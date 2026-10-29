@@ -120,18 +120,48 @@ describe("MediaPlayer", () => {
     expect(releaseArtifactSource).toHaveBeenCalledWith(url);
   });
 
-  it("shows why it can't play with a Retry that asks again", async () => {
-    artifactSource.mockRejectedValueOnce(new Error("ARTIFACT_NOT_FOUND: it expired"));
+  it("offers Retry for a failure that asking again could mend", async () => {
+    artifactSource.mockRejectedValueOnce(new Error("ARTIFACT_BUSY: too many transfers"));
     const onError = vi.fn();
     render(inPlugin(createElement(kit.MediaPlayer, { source: CLIP, onError })));
     await settle();
     expect(screen.getByText("Couldn't play this video")).toBeTruthy();
-    expect(screen.getByText("it expired")).toBeTruthy();
-    expect(onError).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("The file couldn't be loaded")).toBeTruthy();
+    // The plugin still gets the host's own words.
+    expect(onError.mock.calls[0]![0].message).toBe("too many transfers");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await settle();
     expect(artifactSource).toHaveBeenCalledTimes(2);
     expect(screen.queryByText("Couldn't play this video")).toBeNull();
+  });
+
+  it("says plainly why a failure Retry can't mend happened, with no Retry", async () => {
+    for (const [error, words] of [
+      [`ARTIFACT_NOT_FOUND: plugin "${OWNER}" has no artifact "x"`, "This file isn't available"],
+      ["ARTIFACT_SOURCE_UNSUPPORTED: is text/plain", "This format can't be played here"],
+      [
+        "ARTIFACT_REMOTE_UNSUPPORTED: not in a remote window",
+        "Media can't play in a window attached to a remote host",
+      ],
+    ] as const) {
+      artifactSource.mockRejectedValueOnce(new Error(error));
+      render(inPlugin(createElement(kit.MediaPlayer, { source: CLIP })));
+      await settle();
+      expect(screen.getByText(words)).toBeTruthy();
+      expect(document.body.textContent).not.toContain(OWNER);
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      cleanup();
+    }
+  });
+
+  it("rests on an empty state with no source, rather than loading forever", async () => {
+    const { container } = render(inPlugin(createElement(kit.MediaPlayer, { source: null })));
+    await settle();
+    expect(artifactSource).not.toHaveBeenCalled();
+    expect(container.querySelector("[data-media-empty]")?.textContent).toBe(
+      "Choose audio or video to play"
+    );
+    expect(screen.queryByLabelText(/^Loading/)).toBeNull();
   });
 
   it("releases a lease that resolves after the player is gone", async () => {
@@ -218,6 +248,24 @@ describe("MediaThumbnail", () => {
     expect(video.controls).toBe(false);
     expect(video.tabIndex).toBe(-1);
     expect(screen.getByRole("img", { name: "Launch demo" })).toBeTruthy();
+  });
+
+  it("falls back to a failed-preview glyph when an image won't decode, until a new source", async () => {
+    artifactSource.mockImplementation(async (_owner, id) => ({
+      url: `daintree-file://artifact/${id}?lease=${"b".repeat(48)}`,
+      mimeType: "image/png",
+      size: 1,
+    }));
+    const { container, rerender } = render(
+      inPlugin(createElement(kit.MediaThumbnail, { source: "d".repeat(32) }))
+    );
+    await settle();
+    fireEvent.error(container.querySelector("img")!);
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("[data-media-preview-failed]")).not.toBeNull();
+    rerender(inPlugin(createElement(kit.MediaThumbnail, { source: "f".repeat(32) })));
+    await settle();
+    expect(container.querySelector("img")).not.toBeNull();
   });
 
   it("shows a glyph for a type with no source and never asks for one", async () => {

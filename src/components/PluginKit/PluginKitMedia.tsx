@@ -1,5 +1,5 @@
 import { useEffect, useEffectEvent, useRef, useState } from "react";
-import { FileAudio, File as FileGlyph } from "lucide-react";
+import { FileAudio, File as FileGlyph, ImageOff, VideoOff } from "lucide-react";
 import type {
   PluginMediaPlayerProps,
   PluginMediaSource,
@@ -22,18 +22,35 @@ type SourceState =
   | { status: "idle" }
   | { status: "loading" }
   | { status: "ready"; url: string; mimeType: string }
-  | { status: "error"; message: string; code: string | null };
+  | { status: "error"; message: string; detail: string; retryable: boolean };
 
 function sourceId(source: PluginMediaSource | null | undefined): string | null {
   if (typeof source === "string") return nonEmpty(source) ?? null;
   return source && typeof source === "object" ? (nonEmpty(source.id) ?? null) : null;
 }
 
-function errorParts(error: unknown): { message: string; code: string | null } {
+// Failures no Retry can mend, in words for the person rather than the host's
+// own (`plugin "acme.tour" has no artifact "…"`).
+const PERMANENT_FAILURE: Record<string, string> = {
+  ARTIFACT_NOT_FOUND: "This file isn't available",
+  ARTIFACT_SOURCE_UNSUPPORTED: "This format can't be played here",
+  ARTIFACT_REMOTE_UNSUPPORTED: "Media can't play in a window attached to a remote host",
+};
+
+/**
+ * A source failure as the player shows it: plain words, Retry only when
+ * asking again could work, and the host's own text for the plugin's `onError`.
+ */
+function errorParts(error: unknown): { message: string; detail: string; retryable: boolean } {
   const raw = formatErrorMessage(error, "");
-  const code = /^([A-Z][A-Z_]+):\s*/.exec(raw)?.[1] ?? null;
-  const message = code ? raw.slice(code.length + 1).trim() : raw;
-  return { message: message || "The file couldn't be loaded", code };
+  const own = (error as { code?: unknown } | null)?.code;
+  const code =
+    (typeof own === "string" ? own : null) ?? /^([A-Z][A-Z_]+):\s*/.exec(raw)?.[1] ?? null;
+  const detail = raw.replace(/^[A-Z][A-Z_]+:\s*/, "").trim() || "The file couldn't be loaded";
+  const permanent = code === null ? undefined : PERMANENT_FAILURE[code];
+  return permanent
+    ? { message: permanent, detail, retryable: false }
+    : { message: "The file couldn't be loaded", detail, retryable: true };
 }
 
 /**
@@ -54,7 +71,8 @@ function useArtifactSource(source: PluginMediaSource | null | undefined): {
       return;
     }
     if (!owner) {
-      setState({ status: "error", message: "Media plays only in a plugin view", code: null });
+      const message = "Media plays only in a plugin view";
+      setState({ status: "error", message, detail: message, retryable: false });
       return;
     }
     let live = true;
@@ -79,7 +97,10 @@ function useArtifactSource(source: PluginMediaSource | null | undefined): {
       if (minted) host.releaseArtifactSource(minted);
     };
   }, [owner, id, attempt]);
-  return { state, retry: () => setAttempt((n) => n + 1) };
+  // With an id, the render before the effect runs is already a load, never
+  // the empty state.
+  const shown: SourceState = id && state.status === "idle" ? { status: "loading" } : state;
+  return { state: shown, retry: () => setAttempt((n) => n + 1) };
 }
 
 /**
@@ -101,6 +122,9 @@ function useReleaseOnSourceChange(
   }, [ref, url]);
 }
 
+/** `MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED`: the file is fine, this player can't decode it. */
+const MEDIA_ERR_SRC_NOT_SUPPORTED = 4;
+
 const MEDIA_ERROR_TEXT: Record<number, string> = {
   1: "Playback was stopped",
   2: "The file stopped loading",
@@ -114,12 +138,16 @@ function KitMediaPlayer(props: PluginMediaPlayerProps) {
   const posterState = useArtifactSource(poster ?? null).state;
   const mediaRef = useRef<HTMLMediaElement | null>(null);
   // Tied to the source it happened on: a new source starts clean.
-  const [playFailure, setPlayFailure] = useState<{ url: string; message: string } | null>(null);
+  const [playFailure, setPlayFailure] = useState<{
+    url: string;
+    message: string;
+    retryable: boolean;
+  } | null>(null);
   const reportError = useEffectEvent((error: Error) => {
     if (typeof onError === "function") onError(error);
   });
   const url = state.status === "ready" ? state.url : null;
-  const playError = playFailure !== null && playFailure.url === url ? playFailure.message : null;
+  const playError = playFailure !== null && playFailure.url === url ? playFailure : null;
   useReleaseOnSourceChange(mediaRef, url);
 
   // Pausing when the person moves away is the policy, not an option a plugin
@@ -134,7 +162,7 @@ function KitMediaPlayer(props: PluginMediaPlayerProps) {
 
   // Once per failed attempt, whatever the plugin's callback identity does.
   useEffect(() => {
-    if (state.status === "error") reportError(new Error(state.message));
+    if (state.status === "error") reportError(new Error(state.detail));
   }, [state]);
 
   const declaredType = typeof source === "object" && source ? str(source.mimeType) : undefined;
@@ -147,7 +175,7 @@ function KitMediaPlayer(props: PluginMediaPlayerProps) {
   const rootProps = pickRootProps(props);
 
   if (state.status === "error" || playError !== null) {
-    const message = playError ?? (state.status === "error" ? state.message : "");
+    const failure = playError ?? (state.status === "error" ? state : null);
     return (
       <Callout
         {...rootProps}
@@ -155,22 +183,41 @@ function KitMediaPlayer(props: PluginMediaPlayerProps) {
         size="compact"
         title={audio ? "Couldn't play this audio" : "Couldn't play this video"}
         action={
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              setPlayFailure(null);
-              retry();
-            }}
-          >
-            Retry
-          </Button>
+          failure?.retryable ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setPlayFailure(null);
+                retry();
+              }}
+            >
+              Retry
+            </Button>
+          ) : undefined
         }
         className={str(className)}
       >
-        {message}
+        {failure?.message}
       </Callout>
+    );
+  }
+
+  // No source at all is a resting state, not a load that never ends.
+  if (state.status === "idle") {
+    return (
+      <div
+        {...rootProps}
+        data-media-empty=""
+        className={cn(
+          "flex w-full items-center justify-center rounded-[var(--radius-md)] bg-overlay-subtle px-3 text-xs text-text-secondary",
+          audio ? "h-10" : "aspect-video",
+          str(className)
+        )}
+      >
+        Choose audio or video to play
+      </div>
     );
   }
 
@@ -194,7 +241,7 @@ function KitMediaPlayer(props: PluginMediaPlayerProps) {
     onError: (event: { currentTarget: HTMLMediaElement }) => {
       const code = event.currentTarget.error?.code ?? 0;
       const message = MEDIA_ERROR_TEXT[code] ?? "The file couldn't be played";
-      setPlayFailure({ url, message });
+      setPlayFailure({ url, message, retryable: code !== MEDIA_ERR_SRC_NOT_SUPPORTED });
       if (typeof onError === "function") onError(new Error(message));
     },
   };
@@ -235,13 +282,28 @@ function KitMediaThumbnail(props: PluginMediaThumbnailProps) {
   const ref = useRef<HTMLMediaElement | null>(null);
   const url = state.status === "ready" ? state.url : null;
   useReleaseOnSourceChange(ref, url);
+  // A preview that failed to decode, by its URL: a new source tries again.
+  const [brokenUrl, setBrokenUrl] = useState<string | null>(null);
+  const broken = url !== null && brokenUrl === url;
   const mimeType = state.status === "ready" ? state.mimeType : (declaredType ?? "");
   const alt = nonEmpty(props.alt);
   const size = THUMBNAIL_SIZE[oneOf(props.size, ["sm", "md", "lg"] as const) ?? "md"];
 
   let body;
-  if (url && mimeType.startsWith("image/")) {
-    body = <img src={url} alt="" loading="lazy" className="h-full w-full object-cover" />;
+  if (broken) {
+    // Chromium's broken-image glyph is no answer: the kit's own failed-preview mark.
+    const Glyph = mimeType.startsWith("video/") ? VideoOff : ImageOff;
+    body = <Glyph data-media-preview-failed="" className="h-1/3 w-1/3" aria-hidden="true" />;
+  } else if (url && mimeType.startsWith("image/")) {
+    body = (
+      <img
+        src={url}
+        alt=""
+        loading="lazy"
+        onError={() => setBrokenUrl(url)}
+        className="h-full w-full object-cover"
+      />
+    );
   } else if (url && mimeType.startsWith("video/")) {
     // The first frame: metadata only, never playing, out of the tab order.
     body = (
@@ -255,6 +317,7 @@ function KitMediaThumbnail(props: PluginMediaThumbnailProps) {
         playsInline
         tabIndex={-1}
         aria-hidden="true"
+        onError={() => setBrokenUrl(url)}
         className="h-full w-full object-cover"
       />
     );
