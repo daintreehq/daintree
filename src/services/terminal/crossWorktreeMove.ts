@@ -1,4 +1,5 @@
 import { usePanelStore } from "@/store/panelStore";
+import { selectWorktreeMovePanelIds } from "@/store/slices/panelRegistry/selectors";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { classifyLaunchRootAlignment } from "@/utils/worktreeAlignment";
@@ -43,14 +44,7 @@ function readWorktreePaths(): { id: string; path: string; name?: string }[] {
  * group, so every member is in scope even though only one was dragged.
  */
 export function collectMovedPanelIds(terminalId: string): string[] {
-  const group = usePanelStore.getState().getPanelGroup(terminalId);
-  if (!group) return [terminalId];
-  const state = usePanelStore.getState();
-  const panelIds = group.panelIds.filter((pid) => {
-    const panel = state.panelsById[pid];
-    return panel && panel.location !== "trash" && !state.trashedTerminals.has(pid);
-  });
-  return panelIds.length > 0 ? panelIds : [terminalId];
+  return selectWorktreeMovePanelIds(usePanelStore.getState(), terminalId);
 }
 
 /**
@@ -211,4 +205,15 @@ export function moveTerminalToWorktreeAndFollowRescue(
   // is what the fallback-to-main path already did — only the target changes.
   after.selectWorktree(targetWorktreeId);
   after.retargetParkedFleetSelection(targetWorktreeId);
+}
+
+/**
+ * A panel drag released on a worktree: the drop paths' one way into the move. A
+ * grouped panel takes its whole tab group with it (#14962). A destination that
+ * isn't a live worktree (a deleted row's id, or no view store registered yet)
+ * moves nothing; filing panels under it would strand them on another ghost.
+ */
+export function moveDroppedPanelToWorktree(panelId: string, worktreeId: string): void {
+  if (!getCurrentViewStoreOrNull()?.getState().worktrees.has(worktreeId)) return;
+  moveTerminalToWorktreeAndFollowRescue(panelId, worktreeId);
 }

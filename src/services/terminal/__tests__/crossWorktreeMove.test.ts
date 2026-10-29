@@ -55,7 +55,7 @@ const terminalInstanceService = (
 const { terminalClient } = await import("@/clients");
 const { usePanelStore } = await import("@/store/panelStore");
 const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
-const { moveTerminalToWorktreeAndFollowRescue, isPanelProcessLive } =
+const { moveTerminalToWorktreeAndFollowRescue, moveDroppedPanelToWorktree, isPanelProcessLive } =
   await import("../crossWorktreeMove");
 
 /**
@@ -389,6 +389,70 @@ describe("moveTerminalToWorktreeAndFollowRescue", () => {
     moveTerminalToWorktreeAndFollowRescue("ghost", "wt-b");
 
     expect(usePanelStore.getState().focusedId).toBe("t1");
+  });
+});
+
+describe("moveDroppedPanelToWorktree", () => {
+  function seedGroup(worktreeId: string, panelIds = ["t1", "t2", "solo"]): void {
+    seedPanels(panelIds.map((id) => panel(id, worktreeId)));
+    usePanelStore.setState({
+      tabGroups: new Map([
+        [
+          "g1",
+          {
+            id: "g1",
+            location: "grid" as const,
+            worktreeId,
+            activeTabId: "t1",
+            panelIds: ["t1", "t2"],
+          },
+        ],
+      ]),
+    });
+  }
+
+  // A group dragged onto a card arrives as its representative; the drop must
+  // carry every tab, never split the group (#14962).
+  it("moves a dropped group's every member to a live worktree", () => {
+    seedGroup("wt-a");
+    setLiveWorktrees(["wt-a", "wt-b"]);
+
+    moveDroppedPanelToWorktree("t2", "wt-b");
+
+    const panels = usePanelStore.getState().panelsById;
+    expect(panels["t1"]?.worktreeId).toBe("wt-b");
+    expect(panels["t2"]?.worktreeId).toBe("wt-b");
+    expect(panels["solo"]?.worktreeId).toBe("wt-a");
+    expect(usePanelStore.getState().tabGroups.get("g1")?.worktreeId).toBe("wt-b");
+  });
+
+  // The drop goes through the rescue-aware move, not a bare store write: an
+  // emptied deleted row follows its group to the live card.
+  it("follows a rescued group dropped on a live card", () => {
+    seedGroup("wt-dead", ["t1", "t2"]);
+    useWorktreeSelectionStore.getState().addDeletedWorktree(deletedRow("wt-dead"));
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-dead" });
+    usePanelStore.getState().setFocused("t1");
+    unsubscribe = wirePruneSubscriber(["wt-live"]);
+
+    moveDroppedPanelToWorktree("t1", "wt-live");
+
+    const selection = useWorktreeSelectionStore.getState();
+    expect(selection.deletedWorktrees.has("wt-dead")).toBe(false);
+    expect(selection.activeWorktreeId).toBe("wt-live");
+    expect(usePanelStore.getState().focusedId).not.toBe("t1");
+  });
+
+  it("moves nothing onto a worktree that isn't live", () => {
+    seedGroup("wt-a");
+    setLiveWorktrees(["wt-a"]);
+
+    moveDroppedPanelToWorktree("t1", "wt-gone");
+
+    const panels = usePanelStore.getState().panelsById;
+    expect(panels["t1"]?.worktreeId).toBe("wt-a");
+    expect(panels["t2"]?.worktreeId).toBe("wt-a");
+    expect(usePanelStore.getState().tabGroups.get("g1")?.worktreeId).toBe("wt-a");
   });
 });
 
