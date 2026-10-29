@@ -97,7 +97,6 @@ function HostIssueSelector({
         className={cn(
           FIELD_SURFACE,
           "flex h-8 items-center overflow-hidden",
-          "hover:border-border-default",
           disabled && "opacity-50"
         )}
       >
