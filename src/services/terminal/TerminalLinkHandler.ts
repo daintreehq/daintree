@@ -5,7 +5,12 @@ import { usePanelStore } from "@/store/panelStore";
 import { isMac } from "@/lib/platform";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
-import { isPtyPanel } from "@shared/types/panel";
+import {
+  isBrowserPanel,
+  isGridPanelLocation,
+  isPtyPanel,
+  type PanelInstance,
+} from "@shared/types/panel";
 import {
   hostForwardFailure,
   parseLoopbackLink,
@@ -20,6 +25,34 @@ export interface OpenLinkOptions {
    * escape hatch every URL keeps (#13798).
    */
   external?: boolean;
+}
+
+/**
+ * The browser pane a modifier-clicked localhost link takes over: the most
+ * recently used one in the worktree that activating can bring on screen.
+ * Trashed, parked and dialog panes stay in `panelIds`, and navigating one looks
+ * to the user like the click did nothing (#14965). A pane never used, or tied,
+ * keeps `panelIds` order behind any used one.
+ */
+function pickReusableBrowser(
+  panelIds: readonly string[],
+  panelsById: Readonly<Record<string, PanelInstance>>,
+  worktreeId: string | null
+): PanelInstance | undefined {
+  let best: PanelInstance | undefined;
+  let bestUsedAt = 0;
+  for (const id of panelIds) {
+    const panel = panelsById[id];
+    if (!panel || !isBrowserPanel(panel) || (panel.worktreeId ?? null) !== worktreeId) continue;
+    if (!isGridPanelLocation(panel.location) && panel.location !== "dock") continue;
+    const stamp = panel.lastActiveAt;
+    const usedAt = stamp !== undefined && Number.isFinite(stamp) && stamp > 0 ? stamp : 0;
+    if (best === undefined || usedAt > bestUsedAt) {
+      best = panel;
+      bestUsedAt = usedAt;
+    }
+  }
+  return best;
 }
 
 export class TerminalLinkHandler {
@@ -71,12 +104,18 @@ export class TerminalLinkHandler {
 
       const targetWorktreeId = currentTerminal.worktreeId ?? null;
 
-      const existingBrowser = store.panelIds
-        .map((id) => store.panelsById[id])
-        .find((t) => t && t.kind === "browser" && (t.worktreeId ?? null) === targetWorktreeId);
+      const existingBrowser = pickReusableBrowser(
+        store.panelIds,
+        store.panelsById,
+        targetWorktreeId
+      );
 
       if (existingBrowser) {
         store.setBrowserUrl(existingBrowser.id, normalized.url);
+        // A group renders its stored tab over the focused one, so a pane behind
+        // another tab would take focus and stay hidden.
+        const group = store.getPanelGroup(existingBrowser.id);
+        if (group) store.setActiveTab(group.id, existingBrowser.id);
         store.activateTerminal(existingBrowser.id);
         // The store only records the address; the pane navigates (and, on a host, forwards) on this.
         actionService
