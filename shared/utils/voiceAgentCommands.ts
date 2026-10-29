@@ -687,18 +687,29 @@ function rawUnits(
   return { units, named };
 }
 
-function writtenUnits(corrected: string, vocabulary: VoiceCommandVocabulary): AlignedUnit[] {
+/** `corrected` as words and the commands it writes, with where each unit sits in it. */
+function writtenUnits(
+  corrected: string,
+  vocabulary: VoiceCommandVocabulary
+): { units: AlignedUnit[]; spans: Array<{ start: number; end: number }> } {
   const units: AlignedUnit[] = [];
-  for (const word of corrected.split(/\s+/u)) {
+  const spans: Array<{ start: number; end: number }> = [];
+  for (const match of corrected.matchAll(/\S+/gu)) {
+    const word = match[0];
+    const span = { start: match.index, end: match.index + word.length };
     const token = bareToken(word);
     if (knownToken(token, vocabulary)) {
       units.push({ token });
+      spans.push(span);
       continue;
     }
     const key = toKey(word);
-    if (key && !HESITATIONS.has(key)) units.push({ word: key });
+    if (key && !HESITATIONS.has(key)) {
+      units.push({ word: key });
+      spans.push(span);
+    }
   }
-  return units;
+  return { units, spans };
 }
 
 /** How many of `written`'s commands `raw` typed or named, counted rather than placed. */
@@ -723,29 +734,30 @@ function countedCommands(
 }
 
 /**
- * Whether `corrected` writes a listed command where `raw` neither typed it
- * nor named it as a command, so cleanup turned plain words into one. The two
+ * The commands `written` holds where `raw` neither typed nor named them as
+ * commands, so cleanup turned plain words into one: their indexes in
+ * `written.units`, or null when there were too many words to place them and
+ * counting found one unaccounted for. The two
  * are aligned word by word, in order, and each command written must line up
  * with one `raw` typed or named there: naming the commit skill once can't turn
  * "commit the docs" later in the sentence into `/commit`, however the cleanup
  * tidied the words around either. Command-shaped words the target doesn't
  * list ("/tmp") are paths and the like, and stay the prompt's business.
  */
-function writesUnnamedCommand(
+function unnamedCommands(
   raw: string,
-  corrected: string,
+  written: readonly AlignedUnit[],
   vocabulary: VoiceCommandVocabulary
-): boolean {
-  const written = writtenUnits(corrected, vocabulary);
+): number[] | null {
   const commands = written.filter((unit) => "token" in unit).length;
-  if (commands === 0) return false;
+  if (commands === 0) return [];
   const { units: said, named } = rawUnits(raw, vocabulary);
   const inName = new Set<number>();
   for (const [first, span] of named) for (let at = first; at < span.next; at++) inName.add(at);
 
   // What both sides share at either end lines up as it stands, so only the
   // middle, where cleanup changed something, is aligned.
-  let lined = 0;
+  const lined = new Set<number>();
   let head = 0;
   while (
     head < said.length &&
@@ -753,7 +765,7 @@ function writesUnnamedCommand(
     !inName.has(head) &&
     sameUnit(said[head]!, written[head]!)
   ) {
-    if ("token" in written[head]!) lined++;
+    if ("token" in written[head]!) lined.add(head);
     head++;
   }
   let saidEnd = said.length;
@@ -764,7 +776,7 @@ function writesUnnamedCommand(
     !inName.has(saidEnd - 1) &&
     sameUnit(said[saidEnd - 1]!, written[writtenEnd - 1]!)
   ) {
-    if ("token" in written[writtenEnd - 1]!) lined++;
+    if ("token" in written[writtenEnd - 1]!) lined.add(writtenEnd - 1);
     saidEnd--;
     writtenEnd--;
   }
@@ -772,7 +784,7 @@ function writesUnnamedCommand(
   const rows = saidEnd - head;
   const columns = writtenEnd - head;
   if ((rows + 1) * (columns + 1) > MAX_ALIGNMENT_CELLS) {
-    return countedCommands(said, named, written) < commands;
+    return countedCommands(said, named, written) < commands ? null : [];
   }
   // A weighted longest common subsequence over the middle, walked back to
   // count the written commands it lines up.
@@ -809,14 +821,14 @@ function writesUnnamedCommand(
     const value = at(i, j);
     const span = namedWeight(i, j);
     if (span && value === span.weight + at(span.next, j + 1)) {
-      lined++;
+      lined.add(j);
       i = span.next;
       j++;
       continue;
     }
     const pair = pairWeight(i, j);
     if (pair > 0 && value === pair + at(i + 1, j + 1)) {
-      if ("token" in written[j]!) lined++;
+      if ("token" in written[j]!) lined.add(j);
       i++;
       j++;
     } else if (value === at(i + 1, j)) {
@@ -825,7 +837,11 @@ function writesUnnamedCommand(
       j++;
     }
   }
-  return lined < commands;
+  const unlined: number[] = [];
+  written.forEach((unit, index) => {
+    if ("token" in unit && !lined.has(index)) unlined.push(index);
+  });
+  return unlined;
 }
 
 /**
@@ -899,7 +915,79 @@ export function checkVoiceCommandEdit(
   // after it can hold a command the dictation didn't.
   if (opening === "settled") return null;
   if (opening !== "open") return opening;
-  return writesUnnamedCommand(trimmedRaw, trimmedCorrected, vocabulary)
-    ? "unprompted_command"
-    : null;
+  const unnamed = unnamedCommands(
+    trimmedRaw,
+    writtenUnits(trimmedCorrected, vocabulary).units,
+    vocabulary
+  );
+  return unnamed === null || unnamed.length > 0 ? "unprompted_command" : null;
+}
+
+/** Whether `words` holds `key` said in so many words: "design review" for `/design-review`. */
+function saysName(words: ReadonlyArray<string | null>, key: string): boolean {
+  for (let start = 0; start < words.length; start++) {
+    let joined = "";
+    for (let at = start; at < words.length && at - start < MAX_NAME_WORDS; at++) {
+      // A path or flag between two words keeps them apart.
+      const word = words[at];
+      if (word === null) break;
+      joined += word;
+      if (joined === key) return true;
+      if (joined.length >= key.length) break;
+    }
+  }
+  return false;
+}
+
+/**
+ * `corrected` with each listed command it wrote where the dictation never
+ * named one put back as the words that were said, so the rest of the cleanup
+ * still lands: "a design review workflow" cleaned to "a /design-review
+ * workflow" becomes "a design review workflow". Null when there is nothing to
+ * put back, when the cleanup's opening is the problem (a command opening the
+ * prompt that nobody asked for rewrote the whole request), or when a
+ * command's name was never said, since writing it out would put words in the
+ * speaker's mouth.
+ */
+export function writeUnnamedCommandsAsSaid(
+  raw: string,
+  corrected: string,
+  vocabulary: VoiceCommandVocabulary,
+  startsPrompt: boolean
+): string | null {
+  const trimmedRaw = raw.trim();
+  let text = corrected.trim();
+  if (checkOpening(trimmedRaw, text, vocabulary, startsPrompt) !== "open") return null;
+  const { units, spans } = writtenUnits(text, vocabulary);
+  const unnamed = unnamedCommands(trimmedRaw, units, vocabulary);
+  if (!unnamed || unnamed.length === 0) return null;
+  // checkOpening reads a bare token only, so "`/review`" opening the prompt is caught here.
+  if (startsPrompt && unnamed[0] === 0) return null;
+  // Quoted the way prose quotes a word, a name was still said: "the "model"".
+  const said = wordSpans(trimmedRaw, 0).map((span) => {
+    const bare = bareToken(trimmedRaw.slice(span.start, span.end));
+    return /^[\p{L}\p{N}]/u.test(bare) ? toKey(bare) : null;
+  });
+  // A passage partway into the draft opens wherever the speaker was, so its
+  // first word keeps the case the speaker's transcript gave it.
+  const opensDraft = startsPrompt || /^\p{Lu}/u.test(trimmedRaw);
+  // From the end, so the spans before each one still point where they did.
+  for (let index = unnamed.length - 1; index >= 0; index--) {
+    const unit = units[unnamed[index]!]!;
+    const entry = "token" in unit ? knownToken(unit.token, vocabulary) : null;
+    if (!entry || !saysName(said, entry.key)) return null;
+    const { start, end } = spans[unnamed[index]!]!;
+    const word = text.slice(start, end);
+    const at = word.indexOf(entry.token);
+    // Backticks marked it as a command; as words it needs none.
+    const lead = word.slice(0, at).replace(/`/gu, "");
+    const trail = word.slice(at + entry.token.length).replace(/`/gu, "");
+    const before = text.slice(0, start).trimEnd();
+    const opensSentence = before === "" ? opensDraft : SENTENCE_END_RE.test(before);
+    const name = opensSentence
+      ? entry.spokenName.charAt(0).toUpperCase() + entry.spokenName.slice(1)
+      : entry.spokenName;
+    text = text.slice(0, start) + lead + name + trail + text.slice(end);
+  }
+  return text;
 }

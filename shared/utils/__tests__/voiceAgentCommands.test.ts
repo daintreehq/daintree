@@ -12,6 +12,7 @@ import {
   planSpokenCommand,
   rewriteSpokenCommand,
   voiceCommandKeyterms,
+  writeUnnamedCommandsAsSaid,
 } from "../voiceAgentCommands.js";
 
 function sourcesOf(agentId: "claude" | "codex"): readonly CompletionSourceConfig[] {
@@ -855,6 +856,205 @@ describe("checkVoiceCommandEdit for a command named partway into the prompt", ()
         true
       )
     ).toBe("arguments_reformatted");
+  });
+});
+
+describe("writeUnnamedCommandsAsSaid", () => {
+  const skills = buildVoiceCommandVocabulary(
+    [
+      ...getBuiltinSlashCommands("claude"),
+      custom("claude", "/design-review", { kind: "skill" }),
+      custom("claude", "/work", { kind: "skill" }),
+      custom("claude", "/work-batch", { kind: "skill" }),
+      custom("claude", "/commit", { kind: "skill" }),
+    ],
+    sourcesOf("claude")
+  );
+
+  it("keeps a long cleanup and writes back only the commands nobody named", () => {
+    // A 361-character dictation whose whole cleanup was once thrown away for these.
+    const raw =
+      "Then I want you to look at the next, or the work batch, sorry, the work batch skill. And figure out. Actually, no, figure out, just, just change it so that when it sees a, an issue with the design review label, whether it's in this repo or another one, then it will not do a work workflow. So the work is the default workflow. It'll do a design review workflow.";
+    const corrected =
+      "Then look at the /work-batch skill and change it so that when it sees an issue with the design review label, in this repo or another, it won't run the `/work` workflow. /work is the default. It'll run the /design-review workflow instead.";
+    expect(checkVoiceCommandEdit(raw, corrected, skills, true)).toBe("unprompted_command");
+    const asSaid = writeUnnamedCommandsAsSaid(raw, corrected, skills, true);
+    expect(asSaid).toBe(
+      "Then look at the /work-batch skill and change it so that when it sees an issue with the design review label, in this repo or another, it won't run the work workflow. Work is the default. It'll run the design review workflow instead."
+    );
+    expect(checkVoiceCommandEdit(raw, asSaid!, skills, true)).toBeNull();
+  });
+
+  it.each([
+    [
+      "Okay, commit the fix and push it.",
+      "Okay, /commit the fix and push it.",
+      "Okay, commit the fix and push it.",
+    ],
+    [
+      "I'm happy with the design review.",
+      "I'm happy with the /design-review.",
+      "I'm happy with the design review.",
+    ],
+    ["I'm happy with the model.", "I'm happy with the (/model).", "I'm happy with the (model)."],
+    [
+      "Decide which tool to use. Design review on Friday.",
+      "Decide which tool to use. /design-review on Friday.",
+      "Decide which tool to use. Design review on Friday.",
+    ],
+  ])("writes an unnamed command back as its name: %j", (raw, corrected, asSaid) => {
+    expect(writeUnnamedCommandsAsSaid(raw, corrected, skills, true)).toBe(asSaid);
+  });
+
+  it("writes back nothing a cleanup made a command where its name was never said", () => {
+    expect(
+      writeUnnamedCommandsAsSaid(
+        "Review the design of the header.",
+        "Review the /design-review of the header.",
+        skills,
+        false
+      )
+    ).toBeNull();
+  });
+
+  it("leaves a command opening the prompt that nobody asked for to the check", () => {
+    expect(
+      writeUnnamedCommandsAsSaid(
+        "Commit the fix and push it.",
+        "/commit the fix and push it.",
+        skills,
+        true
+      )
+    ).toBeNull();
+    expect(
+      writeUnnamedCommandsAsSaid(
+        "Commit the fix and push it.",
+        "/commit the fix and push it.",
+        skills,
+        false
+      )
+    ).toBe("Commit the fix and push it.");
+  });
+
+  it("keeps the cleanup of a name Grok broke up with its own punctuation", () => {
+    const raw =
+      "Then the next thing I want you to look at is... the next... batch. Skill. So, yeah, next batch, we use that quite a lot to get the next batch of, of work.";
+    const vocabulary = buildVoiceCommandVocabulary(
+      [...getBuiltinSlashCommands("claude"), custom("claude", "/next-batch", { kind: "skill" })],
+      sourcesOf("claude")
+    );
+    const corrected =
+      "Next, I want you to look at the /next-batch skill. We use /next-batch a lot to get the next batch of work.";
+    expect(checkVoiceCommandEdit(raw, corrected, vocabulary, true)).toBe("unprompted_command");
+    expect(writeUnnamedCommandsAsSaid(raw, corrected, vocabulary, true)).toBe(
+      "Next, I want you to look at the next batch skill. We use next batch a lot to get the next batch of work."
+    );
+  });
+
+  it("writes back only the occurrence of a typed command that nobody typed", () => {
+    expect(
+      writeUnnamedCommandsAsSaid(
+        "Inspect /model and change the model settings.",
+        "Inspect /model and change the /model settings.",
+        skills,
+        true
+      )
+    ).toBe("Inspect /model and change the model settings.");
+    // A typed command isn't its name said as words.
+    expect(
+      writeUnnamedCommandsAsSaid(
+        "Inspect /model and change the settings.",
+        "Inspect /model and change the /model settings.",
+        skills,
+        true
+      )
+    ).toBeNull();
+  });
+
+  it.each([
+    ["I'm happy with the model.", "I'm happy with the /design-review and /model."],
+    ["I'm happy with the model.", "I'm happy with the /model and /design-review."],
+  ])("writes back nothing when any unnamed command's name was never said: %j", (raw, corrected) => {
+    expect(writeUnnamedCommandsAsSaid(raw, corrected, skills, true)).toBeNull();
+  });
+
+  it("matches a name only across words said together", () => {
+    expect(
+      writeUnnamedCommandsAsSaid(
+        "Discuss the design /tmp review notes.",
+        "Discuss the /design-review notes.",
+        skills,
+        true
+      )
+    ).toBeNull();
+    expect(
+      writeUnnamedCommandsAsSaid(
+        'I\'m happy with the "model".',
+        'I\'m happy with the "/model".',
+        skills,
+        true
+      )
+    ).toBe('I\'m happy with the "model".');
+  });
+
+  it("refuses an unasked command opening the prompt however the cleanup wraps it", () => {
+    expect(
+      writeUnnamedCommandsAsSaid(
+        "Review the last commit and tell me what changed.",
+        "`/review`",
+        skills,
+        true
+      )
+    ).toBeNull();
+    expect(
+      writeUnnamedCommandsAsSaid(
+        "/review using the model",
+        "/review using the /model",
+        skills,
+        true
+      )
+    ).toBeNull();
+  });
+
+  it("keeps the speaker's case for a name opening a passage partway into the draft", () => {
+    expect(
+      writeUnnamedCommandsAsSaid(
+        "model to predict prices.",
+        "/model to predict prices.",
+        skills,
+        false
+      )
+    ).toBe("model to predict prices.");
+    expect(
+      writeUnnamedCommandsAsSaid(
+        "Model to predict prices.",
+        "/model to predict prices.",
+        skills,
+        false
+      )
+    ).toBe("Model to predict prices.");
+  });
+
+  it("leaves a passage too long to align to the check", () => {
+    expect(
+      writeUnnamedCommandsAsSaid(
+        "Start design review " + "alpha ".repeat(1500) + "end",
+        "Begin /design-review " + "beta ".repeat(1500) + "finish",
+        skills,
+        true
+      )
+    ).toBeNull();
+  });
+
+  it("has nothing to write back when every command was named", () => {
+    expect(
+      writeUnnamedCommandsAsSaid(
+        "Fix the header, then ship it with the commit command.",
+        "Fix the header, then ship it with the /commit command.",
+        skills,
+        true
+      )
+    ).toBeNull();
   });
 });
 

@@ -1,6 +1,7 @@
 import type { VoiceCorrectionVerdict } from "../../shared/types/voiceSessionSummary.js";
 import {
   checkVoiceCommandEdit,
+  writeUnnamedCommandsAsSaid,
   type VoiceCommandEditRejection,
   type VoiceCommandVocabulary,
 } from "../../shared/utils/voiceAgentCommands.js";
@@ -25,6 +26,8 @@ export interface VoiceCorrectionOutcome {
   verdict: VoiceCorrectionVerdict;
   /** The cleanup a check turned down, and which check. */
   rejected?: { reason: VoiceCorrectionRejectReason; candidate: string };
+  /** The cleanup wrote commands the speaker never named, and they landed as the words said. */
+  commandsAsSaid?: true;
 }
 
 export interface VoiceCorrectionChecks {
@@ -36,8 +39,10 @@ export interface VoiceCorrectionChecks {
 /**
  * Decides what a proposal becomes: the cleanup as the model wrote it, unless
  * it invents or rewrites an agent command the speaker didn't say, or the model
- * itself marked it low-confidence. Pure, so the cleanup benchmark lands the
- * replies it recorded exactly as the service would have.
+ * itself marked it low-confidence. A command written partway in where the
+ * speaker only said its name goes back to those words, and the rest lands.
+ * Pure, so the cleanup benchmark lands the replies it recorded exactly as the
+ * service would have.
  */
 export function correctionOutcome(
   rawText: string,
@@ -45,11 +50,34 @@ export function correctionOutcome(
   checks: VoiceCorrectionChecks
 ): VoiceCorrectionOutcome {
   let confirmedText = rawText;
+  let commandsAsSaid = false;
   if (proposal.action === "replace" && proposal.correctedText.trim()) {
-    const candidate = proposal.correctedText.trim();
+    let candidate = proposal.correctedText.trim();
+    let commandRejection = checkVoiceCommandEdit(
+      rawText,
+      candidate,
+      checks.vocabulary,
+      checks.startsPrompt
+    );
+    if (commandRejection === "unprompted_command") {
+      // One word too eagerly made a command shouldn't cost a long passage its cleanup.
+      const asSaid = writeUnnamedCommandsAsSaid(
+        rawText,
+        candidate,
+        checks.vocabulary,
+        checks.startsPrompt
+      );
+      if (
+        asSaid !== null &&
+        checkVoiceCommandEdit(rawText, asSaid, checks.vocabulary, checks.startsPrompt) === null
+      ) {
+        candidate = asSaid;
+        commandRejection = null;
+        commandsAsSaid = true;
+      }
+    }
     const rejection: VoiceCorrectionRejectReason | null =
-      checkVoiceCommandEdit(rawText, candidate, checks.vocabulary, checks.startsPrompt) ??
-      (proposal.confidence === "low" ? "low_confidence" : null);
+      commandRejection ?? (proposal.confidence === "low" ? "low_confidence" : null);
     if (rejection) {
       return {
         action: "no_change",
@@ -61,5 +89,10 @@ export function correctionOutcome(
     confirmedText = candidate;
   }
   const action = confirmedText === rawText ? "no_change" : "replace";
-  return { action, confirmedText, verdict: action === "replace" ? "replaced" : "unchanged" };
+  return {
+    action,
+    confirmedText,
+    verdict: action === "replace" ? "replaced" : "unchanged",
+    ...(commandsAsSaid ? { commandsAsSaid: true as const } : {}),
+  };
 }
