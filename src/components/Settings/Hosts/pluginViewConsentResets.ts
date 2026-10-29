@@ -51,7 +51,8 @@ export function holdPluginViewRetries(): () => void {
 
 function retryOwed(): void {
   for (const view of [...blockedViews]) {
-    if (!view.owed) continue;
+    // An earlier view's retry can take this one away.
+    if (!view.owed || !blockedViews.has(view)) continue;
     view.owed = false;
     view.retry();
   }

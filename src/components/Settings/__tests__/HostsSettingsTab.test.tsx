@@ -8,7 +8,7 @@ import { useRemoteHostsStore } from "@/store/remoteHostsStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import HostsSettingsTab from "../Hosts/HostsSettingsTab";
 import { requestHostUpdate, takePendingHostUpdate } from "../Hosts/hostUpdateRequests";
-import { requestHostPlugins } from "../Hosts/hostPluginRequests";
+import { requestHostPlugins, takePendingHostPlugins } from "../Hosts/hostPluginRequests";
 import {
   _resetPluginViewConsentResetsForTesting,
   notePluginViewConsentReset,
@@ -360,32 +360,48 @@ describe("HostsSettingsTab", () => {
     expect(screen.getByRole("button", { name: "Remove host" })).toBeTruthy();
   });
 
-  it.each([
-    ["host-plugins", "Plugins"],
-    ["host-plugin-views", "Plugin views"],
-  ] as const)("opens a host's details scrolled to %s", async (sectionId, title) => {
-    remoteHosts.list!.mockResolvedValue([entry("studio-03", "studio-03")]);
-    const scrolled: string[] = [];
+  it("opens on the host and section asked for before it mounted, then follows each later request", async () => {
+    let answerList: (hosts: HostListEntry[]) => void = () => {};
+    remoteHosts.list!.mockImplementation(
+      () =>
+        new Promise<HostListEntry[]>((resolve) => {
+          answerList = resolve;
+        })
+    );
+    const scrolls: Array<{ id: string; options: unknown }> = [];
     const scrollIntoView = vi
       .spyOn(Element.prototype, "scrollIntoView")
-      .mockImplementation(function (this: Element) {
-        scrolled.push(this.id);
+      .mockImplementation(function (this: Element, options?: boolean | ScrollIntoViewOptions) {
+        scrolls.push({ id: this.id, options });
       });
+    const lastScroll = () => scrolls[scrolls.length - 1];
     try {
+      requestHostPlugins("studio-03", "host-plugin-views");
       render(
         <TooltipProvider>
           <HostsSettingsTab />
         </TooltipProvider>
       );
-      await screen.findByRole("button", { name: "Details for studio-03" });
-      act(() => requestHostPlugins("studio-03", sectionId));
-      await waitFor(() => expect(scrolled).toContain(sectionId));
-      const section = document.getElementById(sectionId);
-      expect(section?.textContent).toContain(title);
-      // A repeat of the same request scrolls there again.
-      scrolled.length = 0;
-      act(() => requestHostPlugins("studio-03", sectionId));
-      await waitFor(() => expect(scrolled).toContain(sectionId));
+      await act(async () =>
+        answerList([entry("studio-02", "studio-02"), entry("studio-03", "studio-03")])
+      );
+      await waitFor(() => expect(lastScroll()?.id).toBe("host-plugin-views"));
+      expect(lastScroll()?.options).toEqual({ block: "start" });
+      expect(document.getElementById("host-plugin-views")?.textContent).toContain(
+        "Plugins from studio-03"
+      );
+      expect(takePendingHostPlugins()).toBeNull();
+
+      for (const [sectionId, title] of [
+        ["host-plugins", "Plugins"],
+        ["host-plugin-views", "Plugin views"],
+        ["host-plugins", "Plugins"],
+      ] as const) {
+        scrolls.length = 0;
+        act(() => requestHostPlugins("studio-03", sectionId));
+        await waitFor(() => expect(lastScroll()?.id).toBe(sectionId));
+        expect(document.getElementById(sectionId)?.textContent).toContain(title);
+      }
     } finally {
       scrollIntoView.mockRestore();
     }

@@ -81,16 +81,23 @@ describe("HostPluginViewConsents", () => {
     expect(screen.getByText("acme.graph")).toBeTruthy();
   });
 
-  it("lets a view blocked on that plugin ask again once a reset succeeds, and not before", async () => {
+  it("lets only views blocked on that plugin ask again, once its reset has succeeded", async () => {
     const peek = `project__${"a".repeat(64)}__acme.peek`;
+    const otherPeek = `project__${"b".repeat(64)}__acme.peek`;
     client.plugins = [{ pluginId: peek, state: "refused" }];
-    client.resetPluginViewConsent.mockRejectedValueOnce(new Error("host gone"));
     const retry = vi.fn();
+    const sibling = vi.fn();
+    const other = vi.fn();
     onPluginViewConsentReset("studio-01", peek, retry);
-    // The reset settles, then the list read after it fails: the answer is still gone.
-    client.listPluginViewConsents
-      .mockImplementationOnce(async () => client.plugins)
-      .mockRejectedValueOnce(new Error("link down"));
+    onPluginViewConsentReset("studio-01", otherPeek, sibling);
+    onPluginViewConsentReset("studio-01", "acme.graph", other);
+    let settle: { resolve: () => void; reject: (err: Error) => void } | null = null;
+    client.resetPluginViewConsent.mockImplementation(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          settle = { resolve, reject };
+        })
+    );
     await act(async () => {
       render(<HostPluginViewConsents hostId="studio-01" hostName="studio" />);
     });
@@ -99,6 +106,9 @@ describe("HostPluginViewConsents", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Reset the plugin view for acme.peek" }));
     });
+    expect(client.resetPluginViewConsent).toHaveBeenCalledWith("studio-01", peek);
+    expect(retry).not.toHaveBeenCalled();
+    await act(async () => settle!.reject(new Error("host gone")));
     expect(retry).not.toHaveBeenCalled();
 
     await act(async () => {
@@ -106,8 +116,13 @@ describe("HostPluginViewConsents", () => {
         screen.getByRole("button", { name: "Retry resetting the plugin view for acme.peek" })
       );
     });
-    expect(client.resetPluginViewConsent).toHaveBeenLastCalledWith("studio-01", peek);
+    expect(retry).not.toHaveBeenCalled();
+    // The list read after the reset fails: the answer is gone all the same.
+    client.listPluginViewConsents.mockRejectedValueOnce(new Error("link down"));
+    await act(async () => settle!.resolve());
     expect(retry).toHaveBeenCalledTimes(1);
+    expect(sibling).not.toHaveBeenCalled();
+    expect(other).not.toHaveBeenCalled();
   });
 
   it("keeps a failed reset on its own row, and its Retry resets again", async () => {

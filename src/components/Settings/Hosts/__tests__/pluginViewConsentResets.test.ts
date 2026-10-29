@@ -13,11 +13,18 @@ afterEach(() => {
 });
 
 describe("pluginViewConsentResets", () => {
-  it("retries a blocked view at once when nothing holds it back", () => {
+  it("retries a blocked view at once when nothing holds it back, and only once per reset", () => {
     const retry = vi.fn();
     onPluginViewConsentReset("studio-01", "acme.graph", retry);
     notePluginViewConsentReset("studio-01", "acme.graph");
     expect(retry).toHaveBeenCalledTimes(1);
+
+    notePluginViewConsentReset("studio-01", "acme.other");
+    holdPluginViewRetries()();
+    expect(retry).toHaveBeenCalledTimes(1);
+
+    notePluginViewConsentReset("studio-01", "acme.graph");
+    expect(retry).toHaveBeenCalledTimes(2);
   });
 
   it("waits for the last hold, then retries once however many resets landed", () => {
@@ -36,6 +43,22 @@ describe("pluginViewConsentResets", () => {
     expect(retry).toHaveBeenCalledTimes(1);
   });
 
+  it("retries every view each held reset reached", () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const other = vi.fn();
+    onPluginViewConsentReset("studio-01", "acme.graph", first);
+    onPluginViewConsentReset("studio-01", "acme.graph", second);
+    onPluginViewConsentReset("studio-01", "acme.peek", other);
+    const release = holdPluginViewRetries();
+    notePluginViewConsentReset("studio-01", "acme.graph");
+    notePluginViewConsentReset("studio-01", "acme.peek");
+    release();
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(other).toHaveBeenCalledTimes(1);
+  });
+
   it("matches the exact instance on that host, or every plugin on a host-wide reset", () => {
     const graph = vi.fn();
     const peek = vi.fn();
@@ -50,8 +73,12 @@ describe("pluginViewConsentResets", () => {
     expect(peek).toHaveBeenCalledTimes(1);
     expect(graph).not.toHaveBeenCalled();
 
-    notePluginViewConsentReset("studio-01");
+    notePluginViewConsentReset("studio-01", "acme.graph");
     expect(graph).toHaveBeenCalledTimes(1);
+    expect(elsewhere).not.toHaveBeenCalled();
+
+    notePluginViewConsentReset("studio-01");
+    expect(graph).toHaveBeenCalledTimes(2);
     expect(peek).toHaveBeenCalledTimes(2);
     expect(elsewhere).not.toHaveBeenCalled();
   });
@@ -68,5 +95,16 @@ describe("pluginViewConsentResets", () => {
     release();
     expect(gone).not.toHaveBeenCalled();
     expect(refusedAgain).not.toHaveBeenCalled();
+  });
+
+  it("skips a view an earlier retry took away", () => {
+    let unsubscribeSecond = () => {};
+    const first = vi.fn(() => unsubscribeSecond());
+    const second = vi.fn();
+    onPluginViewConsentReset("studio-01", "acme.graph", first);
+    unsubscribeSecond = onPluginViewConsentReset("studio-01", "acme.graph", second);
+    notePluginViewConsentReset("studio-01", "acme.graph");
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).not.toHaveBeenCalled();
   });
 });
