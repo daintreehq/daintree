@@ -104,6 +104,11 @@ function clearPendingIf(kind: TerminalPendingDestructiveActionKind): void {
 function startHeldRefusal(terminalId: string, start: "resume" | "fresh"): string | undefined {
   const panel = usePanelStore.getState().panelsById[terminalId];
   if (!panel || !isPtyPanel(panel)) return `No terminal '${terminalId}' in this project.`;
+  // Ahead of the hold checks: a launch clears the hold before it finishes, and
+  // a pane mid-start must not be sent to terminal.restart.
+  if (isRestoreRecoveryLaunching(terminalId)) {
+    return `Terminal '${terminalId}' is already starting. Watch its status rather than starting it again.`;
+  }
   const recovery = panel.restoreRecovery;
   if (!recovery) {
     return `Terminal '${terminalId}' isn't held for recovery; use terminal.restart for a running one.`;
@@ -116,9 +121,6 @@ function startHeldRefusal(terminalId: string, start: "resume" | "fresh"): string
   }
   if (start === "resume" && recovery.sessionId === undefined) {
     return `Terminal '${terminalId}' was held (${recovery.reason}) with no recorded conversation to resume. Start it fresh, or leave the pane for the user to pick one.`;
-  }
-  if (isRestoreRecoveryLaunching(terminalId)) {
-    return `Terminal '${terminalId}' is already starting. Watch its status rather than starting it again.`;
   }
   return undefined;
 }

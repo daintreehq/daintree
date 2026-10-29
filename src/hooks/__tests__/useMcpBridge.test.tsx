@@ -2978,6 +2978,27 @@ describe("terminal.startHeld confirm preview (#15270)", () => {
       resolveMcpConfirmSubject({ kind: "terminalStartHeld", terminalId: "held", start: "fresh" })
     ).toBe("codex triage");
   });
+
+  it("keeps a long or multi-line pane name to one short heading line", () => {
+    mocks.panelsById = {
+      held: {
+        id: "held",
+        kind: "terminal",
+        title: `first\n${"x".repeat(500)}`,
+        restoreRecovery: { reason: "resume-deferred" },
+      },
+    };
+
+    const subject = resolveMcpConfirmSubject({
+      kind: "terminalStartHeld",
+      terminalId: "held",
+      start: "fresh",
+    })!;
+
+    expect(subject).not.toMatch(/[\r\n]/);
+    expect(Array.from(subject).length).toBeLessThanOrEqual(100);
+    expect(subject.endsWith("…")).toBe(true);
+  });
 });
 
 describe("resolveMcpConfirmSubject for a terminal launch (#12216)", () => {

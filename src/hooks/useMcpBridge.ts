@@ -46,7 +46,9 @@ import {
   type TerminalLaunchPreview,
 } from "@/lib/mcpTerminalLaunchPreview";
 import {
+  boundStartHeldTitle,
   formatStartHeldPreviewLines,
+  MAX_START_HELD_SUBJECT_CHARS,
   type StartHeldChoice,
   type StartHeldPaneSnapshot,
 } from "@/lib/mcpStartHeldPreview";
@@ -357,9 +359,7 @@ function terminalIdsArg(args: unknown): readonly string[] | undefined {
 }
 
 /** The pane and start a `terminal.startHeld` dispatch names, or undefined when malformed. */
-function startHeldArgs(
-  args: unknown
-): { terminalId: string; start: StartHeldChoice } | undefined {
+function startHeldArgs(args: unknown): { terminalId: string; start: StartHeldChoice } | undefined {
   if (args === null || typeof args !== "object") return undefined;
   const { terminalId, start } = args as { terminalId?: unknown; start?: unknown };
   if (typeof terminalId !== "string" || terminalId.length === 0) return undefined;
@@ -701,7 +701,9 @@ export function resolveMcpConfirmSubject(
     }
     if (target.kind === "terminalStartHeld") {
       const title = readStartHeldPane(target.terminalId)?.title;
-      return title !== undefined && title.length > 0 ? title : undefined;
+      return title !== undefined && title.length > 0
+        ? boundStartHeldTitle(title, MAX_START_HELD_SUBJECT_CHARS)
+        : undefined;
     }
     // The worktree the chosen directory IS, named from the store rather than
     // from the path itself — the title must not become a place to render

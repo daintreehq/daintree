@@ -8,9 +8,7 @@ describe("formatStartHeldPreviewLines (#15270)", () => {
   it("names the recorded conversation a resume reopens", () => {
     const lines = formatStartHeldPreviewLines("resume", HELD);
 
-    expect(lines.some((line) => line.startsWith("Resumes:") && line.includes("sess-1"))).toBe(
-      true
-    );
+    expect(lines.some((line) => line.startsWith("Resumes:") && line.includes("sess-1"))).toBe(true);
     expect(lines.some((line) => line.includes("host-ended-uncleanly"))).toBe(true);
     expect(lines.some((line) => line.includes("codex triage"))).toBe(true);
     expect(hasCautionLine(lines)).toBe(false);

@@ -21,18 +21,19 @@ export interface StartHeldPaneSnapshot {
 }
 
 const MAX_TITLE_CHARS = 200;
+/** A dialog subject is one heading line, so it gets a tighter bound than the card. */
+export const MAX_START_HELD_SUBJECT_CHARS = 80;
 
 /**
  * One line, bounded by code point. The title is free text an agent can set, and
  * a line terminator inside it would let the text after it start a line of its
- * own, caution marker included.
+ * own, caution marker included; unbounded, it would push the dialog's buttons
+ * out of reach as its subject.
  */
-function boundTitle(title: string): string {
+export function boundStartHeldTitle(title: string, maxChars = MAX_TITLE_CHARS): string {
   const flat = title.replace(/[\r\n]+/g, " ");
   const points = Array.from(flat);
-  return points.length > MAX_TITLE_CHARS
-    ? `${points.slice(0, MAX_TITLE_CHARS - 1).join("")}…`
-    : flat;
+  return points.length > maxChars ? `${points.slice(0, maxChars - 1).join("")}…` : flat;
 }
 
 export function formatStartHeldPreviewLines(
@@ -43,7 +44,7 @@ export function formatStartHeldPreviewLines(
     return [`${MCP_PREVIEW_CAUTION_PREFIX}This pane isn't held, so the start will be refused.`];
   }
   const lines = [
-    ...(pane.title ? [`Pane: ${boundTitle(pane.title)}`] : []),
+    ...(pane.title ? [`Pane: ${boundStartHeldTitle(pane.title)}`] : []),
     `Held: ${pane.reason}`,
   ];
   if (start === "fresh") {

@@ -75,7 +75,7 @@ const optimisticPanelCloseMock = vi.hoisted(() => ({
 vi.mock("@/services/terminal/optimisticPanelClose", () => optimisticPanelCloseMock);
 
 const launchFromRestoreRecoveryMock = vi.hoisted(() => vi.fn());
-const isRestoreRecoveryLaunchingMock = vi.hoisted(() => vi.fn(() => false));
+const isRestoreRecoveryLaunchingMock = vi.hoisted(() => vi.fn((_panelId: string) => false));
 vi.mock("@/services/terminal/restoreRecoveryLaunch", () => ({
   launchFromRestoreRecovery: launchFromRestoreRecoveryMock,
   isRestoreRecoveryLaunching: isRestoreRecoveryLaunchingMock,
@@ -132,9 +132,14 @@ function setPanelState(options: {
   return { trashPanel };
 }
 
-function setupActions(callbacks: Partial<ActionCallbacks> = {}) {
+function registerActions(callbacks: Partial<ActionCallbacks> = {}): ActionRegistry {
   const actions: ActionRegistry = new Map();
   registerTerminalLifecycleActions(actions, callbacks as ActionCallbacks);
+  return actions;
+}
+
+function setupActions(callbacks: Partial<ActionCallbacks> = {}) {
+  const actions = registerActions(callbacks);
   return async (id: string, args?: unknown, ctx?: unknown): Promise<unknown> => {
     const factory = actions.get(id);
     if (!factory) throw new Error(`missing ${id}`);
@@ -1109,9 +1114,7 @@ describe("terminal.startHeld (#15270)", () => {
   }
 
   function startHeldArgsSchema() {
-    const actions: ActionRegistry = new Map();
-    registerTerminalLifecycleActions(actions, {} as ActionCallbacks);
-    return (actions.get("terminal.startHeld")!() as AnyActionDefinition).argsSchema!;
+    return (registerActions().get("terminal.startHeld")!() as AnyActionDefinition).argsSchema!;
   }
 
   it("resumes the named pane's recorded conversation, in place", async () => {
@@ -1204,7 +1207,9 @@ describe("terminal.startHeld (#15270)", () => {
     ["a pane that isn't held", { restoreRecovery: undefined }, /isn't held/],
     [
       "a pane waiting for a worktree",
-      { restoreRecovery: { reason: "destination-unavailable", awaitingDestination: true as const } },
+      {
+        restoreRecovery: { reason: "destination-unavailable", awaitingDestination: true as const },
+      },
       /waiting for a worktree/,
     ],
     ["a held pane in the trash", { location: "trash" as const }, /in the trash/],
@@ -1268,18 +1273,19 @@ describe("terminal.startHeld (#15270)", () => {
     await expect(failure).rejects.toThrow(/isn't held/);
   });
 
-  it("says the pane is already starting when another start won the race", async () => {
-    setHeldPane();
-    launchFromRestoreRecoveryMock.mockImplementation(async () => {
-      isRestoreRecoveryLaunchingMock.mockReturnValue(true);
-      return "unavailable";
-    });
+  // A launch clears the hold when it commits, before it finishes, so mid-start
+  // the pane reads as not held; it must not be sent to terminal.restart.
+  it("says a pane mid-start is starting, not that it isn't held", async () => {
+    setHeldPane({ restoreRecovery: undefined });
+    isRestoreRecoveryLaunchingMock.mockImplementation((id: string) => id === "p1");
     const run = setupActions();
 
     const failure = run("terminal.startHeld", { terminalId: "p1", start: "fresh" });
 
     await expect(failure).rejects.toBeInstanceOf(UnactionableTargetError);
     await expect(failure).rejects.toThrow(/already starting/);
+    await expect(failure).rejects.not.toThrow(/terminal\.restart/);
+    expect(launchFromRestoreRecoveryMock).not.toHaveBeenCalled();
   });
 
   it("fails retriably when the pane is still held and its launch didn't go through", async () => {
