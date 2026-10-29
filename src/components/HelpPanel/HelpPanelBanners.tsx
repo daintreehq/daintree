@@ -335,15 +335,12 @@ export function HelpPanelBanners({
             tierMismatch.targetTier && (
               <p className="text-xs mt-1 text-text-secondary">
                 Allowing the tool covers repeat calls for 15 minutes after the last one, 30 at most.
-                The project default gives agents launched in this project the{" "}
-                {tierMismatch.targetTier} tool set and raises this session for 30 minutes. New
-                assistant sessions use the tool set in{" "}
-                <Button
-                  variant="link"
-                  className="text-xs"
-                  onClick={onOpenAssistantSettings}
-                  disabled={isApprovingTier}
-                >
+                The project default gives the {tierMismatch.targetTier} tool set to agents launched
+                in this project that support Daintree tools, and raises this session for 30 minutes.
+                New assistant sessions use the tool set in{" "}
+                {/* Live while an approval is in flight: opening a settings tab
+                    neither dismisses this banner nor races the approval. */}
+                <Button variant="link" className="text-xs" onClick={onOpenAssistantSettings}>
                   Assistant settings
                 </Button>
                 .

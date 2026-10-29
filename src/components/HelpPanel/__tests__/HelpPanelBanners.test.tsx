@@ -536,7 +536,9 @@ describe("HelpPanelBanners — tier mismatch (#12119)", () => {
     // The project write feeds agents launched in the project. Every launchMcp
     // agent reads it, not only Claude Code, and there are no Assistant panes
     // left to name (#13502).
-    expect(text).toContain("gives agents launched in this project the full tool set");
+    expect(text).toContain(
+      "gives the full tool set to agents launched in this project that support Daintree tools"
+    );
     expect(text).not.toMatch(/Daintree Assistant panes|Claude Code/);
     // Deliberately broad: nothing in a denied-tool banner has any business
     // promising "new sessions" anything, and that promise was the bug.
@@ -585,21 +587,27 @@ describe("HelpPanelBanners — tier mismatch (#12119)", () => {
     expect(onDismissTierMismatch).toHaveBeenCalledTimes(1);
   });
 
-  it("makes every control inert while an approval is in flight, and spins only the one clicked", () => {
+  it("makes every approval control inert while an approval is in flight, and spins only the one clicked", () => {
     const props = { ...baseProps(), tierMismatch };
-    const { getByTestId, getByText, getByLabelText, rerender } = render(
+    const { getByTestId, getByText, getByLabelText, getByRole, rerender } = render(
       <HelpPanelBanners {...props} />
     );
     fireEvent.click(getByText("Set project default"));
     rerender(<HelpPanelBanners {...props} isApprovingTier />);
 
     const banner = getByTestId("help-tier-mismatch-banner");
-    const buttons = Array.from(banner.querySelectorAll("button"));
-    expect(buttons.length).toBe(4);
+    // The inline Assistant settings link stays live: it neither dismisses the
+    // banner nor touches the approval.
+    const settingsLink = getByRole("button", { name: "Assistant settings" });
+    const buttons = Array.from(banner.querySelectorAll("button")).filter((b) => b !== settingsLink);
+    expect(buttons.length).toBe(3);
     // The × is inert too: dismissing mid-flight would strand the in-flight
-    // grant with no banner to report its outcome. So is the inline
-    // Assistant settings link.
+    // grant with no banner to report its outcome.
     expect(buttons.every((b) => b.getAttribute("aria-disabled") === "true")).toBe(true);
+    expect(settingsLink.hasAttribute("disabled")).toBe(false);
+    expect(settingsLink.getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(settingsLink);
+    expect(props.onOpenAssistantSettings).toHaveBeenCalledTimes(1);
     const busy = buttons.filter((b) => b.getAttribute("aria-busy") === "true");
     expect(busy.map((b) => b.textContent?.trim())).toEqual(["Set project default"]);
 
