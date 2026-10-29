@@ -10,16 +10,45 @@ vi.mock("@/components/ui/button", () => ({
     </button>
   ),
 }));
+type FooterAction = { label: string; onClick: () => void; disabled?: boolean } | undefined;
+
 vi.mock("@/components/ui/AppDialog", () => {
   const AppDialog = ({ isOpen, children }: { isOpen: boolean; children: ReactNode }) =>
     isOpen ? <div>{children}</div> : null;
   AppDialog.Header = ({ children }: { children: ReactNode }) => <div>{children}</div>;
   AppDialog.Title = ({ children }: { children: ReactNode }) => <h2>{children}</h2>;
   AppDialog.CloseButton = () => null;
-  AppDialog.Footer = ({ children, hint }: { children: ReactNode; hint?: ReactNode }) => (
+  AppDialog.Body = ({ children }: { children: ReactNode }) => <div>{children}</div>;
+  // Renders the footer's answers the way the real one does: an unavailable
+  // action stays focusable and announces it, and its click does nothing.
+  AppDialog.Footer = ({
+    hint,
+    leadingAction,
+    secondaryAction,
+    primaryAction,
+  }: {
+    hint?: ReactNode;
+    leadingAction?: FooterAction;
+    secondaryAction?: FooterAction;
+    primaryAction?: FooterAction;
+  }) => (
     <div>
       {hint}
-      {children}
+      {[leadingAction, secondaryAction, primaryAction].map(
+        (action) =>
+          action && (
+            <button
+              key={action.label}
+              type="button"
+              aria-disabled={action.disabled || undefined}
+              onClick={() => {
+                if (!action.disabled) action.onClick();
+              }}
+            >
+              {action.label}
+            </button>
+          )
+      )}
     </div>
   );
   return { AppDialog };
@@ -218,7 +247,7 @@ describe("HostAddProjectDialog", () => {
     await waitFor(() => expect(clone.getAttribute("aria-disabled")).toBeNull());
     fireEvent.click(clone);
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("studio-01 can't clone this");
+    expect(alert.textContent).toContain("studio-01 turned this down");
     expect(alert.textContent).toContain("Only HTTP(S) and SSH remotes can be cloned");
     expect(alert.textContent).not.toContain("[AppError");
     expect(alert.textContent).not.toContain("didn't finish");
@@ -241,7 +270,7 @@ describe("HostAddProjectDialog", () => {
     execute.mockResolvedValue(opened);
     pickHostPaths.mockResolvedValue(["/home/greg/notes"]);
     const onOpened = renderDialog();
-    fireEvent.click(screen.getByRole("button", { name: "Open a folder on studio-01" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open a folder…" }));
     await waitFor(() => expect(onOpened).toHaveBeenCalledWith(opened));
     expect(pickHostPaths).toHaveBeenCalledWith(
       expect.objectContaining({ mode: "directory", hostId: "studio-01" })
@@ -258,7 +287,7 @@ describe("HostAddProjectDialog", () => {
   it("does nothing when the folder picker is dismissed, and states a folder the host refuses", async () => {
     pickHostPaths.mockResolvedValueOnce(null);
     const onOpened = renderDialog();
-    const open = screen.getByRole("button", { name: "Open a folder on studio-01" });
+    const open = screen.getByRole("button", { name: "Open a folder…" });
     fireEvent.click(open);
     await waitFor(() => expect(pickHostPaths).toHaveBeenCalledTimes(1));
     expect(execute).not.toHaveBeenCalled();
@@ -276,15 +305,15 @@ describe("HostAddProjectDialog", () => {
     expect(onOpened).not.toHaveBeenCalled();
   });
 
-  it("says it's opening while the host registers the folder, and Cancel stops waiting for it", async () => {
+  it("says it's opening while the host registers the folder, and Stop waiting stops waiting for it", async () => {
     let answer: (value: unknown) => void = () => {};
     execute.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
     pickHostPaths.mockResolvedValue(["/home/greg/notes"]);
     const onOpened = renderDialog();
-    fireEvent.click(screen.getByRole("button", { name: "Open a folder on studio-01" }));
-    expect(await screen.findByText("Opening")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByText("Opening")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Open a folder…" }));
+    expect(await screen.findByText(/^Opening the folder on studio-01/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Stop waiting" }));
+    expect(screen.queryByText(/^Opening the folder on studio-01/)).toBeNull();
     answer({
       kind: "opened",
       hostId: "studio-01",
@@ -299,8 +328,7 @@ describe("HostAddProjectDialog", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(onOpened).not.toHaveBeenCalled();
     expect(
-      (screen.getByRole("button", { name: "Open a folder on studio-01" }) as HTMLButtonElement)
-        .disabled
+      (screen.getByRole("button", { name: "Open a folder…" }) as HTMLButtonElement).disabled
     ).toBe(false);
   });
 });

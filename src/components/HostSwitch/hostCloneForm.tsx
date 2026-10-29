@@ -137,6 +137,7 @@ export function DestinationField({
   children?: React.ReactNode;
 }) {
   const statusId = useId();
+  const failedId = useId();
   const checking = state.kind === "checking";
   const showChecking = useDeferredLoading(checking, UI_INLINE_LOADING_GATE_MS);
   return (
@@ -146,7 +147,7 @@ export function DestinationField({
           density="compact"
           className="h-7"
           aria-label={`Folder on ${hostName}`}
-          aria-describedby={statusId}
+          aria-describedby={state.kind === "failed" ? failedId : statusId}
           value={value}
           placeholder={placeholder}
           spellCheck={false}
@@ -215,20 +216,23 @@ export function DestinationField({
           </Callout>
         )}
         {state.kind === "invalid" && <Callout severity="error">{state.detail}</Callout>}
-        {state.kind === "failed" && (
-          <Callout
-            severity="error"
-            action={
-              <Button variant="outline" size="xs" disabled={disabled} onClick={onRetry}>
-                <RefreshCw aria-hidden="true" />
-                Retry
-              </Button>
-            }
-          >
-            Couldn't check this folder on {hostName}. {state.message}
-          </Callout>
-        )}
       </div>
+      {/* The host couldn't be asked: an alert, outside the polite answers above. */}
+      {state.kind === "failed" && (
+        <Callout
+          id={failedId}
+          role="alert"
+          severity="error"
+          action={
+            <Button variant="outline" size="xs" disabled={disabled} onClick={onRetry}>
+              <RefreshCw aria-hidden="true" />
+              Retry
+            </Button>
+          }
+        >
+          Couldn't check this folder on {hostName}. {state.message}
+        </Callout>
+      )}
       {children}
     </>
   );

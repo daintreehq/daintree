@@ -18,6 +18,8 @@ vi.mock("@/components/ui/button", () => ({
   ),
 }));
 
+type FooterAction = { label: string; onClick: () => void; disabled?: boolean } | undefined;
+
 vi.mock("@/components/ui/AppDialog", () => {
   const AppDialog = ({
     isOpen,
@@ -39,10 +41,37 @@ vi.mock("@/components/ui/AppDialog", () => {
   AppDialog.Header = ({ children }: { children: ReactNode }) => <div>{children}</div>;
   AppDialog.Title = ({ children }: { children: ReactNode }) => <h2>{children}</h2>;
   AppDialog.CloseButton = () => null;
-  AppDialog.Footer = ({ children, hint }: { children: ReactNode; hint?: ReactNode }) => (
+  AppDialog.Body = ({ children }: { children: ReactNode }) => <div>{children}</div>;
+  // Renders the footer's answers the way the real one does: an unavailable
+  // action stays focusable and announces it, and its click does nothing.
+  AppDialog.Footer = ({
+    hint,
+    leadingAction,
+    secondaryAction,
+    primaryAction,
+  }: {
+    hint?: ReactNode;
+    leadingAction?: FooterAction;
+    secondaryAction?: FooterAction;
+    primaryAction?: FooterAction;
+  }) => (
     <div>
       <div data-testid="hint">{hint}</div>
-      {children}
+      {[leadingAction, secondaryAction, primaryAction].map(
+        (action) =>
+          action && (
+            <button
+              key={action.label}
+              type="button"
+              aria-disabled={action.disabled || undefined}
+              onClick={() => {
+                if (!action.disabled) action.onClick();
+              }}
+            >
+              {action.label}
+            </button>
+          )
+      )}
     </div>
   );
   return { AppDialog };
@@ -566,16 +595,14 @@ describe("HostSwitchDialog", () => {
     );
     render(<HostSwitchDialog request={request} onClose={() => {}} />);
     expect(await screen.findByText(/isn't a git repository/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Send a copy of the repository" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send a copy" })).toBeNull();
   });
 
   it("offers a copy of a repository with no remote, saying what it leaves behind", async () => {
     prepare.mockResolvedValue(preparation({ remotes: [], cloneUrl: null }));
     render(<HostSwitchDialog request={request} onClose={() => {}} />);
-    expect(
-      await screen.findByRole("button", { name: "Send a copy of the repository" })
-    ).toBeTruthy();
-    expect(screen.getByText(/committed history only/)).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Send a copy" })).toBeTruthy();
+    expect(screen.getByText(/sends a copy of its committed history instead/)).toBeTruthy();
   });
 });
 

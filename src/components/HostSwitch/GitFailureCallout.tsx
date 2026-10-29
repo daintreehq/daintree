@@ -63,7 +63,7 @@ export function GitFailureCallout({
               Git output
             </button>
             {showGit && (
-              <CopyButton text={failure.gitText} size="icon-xs" tooltip="Copy git output" />
+              <CopyButton text={failure.gitText} size="icon-xs" aria-label="Copy git output" />
             )}
           </div>
           <pre

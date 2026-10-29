@@ -148,7 +148,7 @@ describe("describeCloneFailure", () => {
     expect(failure.title).toBe("studio-01 couldn't clone git@github.com:daintreehq/daintree.git");
     expect(failure.gitText).toBe("Permission denied (publickey).");
     expect(failure.fix).toBe(
-      "studio-01 needs its own access to this repo: add an SSH key on studio-01, or connect GitHub on studio-01 (Settings on studio-01 → GitHub)."
+      "studio-01 needs its own access to this repository. Add an SSH key on studio-01, or connect GitHub on studio-01 (Settings on studio-01 → GitHub), then retry."
     );
   });
 
@@ -254,11 +254,13 @@ describe("describePlacedWorktree", () => {
       recipeId: null,
     };
     expect(describePlacedWorktree(base, "studio-01")).toBe(
-      "New branch from develop on the remote, at ../daintree-worktrees/feature-x beside the project."
+      "New branch from the remote's develop, at ../daintree-worktrees/feature-x beside the project."
     );
     expect(
       describePlacedWorktree({ ...base, useExistingBranch: true, relativePath: null }, "studio-01")
-    ).toBe("Checks out the existing branch on studio-01, where studio-01 puts new worktrees.");
+    ).toBe(
+      "Checks out the existing branch on studio-01, in the folder studio-01 keeps new worktrees in."
+    );
   });
 });
 

@@ -781,9 +781,11 @@ export function HostSwitchDialog({
     !prep || loadError || quietlyOpening || checkoutOffer
       ? []
       : view === "existing"
-        ? handoff
-          ? ["branch"]
-          : []
+        ? placed
+          ? ["worktree"]
+          : handoff
+            ? ["branch"]
+            : []
         : view === "clone"
           ? ["destination", placed ? "worktree" : "branch"]
           : prep.isGitRepository && !prep.isUnborn
