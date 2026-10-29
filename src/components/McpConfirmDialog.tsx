@@ -19,7 +19,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { WorktreeDeleteNotes } from "@/components/Worktree/WorktreeDeleteNotes";
 import { isCautionPreviewLine, stripCautionPrefix } from "@/lib/mcpPreviewLines";
 import {
-  MAIN_DISPATCH_DEADLINE_MS,
+  confirmationEndsAt,
   useMcpConfirmStore,
   type McpConfirmSelectableTarget,
   type PendingMcpConfirm,
@@ -39,15 +39,6 @@ import { selectActiveSlot, useHelpPanelStore } from "@/store/helpPanelStore";
 import { getAgentConfig } from "@/config/agents";
 import type { HelpAssistantDaintreeConfirmations } from "@shared/types/ipc/api";
 import { logError } from "@/utils/logger";
-
-/**
- * Renderer-side timer that beats main's 30s `pendingDispatches` deadline by
- * a couple seconds, so the user-facing modal closes with a clean
- * `CONFIRMATION_TIMEOUT` outcome before main rejects with a generic
- * "Action dispatch timed out" error. The modal disappears automatically
- * either way; the earlier window just produces nicer audit semantics.
- */
-const CONFIRMATION_TIMEOUT_MS = 28_000;
 
 /**
  * Lower-bound read-time gate for destructive dispatches. `resolveOnce` guards
@@ -93,6 +84,9 @@ const PREVIEW_MAX_BODY_HEIGHT = "max-h-[13rem]";
 
 /** The house's long-wait mark: past it, a loading state says it is still going. */
 const PREVIEW_STILL_WORKING_MS = 5_000;
+
+/** What an expired request says beside its dead button (#14989). */
+const EXPIRED_HINT = "Timed out before an answer, so nothing ran";
 
 function truncateUserAgent(userAgent: string): string {
   return userAgent.length > MAX_USER_AGENT_DISPLAY
@@ -140,6 +134,9 @@ export function McpConfirmDialog() {
   const current = useMcpConfirmStore((state) => state.current);
   const queueDepth = useMcpConfirmStore((state) => state.queue.length);
   const resolveCurrent = useMcpConfirmStore((state) => state.resolveCurrent);
+  const markShown = useMcpConfirmStore((state) => state.markShown);
+  const expire = useMcpConfirmStore((state) => state.expire);
+  const dismiss = useMcpConfirmStore((state) => state.dismiss);
   const resetKey = current?.requestId ?? "null";
 
   // `resolveCurrent` is synchronous: it resolves the promise and advances the
@@ -154,40 +151,30 @@ export function McpConfirmDialog() {
       requestId: string,
       decision: McpConfirmationDecision,
       selectedTargetIds?: readonly string[],
-      scope?: McpApprovalScope,
-      unseen?: boolean
+      scope?: McpApprovalScope
     ) => {
       if (handledRequestIdRef.current === requestId) return;
       handledRequestIdRef.current = requestId;
-      resolveCurrent(decision, selectedTargetIds, scope, unseen);
+      resolveCurrent(decision, selectedTargetIds, scope);
     },
     [resolveCurrent]
   );
 
-  // Whether this view was reported visible at any point while the request
-  // asked. Keyed on the request rather than `current`, which a preview landing
-  // replaces. A view the page reports hidden (a host's project in the
-  // background, a minimised window, on macOS one covered by others) still opens
-  // the dialog, and a timeout there means nobody saw it, not that anyone declined.
-  const seenRef = useRef<{ requestId: string; seen: boolean } | null>(null);
+  // The request is on screen once it is current and its view is visible, and
+  // that is when its decision window starts (#14989): not when it was queued,
+  // and not while a view the page reports hidden (a host's project in the
+  // background, a minimised window, on macOS one covered by others) holds it.
+  // A timeout before then means nobody saw it, not that anyone declined.
   const currentRequestId = current?.requestId ?? null;
   useEffect(() => {
     if (currentRequestId === null) return;
-    if (seenRef.current?.requestId !== currentRequestId) {
-      seenRef.current = { requestId: currentRequestId, seen: false };
-    }
     const observe = () => {
-      if (
-        document.visibilityState === "visible" &&
-        seenRef.current?.requestId === currentRequestId
-      ) {
-        seenRef.current.seen = true;
-      }
+      if (document.visibilityState === "visible") markShown(currentRequestId);
     };
     observe();
     document.addEventListener("visibilitychange", observe);
     return () => document.removeEventListener("visibilitychange", observe);
-  }, [currentRequestId]);
+  }, [currentRequestId, markShown]);
 
   // Which rows of a selectable confirmation are still checked (#12123). Every
   // target starts checked: these are the exact finite ids the caller already
@@ -232,39 +219,17 @@ export function McpConfirmDialog() {
     });
   }, []);
 
+  // One timer, for the moment the request stops offering approval: the end of
+  // its window once shown, or main's deadline while it waits. Both are fixed
+  // points, so a preview landing re-arms the same moment rather than renewing
+  // it, and the cooldown that follows a promotion always fits inside a window
+  // that only starts on screen.
+  const endsAt = current === null || current.expired ? undefined : confirmationEndsAt(current);
   useEffect(() => {
-    if (current === null) return;
-    const { requestId, enqueuedAt } = current;
-    // Subtract time the request already spent queued behind a prior modal so
-    // every dispatch races against the same wall-clock budget; otherwise a
-    // queued item could outlive main's 30s deadline and degrade to a generic
-    // timeout error instead of `CONFIRMATION_TIMEOUT`.
-    const elapsed = Date.now() - enqueuedAt;
-    // Destructive dispatches disable the confirm button for CONFIRM_COOLDOWN_MS
-    // after promotion. A deeply-queued item could otherwise have less budget
-    // left than the cooldown and auto-time-out before the user can ever click —
-    // so floor the window above the cooldown for those. The floor still lands
-    // under main's 30s deadline (28s budget + ~1.5s), preserving the clean
-    // CONFIRMATION_TIMEOUT outcome.
-    const floor = current.danger === "confirm" ? CONFIRM_COOLDOWN_MS + 300 : 500;
-    // The floor keeps a deeply-queued destructive item approvable for at least
-    // as long as its own cooldown. But the floor must never push the modal past
-    // main's deadline: an item promoted at ~29s would otherwise sit open until
-    // 30.5s and re-enable its confirm button at 30.2s — after main had already
-    // failed the dispatch — so a click would run the destructive action while
-    // the agent had been told it timed out. Clamp to whatever budget is
-    // genuinely left; a non-positive clamp fires the timeout immediately, which
-    // is the honest outcome for a request that can no longer be approved.
-    const remaining = Math.min(
-      Math.max(floor, CONFIRMATION_TIMEOUT_MS - elapsed),
-      MAIN_DISPATCH_DEADLINE_MS - elapsed
-    );
-    const timer = setTimeout(() => {
-      const seen = seenRef.current?.requestId === requestId ? seenRef.current.seen : true;
-      resolveOnce(requestId, "timeout", undefined, undefined, !seen);
-    }, remaining);
+    if (currentRequestId === null || endsAt === undefined) return;
+    const timer = setTimeout(() => expire(currentRequestId), Math.max(0, endsAt - Date.now()));
     return () => clearTimeout(timer);
-  }, [current, resolveOnce]);
+  }, [currentRequestId, endsAt, expire]);
 
   if (current === null) {
     return (
@@ -285,6 +250,7 @@ export function McpConfirmDialog() {
   // red. Daintree classifies its own actions, so unlike a remote server's
   // self-reported tool annotations this value is trusted.
   const isDestructive = current.danger === "confirm";
+  const expired = current.expired === true;
   const previewState = derivePreviewState(current);
   const hasArgs = current.argsSummary.trim().length > 0;
 
@@ -321,8 +287,9 @@ export function McpConfirmDialog() {
   const hint = gateHintText(
     previewState,
     previewSlow,
-    current.typedNameTarget ? 0 : queueDepth,
-    selectableTargets !== undefined && selectedCount === 0
+    current.typedNameTarget && !expired ? 0 : queueDepth,
+    selectableTargets !== undefined && selectedCount === 0,
+    expired
   );
 
   const sharedProps = {
@@ -331,25 +298,34 @@ export function McpConfirmDialog() {
     // sideways; wide enough that a file path or commit subject stays on one line
     // and the scoped session label still leaves the footer hint room to read.
     size: "md" as const,
-    onClose: () => resolveOnce(current.requestId, "rejected"),
+    // An expired request already told its caller it timed out, so closing it
+    // only moves on; it is not a second answer.
+    onClose: expired
+      ? () => dismiss(current.requestId)
+      : () => resolveOnce(current.requestId, "rejected"),
     title: confirmTitle(current),
     confirmLabel: offersSession
       ? sessionConfirmLabel(current.actionTitle, allowForSession)
       : selectionConfirmLabel(current, selectedCount),
-    cancelLabel: "Cancel",
-    onConfirm: () =>
+    cancelLabel: expired ? "Close" : "Cancel",
+    onConfirm: () => {
+      if (expired) return;
       resolveOnce(
         current.requestId,
         "approved",
         approvedTargetIds,
         offersSession && allowForSession ? "session" : undefined
-      ),
+      );
+    },
     hasPreview: hasScrollableContent,
     // An empty selection is the same outcome as Cancel with an extra dispatch in
-    // between, so it is not offered as an approval.
+    // between, so it is not offered as an approval. An expired request keeps
+    // its button where it was, dead, beside the reason.
     confirmDisabled:
-      previewState === "pending" || (selectableTargets !== undefined && selectedCount === 0),
-    confirmCooldownMs: isDestructive ? CONFIRM_COOLDOWN_MS : undefined,
+      expired ||
+      previewState === "pending" ||
+      (selectableTargets !== undefined && selectedCount === 0),
+    confirmCooldownMs: isDestructive && !expired ? CONFIRM_COOLDOWN_MS : undefined,
     cooldownKey: current.requestId,
     // A promoted request is a new question: it opens at the top, with focus back
     // on the safe default rather than on the button that answered the last one.
@@ -365,7 +341,9 @@ export function McpConfirmDialog() {
       // Wraps rather than truncating: beside the long session label the reason
       // the button is dead would otherwise shrink to an ellipsis. Two lines of
       // text-xs sit inside the button's height, so the row never moves.
-      <span aria-live="polite" className="line-clamp-2 min-w-0 break-words">
+      // The expiry is announced by the status line in the body, which is
+      // there before it happens; this one would only announce it twice.
+      <span aria-live={expired ? "off" : "polite"} className="line-clamp-2 min-w-0 break-words">
         {hint}
       </span>
     ) : undefined,
@@ -376,6 +354,12 @@ export function McpConfirmDialog() {
   // that the other doesn't repeat (forge.dismissReview's merge-safety note).
   const body = (
     <div className="space-y-4">
+      {/* Mounted for the whole request, so the expiry is a change a screen
+          reader announces rather than a live region that arrived already full. */}
+      <span role="status" className="sr-only">
+        {expired ? EXPIRED_HINT : ""}
+      </span>
+
       <RequesterRow current={current} />
 
       <AppDialog.Description>{current.actionDescription}</AppDialog.Description>
@@ -1084,23 +1068,29 @@ function ArgumentsDisclosure({ argsSummary }: { argsSummary: string }) {
  *
  * Deliberately not a countdown. The request does expire, but a ticking clock on
  * a security decision pushes the reader toward impulsive rather than
- * deliberative processing, so the expiry stays silent and only the conditions
- * the user can act on are named. Nothing here is colour-coded either — it has
- * to survive forced-colors, where a tone would be flattened away.
+ * deliberative processing, so the expiry stays silent until it happens, and
+ * then says so in place of the dead button's other reasons (#14989). Nothing
+ * here is colour-coded either — it has to survive forced-colors, where a tone
+ * would be flattened away.
  */
 function gateHintText(
   previewState: PreviewState,
   previewSlow: boolean,
   queueDepth: number,
-  emptySelection: boolean
+  emptySelection: boolean,
+  expired = false
 ): string | null {
   const parts: string[] = [];
-  if (previewState === "pending") {
+  if (expired) {
+    parts.push(EXPIRED_HINT);
+  } else if (previewState === "pending") {
     parts.push(previewSlow ? "Still working…" : "Checking what this affects…");
   }
   // Says why the button is dead rather than leaving the approver to guess. Same
   // outcome as Cancel, so it is a nudge, not an error.
-  if (emptySelection) parts.push("Nothing selected — cancel, or check something to destroy.");
+  if (emptySelection && !expired) {
+    parts.push("Nothing selected — cancel, or check something to destroy.");
+  }
   if (queueDepth > 0) {
     parts.push(`${pluralize(queueDepth, "more request")} waiting`);
   }

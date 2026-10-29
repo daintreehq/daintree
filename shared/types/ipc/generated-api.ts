@@ -771,6 +771,9 @@ export interface GeneratedElectronAPI {
     getTurnOutcomeRecords(
       ...args: IpcInvokeMap["mcp-server:get-turn-outcome-records"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:get-turn-outcome-records"]["result"]>;
+    holdDispatch(
+      ...args: IpcInvokeMap["mcp-server:hold-dispatch"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:hold-dispatch"]["result"]>;
     issueGrant(
       ...args: IpcInvokeMap["mcp-server:issue-grant"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:issue-grant"]["result"]>;

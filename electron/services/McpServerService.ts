@@ -13,6 +13,8 @@ import type {
   McpAuditRecord,
   McpAuditRecordQuery,
   McpAuditStats,
+  McpDispatchHoldPhase,
+  McpDispatchHoldResult,
   McpGrantLifecyclePayload,
   McpIssueGrantResult,
   McpIssueNativeGrantResult,
@@ -1472,6 +1474,19 @@ export class McpServerService {
   ): ReturnType<typeof this.bridge.dispatchActionForWebContents> {
     this.ensureHostBridgeListeners();
     return this.bridge.dispatchActionForWebContents(...args);
+  }
+
+  /**
+   * A view reporting how far a confirm-gated dispatch it was sent has got
+   * (#14989), which moves main's deadline for it. Answered for this machine's
+   * own views only: a host's dispatch is held by the host.
+   */
+  holdDispatch(
+    webContentsId: number,
+    requestId: string,
+    phase: McpDispatchHoldPhase
+  ): McpDispatchHoldResult {
+    return this.bridge.holdDispatch(webContentsId, requestId, phase);
   }
 
   /**

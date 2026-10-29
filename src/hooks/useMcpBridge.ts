@@ -68,6 +68,7 @@ import type {
 import type {
   McpApprovalScope,
   McpConfirmationDecision,
+  McpDispatchHoldPhase,
   McpSessionOrigin,
 } from "@shared/types/ipc/mcpServer";
 import { isPtyPanel, type TerminalSpawnSource } from "@shared/types/panel";
@@ -90,14 +91,27 @@ const REJECTION_RESULT: ActionDispatchResult = {
 };
 
 /**
- * The approval arrived, but main had already given up on the request.
+ * The approval arrived, but main had already given up on the request (#14989).
  *
  * Distinct from {@link TIMEOUT_RESULT}, which means nobody answered: here a
  * human DID approve, and the point is that we must not act on it. Main dropped
  * the pending dispatch at its deadline and told the agent the call timed out,
- * so starting an irreversible delete now would destroy a worktree on the
- * strength of a result the caller was told never happened. The response itself
- * is very likely discarded; refusing is about not doing the work.
+ * so running the action now would do it on the strength of a result the caller
+ * was told never happened. The response itself is very likely discarded;
+ * refusing is about not doing the work.
+ */
+const LATE_APPROVAL_RESULT: ActionDispatchResult = {
+  ok: false,
+  error: {
+    code: "CONFIRMATION_TIMEOUT",
+    message: "The approval arrived after the request had timed out, so nothing ran.",
+  },
+};
+
+/**
+ * The same refusal for a force delete whose live re-check outlasted the run it
+ * was granted: an approval is still not permission to delete after main's
+ * deadline.
  */
 const EXPIRED_APPROVAL_RESULT: ActionDispatchResult = {
   ok: false,
@@ -117,20 +131,22 @@ const TIMEOUT_RESULT: ActionDispatchResult = {
 };
 
 /**
- * The same timeout, when the view asking was reported hidden throughout: an
- * observation, not a refusal. A view of a host's project is always on the
- * machine the person works at, never the host, so the agent there is told
- * where it was rather than left to guess its own screen.
+ * The same timeout, for a request that never reached the screen: its view was
+ * reported hidden throughout, or other requests were ahead of it until its
+ * time ran out (#14989). An observation, not a refusal. A view of a host's
+ * project is always on the machine the person works at, never the host, so
+ * the agent there is told where it was rather than left to guess its own
+ * screen.
  */
 export function unseenTimeoutResult(hostId: string | undefined): ActionDispatchResult {
   const where = hostId
-    ? "It opened on the machine the person works at, in the window showing this host's project, and that view was hidden the whole time"
-    : "The Daintree view showing it was hidden the whole time";
+    ? "It was raised on the machine the person works at, in the window showing this host's project, and never reached the screen there"
+    : "It never reached the screen";
   return {
     ok: false,
     error: {
       code: "CONFIRMATION_TIMEOUT",
-      message: `Confirmation timed out without a response. ${where}, so nobody saw it to answer. Nothing was declined.`,
+      message: `Confirmation timed out without a response. ${where}: the view was hidden, or other requests were ahead of it. Nobody saw it to answer, and nothing was declined.`,
     },
   };
 }
@@ -924,23 +940,18 @@ export async function buildMcpConfirmPreview(
 const GATE_RECHECK_BUDGET_MS = 5_000;
 
 /**
- * How long after RECEIVING a dispatch the bridge may still start a force
- * delete on the strength of its approval.
- *
- * Not main's deadline itself, and short of it by exactly the re-check budget.
- * Two clocks are involved and the renderer holds the later one: main starts its
- * 30s timer when it queues the dispatch, before a routed send that may first
- * have to thaw an evicted view, so `Date.now() - receivedAt` UNDERSTATES how
- * long main has been waiting by however long that took. Reserving the re-check
- * budget means even a delete that spends its full allowance re-reading the
- * worktree cannot begin later than main's deadline measured from receipt — the
- * unseen send latency is what the remaining margin is for.
- *
- * Refusing early is the safe direction: nothing is deleted, and the caller can
- * ask again. Dispatching late is not — the worktree would be destroyed after
- * the caller was told the call timed out.
+ * Ask main to hold this dispatch open for a confirmation phase (#14989): the
+ * time main granted, from when it answered, or null once main no longer holds
+ * the call. For `approved` that null is final: past main's deadline it has
+ * told the agent the call failed, so nothing may run on the approval.
  */
-const APPROVAL_ACTION_DEADLINE_MS = MAIN_DISPATCH_DEADLINE_MS - GATE_RECHECK_BUDGET_MS;
+async function holdDispatch(
+  requestId: string,
+  phase: McpDispatchHoldPhase
+): Promise<number | null> {
+  const answer = await window.electron.mcpServer.holdDispatch({ requestId, phase });
+  return answer.held ? answer.remainingMs : null;
+}
 
 /**
  * The pre-dispatch re-check, bounded. Resolves to an unverified outcome rather
@@ -1174,9 +1185,9 @@ export function useMcpBridge(): void {
         hostPreview,
         authorization,
       }) => {
-        // Main started its 30s clock when it sent this; ours starts a beat
-        // later, which is the safe direction to be wrong in only for reporting
-        // — for the destructive re-check below we compare against it directly.
+        // Main started its clock when it sent this; ours starts a beat later.
+        // Only a confirmation's first deadline reads it, until main grants a
+        // hold, and an approval runs on main's own say-so, never on this.
         // Taken before the snapshot wait below, which spends that same clock.
         const receivedAt = Date.now();
         // A background view's worktree port is restored just before main sends
@@ -1202,6 +1213,9 @@ export function useMcpBridge(): void {
         // Set only when the user ticked "Allow for this session" on a dialog
         // main said may offer it (#12692); main mints the grant, never this.
         let approvalScope: McpApprovalScope | undefined;
+        // When the run main granted an approval ends (#14989). Undefined for a
+        // dispatch nobody was asked about, which main times as it always did.
+        let runDeadlineAt: number | undefined;
         // Declared outside the confirm block so the approved dispatch can pin
         // itself to the previewed cwd. Stays undefined for pre-granted
         // dispatches, which show no modal and so previewed nothing to pin to.
@@ -1369,74 +1383,83 @@ export function useMcpBridge(): void {
                   : undefined;
               let resolution: McpConfirmResolution;
               try {
-                resolution = await requestMcpConfirmation({
-                  requestId,
-                  actionId,
-                  actionTitle: definition.title,
-                  actionDescription: definition.description,
-                  // Carry the "why this is gated" rationale into the host
-                  // confirm dialog so the human sees the same justification the
-                  // model does — parity with the removed elicitation prompt,
-                  // which used to be the only surface that showed it (#11342).
-                  ...(closeApproval
-                    ? { dangerRationale: PROTECTED_CLOSE_RATIONALE }
-                    : definition.dangerRationale
-                      ? { dangerRationale: definition.dangerRationale }
+                resolution = await requestMcpConfirmation(
+                  {
+                    requestId,
+                    actionId,
+                    actionTitle: definition.title,
+                    actionDescription: definition.description,
+                    // Carry the "why this is gated" rationale into the host
+                    // confirm dialog so the human sees the same justification the
+                    // model does — parity with the removed elicitation prompt,
+                    // which used to be the only surface that showed it (#11342).
+                    ...(closeApproval
+                      ? { dangerRationale: PROTECTED_CLOSE_RATIONALE }
+                      : definition.dangerRationale
+                        ? { dangerRationale: definition.dangerRationale }
+                        : {}),
+                    argsSummary: summarizeMcpArgs(args),
+                    // Names WHICH worktree/recipe in the title. Resolved from the
+                    // renderer's stores, not from the redacted args summary, or
+                    // for another machine's call from that machine's preview.
+                    ...(hostLines !== undefined
+                      ? hostSubject
+                        ? { subject: hostSubject }
+                        : {}
+                      : previewTarget
+                        ? (() => {
+                            const subject = resolveMcpConfirmSubject(previewTarget);
+                            return subject ? { subject } : {};
+                          })()
+                        : {}),
+                    // A protected close is confirm-tier in effect even though
+                    // `terminal.close` declares safe: it is what made main ask.
+                    danger: closeApproval ? "confirm" : definition.danger,
+                    // Display-only requesting-bearer identity (#9157). Present
+                    // only for unpinned external dispatch; the dialog renders a
+                    // "Requested by" row when set, stays provenance-free when not.
+                    callerInfo,
+                    // Origin travels with the identity so the dialog can name the
+                    // requester positively instead of inferring one from an
+                    // absence that has two very different causes.
+                    sessionOrigin,
+                    // Only where "Allow for this session" can deliver what it says.
+                    // A target-picking tool's dialog is raised again on every
+                    // call, so offering to stop asking would be untrue (#12692).
+                    ...(offerSessionApproval === true && isGenericNativeGrantEligible(actionId)
+                      ? { offerSessionApproval: true }
                       : {}),
-                  argsSummary: summarizeMcpArgs(args),
-                  // Names WHICH worktree/recipe in the title. Resolved from the
-                  // renderer's stores, not from the redacted args summary, or
-                  // for another machine's call from that machine's preview.
-                  ...(hostLines !== undefined
-                    ? hostSubject
-                      ? { subject: hostSubject }
-                      : {}
-                    : previewTarget
-                      ? (() => {
-                          const subject = resolveMcpConfirmSubject(previewTarget);
-                          return subject ? { subject } : {};
-                        })()
+                    // Another machine's call is not above any tier of this
+                    // view's: it is that machine's question, asked here.
+                    ...(approvalOnly === true && hostLines === undefined
+                      ? { approvalReason: approvalReason ?? ("above-tier" as const) }
                       : {}),
-                  // A protected close is confirm-tier in effect even though
-                  // `terminal.close` declares safe: it is what made main ask.
-                  danger: closeApproval ? "confirm" : definition.danger,
-                  // Display-only requesting-bearer identity (#9157). Present
-                  // only for unpinned external dispatch; the dialog renders a
-                  // "Requested by" row when set, stays provenance-free when not.
-                  callerInfo,
-                  // Origin travels with the identity so the dialog can name the
-                  // requester positively instead of inferring one from an
-                  // absence that has two very different causes.
-                  sessionOrigin,
-                  // Only where "Allow for this session" can deliver what it says.
-                  // A target-picking tool's dialog is raised again on every
-                  // call, so offering to stop asking would be untrue (#12692).
-                  ...(offerSessionApproval === true && isGenericNativeGrantEligible(actionId)
-                    ? { offerSessionApproval: true }
-                    : {}),
-                  // Another machine's call is not above any tier of this
-                  // view's: it is that machine's question, asked here.
-                  ...(approvalOnly === true && hostLines === undefined
-                    ? { approvalReason: approvalReason ?? ("above-tier" as const) }
-                    : {}),
-                  previewPending,
-                  ...(hostLines !== undefined ? { preview: hostLines } : {}),
-                  ...(hostLines === undefined && previewTarget?.kind === "worktreeDelete"
-                    ? { worktreeDeleteNotesTargetId: previewTarget.worktreeId }
-                    : {}),
-                  ...((hasAsyncPreview || hostLines !== undefined) && previewTarget
-                    ? { previewTitle: mcpConfirmPreviewTitle(previewTarget) }
-                    : {}),
-                  ...(selectableTargets
-                    ? {
-                        selectableTargets,
-                        selectionConfirmLabel:
-                          previewTarget?.kind === "terminalClose"
-                            ? { verb: "Close", one: "panel", many: "panels" }
-                            : { verb: "Kill", one: "terminal", many: "terminals" },
-                      }
-                    : {}),
-                });
+                    previewPending,
+                    ...(hostLines !== undefined ? { preview: hostLines } : {}),
+                    ...(hostLines === undefined && previewTarget?.kind === "worktreeDelete"
+                      ? { worktreeDeleteNotesTargetId: previewTarget.worktreeId }
+                      : {}),
+                    ...((hasAsyncPreview || hostLines !== undefined) && previewTarget
+                      ? { previewTitle: mcpConfirmPreviewTitle(previewTarget) }
+                      : {}),
+                    ...(selectableTargets
+                      ? {
+                          selectableTargets,
+                          selectionConfirmLabel:
+                            previewTarget?.kind === "terminalClose"
+                              ? { verb: "Close", one: "panel", many: "panels" }
+                              : { verb: "Kill", one: "terminal", many: "terminals" },
+                        }
+                      : {}),
+                  },
+                  // Main holds the call open while it waits and while it is on
+                  // screen (#14989); until it grants that, the plain deadline it
+                  // started when it sent this is all the dialog can count on.
+                  {
+                    deadlineAt: receivedAt + MAIN_DISPATCH_DEADLINE_MS,
+                    hold: (phase) => holdDispatch(requestId, phase),
+                  }
+                );
               } finally {
                 inFlightConfirms.delete(requestId);
               }
@@ -1483,6 +1506,22 @@ export function useMcpBridge(): void {
                 });
                 return;
               }
+              // Main has the last word on whether the call is still live: an
+              // approval it refuses came after it told the agent the call
+              // timed out, and must not run (#14989). Accepting it also starts
+              // the run's own budget, so a long read never comes out of it.
+              const claimedAt = Date.now();
+              const runMs = await holdDispatch(requestId, "approved").catch(() => null);
+              if (disposed) return;
+              if (runMs === null) {
+                window.electron.mcpBridge.sendDispatchActionResponse({
+                  requestId,
+                  result: LATE_APPROVAL_RESULT,
+                  confirmationDecision: "timeout",
+                });
+                return;
+              }
+              runDeadlineAt = claimedAt + runMs;
               if (selectableTargets !== undefined) {
                 // Only the rows still checked, each carrying the agent state its
                 // row was SHOWING. `run()` re-reads that state live before it
@@ -1506,13 +1545,12 @@ export function useMcpBridge(): void {
               if (previewTarget?.kind === "worktreeDelete" && previewTarget.force) {
                 const outcome = await recheckWorktreeDeleteOutcome(previewTarget.worktreeId);
                 if (disposed) return;
-                // Approval near the modal's 28s timeout plus a slow re-read can
-                // land after main's 30s deadline, where the agent has already
-                // been told the call timed out. Deleting the worktree at that
-                // point destroys it behind a reported failure, so the deadline
-                // wins over the approval.
+                // A slow re-read can spend the run main granted, and deleting
+                // past its deadline destroys the worktree behind a reported
+                // failure, so the deadline wins over the approval. The re-check
+                // budget is held back for the send latency nobody here can see.
                 const refusal =
-                  Date.now() - receivedAt >= APPROVAL_ACTION_DEADLINE_MS
+                  Date.now() >= claimedAt + runMs - GATE_RECHECK_BUDGET_MS
                     ? EXPIRED_APPROVAL_RESULT
                     : worktreeDeleteGateRefusal(
                         resolveWorktreeDeleteGate(previewTarget, outcome),
@@ -1548,6 +1586,18 @@ export function useMcpBridge(): void {
                 observedAgentRunning: target.agentRunning,
               }));
             }
+          }
+
+          // An approval main accepted is still not permission to start once
+          // that grant has run out: a view stalled past it would act after the
+          // agent was told the call timed out.
+          if (runDeadlineAt !== undefined && Date.now() >= runDeadlineAt) {
+            window.electron.mcpBridge.sendDispatchActionResponse({
+              requestId,
+              result: LATE_APPROVAL_RESULT,
+              confirmationDecision: "timeout",
+            });
+            return;
           }
 
           const dispatchArgs = tagMcpSpawnSource(

@@ -2245,6 +2245,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./mcpServer.js").AssistantTurnRecord[];
   };
+  "mcp-server:hold-dispatch": {
+    args: [request: { requestId: string; phase: import("./mcpServer.js").McpDispatchHoldPhase }];
+    result: import("./mcpServer.js").McpDispatchHoldResult;
+  };
   "mcp-server:issue-grant": {
     args: [payload: { sessionId: string; toolId: string }];
     result: import("./mcpServer.js").McpIssueGrantResult;

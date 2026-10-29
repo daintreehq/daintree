@@ -33,22 +33,38 @@ import {
 import { thawThenSend } from "../../utils/thawThenSend.js";
 import type { WorkspaceViewLeaseRegistry } from "./workspaceViewLease.js";
 import type { RoutedViewWorktreePort } from "./worktreeViewPort.js";
-import type { ActionContext, ActionManifestEntry } from "../../../shared/types/actions.js";
+import type {
+  ActionContext,
+  ActionDispatchResult,
+  ActionManifestEntry,
+} from "../../../shared/types/actions.js";
 import type {
   McpBearerIdentity,
   McpDispatchAuthorization,
+  McpDispatchHoldPhase,
+  McpDispatchHoldResult,
   McpSessionOrigin,
 } from "../../../shared/types/ipc/mcpServer.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { maskTerminalInOtherProject } from "../../../shared/utils/terminalInOtherProject.js";
 import type {
   PendingRequest,
+  DispatchHold,
   DispatchEnvelope,
   DispatchedWorkspaceRef,
   McpWorkspaceBinding,
   WorkspaceDispatchOptions,
 } from "./shared.js";
-import { MCP_MANIFEST_REQUEST_TIMEOUT_MS, MCP_DISPATCH_TIMEOUT_MS } from "./shared.js";
+import {
+  CONFIRMATION_TIMEOUT_CODE,
+  MCP_MANIFEST_REQUEST_TIMEOUT_MS,
+  MCP_DISPATCH_TIMEOUT_MS,
+} from "./shared.js";
+import {
+  MCP_CONFIRM_DECISION_MS,
+  MCP_CONFIRM_HOLD_GRACE_MS,
+  MCP_CONFIRM_QUEUE_HOLD_MS,
+} from "../../../shared/config/mcpConfirmWindow.js";
 
 /**
  * Base for every "this session's routing target can't be reached" failure, so
@@ -314,6 +330,31 @@ function routeLostError(route: BridgeRoute): McpRouteBindingError {
     ? new WorkspaceBindingError(route.workspaceId, "not-found")
     : new SessionBindingError(route.webContentsId);
 }
+
+/**
+ * What a call still waiting on the person resolves with when main's hold on it
+ * runs out (#14989). Normally the view answers first; this is for a view that
+ * went quiet, or a prompt that never reached the screen.
+ */
+function confirmationExpiredResult(phase: "queued" | "shown"): ActionDispatchResult {
+  return {
+    ok: false,
+    error: {
+      code: CONFIRMATION_TIMEOUT_CODE,
+      message:
+        phase === "queued"
+          ? "Confirmation timed out before it reached the screen, behind other requests or in a hidden view. Nothing was declined, and nothing ran."
+          : "Confirmation timed out before the user responded. Nothing ran.",
+    },
+  };
+}
+
+const HOLD_PHASE_ORDER: Record<DispatchHold["phase"], number> = {
+  dispatched: 0,
+  queued: 1,
+  shown: 2,
+  approved: 3,
+};
 
 /** Names the unreachable target in a deadline message, so a timeout says which view went quiet. */
 function routeTimeoutSuffix(route: BridgeRoute | undefined, timeoutMs: number): string {
@@ -909,7 +950,12 @@ export function createRendererBridge(
     route?: BridgeRoute,
     approval?: Pick<
       WorkspaceDispatchOptions,
-      "offerSessionApproval" | "approvalOnly" | "approvalReason" | "authorization" | "hostPreview"
+      | "offerSessionApproval"
+      | "approvalOnly"
+      | "approvalReason"
+      | "authorization"
+      | "hostPreview"
+      | "fixedDeadline"
     >
   ): Promise<DispatchEnvelope> {
     let viewId: number | undefined;
@@ -946,7 +992,12 @@ export function createRendererBridge(
     route?: BridgeRoute,
     approval?: Pick<
       WorkspaceDispatchOptions,
-      "offerSessionApproval" | "approvalOnly" | "approvalReason" | "authorization" | "hostPreview"
+      | "offerSessionApproval"
+      | "approvalOnly"
+      | "approvalReason"
+      | "authorization"
+      | "hostPreview"
+      | "fixedDeadline"
     >
   ): Promise<DispatchEnvelope> {
     return new Promise((resolve, reject) => {
@@ -960,16 +1011,35 @@ export function createRendererBridge(
 
       const requestId = randomUUID();
       const webContentsId = webContents.id;
-      const timer = setTimeout(() => {
-        const pending = pendingDispatches.get(requestId);
-        pending?.destroyedCleanup?.();
-        pendingDispatches.delete(requestId);
-        reject(
-          new Error(
-            `Action dispatch timed out: ${actionId}${routeTimeoutSuffix(route, MCP_DISPATCH_TIMEOUT_MS)}`
-          )
-        );
-      }, MCP_DISPATCH_TIMEOUT_MS);
+      const startedAt = Date.now();
+      const hold: DispatchHold = {
+        phase: "dispatched",
+        deadlineAt: startedAt + MCP_DISPATCH_TIMEOUT_MS,
+        extendable: approval?.fixedDeadline !== true,
+        expire: () => {
+          const pending = pendingDispatches.get(requestId);
+          if (pending?.hold !== hold) return;
+          clearTimeout(pending.timer);
+          pending.destroyedCleanup?.();
+          pendingDispatches.delete(requestId);
+          // A call still waiting on the person is answered as the confirmation
+          // timeout it is, whatever the view managed to say: the view may have
+          // gone quiet, but nothing ran.
+          if (hold.phase === "queued" || hold.phase === "shown") {
+            pending.resolve({
+              result: confirmationExpiredResult(hold.phase),
+              confirmationDecision: "timeout",
+            });
+            return;
+          }
+          reject(
+            new Error(
+              `Action dispatch timed out: ${actionId}${routeTimeoutSuffix(route, hold.deadlineAt - startedAt)}`
+            )
+          );
+        },
+      };
+      const timer = setTimeout(hold.expire, MCP_DISPATCH_TIMEOUT_MS);
 
       const onDestroyed = () => {
         const pending = pendingDispatches.get(requestId);
@@ -1005,6 +1075,7 @@ export function createRendererBridge(
         timer,
         webContentsId,
         destroyedCleanup: settle,
+        hold,
       });
 
       const send = () => {
@@ -1022,7 +1093,7 @@ export function createRendererBridge(
             ),
           });
         } catch (err) {
-          clearTimeout(timer);
+          clearTimeout(pendingDispatches.get(requestId)?.timer ?? timer);
           settle();
           pendingDispatches.delete(requestId);
           reject(normalizeError(err, `Failed to dispatch action: ${actionId}`));
@@ -1239,7 +1310,12 @@ export function createRendererBridge(
     sessionOrigin: McpSessionOrigin = "external",
     approval?: Pick<
       WorkspaceDispatchOptions,
-      "offerSessionApproval" | "approvalOnly" | "approvalReason" | "authorization" | "hostPreview"
+      | "offerSessionApproval"
+      | "approvalOnly"
+      | "approvalReason"
+      | "authorization"
+      | "hostPreview"
+      | "fixedDeadline"
     >,
     callerInfo?: McpBearerIdentity
   ): Promise<DispatchEnvelope> {
@@ -1997,6 +2073,45 @@ export function createRendererBridge(
     });
   };
 
+  /**
+   * Move a confirm-gated dispatch's deadline to the phase its view reports
+   * (#14989). Only the view the dispatch was sent to may hold it, phases only
+   * move forward, and a hold that arrives after the deadline settles the call
+   * there and then instead of reviving it: an `approved` claim main refuses is
+   * an approval that must not run.
+   */
+  function holdDispatch(
+    webContentsId: number,
+    requestId: string,
+    phase: McpDispatchHoldPhase
+  ): McpDispatchHoldResult {
+    const pending = pendingDispatches.get(requestId);
+    const hold = pending?.hold;
+    if (!pending || !hold || pending.webContentsId !== webContentsId) return { held: false };
+    const now = Date.now();
+    if (now >= hold.deadlineAt) {
+      hold.expire();
+      return { held: false };
+    }
+    if (HOLD_PHASE_ORDER[phase] > HOLD_PHASE_ORDER[hold.phase]) {
+      hold.phase = phase;
+      if (hold.extendable) {
+        // The decision window and the run each start afresh when they begin,
+        // so neither is charged for the wait before it; only the queue is
+        // capped from where the call already stood.
+        hold.deadlineAt =
+          phase === "queued"
+            ? Math.max(hold.deadlineAt, now + MCP_CONFIRM_QUEUE_HOLD_MS)
+            : phase === "shown"
+              ? now + MCP_CONFIRM_DECISION_MS + MCP_CONFIRM_HOLD_GRACE_MS
+              : now + MCP_DISPATCH_TIMEOUT_MS;
+        clearTimeout(pending.timer);
+        pending.timer = setTimeout(hold.expire, hold.deadlineAt - now);
+      }
+    }
+    return { held: true, remainingMs: hold.deadlineAt - now };
+  }
+
   function setupListeners(cleanupListeners: Array<() => void>): void {
     cleanupListeners.push(
       onWithContext(CHANNELS.MCP_SERVER_GET_MANIFEST_RESPONSE, manifestHandler),
@@ -2014,6 +2129,7 @@ export function createRendererBridge(
     describeWorkspaceRoute,
     dispatchActionForWorkspace,
     dispatchActionWithoutView,
+    holdDispatch,
     revealOwnedRun,
     /**
      * Validate a handshake workspace selector and describe what it resolved to

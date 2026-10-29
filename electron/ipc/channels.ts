@@ -856,6 +856,7 @@ export const CHANNELS = {
   MCP_SERVER_GET_PANE_NOTIFY_STATE: "mcp-server:get-pane-notify-state",
   /** The pane chrome's "stop": every notice the pane has pending goes. */
   MCP_SERVER_STOP_PANE_NOTICES: "mcp-server:stop-pane-notices",
+  MCP_SERVER_HOLD_DISPATCH: "mcp-server:hold-dispatch",
   /**
    * Hand a running terminal to an orchestrating agent pane, or take it back
    * (#12490). Renderer-only by construction: no action or MCP tool reaches

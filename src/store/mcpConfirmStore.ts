@@ -7,20 +7,36 @@ import type {
   McpConfirmationDecision,
   McpSessionOrigin,
 } from "@shared/types/ipc/mcpServer";
+import { MCP_CONFIRM_DECISION_MS, MCP_DISPATCH_TIMEOUT_MS } from "@shared/config/mcpConfirmWindow";
 
 /**
- * Main's own hard deadline, mirrored from `MCP_DISPATCH_TIMEOUT_MS` in
- * `electron/services/mcp-server/shared.ts` (main-process only, so it cannot be
- * imported here). Nothing on the confirm path may outlive it: past this point
- * main has already failed the dispatch and told the agent it timed out, so an
- * approval landing afterwards would run the action anyway — the destructive
- * write happens while the caller was told it did not.
- *
- * Lives here rather than in the dialog because the bridge needs the same
- * number: it is the dialog that must stop OFFERING approval by then, and the
- * bridge that must stop ACTING on one.
+ * Main's deadline for a dispatch before its view has asked for longer: what a
+ * confirmation can count on from the moment the bridge receives it, until main
+ * grants a hold (#14989). Past main's deadline main has already failed the
+ * dispatch and told the agent it timed out, so nothing on the confirm path may
+ * offer approval beyond what main has granted.
  */
-export const MAIN_DISPATCH_DEADLINE_MS = 30_000;
+export const MAIN_DISPATCH_DEADLINE_MS = MCP_DISPATCH_TIMEOUT_MS;
+
+/**
+ * How long before main's deadline the dialog stops offering approval, so an
+ * answer given at the last moment still reaches main while it holds the call.
+ */
+const MAIN_DEADLINE_MARGIN_MS = 2_000;
+
+/**
+ * Ask main to hold the dispatch behind a confirmation open for the next phase
+ * (#14989). Resolves with the time main granted, measured from when it
+ * answered, or null once main no longer holds the call.
+ */
+export type McpConfirmHold = (phase: "queued" | "shown") => Promise<number | null>;
+
+/** What a confirmation knows about the dispatch deadline it answers to. */
+export interface McpConfirmDeadline {
+  /** Main's deadline as of the request, on this renderer's clock. */
+  deadlineAt: number;
+  hold?: McpConfirmHold;
+}
 
 /**
  * One pending confirmation surfaced for a `danger: "confirm"` MCP dispatch.
@@ -164,6 +180,30 @@ export interface PendingMcpConfirm {
    */
   worktreeDeleteNotesTargetId?: string;
   enqueuedAt: number;
+  /**
+   * Main's deadline for the dispatch, as last granted, on this renderer's clock
+   * (#14989). Each grant is anchored to when it was asked for, so this is never
+   * later than main's own. Absent for a confirmation nothing in main is timing.
+   */
+  deadlineAt?: number;
+  /**
+   * When the request was first current with its view visible: the moment it
+   * was on screen to be answered. Unset means nobody could have seen it, which
+   * is what makes a timeout `unseen`.
+   */
+  shownAt?: number;
+  /**
+   * The end of the decision window, a whole window from {@link shownAt}. Never
+   * renewed: time spent queued before it was shown is not charged to it, and a
+   * preview landing afterwards does not extend it.
+   */
+  decisionEndsAt?: number;
+  /**
+   * The request timed out while it was on screen. It stays up, inert, until
+   * dismissed, so a question someone was partway through answering says it
+   * expired rather than vanishing; the caller was already told it timed out.
+   */
+  expired?: true;
 }
 
 /**
@@ -231,6 +271,22 @@ interface McpConfirmActions {
     scope?: McpApprovalScope,
     unseen?: boolean
   ) => void;
+  /** The current request is on screen: start its decision window (#14989). */
+  markShown: (requestId: string) => void;
+  /** Main granted a hold: record its deadline (#14989). */
+  applyHold: (
+    requestId: string,
+    phase: "queued" | "shown",
+    askedAt: number,
+    remainingMs: number | null
+  ) => void;
+  /**
+   * The request's time ran out: tell the caller it timed out. A request that
+   * was on screen stays up as expired; one nobody saw just goes.
+   */
+  expire: (requestId: string) => void;
+  /** Close an expired request and move on to the next. */
+  dismiss: (requestId: string) => void;
   drop: (requestId: string) => void;
   reset: () => void;
 }
@@ -247,13 +303,66 @@ interface McpConfirmActions {
  */
 const resolvers = new Map<string, (resolution: McpConfirmResolution) => void>();
 
+/** Each request's way of asking main for more time, beside its resolver. */
+const holds = new Map<string, McpConfirmHold>();
+
+/**
+ * Requests whose on-screen grant has landed. Main's grant for being on screen
+ * replaces its grant for waiting, so only once it has landed is a waiting
+ * reply stale; until then the waiting grant is the best deadline there is.
+ */
+const shownGrants = new Set<string>();
+
+function forget(requestId: string): void {
+  resolvers.delete(requestId);
+  holds.delete(requestId);
+  shownGrants.delete(requestId);
+}
+
+/**
+ * The moment a request stops offering approval (#14989): the end of its
+ * decision window once it is on screen, and never later than shortly before
+ * main's deadline. Undefined while nothing bounds it.
+ */
+export function confirmationEndsAt(item: PendingMcpConfirm): number | undefined {
+  const mainEndsAt =
+    item.deadlineAt === undefined ? undefined : item.deadlineAt - MAIN_DEADLINE_MARGIN_MS;
+  if (item.decisionEndsAt === undefined) return mainEndsAt;
+  return mainEndsAt === undefined ? item.decisionEndsAt : Math.min(item.decisionEndsAt, mainEndsAt);
+}
+
+function settle(requestId: string, resolution: McpConfirmResolution): void {
+  const resolve = resolvers.get(requestId);
+  forget(requestId);
+  resolve?.(resolution);
+}
+
+function requestHold(requestId: string, phase: "queued" | "shown"): void {
+  const hold = holds.get(requestId);
+  if (hold === undefined) return;
+  const askedAt = Date.now();
+  // A failed ask keeps the deadline the request already had, which main is
+  // still enforcing; nothing here guesses at a longer one.
+  void hold(phase).then(
+    (remainingMs) =>
+      useMcpConfirmStore.getState().applyHold(requestId, phase, askedAt, remainingMs),
+    () => {}
+  );
+}
+
 function advance(set: (partial: Partial<McpConfirmState>) => void, queue: PendingMcpConfirm[]) {
-  if (queue.length === 0) {
-    set({ current: null, queue: [] });
-    return;
+  // A request whose time ran out while it waited was never on screen. Main has
+  // let it go, so it goes unseen rather than opening only to close again.
+  const now = Date.now();
+  let start = 0;
+  for (const item of queue) {
+    const endsAt = confirmationEndsAt(item);
+    if (endsAt === undefined || endsAt > now) break;
+    settle(item.requestId, { decision: "timeout", unseen: true });
+    start += 1;
   }
-  const [next, ...rest] = queue;
-  set({ current: next, queue: rest });
+  const [next, ...rest] = queue.slice(start);
+  set(next === undefined ? { current: null, queue: [] } : { current: next, queue: rest });
 }
 
 export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((set, get) => ({
@@ -277,32 +386,75 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
   // request already resolved/dropped — the fetch is best-effort and must never
   // resurrect a settled confirmation.
   setPreview: (requestId, preview, typedNameTarget) => {
-    const { current, queue } = get();
     // Spread the optional field rather than assigning it unconditionally: a
     // patch that carries no gate must leave the item without one, not stamp an
     // explicit `undefined` that reads the same but serialises differently.
-    const patch = {
+    patchItem(requestId, {
       preview,
       previewPending: false,
       ...(typedNameTarget === undefined ? {} : { typedNameTarget }),
-    };
-    if (current !== null && current.requestId === requestId) {
-      set({ current: { ...current, ...patch } });
+    });
+  },
+
+  markShown: (requestId) => {
+    const { current } = get();
+    if (current?.requestId !== requestId || current.shownAt !== undefined || current.expired) {
       return;
     }
-    const idx = queue.findIndex((item) => item.requestId === requestId);
-    const target = queue[idx];
-    if (target === undefined) return;
-    const next = [...queue];
-    next[idx] = { ...target, ...patch };
-    set({ queue: next });
+    const shownAt = Date.now();
+    // A view coming back after its time ran out (a laptop waking, say) must
+    // not count the request as seen before its timeout gets to say otherwise.
+    const endsAt = confirmationEndsAt(current);
+    if (endsAt !== undefined && endsAt <= shownAt) {
+      get().expire(requestId);
+      return;
+    }
+    set({ current: { ...current, shownAt, decisionEndsAt: shownAt + MCP_CONFIRM_DECISION_MS } });
+    requestHold(requestId, "shown");
+  },
+
+  applyHold: (requestId, phase, askedAt, remainingMs) => {
+    if (!resolvers.has(requestId)) return;
+    if (remainingMs === null) {
+      // Main no longer holds the call, so it can no longer be approved.
+      get().expire(requestId);
+      return;
+    }
+    if (phase === "queued" && shownGrants.has(requestId)) return;
+    if (phase === "shown") shownGrants.add(requestId);
+    patchItem(requestId, { deadlineAt: askedAt + remainingMs });
+  },
+
+  expire: (requestId) => {
+    const item = findItem(requestId);
+    if (item === undefined || !resolvers.has(requestId)) return;
+    const unseen = item.shownAt === undefined;
+    settle(requestId, { decision: "timeout", ...(unseen ? { unseen: true as const } : {}) });
+    const { current, queue } = get();
+    if (current?.requestId !== requestId) {
+      set({ queue: queue.filter((queued) => queued.requestId !== requestId) });
+      return;
+    }
+    if (unseen) {
+      advance(set, queue);
+      return;
+    }
+    set({ current: { ...current, expired: true } });
+  },
+
+  dismiss: (requestId) => {
+    const { current, queue } = get();
+    if (current?.requestId !== requestId || current.expired !== true) return;
+    advance(set, queue);
   },
 
   resolveCurrent: (decision, selectedTargetIds, scope, unseen) => {
     const { current, queue } = get();
-    if (current === null) return;
+    // An expired request was already answered as a timeout; only dismissing it
+    // moves the queue on.
+    if (current === null || current.expired) return;
     const resolve = resolvers.get(current.requestId);
-    resolvers.delete(current.requestId);
+    forget(current.requestId);
     // Only an approval carries a selection. A rejection or timeout resolved
     // nothing about individual targets, and handing back a stale checkbox state
     // there would let the bridge stamp per-target approvals nobody gave. The
@@ -323,7 +475,7 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
 
   drop: (requestId) => {
     const { current, queue } = get();
-    resolvers.delete(requestId);
+    forget(requestId);
     if (current?.requestId === requestId) {
       advance(set, queue);
       return;
@@ -336,9 +488,32 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
 
   reset: () => {
     resolvers.clear();
+    holds.clear();
+    shownGrants.clear();
     set({ queue: [], current: null });
   },
 }));
+
+function findItem(requestId: string): PendingMcpConfirm | undefined {
+  const { current, queue } = useMcpConfirmStore.getState();
+  if (current?.requestId === requestId) return current;
+  return queue.find((item) => item.requestId === requestId);
+}
+
+/** Patch one request in place, current or queued; a no-op once it has gone. */
+function patchItem(requestId: string, patch: Partial<PendingMcpConfirm>): void {
+  const { current, queue } = useMcpConfirmStore.getState();
+  if (current !== null && current.requestId === requestId) {
+    useMcpConfirmStore.setState({ current: { ...current, ...patch } });
+    return;
+  }
+  const idx = queue.findIndex((item) => item.requestId === requestId);
+  const target = queue[idx];
+  if (target === undefined) return;
+  const next = [...queue];
+  next[idx] = { ...target, ...patch };
+  useMcpConfirmStore.setState({ queue: next });
+}
 
 /**
  * Push a confirmation request into the queue and return a Promise that
@@ -348,7 +523,11 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
  * `"timeout"` so callers can branch on a single discriminated value.
  */
 export function requestMcpConfirmation(
-  item: Omit<PendingMcpConfirm, "enqueuedAt">
+  item: Omit<
+    PendingMcpConfirm,
+    "enqueuedAt" | "deadlineAt" | "shownAt" | "decisionEndsAt" | "expired"
+  >,
+  deadline?: McpConfirmDeadline
 ): Promise<McpConfirmResolution> {
   return new Promise((resolve) => {
     if (resolvers.has(item.requestId)) {
@@ -360,7 +539,15 @@ export function requestMcpConfirmation(
       return;
     }
     resolvers.set(item.requestId, resolve);
-    useMcpConfirmStore.getState().enqueue({ ...item, enqueuedAt: Date.now() });
+    if (deadline?.hold) holds.set(item.requestId, deadline.hold);
+    useMcpConfirmStore.getState().enqueue({
+      ...item,
+      enqueuedAt: Date.now(),
+      ...(deadline ? { deadlineAt: deadline.deadlineAt } : {}),
+    });
+    // Held while it waits, whether behind another prompt or in a hidden view:
+    // its decision window only starts once it is on screen.
+    requestHold(item.requestId, "queued");
   });
 }
 

@@ -3,6 +3,7 @@ import {
   __resetMcpConfirmStoreForTesting,
   requestMcpConfirmation,
   useMcpConfirmStore,
+  type McpConfirmHold,
 } from "../mcpConfirmStore";
 
 function pendingFixture(overrides: { requestId?: string; actionId?: string } = {}) {
@@ -226,5 +227,155 @@ describe("mcpConfirmStore", () => {
     });
     await Promise.resolve();
     expect(firstResolved).toBe(false);
+  });
+
+  describe("main's hold on the dispatch (#14989)", () => {
+    /** A hold whose replies the test hands back one at a time, in any order. */
+    function controlledHold() {
+      const asks: { phase: string; answer: (remainingMs: number | null) => void }[] = [];
+      const hold: McpConfirmHold = (phase) =>
+        new Promise((resolve) => {
+          asks.push({ phase, answer: resolve });
+        });
+      return { hold, asks };
+    }
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("asks main to hold a request as soon as it is queued, and again once it is shown", () => {
+      const { hold, asks } = controlledHold();
+      void requestMcpConfirmation(pendingFixture(), { deadlineAt: Date.now() + 30_000, hold });
+      expect(asks.map((ask) => ask.phase)).toEqual(["queued"]);
+
+      useMcpConfirmStore.getState().markShown("req-1");
+      useMcpConfirmStore.getState().markShown("req-1");
+      expect(asks.map((ask) => ask.phase)).toEqual(["queued", "shown"]);
+    });
+
+    it("takes main's deadline from when it asked, so the grant never runs late", async () => {
+      vi.useFakeTimers();
+      const { hold, asks } = controlledHold();
+      const asked = Date.now();
+      void requestMcpConfirmation(pendingFixture(), { deadlineAt: asked + 30_000, hold });
+
+      vi.advanceTimersByTime(400);
+      asks[0]!.answer(135_000);
+      await Promise.resolve();
+
+      expect(useMcpConfirmStore.getState().current?.deadlineAt).toBe(asked + 135_000);
+    });
+
+    it("ignores a waiting grant that lands after the shown one", async () => {
+      vi.useFakeTimers();
+      const { hold, asks } = controlledHold();
+      void requestMcpConfirmation(pendingFixture(), { deadlineAt: Date.now() + 30_000, hold });
+      useMcpConfirmStore.getState().markShown("req-1");
+      const shownAt = Date.now();
+
+      asks[1]!.answer(125_000);
+      await Promise.resolve();
+      asks[0]!.answer(135_000);
+      await Promise.resolve();
+
+      expect(useMcpConfirmStore.getState().current?.deadlineAt).toBe(shownAt + 125_000);
+    });
+
+    it("keeps the waiting grant while the on-screen one is still on its way", async () => {
+      vi.useFakeTimers();
+      const { hold, asks } = controlledHold();
+      const asked = Date.now();
+      void requestMcpConfirmation(pendingFixture(), { deadlineAt: asked + 30_000, hold });
+      useMcpConfirmStore.getState().markShown("req-1");
+
+      asks[0]!.answer(135_000);
+      await Promise.resolve();
+
+      expect(useMcpConfirmStore.getState().current?.deadlineAt).toBe(asked + 135_000);
+    });
+
+    it("lets a request whose time ran out while hidden go unseen when its view comes back", async () => {
+      vi.useFakeTimers();
+      const first = requestMcpConfirmation(pendingFixture({ requestId: "a" }), {
+        deadlineAt: Date.now() + 30_000,
+      });
+      void requestMcpConfirmation(pendingFixture({ requestId: "b" }));
+
+      // The clock moves on with no timer run: a sleeping machine waking up.
+      vi.setSystemTime(Date.now() + 60_000);
+      useMcpConfirmStore.getState().markShown("a");
+
+      expect(await first).toEqual({ decision: "timeout", unseen: true });
+      expect(useMcpConfirmStore.getState().current?.requestId).toBe("b");
+    });
+
+    it("times a request out as soon as main says it no longer holds it", async () => {
+      const { hold, asks } = controlledHold();
+      const first = requestMcpConfirmation(pendingFixture({ requestId: "a" }));
+      const queued = requestMcpConfirmation(pendingFixture({ requestId: "b" }), {
+        deadlineAt: Date.now() + 30_000,
+        hold,
+      });
+
+      asks[0]!.answer(null);
+
+      expect(await queued).toEqual({ decision: "timeout", unseen: true });
+      expect(useMcpConfirmStore.getState().queue).toHaveLength(0);
+      expect(useMcpConfirmStore.getState().current?.requestId).toBe("a");
+      useMcpConfirmStore.getState().resolveCurrent("rejected");
+      expect(await first).toEqual({ decision: "rejected" });
+    });
+
+    it("lets a queued request whose time ran out go unseen rather than opening it", async () => {
+      vi.useFakeTimers();
+      const first = requestMcpConfirmation(pendingFixture({ requestId: "a" }));
+      const stale = requestMcpConfirmation(pendingFixture({ requestId: "b" }), {
+        deadlineAt: Date.now() + 30_000,
+      });
+      const live = requestMcpConfirmation(pendingFixture({ requestId: "c" }));
+
+      vi.advanceTimersByTime(30_000);
+      useMcpConfirmStore.getState().resolveCurrent("approved");
+
+      expect(await first).toEqual({ decision: "approved" });
+      expect(await stale).toEqual({ decision: "timeout", unseen: true });
+      expect(useMcpConfirmStore.getState().current?.requestId).toBe("c");
+      useMcpConfirmStore.getState().resolveCurrent("rejected");
+      expect(await live).toEqual({ decision: "rejected" });
+    });
+
+    it("keeps a request that expired on screen until it is dismissed, and never answers it again", async () => {
+      const expiring = requestMcpConfirmation(pendingFixture({ requestId: "a" }));
+      const next = requestMcpConfirmation(pendingFixture({ requestId: "b" }));
+      useMcpConfirmStore.getState().markShown("a");
+
+      useMcpConfirmStore.getState().expire("a");
+      expect(await expiring).toEqual({ decision: "timeout" });
+      expect(useMcpConfirmStore.getState().current).toMatchObject({
+        requestId: "a",
+        expired: true,
+      });
+
+      useMcpConfirmStore.getState().resolveCurrent("approved");
+      expect(useMcpConfirmStore.getState().current?.requestId).toBe("a");
+
+      useMcpConfirmStore.getState().dismiss("b");
+      expect(useMcpConfirmStore.getState().current?.requestId).toBe("a");
+      useMcpConfirmStore.getState().dismiss("a");
+      expect(useMcpConfirmStore.getState().current?.requestId).toBe("b");
+      useMcpConfirmStore.getState().resolveCurrent("approved");
+      expect(await next).toEqual({ decision: "approved" });
+    });
+
+    it("moves straight on from a request that expired before anyone saw it", async () => {
+      const unseen = requestMcpConfirmation(pendingFixture({ requestId: "a" }));
+      void requestMcpConfirmation(pendingFixture({ requestId: "b" }));
+
+      useMcpConfirmStore.getState().expire("a");
+
+      expect(await unseen).toEqual({ decision: "timeout", unseen: true });
+      expect(useMcpConfirmStore.getState().current?.requestId).toBe("b");
+    });
   });
 });

@@ -45,6 +45,7 @@ const serviceMock = vi.hoisted(() => ({
   ),
   getPaneNotifyState: vi.fn(() => null),
   stopPaneNotices: vi.fn(),
+  holdDispatch: vi.fn(() => ({ held: true as const, remainingMs: 1_000 })),
 }));
 
 const paneConfigMock = vi.hoisted(() => ({
@@ -180,6 +181,29 @@ describe("mcpServer IPC adversarial", () => {
       await expect(getHandler(channel)(fakeEvent(), terminalId)).rejects.toThrow(/terminalId/);
     }
     expect(serviceMock[method]).not.toHaveBeenCalled();
+  });
+
+  it("holdDispatch refuses a malformed hold before asking the service (#14989)", async () => {
+    const hold = getHandler(CHANNELS.MCP_SERVER_HOLD_DISPATCH);
+    for (const request of [
+      null,
+      "req-1",
+      { requestId: "", phase: "shown" },
+      { requestId: 7, phase: "shown" },
+      { requestId: "req-1", phase: "forever" },
+      { requestId: "req-1" },
+    ]) {
+      await expect(hold(fakeEvent(), request)).rejects.toThrow(/Invalid/);
+    }
+    expect(serviceMock.holdDispatch).not.toHaveBeenCalled();
+  });
+
+  it("holdDispatch holds the call for the view that asked, and only that view (#14989)", async () => {
+    const event = { sender: { id: 77 } } as unknown as Electron.IpcMainInvokeEvent;
+    await expect(
+      getHandler(CHANNELS.MCP_SERVER_HOLD_DISPATCH)(event, { requestId: "req-1", phase: "shown" })
+    ).resolves.toEqual({ held: true, remainingMs: 1_000 });
+    expect(serviceMock.holdDispatch).toHaveBeenCalledWith(77, "req-1", "shown");
   });
 
   it("stopPaneNotices forwards the pane to the service", async () => {

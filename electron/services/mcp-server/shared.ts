@@ -193,6 +193,13 @@ export interface WorkspaceDispatchOptions {
   /** What pre-authorized a `confirmed` dispatch — see `SessionServerDeps.dispatchAction`. */
   authorization?: McpDispatchAuthorization;
   /**
+   * Another machine is timing this call (#14989): a host's dispatch into the
+   * view this Shell drives it from, or its question about a call it runs
+   * itself. Its view can't hold the call open past the host's own deadline,
+   * which is the one the host's agent is told about.
+   */
+  fixedDeadline?: true;
+  /**
    * A call one of another machine's assistants made here through its Shell
    * (#13493). Anything but a read runs only in that Shell's own view of the
    * workspace, the one the drive lease says drives it, or on this host as that
@@ -329,7 +336,7 @@ export const MCP_NATIVE_GRANT_MIN_TTL_MS = 60 * 1000;
 export const MCP_DENIAL_SILENCE_THRESHOLD = 2;
 
 export const MCP_MANIFEST_REQUEST_TIMEOUT_MS = 5_000;
-export const MCP_DISPATCH_TIMEOUT_MS = 30_000;
+export { MCP_DISPATCH_TIMEOUT_MS } from "../../../shared/config/mcpConfirmWindow.js";
 
 export const MAX_RESTART_ATTEMPTS = 5;
 export const RESTART_BASE_DELAY_MS = 500;
@@ -1175,6 +1182,25 @@ export interface PendingRequest<T> {
   timer: ReturnType<typeof setTimeout>;
   webContentsId: number;
   destroyedCleanup?: () => void;
+  /** Dispatches only: how long main still holds the call open for a person (#14989). */
+  hold?: DispatchHold;
+}
+
+/**
+ * A dispatch's deadline, which its view may move through the confirmation
+ * phases (#14989). `timer` on the pending entry is always the one armed for
+ * `deadlineAt`, so whatever settles the entry clears the live timer.
+ */
+export interface DispatchHold {
+  phase: "dispatched" | import("../../../shared/types/ipc/mcpServer.js").McpDispatchHoldPhase;
+  deadlineAt: number;
+  /**
+   * False for a call another machine is timing (#13501): its deadline is the
+   * one the agent sees, so this machine never holds the call open past it.
+   */
+  extendable: boolean;
+  /** Settle the call as timed out: a confirmation timeout while it was asking. */
+  expire: () => void;
 }
 
 /**

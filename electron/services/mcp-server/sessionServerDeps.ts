@@ -61,7 +61,7 @@ import { computeMcpAuditSeverity } from "../../../shared/types/ipc/mcpServer.js"
 import type { TurnOutcomeService } from "./turnOutcomeLog.js";
 import { helpNotifyKey, relayNoticePane } from "./terminalNotify.js";
 import type { AbusePolicy } from "./abusePolicy.js";
-import { MCP_DISPATCH_TIMEOUT_MS } from "./shared.js";
+import { MCP_CONFIRMABLE_CALL_MAX_MS } from "../../../shared/config/mcpConfirmWindow.js";
 import { createLogger } from "../../utils/logger.js";
 
 const pinnedViewLogger = createLogger("main:McpPinnedView");
@@ -440,7 +440,9 @@ function createSessionNotifiers(
           {
             actionId: payload.toolId,
             since: waitingSince,
-            expiresAt: waitingSince + MCP_DISPATCH_TIMEOUT_MS + CONFIRMATION_DEADLINE_GRACE_MS,
+            // The latest the call can still be open (#14989); the marker's
+            // settle is what normally clears it, well before.
+            expiresAt: waitingSince + MCP_CONFIRMABLE_CALL_MAX_MS + CONFIRMATION_DEADLINE_GRACE_MS,
           }
         );
       }

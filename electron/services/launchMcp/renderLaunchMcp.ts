@@ -15,6 +15,12 @@ export interface LaunchMcpServer {
   bearer: string;
   /** PTY env var that carries `bearer` for formats that read it from the env. */
   bearerEnvVar: string;
+  /**
+   * The per-call timeout to give the agent's client, in seconds, where its own
+   * default would cut a call short (#14989). Codex gives up after 60s, inside
+   * the time a confirm-gated call can wait on the person.
+   */
+  toolTimeoutSec?: number;
 }
 
 export interface RenderedLaunchMcp {
@@ -148,6 +154,9 @@ export function renderLaunchMcp(
           "-c",
           `mcp_servers.${server.key}.bearer_token_env_var=${tomlString(server.bearerEnvVar)}`
         );
+        if (server.toolTimeoutSec !== undefined) {
+          args.push("-c", `mcp_servers.${server.key}.tool_timeout_sec=${server.toolTimeoutSec}`);
+        }
       }
       return { file: null, args, env };
     }

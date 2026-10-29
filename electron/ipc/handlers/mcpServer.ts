@@ -18,6 +18,8 @@ import type {
   McpAuditRecord,
   McpAuditRecordQuery,
   McpAuditStats,
+  McpDispatchHoldPhase,
+  McpDispatchHoldResult,
   McpIssueGrantResult,
   McpIssueNativeGrantResult,
   McpLogRecord,
@@ -70,6 +72,23 @@ function sanitizeAuditRecordQuery(query: unknown): McpAuditRecordQuery | undefin
     throw new Error("Invalid limit");
   }
   return { helpSessionId, limit };
+}
+
+const HOLD_PHASES: ReadonlySet<McpDispatchHoldPhase> = new Set(["queued", "shown", "approved"]);
+
+function parseHoldDispatchRequest(request: unknown): {
+  requestId: string;
+  phase: McpDispatchHoldPhase;
+} {
+  if (typeof request !== "object" || request === null) throw new Error("Invalid hold request");
+  const { requestId, phase } = request as Record<string, unknown>;
+  if (typeof requestId !== "string" || requestId.length === 0 || requestId.length > 128) {
+    throw new Error("Invalid requestId");
+  }
+  if (typeof phase !== "string" || !HOLD_PHASES.has(phase as McpDispatchHoldPhase)) {
+    throw new Error("Invalid hold phase");
+  }
+  return { requestId, phase: phase as McpDispatchHoldPhase };
 }
 
 /**
@@ -514,6 +533,20 @@ export const mcpServerNamespace = defineIpcNamespace({
         const svc = await getMcpServerService();
         return svc.getPaneNotifyState(terminalId);
       }
+    ),
+    holdDispatch: op(
+      MCP_SERVER_METHOD_CHANNELS.holdDispatch,
+      async (
+        ctx: IpcContext,
+        request: { requestId: string; phase: McpDispatchHoldPhase }
+      ): Promise<McpDispatchHoldResult> => {
+        const { requestId, phase } = parseHoldDispatchRequest(request as unknown);
+        // A dispatch is held only by the view on this machine it was sent to.
+        if (fromRemoteView(ctx)) return { held: false };
+        const svc = await getMcpServerService();
+        return svc.holdDispatch(ctx.webContentsId, requestId, phase);
+      },
+      { withContext: true }
     ),
     stopPaneNotices: op(
       MCP_SERVER_METHOD_CHANNELS.stopPaneNotices,

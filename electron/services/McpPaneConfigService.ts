@@ -14,6 +14,7 @@ import { createLogger } from "../utils/logger.js";
 import { pluginMcpRoutePath, type AgentMcpToolScope } from "./pluginAgentMcp/types.js";
 import { RESERVED_PLUGIN_SERVER_KEYS } from "./pluginAgentMcp/serverKeys.js";
 import type { LaunchMcpInjection } from "../../shared/config/launchMcp.js";
+import { MCP_CONFIRMABLE_CALL_MAX_MS } from "../../shared/config/mcpConfirmWindow.js";
 import {
   LAUNCH_MCP_FILE_PLACEHOLDER,
   renderLaunchMcp,
@@ -268,6 +269,8 @@ export class McpPaneConfigService {
               claudeSseUrl: `http://127.0.0.1:${port}/sse`,
               bearer: token,
               bearerEnvVar: DAINTREE_MCP_TOKEN_ENV,
+              // Long enough for a call that waits on the approval dialog.
+              toolTimeoutSec: Math.ceil(MCP_CONFIRMABLE_CALL_MAX_MS / 1_000),
             },
           ]
         : []),

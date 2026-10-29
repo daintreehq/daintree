@@ -60,6 +60,23 @@ export type McpAuditResult =
 export type McpConfirmationDecision = "approved" | "rejected" | "timeout";
 
 /**
+ * Where a confirm-gated dispatch has got to, as its view reports it to main
+ * (#14989). Each phase moves main's deadline for the call: `queued` holds it
+ * while the prompt waits to reach the screen, `shown` grants the decision
+ * window, and `approved` claims the run, which main refuses once the call is
+ * no longer live. Phases only move forward; a repeat changes nothing.
+ */
+export type McpDispatchHoldPhase = "queued" | "shown" | "approved";
+
+/**
+ * Main's answer to a hold. `remainingMs` is measured on main's clock when it
+ * answered, so the view anchors it to when it asked and stays on the early
+ * side. Not `held` means main no longer holds the call: it timed out, was
+ * answered, or was never this view's to hold.
+ */
+export type McpDispatchHoldResult = { held: true; remainingMs: number } | { held: false };
+
+/**
  * How far an approval in the MCP confirm dialog reaches (#12692). `once`
  * covers the call on screen; `session` also mints a time-bounded per-tool grant
  * for the agent pane that asked, so its next calls to the same tool run without
