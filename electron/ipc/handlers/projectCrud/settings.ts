@@ -228,8 +228,17 @@ export function registerProjectSettingsHandlers(deps: HandlerDependencies = {}):
           "The template's files changed after they were listed. Check the list again, then create the folder."
         );
       }
+      // The bytes are already read, so a failure here is the new folder's: a
+      // full disk or a locked folder says so, as it does for the folder itself.
       writeTemplate = () =>
         writeProjectTemplate(fullPath, inventory).catch((err: unknown) => {
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code === "ENOSPC") {
+            throw new Error("Not enough disk space to copy the template's files");
+          }
+          if (code === "EACCES" || code === "EPERM" || code === "EROFS") {
+            throw new Error("Permission denied: cannot copy the template's files into this folder");
+          }
           throw plainProjectTemplateError(
             err,
             "Couldn't copy the template's files into the new folder.",

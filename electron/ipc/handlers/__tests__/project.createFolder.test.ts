@@ -189,6 +189,43 @@ describe("project:create-folder with a project template (#13825)", () => {
     expect(await fs.readdir(parent)).toEqual([]);
   });
 
+  it.each([
+    ["ENOSPC", "Not enough disk space to copy the template's files"],
+    ["EACCES", "Permission denied: cannot copy the template's files into this folder"],
+    ["EIO", "Couldn't copy the template's files into the new folder."],
+  ])(
+    "says why a %s copy failed in words, and leaves no folder behind (#15232)",
+    async (code, message) => {
+      const digest = await approvedDigest();
+      const failure = Object.assign(
+        new Error(`${code}: open '${path.join(parent, "my-site", "README.md")}'`),
+        { code }
+      );
+      // Only the copy's own opens fail ("wx"); reading the template still works.
+      const realOpen = fs.open;
+      const open = vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
+        if (flags === "wx") throw failure;
+        return realOpen(file, flags, mode);
+      });
+
+      try {
+        const refusal = await createFolder({
+          parentPath: parent,
+          folderName: "my-site",
+          template: { pluginId: "acme.sites", templateId: "site", digest },
+        }).then(
+          () => null,
+          (err: unknown) => err as Error
+        );
+        expect(refusal?.message).toBe(message);
+        expect(open).toHaveBeenCalledWith(expect.any(String), "wx", expect.anything());
+      } finally {
+        open.mockRestore();
+      }
+      expect(await fs.readdir(parent)).toEqual([]);
+    }
+  );
+
   it("refuses a template no plugin offers any more, and creates nothing", async () => {
     const digest = await approvedDigest();
     clearPluginProjectTemplateRegistry();

@@ -51,11 +51,10 @@ afterEach(() => {
   _resetProjectPresentationStoreForTest();
 });
 
-const reset = () => document.querySelector('[data-testid="project-toolbar-reset"]');
+const reset = () => document.querySelector<HTMLElement>('[data-testid="project-toolbar-reset"]');
 const toolbarSwitch = () => screen.getByRole("switch", { name: "Use this project's toolbar" });
 // The dialog's confirm shares this name; the row's button is the one outside it.
-const resetButton = () =>
-  within(reset() as HTMLElement).getByRole("button", { name: "Reset project toolbar" });
+const resetButton = () => within(reset()!).getByRole("button", { name: "Reset project toolbar" });
 
 describe("ProjectToolbarProfileNotice", () => {
   it("offers the switch once the project's profile has loaded, even an untouched one", () => {
