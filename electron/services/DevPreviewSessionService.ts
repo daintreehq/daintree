@@ -292,19 +292,24 @@ export class DevPreviewSessionService {
 
   /**
    * After a session is deleted or moves to another worktree, remove its stale
-   * worktreeToSession entry and hand the mapping back to any surviving session
-   * that still claims the same worktreeId.
+   * worktreeToSession entry and hand the mapping back to a surviving session
+   * that still claims the same worktreeId, a running one first so the card's
+   * controls reach the server that is actually up.
    */
   private restoreWorktreeMapping(worktreeId: string | undefined, departedKey: string): void {
     if (!worktreeId) return;
     if (this.worktreeToSession.get(worktreeId) !== departedKey) return;
     this.worktreeToSession.delete(worktreeId);
+    let idleKey: string | undefined;
     for (const [survivingKey, survivingSession] of this.sessions) {
-      if (survivingSession.worktreeId === worktreeId) {
+      if (survivingSession.worktreeId !== worktreeId) continue;
+      if (RUNNING_STATES.has(survivingSession.status)) {
         this.worktreeToSession.set(worktreeId, survivingKey);
-        break;
+        return;
       }
+      idleKey ??= survivingKey;
     }
+    if (idleKey !== undefined) this.worktreeToSession.set(worktreeId, idleKey);
   }
 
   /**

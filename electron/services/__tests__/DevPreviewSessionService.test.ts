@@ -318,6 +318,17 @@ describe("DevPreviewSessionService", () => {
     expect(service.getByWorktree("wt-b")?.panelId).toBe("panel-moves");
   });
 
+  it("hands the worktree to a running preview over an older stopped one", async () => {
+    await service.ensure({ ...baseRequest, panelId: "panel-stopped", worktreeId: "wt-a" });
+    await service.ensure({ ...baseRequest, panelId: "panel-running", worktreeId: "wt-a" });
+    await service.ensure({ ...baseRequest, panelId: "panel-moves", worktreeId: "wt-a" });
+    await service.stop({ panelId: "panel-stopped", projectId: baseRequest.projectId });
+
+    await service.ensure({ ...baseRequest, panelId: "panel-moves", worktreeId: "wt-b" });
+
+    expect(service.getByWorktree("wt-a")?.panelId).toBe("panel-running");
+  });
+
   it("leaves another preview's claim on the worktree a preview left", async () => {
     await service.ensure({ ...baseRequest, panelId: "panel-moves", worktreeId: "wt-a" });
     await service.ensure({ ...baseRequest, panelId: "panel-stays", worktreeId: "wt-a" });

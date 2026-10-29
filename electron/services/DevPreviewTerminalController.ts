@@ -501,6 +501,9 @@ export async function ensureSessionTerminal<TSession extends TerminalControllerS
   // change clears the guard upstream (resetCrashLoopGuard in ensure()), and
   // restart() clears it before spawning, so only the automatic path is held.
   if (session.crashLoopStopped) return;
+  // A pending backoff owns the next launch: spawning beside it would race its
+  // install for the same session. Every explicit path clears it first.
+  if (session.backoffAbort) return;
   if (session.launchEpoch !== startEpoch) return;
 
   await spawnSessionTerminal(session, deps);

@@ -97,5 +97,28 @@ describe("worktreeDevServerStore", () => {
     const sessions = useWorktreeDevServerStore.getState().sessionsByWorktreeId;
     expect(sessions.w1?.panelId).toBe("p2");
     expect(sessions.w3?.updatedAt).toBe(300);
+    expect(sessions.w2).toBeUndefined();
+  });
+
+  it("ignores a snapshot from before the move for the worktree a preview left", () => {
+    const store = useWorktreeDevServerStore.getState();
+    store.setSession(
+      "w1",
+      makeSession({ worktreeId: "w1", panelId: "p1", status: "running", updatedAt: 100 })
+    );
+    store.setSession(
+      "w2",
+      makeSession({ worktreeId: "w2", panelId: "p1", status: "running", updatedAt: 200 })
+    );
+
+    // A hydration or resync answer that left before the move lands late.
+    store.setSession(
+      "w1",
+      makeSession({ worktreeId: "w1", panelId: "p1", status: "running", updatedAt: 100 })
+    );
+
+    const sessions = useWorktreeDevServerStore.getState().sessionsByWorktreeId;
+    expect(sessions.w1).toBeUndefined();
+    expect(sessions.w2?.updatedAt).toBe(200);
   });
 });

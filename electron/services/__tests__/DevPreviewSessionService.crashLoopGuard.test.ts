@@ -324,6 +324,25 @@ describe("DevPreviewSessionService crash-loop guard", () => {
     expect(spawnsAfterRestart).toBeGreaterThan(spawnsWhilePending);
   });
 
+  it("leaves a pending backoff install to launch a preview re-filed meanwhile (#14958)", async () => {
+    const started = await service.ensure({ ...baseRequest, worktreeId: "wt-a" });
+    let devId: string | null = started.terminalId!;
+
+    devId = await crashThroughInstall(devId!);
+    ptyClient.emitData(devId!, "missing deps");
+    ptyClient.emitExit(devId!, 1);
+    const spawnsWhilePending = ptyClient.spawn.mock.calls.length;
+    expect(currentTerminalId()).toBeNull(); // backoff pending, no install yet
+
+    const moved = await service.ensure({ ...baseRequest, worktreeId: "wt-b" });
+    expect(moved.worktreeId).toBe("wt-b");
+    expect(ptyClient.spawn.mock.calls.length).toBe(spawnsWhilePending);
+
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(ptyClient.spawn.mock.calls.length).toBe(spawnsWhilePending + 1);
+    expect(service.getState(stateRequest).status).toBe("installing");
+  });
+
   it("does not run a backoff install after the service is disposed", async () => {
     const started = await service.ensure(baseRequest);
     let devId: string | null = started.terminalId!;

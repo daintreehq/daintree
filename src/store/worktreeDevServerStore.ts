@@ -31,19 +31,19 @@ export const useWorktreeDevServerStore = create<WorktreeDevServerState>((set) =>
       // millisecond — e.g. a synchronous spawn failure flipping starting→error —
       // must not silently lose the latter.
       if (existing && session.updatedAt < existing.updatedAt) return state;
+      const elsewhere = Object.entries(state.sessionsByWorktreeId).filter(
+        ([otherWorktreeId, other]) =>
+          otherWorktreeId !== worktreeId &&
+          other.panelId === session.panelId &&
+          other.projectId === session.projectId
+      );
+      // A snapshot taken before this preview moved must not bring back the
+      // row it left.
+      if (elsewhere.some(([, other]) => other.updatedAt > session.updatedAt)) return state;
       const next = { ...state.sessionsByWorktreeId, [worktreeId]: session };
       // A preview moved to another worktree no longer speaks for the one it
       // left (#14958); that row re-hydrates whatever still runs there.
-      for (const [otherWorktreeId, other] of Object.entries(next)) {
-        if (
-          otherWorktreeId !== worktreeId &&
-          other.panelId === session.panelId &&
-          other.projectId === session.projectId &&
-          other.updatedAt <= session.updatedAt
-        ) {
-          delete next[otherWorktreeId];
-        }
-      }
+      for (const [otherWorktreeId] of elsewhere) delete next[otherWorktreeId];
       return { sessionsByWorktreeId: next };
     }),
   removeSession: (worktreeId) =>
