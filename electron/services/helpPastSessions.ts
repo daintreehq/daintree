@@ -381,7 +381,6 @@ export async function listHelpPastSessions(
       .slice(0, HELP_PAST_SESSIONS_LIMIT),
     unreadable,
     // Codex hands back one page, so older threads past it are cut there.
-    truncated:
-      merged.length > HELP_PAST_SESSIONS_LIMIT || codexByPath.some((read) => read.more),
+    truncated: merged.length > HELP_PAST_SESSIONS_LIMIT || codexByPath.some((read) => read.more),
   };
 }
