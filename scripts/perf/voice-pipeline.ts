@@ -635,6 +635,13 @@ function renderReport(run: RunRecord, scored: readonly ScoredPipelineSession[]):
     ""
   );
   for (const arm of run.arms) lines.push(renderStopPreviewTable(scored, arm, run.arms), "");
+  // A dictation that threw has no session to score, but it still counts against the run.
+  if (run.failures.length > 0) {
+    lines.push(
+      `${run.failures.length} dictation(s) failed outright and are in no table; they count with the invalid.`,
+      ""
+    );
+  }
   lines.push(...renderIntentTable(scored, run.arms));
   lines.push("## Sessions whose final text differs from the reference", "");
   for (const clip of CLIPS) {

@@ -267,9 +267,12 @@ export interface StopPreview {
   fate: StopPreviewFate;
   /** The text held at the stop is the final's, whatever the fate. */
   equal: boolean;
-  /** A completion landing after the stop ends in a spoken command. */
+  /**
+   * Words landing after the stop end in a break command, or the last of them
+   * in a send, which later words would have let go as text.
+   */
   command: boolean;
-  /** The final says a command that inserts a file reference, whose lookup the drain awaits. */
+  /** A completion says a command that inserts a file reference, whose lookup the drain awaits. */
   file: boolean;
 }
 
@@ -320,10 +323,13 @@ export function stopPreview(session: PipelineSession): StopPreview {
   const pending = [...previews.values()].filter((text) => text.trim() !== "");
   const final = landedText(completes.map((event) => event.text));
   const equal = landedText([...completed, ...pending]) === final;
-  const command = later.some(
-    (text) => trailingSendCommand(text) !== null || trailingDictationCommands(text) !== null
-  );
-  const file = mayReferenceFile(final);
+  const command = later.some((text, i) => {
+    const send = trailingSendCommand(text);
+    if (send && i === later.length - 1) return true;
+    return trailingDictationCommands(send ? text.slice(0, send.cut) : text) !== null;
+  });
+  // Main reads each completion for a file command on its own, never across two.
+  const file = completes.some((event) => mayReferenceFile(landedText([event.text])));
   const facts = { equal, command, file };
   if (sessionErrored(session) || !final || completes.some((event) => event.incomplete)) {
     return { fate: "invalid", ...facts };

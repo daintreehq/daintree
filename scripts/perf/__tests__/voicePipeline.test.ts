@@ -316,6 +316,15 @@ describe("stopPreview", () => {
     );
     // A preview arriving after the stop is no help to a cleanup started at it.
     expect(fate([delta(3_100, "Then commit.", "b")], "Then commit.")).toBe("mismatch");
+    // A late delta for an item already completed doesn't reopen it.
+    expect(
+      stopPreview(
+        session({
+          stopMs: 3_000,
+          events: [complete(1_000, "Run the tests.", "a"), delta(1_200, "Run the test", "a")],
+        })
+      ).fate
+    ).toBe("settled");
   });
 
   it("compares what production lands: each piece trimmed, its hesitations gone", () => {
@@ -360,6 +369,21 @@ describe("stopPreview", () => {
       "invalid"
     );
     expect(stopPreview(session({ stopMs: 3_000, events: [] })).fate).toBe("invalid");
+    const broken: Partial<PipelineSession>[] = [
+      { startError: "socket refused" },
+      { droppedConnect: 1 },
+      {
+        events: [
+          complete(1_000, "Run the tests.", "a"),
+          { at: 2_000, type: "error", code: "timeout", severity: "recoverable" },
+          delta(2_900, "Then commit.", "b"),
+          complete(3_900, "Then commit.", "b"),
+        ],
+      },
+    ];
+    for (const extra of broken) {
+      expect(fate([delta(2_900, "Then commit.", "b")], "Then commit.", extra)).toBe("invalid");
+    }
   });
 
   it("excludes a final production rewrites once it lands, whatever the preview held", () => {
@@ -368,11 +392,36 @@ describe("stopPreview", () => {
     expect(fate([delta(2_900, "Then commit new line", "b")], "Then commit new line")).toBe(
       "excluded"
     );
+    // Excluded when the preview missed too, so a rewrite never reads as an ordinary miss.
+    expect(preview([delta(2_900, "Then commit, send", "b")], "Then commit, send it.")).toEqual({
+      fate: "excluded",
+      equal: false,
+      command: true,
+      file: false,
+    });
     const named = "Check the add file voice pipeline score.";
     expect(preview([delta(2_900, named, "b")], named)).toMatchObject({
       fate: "excluded",
       file: true,
     });
+    expect(preview([delta(2_900, "Check the add", "b")], named)).toMatchObject({
+      fate: "excluded",
+      equal: false,
+      file: true,
+    });
+    // Main reads each completion for a file command alone, so none spans two.
+    expect(
+      stopPreview(
+        session({
+          stopMs: 3_000,
+          events: [
+            complete(1_000, "Please add", "a"),
+            delta(2_900, "file indexing.", "b"),
+            complete(3_900, "file indexing.", "b"),
+          ],
+        })
+      )
+    ).toMatchObject({ fate: "match", file: false });
     // A "send it" that belongs to its sentence is no command.
     const told = "Review it before you send it.";
     expect(fate([delta(2_900, told, "b")], told)).toBe("match");
@@ -389,6 +438,23 @@ describe("stopPreview", () => {
         })
       )
     ).toMatchObject({ fate: "match", command: false });
+  });
+
+  it("excludes a send only in the last words to land, since later ones let it go as text", () => {
+    const drained = (first: string) =>
+      stopPreview(
+        session({
+          stopMs: 3_000,
+          events: [
+            delta(2_900, `${first} Then add tests.`, "b"),
+            complete(3_400, first, "b"),
+            complete(3_900, "Then add tests.", "c"),
+          ],
+        })
+      );
+    expect(drained("Fix it, send it.")).toMatchObject({ fate: "match", command: false });
+    // A break command stays a break, a send after it or not.
+    expect(drained("Fix it new line send it.")).toMatchObject({ fate: "excluded", command: true });
   });
 });
 
@@ -450,6 +516,42 @@ describe("summariseStopPreview and renderStopPreviewTable", () => {
     expect(summariseStopPreview(rows.slice(3, 4)).exactShare).toBeNull();
   });
 
+  it("counts a file named, and times a wait whose last words came before the stop as none", () => {
+    const retired = scorePipelineSession(
+      session({
+        stopMs: 3_000,
+        drainEndMs: 3_500,
+        events: [
+          complete(1_000, "Commit it.", "a"),
+          delta(2_900, "And", "b"),
+          complete(3_400, "", "b"),
+        ],
+        raw: "Commit it.",
+      }),
+      "Commit it.",
+      [],
+      "gpt-6.1-terra"
+    );
+    const named = scorePipelineSession(
+      session({
+        stopMs: 3_000,
+        drainEndMs: 4_000,
+        events: [
+          delta(2_900, "Add file the score.", "a"),
+          complete(3_800, "Add file the score.", "a"),
+        ],
+        raw: "Add file the score.",
+      }),
+      "Commit it.",
+      [],
+      "gpt-6.1-terra"
+    );
+    expect([retired.stopPreview.fate, named.stopPreview.fate]).toEqual(["mismatch", "excluded"]);
+    const summary = summariseStopPreview([retired, named]);
+    expect(summary).toMatchObject({ waited: 2, match: 0, command: 0, file: 1, exactShare: 0 });
+    expect(summary.stopToFinalMs).toEqual({ p50: 0, p95: 800, n: 2 });
+  });
+
   it("rows each stop tail by voice, then every voice, then every stop", () => {
     const table = renderStopPreviewTable(rows, "prod").split("\n");
     const cells = (tail: string, voice: string) =>
@@ -473,6 +575,47 @@ describe("summariseStopPreview and renderStopPreviewTable", () => {
     expect(cells("0 ms", "gemini:Kore")).toBeUndefined();
     expect(cells("700 ms", "all")?.slice(0, 7)).toEqual(["3", "0", "2", "1", "1", "0", "50.0%"]);
     expect(cells("all", "all")?.slice(0, 7)).toEqual(["6", "1", "4", "2", "1", "0", "50.0%"]);
+    expect(
+      table.slice(2).map((line) =>
+        line
+          .split("|")
+          .slice(1, 3)
+          .map((cell) => cell.trim())
+      )
+    ).toEqual([
+      ["0 ms", "say"],
+      ["0 ms", "all"],
+      ["700 ms", "say"],
+      ["700 ms", "gemini:Kore"],
+      ["700 ms", "all"],
+      ["all", "all"],
+    ]);
+  });
+
+  it("compares arms only over the dictations each of them completed", () => {
+    const kept = (arm: string, clip: string) =>
+      scorePipelineSession(
+        session({
+          arm,
+          clip,
+          stopMs: 3_000,
+          events: [delta(2_900, "Commit it.", "a"), complete(3_300, "Commit it.", "a")],
+          raw: "Commit it.",
+        }),
+        "Commit it.",
+        [],
+        "gpt-6.1-terra"
+      );
+    const all = [kept("a", "one"), kept("a", "two"), kept("b", "one")];
+    const total = (arm: string, arms: string[]) =>
+      renderStopPreviewTable(all, arm, arms)
+        .split("\n")
+        .find((line) => line.startsWith("| all | all |"))
+        ?.split("|")[3]
+        ?.trim();
+    expect(total("a", ["a", "b"])).toBe("1");
+    expect(total("b", ["a", "b"])).toBe("1");
+    expect(total("a", ["a"])).toBe("2");
   });
 });
 
