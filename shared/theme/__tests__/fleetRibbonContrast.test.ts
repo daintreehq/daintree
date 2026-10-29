@@ -91,9 +91,9 @@ function resolveDerivation(
 function pillTint(amber: string, base: string, share: number): string {
   const baseLch = toOklch(opaque(base, "pill base"));
   if (!baseLch) throw new Error(`unconvertible pill base: ${base}`);
-  // Blink treats an oklch chroma under 0.02 as having no hue when it mixes, so
-  // the near-neutral canvases borrow amber's hue rather than turning it.
-  const hue = baseLch.c < BLINK_ACHROMATIC_CHROMA ? undefined : baseLch.h;
+  // Blink treats an oklch chroma of 0.02 or less as having no hue when it
+  // mixes, so the near-neutral canvases borrow amber's hue rather than turning it.
+  const hue = baseLch.c <= BLINK_ACHROMATIC_CHROMA ? undefined : baseLch.h;
   return formatHex(
     interpolate([opaque(amber, "amber"), { ...baseLch, h: hue }], "oklch")(1 - share)
   );

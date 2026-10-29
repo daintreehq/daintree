@@ -14,10 +14,11 @@ export type FleetRibbonDerivation =
   | { kind: "fixed"; l: number; c: number }
   | { kind: "canvas-step"; amberShare: number; chromaPerLightness: number };
 
+// Comments go first, so nothing commented out can stand in for a declaration.
 const css = readFileSync(
   resolve(__dirname, "../../../src/styles/components/fleet-ribbon.css"),
   "utf-8"
-);
+).replace(/\/\*[\s\S]*?\*\//g, "");
 
 function derivation(body: string, variable: string): FleetRibbonDerivation {
   const raw = body.match(new RegExp(`${variable}:([^;]+);`))?.[1];
@@ -48,12 +49,10 @@ if (surfaceClass === undefined || baseBody === undefined) {
 }
 // One paint declaration in the whole sheet, so no later rule or polarity can
 // repaint the band with something the gate never measures.
-const paints = Array.from(
-  css
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .matchAll(/(?:^|[\s;{])(background(?:-color)?)\s*:\s*([^;]+);/g)
-);
-const painted = baseBody.match(/background-color:\s*var\((--[\w-]+)\)\s*;/)?.[1];
+const paints = Array.from(css.matchAll(/(?<![\w-])(background(?:-color)?)\s*:\s*([^;}]+)/gi));
+const painted = baseBody.match(
+  /(?<![\w-])background-color\s*:\s*var\((--[\w-]+)\)\s*(?:;|$)/i
+)?.[1];
 if (paints.length !== 1 || painted !== FLEET_RIBBON_FILL) {
   throw new Error(
     `the band must paint once, with the ${FLEET_RIBBON_FILL} its contrast gate measures; fleet-ribbon.css paints ${paints.map((m) => `${m[1]}: ${m[2]?.trim()}`).join(", ") || "nothing"}`
