@@ -37,6 +37,8 @@ export interface DeviceWaitingRun extends WaitingRunView {
   hostId: string;
   /** The machine's name, as the person knows it. */
   host: string;
+  /** The agent's name as Daintree shows it, when it is one Daintree knows. */
+  agentName?: string | null;
 }
 
 /** How reading one host's runs went; a host with no link is `not-connected`, never dialled to find out. */
@@ -50,6 +52,8 @@ export interface DeviceWaitingHost {
 }
 
 export interface DeviceWaitingList {
+  /** This machine's name, so the page can say what it read when nothing is waiting. */
+  computer?: string;
   runs: DeviceWaitingRun[];
   hosts: DeviceWaitingHost[];
   /** The host list itself couldn't be read, so hosts may be missing from `hosts`. */
