@@ -44,7 +44,7 @@ import { getAgentDisplayTitle } from "@shared/config/agentRegistry";
 import { agentPresetTitle } from "@shared/utils/agentLaunchPlan";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
-import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { panelKindHasPty, panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import {
   isPtyPanel,
   type PanelInstance,
@@ -1367,14 +1367,15 @@ export const createRestartActions = (
     recordExplicitWorktreeAttribution(id, worktreeId);
 
     set((state) => {
-      // Scrollable grid (#8805): restoring a panel always lands it in the
-      // destination worktree's grid; the grid scrolls if it now exceeds the
-      // screen-fit count.
-      const newLocation: PanelLocation = "grid";
-      movedToLocation = newLocation;
-
       const t = state.panelsById[id];
       if (!t) return state;
+      // A panel parked in the dock stays there, as a grouped move already does
+      // (`moveTabGroupToWorktree`); a kind the dock can't host falls back to the
+      // grid (#14966). Anything else lands in the destination's grid, which
+      // scrolls if it now exceeds the screen-fit count (#8805).
+      const newLocation: PanelLocation =
+        t.location === "dock" && panelKindIsDockable(t.kind ?? "terminal") ? "dock" : "grid";
+      movedToLocation = newLocation;
       const ptyT = isPtyPanel(t) ? t : undefined;
       const newById = {
         ...state.panelsById,
