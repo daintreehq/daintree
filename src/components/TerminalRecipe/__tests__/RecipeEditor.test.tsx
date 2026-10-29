@@ -37,6 +37,8 @@ import { RecipeEditor } from "../RecipeEditor";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
 import type { RecipeLayoutOmissions } from "@/store/recipeStore";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import { getAgentDisplayTitle } from "@/config/agents";
 import type { Project, RecipeTerminal, TerminalRecipe } from "@/types";
 
 const RECIPE: TerminalRecipe = {
@@ -325,10 +327,34 @@ describe("RecipeEditor", () => {
       expect(value("terminal-args-0")).toBe("--model sonnet");
     });
 
+    it("offers every built-in agent in the registry's order, under the registry's names", () => {
+      renderEditor(AGENT_RECIPE);
+      fireEvent.keyDown(document.getElementById("terminal-type-0")!, { key: "ArrowDown" });
+      const offered = screen.getAllByRole("option").map((o) => o.textContent);
+      expect(offered).toEqual([
+        "Terminal",
+        ...BUILT_IN_AGENT_IDS.map((id) => getAgentDisplayTitle(id)),
+        "Dev server",
+      ]);
+    });
+
+    it("lets a new step pick an agent the editor used to leave out", async () => {
+      renderEditor(AGENT_RECIPE);
+      await pickType(0, "Aider");
+      expect((await saveTerminals())[0]?.type).toBe("aider");
+    });
+
     it("keeps offering a captured agent the picker doesn't list, so the step can go back", async () => {
       renderEditor({
         ...RECIPE,
-        terminals: [{ type: "cursor", title: "Agent", initialPrompt: "Fix it", env: {} }],
+        terminals: [
+          {
+            type: "acme-agent" as RecipeTerminal["type"],
+            title: "Agent",
+            initialPrompt: "Fix it",
+            env: {},
+          },
+        ],
       });
       const captured = document.getElementById("terminal-type-0")!.textContent!;
       await pickType(0, "Terminal");
