@@ -61,17 +61,19 @@ export const PREVIEW_MAX_CHARS = 240;
  */
 export function excerptPreview(
   text: string,
-  indices: readonly MatchRange[] | undefined
+  indices: readonly MatchRange[] | undefined,
+  /** Narrower rows than the 608px palette's: the recent-dictations list column. */
+  { visibleChars = VISIBLE_CHARS, leadChars = LEAD_CHARS } = {}
 ): PreviewExcerpt {
   const anchor = indices?.[0]?.[0] ?? 0;
   let start = 0;
-  if (anchor > VISIBLE_CHARS) {
-    const target = anchor - LEAD_CHARS;
+  if (anchor > visibleChars) {
+    const target = anchor - leadChars;
     // Back to a word boundary, but only a short way: a long unbroken token
     // (a URL, a path) would otherwise rewind the cut hundreds of characters
     // and slice the anchor off the far end.
     const wordBreak = text.lastIndexOf(" ", target);
-    start = wordBreak >= target - LEAD_CHARS ? wordBreak + 1 : target;
+    start = wordBreak >= target - leadChars ? wordBreak + 1 : target;
   }
   const prefix = start > 0 ? "…" : "";
   const body = text.slice(start, start + PREVIEW_MAX_CHARS);

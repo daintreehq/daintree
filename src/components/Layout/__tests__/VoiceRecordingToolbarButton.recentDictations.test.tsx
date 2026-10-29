@@ -12,6 +12,11 @@ const recovery = vi.hoisted(() => ({
   insertRecentDictation: vi.fn<(d: RecentDictation, version?: string) => string | null>(),
   copyRecentDictation: vi.fn<(d: RecentDictation, version?: string) => void>(),
   focusRecoveredComposer: vi.fn<(panelId: string) => void>(),
+  resolveRecentDictationDestination: vi.fn(() => ({
+    ok: true as const,
+    target: { panelId: "p9", panelTitle: "Claude" },
+    label: "Claude · daintree / develop",
+  })),
 }));
 // The menu's opening and close hand focus around; the test plays both.
 const menu = vi.hoisted(() => ({
@@ -154,7 +159,7 @@ describe("VoiceRecordingToolbarButton — recent dictations (#14637)", () => {
     fireEvent.click(item("Copy original")[0]!);
     expect(recovery.copyRecentDictation).toHaveBeenCalledWith(CLEANED, "original");
     fireEvent.click(item("Copy")[1]!);
-    expect(recovery.copyRecentDictation).toHaveBeenLastCalledWith(RAW_ONLY);
+    expect(recovery.copyRecentDictation).toHaveBeenLastCalledWith(RAW_ONLY, "cleaned");
   });
 
   it("gives the composer the keyboard after an add, instead of the toolbar", () => {
