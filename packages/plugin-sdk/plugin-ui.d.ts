@@ -95,6 +95,8 @@ declare module "@daintreehq/plugin-ui" {
     PluginEmptyStateProps,
     PluginFileDropzoneProps,
     PluginFileDropzoneBaseProps,
+    PluginFileRejection,
+    PluginFileRejectHandler,
     PluginMediaSource,
     PluginMediaPlayerProps,
     PluginMediaThumbnailProps,
@@ -485,6 +487,8 @@ declare module "@daintreehq/plugin-ui" {
   export type TagInputProps = PluginTagInputProps;
   export type FileDropzoneProps = PluginFileDropzoneProps;
   export type FileDropzoneBaseProps = PluginFileDropzoneBaseProps;
+  export type FileRejection = PluginFileRejection;
+  export type FileRejectHandler = PluginFileRejectHandler;
   export type MediaArtifactSource = PluginMediaSource;
   export type MediaPlayerProps = PluginMediaPlayerProps;
   export type MediaThumbnailProps = PluginMediaThumbnailProps;

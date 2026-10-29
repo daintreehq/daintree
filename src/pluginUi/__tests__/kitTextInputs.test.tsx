@@ -408,6 +408,23 @@ describe("Composer", () => {
     fireEvent.paste(screen.getByRole("textbox"), { clipboardData: { files: [png, txt] } });
     expect(onAttach).toHaveBeenCalledWith([png]);
     expect(screen.getByRole("button", { name: "Attach files" })).toBeTruthy();
+    // No onReject: the composer names what it skipped rather than dropping it unseen.
+    expect(screen.getByRole("alert").textContent).toBe(
+      "Skipped notes.txt: not an accepted file type"
+    );
+  });
+
+  it("hands files accept rules out to onReject with their reason, even when none fit", () => {
+    const onAttach = vi.fn();
+    const onReject = vi.fn();
+    render(<Harness onAttach={onAttach} onReject={onReject} accept=".png" />, {
+      wrapper: TooltipProvider,
+    });
+    const txt = new File(["x"], "notes.txt", { type: "text/plain" });
+    fireEvent.paste(screen.getByRole("textbox"), { clipboardData: { files: [txt] } });
+    expect(onAttach).not.toHaveBeenCalled();
+    expect(onReject).toHaveBeenCalledWith([txt], [{ file: txt, reason: "type-not-accepted" }]);
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("counts characters once the draft passes 80% of the limit", () => {
