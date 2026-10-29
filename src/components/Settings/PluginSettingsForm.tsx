@@ -792,7 +792,15 @@ function SettingField({
           layout="stacked"
           control={({ labelId, descriptionId, disabled }) => (
             <div className="grid gap-1.5">
-              <div className="flex items-center gap-2">
+              <div
+                className="flex items-center gap-2"
+                // Commit when focus leaves the field and its eye together, so
+                // Tab can reach the eye and check a typed value before it saves.
+                onBlur={(e) => {
+                  if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+                  void commitSecret();
+                }}
+              >
                 <Input
                   type={revealed ? "text" : "password"}
                   value={draft}
@@ -809,10 +817,13 @@ function SettingField({
                   onChange={(e) => {
                     setDraft(e.target.value);
                     setSecretEdited(true);
+                    // An emptied field starts the next entry masked.
+                    if (e.target.value === "") setRevealed(false);
                   }}
-                  onBlur={() => void commitSecret()}
                 />
-                {hasStored && (
+                {/* Typed text can be checked before anything is stored; with
+                    nothing typed, only a stored value has anything to show. */}
+                {(hasStored || draft !== "") && (
                   <Button
                     type="button"
                     variant="ghost"
@@ -821,7 +832,7 @@ function SettingField({
                     // A toggle: one name, its state carried by `pressed`.
                     aria-label={`Show ${label}`}
                     pressed={revealed}
-                    // Toggle reveal without firing the input's blur-commit.
+                    // A click toggles reveal and leaves the caret in the field.
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
                       if (secretEdited) {
