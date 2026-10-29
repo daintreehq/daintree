@@ -4,7 +4,8 @@ import { readFileSync } from "fs";
 import { resolve } from "path";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PtyPanelData } from "@shared/types/panel";
+import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
+import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
 
 // Issue #11156 — a docked terminal's Radix Popover content is portaled to
 // document.body, so it sits outside the dock rail's DOM tree while its keydowns
@@ -186,7 +187,11 @@ vi.mock("../DockedTerminalItem", () => ({
     </>
   ),
 }));
-vi.mock("../DockedNonPtyPanelItem", () => ({ DockedNonPtyPanelItem: () => null }));
+vi.mock("../DockedNonPtyPanelItem", () => ({
+  DockedNonPtyPanelItem: ({ panel }: { panel: { id: string } }) => (
+    <button type="button" data-dock-item="" data-testid={`chip-${panel.id}`} />
+  ),
+}));
 vi.mock("../DockedTabGroup", () => ({ DockedTabGroup: () => null }));
 vi.mock("../DockLaunchButton", () => ({ DockLaunchButton: () => null }));
 vi.mock("../DockLaunchMenuItems", () => ({ DockLaunchMenuItems: () => null }));
@@ -269,6 +274,8 @@ describe("ContentDock — arrow keys from a docked terminal (issue #11156)", () 
     const { panelIds } = fixture.panelState;
 
     first.focus();
+    rerender();
+    expect(first.scrollIntoView).not.toHaveBeenCalled();
     try {
       fixture.panelState.panelIds = [...panelIds].reverse();
       rerender();
@@ -276,10 +283,30 @@ describe("ContentDock — arrow keys from a docked terminal (issue #11156)", () 
       const rail = screen.getAllByTestId(/^chip-/);
       expect(rail).toEqual([second, first]);
       expect(tabStops(rail)).toEqual([-1, 0]);
+      expect(document.activeElement).toBe(first);
+      expect(first.scrollIntoView).toHaveBeenCalledTimes(1);
 
       fireEvent.keyDown(first, { key: "ArrowLeft" });
 
       expect(document.activeElement).toBe(second);
+    } finally {
+      fixture.panelState.panelIds = panelIds;
+    }
+  });
+
+  it("leaves the rail's scroll alone when the moved chip no longer holds focus", () => {
+    const { chips, inputs, rerender } = renderDock();
+    const [first] = chips as [HTMLElement, HTMLElement];
+    const { panelIds } = fixture.panelState;
+
+    first.focus();
+    inputs.uncancelled.focus();
+    try {
+      fixture.panelState.panelIds = [...panelIds].reverse();
+      rerender();
+
+      expect(first.scrollIntoView).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(inputs.uncancelled);
     } finally {
       fixture.panelState.panelIds = panelIds;
     }
@@ -313,16 +340,41 @@ describe("ContentDock regression test", () => {
   // kinds), NOT `getNarrowPanel` (which drops them, so plugin panels would never
   // reach `isDockPanel`). Reverting either call site silently strands every
   // dockable plugin panel, so pin the selector here.
-  it("reads dock panels through getRenderablePanel so plugin kinds are not dropped", () => {
-    const content = readFileSync(resolve(__dirname, "../ContentDock.tsx"), "utf-8");
-    // Membership lives in `collectDockPanels`, shared with the keyboard chip
-    // move (#14972); dockRenderItems.test.ts covers plugin kinds behaviourally.
-    const membership = readFileSync(resolve(__dirname, "../dockRenderItems.ts"), "utf-8");
+  it("renders a dockable plugin panel's chip in its canonical slot", () => {
+    const PLUGIN_KIND = "acme.board.view";
+    registerPanelKind({
+      id: PLUGIN_KIND,
+      name: "Board",
+      iconId: "package",
+      color: "#fff",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "acme.board",
+    });
+    const plugin = {
+      id: "board",
+      title: "Board",
+      kind: PLUGIN_KIND,
+      pluginId: "acme.board",
+      location: "dock",
+    } as unknown as PanelInstance;
+    const { panelsById, panelIds } = fixture.panelState;
+    try {
+      fixture.panelState.panelsById = { ...panelsById, board: plugin } as typeof panelsById;
+      fixture.panelState.panelIds = [panelIds[0]!, "board", ...panelIds.slice(1)];
+      render(<ContentDock />);
 
-    // Target the call sites (not prose) so a doc mention can't mask a revert.
-    expect(content).toContain("collectDockPanels(state, activeWorktreeId)");
-    expect(membership).toContain("getRenderablePanel(state.panelsById");
-    expect(membership).not.toContain("getNarrowPanel(state.panelsById");
+      expect(screen.getAllByTestId(/^chip-/).map((chip) => chip.dataset.testid)).toEqual([
+        "chip-dock-1",
+        "chip-board",
+        "chip-dock-2",
+      ]);
+    } finally {
+      fixture.panelState.panelsById = panelsById;
+      fixture.panelState.panelIds = panelIds;
+      unregisterPanelKind(PLUGIN_KIND);
+    }
   });
 
   // Issue #11332 — the single-panel chip renders through the generic

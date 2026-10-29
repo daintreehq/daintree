@@ -7,6 +7,7 @@ import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useLayoutUndoStore } from "@/store/layoutUndoStore";
 import { useHelpPanelStore, selectSlotTerminalIds } from "@/store/helpPanelStore";
+import { isHydrationBatchActive } from "@/store/slices/panelRegistry/hydrationBatch";
 import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import { getGridLayoutSnapshot } from "@/components/Terminal/gridLayoutSnapshot";
 import { animatePanelMove } from "@/components/Panel/animatePanelMove";
@@ -16,7 +17,7 @@ import {
   filterRailDockPanels,
   planDockChipMove,
 } from "@/components/Layout/dockRenderItems";
-import { getFocusedDockChip, keepDockChipFocus } from "@/components/Layout/dockChipFocus";
+import { getFocusedDockChipPanelId } from "@/components/Layout/dockChipFocus";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 import {
   PLACEMENT_DESTINATIONS,
@@ -210,9 +211,13 @@ export function registerTerminalLayoutActions(
   // panel moves one slot in the grid. Undo is snapshotted only for a move that
   // happens, so a press at either end leaves history and the redo stack alone.
   const moveAlongRow = (direction: -1 | 1, ctx: ActionContext): void => {
+    // Both reorders rebuild the worktree index from `panelIds`, which a hydration
+    // or spawn batch hasn't appended to yet, and the flush never re-indexes, so a
+    // move mid-batch would drop the pending panels from their worktree for good.
+    if (isHydrationBatchActive()) return;
     const state = usePanelStore.getState();
-    const chip = ctx.dispatchSource === "keybinding" ? getFocusedDockChip() : null;
-    const targetId = chip?.panelId ?? state.focusedId;
+    const chipPanelId = ctx.dispatchSource === "keybinding" ? getFocusedDockChipPanelId() : null;
+    const targetId = chipPanelId ?? state.focusedId;
     if (!targetId) return;
     const activeWorktreeId = callbacks.getActiveWorktreeId();
 
@@ -230,12 +235,7 @@ export function registerTerminalLayoutActions(
       );
       if (!nextPanelIds) return;
       useLayoutUndoStore.getState().pushLayoutSnapshot();
-      const reorder = () => state.restoreTerminalOrder(nextPanelIds);
-      if (chip) {
-        keepDockChipFocus(chip.element, reorder);
-      } else {
-        reorder();
-      }
+      state.restoreTerminalOrder(nextPanelIds);
       return;
     }
 
@@ -288,6 +288,7 @@ export function registerTerminalLayoutActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
+      if (isHydrationBatchActive()) return;
       const state = usePanelStore.getState();
       const { focusedId, panelIds, panelsById, reorderTerminals } = state;
       if (!focusedId) return;
@@ -327,6 +328,7 @@ export function registerTerminalLayoutActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
+      if (isHydrationBatchActive()) return;
       const state = usePanelStore.getState();
       const { focusedId, panelIds, panelsById, reorderTerminals } = state;
       if (!focusedId) return;

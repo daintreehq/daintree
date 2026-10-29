@@ -205,9 +205,18 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
     if (items.length === 0) return;
     // The tab stop follows the chip, not its slot: a chip moved by the keyboard
     // (#14972) keeps it, and the next arrow roves from where the chip now sits.
-    const followedIdx = prevFocusedDockItemRef.current
-      ? items.indexOf(prevFocusedDockItemRef.current)
-      : -1;
+    // React has already put focus back on a moved chip by now, so one that holds
+    // it is scrolled into view the way an arrow-key rove would.
+    const followed = prevFocusedDockItemRef.current;
+    const followedIdx = followed ? items.indexOf(followed) : -1;
+    if (
+      followed &&
+      followedIdx !== -1 &&
+      followedIdx !== activeDockIndexRef.current &&
+      document.activeElement === followed
+    ) {
+      followed.scrollIntoView({ behavior: "instant", block: "nearest", inline: "nearest" });
+    }
     const clamped =
       followedIdx !== -1 ? followedIdx : Math.min(activeDockIndexRef.current, items.length - 1);
     activeDockIndexRef.current = clamped;

@@ -474,19 +474,29 @@ describe("collectDockPanels", () => {
     expect(ids(collectDockPanels(membership([terminal("a"), plugin]), null))).toEqual(["a"]);
   });
 
-  it("appends a panel still pending in a spawn batch (#9649)", () => {
-    const a = terminal("a", "wt-1");
-    const pending = terminal("pending", "wt-1");
+  it("appends panels pending in a spawn batch, own worktree first, then global (#9649)", () => {
+    const panels = [
+      terminal("a", "wt-1"),
+      terminal("global-pending"),
+      terminal("foreign-pending", "wt-2"),
+      terminal("own-pending", "wt-1"),
+    ];
 
+    // Buckets inserted global-first, so an unscoped scan would order them
+    // differently and pull in the other worktree's pending panel.
     const result = collectDockPanels(
-      membership([a, pending], {
+      membership(panels, {
         panelIds: ["a"],
-        panelIdsByWorktreeId: { "wt-1": ["a", "pending"] },
+        panelIdsByWorktreeId: {
+          __none__: ["global-pending"],
+          "wt-2": ["foreign-pending"],
+          "wt-1": ["a", "own-pending"],
+        },
       }),
       "wt-1"
     );
 
-    expect(ids(result)).toEqual(["a", "pending"]);
+    expect(ids(result)).toEqual(["a", "own-pending", "global-pending"]);
   });
 });
 
