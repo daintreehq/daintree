@@ -773,6 +773,38 @@ describe("PluginService built-in plugin loading", () => {
       await expect(fs.access(settingsFile)).rejects.toThrow();
     });
 
+    it("deletes a singleton's accounts, local settings and stored data with deleteSettings, as for a per-project instance", async () => {
+      const pluginsRoot = path.join(tmpDir, "plugins");
+      await fs.mkdir(path.join(pluginsRoot, "acme.wipe"), { recursive: true });
+      await fs.writeFile(
+        path.join(pluginsRoot, "acme.wipe", "plugin.json"),
+        JSON.stringify({ name: "acme.wipe", version: "1.0.0" })
+      );
+      const wiped = [
+        path.join(tmpDir, "plugin-settings", "acme.wipe.json"),
+        path.join(tmpDir, "plugin-settings", "accounts", "acme.wipe.json"),
+        path.join(tmpDir, "plugin-settings", "local", "a".repeat(64), "acme.wipe.json"),
+        path.join(tmpDir, "plugin-settings", "local", "b".repeat(64), "acme.wipe.json"),
+        path.join(tmpDir, "plugin-storage", "acme.wipe.json"),
+      ];
+      const kept = [
+        path.join(tmpDir, "plugin-settings", "acme.other.json"),
+        path.join(tmpDir, "plugin-storage", "acme.other.json"),
+        path.join(tmpDir, "some-project", ".daintree", "plugin-storage", "acme.wipe.json"),
+      ];
+      for (const file of [...wiped, ...kept]) {
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, "{}");
+      }
+      const service = new PluginService(pluginsRoot, "0.0.0", { builtinPluginsRoot: builtinDir });
+      await service.initialize();
+
+      await service.uninstallPlugin("acme.wipe", true);
+
+      for (const file of wiped) await expect(fs.access(file)).rejects.toThrow();
+      for (const file of kept) await expect(fs.access(file)).resolves.toBeUndefined();
+    });
+
     it("never deletes a project-scope settings file, even with deleteSettings", async () => {
       // Uninstall only ever targets the user-scope settings root; per-repo
       // `.daintree/plugin-settings/` files are tracked git artifacts and are not

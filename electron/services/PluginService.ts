@@ -1488,7 +1488,6 @@ export class PluginService {
     this.installer = new PluginInstaller({
       getPluginsRoot: () => this.pluginsRoot,
       records: this.records,
-      getSettingsRoot: () => this.settings.settingsRoot(),
       loadPlugin: async (root, pluginId, opts) => {
         const before = this.projectInstancePackages.get(pluginId);
         const loaded = await this.loadPlugin(root, pluginId, opts);
@@ -1518,7 +1517,7 @@ export class PluginService {
       setEnabled: (pluginId, enabled) => this.setEnabled(pluginId, enabled),
       broadcastProvenanceChanged: () => this.broadcaster.broadcastProvenanceChanged(),
       purgeRecipeMetadata: (pluginId) => this.purgePluginRecipeMetadata(pluginId),
-      wipeProjectInstanceData: (pluginId) => this.wipeInstalledInstanceData(pluginId),
+      wipePluginData: (pluginId) => this.wipeInstalledPluginData(pluginId),
       getPlugin: (pluginId) => this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId),
       reservedNames: this.reservedNames,
       disabledPlugins: this.disabledPlugins,
@@ -7154,17 +7153,22 @@ export class PluginService {
   }
 
   /**
-   * Delete every per-project instance's user-scope settings and secrets, local
-   * settings, account tokens and user-scope storage for one package. Found by
-   * filename rather than by the enablement list, which an uninstall has already
-   * cleared and which never held projects the package was enabled in before.
+   * Delete the user-scope settings and secrets, local settings, account tokens
+   * and user-scope storage of a plugin id and of every per-project instance of
+   * it. Instances are found by filename rather than by the enablement list,
+   * which an uninstall has already cleared and which never held projects the
+   * package was enabled in before. The id's own user-scope files are wiped
+   * whether or not they exist yet, so a first write still waiting on the
+   * keychain can't create one afterwards.
    */
-  private async wipeInstalledInstanceData(manifestId: string): Promise<void> {
-    if (!SCOPED_PLUGIN_NAME_PATTERN.test(manifestId)) return;
-    const isInstanceFile = (name: string): boolean => {
+  private async wipeInstalledPluginData(pluginId: string): Promise<void> {
+    if (!SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) return;
+    const ownFile = `${pluginId}.json`;
+    const isPluginFile = (name: string): boolean => {
+      if (name === ownFile) return true;
       if (!name.endsWith(".json")) return false;
       const parsed = parseProjectPluginInstanceKey(name.slice(0, -".json".length));
-      return parsed?.installed === true && parsed.manifestId === manifestId;
+      return parsed?.installed === true && parsed.manifestId === pluginId;
     };
     const listDir = async (dir: string): Promise<string[]> => {
       try {
@@ -7175,16 +7179,23 @@ export class PluginService {
       }
     };
     const settingsRoot = this.settings.settingsRoot();
-    const dirs = [settingsRoot, path.join(settingsRoot, "accounts"), this.storage.storageRoot()];
+    const userDirs = [
+      settingsRoot,
+      path.join(settingsRoot, "accounts"),
+      this.storage.storageRoot(),
+    ];
+    const files = new Set(userDirs.map((dir) => path.join(dir, ownFile)));
+    const dirs = [...userDirs];
     const localRoot = path.join(settingsRoot, "local");
     for (const projectId of await listDir(localRoot)) {
       if (isProjectWorkspaceId(projectId)) dirs.push(path.join(localRoot, projectId));
     }
     for (const dir of dirs) {
       for (const name of await listDir(dir)) {
-        if (isInstanceFile(name)) await wipeSettingsFile(path.join(dir, name));
+        if (isPluginFile(name)) files.add(path.join(dir, name));
       }
     }
+    for (const file of files) await wipeSettingsFile(file);
   }
 
   /** Forget every enablement in a project that was removed from Daintree. */

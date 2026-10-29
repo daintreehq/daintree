@@ -685,7 +685,9 @@ describe("PluginManagerView", () => {
     await waitFor(() => expect(screen.getByText("Uninstall 'Acme Demo'?")).toBeTruthy());
 
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Also delete this plugin's saved settings" })
+      screen.getByRole("checkbox", {
+        name: "Also delete its settings, connected accounts, and stored data",
+      })
     );
     fireEvent.click(screen.getByRole("button", { name: "Uninstall plugin" }));
     await waitFor(() =>
@@ -702,7 +704,9 @@ describe("PluginManagerView", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Uninstall Acme Demo" }));
     await waitFor(() => expect(screen.getByText("Uninstall 'Acme Demo'?")).toBeTruthy());
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Also delete this plugin's saved settings" })
+      screen.getByRole("checkbox", {
+        name: "Also delete its settings, connected accounts, and stored data",
+      })
     );
     fireEvent.click(screen.getByRole("button", { name: "Keep plugin" }));
 
