@@ -387,7 +387,13 @@ export function useSidebarWorktreeModel({
     };
   }, [nonMainWorktrees.length, quickStateCounts]);
 
-  const { filteredWorktrees, groupedSections, hasResultsWithoutQuickState, totalCount } = useMemo(
+  const {
+    filteredWorktrees,
+    groupedSections,
+    hasResultsWithoutQuickState,
+    resultsWithoutQuickStateCount,
+    totalCount,
+  } = useMemo(
     () =>
       filterSidebarWorktrees({
         deferredWorktrees,
@@ -511,6 +517,15 @@ export function useSidebarWorktreeModel({
         now
       ));
   const mainVisible = mainMatchesQueryPre && mainMatchesFacetsPre;
+  // Main is exempt from the tab, so it can sit on screen in the very state the
+  // tab below it reads as empty. The empty state has to say so rather than
+  // claim nothing is working under a card that visibly is.
+  const mainMeta = mainWorktree ? derivedMetaMap.get(mainWorktree.id) : undefined;
+  const mainInQuickState =
+    quickStateFilter !== "all" &&
+    mainVisible === true &&
+    mainMeta !== undefined &&
+    matchesQuickStateFilter(quickStateFilter, mainMeta);
 
   const mainRowIndex = mainVisible ? 1 : 0;
   const firstScrollableRowIndex = mainRowIndex + 1;
@@ -606,6 +621,7 @@ export function useSidebarWorktreeModel({
     setQuickStateFilter,
     mainWorktree,
     mainVisible,
+    mainInQuickState,
     nonMainWorktrees,
     quickStateCounts,
     chipCounts,
@@ -613,6 +629,7 @@ export function useSidebarWorktreeModel({
     filteredWorktrees,
     groupedSections,
     hasResultsWithoutQuickState,
+    resultsWithoutQuickStateCount,
     totalCount,
     dragStartOrder,
     sortableIds,
