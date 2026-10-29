@@ -1634,6 +1634,29 @@ describe("voiceInput — a session live in another view (#14601)", () => {
     expect(winA.focus).not.toHaveBeenCalled();
   });
 
+  it("asks the owner to stop when dictation is turned off mid-session (#14947)", async () => {
+    await start(ownerA, "a");
+
+    await invoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, viewB, { language: "de" });
+    expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([]);
+
+    await invoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, viewB, { enabled: false });
+
+    expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([{ sessionId: "a" }]);
+    // The owner drains it, so what was said stays in its draft.
+    expect(shared.calls).not.toContain("hard-stop");
+    expect(winA.focus).not.toHaveBeenCalled();
+  });
+
+  it("asks nothing of a view when dictation is turned off with nothing live", async () => {
+    await start(ownerA, "a");
+    await stop(ownerA, "a");
+
+    await invoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, viewB, { enabled: false });
+
+    expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([]);
+  });
+
   describe("taking the person back to the dictation (#14791)", () => {
     const back = { sessionId: "a", returnToTarget: true };
 

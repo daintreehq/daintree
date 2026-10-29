@@ -1126,6 +1126,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // One write, so fields saved together (a mic's id and its name) land
     // together or not at all.
     store.set("voiceInput", { ...store.get("voiceInput"), ...updates });
+    // Off means the microphone is off (#14947): a running session ends the way
+    // a stop would, in whichever view owns it, so its text stays in the draft.
+    if (updates.enabled === false) requestLiveSessionStop();
   };
 
   const reportAudioOverflow = (session: VoiceSession) => {
