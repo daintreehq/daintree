@@ -651,19 +651,19 @@ export function IssuePickerDialog({
             </>
           )
         }
-      >
-        {isLinked && (
-          <Button variant="ghost" onClick={handleDetach} className="text-text-secondary mr-auto">
-            <Link2Off aria-hidden="true" />
-            {draft
-              ? "Clear selection"
-              : `Unlink issue ${worktree.issueKey ?? `#${currentIssueNumber}`}`}
-          </Button>
-        )}
-        <Button variant="ghost" onClick={onClose} className="text-text-secondary">
-          Cancel
-        </Button>
-      </AppDialog.Footer>
+        leadingAction={
+          isLinked
+            ? {
+                label: draft
+                  ? "Clear selection"
+                  : `Unlink issue ${worktree.issueKey ?? `#${currentIssueNumber}`}`,
+                icon: <Link2Off aria-hidden="true" />,
+                onClick: handleDetach,
+              }
+            : undefined
+        }
+        secondaryAction={{ label: "Cancel", onClick: onClose }}
+      />
     </AppDialog>
   );
 }

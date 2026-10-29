@@ -790,6 +790,20 @@ interface AppDialogHeaderProps {
  */
 const DIALOG_INSET = "px-6";
 
+/**
+ * Puts the footer's leading action on the column. It is a ghost, so nothing
+ * marks its box at rest and the eye lines up its label, which the default
+ * size's `px-4` sat 1rem inside the title and body. Hanging the button by that
+ * padding moves the label (or its glyph) onto the column and keeps the whole
+ * box for the hover fill and focus ring, which still clear the card: the box
+ * lands 0.5rem in and the ring 4px in.
+ *
+ * High contrast and forced colours frame every button, and a framed button
+ * lines up by its frame, as the filled primary does on the trailing edge, so
+ * the hang drops there.
+ */
+const DIALOG_LEADING_ACTION_HANG = "-ml-4 contrast-more:ml-0 forced-colors:ml-0";
+
 /** Marks the header close button, which initial focus passes over. */
 const DIALOG_CLOSE_ATTR = "data-dialog-close";
 
@@ -1048,7 +1062,11 @@ AppDialog.Footer = function AppDialogFooter({
           }}
           aria-disabled={leadingAction.disabled || undefined}
           loading={leadingAction.loading}
-          className={cn("shrink-0", leadingAction.disabled && ARIA_DISABLED_CLASSES)}
+          className={cn(
+            "shrink-0",
+            DIALOG_LEADING_ACTION_HANG,
+            leadingAction.disabled && ARIA_DISABLED_CLASSES
+          )}
           data-confirm-role="leading"
         >
           {leadingAction.icon}

@@ -38,10 +38,28 @@ vi.mock("@/components/ui/AppDialog", () => {
   Dialog.Header = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
   Dialog.Title = ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>;
   Dialog.CloseButton = () => <button type="button">close</button>;
-  Dialog.Footer = ({ children, hint }: { children: React.ReactNode; hint?: React.ReactNode }) => (
+  type Action = { label: string; onClick: () => void };
+  Dialog.Footer = ({
+    hint,
+    leadingAction,
+    secondaryAction,
+  }: {
+    hint?: React.ReactNode;
+    leadingAction?: Action;
+    secondaryAction?: Action;
+  }) => (
     <div data-testid="footer">
+      {leadingAction && (
+        <button type="button" onClick={leadingAction.onClick}>
+          {leadingAction.label}
+        </button>
+      )}
       {hint}
-      {children}
+      {secondaryAction && (
+        <button type="button" onClick={secondaryAction.onClick}>
+          {secondaryAction.label}
+        </button>
+      )}
     </div>
   );
   return { AppDialog: Dialog };
