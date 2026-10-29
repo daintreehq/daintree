@@ -1178,11 +1178,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           : note
       );
     const submitAttemptRef = useRef(0);
-    // A send, and its outcome, are newer than any scratch refusal on the border.
-    const dropScratchRefusal = useCallback(() => {
-      const voice = useVoiceRecordingStore.getState();
-      if (voice.scratchRefusal?.panelId === voiceId) voice.setScratchRefusal(null);
-    }, [voiceId]);
     const notingRefusal = useCallback(
       (submit: (outgoing: string) => Promise<boolean>, dictated: boolean) =>
         async (outgoing: string): Promise<boolean> => {
@@ -1195,7 +1190,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             accepted = false;
           }
           if (!accepted && submitAttemptRef.current === attempt) {
-            dropScratchRefusal();
             // A voice wait begun since this send went has taken the status over.
             setSendNote((note) =>
               dictated || note !== null ? { terminalId, refused: true } : note
@@ -1203,7 +1197,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           }
           return accepted;
         },
-      [terminalId, dropScratchRefusal]
+      [terminalId]
     );
     const noteSpokenSendTooShort = useCallback(() => {
       // An earlier send still on its way can't say over it that it wasn't sent.
@@ -1217,7 +1211,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const sendText = useCallback(
       (text: string, options?: SendTextOptions & { dictated?: boolean }) => {
         const { dictated = false, ...sendOptions } = options ?? {};
-        dropScratchRefusal();
         if (sendOptions.submit) return sendResolvedText(text, sendOptions);
         // Claimed before any expansion is awaited, so a press while a diff
         // is fetched calls the hand-back off.
@@ -1238,7 +1231,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           ),
         });
       },
-      [sendResolvedText, guardSentDraft, claimSendHandBack, notingRefusal, dropScratchRefusal]
+      [sendResolvedText, guardSentDraft, claimSendHandBack, notingRefusal]
     );
 
     const resetEditorDoc = () => {
@@ -1394,13 +1387,20 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     );
     // The session's status on the border, for a draft that hides the
     // placeholder saying it. The outcomes of a scratch and a send have the
-    // border first, and a send drops the scratch's, so the newer one shows.
+    // border first, the newer of the two showing.
     const ownSendNote = sendNote?.terminalId === terminalId ? sendNote : null;
     const isSendRefused = ownSendNote?.refused === true;
     const sendRefusedCaption = ownSendNote?.tooShort ? SPOKEN_SEND_TOO_SHORT_CAPTION : "Not sent";
     const sendRefusedStatus = ownSendNote?.tooShort
       ? SPOKEN_SEND_TOO_SHORT_STATUS
       : SEND_HELD_STATUS;
+    // A refused send retires a scratch refusal already on the border. One the
+    // send took outlives it: it says what went out.
+    useEffect(() => {
+      if (!isSendRefused) return;
+      const voice = useVoiceRecordingStore.getState();
+      if (voice.scratchRefusal?.panelId === voiceId) voice.setScratchRefusal(null);
+    }, [isSendRefused, voiceId]);
     // A "scratch that" that removed nothing (#14973), on an empty draft too:
     // the placeholder doesn't say it.
     const scratchRefusal = useVoiceRecordingStore((s) =>
