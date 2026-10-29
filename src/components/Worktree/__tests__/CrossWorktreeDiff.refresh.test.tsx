@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ReactNode } from "react";
 import { CrossWorktreeDiff } from "../CrossWorktreeDiff";
@@ -120,7 +120,7 @@ describe("CrossWorktreeDiff when a worktree snapshot updates", () => {
     setWorktrees({ modifiedCount: 3 }, { modifiedCount: 7 });
     view.rerender(tree());
 
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await act(async () => {});
     expect(mockCompareWorktrees.mock.calls.length).toBe(callsBefore);
     expect(fileRow("b.ts")?.getAttribute("aria-current")).toBe("true");
     expect(screen.getByTestId("diff-viewer").textContent).toBe("diff v1");
