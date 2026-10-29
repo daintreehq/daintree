@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import { UI_DOHERTY_THRESHOLD, UI_STILL_WORKING_MS } from "@/lib/animationUtils";
 import { useDeferredLoading, useSkeletonDisplayFloor } from "@/hooks/useDeferredLoading";
 import { forgeClient } from "@/clients";
-import type { Issue } from "@shared/types/forge";
+import type { Issue, Page } from "@shared/types/forge";
 import type { WorktreeState } from "@/types";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
@@ -295,13 +295,16 @@ export function IssuePickerDialog({
     loadMoreIdRef.current = id;
     setIsLoadingMore(true);
     setLoadMoreFailed(false);
-    const result = await forgeClient
-      .listIssues(worktree.path, {
+    let result: Page<Issue> | null;
+    try {
+      result = await forgeClient.listIssues(worktree.path, {
         search: resultScope.query || undefined,
         state: resultScope.state,
         cursor: nextCursor,
-      })
-      .catch(() => null);
+      });
+    } catch {
+      result = null;
+    }
     if (loadMoreIdRef.current === id) loadMoreIdRef.current = null;
     // A new query, filter, retry or session has replaced the set this page
     // continues; splicing it in would mix two result sets.
