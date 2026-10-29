@@ -834,34 +834,56 @@ const DIFF_TEXT_ROW_FILLS = [
   "overlay-selected",
 ] as const satisfies readonly AppThemeTokenKey[];
 
-/**
- * Every backdrop DiffStat's counts can paint on, resolved to an opaque hex. A
- * fill that can't be resolved (a `color-mix()` row fill from a partial import)
- * is left out rather than guessed; the palette gates already report an
- * unevaluable `overlay-highlight`.
- */
+/** Every backdrop DiffStat's counts can paint on, resolved to an opaque hex. */
 export function resolveDiffTextBackdrops(
   tokens: Partial<Record<AppThemeTokenKey, string>>
 ): Array<{ label: string; hex: string }> {
+  return collectDiffTextBackdrops(tokens).backdrops;
+}
+
+// The backdrops, plus the tint and fill tokens this math can't composite (a
+// `color-mix()` from a partial import). Those are left out of the derivation
+// rather than guessed at, and the gate names them, so a theme can't pass on a
+// backdrop nobody measured.
+function collectDiffTextBackdrops(tokens: Partial<Record<AppThemeTokenKey, string>>): {
+  backdrops: Array<{ label: string; hex: string }>;
+  unresolved: Set<AppThemeTokenKey>;
+} {
   const backdrops: Array<{ label: string; hex: string }> = [];
+  const unresolved = new Set<AppThemeTokenKey>();
   const tint = tokens["tint"];
   for (const surfaceKey of DISPLAY_SURFACES) {
     const surface = tokens[surfaceKey];
     if (typeof surface !== "string" || !isHexColor(surface)) continue;
     backdrops.push({ label: surfaceKey, hex: surface });
-    if (typeof tint === "string" && isHexColor(tint)) {
+    // `bg-tint/[0.04]` scales whatever alpha the tint already carries.
+    const tintColor = typeof tint === "string" ? parseTranslucent(tint) : null;
+    if (tintColor) {
       backdrops.push({
         label: `tint at ${DIFF_TEXT_TINT_OPACITY * 100}% over ${surfaceKey}`,
-        hex: blendOverBackground(tint, surface, DIFF_TEXT_TINT_OPACITY),
+        hex: blendOverBackground(
+          tintColor.hex,
+          surface,
+          DIFF_TEXT_TINT_OPACITY * tintColor.opacity
+        ),
       });
+    } else {
+      unresolved.add("tint");
     }
     for (const fillKey of DIFF_TEXT_ROW_FILLS) {
       const fill = tokens[fillKey];
       const hex = typeof fill === "string" ? resolveOverBackdrop(fill, surface) : null;
       if (hex) backdrops.push({ label: `${fillKey} over ${surfaceKey}`, hex });
+      else unresolved.add(fillKey);
     }
   }
-  return backdrops;
+  return { backdrops, unresolved };
+}
+
+// A hex (alpha or not) or `rgba()` as an opaque colour plus its alpha.
+function parseTranslucent(value: string): { hex: string; opacity: number } | null {
+  if (isHexColor(value)) return splitHexAlpha(value) ?? { hex: value.trim(), opacity: 1 };
+  return parseRgba(value);
 }
 
 /**
@@ -871,13 +893,19 @@ export function resolveDiffTextBackdrops(
  */
 function getDiffTextContrastWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
   const warnings: AppThemeValidationWarning[] = [];
-  const backdrops = resolveDiffTextBackdrops(scheme.tokens);
+  const { backdrops, unresolved } = collectDiffTextBackdrops(scheme.tokens);
   if (backdrops.length === 0) {
     warnings.push({
       kind: "unevaluable",
       message: "Cannot evaluate diff churn text contrast: no display surface is a hex color",
     });
     return warnings;
+  }
+  for (const key of unresolved) {
+    warnings.push({
+      kind: "unevaluable",
+      message: `Cannot evaluate diff churn text contrast on ${key}="${scheme.tokens[key]}": neither hex nor rgba()`,
+    });
   }
   for (const key of ["diff-text-insert", "diff-text-delete"] as const) {
     const ink = scheme.tokens[key];

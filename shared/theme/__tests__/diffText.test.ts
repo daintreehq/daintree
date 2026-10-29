@@ -26,7 +26,16 @@ describe("DiffStat churn inks (#15319)", () => {
     (_id, scheme) => {
       const backdrops = resolveDiffTextBackdrops(scheme.tokens);
       // Every display surface, the preview frame's tint and four row fills over each.
-      expect(backdrops).toHaveLength(DISPLAY_SURFACES.length * 6);
+      expect(backdrops.map((b) => b.label).sort()).toEqual(
+        DISPLAY_SURFACES.flatMap((surface) => [
+          surface,
+          `tint at 4% over ${surface}`,
+          `overlay-subtle over ${surface}`,
+          `overlay-soft over ${surface}`,
+          `overlay-highlight over ${surface}`,
+          `overlay-selected over ${surface}`,
+        ]).sort()
+      );
       for (const [key] of INKS) {
         for (const backdrop of backdrops) {
           const ratio = contrastRatio(scheme.tokens[key], backdrop.hex);
@@ -95,19 +104,52 @@ describe("DiffStat churn inks (#15319)", () => {
   });
 
   it("re-lifts from an imported theme's own status ink and surfaces", () => {
+    // A teal far from the fallback theme's green, so an ink inherited from the
+    // fallback can't pass for one lifted from this theme's status ink.
     const scheme = normalizeAppColorScheme({
-      id: "dim-green",
-      name: "Dim green",
+      id: "dim-teal",
+      name: "Dim teal",
       type: "dark",
-      tokens: { "status-success": "#2f5a36", "surface-panel-elevated": "#3a3a3a" },
+      tokens: { "status-success": "#1f5560", "surface-panel-elevated": "#3a3a3a" },
     });
     const ink = scheme.tokens["diff-text-insert"];
-    expect(ink).not.toBe("#2f5a36");
+    expect(ink).not.toBe("#1f5560");
+    expect(hueDistance(hexToOklch(ink)!.h, hexToOklch("#1f5560")!.h)).toBeLessThan(1.5);
     for (const backdrop of resolveDiffTextBackdrops(scheme.tokens)) {
       expect(contrastRatio(ink, backdrop.hex)).toBeGreaterThanOrEqual(DIFF_TEXT_MIN_CONTRAST);
     }
     expect(getThemeContrastWarnings(scheme).filter((w) => w.message.includes("diff-text"))).toEqual(
       []
+    );
+  });
+
+  it("names a row fill or tint it can't composite instead of skipping it silently", () => {
+    const daintree = BUILT_IN_APP_SCHEMES.find((s) => s.id === "daintree")!;
+    const warnings = getThemeContrastWarnings({
+      ...daintree,
+      tokens: {
+        ...daintree.tokens,
+        "overlay-selected": "color-mix(in srgb, #ffffff 40%, #000000)",
+        tint: "color-mix(in srgb, #ffffff 90%, #000000)",
+      },
+    });
+    const unevaluable = warnings.filter((w) => w.kind === "unevaluable").map((w) => w.message);
+    expect(
+      unevaluable.some((m) => m.includes("diff churn") && m.includes("overlay-selected"))
+    ).toBe(true);
+    expect(unevaluable.some((m) => m.includes("diff churn") && m.includes("tint="))).toBe(true);
+  });
+
+  it("composites the preview frame with the alpha the tint already carries", () => {
+    const daintree = BUILT_IN_APP_SCHEMES.find((s) => s.id === "daintree")!;
+    const elevated = daintree.tokens["surface-panel-elevated"];
+    const frameFor = (tint: string) =>
+      resolveDiffTextBackdrops({ ...daintree.tokens, tint }).find(
+        (b) => b.label === "tint at 4% over surface-panel-elevated"
+      )?.hex;
+    expect(frameFor("rgba(255, 255, 255, 1)")).toBe(blendOverBackground("#ffffff", elevated, 0.04));
+    expect(frameFor("#ffffff80")).toBe(
+      blendOverBackground("#ffffff", elevated, 0.04 * (0x80 / 255))
     );
   });
 
@@ -149,10 +191,25 @@ describe("liftToContrast", () => {
     expect(contrastRatio(dark, "#2a2a2a")).toBeGreaterThanOrEqual(4.5);
     expect(hexToOklch(dark)!.l).toBeGreaterThan(hexToOklch("#3a6b45")!.l);
     expect(hueDistance(hexToOklch(dark)!.h, hexToOklch("#3a6b45")!.h)).toBeLessThan(1.5);
+    // The nearest lightness that reads, not merely one that does.
+    const back = oklchToHex({ ...hexToOklch(dark)!, l: hexToOklch(dark)!.l - 0.01 });
+    expect(contrastRatio(back, "#2a2a2a")).toBeLessThan(4.5);
 
     const light = liftToContrast("#5fae6f", ["#f2efe8"], 4.5, "light");
     expect(contrastRatio(light, "#f2efe8")).toBeGreaterThanOrEqual(4.5);
     expect(hexToOklch(light)!.l).toBeLessThan(hexToOklch("#5fae6f")!.l);
+  });
+
+  it("finds a lightness between a dark and a light backdrop when the far end fails", () => {
+    // White fails against the white backdrop, but a mid grey clears 3:1 on both.
+    const ink = liftToContrast("#222222", ["#000000", "#ffffff"], 3, "dark");
+    expect(contrastRatio(ink, "#000000")).toBeGreaterThanOrEqual(3);
+    expect(contrastRatio(ink, "#ffffff")).toBeGreaterThanOrEqual(3);
+  });
+
+  it("lifts a hex whose alpha byte says fully opaque", () => {
+    const ink = liftToContrast("#3a6b45ff", ["#2a2a2a"], 4.5, "dark");
+    expect(ink).toBe(liftToContrast("#3a6b45", ["#2a2a2a"], 4.5, "dark"));
   });
 
   it("leaves values it can't lift for the gate to report", () => {

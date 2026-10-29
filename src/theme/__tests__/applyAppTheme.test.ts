@@ -8,6 +8,7 @@ import {
   getAppThemeById,
   getAppThemeCssVariables,
   hexToOklch,
+  normalizeAppColorScheme,
   resolveDiffTextBackdrops,
   type AppColorScheme,
 } from "@shared/theme";
@@ -203,6 +204,42 @@ describe("applyColorVisionMode diff token restoration", () => {
     expect(root.style.getPropertyValue("--theme-diff-text-insert")).toBe(
       base["--theme-diff-text-insert"]
     );
+  });
+
+  it("lifts the red-green churn inks against a dark theme's own backdrops", () => {
+    const darkScheme = getAppThemeById("daintree")!;
+    const root = document.createElement("div");
+    applyAppThemeToRoot(root, darkScheme);
+    applyColorVisionMode(root, "red-green", darkScheme);
+    const darkInk = root.style.getPropertyValue("--theme-diff-text-insert");
+
+    for (const backdrop of resolveDiffTextBackdrops(darkScheme.tokens)) {
+      expect(contrastRatio(darkInk, backdrop.hex), backdrop.label).toBeGreaterThanOrEqual(
+        DIFF_TEXT_MIN_CONTRAST
+      );
+    }
+    // Lighter than the raw override on dark; Bondi lifts the same hue darker.
+    expect(hexToOklch(darkInk)!.l).toBeGreaterThan(
+      hexToOklch(RED_GREEN_OVERRIDES["--theme-status-success"]!)!.l
+    );
+  });
+
+  it("only replaces a churn ink whose status ink the mode overrides", () => {
+    const named = normalizeAppColorScheme({
+      id: "named-churn",
+      name: "Named churn",
+      type: "dark",
+      tokens: { "diff-text-insert": "#eeeeee", "diff-text-delete": "#dddddd" },
+    });
+    const root = document.createElement("div");
+    applyAppThemeToRoot(root, named);
+
+    applyColorVisionMode(root, "blue-yellow", named);
+    expect(root.style.getPropertyValue("--theme-diff-text-insert")).toBe("#eeeeee");
+    expect(root.style.getPropertyValue("--theme-diff-text-delete")).toBe("#dddddd");
+
+    applyColorVisionMode(root, "red-green", named);
+    expect(root.style.getPropertyValue("--theme-diff-text-insert")).not.toBe("#eeeeee");
   });
 
   it("blue-yellow restores base diff and status tokens instead of stripping them", () => {

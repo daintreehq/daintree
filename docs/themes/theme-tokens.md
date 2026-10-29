@@ -331,7 +331,7 @@ Theme-controlled colors for the diff viewer and `DiffStat`. Derived from `status
 | `diff-selected-background` | `tint` at 6% | `tint` at 6% |
 | `diff-omit-gutter-line` | `activity-idle` | `activity-idle` |
 
-`diff-text-insert` and `diff-text-delete` are DiffStat's churn counts. The status inks only carry the 3:1 non-text floor, so each is lifted along OKLCH lightness, at the same hue and chroma, until it holds 4.5:1 on every display surface, on the 4% `tint` frame and on the `overlay-subtle`, `overlay-soft`, `overlay-highlight` and `overlay-selected` row fills over each. The derivation reruns on the final tokens of a palette, plugin or imported theme, and a theme that names either token keeps it. `getThemeContrastWarnings` gates both at 4.5:1 against the same backdrops.
+`diff-text-insert` and `diff-text-delete` are DiffStat's churn counts. The status inks only carry the 3:1 non-text floor, so each is lifted along OKLCH lightness, at the same hue and with as much of its chroma as sRGB can show, until it holds 4.5:1 on every display surface, on the 4% `tint` frame and on the `overlay-subtle`, `overlay-soft`, `overlay-highlight` and `overlay-selected` row fills over each. The derivation reruns on the final tokens of a palette, plugin or imported theme, and a theme that names either token keeps it. `getThemeContrastWarnings` gates both at 4.5:1 against the same backdrops.
 
 ## UI Utility Tokens
 

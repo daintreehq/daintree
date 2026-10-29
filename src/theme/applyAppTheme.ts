@@ -82,15 +82,23 @@ export function applyColorVisionMode(
     for (const [name, value] of Object.entries(overrides)) {
       root.style.setProperty(name, value);
     }
-    // The churn inks are the overridden status inks lifted to read as text on
-    // this theme's surfaces, which the static map can't do on its own.
+    // A churn ink whose status ink the mode replaced is that override lifted to
+    // read as text on this theme's surfaces, which the static map can't do on
+    // its own. One whose status ink the mode leaves alone keeps the theme's.
     if (scheme) {
       const effective: Partial<Record<AppThemeTokenKey, string>> = { ...scheme.tokens };
       for (const [name, value] of Object.entries(overrides)) {
         effective[name.slice("--theme-".length) as AppThemeTokenKey] = value;
       }
-      for (const [token, value] of Object.entries(deriveDiffTextInks(effective, scheme.type))) {
-        root.style.setProperty(`--theme-${token}`, value);
+      const inks = deriveDiffTextInks(effective, scheme.type);
+      for (const [token, status] of [
+        ["diff-text-insert", "status-success"],
+        ["diff-text-delete", "status-danger"],
+      ] as const) {
+        const ink = inks[token];
+        if (`--theme-${status}` in overrides && ink !== undefined) {
+          root.style.setProperty(`--theme-${token}`, ink);
+        }
       }
     }
   }

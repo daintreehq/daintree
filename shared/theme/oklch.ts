@@ -150,15 +150,25 @@ export function oklchToHex({ l, c, h }: OklchColor): string {
     .join("")}`;
 }
 
-const OPAQUE_HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+// Opaque hex, including the alpha forms that spell full opacity (`#rgbf`,
+// `#rrggbbff`), which `hexToOklch` reads by their colour bytes.
+const OPAQUE_HEX = /^#(?:[0-9a-f]{3}f?|[0-9a-f]{6}(?:ff)?)$/i;
+
+// Coarse steps along the lightness path before bisecting. With several
+// backdrops the worst-case contrast isn't monotonic in lightness (an ink between
+// a dark and a light backdrop passes only in a middle band), so the endpoint
+// alone can't say whether anything passes. A band narrower than one step can
+// still be missed; at 4.5:1 that only happens between near-black and near-white
+// backdrops, which no theme ships.
+const LIFT_SCAN_STEPS = 32;
 
 /**
  * `ink` itself when it already clears `minimum` against every backdrop,
  * otherwise the nearest OKLCH lightness that does (lighter on a dark theme,
  * darker on a light one) at the same hue and as much of its chroma as sRGB
- * allows. The bisection measures the rounded hex that will actually ship, so
- * whatever it returns has passed. An ink that isn't an opaque hex, or that no
- * lightness rescues, comes back unchanged for the contrast gate to report.
+ * allows. Every candidate is measured as the rounded hex that will actually
+ * ship, so whatever it returns has passed. An ink that isn't an opaque hex, or
+ * that no lightness rescues, comes back unchanged for the contrast gate to report.
  */
 export function liftToContrast(
   ink: string,
@@ -170,11 +180,20 @@ export function liftToContrast(
   if (!start) return ink;
   const reads = (hex: string) =>
     backdrops.every((backdrop) => contrastRatio(hex, backdrop) >= minimum);
-  if (reads(ink)) return ink;
+  if (reads(ink.trim())) return ink;
   const at = (l: number) => oklchToHex({ ...start, l });
+  const end = type === "dark" ? 1 : 0;
   let near = start.l;
-  let far = type === "dark" ? 1 : 0;
-  if (!reads(at(far))) return ink;
+  let far: number | null = null;
+  for (let step = 1; step <= LIFT_SCAN_STEPS; step++) {
+    const l = start.l + ((end - start.l) * step) / LIFT_SCAN_STEPS;
+    if (reads(at(l))) {
+      far = l;
+      break;
+    }
+    near = l;
+  }
+  if (far === null) return ink;
   for (let step = 0; step < 24; step++) {
     const mid = (near + far) / 2;
     if (reads(at(mid))) far = mid;
