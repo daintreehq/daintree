@@ -1,4 +1,5 @@
 import { Spinner } from "@/components/ui/Spinner";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { useDeferredLoading, useDohertyGate } from "@/hooks/useDeferredLoading";
 import { UI_STILL_WORKING_MS } from "@/lib/animationUtils";
 
@@ -11,10 +12,15 @@ export function WaitingRow({ label }: { label: string }) {
   const visible = useDohertyGate(true);
   const slow = useDeferredLoading(true, UI_STILL_WORKING_MS);
   if (!visible) return null;
+  const text = slow ? `${label} — still working…` : label;
   return (
-    <p role="status" className="flex items-center gap-2 text-xs text-text-secondary">
+    // One line whatever the label: a wait in the 32px strip names an app path
+    // that can be longer than the strip has room for.
+    <p role="status" className="flex min-w-0 items-center gap-2 text-xs text-text-secondary">
       <Spinner size="xs" />
-      {slow ? `${label} — still working…` : label}
+      <TruncatedTooltip content={text} focusable={false}>
+        <span className="min-w-0 truncate">{text}</span>
+      </TruncatedTooltip>
     </p>
   );
 }

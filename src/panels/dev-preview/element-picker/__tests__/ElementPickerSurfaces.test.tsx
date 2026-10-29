@@ -136,6 +136,17 @@ function text(): string {
   return document.body.textContent ?? "";
 }
 
+/**
+ * The buttons in a surface that act. Every crumb is a button so its name and
+ * file are a focus away; the ones that can't be picked say so with
+ * `aria-disabled`, and those are not offers.
+ */
+function enabledButtons(surface: HTMLElement, name?: string): HTMLElement[] {
+  return within(surface)
+    .queryAllByRole("button", name === undefined ? {} : { name })
+    .filter((button) => button.getAttribute("aria-disabled") !== "true");
+}
+
 /** Let real time pass, flushing what it settles. */
 function pause(ms: number) {
   return act(() => new Promise<void>((resolve) => setTimeout(resolve, ms)));
@@ -262,36 +273,36 @@ describe("page verdicts", () => {
   it("drops a production-build verdict that a traced selection disproves", async () => {
     await mountBound();
     await act(async () => host.runtimeIssue("not-dev-build"));
-    expect(text()).toContain("production build");
+    expect(text()).toContain("Production build");
 
     await act(async () => host.select(0));
     await screen.findByRole("textbox", { name: "Request for the agent" });
-    expect(text()).not.toContain("production build");
+    expect(text()).not.toContain("Production build");
   });
 
   it("drops a production-build verdict once the pointer finds a traced element", async () => {
     await mountBound();
     await act(async () => host.runtimeIssue("not-dev-build"));
-    expect(text()).toContain("production build");
+    expect(text()).toContain("Production build");
     // The page hydrated after its audit; nothing was clicked, only hovered.
     await act(async () => host.hover(svelteObservation()));
-    expect(text()).not.toContain("production build");
+    expect(text()).not.toContain("Production build");
   });
 
   it("keeps a framework's verdict that another framework's element says nothing about", async () => {
     await mountBound();
     await act(async () => host.runtimeIssue("metadata-unavailable", { framework: "react" }));
-    expect(text()).toContain("no React source locations");
+    expect(text()).toContain("No React source locations");
 
     // A traced Svelte element is no proof of React's metadata…
     await act(async () => host.select(0));
     await screen.findByRole("textbox", { name: "Request for the agent" });
-    expect(text()).toContain("no React source locations");
+    expect(text()).toContain("No React source locations");
 
     // …and a traced React one is.
     host.template = () => reactObservation();
     await act(async () => host.select(0));
-    await waitFor(() => expect(text()).not.toContain("no React source locations"));
+    await waitFor(() => expect(text()).not.toContain("No React source locations"));
   });
 
   it("warns up front when the page's components can't be read", async () => {
@@ -299,7 +310,7 @@ describe("page verdicts", () => {
     await act(async () =>
       host.runtimeIssue("extractor-failed", { framework: "svelte", detail: "no __svelte_meta" })
     );
-    expect(text()).toContain("couldn't read this page's Svelte components");
+    expect(text()).toContain("Couldn't read this page's Svelte components");
     // The page's own words survive under the headline.
     expect(text()).toContain("no __svelte_meta");
   });
@@ -309,7 +320,7 @@ describe("page verdicts", () => {
     await act(async () => host.runtimeIssue("overlay-blocked"));
     await act(async () => host.select(0));
     await screen.findByRole("textbox", { name: "Request for the agent" });
-    expect(text()).toContain("The page blocked the selection overlay");
+    expect(text()).toContain("The page blocked the selection outline");
   });
 
   it("raises the page's own verdict whichever app the worktree holds", async () => {
@@ -513,7 +524,7 @@ describe("preview binding", () => {
       } as never,
     });
     await mountBound();
-    await screen.findByText(/runs from another worktree/);
+    await screen.findAllByText(/runs from another worktree/);
     expect(host.calls("openWorkspace")).toHaveLength(0);
   });
 
@@ -557,7 +568,7 @@ describe("preview binding", () => {
       scanComplete: false,
     });
     await mountBound();
-    await screen.findByText(/too large to search all of it/);
+    await screen.findByText(/The search stopped early/);
   });
 });
 
@@ -579,15 +590,19 @@ describe("a location the page got wrong", () => {
     // A hydrated SvelteKit page can tag an element with a neighbour's location
     // (Svelte's dev `add_locations` counts a child component's root while
     // hydrating). Nothing changed, and selecting again gives the same answer,
-    // so "Selection changed — select again" would be wrong twice over.
+    // so "Page changed — select it again" would be wrong twice over.
     host.resultsFor = () => mismatch();
     await mountBound();
     await act(async () => host.select(0));
-    const notice = await screen.findByRole("alert");
-    expect(notice.textContent).toContain("Couldn't select this element");
-    expect(notice.textContent).toContain(`<button> at ${FILE}:6`);
-    expect(notice.textContent).toContain("doesn't hold it there");
-    expect(text()).not.toContain("Selection changed");
+    // A warning with its way out beside it, not an alert: nothing failed.
+    await screen.findAllByText("Reported location doesn't match the file");
+    expect(screen.queryByRole("alert")).toBeNull();
+    const notice = screen
+      .getAllByRole("status")
+      .find((element) => element.textContent?.includes("doesn't hold it there"));
+    expect(notice?.textContent).toContain(`<button> at ${FILE}:6`);
+    expect(screen.getAllByRole("button", { name: "Switch to Browse" }).length).toBeGreaterThan(0);
+    expect(text()).not.toContain("Page changed");
   });
 
   it("reads the disagreement as the page catching up when the file just changed", async () => {
@@ -602,7 +617,7 @@ describe("a location the page got wrong", () => {
     await act(async () => host.select(0));
     // The click is kept and asked for again once the page has caught up…
     await elapse(UI_DOHERTY_THRESHOLD);
-    expect(screen.getByText("Waiting for the preview to update")).toBeTruthy();
+    expect(screen.getAllByText("Waiting for the preview to update").length).toBeGreaterThan(0);
     expect(host.picker.reselect).not.toHaveBeenCalled();
     expect(text()).not.toContain("neighbour");
     await elapse(HMR_SETTLE_MS - UI_DOHERTY_THRESHOLD);
@@ -610,7 +625,7 @@ describe("a location the page got wrong", () => {
     // …and is the user's to repeat only when the page still can't vouch for
     // it. The page's answer arrives a tick after the ask.
     await elapse(10);
-    expect(screen.getByText("This file just changed — select again")).toBeTruthy();
+    expect(screen.getAllByText("File changed — select it again").length).toBeGreaterThan(0);
     expect(host.picker.reselect).toHaveBeenCalledTimes(1);
     // Nothing is left scheduled to ask again.
     await elapse(HMR_SETTLE_MS * 10);
@@ -635,7 +650,7 @@ describe("a location the page got wrong", () => {
     ];
     await mountBound();
     await act(async () => host.select(0));
-    await screen.findByText("Selection changed — select again");
+    await screen.findAllByText("Page changed — select it again");
   });
 });
 
@@ -757,9 +772,10 @@ describe("selection identity", () => {
       "navigation",
       { name: "Breadcrumb" }
     );
-    const crumbs = Array.from(trail.querySelectorAll("li")).map((li) =>
-      (li.textContent ?? "").trim()
-    );
+    // The trail's own list, not the hidden row it measures crumbs in.
+    const crumbs = Array.from(trail.querySelectorAll("li"))
+      .filter((li) => li.closest('[aria-hidden="true"]') === null)
+      .map((li) => (li.textContent ?? "").trim());
     expect(crumbs).toEqual(["Toolbar", "SaveButton", "button.save"]);
     // The host mapped the frames without reading the files: nothing is cited
     // as checked, so a request carries no revisions to hold.
@@ -775,7 +791,7 @@ describe("selection identity", () => {
     await screen.findByRole("region", { name: "Selected element" });
     for (const trail of screen.getAllByRole("navigation", { name: "Breadcrumb" })) {
       expect(trail.textContent).toContain("SaveButton");
-      expect(within(trail).queryAllByRole("button")).toHaveLength(0);
+      expect(enabledButtons(trail)).toHaveLength(0);
     }
     expect(session().canSelectComponent()).toBe(false);
   });
@@ -1014,7 +1030,14 @@ describe("the composer", () => {
         },
       ],
     });
-    const notice = await screen.findByRole("status");
+    // The delivery's notice, not the strip's live region, which is a status too.
+    const notice = await waitFor(() => {
+      const found = screen
+        .getAllByRole("status")
+        .find((element) => element.textContent?.includes("claude · pricing polish"));
+      if (!found) throw new Error("no delivery notice yet");
+      return found;
+    });
     // The notice's headline is its first paragraph; the body follows it.
     const headline = notice.querySelector("p")?.textContent ?? "";
     expect(headline).toContain("claude · pricing polish");
@@ -1347,8 +1370,8 @@ describe("selecting a component from the trail", () => {
     for (const surface of [strip, identity]) {
       expect(within(surface).getByRole("button", { name: "PricingCard" })).toBeTruthy();
     }
-    // The element is where you already are: text, not a control.
-    expect(within(strip).queryByRole("button", { name: 'button "Start Pro"' })).toBeNull();
+    // The element is where you already are: nothing to act on.
+    expect(enabledButtons(strip, 'button "Start Pro"')).toHaveLength(0);
 
     fireEvent.click(within(identity).getByRole("button", { name: "PricingCard" }));
     expect(host.picker.reselect).toHaveBeenCalledTimes(1);
@@ -1374,8 +1397,8 @@ describe("selecting a component from the trail", () => {
     expect(trail.textContent).not.toContain("Start Pro");
     expect(trail.querySelector('[aria-current="true"]')?.textContent).toBe("PricingCard");
     // Now the selection: no longer a control in either surface.
-    expect(within(strip).queryByRole("button", { name: "PricingCard" })).toBeNull();
-    expect(within(reselected()).queryByRole("button", { name: "PricingCard" })).toBeNull();
+    expect(enabledButtons(strip, "PricingCard")).toHaveLength(0);
+    expect(enabledButtons(reselected(), "PricingCard")).toHaveLength(0);
     // And the request is about it: the composer's About control follows the
     // page's answer, not the crumb.
     const about = within(reselected().parentElement!.parentElement!).getAllByRole("radio", {
@@ -1411,7 +1434,7 @@ describe("selecting a component from the trail", () => {
     await act(async () => host.select(0));
     await screen.findByRole("region", { name: "Selected element" });
     const strip = screen.getByRole("toolbar", { name: "Element Picker" });
-    const cards = within(strip).getAllByRole("button", { name: "Card" });
+    const cards = enabledButtons(strip, "Card");
     expect(cards).toHaveLength(2);
     cards[0]!.focus();
     fireEvent.click(cards[0]!);
@@ -1422,7 +1445,7 @@ describe("selecting a component from the trail", () => {
     const current = trail().querySelector('[aria-current="true"]')!;
     expect(current.textContent).toBe("Card");
     const layout = within(strip).getByRole("button", { name: "Layout" });
-    expect(within(strip).queryByRole("button", { name: "Card" })).toBeNull();
+    expect(enabledButtons(strip, "Card")).toHaveLength(0);
     // On a control the toolbar's roving keys work from, not on the text that
     // replaced the button.
     expect(document.activeElement).toBe(layout);
@@ -1431,6 +1454,7 @@ describe("selecting a component from the trail", () => {
       within(identity).getByRole("navigation", { name: "Breadcrumb" }).querySelectorAll("li")
     )
       .filter((li) => !li.classList.contains("sr-only"))
+      .filter((li) => li.closest('[aria-hidden="true"]') === null)
       .map((li) => (li.textContent ?? "").trim());
     expect(drawerCrumbs).toEqual(["Layout"]);
   });
@@ -1456,7 +1480,7 @@ describe("selecting a component from the trail", () => {
     for (const surface of [strip, identity]) {
       expect(within(surface).getAllByText("Tree").length).toBeGreaterThan(0);
       // The outermost Tree, at its own call site, is still a step up.
-      expect(within(surface).getAllByRole("button", { name: "Tree" })).toHaveLength(1);
+      expect(enabledButtons(surface, "Tree")).toHaveLength(1);
     }
   });
 
@@ -1485,9 +1509,9 @@ describe("selecting a component from the trail", () => {
     expect(within(strip).getByRole("navigation", { name: "Breadcrumb" }).textContent).toContain(
       "PricingCard"
     );
-    expect(within(strip).queryByRole("button", { name: "PricingCard" })).toBeNull();
+    expect(enabledButtons(strip, "PricingCard")).toHaveLength(0);
     const identity = screen.getByRole("region", { name: "Selected element" });
-    expect(within(identity).queryByRole("button", { name: "PricingCard" })).toBeNull();
+    expect(enabledButtons(identity, "PricingCard")).toHaveLength(0);
   });
 });
 
@@ -1650,9 +1674,9 @@ describe("stale selections", () => {
     vi.useFakeTimers();
     await act(async () => host.epochAdvanced(1));
     // Asked first, a bounded number of times; then it is the user's to redo.
-    expect(screen.queryByText("Select again — the page reloaded")).toBeNull();
+    expect(screen.queryAllByText("Page reloaded — select it again")).toHaveLength(0);
     await elapse(HMR_SETTLE_MS * 8);
-    expect(screen.getByText("Select again — the page reloaded")).toBeTruthy();
+    expect(screen.getAllByText("Page reloaded — select it again").length).toBeGreaterThan(0);
   });
 
   it("proves the selection again after its file changes, and the draft follows it", async () => {
@@ -1670,7 +1694,7 @@ describe("stale selections", () => {
     await act(async () => host.sourceChanged(FILE, sha("an agent's edit")));
     // Unproven, so it can't be sent — but nobody is told to click again yet.
     expect(send.disabled).toBe(true);
-    expect(screen.queryByText("Select again — the file changed")).toBeNull();
+    expect(screen.queryAllByText("File changed — select it again")).toHaveLength(0);
 
     // Proved again as a new selection, which the pinned draft moves to: it is
     // sendable, and not offered its own subject as a different one.
@@ -1683,7 +1707,7 @@ describe("stale selections", () => {
       locator: { loc: { file: FILE, line: 6, column: 2 }, index: 2 },
     });
     expect(screen.queryByRole("button", { name: "Use current selection" })).toBeNull();
-    expect(screen.queryByText("Select again — the file changed")).toBeNull();
+    expect(screen.queryAllByText("File changed — select it again")).toHaveLength(0);
     // The draft is about the selection proved again, which names the one it replaced.
     const live = session().getSnapshot().selection;
     if (live.status !== "ready") throw new Error("not ready");
@@ -1769,7 +1793,7 @@ describe("stale selections", () => {
     await act(async () => host.documentReady(1));
     // An id from the old document names some other element now, and there is
     // no locator to ask by: nothing is asked.
-    await screen.findByText("Select again — the page reloaded");
+    await screen.findAllByText("Page reloaded — select it again");
     expect(host.picker.reselect).not.toHaveBeenCalled();
   });
 
@@ -1788,7 +1812,7 @@ describe("stale selections", () => {
       return true;
     });
     await act(async () => host.sourceChanged(FILE));
-    await screen.findByText("Select again — the file changed", {}, { timeout: 4000 });
+    await screen.findAllByText("File changed — select it again", {}, { timeout: 4000 });
     expect(host.calls("resolve")).toHaveLength(1);
     // The page is outlining the stand-in; it is told to stop.
     expect(host.preview.clearSelection).toHaveBeenCalledWith({ sessionId: "session-1" });
@@ -1809,7 +1833,7 @@ describe("stale selections", () => {
       return true;
     });
     await act(async () => host.sourceChanged(FILE));
-    await screen.findByText("Select again — the file changed", {}, { timeout: 4000 });
+    await screen.findAllByText("File changed — select it again", {}, { timeout: 4000 });
     expect(host.picker.reselect.mock.calls[0]![0].locator).toMatchObject({
       component: { file: CARD_CALL.file, line: 3, column: 0 },
     });
@@ -1821,10 +1845,10 @@ describe("stale selections", () => {
     await act(async () => host.sourceChanged(FILE));
     // A Tailwind class the stylesheet never held: the dev server reloads.
     await act(async () => host.documentReady(1));
-    expect(screen.queryByText("Select again — the page reloaded")).toBeNull();
+    expect(screen.queryAllByText("Page reloaded — select it again")).toHaveLength(0);
     await waitFor(() => expect(host.calls("resolve")).toHaveLength(2), { timeout: 4000 });
     expect(host.calls("resolve")[1]).toMatchObject({ documentEpoch: 1 });
-    expect(screen.queryByText("Select again — the page reloaded")).toBeNull();
+    expect(screen.queryAllByText("Page reloaded — select it again")).toHaveLength(0);
     expect(screen.queryByRole("region", { name: "Selected element" })).not.toBeNull();
   });
 
@@ -1842,7 +1866,7 @@ describe("stale selections", () => {
       return true;
     });
     await act(async () => host.documentReady(1));
-    await screen.findByText("Select again — the page reloaded", {}, { timeout: 4000 });
+    await screen.findAllByText("Page reloaded — select it again", {}, { timeout: 4000 });
     // And the page was not asked for it by that id in the first place.
     expect(host.picker.reselect.mock.calls[0]![0]).not.toHaveProperty("elementId");
     expect(host.calls("resolve")).toHaveLength(1);
@@ -1855,7 +1879,7 @@ describe("stale selections", () => {
       return true;
     });
     await act(async () => host.documentReady(1));
-    await screen.findByText("Select again — the page reloaded", {}, { timeout: 4000 });
+    await screen.findAllByText("Page reloaded — select it again", {}, { timeout: 4000 });
     expect(host.calls("resolve")).toHaveLength(1);
   });
 
@@ -1865,13 +1889,15 @@ describe("stale selections", () => {
     await waitFor(() => expect(host.preview.setMode).toHaveBeenCalled());
     await act(async () => host.sourceChanged(FILE));
     // The page answers only in Inspect mode, so this one is the user's to see.
-    await screen.findByText("Select again — the file changed");
+    await screen.findAllByText("File changed — select it again");
     await pause(HMR_SETTLE_MS + PAST_REATTACH_MS);
     expect(host.picker.reselect).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("radio", { name: "Inspect" }));
     await waitFor(() => expect(host.calls("resolve")).toHaveLength(2), { timeout: 4000 });
-    await waitFor(() => expect(screen.queryByText("Select again — the file changed")).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryAllByText("File changed — select it again")).toHaveLength(0)
+    );
   });
 
   it("stops asking, and says so, when the page never finds the element", async () => {
@@ -1880,7 +1906,7 @@ describe("stale selections", () => {
     vi.useFakeTimers();
     await act(async () => host.sourceChanged(FILE));
     await elapse(HMR_SETTLE_MS * 10);
-    expect(screen.getByText("Select again — the file changed")).toBeTruthy();
+    expect(screen.getAllByText("File changed — select it again").length).toBeGreaterThan(0);
     // Bounded: one ask per settle window, then the selection is the user's.
     expect(host.picker.reselect).toHaveBeenCalledTimes(6);
     await elapse(HMR_SETTLE_MS * 10);
@@ -1894,7 +1920,7 @@ describe("stale selections", () => {
       return true;
     });
     await act(async () => host.sourceChanged(FILE));
-    await screen.findByText("Select again — the file changed", {}, { timeout: 4000 });
+    await screen.findAllByText("File changed — select it again", {}, { timeout: 4000 });
     // Never resolved: what now sits at that location is not what was selected.
     expect(host.calls("resolve")).toHaveLength(1);
     expect(host.preview.clearSelection).toHaveBeenCalled();
@@ -1956,13 +1982,17 @@ describe("stale selections", () => {
     // The new page is asked for the selection, and answers for its own epoch.
     await waitFor(() => expect(host.calls("resolve")).toHaveLength(2), { timeout: 4000 });
     expect(host.calls("resolve")[1]).toMatchObject({ documentEpoch: 1 });
-    await waitFor(() => expect(screen.queryByText("Selection changed — select again")).toBeNull());
-    await waitFor(() => expect(screen.queryByText("Select again — the page reloaded")).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryAllByText("Page changed — select it again")).toHaveLength(0)
+    );
+    await waitFor(() =>
+      expect(screen.queryAllByText("Page reloaded — select it again")).toHaveLength(0)
+    );
 
     // The late push for the epoch we are already in must not invalidate anything.
     await act(async () => host.epochAdvanced(1));
-    expect(screen.queryByText("Selection changed — select again")).toBeNull();
-    expect(screen.queryByText("Select again — the page reloaded")).toBeNull();
+    expect(screen.queryAllByText("Page changed — select it again")).toHaveLength(0);
+    expect(screen.queryAllByText("Page reloaded — select it again")).toHaveLength(0);
   });
 
   it("drops a resolve when the owning file changed while it was out", async () => {
@@ -1980,7 +2010,7 @@ describe("stale selections", () => {
     await act(async () => finish());
     // The answer paired old markup with new bytes, so it is thrown away — and
     // the click asked for again rather than handed back.
-    await screen.findByText("Waiting for the preview to update");
+    await screen.findAllByText("Waiting for the preview to update");
     expect(screen.queryByRole("region", { name: "Selected element" })).toBeNull();
     await waitFor(() => expect(host.calls("resolve")).toHaveLength(2), { timeout: 4000 });
     await act(async () => finish());
@@ -2002,7 +2032,7 @@ describe("stale selections", () => {
       suspended: false,
     }));
     fireEvent.click(screen.getByRole("radio", { name: "Browse" }));
-    await screen.findByText("Select again — the page reloaded");
+    await screen.findAllByText("Page reloaded — select it again");
   });
 
   it("holds a click on a file that changed moments ago until HMR can land, then resolves it", async () => {
@@ -2014,7 +2044,7 @@ describe("stale selections", () => {
     await act(async () => host.select(0));
     // The host's answer pairs the click with bytes the page may not show yet,
     // so it is kept back rather than put on screen.
-    await screen.findByText("Waiting for the preview to update");
+    await screen.findAllByText("Waiting for the preview to update");
     expect(screen.queryByRole("textbox", { name: "Request for the agent" })).toBeNull();
     expect(host.calls("resolve")).toHaveLength(1);
 
@@ -2037,7 +2067,7 @@ describe("stale selections", () => {
     await waitFor(() => expect(host.calls("resolve")).toHaveLength(1));
     await act(async () => host.epochAdvanced(1));
     await act(async () => finish());
-    await screen.findByText("Selection changed — select again");
+    await screen.findAllByText("Page changed — select it again");
     expect(screen.queryByRole("region", { name: "Selected element" })).toBeNull();
   });
 });
@@ -2075,7 +2105,7 @@ describe("lifetime", () => {
     await act(async () => host.select(0));
     await screen.findByText(/EACCES/);
     expect(host.calls("openWorkspace")).toHaveLength(2);
-    expect(screen.getByRole("alert").textContent).toContain("Couldn't open the site source");
+    expect(screen.getByRole("alert").textContent).toContain("Couldn't read the site source");
   });
 
   it("keeps working with no plugin loaded, and with the plugins that used to own it switched off", async () => {
@@ -2201,7 +2231,7 @@ describe("preview reattach", () => {
         suspended: true,
       })
     );
-    await screen.findByText("Paused — this page isn't at a local address");
+    await screen.findAllByText("Paused — this page isn't at a local address");
     // An observation, not a fault: the binding is intact, so nothing to click
     // and no reconnect attempt of the controller's own.
     expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull();
@@ -2218,7 +2248,7 @@ describe("preview reattach", () => {
       })
     );
     await waitFor(() =>
-      expect(screen.queryByText("Paused — this page isn't at a local address")).toBeNull()
+      expect(screen.queryAllByText("Paused — this page isn't at a local address")).toHaveLength(0)
     );
     expect(host.picker.bind).toHaveBeenCalledTimes(1);
   });
@@ -2285,7 +2315,7 @@ describe("picker lifetime while switched on", () => {
     publishDevPreviewToolContext({ ...hostContext(), isWebviewReady: false });
     useDevPreviewToolStore.getState().setActive("preview-1", ELEMENT_PICKER_TOOL_ID);
     render(<PickerHarness />, { wrapper: TooltipProvider });
-    await screen.findByText("Waiting for the page to load");
+    await screen.findByText("Connecting to the page");
     // A cold dev server: long enough for the backoff to reach its long steps.
     await elapse(40_000);
 
@@ -2296,7 +2326,7 @@ describe("picker lifetime while switched on", () => {
       publishDevPreviewToolContext(hostContext());
       await vi.advanceTimersByTimeAsync(1_000);
     });
-    expect(screen.queryByText("Waiting for the page to load")).toBeNull();
+    expect(screen.queryByText("Connecting to the page")).toBeNull();
     expect(session().getSnapshot().binding.status).toBe("bound");
   });
 
@@ -2313,7 +2343,7 @@ describe("picker lifetime while switched on", () => {
       return boundState(request);
     });
     mount();
-    await screen.findByText("Waiting for the page to load");
+    await screen.findByText("Connecting to the page");
     await elapse(12_000);
     expect(session().getSnapshot().binding.status).toBe("bound");
   });
@@ -2337,7 +2367,7 @@ describe("picker lifetime while switched on", () => {
     publishDevPreviewToolContext({ ...hostContext(), isWebviewReady: false });
     useDevPreviewToolStore.getState().setActive("preview-1", ELEMENT_PICKER_TOOL_ID);
     render(<PickerHarness />, { wrapper: TooltipProvider });
-    await screen.findByText("Waiting for the page to load");
+    await screen.findByText("Connecting to the page");
     // Through every step but the last, whose attempt is the one held open.
     await elapse(61_000);
     pageUp = true;
@@ -2358,11 +2388,13 @@ describe("picker lifetime while switched on", () => {
       throw new Error("The preview's page refused the runtime");
     });
     mount();
-    await screen.findByText("Waiting for the page to load");
+    await screen.findByText("Connecting to the page");
     await elapse(10 * 60_000);
-    await screen.findByText(
-      "Couldn't connect to the page — The preview's page refused the runtime"
-    );
+    await screen.findAllByText("Couldn't connect to the page");
+    expect(text()).not.toContain("refused the runtime");
+    const details = screen.getByRole("button", { name: "Details" });
+    act(() => details.focus());
+    await waitFor(() => expect(text()).toContain("The preview's page refused the runtime"));
   });
 });
 
@@ -2790,9 +2822,10 @@ describe("issue recovery", () => {
     await mountSelected();
     await act(async () => host.runtimeIssue("capacity", { detail: "capped at 24 nodes" }));
 
-    await waitFor(() => expect(text()).toContain("past a limit the Element Picker works within"));
-    // The page's own words survive under ours, so the notice says which limit.
-    expect(text()).toContain("capped at 24 nodes");
+    await waitFor(() => expect(text()).toContain("Outer components were left out"));
+    // The guest's own words are a log line, not copy: the headline says which
+    // limit in the product's terms.
+    expect(text()).not.toContain("capped at 24 nodes");
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull();
     // And the selection it was about is still there.
@@ -2803,12 +2836,12 @@ describe("issue recovery", () => {
     await mountBound();
     await act(async () => host.runtimeIssue("metadata-unavailable", { framework: "svelte" }));
 
-    await waitFor(() => expect(text()).toContain("no Svelte source locations"));
+    await waitFor(() => expect(text()).toContain("No Svelte source locations"));
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-    await waitFor(() => expect(text()).not.toContain("no Svelte source locations"));
+    await waitFor(() => expect(text()).not.toContain("No Svelte source locations"));
   });
 });
 
@@ -3037,7 +3070,7 @@ describe("an element with nothing to trace", () => {
     await screen.findByRole("textbox", { name: "Request for the agent" });
     const identity = screen.getByRole("region", { name: "Selected element" });
     expect(identity.textContent).toContain("main > button.cta");
-    expect(identity.textContent).toContain("Not traced to source");
+    expect(identity.textContent).toContain("No source reported for this element");
     // Taken when the element was picked, cropped to the box the page measured.
     expect(host.captureElement).toHaveBeenCalledWith("preview-1", {
       rect: { x: 40, y: 80, width: 120, height: 40 },
@@ -3193,7 +3226,7 @@ describe("an element with nothing to trace", () => {
     await act(async () => answer({ status: "unavailable", reason: "unknown-worktree" }));
     const identity = await screen.findByRole("region", { name: "Selected element" });
     // The page said where it is written; nothing here could check it.
-    expect(identity.textContent).toContain("Source not checked");
+    expect(identity.textContent).toContain("Location not checked against source");
     expect(host.calls("resolve")).toEqual([]);
     const prompt = await sendRequest(sent);
     // The picture taken at the click, of what was clicked.
