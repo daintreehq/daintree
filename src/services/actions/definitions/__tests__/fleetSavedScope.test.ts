@@ -32,7 +32,7 @@ describe("resolveSavedScopeIds", () => {
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
   });
 
-  it("includes plugin-contributed agents for a state-filtered live rule (#14961)", () => {
+  it("includes plugin-contributed agents for a state-filtered predicate rule (#14961)", () => {
     seed([
       agent("builtin"),
       agent("plugin", {
@@ -42,11 +42,14 @@ describe("resolveSavedScopeIds", () => {
       }),
       agent("busy", { agentState: "working" }),
     ]);
-    const scope = {
-      kind: "live",
+    const scope: FleetSavedScope = {
+      kind: "predicate",
+      id: "s1",
+      name: "Waiting",
       scope: "current",
       stateFilter: "waiting",
-    } as unknown as FleetSavedScope;
+      createdAt: 0,
+    };
     expect(resolveSavedScopeIds(scope).sort()).toEqual(["builtin", "plugin"]);
   });
 });
