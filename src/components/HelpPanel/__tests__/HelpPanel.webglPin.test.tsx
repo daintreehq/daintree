@@ -309,7 +309,11 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "window", {
     value: {
       electron: {
-        help: { getPinnedActionContext: vi.fn().mockResolvedValue({}) },
+        help: {
+          getPinnedActionContext: vi.fn().mockResolvedValue({}),
+          getGlobalAssistantState: () => new Promise(() => {}),
+          onGlobalAssistantChanged: () => () => {},
+        },
         app: { onViewRevealed: () => () => {} },
       },
     },
@@ -484,7 +488,11 @@ describe("HelpPanel — Daintree Assistant reveal (no local repaint cascade, #10
     Object.defineProperty(globalThis, "window", {
       value: {
         electron: {
-          help: { getPinnedActionContext: vi.fn().mockResolvedValue({}) },
+          help: {
+            getPinnedActionContext: vi.fn().mockResolvedValue({}),
+            getGlobalAssistantState: () => new Promise(() => {}),
+            onGlobalAssistantChanged: () => () => {},
+          },
           app: {
             onViewRevealed: (cb: () => void) => {
               viewRevealedCbs.push(cb);

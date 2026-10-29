@@ -109,6 +109,7 @@ function viewOf(patch: Partial<GlobalAssistantView> = {}): GlobalAssistantView {
     inputOwner: null,
     inputEpoch: 0,
     subject: null,
+    agentState: null,
     ...patch,
   };
 }

@@ -441,7 +441,11 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "window", {
     value: {
       electron: {
-        help: { getPinnedActionContext: vi.fn().mockResolvedValue({}) },
+        help: {
+          getPinnedActionContext: vi.fn().mockResolvedValue({}),
+          getGlobalAssistantState: () => new Promise(() => {}),
+          onGlobalAssistantChanged: () => () => {},
+        },
         app: { onViewRevealed: () => () => {} },
       },
     },

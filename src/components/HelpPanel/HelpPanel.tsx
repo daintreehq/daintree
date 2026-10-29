@@ -57,6 +57,7 @@ import { HelpPanelResizeHandle } from "./HelpPanelResizeHandle";
 import { useHelpPanelResize } from "./useHelpPanelResize";
 import { useHelpPanelRevealFocus } from "./useHelpPanelRevealFocus";
 import { useHelpSessionLanes, type PausedLane } from "./useHelpSessionLanes";
+import { useGlobalAssistantActivity } from "./useGlobalAssistantActivity";
 import { FigureRail } from "./FigureRail";
 import { useHelpPanelStore, selectSlot } from "@/store/helpPanelStore";
 import {
@@ -873,6 +874,11 @@ export function HelpPanel({
     }
   }, []);
   const projectActivity = useMemo(() => summarizeLaneActivity(sessionTabs), [sessionTabs]);
+  const globalAgentState = useGlobalAssistantActivity(isOpen && isVisible && !globalSelected);
+  const globalActivity = useMemo(
+    () => summarizeLaneActivity([{ label: "Global assistant", agentState: globalAgentState }]),
+    [globalAgentState]
+  );
   // The header slot the global pane draws its agent and menu into.
   const [globalControlsHost, setGlobalControlsHost] = useState<HTMLDivElement | null>(null);
 
@@ -1179,6 +1185,7 @@ export function HelpPanel({
         onScopeChange={handleScopeChange}
         globalControlsRef={setGlobalControlsHost}
         projectActivity={projectActivity}
+        globalActivity={globalActivity}
         canRestartConversation={
           !globalSelected && (Boolean(terminalId && agentId) || pausedLane !== null)
         }
