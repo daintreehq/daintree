@@ -9,6 +9,14 @@
 export const SESSION_TAB_TITLE_MAX_CHARS = 28;
 
 const ELLIPSIS = "…";
+
+/**
+ * What a lane is called until its agent names a task. Numbered by slot, the
+ * lane's durable identity, so closing one lane never renames the others.
+ */
+export function sessionSlotLabel(slot: number): string {
+  return `Session ${slot + 1}`;
+}
 const TRAILING_SEPARATORS = /[\s,.:;|/\\·\-–—]+$/u;
 
 /**

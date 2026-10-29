@@ -13,6 +13,7 @@ import type {
   McpConfirmationDecision,
   McpDispatchAuthorization,
   McpHostPreview,
+  McpRequester,
   McpRuntimeSnapshot,
   McpRuntimeState,
 } from "../../../shared/types/ipc/mcpServer.js";
@@ -172,6 +173,12 @@ export interface WorkspaceDispatchOptions {
    * (#12692). Only an agent pane can hold the grant that button mints.
    */
   offerSessionApproval?: boolean;
+  /**
+   * The pane or Assistant tab this dispatch came from, for any dialog it
+   * raises to name (#14992). Set from the bearer's own surface, never from
+   * the call.
+   */
+  requester?: McpRequester;
   /**
    * Raise the approval dialog and report the decision without dispatching
    * (#12692). How main asks the user about a pane call above its tier before

@@ -956,6 +956,7 @@ export function createRendererBridge(
       | "authorization"
       | "hostPreview"
       | "fixedDeadline"
+      | "requester"
     >
   ): Promise<DispatchEnvelope> {
     let viewId: number | undefined;
@@ -998,6 +999,7 @@ export function createRendererBridge(
       | "authorization"
       | "hostPreview"
       | "fixedDeadline"
+      | "requester"
     >
   ): Promise<DispatchEnvelope> {
     return new Promise((resolve, reject) => {
@@ -1091,6 +1093,10 @@ export function createRendererBridge(
               callerInfo,
               approval
             ),
+            // Which of this machine's panes or Assistant tabs asked (#14992).
+            // Only on this local send: another machine's view has none of
+            // this machine's panes to look the id up in.
+            ...(approval?.requester ? { requester: approval.requester } : {}),
           });
         } catch (err) {
           clearTimeout(pendingDispatches.get(requestId)?.timer ?? timer);
@@ -1316,6 +1322,7 @@ export function createRendererBridge(
       | "authorization"
       | "hostPreview"
       | "fixedDeadline"
+      | "requester"
     >,
     callerInfo?: McpBearerIdentity
   ): Promise<DispatchEnvelope> {

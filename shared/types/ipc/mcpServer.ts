@@ -979,6 +979,17 @@ export interface McpBearerIdentity {
 }
 
 /**
+ * Which of this machine's own surfaces sent a dispatch (#14992), so the confirm
+ * dialog can name the pane or Assistant tab that is asking rather than only its
+ * class. Main derives it from what the session's bearer resolved to at
+ * handshake, never from anything the client sends; the renderer looks up what
+ * to call it in its own stores. Display-only: it grants and routes nothing.
+ */
+export type McpRequester =
+  | { kind: "pane"; terminalId: string }
+  | { kind: "assistant"; helpSessionId: string };
+
+/**
  * Result of a renderer-driven `disconnectBearer` IPC. `disconnected` is true
  * when a matching bearer entry existed and its sessions were revoked — false
  * when the token hash was already absent (e.g. the client disconnected first).

@@ -1746,6 +1746,8 @@ export interface IpcEventMap {
     hostPreview?: import("./mcpServer.js").McpHostPreview;
     /** What pre-authorized a `confirmed` dispatch (#12874); set only by main. */
     authorization?: import("./mcpServer.js").McpDispatchAuthorization;
+    /** The pane or Assistant tab that sent the call (#14992); set only by main. */
+    requester?: import("./mcpServer.js").McpRequester;
   };
 
   /**

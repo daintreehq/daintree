@@ -5,6 +5,7 @@ import type {
   McpApprovalScope,
   McpBearerIdentity,
   McpConfirmationDecision,
+  McpRequester,
   McpSessionOrigin,
 } from "@shared/types/ipc/mcpServer";
 import { MCP_CONFIRM_DECISION_MS, MCP_DISPATCH_TIMEOUT_MS } from "@shared/config/mcpConfirmWindow";
@@ -97,6 +98,12 @@ export interface PendingMcpConfirm {
    * first.
    */
   sessionOrigin?: McpSessionOrigin;
+  /**
+   * The pane or Assistant tab that asked (#14992), as main identified it and as
+   * this view named it when the request arrived. Absent for every caller main
+   * did not identify as one of this machine's own surfaces.
+   */
+  requester?: McpConfirmRequester;
   /**
    * Fresh, human-readable preview lines describing the ACTUAL content this
    * dispatch would affect — e.g. the changed-file list a `worktree.delete`
@@ -204,6 +211,24 @@ export interface PendingMcpConfirm {
    * expired rather than vanishing; the caller was already told it timed out.
    */
   expired?: true;
+}
+
+/**
+ * Who asked, for the requester row (#14992).
+ *
+ * The names are taken once, when the request arrives, so a queued request
+ * doesn't change who it says asked while it waits; `identity` is what the
+ * dialog re-finds to show the requester. Every name is optional: a pane this
+ * view can't find is still a pane main identified, and says so.
+ */
+export interface McpConfirmRequester {
+  identity: McpRequester;
+  /** The pane's title as its header shows it, or the Assistant tab's name. */
+  name?: string;
+  /** The pane's agent or kind ("Claude", "Terminal"), when its title doesn't already say it. */
+  kindLabel?: string;
+  worktreeId?: string;
+  worktreeName?: string;
 }
 
 /**
