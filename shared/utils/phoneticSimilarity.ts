@@ -457,6 +457,12 @@ function isOrdinaryWord(word: string): boolean {
   return isCommonEnglishWord(normalizeToken(word), BLOCKLIST);
 }
 
+/** Whether every word of `phrase` is ordinary English ("just", "use state"), by the same test. */
+export function isEverydayPhrase(phrase: string): boolean {
+  const words = tokenize(phrase).filter((token) => normalizeToken(token) !== "");
+  return words.length > 0 && words.every(isOrdinaryWord);
+}
+
 /**
  * Find phonetically-similar substitutions between a baseline transcription and
  * the user's edited text. Returns the corrected terms (deduped, case

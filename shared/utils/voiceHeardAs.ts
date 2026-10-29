@@ -1,4 +1,5 @@
 import type { VoiceDictionaryEntry } from "../types/ipc/api.js";
+import { isEverydayPhrase } from "./phoneticSimilarity.js";
 import { MAX_DICTIONARY_TERM_LENGTH } from "./voiceDictionary.js";
 import { findProtectedRanges } from "./voiceProtectedSpans.js";
 import type { VoiceTextEdit } from "./voiceUncertainWords.js";
@@ -51,12 +52,15 @@ const phraseKey = (phrase: string) => phrase.split(/\s+/).join(" ").toLowerCase(
  * Every heard-as pair, oldest entry first. A heard form claimed by two
  * entries belongs to the first. A form with no letters or digits can't be
  * matched as a word, and a term with a line break would move the breaks a
- * transcript is split on, so neither becomes a rule.
+ * transcript is split on, so neither becomes a rule. Nor does an everyday
+ * phrase a correction taught ("just" fixed to Jest): that fix was right where
+ * it was made, not everywhere the word is said, so the entry teaches only its
+ * term. A form the user typed in stays a rule whatever it is.
  */
 export function collectHeardAsRules(entries: readonly VoiceDictionaryEntry[]): HeardAsRule[] {
   const rules: HeardAsRule[] = [];
   const claimed = new Set<string>();
-  for (const { term, heardAs } of entries) {
+  for (const { term, heardAs, source } of entries) {
     if (LINE_BREAK_RE.test(term)) continue;
     for (const raw of heardAs) {
       const heard = raw.trim().split(/\s+/).join(" ");
@@ -64,7 +68,8 @@ export function collectHeardAsRules(entries: readonly VoiceDictionaryEntry[]): H
       if (
         !HAS_WORD_RE.test(heard) ||
         heard.length > MAX_DICTIONARY_TERM_LENGTH ||
-        claimed.has(key)
+        claimed.has(key) ||
+        (source === "learned" && isEverydayPhrase(heard))
       ) {
         continue;
       }

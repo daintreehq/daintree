@@ -1924,6 +1924,51 @@ describe("voiceInput — context keyterms wiring", () => {
     });
   });
 
+  it.each([
+    { cleanup: "on", correctionEnabled: true },
+    { cleanup: "off", correctionEnabled: false },
+  ])(
+    "teaches a term learned from an everyday word without rewriting the word, cleanup $cleanup",
+    async ({ correctionEnabled }) => {
+      const { store } = await import("../../../store.js");
+      vi.mocked(store.get).mockReturnValue({
+        ...providerSettings("openai"),
+        correctionEnabled,
+        dictionary: [
+          { term: "Jest", heardAs: ["just"], source: "learned", addedAt: 1 },
+          { term: "Zustand", heardAs: ["zoo stand"], source: "learned", addedAt: 2 },
+        ],
+      });
+      const { assembleTaggedKeyterms } = await import("../../../services/voiceContextKeyterms.js");
+
+      await startFn(fakeEvent, nextSessionId());
+      emitTranscriptionEvent({ type: "complete", text: "I just want to check zoo stand" });
+      emitTranscriptionEvent({ type: "complete", text: "I just want to check" });
+
+      const completes = activeSent
+        .filter((m) => m.channel === "voice-input:transcription-complete")
+        .map((m) => m.payload as { text: string; heard?: string });
+      expect(completes.map(({ text }) => text)).toEqual([
+        "I just want to check Zustand",
+        "I just want to check",
+      ]);
+      expect(completes[1]).not.toHaveProperty("heard");
+      expect(vi.mocked(assembleTaggedKeyterms).mock.calls.at(-1)?.[0]).toMatchObject({
+        customDictionary: ["Jest", "Zustand"],
+      });
+      if (!correctionEnabled) return;
+
+      await (getHandler("voice-input:correct") as (e: unknown, r: unknown) => Promise<unknown>)(
+        fakeEvent,
+        { rawText: "I just want to check" }
+      );
+      expect(shared.correctionCalls.at(-1)?.settings).toMatchObject({
+        customDictionary: ["Jest", "Zustand"],
+        heardAs: [{ heard: "zoo stand", term: "Zustand" }],
+      });
+    }
+  );
+
   it("writes each completed utterance with the heard-as rules the session started with", async () => {
     const { store } = await import("../../../store.js");
     const settings = {
