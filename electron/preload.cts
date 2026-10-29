@@ -2976,11 +2976,14 @@ function buildElectronApi(): ElectronAPI {
           openaiApiKey: string;
           deepgramApiKey: string;
           xaiApiKey: string;
+          anthropicApiKey: string;
           language: string;
           transcriptionProvider: "openai" | "deepgram" | "grok";
           transcriptionModel: "gpt-live-transcribe";
           correctionEnabled: boolean;
-          correctionModel: "gpt-6.1-terra" | "gpt-6-luna";
+          correctionProvider: "openai" | "anthropic";
+          correctionModel:
+            "gpt-6.1-terra" | "gpt-6-luna" | "claude-haiku-5-5" | "claude-sonnet-5-5";
           correctionCustomInstructions: string;
           paragraphingStrategy: "spoken-command" | "manual";
           resolveFileLinks: boolean;

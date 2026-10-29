@@ -50,9 +50,12 @@ import {
 import {
   correctionInstructionsFor,
   isVoiceCleanupModel,
+  isVoiceCleanupProvider,
   VOICE_CLEANUP_AI_MODEL,
+  VOICE_CLEANUP_MODELS_BY_PROVIDER,
   type CorrectionWorktreeContext,
 } from "../../../shared/config/voiceCorrection.js";
+import { cleanupApiKey, hasCleanupKey } from "../../../shared/config/voiceProviders.js";
 import { normalizeVoiceLanguage } from "../../../shared/config/voiceLanguages.js";
 import {
   assembleTaggedKeyterms,
@@ -628,10 +631,12 @@ const WRITABLE_VOICE_FIELDS: Record<keyof VoiceInputSettingsPatch, true> = {
   openaiApiKey: true,
   deepgramApiKey: true,
   xaiApiKey: true,
+  anthropicApiKey: true,
   language: true,
   transcriptionProvider: true,
   transcriptionModel: true,
   correctionEnabled: true,
+  correctionProvider: true,
   correctionModel: true,
   correctionCustomInstructions: true,
   paragraphingStrategy: true,
@@ -649,11 +654,13 @@ const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   openaiApiKey: "",
   deepgramApiKey: "",
   xaiApiKey: "",
+  anthropicApiKey: "",
   language: "en",
   dictionary: [],
   transcriptionProvider: "openai",
   transcriptionModel: "gpt-live-transcribe",
   correctionEnabled: true,
+  correctionProvider: "openai",
   correctionModel: VOICE_CLEANUP_AI_MODEL,
   correctionCustomInstructions: "",
   paragraphingStrategy: "spoken-command",
@@ -740,8 +747,17 @@ export function getVoiceSettings(): VoiceInputSettings {
   // valid one stays. Anything else (a retired model, a downgrade, a hand edit)
   // goes back to the default and is written through. migration040 moved every
   // existing install to gpt-6.1-terra once, before there was a choice to keep.
-  const staleCorrectionModel = !isVoiceCleanupModel(merged.correctionModel);
-  if (staleCorrectionModel) merged.correctionModel = VOICE_CLEANUP_AI_MODEL;
+  // A model belongs to one provider, so one that isn't the chosen provider's
+  // (a provider changed without its model, a hand edit) becomes that
+  // provider's default. A store from before the provider existed reads as
+  // OpenAI, whose models it already holds.
+  const staleCorrectionProvider = !isVoiceCleanupProvider(merged.correctionProvider);
+  if (staleCorrectionProvider) merged.correctionProvider = "openai";
+  const providerModels = VOICE_CLEANUP_MODELS_BY_PROVIDER[merged.correctionProvider];
+  const staleCorrectionModel =
+    !isVoiceCleanupModel(merged.correctionModel) ||
+    !providerModels.includes(merged.correctionModel);
+  if (staleCorrectionModel) merged.correctionModel = providerModels[0]!;
 
   // Normalize malformed recordingMode values in memory only (no write-back).
   if (
@@ -761,6 +777,7 @@ export function getVoiceSettings(): VoiceInputSettings {
     dictionaryRepaired ||
     providerNeedsDefault ||
     staleTranscriptionModel ||
+    staleCorrectionProvider ||
     staleCorrectionModel
   ) {
     store.set("voiceInput", merged);
@@ -1070,7 +1087,7 @@ function correctionSettingsFor(
 ): VoiceCorrectionSettings {
   return {
     model: settings.correctionModel,
-    apiKey: settings.openaiApiKey,
+    apiKey: cleanupApiKey(settings),
     customDictionary: dictionaryTerms(sessionDictionary(settings.dictionary, vocabulary)),
     knownNames: names,
     ...(repositoryNames.length > 0 ? { repositoryNames } : {}),
@@ -1090,7 +1107,7 @@ function correctionSettingsFor(
 }
 
 function mayCorrect(settings: VoiceInputSettings): boolean {
-  return settings.correctionEnabled && Boolean(settings.openaiApiKey);
+  return settings.correctionEnabled && hasCleanupKey(settings);
 }
 
 export function registerVoiceInputHandlers(deps: HandlerDependencies): () => void {
@@ -1266,9 +1283,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // socket and the terminal's context are got ready while the drain runs.
     const readyCorrection = (): boolean => {
       if (reason !== "stopped" || session.intent !== "dictation" || session.ended) return false;
-      if (!mayCorrect(getVoiceSettings())) return false;
+      const settings = getVoiceSettings();
+      if (!mayCorrect(settings)) return false;
       correctionService ??= new VoiceCorrectionService();
-      correctionService.preconnect();
+      correctionService.preconnect(settings.correctionProvider);
       return true;
     };
     const prep = session.correctionPrep;
@@ -2486,7 +2504,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       instructions: settings.correctionCustomInstructions,
       dictionary: settings.dictionary,
       language: settings.language,
-      account: [settings.openaiApiKey, settings.organizationId, settings.projectId],
+      account: [cleanupApiKey(settings), settings.organizationId, settings.projectId],
     });
 
   // Whole-passage cleanup pass. The renderer calls this once after recording
@@ -2810,7 +2828,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     request: VoiceInputRewritePayload
   ): Promise<VoiceRewriteOutcome> => {
     const settings = getVoiceSettings();
-    if (!settings.openaiApiKey) return { status: "unavailable" };
+    if (!hasCleanupKey(settings)) return { status: "unavailable" };
     const answered = holdForCleanup(ctx.webContentsId);
     try {
       return await rewriteSelection(ctx, request, settings);
@@ -2835,7 +2853,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       : getProjectInfo(ctx.projectId);
     return correctionService.rewrite(request, {
       model: settings.correctionModel,
-      apiKey: settings.openaiApiKey,
+      apiKey: cleanupApiKey(settings),
       customDictionary: dictionaryTerms(settings.dictionary),
       language: normalizeVoiceLanguage(settings.language),
       projectName: projectInfo.name,

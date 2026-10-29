@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildCorrectionSystemPrompt,
   buildRewriteSystemPrompt,
+  CLAUDE_CORRECTION_INSTRUCTIONS,
+  CLAUDE_CORRECTION_PROMPT,
   CORE_CORRECTION_PROMPT,
   correctionInstructionsFor,
   LITERAL_CORRECTION_INSTRUCTIONS,
@@ -180,10 +182,24 @@ describe("CORE_CORRECTION_PROMPT cleanup of spoken prompts", () => {
 });
 
 describe("correctionInstructionsFor", () => {
-  it("keeps Luna on the literal rules and every other model on the core ones", () => {
+  it("keeps Luna on the literal rules, Claude on its own, and every other model on the core ones", () => {
     expect(correctionInstructionsFor("gpt-6-luna").core).toBe(LITERAL_CORRECTION_PROMPT);
     expect(correctionInstructionsFor("gpt-6.1-terra").core).toBe(CORE_CORRECTION_PROMPT);
     expect(correctionInstructionsFor("some-new-model").core).toBe(CORE_CORRECTION_PROMPT);
+    expect(correctionInstructionsFor("claude-haiku-5-5")).toBe(CLAUDE_CORRECTION_INSTRUCTIONS);
+    expect(correctionInstructionsFor("claude-sonnet-5-5")).toBe(CLAUDE_CORRECTION_INSTRUCTIONS);
+  });
+
+  it("gives Claude rules of its own that read every block the core rules do", () => {
+    expect(CLAUDE_CORRECTION_PROMPT).not.toBe(CORE_CORRECTION_PROMPT);
+    // The service sends a block only to rules that name it.
+    for (const block of ["<code_names>", "<agent_last_reply>", "<following_text>", "<pause/>"]) {
+      expect(CLAUDE_CORRECTION_PROMPT).toContain(block);
+    }
+    expect(CLAUDE_CORRECTION_PROMPT).toContain("TRANSCRIBER");
+    expect(CLAUDE_CORRECTION_PROMPT).toContain("cloud code/clawed code: Claude Code");
+    expect(CLAUDE_CORRECTION_INSTRUCTIONS.contextNames).toBe("spelling");
+    expect(CLAUDE_CORRECTION_INSTRUCTIONS.suffix).toMatch(/^Return a JSON object/);
   });
 
   it("gives the literal rules the same cache floor and reply contract", () => {

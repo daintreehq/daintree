@@ -302,6 +302,7 @@ export type {
   VoiceTranscriptionModel,
   VoiceTranscriptionProvider,
   VoiceCorrectionModel,
+  VoiceCorrectionProvider,
   VoiceParagraphingStrategy,
   VoiceRecordingMode,
   HelpAssistantSettings,

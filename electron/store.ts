@@ -356,11 +356,13 @@ export interface StoreSchema {
     openaiApiKey: string;
     deepgramApiKey: string;
     xaiApiKey: string;
+    anthropicApiKey: string;
     language: string;
     dictionary: VoiceDictionaryEntry[];
     transcriptionProvider: string;
     transcriptionModel: string;
     correctionEnabled: boolean;
+    correctionProvider: string;
     correctionModel: string;
     correctionCustomInstructions: string;
     paragraphingStrategy: string;
@@ -1062,11 +1064,13 @@ const storeOptions = {
       openaiApiKey: "",
       deepgramApiKey: "",
       xaiApiKey: "",
+      anthropicApiKey: "",
       language: "en",
       dictionary: [],
       transcriptionProvider: "openai",
       transcriptionModel: "gpt-live-transcribe",
       correctionEnabled: true,
+      correctionProvider: "openai",
       correctionModel: "gpt-6.1-terra",
       correctionCustomInstructions: "",
       paragraphingStrategy: "spoken-command",

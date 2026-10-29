@@ -698,6 +698,190 @@ const INTENT_SPOKEN = revise(INTENT_GUARDED, {
   ],
 });
 
+// Claude Haiku 5.5 on Terra's rules (intent-spoken) trimmed openers that
+// carried meaning, left tics in, didn't join the code names it was given,
+// read a person's name as the model on screen, headed lists the speaker never
+// introduced and resolved a retracted negation. Round 1 tries a checklist read
+// last, worked examples for the same misses, and both.
+const HAIKU_CHECKLIST = `Before you reply, check your corrected text against the target:
+- Every sentence and clause the speaker said is still there. Cleanup takes out filler, never content: an opening such as "I want you to", "can you" or "I looked at the logs, and" stays, and so does a "Yeah" or "Okay" that answers the agent. If you took out anything more than a filler word, a tic, a false start or a retracted phrase, put it back.
+- The tics are gone: a "so", "yeah", "okay" or "right" that only opens, closes or pads a sentence, a closing "so yeah", and "kind of", "sort of", "basically" or "really" where they only soften.
+- Words that spell out a name listed in <code_names>, the repository names, the dictionary or the preferred terms are written as that name is written, joined, cased and punctuated exactly as listed.
+- Every name you changed was a mishearing of that same thing. A person stays the person the speaker named, and letters the speaker spelled out stay the letters they said.
+- A self-correction whose retracted words hold a negation or a number is exactly as spoken. In one you resolved, the replacement is in the speaker's own words.
+- A list you laid out opens with the speaker's own introducing sentence, or with no introduction at all. Never write one for them.
+- When <following_text> carries the target's sentence on, the target has no capital at its start (unless it's a name or "I") and no full stop at its end.
+- You added no backticks, quotes or other formatting the speaker didn't give, except a list you laid out or words quoted under QUOTES.
+
+`;
+
+const HAIKU_EXAMPLES = `- Target: "yeah so I'd like you to look at the reducer and um check why it runs twice"
+  Corrected: "I'd like you to look at the reducer and check why it runs twice." (the speaker's own request stays; only the tics go)
+- Target: "okay ship it but bump the version first" (answering the agent's "Should I cut the release?")
+  Corrected: "Okay, ship it, but bump the version first." (the "Okay" answers the agent, so it stays)
+- Target: "wrap the input in the use debounced value hook" (with useDebouncedValue in <code_names>)
+  Corrected: "Wrap the input in the useDebouncedValue hook."
+- Target: "validate it with zod to json schema before it goes out" (with zod-to-json-schema in the repository names)
+  Corrected: "Validate it with zod-to-json-schema before it goes out."
+- Target: "Pina from design signed off so check with her" (with pino-worker in <terminal_output>)
+  Corrected: "Pina from design signed off, so check with her." (a person, so the name stays)
+- Target: "don't rebase it, no wait, rebase it onto main"
+  Corrected: "Don't rebase it, no wait, rebase it onto main." (the retracted words hold a negation, so it stays as spoken)
+- Target: "first bump the version then second tag it and third push the tag"
+  Corrected: "1. Bump the version.\\n2. Tag it.\\n3. Push the tag." (no introduction was said, so none is added)
+`;
+
+const HAIKU_EXAMPLES_ANCHOR =
+  "(issue and pull request numbers joined, any other number as transcribed)\n";
+
+const HAIKU_CHECK = revise(INTENT_SPOKEN, {
+  suffix: [
+    [
+      "Return a JSON object that matches the response schema.",
+      `${HAIKU_CHECKLIST}Return a JSON object that matches the response schema.`,
+    ],
+  ],
+});
+
+const HAIKU_EXAMPLES_ONLY = revise(INTENT_SPOKEN, {
+  core: [[HAIKU_EXAMPLES_ANCHOR, `${HAIKU_EXAMPLES_ANCHOR}${HAIKU_EXAMPLES}`]],
+});
+
+const HAIKU_BOTH = revise(HAIKU_CHECK, {
+  core: [[HAIKU_EXAMPLES_ANCHOR, `${HAIKU_EXAMPLES_ANCHOR}${HAIKU_EXAMPLES}`]],
+});
+
+// Round 2: the examples won and the checklist cost, so more examples for
+// what Haiku still missed, and the same misses named in the rules.
+const HAIKU_EXAMPLES_2 = `- Target: "I want you to look at the auth middleware and um list every place it reads the session"
+  Corrected: "I want you to look at the auth middleware and list every place it reads the session." (a request's own opening stays)
+- Target: "yeah so I ran it locally and the snapshot test fails on the date"
+  Corrected: "I ran it locally, and the snapshot test fails on the date." (what the speaker did stays; only the tics go)
+- Target: "so the build is red again. so can you check what changed. so yeah"
+  Corrected: "The build is red again. Can you check what changed?"
+- Target: "never cache the token, no wait, cache it for a minute"
+  Corrected: "Never cache the token, no wait, cache it for a minute." (the retracted words hold a negation, so it stays as spoken)
+- Target: "Mira set up the CI cache so ask her first" (with mirage-cli in <terminal_output>)
+  Corrected: "Mira set up the CI cache, so ask her first." (a person, so the name stays)
+- Target: "pipe the logs through pino pretty" (with pino-pretty in the repository names)
+  Corrected: "Pipe the logs through pino-pretty." (a package is written as it's typed)
+- Target: "run cargo test dash dash release on the parser crate"
+  Corrected: "Run cargo test --release on the parser crate."
+- Target: "then rerun the linter" (with <confirmed_history> ending "Fix the import order and")
+  Corrected: "then rerun the linter" (it carries the sentence on: no capital, no full stop)
+`;
+
+const HAIKU_EX2 = revise(HAIKU_EXAMPLES_ONLY, {
+  core: [[HAIKU_EXAMPLES, `${HAIKU_EXAMPLES}${HAIKU_EXAMPLES_2}`]],
+});
+
+const HAIKU_EX2_RULES = revise(HAIKU_EX2, {
+  core: [
+    [
+      "Remove hesitation sounds such as um, uh and erm,",
+      'The opening of a request or a report is content, not filler: keep "I want you to", "I\'d like you to", "can you", "I looked at the logs, and" and "I ran it, and". Remove hesitation sounds such as um, uh and erm,',
+    ],
+    [
+      "- The context only spells words the target already says.",
+      '- A name the sentence treats as a person (someone who reviewed, wrote, said or signed off on something, or whom "she", "he", "her", "him" or "they" refers back to) stays as transcribed, even when it sounds like a name in the context.\n- A package, file or identifier the context lists and the speaker names in words is written exactly as listed, joined and lowercased as it is there ("pino pretty" with pino-pretty listed is "pino-pretty", never "Pino Pretty").\n- The context only spells words the target already says.',
+    ],
+    [
+      "- Never add, remove, or move a negation (not, don't, never, no, without).",
+      '- A self-correction whose retracted words hold a negation or a number is never resolved: copy it exactly, "no wait" and all, since a wrong guess would reverse what the agent does.\n- Never add, remove, or move a negation (not, don\'t, never, no, without).',
+    ],
+  ],
+});
+
+// Round 3: the same rules in XML sections, which Claude models read as
+// structure, once in their own order and once with what must never change
+// ahead of the cleanup rules and a self-correction's exceptions first.
+const SECTION_HEADERS = [
+  "TASK",
+  "READER",
+  "CONTEXT",
+  "CONFIDENCE TAGS",
+  "PAUSE MARKS",
+  "NAMES AND SPELLINGS",
+  "CORRECTION PRIORITY",
+  "MEANING IS FIXED",
+  "PRESERVE",
+  "EXAMPLES",
+] as const;
+
+function xmlSections(core: string, order: readonly string[] = SECTION_HEADERS): string {
+  const termsAt = core.lastIndexOf("\n<terms>");
+  const lines = core.slice(0, termsAt).split("\n");
+  const intro: string[] = [];
+  const sections = new Map<string, string[]>();
+  let current: string[] = intro;
+  for (const line of lines) {
+    const header = SECTION_HEADERS.find(
+      (name) => line === `${name}:` || line.startsWith(`${name}: `)
+    );
+    if (header) {
+      current = [line.slice(header.length + 1).trimStart()];
+      sections.set(header, current);
+    } else current.push(line);
+  }
+  const tag = (name: string) => name.toLowerCase().replace(/[^a-z]+/g, "_");
+  const blocks = order.map((name) => {
+    const body = sections.get(name);
+    if (!body) throw new Error(`no ${name} section`);
+    return `<${tag(name)}>\n${body.join("\n").trim()}\n</${tag(name)}>`;
+  });
+  return [intro.join("\n").trim(), ...blocks, core.slice(termsAt + 1)].join("\n\n");
+}
+
+const HAIKU_XML: CorrectionInstructions = {
+  ...HAIKU_EX2_RULES,
+  core: xmlSections(HAIKU_EX2_RULES.core),
+};
+
+const HAIKU_XML_FIRST_BASE = revise(HAIKU_EX2_RULES, {
+  core: [
+    [
+      "5. SELF-CORRECTIONS — When the speaker explicitly takes back",
+      '5. SELF-CORRECTIONS — First look at the words being taken back: when they contain a negation (don\'t, not, never, no) or a number, leave the whole self-correction exactly as spoken, "no wait" and all, and change nothing else in it. Otherwise, when the speaker explicitly takes back',
+    ],
+  ],
+});
+
+const HAIKU_XML_FIRST: CorrectionInstructions = {
+  ...HAIKU_XML_FIRST_BASE,
+  core: xmlSections(HAIKU_XML_FIRST_BASE.core, [
+    "TASK",
+    "READER",
+    "PRESERVE",
+    "MEANING IS FIXED",
+    "CONTEXT",
+    "CONFIDENCE TAGS",
+    "PAUSE MARKS",
+    "NAMES AND SPELLINGS",
+    "CORRECTION PRIORITY",
+    "EXAMPLES",
+  ]),
+};
+
+// Round 4: XML sections and low effort both lost to haiku-ex2-rules, so more
+// examples on top of it for what it still missed in two runs.
+const HAIKU_EXAMPLES_3 = `- Target: "only when the cache is cold" (with <confirmed_history> ending "The test flakes" and <following_text> "but passes on a rerun.")
+  Corrected: "only when the cache is cold" (the draft carries the sentence on both sides: no capital, no full stop)
+- Target: "add it to the sidebar <pause/> sorry the toolbar next to the search box"
+  Corrected: "Add it to the toolbar, next to the search box."
+- Target: "set the default theme to dark. no, to system"
+  Corrected: "Set the default theme to system."
+- Target: "the tab bar kind of jumps when you close a tab, okay?"
+  Corrected: "The tab bar jumps when you close a tab."
+- Target: "the retry sort of works but it gives up too early"
+  Corrected: "The retry sort of works, but it gives up too early." (it only partly works, so "sort of" stays)
+- Target: "ask cloud code to rerun the migration"
+  Corrected: "Ask Claude Code to rerun the migration."
+`;
+
+const HAIKU_EX3 = revise(HAIKU_EX2_RULES, {
+  core: [[HAIKU_EXAMPLES_2, `${HAIKU_EXAMPLES_2}${HAIKU_EXAMPLES_3}`]],
+});
+
 export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
   v11: { description: "the rules production sent before #14786", instructionsFor: fixed(V11) },
   firm: {
@@ -822,6 +1006,40 @@ export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
     description:
       "intent-guarded, writing casual spoken forms such as gonna and wanna as typed words",
     instructionsFor: fixed(INTENT_SPOKEN),
+  },
+  "haiku-check": {
+    description: "Haiku round 1: intent-spoken with a checklist of Haiku's misses read last",
+    instructionsFor: fixed(HAIKU_CHECK),
+  },
+  "haiku-examples": {
+    description: "Haiku round 1: intent-spoken with worked examples of Haiku's misses",
+    instructionsFor: fixed(HAIKU_EXAMPLES_ONLY),
+  },
+  "haiku-both": {
+    description: "Haiku round 1: intent-spoken with the checklist and the examples",
+    instructionsFor: fixed(HAIKU_BOTH),
+  },
+  "haiku-ex2": {
+    description: "Haiku round 2: haiku-examples with examples for what it still missed",
+    instructionsFor: fixed(HAIKU_EX2),
+  },
+  "haiku-ex2-rules": {
+    description:
+      "Haiku round 2: haiku-ex2 with openers, people, listed packages and retracted negations named in the rules",
+    instructionsFor: fixed(HAIKU_EX2_RULES),
+  },
+  "haiku-xml": {
+    description: "Haiku round 3: haiku-ex2-rules in XML sections",
+    instructionsFor: fixed(HAIKU_XML),
+  },
+  "haiku-xml-first": {
+    description:
+      "Haiku round 3: haiku-xml with what never changes first and a self-correction's exceptions ahead of its rule",
+    instructionsFor: fixed(HAIKU_XML_FIRST),
+  },
+  "haiku-ex3": {
+    description: "Haiku round 4: haiku-ex2-rules with examples for its remaining misses",
+    instructionsFor: fixed(HAIKU_EX3),
   },
   production: {
     description: "the rules production sends each model now",

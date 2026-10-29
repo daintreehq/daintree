@@ -4,7 +4,11 @@ import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
-import { hasCleanupKey, hasTranscriptionKey } from "@shared/config/voiceProviders";
+import {
+  cleanupKeyIssuer,
+  hasCleanupKey,
+  hasTranscriptionKey,
+} from "@shared/config/voiceProviders";
 import {
   carrySpansThroughEdits,
   shiftSpans,
@@ -885,7 +889,8 @@ class VoiceRecordingService {
   private pendingRewrites = new Set<PendingRewrite>();
   // Null until the settings have been read: a rewrite then goes ahead and main
   // reports a missing key.
-  private hasOpenAIKey: boolean | null = null;
+  private hasCleanupKey: boolean | null = null;
+  private cleanupKeyIssuer = "OpenAI";
   // Each session's summary until its line is logged, by session id (#14617).
   private timelines = new Map<string, VoiceSessionTimeline>();
   // The in-flight start's summary, until its capture is promoted.
@@ -1571,14 +1576,15 @@ class VoiceRecordingService {
 
   async refreshConfiguration(): Promise<boolean> {
     const settings = await window.electron.voiceInput.getSettings();
-    // "Configured" means the selected provider has its own API key. The OpenAI key is a
-    // separate matter: it only gates cleanup and rewrite.
+    // "Configured" means the selected provider has its own API key. The cleanup
+    // provider's key is a separate matter: it only gates cleanup and rewrite.
     const hasProviderKey = hasTranscriptionKey(settings);
     const isConfigured = settings.enabled && hasProviderKey;
     this.selectedDeviceId = settings.deviceId ?? "";
     this.selectedDeviceLabel = settings.deviceLabel ?? "";
     this.recordingMode = settings.recordingMode ?? "tap-or-hold";
-    this.hasOpenAIKey = hasCleanupKey(settings);
+    this.hasCleanupKey = hasCleanupKey(settings);
+    this.cleanupKeyIssuer = cleanupKeyIssuer(settings.correctionProvider);
     this.transcriptionProvider = settings.transcriptionProvider;
     this.heardAsRules = createHeardAsRewriter(collectHeardAsRules(settings.dictionary ?? []));
     this.dropHesitations = normalizeVoiceLanguage(settings.language) === "en";
@@ -4172,10 +4178,12 @@ class VoiceRecordingService {
         return;
       case "unavailable":
         selection.release();
-        useVoiceRecordingStore.getState().announce("Rewriting by voice needs an OpenAI API key.");
+        useVoiceRecordingStore
+          .getState()
+          .announce(`Rewriting by voice needs an ${this.cleanupKeyIssuer} API key.`);
         this.reportStartFailure(
           "Rewrite unavailable",
-          "Add an OpenAI API key in voice settings to rewrite selected text by voice.",
+          `Add an ${this.cleanupKeyIssuer} API key in voice settings to rewrite selected text by voice.`,
           this.settingsAction()
         );
         return;
@@ -4912,11 +4920,12 @@ class VoiceRecordingService {
       this.reportNothingToRewrite("Select text in an agent's prompt to rewrite it by voice.");
       return;
     }
-    if (this.hasOpenAIKey === false) {
-      useVoiceRecordingStore.getState().announce("Rewriting by voice needs an OpenAI API key.");
+    if (this.hasCleanupKey === false) {
+      const issuer = this.cleanupKeyIssuer;
+      useVoiceRecordingStore.getState().announce(`Rewriting by voice needs an ${issuer} API key.`);
       this.reportStartFailure(
         "Rewrite unavailable",
-        "Add an OpenAI API key in voice settings to rewrite selected text by voice.",
+        `Add an ${issuer} API key in voice settings to rewrite selected text by voice.`,
         this.settingsAction()
       );
       return;

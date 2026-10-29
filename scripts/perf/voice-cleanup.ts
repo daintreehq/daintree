@@ -6,9 +6,11 @@ import { contentHash } from "../../e2e/helpers/voiceReplayScore";
 import {
   buildCorrectionSystemPrompt,
   TRANSCRIBER_NOTES,
+  voiceCleanupProviderOf,
   type CorrectionInstructions,
   type VoiceReasoningEffort,
 } from "../../shared/config/voiceCorrection";
+import type { VoiceCorrectionProvider } from "../../shared/types/ipc/api";
 import { formatErrorMessage } from "../../shared/utils/errorMessage";
 import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders";
 import { getAgentConfig } from "../../shared/config/agentRegistry";
@@ -68,6 +70,8 @@ const RESULTS_DIR = path.join(REPO_ROOT, ".tmp", "perf-results", "voice-cleanup"
 const MODEL_ALIASES: Readonly<Record<string, string>> = {
   luna: "gpt-6-luna",
   terra: "gpt-6.1-terra",
+  haiku: "claude-haiku-5-5",
+  sonnet: "claude-sonnet-5-5",
 };
 const EFFORTS: readonly VoiceReasoningEffort[] = ["none", "low", "medium", "high"];
 const STYLES: readonly TranscriptStyle[] = ["openai", "deepgram", "grok", "generic"];
@@ -75,10 +79,11 @@ const STYLES: readonly TranscriptStyle[] = ["openai", "deepgram", "grok", "gener
 const USAGE = `usage: npm run perf voice-cleanup -- [options]
 
 Runs every corpus passage through the real VoiceCorrectionService, once per
-model and effort, against the live OpenAI API (needs OPENAI_API_KEY; costs money).
+model and effort, against the live OpenAI or Anthropic API (needs OPENAI_API_KEY
+for OpenAI models and ANTHROPIC_API_KEY for Claude models; costs money).
 
-  --variants <list>     model:effort pairs (default terra:none);
-                        luna and terra are aliases, any other model id is sent as is
+  --variants <list>     model:effort pairs (default terra:none); luna, terra, haiku
+                        and sonnet are aliases, any other model id is sent as is
   --prompts <list>      cleanup prompts, each run with every model:effort (default
                         production): ${Object.keys(PROMPT_VARIANTS).join(", ")}
   --repeats <n>         passes over the corpus (default 1)
@@ -976,11 +981,21 @@ async function main(): Promise<number> {
     return 1;
   }
 
-  const apiKey = process.env.OPENAI_API_KEY ?? "";
-  if (!apiKey) {
-    console.error("[voice-cleanup] OPENAI_API_KEY is not set");
-    return 1;
+  const apiKeys: Record<VoiceCorrectionProvider, string> = {
+    openai: process.env.OPENAI_API_KEY ?? "",
+    anthropic: process.env.ANTHROPIC_API_KEY ?? "",
+  };
+  const keyNames: Record<VoiceCorrectionProvider, string> = {
+    openai: "OPENAI_API_KEY",
+    anthropic: "ANTHROPIC_API_KEY",
+  };
+  for (const provider of new Set(options.variants.map((v) => voiceCleanupProviderOf(v.model)))) {
+    if (!apiKeys[provider]) {
+      console.error(`[voice-cleanup] ${keyNames[provider]} is not set`);
+      return 1;
+    }
   }
+  const keyFor = (variant: Variant) => apiKeys[voiceCleanupProviderOf(variant.model)];
 
   // The service's logger decides at load whether to write log files into the
   // working directory, so this has to be set before it is imported.
@@ -1072,7 +1087,8 @@ async function main(): Promise<number> {
 
   if (options.probePrediction) {
     for (const model of new Set(options.variants.map((variant) => variant.model))) {
-      run.predictionProbes.push(...(await probePredictedOutputs(model, apiKey)));
+      if (voiceCleanupProviderOf(model) !== "openai") continue;
+      run.predictionProbes.push(...(await probePredictedOutputs(model, apiKeys.openai)));
       save();
     }
   }
@@ -1088,7 +1104,9 @@ async function main(): Promise<number> {
   for (const variant of options.variants) {
     for (const session of cleanupSessions(corpus)) {
       for (const style of warmStyles) {
-        await services.get(variant.id)!.warm(settingsFor(variant, profile, apiKey, session, style));
+        await services
+          .get(variant.id)!
+          .warm(settingsFor(variant, profile, keyFor(variant), session, style));
       }
     }
   }
@@ -1105,7 +1123,7 @@ async function main(): Promise<number> {
       for (const variant of variants) {
         const service = services.get(variant.id)!;
         // As a stop drains, so a reply never waits on a fresh handshake.
-        service.preconnect();
+        service.preconnect(voiceCleanupProviderOf(variant.model));
         const started = performance.now();
         let firstTextAt: number | null = null;
         // Production always streams; the first text is when the composer starts to change.
@@ -1119,7 +1137,7 @@ async function main(): Promise<number> {
           settingsFor(
             variant,
             profile,
-            apiKey,
+            keyFor(variant),
             entry.session,
             options.transcriber ? entry.style : undefined
           ),

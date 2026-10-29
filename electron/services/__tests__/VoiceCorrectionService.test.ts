@@ -823,7 +823,7 @@ describe("VoiceCorrectionService", () => {
       vi.mocked(logDebug).mockClear();
       await sentWith([{ agentReply: REPLY }]);
       expect(logDebug).toHaveBeenCalledWith(
-        expect.stringContaining("Calling Responses API"),
+        expect.stringContaining("Calling cleanup API"),
         expect.objectContaining({ agentReplyLen: REPLY.text.length })
       );
       expect(JSON.stringify(vi.mocked(logDebug).mock.calls)).not.toContain("add a shim");
@@ -902,7 +902,7 @@ describe("VoiceCorrectionService", () => {
       vi.mocked(logDebug).mockClear();
       await sentWith([{ followingText: FOLLOWING }]);
       expect(logDebug).toHaveBeenCalledWith(
-        expect.stringContaining("Calling Responses API"),
+        expect.stringContaining("Calling cleanup API"),
         expect.objectContaining({ followingTextLen: FOLLOWING.length })
       );
       expect(JSON.stringify(vi.mocked(logDebug).mock.calls)).not.toContain("theme picker");
@@ -1034,7 +1034,7 @@ describe("VoiceCorrectionService", () => {
       );
 
       expect(logDebug).toHaveBeenCalledWith(
-        expect.stringContaining("Calling Responses API"),
+        expect.stringContaining("Calling cleanup API"),
         expect.objectContaining({ recentPromptCount: 2, recentPromptsLen: 31 })
       );
       expect(JSON.stringify(vi.mocked(logDebug).mock.calls)).not.toContain("secret plan");
