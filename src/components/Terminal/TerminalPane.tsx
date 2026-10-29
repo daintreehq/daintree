@@ -579,6 +579,7 @@ function TerminalPaneComponent({
         sessionPreservingExit: pty?.sessionPreservingExit === true,
         isTrashedOrRemoved: terminal?.location === "trash" || terminal === undefined,
         spawnStatus: pty?.spawnStatus,
+        runtimeStatus: pty?.runtimeStatus,
         eagerAttach: pty?.eagerAttach ?? false,
         isHeldForRecovery: pty?.restoreRecovery !== undefined,
       };
@@ -593,6 +594,7 @@ function TerminalPaneComponent({
     sessionPreservingExit,
     isTrashedOrRemoved,
     spawnStatus,
+    runtimeStatus,
     eagerAttach,
     isHeldForRecovery,
   } = terminalState;
@@ -1470,6 +1472,18 @@ function TerminalPaneComponent({
   const showScrollbackRestoreError =
     !suppressParseError && Boolean(scrollbackRestoreError) && !restartError;
   const showRestartStatus = restartBannerVariant.type !== "none";
+  // `attachError` outlives an exit and a failed spawn, so the display banner
+  // only vouches for the process while nothing says it has stopped.
+  const attachedProcessRunning =
+    (spawnStatus ?? "ready") === "ready" &&
+    !isExited &&
+    !isRestarting &&
+    !spawnError &&
+    !restartError &&
+    runtimeStatus !== "exited" &&
+    runtimeStatus !== "error" &&
+    !isBackendDisconnected &&
+    !isBackendRecovering;
   const offeredSessionId =
     restartBannerVariant.type === "agent-resume-offer" ? restartBannerVariant.sessionId : undefined;
 
@@ -1647,6 +1661,7 @@ function TerminalPaneComponent({
           <TerminalAttachErrorBanner
             terminalId={id}
             error={attachError}
+            processRunning={attachedProcessRunning}
             onRetry={handleRetryAttach}
             isRetrying={isRebuildingDisplay}
           />
@@ -1771,7 +1786,7 @@ function TerminalPaneComponent({
               containerRef={recoveryGateRef}
               agentId={agentId}
               onLaunchAnyway={() => launchDespiteMemoryPressure(panelHoldKey(id))}
-              onCancel={() => onClose(true)}
+              onCancel={() => onClose()}
             />
           ) : isWaitingForControl ? (
             <DriveLeaseGate agentId={agentId} containerRef={recoveryGateRef} />

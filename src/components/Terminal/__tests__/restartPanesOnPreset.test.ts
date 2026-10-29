@@ -1,0 +1,101 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const dispatchMock = vi.hoisted(() => vi.fn());
+const notifyMock = vi.hoisted(() => vi.fn());
+const announceMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/services/ActionService", () => ({
+  actionService: { dispatch: (...args: unknown[]) => dispatchMock(...args) },
+}));
+vi.mock("@/lib/notify", () => ({ notify: (...args: unknown[]) => notifyMock(...args) }));
+vi.mock("@/store/accessibilityAnnouncerStore", () => ({
+  useAnnouncerStore: { getState: () => ({ announce: announceMock }) },
+}));
+vi.mock("@/utils/logger", () => ({ logWarn: vi.fn() }));
+
+import { restartPanesOnPreset } from "../restartPanesOnPreset";
+
+const preset = { id: "work", name: "Work" };
+const refused = (message: string) => ({
+  ok: false,
+  error: { code: "EXECUTION_ERROR", message },
+});
+
+beforeEach(() => {
+  dispatchMock.mockReset();
+  notifyMock.mockReset();
+  announceMock.mockReset();
+});
+
+describe("restartPanesOnPreset", () => {
+  it("announces a restart that started and raises nothing else", async () => {
+    dispatchMock.mockResolvedValue({ ok: true, result: {} });
+
+    await restartPanesOnPreset([{ id: "t1", title: "Review" }], preset, "user", () => "Restarted");
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "terminal.restartOnPreset",
+      { terminalId: "t1", presetId: "work", confirmed: true },
+      { source: "user" }
+    );
+    expect(announceMock).toHaveBeenCalledWith("Restarted");
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("names a refused pane and announces nothing for it (#15233)", async () => {
+    dispatchMock.mockResolvedValue(refused("already restarting"));
+
+    await restartPanesOnPreset([{ id: "t1", title: "Review" }], preset, "user", () => "Restarted");
+
+    expect(announceMock).not.toHaveBeenCalled();
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    const toast = notifyMock.mock.calls[0]![0];
+    expect(toast.type).toBe("error");
+    expect(toast.title).toBe("Couldn't restart 'Review' on Work");
+    expect(toast.message).toBe("'Review' is already restarting.");
+    expect(toast.action.actionArgs).toEqual({ panelId: "t1" });
+    toast.action.onClick();
+    expect(dispatchMock).toHaveBeenLastCalledWith(
+      "panel.focus",
+      { panelId: "t1" },
+      { source: "user" }
+    );
+  });
+
+  it("counts only the panes that restarted and names each one that didn't", async () => {
+    dispatchMock.mockImplementation(async (_id: string, args: { terminalId: string }) => {
+      if (args.terminalId === "b") return refused("panel is held for recovery");
+      if (args.terminalId === "c") return refused("already restarting");
+      return { ok: true, result: {} };
+    });
+
+    await restartPanesOnPreset(
+      [
+        { id: "a", title: "One" },
+        { id: "b", title: "Two" },
+        { id: "c", title: "Three" },
+        { id: "d", title: "Four" },
+      ],
+      preset,
+      "user",
+      (count) => `Restarting ${count} panes`
+    );
+
+    expect(announceMock).toHaveBeenCalledWith("Restarting 2 panes");
+    const toast = notifyMock.mock.calls[0]![0];
+    expect(toast.title).toBe("Couldn't restart 2 panes on Work");
+    expect(toast.message).toBe("'Two' is waiting to be restored. 'Three' is already restarting.");
+    expect(toast.action.actionArgs).toEqual({ panelId: "b" });
+  });
+
+  it("treats a rejected dispatch as a refusal rather than losing it", async () => {
+    dispatchMock.mockRejectedValue(new Error("boom"));
+
+    await restartPanesOnPreset([{ id: "t1", title: undefined }], preset, "user", () => "Restarted");
+
+    expect(announceMock).not.toHaveBeenCalled();
+    const toast = notifyMock.mock.calls[0]![0];
+    expect(toast.title).toBe("Couldn't restart the terminal on Work");
+    expect(toast.message).toBe("The terminal didn't restart.");
+  });
+});

@@ -37,6 +37,7 @@ function renderBanner(overrides: Partial<React.ComponentProps<typeof TerminalAtt
     <TerminalAttachErrorBanner
       terminalId="term-1"
       error="Cannot read properties of undefined (reading 'setRenderer')"
+      processRunning
       onRetry={onRetry}
       {...overrides}
     />
@@ -61,6 +62,26 @@ describe("TerminalAttachErrorBanner", () => {
     expect(screen.getByRole("alert").textContent).toMatch(
       /process is still running and its output is being recorded/i
     );
+  });
+
+  it("doesn't claim the process is alive once it has stopped (#15233)", () => {
+    // attachError outlives an exit or a failed spawn, so the restart banner
+    // below can say the process exited while this one is still up.
+    renderBanner({ processRunning: false, error: "boom-specific-detail" });
+
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).not.toMatch(/still running/i);
+    expect(alert.textContent).toContain("Terminal display failed");
+    expect(alert.textContent).toContain("boom-specific-detail");
+    expect(screen.getByRole("button", { name: "Retry terminal display" })).toBeTruthy();
+  });
+
+  it("leads with the reassurance and keeps the raw error out of the sentence", () => {
+    renderBanner({ error: "boom-specific-detail" });
+
+    const text = screen.getByRole("alert").textContent ?? "";
+    expect(text.indexOf("still running")).toBeLessThan(text.indexOf("boom-specific-detail"));
+    expect(text).not.toContain("boom-specific-detail The process");
   });
 
   it("surfaces the underlying error text", () => {

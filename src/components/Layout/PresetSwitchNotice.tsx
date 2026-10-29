@@ -2,12 +2,11 @@ import { useCallback } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
-import { closeAndAnnounce } from "@/lib/accessibility";
 import { pluralize } from "@/lib/pluralize";
-import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
+import { restartPanesOnPreset } from "@/components/Terminal/restartPanesOnPreset";
 
 /**
  * A worktree's preset pick that just moved off a preset live panes are still
@@ -135,16 +134,12 @@ export function PresetSwitchRestartDialog({
 }) {
   const handleConfirm = useCallback(() => {
     if (!request) return;
-    for (const pane of request.panes) {
-      void actionService.dispatch(
-        "terminal.restartOnPreset",
-        { terminalId: pane.id, presetId: request.toPresetId, confirmed: true },
-        { source: "user" }
-      );
-    }
-    closeAndAnnounce(
-      onClose,
-      `Restarting ${pluralize(request.panes.length, "pane")} on ${request.toName}`
+    onClose();
+    void restartPanesOnPreset(
+      request.panes,
+      { id: request.toPresetId, name: request.toName },
+      "user",
+      (count) => `Restarting ${pluralize(count, "pane")} on ${request.toName}`
     );
   }, [request, onClose]);
 
