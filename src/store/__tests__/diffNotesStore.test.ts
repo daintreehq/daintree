@@ -133,7 +133,11 @@ describe("diffNotesStore", () => {
 
   it("doesn't let an Undo overwrite a revision a sibling saved after the send", () => {
     const original = add();
-    const rewritten = { ...original, body: "Rewritten elsewhere", updatedAt: original.updatedAt + 1 };
+    const rewritten = {
+      ...original,
+      body: "Rewritten elsewhere",
+      updatedAt: original.updatedAt + 1,
+    };
     const merged = mergeDiffNotesPersistedWrite({
       baseline: { version: 0, state: { notes: {} } },
       incoming: { version: 0, state: { notes: { [original.id]: original } } },
