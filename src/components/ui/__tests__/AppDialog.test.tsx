@@ -1988,6 +1988,35 @@ describe("AppDialog — shared chrome contract", () => {
     expect(svg.getAttribute("class")).toContain("text-status-warning");
   });
 
+  it("aligns the title glyph and the close button to the same edge of a wrapped title", () => {
+    render(
+      <AppDialog isOpen onClose={() => {}}>
+        <AppDialog.Header>
+          <AppDialog.Title icon={<svg />}>daintree isn't on a-very-long-host-name yet</AppDialog.Title>
+          <AppDialog.CloseButton />
+        </AppDialog.Header>
+      </AppDialog>
+    );
+    const slot = screen
+      .getByRole("heading", { name: "daintree isn't on a-very-long-host-name yet" })
+      .querySelector<HTMLElement>("[data-dialog-title-icon]")!;
+    const closeButton = screen.getByRole("button", { name: "Close dialog" });
+    const matching = (el: HTMLElement, pattern: RegExp) =>
+      el.className.split(/\s+/).filter((c) => pattern.test(c));
+
+    // The header and heading centre their children, which parks both on the
+    // middle of a two-line title. Layout isn't computed under jsdom, so this
+    // pins the relationship that carries it: each declares one cross-axis
+    // alignment of its own, they agree, and it isn't the centring they inherit.
+    const slotAlign = matching(slot, /^self-/);
+    expect(slotAlign).toHaveLength(1);
+    expect(matching(closeButton, /^self-/)).toEqual(slotAlign);
+    expect(slotAlign).not.toContain("self-center");
+    // One line of the heading's own type, so the glyph centres on line one at
+    // whatever size a caller sets.
+    expect(matching(slot, /^h-/)).toEqual([expect.stringMatching(/lh\]$/)]);
+  });
+
   it("keeps a leading action apart from Cancel and the primary, and off initial focus", async () => {
     const onDiscard = vi.fn();
     render(

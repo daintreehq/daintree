@@ -117,6 +117,15 @@ describe("SurfaceHeaderTitle", () => {
     expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("Dialog");
   });
 
+  it("declares a wrap strategy so a long name can't strand a word on the last line", () => {
+    // Greedy wrapping is the browser default and leaves one word alone on line
+    // two of a long host or branch name. Layout isn't computed under jsdom, so
+    // this pins that the title opts into a balancing or pretty strategy.
+    render(<SurfaceHeaderTitle>daintree isn't on a-very-long-host-name yet</SurfaceHeaderTitle>);
+
+    expect(matching(screen.getByRole("heading"), /^text-(balance|pretty)$/)).toHaveLength(1);
+  });
+
   it("lets a caller override the default type scale", () => {
     // The file viewers rely on this to shrink the title; a merge that kept both
     // sizes would resolve by stylesheet order rather than by the caller.

@@ -81,8 +81,12 @@ const SurfaceHeaderTitle = React.forwardRef<HTMLHeadingElement, SurfaceHeaderTit
       //
       // The glyph is pinned at its size: as a flex item it would otherwise give
       // up width to a title that wraps, shrinking only on long names.
+      //
+      // text-balance evens out a title that wraps, so a long host or branch
+      // name never leaves one word alone on the last line. A title that fits on
+      // one line has nothing to balance and renders as before.
       className={cn(
-        "text-lg font-semibold text-text-primary flex items-center gap-2 min-w-0 break-words [&>svg]:shrink-0",
+        "text-lg font-semibold text-text-primary flex items-center gap-2 min-w-0 break-words text-balance [&>svg]:shrink-0",
         className
       )}
       {...props}
