@@ -71,8 +71,8 @@ export async function importCompiled(absoluteSource: string): Promise<Record<str
   const sourceDir = path.dirname(absoluteSource);
   const code = compiledCode.replace(
     RELATIVE_SPECIFIER,
-    (_, lead: string, quote: string, spec: string) =>
-      `${lead}${quote}${path.resolve(sourceDir, spec)}${quote}`
+    (_, lead: string, _quote: string, spec: string) =>
+      `${lead}${JSON.stringify(path.resolve(sourceDir, spec).replaceAll("\\", "/"))}`
   );
   const target = path.join(
     OUT_DIR,

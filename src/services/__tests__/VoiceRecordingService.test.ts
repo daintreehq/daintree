@@ -383,7 +383,9 @@ describe("VoiceRecordingService — background recording", () => {
     suspendCallbacks.length = 0;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.destroy();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -875,7 +877,7 @@ describe("VoiceRecordingService — the keyboard follows a start (#14770)", () =
     focusDictationComposer.mockClear();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     // The store mock is shared with the suites after this one, and one of them
     // compares the first arming call with its own start.
     if (arranged) {
@@ -886,6 +888,8 @@ describe("VoiceRecordingService — the keyboard follows a start (#14770)", () =
       for (const fn of arranged.calls) fn.mockClear();
       arranged = null;
     }
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.destroy();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -1054,7 +1058,9 @@ describe("VoiceRecordingService — arming state", () => {
     suspendCallbacks.length = 0;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.destroy();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -1348,7 +1354,9 @@ describe("VoiceRecordingService — microphone device selection", () => {
     suspendCallbacks.length = 0;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.destroy();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -1452,7 +1460,9 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
     suspendCallbacks.length = 0;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.destroy();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -1721,6 +1731,8 @@ describe("VoiceRecordingService — a lock on a pane with no composer (#14955)",
     (await import("@/store/fleetArmingStore")).useFleetArmingStore.setState({
       armedIds: new Set<string>(),
     });
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.destroy();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -1876,7 +1888,9 @@ describe("VoiceRecordingService — Canopy's reply box (#14777)", () => {
     suspendCallbacks.length = 0;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.destroy();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -2104,7 +2118,9 @@ describe("VoiceRecordingService — shortcut stops from anywhere (#12832)", () =
     suspendCallbacks.length = 0;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.destroy();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -2417,7 +2433,9 @@ describe("VoiceRecordingService — pause/resume (#9191)", () => {
     suspendCallbacks.length = 0;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.destroy();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -2650,7 +2668,9 @@ describe("VoiceRecordingService — interim delta handling (#9172)", () => {
     suspendCallbacks.length = 0;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.destroy();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -2796,7 +2816,9 @@ describe("VoiceRecordingService — provider configuration gating", () => {
     suspendCallbacks.length = 0;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.destroy();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -2895,7 +2917,9 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     suspendCallbacks.length = 0;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.destroy();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -3322,7 +3346,9 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
     suspendCallbacks.length = 0;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.destroy();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -4112,7 +4138,9 @@ describe("VoiceRecordingService — tap-or-hold mode (#14626)", () => {
     suspendCallbacks.length = 0;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.destroy();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
