@@ -13,6 +13,10 @@ import type {
   PluginViewHostContext,
   SettingDefinition,
 } from "@shared/types/plugin";
+import {
+  makeInstalledProjectInstanceKey,
+  makeProjectPluginInstanceKey,
+} from "@shared/types/plugin";
 import { _resetPluginRuntimeStatusStoreForTest } from "@/store/pluginRuntimeStatusStore";
 import {
   _resetPluginHostedViewsStoreForTest,
@@ -730,7 +734,9 @@ describe("PluginSettingsForm", () => {
         { id: "u", type: "string", label: "U" },
         { id: "p", type: "string", label: "P", scope: "project" },
       ]),
+      instanceId: makeProjectPluginInstanceKey("proj-1", "acme.test"),
       origin: "project" as const,
+      projectId: "proj-1",
     };
     render(<PluginSettingsForm plugin={plugin} viewScope="project" />);
     expect(await screen.findByLabelText("U")).toBeTruthy();
@@ -738,6 +744,79 @@ describe("PluginSettingsForm", () => {
     expect(screen.queryByRole("button", { name: /Open (plugin manager|project settings)/ })).toBe(
       null
     );
+  });
+
+  it.each([
+    ["a repository plugin", makeProjectPluginInstanceKey("proj-1", "acme.test")],
+    ["an installed per-project instance", makeInstalledProjectInstanceKey("proj-1", "acme.test")],
+  ])("badges %s's user-scope fields for the one project they reach", async (_, instanceId) => {
+    currentProjectId = "proj-1";
+    const plugin: LoadedPluginInfo = {
+      ...makePlugin([
+        { id: "u", type: "string", label: "U" },
+        { id: "u2", type: "string", label: "U2", scope: "user" },
+        { id: "p", type: "string", label: "P", scope: "project" },
+      ]),
+      instanceId,
+      origin: "project",
+      projectId: "proj-1",
+    };
+    render(<PluginSettingsForm plugin={plugin} viewScope="project" />);
+    // Its user-scope file is named by an instance key that carries the project
+    // id, so the value stays with this project on this machine — unlike a
+    // project-scope value, which the repository shares.
+    const rowOf = (label: string) =>
+      screen.getByLabelText(label).closest<HTMLElement>("[data-settings-row]")!;
+    await screen.findByLabelText("U");
+    expect(within(rowOf("U")).getByText("This project, this machine")).toBeTruthy();
+    expect(within(rowOf("U2")).getByText("This project, this machine")).toBeTruthy();
+    expect(within(rowOf("P")).getByText("This project")).toBeTruthy();
+    expect(screen.queryByText("All projects")).toBeNull();
+  });
+
+  it.each([
+    ["an installed plugin", "acme.test", null],
+    ["a repository plugin", makeProjectPluginInstanceKey("proj-1", "acme.test"), "proj-1"],
+  ])("badges %s's project-scope secrets for this machine", async (_, instanceId, owner) => {
+    currentProjectId = "proj-1";
+    const plugin: LoadedPluginInfo = {
+      ...makePlugin([
+        { id: "token", type: "secret", label: "Token", scope: "project" },
+        { id: "legacy", type: "string", secret: true, label: "Legacy", scope: "project" },
+        { id: "p", type: "string", label: "P", scope: "project" },
+      ]),
+      instanceId,
+      origin: owner === null ? "global" : "project",
+      projectId: owner,
+    };
+    render(<PluginSettingsForm plugin={plugin} viewScope="project" />);
+    // A project-scope secret is stored in the local file, never the repository,
+    // so it doesn't wear the badge of a value the repository shares.
+    const rowOf = (label: string) =>
+      screen.getByLabelText(label).closest<HTMLElement>("[data-settings-row]")!;
+    await screen.findByLabelText("Token");
+    expect(within(rowOf("Token")).getByText("This project, this machine")).toBeTruthy();
+    expect(within(rowOf("Legacy")).getByText("This project, this machine")).toBeTruthy();
+    expect(within(rowOf("P")).getByText("This project")).toBeTruthy();
+  });
+
+  it("keeps an installed plugin's user-scope secrets badged for every project", async () => {
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([
+          { id: "token", type: "secret", label: "Token" },
+          { id: "legacy", type: "string", secret: true, label: "Legacy" },
+        ])}
+        viewScope="user"
+      />
+    );
+    // Only a project-scope secret is moved off the repository into the local
+    // file; a user-scope one is the installed plugin's, shared by every project.
+    const rowOf = (label: string) =>
+      screen.getByLabelText(label).closest<HTMLElement>("[data-settings-row]")!;
+    await screen.findByLabelText("Token");
+    expect(within(rowOf("Token")).getByText("All projects")).toBeTruthy();
+    expect(within(rowOf("Legacy")).getByText("All projects")).toBeTruthy();
   });
 
   it("shows an unstored required field as unset, with its default as the way to set it", async () => {
