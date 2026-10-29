@@ -280,3 +280,47 @@ describe("HybridInputBar's fleet send", () => {
     expect(draft("term-2")).toBe("try again");
   });
 });
+
+describe("HybridInputBar's fleet send with context tokens (#14953)", () => {
+  it("sends every pane the diff instead of the token", async () => {
+    const getWorkingDiff = vi.fn(async (cwd: string) => `diff --git in ${cwd}`);
+    Object.assign(window.electron, { git: { getWorkingDiff } });
+    const { view, type, pressEnter, settle } = await mount();
+    await type("Review @diff now");
+    await pressEnter();
+    await settle();
+
+    expect(submitMock).toHaveBeenCalledTimes(2);
+    for (const [, payload] of submitMock.mock.calls) {
+      expect(payload).toContain(`diff --git in ${WT_ID}`);
+      expect(payload).not.toContain("@diff");
+    }
+    expect(view.state.doc.toString()).toBe("");
+  });
+
+  it("keeps the draft and says why when the token would reach another host", async () => {
+    useFleetArmingStore.getState().armCrossHostTarget({
+      key: "host-fleet:studio:r-1",
+      hostId: "studio",
+      hostName: "Studio",
+      terminalId: "r-1",
+      title: "remote",
+    });
+    const { view, type, pressEnter, settle, draft, onSend } = await mount();
+    await type("Review @diff now");
+    await pressEnter();
+    await settle();
+
+    expect(submitMock).not.toHaveBeenCalled();
+    expect(onSend).not.toHaveBeenCalled();
+    expect(view.state.doc.toString()).toBe("Review @diff now");
+    expect(draft("term-1")).toBe("Review @diff now");
+    expect(document.querySelector("[data-send-refused-caption]")?.textContent).toContain(
+      "another host"
+    );
+    expect(document.querySelector("[role='status']")?.textContent).toContain("another host");
+
+    await type(" please");
+    expect(document.querySelector("[data-send-refused-caption]")).toBeNull();
+  });
+});

@@ -808,3 +808,27 @@ describe("tryFleetBroadcastFromEditor — supervised run integration (#10930)", 
     }
   });
 });
+
+describe("tryFleetBroadcastFromEditor — context tokens (#14953)", () => {
+  it("hands every agent, the one typed in included, its own diff instead of the token", async () => {
+    arm(["a", "b", "c"]);
+    for (const id of ["a", "b", "c"]) {
+      usePanelStore.setState((state) => ({
+        panelsById: { ...state.panelsById, [id]: { ...makeAgent(id), cwd: `/wt/${id}` } },
+      }));
+    }
+    const getWorkingDiff = vi.fn(async (cwd: string) => `diff --git ${cwd}`);
+    Object.assign(window.electron, { git: { getWorkingDiff } });
+
+    const onSent = vi.fn();
+    expect(tryFleetBroadcastFromEditor("a", "Review @diff", onSent)).toBe(true);
+    await vi.waitFor(() => expect(submitMock).toHaveBeenCalledTimes(3));
+
+    const sent = new Map(submitMock.mock.calls.map(([id, payload]) => [id, payload]));
+    for (const id of ["a", "b", "c"]) {
+      expect(sent.get(id)).toContain(`diff --git /wt/${id}`);
+      expect(sent.get(id)).not.toContain("@diff");
+    }
+    await vi.waitFor(() => expect(onSent).toHaveBeenCalledTimes(1));
+  });
+});

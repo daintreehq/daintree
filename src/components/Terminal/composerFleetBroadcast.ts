@@ -1,4 +1,6 @@
 import { tryFleetBroadcastFromEditor } from "@/components/Fleet/fleetEnterBroadcast";
+
+export { CROSS_HOST_CONTEXT_REFUSAL } from "@/components/Fleet/fleetEnterBroadcast";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 
 /**
@@ -6,14 +8,16 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
  * there is a fleet to send to is the broadcast's call, since it counts armed
  * agents on other hosts beside this view's own; a pane armed alone sends as
  * usual. True when the fleet took the draft; `onDelivered` runs only once the
- * broadcast has reached at least one target.
+ * broadcast has reached at least one target, and `onContextRefused` when the
+ * draft took nowhere because it would hand context to another host's agent.
  */
 export function tryComposerFleetBroadcast(
   isFocusedTerminal: boolean,
   terminalId: string,
   text: string,
-  onDelivered: () => void
+  onDelivered: () => void,
+  onContextRefused?: () => void
 ): boolean {
   if (!isFocusedTerminal || !useFleetArmingStore.getState().armedIds.has(terminalId)) return false;
-  return tryFleetBroadcastFromEditor(terminalId, text, onDelivered);
+  return tryFleetBroadcastFromEditor(terminalId, text, onDelivered, onContextRefused);
 }

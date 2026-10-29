@@ -207,22 +207,28 @@ describe("useTokenResolution.sendText", () => {
     }
   });
 
-  it("closes a fence the user left open before a handoff block when submitting", async () => {
-    const block = formatAgentContextBlock({ text: "```\nx\n```\nPAYLOAD LINE", title: "Card" });
-    // Appending closes an open fence; editing the draft afterwards can reopen one.
-    const draft = `\`\`\`\nuser code\n\n${block}\n`;
-    const { sendText, onSend } = setup();
-    await act(async () => {
-      await sendText(draft);
-    });
+  it.each([
+    ["here", true],
+    ["for a terminal on another host", false],
+  ])(
+    "closes a fence the user left open before a handoff block when submitting %s",
+    async (_, expandContext) => {
+      const block = formatAgentContextBlock({ text: "```\nx\n```\nPAYLOAD LINE", title: "Card" });
+      // Appending closes an open fence; editing the draft afterwards can reopen one.
+      const draft = `\`\`\`\nuser code\n\n${block}\n`;
+      const { sendText, onSend } = setup({}, { expandContext });
+      await act(async () => {
+        await sendText(draft);
+      });
 
-    const sent = onSend.mock.calls[0]![0].text;
-    expect(sent).toBe(`\`\`\`\nuser code\n\n\`\`\`\n${block}\n`);
-    const handoffFence = /^(`{3,})daintree-context$/m.exec(sent)![1];
-    const before = sent.slice(0, sent.indexOf("\nPAYLOAD LINE\n") + 1);
-    expect(closingFenceForOpenBlock(before)).toBe(handoffFence);
-    expect(closingFenceForOpenBlock(sent)).toBeNull();
-  });
+      const sent = onSend.mock.calls[0]![0].text;
+      expect(sent).toBe(`\`\`\`\nuser code\n\n\`\`\`\n${block}\n`);
+      const handoffFence = /^(`{3,})daintree-context$/m.exec(sent)![1];
+      const before = sent.slice(0, sent.indexOf("\nPAYLOAD LINE\n") + 1);
+      expect(closingFenceForOpenBlock(before)).toBe(handoffFence);
+      expect(closingFenceForOpenBlock(sent)).toBeNull();
+    }
+  );
 
   it("keeps a handoff that lands in the draft while a @diff fetch is awaited", async () => {
     let releaseDiff!: (diff: string) => void;

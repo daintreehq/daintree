@@ -10,6 +10,8 @@ import {
 } from "@/store/fleetTargetOverridesStore";
 import { usePanelStore } from "@/store/panelStore";
 import { FleetDraftingPill } from "../FleetDraftingPill";
+import { crossHostTargetKey } from "../crossHostFleet";
+import { findCrossHostContextTargets } from "../fleetExecution";
 import type { PtyPanelData } from "@shared/types/panel";
 
 function resetStores() {
@@ -410,5 +412,107 @@ describe("FleetDraftingPill — per-target edit and skip (#8691)", () => {
       useFleetTargetOverridesStore.getState().setPayloadOverride("t-1", "x");
     });
     expect(screen.getByTestId("fleet-drafting-pill-divergence-dot")).toBeTruthy();
+  });
+});
+
+describe("the preview for a draft with context tokens (#14953)", () => {
+  beforeEach(() => {
+    resetStores();
+    useFleetArmingStore.setState({ crossHostTargets: [] });
+    seedPanel(makeAgent("t-1", { cwd: "/wt/one" }));
+    seedPanel(makeAgent("t-2", { cwd: "/wt/two" }));
+    armAgent("t-1", 0);
+    armAgent("t-2", 1);
+    usePanelStore.setState({ focusedId: "t-1" });
+  });
+
+  const rowFor = (id: string) =>
+    screen.getAllByTestId("fleet-resolution-row").find((row) => row.textContent?.includes(id))!;
+
+  it("opens on the keystroke that adds a token and closes when it's gone", () => {
+    useFleetResolutionPreviewStore.getState().setDraft("Review");
+    expect(useFleetResolutionPreviewStore.getState().open).toBe(false);
+    useFleetResolutionPreviewStore.getState().setDraft("Review @diff");
+    const state = useFleetResolutionPreviewStore.getState();
+    expect(state.hasContext).toBe(true);
+    expect(state.open).toBe(true);
+    expect(state.previews).toHaveLength(2);
+    useFleetResolutionPreviewStore.getState().setDraft("Review @dif");
+    expect(useFleetResolutionPreviewStore.getState().open).toBe(false);
+  });
+
+  it("says, row by row, whose context each agent is sent", () => {
+    useFleetResolutionPreviewStore.getState().setDraft("Review @diff and @terminal");
+    render(<FleetDraftingPill />);
+    const one = rowFor("t-1").querySelector("[data-testid='fleet-resolution-row-context']");
+    const two = rowFor("t-2").querySelector("[data-testid='fleet-resolution-row-context']");
+    expect(one?.textContent).toContain("@diff from /wt/one");
+    expect(two?.textContent).toContain("@diff from /wt/two");
+    expect(two?.textContent).toContain("@terminal from its own output");
+  });
+
+  it("follows a per-target edit, and says nothing for a skipped agent", () => {
+    useFleetResolutionPreviewStore.getState().setDraft("Review @diff");
+    render(<FleetDraftingPill />);
+    const contextOf = (id: string) =>
+      rowFor(id).querySelector("[data-testid='fleet-resolution-row-context']")?.textContent;
+    act(() => {
+      useFleetTargetOverridesStore.getState().setPayloadOverride("t-2", "Explain @selection");
+    });
+    expect(contextOf("t-2")).toContain("@selection from its own selection");
+    expect(contextOf("t-2")).not.toContain("@diff");
+    expect(contextOf("t-1")).toContain("@diff from /wt/one");
+
+    act(() => {
+      useFleetTargetOverridesStore.getState().setPayloadOverride("t-2", "Review your changes");
+      useFleetTargetOverridesStore.getState().setSkipped("t-1", true);
+    });
+    expect(screen.queryByTestId("fleet-resolution-row-context")).toBeNull();
+    act(() => useFleetTargetOverridesStore.getState().setSkipped("t-1", false));
+    expect(contextOf("t-1")).toContain("@diff from /wt/one");
+  });
+
+  it("leaves the keyboard in the composer when the preview opens and closes itself", async () => {
+    const composer = document.createElement("textarea");
+    document.body.appendChild(composer);
+    const settle = () => act(async () => await new Promise((resolve) => setTimeout(resolve, 0)));
+    try {
+      render(<FleetDraftingPill />);
+      // A click on the pill with nothing to preview opens nothing.
+      fireEvent.click(screen.getByTestId("fleet-drafting-pill-trigger"));
+      composer.focus();
+
+      act(() => useFleetResolutionPreviewStore.getState().setDraft("Review @diff"));
+      await settle();
+      expect(screen.getByTestId("fleet-resolution-popover")).toBeTruthy();
+      expect(document.activeElement).toBe(composer);
+
+      act(() => useFleetResolutionPreviewStore.getState().setDraft("Review @dif"));
+      await settle();
+      expect(screen.queryByTestId("fleet-resolution-popover")).toBeNull();
+      expect(document.activeElement).toBe(composer);
+    } finally {
+      composer.remove();
+    }
+  });
+
+  it("flags an agent on another host, which the token can't reach", () => {
+    const key = crossHostTargetKey("studio", "r-1");
+    useFleetArmingStore.setState({
+      crossHostTargets: [
+        { key, hostId: "studio", hostName: "Studio", terminalId: "r-1", title: "remote" },
+      ],
+    });
+    expect(findCrossHostContextTargets("Review @diff", ["t-1", key])).toEqual([key]);
+    useFleetResolutionPreviewStore.getState().setDraft("Review @diff");
+    render(<FleetDraftingPill />);
+    const remote = rowFor("remote");
+    expect(
+      remote.querySelector("[data-testid='fleet-resolution-row-context-blocked']")?.textContent
+    ).toContain("@diff can't reach another host");
+    expect(remote.querySelector("[data-testid='fleet-resolution-row-context']")).toBeNull();
+    expect(
+      rowFor("t-1").querySelector("[data-testid='fleet-resolution-row-context-blocked']")
+    ).toBeNull();
   });
 });
