@@ -16,7 +16,7 @@ export type UnavailableReason =
   | "SVG_REJECTED"
   | "PDF_FAILED"
   | "READ_FAILED"
-  /** A remote window's host shows previews only to the window with control. */
+  /** A remote window's host shows previews only to the window with control (ControlRefusedState). */
   | "DRIVEN_ELSEWHERE"
   /** A remote window's host refused a file outside the project's folders. */
   | "OUTSIDE_PROJECT";
@@ -146,8 +146,8 @@ export function unavailableCopy(
       };
     case "DRIVEN_ELSEWHERE":
       return {
-        title: "Another window has control",
-        description: "Take control of this project to show the file here.",
+        title: "Waiting for control",
+        description: "The file shows here once this window has control of the project.",
         action: "take-control",
       };
     case "OUTSIDE_PROJECT":
@@ -173,11 +173,11 @@ function remoteUnavailableCopy(
   switch (reason) {
     case "DRIVEN_ELSEWHERE":
       return {
-        title: "Another window has control",
+        title: "Waiting for control",
         description:
           remote.driverName === null
-            ? `Take control of this project on ${remote.hostName} to show the file here.`
-            : `${remote.driverName} has control of this project on ${remote.hostName}. Take control to show the file here.`,
+            ? `The file shows here once this window has control of the project on ${remote.hostName}.`
+            : `${remote.driverName} has control of the project on ${remote.hostName}. The file shows here once this window has control.`,
         action: "take-control",
       };
     case "OUTSIDE_PROJECT":
@@ -244,18 +244,24 @@ export function FileUnavailableState({
   title,
   description,
   action,
+  live = "polite",
   "data-testid": testId = "file-unavailable",
 }: {
   icon: LucideIcon;
   title: string;
   description?: string;
   action?: React.ReactNode;
+  /**
+   * `off` for a state whose changes the window already announces once (who
+   * has control, the host link), so every refused view doesn't say it again.
+   */
+  live?: "polite" | "off";
   "data-testid"?: string;
 }) {
   return (
     <div
       role="status"
-      aria-live="polite"
+      aria-live={live}
       className="flex h-full w-full items-center justify-center p-6"
       data-testid={testId}
     >

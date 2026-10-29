@@ -889,7 +889,7 @@ export async function takeOverDrive(
   if (!view.drivingHere) {
     takeOversSettling.delete(settling);
     // A conditional claim the host turned down: someone took it first. This
-    // view watches, with Take over offered, and keeps what it holds.
+    // view watches, with Take control offered, and keeps what it holds.
     applyLease(view);
     return;
   }
@@ -1398,6 +1398,15 @@ export function useHostConnection() {
 /** Why terminals in this view take no input right now, or null when they do. */
 export function useTerminalInputBlock(): TerminalInputBlock | null {
   return useSyncExternalStore(subscribeTerminalInputGate, getTerminalInputBlock);
+}
+
+/**
+ * The host this view's link is down to, or null while it is up (or the view
+ * is local): what anything waiting on control waits for first.
+ */
+export function useLinkDownHost(): string | null {
+  const block = useTerminalInputBlock();
+  return block?.kind === "disconnected" ? block.hostName : null;
 }
 
 /** Ask the host link to try again now, starting over if an attempt is stuck. */

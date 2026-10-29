@@ -74,7 +74,7 @@ describe("watchHostConnectionAnnouncements", () => {
       vi.advanceTimersByTime(1_000);
     }
     expect(spoken()).toEqual([
-      "Connection to studio-01 lost. Terminals are read-only until it reconnects.",
+      "Lost connection to studio-01. Terminals are read-only until it's back.",
     ]);
 
     link(RECONNECTING);
@@ -196,7 +196,7 @@ describe("watchHostConnectionAnnouncements", () => {
     link(UNREACHABLE);
     vi.advanceTimersByTime(400);
     expect(spoken()).toEqual([
-      "ssh couldn't log in to studio-01.",
+      "Couldn't log in to studio-01 over ssh.",
       "studio-01 is unreachable. Terminals are read-only until it reconnects.",
     ]);
   });

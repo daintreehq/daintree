@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { RefreshCw } from "lucide-react";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
@@ -10,6 +11,7 @@ import {
   useHostConnectionStore,
 } from "@/store/hostConnectionStore";
 import { runHostUpdate } from "@/components/Hosts/hostUpdate";
+import { olderBuildSide, updateActionLabel, updateTargetFor } from "@/components/Hosts/hostModel";
 import {
   openHostsSettingsTab,
   requestHostSettings,
@@ -51,6 +53,9 @@ export function HostConnectionBanner() {
   const detail = useHostConnectionStore((s) =>
     s.connection?.status === "unreachable" ? s.connection.detail : null
   );
+  const mismatch = useHostConnectionStore((s) =>
+    s.connection?.status === "version-mismatch" ? s.connection.mismatch : null
+  );
   const everConnected = useHostConnectionStore((s) => s.everConnected);
   const dropped =
     everConnected &&
@@ -59,18 +64,21 @@ export function HostConnectionBanner() {
     !dropped && (variant === "connecting" || variant === "checking" || variant === "restarting");
   const droppedShown = useDeferredLoading(dropped, HOST_LINK_SETTLE_MS);
   const transientShown = useDohertyGate(transient);
-  const now = useNow(variant === "unreachable" || variant === "host-mode-off");
+  const now = useNow(
+    variant === "unreachable" || variant === "host-mode-off" || variant === "reconnecting"
+  );
 
   if (variant === null) return null;
   if (dropped && !droppedShown) return null;
   if (transient && !transientShown) return null;
 
-  const { title, description } = getHostConnectionBannerCopy(
+  const { title, description, contextLine } = getHostConnectionBannerCopy(
     variant,
     hostName,
     lastSeenAt,
     now,
-    detail
+    detail,
+    mismatch === null ? null : olderBuildSide(mismatch)
   );
 
   if (variant === "restarting") {
@@ -85,7 +93,13 @@ export function HostConnectionBanner() {
         role="status"
         ariaLive="off"
         animated={false}
-        action={{ id: "reconnect", label: "Retry", variant: "primary", onClick: reconnectHost }}
+        action={{
+          id: "reconnect",
+          label: "Retry",
+          icon: RefreshCw,
+          variant: "primary",
+          onClick: reconnectHost,
+        }}
       />
     );
   }
@@ -106,6 +120,8 @@ export function HostConnectionBanner() {
   }
 
   if (variant === "version-mismatch") {
+    // The way out is the update the host chip and Settings → Hosts offer, of
+    // whichever side is behind.
     return (
       <InlineStatusBanner
         title={title}
@@ -114,7 +130,18 @@ export function HostConnectionBanner() {
         role="status"
         ariaLive="off"
         animated={false}
-        actions={[]}
+        actions={
+          mismatch === null || hostId === null
+            ? []
+            : [
+                {
+                  id: "update",
+                  label: updateActionLabel(mismatch, hostName),
+                  variant: "primary",
+                  onClick: () => runHostUpdate(updateTargetFor(mismatch), hostId),
+                },
+              ]
+        }
       />
     );
   }
@@ -131,10 +158,18 @@ export function HostConnectionBanner() {
         role="status"
         ariaLive="off"
         animated={false}
-        action={{ id: "reconnect", label: "Retry", variant: "primary", onClick: reconnectHost }}
+        action={{
+          id: "reconnect",
+          label: "Retry",
+          icon: RefreshCw,
+          variant: "primary",
+          onClick: reconnectHost,
+        }}
         trailingSlot={
+          // Opens the host's own set-up flow in Settings → Hosts, which turns
+          // Host mode on there.
           <Button variant="ghost" size="sm" onClick={() => runHostUpdate("host", hostId)}>
-            Set up…
+            Set up Host mode…
           </Button>
         }
       />
@@ -148,11 +183,18 @@ export function HostConnectionBanner() {
       <InlineStatusBanner
         title={title}
         description={description}
+        contextLine={contextLine}
         severity="error"
         role="status"
         ariaLive="off"
         animated={false}
-        action={{ id: "reconnect", label: "Retry", variant: "primary", onClick: reconnectHost }}
+        action={{
+          id: "reconnect",
+          label: "Retry",
+          icon: RefreshCw,
+          variant: "primary",
+          onClick: reconnectHost,
+        }}
         trailingSlot={
           <Button
             variant="ghost"
@@ -162,7 +204,7 @@ export function HostConnectionBanner() {
               openHostsSettingsTab();
             }}
           >
-            Settings…
+            Host details…
           </Button>
         }
       />
@@ -180,6 +222,7 @@ export function HostConnectionBanner() {
       action={{
         id: "reconnect",
         label: variant === "disconnected" ? "Connect" : "Retry",
+        ...(variant !== "disconnected" && { icon: RefreshCw }),
         variant: "primary",
         onClick: reconnectHost,
       }}

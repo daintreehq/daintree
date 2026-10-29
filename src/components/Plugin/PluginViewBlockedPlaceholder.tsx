@@ -1,9 +1,11 @@
 import { useEffect, useRef } from "react";
-import { ShieldOff, Users } from "lucide-react";
+import { Lock, ShieldOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { drivenElsewhereBy, useHostConnection } from "@/hooks/useHostConnection";
-import { useDriveLeaseView } from "@/components/Recovery/driveLeaseState";
+import { drivenElsewhereBy, useHostConnection, useLinkDownHost } from "@/hooks/useHostConnection";
+import { useControlFacts, useDriveLeaseView } from "@/components/Recovery/driveLeaseState";
+import { getControlRefusalCopy } from "@/components/Recovery/recoveryCopy";
+import { TakeControlOffer } from "@/components/Recovery/TakeControlOffer";
 
 /** Thrown when this computer won't run a host plugin's view: the person said no, or it couldn't be checked. */
 export class PluginViewBlockedError extends Error {
@@ -11,17 +13,6 @@ export class PluginViewBlockedError extends Error {
     super(`The view of plugin "${pluginId}" from this window's host is blocked on this computer`);
     this.name = "PluginViewBlockedError";
   }
-}
-
-/**
- * The shared take-control action, loaded on use: it reaches the panel store,
- * which a plugin pane's placeholder has no other reason to pull in. Outside
- * the component, where the compiler doesn't have to lower an `import()`.
- */
-function takeControlOf(projectId: string): void {
-  void import("@/components/Recovery/takeControl").then(({ takeControl }) =>
-    takeControl(projectId)
-  );
 }
 
 export function isPluginViewBlockedError(error: unknown): boolean {
@@ -52,6 +43,8 @@ export function PluginViewBlockedPlaceholder({
   const machine = hostName ?? "this window's host";
   const lease = useDriveLeaseView();
   const driver = drivenElsewhereBy(lease);
+  const facts = useControlFacts();
+  const linkDownHost = useLinkDownHost();
   // The host serves a plugin's view only to the window driving its project:
   // once this one drives it, the view loads without being asked.
   const wasDrivenElsewhere = useRef(driver !== null);
@@ -66,24 +59,27 @@ export function PluginViewBlockedPlaceholder({
     }
   }, [driver, lease?.drivingHere, onRetry]);
 
-  if (driver !== null && lease) {
-    const projectId = lease.projectId;
+  if (driver !== null && lease && facts !== null) {
+    // Held like a file preview or a launch: the host serves the view only to
+    // the window with control, and it loads by itself once this one has it.
+    const copy = getControlRefusalCopy(pluginDisplayName, facts, linkDownHost);
     return (
       <div className="flex h-full w-full" data-testid="plugin-view-driven-elsewhere">
         <EmptyState
           variant="zero-data"
           scale="canvas"
           className="my-auto w-full shrink-0"
-          icon={<Users />}
-          title={`${pluginDisplayName} shows in the window driving this project`}
-          description={`${driver} has control of it on ${machine}. Take control to show ${pluginDisplayName} here.`}
+          icon={<Lock />}
+          title={copy.title}
+          description={copy.description}
           action={
-            <div className="flex flex-wrap items-center justify-center gap-2">
-              <Button variant="outline" size="sm" onClick={() => takeControlOf(projectId)}>
-                Take control
-              </Button>
-              {leaveButton}
-            </div>
+            linkDownHost === null ? (
+              <TakeControlOffer projectId={lease.projectId} facts={facts}>
+                {leaveButton}
+              </TakeControlOffer>
+            ) : (
+              leaveButton
+            )
           }
         />
       </div>

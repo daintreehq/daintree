@@ -49,7 +49,7 @@ describe("describePlacementProjectFacts", () => {
     expect(lines).toEqual([
       "Has a copy of this project",
       "Agent CLIs: Claude 2.0.0",
-      "Driven from Greg's MacBook",
+      "Greg's MacBook has control",
     ]);
   });
 
@@ -72,7 +72,7 @@ describe("describePlacementProjectFacts", () => {
     const silentDrivers = makeSummary({ drivers: undefined });
     expect(
       describePlacementProjectFacts(hostFor(), makeRow({ summary: silentDrivers }), silentDrivers)
-    ).toContain("Who drives it not reported");
+    ).toContain("Who has control not reported");
   });
 
   it("doesn't read a project missing from a capped drivers list as undriven", () => {
@@ -81,10 +81,10 @@ describe("describePlacementProjectFacts", () => {
     });
     expect(
       describePlacementProjectFacts(hostFor(), makeRow({ summary: capped }), capped)
-    ).toContain("Who drives it not reported");
+    ).toContain("Who has control not reported");
     const full = makeSummary({ drivers: [] });
     expect(describePlacementProjectFacts(hostFor(), makeRow({ summary: full }), full)).toContain(
-      "Nobody drives it"
+      "Nobody has control"
     );
   });
 });

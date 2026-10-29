@@ -42,6 +42,7 @@ import {
   getTerminalInputBlock,
   isTerminalInputBlocked,
   isTerminalReplyBlocked,
+  noteRefusedInput,
   terminalInputBlockedError,
 } from "@/services/terminal/inputGate";
 
@@ -485,8 +486,12 @@ export const terminalClient = {
   write: (id: string, data: string): void => {
     // Typed input is dropped, not queued, while the host is out of reach or
     // another frontend drives: replaying it later would land keystrokes the
-    // user can no longer see the context for.
-    if (isTerminalInputBlocked()) return;
+    // user can no longer see the context for. The pane it was meant for says
+    // why, in place.
+    if (isTerminalInputBlocked()) {
+      noteRefusedInput(id);
+      return;
+    }
     sendInput(id, data);
   },
 
@@ -522,7 +527,10 @@ export const terminalClient = {
     handbackCode?: string
   ): Promise<void> => {
     const blocked = getTerminalInputBlock();
-    if (blocked) return Promise.reject(terminalInputBlockedError(blocked));
+    if (blocked) {
+      noteRefusedInput(id);
+      return Promise.reject(terminalInputBlockedError(blocked));
+    }
     return handbackCode === undefined
       ? window.electron.terminal.submit(id, text, submissionToken)
       : window.electron.terminal.submit(id, text, submissionToken, handbackCode);
@@ -539,7 +547,10 @@ export const terminalClient = {
     // chip that could never be an attachment (a UNC share, say) is dropped
     // here and simply stays text — the draft still goes out.
     const blocked = getTerminalInputBlock();
-    if (blocked) return Promise.reject(terminalInputBlockedError(blocked));
+    if (blocked) {
+      noteRefusedInput(id);
+      return Promise.reject(terminalInputBlockedError(blocked));
+    }
     const attachable = imagePaths.filter(isImageAttachmentPath).slice(0, MAX_SUBMIT_IMAGE_PATHS);
     return attachable.length === 0
       ? window.electron.terminal.submit(id, text)

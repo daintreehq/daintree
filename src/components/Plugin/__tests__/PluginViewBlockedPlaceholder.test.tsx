@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { DriveLeaseView } from "@shared/types/ipc/driveLease";
 
-const takeControl = vi.hoisted(() => vi.fn(async () => {}));
+const takeControl = vi.hoisted(() => vi.fn(async (_projectId: string, _panelId?: string) => {}));
 vi.mock("@/components/Recovery/takeControl", () => ({
   takeControl,
   useTakeControlPending: () => false,
@@ -41,16 +41,25 @@ afterEach(() => {
 });
 
 describe("PluginViewBlockedPlaceholder", () => {
-  it("says the view shows where the project is driven, offers control, and loads once this window has it", async () => {
+  it("says the view waits for control, offers it with what it does, and loads once this window has it", async () => {
     seedDriveLeaseView(lease(false));
     const onRetry = vi.fn();
-    render(<PluginViewBlockedPlaceholder pluginDisplayName="Docker Console" onRetry={onRetry} />);
-    expect(
-      screen.getByText("Docker Console shows in the window driving this project")
-    ).toBeTruthy();
+    const { container } = render(
+      <PluginViewBlockedPlaceholder pluginDisplayName="Docker Console" onRetry={onRetry} />
+    );
+    expect(screen.getByText("Waiting for control")).toBeTruthy();
+    expect(container.textContent).toContain(
+      "Docker Console shows here once this window has control"
+    );
     expect(screen.queryByText(/is blocked on this computer/)).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Take control" }));
-    await vi.waitFor(() => expect(takeControl).toHaveBeenCalledWith("proj-1"));
+    const button = screen.getByRole("button", { name: "Take control" });
+    const describedBy = button.getAttribute("aria-describedby");
+    expect(describedBy && document.getElementById(describedBy)?.textContent).toMatch(
+      /^Makes .* read-only on /
+    );
+    fireEvent.click(button);
+    // No pane to hand the keyboard back to from a plugin view.
+    await vi.waitFor(() => expect(takeControl).toHaveBeenCalledWith("proj-1", undefined));
     expect(onRetry).not.toHaveBeenCalled();
 
     act(() => seedDriveLeaseView(lease(true)));

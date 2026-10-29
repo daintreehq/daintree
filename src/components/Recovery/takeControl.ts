@@ -4,14 +4,17 @@ import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import { notify } from "@/lib/notify";
 import { usePanelStore } from "@/store/panelStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { isTakeControlPending, setTakeControlPending } from "./takeControlPending";
+
+export { useTakeControlBusy, useTakeControlPending } from "./takeControlPending";
 
 /**
  * Taking control of a project, shared by every control that offers it (the
- * window banner, each pane's read-only strip, the host's in-use menu), so they
- * all show the same request in flight and none can send a second one.
+ * window banner, the strip in a pane the user tried to type into, the waiting
+ * gate, the file and plugin placeholders, the host's connected-machines menu),
+ * so they all show the same request in flight and none can send a second one.
  */
 
-const pending = new Set<string>();
 const listeners = new Set<() => void>();
 
 function emit(): void {
@@ -58,13 +61,14 @@ function returnFocus(target: string | null): void {
 
 /** Never rejects: a refusal is reported with a way to try again. */
 export async function takeControl(projectId: string, panelId?: string): Promise<void> {
-  if (pending.has(projectId)) return;
-  pending.add(projectId);
-  emit();
+  if (isTakeControlPending(projectId)) return;
+  setTakeControlPending(projectId, true);
+  // Where the user was when they asked, not wherever focus has wandered by
+  // the time the host answers.
+  const target = panelId ?? usePanelStore.getState().focusedId;
   try {
     // The lease change it lands is announced where every change of control is.
     await takeOverDrive(projectId);
-    const target = panelId ?? usePanelStore.getState().focusedId;
     confirmIn(target);
     returnFocus(target);
   } catch (error) {
@@ -82,18 +86,8 @@ export async function takeControl(projectId: string, panelId?: string): Promise<
       ],
     });
   } finally {
-    pending.delete(projectId);
-    emit();
+    setTakeControlPending(projectId, false);
   }
-}
-
-/** Whether a take-control request for this project is in flight, from any control. */
-export function useTakeControlPending(projectId: string | null | undefined): boolean {
-  return useSyncExternalStore(
-    subscribe,
-    () => (projectId ? pending.has(projectId) : false),
-    () => false
-  );
 }
 
 /** The pane control just arrived in shows a short confirmation; null once it has gone. */

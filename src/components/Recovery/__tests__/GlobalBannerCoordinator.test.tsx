@@ -178,14 +178,14 @@ describe("GlobalBannerCoordinator", () => {
     try {
       usePanelStore.setState({ watchdogStatus: "disabled" });
       const { unmount } = render(<GlobalBannerCoordinator />);
-      expect(screen.getByText("greg-mbp has control of this project")).toBeTruthy();
+      expect(screen.getByText(/^greg-mbp has control\./)).toBeTruthy();
       expect(screen.queryByText("Crash watchdog disabled")).toBeNull();
       unmount();
 
       usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: null });
       render(<GlobalBannerCoordinator />);
       expect(screen.getByText("Terminal service crashed")).toBeTruthy();
-      expect(screen.queryByText("greg-mbp has control of this project")).toBeNull();
+      expect(screen.queryByText(/^greg-mbp has control\./)).toBeNull();
     } finally {
       _resetDriveLeaseBannerForTesting();
     }

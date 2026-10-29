@@ -319,7 +319,7 @@ export function HostCard({
         {summary && <Fact label="Thermal" value={describeThermal(summary)} />}
         {summary && (
           <Fact
-            label="Driving"
+            label="Control"
             value={describeDriver(summary)}
             detail={describeDriverDetail(summary)}
           />

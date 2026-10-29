@@ -8,7 +8,7 @@ export interface DriveLeaseTakeOverPayload extends DriveLeaseProjectPayload {
   /**
    * Take it only if the lease is still the one this view read: that holder's
    * `leaseId`, or null for nobody holding it. Absent, the take-over is
-   * unconditional, as the Take over button's is. A claim made on opening a
+   * unconditional, as Take control's is. A claim made on opening a
    * project passes it, so two Shells opening at once can't take it from each
    * other on the same stale read.
    */
@@ -50,7 +50,7 @@ export interface DriveLeaseView extends DriveLeaseState {
   drivingHere: boolean;
   /** This renderer is the holder itself: MCP dispatch and plugin prompts land here. */
   isHolderEndpoint: boolean;
-  /** This renderer is a window on the Host machine's own screen (offers "Take back"). */
+  /** This renderer is a window on the Host machine's own screen. */
   viewerIsHostLocal: boolean;
   /**
    * The holder is a window of this renderer's own machine (any of its windows),

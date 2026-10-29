@@ -240,21 +240,23 @@ function joinNames(names: readonly string[]): string {
 }
 
 /**
- * Who drives the host: every launch holding one of its projects, once, and
- * whether it is away inside its reservation. A host from before `drivers`
- * names only its newest holder.
+ * Who has control of the host's projects: every launch holding one, once, and
+ * whether it is away inside its reservation, in the words the window banner
+ * uses. A host from before `drivers` names only its newest holder.
  */
 export function describeDriver(summary: HostMetricsSummary): string | null {
   const drivers = summary.drivers;
   if (!drivers) {
     const driver = summary.driver;
     if (!driver) return null;
-    return driver.isHostLocal ? "Driven from its own screen" : `Driven from ${driver.clientName}`;
+    return driver.isHostLocal ? "Its own screen has control" : `${driver.clientName} has control`;
   }
   const launches = driverLaunches(drivers);
   if (launches.length === 0) return null;
   const labels = launches.map((launch) => launchLabel(launch, launches, summary.sampledAt));
-  return `Driven from ${joinNames(labels)}`;
+  // A machine's name keeps its own case; only "its own screen" opens a sentence.
+  const names = joinNames(labels).replace(/^its own screen/, "Its own screen");
+  return `${names} ${launches.length === 1 ? "has" : "have"} control`;
 }
 
 /**

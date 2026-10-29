@@ -4,6 +4,7 @@ import { isEitherRemoteRoleSupported } from "@/lib/remoteHosts";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
+import { useProjectStore } from "@/store/projectStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import {
   getDriveLeaseSnapshot,
@@ -11,13 +12,16 @@ import {
   subscribeDriveLeaseSnapshot,
 } from "@/services/terminal/inputGate";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { hostScreenName, type ControlFacts } from "./recoveryCopy";
 
 /**
- * Which drive-lease banner this view shows:
+ * Which drive-lease banner this view shows. Both offer the same Take control:
+ * the effect is the same from either side, and "taking back" would claim an
+ * ownership the host's screen doesn't have.
  * - `taken-from-host`: this is a window on the host's own screen and a remote
- *   client drives the project ("Being driven from greg-mbp" · Take back).
- * - `driven-elsewhere`: this is a remote client and someone else drives the
- *   project ("studio-01 is being driven from greg-mbp" · Take over).
+ *   client has control of the project.
+ * - `driven-elsewhere`: this is a remote client and another device (a client,
+ *   or the host's own screen) has control of the project.
  */
 export type DriveLeaseBannerState =
   | { kind: "taken-from-host"; projectId: string; driverName: string }
@@ -69,7 +73,7 @@ function controllerOf(view: DriveLeaseView | null): { key: string; name: string 
   const key = holder.isHostLocal ? "host-screen" : holder.clientId;
   if (state.kind === "driven-elsewhere" && state.driverIsHostScreen) {
     const host = useHostConnectionStore.getState();
-    return { key, name: `${host.hostName ?? host.hostId ?? "The host"}'s own screen` };
+    return { key, name: hostScreenName(host.hostName ?? host.hostId ?? "The host") };
   }
   return { key, name: state.driverName };
 }
@@ -185,6 +189,52 @@ export function useDriveLeaseView(): DriveLeaseView | null {
 export function useDriveLeaseBanner(): DriveLeaseBannerState | null {
   const view = useDriveLeaseView();
   return selectDriveLeaseBanner(view, getViewHostId() !== null);
+}
+
+/**
+ * Who has control of this view's project, of what and where, as every surface
+ * that offers Take control names them; null while this view has control. The
+ * host's own screen goes by the name this machine knows the host by, not the
+ * name it reports itself. Read from this view's mirror of the lease, else
+ * straight from the input gate's snapshot it mirrors, so a surface outside
+ * the banner's sync still names the same holder.
+ */
+export function useControlFacts(): (ControlFacts & { projectId: string }) | null {
+  const mirrored = useDriveLeaseView();
+  const snapshot = useSyncExternalStore(
+    subscribeDriveLeaseSnapshot,
+    getDriveLeaseSnapshot,
+    getDriveLeaseSnapshot
+  );
+  const view =
+    mirrored ??
+    (snapshot !== null && snapshot.projectId === getViewWorkspaceId() ? snapshot : null);
+  const hostName = useHostConnectionStore((s) => s.hostName ?? s.hostId);
+  const projectId = view?.projectId ?? null;
+  const projectName = useProjectStore((s) =>
+    projectId === null
+      ? null
+      : s.currentProject?.id === projectId
+        ? s.currentProject.name
+        : (s.projects.find((p) => p.id === projectId)?.name ?? null)
+  );
+  const holder = view?.holder ?? null;
+  if (view === null || holder === null || view.drivingHere) return null;
+  const host = getViewHostId() !== null ? (hostName ?? "the host") : null;
+  const holderIsHostScreen = holder.isHostLocal && host !== null;
+  return {
+    projectId: view.projectId,
+    holder: holderIsHostScreen ? hostScreenName(host) : holder.clientName,
+    holderIsHostScreen,
+    project: projectName ?? "this project",
+    host,
+  };
+}
+
+/** Whether the device with control of this view's project is away. */
+export function useDriveLeaseHolderAway(): boolean {
+  const current = useSyncExternalStore(subscribe, getAway, getAway);
+  return current !== null;
 }
 
 /**

@@ -28,7 +28,7 @@ import {
   selectDriveLeaseBanner,
   useDriveLeaseSync,
 } from "../driveLeaseState";
-import { getDriveLeaseBannerCopy } from "../recoveryCopy";
+import { getDriveLeaseBannerCopy, type ControlFacts } from "../recoveryCopy";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import {
@@ -52,6 +52,20 @@ function holder(overrides: Partial<DriveLeaseHolder> = {}): DriveLeaseHolder {
     ...overrides,
   };
 }
+
+/** The facts the banner names, for a view whose project the store hasn't named. */
+function facts(overrides: Partial<ControlFacts> = {}): ControlFacts {
+  return {
+    holder: "greg-mbp",
+    holderIsHostScreen: false,
+    project: "this project",
+    host: null,
+    ...overrides,
+  };
+}
+
+/** The banner's one action, whose accessible name leads with its visible label. */
+const TAKE_CONTROL = { name: /^Take control/ };
 
 function view(overrides: Partial<DriveLeaseView> = {}): DriveLeaseView {
   return {
@@ -144,7 +158,7 @@ describe("selectDriveLeaseBanner", () => {
     expect(selectDriveLeaseBanner(view({ drivingHere: true }), true)).toBeNull();
   });
 
-  it("offers Take back on the host's own screen when a remote client drives", () => {
+  it("offers control on the host's own screen when a remote client drives", () => {
     expect(selectDriveLeaseBanner(view(), false)).toEqual({
       kind: "taken-from-host",
       projectId: "p1",
@@ -152,7 +166,7 @@ describe("selectDriveLeaseBanner", () => {
     });
   });
 
-  it("offers Take over on a client that isn't driving", () => {
+  it("offers control on a client that isn't driving", () => {
     expect(selectDriveLeaseBanner(view({ viewerIsHostLocal: false }), true)).toEqual({
       kind: "driven-elsewhere",
       projectId: "p1",
@@ -175,10 +189,7 @@ describe("DriveLeaseBanner", () => {
     isInUse.mockResolvedValue(true);
     get.mockResolvedValue(view());
     render(<Harness />);
-    const copy = getDriveLeaseBannerCopy(
-      { kind: "taken-from-host", driverName: "greg-mbp" },
-      "studio-01"
-    );
+    const copy = getDriveLeaseBannerCopy(facts());
     expect(await screen.findByText(copy.title)).toBeTruthy();
     expect(get).toHaveBeenCalledTimes(1);
     expect(getTerminalInputBlock()).toMatchObject({
@@ -212,13 +223,10 @@ describe("DriveLeaseBanner", () => {
       },
     };
     act(() => useHostConnectionStore.setState({ connection: connected }));
-    const copy = getDriveLeaseBannerCopy(
-      { kind: "driven-elsewhere", driverName: "greg-mbp", driverIsHostScreen: false },
-      "studio-01"
-    );
+    const copy = getDriveLeaseBannerCopy(facts({ host: "studio-01" }));
     expect(await screen.findByText(copy.title)).toBeTruthy();
     // Claim and fallback at open (both down), then the claim on reconnect, which
-    // finds another machine driving and leaves it to the banner's Take over.
+    // finds another machine driving and leaves it to the banner's Take control.
     expect(get).toHaveBeenCalledTimes(3);
     expect(takeOver).not.toHaveBeenCalled();
   });
@@ -229,38 +237,38 @@ describe("DriveLeaseBanner", () => {
     expect(emit).toBeNull();
   });
 
-  it("tells the host's own screen who drives it, and takes it back", async () => {
+  it("tells the host's own screen who has control, and takes it", async () => {
     render(<Harness />);
     act(() => emit?.({ type: "changed", state: view() }));
-    const copy = getDriveLeaseBannerCopy(
-      { kind: "taken-from-host", driverName: "greg-mbp" },
-      "studio-01"
-    );
+    const copy = getDriveLeaseBannerCopy(facts());
     expect(screen.getByText(copy.title)).toBeTruthy();
 
     expect(getTerminalInputBlock()).toMatchObject({ kind: "driven-elsewhere" });
 
     takeOver.mockResolvedValue(view({ holder: holder({ isHostLocal: true }), drivingHere: true }));
-    fireEvent.click(screen.getByRole("button", { name: copy.actionLabel }));
+    fireEvent.click(screen.getByRole("button", TAKE_CONTROL));
     await waitFor(() => expect(takeOver).toHaveBeenCalledWith({ projectId: "p1" }));
     await waitFor(() => expect(screen.queryByText(copy.title)).toBeNull());
     expect(getTerminalInputBlock()).toBeNull();
   });
 
-  it("tells a client that isn't driving which machine does, and takes over", async () => {
+  it("tells a client that isn't driving which machine has control, and what taking it does", async () => {
     window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
     useHostConnectionStore.setState({ hostId: "studio-01", hostName: "studio-01" });
     get.mockResolvedValue(view({ viewerIsHostLocal: false }));
     render(<Harness />);
-    const copy = getDriveLeaseBannerCopy(
-      { kind: "driven-elsewhere", driverName: "greg-mbp", driverIsHostScreen: false },
-      "studio-01"
-    );
+    const copy = getDriveLeaseBannerCopy(facts({ host: "studio-01" }));
     expect(await screen.findByText(copy.title)).toBeTruthy();
-    expect(copy.title).toBe("greg-mbp has control of this project");
+    // Where it lives in the title; who has it, and what taking it does to them, beside the action.
+    expect(copy.title).toContain("on studio-01");
+    expect(copy.description).toContain("greg-mbp has control.");
+    expect(copy.description).toContain("read-only on greg-mbp");
+    expect(screen.getByRole("button", TAKE_CONTROL).getAttribute("aria-label")).toContain(
+      "read-only on greg-mbp"
+    );
 
     takeOver.mockRejectedValue(new Error("gone"));
-    fireEvent.click(screen.getByRole("button", { name: copy.actionLabel }));
+    fireEvent.click(screen.getByRole("button", TAKE_CONTROL));
     await waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
     expect(notify.mock.calls[0]![0]).toMatchObject({ type: "error" });
   });
@@ -273,33 +281,27 @@ describe("DriveLeaseBanner", () => {
     try {
       render(<Harness />);
       act(() => emit?.({ type: "changed", state: view() }));
-      const live = getDriveLeaseBannerCopy(
-        { kind: "taken-from-host", driverName: "greg-mbp" },
-        "studio-01"
-      );
-      expect(screen.getByText(live.title)).toBeTruthy();
+      const live = getDriveLeaseBannerCopy(facts());
+      expect(screen.getByText(live.description)).toBeTruthy();
       announce.mockClear();
 
       act(() => emit?.({ type: "changed", state: view({ holderAwayMs: 15_000 }) }));
-      expect(screen.getByText("greg-mbp is away")).toBeTruthy();
       expect(
-        screen.getByText("Read-only. Control passes on in 15s unless it comes back.")
+        screen.getByText(/^greg-mbp is away\. Control passes on in 15s unless it comes back\./)
       ).toBeTruthy();
-      expect(screen.getByRole("button", { name: "Take control" })).toBeTruthy();
+      expect(screen.getByRole("button", TAKE_CONTROL)).toBeTruthy();
       expect(getTerminalInputBlock()).toMatchObject({ driverAway: true });
 
       act(() => {
         vi.advanceTimersByTime(4_000);
       });
-      expect(
-        screen.getByText("Read-only. Control passes on in 11s unless it comes back.")
-      ).toBeTruthy();
+      expect(screen.getByText(/Control passes on in 11s unless it comes back\./)).toBeTruthy();
       // Said once on going away, not once a second.
       expect(announce.mock.calls.map(([message]) => message)).toEqual(["greg-mbp is away"]);
 
       act(() => emit?.({ type: "changed", state: view() }));
-      expect(screen.getByText(live.title)).toBeTruthy();
-      expect(screen.queryByText("greg-mbp is away")).toBeNull();
+      expect(screen.getByText(live.description)).toBeTruthy();
+      expect(screen.queryByText(/is away/)).toBeNull();
       expect(getTerminalInputBlock()).toMatchObject({ driverAway: false });
       expect(announce.mock.calls.map(([message]) => message)).toEqual([
         "greg-mbp is away",
@@ -318,7 +320,7 @@ describe("DriveLeaseBanner", () => {
     try {
       render(<Harness />);
       act(() => emit?.({ type: "changed", state: view({ holderAwayMs: 45_000 }) }));
-      expect(screen.getByText("greg-mbp is away")).toBeTruthy();
+      expect(screen.getByText(/^greg-mbp is away\./)).toBeTruthy();
       expect(announce.mock.calls.map(([message]) => message)).toEqual(["greg-mbp is away"]);
     } finally {
       useAnnouncerStore.setState({ announce: realAnnounce });
@@ -328,7 +330,7 @@ describe("DriveLeaseBanner", () => {
   it("keeps the live wording for a host that doesn't say whether its controller is away", () => {
     render(<Harness />);
     act(() => emit?.({ type: "changed", state: view() }));
-    expect(screen.getByText("greg-mbp has control of this project")).toBeTruthy();
+    expect(screen.getByText(/^greg-mbp has control\./)).toBeTruthy();
     expect(screen.queryByText(/is away/)).toBeNull();
   });
 
