@@ -53,19 +53,59 @@ interface LayoutUndoState {
   pushLayoutSnapshot: () => void;
   undo: () => void;
   redo: () => void;
+  /** Drops entries with no surviving panel left to restore. */
+  pruneHistory: () => void;
   clearHistory: () => void;
 }
 
-// Ephemeral panels sit outside layout history: a dialog panel captured in a
-// snapshot is gone the moment the dialog closes, and `applySnapshot` rejects a
-// whole snapshot whose ids no longer resolve — one file peek would void the undo
-// entry. Outside history means untouched by it, so apply carries them verbatim.
+// Ephemeral panels sit outside layout history: a dialog panel is gone the moment
+// the dialog closes, so a snapshot of it would restore nothing. Outside history
+// means untouched by it, so apply carries them verbatim.
 function isExcludedFromLayout(panel: CarrierPanel): boolean {
   return (
     panel.location === "trash" ||
     panel.location === "dialog" ||
     panel.excludeFromPersistence === true
   );
+}
+
+/**
+ * The panels a snapshot can still restore: live and inside layout history. Read
+ * from `panelsById` rather than `panelIds`, the same lookup `applySnapshot`
+ * restores through.
+ */
+export function selectLayoutPanelIds(state: {
+  panelsById: Record<string, CarrierPanel | undefined>;
+}): Set<string> {
+  const ids = new Set<string>();
+  for (const id in state.panelsById) {
+    const panel = state.panelsById[id];
+    if (panel && !isExcludedFromLayout(panel)) ids.add(id);
+  }
+  return ids;
+}
+
+// A snapshot with even one surviving panel is still worth applying: the rest of
+// its layout restores around the gaps (#14969). One with none restores nothing.
+function isRestorable(snapshot: LayoutSnapshot, layoutPanelIds: ReadonlySet<string>): boolean {
+  return snapshot.terminals.some((entry) => layoutPanelIds.has(entry.id));
+}
+
+type LayoutHistory = Pick<LayoutUndoState, "undoStack" | "redoStack" | "canUndo" | "canRedo">;
+
+function restorableHistory(
+  undoStack: LayoutSnapshot[],
+  redoStack: LayoutSnapshot[],
+  layoutPanelIds: ReadonlySet<string>
+): LayoutHistory {
+  const nextUndo = undoStack.filter((s) => isRestorable(s, layoutPanelIds));
+  const nextRedo = redoStack.filter((s) => isRestorable(s, layoutPanelIds));
+  return {
+    undoStack: nextUndo,
+    redoStack: nextRedo,
+    canUndo: nextUndo.length > 0,
+    canRedo: nextRedo.length > 0,
+  };
 }
 
 function captureCurrentLayout(): LayoutSnapshot {
@@ -91,19 +131,14 @@ function captureCurrentLayout(): LayoutSnapshot {
 // forced overflow panels onto the dock during undo/redo. Snapshots now restore
 // every grid panel as-is; the grid scrolls if it exceeds the visible fit.
 
-function applySnapshot(snapshot: LayoutSnapshot): boolean {
+// Entries for panels that no longer exist are skipped; callers only pass a
+// snapshot `isRestorable` accepted, so something always lands.
+function applySnapshot(snapshot: LayoutSnapshot): void {
   const state = usePanelStore.getState();
   const { panelsById, panelIds } = state;
   const activeWorktreeId = getWorktreeSelectionSnapshot()?.activeWorktreeId ?? null;
 
   const snapshotIds = new Set(snapshot.terminals.map((t) => t.id));
-
-  // Check all snapshot terminals still exist
-  for (const id of snapshotIds) {
-    if (!panelsById[id]) {
-      return false;
-    }
-  }
 
   // A panel trashed, moved into a dialog or closed since the snapshot left its
   // group then; restoring that membership would hand a tab strip a panel it
@@ -292,8 +327,6 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
     if (after === undefined) continue;
     reconcileMovedPanel(id, after);
   }
-
-  return true;
 }
 
 export const useLayoutUndoStore = create<LayoutUndoState>()((set, get) => ({
@@ -305,59 +338,88 @@ export const useLayoutUndoStore = create<LayoutUndoState>()((set, get) => ({
   pushLayoutSnapshot: () => {
     const snapshot = captureCurrentLayout();
     set((state) => {
-      const newStack = [...state.undoStack, snapshot];
-      if (newStack.length > MAX_UNDO_HISTORY) {
-        newStack.shift();
-      }
+      // A capture with no layout panels has nothing to put back; it still ends
+      // the redo branch, since a layout change is starting.
+      const undoStack =
+        snapshot.terminals.length > 0
+          ? [...state.undoStack, snapshot].slice(-MAX_UNDO_HISTORY)
+          : state.undoStack;
       return {
-        undoStack: newStack,
+        undoStack,
         redoStack: [],
-        canUndo: true,
+        canUndo: undoStack.length > 0,
         canRedo: false,
       };
     });
   },
 
+  // Entries with nothing left to restore are dropped on the way to the newest
+  // one that has, so a dead entry never parks on top of the stack.
   undo: () => {
-    const { undoStack } = get();
-    if (undoStack.length === 0) return;
-
-    const snapshot = undoStack[undoStack.length - 1];
-    if (!snapshot) return;
+    const { undoStack: undoEntries, redoStack: redoEntries } = get();
+    if (undoEntries.length === 0) return;
+    const history = restorableHistory(
+      undoEntries,
+      redoEntries,
+      selectLayoutPanelIds(usePanelStore.getState())
+    );
+    const snapshot = history.undoStack[history.undoStack.length - 1];
+    if (!snapshot) {
+      set(history);
+      return;
+    }
     const currentLayout = captureCurrentLayout();
+    applySnapshot(snapshot);
 
-    if (!applySnapshot(snapshot)) return;
-
-    set((state) => {
-      const newUndoStack = state.undoStack.slice(0, -1);
-      return {
-        undoStack: newUndoStack,
-        redoStack: [...state.redoStack, currentLayout],
-        canUndo: newUndoStack.length > 0,
-        canRedo: true,
-      };
+    const undoStack = history.undoStack.slice(0, -1);
+    set({
+      undoStack,
+      redoStack: [...history.redoStack, currentLayout],
+      canUndo: undoStack.length > 0,
+      canRedo: true,
     });
   },
 
   redo: () => {
-    const { redoStack } = get();
-    if (redoStack.length === 0) return;
-
-    const snapshot = redoStack[redoStack.length - 1];
-    if (!snapshot) return;
+    const { undoStack: undoEntries, redoStack: redoEntries } = get();
+    if (redoEntries.length === 0) return;
+    const history = restorableHistory(
+      undoEntries,
+      redoEntries,
+      selectLayoutPanelIds(usePanelStore.getState())
+    );
+    const snapshot = history.redoStack[history.redoStack.length - 1];
+    if (!snapshot) {
+      set(history);
+      return;
+    }
     const currentLayout = captureCurrentLayout();
+    applySnapshot(snapshot);
 
-    if (!applySnapshot(snapshot)) return;
-
-    set((state) => {
-      const newRedoStack = state.redoStack.slice(0, -1);
-      return {
-        undoStack: [...state.undoStack, currentLayout],
-        redoStack: newRedoStack,
-        canUndo: true,
-        canRedo: newRedoStack.length > 0,
-      };
+    const redoStack = history.redoStack.slice(0, -1);
+    set({
+      undoStack: [...history.undoStack, currentLayout],
+      redoStack,
+      canUndo: true,
+      canRedo: redoStack.length > 0,
     });
+  },
+
+  pruneHistory: () => {
+    const { undoStack, redoStack } = get();
+    if (undoStack.length === 0 && redoStack.length === 0) return;
+    const history = restorableHistory(
+      undoStack,
+      redoStack,
+      selectLayoutPanelIds(usePanelStore.getState())
+    );
+    if (
+      history.undoStack.length === undoStack.length &&
+      history.redoStack.length === redoStack.length
+    ) {
+      return;
+    }
+    set(history);
   },
 
   clearHistory: () => {

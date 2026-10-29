@@ -25,7 +25,7 @@ import { usePluginPanelAttentionStore } from "./pluginPanelAttentionStore";
 import { usePluginPanelToolbarStore } from "./pluginPanelToolbarStore";
 import { usePluginPanelMenuStore } from "./pluginPanelMenuStore";
 import { usePluginPanelOpenRequestStore } from "./pluginPanelOpenRequestStore";
-import { useLayoutUndoStore } from "./layoutUndoStore";
+import { selectLayoutPanelIds, useLayoutUndoStore } from "./layoutUndoStore";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { useAgentSettingsStore } from "./agentSettingsStore";
 import { useHelpPanelStore } from "./helpPanelStore";
@@ -527,19 +527,17 @@ export function initStoreOrchestrator(): () => void {
     )
   );
 
-  // 4. Layout undo history invalidation: when terminal set changes
-  //    (add/remove), clear the undo stack since snapshots reference a
-  //    different terminal universe.
+  // 4. Layout undo history pruning: when a panel leaves layout history
+  //    (removed, trashed, moved into a dialog), drop the entries with nothing
+  //    left to restore so Undo/Redo stay enabled only when they can act. One
+  //    gone panel must not cost the rest of the history (#14969), and a panel
+  //    added since a snapshot is simply carried through its restore.
   disposables.add(
     toDisposable(
       usePanelStore.subscribe(
-        (state) => state.panelIds,
-        (panelIds, prevPanelIds) => {
-          const prevIdSet = new Set(prevPanelIds);
-          if (panelIds.length !== prevIdSet.size || panelIds.some((id) => !prevIdSet.has(id))) {
-            useLayoutUndoStore.getState().clearHistory();
-          }
-        }
+        selectLayoutPanelIds,
+        () => useLayoutUndoStore.getState().pruneHistory(),
+        { equalityFn: shallow, fireImmediately: true }
       )
     )
   );

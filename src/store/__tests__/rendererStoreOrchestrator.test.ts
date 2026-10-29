@@ -136,6 +136,7 @@ const { initStoreOrchestrator, destroyStoreOrchestrator } =
 const { useReviewMarksStore, _resetReviewMarksStoreForTesting } =
   await import("../reviewMarksStore");
 const { useDiffViewedStore } = await import("../diffViewedStore");
+const { useLayoutUndoStore } = await import("../layoutUndoStore");
 
 describe("rendererStoreOrchestrator", () => {
   beforeEach(async () => {
@@ -553,6 +554,142 @@ describe("rendererStoreOrchestrator", () => {
     expect(useWorktreeSelectionStore.getState().lastFocusedTerminalByWorktree.has("wt-1")).toBe(
       false
     );
+  });
+
+  describe("layout undo history (#14969)", () => {
+    function browserPanel(id: string, overrides: Partial<PanelInstance> = {}): PanelInstance {
+      return {
+        id,
+        kind: "browser",
+        title: id,
+        cwd: "/test",
+        cols: 80,
+        rows: 24,
+        location: "grid",
+        ...overrides,
+      } as PanelInstance;
+    }
+
+    function seedPanels(panels: PanelInstance[]) {
+      usePanelStore.setState({
+        panelsById: Object.fromEntries(panels.map((p) => [p.id, p])),
+        panelIds: panels.map((p) => p.id),
+      });
+    }
+
+    function movePanel(id: string, location: PanelInstance["location"]) {
+      const { panelsById } = usePanelStore.getState();
+      usePanelStore.setState({ panelsById: { ...panelsById, [id]: { ...panelsById[id]!, location } } });
+    }
+
+    beforeEach(() => {
+      useLayoutUndoStore.getState().clearHistory();
+    });
+
+    afterEach(() => {
+      useLayoutUndoStore.getState().clearHistory();
+    });
+
+    it("keeps undo working when a panel from another worktree is removed", () => {
+      seedPanels([
+        browserPanel("a", { worktreeId: "wt-1" }),
+        browserPanel("b", { worktreeId: "wt-2" }),
+      ]);
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      movePanel("a", "dock");
+
+      usePanelStore.getState().removePanel("b");
+
+      expect(useLayoutUndoStore.getState().canUndo).toBe(true);
+      useLayoutUndoStore.getState().undo();
+      const state = usePanelStore.getState();
+      expect(state.panelsById["a"]!.location).toBe("grid");
+      expect(state.panelsById["b"]).toBeUndefined();
+      expect(useLayoutUndoStore.getState().canRedo).toBe(true);
+    });
+
+    it("keeps history when a panel is added, and the new panel survives undo", () => {
+      seedPanels([browserPanel("a")]);
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      movePanel("a", "dock");
+
+      const { panelsById, panelIds } = usePanelStore.getState();
+      usePanelStore.setState({
+        panelsById: { ...panelsById, c: browserPanel("c", { location: "dock" }) },
+        panelIds: [...panelIds, "c"],
+      });
+
+      expect(useLayoutUndoStore.getState().canUndo).toBe(true);
+      useLayoutUndoStore.getState().undo();
+      const state = usePanelStore.getState();
+      expect(state.panelIds).toEqual(["a", "c"]);
+      expect(state.panelsById["a"]!.location).toBe("grid");
+      expect(state.panelsById["c"]!.location).toBe("dock");
+    });
+
+    it("disables undo once the only panel an entry restores goes to the trash", () => {
+      seedPanels([browserPanel("a"), browserPanel("b", { location: "trash" })]);
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      movePanel("b", "grid");
+      expect(useLayoutUndoStore.getState().canUndo).toBe(true);
+
+      movePanel("a", "trash");
+
+      expect(usePanelStore.getState().panelIds).toEqual(["a", "b"]);
+      expect(useLayoutUndoStore.getState().canUndo).toBe(false);
+      expect(useLayoutUndoStore.getState().undoStack).toHaveLength(0);
+    });
+
+    it("prunes the redo stack the same way", () => {
+      seedPanels([browserPanel("a"), browserPanel("b")]);
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      movePanel("a", "dock");
+      useLayoutUndoStore.getState().undo();
+      expect(useLayoutUndoStore.getState().canRedo).toBe(true);
+
+      usePanelStore.getState().removePanel("a");
+      expect(useLayoutUndoStore.getState().canRedo).toBe(true);
+
+      usePanelStore.getState().removePanel("b");
+      expect(useLayoutUndoStore.getState().canRedo).toBe(false);
+    });
+
+    it("empties history when the panel store is cleared", () => {
+      seedPanels([browserPanel("a"), browserPanel("b")]);
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      movePanel("a", "dock");
+      useLayoutUndoStore.getState().undo();
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+
+      usePanelStore.setState({ panelsById: {}, panelIds: [] });
+
+      const history = useLayoutUndoStore.getState();
+      expect(history.undoStack).toHaveLength(0);
+      expect(history.redoStack).toHaveLength(0);
+      expect(history.canUndo).toBe(false);
+      expect(history.canRedo).toBe(false);
+    });
+
+    it("leaves history alone on reorders and metadata updates", () => {
+      seedPanels([browserPanel("a"), browserPanel("b")]);
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      const before = useLayoutUndoStore.getState();
+
+      usePanelStore.setState({ panelIds: ["b", "a"] });
+      usePanelStore.getState().updateTitle("a", "renamed", "automation");
+
+      expect(useLayoutUndoStore.getState()).toBe(before);
+    });
+
+    it("stops pruning once the orchestrator is torn down", () => {
+      seedPanels([browserPanel("a")]);
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+
+      destroyStoreOrchestrator();
+      usePanelStore.setState({ panelsById: {}, panelIds: [] });
+
+      expect(useLayoutUndoStore.getState().undoStack).toHaveLength(1);
+    });
   });
 
   describe("stashed maximize cleanup (#11183)", () => {
