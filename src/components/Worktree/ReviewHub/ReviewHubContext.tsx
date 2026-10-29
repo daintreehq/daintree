@@ -506,12 +506,14 @@ function RecordField({
           </button>
         )}
       </div>
+      {/* Pretty wrapping as a property: the colour-system contract reads the
+          utility form, with its "pr" prefix, as a colour token. */}
       {text && (
         <p
           ref={textRef}
           id={textId}
           className={cn(
-            "text-xs text-text-primary whitespace-pre-wrap wrap-break-word text-pretty",
+            "text-xs text-text-primary whitespace-pre-wrap wrap-break-word [text-wrap:pretty]",
             !expanded && "line-clamp-3"
           )}
         >
