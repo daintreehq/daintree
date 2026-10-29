@@ -724,8 +724,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     })();
     const placeholder = (() => {
       if (voiceSessionStatus) return voiceSessionStatus;
-      // Said only where the placeholder shows: a draft keeps its border clear.
-      if (isVoiceListeningChrome) return "Listening…";
+      // The live meter at the start of the empty draft says it's listening.
+      if (isVoiceListeningChrome) return "";
       const agentName = agentId ? getAgentConfig(agentId)?.name : null;
       return agentName ? `Ask ${agentName}` : "Ask anything";
     })();
@@ -1295,11 +1295,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const voiceCorrectionStreamed = useVoiceRecordingStore((s) =>
       correctionStreamShare(s.panelBuffers[voiceId]?.correctionRanges ?? [], voiceWaitSessions)
     );
+    // Dictated words still on their way hide the placeholder as a draft does.
+    const hasVoicePreview = useVoiceRecordingStore(
+      (s) => (s.panelBuffers[voiceId]?.liveText ?? "").trim() !== ""
+    );
     // The session's status on the border, for a draft that hides the
     // placeholder saying it. The send's own caption has the border first.
     const showVoiceSessionCaption =
       voiceSessionStatus !== null &&
-      value.length > 0 &&
+      (value.length > 0 || hasVoicePreview) &&
       !isVoiceSubmitting &&
       !isVoiceSubmitPresenting;
 

@@ -108,21 +108,26 @@ export function voiceCaretPosition(
 }
 
 class VoiceCaretWidget extends WidgetType {
-  constructor(readonly phase: VoiceCaretPhase) {
+  /** `lineEnd`: nothing follows on its line, so it can stand clear of the words. */
+  constructor(
+    readonly phase: VoiceCaretPhase,
+    readonly lineEnd: boolean
+  ) {
     super();
   }
   eq(other: VoiceCaretWidget): boolean {
-    return other.phase === this.phase;
+    return other.phase === this.phase && other.lineEnd === this.lineEnd;
   }
   toDOM(): HTMLElement {
     const span = document.createElement("span");
     span.className = "cm-voice-caret";
-    span.dataset.phase = this.phase;
     span.setAttribute("aria-hidden", "true");
+    this.updateDOM(span);
     return span;
   }
   updateDOM(dom: HTMLElement): boolean {
     dom.dataset.phase = this.phase;
+    dom.toggleAttribute("data-line-end", this.lineEnd);
     return true;
   }
   ignoreEvent(): boolean {
@@ -130,24 +135,30 @@ class VoiceCaretWidget extends WidgetType {
   }
 }
 
-const CARET_WIDGETS: Record<VoiceCaretPhase, VoiceCaretWidget> = {
-  starting: new VoiceCaretWidget("starting"),
-  live: new VoiceCaretWidget("live"),
-  held: new VoiceCaretWidget("held"),
+const CARET_WIDGETS: Record<
+  VoiceCaretPhase,
+  [inLine: VoiceCaretWidget, lineEnd: VoiceCaretWidget]
+> = {
+  starting: [new VoiceCaretWidget("starting", false), new VoiceCaretWidget("starting", true)],
+  live: [new VoiceCaretWidget("live", false), new VoiceCaretWidget("live", true)],
+  held: [new VoiceCaretWidget("held", false), new VoiceCaretWidget("held", true)],
 };
 
 /**
  * Draws where dictation will write, focused or not, without blinking: a level
- * meter in a few pixels of its own, so it stands clear of the word before it,
- * and past the grey preview while one shows (the preview's side is 1). When
- * the editor's own caret sits at the same spot it steps aside, so there is one
- * caret, not two.
+ * meter that takes no width, so nothing around it moves, past the grey
+ * preview's words while one shows (the words' side is 1, a separator after
+ * them 3). Where the editor's own caret follows the dictation, at the meter or
+ * where the preview begins, it steps aside, so there is one caret, not two; a
+ * caret the user put elsewhere stays, in a neutral ink (`apart`). An empty
+ * draft whose placeholder is saying what the mic is doing shows no meter.
  */
 class VoiceCaretView {
   decorations: DecorationSet = Decoration.none;
   // Matches `caretTracker`: a composer never focused has a caret at 0 nobody chose.
   private everFocused: boolean;
   covers = false;
+  apart = false;
 
   constructor(view: EditorView) {
     this.everFocused = view.hasFocus;
@@ -179,18 +190,24 @@ class VoiceCaretView {
 
   private compute(view: EditorView): void {
     const at = view.composing ? null : voiceCaretPosition(view.state, this.everFocused);
-    if (!at) {
+    // Starting, no audio or held, an empty draft's placeholder says so, and
+    // the words can only go in where it starts.
+    if (!at || (at.phase !== "live" && !at.afterPreview && view.state.doc.length === 0)) {
       this.decorations = Decoration.none;
       this.covers = false;
+      this.apart = false;
       return;
     }
     const main = view.state.selection.main;
-    // Past a preview the two carets share a position but not a spot: the
-    // keyboard's stays before the grey words, where typing goes.
-    this.covers = view.hasFocus && main.empty && main.head === at.pos && !at.afterPreview;
+    // A caret where a preview begins is the dictation's own, carried along by
+    // the words it writes: the meter past the preview stands for it.
+    this.covers = view.hasFocus && main.empty && main.head === at.pos;
+    this.apart = view.hasFocus && !this.covers;
+    const trail = at.afterPreview && !!view.state.field(interimWidgetField, false)?.trail;
+    const lineEnd = !trail && at.pos === view.state.doc.lineAt(at.pos).to;
     this.decorations = Decoration.set(
       Decoration.widget({
-        widget: CARET_WIDGETS[at.phase],
+        widget: CARET_WIDGETS[at.phase][lineEnd ? 1 : 0],
         side: at.afterPreview ? 2 : -1,
       }).range(at.pos)
     );
@@ -206,8 +223,13 @@ const voiceCaretPlugin = ViewPlugin.fromClass(VoiceCaretView, {
   },
 });
 
-const voiceCaretAttributes = EditorView.editorAttributes.of((view) =>
-  view.plugin(voiceCaretPlugin)?.covers ? { "data-voice-caret-covers": "" } : null
+const voiceCaretAttributes = EditorView.editorAttributes.of(
+  (view): Record<string, string> | null => {
+    const plugin = view.plugin(voiceCaretPlugin);
+    if (plugin?.covers) return { "data-voice-caret-covers": "" };
+    if (plugin?.apart) return { "data-voice-caret-apart": "" };
+    return null;
+  }
 );
 
 export const voiceCaret: Extension = [voiceCaretField, voiceCaretPlugin, voiceCaretAttributes];
