@@ -5,9 +5,12 @@ const dispatchMock = vi.hoisted(() => vi.fn());
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: dispatchMock },
 }));
+const notifyMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useScratchStore } from "@/store/scratchStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useUIStore } from "@/store/uiStore";
 import { setWorktreeIdSetAccessor } from "@/store/storeAccessors";
@@ -32,13 +35,31 @@ function seedPanels(panels: Record<string, PanelSeed>, focusedId: string | null 
 
 const trackTerminalFocus = vi.fn();
 const selectWorktree = vi.fn();
+const switchProject = vi.fn();
+const switchScratch = vi.fn();
+
+const OTHER_PROJECT = "b".repeat(64);
+const MISSING_PROJECT = "c".repeat(64);
+const SCRATCH = "0b2d7c4e-1f3a-4b5c-8d9e-0a1b2c3d4e5f";
 
 beforeEach(() => {
   dispatchMock.mockReset().mockResolvedValue({ ok: true });
+  notifyMock.mockReset();
   trackTerminalFocus.mockReset();
   selectWorktree.mockReset();
+  switchProject.mockReset().mockResolvedValue(undefined);
+  switchScratch.mockReset().mockResolvedValue(undefined);
   seedPanels({});
-  useProjectStore.setState({ currentProject: { id: "p1" } } as never);
+  useProjectStore.setState({
+    currentProject: { id: "p1" },
+    projects: [
+      { id: "p1", name: "Helios" },
+      { id: OTHER_PROJECT, name: "Atlas", status: "closed" },
+      { id: MISSING_PROJECT, name: "Gone", status: "missing" },
+    ],
+    switchProject,
+  } as never);
+  useScratchStore.setState({ scratches: [{ id: SCRATCH }], switchScratch } as never);
   useWorktreeSelectionStore.setState({
     activeWorktreeId: "wt-1",
     deletedWorktrees: new Map(),
@@ -256,6 +277,95 @@ describe("goToNotificationSource", () => {
     it("tolerates an entry pruned during navigation", async () => {
       seedPanels({ "pane-1": { location: "grid", worktreeId: "wt-1" } });
       await expect(goToNotificationSource({ panelId: "pane-1" }, "gone")).resolves.toBe(true);
+    });
+
+    it("leaves a row from another workspace unread when it switches there", async () => {
+      seed([entry("e1")]);
+      await goToNotificationSource({ projectId: OTHER_PROJECT, panelId: "pane-1" }, "e1");
+      expect(switchProject).toHaveBeenCalledOnce();
+      expect(readIds()).toEqual([]);
+    });
+  });
+
+  describe("another workspace", () => {
+    it("closes the inbox and switches with the panel, its worktree riding as the fallback", async () => {
+      await expect(
+        goToNotificationSource(
+          { projectId: OTHER_PROJECT, worktreeId: "wt-9", panelId: "pane-9" },
+          "e1"
+        )
+      ).resolves.toBe(true);
+      expect(useUIStore.getState().notificationCenterOpen).toBe(false);
+      expect(switchProject).toHaveBeenCalledWith(OTHER_PROJECT, {
+        focusIntent: { intent: "focus-panel", panelId: "pane-9", worktreeId: "wt-9" },
+      });
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("lands on the worktree when the record named only that", async () => {
+      await goToNotificationSource({ projectId: OTHER_PROJECT, worktreeId: "wt-9" }, "e1");
+      expect(switchProject).toHaveBeenCalledWith(OTHER_PROJECT, {
+        focusIntent: { intent: "focus-worktree", worktreeId: "wt-9" },
+      });
+    });
+
+    it("sends a panel with no worktree without a fallback", async () => {
+      await goToNotificationSource({ projectId: OTHER_PROJECT, panelId: "pane-9" }, "e1");
+      expect(switchProject).toHaveBeenCalledWith(OTHER_PROJECT, {
+        focusIntent: { intent: "focus-panel", panelId: "pane-9" },
+      });
+    });
+
+    it("routes a scratch through the scratch switch", async () => {
+      await goToNotificationSource({ projectId: SCRATCH, panelId: "pane-9" }, "e1");
+      expect(switchScratch).toHaveBeenCalledWith(SCRATCH, {
+        focusIntent: { intent: "focus-panel", panelId: "pane-9" },
+      });
+      expect(switchProject).not.toHaveBeenCalled();
+    });
+
+    it("says so, with a Try again that keeps the address, when the switch rejects", async () => {
+      switchScratch.mockRejectedValueOnce(new Error("The scratch is busy"));
+      await goToNotificationSource({ projectId: SCRATCH, panelId: "pane-9" }, "e1");
+      await vi.waitFor(() => expect(notifyMock).toHaveBeenCalledOnce());
+      const toast = notifyMock.mock.calls[0]![0];
+      expect(toast).toMatchObject({ type: "error", message: "The scratch is busy" });
+      toast.actions[0].onClick();
+      expect(switchScratch).toHaveBeenCalledTimes(2);
+      expect(switchScratch).toHaveBeenLastCalledWith(SCRATCH, {
+        focusIntent: { intent: "focus-panel", panelId: "pane-9" },
+      });
+    });
+
+    it("re-reads whether the workspace can still be opened at activation", async () => {
+      useProjectStore.setState({ projects: [{ id: "p1", name: "Helios" }] } as never);
+      await expect(
+        goToNotificationSource({ projectId: OTHER_PROJECT, panelId: "pane-9" }, "e1")
+      ).resolves.toBe(false);
+      expect(useUIStore.getState().notificationCenterOpen).toBe(true);
+      expect(switchProject).not.toHaveBeenCalled();
+    });
+
+    it("goes nowhere for a project whose folder is missing, or a row from another machine", async () => {
+      await expect(
+        goToNotificationSource({ projectId: MISSING_PROJECT, panelId: "pane-9" }, "e1")
+      ).resolves.toBe(false);
+      await expect(
+        goToNotificationSource(
+          { projectId: OTHER_PROJECT, panelId: "pane-9", hostName: "studio-01" },
+          "e1"
+        )
+      ).resolves.toBe(false);
+      expect(switchProject).not.toHaveBeenCalled();
+      expect(useUIStore.getState().notificationCenterOpen).toBe(true);
+    });
+
+    it("is not navigated within this view", async () => {
+      await expect(
+        navigateToNotificationSource({ projectId: OTHER_PROJECT, panelId: "pane-9" })
+      ).resolves.toBe(false);
+      expect(switchProject).not.toHaveBeenCalled();
+      expect(dispatchMock).not.toHaveBeenCalled();
     });
   });
 });

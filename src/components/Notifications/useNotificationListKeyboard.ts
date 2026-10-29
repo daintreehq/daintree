@@ -16,8 +16,10 @@ function sourceUnreachableMessage(context: NotificationHistoryEntry["context"]):
   const destination = resolveLiveNotificationDestination(context);
   if (destination.kind !== "none") return "Couldn't open the source";
   switch (destination.reason) {
+    case "other-host":
+      return "It came from another machine";
     case "other-project":
-      return "From another project. Switch to it to open the source";
+      return "Its project is no longer available";
     case "panel-trashed":
       return "Its panel is in the trash";
     case "gone":

@@ -90,7 +90,12 @@ export interface ProjectSwitchOutgoingState {
  */
 export type ProjectFocusOnActivateIntent =
   | { intent: "focus-next-waiting" }
-  | { intent: "focus-panel"; panelId: string }
+  | {
+      intent: "focus-panel";
+      panelId: string;
+      /** Where to land instead when the panel is gone by the time the view opens. */
+      worktreeId?: string;
+    }
   /**
    * Land with this worktree selected instead of the one the project last had.
    * One that's gone by then leaves the project as it opens, and says so.

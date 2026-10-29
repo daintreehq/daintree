@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   hasNotificationAddress,
+  isOpenableWorkspace,
   isOtherProjectContext,
   resolveNotificationDestination,
   type NotificationDestinationFacts,
@@ -12,6 +13,7 @@ const facts = (overrides: Partial<NotificationDestinationFacts> = {}) => ({
   panelWorktreeId: undefined,
   panelWorktreeShown: true,
   worktreeLive: false,
+  otherWorkspaceOpenable: false,
   ...overrides,
 });
 
@@ -97,10 +99,65 @@ describe("resolveNotificationDestination", () => {
     ).toEqual({ kind: "none", reason: "other-project" });
   });
 
+  it("goes to another workspace on this machine, carrying the record's address", () => {
+    expect(
+      resolveNotificationDestination(
+        { projectId: "p2", worktreeId: "wt-1", panelId: "pane-1" },
+        facts({ otherWorkspaceOpenable: true })
+      )
+    ).toEqual({ kind: "project", projectId: "p2", panelId: "pane-1", worktreeId: "wt-1" });
+    expect(
+      resolveNotificationDestination(
+        { projectId: "p2", worktreeId: "wt-1" },
+        facts({ otherWorkspaceOpenable: true })
+      )
+    ).toEqual({ kind: "project", projectId: "p2", panelId: undefined, worktreeId: "wt-1" });
+  });
+
+  it("does not go to another workspace for a record that names nothing in it", () => {
+    expect(
+      resolveNotificationDestination({ projectId: "p2" }, facts({ otherWorkspaceOpenable: true }))
+    ).toEqual({ kind: "none", reason: null });
+  });
+
+  it("never navigates a record from another machine, even when its ids match here", () => {
+    expect(
+      resolveNotificationDestination(
+        { projectId: "p1", worktreeId: "wt-1", panelId: "pane-1", hostName: "studio-01" },
+        facts({ panelLocation: "grid", worktreeLive: true })
+      )
+    ).toEqual({ kind: "none", reason: "other-host" });
+    expect(
+      resolveNotificationDestination(
+        { projectId: "p2", panelId: "pane-1", hostName: "studio-01" },
+        facts({ otherWorkspaceOpenable: true })
+      )
+    ).toEqual({ kind: "none", reason: "other-host" });
+  });
+
   it("treats a record with no project id as this view's", () => {
     expect(
       resolveNotificationDestination({ worktreeId: "wt-1" }, facts({ worktreeLive: true }))
     ).toEqual({ kind: "worktree", worktreeId: "wt-1" });
+  });
+});
+
+describe("isOpenableWorkspace", () => {
+  const PROJECT = "a".repeat(64);
+  const SCRATCH = "0b2d7c4e-1f3a-4b5c-8d9e-0a1b2c3d4e5f";
+
+  it("opens a registered project unless its folder is missing", () => {
+    expect(isOpenableWorkspace(PROJECT, [{ id: PROJECT, status: "closed" }], [])).toBe(true);
+    expect(isOpenableWorkspace(PROJECT, [{ id: PROJECT }], [])).toBe(true);
+    expect(isOpenableWorkspace(PROJECT, [{ id: PROJECT, status: "missing" }], [])).toBe(false);
+    expect(isOpenableWorkspace(PROJECT, [], [])).toBe(false);
+    expect(isOpenableWorkspace(undefined, [{ id: PROJECT }], [])).toBe(false);
+  });
+
+  it("opens a scratch only from the scratch list, whatever the project list holds", () => {
+    expect(isOpenableWorkspace(SCRATCH, [], [{ id: SCRATCH }])).toBe(true);
+    expect(isOpenableWorkspace(SCRATCH, [{ id: SCRATCH }], [])).toBe(false);
+    expect(isOpenableWorkspace(PROJECT, [], [{ id: PROJECT }])).toBe(false);
   });
 });
 
