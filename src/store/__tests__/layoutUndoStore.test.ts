@@ -261,7 +261,10 @@ describe("layoutUndoStore", () => {
 
     // Records a redo entry holding `a` and `b`.
     useLayoutUndoStore.getState().undo();
-    setTerminals([{ ...a, location: "dock" }, { ...b, location: "trash" }]);
+    setTerminals([
+      { ...a, location: "dock" },
+      { ...b, location: "trash" },
+    ]);
     // Records a redo entry holding only `a`: `b` sits in the trash.
     useLayoutUndoStore.getState().undo();
     setTerminals([{ ...b, location: "grid" }]);

@@ -579,7 +579,9 @@ describe("rendererStoreOrchestrator", () => {
 
     function movePanel(id: string, location: PanelInstance["location"]) {
       const { panelsById } = usePanelStore.getState();
-      usePanelStore.setState({ panelsById: { ...panelsById, [id]: { ...panelsById[id]!, location } } });
+      usePanelStore.setState({
+        panelsById: { ...panelsById, [id]: { ...panelsById[id]!, location } },
+      });
     }
 
     beforeEach(() => {
