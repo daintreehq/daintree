@@ -1,10 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Mock } from "vitest";
+import { createHash } from "crypto";
+import type { CodexRestoreMatchRequest } from "@shared/types/ipc/agentSubagents";
+import { launchPromptArgText } from "@shared/types/agentSettings";
 import {
   registerPluginAgents,
   clearPluginAgentRegistryForTests,
 } from "@shared/config/pluginAgentRegistry";
-import type { TerminalState, BackendTerminalInfo } from "@shared/types/ipc/terminal";
+import type {
+  TerminalState,
+  BackendTerminalInfo,
+  TerminalReconnectResult,
+} from "@shared/types/ipc/terminal";
 import type { WorktreeState } from "@shared/types";
 
 // --- Module mocks ---
@@ -37,10 +44,21 @@ const resolveResumeLatestSessionMock = vi.hoisted(() =>
   vi.fn(async (_payload: { cwd: string }): Promise<string | null> => null)
 );
 
+// Restore asks main which held panes' launch prompts name a conversation
+// (#15269). Defaults to "none", which leaves every pane as the cases above expect.
+const matchRestoreSessionsMock = vi.hoisted(() =>
+  vi.fn(
+    async (
+      _payload: CodexRestoreMatchRequest
+    ): Promise<{ matches: Array<{ key: string; sessionId: string }> }> => ({ matches: [] })
+  )
+);
+
 vi.mock("@/clients/codexClient", () => ({
   codexClient: {
     resolveResumeLatestSession: (payload: { cwd: string }) =>
       resolveResumeLatestSessionMock(payload),
+    matchRestoreSessions: (payload: CodexRestoreMatchRequest) => matchRestoreSessionsMock(payload),
   },
 }));
 
@@ -128,6 +146,9 @@ vi.mock("../statePatcher", async () => {
       allowSessionIdResume: options?.allowSessionIdResume ?? true,
       resolvedResumeLatestSessionId: options?.resolvedResumeLatestSessionId,
       coldLaunch: options?.coldLaunch,
+      // What the builder was handed to resume and to hold with (#15269).
+      savedAgentSessionId: s.agentSessionId,
+      savedRestoreRecovery: s.restoreRecovery,
     }),
     // Mirrors the real resolver's title recovery (same agent order) so the
     // election's identity resolution can't silently diverge from production.
@@ -307,6 +328,8 @@ beforeEach(() => {
   reconnectWithTimeoutMock.mockReset();
   resolveResumeLatestSessionMock.mockReset();
   resolveResumeLatestSessionMock.mockResolvedValue(null);
+  matchRestoreSessionsMock.mockReset();
+  matchRestoreSessionsMock.mockResolvedValue({ matches: [] });
   getRestoreBatchParamsMock.mockClear();
   getRestoreBatchParamsMock.mockReturnValue({ batchSize: 2, delayMs: 0 });
 });
@@ -2865,5 +2888,241 @@ describe("resolveVisiblePanelId (#10527, #13763)", () => {
   it("yields undefined for a missing or all-non-PTY list", () => {
     expect(resolveVisiblePanelId(undefined, isNonPty)).toBeUndefined();
     expect(resolveVisiblePanelId(["terminal:br1"], isNonPty)).toBeUndefined();
+  });
+});
+
+describe("restorePanelsPhase — naming held panes' conversations by launch prompt (#15269)", () => {
+  const AT = 1_800_000_000_000;
+
+  interface RespawnArgs {
+    requestedId?: string;
+    allowResumeLatest?: boolean;
+    savedAgentSessionId?: string;
+    savedRestoreRecovery?: unknown;
+  }
+
+  function argsById(ctx: MockedContext): Map<string, RespawnArgs> {
+    const byId = new Map<string, RespawnArgs>();
+    for (const [args] of ctx.addPanel.mock.calls as [RespawnArgs][]) {
+      if (args.requestedId !== undefined) byId.set(args.requestedId, args);
+    }
+    return byId;
+  }
+
+  /** A cold Codex pane in /repo, launched with `prompt` and never given an id. */
+  const codexPane = (id: string, prompt?: string, overrides: Partial<TerminalState> = {}) =>
+    panel(id, {
+      kind: "agent",
+      launchAgentId: "codex",
+      cwd: "/repo",
+      ...(prompt !== undefined && { firstPrompt: { text: prompt, via: "launch", at: AT } }),
+      ...overrides,
+    } as Partial<TerminalState>);
+
+  /** The bulk probe as it answers on a cold start: nothing survived. */
+  function coldProbe(panels: TerminalState[]): Record<string, TerminalReconnectResult> {
+    return Object.fromEntries(panels.map((saved) => [saved.id, { exists: false }]));
+  }
+
+  async function restore(panels: TerminalState[], overrides: Partial<RawContext> = {}) {
+    const ctx = makeContext({ prefetchedReconnectResults: coldProbe(panels), ...overrides });
+    await restorePanelsPhase(panels, ctx);
+    return ctx;
+  }
+
+  const sentPanes = () =>
+    (matchRestoreSessionsMock.mock.calls[0]?.[0]?.scopes ?? []).flatMap((scope) => scope.panes);
+
+  beforeEach(() => {
+    reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
+  });
+
+  it("resumes each held pane on the conversation main names, and holds the rest", async () => {
+    matchRestoreSessionsMock.mockResolvedValue({
+      matches: [
+        { key: "a", sessionId: "sess-a" },
+        { key: "b", sessionId: "sess-b" },
+      ],
+    });
+
+    const ctx = await restore([
+      codexPane("kept", undefined, { agentSessionId: "sess-kept" }),
+      codexPane("a", "Triage the parser"),
+      codexPane("b", "Triage the renderer"),
+      codexPane("c", "Triage the docs"),
+    ]);
+
+    expect(matchRestoreSessionsMock).toHaveBeenCalledTimes(1);
+    expect(matchRestoreSessionsMock.mock.calls[0]?.[0]).toMatchObject({
+      scopes: [{ cwd: "/repo" }],
+      exclude: ["sess-kept"],
+    });
+    expect(sentPanes().map((pane) => [pane.key, pane.resolve])).toEqual([
+      ["a", true],
+      ["b", true],
+      ["c", true],
+    ]);
+    const byId = argsById(ctx);
+    expect(byId.get("a")?.savedAgentSessionId).toBe("sess-a");
+    expect(byId.get("b")?.savedAgentSessionId).toBe("sess-b");
+    expect(byId.get("c")?.savedAgentSessionId).toBeUndefined();
+    expect(byId.get("c")?.allowResumeLatest).toBe(false);
+  });
+
+  it("sends a digest of the prompt as the CLI received it, never the prompt", async () => {
+    const prompt = "  Review the parser\nand report back  ";
+
+    await restore([
+      codexPane("kept", undefined, { agentSessionId: "s-1" }),
+      codexPane("a", prompt),
+    ]);
+
+    const expected = createHash("sha256").update(launchPromptArgText(prompt), "utf8").digest("hex");
+    expect(sentPanes()).toEqual([{ key: "a", promptHash: expected, at: AT, resolve: true }]);
+    expect(JSON.stringify(matchRestoreSessionsMock.mock.calls[0]?.[0])).not.toContain("parser");
+  });
+
+  it("names a pane an earlier restore held for want of a conversation", async () => {
+    matchRestoreSessionsMock.mockResolvedValue({ matches: [{ key: "held", sessionId: "sess-h" }] });
+
+    const ctx = await restore([
+      codexPane("held", "Triage the parser", {
+        restoreRecovery: { reason: "sibling-owns-resume-latest-slot" },
+      }),
+    ]);
+
+    const held = argsById(ctx).get("held");
+    expect(held?.savedAgentSessionId).toBe("sess-h");
+    // The earlier hold is answered, so the builder resumes rather than holding again.
+    expect(held?.savedRestoreRecovery).toBeUndefined();
+  });
+
+  it("leaves holds for any other reason to the user", async () => {
+    const ctx = await restore([
+      codexPane("deferred", "Task A", { restoreRecovery: { reason: "resume-deferred" } }),
+      codexPane("candidate", "Task B", {
+        restoreRecovery: { reason: "sibling-owns-resume-latest-slot", sessionId: "sess-c" },
+      }),
+      codexPane("waiting", "Task C", {
+        restoreRecovery: { reason: "sibling-owns-resume-latest-slot", awaitingDestination: true },
+      }),
+    ]);
+
+    expect(matchRestoreSessionsMock).not.toHaveBeenCalled();
+    expect(argsById(ctx).get("deferred")?.savedRestoreRecovery).toEqual({
+      reason: "resume-deferred",
+    });
+  });
+
+  it("sends the folder's `--last` pane as a claimant that reserves the latest thread", async () => {
+    await restore([
+      codexPane("winner", "Task W", { lastActiveAt: 900 }),
+      codexPane("loser", "Task L", { lastActiveAt: 100 }),
+    ]);
+
+    const request = matchRestoreSessionsMock.mock.calls[0]?.[0];
+    expect(request?.scopes[0]?.reserveLatest).toBe(true);
+    expect(sentPanes().map((pane) => [pane.key, pane.resolve])).toEqual([
+      ["winner", false],
+      ["loser", true],
+    ]);
+  });
+
+  it("ignores a match for a pane that wasn't asking", async () => {
+    matchRestoreSessionsMock.mockResolvedValue({
+      matches: [{ key: "winner", sessionId: "sess-x" }],
+    });
+
+    const ctx = await restore([
+      codexPane("winner", "Task W", { lastActiveAt: 900 }),
+      codexPane("loser", "Task L", { lastActiveAt: 100 }),
+    ]);
+
+    expect(argsById(ctx).get("winner")?.savedAgentSessionId).toBeUndefined();
+  });
+
+  it("only treats a launch prompt kept whole as evidence", async () => {
+    await restore([
+      codexPane("kept", undefined, { agentSessionId: "s-1" }),
+      codexPane("cut", undefined, {
+        firstPrompt: { text: "Task", via: "launch", at: AT, truncated: true },
+      } as Partial<TerminalState>),
+      codexPane("sent", undefined, {
+        firstPrompt: { text: "Task", via: "send", at: AT },
+      } as Partial<TerminalState>),
+      codexPane("none"),
+    ]);
+
+    expect(matchRestoreSessionsMock).not.toHaveBeenCalled();
+  });
+
+  it("asks under the pane's own profile, and leaves out one it can't name", async () => {
+    await restore([
+      codexPane("kept", undefined, { agentSessionId: "s-1" }),
+      codexPane("a", "Task A", { env: { CODEX_HOME: "/profiles/work" } }),
+      codexPane("b", "Task B", { env: { CODEX_HOME: "relative/profile" } }),
+    ]);
+
+    const request = matchRestoreSessionsMock.mock.calls[0]?.[0];
+    expect(request?.scopes).toHaveLength(1);
+    expect(request?.scopes[0]?.codexHome).toBe("/profiles/work");
+    expect(sentPanes().map((pane) => pane.key)).toEqual(["a"]);
+  });
+
+  it("asks nothing for a folder where a live pane runs a conversation nobody can name", async () => {
+    const panels = [codexPane("live"), codexPane("a", "Task A"), codexPane("b", "Task B")];
+    const ctx = makeContext({ prefetchedReconnectResults: coldProbe(panels) });
+    ctx.backendTerminalMap.set("live", backend("live", { cwd: "/repo", launchAgentId: "codex" }));
+
+    await restorePanelsPhase(panels, ctx);
+
+    expect(matchRestoreSessionsMock).not.toHaveBeenCalled();
+  });
+
+  it("counts a live pane with a known conversation as a holder of it", async () => {
+    const panels = [codexPane("live"), codexPane("a", "Task A")];
+    const ctx = makeContext({ prefetchedReconnectResults: coldProbe(panels) });
+    ctx.backendTerminalMap.set(
+      "live",
+      backend("live", { cwd: "/repo", launchAgentId: "codex", agentSessionId: "sess-live" })
+    );
+
+    await restorePanelsPhase(panels, ctx);
+
+    expect(matchRestoreSessionsMock.mock.calls[0]?.[0]?.exclude).toEqual(["sess-live"]);
+  });
+
+  it("asks nothing when the bulk probe couldn't say which panes are still running", async () => {
+    const ctx = makeContext();
+
+    await restorePanelsPhase(
+      [codexPane("kept", undefined, { agentSessionId: "s-1" }), codexPane("a", "Task A")],
+      ctx
+    );
+
+    expect(matchRestoreSessionsMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a pane held when its match is already someone else's", async () => {
+    matchRestoreSessionsMock.mockResolvedValue({ matches: [{ key: "a", sessionId: "s-1" }] });
+
+    const ctx = await restore([
+      codexPane("kept", undefined, { agentSessionId: "s-1" }),
+      codexPane("a", "Task A"),
+    ]);
+
+    expect(argsById(ctx).get("a")?.savedAgentSessionId).toBeUndefined();
+  });
+
+  it("holds every pane as before when the lookup fails", async () => {
+    matchRestoreSessionsMock.mockRejectedValue(new Error("main is gone"));
+
+    const ctx = await restore([
+      codexPane("kept", undefined, { agentSessionId: "s-1" }),
+      codexPane("a", "Task A"),
+    ]);
+
+    expect(ctx.addPanel).toHaveBeenCalledTimes(2);
+    expect(argsById(ctx).get("a")?.savedAgentSessionId).toBeUndefined();
   });
 });
