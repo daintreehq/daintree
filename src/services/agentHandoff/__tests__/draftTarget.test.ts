@@ -5,6 +5,7 @@ import type { WorktreeSnapshot } from "@shared/types";
 import {
   buildAgentPanes,
   pickPreselectedPane,
+  resolveAssistantDraftRefusal,
   resolveDraftRefusal,
   type AgentPaneListInputs,
   type DraftTargetInputs,
@@ -128,6 +129,67 @@ describe("resolveDraftRefusal", () => {
     expect(resolveDraftRefusal(inputs([panel], { hybridInputEnabled: false }), "a")).toBe(
       "not-agent"
     );
+  });
+});
+
+describe("resolveAssistantDraftRefusal", () => {
+  function assistantPanel(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
+    return agentPanel("help", { location: "overlay", worktreeId: undefined, ...overrides });
+  }
+
+  it("accepts the Assistant's terminal, which never sits in the grid", () => {
+    const state = inputs([assistantPanel()]);
+    expect(resolveDraftRefusal(state, "help")).toBe("not-in-grid");
+    expect(resolveAssistantDraftRefusal(state, "help", "claude")).toBeNull();
+  });
+
+  it("accepts it while the assistant is working, since a draft never submits", () => {
+    const state = inputs([assistantPanel({ agentState: "working" })]);
+    expect(resolveAssistantDraftRefusal(state, "help", "claude")).toBeNull();
+  });
+
+  it("checks the agent the session names, which is what draws the composer", () => {
+    // The pane's own identity can lag the session's (detection has not run
+    // yet); the session's agent is what HelpPanel renders the bar for.
+    const state = inputs([assistantPanel({ launchAgentId: undefined })]);
+    expect(resolveAssistantDraftRefusal(state, "help", "claude")).toBeNull();
+    expect(resolveAssistantDraftRefusal(state, "help", undefined)).toBe("not-agent");
+    expect(resolveAssistantDraftRefusal(state, "help", "acme.custom-agent")).toBe("not-agent");
+  });
+
+  it("is not refused by a broadcast it can't be part of", () => {
+    const state = inputs([assistantPanel(), agentPanel("b")], {
+      armedIds: new Set(["help", "b"]),
+    });
+    expect(resolveAssistantDraftRefusal(state, "help", "claude")).toBeNull();
+  });
+
+  it.each<[string, PanelInstance[], Partial<DraftTargetInputs>, string]>([
+    ["a session with no terminal", [], {}, "unknown-terminal"],
+    ["an exited session", [assistantPanel({ runtimeStatus: "exited" })], {}, "exited"],
+    ["a session with no PTY", [assistantPanel({ hasPty: false })], {}, "exited"],
+    [
+      "the input bar switched off",
+      [assistantPanel()],
+      { hybridInputEnabled: false },
+      "input-bar-off",
+    ],
+    [
+      "a disconnected backend",
+      [assistantPanel()],
+      { backendStatus: "disconnected" },
+      "backend-unavailable",
+    ],
+    ["a locked input", [assistantPanel({ isInputLocked: true })], {}, "input-locked"],
+    ["a restarting session", [assistantPanel({ isRestarting: true })], {}, "restarting"],
+    [
+      "a dictation about to submit",
+      [assistantPanel()],
+      { voiceSubmittingIds: new Set(["help"]) },
+      "input-busy",
+    ],
+  ])("refuses %s", (_name, panels, overrides, reason) => {
+    expect(resolveAssistantDraftRefusal(inputs(panels, overrides), "help", "claude")).toBe(reason);
   });
 });
 
