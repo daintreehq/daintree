@@ -124,6 +124,11 @@ describe("HostPluginViewConsents", () => {
     expect(button.getAttribute("aria-busy")).toBe("true");
     expect(button.getAttribute("aria-disabled")).toBe("true");
     await act(async () => finish());
-    expect(screen.queryByText("acme.graph")).toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: "Reset the plugin view for acme.graph" })
+        .getAttribute("aria-busy")
+    ).toBeNull();
+    expect(client.listPluginViewConsents).toHaveBeenCalledTimes(2);
   });
 });
