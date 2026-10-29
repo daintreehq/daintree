@@ -749,6 +749,20 @@ describe("CanopyView role filter", () => {
     // The inbox above it still counts its rows.
     expect(countOf("canopy-inbox-label")).not.toBeNull();
   });
+
+  it("offers reading above the workers, never above the assistants alone", async () => {
+    const off = { ...canopySnapshot, activated: false, cards: [], glances: [] };
+    installElectron().setActive.mockResolvedValue(off);
+    useCanopyStore.setState({ snapshot: off, roleFilter: "assistants" });
+    render(<CanopyView />);
+    await settle();
+    expect(assistantRows().length).toBeGreaterThan(0);
+    expect(document.querySelector("[data-canopy-reading-offer]")).toBeNull();
+    act(() => useCanopyStore.getState().setRoleFilter("all"));
+    await settle();
+    expect(workerIds().length).toBeGreaterThan(0);
+    expect(document.querySelector("[data-canopy-reading-offer]")).not.toBeNull();
+  });
 });
 
 describe("CanopyView show its work", () => {

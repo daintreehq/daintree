@@ -763,8 +763,13 @@ describe("the Canopy host picker", () => {
     expect(callout.textContent).toContain("on studio-01");
     fireEvent.click(within(callout).getByRole("button", { name: "Turn on reading" }));
     await settle();
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
     expect(document.body.textContent).toContain("Canopy is off on studio-01");
     expect(document.querySelector("[data-canopy-reading-offer]")).toBeNull();
+    // The button left with the inbox: the keyboard lands on the offer's heading, not Turn on.
+    expect(document.activeElement?.id).toBe("canopy-host-offer-title");
     expect(state.invoke).not.toHaveBeenCalledWith("studio", "canopy:set-mode", "on");
   });
 
