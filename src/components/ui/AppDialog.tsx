@@ -832,9 +832,18 @@ interface AppDialogTitleProps {
  * attribute) can't make one dialog's header louder than the rest. Colour is only
  * a default: a caller whose glyph carries meaning — a destructive `Trash2`, a
  * warning triangle — names its status colour on the icon, and that wins.
+ *
+ * The slot is one line of the title tall and pinned to the top of the heading,
+ * with the glyph centred inside it. A title that fits on one line renders as it
+ * always did; one that wraps keeps its glyph beside the first line rather than
+ * floating between the two (`1lh` follows whatever type size the caller sets).
+ * A glyph taller than a line (a 2xl spinner escapes the 16px rule) overflows the
+ * slot evenly, so it stays level with the title and the X and the header only
+ * loses the extra height; a slot that grew with it would instead push the X off
+ * the title by half the difference.
  */
 const DIALOG_TITLE_ICON_SLOT =
-  "inline-flex shrink-0 items-center text-text-secondary [&>svg]:size-4 [&>svg]:shrink-0";
+  "inline-flex h-[1lh] shrink-0 items-center self-start text-text-secondary [&>svg]:size-4 [&>svg]:shrink-0";
 
 AppDialog.Title = function AppDialogTitle({ children, icon, className, as }: AppDialogTitleProps) {
   const context = useContext(AppDialogContext);
@@ -867,7 +876,11 @@ AppDialog.CloseButton = function AppDialogCloseButton({
       // A locked dialog swallows the click anyway; say so instead of offering
       // an X that looks live beside a disabled Cancel.
       disabled={context ? !context.dismissible : false}
-      className={className}
+      // Pinned to the top of the header so a title that wraps leaves the X
+      // beside its first line. Every sibling in a dialog header is at most as
+      // tall as this button, so on one line the row is the button's own height
+      // and nothing moves.
+      className={cn("self-start", className)}
       aria-label={ariaLabel}
     />
   );
