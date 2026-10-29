@@ -21,7 +21,12 @@ import {
   type HostSettingsRequest,
 } from "./hostSettingsRequests";
 import { onHostUpdateRequest, takePendingHostUpdate } from "./hostUpdateRequests";
-import { onHostPluginsRequest, takePendingHostPlugins } from "./hostPluginRequests";
+import {
+  onHostPluginsRequest,
+  takePendingHostPlugins,
+  type HostPluginsRequest,
+} from "./hostPluginRequests";
+import { holdPluginViewRetries } from "./pluginViewConsentResets";
 import { onHostCopySettingsRequest, takePendingHostCopySettings } from "./hostCopySettingsRequests";
 import { clientErrorText } from "@/utils/clientAppError";
 
@@ -69,9 +74,9 @@ export default function HostsSettingsTab() {
   };
   // Each "Update …" request remounts the detail so its update flow opens again.
   const [updateRequest, setUpdateRequest] = useState<{ hostId: HostId; seq: number } | null>(null);
-  const [pluginsRequest, setPluginsRequest] = useState<{ hostId: HostId; seq: number } | null>(
-    null
-  );
+  const [pluginsRequest, setPluginsRequest] = useState<
+    (HostPluginsRequest & { seq: number }) | null
+  >(null);
   const [copyRequest, setCopyRequest] = useState<{ hostId: HostId; seq: number } | null>(null);
 
   useEffect(() => {
@@ -112,16 +117,20 @@ export default function HostsSettingsTab() {
   }, [detailHostId]);
 
   useEffect(() => {
-    const open = (hostId: HostId) => {
-      setDetailHostId(hostId);
+    const open = (request: HostPluginsRequest) => {
+      setDetailHostId(request.hostId);
       // The latest request decides what opens: an earlier update's would win otherwise.
       setUpdateRequest(null);
-      setPluginsRequest((prev) => ({ hostId, seq: (prev?.seq ?? 0) + 1 }));
+      setPluginsRequest((prev) => ({ ...request, seq: (prev?.seq ?? 0) + 1 }));
     };
     const pending = takePendingHostPlugins();
     if (pending) open(pending);
     return onHostPluginsRequest(open);
   }, []);
+
+  // A plugin view refused here and reset on this page asks again once Settings
+  // has closed, not over it: this tab stays mounted until the dialog's exit ends.
+  useEffect(() => holdPluginViewRetries(), []);
 
   useEffect(() => {
     const open = (hostId: HostId) => {
@@ -158,7 +167,7 @@ export default function HostsSettingsTab() {
         entry={detail}
         focusBackOnMount={focusBackFor === detail.descriptor.id}
         openUpdate={openUpdate}
-        focusPlugins={focusPlugins}
+        focusSection={focusPlugins ? pluginsRequest.sectionId : undefined}
         offerCopySettings={offerCopySettings}
         onBack={(viaKeyboard) => {
           returnFocusTo.current = { hostId: detail.descriptor.id, visible: viaKeyboard === true };

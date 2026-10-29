@@ -118,26 +118,30 @@ describe("useSettingsDialog — repeat navigation", () => {
 });
 
 describe("useSettingsDialog — a host's plugins", () => {
-  it("asks Settings → Hosts for the plugins of a remote host and drops the section", () => {
-    const { result } = renderHook(() => useSettingsDialog());
+  it.each(["host-plugins", "host-plugin-views"])(
+    "asks Settings → Hosts for a remote host's %s and drops the section",
+    (sectionId) => {
+      const { result } = renderHook(() => useSettingsDialog());
 
-    act(() => {
-      result.current.handleOpenSettingsTab({
-        tab: asTab("hosts"),
-        subtab: "studio-01",
-        sectionId: "host-plugins",
+      act(() => {
+        result.current.handleOpenSettingsTab({
+          tab: asTab("hosts"),
+          subtab: "studio-01",
+          sectionId,
+        });
       });
-    });
 
-    expect(takePendingHostPlugins()).toBe("studio-01");
-    expect(result.current.isSettingsOpen).toBe(true);
-    expect(result.current.settingsTab).toBe("hosts");
-    expect(result.current.settingsSubtab).toBeUndefined();
-    expect(result.current.settingsSectionId).toBeUndefined();
-  });
+      expect(takePendingHostPlugins()).toEqual({ hostId: "studio-01", sectionId });
+      expect(result.current.isSettingsOpen).toBe(true);
+      expect(result.current.settingsTab).toBe("hosts");
+      expect(result.current.settingsSubtab).toBeUndefined();
+      expect(result.current.settingsSectionId).toBeUndefined();
+    }
+  );
 
   it.each([
     { tab: asTab("hosts"), subtab: "local", sectionId: "host-plugins" },
+    { tab: asTab("hosts"), subtab: "local", sectionId: "host-plugin-views" },
     { tab: asTab("hosts"), subtab: "bad:id", sectionId: "host-plugins" },
     { tab: asTab("hosts"), sectionId: "host-plugins" },
     { tab: asTab("hosts"), subtab: "studio-01", sectionId: "hosts-list" },

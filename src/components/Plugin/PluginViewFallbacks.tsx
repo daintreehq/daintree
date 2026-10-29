@@ -88,6 +88,7 @@ export function createPluginViewFallback({
     if (isPluginViewBlockedError(error)) {
       return (
         <PluginViewBlockedPlaceholder
+          pluginId={pluginId}
           pluginDisplayName={pluginDisplayName}
           onRetry={resetError}
           leave={leave}

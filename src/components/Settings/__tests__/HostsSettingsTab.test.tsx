@@ -8,7 +8,12 @@ import { useRemoteHostsStore } from "@/store/remoteHostsStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import HostsSettingsTab from "../Hosts/HostsSettingsTab";
 import { requestHostUpdate, takePendingHostUpdate } from "../Hosts/hostUpdateRequests";
-import { requestHostPlugins } from "../Hosts/hostPluginRequests";
+import { requestHostPlugins, takePendingHostPlugins } from "../Hosts/hostPluginRequests";
+import {
+  _resetPluginViewConsentResetsForTesting,
+  notePluginViewConsentReset,
+  onPluginViewConsentReset,
+} from "../Hosts/pluginViewConsentResets";
 
 const { connectionKindMock } = vi.hoisted(() => ({
   connectionKindMock: vi.fn<() => "ssh" | "wsl">(() => "ssh"),
@@ -102,6 +107,7 @@ beforeEach(() => {
 
 afterEach(() => {
   Reflect.deleteProperty(window, "electron");
+  _resetPluginViewConsentResetsForTesting();
 });
 
 describe("HostsSettingsTab", () => {
@@ -352,5 +358,70 @@ describe("HostsSettingsTab", () => {
     act(() => requestHostPlugins("studio-03"));
     await waitFor(() => expect(screen.queryByText("Update studio-03")).toBeNull());
     expect(screen.getByRole("button", { name: "Remove host" })).toBeTruthy();
+  });
+
+  it("opens on the host and section asked for before it mounted, then follows each later request", async () => {
+    let answerList: (hosts: HostListEntry[]) => void = () => {};
+    remoteHosts.list!.mockImplementation(
+      () =>
+        new Promise<HostListEntry[]>((resolve) => {
+          answerList = resolve;
+        })
+    );
+    const scrolls: Array<{ id: string; options: unknown }> = [];
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(function (this: Element, options?: boolean | ScrollIntoViewOptions) {
+        scrolls.push({ id: this.id, options });
+      });
+    const lastScroll = () => scrolls[scrolls.length - 1];
+    try {
+      requestHostPlugins("studio-03", "host-plugin-views");
+      render(
+        <TooltipProvider>
+          <HostsSettingsTab />
+        </TooltipProvider>
+      );
+      await act(async () =>
+        answerList([entry("studio-02", "studio-02"), entry("studio-03", "studio-03")])
+      );
+      await waitFor(() => expect(lastScroll()?.id).toBe("host-plugin-views"));
+      expect(lastScroll()?.options).toEqual({ block: "start" });
+      expect(document.getElementById("host-plugin-views")?.textContent).toContain(
+        "Plugins from studio-03"
+      );
+      expect(takePendingHostPlugins()).toBeNull();
+
+      // A repeat of the same section scrolls there again, as does a change.
+      for (const [sectionId, title] of [
+        ["host-plugin-views", "Plugin views"],
+        ["host-plugins", "Plugins"],
+        ["host-plugins", "Plugins"],
+        ["host-plugin-views", "Plugin views"],
+      ] as const) {
+        scrolls.length = 0;
+        act(() => requestHostPlugins("studio-03", sectionId));
+        await waitFor(() => expect(lastScroll()?.id).toBe(sectionId));
+        expect(lastScroll()?.options).toEqual({ block: "start" });
+        expect(document.getElementById(sectionId)?.textContent).toContain(title);
+      }
+    } finally {
+      scrollIntoView.mockRestore();
+    }
+  });
+
+  it("holds a reset plugin view's retry until the tab goes away with Settings", async () => {
+    const retry = vi.fn();
+    onPluginViewConsentReset("studio-03", "acme.graph", retry);
+    const { unmount } = render(
+      <TooltipProvider>
+        <HostsSettingsTab />
+      </TooltipProvider>
+    );
+    await screen.findByRole("button", { name: "Add host" });
+    act(() => notePluginViewConsentReset("studio-03", "acme.graph"));
+    expect(retry).not.toHaveBeenCalled();
+    unmount();
+    expect(retry).toHaveBeenCalledTimes(1);
   });
 });

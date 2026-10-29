@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import type { DriveLeaseView } from "@shared/types/ipc/driveLease";
+import type { SettingsNavTarget } from "@/components/Settings";
+
+const dispatch = vi.hoisted(() =>
+  vi.fn(async (_actionId: string, _args: SettingsNavTarget, _options: unknown) => ({ ok: true }))
+);
+vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 
 const takeControl = vi.hoisted(() => vi.fn(async (_projectId: string, _panelId?: string) => {}));
 vi.mock("@/components/Recovery/takeControl", () => ({
@@ -13,11 +19,22 @@ vi.mock("@/hooks/useHostConnection", async (importOriginal) => ({
   useHostConnection: () => ({ hostName: "studio-01" }),
 }));
 
-import { PluginViewBlockedPlaceholder } from "../PluginViewBlockedPlaceholder";
+import {
+  PluginViewBlockedError,
+  PluginViewBlockedPlaceholder,
+} from "../PluginViewBlockedPlaceholder";
+import { createPluginViewFallback } from "../PluginViewFallbacks";
 import {
   _resetDriveLeaseBannerForTesting,
   seedDriveLeaseView,
 } from "@/components/Recovery/driveLeaseState";
+import {
+  _resetPluginViewConsentResetsForTesting,
+  holdPluginViewRetries,
+  notePluginViewConsentReset,
+} from "@/components/Settings/Hosts/pluginViewConsentResets";
+import { takePendingHostPlugins } from "@/components/Settings/Hosts/hostPluginRequests";
+import { useSettingsDialog } from "@/hooks/app/useSettingsDialog";
 
 const lease = (drivingHere: boolean): DriveLeaseView => ({
   projectId: "proj-1",
@@ -34,10 +51,18 @@ const lease = (drivingHere: boolean): DriveLeaseView => ({
   viewerIsHostLocal: false,
 });
 
+beforeEach(() => {
+  window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+});
+
 afterEach(() => {
   cleanup();
   _resetDriveLeaseBannerForTesting();
+  _resetPluginViewConsentResetsForTesting();
+  takePendingHostPlugins();
+  delete window.__DAINTREE_HOST_ID__;
   takeControl.mockClear();
+  dispatch.mockClear();
 });
 
 describe("PluginViewBlockedPlaceholder", () => {
@@ -45,7 +70,11 @@ describe("PluginViewBlockedPlaceholder", () => {
     seedDriveLeaseView(lease(false));
     const onRetry = vi.fn();
     const { container } = render(
-      <PluginViewBlockedPlaceholder pluginDisplayName="Docker Console" onRetry={onRetry} />
+      <PluginViewBlockedPlaceholder
+        pluginId="acme.docker"
+        pluginDisplayName="Docker Console"
+        onRetry={onRetry}
+      />
     );
     expect(screen.getByText("Waiting for control")).toBeTruthy();
     expect(container.textContent).toContain(
@@ -69,8 +98,165 @@ describe("PluginViewBlockedPlaceholder", () => {
   it("says the view is blocked here when this window drives the project", () => {
     seedDriveLeaseView(lease(true));
     const onRetry = vi.fn();
-    render(<PluginViewBlockedPlaceholder pluginDisplayName="Docker Console" onRetry={onRetry} />);
+    render(
+      <PluginViewBlockedPlaceholder
+        pluginId="acme.docker"
+        pluginDisplayName="Docker Console"
+        onRetry={onRetry}
+      />
+    );
     expect(screen.getByText("Docker Console is blocked on this computer")).toBeTruthy();
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
+  it("opens this host's plugin views in Settings, and keeps Try again", async () => {
+    seedDriveLeaseView(lease(true));
+    const onRetry = vi.fn();
+    render(
+      <PluginViewBlockedPlaceholder
+        pluginId="acme.docker"
+        pluginDisplayName="Docker Console"
+        onRetry={onRetry}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open plugin views" }));
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+    const [actionId, target, options] = dispatch.mock.calls[0]!;
+    expect(actionId).toBe("app.settings.openTab");
+    expect(options).toEqual({ source: "user" });
+    // The target lands on that host's Plugin views, not its plugin list.
+    const { result } = renderHook(() => useSettingsDialog());
+    act(() => result.current.handleOpenSettingsTab(target));
+    expect(result.current.settingsTab).toBe("hosts");
+    expect(takePendingHostPlugins()).toEqual({
+      hostId: "studio-01",
+      sectionId: "host-plugin-views",
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers no Settings link in a window on this machine", () => {
+    delete window.__DAINTREE_HOST_ID__;
+    seedDriveLeaseView(lease(true));
+    render(
+      <PluginViewBlockedPlaceholder
+        pluginId="acme.docker"
+        pluginDisplayName="Docker Console"
+        onRetry={vi.fn()}
+      />
+    );
+    expect(screen.queryByRole("button", { name: "Open plugin views" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+  });
+
+  it("ignores resets of another plugin or another host", () => {
+    seedDriveLeaseView(lease(true));
+    const onRetry = vi.fn();
+    render(
+      <PluginViewBlockedPlaceholder
+        pluginId="acme.docker"
+        pluginDisplayName="Docker Console"
+        onRetry={onRetry}
+      />
+    );
+    act(() => notePluginViewConsentReset("studio-01", "acme.other"));
+    act(() => notePluginViewConsentReset("studio-02", "acme.docker"));
+    act(() => notePluginViewConsentReset("studio-02"));
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
+  it("asks again by itself once Settings closes after its answer was reset", () => {
+    seedDriveLeaseView(lease(true));
+    const firstRetry = vi.fn();
+    const onRetry = vi.fn();
+    const { rerender } = render(
+      <PluginViewBlockedPlaceholder
+        pluginId="acme.docker"
+        pluginDisplayName="Docker Console"
+        onRetry={firstRetry}
+      />
+    );
+    const closeSettings = holdPluginViewRetries();
+    act(() => notePluginViewConsentReset("studio-01", "acme.docker"));
+    rerender(
+      <PluginViewBlockedPlaceholder
+        pluginId="acme.docker"
+        pluginDisplayName="Docker Console"
+        onRetry={onRetry}
+      />
+    );
+    expect(onRetry).not.toHaveBeenCalled();
+    act(() => closeSettings());
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(firstRetry).not.toHaveBeenCalled();
+  });
+
+  it("drops a held retry once the view waits for control or goes away", () => {
+    seedDriveLeaseView(lease(true));
+    const onRetry = vi.fn();
+    const { unmount } = render(
+      <PluginViewBlockedPlaceholder
+        pluginId="acme.docker"
+        pluginDisplayName="Docker Console"
+        onRetry={onRetry}
+      />
+    );
+    const closeSettings = holdPluginViewRetries();
+    act(() => notePluginViewConsentReset("studio-01", "acme.docker"));
+    act(() => seedDriveLeaseView(lease(false)));
+    expect(screen.getByText("Waiting for control")).toBeTruthy();
+    act(() => closeSettings());
+    expect(onRetry).not.toHaveBeenCalled();
+    unmount();
+
+    seedDriveLeaseView(lease(true));
+    const gone = vi.fn();
+    const second = render(
+      <PluginViewBlockedPlaceholder
+        pluginId="acme.docker"
+        pluginDisplayName="Docker Console"
+        onRetry={gone}
+      />
+    );
+    const closeAgain = holdPluginViewRetries();
+    act(() => notePluginViewConsentReset("studio-01", "acme.docker"));
+    second.unmount();
+    closeAgain();
+    expect(gone).not.toHaveBeenCalled();
+  });
+
+  it("hands the fallback's plugin instance to the placeholder, so only its own reset retries it", () => {
+    seedDriveLeaseView(lease(true));
+    const instanceId = `project__${"b".repeat(64)}__acme.docker`;
+    const Fallback = createPluginViewFallback({
+      pluginId: instanceId,
+      kindId: "acme.docker.console",
+      displayName: "Docker Console",
+      componentPath: "plugin://acme-docker/view.js",
+    });
+    const resetError = vi.fn();
+    render(<Fallback error={new PluginViewBlockedError(instanceId)} resetError={resetError} />);
+    expect(screen.getByText(/is blocked on this computer/)).toBeTruthy();
+    act(() => notePluginViewConsentReset("studio-01", "acme.docker"));
+    act(() => notePluginViewConsentReset("studio-01", `project__${"c".repeat(64)}__acme.docker`));
+    expect(resetError).not.toHaveBeenCalled();
+    act(() => notePluginViewConsentReset("studio-01", instanceId));
+    expect(resetError).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a reset alone while the view waits for control", () => {
+    seedDriveLeaseView(lease(false));
+    const onRetry = vi.fn();
+    render(
+      <PluginViewBlockedPlaceholder
+        pluginId="acme.docker"
+        pluginDisplayName="Docker Console"
+        onRetry={onRetry}
+      />
+    );
+    act(() => notePluginViewConsentReset("studio-01", "acme.docker"));
     expect(onRetry).not.toHaveBeenCalled();
   });
 
@@ -82,6 +268,7 @@ describe("PluginViewBlockedPlaceholder", () => {
     const showWorktrees = vi.fn();
     render(
       <PluginViewBlockedPlaceholder
+        pluginId="acme.docker"
         pluginDisplayName="Docker Console"
         onRetry={vi.fn()}
         leave={{ label: "Show worktrees", onClick: showWorktrees }}

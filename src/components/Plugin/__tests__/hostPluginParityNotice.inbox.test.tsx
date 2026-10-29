@@ -133,7 +133,7 @@ describe("the host plugin notice in the inbox", () => {
     });
     expect(result.current.isSettingsOpen).toBe(true);
     expect(result.current.settingsTab).toBe("hosts");
-    expect(takePendingHostPlugins()).toBe("studio-01");
+    expect(takePendingHostPlugins()).toEqual({ hostId: "studio-01", sectionId: "host-plugins" });
     // The host's details open on their plugins; nothing else scrolls for them.
     expect(result.current.settingsSectionId).toBeUndefined();
   });
