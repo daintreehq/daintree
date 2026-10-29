@@ -169,7 +169,10 @@ describe("HostDetail SSH target", () => {
 
   it("still rebinds to a target that didn't connect, but only when asked outright", async () => {
     client.probe.mockImplementation(async () =>
-      probe({ reachable: false, sshError: "ssh: connect to host newbox port 22: Connection refused" })
+      probe({
+        reachable: false,
+        sshError: "ssh: connect to host newbox port 22: Connection refused",
+      })
     );
     render(<HostDetail entry={entry()} onBack={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "Change target…" }));

@@ -194,7 +194,9 @@ describe("DeviceAnswerGroup", () => {
     renderGroup(makeStatus({ enabled: true, listening: true }));
     const command = await screen.findByText("ssh -L 7421:127.0.0.1:7421 greg@studio.local");
     expect(command.textContent).not.toMatch(/[<>]/);
-    expect(screen.getByText(/greg@studio\.local is this machine's login and hostname/)).toBeTruthy();
+    expect(
+      screen.getByText(/greg@studio\.local is this machine's login and hostname/)
+    ).toBeTruthy();
   });
 
   it("announces the code once instead of every tick of its countdown", async () => {

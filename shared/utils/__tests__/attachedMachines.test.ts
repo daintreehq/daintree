@@ -41,9 +41,7 @@ describe("describeAttachedMachines", () => {
 
   it("counts several unnamed machines", () => {
     expect(describeAttachedMachines(["", " "]).subject).toBe("2 machines");
-    expect(describeAttachedMachines(["Studio", "", ""]).object).toBe(
-      "Studio and 2 other machines"
-    );
+    expect(describeAttachedMachines(["Studio", "", ""]).object).toBe("Studio and 2 other machines");
   });
 
   it("keeps a lowercase machine name as it is", () => {
