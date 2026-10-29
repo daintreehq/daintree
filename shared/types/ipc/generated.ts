@@ -1827,7 +1827,9 @@ export interface GeneratedIpcInvokeMap {
     result: { exists: boolean; alternateBufferEnabled: boolean; error?: string | undefined };
   };
   "git:discard-file-changes": {
-    args: [payload: { worktreePath: string; relativePath: string }];
+    args: [
+      payload: { worktreePath: string; relativePath: string; expectedToken?: string | undefined },
+    ];
     result: void;
   };
   "git:fetch": {
@@ -1864,6 +1866,10 @@ export interface GeneratedIpcInvokeMap {
       },
     ];
     result: void;
+  };
+  "git:preview-file-mutation": {
+    args: [payload: { worktreePath: string; relativePath: string; kind: "trash" | "discard" }];
+    result: import("../fileMutation.js").FileMutationPreview;
   };
   "git:rebase-onto-base": {
     args: [

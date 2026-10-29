@@ -415,6 +415,7 @@ export const CHANNELS = {
   GIT_PULL_REBASE: "git:pull-rebase",
   GIT_FETCH: "git:fetch",
   GIT_DISCARD_FILE_CHANGES: "git:discard-file-changes",
+  GIT_PREVIEW_FILE_MUTATION: "git:preview-file-mutation",
   GIT_FORCE_PUSH_WITH_LEASE: "git:force-push-with-lease",
   GIT_LIST_REMOTE_COMMITS: "git:list-remote-commits",
   GIT_LIST_PUSH_COMMITS: "git:list-push-commits",

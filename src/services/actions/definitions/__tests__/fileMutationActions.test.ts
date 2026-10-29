@@ -12,7 +12,10 @@ vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
 import { registerGitActions } from "../gitActions";
 import { registerFileActions } from "../fileActions";
-import { useFileMutationConfirmStore } from "@/store/fileMutationConfirmStore";
+import {
+  useFileMutationConfirmStore,
+  type FileMutationApproval,
+} from "@/store/fileMutationConfirmStore";
 import {
   resetStoreAccessorsForTesting,
   setWorktreePathIndexAccessor,
@@ -40,11 +43,11 @@ function setup() {
   };
 }
 
-async function answer(ok: boolean): Promise<void> {
+async function answer(approval: FileMutationApproval | null): Promise<void> {
   await vi.waitFor(() => {
     expect(useFileMutationConfirmStore.getState().pendingConfirm).not.toBeNull();
   });
-  useFileMutationConfirmStore.getState().resolveConfirmation(ok);
+  useFileMutationConfirmStore.getState().resolveConfirmation(approval);
 }
 
 const ARGS = { worktreePath: "/repo/one", filePath: "src/index.ts" };
@@ -60,7 +63,7 @@ beforeEach(() => {
 afterEach(() => {
   resetStoreAccessorsForTesting();
   if (useFileMutationConfirmStore.getState().pendingConfirm) {
-    useFileMutationConfirmStore.getState().resolveConfirmation(false);
+    useFileMutationConfirmStore.getState().resolveConfirmation(null);
   }
   Object.defineProperty(globalThis, "window", { value: undefined, configurable: true });
 });
@@ -77,11 +80,13 @@ describe.each([
       expect(useFileMutationConfirmStore.getState().pendingConfirm).toMatchObject({
         kind,
         relativePath: "src/index.ts",
+        // The dialog reads its preview from the resolved worktree.
+        worktreePath: "/repo/one",
       });
     });
     expect(ipc).not.toHaveBeenCalled();
 
-    await answer(true);
+    await answer({ token: null });
     await pending;
     expect(ipc).toHaveBeenCalledWith(PAYLOAD);
     expect(refreshMock).toHaveBeenCalledWith("wt-1");
@@ -91,7 +96,7 @@ describe.each([
     const run = setup();
     const pending = run(actionId, ARGS, { dispatchSource: "user" });
 
-    await answer(false);
+    await answer(null);
     await pending;
     expect(ipc).not.toHaveBeenCalled();
     expect(refreshMock).not.toHaveBeenCalled();
@@ -112,5 +117,16 @@ describe.each([
     const pending = run(actionId, ARGS, { dispatchSource: "agent" });
 
     await expect(pending).rejects.toThrow("No trash on this volume");
+  });
+});
+
+describe("git.discardFileChanges approval", () => {
+  it("hands the approved preview's token to the discard, so a changed file is refused", async () => {
+    const run = setup();
+    const pending = run("git.discardFileChanges", ARGS, { dispatchSource: "context-menu" });
+
+    await answer({ token: "fingerprint-1" });
+    await pending;
+    expect(discardMock).toHaveBeenCalledWith({ ...PAYLOAD, expectedToken: "fingerprint-1" });
   });
 });
