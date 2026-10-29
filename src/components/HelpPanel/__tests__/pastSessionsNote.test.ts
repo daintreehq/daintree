@@ -16,10 +16,9 @@ describe("withPastSessionsNote (#14979)", () => {
 
   it.each(
     CONSEQUENCES.flatMap((consequence) =>
-      ["copilot", "my-custom-agent", "constructor", "", null, undefined].map((id) => [
-        consequence,
-        id,
-      ])
+      ["copilot", "my-custom-agent", "constructor", "", null, undefined].map(
+        (id): [string, string | null | undefined] => [consequence, id]
+      )
     )
   )("leaves %j alone for %j", (consequence, agentId) => {
     expect(withPastSessionsNote(consequence, agentId)).toBe(consequence);
