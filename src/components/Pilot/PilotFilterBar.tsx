@@ -284,6 +284,9 @@ export function PilotFilterBar({
         const visual = segment === "all" ? null : segmentVisual(bands, segment);
         const label = PILOT_BAND_FILTER_LABEL[segment];
         const Icon = visual?.Icon;
+        // Still at zero, as in the sidebar's bar: spinning an empty bucket would
+        // claim work that isn't happening. Quiet stays still for its own reason
+        // (`SEGMENT_TONE`); the glyph rule names both.
         const isSpinning = segment === "working" && count > 0;
         const qualifier = segmentQualifier(bands, segment);
         const isHued = segment !== "all" && segmentIsHued(bands, segment);
