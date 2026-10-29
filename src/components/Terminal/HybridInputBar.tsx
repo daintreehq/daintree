@@ -1149,18 +1149,25 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     });
 
     // A send the terminal turned down leaves its draft where it was typed, and
-    // says so until the draft is next edited or sent (#14945). A dictated send
-    // says it through its own outcome instead.
-    const [refusedSendFor, setRefusedSendFor] = useState<string | null>(null);
+    // says so until the draft next changes or is sent again (#14945). An
+    // ordinary send owns the composer's spoken status from the moment it goes,
+    // so an earlier dictated send's outcome is never read out again over it;
+    // a dictated send leaves its own outcome to speak until it is refused.
+    const [sendNote, setSendNote] = useState<{ terminalId: string; refused: boolean } | null>(null);
     const submitAttemptRef = useRef(0);
     const notingRefusal = useCallback(
-      (submit: (outgoing: string) => Promise<boolean>, saidElsewhere: boolean) =>
+      (submit: (outgoing: string) => Promise<boolean>, dictated: boolean) =>
         async (outgoing: string): Promise<boolean> => {
           const attempt = ++submitAttemptRef.current;
-          setRefusedSendFor(null);
-          const accepted = await submit(outgoing).catch(() => false);
-          if (!accepted && !saidElsewhere && submitAttemptRef.current === attempt) {
-            setRefusedSendFor(terminalId);
+          setSendNote(dictated ? null : { terminalId, refused: false });
+          let accepted: boolean;
+          try {
+            accepted = await submit(outgoing);
+          } catch {
+            accepted = false;
+          }
+          if (!accepted && submitAttemptRef.current === attempt) {
+            setSendNote({ terminalId, refused: true });
           }
           return accepted;
         },
@@ -1171,8 +1178,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // from the command picker — goes through `submitText` when it is given, so
     // a refused send never eats the draft, whichever path sent it.
     const sendText = useCallback(
-      (text: string, options?: SendTextOptions & { refusalSaidElsewhere?: boolean }) => {
-        const { refusalSaidElsewhere = false, ...sendOptions } = options ?? {};
+      (text: string, options?: SendTextOptions & { dictated?: boolean }) => {
+        const { dictated = false, ...sendOptions } = options ?? {};
         if (sendOptions.submit) return sendResolvedText(text, sendOptions);
         // Claimed before any expansion is awaited, so a press while a diff
         // is fetched calls the hand-back off.
@@ -1189,7 +1196,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           // expansion awaited in between can outlast a lock or a restart.
           submit: notingRefusal(
             (outgoing) => submitTextRef.current?.(outgoing, imagePaths) ?? Promise.resolve(false),
-            refusalSaidElsewhere
+            dictated
           ),
         });
       },
@@ -1270,7 +1277,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         onHandedOff: handBack,
         keepDraft,
         dictationSessions: voiceSend?.sessions,
-        refusalSaidElsewhere: voiceSend !== undefined,
+        dictated: voiceSend !== undefined,
         // Routed at its key press: through the route, in place of `submitText`.
         ...(route && {
           submit: notingRefusal(
@@ -1333,7 +1340,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     );
     // The session's status on the border, for a draft that hides the
     // placeholder saying it. The send's own caption has the border first.
-    const isSendRefused = refusedSendFor === terminalId;
+    const ownSendNote = sendNote?.terminalId === terminalId ? sendNote : null;
+    const isSendRefused = ownSendNote?.refused === true;
     const showSendRefusedCaption = isSendRefused && !isVoiceSubmitting && !isVoiceSubmitPresenting;
     const showVoiceSessionCaption =
       voiceSessionStatus !== null &&
@@ -1365,7 +1373,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // Editor waits there, and a live region outside its modal goes unheard.
     const voiceSubmitAnnouncer = (
       <div role="status" aria-live="polite" className="sr-only">
-        {isSendRefused ? SEND_HELD_STATUS : voiceSubmitStatus}
+        {ownSendNote && !voiceSubmitWait
+          ? isSendRefused
+            ? SEND_HELD_STATUS
+            : ""
+          : voiceSubmitStatus}
       </div>
     );
     // The Expanded Editor has no composer shell to draw the wait's progress
@@ -1633,10 +1645,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       latestRef,
       activeTriggers,
       applyDocChange: (next) => {
+        // Before the guard: the composer's own writes (a template, a completion)
+        // change the draft the note was about too.
+        setSendNote((note) => (note?.refused ? { ...note, refused: false } : note));
         if (next === lastEmittedValueRef.current) return false;
         lastEmittedValueRef.current = next;
         setValue(next);
-        setRefusedSendFor(null);
         return true;
       },
       consumeExternalValueFlag: () => {

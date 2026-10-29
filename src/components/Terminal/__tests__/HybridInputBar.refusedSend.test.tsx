@@ -107,35 +107,44 @@ function terminal() {
   pane.innerHTML = '<div class="xterm"><textarea></textarea></div>';
   document.body.appendChild(pane);
   const textarea = pane.querySelector("textarea")!;
-  unregisterTerminal = registerPanelFocusHandler("term-1", (surface?: string) => {
+  const handler = vi.fn((surface?: string) => {
     if (surface !== "xterm") return false;
     textarea.focus();
     return true;
   });
-  return { textarea };
+  unregisterTerminal = registerPanelFocusHandler("term-1", handler);
+  return { textarea, handler };
 }
 
-async function mount() {
-  const { textarea } = terminal();
+async function mount({ isolated = false } = {}) {
+  const { textarea, handler } = terminal();
   const settles: Array<(accepted: boolean) => void> = [];
   const onSend = vi.fn();
   const submitText = vi.fn(
     (_text: string, _imagePaths: readonly string[]) =>
       new Promise<boolean>((resolve) => settles.push(resolve))
   );
-  const result = render(
+  const worktreeStore = createWorktreeStore();
+  const bar = (terminalId: string) => (
     <TooltipProvider>
-      <WorktreeStoreContext.Provider value={createWorktreeStore()}>
+      <WorktreeStoreContext.Provider value={worktreeStore}>
         <HybridInputBar
-          terminalId="term-1"
+          terminalId={terminalId}
           cwd={WT_ID}
           agentId="claude"
           onSend={onSend}
           submitText={submitText}
+          isolated={isolated}
         />
       </WorktreeStoreContext.Provider>
     </TooltipProvider>
   );
+  const result = render(bar("term-1"));
+  const switchTo = async (terminalId: string) => {
+    await act(async () => {
+      result.rerender(bar(terminalId));
+    });
+  };
   await act(async () => {});
   const view = EditorView.findFromDOM(result.container.querySelector<HTMLElement>(".cm-editor")!)!;
   view.contentDOM.focus();
@@ -173,7 +182,9 @@ async function mount() {
     settle,
     caption,
     announced,
+    switchTo,
     textarea,
+    handler,
   };
 }
 
@@ -264,14 +275,83 @@ describe("HybridInputBar with a host that says whether the terminal took the sen
     expect(caption()).toBeNull();
   });
 
-  it("treats a submission that throws as refused", async () => {
+  it.each([
+    ["rejects", () => Promise.reject(new Error("pty gone"))],
+    [
+      "throws",
+      () => {
+        throw new Error("pty gone");
+      },
+    ],
+  ])("treats a submission that %s as refused", async (_, refuse) => {
     const { submitText, view, type, pressEnter, caption } = await mount();
-    submitText.mockImplementationOnce(() => Promise.reject(new Error("pty gone")));
+    submitText.mockImplementationOnce(refuse);
     await type("ship it");
     await pressEnter();
     await act(async () => {});
 
     expect(view.state.doc.toString()).toBe("ship it");
     expect(caption()?.textContent).toBe("Not sent");
+  });
+
+  it("drops the note when the composer moves to another terminal, and a late refusal stays with the first", async () => {
+    const { type, pressEnter, settle, caption, announced, switchTo } = await mount();
+    await type("ship it");
+    await pressEnter();
+    await settle(false);
+    expect(caption()).not.toBeNull();
+
+    await switchTo("term-2");
+    expect(caption()).toBeNull();
+    expect(announced()).not.toContain("Not sent");
+
+    await switchTo("term-1");
+    await type("again");
+    await pressEnter();
+    await switchTo("term-2");
+    await settle(false);
+    expect(caption()).toBeNull();
+  });
+
+  it("says a refused send wasn't sent in an isolated composer too, and never hands the keyboard back", async () => {
+    const { view, type, pressEnter, settle, caption, handler } = await mount({ isolated: true });
+    await type("ship it");
+    await pressEnter();
+    await settle(false);
+    expect(caption()?.textContent).toBe("Not sent");
+
+    await pressEnter();
+    await settle(true);
+    expect(view.state.doc.toString()).toBe("");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  // The claim is the Enter's, not the moment the text finally goes out.
+  it.each([
+    ["hands back", false],
+    ["leaves the keyboard alone after a press", true],
+  ])("%s once a @diff fetched before the send is accepted", async (_, pressed) => {
+    const { view, type, pressEnter, settle, handler, submitText } = await mount();
+    let deliverDiff!: (diff: string) => void;
+    (window as { electron?: unknown }).electron = {
+      git: {
+        getWorkingDiff: vi.fn(
+          () =>
+            new Promise<string>((resolve) => {
+              deliverDiff = resolve;
+            })
+        ),
+      },
+    };
+    await type("review @diff");
+    await pressEnter();
+    if (pressed) document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    await act(async () => deliverDiff("diff --git a/x b/x"));
+    expect(submitText).toHaveBeenCalledTimes(1);
+
+    await settle(true);
+
+    expect(handler).toHaveBeenCalledTimes(pressed ? 0 : 1);
+    expect(document.activeElement === view.contentDOM).toBe(pressed);
   });
 });

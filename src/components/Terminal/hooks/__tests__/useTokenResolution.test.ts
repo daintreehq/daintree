@@ -443,7 +443,7 @@ describe("useTokenResolution.sendText — the pane's acceptance (#14692)", () =>
     await expect(onHandedOff.mock.calls[0]![0]).resolves.toBe(true);
   });
 
-  it("hands on nothing from an accepted submit whose draft changed while it was on its way", async () => {
+  it("hands on nothing from an accepted submit that leaves the draft alone", async () => {
     const { sendText, clearDraftInput } = setup();
     const onHandedOff = vi.fn();
 
