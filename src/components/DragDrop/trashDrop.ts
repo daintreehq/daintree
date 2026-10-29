@@ -4,6 +4,7 @@ import {
   hasPanelCloseGuard,
   isPanelClosePending,
 } from "@/services/panelCloseGuard";
+import { isOptimisticallyClosing } from "@/services/terminal/optimisticPanelClose";
 
 function groupMemberIds(panelId: string): string[] {
   const group = usePanelStore.getState().getPanelGroup(panelId);
@@ -30,14 +31,17 @@ export function trashDroppedPanel(panelId: string): void {
   void consultPanelCloseGuards(memberIds).then((proceed) => {
     if (!proceed) return;
     // The prompt took time. The panel may have been removed or trashed by
-    // another path meanwhile, or its group may have gained a member nobody
-    // was asked about — the next drop will ask.
+    // another path meanwhile, a member may be queued in the optimistic close
+    // coordinator (trashing it here too would overwrite its restore record),
+    // or the group may have changed under a prompt that only asked about its
+    // old members — the next drop will ask again.
     const panel = usePanelStore.getState().panelsById[panelId];
     if (panel === undefined || panel.location === "trash") return;
     const currentIds = groupMemberIds(panelId);
     if (
       currentIds.length !== memberIds.length ||
-      currentIds.some((id) => !memberIds.includes(id))
+      currentIds.some((id) => !memberIds.includes(id)) ||
+      currentIds.some(isOptimisticallyClosing)
     ) {
       return;
     }
