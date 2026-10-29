@@ -130,6 +130,28 @@ describe("diffNotesStore", () => {
     });
     expect(merged.state.notes).toEqual({});
   });
+
+  it("doesn't let an Undo overwrite a revision a sibling saved after the send", () => {
+    const original = add();
+    const rewritten = { ...original, body: "Rewritten elsewhere", updatedAt: original.updatedAt + 1 };
+    const merged = mergeDiffNotesPersistedWrite({
+      baseline: { version: 0, state: { notes: {} } },
+      incoming: { version: 0, state: { notes: { [original.id]: original } } },
+      onDisk: { version: 0, state: { notes: { [original.id]: rewritten } } },
+    });
+    expect(merged.state.notes).toEqual({ [original.id]: rewritten });
+  });
+
+  it("lands an Undo when disk no longer holds the note", () => {
+    const original = add();
+    const other = add("src/b.ts");
+    const merged = mergeDiffNotesPersistedWrite({
+      baseline: { version: 0, state: { notes: { [other.id]: other } } },
+      incoming: { version: 0, state: { notes: { [original.id]: original, [other.id]: other } } },
+      onDisk: { version: 0, state: { notes: { [other.id]: other } } },
+    });
+    expect(merged.state.notes).toEqual({ [original.id]: original, [other.id]: other });
+  });
 });
 
 describe("diffNotesStore restoreNote — the Undo for deleteNote", () => {

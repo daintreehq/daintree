@@ -43,7 +43,7 @@ A D0 change that the app can put back **exactly** — same id, same position, no
 
 Restart and kill follow the same logic from the other side: they act at once on an idle terminal and confirm only while an agent is working, through `TerminalDestructiveActionConfirmDialog` from every entry point (right-click menu, pane overflow menu, keybinding, palette). A menu item never arms itself for a second click; the confirm is always the dialog.
 
-Current sites: diff-note delete, reset hidden commands, clear log-level overrides, unbind a conflicting shortcut, mark notifications read, mute project notifications, silence a notification kind, issue assignment on worktree create, quick-create a worktree, remove a portal link, reset the toolbar, reset worktree split ratios, delete a saved fleet. What stays a confirm: `keybinding.resetAll` and the agent settings reset (the defaults replace per-agent flags and bindings built up over time, and one Undo toast is too thin a net for that), and anything D1 and above.
+Current sites: diff-note delete, send diff notes (Undo restores the notes, not the paste), reset hidden commands, clear log-level overrides, unbind a conflicting shortcut, mark notifications read, mute project notifications, silence a notification kind, issue assignment on worktree create, quick-create a worktree, remove a portal link, reset the toolbar, reset worktree split ratios, delete a saved fleet. What stays a confirm: `keybinding.resetAll` and the agent settings reset (the defaults replace per-agent flags and bindings built up over time, and one Undo toast is too thin a net for that), and anything D1 and above.
 
 ## Audit table
 
