@@ -26,9 +26,17 @@ export function isComponent<P>(value: unknown): value is ComponentType<P> {
  *
  * The output goes outside `src`, which the contract tests walk while this
  * runs, with relative imports made absolute; `removeCompiledModules` deletes it.
+ *
+ * The panic threshold is the dev server's: a component the compiler rejects
+ * fails the whole module there, while the build's "none" would quietly leave
+ * it uncompiled and the test would drive code the app never runs.
  */
 export async function importCompiled(absoluteSource: string): Promise<Record<string, unknown>> {
-  const { preset } = reactCompilerPreset({ compilationMode: "infer", target: "19" });
+  const { preset } = reactCompilerPreset({
+    compilationMode: "infer",
+    panicThreshold: "critical_errors",
+    target: "19",
+  });
   const result = transformSync(readFileSync(absoluteSource, "utf8"), {
     filename: absoluteSource,
     babelrc: false,
