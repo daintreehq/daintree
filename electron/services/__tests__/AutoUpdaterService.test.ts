@@ -133,7 +133,10 @@ const updateWarningMock = vi.hoisted(() => ({
   getActiveAgentCount: vi.fn(() => 0),
 }));
 vi.mock("../../utils/quitWarning.js", () => updateWarningMock);
-vi.mock("../AgentAvailabilityStore.js", () => ({ getAgentAvailabilityStore: () => ({}) }));
+const agentStoreMock = vi.hoisted(() => ({ store: { id: "agent-availability" } }));
+vi.mock("../AgentAvailabilityStore.js", () => ({
+  getAgentAvailabilityStore: () => agentStoreMock.store,
+}));
 
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastMock,
@@ -2329,6 +2332,7 @@ describe("AutoUpdaterService", () => {
 
         await expect(autoUpdaterService.confirmAndQuitAndInstall()).resolves.toBe(false);
 
+        expect(updateWarningMock.getActiveAgentCount).toHaveBeenCalledWith(agentStoreMock.store);
         expect(updateWarningMock.showUpdateWarning).toHaveBeenCalledWith(
           { activeAgents: 2, attachedShells: [] },
           expect.anything(),
@@ -2392,6 +2396,43 @@ describe("AutoUpdaterService", () => {
         await first;
 
         expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).not.toHaveBeenCalled();
+      });
+
+      describe("when the channel switches while the dialog is open", () => {
+        let answer: (confirmed: boolean) => void = () => {};
+        const switchChannel = () =>
+          (
+            (ipcMainMock.handle as Mock).mock.calls.find(
+              (args) => args[0] === CHANNELS.UPDATE_SET_CHANNEL
+            )![1] as (event: unknown, channel: unknown) => Promise<unknown>
+          )(null, "nightly");
+
+        beforeEach(() => {
+          updateWarningMock.showUpdateWarning.mockReturnValue(
+            new Promise<boolean>((resolve) => {
+              answer = resolve;
+            })
+          );
+        });
+
+        it("installs nothing from the menu", async () => {
+          const pending = autoUpdaterService.confirmAndQuitAndInstall();
+          await switchChannel();
+          answer(true);
+
+          await expect(pending).resolves.toBe(false);
+          expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).not.toHaveBeenCalled();
+        });
+
+        it("installs nothing from the toast", async () => {
+          quitHandler()(TRUSTED_SENDER);
+          await vi.waitFor(() => expect(updateWarningMock.showUpdateWarning).toHaveBeenCalled());
+          await switchChannel();
+          answer(true);
+          await vi.waitFor(() => expect(isExitConfirmationPending()).toBe(false));
+
+          expect(shutdownCoordinatorMock.requestGracefulShutdownForUpdate).not.toHaveBeenCalled();
+        });
       });
 
       it("restarts straight away once nothing is working", async () => {
