@@ -195,9 +195,11 @@ export function EnvironmentSettingsTab() {
   // for a write that can still fail.
   const saveInFlightRef = useRef<Promise<SettingsFlushFailure | undefined> | null>(null);
   const handleSave = () => {
-    saveInFlightRef.current ??= save().finally(() => {
-      saveInFlightRef.current = null;
-    });
+    if (!saveInFlightRef.current) {
+      saveInFlightRef.current = save().finally(() => {
+        saveInFlightRef.current = null;
+      });
+    }
     return saveInFlightRef.current;
   };
 

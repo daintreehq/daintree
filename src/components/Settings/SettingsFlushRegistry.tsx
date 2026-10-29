@@ -64,15 +64,16 @@ export function SettingsFlushProvider({ children }: ProviderProps) {
     const flushers = Array.from(flushersRef.current.entries());
     const outcomes = await Promise.all(
       flushers.map(async ([tab, fn]): Promise<FailedSettingsFlush | null> => {
+        let failure: SettingsFlushFailure | void;
         try {
-          const failure = await fn();
-          return failure ? { tab, landOn: failure.landOn } : null;
+          failure = await fn();
         } catch (err) {
           // A flush that throws has no message on its page, so holding the dialog
           // open on it would leave Settings unclosable with nothing saying why.
           logError("Settings flush failed", err);
           return null;
         }
+        return failure ? { tab, landOn: failure.landOn } : null;
       })
     );
     return outcomes.filter((outcome): outcome is FailedSettingsFlush => outcome !== null);
