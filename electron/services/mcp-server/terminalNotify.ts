@@ -25,11 +25,13 @@ import { readTailSnapshot } from "../../../shared/utils/artifactParser.js";
 import { evaluateWakeGate, wakeGateOptionsFor } from "../../../shared/utils/terminalWakeGate.js";
 import { createLogger } from "../../utils/logger.js";
 import {
+  formatAssistantApprovalLine,
   formatHostNoticeLine,
   formatHostNoticesLostLine,
   formatHostWatchLine,
   formatNoticeLine,
   formatRetiredExchangesLine,
+  type AssistantApproval,
   type FiredNotice,
   type HostWatchNotice,
   type NoticeObservation,
@@ -37,11 +39,13 @@ import {
 import { REPLY_SEARCH_ROWS, extractReply, type ObservedMarker } from "./noticeReply.js";
 
 export {
+  formatAssistantApprovalLine,
   formatHostNoticeLine,
   formatHostNoticesLostLine,
   formatHostWatchLine,
   formatNoticeLine,
   formatRetiredExchangesLine,
+  type AssistantApproval,
   type FiredNotice,
   type HostWatchNotice,
   type NoticeObservation,
@@ -307,9 +311,10 @@ export interface LaneWake {
    * (#13496), in {@link LaneWake.retired}; `lost` says a host no longer holds
    * notices the run asked it for (#13930), in {@link LaneWake.lostNotices};
    * `watch` says what became of a `host.watch` the run armed (#14463), in
-   * {@link LaneWake.hostWatch}.
+   * {@link LaneWake.hostWatch}; `approval` says the user approved a refused
+   * tool from the panel (#14995), in {@link LaneWake.approval}.
    */
-  kind: "notice" | "retired" | "lost" | "watch";
+  kind: "notice" | "retired" | "lost" | "watch" | "approval";
   /**
    * A `notice`'s observation. Only the host's name as this Shell knows it and
    * the host's observations: the line is still Daintree's own wording.
@@ -321,6 +326,8 @@ export interface LaneWake {
   lostNotices?: { hostName: string; terminalIds: readonly string[] };
   /** A `watch` line's fixed facts. */
   hostWatch?: HostWatchNotice;
+  /** An `approval` line's tool or tier. */
+  approval?: AssistantApproval;
   /** Asked synchronously immediately before the line is typed, and while it waits. */
   recheck(): LaneWakeCheck;
   /**
@@ -2176,6 +2183,11 @@ export class TerminalNotifyService {
       ...wakes.flatMap(({ wake }) =>
         wake.kind === "watch" && wake.hostWatch !== undefined
           ? [formatHostWatchLine(wake.hostWatch)]
+          : []
+      ),
+      ...wakes.flatMap(({ wake }) =>
+        wake.kind === "approval" && wake.approval !== undefined
+          ? [formatAssistantApprovalLine(wake.approval)]
           : []
       ),
       ...(entries.length > 0
