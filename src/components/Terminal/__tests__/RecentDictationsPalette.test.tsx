@@ -28,8 +28,14 @@ const recovery = vi.hoisted(() => ({
   insertRecentDictation: vi.fn<(d: RecentDictation, version?: string) => string | null>(),
   copyRecentDictation: vi.fn<(d: RecentDictation, version?: string) => void>(),
   focusRecoveredComposer: vi.fn<(panelId: string) => void>(),
+  resolveRecentDictationDestination:
+    vi.fn<
+      () => { ok: true; target: { panelId: string }; label: string } | { ok: false; reason: string }
+    >(),
 }));
 vi.mock("@/services/recentDictationRecovery", () => recovery);
+
+const READY = { ok: true as const, target: { panelId: "p9" }, label: "Claude · daintree / main" };
 
 // Copy is Cmd+Enter on macOS and Ctrl+Enter elsewhere; each test picks one.
 const platform = vi.hoisted(() => ({ mac: true }));
@@ -101,6 +107,7 @@ describe("RecentDictationsPalette", () => {
     recovery.insertRecentDictation.mockReset().mockReturnValue("p9");
     recovery.copyRecentDictation.mockReset();
     recovery.focusRecoveredComposer.mockReset();
+    recovery.resolveRecentDictationDestination.mockReset().mockReturnValue(READY);
     platform.mac = true;
     useRecentDictationsStore.getState().setDictations([NEWER, OLDER]);
     usePaletteStore.getState().openPalette("recent-dictations");
@@ -152,13 +159,22 @@ describe("RecentDictationsPalette", () => {
     composer.remove();
   });
 
-  it("closes without moving focus when the add is refused", async () => {
-    recovery.insertRecentDictation.mockReturnValue(null);
+  it("stays open with the search when the add is refused, and says why", async () => {
+    recovery.resolveRecentDictationDestination.mockReturnValue({
+      ok: false,
+      reason: "focus an agent's input first",
+    });
     const input = renderPalette();
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "lexer" } });
+    });
     await press(input, {});
 
+    expect(recovery.insertRecentDictation).not.toHaveBeenCalled();
     expect(recovery.focusRecoveredComposer).not.toHaveBeenCalled();
-    expect(isOpen()).toBe(false);
+    expect(isOpen()).toBe(true);
+    expect(input.value).toBe("lexer");
+    expect(document.body.textContent).toContain("Not added to draft: focus an agent's input first");
   });
 
   it.each([

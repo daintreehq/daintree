@@ -12,6 +12,8 @@ import {
   type RecentDictationDestination,
 } from "@/services/recentDictationRecovery";
 
+const RECHECK_MS = 1000;
+
 function sameDestination(a: RecentDictationDestination, b: RecentDictationDestination): boolean {
   if (a.ok) return b.ok && a.target.panelId === b.target.panelId && a.label === b.label;
   return !b.ok && a.reason === b.reason;
@@ -22,6 +24,8 @@ function sameDestination(a: RecentDictationDestination, b: RecentDictationDestin
  * palette and menu can name it, or say why there's nowhere, before the pick
  * (#15127). The voice store ticks with the mic level while recording, so an
  * unchanged answer keeps its identity rather than re-rendering the caller.
+ * A Canopy reply's readiness lives in its card, outside every store here, so
+ * a slow re-check catches it too; the pick re-checks regardless.
  */
 export function useRecentDictationDestination(active: boolean): RecentDictationDestination {
   const [destination, setDestination] = useState(resolveRecentDictationDestination);
@@ -44,7 +48,11 @@ export function useRecentDictationDestination(active: boolean): RecentDictationD
       useMacroFocusStore.subscribe(update),
       subscribeTerminalInputGate(update),
     ];
-    return () => stops.forEach((stop) => stop());
+    const recheck = window.setInterval(update, RECHECK_MS);
+    return () => {
+      window.clearInterval(recheck);
+      stops.forEach((stop) => stop());
+    };
   }, [active]);
 
   return destination;

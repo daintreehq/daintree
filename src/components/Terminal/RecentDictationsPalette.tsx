@@ -26,6 +26,7 @@ import {
   copyRecentDictation,
   focusRecoveredComposer,
   insertRecentDictation,
+  resolveRecentDictationDestination,
   type RecentDictationDestination,
 } from "@/services/recentDictationRecovery";
 import { excerptPreview, findPreviewMatches, type MatchRange } from "@/utils/promptHistoryPreview";
@@ -33,6 +34,8 @@ import { excerptPreview, findPreviewMatches, type MatchRange } from "@/utils/pro
 const PALETTE_ID: PaletteId = "recent-dictations";
 const PREVIEW_ID = "recent-dictation-preview";
 const PREVIEW_HINT_ID = "recent-dictation-preview-hint";
+/** The preview's scroller, which Page Up and Page Down move from the search field. */
+const PREVIEW_SCROLL_ID = "recent-dictation-preview-scroll";
 
 interface RecentDictationItem {
   id: string;
@@ -109,8 +112,11 @@ function toVerbatim(ranges: MatchRange[] | undefined, offsets: number[]): MatchR
   return ranges?.map(([start, end]): MatchRange => [offsets[start]!, offsets[end]!]);
 }
 
-function attemptKey(item: RecentDictationItem, query: string, reason: string): string {
-  return `${item.id}\u0000${query}\u0000${reason}`;
+/** An add the pick refused, and where: the receipt belongs to that row and that search. */
+interface RefusedAttempt {
+  itemId: string;
+  query: string;
+  reason: string;
 }
 
 function wordCount(text: string): number {
@@ -259,9 +265,12 @@ function RecentDictationRow({
       aria-selected={isSelected}
       onPointerDown={(e) => e.preventDefault()}
       onPointerMove={() => onHoverIndex(index)}
-      onClick={(e) =>
-        onPick(item, isMac() ? e.metaKey : e.ctrlKey, e.altKey ? "original" : "cleaned")
-      }
+      onClick={(e) => {
+        // Selected first: touch and assistive technology activate a row with
+        // no pointer move, and a refusal is reported for the selected row.
+        onHoverIndex(index);
+        onPick(item, isMac() ? e.metaKey : e.ctrlKey, e.altKey ? "original" : "cleaned");
+      }}
       className={cn(
         PALETTE_ROW_CLASS,
         "w-full flex items-start gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left text-text-secondary"
@@ -293,9 +302,8 @@ function RecentDictationRow({
               </span>
               {item.place && (
                 <>
-                  <span aria-hidden="true" className="shrink-0 px-1">
-                    ·
-                  </span>
+                  {/* Spaces in the text, so the option's name reads "Codex · daintree". */}
+                  <span className="shrink-0 whitespace-pre"> · </span>
                   <span className="min-w-0 truncate">
                     <HighlightedText text={place.text} indices={place.indices} />
                   </span>
@@ -401,7 +409,6 @@ interface RecentDictationPreviewProps {
   matches: readonly FuseResultMatch[] | undefined;
   destination: RecentDictationDestination;
   onPick: (item: RecentDictationItem, copy: boolean, version: RecentDictationVersion) => void;
-  scrollRef: React.RefObject<HTMLDivElement | null>;
 }
 
 function RecentDictationPreview({
@@ -410,13 +417,13 @@ function RecentDictationPreview({
   matches,
   destination,
   onPick,
-  scrollRef,
 }: RecentDictationPreviewProps) {
   const { dictation } = item;
   const hasOriginal = dictation.correctedText !== null;
   const cleaned = recentDictationText(dictation);
   const q = query.trim();
   const found = rowMatches(item, query, matches);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const originalRef = useRef<HTMLElement>(null);
 
   // A new selection starts at the top, unless the reason it matched is only
@@ -428,7 +435,7 @@ function RecentDictationPreview({
     const original = originalRef.current;
     scroller.scrollTop =
       matchOnlyInOriginal && original ? original.offsetTop - scroller.offsetTop - 12 : 0;
-  }, [item.id, q, matchOnlyInOriginal, scrollRef]);
+  }, [item.id, q, matchOnlyInOriginal]);
 
   const words = wordCount(dictation.rawText);
 
@@ -444,6 +451,7 @@ function RecentDictationPreview({
     >
       <ScrollShadow
         ref={scrollRef}
+        id={PREVIEW_SCROLL_ID}
         className="max-h-[60vh] flex-1 max-[900px]:max-h-[34vh]"
         scrollClassName="px-4 py-3"
       >
@@ -500,7 +508,6 @@ function RecentDictationPreview({
  */
 export function RecentDictationsPalette() {
   const dictations = useRecentDictationsStore((s) => s.dictations);
-  const previewScrollRef = useRef<HTMLDivElement>(null);
 
   const items = useMemo<RecentDictationItem[]>(
     () =>
@@ -536,16 +543,21 @@ export function RecentDictationsPalette() {
   const { isOpen, query, results, selectedIndex, setQuery, setSelectedIndex, close } = palette;
   const destination = useRecentDictationDestination(isOpen);
   // The add Enter just refused, so the footer can say it didn't happen
-  // rather than repeat what it said before the press. Keyed on what was
-  // tried, so a new selection, query or destination reads fresh.
-  const [refusedAttempt, setRefusedAttempt] = useState<string | null>(null);
+  // rather than repeat what it said before the press, with the reason the
+  // pick itself found.
+  const [refusedAttempt, setRefusedAttempt] = useState<RefusedAttempt | null>(null);
   // Cleared, not just hidden, once its moment passes: coming back to the row
-  // later must not show a refusal nobody just asked for.
+  // later must not show a refusal nobody just asked for. A pick that selects
+  // its row as it's refused keeps the receipt it just made.
   const selectedId = results[selectedIndex]?.id ?? null;
-  const destinationKey = destination.ok ? destination.label : destination.reason;
   useEffect(() => {
-    setRefusedAttempt(null);
-  }, [isOpen, selectedId, query, destinationKey]);
+    setRefusedAttempt((attempt) =>
+      isOpen && attempt?.itemId === selectedId && attempt.query === query ? attempt : null
+    );
+  }, [isOpen, selectedId, query]);
+  useEffect(() => {
+    if (destination.ok) setRefusedAttempt(null);
+  }, [destination.ok]);
 
   useEffect(() => {
     if (isOpen) setQuery("");
@@ -570,24 +582,31 @@ export function RecentDictationsPalette() {
         close();
         return;
       }
-      // Refused before it's tried: the footer already says why, so the
-      // palette stays open with the search and selection as they were.
-      if (!destination.ok) {
-        setRefusedAttempt(attemptKey(item, query, destination.reason));
-        useAnnouncerStore
-          .getState()
-          .announce(`Not added to draft: ${destination.reason}`, "assertive");
+      // Checked afresh at the pick, not from what the footer last showed: a
+      // refusal keeps the palette open with the search and selection as
+      // they were, and says why in place.
+      const refuse = (reason: string) => {
+        setRefusedAttempt({ itemId: item.id, query, reason });
+        useAnnouncerStore.getState().announce(`Not added to draft: ${reason}`, "assertive");
+      };
+      const fresh = resolveRecentDictationDestination();
+      if (!fresh.ok) {
+        refuse(fresh.reason);
         return;
       }
       const panelId = insertRecentDictation(item.dictation, version);
-      if (!panelId) return;
+      if (!panelId) {
+        const again = resolveRecentDictationDestination();
+        if (!again.ok) refuse(again.reason);
+        return;
+      }
       // The keyboard goes to the composer the words went into, not back to
       // whatever opened the palette.
       suppressPaletteFocusRestore();
       close();
       focusRecoveredComposer(panelId);
     },
-    [close, destination, query]
+    [close, query]
   );
 
   const handleConfirm = useCallback(
@@ -602,7 +621,7 @@ export function RecentDictationsPalette() {
     (e: React.KeyboardEvent<HTMLInputElement>) => {
       // The preview scrolls from the search field, which keeps the keyboard.
       if (e.key === "PageDown" || e.key === "PageUp") {
-        const scroller = previewScrollRef.current;
+        const scroller = document.getElementById(PREVIEW_SCROLL_ID);
         if (!scroller) return;
         e.preventDefault();
         const page = scroller.clientHeight * 0.85;
@@ -627,11 +646,15 @@ export function RecentDictationsPalette() {
       // PaletteFooterHints because the lead wraps instead of truncating: the
       // destination is the last check against adding to the wrong pane, and a
       // long title must not cost it its worktree, nor a reason its condition.
-      const refused =
-        !destination.ok && refusedAttempt === attemptKey(item, query, destination.reason);
+      const refusal =
+        refusedAttempt?.itemId === item.id && refusedAttempt.query === query
+          ? `Not added to draft: ${refusedAttempt.reason}`
+          : null;
+      const warning =
+        refusal ?? (destination.ok ? null : `Can't add to a draft: ${destination.reason}`);
       return (
         <div className="@container/palette-footer flex w-full min-w-0 items-baseline justify-between gap-4">
-          {destination.ok ? (
+          {warning === null && destination.ok ? (
             <span className="flex min-w-0 items-baseline gap-1.5">
               <KeyCaps keys={["↵"]} />
               <span className="min-w-0 break-words">
@@ -645,9 +668,7 @@ export function RecentDictationsPalette() {
                 className="mt-px size-3.5 shrink-0 self-start text-status-warning"
                 aria-hidden="true"
               />
-              <span className="min-w-0 break-words text-text-primary">
-                {refused ? "Not added to draft" : "Can't add to a draft"}: {destination.reason}
-              </span>
+              <span className="min-w-0 break-words text-text-primary">{warning}</span>
             </span>
           )}
           {/* Copy works either way, so its hint stays until the footer is too
@@ -671,7 +692,6 @@ export function RecentDictationsPalette() {
           matches={palette.matchesById.get(item.id)}
           destination={destination}
           onPick={pick}
-          scrollRef={previewScrollRef}
         />
       ) : null,
     [query, palette.matchesById, destination, pick]
