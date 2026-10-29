@@ -19,6 +19,8 @@ const RESUMABLE_STATUSES = new Set(["paused", "stopped"]);
 // "stopped" kept only to gracefully handle a transient read from a CLI
 // that hasn't switched to "paused" yet; the schema/UI no longer emit it.
 
+const RESOURCE_ENVIRONMENT_CHANGED_ERROR = "Resource environment changed";
+
 const DEFAULT_TIMEOUT_MS = {
   provision: 300_000,
   teardown: 300_000,
@@ -60,9 +62,18 @@ export class ResourceActionExecutor {
     worktreeId: string,
     action: "provision" | "teardown" | "resume" | "pause" | "status",
     environmentId: string | undefined,
+    environmentEpoch: number,
     signal: AbortSignal
   ): Promise<{ success: boolean; error?: string; output?: string }> {
     if (this.disposed) return { success: false, error: "Aborted" };
+
+    // What this action learns describes the environment it was asked about, so
+    // once the worktree has moved to another one it stops writing (#15005).
+    // Commands already running are left to finish.
+    const monitorInEnvironment = (): WorktreeMonitor | undefined => {
+      const live = this.ctx.getMonitor(worktreeId);
+      return live?.resourceEnvironmentEpoch === environmentEpoch ? live : undefined;
+    };
 
     const monitor = this.ctx.getMonitor(worktreeId);
     const projectRootPath = this.ctx.getProjectRootPath();
@@ -140,6 +151,16 @@ export class ResourceActionExecutor {
       resourceEnvironments,
       projectRootPath
     );
+
+    if (monitor.resourceEnvironmentEpoch !== environmentEpoch) {
+      this.ctx.sendEvent({
+        type: "resource-action-result",
+        requestId,
+        success: false,
+        error: RESOURCE_ENVIRONMENT_CHANGED_ERROR,
+      });
+      return { success: false, error: RESOURCE_ENVIRONMENT_CHANGED_ERROR };
+    }
 
     const previousConnectCommand = monitor.resourceConnectCommand;
     applyResourceConfigToMonitor(monitor, resourceConfig, sub, commandsApproved);
@@ -258,8 +279,18 @@ export class ResourceActionExecutor {
       }
 
       // Re-read monitor after await — it may have been removed during the command
-      const statusMonitor = this.ctx.getMonitor(worktreeId);
-      if (!statusMonitor) return { success: false, error: "Worktree removed" };
+      if (!this.ctx.getMonitor(worktreeId)) return { success: false, error: "Worktree removed" };
+      const statusMonitor = monitorInEnvironment();
+      if (!statusMonitor) {
+        this.ctx.sendEvent({
+          type: "resource-action-result",
+          requestId,
+          success: result.success,
+          output: result.output,
+          error: result.error,
+        });
+        return { success: result.success, output: result.output, error: result.error };
+      }
 
       try {
         const parsed = JSON.parse(result.output);
@@ -316,16 +347,18 @@ export class ResourceActionExecutor {
         }
       }
 
-      statusMonitor.setLifecycleStatus({
-        phase: "resource-status",
-        state: result.timedOut ? "timed-out" : result.success ? "success" : "failed",
-        totalCommands: 1,
-        output: result.output,
-        error: result.error,
-        startedAt: statusMonitor.lifecycleStatus?.startedAt ?? Date.now(),
-        completedAt: Date.now(),
-      });
-      this.ctx.emitUpdate(statusMonitor);
+      if (monitorInEnvironment() === statusMonitor) {
+        statusMonitor.setLifecycleStatus({
+          phase: "resource-status",
+          state: result.timedOut ? "timed-out" : result.success ? "success" : "failed",
+          totalCommands: 1,
+          output: result.output,
+          error: result.error,
+          startedAt: statusMonitor.lifecycleStatus?.startedAt ?? Date.now(),
+          completedAt: Date.now(),
+        });
+        this.ctx.emitUpdate(statusMonitor);
+      }
 
       this.ctx.sendEvent({
         type: "resource-action-result",
@@ -377,7 +410,7 @@ export class ResourceActionExecutor {
       timeoutMs,
       signal,
       onProgress: (commandIndex, totalCommands, command) => {
-        const m = this.ctx.getMonitor(worktreeId);
+        const m = monitorInEnvironment();
         if (m) {
           m.setLifecycleStatus({
             phase,
@@ -394,7 +427,7 @@ export class ResourceActionExecutor {
 
     if (result.aborted) return { success: false, error: "Aborted" };
 
-    const finalMonitor = this.ctx.getMonitor(worktreeId);
+    const finalMonitor = monitorInEnvironment();
     if (finalMonitor) {
       finalMonitor.setLifecycleStatus({
         phase,
@@ -523,11 +556,23 @@ export class ResourceActionExecutor {
     }
 
     const controller = this.getResourceActionAbortController(worktreeId);
+    // Taken at request time: an action queued for one environment must not run
+    // against another the worktree switched to while it waited.
+    const environmentEpoch = monitor.resourceEnvironmentEpoch;
 
     const queued = await queue
-      .add(() => this.execute(requestId, worktreeId, action, environmentId, controller.signal), {
-        signal: controller.signal,
-      })
+      .add(
+        () =>
+          this.execute(
+            requestId,
+            worktreeId,
+            action,
+            environmentId,
+            environmentEpoch,
+            controller.signal
+          ),
+        { signal: controller.signal }
+      )
       .catch(() => undefined);
 
     return queued ?? { success: false, error: "Aborted" };

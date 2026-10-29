@@ -485,6 +485,49 @@ describe("WorktreeMonitor", () => {
       monitor.stop();
     });
 
+    it("stops polling the status of an environment the worktree has left", async () => {
+      const activeWorktree: Worktree = { ...TEST_WORKTREE, isCurrent: true };
+      const callbacks = makeCallbacks({ onResourceStatusPoll: vi.fn() });
+      const monitor = new WorktreeMonitor(activeWorktree, TEST_CONFIG, callbacks, "main");
+
+      monitor.startWithoutGitStatus();
+      monitor.setHasResourceConfig(true);
+      monitor.setHasStatusCommand(true);
+      monitor.leaveResourceEnvironment();
+
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(callbacks.onResourceStatusPoll).not.toHaveBeenCalled();
+
+      monitor.stop();
+    });
+
+    it("drops the left environment's explicit interval for the next one's defaults", async () => {
+      const activeWorktree: Worktree = { ...TEST_WORKTREE, isCurrent: true };
+      const callbacks = makeCallbacks({ onResourceStatusPoll: vi.fn() });
+      const monitor = new WorktreeMonitor(activeWorktree, TEST_CONFIG, callbacks, "main");
+
+      monitor.startWithoutGitStatus();
+      monitor.setHasResourceConfig(true);
+      monitor.setHasStatusCommand(true);
+      monitor.setResourcePollInterval(5_000);
+      monitor.leaveResourceEnvironment();
+      monitor.setHasResourceConfig(true);
+      monitor.setHasStatusCommand(true);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(callbacks.onResourceStatusPoll).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(callbacks.onResourceStatusPoll).toHaveBeenCalledTimes(1);
+
+      // A default cadence follows focus; an explicit one left behind would not.
+      monitor.isCurrent = false;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(callbacks.onResourceStatusPoll).toHaveBeenCalledTimes(1);
+
+      monitor.stop();
+    });
+
     it("explicit setResourcePollInterval overrides defaults", async () => {
       const activeWorktree: Worktree = { ...TEST_WORKTREE, isCurrent: true };
       const callbacks = makeCallbacks({ onResourceStatusPoll: vi.fn() });
@@ -573,6 +616,67 @@ describe("WorktreeMonitor", () => {
       expect(callbacks.onResourceStatusPoll).toHaveBeenCalledTimes(1);
 
       monitor.stop();
+    });
+  });
+
+  describe("leaving a resource environment", () => {
+    function monitorInEnvironment(): WorktreeMonitor {
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+      monitor.setHasResourceConfig(true);
+      monitor.setHasStatusCommand(true);
+      monitor.setHasPauseCommand(true);
+      monitor.setHasResumeCommand(true);
+      monitor.setHasTeardownCommand(true);
+      monitor.setHasProvisionCommand(true);
+      monitor.setResourceProvider("alpha-cloud");
+      monitor.setResourceConnectCommand("ssh alpha");
+      monitor.setResourceStatus({ lastStatus: "ready", endpoint: "alpha.example.com" });
+      return monitor;
+    }
+
+    it("clears every command it offered but keeps the environment switcher", () => {
+      const monitor = monitorInEnvironment();
+      const epoch = monitor.resourceEnvironmentEpoch;
+
+      monitor.leaveResourceEnvironment();
+
+      expect(monitor.resourceEnvironmentEpoch).not.toBe(epoch);
+      expect({
+        status: monitor.hasStatusCommand,
+        pause: monitor.hasPauseCommand,
+        resume: monitor.hasResumeCommand,
+        teardown: monitor.hasTeardownCommand,
+        provision: monitor.hasProvisionCommand,
+      }).toEqual({ status: false, pause: false, resume: false, teardown: false, provision: false });
+      expect(monitor.resourceProvider).toBeUndefined();
+      expect(monitor.resourceConnectCommand).toBeUndefined();
+      expect(monitor.resourceStatus).toBeUndefined();
+      expect(monitor.hasResourceConfig).toBe(true);
+    });
+
+    it.each([
+      "resource-provision",
+      "resource-teardown",
+      "resource-resume",
+      "resource-pause",
+      "resource-status",
+    ] as const)("drops a %s lifecycle status", (phase) => {
+      const monitor = monitorInEnvironment();
+      monitor.setLifecycleStatus({ phase, state: "running", startedAt: 1 });
+
+      monitor.leaveResourceEnvironment();
+
+      expect(monitor.lifecycleStatus).toBeUndefined();
+    });
+
+    it("keeps a setup lifecycle status", () => {
+      const monitor = monitorInEnvironment();
+      const setup = { phase: "setup" as const, state: "running" as const, startedAt: 1 };
+      monitor.setLifecycleStatus(setup);
+
+      monitor.leaveResourceEnvironment();
+
+      expect(monitor.lifecycleStatus).toEqual(setup);
     });
   });
 
