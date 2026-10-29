@@ -104,6 +104,20 @@ describe("filterSidebarWorktrees — quick-state counterfactual", () => {
     expect(result.hasResultsWithoutQuickState).toBe(true);
   });
 
+  it("counts every match the quick state alone is hiding", () => {
+    const gamma = makeWorktree("gamma-auth");
+    const result = filterSidebarWorktrees(
+      filterInput([alpha, beta, gamma], { quickStateFilter: "working", deferredQuery: "a" })
+    );
+    const expected = filterSidebarWorktrees(
+      filterInput([alpha, beta, gamma], { deferredQuery: "a" })
+    ).filteredWorktrees.length;
+
+    expect(result.filteredWorktrees).toEqual([]);
+    expect(expected).toBeGreaterThan(0);
+    expect(result.resultsWithoutQuickStateCount).toBe(expected);
+  });
+
   it("reports no match without the quick-state filter when the query hides everything too", () => {
     const result = filterSidebarWorktrees(
       filterInput([alpha, beta], { quickStateFilter: "waiting", deferredQuery: "zzz" })
@@ -118,6 +132,7 @@ describe("filterSidebarWorktrees — quick-state counterfactual", () => {
 
     expect(ids(result.filteredWorktrees)).toEqual(["alpha", "beta"]);
     expect(result.hasResultsWithoutQuickState).toBe(false);
+    expect(result.resultsWithoutQuickStateCount).toBe(0);
   });
 
   it("filters and counts the non-main population, never the whole list", () => {

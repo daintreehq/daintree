@@ -85,13 +85,15 @@ function renderInner(
     ? "text-text-placeholder [&_svg]:h-10 [&_svg]:w-10 @max-[280px]/empty-state:[&_svg]:h-6 @max-[280px]/empty-state:[&_svg]:w-6"
     : "text-text-placeholder [&_svg]:h-6 [&_svg]:w-6 @max-[280px]/empty-state:[&_svg]:h-4 @max-[280px]/empty-state:[&_svg]:w-4";
   // `text-balance` so a line that just overflows wraps into two even lines
-  // rather than stranding its last word beneath a full one.
+  // rather than stranding its last word beneath a full one. `wrap-anywhere`
+  // because titles echo queries and paths: an unbroken token wider than a
+  // narrow sidebar would otherwise size the centred column past its container.
   const titleClass = isCanvas
-    ? "text-lg font-semibold text-text-secondary text-balance @max-[280px]/empty-state:text-sm @max-[280px]/empty-state:font-medium"
-    : "text-sm font-medium text-text-secondary text-balance";
+    ? "text-lg font-semibold text-text-secondary text-balance wrap-anywhere @max-[280px]/empty-state:text-sm @max-[280px]/empty-state:font-medium"
+    : "text-sm font-medium text-text-secondary text-balance wrap-anywhere";
   const descriptionClass = isCanvas
-    ? "text-sm text-text-secondary max-w-xs text-balance @max-[280px]/empty-state:text-xs"
-    : "text-xs text-text-secondary max-w-xs text-balance";
+    ? "text-sm text-text-secondary max-w-xs text-balance wrap-anywhere @max-[280px]/empty-state:text-xs"
+    : "text-xs text-text-secondary max-w-xs text-balance wrap-anywhere";
   return (
     <>
       {icon ? (
@@ -198,7 +200,7 @@ export function EmptyState(props: EmptyStateProps) {
         className
       )}
     >
-      <div className="grid">
+      <div className="grid max-w-full">
         <div
           key={`current-${generation}`}
           className={cn(

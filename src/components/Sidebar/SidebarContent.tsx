@@ -1,4 +1,3 @@
-import { AGENT_BUCKET_LABEL } from "@/lib/agentStateVocabulary";
 import {
   useCallback,
   useEffect,
@@ -87,17 +86,14 @@ import { CountBadge } from "@/components/ui/badge";
 import { needsReconnectRetry } from "@/lib/worktreeReconnect";
 import type { SidebarFlatItem } from "./sidebarWorktreeModel";
 import { useSidebarWorktreeModel } from "./useSidebarWorktreeModel";
+import {
+  SidebarListEmptyState,
+  resolveSidebarListEmpty,
+  sidebarListEmptyTitle,
+} from "./SidebarListEmptyState";
+import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useSidebarReorderSession } from "./useSidebarReorderSession";
 import { useRenderTime } from "./useRenderTime";
-
-const NO_MATCH_QUERY_MAX = 40;
-
-/** Mirrors `QuickStateFilterBar`'s own labels — see the rationale there. */
-const QUICK_STATE_LABELS: Record<"working" | "waiting" | "finished", string> = {
-  working: AGENT_BUCKET_LABEL.working,
-  waiting: AGENT_BUCKET_LABEL.attention,
-  finished: AGENT_BUCKET_LABEL.finished,
-};
 
 // Virtuoso overscan in pixels — covers ~2–5 rows at the 120–260px height range,
 // keeping useSortable hooks alive in a small window beyond the viewport so a
@@ -125,13 +121,6 @@ const WORKTREE_SKELETON_CARDS = [
   { id: "c", titleWidth: "52%", subtitleWidth: "38%" },
   { id: "d", titleWidth: "36%", subtitleWidth: "48%" },
 ] as const;
-
-function truncateSearchQuery(trimmedQuery: string) {
-  const codepoints = Array.from(trimmedQuery);
-  return codepoints.length > NO_MATCH_QUERY_MAX
-    ? `${codepoints.slice(0, NO_MATCH_QUERY_MAX).join("")}…`
-    : trimmedQuery;
-}
 
 interface SidebarVirtuosoContext {
   activeWorktreeId: string | null;
@@ -458,13 +447,14 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     setQuickStateFilter,
     mainWorktree,
     mainVisible,
+    mainInQuickState,
     nonMainWorktrees,
     quickStateCounts,
     chipCounts,
     mainWorktreeAggregateCounts,
     filteredWorktrees,
     groupedSections,
-    hasResultsWithoutQuickState,
+    resultsWithoutQuickStateCount,
     totalCount,
     dragStartOrder,
     sortableIds,
@@ -568,6 +558,19 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // rather than news, and it was eating the line and truncating the scope.
   const filterStatusText = scopeText ?? dragDisabledReason;
 
+  const listEmpty = resolveSidebarListEmpty({
+    filteredCount: filteredWorktrees.length,
+    hasNonMainWorktrees: nonMainWorktrees.length > 0,
+    quickStateFilter,
+    hasQuery,
+    hasFacets: hasFacetFiltersActive,
+    resultsWithoutQuickStateCount,
+    mainVisible: mainVisible === true,
+    mainInQuickState,
+    displayQuery: deferredQuery,
+  });
+  const listEmptyTitle = listEmpty === null ? null : sidebarListEmptyTitle(listEmpty);
+
   // Announce the filtered worktree count to screen readers, debounced so rapid
   // typing in the search box doesn't flood the AT speech queue. Routed through
   // the global announcer (document.ariaNotify + always-mounted fallback) rather
@@ -592,7 +595,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   useEffect(() => {
     let message: string | null = null;
     if (showScope) {
-      message = `${filteredCount} of ${scopeTotal} worktrees`;
+      // An emptied list says why rather than "1 of 7 worktrees", which counts
+      // the main card and reads as a contradiction of the tab that emptied it.
+      message = listEmptyTitle ?? `${filteredCount} of ${scopeTotal} worktrees`;
       wasNarrowedRef.current = true;
     } else if (wasNarrowedRef.current && filteredCount === scopeTotal) {
       message = `All ${scopeTotal} worktrees shown`;
@@ -616,6 +621,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     liveQuery,
     quickStateFilter,
     isHiddenInSidebar,
+    listEmptyTitle,
   ]);
 
   // Computed after `sidebarItems` because the indicator counts hidden worktree
@@ -889,11 +895,24 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   }
 
   const hasNonMainWorktrees = nonMainWorktrees.length > 0;
-  const showQuickStateEmptyState =
-    filteredWorktrees.length === 0 &&
-    quickStateFilter !== "all" &&
-    hasResultsWithoutQuickState &&
-    hasNonMainWorktrees;
+
+  // Each recovery action unmounts the button it lives on, so focus goes to the
+  // search field first — it survives every branch, and it holds the criteria
+  // the user kept. Without it a keyboard user lands on the document body.
+  const handleShowAllMatches = () => {
+    searchInputRef.current?.focus();
+    setQuickStateFilter("all");
+  };
+  const handleClearSearch = () => {
+    searchInputRef.current?.focus();
+    const { setLiveQuery, setQuery } = useWorktreeFilterStore.getState();
+    setLiveQuery("");
+    setQuery("");
+  };
+  const handleClearAllFilters = () => {
+    searchInputRef.current?.focus();
+    clearAllFilters();
+  };
 
   // Compact arm affordance pinned to the QuickStateFilterBar's trailing edge —
   // replaces the former full-width banner button. Enabled whenever the visible
@@ -1203,110 +1222,12 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
         {/* Virtualized non-main worktree list */}
         <div role="presentation" className="relative flex-1 min-h-0">
-          {showQuickStateEmptyState && !hasFacetFiltersActive && !hasQuery ? (
-            quickStateFilter === "waiting" ? (
-              <EmptyState variant="user-cleared" scale="sidebar" title="All caught up" />
-            ) : (
-              <EmptyState
-                variant="filtered-empty"
-                scale="sidebar"
-                instant
-                title={`No ${QUICK_STATE_LABELS[quickStateFilter].toLowerCase()} worktrees`}
-                action={
-                  <>
-                    <Button variant="subtle" size="sm" onClick={() => setQuickStateFilter("all")}>
-                      Show all worktrees
-                    </Button>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="subtle"
-                          size="sm"
-                          onClick={onOpenOverview}
-                          className="ml-1"
-                          aria-keyshortcuts={overviewAriaShortcut}
-                        >
-                          Open overview
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">
-                        {createTooltipContent("Open overview", overviewShortcut)}
-                      </TooltipContent>
-                    </Tooltip>
-                  </>
-                }
-              />
-            )
-          ) : showQuickStateEmptyState && hasFacetFiltersActive ? (
-            <EmptyState
-              variant="filtered-empty"
-              scale="sidebar"
-              instant
-              title={
-                deferredQuery.trim()
-                  ? `No matches for "${truncateSearchQuery(deferredQuery.trim())}"`
-                  : "No matching worktrees"
-              }
-              action={
-                <>
-                  <Button variant="subtle" size="sm" onClick={clearAllFilters}>
-                    Show all worktrees
-                  </Button>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="subtle"
-                        size="sm"
-                        onClick={onOpenOverview}
-                        className="ml-1"
-                        aria-keyshortcuts={overviewAriaShortcut}
-                      >
-                        Open overview
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">
-                      {createTooltipContent("Open overview", overviewShortcut)}
-                    </TooltipContent>
-                  </Tooltip>
-                </>
-              }
-            />
-          ) : filteredWorktrees.length === 0 &&
-            hasFilters &&
-            hasNonMainWorktrees &&
-            !mainVisible ? (
-            <EmptyState
-              variant="filtered-empty"
-              scale="sidebar"
-              instant
-              title={
-                deferredQuery.trim()
-                  ? `No matches for "${truncateSearchQuery(deferredQuery.trim())}"`
-                  : "No matching worktrees"
-              }
-              action={
-                <>
-                  <Button variant="subtle" size="sm" onClick={clearAllFilters}>
-                    Show all worktrees
-                  </Button>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="subtle"
-                        size="sm"
-                        onClick={onOpenOverview}
-                        className="ml-1"
-                        aria-keyshortcuts={overviewAriaShortcut}
-                      >
-                        Open overview
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">
-                      {createTooltipContent("Open overview", overviewShortcut)}
-                    </TooltipContent>
-                  </Tooltip>
-                </>
-              }
+          {listEmpty !== null ? (
+            <SidebarListEmptyState
+              empty={listEmpty}
+              onShowAllMatches={handleShowAllMatches}
+              onClearSearch={handleClearSearch}
+              onClearAllFilters={handleClearAllFilters}
             />
           ) : groupedSections ? (
             <Virtuoso<SidebarFlatItem, SidebarVirtuosoContext>
