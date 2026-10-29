@@ -2486,6 +2486,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
          * (#12874); anything else keeps it.
          */
         authorization?: import("./mcpServer.js").McpDispatchAuthorization;
+        /**
+         * Which of this machine's panes or Assistant tabs sent the call
+         * (#14992), set only by main, so the dialog can name it.
+         */
+        requester?: import("./mcpServer.js").McpRequester;
       }) => void
     ): () => void;
     /** Send action dispatch result to main process */

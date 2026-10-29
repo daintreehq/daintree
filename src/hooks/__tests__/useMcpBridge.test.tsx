@@ -168,6 +168,8 @@ describe("useMcpBridge", () => {
         approvalReason?: "above-tier" | "protected-close";
         hostPreview?: { subject?: string; lines: string[] };
         authorization?: "tier" | "user" | "session-grant" | "native-grant" | "skip-preference";
+        requester?:
+          { kind: "pane"; terminalId: string } | { kind: "assistant"; helpSessionId: string };
       }) => void | Promise<void>)
     | undefined;
   let cleanupManifest: ReturnType<typeof vi.fn>;
@@ -731,6 +733,48 @@ describe("useMcpBridge", () => {
     expect(holdDispatch).not.toHaveBeenCalledWith(expect.objectContaining({ phase: "approved" }));
   });
 
+  // #14992: the dialog names the pane that asked, as this view names it when
+  // the question arrives, including a pane whose tool can't take a session
+  // grant and so arrives without the session offer.
+  it("names the requesting pane from this view's stores when the question arrives", async () => {
+    mocks.get.mockReturnValue(safeManifestEntry({ id: "git.push", title: "Push" }));
+    mocks.worktrees.set("wt-2", { branch: "feature/auth", name: "auth" });
+    mocks.panelsById = {
+      "t-own": {
+        id: "t-own",
+        title: "Worker",
+        worktreeId: "wt-2",
+        detectedAgentId: "claude",
+        location: "grid",
+      },
+    };
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-named",
+      actionId: "git.push",
+      args: {},
+      sessionOrigin: "external",
+      approvalOnly: true,
+      requester: { kind: "pane", terminalId: "t-own" },
+    });
+
+    await Promise.resolve();
+    // Renamed while queued: the request still says who asked when it asked.
+    mocks.panelsById = { "t-own": { id: "t-own", title: "Renamed", location: "grid" } };
+    expect(useMcpConfirmStore.getState().current?.requester).toEqual({
+      identity: { kind: "pane", terminalId: "t-own" },
+      name: "Worker",
+      kindLabel: "Claude",
+      worktreeId: "wt-2",
+      worktreeName: "feature/auth",
+    });
+
+    useMcpConfirmStore.getState().resolveCurrent("rejected");
+    await dispatched;
+  });
+
   it("reports a declined approval-only request as USER_REJECTED", async () => {
     mocks.get.mockReturnValue(safeManifestEntry({ id: "git.push", title: "Push" }));
 
@@ -772,10 +816,13 @@ describe("useMcpBridge", () => {
       callerInfo: { token4LastChars: "", userAgent: 'Your assistant, through host "studio-01"' },
       approvalOnly: true,
       hostPreview: { subject: "feature/thing", lines: ["No uncommitted changes."] },
+      // Nothing of that host's is here to name, whatever the payload says.
+      requester: { kind: "pane", terminalId: "t-host" },
     });
 
     await Promise.resolve();
     const pending = useMcpConfirmStore.getState().current;
+    expect(pending?.requester).toBeUndefined();
     expect(pending?.preview).toEqual(["No uncommitted changes."]);
     expect(pending?.subject).toBe("feature/thing");
     expect(pending?.previewPending).toBe(false);

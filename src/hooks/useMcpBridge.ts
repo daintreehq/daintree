@@ -79,6 +79,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { summarizeMcpArgs } from "@shared/utils/mcpArgsSummary";
 import { isGenericNativeGrantEligible } from "@shared/config/nativeGrantUsePolicies";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { resolveMcpConfirmRequester } from "@/lib/mcpConfirmRequester";
 import { waitForWorktreeSnapshot } from "@/store/worktreeSnapshotSync";
 import { withReplayedWorktreeDetails } from "@/services/actions/replayedContextWorktree";
 
@@ -1184,6 +1185,7 @@ export function useMcpBridge(): void {
         approvalReason,
         hostPreview,
         authorization,
+        requester,
       }) => {
         // Main started its clock when it sent this; ours starts a beat later.
         // Only a confirmation's first deadline reads it, until main grants a
@@ -1423,6 +1425,12 @@ export function useMcpBridge(): void {
                     // requester positively instead of inferring one from an
                     // absence that has two very different causes.
                     sessionOrigin,
+                    // Which pane or Assistant tab asked (#14992), named from
+                    // this view's stores. Never for another machine's call,
+                    // whose panes and tabs aren't here to name.
+                    ...(requester !== undefined && hostLines === undefined
+                      ? { requester: resolveMcpConfirmRequester(requester) }
+                      : {}),
                     // Only where "Allow for this session" can deliver what it says.
                     // A target-picking tool's dialog is raised again on every
                     // call, so offering to stop asking would be untrue (#12692).

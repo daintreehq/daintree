@@ -45,6 +45,7 @@ import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import type {
   McpBearerIdentity,
   McpDispatchAuthorization,
+  McpRequester,
 } from "../../../shared/types/ipc/mcpServer.js";
 import { buildAnnotations } from "./tierAuth.js";
 import { bindHostControl } from "./hostControlTools.js";
@@ -170,7 +171,10 @@ export interface SessionServerDepsSource {
     confirmed?: boolean,
     contextOverride?: import("../../../shared/types/actions.js").ActionContext,
     sessionOrigin?: McpSessionOrigin,
-    approval?: Pick<WorkspaceDispatchOptions, "approvalOnly" | "approvalReason" | "authorization">
+    approval?: Pick<
+      WorkspaceDispatchOptions,
+      "approvalOnly" | "approvalReason" | "authorization" | "requester"
+    >
   ) => Promise<import("./shared.js").DispatchEnvelope>;
   // Workspace-bound variants used for external sessions that named a workspace
   // at handshake (#11789) and for agent panes bound to their launch workspace
@@ -589,6 +593,14 @@ export function createSessionServerDeps(
   // workspace, for the workspace's reason: a session torn down while a call
   // awaits its manifest must still dispatch against the pane's own worktree,
   // not drop its context and act on whatever the view has selected.
+  // The bearer's own terminal, so a dialog can say which pane is asking
+  // (#14992). Never the launch context's focused terminal, which is whatever
+  // had focus when the pane started, and never a relayed pane, which lives on
+  // the machine that relayed it.
+  const paneRequester: McpRequester | undefined =
+    paneBinding && ownPane && ownPane.relay === undefined
+      ? { kind: "pane", terminalId: ownPane.terminalId }
+      : undefined;
   const paneDispatchOptions: WorkspaceDispatchOptions | undefined = paneBinding
     ? {
         contextOverride: paneBinding.actionContext,
@@ -597,6 +609,7 @@ export function createSessionServerDeps(
         // rather than a ceiling (#12692), so its dialogs may offer to keep
         // allowing the tool for the rest of the session.
         offerSessionApproval: true,
+        ...(paneRequester ? { requester: paneRequester } : {}),
       }
     : undefined;
   const preferredWebContentsId = paneBinding?.launchWebContentsId;
@@ -629,6 +642,13 @@ export function createSessionServerDeps(
   // assistant's own spawns to "an external client did this" (#11808). Read
   // here, before the closure, never inside it.
   const sessionOrigin = deps.sessionStore.getOrigin(sessionId);
+  // The Assistant tab asking (#14992), by the help session id its lane holds.
+  // Only for the assistant's own session: a relayed call's tab is on the
+  // machine that relayed it.
+  const assistantRequester: McpRequester | undefined =
+    sessionOrigin === "help" && helpSessionId !== null && relay === undefined
+      ? { kind: "assistant", helpSessionId }
+      : undefined;
 
   // The view captured with the pin, so a webContents id recycled after the
   // view is gone never resolves as the one the assistant was opened in.
@@ -923,9 +943,10 @@ export function createSessionServerDeps(
       // the model's turn (#8317). Absent for context-less sessions, in
       // which case pinned dispatch falls back to live renderer context.
       const boundContext = deps.sessionStore.sessionContextMap.get(sessionId);
-      return authorization !== undefined
+      return authorization !== undefined || assistantRequester !== undefined
         ? pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin, {
-            authorization,
+            ...(authorization !== undefined ? { authorization } : {}),
+            ...(assistantRequester !== undefined ? { requester: assistantRequester } : {}),
           })
         : pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin);
     }
@@ -981,7 +1002,11 @@ export function createSessionServerDeps(
         false,
         deps.sessionStore.sessionContextMap.get(sessionId),
         sessionOrigin,
-        { approvalOnly: true, approvalReason: "protected-close" }
+        {
+          approvalOnly: true,
+          approvalReason: "protected-close",
+          ...(assistantRequester !== undefined ? { requester: assistantRequester } : {}),
+        }
       );
     };
 

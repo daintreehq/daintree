@@ -91,11 +91,13 @@ describe("view reverse requests", () => {
       callerInfo: { name: "ignored" },
       sessionOrigin: "help",
       offerSessionApproval: true,
+      // The host's own pane (#14992): no terminal of this Shell's to name.
+      requester: { kind: "pane", terminalId: "host-pane" },
     });
 
-    // Never pre-confirmed, never the host's context or origin: the view's own
-    // binding decides the project, and a confirm-gated action raises this
-    // Shell's dialog naming the host that asked.
+    // Never pre-confirmed, never the host's context, origin or requester: the
+    // view's own binding decides the project, and a confirm-gated action raises
+    // this Shell's dialog naming the host that asked.
     expect(m.dispatchActionForHost).toHaveBeenCalledWith(
       11,
       "worktree.delete",

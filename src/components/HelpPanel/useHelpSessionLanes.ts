@@ -24,7 +24,7 @@ import { isPtyPanel } from "@shared/types/panel";
 import type { HelpPastSession } from "@shared/types/ipc/help";
 import type { HelpPastSessionPickOutcome } from "@/services/actions/definitions/helpActions";
 import type { HelpSessionTab } from "./HelpSessionTabs";
-import { trimSessionTabTitle } from "./sessionTabTitle";
+import { sessionSlotLabel, trimSessionTabTitle } from "./sessionTabTitle";
 import { isListedAssistantAgent, type PendingCloseCost } from "./pastSessionsNote";
 
 /** How a closed lane's conversation comes back (#15385). */
@@ -209,7 +209,7 @@ export function useHelpSessionLanes({
           //
           // A task title replaces the number rather than joining it: the strip is
           // narrow, and the number was only ever standing in for a name.
-          label: task?.label ?? `Session ${slot + 1}`,
+          label: task?.label ?? sessionSlotLabel(slot),
           fullTitle: task?.fullTitle,
           agentState: laneAgentStates[index],
           agentId: laneAgentIds[index] ?? null,

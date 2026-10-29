@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Callout } from "@/components/ui/Callout";
 import {
@@ -26,6 +27,7 @@ import {
 } from "@/store/mcpConfirmStore";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { pluralize } from "@/lib/pluralize";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -39,6 +41,8 @@ import { selectActiveSlot, useHelpPanelStore } from "@/store/helpPanelStore";
 import { getAgentConfig } from "@/config/agents";
 import type { HelpAssistantDaintreeConfirmations } from "@shared/types/ipc/api";
 import { logError } from "@/utils/logger";
+import { showMcpRequester, useMcpRequesterLiveState } from "@/lib/mcpConfirmRequester";
+import type { McpRequester } from "@shared/types/ipc/mcpServer";
 
 /**
  * Lower-bound read-time gate for destructive dispatches. `resolveOnce` guards
@@ -200,6 +204,46 @@ export function McpConfirmDialog() {
     setAllowForSession(false);
   }, [resetKey]);
 
+  // The request whose requester the user went to look at (#14992). It stays
+  // current, unanswered and on its own clock: the dialog only steps aside, and
+  // a return control brings the same request back. Keyed by id, so a request
+  // that settles meanwhile can't leave the next one hidden.
+  const [inspectingId, setInspectingId] = useState<string | null>(null);
+  const inspecting = inspectingId !== null && inspectingId === currentRequestId;
+  // Where to go once the dialog has finished closing. Not before: the close
+  // hands focus back to wherever it was when the dialog opened, which would
+  // pull it straight out of the pane the user asked to see.
+  const pendingShowRef = useRef<{ requestId: string; identity: McpRequester } | null>(null);
+  const showRequester = useCallback((requestId: string, identity: McpRequester) => {
+    pendingShowRef.current = { requestId, identity };
+    setInspectingId(requestId);
+  }, []);
+  const reviewRequest = useCallback(() => {
+    // Reopened before the exit finished: the close that would have navigated
+    // never completes, and a later one, after an answer, must not go instead.
+    pendingShowRef.current = null;
+    setInspectingId(null);
+  }, []);
+  const handleCloseComplete = useCallback(() => {
+    const pending = pendingShowRef.current;
+    pendingShowRef.current = null;
+    if (pending === null) return;
+    // Settled while the dialog was closing: there is nothing left to come back to.
+    if (useMcpConfirmStore.getState().current?.requestId !== pending.requestId) return;
+    // Nothing left to look at brings the request straight back, rather than
+    // leaving it behind a return control over a pane that isn't there.
+    const comeBack = () => setInspectingId((id) => (id === pending.requestId ? null : id));
+    void showMcpRequester(pending.identity).then(
+      (arrived) => {
+        if (!arrived) comeBack();
+      },
+      (err) => {
+        logError("[McpConfirmDialog] Failed to show requester", err);
+        comeBack();
+      }
+    );
+  }, []);
+
   // A preview still pending after the house's long-wait mark says so, rather
   // than leaving the same line up for the whole wait.
   const previewPending = current?.previewPending === true;
@@ -293,7 +337,8 @@ export function McpConfirmDialog() {
   );
 
   const sharedProps = {
-    isOpen: true,
+    isOpen: !inspecting,
+    onCloseComplete: handleCloseComplete,
     // One width for every request, so a promotion never re-centres the buttons
     // sideways; wide enough that a file path or commit subject stays on one line
     // and the scoped session label still leaves the footer hint room to read.
@@ -334,7 +379,12 @@ export function McpConfirmDialog() {
     // Neither future-requests control may be where focus lands: a Space or an
     // arrow key meant for something else would otherwise widen a grant or change
     // an app-wide setting. A bare request has nothing else focusable before them.
-    initialFocus: showAssistantPreference || offersSession ? ("cancel" as const) : undefined,
+    // Nor may the control that steps away to the requester: a reflexive Enter
+    // there would hide the question instead of answering it.
+    initialFocus:
+      showAssistantPreference || offersSession || current.requester !== undefined
+        ? ("cancel" as const)
+        : undefined,
     // Absent rather than empty when there is nothing to say, so ConfirmDialog's
     // own typed-name hint can take the slot.
     hint: hint ? (
@@ -360,7 +410,12 @@ export function McpConfirmDialog() {
         {expired ? EXPIRED_HINT : ""}
       </span>
 
-      <RequesterRow current={current} />
+      <RequesterRow
+        current={current}
+        onShowRequester={
+          expired ? undefined : (identity) => showRequester(current.requestId, identity)
+        }
+      />
 
       <AppDialog.Description>{current.actionDescription}</AppDialog.Description>
 
@@ -406,6 +461,7 @@ export function McpConfirmDialog() {
         <LaterRequests>
           <SessionApprovalOption
             actionTitle={current.actionTitle}
+            requesterName={current.requester?.name}
             checked={allowForSession}
             onCheckedChange={setAllowForSession}
           />
@@ -445,6 +501,12 @@ export function McpConfirmDialog() {
         <ConfirmDialog {...sharedProps} variant="default">
           {body}
         </ConfirmDialog>
+      )}
+      {/* After the dialog, so the dialog stays the first child in both
+          branches and is reused, not remounted, when a request arrives on an
+          empty queue. A portal, so where it sits here is not where it shows. */}
+      {inspecting && (
+        <ReturnToRequest title={confirmTitle(current)} expired={expired} onReview={reviewRequest} />
       )}
     </ErrorBoundary>
   );
@@ -507,30 +569,51 @@ export function confirmTitle(current: PendingMcpConfirm): string {
  * assistant-owned requests, which moved everything below it by ~52px whenever a
  * queued item promoted across origins, and left the most trusted case looking
  * like a missing section.
+ *
+ * With several agents running, the class of surface is not enough to decide on
+ * (#14992), so a pane or Assistant tab main identified is named the way its own
+ * header or tab names it, and the row offers to go and look at it.
  */
-function RequesterRow({ current }: { current: PendingMcpConfirm }) {
-  const { callerInfo, sessionOrigin } = current;
+function RequesterRow({
+  current,
+  onShowRequester,
+}: {
+  current: PendingMcpConfirm;
+  onShowRequester?: (identity: McpRequester) => void;
+}) {
+  const { callerInfo, sessionOrigin, requester } = current;
   const isAssistant = sessionOrigin === "help";
+  const live = useMcpRequesterLiveState(requester);
 
   let Icon = ShieldAlert;
   let name = "Unidentified client";
   let detail: string | null = null;
+  const qualifiers: string[] = [];
+  let showLabel: string | null = null;
 
-  // Only main sets `offerSessionApproval`, and only for a session it
-  // authenticated with a per-pane bearer — so this is a positive
+  // Only main sets `requester` and `offerSessionApproval`, and only for a
+  // session it authenticated with a per-pane bearer — so this is a positive
   // identification, not an inference from missing fields (#12692).
-  if (current.offerSessionApproval === true) {
+  if (requester?.identity.kind === "pane" || current.offerSessionApproval === true) {
     Icon = SquareTerminal;
-    name = "Agent in a terminal pane";
+    name = requester?.name ?? "Agent in a terminal pane";
+    if (requester?.kindLabel) qualifiers.push(requester.kindLabel);
+    if (live.otherWorktreeName) qualifiers.push(live.otherWorktreeName);
+    showLabel = "Show pane";
   } else if (callerInfo) {
     Icon = Plug;
     name = truncateUserAgent(callerInfo.userAgent);
     // A host's agent has no bearer of this machine's, so nothing to show.
     detail = callerInfo.token4LastChars ? `…${callerInfo.token4LastChars}` : null;
-  } else if (isAssistant) {
+  } else if (requester?.identity.kind === "assistant" || isAssistant) {
     Icon = Sparkles;
     name = "Daintree Assistant";
+    if (requester?.name) qualifiers.push(requester.name);
+    showLabel = "Show tab";
   }
+  // Named when the request arrived and gone since: say so, rather than offer
+  // to show something that isn't there.
+  if (requester?.name !== undefined && !live.present) qualifiers.push("No longer open");
 
   return (
     <div className="space-y-1">
@@ -542,7 +625,24 @@ function RequesterRow({ current }: { current: PendingMcpConfirm }) {
           {detail && (
             <span className="shrink-0 font-mono text-2xs text-text-secondary">{detail}</span>
           )}
+          {qualifiers.length > 0 && (
+            // Gives way before the name does: the name is who is asking.
+            <span className="min-w-0 shrink-[3] truncate text-xs text-text-secondary">
+              · {qualifiers.join(" · ")}
+            </span>
+          )}
         </span>
+        {requester && live.present && onShowRequester && showLabel && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            className="shrink-0"
+            onClick={() => onShowRequester(requester.identity)}
+          >
+            {showLabel}
+          </Button>
+        )}
       </div>
       {/* The question is about reach, not danger: the action may be harmless. */}
       {current.approvalReason === "above-tier" && (
@@ -572,6 +672,40 @@ function LaterRequests({ children }: { children: React.ReactNode }) {
 }
 
 /**
+ * What stays on screen while the user looks at the requester (#14992): the
+ * question is still open and still on its clock, so it says what is waiting and
+ * brings it back. Nonmodal and unfocused, so the pane the user went to see keeps
+ * the keyboard; it never closes on its own, because closing is not an answer.
+ */
+function ReturnToRequest({
+  title,
+  expired,
+  onReview,
+}: {
+  title: string;
+  expired: boolean;
+  onReview: () => void;
+}) {
+  return createPortal(
+    <div
+      role="region"
+      aria-label="Approval request"
+      className="fixed bottom-6 left-1/2 z-[var(--z-modal)] flex w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--border-overlay)] bg-surface-panel-elevated py-2 pr-2 pl-3 shadow-[var(--theme-shadow-floating)]"
+    >
+      <ShieldAlert aria-hidden="true" className="size-4 shrink-0 text-text-secondary" />
+      <span className="min-w-0 truncate text-sm text-text-primary">{title}</span>
+      <span className="shrink-0 text-xs text-text-secondary">
+        {expired ? "Timed out" : "Waiting for your answer"}
+      </span>
+      <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={onReview}>
+        Review request
+      </Button>
+    </div>,
+    document.body
+  );
+}
+
+/**
  * The "keep allowing this" choice offered to an agent pane (#12692).
  *
  * Spells out the reach, because it is wider than the call on screen: later
@@ -582,10 +716,13 @@ function LaterRequests({ children }: { children: React.ReactNode }) {
  */
 function SessionApprovalOption({
   actionTitle,
+  requesterName,
   checked,
   onCheckedChange,
 }: {
   actionTitle: string;
+  /** The pane the grant would cover, so "this agent" is never one of six (#14992). */
+  requesterName?: string;
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
 }) {
@@ -606,7 +743,8 @@ function SessionApprovalOption({
           Allow for this session
         </label>
         <span id={detailId} className="text-2xs text-text-secondary">
-          Later {actionTitle} calls from this agent · any arguments · up to 30 minutes
+          Later {actionTitle} calls from {requesterName ? `'${requesterName}'` : "this agent"} · any
+          arguments · up to 30 minutes
         </span>
       </span>
     </div>

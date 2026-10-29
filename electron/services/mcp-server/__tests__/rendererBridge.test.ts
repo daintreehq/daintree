@@ -291,6 +291,35 @@ describe("rendererBridge — per-session pinned dispatch (#7002)", () => {
     expect(sentPayload).not.toHaveProperty("approvalOnly");
   });
 
+  it("names the requester to the local view, and only when main identified one (#14992)", async () => {
+    const wc = makeWebContents(704);
+    mockWebContentsRegistry.set(704, wc);
+
+    const sent: Array<Record<string, unknown>> = [];
+    wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
+      if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
+      sent.push(payload as Record<string, unknown>);
+      queueMicrotask(() => {
+        mockIpcMain.emit(
+          CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+          { sender: { id: 704 } },
+          { requestId: payload.requestId, result: { ok: true, result: "ok" } }
+        );
+      });
+    });
+
+    const requester = { kind: "assistant" as const, helpSessionId: "help-1" };
+    await bridge.dispatchActionForWebContents(704, "terminal.close", {}, false, undefined, "help", {
+      approvalOnly: true,
+      approvalReason: "protected-close",
+      requester,
+    });
+    await bridge.dispatchActionForWebContents(704, "terminal.close", {}, false, undefined, "help");
+
+    expect(sent[0]?.requester).toEqual(requester);
+    expect(sent[1]).not.toHaveProperty("requester");
+  });
+
   it("threads the session's authenticated origin into the dispatch IPC payload (#11808)", async () => {
     const wc = makeWebContents(901);
     mockWebContentsRegistry.set(901, wc);
