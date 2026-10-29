@@ -104,16 +104,21 @@ export function useRecipePicker({
     setLastSelectedWorktreeRecipeIdByProject,
   ]);
 
-  // Invalidate stale recipe (skip sentinel IDs)
+  // Invalidate stale recipe (skip sentinel IDs). The remembered recipe goes
+  // with it only when it is the one that vanished: a pick not yet saved
+  // disappearing says nothing about the remembered one.
   useEffect(() => {
     if (!selectedRecipeId) return;
     if (selectedRecipeId === CLONE_LAYOUT_ID) return;
     if (startingLayoutRecipes.some((recipe) => recipe.id === selectedRecipeId)) return;
     setSelectedRecipeId(null);
-    if (projectId) setLastSelectedWorktreeRecipeIdByProject(projectId, undefined);
+    if (projectId && selectedRecipeId === lastSelectedWorktreeRecipeId) {
+      setLastSelectedWorktreeRecipeIdByProject(projectId, undefined);
+    }
   }, [
     startingLayoutRecipes,
     selectedRecipeId,
+    lastSelectedWorktreeRecipeId,
     projectId,
     setLastSelectedWorktreeRecipeIdByProject,
   ]);

@@ -642,6 +642,7 @@ export function NewWorktreeDialog({
     if (errors.touchedFields.branchInput && branchInput.trim()) return true;
     if (errors.touchedFields.issue && selectedIssue !== null) return true;
     if (errors.touchedFields.recipe) return true;
+    if (errors.touchedFields.agent) return true;
     if (errors.touchedFields.worktreePath && worktreePath.trim()) return true;
     if (worktreeMode !== "local") return true;
     if (firstPrompt.trim()) return true;
@@ -788,6 +789,18 @@ export function NewWorktreeDialog({
     // that case rather than risk a stuck row.
     const placeholderPath = isHostAbsolutePath(snapWorktreePath) ? snapWorktreePath : null;
     const selectionStore = useWorktreeSelectionStore.getState();
+
+    // Picks become the project's remembered setup only when they create
+    // something: a discarded dialog leaves the next one as this one opened.
+    // An untouched field keeps following whatever seeded it.
+    if (projectId) {
+      if (errors.touchedFields.recipe) {
+        setLastSelectedWorktreeRecipeIdByProject(projectId, snapRecipeId);
+      }
+      if (errors.touchedFields.agent) {
+        setLastSelectedWorktreeAgentIdByProject(projectId, firstAgentId);
+      }
+    }
 
     if (placeholderPath) {
       selectionStore.addPendingCreation(placeholderPath, {
@@ -1154,25 +1167,17 @@ export function NewWorktreeDialog({
       recipeSelectionTouchedRef.current = true;
       markTouched("recipe");
       setSelectedRecipeId(id);
-      if (projectId) setLastSelectedWorktreeRecipeIdByProject(projectId, id);
       clearErrors();
     },
-    [
-      recipeSelectionTouchedRef,
-      markTouched,
-      setSelectedRecipeId,
-      projectId,
-      setLastSelectedWorktreeRecipeIdByProject,
-      clearErrors,
-    ]
+    [recipeSelectionTouchedRef, markTouched, setSelectedRecipeId, clearErrors]
   );
 
   const handleFirstAgentSelect = useCallback(
     (id: string | null) => {
+      markTouched("agent");
       setFirstAgentId(id);
-      if (projectId) setLastSelectedWorktreeAgentIdByProject(projectId, id);
     },
-    [projectId, setLastSelectedWorktreeAgentIdByProject]
+    [markTouched]
   );
 
   const handlePrefixSelectWrap = useCallback(
