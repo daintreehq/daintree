@@ -64,15 +64,13 @@ export function ProjectWelcomeNotice() {
           description="Your answer wasn't saved, so the welcome is still on offer."
           severity="error"
           role="alert"
-          actions={[
-            {
-              id: "retry",
-              label: "Retry",
-              variant: "primary",
-              onClick: skip,
-              loading: busy === "skip",
-            },
-          ]}
+          action={{
+            id: "retry",
+            label: "Retry",
+            variant: "primary",
+            onClick: skip,
+            loading: busy === "skip",
+          }}
           className={BANNER_CLASS}
           onClose={() => setFailure(null)}
           closeAriaLabel="Dismiss"
@@ -115,7 +113,8 @@ export function ProjectWelcomeNotice() {
   if (handoff === null) return null;
   // The strip goes only once the workflow went through; until then it is the
   // one place to run it again from.
-  const runWorkflow = () =>
+  const runWorkflow = () => {
+    const key = handoffKey(handoff);
     run(
       "workflow",
       async () => {
@@ -123,16 +122,19 @@ export function ProjectWelcomeNotice() {
           source: "user",
         });
         if (result.ok) {
-          dismissProjectWelcomeHandoff();
+          // Only the hand-off it was pressed on: a workflow that changed while
+          // this one ran has its own strip to keep.
+          const current = useProjectWelcomeStore.getState().handoff;
+          if (current !== null && handoffKey(current) === key) dismissProjectWelcomeHandoff();
           return;
         }
         // A dialog now asking the user is not a failure to report.
         if (isStagedConfirmation(result.error)) return;
         throw new Error(result.error.message);
       },
-      (error) =>
-        setFailure({ key: handoffKey(handoff), message: formatErrorMessage(error, "").trim() })
+      (error) => setFailure({ key, message: formatErrorMessage(error, "").trim() })
     );
+  };
   if (failure?.key === handoffKey(handoff)) {
     return (
       <InlineStatusBanner
@@ -141,15 +143,13 @@ export function ProjectWelcomeNotice() {
         description={failure.message || undefined}
         severity="error"
         role="alert"
-        actions={[
-          {
-            id: "retry",
-            label: "Retry",
-            variant: "primary",
-            onClick: runWorkflow,
-            loading: busy === "workflow",
-          },
-        ]}
+        action={{
+          id: "retry",
+          label: "Retry",
+          variant: "primary",
+          onClick: runWorkflow,
+          loading: busy === "workflow",
+        }}
         className={BANNER_CLASS}
         onClose={() => setFailure(null)}
         closeAriaLabel="Dismiss"

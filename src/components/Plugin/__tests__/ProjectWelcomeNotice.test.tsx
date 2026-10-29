@@ -137,6 +137,44 @@ describe("ProjectWelcomeNotice failures (#15236)", () => {
     expect(dispatch).toHaveBeenCalledTimes(2);
   });
 
+  it("reports a confirmation refusal that staged no dialog", async () => {
+    dispatch.mockResolvedValueOnce({
+      ok: false,
+      error: { code: "CONFIRMATION_REQUIRED", message: "Needs confirmation." },
+    });
+    useProjectWelcomeStore.getState().setHandoff(HANDOFF);
+    renderNotice();
+
+    fireEvent.click(screen.getByRole("button", { name: "Import books" }));
+
+    expect(await screen.findByText("Couldn't run Import books")).toBeTruthy();
+  });
+
+  it("leaves a newer hand-off alone when an older workflow finishes", async () => {
+    let finish!: (result: DispatchResult) => void;
+    dispatch.mockImplementationOnce(
+      () =>
+        new Promise<DispatchResult>((resolve) => {
+          finish = resolve;
+        })
+    );
+    useProjectWelcomeStore.getState().setHandoff(HANDOFF);
+    renderNotice();
+    fireEvent.click(screen.getByRole("button", { name: "Import books" }));
+    await waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+
+    act(() =>
+      useProjectWelcomeStore.getState().setHandoff({
+        ...HANDOFF,
+        actionId: "project__p1__acme.ledger.reconcile",
+        title: "Reconcile",
+      })
+    );
+    await act(async () => finish({ ok: true, result: undefined }));
+
+    expect(dismissProjectWelcomeHandoff).not.toHaveBeenCalled();
+  });
+
   it("keeps the hand-off quietly while the workflow's confirmation is up", async () => {
     dispatch.mockResolvedValueOnce({
       ok: false,

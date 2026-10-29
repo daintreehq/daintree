@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ActionDispatchResult } from "@shared/types/actions";
 import type { PluginSetupStepUiAction } from "@shared/types/plugin";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -50,6 +50,15 @@ export function PluginSetupChecklist({
 }: PluginSetupChecklistProps) {
   const [runningStepId, setRunningStepId] = useState<string | null>(null);
   const [failure, setFailure] = useState<StepFailure | null>(null);
+  // A popover's rows unmount when it closes. An answer landing after that
+  // belongs to an opening that's gone, and must not close the next one.
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // The popover stays up until the action answers: closed first, a command
   // that failed or was refused would leave nothing on screen to say so. The
@@ -61,6 +70,7 @@ export function PluginSetupChecklist({
     void runSetupAction(pluginId, action)
       .then(
         (result) => {
+          if (!mountedRef.current) return;
           // A staged confirmation is a dialog now asking the user, not a failure.
           if (result.ok || isStagedConfirmation(result.error)) {
             onAction?.();

@@ -318,11 +318,51 @@ describe("PluginSetupStrip with a setup checklist (#13824)", () => {
     const run = screen.getByRole("button", { name: "Run: Step sync" });
     fireEvent.click(run);
     fireEvent.click(run);
+    // Nor another step's, until this one answers.
+    fireEvent.click(screen.getByRole("button", { name: "Open setting: Step team" }));
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(screen.getByText("Step team")).toBeTruthy();
 
     await act(async () => finish());
     await waitFor(() => expect(screen.queryByText("Step team")).toBeNull());
+  });
+
+  it("reports a confirmation refusal that staged no dialog as a failure", async () => {
+    dispatch.mockResolvedValueOnce({
+      ok: false,
+      error: { code: "CONFIRMATION_REQUIRED", message: "Needs confirmation from plugin sources." },
+    });
+    render(<PluginSetupStrip pluginId="acme.linear" />);
+    await openSteps();
+
+    fireEvent.click(screen.getByRole("button", { name: "Run: Step sync" }));
+
+    await waitFor(() =>
+      expect(document.querySelector('[data-setup-step="sync"]')?.textContent).toContain(
+        "Couldn't run this step"
+      )
+    );
+    expect(screen.getByText("Step team")).toBeTruthy();
+  });
+
+  it("leaves a later opening alone when an earlier one's answer lands after it closed", async () => {
+    let finish!: () => void;
+    dispatch.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve({ ok: true, result: undefined });
+        })
+    );
+    render(<PluginSetupStrip pluginId="acme.linear" />);
+    await openSteps();
+    fireEvent.click(screen.getByRole("button", { name: "Run: Step sync" }));
+
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByText("Step team")).toBeNull());
+    await openSteps();
+
+    await act(async () => finish());
+    expect(screen.getByText("Step team")).toBeTruthy();
   });
 
   it("steps aside without an error when the command stages a confirmation (#15236)", async () => {

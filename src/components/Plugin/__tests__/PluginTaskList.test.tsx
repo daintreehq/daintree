@@ -147,6 +147,32 @@ describe("PluginTaskList", () => {
     expect(cancel.getAttribute("aria-disabled")).toBe("true");
   });
 
+  it("keeps a newer Dismiss when an older Cancel answers late", async () => {
+    let refuseCancel!: () => void;
+    client.cancelTask.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          refuseCancel = () => resolve(false);
+        })
+    );
+    client.dismissTask.mockImplementationOnce(() => new Promise<boolean>(() => {}));
+    const { rerender } = render(<PluginTaskList tasks={[task()]} />, { wrapper });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel Importing records" }));
+
+    rerender(<PluginTaskList tasks={[task({ state: "interrupted" })]} />);
+    const dismiss = screen.getByRole("button", { name: "Dismiss Importing records" });
+    fireEvent.click(dismiss);
+    expect(dismiss.getAttribute("aria-disabled")).toBe("true");
+
+    await act(async () => refuseCancel());
+
+    // Still waiting on the Dismiss, and no Cancel failure on an interrupted row.
+    expect(dismiss.getAttribute("aria-disabled")).toBe("true");
+    expect(row().querySelector('[role="alert"]')).toBeNull();
+    fireEvent.click(dismiss);
+    expect(client.dismissTask).toHaveBeenCalledTimes(1);
+  });
+
   it("says on the row when a dismiss doesn't take", async () => {
     client.dismissTask.mockResolvedValueOnce(false);
     render(<PluginTaskList tasks={[task({ state: "interrupted" })]} />, { wrapper });

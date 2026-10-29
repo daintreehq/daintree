@@ -21,10 +21,14 @@ function taskStatus(task: PluginTaskSnapshot): string | null {
  * that instead, so the request stops counting.
  */
 interface TaskRequest {
+  /** Which ask this is, so a late answer to an older one can't overwrite it. */
+  id: number;
   kind: "cancel" | "dismiss";
   state: PluginTaskSnapshot["state"];
   failed: boolean;
 }
+
+let taskRequests = 0;
 
 function PluginTaskRow({ task }: { task: PluginTaskSnapshot }) {
   const [request, setRequest] = useState<TaskRequest | null>(null);
@@ -42,8 +46,10 @@ function PluginTaskRow({ task }: { task: PluginTaskSnapshot }) {
   // The row's own button is the retry.
   const ask = (kind: TaskRequest["kind"]) => {
     if (asking) return;
-    const state = task.state;
-    setRequest({ kind, state, failed: false });
+    const id = ++taskRequests;
+    setRequest({ id, kind, state: task.state, failed: false });
+    const fail = () =>
+      setRequest((current) => (current?.id === id ? { ...current, failed: true } : current));
     const call =
       kind === "cancel"
         ? pluginClient.cancelTask(task.pluginId, task.id)
@@ -52,11 +58,11 @@ function PluginTaskRow({ task }: { task: PluginTaskSnapshot }) {
       // Taken, it lapses when the task's own state moves on — cancelling, or
       // gone — rather than flicking back to working in between.
       (taken) => {
-        if (!taken) setRequest({ kind, state, failed: true });
+        if (!taken) fail();
       },
       (error: unknown) => {
         logError(`[PluginTaskList] Failed to ${kind} a plugin task`, error);
-        setRequest({ kind, state, failed: true });
+        fail();
       }
     );
   };

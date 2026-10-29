@@ -56,28 +56,36 @@ vi.mock("@/components/Plugin/ProjectSurfaceView", () => ({
 
 // `onUseStock` stands for the dialog's `onCloseComplete`: the real dialog calls
 // it once its exit has finished and focus is back on the opener.
-vi.mock("../ProjectWorktreeCreateDialog", () => ({
-  ProjectWorktreeCreateDialog: ({
-    config,
-    leavingForStock,
-    onClose,
-    onUseStock,
-  }: {
-    config: { id: string };
-    leavingForStock?: boolean;
-    onClose: () => void;
-    onUseStock: () => void;
-  }) => (
-    <div
-      data-testid="plugin-create-dialog"
-      data-kind={config.id}
-      data-leaving={String(leavingForStock === true)}
-    >
-      <button onClick={onUseStock}>standard dialog</button>
-      <button onClick={onClose}>close plugin</button>
-    </div>
-  ),
-}));
+vi.mock("../ProjectWorktreeCreateDialog", async () => {
+  const { useState } = await import("react");
+  return {
+    ProjectWorktreeCreateDialog: ({
+      config,
+      leavingForStock,
+      onClose,
+      onUseStock,
+    }: {
+      config: { id: string };
+      leavingForStock?: boolean;
+      onClose: () => void;
+      onUseStock: () => void;
+    }) => {
+      // Stands for the real dialog's own "Standard dialog…" latch.
+      const [leaving, setLeaving] = useState(false);
+      return (
+        <div
+          data-testid="plugin-create-dialog"
+          data-kind={config.id}
+          data-leaving={String(leavingForStock === true || leaving)}
+        >
+          <button onClick={onUseStock}>standard dialog</button>
+          <button onClick={() => setLeaving(true)}>start leaving</button>
+          <button onClick={onClose}>close plugin</button>
+        </div>
+      );
+    },
+  };
+});
 
 vi.mock("@/hooks/useWorktrees", () => ({
   useWorktrees: () => ({ refresh: refreshMock }),
@@ -418,6 +426,27 @@ describe("ProjectDialogHost", () => {
       );
 
       expect((await screen.findByTestId("plugin-create-dialog")).dataset.leaving).toBe("false");
+    });
+
+    it("never carries one opening's hand-off into the next (#15236)", async () => {
+      surfaceState.current = { config: { id: PLUGIN_KIND } };
+      render(<ProjectDialogHost />);
+      act(() =>
+        useWorktreeSelectionStore.getState().openCreateDialog(null, {
+          surfacePanelKindId: PLUGIN_KIND,
+        })
+      );
+      fireEvent.click(await screen.findByText("start leaving"));
+      expect(screen.getByTestId("plugin-create-dialog").dataset.leaving).toBe("true");
+
+      // A new opening lands before the first one's exit has finished.
+      act(() =>
+        useWorktreeSelectionStore.getState().openCreateDialog(null, {
+          surfacePanelKindId: PLUGIN_KIND,
+        })
+      );
+
+      expect(screen.getByTestId("plugin-create-dialog").dataset.leaving).toBe("false");
     });
 
     it("ignores a close from a plugin view whose opening has ended", async () => {

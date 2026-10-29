@@ -49,7 +49,17 @@ vi.stubGlobal(
 
 import { ProjectWorktreeCreateDialog } from "../ProjectWorktreeCreateDialog";
 
-const CONFIG = { id: "plugin.acme.create", name: "Acme create" } as PanelKindConfig;
+const CONFIG: PanelKindConfig = {
+  id: "plugin.acme.create",
+  name: "Acme create",
+  iconId: "puzzle",
+  color: "#ffffff",
+  hasPty: false,
+  canRestart: false,
+  canConvert: false,
+  extensionId: "project__p1__acme",
+  componentPath: "plugin://acme/1/create.js",
+};
 
 describe("ProjectWorktreeCreateDialog hand-off to stock (#15236)", () => {
   let opener: HTMLButtonElement;

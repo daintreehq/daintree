@@ -106,6 +106,7 @@ describe("panelExtensionStateVersionMessage", () => {
 
   it("keeps both formats for diagnostics, so the direction of the mismatch is visible", () => {
     expect(panelExtensionStateVersionDiagnostic(3, 2)).toBe("state format 3; this version reads 2");
+    expect(panelExtensionStateVersionDiagnostic(7, 5)).toBe("state format 7; this version reads 5");
   });
 });
 
