@@ -152,7 +152,59 @@ describe("PluginNotOnHostPlaceholder", () => {
     ]);
     const { container, queryByRole } = render(<PluginNotOnHostPlaceholder pluginId="acme.md" />);
     await waitFor(() => expect(container.textContent).toContain("Has no build for Linux"));
+    expect(container.textContent).toContain("Markdown Preview can't run here from studio-01");
+    expect(container.textContent).not.toContain("isn't installed");
     expect(queryByRole("button", { name: /Install on/ })).toBeNull();
+  });
+
+  it("never says a plugin the host has isn't installed there", async () => {
+    parity.diff.mockResolvedValue([
+      row({
+        group: "incompatible",
+        hostVersion: "1.0.0",
+        action: null,
+        incompatibility: { kind: "unconfigured", missing: ["API key"] },
+      }),
+    ]);
+    const { container, queryByRole } = render(<PluginNotOnHostPlaceholder pluginId="acme.md" />);
+    await waitFor(() =>
+      expect(container.textContent).toContain("Markdown Preview isn't running on studio-01")
+    );
+    expect(container.textContent).toContain("Set it up on studio-01: API key isn't set there.");
+    expect(container.textContent).not.toContain("isn't installed");
+    expect(queryByRole("button", { name: /Install on/ })).toBeNull();
+  });
+
+  it("says the comparison failed instead of advising an install, and compares again on Retry", async () => {
+    parity.diff.mockRejectedValueOnce(new Error("link down"));
+    const { container, findByRole, queryByRole } = render(
+      <PluginNotOnHostPlaceholder pluginId="acme.md" />
+    );
+    const retry = await findByRole("button", { name: "Retry" });
+    expect(container.textContent).toContain("Couldn't check acme.md on studio-01");
+    expect(container.textContent).not.toMatch(/Install it|link down/);
+    expect(queryByRole("button", { name: /Install on/ })).toBeNull();
+
+    parity.diff.mockResolvedValueOnce([row({})]);
+    fireEvent.click(retry);
+    await findByRole("button", { name: "Install on studio-01" });
+    expect(parity.diff).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("Markdown Preview isn't installed on studio-01");
+  });
+
+  it("says an install went in and offers no second one while the panel hasn't appeared", async () => {
+    parity.diff.mockResolvedValueOnce([row({})]);
+    parity.diff.mockResolvedValueOnce([
+      row({ group: "same", hostVersion: "1.0.0", action: null }),
+    ]);
+    const { container, findByRole, queryByRole } = render(
+      <PluginNotOnHostPlaceholder pluginId="acme.md" />
+    );
+    fireEvent.click(await findByRole("button", { name: "Install on studio-01" }));
+    await waitFor(() => expect(container.textContent).toContain("Installed on studio-01."));
+    expect(container.textContent).toContain("Markdown Preview isn't running on studio-01");
+    expect(queryByRole("button", { name: /Install on/ })).toBeNull();
+    await waitFor(() => expect(parity.diff).toHaveBeenCalledTimes(2));
   });
 
   it("shows one toast when the host removes a plugin under open panels, none for a restore", async () => {
@@ -358,7 +410,7 @@ describe("parity copy", () => {
         "studio-01"
       )
     ).toBe(
-      "Requires Daintree >=0.40.0; studio-01 runs 0.38.0. It still loads there, but may not work."
+      "Requires Daintree >=0.40.0; studio-01 runs 0.38.0, so it may not work there."
     );
     expect(
       describeIncompatibility({ kind: "unconfigured", missing: ["apiToken"] }, "studio-01")

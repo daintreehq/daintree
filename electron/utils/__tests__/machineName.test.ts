@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { machineDisplayName } from "../machineName.js";
+import { machineDisplayName, sshLoginTarget } from "../machineName.js";
 
 describe("machineDisplayName", () => {
   it("uses a Mac's own computer name", () => {
@@ -20,5 +20,18 @@ describe("machineDisplayName", () => {
 
   it("keeps a Linux hostname as it is", () => {
     expect(machineDisplayName("linux", "devbox", () => "unused")).toBe("devbox");
+  });
+});
+
+describe("sshLoginTarget", () => {
+  it("names the login at the hostname", () => {
+    expect(sshLoginTarget("studio.local", () => "greg")).toBe("greg@studio.local");
+  });
+
+  it("gives the hostname alone when there is no login to name", () => {
+    const fails = () => {
+      throw new Error("ENOENT: no passwd entry");
+    };
+    expect(sshLoginTarget("studio.local", fails)).toBe("studio.local");
   });
 });

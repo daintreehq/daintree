@@ -8,6 +8,7 @@ import {
 } from "../../services/deviceAnswer/index.js";
 import { sanitizeDeviceAnswerSettings } from "../../services/deviceAnswer/deviceAnswerSettings.js";
 import { DEVICE_ANSWER_METHOD_CHANNELS } from "./deviceAnswer.preload.js";
+import { sshLoginTarget } from "../../utils/machineName.js";
 import type {
   DeviceAnswerStatus,
   SetDeviceAnswerPayload,
@@ -24,6 +25,7 @@ function idleStatus(): DeviceAnswerStatus {
     listening: false,
     port: saved.port,
     tailnetHost: saved.tailnetHost,
+    sshTarget: sshLoginTarget(),
     error: null,
     pairing: null,
     devices: saved.devices.map(({ tokenHash: _tokenHash, ...device }) => device),

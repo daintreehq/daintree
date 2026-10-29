@@ -38,22 +38,32 @@ export function recipeOriginLabel(recipe: TerminalRecipe): string {
   return recipe.projectId === undefined ? "global recipe" : "project recipe";
 }
 
-function describeTerminal(terminal: RecipeTerminal): string[] {
+/**
+ * What one terminal runs, a line each. `full` keeps commands and prompts as
+ * written, for a dialog with room to scroll them; env values are hidden either way.
+ */
+export function describeTerminal(
+  terminal: RecipeTerminal,
+  { full = false }: { full?: boolean } = {}
+): string[] {
+  const fragment = full ? (value: string) => value : truncate;
   const lines: string[] = [];
   if (terminal.type === "terminal") {
-    lines.push(terminal.command ? `$ ${truncate(terminal.command)}` : "$ (default shell)");
+    lines.push(terminal.command ? `$ ${fragment(terminal.command)}` : "$ (default shell)");
   } else if (terminal.type === "dev-preview") {
-    lines.push(terminal.devCommand ? `$ ${truncate(terminal.devCommand)}` : "$ (no dev command)");
+    lines.push(terminal.devCommand ? `$ ${fragment(terminal.devCommand)}` : "$ (no dev command)");
   } else if (terminal.type === "plugin-panel") {
-    lines.push(`opens ${recipePanelStepName(terminal)}`);
+    // A recipe from another machine can name a panel no plugin here registers.
+    const kind = full && terminal.panelKindId ? ` (${terminal.panelKindId})` : "";
+    lines.push(`opens ${recipePanelStepName(terminal)}${kind}`);
   } else {
-    lines.push(terminal.args ? `${terminal.type} ${truncate(terminal.args)}` : terminal.type);
+    lines.push(terminal.args ? `${terminal.type} ${fragment(terminal.args)}` : terminal.type);
   }
   if (terminal.initialPrompt) {
-    lines.push(`prompt: ${truncate(terminal.initialPrompt)}`);
+    lines.push(`prompt: ${fragment(terminal.initialPrompt)}`);
   }
   if (terminal.systemPrompt) {
-    lines.push(`system prompt: ${truncate(terminal.systemPrompt)}`);
+    lines.push(`system prompt: ${fragment(terminal.systemPrompt)}`);
   }
   const envKeys = Object.keys(terminal.env ?? {}).sort();
   if (envKeys.length > 0) {

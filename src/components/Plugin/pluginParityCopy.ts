@@ -13,7 +13,8 @@ function platformName(platform: string): string {
 export function describeIncompatibility(reason: PluginIncompatibleReason, host: string): string {
   switch (reason.kind) {
     case "engine":
-      return `Requires Daintree ${reason.required}; ${host} runs ${reason.hostVersion}. It still loads there, but may not work.`;
+      // Also said of a copy not installed there yet, so it claims nothing about one being there.
+      return `Requires Daintree ${reason.required}; ${host} runs ${reason.hostVersion}, so it may not work there.`;
     case "platform":
       return `Has no build for ${platformName(reason.hostPlatform)}, so it can't run on ${host}.`;
     case "remote-unsupported":

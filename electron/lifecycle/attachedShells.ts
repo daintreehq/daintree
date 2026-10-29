@@ -30,9 +30,3 @@ export function isExitConfirmationPending(): boolean {
 export function setExitConfirmationPending(pending: boolean): void {
   confirming = pending;
 }
-
-export function describeShellNames(shells: AttachedShell[]): string {
-  const names = [...new Set(shells.map((s) => s.clientName.trim() || "Another machine"))];
-  if (names.length <= 1) return names[0] ?? "";
-  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-}

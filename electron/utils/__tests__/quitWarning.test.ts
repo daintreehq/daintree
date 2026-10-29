@@ -177,6 +177,30 @@ describe("showQuitWarning with attached Shells", () => {
     expect(showMessageBox).toHaveBeenCalledTimes(1);
     expect(showMessageBox.mock.calls[0]![0].detail).toContain("1 agent is currently working");
   });
+
+  it("counts two unnamed machines instead of merging them into one", async () => {
+    const showMessageBox = box(1);
+    await showQuitWarning(
+      { activeAgents: 0, attachedShells: [{ clientName: "" }, { clientName: " " }] },
+      showMessageBox
+    );
+    const opts = showMessageBox.mock.calls[0]![0];
+    expect(opts.message).toBe("2 machines are attached to this host");
+    expect(opts.detail).toBe(
+      "Quitting disconnects 2 machines and ends the work they have open on this machine."
+    );
+  });
+
+  it("keeps the fallback lowercase mid-sentence", async () => {
+    const showMessageBox = box(1);
+    await showQuitWarning(
+      { activeAgents: 0, attachedShells: [{ clientName: "" }] },
+      showMessageBox
+    );
+    const opts = showMessageBox.mock.calls[0]![0];
+    expect(opts.message).toBe("Another machine is attached to this host");
+    expect(opts.detail).toContain("disconnects another machine and ends the work it has open");
+  });
 });
 
 describe("showUpdateWarning", () => {
@@ -222,5 +246,19 @@ describe("showUpdateWarning", () => {
     expect(opts.detail).toContain("disconnects MacBook Pro");
     expect(opts.detail).toContain("1 agent is currently working");
     expect(opts.detail).toContain("stays ready");
+  });
+
+  it("counts machines that share a name", async () => {
+    const showMessageBox = vi.fn().mockResolvedValue({ response: 1 });
+    await showUpdateWarning(
+      {
+        activeAgents: 0,
+        attachedShells: [{ clientName: "MacBook Pro" }, { clientName: "MacBook Pro" }],
+      },
+      showMessageBox
+    );
+    const opts = showMessageBox.mock.calls[0]![0];
+    expect(opts.message).toBe("2 machines named MacBook Pro are attached to this host");
+    expect(opts.detail).toContain("ends the work they have open");
   });
 });

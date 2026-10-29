@@ -184,7 +184,9 @@ describe("HostModeGroup", () => {
       expect(clientMock.setEnabled).not.toHaveBeenCalled();
       const text = document.body.textContent ?? "";
       expect(text).toContain("Turn off hosting?");
-      expect(text).toContain("greg-mbp, studio are attached");
+      expect(text).toContain(
+        "greg-mbp and studio are attached to this machine. Turning hosting off disconnects them and ends the work they have open here."
+      );
     });
 
     it("leaves hosting on when cancelled", async () => {
@@ -209,6 +211,25 @@ describe("HostModeGroup", () => {
         fireEvent.click(confirm);
       });
       expect(clientMock.setEnabled).toHaveBeenCalledWith({ enabled: false });
+    });
+
+    it("counts two machines with one name as two", async () => {
+      clientMock.onEvent.mockReturnValue(() => {});
+      clientMock.getStatus.mockResolvedValue({
+        ...ON,
+        attachedClients: [
+          { clientId: "a", clientName: "MacBook Pro", connectedAt: 1, drivingProjectIds: [] },
+          { clientId: "b", clientName: "MacBook Pro", connectedAt: 2, drivingProjectIds: [] },
+        ],
+      });
+      const { container } = await renderGroup();
+      await act(async () => {
+        fireEvent.click(switchFor(container, "Allow this machine to be a host"));
+      });
+
+      expect(document.body.textContent).toContain(
+        "2 machines named MacBook Pro are attached to this machine."
+      );
     });
   });
 

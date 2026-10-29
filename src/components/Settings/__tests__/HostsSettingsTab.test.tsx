@@ -85,6 +85,7 @@ beforeEach(() => {
       listening: false,
       port: 7421,
       tailnetHost: null,
+      sshTarget: "greg@studio",
       error: null,
       pairing: null,
       devices: [],

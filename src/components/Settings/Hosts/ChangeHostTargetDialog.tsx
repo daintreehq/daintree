@@ -6,7 +6,8 @@ import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import { sshConnection, type HostId } from "@shared/types/remoteHosts";
 import type { HostProbeResult } from "@shared/types/ipc/remoteHosts";
-import { installLabel, platformLabel, SSH_TARGET_HINT } from "./hostLabels";
+import { installLabel, platformLabel, SSH_TARGET_HINT, sshRefusalAdvice } from "./hostLabels";
+import { SshRefusalHelp } from "./SshRefusalHelp";
 
 interface ChangeHostTargetDialogProps {
   isOpen: boolean;
@@ -55,6 +56,7 @@ export function ChangeHostTargetDialog({
   const next = target.trim();
   const unchanged = next === currentTarget;
   const reviewed = probe !== null && checked === next && !unchanged;
+  const unreachable = reviewed && !probe.reachable;
 
   const check = () => {
     setChecking(true);
@@ -88,20 +90,40 @@ export function ChangeHostTargetDialog({
     );
   };
 
-  const primary: DialogAction = reviewed
-    ? {
-        label: "Change target",
-        onClick: change,
-        intent: "destructive",
-        disabled: changing,
-        loading: changing,
-      }
-    : {
-        label: "Check target",
-        onClick: check,
-        disabled: checking || next.length === 0 || unchanged,
-        loading: checking,
-      };
+  let primary: DialogAction;
+  let leading: DialogAction | undefined;
+  if (unreachable) {
+    // A target that didn't answer is checked again first; rebinding to it
+    // anyway stays possible, but never as the default.
+    primary = {
+      label: "Check again",
+      onClick: check,
+      disabled: checking || changing,
+      loading: checking,
+    };
+    leading = {
+      label: "Change target anyway",
+      onClick: change,
+      intent: "destructive",
+      disabled: checking || changing,
+      loading: changing,
+    };
+  } else if (reviewed) {
+    primary = {
+      label: "Change target",
+      onClick: change,
+      intent: "destructive",
+      disabled: changing,
+      loading: changing,
+    };
+  } else {
+    primary = {
+      label: "Check target",
+      onClick: check,
+      disabled: checking || next.length === 0 || unchanged,
+      loading: checking,
+    };
+  }
 
   return (
     <AppDialog
@@ -129,7 +151,15 @@ export function ChangeHostTargetDialog({
               autoCapitalize="off"
               onChange={(e) => setTarget(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !reviewed && !checking && next && !unchanged) check();
+                if (
+                  e.key === "Enter" &&
+                  (!reviewed || unreachable) &&
+                  !checking &&
+                  next &&
+                  !unchanged
+                ) {
+                  check();
+                }
               }}
             />
             <FieldDescription>{SSH_TARGET_HINT}</FieldDescription>
@@ -143,6 +173,13 @@ export function ChangeHostTargetDialog({
                   {probe.sshError}
                 </pre>
               )}
+              {!probe.reachable && (
+                <SshRefusalHelp
+                  refusal={sshRefusalAdvice(probe.sshError)}
+                  target={next}
+                  testId="change-host-target-ssh-refusal"
+                />
+              )}
               {probe.reachable && (
                 <>
                   <Line label="Platform" value={platformLabel(probe.platform, probe.arch)} />
@@ -154,6 +191,8 @@ export function ChangeHostTargetDialog({
           )}
           {reviewed && (
             <p className="text-sm text-text-secondary">
+              {unreachable &&
+                `If you change it anyway, ${hostName} can't connect until ssh reaches ${next}. `}
               {`Windows showing ${hostName} return to this machine and its connection closes. Its plugin permissions, history and browser data on this device are cleared, since ${next} may be another machine. Nothing connects to ${next} until you connect. Projects and Daintree at ${currentTarget} keep running.`}
             </p>
           )}
@@ -167,6 +206,7 @@ export function ChangeHostTargetDialog({
       <AppDialog.Footer
         primaryAction={primary}
         secondaryAction={{ label: "Cancel", onClick: onClose, disabled: changing }}
+        leadingAction={leading}
       />
     </AppDialog>
   );

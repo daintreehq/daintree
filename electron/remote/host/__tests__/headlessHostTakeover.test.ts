@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("electron", () => ({ app: { isPackaged: true }, dialog: {} }));
 
 import {
+  TAKEOVER_PROMPT,
   hostUnitFromCgroup,
   isHeadlessHostCommandLine,
   processStartTime,
@@ -11,6 +12,13 @@ import {
 } from "../headlessHostTakeover.js";
 
 describe("headless Host takeover", () => {
+  it("defaults to Cancel, so Enter never stops the Host and the work running in it", () => {
+    const { buttons = [], defaultId, cancelId } = TAKEOVER_PROMPT;
+    expect(defaultId).toBe(cancelId);
+    expect(buttons[defaultId!]).toBe("Cancel");
+    expect(buttons[0]).toBe("Restart with a window");
+  });
+
   it("is only for a launch that wants a window, on a desktop that can show one", () => {
     const desktop = { DISPLAY: ":0" };
     expect(wantsDesktopWindow(["daintree"], desktop)).toBe(true);

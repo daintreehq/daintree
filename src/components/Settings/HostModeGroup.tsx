@@ -16,6 +16,7 @@ import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadError
 import { useHostMode } from "@/hooks/useHostMode";
 import { isMac } from "@/lib/platform";
 import type { HostModeStatusRow, SetHostModePayload } from "@shared/types/ipc/hostMode";
+import { describeAttachedMachines } from "@shared/utils/attachedMachines";
 
 function rowById(rows: readonly HostModeStatusRow[] | undefined, id: HostModeStatusRow["id"]) {
   return rows?.find((row) => row.id === id) ?? null;
@@ -87,16 +88,14 @@ export default function HostModeGroup() {
   const rows = status?.rows;
   const startRow = rowById(rows, "start-at-login");
   const mac = isMac();
-  const attachedNames = [
-    ...new Set(
-      (status?.attachedClients ?? []).map((c) => c.clientName.trim() || "Another machine")
-    ),
-  ];
+  const attached = describeAttachedMachines(
+    (status?.attachedClients ?? []).map((c) => c.clientName)
+  );
 
   // Turning hosting off disconnects whoever is attached, so that asks first;
   // with nobody attached it applies at once.
   const requestEnabled = (payload: SetHostModePayload) => {
-    if (!payload.enabled && attachedNames.length > 0) {
+    if (!payload.enabled && attached.count > 0) {
       setConfirmingOff(true);
       return;
     }
@@ -213,7 +212,7 @@ export default function HostModeGroup() {
           void host.setEnabled({ enabled: false });
         }}
         title="Turn off hosting?"
-        description={`${attachedNames.join(", ")} ${attachedNames.length > 1 ? "are" : "is"} attached to this machine. Turning hosting off disconnects ${attachedNames.length > 1 ? "them" : "it"} and ends the work ${attachedNames.length > 1 ? "they have" : "it has"} open here.`}
+        description={`${attached.subject} ${attached.verb} attached to this machine. Turning hosting off disconnects ${attached.pronoun} and ends ${attached.openWork} here.`}
         confirmLabel="Turn off hosting"
       />
     </SettingsSection>

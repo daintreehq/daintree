@@ -1,6 +1,10 @@
 import type { BrowserWindow } from "electron";
 import type { AgentAvailabilityStore } from "../services/AgentAvailabilityStore.js";
-import { describeShellNames, type AttachedShell } from "../lifecycle/attachedShells.js";
+import type { AttachedShell } from "../lifecycle/attachedShells.js";
+import {
+  describeAttachedMachines,
+  type AttachedMachinesCopy,
+} from "../../shared/utils/attachedMachines.js";
 
 type Dialog = typeof import("electron").dialog;
 
@@ -19,8 +23,12 @@ function agentsWorkingLine(activeAgents: number): string {
   return `${activeAgents} agent${activeAgents > 1 ? "s are" : " is"} currently working`;
 }
 
-function attachedShellsMessage(attachedShells: AttachedShell[]): string {
-  return `${describeShellNames(attachedShells)} ${attachedShells.length > 1 ? "are" : "is"} attached to this host`;
+function attachedMachines(attachedShells: AttachedShell[]): AttachedMachinesCopy {
+  return describeAttachedMachines(attachedShells.map((s) => s.clientName));
+}
+
+function attachedMachinesMessage(machines: AttachedMachinesCopy): string {
+  return `${machines.subject} ${machines.verb} attached to this host`;
 }
 
 export async function showQuitWarning(
@@ -30,7 +38,8 @@ export async function showQuitWarning(
 ): Promise<boolean> {
   const { activeAgents, attachedShells } = impact;
   const agentsLine = agentsWorkingLine(activeAgents);
-  const shellsLine = `Quitting disconnects ${describeShellNames(attachedShells)} and ends the work it has open on this machine.`;
+  const machines = attachedMachines(attachedShells);
+  const shellsLine = `Quitting disconnects ${machines.object} and ends ${machines.openWork} on this machine.`;
 
   const opts: Electron.MessageBoxOptions =
     attachedShells.length === 0
@@ -49,7 +58,7 @@ export async function showQuitWarning(
           defaultId: 1,
           cancelId: 1,
           title: "Other machines are attached",
-          message: attachedShellsMessage(attachedShells),
+          message: attachedMachinesMessage(machines),
           detail:
             activeAgents > 0
               ? `${shellsLine} ${agentsLine}, and quitting will interrupt them too.`
@@ -69,7 +78,8 @@ export async function showUpdateWarning(
   const { activeAgents, attachedShells } = impact;
   const agentsLine = agentsWorkingLine(activeAgents);
   const staysReady = "The update stays ready until you restart.";
-  const shellsLine = `Restarting to update disconnects ${describeShellNames(attachedShells)} and ends the work it has open on this machine.`;
+  const machines = attachedMachines(attachedShells);
+  const shellsLine = `Restarting to update disconnects ${machines.object} and ends ${machines.openWork} on this machine.`;
 
   const opts: Electron.MessageBoxOptions =
     attachedShells.length === 0
@@ -88,7 +98,7 @@ export async function showUpdateWarning(
           defaultId: 1,
           cancelId: 1,
           title: "Other machines are attached",
-          message: attachedShellsMessage(attachedShells),
+          message: attachedMachinesMessage(machines),
           detail:
             activeAgents > 0
               ? `${shellsLine} ${agentsLine}, and restarting will interrupt them too. ${staysReady}`
