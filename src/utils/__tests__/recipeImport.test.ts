@@ -65,8 +65,8 @@ describe("describeRejectedTerminal", () => {
   it("shows a hostile title or type as one short, inert line", () => {
     const [described] = describeAll([
       {
-        type: "evil‮\ntype",
-        title: `  Build\n\u0000agent ‮gnp.exe ${"x".repeat(200)}`,
+        type: "evil\u202e\ntype",
+        title: `  Build\n\u0000agent \u202egnp.exe ${"x".repeat(200)}`,
       },
     ]);
 
@@ -75,8 +75,8 @@ describe("describeRejectedTerminal", () => {
     // 60 characters of title, the ellipsis, and the position prefix.
     expect(Array.from(described!.label).length).toBe("Terminal 1 · ".length + 61);
     expect(described!.reason).toBe(`this version of Daintree can't launch type "evil type"`);
-    // eslint-disable-next-line no-control-regex -- asserting control characters are gone
-    expect(described!.label + described!.reason).not.toMatch(/[\u0000-\u001f‮]/);
+    const shown = Array.from(described!.label + described!.reason);
+    expect(shown.some((c) => c.codePointAt(0)! < 0x20 || c === "\u202e")).toBe(false);
   });
 
   it("falls back to the position alone for a blank title", () => {
