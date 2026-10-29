@@ -66,10 +66,10 @@ let pending: PendingClone[];
 let events: OperationsEvent[];
 let registry: OperationRegistry;
 
-function localCtx(projectId = "project-a") {
+function localCtx(projectId = "project-a", webContentsId = 1) {
   return {
-    event: { sender: { id: 1 } },
-    webContentsId: 1,
+    event: { sender: { id: webContentsId } },
+    webContentsId,
     senderWindow: null,
     projectId,
     endpoint: { kind: "local-view", isClosed: () => false },
@@ -373,6 +373,22 @@ describe("clone cancel", () => {
       await finish(runs);
     }
   );
+
+  it("stops only the caller's own clones when no opId is named", async () => {
+    // Two windows, each with an unnamed local clone in flight.
+    const a = clone(localCtx("project-a", 1), options({ folderName: "a" }));
+    await started(1);
+    const b = clone(localCtx("project-b", 2), options({ folderName: "b" }));
+    await started(2);
+
+    await cancel(localCtx("project-a", 1));
+    await expect(a).rejects.toMatchObject({ code: "CANCELLED" });
+
+    const other = pending.find((p) => p.folder === "b")!;
+    expect(other.signal.aborted).toBe(false);
+    other.resolve();
+    await expect(b).resolves.toEqual({ clonedPath: path.join("/abs/parent", "b") });
+  });
 
   it("never lets a remote caller cancel every clone", async () => {
     const runs = await twoClones();
