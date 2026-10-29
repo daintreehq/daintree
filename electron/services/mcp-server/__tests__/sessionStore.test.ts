@@ -1189,6 +1189,25 @@ describe("SessionStore.getLiveStatusForHelpSession (#10032)", () => {
     expect(grants.map((g) => g.toolId)).toEqual(["terminal.kill"]);
   });
 
+  it("carries each grant's ceiling and drops one past it whose sliding expiry is still ahead (#14998)", () => {
+    wireLiveHelpSession({ tier: "core" });
+    const grant = store.grantCache.issueGrant(TRANSPORT, "project.runCheck");
+    // A use just before the ceiling slides the expiry well past it.
+    vi.setSystemTime(grant.maxExpiresAt - 1000);
+    store.grantCache.refresh(TRANSPORT, "project.runCheck", grant.issuedAt);
+    expect(store.getLiveStatusForHelpSession(HELP_ID, WC)?.activeGrants).toEqual([
+      expect.objectContaining({
+        toolId: "project.runCheck",
+        expiresAt: grant.expiresAt,
+        maxExpiresAt: grant.maxExpiresAt,
+      }),
+    ]);
+
+    vi.setSystemTime(grant.maxExpiresAt + 1);
+    expect(grant.expiresAt).toBeGreaterThan(Date.now());
+    expect(store.getLiveStatusForHelpSession(HELP_ID, WC)?.activeGrants).toEqual([]);
+  });
+
   it("finds the caller's live transport even when a stale same-help-id mapping is iterated first", () => {
     // A reconnect left an older transport for the same help id pinned to a
     // different WebContents; it must not short-circuit the lookup before the

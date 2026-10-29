@@ -426,10 +426,12 @@ export class McpActivityTracker {
   /**
    * Consume a live grant lifecycle push (#10042). `grant.issued` arms the
    * countdown banner and dismisses the mismatch that prompted it;
+   * `grant.refreshed` moves its deadline after a use slides it (#14998);
    * `grant.expired`/`grant.revoked` retire the banner and, for the two
    * user-actionable reasons, surface a brief "approval ended" notice. The
-   * `expired`/`revoked` cases are scoped to the grant currently on screen so a
-   * stale lapse for a different tool can't wipe the active countdown.
+   * `refreshed`/`expired`/`revoked` cases are scoped to the grant currently on
+   * screen, so a push for a different tool can't move or wipe the countdown,
+   * and a refresh never re-arms a banner that's already gone.
    * `tier.elevated`/`tier.decayed` are session-tier transitions, not per-tool
    * grants — they leave the countdown untouched (the audit viewer records
    * them).
@@ -447,6 +449,7 @@ export class McpActivityTracker {
           sessionId: payload.sessionId,
           toolId: payload.toolId,
           expiresAt: payload.expiresAt,
+          maxExpiresAt: payload.maxExpiresAt,
           ttlMs: payload.ttlMs,
         },
         grantEnded: null,
@@ -456,11 +459,22 @@ export class McpActivityTracker {
       this._clearTierMismatchIfStillCurrent(payload.sessionId, payload.toolId);
       return;
     }
+    const active = this.host.getSnapshot().activeGrant;
+    if (!active || active.sessionId !== payload.sessionId || active.toolId !== payload.toolId) {
+      return;
+    }
+    if (payload.type === "grant.refreshed") {
+      if (payload.expiresAt === undefined) return;
+      this.host.patch({
+        activeGrant: {
+          ...active,
+          expiresAt: payload.expiresAt,
+          maxExpiresAt: payload.maxExpiresAt ?? active.maxExpiresAt,
+        },
+      });
+      return;
+    }
     if (payload.type === "grant.expired" || payload.type === "grant.revoked") {
-      const active = this.host.getSnapshot().activeGrant;
-      if (!active || active.sessionId !== payload.sessionId || active.toolId !== payload.toolId) {
-        return;
-      }
       const reason = this._grantEndReason(payload);
       this._clearGrantEndedTimer();
       this.host.patch({

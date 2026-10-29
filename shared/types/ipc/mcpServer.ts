@@ -449,17 +449,33 @@ export function isAuditRecord(record: McpLogRecord): record is McpAuditRecord {
 }
 
 /**
+ * Live-only lifecycle types: pushed to the renderer, never written to the
+ * audit log. `grant.refreshed` is a successful use sliding a grant's
+ * `expiresAt` forward (#14998); the dispatch record already logs each use, so
+ * auditing the slide too would only double the ring buffer's per-call rows.
+ * Sent only when the deadline the user sees moves, so once the hard ceiling is
+ * what ends the grant, further uses push nothing.
+ */
+export type McpGrantLifecycleType = McpGrantRecordType | "grant.refreshed";
+
+/**
  * Live event payload broadcast to the pinned renderer for a grant
  * transition. Mirrors `McpGrantRecord` because renderers want the same
  * fields they'd see in the audit log. Send is targeted (never broadcast)
  * because grant state is session-scoped.
  */
 export interface McpGrantLifecyclePayload {
-  type: McpGrantRecordType;
+  type: McpGrantLifecycleType;
   sessionId: string;
   toolId: string;
   ttlMs: number;
   expiresAt?: number;
+  /**
+   * The hard ceiling: absolute epoch millis past which no use can extend the
+   * grant. Set on `grant.issued`/`grant.refreshed`. The grant ends at the
+   * earlier of this and `expiresAt`.
+   */
+  maxExpiresAt?: number;
   revokedReason?: McpGrantRevokedReason;
   /** Native automation grant fields (#10648); absent for per-tool grants. */
   grantId?: string;

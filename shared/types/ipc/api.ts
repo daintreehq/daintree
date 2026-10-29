@@ -3251,6 +3251,11 @@ export interface HelpSessionActiveGrant {
   toolId: string;
   /** Absolute epoch millis when the grant expires without refresh. */
   expiresAt: number;
+  /**
+   * The hard ceiling no use can extend past, in absolute epoch millis. The
+   * grant ends at the earlier of this and {@link expiresAt}.
+   */
+  maxExpiresAt?: number;
   /** TTL the grant was minted with, in milliseconds. */
   ttlMs: number;
   /** Discriminates the grant kind. Defaults to `"per-tool"` when absent. */

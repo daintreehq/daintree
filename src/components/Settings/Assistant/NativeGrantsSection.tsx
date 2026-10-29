@@ -102,7 +102,7 @@ export function NativeGrantsSection({
                 <span className="tabular-nums">
                   {grant.remainingUses ?? 0} of {grant.maxUses ?? 0} uses left
                 </span>
-                <GrantCountdown expiresAt={grant.expiresAt} />
+                <GrantCountdown expiresAt={grant.expiresAt} maxExpiresAt={grant.maxExpiresAt} />
               </div>
             </div>
           ))}

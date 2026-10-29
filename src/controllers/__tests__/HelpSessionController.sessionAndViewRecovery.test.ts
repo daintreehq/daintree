@@ -746,6 +746,76 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
     }
   );
 
+  it("grant.refreshed moves the on-screen deadline after a use slides it (#14998)", () => {
+    helpPanelState.sessionId = "s1";
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    const issuedAt = Date.now();
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt: issuedAt + 900_000,
+      maxExpiresAt: issuedAt + 1_800_000,
+    });
+    grantLifecycleListeners[0]?.({
+      type: "grant.refreshed",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt: issuedAt + 1_500_000,
+      maxExpiresAt: issuedAt + 1_800_000,
+    });
+    expect(ctrl.getSnapshot().activeGrant).toEqual({
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt: issuedAt + 1_500_000,
+      maxExpiresAt: issuedAt + 1_800_000,
+    });
+
+    // Another tool's slide must not move this countdown.
+    grantLifecycleListeners[0]?.({
+      type: "grant.refreshed",
+      sessionId: "s1",
+      toolId: "t2",
+      ttlMs: 900_000,
+      expiresAt: issuedAt + 1_700_000,
+    });
+    expect(ctrl.getSnapshot().activeGrant?.expiresAt).toBe(issuedAt + 1_500_000);
+    ctrl.stop();
+  });
+
+  it("a grant.refreshed after the grant ended never re-arms the countdown (#14998)", () => {
+    helpPanelState.sessionId = "s1";
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt: Date.now() + 900_000,
+    });
+    grantLifecycleListeners[0]?.({
+      type: "grant.expired",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+    });
+    grantLifecycleListeners[0]?.({
+      type: "grant.refreshed",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt: Date.now() + 900_000,
+    });
+    expect(ctrl.getSnapshot().activeGrant).toBeNull();
+    expect(ctrl.getSnapshot().grantEnded).toEqual({ toolId: "t1", reason: "expired" });
+    ctrl.stop();
+  });
+
   it("a lapse for a different tool leaves the on-screen countdown intact", () => {
     // #12108: MCP pushes are matched against the lane's own session id.
     helpPanelState.sessionId = "s1";

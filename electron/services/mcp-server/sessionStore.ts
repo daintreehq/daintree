@@ -857,6 +857,7 @@ export class SessionStore {
     activeGrants: Array<{
       toolId: string;
       expiresAt: number;
+      maxExpiresAt: number;
       ttlMs: number;
       kind?: "per-tool" | "native";
       grantId?: string;
@@ -881,15 +882,16 @@ export class SessionStore {
       // the same "no live transport" signal this scan used to test by hand.
       const tier = this.getTier(transportSessionId);
       if (tier === null) continue;
-      // getActiveGrants is lazy-eviction only — a grant past expiresAt can
-      // linger until the periodic sweep (~5min). Filter those out so the
-      // snapshot never reports a logically-expired grant as active; the next
-      // sweep's `grant.expired` push will reconcile the renderer anyway.
-      const now = Date.now();
-      const activeGrants = this.grantCache
-        .getActiveGrants(transportSessionId)
-        .filter((g) => g.expiresAt > now)
-        .map((g) => ({ toolId: g.toolId, expiresAt: g.expiresAt, ttlMs: g.ttlMs }));
+      // Eviction is lazy — a grant past its TTL or its ceiling can linger until
+      // the periodic sweep (~5min). getLiveGrants drops both so the snapshot
+      // never reports a logically-ended grant as active; the next sweep's push
+      // reconciles the renderer anyway.
+      const activeGrants = this.grantCache.getLiveGrants(transportSessionId).map((g) => ({
+        toolId: g.toolId,
+        expiresAt: g.expiresAt,
+        maxExpiresAt: g.maxExpiresAt,
+        ttlMs: g.ttlMs,
+      }));
       // Native session-scoped automation grants (#10648) are addressed by the
       // transport sessionId in the cache; merge them into the same snapshot so
       // the settings surface shows the full grant lifecycle. Lazy-eviction
@@ -897,6 +899,7 @@ export class SessionStore {
       const nativeGrants = this.grantCache.getLiveNativeGrants(transportSessionId).map((g) => ({
         toolId: "*",
         expiresAt: g.expiresAt,
+        maxExpiresAt: g.maxExpiresAt,
         ttlMs: g.ttlMs,
         kind: "native" as const,
         grantId: g.id,
