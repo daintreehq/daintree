@@ -10,10 +10,7 @@ import type { NotificationHistoryEntry } from "@/store/slices/notificationHistor
 type NotificationContext = NotificationHistoryEntry["context"];
 
 export type NotificationUnavailableReason =
-  | "other-host"
-  | "other-project"
-  | "panel-trashed"
-  | "gone";
+  "other-host" | "other-project" | "panel-trashed" | "gone";
 
 export type NotificationDestination =
   | { kind: "panel"; panelId: string; worktreeId?: string }

@@ -1261,7 +1261,9 @@ describe("NotificationCenterEntry — go to source", () => {
     it("is a link that closes the inbox and switches there, landing on the panel", async () => {
       const { container } = render(
         <NotificationCenterEntry
-          entry={makeEntry({ context: { projectId: OTHER, worktreeId: "wt-9", panelId: "pane-9" } })}
+          entry={makeEntry({
+            context: { projectId: OTHER, worktreeId: "wt-9", panelId: "pane-9" },
+          })}
         />
       );
       expect(getRow(container).getAttribute("data-navigable")).toBe("true");
