@@ -3,6 +3,7 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  panels: null as { setState: (state: { panelsById: Record<string, unknown> }) => void } | null,
   worktrees: new Map<string, unknown>(),
   viewStoreThrows: false,
   navigate: vi.fn(async (_context: unknown) => true),
@@ -12,7 +13,9 @@ const mocks = vi.hoisted(() => ({
 // A real store holding only the roster, so the live hook's subscriptions are exercised.
 vi.mock("@/store/panelStore", async () => {
   const { create } = await import("zustand");
-  return { usePanelStore: create(() => ({ panelsById: {} as Record<string, unknown> })) };
+  const usePanelStore = create(() => ({ panelsById: {} as Record<string, unknown> }));
+  mocks.panels = usePanelStore;
+  return { usePanelStore };
 });
 
 vi.mock("@/lib/sidebarToggle", () => ({ suppressSidebarResizes: mocks.suppressResizes }));
@@ -34,7 +37,6 @@ import {
   useMcpRequesterLiveState,
 } from "../mcpConfirmRequester";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
-import { usePanelStore } from "@/store/panelStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useFocusStore } from "@/store/focusStore";
@@ -43,7 +45,7 @@ import type { McpConfirmRequester } from "@/store/mcpConfirmStore";
 const initialHelp = useHelpPanelStore.getState();
 
 function setPanels(panelsById: Record<string, unknown>): void {
-  usePanelStore.setState({ panelsById } as never);
+  mocks.panels?.setState({ panelsById });
 }
 const initialSelection = useWorktreeSelectionStore.getState();
 const initialFocus = useFocusStore.getState();
@@ -243,7 +245,9 @@ describe("useMcpRequesterLiveState", () => {
     expect(result.current.present).toBe(true);
 
     // The same slot, a new conversation.
-    act(() => useHelpPanelStore.setState({ sessions: { 0: lane("t-c", "help-c") } }));
+    act(() => {
+      useHelpPanelStore.setState({ sessions: { 0: lane("t-c", "help-c") } });
+    });
     expect(result.current.present).toBe(false);
   });
 });
