@@ -793,9 +793,9 @@ describe("selection identity", () => {
     // The identity says it under the name in its header; the note says it again
     // only as far as it must, naming the target and what to do.
     expect(sendNote()).toBe("Couldn't find the source for PricingCard — choose another target");
-    expect(
-      screen.getByRole("region", { name: "Selected element" }).textContent
-    ).toContain("Couldn't find the source");
+    expect(screen.getByRole("region", { name: "Selected element" }).textContent).toContain(
+      "Couldn't find the source"
+    );
     // The element itself is still something the request can be about.
     fireEvent.click(screen.getByRole("radio", { name: "Element" }));
     await waitFor(() => expect(isOff(sendButton())).toBe(false));
@@ -3210,9 +3210,10 @@ describe("an element with nothing to trace", () => {
     expect(identity.textContent).toContain("No source reported for this element");
     // The notice says why there is no source, never what a request carries.
     expect(identity.textContent).not.toMatch(/screenshot|markup|styles|request carries/i);
+    // Parts keep their words together with non-breaking spaces.
     await waitFor(() =>
-      expect(document.querySelector("[data-composer-includes]")?.textContent).toContain(
-        "no screenshot"
+      expect(document.querySelector("[data-composer-includes]")?.textContent).toMatch(
+        /no\sscreenshot/
       )
     );
   });
