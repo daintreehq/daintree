@@ -257,9 +257,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   // Where the confirm on screen sits in the run, for "Update 2 of 5" (#15042).
   // `position` moves only when the next update is shown, so an update parked
   // behind the HTTP confirm or put back up for unsaved work keeps its place.
-  const [updateBatch, setUpdateBatch] = useState<{ position: number; total: number } | null>(
-    null
-  );
+  const [updateBatch, setUpdateBatch] = useState<{ position: number; total: number } | null>(null);
   // True while an HTTP-downgrade confirm originated from a reinstall (single or
   // batch) rather than a manual URL install — so cancelling it doesn't wrongly
   // reopen the manual install dialog, and resolving it advances the batch queue.

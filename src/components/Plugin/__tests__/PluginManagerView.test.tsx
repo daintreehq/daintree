@@ -2029,7 +2029,10 @@ describe("PluginManagerView", () => {
       });
 
       it("keeps plain Cancel when Update all finds only one update", async () => {
-        listMock().mockResolvedValue([makeUrl("acme.a", "Plugin A"), makeUrl("acme.b", "Plugin B")]);
+        listMock().mockResolvedValue([
+          makeUrl("acme.a", "Plugin A"),
+          makeUrl("acme.b", "Plugin B"),
+        ]);
         checkMock().mockImplementation(async (id: string) =>
           id === "acme.a"
             ? {
