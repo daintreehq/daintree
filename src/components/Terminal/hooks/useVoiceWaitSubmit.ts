@@ -93,6 +93,11 @@ interface UseVoiceWaitSubmitParams {
   claimSendHandBack?: ClaimSendHandBack;
   /** A disabled composer ignores a spoken "send it" the way it ignores Enter. */
   isDisabled?: () => boolean;
+  /**
+   * A spoken "send it" left the draft unsent for being too short to send by
+   * voice, whether that was clear at once or only once the cleanup landed.
+   */
+  onSpokenSendTooShort?: () => void;
 }
 
 interface VoiceWaitSubmitOptions {
@@ -173,16 +178,19 @@ export function useVoiceWaitSubmit({
   sendFromEditor,
   claimSendHandBack,
   isDisabled,
+  onSpokenSendTooShort,
 }: UseVoiceWaitSubmitParams) {
   const ownVoice = voice !== undefined;
   const voiceId = voice?.panelId ?? terminalId;
   const voiceProjectId = voice ? voice.projectId : projectId;
   const sendFromEditorRef = useRef(sendFromEditor);
   const isDisabledRef = useRef(isDisabled);
+  const onSpokenSendTooShortRef = useRef(onSpokenSendTooShort);
   useEffect(() => {
     sendFromEditorRef.current = sendFromEditor;
     isDisabledRef.current = isDisabled;
-  }, [sendFromEditor, isDisabled]);
+    onSpokenSendTooShortRef.current = onSpokenSendTooShort;
+  }, [sendFromEditor, isDisabled, onSpokenSendTooShort]);
   const claimSendHandBackRef = useRef(claimSendHandBack);
   useEffect(() => {
     claimSendHandBackRef.current = claimSendHandBack;
@@ -323,6 +331,7 @@ export function useVoiceWaitSubmit({
 
       void (async () => {
         let sent: boolean | Promise<boolean> = false;
+        let tooShort = false;
         try {
           if (isVoiceSessionActiveFor(voiceId)) {
             await voiceRecordingService.stop("Submitting command.", {
@@ -404,7 +413,10 @@ export function useVoiceWaitSubmit({
             useDictationRangeStore.getState().listDictations(terminalId, projectId),
             sessions
           );
-          if (options?.spoken && !isSpokenSendable(voiceSend.text)) return;
+          if (options?.spoken && !isSpokenSendable(voiceSend.text)) {
+            tooShort = voiceSend.text.trim() !== "";
+            return;
+          }
           sent = sendFromEditorRef.current(handBack, voiceSend, options?.route) ?? true;
         } finally {
           releaseKeys();
@@ -416,6 +428,7 @@ export function useVoiceWaitSubmit({
             setVoiceSubmitWait(null);
             if (typeof sent === "boolean") {
               setVoiceSubmitOutcome({ kind: sent ? "sent" : "held", attempt });
+              if (tooShort) onSpokenSendTooShortRef.current?.();
             } else {
               setVoiceSubmitOutcome({ kind: "sending", attempt });
               const settle = (went: boolean) => {
@@ -448,6 +461,11 @@ export function useVoiceWaitSubmit({
           ? voiceProjectId
           : (voiceProjectId ?? useProjectStore.getState().currentProject?.id),
         (options) => {
+          // The service has already decided, and stopped what needed stopping.
+          if (options?.tooShort) {
+            if (!isDisabledRef.current?.()) onSpokenSendTooShortRef.current?.();
+            return;
+          }
           if (isDisabledRef.current?.()) {
             void voiceRecordingService.stop("Dictation stopped.", { reason: "send" });
             return;

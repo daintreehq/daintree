@@ -202,6 +202,8 @@ type StartStepLogger = (step: string, details?: Record<string, unknown>) => void
 /** How a composer's send was asked for: a spoken "send it" holds back a too-short draft. */
 export interface VoiceSendOptions {
   spoken?: boolean;
+  /** A spoken "send it" its draft was too short for: nothing is sent, and the composer says so. */
+  tooShort?: boolean;
 }
 
 /** The running session's clock, as {@link VoiceRecordingService.getSessionClock} reads it. */
@@ -790,6 +792,9 @@ class VoiceRecordingService {
   // nothing has joined it or started since: a "send it" its drain lands still
   // sends.
   private stopTakesSpokenSend = false;
+  // The stop in flight still says it stopped: a "send it" its drain lands on
+  // a draft too short to send leaves the composer to say what became of it.
+  private stopAnnounces = true;
   private levelRaf: number | null = null;
   private pendingLevel = 0;
   // Session-wide audio-level stats, logged on stop so a captured log can show
@@ -3005,6 +3010,7 @@ class VoiceRecordingService {
     }
 
     this.stopTakesSpokenSend = reason === "key_release" || reason === "user";
+    this.stopAnnounces = true;
     this.stopPromise = (async () => {
       this.initialize();
       const { skipRemoteStop = false, preserveLiveText = true, nextStatus = "idle" } = options;
@@ -3154,7 +3160,7 @@ class VoiceRecordingService {
         if (stoppedTarget && !stoppedTarget.rewrite) {
           finished = takeFinishedTranscript(stoppedTarget, stoppedSessionId);
         }
-        if (shouldAnnounce) {
+        if (shouldAnnounce && this.stopAnnounces) {
           useVoiceRecordingStore.getState().announce(announcement);
         }
       } else if (nextStatus === "idle") {
@@ -5862,6 +5868,15 @@ class VoiceRecordingService {
     }
     if (handler && isSpokenSendable(draft)) {
       handler();
+      return;
+    }
+    // A reply too short to send by voice stays in the draft (#14633). The stop
+    // alone would pass for an ordinary one, so the composer says it wasn't
+    // sent and how to send it, in place of the stop's own word (#14944).
+    if (handler && draft.trim()) {
+      if (stopping) this.stopAnnounces = false;
+      else void this.stop("Dictation stopped.", { reason: "send", announce: false });
+      handler({ tooShort: true });
       return;
     }
     if (!stopping) void this.stop("Dictation stopped.", { reason: "send" });

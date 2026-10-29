@@ -73,10 +73,12 @@ describe("terminalInputStore voiceSubmitting", () => {
 
 describe("useVoiceWaitSubmit", () => {
   let sendFromEditor: ReturnType<typeof vi.fn<() => void>>;
+  let onSpokenSendTooShort: ReturnType<typeof vi.fn<() => void>>;
 
   beforeEach(() => {
     useTerminalInputStore.setState({ voiceSubmittingPanels: new Set() });
     sendFromEditor = vi.fn<() => void>();
+    onSpokenSendTooShort = vi.fn<() => void>();
     stopMock.mockReset();
     stopMock.mockResolvedValue(undefined);
     hasPendingMock.mockReset();
@@ -104,11 +106,12 @@ describe("useVoiceWaitSubmit", () => {
         sendFromEditor,
         claimSendHandBack,
         isDisabled,
+        onSpokenSendTooShort,
       })
     );
   }
 
-  function spokenSendHandler(): (options?: { spoken?: boolean }) => void {
+  function spokenSendHandler(): (options?: { spoken?: boolean; tooShort?: boolean }) => void {
     const call = onSpokenSendMock.mock.calls.at(-1);
     expect(call?.[0]).toBe(PANEL_ID);
     return call![2];
@@ -125,6 +128,7 @@ describe("useVoiceWaitSubmit", () => {
 
       expect(stopMock).toHaveBeenCalledTimes(1);
       expect(sendFromEditor).toHaveBeenCalledTimes(1);
+      expect(onSpokenSendTooShort).not.toHaveBeenCalled();
     });
 
     it("waits for the correction before sending, as Enter does", async () => {
@@ -185,7 +189,11 @@ describe("useVoiceWaitSubmit", () => {
       expect(sendFromEditor).not.toHaveBeenCalledWith(handBack, expect.anything(), undefined);
     });
 
-    it.each(["", "fix it", "  ok , ! "])("stops but leaves %j unsent", async (draft) => {
+    it.each([
+      ["", false],
+      ["fix it", true],
+      ["  ok , ! ", true],
+    ])("stops but leaves %j unsent, saying so for a reply: %s", async (draft, says) => {
       useTerminalInputStore.getState().setDraftInput(PANEL_ID, draft);
       renderWaitSubmit();
 
@@ -196,6 +204,65 @@ describe("useVoiceWaitSubmit", () => {
       expect(stopMock).toHaveBeenCalledTimes(1);
       expect(sendFromEditor).not.toHaveBeenCalled();
       expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
+      expect(onSpokenSendTooShort).toHaveBeenCalledTimes(says ? 1 : 0);
+    });
+
+    // #14944: the service found the draft too short and stopped the dictation itself.
+    it("says a reply was too short to send without stopping, waiting or sending", async () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL_ID, "yes");
+      hasPendingMock.mockReturnValue(true);
+      const claimSendHandBack = vi.fn(() => vi.fn());
+      renderWaitSubmit(undefined, claimSendHandBack);
+
+      await act(async () => {
+        spokenSendHandler()({ tooShort: true });
+      });
+
+      expect(onSpokenSendTooShort).toHaveBeenCalledTimes(1);
+      expect(stopMock).not.toHaveBeenCalled();
+      expect(waitMock).not.toHaveBeenCalled();
+      expect(sendFromEditor).not.toHaveBeenCalled();
+      expect(claimSendHandBack).not.toHaveBeenCalled();
+      expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
+    });
+
+    it("says nothing of a too-short reply in a disabled composer, and stops nothing more", async () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL_ID, "yes");
+      renderWaitSubmit(() => true);
+
+      await act(async () => {
+        spokenSendHandler()({ tooShort: true });
+      });
+
+      expect(onSpokenSendTooShort).not.toHaveBeenCalled();
+      expect(stopMock).not.toHaveBeenCalled();
+    });
+
+    it("says nothing late for a send cancelled before its cleanup left it too short", async () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL_ID, "um so yeah");
+      hasPendingMock.mockReturnValue(true);
+      let landCorrection!: (landed: boolean) => void;
+      waitMock.mockImplementation(
+        () =>
+          new Promise<boolean>((resolve) => {
+            landCorrection = resolve;
+          })
+      );
+      const { result } = renderWaitSubmit();
+
+      await act(async () => {
+        spokenSendHandler()();
+      });
+      act(() => {
+        result.current.cancelVoiceWaitSubmit();
+      });
+      await act(async () => {
+        useTerminalInputStore.getState().setDraftInput(PANEL_ID, "Yeah.");
+        landCorrection(true);
+      });
+
+      expect(onSpokenSendTooShort).not.toHaveBeenCalled();
+      expect(sendFromEditor).not.toHaveBeenCalled();
     });
 
     it("joins a stop already finishing and sends once its correction lands (#14803)", async () => {
@@ -258,6 +325,31 @@ describe("useVoiceWaitSubmit", () => {
 
       expect(sendFromEditor).not.toHaveBeenCalled();
       expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
+      expect(onSpokenSendTooShort).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(["", "  "])("says nothing of a reply when the cleanup leaves %j", async (cleaned) => {
+      useTerminalInputStore.getState().setDraftInput(PANEL_ID, "um so yeah");
+      hasPendingMock.mockReturnValue(true);
+      let landCorrection!: (landed: boolean) => void;
+      waitMock.mockImplementation(
+        () =>
+          new Promise<boolean>((resolve) => {
+            landCorrection = resolve;
+          })
+      );
+      renderWaitSubmit();
+
+      await act(async () => {
+        spokenSendHandler()();
+      });
+      await act(async () => {
+        useTerminalInputStore.getState().setDraftInput(PANEL_ID, cleaned);
+        landCorrection(true);
+      });
+
+      expect(sendFromEditor).not.toHaveBeenCalled();
+      expect(onSpokenSendTooShort).not.toHaveBeenCalled();
     });
 
     it("claims the keyboard's hand-back at the command and sends with it, as Enter does", async () => {

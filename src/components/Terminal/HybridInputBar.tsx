@@ -143,6 +143,7 @@ import {
   clearComposerHistory,
   createComboboxAttributes,
   captureRewriteSelection,
+  dictationWrite,
   endCorrectionReview,
   outsideDraftWrite,
   selectionAfterOutsideWrite,
@@ -333,6 +334,9 @@ function editorOwnsDomFocus(view: EditorView): boolean {
  * Editor. Shared so the two drop targets cannot drift apart again (#12570).
  */
 const SEND_HELD_STATUS = "Not sent. The draft is still here.";
+const SPOKEN_SEND_TOO_SHORT_CAPTION = "Too short to send by voice · Enter to send";
+const SPOKEN_SEND_TOO_SHORT_STATUS =
+  "Not sent: a voice send needs three or more words. Press Enter to send the reply.";
 const VOICE_SUBMIT_OUTCOME_STATUS: Record<VoiceSubmitOutcome["kind"], string> = {
   sending: "Sending…",
   sent: "Sent",
@@ -1154,9 +1158,21 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // ordinary send owns the composer's spoken status from the moment it goes,
     // so an earlier dictated send's outcome is never read out again over it;
     // a dictated send leaves its own outcome to speak until it is refused.
-    const [sendNote, setSendNote] = useState<{ terminalId: string; refused: boolean } | null>(null);
-    const dropSendRefusal = () =>
-      setSendNote((note) => (note?.refused ? { ...note, refused: false } : note));
+    // A spoken "send it" on a reply too short to send by voice says so too,
+    // and how to send it (#14944): that note outlasts the dictation's own
+    // writes, its cleanup landing after the stop above all, while they leave
+    // a reply to send.
+    const [sendNote, setSendNote] = useState<{
+      terminalId: string;
+      refused: boolean;
+      tooShort?: true;
+    } | null>(null);
+    const dropSendRefusal = (dictationKeepsReply = false) =>
+      setSendNote((note) =>
+        note?.refused && !(note.tooShort && dictationKeepsReply)
+          ? { terminalId: note.terminalId, refused: false }
+          : note
+      );
     const submitAttemptRef = useRef(0);
     const notingRefusal = useCallback(
       (submit: (outgoing: string) => Promise<boolean>, dictated: boolean) =>
@@ -1179,6 +1195,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         },
       [terminalId]
     );
+    const noteSpokenSendTooShort = useCallback(() => {
+      // An earlier send still on its way can't say over it that it wasn't sent.
+      ++submitAttemptRef.current;
+      setSendNote({ terminalId, refused: true, tooShort: true });
+    }, [terminalId]);
 
     // Every way this composer sends — Enter, a picked slash command, a prompt
     // from the command picker — goes through `submitText` when it is given, so
@@ -1314,6 +1335,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       sendFromEditor,
       claimSendHandBack,
       isDisabled: () => disabledRef.current,
+      onSpokenSendTooShort: noteSpokenSendTooShort,
     });
     // The editor locks and the shell changes the moment a voice send starts;
     // what it is waiting on is only told once the wait outlasts the inline
@@ -1322,6 +1344,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // A dictated send waiting is the newest send: its progress and outcome,
     // cancellation included, speak from here.
     if (isVoiceSubmitting && sendNote !== null) setSendNote(null);
+    // Dictating again here is the next word on the reply the note was about.
+    if (
+      sendNote?.tooShort &&
+      (isVoiceRecording ||
+        isVoiceConnecting ||
+        (activeVoicePanelId === voiceId && voiceStatus === "arming"))
+    ) {
+      setSendNote({ terminalId: sendNote.terminalId, refused: false });
+    }
     const isVoiceSendHandingOver = voiceSubmitOutcome?.kind === "sending";
     const voiceSubmitAttempt = voiceSubmitWait?.attempt ?? voiceSubmitOutcome?.attempt ?? 0;
     const showVoiceSubmitStatus = useDeferredLoading(
@@ -1354,6 +1385,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // placeholder saying it. The send's own caption has the border first.
     const ownSendNote = sendNote?.terminalId === terminalId ? sendNote : null;
     const isSendRefused = ownSendNote?.refused === true;
+    const sendRefusedCaption = ownSendNote?.tooShort ? SPOKEN_SEND_TOO_SHORT_CAPTION : "Not sent";
+    const sendRefusedStatus = ownSendNote?.tooShort
+      ? SPOKEN_SEND_TOO_SHORT_STATUS
+      : SEND_HELD_STATUS;
     const showSendRefusedCaption = isSendRefused && !isVoiceSubmitting && !isVoiceSubmitPresenting;
     const showVoiceSessionCaption =
       voiceSessionStatus !== null &&
@@ -1385,7 +1420,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // Editor waits there, and a live region outside its modal goes unheard.
     const voiceSubmitAnnouncer = (
       <div role="status" aria-live="polite" className="sr-only">
-        {ownSendNote ? (isSendRefused ? SEND_HELD_STATUS : "") : voiceSubmitStatus}
+        {ownSendNote ? (isSendRefused ? sendRefusedStatus : "") : voiceSubmitStatus}
       </div>
     );
     // The Expanded Editor has no composer shell to draw the wait's progress
@@ -1398,7 +1433,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         </span>
       ) : isSendRefused ? (
         <span aria-hidden="true" className="ml-auto mr-3 text-xs text-text-secondary">
-          Not sent
+          {sendRefusedCaption}
         </span>
       ) : null;
 
@@ -1677,10 +1712,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const { handleUpdateRef: contextUpdateRef } = useContextDetection({
       latestRef,
       activeTriggers,
-      applyDocChange: (next) => {
+      applyDocChange: (next, update) => {
         // Before the guard: the composer's own writes (a template, a completion)
         // change the draft the note was about too.
-        dropSendRefusal();
+        dropSendRefusal(
+          next.trim() !== "" && update.transactions.every((tr) => tr.annotation(dictationWrite))
+        );
         if (next === lastEmittedValueRef.current) return false;
         lastEmittedValueRef.current = next;
         setValue(next);
@@ -2033,7 +2070,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 data-send-refused-caption=""
                 className={COMPOSER_BORDER_CAPTION_CLASS}
               >
-                Not sent
+                {sendRefusedCaption}
               </div>
             )}
             <AutocompleteMenu
