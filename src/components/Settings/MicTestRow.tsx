@@ -8,12 +8,49 @@ import {
   type MicTestOpened,
   type MicTestSample,
 } from "@/services/voiceMicTest";
+import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import type { VoiceInputStatus, VoiceSessionElsewhere } from "@shared/types";
 
 type TestState =
   | { phase: "idle" }
   | { phase: "starting" }
   | { phase: "running"; opened: MicTestOpened; sample: MicTestSample }
   | { phase: "failed"; reason: "denied" | "unavailable" };
+
+/**
+ * A dictation that would hear the test, here or in another view: "open" while
+ * it can still be stopped, "finishing" while its last words drain. A paused one
+ * counts, since its key can resume it mid-test (#14951).
+ */
+type DictationBlock = "open" | "finishing" | null;
+
+interface DictationState {
+  status: VoiceInputStatus;
+  pendingTarget: unknown;
+  sessionElsewhere: VoiceSessionElsewhere | null;
+}
+
+function ownDictationBlock({ status, pendingTarget }: DictationState): DictationBlock {
+  if (status === "finishing" && !pendingTarget) return "finishing";
+  return pendingTarget || (status !== "idle" && status !== "error") ? "open" : null;
+}
+
+function dictationBlock(state: DictationState): DictationBlock {
+  const own = ownDictationBlock(state);
+  const elsewhere = state.sessionElsewhere;
+  if (own === "open" || (elsewhere && elsewhere.details?.phase !== "finishing")) return "open";
+  return own ?? (elsewhere ? "finishing" : null);
+}
+
+function stopDictation() {
+  const state = useVoiceRecordingStore.getState();
+  if (ownDictationBlock(state) === "open") {
+    void voiceRecordingService.stopActiveSession({ returnToTarget: false });
+  } else if (state.sessionElsewhere) {
+    void voiceRecordingService.stopSessionElsewhereById(state.sessionElsewhere.sessionId);
+  }
+}
 
 interface MicTestRowProps {
   /** The saved input device; empty for the system default. */
@@ -28,7 +65,12 @@ interface MicTestRowProps {
   disabled?: boolean;
 }
 
-function describe(state: TestState): string {
+function describe(state: TestState, block: DictationBlock): string {
+  if (block === "open") {
+    return "Dictation is still running, so what you say could land in its draft. Stop it to test the microphone.";
+  }
+  if (block === "finishing")
+    return "Dictation is finishing. You can test the microphone once it ends.";
   switch (state.phase) {
     case "idle":
       return "Check that the selected microphone is picking you up. Nothing is recorded or sent anywhere.";
@@ -59,6 +101,7 @@ function describe(state: TestState): string {
 
 export function MicTestRow({ deviceId, deviceLabel, active = true, disabled }: MicTestRowProps) {
   const [state, setState] = useState<TestState>({ phase: "idle" });
+  const block = useVoiceRecordingStore(dictationBlock);
   const handleRef = useRef<MicTestHandle | null>(null);
   // Bumped on every start and stop, so a start that resolves after the user
   // stopped (or after unmount) releases its stream instead of keeping it open.
@@ -72,6 +115,8 @@ export function MicTestRow({ deviceId, deviceLabel, active = true, disabled }: M
   }, []);
 
   const start = useCallback(async () => {
+    // The button can trail the store by a render.
+    if (dictationBlock(useVoiceRecordingStore.getState())) return;
     const run = ++runRef.current;
     handleRef.current?.stop();
     handleRef.current = null;
@@ -80,7 +125,8 @@ export function MicTestRow({ deviceId, deviceLabel, active = true, disabled }: M
       const handle = await startMicTest({
         deviceId,
         deviceLabel,
-        isCurrent: () => run === runRef.current,
+        isCurrent: () =>
+          run === runRef.current && !dictationBlock(useVoiceRecordingStore.getState()),
         onSample: (sample) => {
           if (run !== runRef.current) return;
           setState((prev) => (prev.phase === "running" ? { ...prev, sample } : prev));
@@ -109,10 +155,11 @@ export function MicTestRow({ deviceId, deviceLabel, active = true, disabled }: M
 
   // A test belongs to the device it was started on, and never outlives the page:
   // unmounting or hiding it (another settings page, a search) stops the test.
+  // A dictation starting, here or in another view, stops it too.
   useEffect(() => {
-    if (!active) return;
+    if (!active || block) return;
     return stop;
-  }, [stop, active, deviceId]);
+  }, [stop, active, deviceId, block]);
 
   const running = state.phase === "running";
   const level = running ? state.sample.level : 0;
@@ -123,7 +170,19 @@ export function MicTestRow({ deviceId, deviceLabel, active = true, disabled }: M
       id="voice-mic-test"
       label="Test microphone"
       layout="stacked"
-      description={<span role="status">{describe(state)}</span>}
+      description={
+        <>
+          <span role="status">{describe(state, block)}</span>
+          {block === "open" && (
+            <>
+              {" "}
+              <Button variant="link" onClick={stopDictation}>
+                Stop dictation
+              </Button>
+            </>
+          )}
+        </>
+      }
       disabled={disabled}
       control={({ disabled: rowDisabled, descriptionId }) => (
         <div className="flex items-center gap-3">
@@ -134,7 +193,7 @@ export function MicTestRow({ deviceId, deviceLabel, active = true, disabled }: M
             loading={state.phase === "starting"}
             // A running test can always be stopped, so the mic is never held
             // open by a row that became disabled mid-test.
-            disabled={rowDisabled && !running}
+            disabled={(rowDisabled || block !== null) && !running}
             aria-describedby={descriptionId}
           >
             {running ? "Stop test" : "Test microphone"}
