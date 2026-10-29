@@ -7,7 +7,8 @@ type FocusPayload =
   | { intent: "focus-panel"; panelId: string }
   | { intent: "focus-worktree"; worktreeId: string }
   | { intent: "open-assistant"; subject: Record<string, unknown> }
-  | { intent: "restore-trashed"; runId: string; spawnedAt: number; expiresAt: number };
+  | { intent: "restore-trashed"; runId: string; spawnedAt: number; expiresAt: number }
+  | { intent: "placement-note"; note: string };
 
 const onFocusOnActivateMock = vi.hoisted(() =>
   vi.fn<(cb: (payload: FocusPayload) => void) => () => void>()
@@ -297,6 +298,32 @@ describe("useFocusOnActivateIntent", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
     rerender({ loaded: true });
     expect(landOnWorktreeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("says what a placed worktree's host skipped once hydrated, in the grid bar (#14991)", () => {
+    const note = "The setup recipe isn't in this host's copy of the repository, so it won't run.";
+    const { rerender } = renderHook(({ loaded }) => useFocusOnActivateIntent(loaded), {
+      initialProps: { loaded: false },
+    });
+    act(() => {
+      lastCallback?.({ intent: "placement-note", note });
+    });
+    expect(notifyMock).not.toHaveBeenCalled();
+
+    rerender({ loaded: true });
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "warning",
+        title: "Part of the setup didn't run",
+        message: note,
+        placement: "grid-bar",
+      })
+    );
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(landOnWorktreeMock).not.toHaveBeenCalled();
+    rerender({ loaded: true });
+    expect(notifyMock).toHaveBeenCalledTimes(1);
   });
 
   it("drops a landing still waiting when a newer intent arrives or the view unmounts", () => {

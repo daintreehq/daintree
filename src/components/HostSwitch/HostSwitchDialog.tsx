@@ -391,10 +391,20 @@ export function HostSwitchDialog({
     return result?.kind === "pushed";
   };
 
-  const finish = (result: Extract<HostSwitchExecuteResult, { kind: "opened" }>) => {
+  /** `note` is what the host said it didn't do, shown in the view the switch lands in. */
+  const finish = (
+    result: Extract<HostSwitchExecuteResult, { kind: "opened" }>,
+    note: string | null = null
+  ) => {
     if (flowEnded(request.id)) return;
     if (onComplete) onComplete();
     else onClose();
+    if (note) {
+      void switchToHost(result.hostId, newWindow, result.projectId, {
+        focusIntent: { intent: "placement-note", note },
+      });
+      return;
+    }
     void switchToHost(result.hostId, newWindow, result.projectId);
   };
 
@@ -418,7 +428,8 @@ export function HostSwitchDialog({
       });
       return;
     }
-    if (result.kind === "opened") finish(result);
+    // The worktree is there either way; a recipe the host's copy lacks is said there.
+    if (result.kind === "opened") finish(result, result.branchNote);
   };
 
   const handleOpened = (result: HostSwitchExecuteResult | null) => {

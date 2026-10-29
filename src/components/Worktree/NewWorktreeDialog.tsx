@@ -53,6 +53,7 @@ import {
 import { useWorktreeFormErrors, type ErrorField } from "./hooks/useWorktreeFormErrors";
 import { useWorktreeFormValidation } from "./hooks/useWorktreeFormValidation";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { recipeTerminalsStartAgent, spawnPanelsFromRecipe } from "./panelSpawning";
 import {
   notifyAgentNotStarted,
@@ -88,6 +89,8 @@ import {
 } from "./views";
 
 type BranchMode = "new" | "existing";
+
+const setupList = new Intl.ListFormat("en", { style: "long", type: "conjunction" });
 
 const branchListCache = new Map<string, BranchInfo[]>();
 
@@ -1182,8 +1185,16 @@ export function NewWorktreeDialog({
     [handleIssueSelect, markTouched, clearErrors]
   );
 
-  // Another host chosen for the worktree: the project continues there, nothing is created here.
-  const [placementElsewhere, setPlacementElsewhere] = useState(false);
+  // Another host chosen for the worktree, by name: the project continues there,
+  // nothing is created here.
+  const [placementHost, setPlacementHost] = useState<string | null>(null);
+  const placementElsewhere = placementHost !== null;
+  // Another host runs only a team recipe, from its own copy of the repository:
+  // a cloned layout or a recipe kept on this host is never sent (#14991).
+  const placedRecipeId =
+    selectedRecipeId !== null && selectedRecipe && isInRepoRecipeId(selectedRecipe)
+      ? selectedRecipeId
+      : null;
   // The form as it stands, for another host to create: validated here, so the
   // same errors show on the same fields as a create on this host would.
   const getPlacementDraft = (): PlacementDraft | null => {
@@ -1219,7 +1230,7 @@ export function NewWorktreeDialog({
       fromRemote: isExistingMode ? false : fromRemote,
       useExistingBranch: isExistingMode,
       path: worktreePath.trim(),
-      recipeId: selectedRecipeId === CLONE_LAYOUT_ID ? null : selectedRecipeId,
+      recipeId: placedRecipeId,
     };
   };
   const submitDisabled =
@@ -1294,7 +1305,10 @@ export function NewWorktreeDialog({
   // Without saved recipes the layout silently defaults to a clone of the
   // current one, which can itself start an agent — so once an agent is picked
   // the layout choice is shown too.
-  const showRecipeRow = startingLayoutRecipes.length > 0 || firstAgent !== undefined;
+  // Another host chosen, the layout is shown too: a silently defaulted clone of
+  // this one is a layout that host won't make.
+  const showRecipeRow =
+    startingLayoutRecipes.length > 0 || firstAgent !== undefined || placementElsewhere;
   const selectedRecipeStartsAgent = selectedRecipe
     ? recipeTerminalsStartAgent(selectedRecipe.terminals)
     : false;
@@ -1322,6 +1336,23 @@ export function NewWorktreeDialog({
   // A prompt that can't be sent only earns its three lines while it holds a
   // draft the user needs to see is going nowhere.
   const showPromptRow = firstAgent !== undefined && !(promptBlocked && !firstPrompt.trim());
+
+  // While another host is chosen, what it won't apply is said here, before
+  // Create, and its controls are off; the choices are kept for this host.
+  const placementSkips = [
+    showIssueRow ? "issue" : null,
+    hasAnyEnvironments ? "environment" : null,
+    "agent",
+    showPromptRow ? "prompt" : null,
+  ].filter((skip): skip is string => skip !== null);
+  const placedRecipeNote =
+    placementHost === null || selectedRecipeId === null
+      ? null
+      : selectedRecipeId === CLONE_LAYOUT_ID
+        ? `${placementHost} can't clone this window's layout, so the worktree opens there without it`
+        : placedRecipeId !== null
+          ? `Runs only if ${placementHost}'s copy of the repository has this recipe`
+          : `${placementHost} only runs team recipes from the repository, so this one won't run there`;
 
   // Same flags the real sections are built from, so the skeleton is the shape
   // that is actually about to render rather than a generic three-block guess.
@@ -1531,11 +1562,24 @@ export function NewWorktreeDialog({
                     rootPath={rootPath}
                     getDraft={getPlacementDraft}
                     onLeave={onClose}
-                    onElsewhereChange={setPlacementElsewhere}
+                    onElsewhereChange={setPlacementHost}
                   />
                 </FormSection>
 
                 <FormSection title="Setup" note="Optional">
+                  {placementHost !== null && (
+                    <div className="col-span-2" data-testid="placement-setup-note">
+                      <Callout severity="info">
+                        <p>
+                          {placementHost} creates the worktree and can run a team recipe. The{" "}
+                          {setupList.format(placementSkips)}{" "}
+                          {placementSkips.length === 1 ? "applies" : "apply"} only to a worktree
+                          created on this host.
+                        </p>
+                      </Callout>
+                    </div>
+                  )}
+
                   {showIssueRow && (
                     <FormRow
                       label="Issue"
@@ -1546,6 +1590,7 @@ export function NewWorktreeDialog({
                             onSetAssignWorktreeToSelf={setAssignWorktreeToSelf}
                             currentUser={currentUser}
                             currentUserAvatar={currentUserAvatar}
+                            disabled={placementElsewhere}
                           />
                         )
                       }
@@ -1555,6 +1600,7 @@ export function NewWorktreeDialog({
                         selectedIssue={selectedIssue}
                         onSelectIssue={handleIssueSelectWrapper}
                         onPickerOpenChange={setIssuePickerOpen}
+                        disabled={placementElsewhere}
                       />
                     </FormRow>
                   )}
@@ -1564,7 +1610,8 @@ export function NewWorktreeDialog({
                       label="Environment"
                       selfLabelled
                       hint={
-                        worktreeMode !== "local" && <EnvironmentHint worktreeMode={worktreeMode} />
+                        worktreeMode !== "local" &&
+                        !placementElsewhere && <EnvironmentHint worktreeMode={worktreeMode} />
                       }
                     >
                       <EnvironmentRadioGroup
@@ -1572,12 +1619,26 @@ export function NewWorktreeDialog({
                         onChange={setWorktreeMode}
                         resourceEnvironments={resourceEnvironments}
                         hasAnyEnvironments={hasAnyEnvironments}
+                        disabled={placementElsewhere}
                       />
                     </FormRow>
                   )}
 
                   {showRecipeRow && (
-                    <FormRow label="Recipe" htmlFor="recipe-selector-trigger">
+                    <FormRow
+                      label="Recipe"
+                      htmlFor="recipe-selector-trigger"
+                      hint={
+                        placedRecipeNote && (
+                          <span
+                            className="text-xs text-text-secondary"
+                            data-testid="placed-recipe-note"
+                          >
+                            {placedRecipeNote}
+                          </span>
+                        )
+                      }
+                    >
                       <RecipePickerPopover
                         recipes={startingLayoutRecipes}
                         selectedRecipeId={selectedRecipeId}
@@ -1598,7 +1659,8 @@ export function NewWorktreeDialog({
                     label="Agent"
                     htmlFor="first-agent-selector-trigger"
                     hint={
-                      promptBlocked && (
+                      promptBlocked &&
+                      !placementElsewhere && (
                         <span
                           id="first-agent-conflict"
                           className="text-xs text-text-secondary"
@@ -1619,7 +1681,10 @@ export function NewWorktreeDialog({
                       onOpenChange={setAgentPickerOpen}
                       onSelectAgent={handleFirstAgentSelect}
                       listId="first-agent-selector"
-                      describedBy={promptBlocked ? "first-agent-conflict" : undefined}
+                      describedBy={
+                        promptBlocked && !placementElsewhere ? "first-agent-conflict" : undefined
+                      }
+                      disabled={placementElsewhere}
                     />
                   </FormRow>
 
@@ -1637,8 +1702,10 @@ export function NewWorktreeDialog({
                         value={firstPrompt}
                         onChange={(e) => setFirstPrompt(e.target.value)}
                         placeholder="First task for the agent (optional)"
-                        disabled={promptBlocked}
-                        aria-describedby={promptBlocked ? "first-agent-conflict" : undefined}
+                        disabled={promptBlocked || placementElsewhere}
+                        aria-describedby={
+                          promptBlocked && !placementElsewhere ? "first-agent-conflict" : undefined
+                        }
                       />
                     </FormRow>
                   )}

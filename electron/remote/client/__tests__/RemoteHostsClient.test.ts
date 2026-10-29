@@ -609,6 +609,40 @@ describe("RemoteHostsClient", () => {
     expect(windows.openRemoteProject).not.toHaveBeenCalled();
   });
 
+  it("carries what a placed worktree's host said it skipped, and refuses one with no note (#14991)", async () => {
+    const focusIntent = {
+      intent: "placement-note",
+      note: "The setup recipe isn't in this host's copy of the repository, so it won't run.",
+    } as const;
+    await client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "proj-1",
+      focusIntent: { ...focusIntent, panelId: "term-9" } as never,
+    });
+    expect(windows.openRemoteProject).toHaveBeenCalledWith(
+      1,
+      "studio-01",
+      "proj-1",
+      "/srv/proj-1",
+      focusIntent,
+      { requesterWebContentsId: 5 }
+    );
+
+    vi.mocked(windows.openRemoteProject).mockClear();
+    for (const note of ["", "n".repeat(20_000), 42, undefined, ["a note"]]) {
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), {
+          hostId: "studio-01",
+          newWindow: false,
+          projectId: "proj-1",
+          focusIntent: { intent: "placement-note", note } as never,
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+    }
+    expect(windows.openRemoteProject).not.toHaveBeenCalled();
+  });
+
   it("focuses nothing in a window that came forward without being asked to", async () => {
     windows.projectOwner = vi.fn(() => ({ windowId: 2, showing: true }));
     windows.revealWindow = vi.fn();
