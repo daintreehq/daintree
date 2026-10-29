@@ -113,7 +113,13 @@ describe("terminal.moveLeft / moveRight on a docked panel (#14972)", () => {
 
   it("moves a group chip past a single chip as one unit", async () => {
     seed([panel("t1", "dock"), panel("t2", "dock"), panel("a", "dock")], "t2", [
-      { id: "tabs", location: "dock", worktreeId: "wt-1", activeTabId: "t2", panelIds: ["t1", "t2"] },
+      {
+        id: "tabs",
+        location: "dock",
+        worktreeId: "wt-1",
+        activeTabId: "t2",
+        panelIds: ["t1", "t2"],
+      },
     ]);
 
     await run("terminal.moveRight");
@@ -124,7 +130,13 @@ describe("terminal.moveLeft / moveRight on a docked panel (#14972)", () => {
 
   it("moves a single chip past a whole group chip", async () => {
     seed([panel("t1", "dock"), panel("t2", "dock"), panel("a", "dock")], "a", [
-      { id: "tabs", location: "dock", worktreeId: "wt-1", activeTabId: "t1", panelIds: ["t1", "t2"] },
+      {
+        id: "tabs",
+        location: "dock",
+        worktreeId: "wt-1",
+        activeTabId: "t1",
+        panelIds: ["t1", "t2"],
+      },
     ]);
 
     await run("terminal.moveLeft");

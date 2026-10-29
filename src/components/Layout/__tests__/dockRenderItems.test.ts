@@ -562,7 +562,13 @@ describe("planDockChipMove", () => {
     const panels = [terminal("g1"), terminal("a"), terminal("g2"), terminal("b")];
     const groups = groupMap(group(["g2", "g1"], "g2", { id: "pair" }));
 
-    expect(railFor(panels.map((p) => p.id), panels, groups)).toEqual(["pair", "a", "b"]);
+    expect(
+      railFor(
+        panels.map((p) => p.id),
+        panels,
+        groups
+      )
+    ).toEqual(["pair", "a", "b"]);
 
     const next = plan(panels, "g2", 1, groups);
 
