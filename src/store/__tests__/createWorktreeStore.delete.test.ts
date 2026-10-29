@@ -46,7 +46,8 @@ const {
   devPreviewGetByWorktreeMock: vi.fn().mockResolvedValue(null),
   devPreviewStopByWorktreeMock: vi.fn().mockResolvedValue(undefined),
   devPreviewGetAllSessionsMock: vi.fn().mockResolvedValue([]),
-  resumeDevPreviewsMock: vi.fn<(worktreeId: string, panelIds: readonly string[]) => Promise<void>>(),
+  resumeDevPreviewsMock:
+    vi.fn<(worktreeId: string, panelIds: readonly string[]) => Promise<void>>(),
   logErrorWithContextMock: vi.fn(),
 }));
 
