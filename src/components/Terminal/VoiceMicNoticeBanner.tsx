@@ -38,7 +38,7 @@ const RESTART_FAILURE_COPY = {
  * A silent mic in an app whose bundle was replaced while it ran (#14937):
  * macOS feeds the old process zeros, so no mic or setting helps and a restart
  * does. The restart keeps the session, but closes terminals and interrupts
- * agents mid-task, so it is confirmed first; a retry after a failed one isn't.
+ * agents mid-task, so every attempt is confirmed first.
  */
 function AppReplacedMicNotice({
   deviceLabel,
@@ -89,7 +89,7 @@ function AppReplacedMicNotice({
           label: failure ? "Retry" : "Restart Daintree",
           variant: "primary",
           loading: isRestarting,
-          onClick: () => (failure ? void restart() : setIsConfirmOpen(true)),
+          onClick: () => setIsConfirmOpen(true),
         }}
       />
       <ConfirmDialog

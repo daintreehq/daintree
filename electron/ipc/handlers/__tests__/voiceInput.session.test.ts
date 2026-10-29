@@ -2360,6 +2360,15 @@ describe("voiceInput — an app bundle replaced under it (#14937)", () => {
     expect(relaunchApp).toHaveBeenCalledExactlyOnceWith("bundle-replaced");
   });
 
+  it("restarts into a bundle that was put back as it was, since the user asked", async () => {
+    bundle.launchable = true;
+
+    expect(
+      await getHandler(CHANNELS.VOICE_INPUT_RESTART_REPLACED_APP)({ sender: makeSender() })
+    ).toBe(true);
+    expect(relaunchApp).toHaveBeenCalledExactlyOnceWith("bundle-replaced");
+  });
+
   it("refuses a restart with no bundle to come back up as", async () => {
     bundle.replaced = true;
 

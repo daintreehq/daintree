@@ -192,9 +192,15 @@ describe("VoiceMicNoticeBanner", () => {
       );
       const { container } = renderNotice(REPLACED);
 
-      await confirmRestart(container);
-      const dialog = screen.getByRole("alertdialog");
-      fireEvent.click(within(dialog).getByRole("button", { name: "Restart Daintree" }));
+      fireEvent.click(bannerRestart(container));
+      const confirm = within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: "Restart Daintree",
+      });
+      // Both presses land before React commits the dialog's locked state.
+      await act(async () => {
+        fireEvent.click(confirm);
+        fireEvent.click(confirm);
+      });
 
       expect(mocks.restartReplacedApp).toHaveBeenCalledTimes(1);
       expect(bannerRestart(container).getAttribute("aria-disabled")).toBe("true");
@@ -213,12 +219,13 @@ describe("VoiceMicNoticeBanner", () => {
       const retry = bannerRestart(container, "Retry");
       expect(retry.getAttribute("aria-disabled")).toBeNull();
 
+      // The session may have changed since the last confirm, so it asks again.
+      fireEvent.click(retry);
+      expect(mocks.restartReplacedApp).toHaveBeenCalledTimes(1);
+      const dialog = screen.getByRole("alertdialog");
       await act(async () => {
-        fireEvent.click(retry);
+        fireEvent.click(within(dialog).getByRole("button", { name: "Restart Daintree" }));
       });
-
-      // Confirmed once already: the retry goes straight to main.
-      expect(screen.queryByRole("alertdialog")).toBeNull();
       expect(mocks.restartReplacedApp).toHaveBeenCalledTimes(2);
     });
 
