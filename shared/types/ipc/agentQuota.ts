@@ -45,10 +45,10 @@ export type CodexQuotaResult =
 export const CODEX_QUOTA_STALE_AFTER_MS = 2 * 60_000;
 
 /**
- * Why a preset's own `CODEX_HOME` couldn't be read at all (#13686). Kept apart
- * from {@link CODEX_QUOTA_UNAVAILABLE_REASONS} because only Settings reads
- * preset profiles; the MCP quota tool reports main's default one and its
- * schema doesn't carry these.
+ * Why a profile's `CODEX_HOME` couldn't be read at all (#13686): a preset's,
+ * or the agent-wide one the default profile uses (#15047). Kept apart from
+ * {@link CODEX_QUOTA_UNAVAILABLE_REASONS} because the MCP quota tool's schema
+ * doesn't carry these; it reports an unreadable default home as `read-failed`.
  */
 export const CODEX_QUOTA_PROFILE_HOME_REASONS = [
   /** The directory doesn't exist, or isn't a directory. */
@@ -74,7 +74,10 @@ export type CodexQuotaProfileResult =
 export interface CodexQuotaProfile {
   /** Opaque and stable for as long as the home doesn't change. */
   key: string;
-  /** Main's own profile: what a launch with no preset `CODEX_HOME` uses. */
+  /**
+   * What a launch with no preset `CODEX_HOME` uses: the agent-wide one when
+   * Codex's env sets it (#15047), main's own otherwise.
+   */
   isDefault: boolean;
   /** Names of the presets that set this home, in preset order. */
   presetNames: string[];
