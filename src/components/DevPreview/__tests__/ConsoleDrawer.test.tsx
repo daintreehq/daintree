@@ -404,6 +404,25 @@ describe("ConsoleDrawer", () => {
       renderDrawer({ defaultOpen: false, status: "running" });
       expect(screen.getByText("Running")).toBeTruthy();
     });
+
+    it("labels restart as a resource pause and resume for an endpoint preview", () => {
+      const onRestartDevServer = vi.fn();
+      renderDrawer({
+        terminalId: null,
+        defaultOpen: false,
+        onRestartDevServer,
+        status: "installing",
+      });
+
+      expect(screen.queryByRole("button", { name: /Restart dev server/ })).toBeNull();
+      fireEvent.click(
+        screen.getByRole("button", { name: "Pause and resume resource environment" })
+      );
+      fireEvent.click(
+        screen.getByRole("menuitem", { name: "Pause and resume resource environment" })
+      );
+      expect(onRestartDevServer).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe("terminalInstanceService integration", () => {
