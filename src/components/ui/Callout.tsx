@@ -92,6 +92,8 @@ export interface CalloutProps extends Omit<React.HTMLAttributes<HTMLDivElement>,
    * message when the box is too narrow for both. Anything more goes in the body.
    */
   action?: React.ReactNode;
+  /** A dismiss X, held at the trailing edge: unlike `action`, it never wraps under the message. */
+  dismiss?: React.ReactNode;
   /** A domain glyph in place of `Info`, for `neutral` only: every other tone's glyph is its severity. */
   icon?: LucideIcon;
 }
@@ -101,6 +103,7 @@ export function Callout({
   size = "default",
   title,
   action,
+  dismiss,
   icon,
   className,
   children,
@@ -141,6 +144,7 @@ export function Callout({
         </div>
         {action && <div className="shrink-0 self-center">{action}</div>}
       </div>
+      {dismiss && <div className="shrink-0 self-center">{dismiss}</div>}
     </div>
   );
 }

@@ -806,17 +806,18 @@ function KitCalloutBody({
     );
   }
 
-  const trailing =
-    (actionNode !== undefined && !below) || dismiss ? (
-      <span className="flex items-center gap-1">
-        {below ? null : actionNode}
-        {dismiss ? <DismissButton aria-label={dismissName} onClick={() => dismiss()} /> : null}
-      </span>
-    ) : undefined;
   const shared = {
     ...pickDomProps(rest),
     title: content(title),
-    action: trailing,
+    action:
+      actionNode !== undefined && !below ? (
+        <span className="flex items-center gap-1">{actionNode}</span>
+      ) : undefined,
+    // Outside `action`, so a lone X never takes the wrapping action's measure
+    // and drops under a short message.
+    dismiss: dismiss ? (
+      <DismissButton aria-label={dismissName} onClick={() => dismiss()} />
+    ) : undefined,
     size: oneOf(size, ["default", "compact"] as const),
     className: str(className),
     children: (

@@ -479,8 +479,9 @@ interface PluginCalloutProps extends Omit<PluginDomProps<HTMLDivElement>, "title
     /** One trailing control, such as a Retry button. */
     action?: ReactNode;
     /**
-     * `inline` (the default) puts `action` beside the message; `below` puts it
-     * under the text, for a long message or more than one control.
+     * `inline` (the default) puts `action` beside the message, or under it when
+     * the box is too narrow for both; `below` always puts it under the text, for
+     * a long message or more than one control.
      */
     actionPlacement?: "inline" | "below";
     /** Draws the dismiss X, which calls this. */
