@@ -239,6 +239,9 @@ export const theme: BuiltInThemeSource = {
     "pr-merged": "#80709D",
     "pr-closed": "#A9655A",
     "pr-draft": "#757A7E",
+    // Solid so the field edge clears 3:1 on every surface (3.07–3.33:1); the
+    // alpha `border-strong` it used to follow measured 1.23–1.29:1.
+    "border-input": "#6B6152",
     "focus-ring": "rgba(211,204,192,0.42)",
     // Category hues label branches, worktrees, action categories and panel
     // kinds. The engine hands them out at full strength — the dark defaults

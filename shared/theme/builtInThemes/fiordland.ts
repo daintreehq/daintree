@@ -81,6 +81,9 @@ export const theme: BuiltInThemeSource = {
     },
   },
   tokens: {
+    // Solid so the field edge clears 3:1 on every surface (3.08–4.07:1); the
+    // alpha `border-strong` it used to follow measured 1.40–1.47:1.
+    "border-input": "#6A7776",
     "border-strong": "rgba(211,230,228,0.14)",
     "border-subtle": "rgba(211,230,228,0.09)",
     // 1px verticals on an uneven 27px period — smooth full-width gradients band here.

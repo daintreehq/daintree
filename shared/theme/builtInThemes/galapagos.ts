@@ -84,6 +84,9 @@ export const theme: BuiltInThemeSource = {
   },
   tokens: {
     "border-divider": "rgba(140,200,180,0.05)",
+    // Solid so the field edge clears 3:1 on every surface (3.08–4.20:1); the
+    // alpha `border-strong` it used to follow measured 1.53–1.56:1.
+    "border-input": "#5A8174",
     // Must stay above `border-strong`: interactive is the lift a control shows
     // on focus or hover, and several resting borders (the palette input among
     // them) sit at strong. At 0.12 the lift landed *below* the resting state, so
