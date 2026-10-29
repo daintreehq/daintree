@@ -1415,6 +1415,19 @@ describe("voiceInput — session identity", () => {
       expect(endedPayloads(ownerB)[0]?.report).toMatchObject({ prefetchesStarted: 1 });
     });
 
+    it("counts each run a pause starts, and none for one it already has", async () => {
+      await start(ownerA, "a");
+      // Each pause's runs reach OpenAI before the next pause replaces them.
+      for (const last of ["then the lint", "then the lint", "then the lint check"]) {
+        await prefetch(ownerA, "a", "run the tests", last);
+        await settle();
+      }
+      await stop(ownerA, "a");
+
+      expect(shared.cleanups).toHaveLength(3);
+      expect(endedPayloads(ownerA)[0]?.report).toMatchObject({ prefetchesStarted: 3 });
+    });
+
     it("cancels a cancelled dictation's prefetch", async () => {
       await start(ownerA, "a");
       await prefetch(ownerA, "a", "run the tests");

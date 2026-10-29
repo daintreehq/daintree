@@ -22,29 +22,33 @@ describe("settlePassageReplies", () => {
     const second = deferred<Reply>();
     const settled = settlePassageReplies([first.promise, second.promise]);
 
+    const lastBack = {
+      text: "A",
+      timing: { prepMs: 8, requestMs: 1_400 },
+      prefetch: "not_matched",
+    };
     second.resolve({ text: "B", timing: { prepMs: 5, requestMs: 900 }, prefetch: "adopted" });
     await Promise.resolve();
-    first.resolve({ text: "A", timing: { prepMs: 8, requestMs: 1_400 }, prefetch: "not_matched" });
+    first.resolve(lastBack);
 
     const { results, last } = await settled;
     expect(results.map((result) => result.text)).toEqual(["A", "B"]);
     // Its timing and its prefetch come together, from the same reply.
-    expect(last).toMatchObject({
-      timing: { prepMs: 8, requestMs: 1_400 },
-      prefetch: "not_matched",
-    });
+    expect(last).toBe(lastBack);
   });
 
-  it("takes a last reply that carries no timing over an earlier one that did", async () => {
+  it("takes a last reply that carries nothing over an earlier one that did", async () => {
     const first = deferred<Reply>();
     const second = deferred<Reply>();
     const settled = settlePassageReplies([first.promise, second.promise]);
 
-    first.resolve({ text: "A", timing: { prepMs: 8, requestMs: 1_400 } });
+    const lastBack = { text: "B", timing: null };
+    first.resolve({ text: "A", timing: { prepMs: 8, requestMs: 1_400 }, prefetch: "adopted" });
     await Promise.resolve();
-    second.resolve({ text: "B", timing: null });
+    second.resolve(lastBack);
 
-    expect((await settled).last?.timing).toBeNull();
+    // Nothing of the earlier reply's carries over to stand in for it.
+    expect((await settled).last).toBe(lastBack);
   });
 
   it("has no last reply for no passages", async () => {

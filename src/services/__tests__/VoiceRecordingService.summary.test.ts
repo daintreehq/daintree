@@ -493,6 +493,26 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
     expect(summaries()).toMatchObject([{ stopTailMs: 1_000, audioNoText: true }]);
   });
 
+  it("reads speech the stop's flush handed over as speech up to the stop", async () => {
+    const harness = setupGlobals();
+    const { service, summaries } = await load();
+    let clock = performance.now();
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    await startLive(harness, service);
+    const node = harness.workletNodes.at(-1)!;
+    // The worklet's partial chunk, said before the stop, lands after it.
+    vi.mocked(node.port.postMessage).mockImplementation((message: unknown) => {
+      if ((message as { type?: string } | null)?.type !== "flush") return;
+      clock += 30;
+      sendChunk(node, 2_000);
+      void Promise.resolve().then(() => node.port.onmessage?.({ data: { type: "flushed" } }));
+    });
+    clock += 800;
+    await service.stop("Dictation stopped.", { reason: "user" });
+
+    expect(summaries()).toMatchObject([{ stopTailMs: 0 }]);
+  });
+
   it("has no stop tail for a session that heard nothing at speech level", async () => {
     const harness = setupGlobals();
     const { service, summaries } = await load();
@@ -943,6 +963,32 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
     await flushPromises();
 
     expect(summaries()[0]!.correctionPassages).toEqual({ ...NO_PASSAGES, sent: 1, failed: 1 });
+    expect(summaries()[0]).toMatchObject({
+      correctionPrefetch: null,
+      correctionPrepMs: null,
+      correctionRequestMs: null,
+    });
+  });
+
+  it("logs the prefetch a stop's reply took", async () => {
+    const harness = setupGlobals({ correctionEnabled: true });
+    harness.voiceInput.correct.mockResolvedValue({
+      action: "replace",
+      correctedText: "Deploy the canopy branch to staging.",
+      timing: { prepMs: 3, requestMs: 1_200 },
+      prefetch: "adopted",
+    });
+    const { service, summaries } = await load();
+    const sessionId = await startLive(harness, service);
+    harness.emit("complete", { sessionId, text: DICTATED, itemId: "item-1" });
+    harness.paintFrames();
+    await service.stop("Dictation stopped.", { reason: "user" });
+    await flushPromises();
+
+    expect(summaries()[0]).toMatchObject({
+      correctionPrefetch: "adopted",
+      correctionRequestMs: 1_200,
+    });
   });
 
   it("counts a cleaned passage whose place in the draft was lost as unable to land", async () => {
