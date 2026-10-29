@@ -39,12 +39,15 @@ export function useHostPluginParityNotice(): void {
           .map((row) => row.pluginId)
           .sort();
         if (cancelled || missing.length === 0) return;
+        // Claimed even for a difference the inbox already holds: main follows
+        // the window's host through these claims, and a skipped one would leave
+        // it on the last host announced, refusing that host's next change.
+        if (!(await window.electron.pluginParity.claimSwitchNotice({ hostId }))) return;
         const key = `plugin-parity:${hostId}`;
         // The plugins themselves, not their count: two different sets can be
         // the same size.
         const difference = `${key}:${JSON.stringify(missing)}`;
         if (alreadyInInbox(key, difference)) return;
-        if (!(await window.electron.pluginParity.claimSwitchNotice({ hostId }))) return;
         const host = useHostConnectionStore.getState().hostName ?? hostId;
         // Settings → Hosts on that host's plugins, and nothing else.
         const review = hostPluginsSettingsTarget(hostId);

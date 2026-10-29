@@ -680,6 +680,33 @@ describe("notificationHistorySlice", () => {
       expect(entries.find((e) => e.id === "a-older")!.archivedAt).toBeNull();
     });
 
+    it("supersedeKey clears the snooze of a thread it leaves with nothing active", () => {
+      const key = "plugin-parity:studio-01";
+      getState().addEntry({ type: "info", message: "old", supersedeKey: key, correlationId: "x" });
+      getState().snoozeThread("x", Date.now() + 60_000);
+      getState().addEntry({ type: "info", message: "new", supersedeKey: key, correlationId: "y" });
+      expect(getState().snoozedThreads).toEqual({});
+    });
+
+    it("supersedeKey keeps the snooze of a thread the new entry continues", () => {
+      const key = "terminal.A.fallback";
+      getState().addEntry({
+        type: "error",
+        message: "down",
+        supersedeKey: key,
+        correlationId: "t",
+      });
+      const until = Date.now() + 60_000;
+      getState().snoozeThread("t", until);
+      getState().addEntry({
+        type: "error",
+        message: "still",
+        supersedeKey: key,
+        correlationId: "t",
+      });
+      expect(getState().snoozedThreads).toEqual({ t: until });
+    });
+
     it("supersedeKey skips already-archived entries with the same key", () => {
       const key = "terminal.A.fallback";
       getState().addEntry({ type: "error", message: "old", supersedeKey: key });
