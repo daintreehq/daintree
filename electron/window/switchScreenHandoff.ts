@@ -11,14 +11,18 @@
  * fades on the shared exit tier. The destination is never held back for it:
  * the cover goes on only once the destination is ready to show.
  *
- * The cover is a user-origin pseudo-element rather than an element. A cold
- * switch reveals the pre-React skeleton, so there is no app to render one yet;
- * a pseudo-element takes no focus or pointer input, and with no content it has
- * nothing to say to assistive tech. It sits where the screen sat, just above
- * the toolbar and under every dialog and palette. While the startup skeleton is
- * up, a second copy sits on top of it, since the skeleton covers everything
- * until the app is ready; the two fade together, so the skeleton leaving
- * mid-fade changes nothing.
+ * The cover is a pseudo-element from a stylesheet main inserts, rather than an
+ * element. A cold switch reveals the pre-React skeleton, so there is no app to
+ * render one yet; a pseudo-element takes no focus or pointer input, and with
+ * no content it has nothing to say to assistive tech. It sits where the screen
+ * sat, just above the toolbar and under every dialog and palette. While the
+ * startup skeleton is up, a second copy sits on top of it, since the skeleton
+ * covers everything until the app is ready; the two fade together, so the
+ * skeleton leaving mid-fade changes nothing.
+ *
+ * The sheets are author-origin: Electron 42 removes an inserted sheet only
+ * from the author origin, so a user-origin cover could never come off. Their
+ * `!important` is what outranks the app's own rules.
  */
 
 import type { BrowserWindow, WebContents } from "electron";
@@ -72,12 +76,15 @@ function toSurface(value: unknown): SwitchScreenSurface | null {
 }
 
 function coverCss({ canvas, band, bandHeight }: SwitchScreenSurface): string {
+  // The solid colour is what forced colours keep: it drops gradients, and
+  // swaps the colour for the system canvas rather than leaving nothing.
   const surface = [
     'content: "" !important;',
     "position: fixed !important;",
     "inset: 0 !important;",
     "pointer-events: none !important;",
-    `background: linear-gradient(${band} 0 ${bandHeight}px, ${canvas} ${bandHeight}px) !important;`,
+    `background-color: ${canvas} !important;`,
+    `background-image: linear-gradient(${band} 0 ${bandHeight}px, ${canvas} ${bandHeight}px) !important;`,
     `transition: opacity ${UI_EXIT_DURATION}ms ${UI_EXIT_EASING} !important;`,
   ].join(" ");
   return [
@@ -119,6 +126,9 @@ export async function prepareSwitchScreenHandoff(
   });
   try {
     if (!outgoing || outgoing.isDestroyed() || incoming.isDestroyed()) return null;
+    // A document still loading (a new window's first view) has no screen up,
+    // and Electron would hold the read until it finished.
+    if (outgoing.isLoadingMainFrame()) return null;
     const read = await Promise.race([
       outgoing.executeJavaScript(READ_SWITCH_SCREEN).catch(() => null),
       timedOut,
@@ -126,17 +136,27 @@ export async function prepareSwitchScreenHandoff(
     const surface = read === TIMED_OUT ? null : toSurface(read);
     if (!surface || incoming.isDestroyed()) return null;
 
-    const inserting = incoming.insertCSS(coverCss(surface), { cssOrigin: "user" });
+    const inserting = incoming.insertCSS(coverCss(surface));
     const key = await Promise.race([inserting.catch(() => null), timedOut]);
     if (key === TIMED_OUT) {
-      // Too late to be in the frame the swap uncovers: never let it land after.
-      void inserting.then((late) => removeCss(incoming, late)).catch(() => {});
+      // Too late for the frame the swap uncovers. The fade is queued behind it
+      // to the same renderer, so a cover that lands after the swap lands
+      // already faded, and both come off once they have.
+      for (const late of [inserting, incoming.insertCSS(FADE_CSS)]) {
+        void late.then(
+          (lateKey) => removeCss(incoming, lateKey),
+          () => {}
+        );
+      }
       return null;
     }
     if (key === null) return null;
     // Past the budget the cover may miss the first uncovered frame, but it is
     // on and still fades: a frame of the destination is the plain swap's cut.
-    await Promise.race([waitForRenderedFrame(incoming, win), timedOut]);
+    // A window nobody can see draws no frames, and has nothing to flash on.
+    if (!win.isDestroyed() && !win.isMinimized() && win.isVisible()) {
+      await Promise.race([waitForRenderedFrame(incoming), timedOut]);
+    }
 
     let settled = false;
     return {
@@ -146,7 +166,7 @@ export async function prepareSwitchScreenHandoff(
         try {
           if (incoming.isDestroyed()) return;
           void incoming
-            .insertCSS(FADE_CSS, { cssOrigin: "user" })
+            .insertCSS(FADE_CSS)
             .then((fadeKey) => {
               setTimeout(() => {
                 removeCss(incoming, key);

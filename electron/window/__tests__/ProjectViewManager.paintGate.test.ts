@@ -1719,11 +1719,18 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
   describe("host switch screen handoff (#15300)", () => {
     const SURFACE = { canvas: "rgb(20, 20, 19)", band: "rgb(30, 30, 28)", bandHeight: 48 };
 
-    /** The view being left shows its switch screen; the arriving one takes stylesheets. */
-    function showSwitchScreen(outgoing: MockWc) {
+    /** The view being left shows its switch screen, as `read` answers for it. */
+    function showSwitchScreen(outgoing: MockWc, read = () => Promise.resolve<unknown>(SURFACE)) {
+      Object.assign(outgoing, { isLoadingMainFrame: vi.fn(() => false) });
       outgoing.executeJavaScript.mockImplementation((code: string) =>
-        Promise.resolve(code === READ_SWITCH_SCREEN ? SURFACE : undefined)
+        code === READ_SWITCH_SCREEN ? read() : Promise.resolve(undefined)
       );
+    }
+    /** A read the test answers itself. */
+    function heldRead() {
+      let answer!: (surface: unknown) => void;
+      const read = () => new Promise<unknown>((resolve) => (answer = resolve));
+      return { read, answer: (surface: unknown) => answer(surface) };
     }
     function acceptCss(incoming: MockWc) {
       let next = 0;
@@ -1734,38 +1741,59 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
       Object.assign(incoming, stylesheets);
       return stylesheets;
     }
+    /** The renderer-gone listener registered last: the one watching the handoff. */
+    function loseRenderer(wc: MockWc) {
+      const handler = wc.on.mock.calls.filter(([event]) => event === "render-process-gone").pop();
+      (handler?.[1] as (() => void) | undefined)?.();
+    }
+    function removedViewOf(wc: MockWc): boolean {
+      return win.contentView.removeChildView.mock.calls.some(
+        ([view]) => (view as { webContents?: MockWc }).webContents === wc
+      );
+    }
     async function drain() {
       for (let i = 0; i < 20; i++) await Promise.resolve();
     }
 
-    it("covers a cold view with the screen before the swap and fades it after", async () => {
+    it("covers a cold view with the screen once it is ready, and swaps under a drawn cover", async () => {
       const incomingWc = createMockWebContents();
       wcQueue.push(incomingWc);
       showSwitchScreen(initialWc);
       const css = acceptCss(incomingWc);
+      // The frame drawn with the cover on is the test's to draw.
+      let drawCovered: () => void = () => {};
+      incomingWc.executeJavaScript.mockImplementation((code: string) =>
+        css.insertCSS.mock.calls.length > 0 && code.includes("requestAnimationFrame")
+          ? new Promise((resolve) => (drawCovered = () => resolve(true)))
+          : Promise.resolve(undefined)
+      );
 
       const switchPromise = manager.switchTo("proj-b", "/path/b", undefined, {
         switchScreenHandoff: true,
       });
-      await Promise.resolve();
-      await Promise.resolve();
-      manager.signalSkeletonPainted(incomingWc.id);
-      await switchPromise;
+      await drain();
+      // Nothing is asked of the view being left until the destination is ready.
+      expect(initialWc.executeJavaScript).not.toHaveBeenCalledWith(READ_SWITCH_SCREEN);
 
-      const [cover, fade] = css.insertCSS.mock.calls.map(([text]) => text);
-      expect(cover).toContain(SURFACE.canvas);
-      expect(cover).toContain(SURFACE.band);
-      expect(cover).toContain("#startup-skeleton::after");
+      manager.signalSkeletonPainted(incomingWc.id);
+      await drain();
+      expect(css.insertCSS).toHaveBeenCalledTimes(1);
+      expect(css.insertCSS.mock.calls[0]?.[0]).toContain(SURFACE.canvas);
+      expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+      drawCovered();
+      await switchPromise;
+      expect(removedViewOf(initialWc)).toBe(true);
       const detachedAt = win.contentView.removeChildView.mock.invocationCallOrder[0]!;
-      expect(css.insertCSS.mock.invocationCallOrder[0]!).toBeLessThan(detachedAt);
 
       // The fade goes on only once the outgoing view is gone.
       await drain();
-      expect(fade).toMatch(/opacity:\s*0/);
+      expect(css.insertCSS).toHaveBeenCalledTimes(2);
+      expect(css.insertCSS.mock.calls[1]?.[0]).toMatch(/opacity:\s*0/);
       expect(css.insertCSS.mock.invocationCallOrder[1]!).toBeGreaterThan(detachedAt);
     });
 
-    it("covers a cached view with the screen before the warm swap and fades it after", async () => {
+    it("covers a cached view with the screen once it is ready, and fades it after the warm swap", async () => {
       const incomingWc = createMockWebContents();
       wcQueue.push(incomingWc);
       const firstSwitch = manager.switchTo("proj-b", "/path/b");
@@ -1782,6 +1810,7 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
         switchScreenHandoff: true,
       });
       for (let i = 0; i < 6; i++) await Promise.resolve();
+      expect(incomingWc.executeJavaScript).not.toHaveBeenCalledWith(READ_SWITCH_SCREEN);
       manager.signalWarmViewPainted(initialWc.id);
       await switchBack;
 
@@ -1796,8 +1825,7 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     it("swaps plainly when the screen is still inside its loading gate", async () => {
       const incomingWc = createMockWebContents();
       wcQueue.push(incomingWc);
-      // The screen reads back as not shown.
-      initialWc.executeJavaScript.mockImplementation(() => Promise.resolve(null));
+      showSwitchScreen(initialWc, () => Promise.resolve(null));
       const css = acceptCss(incomingWc);
 
       const switchPromise = manager.switchTo("proj-b", "/path/b", undefined, {
@@ -1831,17 +1859,12 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
       expect(css.insertCSS).not.toHaveBeenCalled();
     });
 
-    it("takes the cover off at once when the window closes before the swap", async () => {
+    it("takes the cover straight off when the manager is disposed during the handoff", async () => {
       const incomingWc = createMockWebContents();
       wcQueue.push(incomingWc);
       const css = acceptCss(incomingWc);
-      // The read lands after the window has gone.
-      let answer!: (surface: unknown) => void;
-      initialWc.executeJavaScript.mockImplementation((code: string) =>
-        code === READ_SWITCH_SCREEN
-          ? new Promise((resolve) => (answer = resolve))
-          : Promise.resolve(undefined)
-      );
+      const held = heldRead();
+      showSwitchScreen(initialWc, held.read);
 
       const switchPromise = manager.switchTo("proj-b", "/path/b", undefined, {
         switchScreenHandoff: true,
@@ -1853,12 +1876,70 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
       expect(initialWc.executeJavaScript).toHaveBeenCalledWith(READ_SWITCH_SCREEN);
 
       manager.dispose();
-      answer(SURFACE);
+      win.contentView.removeChildView.mockClear();
+      held.answer(SURFACE);
       await switchPromise.catch(() => {});
       await drain();
 
-      // Put on and taken straight off: no fade into a swap that never happened.
+      // Put on and taken straight off: no swap, and no fade into one.
+      expect(win.contentView.removeChildView).not.toHaveBeenCalled();
       expect(css.insertCSS).toHaveBeenCalledTimes(1);
+      expect(css.removeInsertedCSS).toHaveBeenCalledWith("css-1");
+    });
+
+    it("rolls a cold switch back when its renderer is lost during the handoff", async () => {
+      const incomingWc = createMockWebContents();
+      wcQueue.push(incomingWc);
+      const css = acceptCss(incomingWc);
+      const held = heldRead();
+      showSwitchScreen(initialWc, held.read);
+
+      const switchPromise = expectRejection(
+        manager.switchTo("proj-b", "/path/b", undefined, { switchScreenHandoff: true })
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      manager.signalSkeletonPainted(incomingWc.id);
+      await drain();
+
+      loseRenderer(incomingWc);
+      held.answer(SURFACE);
+      const error = await switchPromise;
+
+      expect(error.message).toContain("switch screen handoff");
+      expect(manager.getActiveProjectId()).toBe("proj-a");
+      expect(removedViewOf(initialWc)).toBe(false);
+      expect(css.removeInsertedCSS).toHaveBeenCalledWith("css-1");
+    });
+
+    it("rolls a warm switch back when its renderer is lost during the handoff", async () => {
+      const incomingWc = createMockWebContents();
+      wcQueue.push(incomingWc);
+      const firstSwitch = manager.switchTo("proj-b", "/path/b");
+      await Promise.resolve();
+      await Promise.resolve();
+      manager.signalViewPainted(incomingWc.id);
+      await firstSwitch;
+
+      win.contentView.removeChildView.mockClear();
+      const held = heldRead();
+      showSwitchScreen(incomingWc, held.read);
+      const css = acceptCss(initialWc);
+
+      const switchBack = expectRejection(
+        manager.switchTo("proj-a", "/path/a", undefined, { switchScreenHandoff: true })
+      );
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+      manager.signalWarmViewPainted(initialWc.id);
+      await drain();
+      expect(incomingWc.executeJavaScript).toHaveBeenCalledWith(READ_SWITCH_SCREEN);
+
+      loseRenderer(initialWc);
+      held.answer(SURFACE);
+      await switchBack;
+
+      expect(manager.getActiveProjectId()).toBe("proj-b");
+      expect(removedViewOf(incomingWc)).toBe(false);
       expect(css.removeInsertedCSS).toHaveBeenCalledWith("css-1");
     });
   });

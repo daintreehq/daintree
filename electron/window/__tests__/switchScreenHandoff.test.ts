@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import vm from "node:vm";
-import { UI_EXIT_DURATION } from "../../../shared/config/uiMotion.js";
+import { UI_EXIT_DURATION, UI_EXIT_EASING } from "../../../shared/config/uiMotion.js";
 import {
   READ_SWITCH_SCREEN,
   SWITCH_SCREEN_HANDOFF_BUDGET_MS,
@@ -9,6 +9,7 @@ import {
 } from "../switchScreenHandoff.js";
 
 const SURFACE = { canvas: "rgb(20, 20, 19)", band: "oklch(0.2 0.01 250)", bandHeight: 47.6 };
+const COVER_SELECTORS = ["body::after", "#startup-skeleton::after"];
 
 function readScreen(): unknown {
   return vm.runInNewContext(READ_SWITCH_SCREEN, {
@@ -28,11 +29,21 @@ function mountScreen(opts: { shown: boolean }) {
   band.getBoundingClientRect = () => ({ height: 48 }) as DOMRect;
   screen.append(band, document.createElement("div"));
   document.body.append(screen);
+  return screen;
+}
+
+/** Each selector's declarations, as a stylesheet's text gives them. */
+function declarationsOf(css: string, selector: string): string {
+  return [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+    .filter(([, selectors]) => selectors!.split(",").some((s) => s.trim() === selector))
+    .map(([, , body]) => body)
+    .join(" ");
 }
 
 function makeOutgoing(read: () => Promise<unknown> = () => Promise.resolve(SURFACE)) {
   return {
     isDestroyed: vi.fn(() => false),
+    isLoadingMainFrame: vi.fn(() => false),
     executeJavaScript: vi.fn((_code: string) => read()),
   };
 }
@@ -42,7 +53,9 @@ function makeIncoming() {
   let drawFrame: () => void = () => {};
   const wc = {
     isDestroyed: vi.fn(() => false),
-    insertCSS: vi.fn((_css: string, _options?: unknown) => Promise.resolve(`css-${++next}`)),
+    insertCSS: vi.fn((_css: string, _options?: { cssOrigin?: string }) =>
+      Promise.resolve(`css-${++next}`)
+    ),
     removeInsertedCSS: vi.fn((_key: string) => Promise.resolve()),
     // The frame probe: held until the test draws the frame.
     executeJavaScript: vi.fn(
@@ -52,16 +65,30 @@ function makeIncoming() {
   return { wc, drawFrame: () => drawFrame() };
 }
 
-const win = {
-  isDestroyed: () => false,
-  isMinimized: () => false,
-  isVisible: () => true,
-  on: vi.fn(),
-  removeListener: vi.fn(),
-};
+function makeWin(opts: { visible?: boolean } = {}) {
+  return {
+    isDestroyed: () => false,
+    isMinimized: () => false,
+    isVisible: () => opts.visible ?? true,
+  };
+}
 
 async function flush() {
   for (let i = 0; i < 10; i++) await Promise.resolve();
+}
+
+/** A prepared handoff, its cover on and its frame drawn. */
+async function prepared(incoming = makeIncoming()) {
+  const pending = prepareSwitchScreenHandoff(
+    makeOutgoing() as never,
+    incoming.wc as never,
+    makeWin() as never
+  );
+  await flush();
+  incoming.drawFrame();
+  const handoff = await pending;
+  if (!handoff) throw new Error("expected a handoff");
+  return { handoff, incoming };
 }
 
 describe("READ_SWITCH_SCREEN", () => {
@@ -76,6 +103,11 @@ describe("READ_SWITCH_SCREEN", () => {
 
   it("hands nothing over from a screen still inside its loading gate", () => {
     mountScreen({ shown: false });
+    expect(readScreen()).toBeNull();
+  });
+
+  it("hands nothing over from a screen that is hidden", () => {
+    mountScreen({ shown: true }).style.visibility = "hidden";
     expect(readScreen()).toBeNull();
   });
 
@@ -106,27 +138,44 @@ describe("prepareSwitchScreenHandoff", () => {
   it("covers the incoming view with the screen's surface and waits for a frame drawn with it", async () => {
     const outgoing = makeOutgoing();
     const incoming = makeIncoming();
-    let prepared = false;
-    const handoff = prepareSwitchScreenHandoff(
+    let ready = false;
+    const pending = prepareSwitchScreenHandoff(
       outgoing as never,
       incoming.wc as never,
-      win as never
+      makeWin() as never
     );
-    void handoff.then(() => (prepared = true));
+    void pending.then(() => (ready = true));
     await flush();
 
     expect(outgoing.executeJavaScript).toHaveBeenCalledWith(READ_SWITCH_SCREEN);
+    expect(incoming.wc.insertCSS).toHaveBeenCalledTimes(1);
+    // Only an author-origin sheet can be taken off again in Electron 42.
+    expect(incoming.wc.insertCSS.mock.calls[0]?.[1]?.cssOrigin ?? "author").toBe("author");
     const cover = incoming.wc.insertCSS.mock.calls[0]?.[0] ?? "";
-    expect(incoming.wc.insertCSS.mock.calls[0]?.[1]).toEqual({ cssOrigin: "user" });
-    expect(cover).toContain("linear-gradient(oklch(0.2 0.01 250) 0 48px, rgb(20, 20, 19) 48px)");
-    expect(cover).toMatch(/body::after \{[^}]*z-index: calc\(var\(--z-toolbar\) \+ 1\)/);
-    expect(cover).toMatch(/#startup-skeleton::after \{[^}]*pointer-events: none/);
-    expect(prepared).toBe(false);
+    for (const selector of COVER_SELECTORS) {
+      const rule = declarationsOf(cover, selector);
+      expect(rule).toContain('content: "" !important');
+      expect(rule).toContain("position: fixed !important");
+      expect(rule).toContain("inset: 0 !important");
+      expect(rule).toContain("pointer-events: none !important");
+      expect(rule).toContain(`background-color: ${SURFACE.canvas} !important`);
+      expect(rule).toContain(
+        `linear-gradient(${SURFACE.band} 0 48px, ${SURFACE.canvas} 48px) !important`
+      );
+      expect(rule).toContain(
+        `transition: opacity ${UI_EXIT_DURATION}ms ${UI_EXIT_EASING} !important`
+      );
+    }
+    // Where the screen sat, under dialogs; and over the skeleton while it is up.
+    expect(declarationsOf(cover, "body::after")).toContain(
+      "z-index: calc(var(--z-toolbar) + 1) !important"
+    );
+    expect(ready).toBe(false);
 
     incoming.drawFrame();
     await flush();
-    expect(prepared).toBe(true);
-    expect(await handoff).not.toBeNull();
+    expect(ready).toBe(true);
+    expect(await pending).not.toBeNull();
   });
 
   it("puts nothing on when the outgoing view has no screen up", async () => {
@@ -134,10 +183,23 @@ describe("prepareSwitchScreenHandoff", () => {
     const handoff = await prepareSwitchScreenHandoff(
       makeOutgoing(() => Promise.resolve(null)) as never,
       incoming.wc as never,
-      win as never
+      makeWin() as never
     );
     expect(handoff).toBeNull();
     expect(incoming.wc.insertCSS).not.toHaveBeenCalled();
+  });
+
+  it("doesn't wait on an outgoing document that is still loading", async () => {
+    const outgoing = makeOutgoing();
+    outgoing.isLoadingMainFrame.mockReturnValue(true);
+    const incoming = makeIncoming();
+    const handoff = await prepareSwitchScreenHandoff(
+      outgoing as never,
+      incoming.wc as never,
+      makeWin() as never
+    );
+    expect(handoff).toBeNull();
+    expect(outgoing.executeJavaScript).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -149,7 +211,7 @@ describe("prepareSwitchScreenHandoff", () => {
     const handoff = await prepareSwitchScreenHandoff(
       makeOutgoing(() => Promise.resolve(surface)) as never,
       incoming.wc as never,
-      win as never
+      makeWin() as never
     );
     expect(handoff).toBeNull();
     expect(incoming.wc.insertCSS).not.toHaveBeenCalled();
@@ -157,17 +219,56 @@ describe("prepareSwitchScreenHandoff", () => {
 
   it("gives up on an outgoing view that doesn't answer, so the swap isn't held", async () => {
     const incoming = makeIncoming();
+    let settled = false;
     const handoff = prepareSwitchScreenHandoff(
       makeOutgoing(() => new Promise(() => {})) as never,
       incoming.wc as never,
-      win as never
+      makeWin() as never
     );
-    await vi.advanceTimersByTimeAsync(SWITCH_SCREEN_HANDOFF_BUDGET_MS);
+    void handoff.then(() => (settled = true));
+    await vi.advanceTimersByTimeAsync(SWITCH_SCREEN_HANDOFF_BUDGET_MS - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
     expect(await handoff).toBeNull();
     expect(incoming.wc.insertCSS).not.toHaveBeenCalled();
   });
 
-  it("takes a cover that lands past the budget straight off again", async () => {
+  it("spends one budget across the read and the frame, not one each", async () => {
+    const incoming = makeIncoming();
+    let settled = false;
+    const handoff = prepareSwitchScreenHandoff(
+      makeOutgoing(
+        () =>
+          new Promise((resolve) =>
+            setTimeout(() => resolve(SURFACE), SWITCH_SCREEN_HANDOFF_BUDGET_MS - 10)
+          )
+      ) as never,
+      incoming.wc as never,
+      makeWin() as never
+    );
+    void handoff.then(() => (settled = true));
+    await vi.advanceTimersByTimeAsync(SWITCH_SCREEN_HANDOFF_BUDGET_MS - 1);
+    expect(incoming.wc.insertCSS).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+
+    // The frame never comes: the cover is on, so the swap goes ahead and fades it.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await handoff).not.toBeNull();
+  });
+
+  it("doesn't wait for a frame in a window nobody can see", async () => {
+    const incoming = makeIncoming();
+    const handoff = await prepareSwitchScreenHandoff(
+      makeOutgoing() as never,
+      incoming.wc as never,
+      makeWin({ visible: false }) as never
+    );
+    expect(handoff).not.toBeNull();
+    expect(incoming.wc.executeJavaScript).not.toHaveBeenCalled();
+  });
+
+  it("lands a cover that comes past the budget already faded, and takes both off", async () => {
     const incoming = makeIncoming();
     let land!: (key: string) => void;
     incoming.wc.insertCSS.mockImplementationOnce(
@@ -176,35 +277,40 @@ describe("prepareSwitchScreenHandoff", () => {
     const handoff = prepareSwitchScreenHandoff(
       makeOutgoing() as never,
       incoming.wc as never,
-      win as never
+      makeWin() as never
     );
     await vi.advanceTimersByTimeAsync(SWITCH_SCREEN_HANDOFF_BUDGET_MS);
     expect(await handoff).toBeNull();
+    // Queued straight behind the cover, to the same renderer.
+    expect(incoming.wc.insertCSS).toHaveBeenCalledTimes(2);
+    const fade = incoming.wc.insertCSS.mock.calls[1]?.[0] ?? "";
+    for (const selector of COVER_SELECTORS) {
+      expect(declarationsOf(fade, selector)).toContain("opacity: 0 !important");
+    }
 
     land("late");
     await flush();
-    expect(incoming.wc.removeInsertedCSS).toHaveBeenCalledWith("late");
+    expect(incoming.wc.removeInsertedCSS.mock.calls.map(([key]) => key).sort()).toEqual([
+      "css-1",
+      "late",
+    ]);
   });
 
   it("fades the cover once released, then drops both stylesheets", async () => {
-    const incoming = makeIncoming();
-    const pending = prepareSwitchScreenHandoff(
-      makeOutgoing() as never,
-      incoming.wc as never,
-      win as never
-    );
-    await flush();
-    incoming.drawFrame();
-    const handoff = await pending;
+    const { handoff, incoming } = await prepared();
 
-    handoff!.release();
-    handoff!.release();
+    handoff.release();
+    handoff.release();
     await flush();
     expect(incoming.wc.insertCSS).toHaveBeenCalledTimes(2);
-    expect(incoming.wc.insertCSS.mock.calls[1]?.[0]).toMatch(/opacity: 0/);
-    expect(incoming.wc.removeInsertedCSS).not.toHaveBeenCalled();
+    const fade = incoming.wc.insertCSS.mock.calls[1]?.[0] ?? "";
+    for (const selector of COVER_SELECTORS) {
+      expect(declarationsOf(fade, selector)).toContain("opacity: 0 !important");
+    }
 
-    await vi.advanceTimersByTimeAsync(UI_EXIT_DURATION);
+    await vi.advanceTimersByTimeAsync(UI_EXIT_DURATION - 1);
+    expect(incoming.wc.removeInsertedCSS).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
     expect(incoming.wc.removeInsertedCSS.mock.calls.map(([key]) => key).sort()).toEqual([
       "css-1",
       "css-2",
@@ -212,38 +318,21 @@ describe("prepareSwitchScreenHandoff", () => {
   });
 
   it("drops the cover at once without fading when the swap didn't happen", async () => {
-    const incoming = makeIncoming();
-    const pending = prepareSwitchScreenHandoff(
-      makeOutgoing() as never,
-      incoming.wc as never,
-      win as never
-    );
-    await flush();
-    incoming.drawFrame();
-    const handoff = await pending;
+    const { handoff, incoming } = await prepared();
 
-    handoff!.cancel();
-    handoff!.release();
+    handoff.cancel();
+    expect(incoming.wc.removeInsertedCSS).toHaveBeenCalledWith("css-1");
+    handoff.release();
     await vi.advanceTimersByTimeAsync(UI_EXIT_DURATION);
     expect(incoming.wc.insertCSS).toHaveBeenCalledTimes(1);
-    expect(incoming.wc.removeInsertedCSS).toHaveBeenCalledWith("css-1");
+    expect(incoming.wc.removeInsertedCSS).toHaveBeenCalledTimes(1);
   });
 
   it("releases quietly into a view that has gone", async () => {
-    const incoming = makeIncoming();
-    const pending = prepareSwitchScreenHandoff(
-      makeOutgoing() as never,
-      incoming.wc as never,
-      win as never
-    );
-    await flush();
-    incoming.drawFrame();
-    const handoff = await pending;
+    const { handoff, incoming } = await prepared();
 
     incoming.wc.isDestroyed.mockReturnValue(true);
-    incoming.wc.insertCSS.mockImplementation(() => {
-      throw new Error("Object has been destroyed");
-    });
-    expect(() => handoff!.release()).not.toThrow();
+    expect(() => handoff.release()).not.toThrow();
+    expect(incoming.wc.insertCSS).toHaveBeenCalledTimes(1);
   });
 });
