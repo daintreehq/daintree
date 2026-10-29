@@ -1992,7 +1992,9 @@ describe("AppDialog — shared chrome contract", () => {
     render(
       <AppDialog isOpen onClose={() => {}}>
         <AppDialog.Header>
-          <AppDialog.Title icon={<svg />}>daintree isn't on a-very-long-host-name yet</AppDialog.Title>
+          <AppDialog.Title icon={<svg />}>
+            daintree isn't on a-very-long-host-name yet
+          </AppDialog.Title>
           <AppDialog.CloseButton />
         </AppDialog.Header>
       </AppDialog>
