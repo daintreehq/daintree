@@ -17,10 +17,12 @@ vi.mock("@/services/ActionService", () => ({
 
 const TABS: PortalTab[] = [{ id: "a", url: "https://claude.ai/", title: "Claude" }];
 
-function renderToolbar(history: { canGoBack?: boolean; canGoForward?: boolean }) {
+type History = { canGoBack?: boolean; canGoForward?: boolean };
+
+function renderToolbar(history: History) {
   const onGoBack = vi.fn();
   const onGoForward = vi.fn();
-  render(
+  const toolbar = (h: History) => (
     <TooltipProvider>
       <PortalToolbar
         tabs={TABS}
@@ -34,13 +36,15 @@ function renderToolbar(history: { canGoBack?: boolean; canGoForward?: boolean })
         onGoForward={onGoForward}
         hasActiveUrl
         enabledLinks={[]}
-        {...history}
+        {...h}
       />
     </TooltipProvider>
   );
+  const { rerender } = render(toolbar(history));
   return {
-    back: screen.getByRole("button", { name: "Go back" }),
-    forward: screen.getByRole("button", { name: "Go forward" }),
+    back: () => screen.getByRole("button", { name: "Go back" }),
+    forward: () => screen.getByRole("button", { name: "Go forward" }),
+    update: (h: History) => rerender(toolbar(h)),
     onGoBack,
     onGoForward,
   };
@@ -55,32 +59,48 @@ describe("PortalToolbar history buttons", () => {
       canGoForward: false,
     });
 
-    expect(back.getAttribute("aria-disabled")).toBe("true");
-    expect(forward.getAttribute("aria-disabled")).toBe("true");
-    fireEvent.click(back);
-    fireEvent.click(forward);
+    expect(back().getAttribute("aria-disabled")).toBe("true");
+    expect(forward().getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(back());
+    fireEvent.click(forward());
     expect(onGoBack).not.toHaveBeenCalled();
     expect(onGoForward).not.toHaveBeenCalled();
   });
 
-  it("enables only the direction the tab can go", () => {
-    const { back, forward, onGoBack, onGoForward } = renderToolbar({
+  it.each([
+    ["back", { canGoBack: true, canGoForward: false }],
+    ["forward", { canGoBack: false, canGoForward: true }],
+  ])("enables only %s when that is the way the tab can go", (_label, history) => {
+    const { back, forward, onGoBack, onGoForward } = renderToolbar(history);
+
+    expect(back().getAttribute("aria-disabled")).toBe(history.canGoBack ? null : "true");
+    expect(forward().getAttribute("aria-disabled")).toBe(history.canGoForward ? null : "true");
+    fireEvent.click(back());
+    fireEvent.click(forward());
+    expect(onGoBack).toHaveBeenCalledTimes(history.canGoBack ? 1 : 0);
+    expect(onGoForward).toHaveBeenCalledTimes(history.canGoForward ? 1 : 0);
+  });
+
+  it("follows the history as it changes", () => {
+    const { back, forward, update, onGoForward } = renderToolbar({
       canGoBack: true,
-      canGoForward: false,
+      canGoForward: true,
     });
 
-    expect(back.getAttribute("aria-disabled")).toBeNull();
-    expect(forward.getAttribute("aria-disabled")).toBe("true");
-    fireEvent.click(back);
-    fireEvent.click(forward);
-    expect(onGoBack).toHaveBeenCalledTimes(1);
+    update({ canGoBack: false, canGoForward: true });
+    expect(back().getAttribute("aria-disabled")).toBe("true");
+    expect(forward().getAttribute("aria-disabled")).toBeNull();
+
+    update({ canGoBack: true, canGoForward: false });
+    fireEvent.click(forward());
+    expect(back().getAttribute("aria-disabled")).toBeNull();
     expect(onGoForward).not.toHaveBeenCalled();
   });
 
   it("disables both when history is unknown", () => {
     const { back, forward } = renderToolbar({});
 
-    expect(back.getAttribute("aria-disabled")).toBe("true");
-    expect(forward.getAttribute("aria-disabled")).toBe("true");
+    expect(back().getAttribute("aria-disabled")).toBe("true");
+    expect(forward().getAttribute("aria-disabled")).toBe("true");
   });
 });

@@ -823,11 +823,13 @@ describe("portalStore tab history (#15040)", () => {
     });
   });
 
-  it("leaves the store alone when main repeats what it already said", () => {
+  it("replaces a tab's history when it changes, and leaves the store alone when it doesn't", () => {
     report("tab-1", true);
+    report("tab-1", false, true);
+    expect(history()["tab-1"]).toEqual({ canGoBack: false, canGoForward: true });
     const before = usePortalStore.getState();
 
-    report("tab-1", true);
+    report("tab-1", false, true);
 
     expect(usePortalStore.getState()).toBe(before);
   });
@@ -838,36 +840,46 @@ describe("portalStore tab history (#15040)", () => {
 
     usePortalStore.getState().markTabCreated("tab-1");
 
+    expect(usePortalStore.getState().createdTabs.has("tab-1")).toBe(true);
     expect(history()["tab-1"]).toEqual({ canGoBack: true, canGoForward: false });
   });
 
   it.each([
-    ["unmarkTabCreated", () => usePortalStore.getState().unmarkTabCreated("tab-1"), ["tab-3"]],
+    [
+      "unmarkTabCreated",
+      () => usePortalStore.getState().unmarkTabCreated("tab-1"),
+      ["tab-2", "tab-3"],
+    ],
     [
       "markTabsUncreated",
       () => usePortalStore.getState().markTabsUncreated(["tab-1", "tab-2"]),
       ["tab-3"],
     ],
-    ["closeTab", () => usePortalStore.getState().closeTab("tab-1"), ["tab-3"]],
+    ["closeTab", () => usePortalStore.getState().closeTab("tab-1"), ["tab-2", "tab-3"]],
     ["closeAllTabs", () => usePortalStore.getState().closeAllTabs(), []],
     ["closeTabsExcept", () => usePortalStore.getState().closeTabsExcept("tab-3"), ["tab-3"]],
-    ["closeTabsAfter", () => usePortalStore.getState().closeTabsAfter("tab-2"), ["tab-1"]],
+    ["closeTabsAfter", () => usePortalStore.getState().closeTabsAfter("tab-2"), ["tab-1", "tab-2"]],
     ["reset", () => usePortalStore.getState().reset(), []],
   ])("drops the history of tabs %s takes from main", (_label, act, survivors) => {
     report("tab-1", true);
-    report("tab-3", true);
+    report("tab-2", false, true);
+    report("tab-3", true, true);
+    const reported = history();
 
     act();
 
-    expect(Object.keys(history()).sort()).toEqual(survivors);
+    expect(history()).toEqual(Object.fromEntries(survivors.map((id) => [id, reported[id]])));
   });
 
   it("starts a duplicate with no history of its own", () => {
     report("tab-1", true);
 
-    const copyId = usePortalStore.getState().duplicateTab("tab-1")!;
+    const copyId = usePortalStore.getState().duplicateTab("tab-1");
 
-    expect(history()[copyId]).toBeUndefined();
+    expect(copyId).not.toBeNull();
+    expect(usePortalStore.getState().tabs.some((t) => t.id === copyId)).toBe(true);
+    expect(history()[copyId!]).toBeUndefined();
+    expect(history()["tab-1"]).toEqual({ canGoBack: true, canGoForward: false });
   });
 
   it("never persists history", () => {

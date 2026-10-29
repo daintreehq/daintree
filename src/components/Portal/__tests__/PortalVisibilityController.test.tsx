@@ -675,6 +675,13 @@ describe("PortalVisibilityController", () => {
           canGoForward: false,
         });
         navigate({
+          tabId: "tab-2",
+          title: "B",
+          url: "https://example.com/b",
+          canGoBack: false,
+          canGoForward: true,
+        });
+        navigate({
           tabId: "tab-gone",
           title: "Gone",
           url: "https://example.com/gone",
@@ -685,13 +692,16 @@ describe("PortalVisibilityController", () => {
 
       expect(usePortalStore.getState().tabHistory).toEqual({
         "tab-1": { canGoBack: true, canGoForward: false },
+        "tab-2": { canGoBack: false, canGoForward: true },
       });
 
       act(() => {
         for (const cb of evictionCallbacks) cb({ tabId: "tab-1" });
       });
 
-      expect(usePortalStore.getState().tabHistory).toEqual({});
+      expect(usePortalStore.getState().tabHistory).toEqual({
+        "tab-2": { canGoBack: false, canGoForward: true },
+      });
     });
 
     it("recreates a selected tab that main reports missing on show", async () => {

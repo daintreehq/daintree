@@ -740,7 +740,7 @@ describe("PortalManager LRU eviction", () => {
     expect(evictedCalls()[1][1]).toEqual({ tabId: "tab-2" });
   });
 
-  it("closeTab does not emit eviction event", async () => {
+  it("closeTab announces the release once, and nothing for a tab main doesn't hold", async () => {
     const manager = new PortalManagerClass(mockWindow);
 
     manager.createTab("tab-1", "http://localhost:1001");
@@ -748,11 +748,13 @@ describe("PortalManager LRU eviction", () => {
     (mockWindow.webContents.send as ReturnType<typeof vi.fn>).mockClear();
 
     await manager.closeTab("tab-2");
+    await manager.closeTab("tab-2");
+    await manager.closeTab("tab-unknown");
 
     const evictedCalls = (
       mockWindow.webContents.send as ReturnType<typeof vi.fn>
     ).mock.calls.filter(([ch]: string[]) => ch === "portal:tab-evicted");
-    expect(evictedCalls).toHaveLength(0);
+    expect(evictedCalls.map(([, payload]) => payload)).toEqual([{ tabId: "tab-2" }]);
   });
 
   it("never evicts the active tab", () => {
@@ -1320,26 +1322,59 @@ describe("PortalManager across project views (#14537)", () => {
       ]);
     });
 
-    it("reports the tab's history every time it is shown", async () => {
+    it("reports the tab's history as it stands every time it is shown", async () => {
       const manager = new PortalManagerClass(mockWindow);
       manager.createTab("tab-1", "http://localhost:3000");
       manager.createTab("tab-2", "http://localhost:3001");
-      createdWebContents[0].canGoBack.mockReturnValue(true);
+      const tab1 = createdWebContents[0];
+      tab1.canGoBack.mockReturnValue(true);
       const bounds = { x: 0, y: 0, width: 800, height: 600 };
 
       await manager.showTab("tab-1", bounds);
       await manager.showTab("tab-2", bounds);
+      tab1.canGoBack.mockReturnValue(false);
+      tab1.canGoForward.mockReturnValue(true);
       await manager.showTab("tab-1", bounds);
 
       expect(
-        (sentOn(frontView, "portal:nav-event") as Array<{ tabId: string; canGoBack: boolean }>).map(
-          ({ tabId, canGoBack }) => [tabId, canGoBack]
-        )
+        (
+          sentOn(frontView, "portal:nav-event") as Array<{
+            tabId: string;
+            canGoBack: boolean;
+            canGoForward: boolean;
+          }>
+        ).map(({ tabId, canGoBack, canGoForward }) => [tabId, canGoBack, canGoForward])
       ).toEqual([
-        ["tab-1", true],
-        ["tab-2", false],
-        ["tab-1", true],
+        ["tab-1", true, false],
+        ["tab-2", false, false],
+        ["tab-1", false, true],
       ]);
+    });
+
+    it("reports history the page reached without navigating once it loses focus", () => {
+      const manager = new PortalManagerClass(mockWindow);
+      manager.createTab("tab-1", "http://localhost:3000");
+      const wc = createdWebContents[0];
+      handlerFor(wc, "did-navigate")({}, "http://localhost:3000/#pushed");
+
+      wc.getURL.mockReturnValue("http://localhost:3000/#pushed");
+      wc.canGoBack.mockReturnValue(true);
+      handlerFor(wc, "blur")();
+
+      expect(history(cachedView)).toEqual([
+        { url: "http://localhost:3000/#pushed", canGoBack: false, canGoForward: false },
+        { url: "http://localhost:3000/#pushed", canGoBack: true, canGoForward: false },
+      ]);
+    });
+
+    it("tells every project view when a tab is closed, so none keeps it live", async () => {
+      const manager = new PortalManagerClass(mockWindow);
+      manager.createTab("tab-1", "http://localhost:3000");
+
+      await manager.closeTab("tab-1");
+
+      expect(sentOn(cachedView, "portal:tab-evicted")).toEqual([{ tabId: "tab-1" }]);
+      expect(sentOn(frontView, "portal:tab-evicted")).toEqual([{ tabId: "tab-1" }]);
     });
 
     it("reports nothing for a view shown before its first commit", async () => {

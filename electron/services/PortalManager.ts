@@ -581,6 +581,10 @@ export class PortalManager {
       view.webContents.on("blur", () => {
         this.setTabFocused(tabId, false);
         this.sendToApp(CHANNELS.PORTAL_BLUR);
+        // A click or key in the page can make entries it pushed on its own
+        // reachable again without navigating, and leaving the page is when the
+        // toolbar comes back into play.
+        this.sendNavEvent(tabId, view);
       });
 
       view.webContents.on("context-menu", (_event, params) => {
@@ -852,6 +856,11 @@ export class PortalManager {
   }
 
   async closeTab(tabId: string): Promise<void> {
+    // The project view closing the tab knows; any other one still listing it
+    // would keep it marked live, history and all.
+    if (this.viewMap.has(tabId)) {
+      this.sendToWindowViews(CHANNELS.PORTAL_TAB_EVICTED, { tabId });
+    }
     await this.destroyView(tabId);
   }
 
