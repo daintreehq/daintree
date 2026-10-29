@@ -282,7 +282,8 @@ describe("forced-colors ghost-danger button distinction (#15377)", () => {
   }
 
   function borderWidthPx(body: string): number | undefined {
-    const raw = body.match(/border-width:\s*([\d.]+)px/)?.[1] ?? body.match(/border:\s*([\d.]+)px/)?.[1];
+    const raw =
+      body.match(/border-width:\s*([\d.]+)px/)?.[1] ?? body.match(/border:\s*([\d.]+)px/)?.[1];
     return raw === undefined ? undefined : Number(raw);
   }
 
