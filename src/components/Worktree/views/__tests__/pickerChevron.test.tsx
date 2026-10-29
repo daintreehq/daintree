@@ -130,10 +130,14 @@ describe("New worktree pickers", () => {
     expect(turn).toBeDefined();
 
     const { rerender } = render(PICKERS[name]!(false));
-    expect(trigger().classList.contains(`group/${turn}`)).toBe(true);
-    expect(trigger().getAttribute("data-state")).toBe("closed");
+    const el = trigger();
+    expect(el.getAttribute("data-state")).toBe("closed");
 
     rerender(PICKERS[name]!(true));
-    expect(trigger().getAttribute("data-state")).toBe("open");
+    expect(trigger()).toBe(el);
+    expect(el.getAttribute("data-state")).toBe("open");
+    // Open is when the turn shows, so the chevron and its group must still be there.
+    expect(el.classList.contains(`group/${turn}`)).toBe(true);
+    expect(chevronOf(el).getAttribute("class")).toBe(sharedChevronClass());
   });
 });

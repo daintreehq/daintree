@@ -480,6 +480,9 @@ describe("IssueSelector", () => {
     mockListIssues.mockReturnValue(new Promise(() => {}));
     fireEvent.click(trigger);
     expect(trigger.getAttribute("data-state")).toBe("open");
+    expect(trigger.classList.contains(`group/${group}`)).toBe(true);
+    const openSvgs = trigger.querySelectorAll("svg");
+    expect(openSvgs[openSvgs.length - 1]!.getAttribute("class")).toBe(expected);
   });
 
   it("says the load failed instead of claiming the repo has no open issues", async () => {
