@@ -89,7 +89,11 @@ beforeEach(() => {
   vi.spyOn(document, "hasFocus").mockReturnValue(true);
   useNotificationStore.setState({ notifications: [] });
   useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
-  useNotificationSettingsStore.setState({ enabled: true, hydrated: true, quietHoursEnabled: false });
+  useNotificationSettingsStore.setState({
+    enabled: true,
+    hydrated: true,
+    quietHoursEnabled: false,
+  });
   _resetCoalesceMap();
   _resetRateLimitBuckets();
   takePendingHostPlugins();

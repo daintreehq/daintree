@@ -203,7 +203,8 @@ export function HostDetail({
   }, [focusBackOnMount]);
 
   useEffect(() => {
-    if (focusPlugins) document.getElementById(HOST_PLUGINS_SECTION_ID)?.scrollIntoView({ block: "start" });
+    if (focusPlugins)
+      document.getElementById(HOST_PLUGINS_SECTION_ID)?.scrollIntoView({ block: "start" });
   }, [focusPlugins]);
 
   // A host added here that first connects after the add flow closed still

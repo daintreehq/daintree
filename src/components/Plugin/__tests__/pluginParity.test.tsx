@@ -406,11 +406,9 @@ describe("the switch notice", () => {
     expect(payload.action.actionId).toBe("app.settings.openTab");
     payload.action.onClick();
     expect(dispatchMock).toHaveBeenCalledTimes(1);
-    expect(dispatchMock).toHaveBeenCalledWith(
-      "app.settings.openTab",
-      payload.action.actionArgs,
-      { source: "user" }
-    );
+    expect(dispatchMock).toHaveBeenCalledWith("app.settings.openTab", payload.action.actionArgs, {
+      source: "user",
+    });
     // Review opens that host's plugins, never the Add host flow.
     const { result } = renderHook(() => useSettingsDialog());
     act(() => result.current.handleOpenSettingsTab(payload.action.actionArgs));
