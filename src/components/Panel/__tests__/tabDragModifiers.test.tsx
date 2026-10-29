@@ -155,26 +155,29 @@ describe("tab strip drag bounds (#14971)", () => {
     ["performance mode", true],
   ] as const;
 
-  it.each(modes)("drags a tab past its neighbours and drops it there (%s)", (_label, performanceMode) => {
-    if (performanceMode) document.body.dataset.performanceMode = "true";
-    removeStyle = stubLayout();
-    const onDragEnd = vi.fn();
-    render(<TabStrip onDragEnd={onDragEnd} />);
+  it.each(modes)(
+    "drags a tab past its neighbours and drops it there (%s)",
+    (_label, performanceMode) => {
+      if (performanceMode) document.body.dataset.performanceMode = "true";
+      removeStyle = stubLayout();
+      const onDragEnd = vi.fn();
+      render(<TabStrip onDragEnd={onDragEnd} />);
 
-    const first = screen.getByRole("tab", { name: /Tab 1/ });
-    fireEvent.mouseDown(first, { button: 0, clientX: 50, clientY: 15 });
-    fireEvent.mouseMove(document, { clientX: 60, clientY: 15 });
-    act(() => {
-      fireEvent.mouseMove(document, { clientX: 250, clientY: 15 });
-    });
-    expect(dragTranslateX("tab-a")).toBe(200);
+      const first = screen.getByRole("tab", { name: /Tab 1/ });
+      fireEvent.mouseDown(first, { button: 0, clientX: 50, clientY: 15 });
+      fireEvent.mouseMove(document, { clientX: 60, clientY: 15 });
+      act(() => {
+        fireEvent.mouseMove(document, { clientX: 250, clientY: 15 });
+      });
+      expect(dragTranslateX("tab-a")).toBe(200);
 
-    act(() => {
-      fireEvent.mouseUp(document, { clientX: 250, clientY: 15 });
-    });
-    expect(onDragEnd).toHaveBeenCalledTimes(1);
-    expect(onDragEnd.mock.calls[0]![0].over?.id).toBe("tab-c");
-  });
+      act(() => {
+        fireEvent.mouseUp(document, { clientX: 250, clientY: 15 });
+      });
+      expect(onDragEnd).toHaveBeenCalledTimes(1);
+      expect(onDragEnd.mock.calls[0]![0].over?.id).toBe("tab-c");
+    }
+  );
 
   it.each(modes)("stops a tab at the strip's edges (%s)", (_label, performanceMode) => {
     if (performanceMode) document.body.dataset.performanceMode = "true";
