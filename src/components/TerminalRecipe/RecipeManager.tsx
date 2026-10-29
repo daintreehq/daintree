@@ -127,6 +127,10 @@ export function RecipeManager({
   const [recipeToDeleteAfterSave, setRecipeToDeleteAfterSave] = useState<string | null>(null);
   const [deleteAfterSaveError, setDeleteAfterSaveError] = useState<string | null>(null);
   const [showImportDialog, setShowImportDialog] = useState(false);
+  const [refusedFileImport, setRefusedFileImport] = useState<{
+    json: string;
+    error: unknown;
+  } | null>(null);
   // The row a delete removes takes its trigger with it, so focus goes to the
   // row that slides into its place, or the one above when it was the last.
   const deleteSuccessorRef = useRef<string | null>(null);
@@ -198,6 +202,20 @@ export function RecipeManager({
     },
     [exportRecipe]
   );
+
+  // A clean file imports in one click. One that would lose terminals, or that
+  // the store refuses outright, opens in the paste dialog with its JSON, so the
+  // user sees why and can fix it or import what can be (#15044).
+  const handleImportFromFile = async () => {
+    try {
+      const result = await importRecipeFromFile(currentProject?.id);
+      if (result.status !== "refused") return;
+      setRefusedFileImport({ json: result.json, error: result.error });
+      setShowImportDialog(true);
+    } catch (err) {
+      logError("Failed to import recipe from file", err);
+    }
+  };
 
   // Same naming rule as the canvas band's Duplicate, so a copy made in either
   // place never collides with an existing recipe's name or on-disk filename.
@@ -620,11 +638,7 @@ export function RecipeManager({
                     <Button variant="ghost" size="sm" onClick={() => setShowImportDialog(true)}>
                       Import from clipboard
                     </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => void importRecipeFromFile(currentProject?.id)}
-                    >
+                    <Button variant="ghost" size="sm" onClick={() => void handleImportFromFile()}>
                       Import from file
                     </Button>
                   </div>
@@ -672,9 +686,7 @@ export function RecipeManager({
                       <Clipboard data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Import from clipboard…
                     </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onSelect={() => void importRecipeFromFile(currentProject?.id)}
-                    >
+                    <DropdownMenuItem onSelect={() => void handleImportFromFile()}>
                       <FileDown data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                       Import from file…
                     </DropdownMenuItem>
@@ -772,8 +784,18 @@ export function RecipeManager({
 
       <RecipeImportDialog
         isOpen={showImportDialog}
-        onClose={() => setShowImportDialog(false)}
+        onClose={() => {
+          setShowImportDialog(false);
+          setRefusedFileImport(null);
+        }}
         projectId={currentProject?.id}
+        refusedImport={refusedFileImport}
+        // Importing the first recipe swaps the empty state, and the button that
+        // opened this dialog with it, for the inventory and its filter.
+        restoreFocusTo={() =>
+          inventoryFocusFallbackRef.current?.querySelector<HTMLElement>("input") ??
+          emptyStateActionRef.current
+        }
       />
     </>
   );

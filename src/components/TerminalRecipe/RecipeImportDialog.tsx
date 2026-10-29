@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from "react";
-import { AppDialog } from "@/components/ui/AppDialog";
+import { AppDialog, type RestoreFocusTarget } from "@/components/ui/AppDialog";
 import { Field, FieldError } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -14,12 +14,27 @@ import { FIELD_CONTROL_SIZE, FormGrid, FormRow } from "@/components/Worktree/vie
 import { useRecipeStore } from "@/store/recipeStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { pluralize, pluralNoun } from "@/lib/pluralize";
+import {
+  describeRejectedTerminal,
+  isRecipeImportDropsTerminalsError,
+  type RecipeImportDropsTerminalsError,
+} from "@/utils/recipeImport";
+
+const IMPORT_FAILED = "The recipe couldn't be imported";
 
 interface RecipeImportDialogProps {
   isOpen: boolean;
   onClose: () => void;
   /** The project a "Project" import lands in; without one only Global can succeed. */
   projectId: string | undefined;
+  /**
+   * A file import that was refused, opened here with its JSON and what went
+   * wrong, so the user can fix it in place or import what can be.
+   */
+  refusedImport?: { json: string; error: unknown } | null;
+  /** Where focus goes on close when the control that opened the dialog is gone. */
+  restoreFocusTo?: RestoreFocusTarget;
 }
 
 /**
@@ -27,7 +42,13 @@ interface RecipeImportDialogProps {
  * it — the recipe manager and the project settings tab used to carry their own
  * copies, which had drifted apart in fields, validation and how an error looked.
  */
-export function RecipeImportDialog({ isOpen, onClose, projectId }: RecipeImportDialogProps) {
+export function RecipeImportDialog({
+  isOpen,
+  onClose,
+  projectId,
+  refusedImport,
+  restoreFocusTo,
+}: RecipeImportDialogProps) {
   const importRecipe = useRecipeStore((s) => s.importRecipe);
   // With no project open only Global can succeed, so it is the starting choice
   // and Project is offered but unavailable rather than failing on submit.
@@ -38,6 +59,10 @@ export function RecipeImportDialog({ isOpen, onClose, projectId }: RecipeImportD
   // refused a well-formed recipe is a failed operation, reported as one.
   const [jsonError, setJsonError] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  // Terminals the last attempt would have dropped. Nothing is saved while this
+  // stands; any edit clears it, so a confirmed import always matches what the
+  // user reviewed (#15044).
+  const [review, setReview] = useState<RecipeImportDropsTerminalsError | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const scopeId = useId();
   const jsonLabelId = useId();
@@ -48,9 +73,23 @@ export function RecipeImportDialog({ isOpen, onClose, projectId }: RecipeImportD
     setJson("");
     setJsonError(null);
     setImportError(null);
+    setReview(null);
   }, [isOpen, defaultScope]);
 
+  useEffect(() => {
+    if (!isOpen || !refusedImport) return;
+    setJson(refusedImport.json);
+    if (isRecipeImportDropsTerminalsError(refusedImport.error)) {
+      setReview(refusedImport.error);
+    } else {
+      setImportError(formatErrorMessage(refusedImport.error, IMPORT_FAILED));
+    }
+  }, [isOpen, refusedImport]);
+
+  const canImportRest = review !== null && review.acceptedCount > 0;
+
   const handleImport = async () => {
+    const allowDroppedTerminals = canImportRest;
     setJsonError(null);
     setImportError(null);
     try {
@@ -67,17 +106,31 @@ export function RecipeImportDialog({ isOpen, onClose, projectId }: RecipeImportD
     }
     setIsImporting(true);
     try {
-      await importRecipe(scope === "global" ? undefined : projectId, json);
+      await importRecipe(
+        scope === "global" ? undefined : projectId,
+        json,
+        allowDroppedTerminals ? { allowDroppedTerminals } : undefined
+      );
       onClose();
     } catch (err) {
-      setImportError(formatErrorMessage(err, "The recipe couldn't be imported"));
+      if (isRecipeImportDropsTerminalsError(err)) {
+        setReview(err);
+      } else {
+        setImportError(formatErrorMessage(err, IMPORT_FAILED));
+      }
     } finally {
       setIsImporting(false);
     }
   };
 
   return (
-    <AppDialog isOpen={isOpen} onClose={onClose} size="md" dismissible={!isImporting}>
+    <AppDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      size="md"
+      dismissible={!isImporting}
+      restoreFocusTo={restoreFocusTo}
+    >
       <AppDialog.Header>
         <AppDialog.Title>Import recipe</AppDialog.Title>
         <AppDialog.CloseButton />
@@ -91,6 +144,7 @@ export function RecipeImportDialog({ isOpen, onClose, projectId }: RecipeImportD
               onValueChange={(value) => {
                 setScope(value === "global" ? "global" : "project");
                 setImportError(null);
+                setReview(null);
               }}
               disabled={isImporting}
             >
@@ -119,6 +173,7 @@ export function RecipeImportDialog({ isOpen, onClose, projectId }: RecipeImportD
               setJson(e.target.value);
               setJsonError(null);
               setImportError(null);
+              setReview(null);
             }}
             data-testid="recipe-import-textarea"
             readOnly={isImporting}
@@ -133,6 +188,28 @@ export function RecipeImportDialog({ isOpen, onClose, projectId }: RecipeImportD
           {jsonError && <FieldError>{jsonError}</FieldError>}
         </Field>
 
+        {review && (
+          <InlineStatusBanner
+            severity={canImportRest ? "warning" : "error"}
+            title={review.message}
+            description={reviewDescription(review)}
+            descriptionExtras={
+              <ul className="mt-1.5 space-y-1 text-xs">
+                {review.rejected.map((terminal) => {
+                  const { label, reason } = describeRejectedTerminal(terminal);
+                  return (
+                    <li key={terminal.index} className="break-words">
+                      <span className="font-medium text-text-primary">{label}</span>
+                      <span className="text-text-secondary"> — {reason}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            }
+            className="mt-4 rounded-[var(--radius-md)]"
+          />
+        )}
+
         {importError && (
           <InlineStatusBanner
             severity="error"
@@ -146,7 +223,9 @@ export function RecipeImportDialog({ isOpen, onClose, projectId }: RecipeImportD
       <AppDialog.Footer
         secondaryAction={{ label: "Cancel", onClick: onClose, disabled: isImporting }}
         primaryAction={{
-          label: "Import recipe",
+          label: canImportRest
+            ? `Import ${pluralize(review.acceptedCount, "terminal")}`
+            : "Import recipe",
           onClick: () => void handleImport(),
           disabled: !json.trim(),
           loading: isImporting,
@@ -154,4 +233,10 @@ export function RecipeImportDialog({ isOpen, onClose, projectId }: RecipeImportD
       />
     </AppDialog>
   );
+}
+
+function reviewDescription(review: RecipeImportDropsTerminalsError): string {
+  const them = pluralNoun(review.rejected.length, "it", "them");
+  if (review.acceptedCount === 0) return `Fix ${them} in the JSON, then import again.`;
+  return `Nothing has been saved. Fix ${them} in the JSON, or import the other ${pluralize(review.acceptedCount, "terminal")} without ${them}.`;
 }

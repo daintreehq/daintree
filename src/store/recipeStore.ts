@@ -55,7 +55,8 @@ import {
   recipeTerminalsUsePluginOnlyFeatures,
   recipeUsesPluginOnlyFeatures,
 } from "@/utils/pluginRecipeCopy";
-import { sanitizeRecipeTerminals, MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
+import { inspectRecipeTerminals, MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
+import { RecipeImportDropsTerminalsError, type RecipeFileImportResult } from "@/utils/recipeImport";
 import type { ActionSource, HostApprovedRecipeRun } from "@shared/types/actions";
 import type { AgentCliDetail } from "@shared/types/ipc";
 import type { TerminalSpawnSource, AddPanelFocusPolicy } from "@shared/types/panel";
@@ -303,7 +304,7 @@ interface RecipeState {
   /** Replace the plugin tier wholesale from main's authoritative snapshot. */
   setPluginRecipes: (recipes: TerminalRecipe[]) => void;
   exportRecipeToFile: (id: string) => Promise<boolean>;
-  importRecipeFromFile: (projectId: string | undefined) => Promise<boolean>;
+  importRecipeFromFile: (projectId: string | undefined) => Promise<RecipeFileImportResult>;
   createRecipe: (
     projectId: string | undefined,
     name: string,
@@ -340,7 +341,16 @@ interface RecipeState {
   saveToRepo: (recipeId: string, deleteOriginal?: boolean) => Promise<void>;
 
   exportRecipe: (id: string) => string | null;
-  importRecipe: (projectId: string | undefined, json: string) => Promise<void>;
+  /**
+   * Throws {@link RecipeImportDropsTerminalsError} when any terminal fails
+   * validation, unless `allowDroppedTerminals` says the user has seen which
+   * ones and chose to import the rest (#15044).
+   */
+  importRecipe: (
+    projectId: string | undefined,
+    json: string,
+    options?: { allowDroppedTerminals?: boolean }
+  ) => Promise<void>;
 
   captureRecipeFromLayout: (worktreeId: string) => RecipeLayoutCapture;
   generateRecipeFromActiveTerminals: (worktreeId: string) => RecipeTerminal[];
@@ -1611,12 +1621,16 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
   importRecipeFromFile: async (projectId) => {
     const json = await projectClient.importRecipeFromFile();
-    if (!json) return false;
-    await get().importRecipe(projectId, json);
-    return true;
+    if (!json) return { status: "cancelled" };
+    try {
+      await get().importRecipe(projectId, json);
+    } catch (error) {
+      return { status: "refused", json, error };
+    }
+    return { status: "imported" };
   },
 
-  importRecipe: async (projectId, json) => {
+  importRecipe: async (projectId, json, options) => {
     let recipe: Partial<TerminalRecipe>;
     try {
       recipe = JSON.parse(json);
@@ -1645,11 +1659,16 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     // Content-validate at the import trust boundary. Shared with the in-repo
     // load path (ProjectIdentityFiles.readInRepoRecipesWithHashes) so both
     // entry points apply the same type allowlist, control-char filtering, and
-    // explicit field mapping before a terminal can reach the spawn path.
-    const sanitizedTerminals = sanitizeRecipeTerminals(recipe.terminals);
+    // explicit field mapping before a terminal can reach the spawn path. A
+    // recipe that would lose a terminal is a weaker copy, so it is saved only
+    // once the user has seen what goes (#15044).
+    const { accepted: sanitizedTerminals, rejected } = inspectRecipeTerminals(recipe.terminals);
 
-    if (sanitizedTerminals.length === 0) {
-      throw new Error("No valid terminals found in recipe");
+    if (
+      sanitizedTerminals.length === 0 ||
+      (rejected.length > 0 && options?.allowDroppedTerminals !== true)
+    ) {
+      throw new RecipeImportDropsTerminalsError(sanitizedTerminals.length, rejected);
     }
 
     const isGlobal = projectId === undefined;
