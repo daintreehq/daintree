@@ -720,11 +720,9 @@ export function DockLaunchButton({
     return (row: DockLaunchRow) => {
       if (row.kind !== "preset" || row.preset.isSelected) return;
       // The store rolls back and records the failure itself.
-      void updateWorktreePreset(
-        row.item.agent.id,
-        activeWorktreeId,
-        row.preset.presetId
-      ).catch(() => {});
+      void updateWorktreePreset(row.item.agent.id, activeWorktreeId, row.preset.presetId).catch(
+        () => {}
+      );
     };
   }, [activeWorktreeId, updateWorktreePreset]);
 
