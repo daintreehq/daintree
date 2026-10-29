@@ -26,11 +26,7 @@ class FakeContents extends EventEmitter {
   }
 }
 
-function report(
-  wc: FakeContents,
-  panels: unknown,
-  projectId: string | null = "project-a"
-): void {
+function report(wc: FakeContents, panels: unknown, projectId: string | null = "project-a"): void {
   recordUnsavedPluginPanels(
     wc.id,
     watchWebContentsDocument(wc as unknown as Electron.WebContents),

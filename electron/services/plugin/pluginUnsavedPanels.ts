@@ -137,7 +137,9 @@ export function watchWebContentsDocument(wc: Electron.WebContents): UnsavedPanel
 }
 
 /** A remote view's document lasts as long as its endpoint. */
-export function watchSourceHandle(handle: PanelLifecycleSourceHandle): UnsavedPanelsDocumentWatcher {
+export function watchSourceHandle(
+  handle: PanelLifecycleSourceHandle
+): UnsavedPanelsDocumentWatcher {
   return (forget) => {
     const onGone = () => forget();
     handle.once("destroyed", onGone);
