@@ -14,6 +14,10 @@ vi.mock("@/store", () => ({
   usePreferencesStore: vi.fn(),
 }));
 
+// The real module drags in the whole worktree view provider; ordering is a pure
+// function, so no test here reads the store.
+vi.mock("@/hooks/useWorktreeStore", () => ({ useWorktreeStore: vi.fn() }));
+
 vi.mock("@/clients", () => ({
   terminalClient: { write: writeMock },
 }));
@@ -38,7 +42,7 @@ vi.mock("@/utils/terminalTitleDisplay", () => ({
   getTerminalDisplayTitle: (panel: { title: string }) => panel.title,
 }));
 
-import { deliverDiffNotes } from "../useDiffNoteDelivery";
+import { deliverDiffNotes, orderDiffNoteTargets } from "../useDiffNoteDelivery";
 import { useDiffNotesStore } from "@/store/diffNotesStore";
 
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
@@ -179,5 +183,35 @@ describe("deliverDiffNotes", () => {
     expect(writeMock.mock.calls[0]![1]).toContain("Ready to go");
     expect(writeMock.mock.calls[0]![1]).not.toContain("Half written");
     expect(useDiffNotesStore.getState().notes[editing.id]).toBeDefined();
+  });
+});
+
+describe("orderDiffNoteTargets", () => {
+  const target = (id: string, worktreeId: string | null) => ({
+    id,
+    title: id,
+    isInputLocked: false,
+    kind: "terminal" as const,
+    chrome: {} as never,
+    worktreeId,
+    worktreeName: worktreeId,
+  });
+
+  it("puts agents in the diff's worktree first and keeps grid order on both sides", () => {
+    const ordered = orderDiffNoteTargets(
+      [target("a", "wt-2"), target("b", "wt-1"), target("c", null), target("d", "wt-1")],
+      "wt-1"
+    );
+    expect(ordered.map((t) => t.id)).toEqual(["b", "d", "a", "c"]);
+  });
+
+  it("keeps agents in other worktrees available", () => {
+    const ordered = orderDiffNoteTargets([target("a", "wt-2")], "wt-1");
+    expect(ordered.map((t) => t.id)).toEqual(["a"]);
+  });
+
+  it("leaves grid order alone when the diff has no worktree", () => {
+    const ordered = orderDiffNoteTargets([target("a", "wt-2"), target("b", "wt-1")], null);
+    expect(ordered.map((t) => t.id)).toEqual(["a", "b"]);
   });
 });
