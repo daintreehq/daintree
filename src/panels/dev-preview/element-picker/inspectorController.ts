@@ -29,8 +29,7 @@ import type {
   DevPreviewToolSessionContext,
 } from "@/services/devPreviewTools/types";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
-import { cancelAgentRequests } from "./agentRequest.js";
-import { forgetComposerMemories } from "./composerMemory.js";
+import { cancelAgentRequests, watchPickerPreviews } from "./agentRequest.js";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { mismatchMessage, runtimeIssueMessage, wireFailureMessage } from "./copy.js";
 import { usePanelStore } from "@/store/panelStore";
@@ -331,6 +330,12 @@ const PROJECT_CONTEXT_TIMEOUT_MS = 3_000;
 const CAPTURE_TIMEOUT_MS = 5_000;
 /** Pictures kept for the selections a draft may still be about. */
 const CAPTURES_KEPT = 16;
+/**
+ * Tells one picker session's selections from the next one's. A draft outlives
+ * the session it was pinned in, and a count that starts again would give the
+ * first element picked after reopening the id of the element it is about.
+ */
+let nextGeneration = 0;
 
 /** Keep the newest of a per-selection record, dropping the oldest past the bound. */
 function keepRecent<T>(records: Map<string, T>, selectionId: string, record: T): void {
@@ -489,7 +494,13 @@ export class InspectorController implements DevPreviewToolSession {
   private recoveringWorkspace: string | null = null;
   private held: HeldSelection | null = null;
   private disposed = false;
+  /** Kept apart from the rest: a closed picker still hears edits while its requests are out. */
+  private offSourceChanged: (() => void) | null = null;
   private selectionCount = 0;
+  private readonly generation = ++nextGeneration;
+  /** Requests this controller made that are still on their way: a closed picker waits for them. */
+  private pendingRequests = 0;
+  private lingering: string | null = null;
   /** The last proven element, for asking the page for it again. */
   private continuity: Continuity | null = null;
   /** Each selection's picture, taken when it was made: oldest first, bounded. */
@@ -500,9 +511,10 @@ export class InspectorController implements DevPreviewToolSession {
     private readonly deps: InspectorDeps
   ) {
     this.panelId = panelId;
-    this.unsubscribers.push(
-      deps.picker.onEvent((payload) => this.handlePreviewPush(payload)),
-      deps.picker.onSourceChanged((payload) => this.handleSourceChanged(payload))
+    watchPickerPreviews();
+    this.unsubscribers.push(deps.picker.onEvent((payload) => this.handlePreviewPush(payload)));
+    this.offSourceChanged = deps.picker.onSourceChanged((payload) =>
+      this.handleSourceChanged(payload)
     );
   }
 
@@ -740,7 +752,7 @@ export class InspectorController implements DevPreviewToolSession {
    * looped on.
    */
   private recoverClosedWorkspace(workspaceId: string): void {
-    if (this.currentWorkspaceId() !== workspaceId) return;
+    if (this.disposed || this.currentWorkspaceId() !== workspaceId) return;
     if (this.recoveringWorkspace === workspaceId) return;
     this.recoveringWorkspace = workspaceId;
     this.selectionRequest++;
@@ -1139,7 +1151,7 @@ export class InspectorController implements DevPreviewToolSession {
     const binding = this.state.binding;
     this.selectionCount += 1;
     return {
-      selectionId: `${this.panelId}:${epoch}:${this.selectionCount}`,
+      selectionId: `${this.panelId}:${this.generation}:${epoch}:${this.selectionCount}`,
       previewPanelId: this.panelId,
       sessionId: binding.status === "bound" ? binding.sessionId : "",
       documentEpoch: epoch,
@@ -1740,15 +1752,29 @@ export class InspectorController implements DevPreviewToolSession {
   }
 
   /**
+   * The workspace a selection's files can be read through now: its own, or the
+   * one this picker opened on the same app since — a draft kept while the
+   * picker was closed was pinned in a workspace that is gone. Null when
+   * nothing open now reads the same files.
+   */
+  private workspaceFor(selection: PickedSelection): string | null {
+    const workspace = this.state.workspace;
+    if (workspace.status !== "ready") return null;
+    if (workspace.workspaceId === selection.workspaceId) return workspace.workspaceId;
+    return workspace.appPath === selection.appPath ? workspace.workspaceId : null;
+  }
+
+  /**
    * Whether every file a request cites still has the bytes its claims were
    * checked against. Asked of the workspace open now: one the picker has
    * since let go of cannot vouch for anything.
    */
   async sourcesUnchanged(selection: PickedSelection): Promise<boolean> {
-    const workspaceId = selection.workspaceId;
     // Nothing was resolved, so nothing is cited that could have changed.
-    if (workspaceId === null) return true;
-    if (this.currentWorkspaceId() !== workspaceId) return false;
+    if (selection.workspaceId === null) return true;
+    const workspaceId = this.workspaceFor(selection);
+    if (workspaceId === null) return false;
+    const own = workspaceId === selection.workspaceId;
     const revisions = citedRevisions(selection);
     // A claim held without its file being read carries no revision to compare,
     // but an edit reported to that file since the selection was made still
@@ -1756,6 +1782,8 @@ export class InspectorController implements DevPreviewToolSession {
     const captured = Date.parse(selection.capturedAt);
     for (const path of heldPaths(selection)) {
       if (path in revisions) continue;
+      // Edits made before this workspace opened were never heard here.
+      if (!own) return false;
       const changed = this.recentChanges.get(path);
       // The same millisecond reads as after: a pick can't vouch for bytes it may not have seen.
       if (changed !== undefined && changed >= captured) return false;
@@ -1816,6 +1844,8 @@ export class InspectorController implements DevPreviewToolSession {
     if (workspaceId === null || push.workspaceId !== workspaceId) return;
     const path = push.file.path;
     this.noteChanged(path);
+    // A closed picker only keeps the record a waiting request is checked against.
+    if (this.disposed) return;
     const selection = this.state.selection;
     if (
       selection.status === "ready" &&
@@ -1917,7 +1947,7 @@ export class InspectorController implements DevPreviewToolSession {
    * Null when it can't be read in time; the request then goes without.
    */
   async projectFor(selection: PickedSelection): Promise<ProjectContextOutcome | null> {
-    const workspaceId = selection.workspaceId;
+    const workspaceId = this.workspaceFor(selection);
     if (workspaceId === null) return null;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -2001,10 +2031,9 @@ export class InspectorController implements DevPreviewToolSession {
 
   dispose(): void {
     if (this.disposed) return;
-    // The picker is really over for this preview: nothing typed or in flight
-    // for it may outlive it.
-    cancelAgentRequests(this.panelId);
-    forgetComposerMemories(this.panelId);
+    // Switching the picker off puts it away. What was typed stays in the
+    // composer's memory, and a request still on its way keeps going: only the
+    // preview ending, or the user, cancels it.
     this.clearReattach();
     this.clearConnectRetry();
     this.endReprove();
@@ -2015,11 +2044,44 @@ export class InspectorController implements DevPreviewToolSession {
     if (binding.status === "bound") {
       void this.deps.preview.detach({ sessionId: binding.sessionId }).catch(() => undefined);
     }
-    this.closeWorkspace();
+    const workspace = this.state.workspace;
+    if (workspace.status === "ready" && this.pendingRequests > 0) {
+      // Requests on their way are checked against this workspace before they
+      // go in, so it stays open, and keeps hearing edits, until they settle.
+      this.workspaceRequest++;
+      this.projectRequest++;
+      this.continuity = null;
+      this.lingering = workspace.workspaceId;
+    } else {
+      this.closeWorkspace();
+    }
     this.disposed = true;
     for (const unsubscribe of this.unsubscribers) unsubscribe();
     this.unsubscribers.length = 0;
     this.listeners.clear();
+    if (this.lingering === null) this.stopHearingSource();
+  }
+
+  /**
+   * Keep what `request` is checked against for as long as it is on its way,
+   * picker open or not. Only this controller's own requests hold it: one made
+   * through an earlier session is that session's to wait for.
+   */
+  holdWhile(request: Promise<void>): void {
+    this.pendingRequests++;
+    const done = () => {
+      this.pendingRequests--;
+      if (this.pendingRequests > 0 || this.lingering === null) return;
+      this.releaseWorkspace(this.lingering);
+      this.lingering = null;
+      this.stopHearingSource();
+    };
+    request.then(done, done);
+  }
+
+  private stopHearingSource(): void {
+    this.offSourceChanged?.();
+    this.offSourceChanged = null;
   }
 }
 
@@ -2033,9 +2095,8 @@ export function createElementPickerSession(
   context: DevPreviewToolSessionContext,
   deps: () => InspectorDeps = defaultInspectorDeps
 ): InspectorController {
-  // The chunk can land after the host let this preview go. Disposing what we
-  // would build here cancels agent requests and forgets composer drafts for the
-  // whole panel — which by then may belong to the next session.
+  // The chunk can land after the host let this preview go: nothing is built,
+  // so nothing binds or opens a workspace for a picker nobody switched on.
   if (context.signal.aborted) {
     throw new Error("The Element Picker was switched off while it loaded");
   }
