@@ -502,9 +502,9 @@ export function McpConfirmDialog() {
           {body}
         </ConfirmDialog>
       )}
-      {/* After the dialog, so the dialog keeps the child slot the empty-queue
-          branch renders it in, and its exit still animates when the queue
-          drains. A portal, so where it sits in the tree is not where it shows. */}
+      {/* After the dialog, so the dialog stays the first child in both
+          branches and is reused, not remounted, when a request arrives on an
+          empty queue. A portal, so where it sits here is not where it shows. */}
       {inspecting && (
         <ReturnToRequest title={confirmTitle(current)} expired={expired} onReview={reviewRequest} />
       )}
@@ -598,7 +598,7 @@ function RequesterRow({
     Icon = SquareTerminal;
     name = requester?.name ?? "Agent in a terminal pane";
     if (requester?.kindLabel) qualifiers.push(requester.kindLabel);
-    if (requester?.worktreeName && live.inOtherWorktree) qualifiers.push(requester.worktreeName);
+    if (live.otherWorktreeName) qualifiers.push(live.otherWorktreeName);
     showLabel = "Show pane";
   } else if (callerInfo) {
     Icon = Plug;

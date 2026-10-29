@@ -71,11 +71,14 @@ const pluginClientMock = vi.hoisted(() => ({
 }));
 vi.mock("@/clients/pluginClient", () => ({ pluginClient: pluginClientMock }));
 
+// Set `defer` to hold a close open until `finish()`, as a real exit animation
+// does; otherwise a close finishes at once.
+const presence = vi.hoisted(() => ({ defer: false, finish: null as (() => void) | null }));
 vi.mock("@/hooks/useAnimatedPresence", async () => {
-  const { useEffect, useRef } = await import("react");
+  const { useEffect, useRef, useState } = await import("react");
   return {
-    // No exit animation, but a close still reports that it finished, which is
-    // when a dialog hands focus back and runs its close-complete step.
+    // A close still reports that it finished, which is when a dialog hands
+    // focus back and runs its close-complete step.
     useAnimatedPresence: ({
       isOpen,
       onAnimateOut,
@@ -84,17 +87,33 @@ vi.mock("@/hooks/useAnimatedPresence", async () => {
       onAnimateOut?: () => void;
     }) => {
       const wasOpen = useRef(isOpen);
+      const [closing, setClosing] = useState(false);
       useEffect(() => {
-        if (wasOpen.current && !isOpen) onAnimateOut?.();
+        if (isOpen) {
+          // Reopened mid-exit: the close that was under way never finishes.
+          presence.finish = null;
+          setClosing(false);
+        } else if (wasOpen.current) {
+          if (presence.defer) {
+            setClosing(true);
+            presence.finish = () => {
+              presence.finish = null;
+              setClosing(false);
+              onAnimateOut?.();
+            };
+          } else {
+            onAnimateOut?.();
+          }
+        }
         wasOpen.current = isOpen;
       }, [isOpen, onAnimateOut]);
-      return { isVisible: isOpen, shouldRender: isOpen };
+      return { isVisible: isOpen, shouldRender: isOpen || closing };
     },
   };
 });
 
 const requesterMocks = vi.hoisted(() => ({
-  live: { present: true, inOtherWorktree: false },
+  live: { present: true } as { present: boolean; otherWorktreeName?: string },
   show: vi.fn(async (_identity: unknown) => true),
 }));
 vi.mock("@/lib/mcpConfirmRequester", () => ({
@@ -250,7 +269,9 @@ describe("McpConfirmDialog", () => {
     helpPanelState.preferredAgentId = null;
     helpPanelState.activeSlotAgentId = null;
     loggerMocks.logError.mockReset();
-    requesterMocks.live = { present: true, inOtherWorktree: false };
+    requesterMocks.live = { present: true };
+    presence.defer = false;
+    presence.finish = null;
     requesterMocks.show.mockReset();
     requesterMocks.show.mockResolvedValue(true);
     helpAssistantApi.getSettings = vi.fn().mockResolvedValue({ daintreeConfirmations: "inherit" });
@@ -873,9 +894,11 @@ describe("McpConfirmDialog", () => {
       expect(requesterRow()).not.toContain("feature/auth");
       unmount();
 
-      requesterMocks.live = { present: true, inOtherWorktree: true };
+      // Where the pane is now, not where it was when it asked.
+      requesterMocks.live = { present: true, otherWorktreeName: "feature/moved" };
       render(<McpConfirmDialog />);
-      expect(requesterRow()).toContain("feature/auth");
+      expect(requesterRow()).toContain("feature/moved");
+      expect(requesterRow()).not.toContain("feature/auth");
       expect(screen.getByRole("button", { name: "Show pane" })).toBeTruthy();
     });
 
@@ -905,7 +928,7 @@ describe("McpConfirmDialog", () => {
     });
 
     it("says a requester has gone rather than offering to show it", () => {
-      requesterMocks.live = { present: false, inOtherWorktree: false };
+      requesterMocks.live = { present: false };
       void enqueue({ offerSessionApproval: true, danger: "safe", requester: PANE });
       render(<McpConfirmDialog />);
 
@@ -914,7 +937,7 @@ describe("McpConfirmDialog", () => {
     });
 
     it("still names an unnamed pane as a pane when it can't offer the session grant", () => {
-      requesterMocks.live = { present: false, inOtherWorktree: false };
+      requesterMocks.live = { present: false };
       void enqueue({ danger: "safe", requester: { identity: PANE.identity } });
       render(<McpConfirmDialog />);
 
@@ -957,6 +980,70 @@ describe("McpConfirmDialog", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it("goes to the requester only once the dialog has finished closing", async () => {
+      presence.defer = true;
+      void enqueue({ danger: "safe", actionTitle: "Push", requester: PANE });
+      render(<McpConfirmDialog />);
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Show pane" }));
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      // Going now would lose focus to the close handing it back.
+      expect(requesterMocks.show).not.toHaveBeenCalled();
+
+      act(() => {
+        presence.finish?.();
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(requesterMocks.show).toHaveBeenCalledWith(PANE.identity);
+    });
+
+    it("goes nowhere when the request is brought back before the dialog has closed", async () => {
+      presence.defer = true;
+      const pending = enqueue({ danger: "safe", actionTitle: "Push", requester: PANE });
+      render(<McpConfirmDialog />);
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Show pane" }));
+      });
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+      });
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Push" }));
+      });
+      await expect(pending).resolves.toEqual({ decision: "approved" });
+      await act(async () => {
+        presence.finish?.();
+        await Promise.resolve();
+      });
+
+      expect(requesterMocks.show).not.toHaveBeenCalled();
+    });
+
+    it("still animates out when an identified request is the last one answered", async () => {
+      presence.defer = true;
+      const pending = enqueue({ danger: "safe", actionTitle: "Push", requester: PANE });
+      render(<McpConfirmDialog />);
+      const surface = () => document.querySelector('[role="dialog"], [role="alertdialog"]');
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      });
+      await expect(pending).resolves.toEqual({ decision: "rejected" });
+      expect(surface()).not.toBeNull();
+
+      act(() => {
+        presence.finish?.();
+      });
+      expect(surface()).toBeNull();
     });
 
     it("comes straight back when the requester can't be reached", async () => {

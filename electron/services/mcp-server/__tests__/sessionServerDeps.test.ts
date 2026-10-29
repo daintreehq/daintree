@@ -384,5 +384,67 @@ describe("createSessionServerDeps", () => {
         requester,
       });
     });
+
+    it.each([
+      ["a help session with no help id", "help" as const, null, {}],
+      ["a pinned session that isn't the assistant's", "external" as const, "help-1", {}],
+      [
+        "a relayed call, whose tab is on another machine",
+        "help" as const,
+        "help-1",
+        { relay: RELAY },
+      ],
+    ])("is absent on the pinned route for %s", async (_label, origin, helpId, capture) => {
+      const deps = fakeSource();
+      const dispatchActionForWebContents = vi.fn(async () => ({
+        result: { ok: true, result: null },
+      }));
+      (deps as { dispatchActionForWebContents?: unknown }).dispatchActionForWebContents =
+        dispatchActionForWebContents;
+      deps.sessionStore.sessionOriginMap.set("s", origin);
+      deps.sessionStore.sessionWebContentsMap.set("s", 7);
+      if (helpId !== null) deps.sessionStore.sessionHelpIdMap.set("s", helpId);
+      const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
+        sessionId: "s",
+        ...capture,
+      });
+
+      await sessionDeps.requestCloseApproval?.("terminal.close", {});
+
+      const approval = (dispatchActionForWebContents.mock.calls[0] as unknown[])[6] as Record<
+        string,
+        unknown
+      >;
+      expect(approval).toEqual({ approvalOnly: true, approvalReason: "protected-close" });
+    });
+
+    it.each([
+      ["another machine's", RELAY],
+      ["this machine's, reaching another project", { ...RELAY, local: true as const }],
+    ])("is absent for a relay session carrying %s assistant", async (_label, relay) => {
+      // As `openRelaySession` builds one: a workspace route, no pane, no pane bearer.
+      const deps = fakeSource();
+      const dispatchActionForWorkspace = vi.fn(async () => ({
+        result: { ok: true, result: null },
+      }));
+      (deps as { dispatchActionForWorkspace?: unknown }).dispatchActionForWorkspace =
+        dispatchActionForWorkspace;
+      deps.sessionStore.sessionHelpIdMap.set("s", "help-1");
+      const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
+        sessionId: "s",
+        workspaceBinding: { workspaceId: WS_A },
+        ownPane: null,
+        relay,
+      });
+
+      await sessionDeps.dispatchAction("terminal.close", {}, false);
+
+      const options = (dispatchActionForWorkspace.mock.calls[0] as unknown[])[5] as Record<
+        string,
+        unknown
+      >;
+      expect(options).toHaveProperty("relay");
+      expect(options).not.toHaveProperty("requester");
+    });
   });
 });

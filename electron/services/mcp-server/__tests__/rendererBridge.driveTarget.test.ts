@@ -540,7 +540,9 @@ describe("rendererBridge — sessions pinned to a remote view", () => {
       { a: 1 },
       false,
       context,
-      "help"
+      "help",
+      // This machine's Assistant tab: the remote view has no such lane to name.
+      { requester: { kind: "assistant", helpSessionId: "help-local" } }
     );
 
     expect(envelope.result).toEqual({ ok: true, result: 42 });
@@ -549,6 +551,8 @@ describe("rendererBridge — sessions pinned to a remote view", () => {
       expect.objectContaining({ actionId: "worktree.list", args: { a: 1 }, context }),
       expect.any(Object)
     );
+    const [, payload] = vi.mocked(endpoint.request).mock.calls[0];
+    expect(payload).not.toHaveProperty("requester");
     expect(pendingDispatches.size).toBe(0);
   });
 
