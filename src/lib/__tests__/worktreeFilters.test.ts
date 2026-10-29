@@ -547,6 +547,14 @@ describe("matchesFilters", () => {
     expect(matchesFilters(worktree, filters, meta, false)).toBe(false);
   });
 
+  it("treats a whitespace-only query as empty", () => {
+    const worktree = createMockWorktree({ issueNumber: 123 });
+    const filters = createEmptyFilters();
+    filters.query = "   ";
+    expect(matchesFilters(worktree, filters, createEmptyMeta(), false)).toBe(true);
+    expect(hasAnyFilters(filters)).toBe(false);
+  });
+
   it("matches bare number with whitespace padding", () => {
     const worktree = createMockWorktree({ issueNumber: 123 });
     const filters = createEmptyFilters();

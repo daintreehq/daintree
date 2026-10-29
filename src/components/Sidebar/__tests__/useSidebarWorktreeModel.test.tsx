@@ -176,16 +176,14 @@ describe("useSidebarWorktreeModel — rows", () => {
     expect(result.current.hasFacetFiltersActive).toBe(false);
   });
 
-  it("switches the active-row bypass off once a facet filter applies", () => {
-    // A query of spaces hides every row by score but does not count as a
-    // search, so the active worktree is held on screen by the bypass alone.
+  it("reads a whitespace-only query as no query, until a facet filter applies", () => {
     const { result } = renderModel({ activeWorktreeId: "a" });
     act(() => {
       const store = useWorktreeFilterStore.getState();
       store.setAlwaysShowActive(true);
       store.setLiveQuery("   ");
     });
-    expect(result.current.filteredWorktrees.map((w) => w.id)).toEqual(["a"]);
+    expect(result.current.filteredWorktrees.map((w) => w.id)).toEqual(["a", "b"]);
 
     act(() => useWorktreeFilterStore.getState().toggleStatusFilter("dirty"));
     expect(result.current.filteredWorktrees).toEqual([]);

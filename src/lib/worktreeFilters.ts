@@ -146,16 +146,14 @@ export function scoreWorktree(
  * score. Every surface that promises "finds what the sidebar's search box
  * finds" reads this rather than restating it.
  *
- * An empty query matches everything. Whitespace is not trimmed here, because
- * the sidebar never has: a query of spaces scores nothing and so hides every
- * row. A caller that wants whitespace to read as empty trims first.
+ * An empty or whitespace-only query matches everything.
  */
 export function matchesWorktreeQuery(
   worktree: Worktree | WorktreeState,
   query: string,
   customTitle?: string
 ): boolean {
-  if (query.length === 0) return true;
+  if (query.trim().length === 0) return true;
   const exactNum = parseExactNumber(query);
   if (exactNum !== null) {
     return worktree.issueNumber === exactNum || worktree.linked?.pr?.ref.number === exactNum;
@@ -519,7 +517,7 @@ export function orderWorktreesLikeSidebar<T extends Worktree | WorktreeState>(
 
 export function hasAnyFilters(filters: FilterState): boolean {
   return (
-    filters.query.length > 0 ||
+    filters.query.trim().length > 0 ||
     filters.statusFilters.size > 0 ||
     filters.typeFilters.size > 0 ||
     filters.prIssueFilters.size > 0 ||
@@ -600,7 +598,7 @@ export function computeChipCounts(
 ): ChipCounts {
   const counts = emptyChipCounts();
   const now = Date.now();
-  const hasQuery = filters.query.length > 0;
+  const hasQuery = filters.query.trim().length > 0;
   const exactQuery = hasQuery ? parseExactNumber(filters.query) : null;
 
   for (const worktree of worktrees) {
