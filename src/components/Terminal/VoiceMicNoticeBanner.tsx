@@ -3,6 +3,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { actionService } from "@/services/ActionService";
 import { useVoiceRecordingStore, type VoiceMicNotice } from "@/store/voiceRecordingStore";
 import { logError } from "@/utils/logger";
+import { voiceErrorLogFields } from "@shared/utils/voiceLogFields";
 import { InlineStatusBanner, type BannerAction } from "./InlineStatusBanner";
 
 export interface VoiceMicNoticeBannerProps {
@@ -62,7 +63,11 @@ function AppReplacedMicNotice({
         ? "restarting"
         : "incomplete";
     } catch (err) {
-      logError("Failed to restart Daintree after it was updated", err);
+      logError(
+        "Failed to restart Daintree after it was updated",
+        undefined,
+        voiceErrorLogFields(err)
+      );
       outcome = "error";
     }
     // Daintree is on its way down; the banner goes with it.
