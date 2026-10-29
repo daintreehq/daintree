@@ -215,15 +215,7 @@ export function useHelpSessionLanes({
           canRestart: laneIsLive[index] || (slot === activeSlot && pausedLane !== null),
         };
       }),
-    [
-      openSlots,
-      laneAgentStates,
-      laneTaskTitles,
-      laneAgentIds,
-      laneIsLive,
-      activeSlot,
-      pausedLane,
-    ]
+    [openSlots, laneAgentStates, laneTaskTitles, laneAgentIds, laneIsLive, activeSlot, pausedLane]
   );
 
   // Bring back the tabs for lanes whose conversations an eviction or crash

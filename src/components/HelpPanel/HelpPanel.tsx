@@ -480,7 +480,11 @@ export function HelpPanel({
               buildResumeCommand(pendingAgentId, pending.agentSessionId) !== undefined));
         setResumablePending(
           canResume
-            ? { workspaceId: activeWorkspaceId, agentId: pendingAgentId, live: pending?.live === true }
+            ? {
+                workspaceId: activeWorkspaceId,
+                agentId: pendingAgentId,
+                live: pending?.live === true,
+              }
             : null
         );
       })

@@ -1114,7 +1114,11 @@ describe("HelpPanel — restarting a paused lane (#14981)", () => {
     expect(queryByTestId("confirm-dialog")).toBeNull();
     expect(mockDiscardConversation).not.toHaveBeenCalled();
     expect(helpPanelState.clearHibernateSession).not.toHaveBeenCalled();
-    expect(mockDispatch).not.toHaveBeenCalledWith("agent.launch", expect.anything(), expect.anything());
+    expect(mockDispatch).not.toHaveBeenCalledWith(
+      "agent.launch",
+      expect.anything(),
+      expect.anything()
+    );
   });
 
   it("discards the paused conversation and starts the captured agent fresh once confirmed", async () => {
