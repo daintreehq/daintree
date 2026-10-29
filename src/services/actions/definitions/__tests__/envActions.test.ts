@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import type { ActionContext } from "@shared/types/actions";
 import type { AnyActionDefinition } from "../../actionTypes";
+import { UnactionableTargetError } from "../../unactionableTarget";
 
 const mockGetSettings = vi.fn();
 const mockSaveSettings = vi.fn();
@@ -110,17 +111,21 @@ describe("env action definitions", () => {
     expect(savedSettings.runCommands).toEqual([]);
   });
 
-  it("worktree.resource.config.set refuses an environment named local without saving", async () => {
-    mockGetSettings.mockResolvedValue({ runCommands: [] });
-    const def = registry.get("worktree.resource.config.set")!();
-    await expect(
-      def.run(
-        { projectId: "p1", resourceEnvironments: { local: { provision: ["a"] }, ok: {} } },
-        stubCtx
-      )
-    ).rejects.toThrow(/reserved for Local mode/);
-    expect(mockSaveSettings).not.toHaveBeenCalled();
-  });
+  it.each([
+    { local: { provision: ["a"] } },
+    { local: { provision: ["a"] }, ok: {} },
+    { ok: {}, local: { provision: ["a"] } },
+  ])(
+    "worktree.resource.config.set refuses an environment named local without saving (%j)",
+    async (resourceEnvironments) => {
+      mockGetSettings.mockResolvedValue({ runCommands: [] });
+      const def = registry.get("worktree.resource.config.set")!();
+      const run = def.run({ projectId: "p1", resourceEnvironments }, stubCtx);
+      await expect(run).rejects.toBeInstanceOf(UnactionableTargetError);
+      await expect(run).rejects.toThrow(/reserved for Local mode/);
+      expect(mockSaveSettings).not.toHaveBeenCalled();
+    }
+  );
 
   it("worktree.resource.config.set accepts an environment named Local", async () => {
     mockGetSettings.mockResolvedValue({ runCommands: [] });

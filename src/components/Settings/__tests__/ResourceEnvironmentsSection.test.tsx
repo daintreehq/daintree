@@ -7,7 +7,10 @@ import { createWorktreeStore } from "@/store/createWorktreeStore";
 import { ResourceEnvironmentsSection } from "../ResourceEnvironmentsSection";
 
 // The last confirm handler the dialog was given, so a test can call it past a disabled button.
-const dialog = vi.hoisted(() => ({ onConfirm: null as (() => void) | null }));
+const dialog = vi.hoisted(() => ({
+  onConfirm: null as (() => void) | null,
+  restoreFocusTo: undefined as (() => HTMLElement | null) | undefined,
+}));
 
 // The real dialog portals and pulls in the app's icons; what matters here is what it is given.
 vi.mock("@/components/ui/ConfirmDialog", () => ({
@@ -21,8 +24,10 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
     hint?: React.ReactNode;
     onClose: () => void;
     onConfirm: () => void;
+    restoreFocusTo?: () => HTMLElement | null;
   }) => {
     dialog.onConfirm = props.onConfirm;
+    dialog.restoreFocusTo = props.restoreFocusTo;
     return props.isOpen ? (
       <div role="dialog">
         <h2>{props.title}</h2>
@@ -451,7 +456,32 @@ describe("ResourceEnvironmentsSection — the reserved local name", () => {
 
     expect(onResourceEnvironmentsChange).not.toHaveBeenCalled();
     expect(input.getAttribute("aria-invalid")).toBe("true");
-    expect(screen.getByRole("alert").textContent).toMatch(/local/i);
+    const error = screen.getByRole("alert");
+    expect(error.textContent).toBe(`The name "${name.trim()}" is reserved for Local mode`);
+    expect(input.getAttribute("aria-describedby")).toBe(error.id);
+  });
+
+  it("still adds a name that only contains local", () => {
+    const onResourceEnvironmentsChange = vi.fn();
+    render(
+      <ResourceEnvironmentsSection
+        resourceEnvironments={mockResourceEnvironments}
+        onResourceEnvironmentsChange={onResourceEnvironmentsChange}
+        activeResourceEnvironment="docker-local"
+        onActiveResourceEnvironmentChange={vi.fn()}
+        defaultWorktreeMode="local"
+        onDefaultWorktreeModeChange={vi.fn()}
+        isOpen={true}
+      />
+    );
+
+    addEnvironment("local-vm");
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(Object.keys(onResourceEnvironmentsChange.mock.calls[0]![0])).toEqual([
+      "docker-local",
+      "local-vm",
+    ]);
   });
 
   it("offers a saved environment named local only as the Local default", () => {
@@ -490,10 +520,11 @@ describe("ResourceEnvironmentsSection — the reserved local name", () => {
   });
 
   it("flags a saved environment named local as unusable while keeping its commands", () => {
+    const onResourceEnvironmentsChange = vi.fn();
     render(
       <ResourceEnvironmentsSection
         resourceEnvironments={{ ...mockResourceEnvironments, local: { provision: ["make up"] } }}
-        onResourceEnvironmentsChange={vi.fn()}
+        onResourceEnvironmentsChange={onResourceEnvironmentsChange}
         activeResourceEnvironment="local"
         onActiveResourceEnvironmentChange={vi.fn()}
         defaultWorktreeMode="local"
@@ -503,9 +534,31 @@ describe("ResourceEnvironmentsSection — the reserved local name", () => {
     );
 
     expect(screen.getByText(`Worktrees can't run in "local"`)).toBeTruthy();
-    const values = (screen.getAllByRole("textbox") as HTMLInputElement[]).map((i) => i.value);
-    expect(values).toContain("make up");
+    const command = screen.getByDisplayValue("make up") as HTMLInputElement;
+    fireEvent.change(command, { target: { value: "make up -d" } });
+    const saved = onResourceEnvironmentsChange.mock.calls.at(-1)![0];
+    expect(saved.local.provision).toEqual(["make up -d"]);
+    expect(saved["docker-local"]).toEqual(mockResourceEnvironments["docker-local"]);
   });
+
+  it.each(["docker-local", "Local"])(
+    "keeps the delete button off a sole %s environment",
+    (name) => {
+      render(
+        <ResourceEnvironmentsSection
+          resourceEnvironments={{ [name]: {} }}
+          onResourceEnvironmentsChange={vi.fn()}
+          activeResourceEnvironment={name}
+          onActiveResourceEnvironmentChange={vi.fn()}
+          defaultWorktreeMode="local"
+          onDefaultWorktreeModeChange={vi.fn()}
+          isOpen={true}
+        />
+      );
+
+      expect(screen.queryByRole("button", { name: `Delete ${name} environment` })).toBeNull();
+    }
+  );
 
   it("leaves an environment named Local unflagged, since it is a different key", () => {
     render(
@@ -540,10 +593,10 @@ describe("ResourceEnvironmentsSection — the reserved local name", () => {
       };
       store.setState({ worktrees: new Map([[localWorktree.id, localWorktree]]), isInitialized });
       const onResourceEnvironmentsChange = vi.fn();
-      render(
+      const section = (resourceEnvironments: Record<string, { provision?: string[] }>) => (
         <WorktreeStoreContext.Provider value={store}>
           <ResourceEnvironmentsSection
-            resourceEnvironments={{ local: { provision: ["make up"] } }}
+            resourceEnvironments={resourceEnvironments}
             onResourceEnvironmentsChange={onResourceEnvironmentsChange}
             activeResourceEnvironment="local"
             onActiveResourceEnvironmentChange={vi.fn()}
@@ -553,6 +606,7 @@ describe("ResourceEnvironmentsSection — the reserved local name", () => {
           />
         </WorktreeStoreContext.Provider>
       );
+      const { rerender } = render(section({ local: { provision: ["make up"] } }));
 
       fireEvent.click(screen.getByRole("button", { name: "Delete local environment" }));
       const confirmDialog = screen.getByRole("dialog");
@@ -563,6 +617,11 @@ describe("ResourceEnvironmentsSection — the reserved local name", () => {
       fireEvent.click(confirm);
 
       expect(onResourceEnvironmentsChange).toHaveBeenCalledWith({});
+      // The delete button is gone with the last entry, so focus goes to Add.
+      rerender(section({}));
+      expect(dialog.restoreFocusTo?.()).toBe(
+        screen.getByRole("button", { name: /add environment/i })
+      );
     }
   );
 });

@@ -1703,6 +1703,7 @@ describe("NewWorktreeDialog — environment picker with a saved local key", () =
     await advanceTimersGradually(500);
 
     expect(screen.queryByRole("radiogroup", { name: "Environment" })).toBeNull();
+    expect(screen.queryByText("Environment", { exact: true })).toBeNull();
   });
 
   it("offers Local once beside the usable environments", async () => {

@@ -569,6 +569,21 @@ describe("WorktreeMenuItems — Runtime", () => {
     expect(radios.filter((r) => r.getAttribute("aria-checked") === "true")).toHaveLength(1);
   });
 
+  it("keeps a saved Local key, which is a different key from Local mode", () => {
+    const onSwitchEnvironment = vi.fn();
+    renderWorktreeMenu({
+      hasResourceConfig: true,
+      worktreeMode: "local",
+      resourceEnvironmentKeys: ["local", "Local", "staging"],
+      onSwitchEnvironment,
+    });
+
+    const radios = screen.getAllByRole("menuitemradio");
+    expect(radios.map((r) => r.textContent?.trim())).toEqual(["Local", "Local", "staging"]);
+    fireEvent.click(radios[1]!);
+    expect(onSwitchEnvironment).toHaveBeenCalledWith("Local");
+  });
+
   it("offers no environment switch when the only saved key is local", () => {
     renderWorktreeMenu({
       hasResourceConfig: true,

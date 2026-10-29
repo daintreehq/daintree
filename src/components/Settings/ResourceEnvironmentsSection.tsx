@@ -608,6 +608,8 @@ export function ResourceEnvironmentsSection({
         }
         hasPreview={worktreesInPendingEnvironment.length > 0}
         variant="destructive"
+        // Removing the last entry, or leaving one, unmounts the delete button.
+        restoreFocusTo={() => selectorRef.current ?? addButtonRef.current}
         onConfirm={() => {
           if (pendingDeleteEnvironment) {
             handleRemoveEnv(pendingDeleteEnvironment);
