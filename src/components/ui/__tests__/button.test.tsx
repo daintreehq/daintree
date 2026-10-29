@@ -2,12 +2,13 @@
 import { render, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { getOverlayContrastWarnings } from "@shared/theme/colorValidator";
+import { DESTRUCTIVE_BUTTON_CONTRAST } from "@shared/theme/contrast";
 import { BUILT_IN_APP_SCHEMES } from "@shared/theme/themes";
 import type { AppColorScheme } from "@shared/theme/types";
 
 import { Button, buttonVariants } from "../button";
 import { FilterChip } from "../FilterChip";
-import { readIndexCss } from "@/__tests__/support/hostCss";
+import { readHostCss, readIndexCss } from "@/__tests__/support/hostCss";
 
 describe("buttonVariants", () => {
   it("transitions paint only, so the press scale snaps both ways", () => {
@@ -344,6 +345,64 @@ describe("ghost hover fill", () => {
       );
       expect(pressed, theme.id).toBeGreaterThan(hover);
     }
+  });
+});
+
+describe("destructive variant", () => {
+  const classes = () => buttonVariants({ variant: "destructive" }).split(/\s+/);
+
+  // Follows `--color-*` through its `var()` aliases to the theme token it lands on.
+  const themeTokenOf = (utility: string, prefix: "bg-" | "text-") => {
+    const declarations = new Map(
+      [...readHostCss().matchAll(/(--[\w-]+)\s*:\s*var\((--[\w-]+)\)\s*;/g)].map(
+        ([, name, value]) => [name, value]
+      )
+    );
+    let current = `--color-${utility.slice(prefix.length)}`;
+    while (!current.startsWith("--theme-")) {
+      const next = declarations.get(current);
+      if (next === undefined) return current;
+      current = next;
+    }
+    return current.slice("--theme-".length);
+  };
+
+  // The theme validator holds `text-inverse` on `status-danger` to 4.5:1 at rest and
+  // under the hover and press brightness it models (#15363). A variant that paints a
+  // different pair, or moves its states to a filter or fill the validator does not
+  // model, would leave that guarantee describing a button nobody sees.
+  it("paints the label and fill the theme validator measures", () => {
+    // Arbitrary values count too: a later `bg-[#fff]` would win over the token fill.
+    const fill = classes().filter((c) => c.startsWith("bg-"));
+    const label = classes().filter(
+      (c) =>
+        c.startsWith("text-") && !/^text-(3xs|2xs|xs|sm|base|lg|\d?xl|left|center|right)$/.test(c)
+    );
+    expect(fill).toHaveLength(1);
+    expect(label).toHaveLength(1);
+    expect(themeTokenOf(fill[0]!, "bg-")).toBe(DESTRUCTIVE_BUTTON_CONTRAST.background);
+    expect(themeTokenOf(label[0]!, "text-")).toBe(DESTRUCTIVE_BUTTON_CONTRAST.foreground);
+  });
+
+  it("signals hover and press with the brightness the validator models, and nothing else", () => {
+    const amounts = classes()
+      .filter((c) => c.includes("brightness-"))
+      .map((c) => {
+        const match = /^(?:(hover|active):)?brightness-(?:(\d+)|\[(\d*\.?\d+)(%?)\])$/.exec(c);
+        expect(match, `a brightness the validator does not model: ${c}`).toBeTruthy();
+        const [, state = "rest", percent, value, unit] = match!;
+        const amount =
+          percent !== undefined ? Number(percent) / 100 : Number(value) / (unit ? 100 : 1);
+        return [state, amount] as const;
+      });
+    expect(amounts).toHaveLength(2);
+    expect(Object.fromEntries(amounts)).toEqual({
+      hover: DESTRUCTIVE_BUTTON_CONTRAST.brightness.hover,
+      active: DESTRUCTIVE_BUTTON_CONTRAST.brightness.press,
+    });
+    const unmodelled =
+      /^(?:(?:hover|active):(?:bg|text|opacity)-|(?:(?:hover|active):)?(?:-?(?:contrast|saturate|grayscale|invert|sepia|hue-rotate)(?:-|$)|\[filter:))/;
+    expect(classes().filter((c) => unmodelled.test(c))).toEqual([]);
   });
 });
 
