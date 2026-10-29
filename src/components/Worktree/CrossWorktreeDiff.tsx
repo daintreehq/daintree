@@ -239,6 +239,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
   const compareTokenRef = useRef(0);
   const fileDiffTokenRef = useRef(0);
   const selectedFileRef = useRef<CrossWorktreeFile | null>(null);
+  const fileDiffRef = useRef<string | null>(null);
   // The key of the comparison `result` belongs to, so a rerun for the same
   // comparison can refresh in place instead of starting over.
   const resultKeyRef = useRef<string | null>(null);
@@ -286,11 +287,13 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
 
   // A refresh keeps the diff on screen until the new one lands and ignores
   // failures, so a background update never swaps what is being read for a
-  // loading state or an error.
+  // loading state or an error. With no diff on screen there is nothing to
+  // protect, and the request it replaces may still owe the user an error.
   const fetchFileDiff = useCallback(
-    async (file: CrossWorktreeFile, refresh = false) => {
+    async (file: CrossWorktreeFile, wantRefresh = false) => {
       if (!leftPath || !leftBranch || !rightBranch) return;
 
+      const refresh = wantRefresh && fileDiffRef.current !== null;
       const token = ++fileDiffTokenRef.current;
 
       setSelectedFile(file);
@@ -334,7 +337,8 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
 
   useEffect(() => {
     selectedFileRef.current = selectedFile;
-  }, [selectedFile]);
+    fileDiffRef.current = fileDiff;
+  }, [selectedFile, fileDiff]);
 
   const fetchComparison = useCallback(
     async (refresh = false) => {
