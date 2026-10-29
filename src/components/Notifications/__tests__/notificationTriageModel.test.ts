@@ -5,6 +5,7 @@ import {
   deriveTriageView,
   filterTriageEntries,
   groupByCorrelationId,
+  NEEDS_ATTENTION_MAX_AGE_MS,
   type NotificationFilter,
 } from "../notificationTriageModel";
 
@@ -14,7 +15,7 @@ function entry(overrides: Partial<NotificationHistoryEntry> = {}): NotificationH
     id: `e-${++counter}`,
     type: "info",
     message: "m",
-    timestamp: 1_000,
+    timestamp: Date.now(),
     seenAsToast: true,
     summarized: false,
     countable: true,
@@ -30,6 +31,7 @@ function view(
     groupByContext?: boolean;
     lastClosedAt?: number;
     snoozedThreads?: Record<string, number>;
+    now?: number;
   } = {}
 ) {
   const filter = opts.filter ?? "all";
@@ -42,6 +44,7 @@ function view(
     groupByContext: opts.groupByContext ?? false,
     lastClosedAt: opts.lastClosedAt ?? 0,
     snoozedThreads,
+    now: opts.now ?? Date.now(),
   });
 }
 
@@ -106,6 +109,78 @@ describe("notificationTriageModel", () => {
       const rows = view([recent, stale], { filter }).chronoSections.flatMap((s) => s.groups);
       expect(rows.map((g) => g.entries[0]!.id)).toEqual([recent.id, stale.id]);
     }
+  });
+
+  it("pins up to the age horizon inclusive, and not a millisecond past it", () => {
+    const now = 50_000_000_000;
+    const err = entry({ type: "error", seenAsToast: false, timestamp: now });
+    const pinnedAt = (age: number) => view([err], { now: now + age }).needsAttentionGroups.length;
+    expect(pinnedAt(NEEDS_ATTENTION_MAX_AGE_MS)).toBe(1);
+    expect(pinnedAt(NEEDS_ATTENTION_MAX_AGE_MS + 1)).toBe(0);
+  });
+
+  it("ages a thread by its newest unread entry, so a read follow-up neither revives nor re-dates it", () => {
+    const now = Date.now();
+    const stale = now - NEEDS_ATTENTION_MAX_AGE_MS - 60_000;
+    const staleError = entry({
+      type: "error",
+      seenAsToast: false,
+      timestamp: stale,
+      correlationId: "old",
+    });
+    const readFollowUp = entry({
+      type: "info",
+      seenAsToast: true,
+      timestamp: now,
+      correlationId: "old",
+    });
+    expect(view([readFollowUp, staleError]).needsAttentionGroups).toEqual([]);
+
+    // Unread news in the same thread is recent, so the thread is back.
+    const unreadFollowUp = entry({
+      type: "info",
+      seenAsToast: false,
+      timestamp: now,
+      correlationId: "old",
+    });
+    expect(
+      view([unreadFollowUp, staleError]).needsAttentionGroups.map((g) => g.correlationId)
+    ).toEqual(["old"]);
+
+    // Two recent errors: the one whose thread only looks fresh because of a
+    // read entry ranks by its unread error, behind the genuinely newer one.
+    const olderUnread = entry({
+      type: "error",
+      seenAsToast: false,
+      timestamp: now - 120_000,
+      correlationId: "a",
+    });
+    const readTail = entry({ type: "info", seenAsToast: true, timestamp: now, correlationId: "a" });
+    const newerUnread = entry({
+      type: "error",
+      seenAsToast: false,
+      timestamp: now - 60_000,
+      correlationId: "b",
+    });
+    expect(
+      view([readTail, newerUnread, olderUnread]).needsAttentionGroups.map((g) => g.correlationId)
+    ).toEqual(["b", "a"]);
+  });
+
+  it("leaves stale threads out of the overflow count", () => {
+    const now = Date.now();
+    const stale = now - NEEDS_ATTENTION_MAX_AGE_MS - 1;
+    const recent = Array.from({ length: 4 }, (_, i) =>
+      entry({ type: "error", seenAsToast: false, timestamp: now - i })
+    );
+    const old = Array.from({ length: 3 }, (_, i) =>
+      entry({ type: "error", seenAsToast: false, timestamp: stale - i })
+    );
+    const result = view([...recent, ...old]);
+    expect(result.needsAttentionGroups.map((g) => g.entries[0]!.id)).toEqual(
+      ids(recent.slice(0, 3))
+    );
+    expect(result.needsAttentionOverflow).toBe(1);
   });
 
   it("keeps the pinned rail out of Archived and Snoozed", () => {

@@ -183,8 +183,9 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   const [, forceTick] = useState(0);
   const now = Date.now();
   // Quantized to the minute so every row doesn't get a fresh prop on each
-  // unrelated re-render — snooze expiry only needs minute resolution, and the
-  // quiet-hours tick already re-renders on minute boundaries.
+  // unrelated re-render — snooze expiry and the Needs attention age horizon
+  // only need minute resolution, and the quiet-hours tick already re-renders
+  // on minute boundaries.
   const snoozeRenderTime = now - (now % 60_000);
   const isSessionMuted = quietUntil > now;
   const isScheduledMuted = isScheduledQuietNow({
@@ -330,8 +331,17 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
         groupByContext,
         lastClosedAt,
         snoozedThreads,
+        now: snoozeRenderTime,
       }),
-    [entries, filteredEntries, groupByContext, lastClosedAt, filter, snoozedThreads]
+    [
+      entries,
+      filteredEntries,
+      groupByContext,
+      lastClosedAt,
+      filter,
+      snoozedThreads,
+      snoozeRenderTime,
+    ]
   );
 
   const totalChronoGroups = chronoSections.reduce((sum, s) => sum + s.groups.length, 0);

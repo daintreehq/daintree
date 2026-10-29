@@ -1213,6 +1213,36 @@ describe("NotificationCenter — Needs attention pinned section", () => {
     expect(within(screen.getByTestId("chrono-section")).getByText("Failure 6")).toBeTruthy();
   });
 
+  it("stops pinning an unread error from weeks ago but keeps it in All and Unread", async () => {
+    setEntries([
+      makeEntry({ type: "warning", message: "Token expiring", seenAsToast: false }),
+      makeEntry({
+        type: "error",
+        message: "September failure",
+        timestamp: Date.now() - 40 * 24 * 60 * 60 * 1000,
+        seenAsToast: false,
+      }),
+    ]);
+
+    render(<NotificationCenter open onClose={vi.fn()} />);
+
+    const pinned = () => screen.getByTestId("needs-attention-section");
+    expect(within(pinned()).queryByText("September failure")).toBeNull();
+    expect(within(pinned()).getByText("Token expiring")).toBeTruthy();
+    expect(screen.queryByTestId("needs-attention-overflow")).toBeNull();
+    expect(
+      within(screen.getByTestId("chrono-section")).getByText("September failure")
+    ).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Unread"));
+    });
+    expect(within(pinned()).queryByText("September failure")).toBeNull();
+    expect(
+      within(screen.getByTestId("chrono-section")).getByText("September failure")
+    ).toBeTruthy();
+  });
+
   it("omits the overflow note when severe unread threads fit within the cap", () => {
     setEntries([makeEntry({ type: "error", message: "Build failed", seenAsToast: false })]);
 
