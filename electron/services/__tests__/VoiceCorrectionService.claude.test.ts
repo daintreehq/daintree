@@ -138,6 +138,7 @@ describe("VoiceCorrectionService on Claude", () => {
     expect(body).not.toHaveProperty("prompt_cache_key");
     expect(body).not.toHaveProperty("reasoning");
     expect(body).not.toHaveProperty("input");
+    expect(body).not.toHaveProperty("store");
   });
 
   it("turns Sonnet's thinking off the way Sonnet 5.5 accepts", async () => {
@@ -384,9 +385,8 @@ describe("VoiceCorrectionService on Claude", () => {
     );
     expect(outcome).toEqual({ status: "replace", text: "Shorter text here." });
     expect(fetchMock.mock.calls[0]![0]).toBe("https://api.anthropic.com/v1/messages");
-    expect(sentBody(fetchMock).output_config.format.schema.required).toEqual([
-      "action",
-      "rewritten_text",
-    ]);
+    const body = sentBody(fetchMock);
+    expect(body.output_config.format.schema.required).toEqual(["action", "rewritten_text"]);
+    expect(body).not.toHaveProperty("store");
   });
 });

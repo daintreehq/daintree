@@ -2021,6 +2021,21 @@ describe("VoiceCorrectionService", () => {
       expect(result).toEqual([{ description: "hybrid input bar" }]);
     });
 
+    it("asks OpenAI not to store the request", async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ output_text: JSON.stringify({ file_references: [] }) }),
+      } as unknown as Response);
+      vi.stubGlobal("fetch", fetchMock);
+
+      await new VoiceCorrectionService().detectFileLinkTokens("link to the hybrid input bar", {
+        apiKey: "sk-test",
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(fetchMock.mock.calls[0]![1].body as string).store).toBe(false);
+    });
+
     it("returns empty array on API error", async () => {
       vi.stubGlobal(
         "fetch",
@@ -2294,6 +2309,7 @@ describe("VoiceCorrectionService.rewrite", () => {
     const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string);
     expect(body.model).toBe(BASE_SETTINGS.model);
     expect(body.text.format.strict).toBe(true);
+    expect(body.store).toBe(false);
     expect(body.input[1].content).toBe(
       "<selection>\nit is fixed\n</selection>\n\n<instruction>\nrephrase as a question\n</instruction>"
     );
@@ -2601,6 +2617,7 @@ describe("VoiceCorrectionService timing and warm-up", () => {
       text: passage.text,
       store: false,
     });
+    expect(passage.store).toBe(false);
     expect(warm.max_output_tokens).toBeLessThan(passage.max_output_tokens as number);
     expect(warmUser!.content).not.toMatch(/parsr|parser|draft sentinel/);
     // Read to the end, so its socket can carry the passage.

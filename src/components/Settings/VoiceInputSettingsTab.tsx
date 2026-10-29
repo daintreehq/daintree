@@ -88,6 +88,13 @@ const PROVIDER_PRIVACY: Record<VoiceTranscriptionProvider, string> = {
   grok: `xAI receives your audio over an encrypted connection, keeps it for up to 30 days for abuse auditing unless your team turns on Zero Data Retention, and doesn't train on it without permission. ${RECOGNITION_HINTS_PRIVACY}`,
 };
 
+// Completes "...are sent to", for the AI text correction section.
+const CLEANUP_PROVIDER_PRIVACY: Record<VoiceCorrectionProvider, string> = {
+  openai:
+    "OpenAI, which keeps them for up to 30 days for abuse monitoring and doesn't train on them",
+  anthropic: "Anthropic",
+};
+
 const CLEANUP_PROVIDER_NOTE: Record<VoiceCorrectionProvider, string> = {
   openai: "Cleanup and spoken rewrites run here. Your OpenAI key can cover transcription too.",
   anthropic: "Cleanup and spoken rewrites run here, with an Anthropic API key.",
@@ -900,7 +907,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
       {settings.enabled && (
         <SettingsSection
           title="AI text correction"
-          description="When you stop dictating, the whole passage is corrected once by the cleanup model to fix technical terms, punctuation and filler words, resolve self-corrections, and lay out spoken lists. The text, the prompts you recently sent from the same terminal, the terminal's recent output with credential-like lines removed, the repository's package, folder and dependency names, and the worktree's issue or PR title are sent to the cleanup provider."
+          description={`When you stop dictating, the whole passage is corrected once by the cleanup model to fix technical terms, punctuation and filler words, resolve self-corrections, and lay out spoken lists. The text, the prompts you recently sent from the same terminal, the terminal's recent output with credential-like lines removed, the repository's package, folder and dependency names, and the worktree's issue or PR title are sent to ${CLEANUP_PROVIDER_PRIVACY[cleanupProvider]}.`}
           id="voice-ai-correction"
         >
           {saveError("correction")}

@@ -536,6 +536,29 @@ describe("VoiceInputSettingsTab cleanup provider", () => {
     expect(section?.textContent).not.toContain("covers transcription and cleanup");
     expect(section?.textContent).toContain("Cleanup runs on Anthropic. Add an Anthropic API key");
   });
+
+  it("names the cleanup provider the passage goes to, with OpenAI's retention only for OpenAI", async () => {
+    install({ correctionEnabled: true, openaiApiKey: "sk-test" });
+    const { container, unmount } = render(<VoiceInputSettingsTab />);
+    await screen.findByRole("radiogroup", { name: "Cleanup model" });
+    const openai = container.querySelector("#voice-ai-correction")?.textContent ?? "";
+    expect(openai).toContain(
+      "are sent to OpenAI, which keeps them for up to 30 days for abuse monitoring and doesn't train on them."
+    );
+    unmount();
+
+    install({
+      correctionEnabled: true,
+      openaiApiKey: "sk-test",
+      correctionProvider: "anthropic",
+      correctionModel: "claude-haiku-5-5",
+    });
+    const anthropic = render(<VoiceInputSettingsTab />);
+    await screen.findByRole("radiogroup", { name: "Cleanup model" });
+    const text = anthropic.container.querySelector("#voice-ai-correction")?.textContent ?? "";
+    expect(text).toContain("are sent to Anthropic.");
+    expect(text).not.toMatch(/30 days|OpenAI, which keeps/);
+  });
 });
 
 describe("VoiceInputSettingsTab file references", () => {
