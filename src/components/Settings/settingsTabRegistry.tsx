@@ -1971,7 +1971,21 @@ export const SETTINGS_REGISTRY = [
     LazyComponent: LazyCanopySettingsTab,
     searchNavDescription:
       "Show or hide Canopy, turn its reading on or off, and the model it reads with",
-    searchNavKeywords: ["canopy", "inbox", "agents", "summary", "priority", "privacy", "local"],
+    // The model's own rows only render while there is a download or a model on disk, so
+    // model searches land on rows that are always there and describe it.
+    searchNavKeywords: [
+      "canopy",
+      "inbox",
+      "agents",
+      "summary",
+      "priority",
+      "privacy",
+      "local",
+      "model",
+      "download",
+      "delete",
+      "disk",
+    ],
     sections: [
       {
         id: "canopy-show",
@@ -1986,21 +2000,17 @@ export const SETTINGS_REGISTRY = [
         title: "Read agent terminals",
         // The page and the turn-on offer say it with the same words, so search can't drift.
         description: CANOPY_LOCAL,
-        keywords: ["canopy", "privacy", "consent", "activate", "turn on", "local", "offline"],
-      },
-      {
-        id: "canopy-model-status",
-        section: "Model",
-        title: "Model download",
-        description: "How far the model's download has got, or retry one that failed",
-        keywords: ["canopy", "model", "download", "retry", "failed", "progress"],
-      },
-      {
-        id: "canopy-delete-model",
-        section: "Downloaded model",
-        title: "Delete model",
-        description: "Free the disk space the downloaded model takes up",
-        keywords: ["canopy", "model", "delete", "remove", "disk", "space", "storage"],
+        keywords: [
+          "canopy",
+          "privacy",
+          "consent",
+          "activate",
+          "turn on",
+          "local",
+          "offline",
+          "model",
+          "download",
+        ],
       },
     ],
   } satisfies LazySettingsTabEntry,

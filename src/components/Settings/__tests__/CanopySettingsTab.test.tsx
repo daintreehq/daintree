@@ -6,6 +6,8 @@ import type { CanopyMode, CanopyModelInfo, CanopySnapshot } from "@shared/types/
 import { useCanopyStore } from "@/store/canopyStore";
 import { CanopySettingsTab } from "../CanopySettingsTab";
 import { getSettingsTabEntry } from "../settingsTabRegistry";
+import { SETTINGS_SEARCH_INDEX } from "../settingsSearchIndex";
+import { filterSettings } from "../settingsSearchUtils";
 
 // The real dialog pulls in the app's icons and portals; what matters here is what it is given.
 vi.mock("@/components/ui/ConfirmDialog", () => ({
@@ -221,32 +223,28 @@ describe("CanopySettingsTab", () => {
     }
   });
 
-  it("is searched for by what the page says and shows, not by the hosted reader it replaced", async () => {
+  it("is searched for by what the page says and shows, not by the hosted reader it replaced", () => {
     const sections = getSettingsTabEntry("canopy")?.sections ?? [];
     expect(sections.length).toBeGreaterThan(0);
-    const reading = sections.find((s) => s.id === "canopy-read-terminals");
-    expect(reading?.description).toBe(CANOPY_LOCAL);
+    expect(sections.find((s) => s.id === "canopy-read-terminals")?.description).toBe(CANOPY_LOCAL);
     for (const section of sections) {
       expect(`${section.description} ${section.keywords?.join(" ")}`).not.toMatch(
         /servers?\b|paid|beta|plan\b|pricing|subscription/i
       );
     }
 
-    // Each result lands on a row the page renders in some state: off with a model on
-    // disk, then on while the model downloads.
-    const rendered = new Set<string>();
+    // Search lands in a layout effect, before the model's info has loaded, and with
+    // Canopy off: each result's row has to be there on that first render.
     install("unset");
-    const off = render(<CanopySettingsTab />);
-    await off.findByRole("button", { name: "Delete model" });
-    for (const el of off.container.querySelectorAll("[id]")) rendered.add(el.id);
-    off.unmount();
-    install("on", {
-      model: { id: LIGHT.id, status: "downloading", received: 1, total: 2 },
-    });
-    const downloading = render(<CanopySettingsTab />);
-    await downloading.findByText("Downloading…");
-    for (const el of downloading.container.querySelectorAll("[id]")) rendered.add(el.id);
-
+    const { container } = render(<CanopySettingsTab />);
+    const rendered = new Set([...container.querySelectorAll("[id]")].map((el) => el.id));
     expect(sections.map((s) => s.id).filter((id) => !rendered.has(id))).toEqual([]);
+
+    for (const query of ["model", "download model", "delete model"]) {
+      expect(
+        filterSettings(SETTINGS_SEARCH_INDEX, query).some((r) => r.tab === "canopy"),
+        query
+      ).toBe(true);
+    }
   });
 });
