@@ -1,4 +1,5 @@
 import type { BigIntStats } from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isAppBundleLaunchable,
@@ -10,7 +11,7 @@ import {
 
 const EXEC = "/Applications/Daintree.app/Contents/MacOS/Daintree";
 const RESOURCES = "/Applications/Daintree.app/Contents/Resources";
-const ASAR = `${RESOURCES}/app.asar`;
+const ASAR = path.join(RESOURCES, "app.asar");
 
 interface FakeFile {
   dev: bigint;

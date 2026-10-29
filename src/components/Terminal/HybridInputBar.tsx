@@ -687,24 +687,29 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       clearComposerHistory(view);
     }, [terminalId, projectId, getDraftInput]);
 
-    const wasFollowingDriverRef = useRef(followsDriver);
-    useEffect(() => {
-      const wasFollowing = wasFollowingDriverRef.current;
-      wasFollowingDriverRef.current = followsDriver;
-      // Written back, the text a render behind would land over a newer draft
-      // the host just sent. That holds for the pass that stops following too:
-      // the store has the host's latest, and the outside-write effect below
-      // brings the editor to it.
-      if (followsDriver || wasFollowing) return;
-      setDraftInput(terminalId, value, projectId);
-    }, [terminalId, value, projectId, setDraftInput, followsDriver]);
-
     // Fleet hybrid-input mirroring
     const armedIds = useFleetArmingStore((s) => s.armedIds);
     const isArmed = !isolated && armedIds.has(terminalId);
     const fleetSize = armedIds.size;
     const isFleetPrimary = isFocusedTerminal && isArmed && fleetSize >= 2;
     const isFleetFollower = !isFocusedTerminal && isArmed && fleetSize >= 2;
+
+    const wasFollowingDriverRef = useRef(followsDriver);
+    const wasFleetFollowerRef = useRef(isFleetFollower);
+    useEffect(() => {
+      const wasFollowing = wasFollowingDriverRef.current;
+      wasFollowingDriverRef.current = followsDriver;
+      const wasFleetFollower = wasFleetFollowerRef.current;
+      wasFleetFollowerRef.current = isFleetFollower;
+      // Written back, the text a render behind would land over a newer draft
+      // the host just sent. That holds for the pass that stops following too:
+      // the store has the host's latest, and the outside-write effect below
+      // brings the editor to it.
+      // The primary owns a follower's draft slot. Writing its local value here
+      // can overwrite a newer mirrored keystroke before the editor catches up.
+      if (followsDriver || wasFollowing || isFleetFollower || wasFleetFollower) return;
+      setDraftInput(terminalId, value, projectId);
+    }, [terminalId, value, projectId, setDraftInput, followsDriver, isFleetFollower]);
 
     const { isApplyingExternalValueRef } = useFleetMirror({
       editorViewRef,

@@ -135,6 +135,23 @@ async function focus(id: string): Promise<void> {
 }
 
 describe("HybridInputBar keeps a pane's own draft through a fleet", () => {
+  it("mirrors every typed character into mounted followers without writing an older draft back", async () => {
+    const { container } = render(bars(["pane-a", "pane-b", "pane-c"]));
+    await act(async () => {
+      useFleetArmingStore.getState().armIds(["pane-a", "pane-b", "pane-c"]);
+    });
+
+    let text = "";
+    for (const character of "retry this send") {
+      text += character;
+      await type(container, "pane-a", character);
+      for (const id of ["pane-a", "pane-b", "pane-c"]) {
+        expect(editorText(container, id)).toBe(text);
+        expect(draftOf(id)).toBe(text);
+      }
+    }
+  });
+
   it("shows the primary's draft while armed and gives the follower its own back on disarm", async () => {
     seedDraft("pane-a", "shared instruction");
     seedDraft("pane-b", "half-written for b");

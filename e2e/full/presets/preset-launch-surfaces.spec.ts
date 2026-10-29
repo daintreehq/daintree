@@ -319,12 +319,12 @@ test.describe("Presets: launch surfaces", () => {
         await expect(agentPanel.first()).toBeVisible({ timeout: T_LONG });
       });
 
-      test("96. The saved default preset is checked in the context menu", async () => {
+      test("96. The saved default preset is identified in the context menu", async () => {
         await resetClaudeSelection(ctx.window, "ccr-tray-b");
         const submenu = await openContextPresetSubmenu();
-        const checked = submenu.locator('[role^="menuitem"][aria-checked="true"]');
-        await expect(checked).toHaveCount(1, { timeout: T_MEDIUM });
-        await expect(checked.first()).toContainText("Tray Model B");
+        const currentDefault = submenu.getByRole("menuitem").filter({ hasText: "Current default" });
+        await expect(currentDefault).toHaveCount(1, { timeout: T_MEDIUM });
+        await expect(currentDefault).toContainText("Tray Model B");
         await dismissContextMenu();
       });
     });

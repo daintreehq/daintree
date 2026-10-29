@@ -1195,7 +1195,15 @@ test.describe("Core: Fleet terminal broadcast", () => {
           TERMINAL_SUBMIT_CHANNEL,
           "simulated transient broadcast failure"
         );
-        await broadcastViaEditor(window, getPanelById(window, ids[0]!), ids[0]!, `echo ${marker}`);
+        const editor = await focusPanelHybridInput(window, getPanelById(window, ids[0]!), ids[0]!);
+        await editor.pressSequentially(`echo ${marker}`);
+        await expect.poll(() => editorContains(editor, `echo ${marker}`)).toBe(true);
+        for (const id of ids) {
+          await expect
+            .poll(() => getHybridInputText(window, id), { message: `draft ${id}` })
+            .toBe(`echo ${marker}`);
+        }
+        await editor.press("Enter");
       });
 
       await test.step("The failure banner appears with a retry action", async () => {
@@ -1207,6 +1215,8 @@ test.describe("Core: Fleet terminal broadcast", () => {
         // later "marker present" assertion would pass on the original send, not
         // the retry, making the retry path falsely look exercised.
         for (const id of ids) {
+          // A send that reached nobody preserves the mirrored draft for retry.
+          await expect.poll(() => getHybridInputText(window, id)).toBe(`echo ${marker}`);
           await expectAbsentThroughout(
             () => getTerminalText(getPanelById(window, id)),
             marker,
