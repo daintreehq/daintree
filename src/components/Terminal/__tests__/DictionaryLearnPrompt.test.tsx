@@ -112,7 +112,9 @@ describe("DictionaryLearnPrompt", () => {
     offer();
     fireEvent.click(screen.getByText("Add"));
     act(() => {
-      useDictionaryLearnPromptStore.getState().offer("t1", { word: "Vitest", utterance: "vee test" });
+      useDictionaryLearnPromptStore
+        .getState()
+        .offer("t1", { word: "Vitest", utterance: "vee test" });
     });
     await act(async () => finish());
     expect(screen.getByRole("status").textContent).toContain("Vitest");

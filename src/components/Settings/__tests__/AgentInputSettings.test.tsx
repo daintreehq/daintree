@@ -7,7 +7,11 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: (...args: unknown[]) => dispatch(...args) },
 }));
 
-const ctrlV = vi.hoisted(() => ({ saved: true, supported: false, setInterceptCtrlVImages: vi.fn() }));
+const ctrlV = vi.hoisted(() => ({
+  saved: true,
+  supported: false,
+  setInterceptCtrlVImages: vi.fn(),
+}));
 vi.mock("@/components/Terminal/uploads/ctrlVImagePaste", () => ({
   refreshUploadPreferences: vi.fn().mockResolvedValue(undefined),
   shouldInterceptCtrlVImages: () => ctrlV.saved,

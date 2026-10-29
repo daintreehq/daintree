@@ -75,7 +75,8 @@ export function DictionaryLearnPrompt({
     if (prompt && hasDraft && !saving) useDictionaryLearnPromptStore.getState().clear(terminalId);
   }, [prompt, hasDraft, saving, terminalId]);
 
-  const expires = Boolean(prompt) && current.answer === null && !current.hovered && !current.focused;
+  const expires =
+    Boolean(prompt) && current.answer === null && !current.hovered && !current.focused;
   useEffect(() => {
     if (!prompt || !expires) return;
     const timer = setTimeout(() => expire(prompt), PROMPT_VISIBLE_MS);

@@ -972,9 +972,9 @@ describe("VoiceInputSettingsTab mic settings button", () => {
         "Microphone access is blocked. Allow it under Microphone access above, then re-check."
       )
     ).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Test microphone" }).hasAttribute("disabled")
-    ).toBe(true);
+    expect(screen.getByRole("button", { name: "Test microphone" }).hasAttribute("disabled")).toBe(
+      true
+    );
   });
 
   it("stays quiet when the settings app opened", async () => {
