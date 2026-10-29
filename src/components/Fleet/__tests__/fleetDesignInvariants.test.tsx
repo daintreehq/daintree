@@ -99,6 +99,7 @@ import { useFleetTargetOverridesStore } from "@/store/fleetTargetOverridesStore"
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { _resetForTests as resetEscapeStack } from "@/lib/escapeStack";
+import { FLEET_RIBBON_INK, fleetRibbonSheet } from "@shared/theme/__tests__/fleetRibbonSheet";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { ReactNode } from "react";
 
@@ -393,16 +394,6 @@ describe("Fleet ribbon design invariants", () => {
     // fleetRibbonContrast.test.ts holds the sheet's fill and ink to their
     // contrast floors; this holds the ribbon to drawing with them, so a mark
     // that drifts back to a shared token leaves the gate measuring nothing.
-    const sheet = readFileSync(
-      resolve(__dirname, "../../../styles/components/fleet-ribbon.css"),
-      "utf-8"
-    );
-    const painters = new Map<string, string>();
-    for (const [, cls, body] of sheet.matchAll(/^\.([\w-]+)\s*\{([^}]*)\}/gm)) {
-      const fill = body?.match(/background-color:\s*var\((--[\w-]+)\)/)?.[1];
-      if (cls && fill) painters.set(cls, fill);
-    }
-    const declared = new Set(Array.from(sheet.matchAll(/(--[\w-]+):/g), (m) => m[1]));
 
     // An SVG keeps a colour set on itself under forced colours, so an inked
     // glyph has to be one the forced-colours sheet sends to CanvasText.
@@ -424,17 +415,20 @@ describe("Fleet ribbon design invariants", () => {
     const failures: string[] = [];
 
     const check = (state: string, shell: HTMLElement, track: HTMLElement | null) => {
-      const fill = classes(shell)
-        .map((cls) => painters.get(cls))
-        .find(Boolean);
-      if (!fill)
-        failures.push(`${state}: the shell takes its background from no fleet-ribbon.css rule`);
+      if (!classes(shell).includes(fleetRibbonSheet.surfaceClass)) {
+        failures.push(`${state}: the shell does not take the band the contrast gate measures`);
+      }
 
       const marks: [string, string | undefined][] = [["stripe", readsVariable(shell, "before:bg")]];
       if (track) marks.push(["delivery track", readsVariable(track, "bg")]);
-      const glyphs = Array.from(shell.querySelectorAll("svg")).filter((svg) =>
-        classes(svg).some((cls) => cls.startsWith("text-[var(") || cls.startsWith("text-category-"))
-      );
+      // An amber glyph is one coloured from the ribbon's sheet or a category hue.
+      const glyphs = Array.from(shell.querySelectorAll("svg")).filter((svg) => {
+        const variable = readsVariable(svg, "text");
+        return (
+          (variable !== undefined && fleetRibbonSheet.variables.has(variable)) ||
+          classes(svg).some((cls) => cls.startsWith("text-category-"))
+        );
+      });
       for (const glyph of glyphs) {
         marks.push(["glyph", readsVariable(glyph, "text")]);
         if (forcedGlyph && !glyph.matches(forcedGlyph)) {
@@ -445,7 +439,7 @@ describe("Fleet ribbon design invariants", () => {
         failures.push("confirm: no amber glyph found");
 
       for (const [mark, variable] of marks) {
-        if (!variable || !declared.has(variable) || variable === fill) {
+        if (variable !== FLEET_RIBBON_INK) {
           failures.push(`${state}: the ${mark} does not draw with the ribbon's ink`);
         }
       }

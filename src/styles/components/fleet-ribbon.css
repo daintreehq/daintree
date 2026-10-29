@@ -8,12 +8,13 @@
  * Dark keeps the tint's lightness, the 12% step up from the canvas, so the
  * bar's text and controls keep their contrast on every theme. The step is
  * mixed in oklab into a neutral copy of the canvas, which leaves the hue
- * exactly amber's, and the chroma is then set from the lightness: as much as
- * sRGB holds there for every amber, the colour-vision ones included. Light
+ * exactly amber's, and the chroma is then set from the lightness, just inside
+ * what sRGB holds there for every amber, the colour-vision ones included. Light
  * holds one lightness and chroma instead, the way the remote-window light is
  * (toolbar/surface.css), because the blue-yellow amber is pale enough that a
- * mix toward it never leaves white; the lightness is the darkest the controls'
- * hover wash allows before their secondary text drops under 4.5:1.
+ * mix toward it never leaves white. Its chroma is red-green's sRGB limit at
+ * that lightness, and its lightness sits just above the point where the
+ * controls' hover wash would take their secondary text under 4.5:1.
  *
  * The ink is for the marks that carry the mode without colour: the left
  * stripe, the delivery track and the confirm glyph. The category text token

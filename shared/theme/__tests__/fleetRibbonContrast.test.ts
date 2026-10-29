@@ -1,70 +1,22 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { converter, displayable, formatHex, parse } from "culori";
+import { converter, displayable, formatHex, interpolate, parse } from "culori";
 import { BUILT_IN_APP_SCHEMES } from "../themes.js";
 import { blendOverBackground, contrastRatio, deltaEOK, isHexColor } from "../contrast.js";
 import { RED_GREEN_OVERRIDES, BLUE_YELLOW_OVERRIDES } from "../colorVisionOverrides.js";
+import { fleetRibbonSheet, type FleetRibbonDerivation } from "./fleetRibbonSheet.js";
 
 // #15334 — the fleet ribbon is a full-width band, so it has to read as its own
 // band against the chrome it sits in, on every built-in theme and colour-vision
-// palette, without costing its text or its stripe their contrast. The fill and
-// ink are derived in fleet-ribbon.css; this reads them from there so the two
-// cannot drift.
-
-const ribbonCss = readFileSync(
-  resolve(__dirname, "../../../src/styles/components/fleet-ribbon.css"),
-  "utf-8"
-);
-
-/** `oklch(from amber L C h)`, or the canvas's lightness stepped toward amber with chroma set from it. */
-type Derivation =
-  | { kind: "fixed"; l: number; c: number }
-  | { kind: "canvas-step"; amberShare: number; chromaPerLightness: number };
-
-function ruleBody(selector: RegExp): string {
-  const body = ribbonCss.match(selector)?.[1];
-  if (body === undefined) throw new Error(`rule ${selector} not found in fleet-ribbon.css`);
-  return body;
-}
-
-function derivation(body: string, name: "fill" | "ink"): Derivation {
-  const raw = body.match(new RegExp(`--fleet-ribbon-${name}:([^;]+);`))?.[1];
-  if (raw === undefined) throw new Error(`--fleet-ribbon-${name} not found in fleet-ribbon.css`);
-  const value = raw.replace(/\s+/g, " ").replace(/\( /g, "(").replace(/ \)/g, ")").trim();
-
-  const fixed = value.match(/^oklch\(from var\(--color-category-amber\) ([\d.]+) ([\d.]+) h\)$/);
-  if (fixed) return { kind: "fixed", l: Number(fixed[1]), c: Number(fixed[2]) };
-
-  const step = value.match(
-    /^oklch\(from color-mix\(in oklab, var\(--color-category-amber\) ([\d.]+)%, oklch\(from var\(--color-surface-canvas\) l 0 0\)\) l calc\(l \* ([\d.]+)\) h\)$/
-  );
-  if (step) {
-    return {
-      kind: "canvas-step",
-      amberShare: Number(step[1]) / 100,
-      chromaPerLightness: Number(step[2]),
-    };
-  }
-  throw new Error(`--fleet-ribbon-${name} has a derivation this gate cannot model: ${value}`);
-}
-
-const darkBody = ruleBody(/^\.fleet-ribbon-surface\s*\{([^}]*)\}/m);
-const lightBody = ruleBody(
-  /^:where\(\.light,\s*\[data-color-mode="light"\]\)\s+\.fleet-ribbon-surface\s*\{([^}]*)\}/m
-);
-const DERIVATIONS = {
-  dark: { fill: derivation(darkBody, "fill"), ink: derivation(darkBody, "ink") },
-  light: { fill: derivation(lightBody, "fill"), ink: derivation(lightBody, "ink") },
-} as const;
+// palette, without costing its text, its controls or its stripe their contrast.
+// The fill and ink are read from fleet-ribbon.css so the two cannot drift.
 
 /**
  * The planes the band runs along: the toolbar above it, the sidebar below it,
  * the window behind. Two JNDs (OKLab ΔE ≈ 0.02 each) is the target; the floor
  * sits just under it because on serengeti the blue-yellow amber is the
- * sidebar's own sand, and sRGB, the controls' contrast and red-green's hue
- * leave no lightness or chroma that clears it by more. The pill tint this
- * replaced sat at 0.014 to 0.021.
+ * sidebar's own sand, and for an amber band sRGB, the controls' contrast and
+ * red-green's hue leave no lightness or chroma that clears it by more. The
+ * pill tint this replaced sat at 0.014 to 0.021.
  */
 const BAND_SEPARATION = 0.035;
 /**
@@ -72,6 +24,15 @@ const BAND_SEPARATION = 0.035;
  * meet the band only past the shell's own bottom border, so they owe one JND.
  */
 const CONTENT_SEPARATION = 0.02;
+
+/** The bar's text sits on the band itself and on its controls' resting and hovered tint washes. */
+const TEXT_SURFACES = [
+  ["band", 0],
+  ["resting control", 0.08],
+  ["hovered control", 0.14],
+] as const;
+/** How far a control that was already under AA on the pill tint may move: rounding, not a regression. */
+const BELOW_AA_TOLERANCE = 0.05;
 
 const MODES = [
   ["default", {}],
@@ -82,21 +43,23 @@ const MODES = [
 const toOklch = converter("oklch");
 const toOklab = converter("oklab");
 
-function oklchOf(color: string) {
-  const resolved = toOklch(parse(color));
-  if (!resolved) throw new Error(`unparseable colour: ${color}`);
-  return resolved;
+function opaque(color: string, what: string) {
+  const parsed = parse(color);
+  if (!parsed) throw new Error(`unparseable ${what}: ${color}`);
+  // The model below mixes without premultiplying, which only holds for opaque inputs.
+  if ((parsed.alpha ?? 1) < 1) throw new Error(`${what} ${color} is translucent`);
+  return parsed;
 }
 
 /** Resolves a derivation the way Chromium does, and requires it inside sRGB so no gamut mapping is involved. */
 function resolveDerivation(
-  spec: Derivation,
+  spec: FleetRibbonDerivation,
   amber: string,
   canvas: string,
   where: string,
   failures: string[]
 ): string {
-  const hue = oklchOf(amber).h;
+  const hue = toOklch(opaque(amber, "amber"))?.h;
   if (hue === undefined) throw new Error(`${where}: amber ${amber} has no hue`);
   let l: number;
   let c: number;
@@ -104,9 +67,10 @@ function resolveDerivation(
     ({ l, c } = spec);
   } else {
     // Mixing into the canvas with its chroma removed keeps amber's hue exactly.
-    const amberLab = toOklab(parse(amber));
-    if (!amberLab) throw new Error(`unparseable colour: ${amber}`);
-    l = spec.amberShare * amberLab.l + (1 - spec.amberShare) * oklchOf(canvas).l;
+    const amberLab = toOklab(opaque(amber, "amber"));
+    const canvasLab = toOklab(opaque(canvas, "canvas"));
+    if (!amberLab || !canvasLab) throw new Error(`${where}: unconvertible amber or canvas`);
+    l = spec.amberShare * amberLab.l + (1 - spec.amberShare) * canvasLab.l;
     c = spec.chromaPerLightness * l;
   }
   const color = { mode: "oklch" as const, l, c, h: hue };
@@ -118,21 +82,34 @@ function resolveDerivation(
   return formatHex(color);
 }
 
+/**
+ * The pill tint the band replaced, as it stood then: amber 12% into the canvas
+ * on dark and 20% into the elevated plane on light, mixed in oklch. The issue
+ * asked that the bar's text and controls keep the contrast they had on it.
+ */
+function pillTint(amber: string, base: string, share: number): string {
+  return formatHex(
+    interpolate([opaque(amber, "amber"), opaque(base, "pill base")], "oklch")(1 - share)
+  );
+}
+
 function plainColor(value: string, what: string): string {
-  if (!isHexColor(value))
+  if (!isHexColor(value)) {
     throw new Error(`${what} is not a flat hex colour this gate can model: ${value}`);
+  }
   return value;
 }
 
 describe("fleet ribbon band (#15334)", () => {
-  it("reads as its own band, and keeps its text and stripe legible, on every theme and palette", () => {
+  it("reads as its own band, and keeps its text, controls and stripe legible, on every theme and palette", () => {
     const failures: string[] = [];
 
     for (const scheme of BUILT_IN_APP_SCHEMES) {
       const { tokens } = scheme;
       const extensions = (scheme.extensions ?? {}) as Record<string, string | undefined>;
       const canvas = tokens["surface-canvas"];
-      const { fill: fillSpec, ink: inkSpec } = DERIVATIONS[scheme.type];
+      const tint = plainColor(tokens.tint, "tint");
+      const { fill: fillSpec, ink: inkSpec } = fleetRibbonSheet.derivations[scheme.type];
 
       if (extensions["chrome-bg"] !== undefined) {
         throw new Error(`${scheme.id}: chrome-bg replaces the sidebar plane this gate models`);
@@ -159,6 +136,10 @@ describe("fleet ribbon band (#15334)", () => {
           tokens["category-amber"];
         const fill = resolveDerivation(fillSpec, amber, canvas, `${where} fill`, failures);
         const ink = resolveDerivation(inkSpec, amber, canvas, `${where} ink`, failures);
+        const pill =
+          scheme.type === "dark"
+            ? pillTint(amber, canvas, 0.12)
+            : pillTint(amber, tokens["surface-panel-elevated"], 0.2);
 
         for (const [planes, floor] of [
           [bandPlanes, BAND_SEPARATION],
@@ -174,14 +155,20 @@ describe("fleet ribbon band (#15334)", () => {
           }
         }
 
-        for (const text of ["text-primary", "text-secondary"] as const) {
-          const ratio = contrastRatio(tokens[text], fill);
-          if (ratio < 4.5) {
-            failures.push(
-              `${where}: ${text} ${tokens[text]} on ${fill} = ${ratio.toFixed(2)} < 4.5`
-            );
+        for (const [surface, wash] of TEXT_SURFACES) {
+          for (const text of ["text-primary", "text-secondary"] as const) {
+            const ratio = contrastRatio(tokens[text], blendOverBackground(tint, fill, wash));
+            const before = contrastRatio(tokens[text], blendOverBackground(tint, pill, wash));
+            // The band's own text always owes AA; a control owes it wherever it had it.
+            const floor = surface === "band" || before >= 4.5 ? 4.5 : before - BELOW_AA_TOLERANCE;
+            if (ratio < floor) {
+              failures.push(
+                `${where}: ${text} on ${surface} ${ratio.toFixed(2)} < ${floor.toFixed(2)} (pill tint ${before.toFixed(2)})`
+              );
+            }
           }
         }
+
         const inkRatio = contrastRatio(ink, fill);
         if (inkRatio < 3) {
           failures.push(`${where}: ink ${ink} on ${fill} = ${inkRatio.toFixed(2)} < 3`);
