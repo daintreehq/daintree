@@ -39,8 +39,11 @@ import {
   displayLine,
   elementClaim,
   heldPaths,
+  samePoint,
   svelteEvidence,
   unionBounds,
+  type ComponentSelectionMode,
+  type ComponentTarget,
   type PageScreenshot,
   type PickedSelection,
   type SourcePoint,
@@ -266,6 +269,24 @@ function invocationSite(
   return site ? { file: site.file, line: site.location.line, column: site.location.column } : null;
 }
 
+/** A component a selection was widened to, as the page is asked for it again. */
+type WidenedComponent = Omit<ComponentTarget, "rendered">;
+
+function widenedTo(
+  observation: SelectionObservation,
+  componentId: string
+): WidenedComponent | null {
+  const record = observation.componentChain.components.find(
+    (entry) => entry.componentId === componentId
+  );
+  if (record === undefined) return null;
+  return {
+    componentId,
+    framework: record.framework,
+    usedAt: invocationSite(observation, componentId),
+  };
+}
+
 /**
  * Svelte's own place for the element: where `__svelte_meta.loc` stamped it,
  * in the page's spelling, and which of the copies stamped there it is — the
@@ -294,8 +315,8 @@ function svelteLocator(observation: SelectionObservation): Continuity["locator"]
  */
 interface Reprove {
   record: Continuity;
-  /** The component call site a component selection was widened to. */
-  component: SourcePoint | null;
+  /** The component a component selection was widened to. */
+  component: WidenedComponent | null;
   /** A cited file changed, as opposed to the node simply leaving the page. */
   sourceChanged: boolean;
   /** The page reloaded under it: a failure is said as that, not as the element having gone. */
@@ -1292,7 +1313,7 @@ export class InspectorController implements DevPreviewToolSession {
         (observations.length === 1 || scope.kind === "component") &&
         this.startReprove({
           record,
-          component: scope.kind === "component" ? invocationSite(primary, scope.componentId) : null,
+          component: scope.kind === "component" ? widenedTo(primary, scope.componentId) : null,
           sourceChanged: true,
           reloaded: false,
           attempts: 0,
@@ -1562,7 +1583,7 @@ export class InspectorController implements DevPreviewToolSession {
     const started = this.startReprove({
       record,
       component:
-        scope.kind === "component" && primary ? invocationSite(primary, scope.componentId) : null,
+        scope.kind === "component" && primary ? widenedTo(primary, scope.componentId) : null,
       sourceChanged: sourceChanged || (this.reprove?.sourceChanged ?? false),
       reloaded: reloaded || (this.reprove?.reloaded ?? false),
       attempts: 0,
@@ -1600,13 +1621,9 @@ export class InspectorController implements DevPreviewToolSession {
     const wanted = reprove.component;
     if (wanted !== null) {
       if (scope.kind !== "component") return false;
-      const site = invocationSite(observation, scope.componentId);
-      if (
-        site === null ||
-        site.file !== wanted.file ||
-        site.line !== wanted.line ||
-        site.column !== wanted.column
-      ) {
+      // An id names one invocation, but only in the document the page minted it in.
+      const sameId = epoch === reprove.record.epoch && scope.componentId === wanted.componentId;
+      if (!sameId && !samePoint(invocationSite(observation, scope.componentId), wanted.usedAt)) {
         return false;
       }
     } else if (scope.kind !== "element") {
@@ -1656,11 +1673,12 @@ export class InspectorController implements DevPreviewToolSession {
   private reselectRequest(
     sessionId: string,
     record: Continuity,
-    component: SourcePoint | null,
+    component: WidenedComponent | null,
     reveal: boolean
   ): ElementPickerReselectRequest | null {
     const sameDocument = record.epoch === this.state.epoch;
     if (!sameDocument && record.locator === null) return null;
+    const site = component?.usedAt ?? null;
     return {
       sessionId,
       // Never an id from another document: there it is some other element.
@@ -1668,9 +1686,12 @@ export class InspectorController implements DevPreviewToolSession {
       ...(record.locator !== null
         ? {
             framework: "svelte" as const,
-            locator: { ...record.locator, ...(component ? { component } : {}) },
+            locator: { ...record.locator, ...(site ? { component: site } : {}) },
           }
-        : {}),
+        : // Without a locator this is the same document, where the page's id still names it.
+          component !== null
+          ? { framework: component.framework, componentId: component.componentId }
+          : {}),
       ...(reveal ? { reveal: true } : {}),
     };
   }
@@ -1918,38 +1939,45 @@ export class InspectorController implements DevPreviewToolSession {
   }
 
   /**
-   * Whether a component on the trail can be selected right now — the one rule
-   * the crumbs and {@link selectComponent} share, so a crumb is never a button
-   * that does nothing. The page only answers a selection request in Select
-   * mode; a stale trail describes an element the page no longer shows; and the
-   * page finds a component around an element by the framework's own locator,
-   * which only Svelte's dev runtime gives it.
+   * How a component on the trail can be selected right now, if at all — the
+   * one rule the crumbs and {@link selectComponent} share, so a crumb is never
+   * a button that does nothing. The page only answers a selection request in
+   * Select mode, and a stale trail describes an element the page no longer
+   * shows. Svelte's locator finds a component by its call site; any other
+   * page by the id it gave the component, which names it only in the
+   * document the element was proved in.
    */
-  canSelectComponent(): boolean {
+  componentSelection(): ComponentSelectionMode | null {
     const state = this.state;
-    return (
-      state.binding.status === "bound" &&
-      state.mode === "select" &&
-      state.selection.status === "ready" &&
-      state.selection.stale === null &&
-      this.continuity?.locator != null
-    );
+    const record = this.continuity;
+    if (
+      state.binding.status !== "bound" ||
+      state.mode !== "select" ||
+      state.selection.status !== "ready" ||
+      state.selection.stale !== null ||
+      record === null
+    ) {
+      return null;
+    }
+    if (record.locator !== null) return "site";
+    return record.epoch === state.epoch ? "id" : null;
   }
 
   /**
-   * Select the component invoked at `usedAt` — what a crumb in the trail names
-   * — the way Option/Alt+Up would, aimed: the page re-selects the element it
-   * last proved as a member of that invocation and reports it back, and the
-   * answer resolves as any fresh pick does. False when the pick can't be made
-   * ({@link canSelectComponent}) or the page no longer has the element.
+   * Select the component a crumb in the trail names, the way Option/Alt+Up
+   * would, aimed: the page re-selects the element it last proved and widens it
+   * to that invocation, and the answer resolves as any fresh pick does. False
+   * when the pick can't be made ({@link componentSelection}), the target can't
+   * be asked for that way, or the page no longer has the element.
    */
-  async selectComponent(usedAt: SourcePoint): Promise<boolean> {
+  async selectComponent(target: ComponentTarget): Promise<boolean> {
     const record = this.continuity;
     const binding = this.state.binding;
-    if (record === null || binding.status !== "bound" || !this.canSelectComponent()) {
-      return false;
-    }
-    const request = this.reselectRequest(binding.sessionId, record, usedAt, true);
+    const by = this.componentSelection();
+    if (record === null || binding.status !== "bound" || by === null) return false;
+    // A call site is what Svelte's locator aims at; an id finds only roots the page reported.
+    if (by === "site" ? target.usedAt === null : !target.rendered) return false;
+    const request = this.reselectRequest(binding.sessionId, record, target, true);
     if (request === null) return false;
     try {
       return await this.deps.picker.reselect(request);

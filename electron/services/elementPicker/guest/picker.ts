@@ -2075,6 +2075,8 @@ export function createPicker(host: PickerHost): PickerHandle {
    * same node; else whatever the framework's locator finds — exactly the copy
    * it names, never the first in its place. A locator that asks for a widened
    * component gets that invocation's roots back, the way Alt+ArrowUp would.
+   * So does a component id from the selection's own chain — a crumb on any
+   * page whose framework can find a component's roots — or nothing at all.
    */
   function reselect(request: unknown): boolean {
     if (disposed || mode !== "select" || !isPlainObject(request)) return false;
@@ -2084,7 +2086,21 @@ export function createPicker(host: PickerHost): PickerHandle {
         : null;
     let target = heldElement(request.elementId);
     let componentId: unknown;
-    if (framework !== null && request.locator !== undefined) {
+    const aimed = request.componentId !== undefined;
+    if (aimed) {
+      // Ids are this document's and this chain's: one the selection was not
+      // read with names nothing here.
+      const named = request.componentId;
+      if (
+        typeof named !== "string" ||
+        framework === null ||
+        selectedChain?.framework !== framework ||
+        !selectedChain.chain.components.some((record) => record.componentId === named)
+      ) {
+        return false;
+      }
+      componentId = named;
+    } else if (framework !== null && request.locator !== undefined) {
       const found = locate(framework, { kind: "reselect", locator: request.locator }, target);
       const first = found?.elements[0];
       if (first !== undefined) {
@@ -2105,6 +2121,9 @@ export function createPicker(host: PickerHost): PickerHandle {
           framework,
           rootsComplete: roots.data.complete === true && !roots.truncated,
         };
+      } else if (aimed) {
+        // A crumb that cannot select its component selects nothing else instead.
+        return false;
       }
     }
     if (!commit(entries, next, "reselect")) return false;

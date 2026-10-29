@@ -864,6 +864,7 @@ export interface GeneratedIpcInvokeMap {
               component?: { file: string; line: number; column: number } | undefined;
             }
           | undefined;
+        componentId?: string | undefined;
         reveal?: boolean | undefined;
       },
     ];

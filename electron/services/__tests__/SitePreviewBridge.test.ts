@@ -1135,6 +1135,25 @@ describe("SitePreviewBridge core picker reselect", () => {
     expect(expression).not.toContain(sessionId);
   });
 
+  it("forwards a component id for the guest to hold to its own chain", async () => {
+    const harness = await coreHarness();
+    harness.wc.debugger.responses.set("Runtime.evaluate", { result: { value: true } });
+    const byId = {
+      sessionId: harness.state.sessionId,
+      elementId: "el-1",
+      framework: "react" as const,
+      componentId: "react-3",
+      reveal: true,
+    };
+    await expect(
+      harness.bridge.reselectElementPicker(PROJECT_ID, harness.state.sessionId, byId)
+    ).resolves.toBe(true);
+    const { sessionId, ...forwarded } = byId;
+    const expression = String(reselects(harness)[0]?.params?.expression);
+    expect(expression).toContain(JSON.stringify(forwarded));
+    expect(expression).not.toContain(sessionId);
+  });
+
   it("answers false for a locator it cannot bound", async () => {
     const core = await coreHarness();
     core.wc.debugger.responses.set("Runtime.evaluate", { result: { value: true } });

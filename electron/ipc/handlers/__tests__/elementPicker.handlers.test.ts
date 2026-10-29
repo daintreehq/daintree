@@ -184,6 +184,8 @@ describe("elementPicker handlers", () => {
       [all.reselect.schema, { sessionId: "s1", projectId: "project-b" }],
       [all.reselect.schema, { sessionId: "s1", script: "alert(1)" }],
       [all.reselect.schema, { sessionId: "s1", framework: "jquery" }],
+      [all.reselect.schema, { sessionId: "s1", componentId: "" }],
+      [all.reselect.schema, { sessionId: "s1", componentId: "c".repeat(129) }],
       [
         all.reselect.schema,
         { sessionId: "s1", locator: { loc: { file: "a", line: 1, column: 0 }, index: 0, x: 1 } },
@@ -241,6 +243,20 @@ describe("elementPicker handlers", () => {
   it("reselects in the sender's project only", async () => {
     const all = await ops();
     const request = { sessionId: "s1", elementId: "el-1", reveal: true };
+    await expect(all.reselect.handler(ctx("project-a"), request)).resolves.toBe(true);
+    expect(bridge.reselectElementPicker).toHaveBeenCalledWith("project-a", "s1", request);
+  });
+
+  it("passes a crumb's component id through to the bridge", async () => {
+    const all = await ops();
+    const request = {
+      sessionId: "s1",
+      elementId: "el-1",
+      framework: "react" as const,
+      componentId: "react-3",
+      reveal: true,
+    };
+    expect(all.reselect.schema.safeParse(request)).toMatchObject({ success: true, data: request });
     await expect(all.reselect.handler(ctx("project-a"), request)).resolves.toBe(true);
     expect(bridge.reselectElementPicker).toHaveBeenCalledWith("project-a", "s1", request);
   });

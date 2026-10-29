@@ -488,6 +488,27 @@ function keepInnermost(records: ComponentRecord[], count: number): ComponentReco
   return kept;
 }
 
+/**
+ * The host of the component named `componentId` among those `element` sits
+ * inside, found by the walk a selection's host chain takes. An owner outside
+ * that chain hosts nothing around the element to widen to.
+ */
+function enclosingHost(
+  element: Element,
+  componentId: string,
+  api: DebugApi,
+  ids: InstanceIds
+): Element | null {
+  const ancestry = new Steps(STEPS.ancestry);
+  for (let node: Element | null = element; node !== null; node = parentOf(node)) {
+    if (!ancestry.spend()) return null;
+    const instance = hostedOn(node, api);
+    if (instance === undefined) return null;
+    if (instance !== null && ids.idOf(instance) === componentId) return node;
+  }
+  return null;
+}
+
 export function createAngularExtractor(): ElementPickerExtractor {
   // Per install, so ids last as long as the bootstrap that shows them.
   const ids = new InstanceIds();
@@ -499,6 +520,16 @@ export function createAngularExtractor(): ElementPickerExtractor {
       const api = debugApi();
       if (api === null) return unreadable(isProductionBuild() ? PRODUCTION : NOT_EXPOSED);
       return phase === "hover" ? hoverOf(element, api, ids) : selectionOf(element, api, ids, refs);
+    },
+    locate(query, anchor) {
+      if (anchor === null || typeof query !== "object" || query === null) return null;
+      const { kind, componentId } = query as Record<string, unknown>;
+      if (kind !== "roots" || typeof componentId !== "string") return null;
+      const api = debugApi();
+      if (api === null) return null;
+      const host = enclosingHost(anchor, componentId, api, ids);
+      // A component's one root is its host element.
+      return host === null ? null : { elements: [host], data: { complete: true } };
     },
   };
 }

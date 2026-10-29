@@ -64,6 +64,12 @@ export interface ElementPickerReselectRequest {
   elementId?: string;
   framework?: ElementPickerProviderId;
   locator?: ElementPickerLocator;
+  /**
+   * A component around `elementId` on the selection's own chain, by the id the
+   * page gave it: that invocation's roots, or nothing. Ids are minted per
+   * document, so it is only sent with an element of the same one.
+   */
+  componentId?: string;
   /** Scroll the element into view, as picking it from the trail does; never for a reselect after an edit. */
   reveal?: boolean;
 }

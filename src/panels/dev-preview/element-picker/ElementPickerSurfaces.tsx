@@ -60,13 +60,7 @@ import { WaitingRow } from "./WaitingRow.js";
 import { IdentitySkeleton } from "./IdentitySkeleton.js";
 import { useDeferredLoading, useDohertyGate, useSkeletonFloor } from "@/hooks/useDeferredLoading";
 import { UI_STILL_WORKING_MS } from "@/lib/animationUtils";
-import {
-  elementPlace,
-  primaryObservation,
-  scopesFor,
-  type PickedSelection,
-  type SourcePoint,
-} from "./selection.js";
+import { elementPlace, primaryObservation, scopesFor, type PickedSelection } from "./selection.js";
 import {
   BROWSE_COPY,
   DETACH_COPY,
@@ -81,7 +75,7 @@ import {
   relativeTo,
   untestedToolchainDetail,
 } from "./copy.js";
-import { SelectionTrail, trailFor } from "./SelectionTrail.js";
+import { SelectionTrail, trailFor, type CrumbSelect } from "./SelectionTrail.js";
 import { PickerIconButton } from "./PickerIconButton.js";
 
 const MODE_OPTIONS = [
@@ -140,7 +134,7 @@ function useSelectCrumb(
    * or focus is spent on a landing that has not been rendered.
    */
   landingReady = true
-): ((usedAt: SourcePoint, keepFocus?: boolean) => void) | undefined {
+): CrumbSelect | undefined {
   // The generation the pick was made from; the answer advances it.
   const pending = useRef<{ generation: number; timer: ReturnType<typeof setTimeout> } | null>(null);
   const status = state.selection.status;
@@ -168,18 +162,22 @@ function useSelectCrumb(
     target?.focus();
   }, [status, generation, landingReady, root, landing, drop]);
   useEffect(() => drop, [drop]);
-  if (controller === null || !controller.canSelectComponent()) return undefined;
-  return (usedAt, keepFocus = false) => {
-    drop();
-    // A pick from the trail's overflow menu is made from a portalled menu, so
-    // focus is outside the surface at that moment; the surface still owns it.
-    const focused = keepFocus || (root.current?.contains(document.activeElement) ?? false);
-    if (focused) {
-      pending.current = { generation, timer: setTimeout(drop, CRUMB_FOCUS_WAIT_MS) };
-    }
-    void controller.selectComponent(usedAt).then((sent) => {
-      if (!sent) drop();
-    });
+  const by = controller?.componentSelection() ?? null;
+  if (controller === null || by === null) return undefined;
+  return {
+    by,
+    select: (target, keepFocus = false) => {
+      drop();
+      // A pick from the trail's overflow menu is made from a portalled menu, so
+      // focus is outside the surface at that moment; the surface still owns it.
+      const focused = keepFocus || (root.current?.contains(document.activeElement) ?? false);
+      if (focused) {
+        pending.current = { generation, timer: setTimeout(drop, CRUMB_FOCUS_WAIT_MS) };
+      }
+      void controller.selectComponent(target).then((sent) => {
+        if (!sent) drop();
+      });
+    },
   };
 }
 
@@ -558,7 +556,7 @@ function StripStatus({
   /** The drawer is open beside the page and already names the source. */
   drawerShowing: boolean;
   /** Select a component from the trail; absent while that can't be done. */
-  selectCrumb: ((usedAt: SourcePoint, keepFocus?: boolean) => void) | undefined;
+  selectCrumb: CrumbSelect | undefined;
   worktreePath: string | null;
 }) {
   const binding = state.binding;
@@ -727,7 +725,7 @@ function StripTrail({
   currentBadge,
 }: {
   selection: PickedSelection;
-  onSelect: ((usedAt: SourcePoint, keepFocus?: boolean) => void) | undefined;
+  onSelect: CrumbSelect | undefined;
   currentBadge?: string;
 }) {
   const { above, current, truncated } = trailFor(selection);
@@ -742,10 +740,11 @@ function StripTrail({
       onSelect={
         onSelect
           ? (crumb, fromMenu) => {
-              if (crumb.usedAt) onSelect(crumb.usedAt, fromMenu);
+              if (crumb.component) onSelect.select(crumb.component, fromMenu);
             }
           : undefined
       }
+      selectBy={onSelect?.by}
       className="min-w-0 flex-1"
     />
   );
