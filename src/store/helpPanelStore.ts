@@ -611,9 +611,13 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
           }
           const next = { ...s.sessions };
           delete next[slot];
+          // Closing the lane on screen lands on its neighbour, the following one
+          // first, as a browser tab strip does — and as the strip's keyboard
+          // handoff already does for a background lane.
+          const successor = remaining.find((n) => n > slot) ?? remaining[remaining.length - 1]!;
           return {
             sessions: next,
-            activeSlot: s.activeSlot === slot ? remaining[0]! : s.activeSlot,
+            activeSlot: s.activeSlot === slot ? successor : s.activeSlot,
           };
         }),
 

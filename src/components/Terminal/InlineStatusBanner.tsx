@@ -19,6 +19,9 @@ const TINT_PERCENT = `${BANNER_TINT_ALPHA * 100}%`;
 /** The band's edge — the same /20 a `Callout` draws its border at. */
 const BORDER_PERCENT = "20%";
 
+/** The least an auto-dismiss gets back after a hold, so it never vanishes the instant the pointer leaves. */
+const AUTO_DISMISS_RESUME_FLOOR_MS = 1_000;
+
 /** Marks a banner root (see the root's `data-inline-status-banner`), so a stack of sibling banners can find each other. */
 const STACK_MEMBER_ATTR = "data-inline-status-banner";
 
@@ -146,8 +149,11 @@ interface OptionalDismissProps {
   /**
    * Fire `onClose` automatically after this many milliseconds. The timer
    * clears on unmount and restarts when this value changes; a new `onClose`
-   * is picked up through a ref without restarting it. Pass `undefined` to
-   * disable (callers gate their own conditions this way).
+   * is picked up through a ref without restarting it. It holds while the
+   * pointer is over the banner or focus is inside it, and resumes with what
+   * was left (WCAG 2.2.1): a banner must not leave under the user reaching
+   * for its action. Pass `undefined` to disable (callers gate their own
+   * conditions this way).
    */
   autoDismissAfter?: number;
 }
@@ -365,6 +371,15 @@ export function InlineStatusBanner({
     onCloseRef.current = onClose;
   }, [onClose]);
 
+  const [isPointerOver, setIsPointerOver] = useState(false);
+  const [isFocusWithin, setIsFocusWithin] = useState(false);
+  const isDismissHeld = isPointerOver || isFocusWithin;
+  // What is left of the auto-dismiss window, carried across holds. A new
+  // duration or severity is a new message, and starts a whole window.
+  const dismissWindowKey = `${autoDismissAfter}:${severity}`;
+  const dismissWindowRef = useRef(dismissWindowKey);
+  const dismissRemainingRef = useRef(autoDismissAfter ?? 0);
+
   useEffect(() => {
     if (import.meta.env.DEV && severity === "success" && !(autoDismissAfter! > 0)) {
       console.warn(
@@ -373,10 +388,24 @@ export function InlineStatusBanner({
           'thing a success banner may not do. Use severity="neutral" for persistent completion.'
       );
     }
-    if (!(autoDismissAfter! > 0) || !onCloseRef.current) return;
-    const timer = setTimeout(() => onCloseRef.current?.(), autoDismissAfter);
-    return () => clearTimeout(timer);
-  }, [autoDismissAfter, severity]);
+    if (dismissWindowRef.current !== dismissWindowKey) {
+      dismissWindowRef.current = dismissWindowKey;
+      dismissRemainingRef.current = autoDismissAfter ?? 0;
+    }
+    if (!(autoDismissAfter! > 0) || !onCloseRef.current || isDismissHeld) return;
+    // A hold released with the window nearly spent still leaves a beat to read
+    // it, never more than the window itself.
+    const delay = Math.max(
+      dismissRemainingRef.current,
+      Math.min(autoDismissAfter!, AUTO_DISMISS_RESUME_FLOOR_MS)
+    );
+    const startedAt = Date.now();
+    const timer = setTimeout(() => onCloseRef.current?.(), delay);
+    return () => {
+      clearTimeout(timer);
+      dismissRemainingRef.current = delay - (Date.now() - startedAt);
+    };
+  }, [autoDismissAfter, severity, dismissWindowKey, isDismissHeld]);
 
   useEffect(() => {
     if (!shouldAnimate) return;
@@ -423,6 +452,7 @@ export function InlineStatusBanner({
     const root = rootRef.current;
     if (!root || !(e.target instanceof Node) || !root.contains(e.target)) return;
     focusWithinRef.current = true;
+    setIsFocusWithin(true);
     focusHomeRef.current =
       root.closest<HTMLElement>("[role='dialog'], [role='alertdialog']") ?? root.parentElement;
     let above = root.previousElementSibling;
@@ -435,13 +465,33 @@ export function InlineStatusBanner({
     if (e.relatedTarget instanceof Node && root.contains(e.relatedTarget)) return;
     if (e.relatedTarget) {
       focusWithinRef.current = false;
+      setIsFocusWithin(false);
       return;
     }
     queueMicrotask(() => {
       if (!root.isConnected) return;
       focusWithinRef.current = root.contains(document.activeElement);
+      setIsFocusWithin(focusWithinRef.current);
     });
   };
+  // Chromium fires no blur when the focused control is removed, and a control
+  // in `trailingSlot` can remove itself without this banner re-rendering, so a
+  // focus hold on the auto-dismiss is re-checked whenever the subtree changes
+  // or focus lands anywhere: it must not outlive the focus it stands for.
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!isFocusWithin || !root) return;
+    const recheck = () => {
+      if (!root.contains(document.activeElement)) setIsFocusWithin(false);
+    };
+    const observer = new MutationObserver(recheck);
+    observer.observe(root, { childList: true, subtree: true });
+    document.addEventListener("focusin", recheck);
+    return () => {
+      observer.disconnect();
+      document.removeEventListener("focusin", recheck);
+    };
+  }, [isFocusWithin]);
   useEffect(
     () => () => {
       if (!focusWithinRef.current) return;
@@ -680,6 +730,8 @@ export function InlineStatusBanner({
       data-inline-status-banner=""
       onFocusCapture={handleFocusCapture}
       onBlurCapture={handleBlurCapture}
+      onPointerEnter={() => setIsPointerOver(true)}
+      onPointerLeave={() => setIsPointerOver(false)}
       aria-live={ariaLive}
       aria-atomic={ariaLive && ariaLive !== "off" ? "true" : undefined}
     >

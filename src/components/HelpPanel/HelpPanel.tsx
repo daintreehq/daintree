@@ -43,7 +43,12 @@ import {
 } from "@/controllers/helpSessionControllerRegistry";
 import { assistantSlotKey } from "@shared/config/assistantSlots";
 import { HelpPanelBanners } from "./HelpPanelBanners";
-import { usePastSessionsNote } from "./pastSessionsNote";
+import {
+  closeSessionDescription,
+  useLatchedWhileOpen,
+  usePastSessionsNote,
+} from "./pastSessionsNote";
+import { HelpClosedSessionNotice } from "./HelpClosedSessionNotice";
 import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
 import { HelpAssistantAgentChooser } from "./HelpAssistantAgentChooser";
 import { HelpLaunchingState } from "./HelpLaunchingState";
@@ -800,17 +805,18 @@ export function HelpPanel({
     resolveRestartFocusTarget,
     pendingCloseSlot,
     pendingCloseLabel,
+    pendingCloseCost,
     handleConfirmCloseSlot,
     handleCancelCloseSlot,
     resolveCloseFocusTarget,
+    closedNotice,
+    reopenClosedSession,
+    dismissClosedNotice,
   } = useHelpSessionLanes({ panelRef, activeSlot, activeWorkspaceId, terminalId });
-  // A restart or close can target a background lane, whose agent may not be the one
-  // on screen: read from the same lane record the confirm gate reads.
+  // A restart can target a background lane, whose agent may not be the one on
+  // screen: read from the same lane record the confirm gate reads.
   const pendingRestartAgentId = useHelpPanelStore((s) =>
     pendingRestartSlot === null ? null : selectSlot(s, pendingRestartSlot).agentId
-  );
-  const pendingCloseAgentId = useHelpPanelStore((s) =>
-    pendingCloseSlot === null ? null : selectSlot(s, pendingCloseSlot).agentId
   );
   const restartDescription = usePastSessionsNote(
     pendingRestartSlot !== null,
@@ -822,11 +828,11 @@ export function HelpPanel({
     "The agent stops and the next start opens a new conversation",
     agentId
   );
-  const closeDescription = usePastSessionsNote(
+  const closeDescription = useLatchedWhileOpen(
     pendingCloseSlot !== null,
-    "The agent stops and this tab closes",
-    pendingCloseAgentId
+    pendingCloseCost ? closeSessionDescription(pendingCloseCost) : ""
   );
+  const closeTitle = useLatchedWhileOpen(pendingCloseSlot !== null, `Close ${pendingCloseLabel}?`);
   // The conversation being left is the running agent's, not the pick's.
   const agentSwitchDescription = usePastSessionsNote(
     showAgentSwitchConfirm,
@@ -1527,6 +1533,13 @@ export function HelpPanel({
         )}
       </div>
 
+      {!globalSelected && closedNotice && (
+        <HelpClosedSessionNotice
+          notice={closedNotice}
+          onReopen={reopenClosedSession}
+          onDismiss={dismissClosedNotice}
+        />
+      )}
       {!globalSelected && showTerminal && agentConfig && agentId && !isMissingCli && (
         <HelpPanelFooter
           sessionId={sessionId}
@@ -1568,7 +1581,7 @@ export function HelpPanel({
       />
       <ConfirmDialog
         isOpen={pendingCloseSlot !== null}
-        title={`Close ${pendingCloseLabel}?`}
+        title={closeTitle}
         description={closeDescription}
         confirmLabel="Close session"
         onConfirm={handleConfirmCloseSlot}
