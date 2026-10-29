@@ -669,7 +669,12 @@ describe("Slider", () => {
     fireEvent.change(slider, { target: { value: "70" } });
     expect(onValueChange).toHaveBeenCalledWith(70);
     expect(slider.getAttribute("aria-valuetext")).toBe("70%");
-    expect(screen.getByText("70%").getAttribute("aria-hidden")).toBe("true");
+    const readout = screen.getByText("70%").closest("[data-slider-readout]")!;
+    expect(readout.getAttribute("aria-hidden")).toBe("true");
+    // Both ends' texts hold the readout's width, so the track never resizes mid-drag.
+    expect(
+      [...readout.querySelectorAll("[data-readout-reserve]")].map((ghost) => ghost.textContent)
+    ).toEqual(["0%", "100%"]);
     fireEvent.pointerUp(slider);
     expect(onValueCommit).toHaveBeenCalledWith(70);
   });
@@ -1323,6 +1328,49 @@ describe("FileDropzone", () => {
     expect(zone.className).toContain("border-selection-outline");
     expect(onFiles.mock.calls[0]![0].map((f: File) => f.name)).toEqual(["a.md", "c.md"]);
     expect(onReject.mock.calls[0]![0].map((f: File) => f.name)).toEqual(["b.png"]);
+    expect(onReject.mock.calls[0]![1]).toEqual([{ file: files[1], reason: "type-not-accepted" }]);
+    // The plugin explains it, so the zone says nothing of its own.
+    expect(zone.querySelector("[data-skipped-files]")).toBeNull();
+  });
+
+  it("reports every file a single-file zone leaves out, in the order they came", () => {
+    const onFiles = vi.fn();
+    const onReject = vi.fn();
+    render(
+      createElement(kit.FileDropzone, { onFiles, onReject, accept: ".md", "data-testid": "zone" })
+    );
+    const files = [file("a.png"), file("b.md"), file("c.md"), file("d.md")];
+    fireEvent.drop(screen.getByTestId("zone"), { dataTransfer: { types: ["Files"], files } });
+    expect(onFiles.mock.calls[0]![0].map((f: File) => f.name)).toEqual(["b.md"]);
+    expect(
+      onReject.mock.calls[0]![1].map((entry: { file: File; reason: string }) => [
+        entry.file.name,
+        entry.reason,
+      ])
+    ).toEqual([
+      ["a.png", "type-not-accepted"],
+      ["c.md", "too-many-files"],
+      ["d.md", "too-many-files"],
+    ]);
+  });
+
+  it("says what it skipped when the plugin has no onReject, until the next drop", () => {
+    const onFiles = vi.fn();
+    render(createElement(kit.FileDropzone, { onFiles, accept: ".md", "data-testid": "zone" }));
+    const zone = screen.getByTestId("zone");
+    fireEvent.drop(zone, {
+      dataTransfer: {
+        types: ["Files"],
+        files: [file("a.md"), file("b.md"), file("c.md"), file("x.png")],
+      },
+    });
+    expect(onFiles.mock.calls[0]![0].map((f: File) => f.name)).toEqual(["a.md"]);
+    expect([...screen.getByRole("alert").querySelectorAll("p")].map((p) => p.textContent)).toEqual([
+      "Skipped x.png: not an accepted file type",
+      "Skipped b.md and c.md: one file at a time",
+    ]);
+    fireEvent.drop(zone, { dataTransfer: { types: ["Files"], files: [file("d.md")] } });
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("keeps one file without multiple, and ignores drags that carry no files", () => {

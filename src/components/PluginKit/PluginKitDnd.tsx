@@ -52,7 +52,7 @@ import { PLUGIN_STYLE_ROOT_ATTRIBUTE } from "@shared/types/plugin";
 import { Button } from "@/components/ui/button";
 import { DRAG_GRIP_CLASS, DRAG_GRIP_ICON_CLASS } from "@/components/ui/dragGripStyles";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { MOUSE_SENSOR_OPTIONS, TOUCH_SENSOR_OPTIONS } from "@/components/DragDrop/dragActivation";
 import { DROP_INDICATOR_LINE, DROP_TARGET_FRAME } from "@/components/DragDrop/dropIndicator";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
@@ -1622,6 +1622,10 @@ function FoldButton({
   );
 }
 
+// A column title is the plugin's (often the user's) own name, so it keeps its
+// case: the uppercase section label would turn "iOS" into "IOS".
+const COLUMN_TITLE_CLASS = "text-xs font-medium text-text-primary";
+
 function KanbanColumnFrame({
   engine,
   column,
@@ -1650,6 +1654,7 @@ function KanbanColumnFrame({
   children: ReactNode;
 }) {
   const titleId = `${useId()}title`;
+  const overlayZ = useKitOverlayZClass();
   const { setNodeRef } = useDroppable({ id: `kit-lane:${column.id}` });
   const register = (element: HTMLElement | null) => {
     setNodeRef(element);
@@ -1671,12 +1676,22 @@ function KanbanColumnFrame({
         )}
       >
         <FoldButton title={column.title} folded onToggle={onToggleFold} />
-        <h3
-          id={titleId}
-          className={cn(SECTION_LABEL_CLASS, "min-h-0 truncate [writing-mode:vertical-rl]")}
-        >
-          {column.title}
-        </h3>
+        {/* Vertical text overflows on the axis truncation detection doesn't read,
+            and the strip cuts most titles, so the full one is always a hover away;
+            the fold button already names it for the keyboard. */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <h3
+              id={titleId}
+              className={cn(COLUMN_TITLE_CLASS, "min-h-0 truncate [writing-mode:vertical-rl]")}
+            >
+              {column.title}
+            </h3>
+          </TooltipTrigger>
+          <TooltipContent side="right" className={overlayZ}>
+            {column.title}
+          </TooltipContent>
+        </Tooltip>
         <ColumnCount count={count} limit={column.limit} />
       </section>
     );
@@ -1697,9 +1712,11 @@ function KanbanColumnFrame({
       )}
     >
       <header className="flex h-9 shrink-0 items-center gap-2 border-b border-border-subtle pr-1.5 pl-3">
-        <h3 id={titleId} className={cn(SECTION_LABEL_CLASS, "min-w-0 truncate")}>
-          {column.title}
-        </h3>
+        <TruncatedTooltip content={column.title} contentClassName={overlayZ}>
+          <h3 id={titleId} className={cn(COLUMN_TITLE_CLASS, "min-w-0 truncate")}>
+            {column.title}
+          </h3>
+        </TruncatedTooltip>
         <ColumnCount count={count} limit={column.limit} />
         <span className="flex-1" />
         {actions}

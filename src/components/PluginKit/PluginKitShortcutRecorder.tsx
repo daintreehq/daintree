@@ -19,8 +19,10 @@ import {
   keybindingService,
   normalizeKeyForBinding,
 } from "@/services/KeybindingService";
+import type { ActionId } from "@shared/types/actions";
 import { field, fn, nonEmpty, oneOf, pickRootProps, str } from "./kitProps";
 import { reportPluginFault } from "./kitDiagnostics";
+import { getPluginKitHost } from "./kitHost";
 import { useKitFieldControl } from "./kitField";
 import { pickAria, joinIds, safely, verdict, REMOVE_ROW_CLASS } from "./kitTextInputHelpers";
 
@@ -68,11 +70,22 @@ function findHostConflicts(combo: string): ReturnType<typeof keybindingService.f
   }
 }
 
+// A plugin keybinding's description is optional, and its id is no name to show
+// anyone. A restricted action's title stays hidden, as everywhere in the kit.
+function actionTitle(actionId: string): string {
+  try {
+    const entry = getPluginKitHost().getAction(actionId as ActionId);
+    return entry && entry.danger !== "restricted" ? entry.title : "";
+  } catch {
+    return "";
+  }
+}
+
 function hostConflict(combo: string): string | null {
   const conflicts = findHostConflicts(combo);
   if (conflicts.length === 0) return null;
   const exact = conflicts.find((conflict) => conflict.kind !== "shadowed") ?? conflicts[0]!;
-  const name = exact.description || exact.actionId;
+  const name = exact.description || actionTitle(exact.actionId) || "another action";
   const more = conflicts.length > 1 ? ` and ${conflicts.length - 1} more` : "";
   return exact.kind === "shadowed"
     ? `Overlaps Daintree's shortcut for ${name}${more}`
@@ -333,9 +346,9 @@ export function KitShortcutRecorder(props: PluginShortcutRecorderProps) {
           onKeyUp={(event) => {
             if (recording && !firstStep) setHeld(heldModifiers(event, mac));
           }}
-          onFocus={() => {
-            if (!inert) setRecording(true);
-          }}
+          // Arms on a click or Enter/Space only, as the host's own capture does:
+          // arming on focus would let a keyboard user tabbing through the form
+          // overwrite the shortcut with the next key they press (Cmd+S to save).
           onClick={() => {
             if (!inert) setRecording(true);
           }}

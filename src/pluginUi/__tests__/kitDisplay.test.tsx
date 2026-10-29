@@ -486,10 +486,14 @@ describe("Timeline", () => {
     );
     const list = screen.getByRole("list", { name: "Activity" });
     expect(list.getAttribute("data-testid")).toBe("feed");
-    expect(screen.getAllByRole("listitem")).toHaveLength(6);
-    expect(screen.getByText("Today")).not.toBeNull();
-    expect(screen.getByText("Yesterday")).not.toBeNull();
     const entries = container.querySelectorAll("[data-timeline-entry]");
+    // Day rows head the entries; only the entries are counted as items.
+    expect(screen.getAllByRole("listitem")).toHaveLength(entries.length);
+    expect(screen.getAllByRole("heading").map((heading) => heading.textContent)).toEqual([
+      "Today",
+      "Yesterday",
+      expect.any(String),
+    ]);
     expect(entries[0]?.textContent).toContain("Ada opened this pull request");
     expect(entries[0]?.querySelector("time")?.textContent).toBe("1h ago");
     expect(entries[1]?.textContent).toContain("Warning: Grace commented");

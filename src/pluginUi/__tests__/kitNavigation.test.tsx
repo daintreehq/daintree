@@ -225,7 +225,10 @@ describe("Sheet", () => {
     expect(root.getAttribute("role")).toBe("dialog");
     expect(root.className).toContain("justify-end");
     const surface = root.firstElementChild!;
-    expect(surface.className).toContain("h-full");
+    // Below the toolbar band and out of the window's drag region, so its header
+    // and close button never sit under the window controls.
+    expect(surface.className).toContain("mt-12");
+    expect(surface.className.split(" ")).toContain("app-no-drag");
     expect(surface.className).toContain("border-l");
     expect(surface.className).not.toContain("rounded-[var(--radius-xl)]");
     expect(surface.className).toContain("max-w-xl");
@@ -250,6 +253,7 @@ describe("Sheet", () => {
     const root = await screen.findByTestId("sheet");
     expect(root.className).toContain("justify-start");
     expect(root.firstElementChild!.className).toContain("border-r");
+    expect(root.firstElementChild!.className.split(" ")).toContain("app-no-drag");
     expect(root.firstElementChild!.className).toContain("max-w-4xl");
   });
 

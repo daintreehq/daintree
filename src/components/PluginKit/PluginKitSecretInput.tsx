@@ -1,15 +1,16 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Eye, EyeOff, Lock } from "lucide-react";
 import type { PluginSecretInputProps } from "@shared/types/plugin-sdk-react";
 import { Button } from "@/components/ui/button";
+import { InlineError } from "@/components/ui/field";
 import { inputVariants } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/Spinner";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { cn } from "@/lib/utils";
-import { fn, nonEmpty, oneOf, pickRootProps, str } from "./kitProps";
-import { isThenable, reportPluginFault, settleThenable } from "./kitDiagnostics";
+import { field, fn, nonEmpty, oneOf, pickRootProps, str } from "./kitProps";
+import { faultMessage, isThenable, reportPluginFault, settleThenable } from "./kitDiagnostics";
 import { invalidProp, useKitFieldControl } from "./kitField";
-import { pickAria, safely, attempt } from "./kitTextInputHelpers";
+import { joinIds, pickAria, safely, attempt } from "./kitTextInputHelpers";
 
 const DOTS = "••••••••";
 
@@ -58,6 +59,12 @@ export function KitSecretInput(props: PluginSecretInputProps) {
     []
   );
   const [saving, setSaving] = useState(false);
+  // Why the last save failed, shown under the field until the next edit, as
+  // InlineEdit does: a failed save must not look like one that went through.
+  // Held with the text it was for, so a value replaced from outside never
+  // wears another value's failure.
+  const [saveFailure, setSaveFailure] = useState<{ message: string; text: string } | null>(null);
+  const errorId = useId();
   // A save under 400ms shows nothing, per the app's loading gate.
   const showSaving = useDohertyGate(saving);
   const handleValue = fn(onValueChange);
@@ -69,6 +76,7 @@ export function KitSecretInput(props: PluginSecretInputProps) {
   const compact = oneOf(density, ["default", "compact"] as const) === "compact";
   const hint = nonEmpty(storedHint)?.slice(-6);
   const showStored = stored === true && !replacing;
+  const saveError = saveFailure !== null && saveFailure.text === text ? saveFailure.message : null;
   const canReveal = revealable !== false;
   // Turning `revealable` off hides a value that was showing.
   const revealed = canReveal && shown;
@@ -91,6 +99,7 @@ export function KitSecretInput(props: PluginSecretInputProps) {
       // The draft that was saved is not kept behind the saved state.
       setReplacing(false);
       setShown(false);
+      setSaveFailure(null);
       if (!controlled) setOwn("");
     }
   }
@@ -102,6 +111,7 @@ export function KitSecretInput(props: PluginSecretInputProps) {
   }, [focusTarget]);
 
   const change = (next: string) => {
+    setSaveFailure(null);
     if (!controlled) setOwn(next);
     safely("SecretInput onValueChange", handleValue, next);
   };
@@ -113,9 +123,21 @@ export function KitSecretInput(props: PluginSecretInputProps) {
   const submitDraft = () => {
     // One save at a time: a second Enter while one is out does nothing.
     if (savingRef.current) return;
+    // The plugin's reason, unless it repeats the secret: that never goes on
+    // screen, padded or not (the reason arrives trimmed).
+    const failed = (reason: unknown) => {
+      const message = faultMessage(reason, "Couldn't save");
+      const secret = text.trim();
+      setSaveFailure({
+        message: secret !== "" && message.includes(secret) ? "Couldn't save" : message,
+        text,
+      });
+    };
+    setSaveFailure(null);
     const outcome = attempt(() => submit?.(text));
     if (!outcome.ok) {
       reportPluginFault("SecretInput onSubmit threw", outcome.error);
+      failed(outcome.error);
       return;
     }
     const replacingStored = replacing && stored === true;
@@ -141,17 +163,19 @@ export function KitSecretInput(props: PluginSecretInputProps) {
     const token = { session: replaceSessionRef.current };
     savingRef.current = token;
     setSaving(true);
-    const settle = (saved: boolean) => {
+    const settle = (saved: boolean, reason?: unknown) => {
       // A save that lands after the user backed out, or started another
       // replace, changes nothing in the field they are in now.
       if (savingRef.current !== token) return;
       savingRef.current = null;
       setSaving(false);
-      if (saved && replaceSessionRef.current === token.session) close();
+      if (replaceSessionRef.current !== token.session) return;
+      if (saved) close();
+      else failed(reason);
     };
     settleThenable(outcome.value).then(
       () => settle(true),
-      () => settle(false)
+      (reason: unknown) => settle(false, reason)
     );
   };
   const backOut = () => {
@@ -230,12 +254,17 @@ export function KitSecretInput(props: PluginSecretInputProps) {
   return (
     <div
       {...pickRootProps(props)}
-      className={cn("flex min-w-0 items-center gap-2", str(className))}
+      className={cn("flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5", str(className))}
     >
       <div className="relative min-w-0 flex-1">
         <input
           {...pickAria(props)}
           {...controlProps}
+          aria-invalid={saveError ? true : controlProps["aria-invalid"]}
+          aria-describedby={joinIds([
+            saveError ? errorId : undefined,
+            str(field(controlProps, "aria-describedby")) ?? str(props["aria-describedby"]),
+          ])}
           ref={inputRef}
           type={revealed ? "text" : "password"}
           value={text}
@@ -271,7 +300,7 @@ export function KitSecretInput(props: PluginSecretInputProps) {
           className={cn(
             inputVariants({
               density: compact ? "compact" : "default",
-              invalid: shownInvalid,
+              invalid: shownInvalid || saveError !== null,
             }),
             "font-mono placeholder:font-sans",
             canReveal && (compact ? "pr-8" : "pr-9")
@@ -310,6 +339,11 @@ export function KitSecretInput(props: PluginSecretInputProps) {
         >
           Cancel
         </Button>
+      ) : null}
+      {saveError ? (
+        <InlineError id={errorId} role="alert" className="basis-full">
+          {saveError}
+        </InlineError>
       ) : null}
     </div>
   );

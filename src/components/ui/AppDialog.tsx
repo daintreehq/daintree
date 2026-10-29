@@ -198,11 +198,15 @@ const PLACEMENT_BACKDROP_CLASSES: Record<DialogPlacement, string> = {
   left: "items-stretch justify-start",
 };
 
-// A sheet runs the window's full height against its edge, so only the edge
-// facing the content keeps a border and nothing is rounded.
+// A sheet runs from under the toolbar's 48px band (h-12) to the window's foot
+// against its edge. Starting below the band keeps its header and close button
+// out of the window drag region and clear of the traffic lights and the
+// Windows caption buttons; `app-no-drag` claims whatever of a taller title
+// surface (a global banner) it still overlaps. Only the edges facing the app
+// keep a border, and nothing is rounded.
 const PLACEMENT_SURFACE_CLASSES: Record<Exclude<DialogPlacement, "center">, string> = {
-  right: "h-full border-l",
-  left: "h-full border-r",
+  right: "app-no-drag mt-12 h-[calc(100%-3rem)] border-l border-t",
+  left: "app-no-drag mt-12 h-[calc(100%-3rem)] border-r border-t",
 };
 
 // A card rises a step and settles; a sheet slides a step in from its edge.

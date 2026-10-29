@@ -85,6 +85,39 @@ function formatSafely(formatter: ((value: number) => string) | undefined, value:
   return safeFormat(formatter, value, String) || String(value);
 }
 
+/**
+ * A slider's value readout, as wide as the widest text it can show: the ends'
+ * texts sit invisibly in the same cell, so the track beside it keeps its size
+ * when a drag passes 9 or 99, or a format grows from "5 s" to "15 s".
+ */
+export function SliderReadout({
+  text,
+  reserve,
+  className,
+}: {
+  text: string;
+  reserve: readonly string[];
+  className?: string;
+}) {
+  return (
+    <span
+      aria-hidden="true"
+      data-slider-readout=""
+      className={cn(
+        "grid shrink-0 justify-items-end whitespace-nowrap text-xs tabular-nums text-text-secondary",
+        className
+      )}
+    >
+      {reserve.map((ghost, index) => (
+        <span key={index} data-readout-reserve="" className="invisible [grid-area:1/1]">
+          {ghost}
+        </span>
+      ))}
+      <span className="[grid-area:1/1]">{text}</span>
+    </span>
+  );
+}
+
 function readPair(value: unknown): [number, number] | undefined {
   if (!Array.isArray(value) || value.length !== 2) return undefined;
   const a = finite(value[0]);
@@ -404,9 +437,15 @@ export function KitRangeSlider(props: PluginRangeSliderProps) {
         ) : null}
       </div>
       {showValue === true ? (
-        <span aria-hidden="true" className="shrink-0 text-xs tabular-nums text-text-secondary">
-          {`${words(current[0])} – ${words(current[1])}`}
-        </span>
+        <SliderReadout
+          text={`${words(current[0])} – ${words(current[1])}`}
+          reserve={[
+            `${words(lo)} – ${words(lo)}`,
+            `${words(lo)} – ${words(hi)}`,
+            `${words(hi)} – ${words(lo)}`,
+            `${words(hi)} – ${words(hi)}`,
+          ]}
+        />
       ) : null}
       {nonEmpty(name) ? (
         <>

@@ -63,6 +63,7 @@ import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { documentTabClassName, revealTabInStrip } from "@/components/ui/document-tab";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
+import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import { SEVERITY_VISUAL } from "@/lib/statusSeverity";
 import { formatCompactCount } from "@/lib/formatCount";
 import { cn } from "@/lib/utils";
@@ -539,7 +540,7 @@ function KitTabs({
     const button = buttons[next];
     if (!tab || !button) return;
     button.focus();
-    revealTabInStrip(event.currentTarget, button, "smooth");
+    revealTabInStrip(event.currentTarget, button, prefersReducedMotion() ? "auto" : "smooth");
     handleChange?.(tab.value);
   };
   const strip = (
@@ -567,7 +568,12 @@ function KitTabs({
             data-document-tab=""
             onClick={(event) => {
               const strip = event.currentTarget.parentElement;
-              if (strip) revealTabInStrip(strip, event.currentTarget, "smooth");
+              if (strip)
+                revealTabInStrip(
+                  strip,
+                  event.currentTarget,
+                  prefersReducedMotion() ? "auto" : "smooth"
+                );
               handleChange?.(tab.value);
             }}
             className={cn(

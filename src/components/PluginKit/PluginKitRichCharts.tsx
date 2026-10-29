@@ -7,6 +7,7 @@ import type {
   PluginScatterChartProps,
   PluginStackedAreaChartProps,
 } from "@shared/types/plugin-sdk-react";
+import { pluralize } from "@/lib/pluralize";
 import { cn } from "@/lib/utils";
 import {
   AXIS_FONT_PX,
@@ -1244,7 +1245,7 @@ function KitHistogram({
               x: `${formats.full(edges[index] ?? 0)} – ${formats.full(edges[index + 1] ?? 0)}`,
               values: [count.toLocaleString()],
             })),
-      summary: `${values.length} values in ${counts.length} bins.`,
+      summary: `${pluralize(values.length, "value")} in ${pluralize(counts.length, "bin")}.`,
     }),
     [counts, edges, formats, counted, values.length]
   );
@@ -1559,7 +1560,9 @@ function KitStackedAreaChart({
       })),
     };
     readout = {
-      title: `${formatPoint(xs[active] ?? 0)} · Total ${formats.full(total)}`,
+      // The pile sums only the drawn series; with some left out, saying so keeps
+      // the figure from passing for the whole.
+      title: `${formatPoint(xs[active] ?? 0)} · ${omitted.length > 0 ? "Total of shown" : "Total"} ${formats.full(total)}`,
       rows,
       x: at,
       y: geometry.top,
@@ -1740,6 +1743,10 @@ function KitGauge({
   const start = -SWEEP / 2;
   const angleOf = (amount: number) => start + ((amount - low) / (high - low)) * SWEEP;
   const goal = finite(target);
+  // A target past either end is pinned to that end and drawn dashed, so the arc
+  // still shows it and neither the eye nor the reader is told it sits on-scale.
+  const offScale = goal === null ? null : goal > high ? "above" : goal < low ? "below" : null;
+  const tick = goal === null ? null : angleOf(Math.min(high, Math.max(low, goal)));
   const fill = tone === "neutral" ? hueOf(color) : TONE_COLOR[tone];
   const text = raw === null ? NO_VALUE : format(raw);
   const glyph = tone === "neutral" ? null : severityGlyph(tone, "h-3.5 w-3.5");
@@ -1781,15 +1788,16 @@ function KitGauge({
             style={{ stroke: fill }}
           />
         ) : null}
-        {goal !== null && goal >= low && goal <= high ? (
+        {tick !== null ? (
           <line
-            data-chart-gauge-target=""
-            x1={gaugePoint(cx, cy, r - thickness / 2 - 2, angleOf(goal))[0]}
-            y1={gaugePoint(cx, cy, r - thickness / 2 - 2, angleOf(goal))[1]}
-            x2={gaugePoint(cx, cy, r + thickness / 2 + 2, angleOf(goal))[0]}
-            y2={gaugePoint(cx, cy, r + thickness / 2 + 2, angleOf(goal))[1]}
+            data-chart-gauge-target={offScale ?? ""}
+            x1={gaugePoint(cx, cy, r - thickness / 2 - 2, tick)[0]}
+            y1={gaugePoint(cx, cy, r - thickness / 2 - 2, tick)[1]}
+            x2={gaugePoint(cx, cy, r + thickness / 2 + 2, tick)[0]}
+            y2={gaugePoint(cx, cy, r + thickness / 2 + 2, tick)[1]}
             strokeWidth={2}
-            strokeLinecap="round"
+            strokeLinecap={offScale ? "butt" : "round"}
+            strokeDasharray={offScale ? "2 2" : undefined}
             className="stroke-text-primary"
           />
         ) : null}
@@ -1824,7 +1832,7 @@ function KitGauge({
       </div>
       {goal !== null ? (
         <span id={describedBy} className="sr-only">
-          Target {format(goal)}
+          {offScale ? `Target ${format(goal)}, ${offScale} the scale` : `Target ${format(goal)}`}
         </span>
       ) : null}
     </div>

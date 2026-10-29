@@ -307,7 +307,9 @@ export function useDataTableEditing({
         focusGrid();
       }
     };
-    if ((draft === startValue(column, item.row) && edit.error === undefined) || !cellEdit) {
+    // Back to the stored value is no edit, even after a failed save: there is
+    // nothing to send, and the failure was dropped above.
+    if (draft === startValue(column, item.row) || !cellEdit) {
       leave();
       return true;
     }
@@ -360,7 +362,13 @@ export function useDataTableEditing({
   useEffect(() => {
     if (editKey !== null && scroller !== null) revealEditCell(scroller, trailing);
   }, [editKey, scroller, trailing]);
+  // Escape discards the draft, a failed save's included: the cell shows the
+  // row's value again rather than holding a draft only a successful save clears.
   const cancelEdit = () => {
+    if (edit) {
+      const id = cellId(edit.key, edit.columnId);
+      if (failures[id]) setFailures((map) => omitKey(map, id));
+    }
     setEdit(null);
     focusGrid();
   };

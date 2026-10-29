@@ -763,6 +763,22 @@ describe("charts", () => {
     expect(text).toContain("67%");
   });
 
+  it("calls a StackedAreaChart's total partial when series are left out", () => {
+    const keys = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    mount(
+      createElement(kit.StackedAreaChart, {
+        data: [Object.fromEntries([["day", 1], ...keys.map((key) => [key, 1])])],
+        x: "day",
+        series: keys.map((key) => ({ key, label: key.toUpperCase() })),
+        "aria-label": "Many",
+      })
+    );
+    fireEvent.keyDown(plot(), { key: "Home" });
+    const drawn = document.querySelectorAll("[data-chart-series]").length;
+    expect(drawn).toBeLessThan(keys.length);
+    expect(tooltip()?.textContent).toContain(`Total of shown ${drawn}`);
+  });
+
   it("announces a Gauge as a meter and turns tone at its thresholds", () => {
     mount(
       createElement(kit.Gauge, {
@@ -790,6 +806,51 @@ describe("charts", () => {
     expect(gaugeTone(90, { warning: 80 })).toBe("warning");
     expect(gaugeTone(10, null)).toBe("neutral");
     cleanup();
+    mount(createElement(kit.Gauge, { value: 50, target: 80, "aria-label": "On scale" }));
+    const onScale = screen.getByRole("meter", { name: "On scale" });
+    expect(
+      onScale.querySelector("[data-chart-gauge-target]")?.getAttribute("stroke-dasharray")
+    ).toBeNull();
+    expect(document.getElementById(onScale.getAttribute("aria-describedby")!)?.textContent).toBe(
+      "Target 80%"
+    );
+    cleanup();
+    // A target past either end is still drawn, pinned to that end and dashed,
+    // and said to be off the scale.
+    const tickAt = (target: number) => {
+      mount(createElement(kit.Gauge, { value: 50, target, "aria-label": `At ${target}` }));
+      const meter = screen.getByRole("meter", { name: `At ${target}` });
+      const line = meter.querySelector("[data-chart-gauge-target]")!;
+      const spoken = document.getElementById(meter.getAttribute("aria-describedby")!)?.textContent;
+      const drawn = {
+        at: ["x1", "y1", "x2", "y2"].map((name) => line.getAttribute(name)).join(","),
+        side: line.getAttribute("data-chart-gauge-target"),
+        dashed: line.getAttribute("stroke-dasharray") !== null,
+        spoken,
+      };
+      cleanup();
+      return drawn;
+    };
+    const top = tickAt(100);
+    const bottom = tickAt(0);
+    const middle = tickAt(50);
+    const above = tickAt(120);
+    const below = tickAt(-20);
+    expect(above).toEqual({
+      at: top.at,
+      side: "above",
+      dashed: true,
+      spoken: "Target 120%, above the scale",
+    });
+    expect(below).toEqual({
+      at: bottom.at,
+      side: "below",
+      dashed: true,
+      spoken: "Target -20%, below the scale",
+    });
+    expect(top.dashed).toBe(false);
+    expect(middle.at).not.toBe(top.at);
+    expect(middle.at).not.toBe(bottom.at);
     // Below the smallest size its figure, label and ends fit in, it holds that size.
     mount(createElement(kit.Gauge, { value: 5, size: 48, label: "Lines", "aria-label": "Tiny" }));
     expect(screen.getByRole("meter", { name: "Tiny" }).style.width).toBe("96px");

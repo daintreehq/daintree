@@ -7,6 +7,7 @@ import type {
   PluginTimeAgoProps,
 } from "@shared/types/plugin-sdk-react";
 import { Button } from "@/components/ui/button";
+import { InlineError } from "@/components/ui/field";
 import {
   getPopoverAvailableWidth,
   Popover,
@@ -52,10 +53,11 @@ import {
   weekdayNames,
   type DateRange,
 } from "@/pluginUi/dateMath";
-import { fn, nonEmpty, pickRootProps, str, useKitOwnerAttributes } from "./kitProps";
+import { field, fn, nonEmpty, pickRootProps, str, useKitOwnerAttributes } from "./kitProps";
 import { useKitOverlayZClass } from "./kitScope";
 import { invalidProp, useKitFieldControl } from "./kitField";
 import { toTimestamp } from "./kitTime";
+import { joinIds } from "./kitTextInputHelpers";
 
 type Mode = "single" | "range";
 
@@ -548,7 +550,12 @@ function DateField({ mode, props }: DateFieldProps) {
   const [ownValue, setOwnValue] = useState<FieldValue>(() => readValue(mode, props.defaultValue));
   const value = controlled ? readValue(mode, props.value) : ownValue;
   const [text, setText] = useState<string | null>(null);
-  const [typedInvalid, setTypedInvalid] = useState(false);
+  // Why typed text was refused. While the text stays the field is invalid; once
+  // leaving it put the value back, the line says the value wasn't changed, so
+  // what is on screen is always what the form holds.
+  const [refusal, setRefusal] = useState<{ reason: string; reverted: boolean } | null>(null);
+  const typedInvalid = refusal !== null && !refusal.reverted;
+  const refusalId = useId();
   const [editing, setEditing] = useState(false);
   const controlledOpen = typeof open === "boolean" ? open : undefined;
   const [ownOpen, setOwnOpen] = useState(false);
@@ -584,32 +591,50 @@ function DateField({ mode, props }: DateFieldProps) {
 
   const change = (next: FieldValue) => {
     setText(null);
-    setTypedInvalid(false);
+    setRefusal(null);
     if (sameValue(next, value)) return;
     if (!controlled) setOwnValue(next);
     handleValue?.(next);
   };
 
-  const commitText = () => {
+  /** Why `iso` can't be taken, or `null` when it can. */
+  const refusalOf = (iso: string): string | null => {
+    const what = mode === "range" ? "dates" : "a date";
+    if (minIso !== null && iso < minIso)
+      return `Choose ${what} on or after ${formatFieldDate(minIso)}`;
+    if (maxIso !== null && iso > maxIso)
+      return `Choose ${what} on or before ${formatFieldDate(maxIso)}`;
+    if (callDisabled(disabledCheck, iso)) return "That date isn't available";
+    return null;
+  };
+
+  /** Takes the typed text; leaving the field with text it refuses puts the value back. */
+  const commitText = (leaving = false) => {
     if (text === null) return;
     if (text.trim() === "") {
       if (mustHaveValue) {
         setText(null);
-        setTypedInvalid(false);
+        setRefusal(null);
       } else {
         change(null);
       }
       return;
     }
     const parsed = mode === "range" ? parseRangeText(text, today) : parseDateText(text, today);
-    const ok =
-      parsed !== null &&
-      (typeof parsed === "string" ? allowed(parsed) : allowed(parsed.start) && allowed(parsed.end));
-    if (!ok) {
-      setTypedInvalid(true);
+    const reason =
+      parsed === null
+        ? mode === "range"
+          ? "Enter valid dates"
+          : "Enter a valid date"
+        : typeof parsed === "string"
+          ? refusalOf(parsed)
+          : (refusalOf(parsed.start) ?? refusalOf(parsed.end));
+    if (reason === null) {
+      change(parsed);
       return;
     }
-    change(parsed);
+    if (leaving) setText(null);
+    setRefusal({ reason, reverted: leaving });
   };
 
   useLayoutEffect(() => {
@@ -635,7 +660,7 @@ function DateField({ mode, props }: DateFieldProps) {
       event.preventDefault();
       event.stopPropagation();
       setText(null);
-      setTypedInvalid(false);
+      setRefusal(null);
     } else if (event.key === "ArrowDown" && event.altKey) {
       event.preventDefault();
       commitText();
@@ -685,7 +710,8 @@ function DateField({ mode, props }: DateFieldProps) {
     />
   );
 
-  return (
+  const unchanged = mode === "range" ? "The dates weren't changed." : "The date wasn't changed.";
+  const box = (
     // Modal, as the date picker dialog pattern asks: Tab stays in the calendar,
     // the page behind is inert, and Escape or a click away closes it and hands
     // focus back (to the calendar button, or the text when Alt+Down opened it).
@@ -710,15 +736,23 @@ function DateField({ mode, props }: DateFieldProps) {
             aria-labelledby={str(ariaLabelledBy)}
             aria-describedby={str(ariaDescribedBy)}
             {...controlProps}
+            {...(refusal
+              ? {
+                  "aria-describedby": joinIds([
+                    refusalId,
+                    str(field(controlProps, "aria-describedby")) ?? str(ariaDescribedBy),
+                  ]),
+                }
+              : {})}
             value={text ?? formatValue(value, editing)}
             onChange={(event) => {
               setText(event.target.value);
-              setTypedInvalid(false);
+              setRefusal(null);
             }}
             onFocus={() => setEditing(true)}
             onBlur={() => {
               setEditing(false);
-              commitText();
+              commitText(true);
             }}
             onKeyDown={handleKeyDown}
             placeholder={str(placeholder) ?? (mode === "range" ? "Choose dates" : "Choose a date")}
@@ -833,6 +867,18 @@ function DateField({ mode, props }: DateFieldProps) {
         )}
       </PopoverContent>
     </Popover>
+  );
+  // Beside the field rather than in it: the field is one bordered row. A
+  // fragment keeps the input mounted when the line comes and goes.
+  return (
+    <>
+      {box}
+      {refusal ? (
+        <InlineError id={refusalId} role="alert" className="mt-1.5 basis-full">
+          {refusal.reverted ? `${refusal.reason}. ${unchanged}` : refusal.reason}
+        </InlineError>
+      ) : null}
+    </>
   );
 }
 
