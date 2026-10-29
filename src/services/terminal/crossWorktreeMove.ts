@@ -203,8 +203,10 @@ export function moveTerminalToWorktreeAndFollowRescue(
   ) {
     if (focusStaysInView) {
       // A pane arriving in the grid with the keyboard can't be parked behind
-      // another pane's fullscreen (#11060), and re-asserting focus makes the dock
-      // let go of one that came from there.
+      // another pane's fullscreen (#11060). A docked pane stays docked (#14966)
+      // and its popover opens alongside fullscreen, so re-asserting focus keeps
+      // it open; only a kind the dock can't host comes out into the grid, and
+      // the dock lets go of that one.
       if (usePanelStore.getState().panelsById[focusedId]?.location === "grid") {
         usePanelStore.getState().exitMaximize();
       }

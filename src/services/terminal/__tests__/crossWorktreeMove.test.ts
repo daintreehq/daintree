@@ -588,13 +588,14 @@ describe("focus after a cross-worktree move (#14974)", () => {
 
     moveTerminalToWorktreeAndFollowRescue("d1", "wt-a");
 
-    // Now in the grid: the pane keeps the keyboard and the dock lets go of it.
-    expect(usePanelStore.getState().panelsById["d1"]?.location).toBe("grid");
+    // Still docked (#14966) and still in front of the user: the pane keeps the
+    // keyboard and its popover stays open on it.
+    expect(usePanelStore.getState().panelsById["d1"]?.location).toBe("dock");
     expect(usePanelStore.getState().focusedId).toBe("d1");
-    expect(usePanelStore.getState().activeDockTerminalId).toBeNull();
+    expect(usePanelStore.getState().activeDockTerminalId).toBe("d1");
   });
 
-  it("brings an arriving focused pane out from behind another pane's maximize", () => {
+  it("leaves another pane's maximize alone when the arriving pane stays in the dock", () => {
     const globalDock: PtyPanelData = { ...panel("d1", "wt-a", "dock"), worktreeId: undefined };
     usePanelStore.setState({
       panelsById: { d1: globalDock, g1: panel("g1", "wt-a") },
@@ -609,7 +610,40 @@ describe("focus after a cross-worktree move (#14974)", () => {
 
     moveTerminalToWorktreeAndFollowRescue("d1", "wt-a");
 
+    // The dock's popover renders alongside fullscreen, so nothing is hidden.
     expect(usePanelStore.getState().focusedId).toBe("d1");
+    expect(usePanelStore.getState().activeDockTerminalId).toBe("d1");
+    expect(usePanelStore.getState().maximizedId).toBe("g1");
+    expect(usePanelStore.getState().maximizeTarget).toEqual({ type: "panel", id: "g1" });
+  });
+
+  it("brings an arriving focused pane out from behind another pane's maximize", () => {
+    // A kind the dock can't host leaves it for the grid when it moves (#14966).
+    const dockedReview: PanelInstance = {
+      id: "r1",
+      kind: "review",
+      title: "r1",
+      location: "dock",
+      isVisible: false,
+    };
+    usePanelStore.setState({
+      panelsById: { r1: dockedReview, g1: panel("g1", "wt-a") },
+      panelIds: ["r1", "g1"],
+      panelIdsByWorktreeId: { "wt-a": ["g1"] },
+      maximizedId: "g1",
+      maximizeTarget: { type: "panel", id: "g1" },
+    });
+    standIn("wt-a");
+    setLiveWorktrees(["wt-a"]);
+    usePanelStore.getState().setFocused("r1");
+
+    moveTerminalToWorktreeAndFollowRescue("r1", "wt-a");
+
+    // Now in the grid: the pane keeps the keyboard, the dock lets go of it, and
+    // it isn't parked behind g1's fullscreen.
+    expect(usePanelStore.getState().panelsById["r1"]?.location).toBe("grid");
+    expect(usePanelStore.getState().focusedId).toBe("r1");
+    expect(usePanelStore.getState().activeDockTerminalId).toBeNull();
     expect(usePanelStore.getState().maximizedId).toBeNull();
     expect(usePanelStore.getState().maximizeTarget).toBeNull();
   });
