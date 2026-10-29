@@ -602,10 +602,48 @@ describe("readCodexQuotaProfiles (#13686)", () => {
 
     it("shares the agent-wide home's reading between Settings and MCP", async () => {
       codexEntry({ globalEnv: { CODEX_HOME: second } });
-      respondPerHome(() => 10);
-      await readCodexQuotaProfiles();
-      await readCodexQuota();
-      expect(runSession).toHaveBeenCalledTimes(1);
+      respondPerHome((home) => (home === second ? 80 : 10));
+      const profiles = await readCodexQuotaProfiles();
+      const mcp = await readCodexQuota();
+      expect([used(profiles[0]!.result), used(mcp)]).toEqual([80, 80]);
+      expect(runSession.mock.calls.map((call) => call[1])).toEqual([{ codexHome: second }]);
+    });
+
+    describe("an empty value", () => {
+      let fallback: string;
+
+      beforeEach(() => {
+        // Main's own home is elsewhere, so landing on it would be the wrong account.
+        vi.spyOn(os, "homedir").mockReturnValue(root);
+        fallback = path.join(root, ".codex");
+        mkdirSync(fallback);
+      });
+
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+
+      it("reads Codex's own fallback home, as the cleared launch env does", async () => {
+        codexEntry({ globalEnv: { CODEX_HOME: "" } });
+        respondPerHome((home) => (home === fallback ? 80 : 10));
+        const profiles = await readCodexQuotaProfiles();
+        expect(profiles.map((p) => [p.isDefault, used(p.result)])).toEqual([[true, 80]]);
+        expect(used(await readCodexQuota())).toBe(80);
+        expect(runSession.mock.calls.map((call) => call[1])).toEqual([{ codexHome: fallback }]);
+      });
+
+      it("gives a preset that clears the agent-wide home a row of its own", async () => {
+        codexEntry({
+          globalEnv: { CODEX_HOME: second },
+          customPresets: [{ id: "c", name: "Cleared", env: { CODEX_HOME: "" } }],
+        });
+        respondPerHome((home) => (home === fallback ? 10 : 80));
+        const profiles = await readCodexQuotaProfiles();
+        expect(profiles.map((p) => [p.isDefault, p.presetNames, used(p.result)])).toEqual([
+          [true, [], 80],
+          [false, ["Cleared"], 10],
+        ]);
+      });
     });
   });
 

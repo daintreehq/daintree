@@ -254,22 +254,30 @@ describe("AgentQuotaSection profiles (#13686)", () => {
     expect(document.body.textContent).toContain("isn't a folder Daintree can open");
   });
 
-  it("points the default profile's unreadable home at Codex's own variables (#15047)", async () => {
-    readProfiles.mockResolvedValue([
-      {
-        key: "a",
-        isDefault: true,
-        presetNames: [],
-        result: { status: "unavailable", reason: "home-not-absolute", fetchedAt: NOW },
-      },
-    ]);
-    await renderFor("codex");
+  it.each([
+    ["home-missing", true, "The CODEX_HOME in Codex's environment variables isn't a folder"],
+    ["home-not-absolute", true, "The CODEX_HOME in Codex's environment variables isn't a full"],
+    ["home-missing", false, "This preset's CODEX_HOME isn't a folder"],
+    ["home-not-absolute", false, "This preset's CODEX_HOME isn't a full"],
+  ] as const)(
+    "words a %s home for whoever set it, default %s (#15047)",
+    async (reason, isDefault, copy) => {
+      readProfiles.mockResolvedValue([
+        {
+          key: "a",
+          isDefault,
+          presetNames: isDefault ? [] : ["Second"],
+          result: { status: "unavailable", reason, fetchedAt: NOW },
+        },
+      ]);
+      await renderFor("codex");
 
-    expect(document.body.textContent).toContain(
-      "The CODEX_HOME in Codex's environment variables isn't a full path"
-    );
-    expect(document.body.textContent).not.toContain("This preset's");
-  });
+      expect(document.body.textContent).toContain(copy);
+      expect(document.body.textContent).not.toContain(
+        isDefault ? "This preset's" : "Codex's environment variables"
+      );
+    }
+  );
 
   it("lets a batch that outlasts the poll interval finish instead of discarding it", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
@@ -340,41 +348,43 @@ describe("AgentQuotaSection project presets (#15047)", () => {
     readQuota.mockResolvedValue({ status: "unavailable", reason: "read-failed", fetchedAt: NOW });
   });
 
-  it("says which project presets with their own home it doesn't read", async () => {
+  it("names only the project presets that launch with a home of their own", async () => {
     useProjectPresetsStore.getState().setPresetsByAgent("p1", {
       codex: [
         project("team", "Team account", { CODEX_HOME: "/Users/me/.codex-team" }),
-        project("plain", "Plain", { OTHER: "1" }),
+        project("lower", "Lower", { codex_home: "/Users/me/.codex-lower" }),
+        // Empty still replaces the default, with Codex's own ~/.codex.
         project("blank", "Blank", { CODEX_HOME: "" }),
-        project("mine", "Shadowed", { codex_home: "/Users/me/.codex-x" }),
+        project("plain", "Plain", { OTHER: "1" }),
+        project("mine", "Shadowed", { CODEX_HOME: "/Users/me/.codex-x" }),
       ],
       claude: [project("other", "Other agent", { CODEX_HOME: "/Users/me/.codex-y" })],
     });
-    // A custom preset with the same id is the one that launches.
+    // A custom preset with the same id is the one that launches, and main reads its home.
     useAgentSettingsStore.setState({
       settings: {
-        agents: { codex: { customPresets: [project("mine", "Mine")] } },
+        agents: {
+          codex: { customPresets: [project("mine", "Mine", { CODEX_HOME: "/Users/me/.codex-m" })] },
+        },
       } as AgentSettings,
     });
     await renderFor("codex");
 
-    expect(disclosure()).toContain("Team account sets its own CODEX_HOME");
-    expect(disclosure()).toContain("no reading for it.");
-    for (const name of ["Plain", "Blank", "Shadowed", "Other agent"]) {
+    expect(disclosure()).toContain("Team account, Lower, and Blank set their own CODEX_HOME");
+    expect(disclosure()).toContain("they're left out of the profiles above.");
+    for (const name of ["Plain", "Shadowed", "Mine", "Other agent"]) {
       expect(disclosure()).not.toContain(name);
     }
   });
 
-  it("lists several in one sentence", async () => {
+  it("words a lone preset in the singular", async () => {
     useProjectPresetsStore.getState().setPresetsByAgent("p1", {
-      codex: [
-        project("a", "Work", { CODEX_HOME: "/a" }),
-        project("b", "Review", { CODEX_HOME: "/b" }),
-      ],
+      codex: [project("a", "Work", { CODEX_HOME: "/a" })],
     });
     await renderFor("codex");
 
-    expect(disclosure()).toContain("Work and Review set their own CODEX_HOME");
+    expect(disclosure()).toContain("Work sets its own CODEX_HOME");
+    expect(disclosure()).toContain("it's left out of the profiles above.");
   });
 
   it("says nothing when no project preset names a home", async () => {

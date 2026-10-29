@@ -28,9 +28,14 @@ export interface CodexQuotaProfileTarget {
   inheritsMainEnv?: boolean;
 }
 
+/** Where Codex lands when its env has no `CODEX_HOME`, or an empty one. */
+function codexFallbackHome(): string {
+  return path.join(os.homedir(), ".codex");
+}
+
 /** Main's own home: where a Codex launch lands when nothing in its env names one. */
 export function defaultCodexHome(): string {
-  return path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"));
+  return path.resolve(process.env.CODEX_HOME || codexFallbackHome());
 }
 
 // Matched case-insensitively, as the pane-side lookup does: on Windows the
@@ -40,7 +45,22 @@ function envCodexHome(env: Record<string, string> | undefined): string | undefin
   const key = Object.keys(env).find((name) => name.toUpperCase() === "CODEX_HOME");
   // Untrimmed: the pane gets the value verbatim, so `/Users/me/.codex ` is a
   // different folder from the default, not a spelling of it.
-  return key && env[key] ? env[key] : undefined;
+  return key === undefined ? undefined : env[key];
+}
+
+/**
+ * The home a value of `CODEX_HOME` sends a pane to. An empty one still
+ * replaces whatever the layer under it set, and Codex takes it as unset: its
+ * own `~/.codex`, never main's home.
+ */
+function namedHome(raw: string): Pick<CodexQuotaProfileTarget, "home" | "invalid"> {
+  if (raw === "") return { home: path.resolve(codexFallbackHome()) };
+  // Never resolved against main's cwd: that would read a folder no pane uses.
+  if (!isFullyQualified(raw)) return { home: raw, invalid: "home-not-absolute" };
+  // Normalises separators, dot segments and a trailing slash, so
+  // `/Users/me/.codex/` folds into the default row. Symlinks and case on a
+  // case-insensitive volume are folded later, by the service's realpath.
+  return { home: path.resolve(raw) };
 }
 
 /**
@@ -88,9 +108,8 @@ export function resolveDefaultCodexTarget(
     presetOrder: [],
   };
   const raw = envCodexHome(sanitizeAgentEnv(entry?.globalEnv as Record<string, unknown>));
-  if (!raw) return { ...base, home: mainHome, inheritsMainEnv: true };
-  if (!isFullyQualified(raw)) return { ...base, home: raw, invalid: "home-not-absolute" };
-  return { ...base, home: path.resolve(raw) };
+  if (raw === undefined) return { ...base, home: mainHome, inheritsMainEnv: true };
+  return { ...base, ...namedHome(raw) };
 }
 
 /**
@@ -114,9 +133,9 @@ export function resolveCodexQuotaProfiles(
     entry?.customPresets as AgentPreset[]
   ).entries()) {
     const raw = envCodexHome(preset.env);
-    if (!raw) continue;
-    if (!isFullyQualified(raw)) {
-      // Never resolved against main's cwd: that would read a folder no pane uses.
+    if (raw === undefined) continue;
+    const { home, invalid } = namedHome(raw);
+    if (invalid) {
       const existing = invalidByRaw.get(raw);
       if (existing) {
         existing.presetNames.push(preset.name);
@@ -127,17 +146,13 @@ export function resolveCodexQuotaProfiles(
           isDefault: false,
           presetNames: [preset.name],
           presetOrder: [order],
-          invalid: "home-not-absolute",
+          invalid,
         };
         invalidByRaw.set(raw, target);
         targets.push(target);
       }
       continue;
     }
-    // Normalises separators, dot segments and a trailing slash, so
-    // `/Users/me/.codex/` folds into the default row. Symlinks and case on a
-    // case-insensitive volume are folded later, by the service's realpath.
-    const home = path.resolve(raw);
     const existing = byHome.get(homeIdentity(home));
     if (existing) {
       existing.presetNames.push(preset.name);

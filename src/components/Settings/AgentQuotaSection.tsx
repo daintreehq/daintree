@@ -56,10 +56,10 @@ function unavailableCopy(
 
 const presetList = new Intl.ListFormat("en", { style: "long", type: "conjunction" });
 
+// An empty value counts: it still moves the pane off the default, onto
+// Codex's own `~/.codex`.
 function setsCodexHome(preset: AgentPreset): boolean {
-  return Object.entries(preset.env ?? {}).some(
-    ([name, value]) => name.toUpperCase() === "CODEX_HOME" && value !== ""
-  );
+  return Object.keys(preset.env ?? {}).some((name) => name.toUpperCase() === "CODEX_HOME");
 }
 
 /**
@@ -250,7 +250,7 @@ function CodexQuota() {
         <SettingsGroup>
           <SettingsRow
             label="Project presets not included"
-            description={`${presetList.format(unreadProjectPresets)} ${pluralNoun(unreadProjectPresets.length, "sets its", "set their")} own CODEX_HOME in this project's .daintree/presets. Daintree doesn't start Codex against a home a repository names, so there's no reading for ${pluralNoun(unreadProjectPresets.length, "it", "them")}.`}
+            description={`${presetList.format(unreadProjectPresets)} ${pluralNoun(unreadProjectPresets.length, "sets its", "set their")} own CODEX_HOME in this project's .daintree/presets. Daintree doesn't start Codex against a home a repository names, so ${pluralNoun(unreadProjectPresets.length, "it's", "they're")} left out of the profiles above.`}
           />
         </SettingsGroup>
       )}
