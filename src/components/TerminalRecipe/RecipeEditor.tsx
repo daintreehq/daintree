@@ -39,6 +39,7 @@ import {
 } from "@/components/Worktree/views";
 import { RecipeVariablePreview } from "@/components/TerminalRecipe/RecipeVariablePreview";
 import { getAgentConfig } from "@/config/agents";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { getRecipeScope } from "@/utils/recipeScope";
 import { pluralize } from "@/lib/pluralize";
 
@@ -89,21 +90,12 @@ interface RecipeEditorProps {
   onSave?: (recipe: TerminalRecipe) => void;
 }
 
-const TERMINAL_TYPES: RecipeTerminalType[] = [
-  "terminal",
-  "claude",
-  "gemini",
-  "codex",
-  "opencode",
-  "dev-preview",
-];
+// Agents follow the registry's own order, which is what the launcher and
+// settings show; the sanitizer admits exactly these ids.
+const TERMINAL_TYPES: RecipeTerminalType[] = ["terminal", ...BUILT_IN_AGENT_IDS, "dev-preview"];
 
 const TYPE_LABELS: Partial<Record<RecipeTerminalType, string>> = {
   terminal: "Terminal",
-  claude: "Claude",
-  gemini: "Gemini",
-  codex: "Codex",
-  opencode: "OpenCode",
   "dev-preview": "Dev server",
 };
 
