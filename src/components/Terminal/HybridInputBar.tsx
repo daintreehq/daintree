@@ -1169,7 +1169,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             accepted = false;
           }
           if (!accepted && submitAttemptRef.current === attempt) {
-            setSendNote({ terminalId, refused: true });
+            // A voice wait begun since this send went has taken the status over.
+            setSendNote((note) =>
+              dictated || note !== null ? { terminalId, refused: true } : note
+            );
           }
           return accepted;
         },

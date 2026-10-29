@@ -30,6 +30,7 @@ import { HybridInputBar } from "../HybridInputBar";
 import { _resetPaneFocusRequestsForTesting } from "../paneFocusRequest";
 
 const WT_ID = "/repo/wt";
+const isMac = /Mac/.test(navigator.platform);
 const originalElectron = Object.getOwnPropertyDescriptor(window, "electron");
 
 // jsdom has no layout: CodeMirror measures text through Range rects it lacks.
@@ -166,6 +167,15 @@ async function mount({ isolated = false } = {}) {
       runScopeHandlers(liveView(), new KeyboardEvent("keydown", { key: "Enter" }), "editor");
     });
   };
+  const chord = async (key: string) => {
+    await act(async () => {
+      runScopeHandlers(
+        liveView(),
+        new KeyboardEvent("keydown", { key, shiftKey: true, metaKey: isMac, ctrlKey: !isMac }),
+        "editor"
+      );
+    });
+  };
   const settle = async (accepted: boolean) => {
     await act(async () => {
       settles.shift()!(accepted);
@@ -183,6 +193,7 @@ async function mount({ isolated = false } = {}) {
     submitText,
     type,
     pressEnter,
+    chord,
     settle,
     caption,
     announced,
@@ -277,6 +288,22 @@ describe("HybridInputBar with a host that says whether the terminal took the sen
     expect(caption()).toBeNull();
     await settle(true);
     expect(caption()).toBeNull();
+  });
+
+  it("drops the note when a popped stash replaces the draft", async () => {
+    const { view, type, pressEnter, chord, settle, caption, announced } = await mount();
+    await type("older");
+    await chord("s");
+    await type("ship it");
+    await pressEnter();
+    await settle(false);
+    expect(caption()).not.toBeNull();
+
+    await chord("x");
+
+    expect(view.state.doc.toString()).toBe("older");
+    expect(caption()).toBeNull();
+    expect(announced()).not.toContain("Not sent");
   });
 
   it.each([
