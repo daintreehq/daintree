@@ -781,6 +781,42 @@ describe("ListEditor", () => {
 });
 
 describe("SecretInput", () => {
+  it("says a save failed, from a throw or a rejection, and clears it on the next edit", async () => {
+    const onSubmit = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error("Token rejected by GitHub");
+      })
+      .mockImplementationOnce(() => Promise.reject(new Error("Network down")));
+    render(<kit.SecretInput aria-label="Key" defaultValue="ghp_bad" onSubmit={onSubmit} />);
+    const input = screen.getByLabelText("Key") as HTMLInputElement;
+    fireEvent.keyDown(input, { key: "Enter" });
+    const thrown = screen.getByRole("alert");
+    expect(thrown.textContent).toBe("Token rejected by GitHub");
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(input.getAttribute("aria-describedby")).toBe(thrown.id);
+    fireEvent.keyDown(input, { key: "Enter" });
+    await flush();
+    expect(screen.getByRole("alert").textContent).toBe("Network down");
+    fireEvent.change(input, { target: { value: "ghp_good" } });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(input.getAttribute("aria-invalid")).toBeNull();
+  });
+
+  it("never shows a failure message that repeats the secret", () => {
+    render(
+      <kit.SecretInput
+        aria-label="Key"
+        defaultValue="sk-live-123"
+        onSubmit={(secret) => {
+          throw new Error(`bad key ${secret}`);
+        }}
+      />
+    );
+    fireEvent.keyDown(screen.getByLabelText("Key"), { key: "Enter" });
+    expect(screen.getByRole("alert").textContent).toBe("Couldn't save");
+  });
+
   it("masks the value, reveals it and blocks copying by default", () => {
     render(<kit.SecretInput aria-label="API token" defaultValue="ghp_123" />);
     const input = screen.getByLabelText("API token") as HTMLInputElement;
