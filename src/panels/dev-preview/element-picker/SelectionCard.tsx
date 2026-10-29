@@ -314,7 +314,9 @@ export function SourcePath({
         className
       )}
     >
-      <span ref={boxRef} className="relative block min-w-0 flex-1 overflow-hidden">
+      {/* Clips along the line only: `overflow-hidden` also cut the descenders
+          under an inherited `leading-none`, as in an xs Button. */}
+      <span ref={boxRef} className="relative block min-w-0 flex-1 overflow-x-clip">
         <span aria-hidden="true" className="invisible">
           {full}
         </span>
