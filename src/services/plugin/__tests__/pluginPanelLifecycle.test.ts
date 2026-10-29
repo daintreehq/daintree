@@ -17,6 +17,7 @@ import {
   setViewUnsavedChanges,
   subscribeViewUnsavedChanges,
   getViewUnsavedPanelIds,
+  getViewUnsavedPluginPanels,
   syncPluginPanels,
   type PluginPanelSnapshotEntry,
 } from "@/services/plugin/pluginPanelLifecycle";
@@ -465,5 +466,20 @@ describe("view unsaved-change signal (#13815)", () => {
     syncPluginPanels([], new Set());
     expect(listener).toHaveBeenCalledTimes(1);
     expect(getViewUnsavedPanelIds()).toEqual([]);
+  });
+
+  it("names each dirty panel's plugin, leaving out one the store hasn't placed (#15031)", () => {
+    syncPluginPanels([
+      panel({ panelId: "p1", pluginId: "acme" }),
+      panel({ panelId: "p2", pluginId: "beta" }),
+    ]);
+    setViewUnsavedChanges("p2", {}, true);
+    setViewUnsavedChanges("p1", {}, true);
+    setViewUnsavedChanges("unplaced", {}, true);
+
+    expect(getViewUnsavedPluginPanels()).toEqual([
+      { panelId: "p1", pluginId: "acme" },
+      { panelId: "p2", pluginId: "beta" },
+    ]);
   });
 });
