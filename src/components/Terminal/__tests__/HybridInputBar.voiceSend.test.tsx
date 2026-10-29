@@ -29,7 +29,7 @@ import { HybridInputBar } from "../HybridInputBar";
 
 type DeltaPayload = { text: string; itemId?: string };
 type CompletePayload = { text: string; willCorrect: boolean; itemId?: string };
-type CorrectResult = { action: "no_change" | "replace"; correctedText: string };
+type CorrectResult = { action: "no_change" | "replace"; correctedText: string; failed?: true };
 
 const WT_ID = "/repo/wt";
 const PANEL_ID = "term-1";
@@ -184,6 +184,32 @@ async function mount(onSend: (payload: { text: string }) => void) {
   await act(async () => {});
   return EditorView.findFromDOM(result.container.querySelector<HTMLElement>(".cm-editor")!)!;
 }
+
+describe("HybridInputBar dictated send whose cleanup failed (#14959)", () => {
+  it("sends the words as dictated and says on its receipt that the cleanup failed", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const onSend = vi.fn();
+    act(() => {
+      dictate("hello wrld");
+    });
+    const view = await mount(onSend);
+
+    await act(async () => {
+      runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+    });
+    await act(async () => {
+      pending.resolve({ action: "no_change", correctedText: "hello wrld", failed: true });
+    });
+
+    expect(onSend.mock.calls.map(([payload]) => payload.text)).toEqual(["hello wrld"]);
+    expect(document.querySelector("[data-voice-submit-caption]")?.textContent).toMatch(
+      /cleanup failed/
+    );
+    const statuses = [...document.querySelectorAll('[role="status"]')].map((el) => el.textContent);
+    expect(statuses.some((text) => /cleanup failed/.test(text ?? ""))).toBe(true);
+  });
+});
 
 describe("HybridInputBar dictated send with the next dictation already started (#14804)", () => {
   it("sends the cleaned prompt alone and keeps every word of the next one in the composer", async () => {

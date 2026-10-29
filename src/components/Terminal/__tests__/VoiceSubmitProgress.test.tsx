@@ -2,8 +2,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render } from "@testing-library/react";
 import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
-import { polishingShareAt, VoiceSubmitProgress } from "../VoiceSubmitProgress";
-import type { VoiceSubmitWait } from "../hooks/useVoiceWaitSubmit";
+import {
+  polishingShareAt,
+  VoiceSubmitProgress,
+  voiceSubmitWaitCaption,
+} from "../VoiceSubmitProgress";
+import type { VoiceSubmitOutcome, VoiceSubmitWait } from "../hooks/useVoiceWaitSubmit";
 
 const polishing = (
   beganAt: number | null,
@@ -53,6 +57,16 @@ describe("polishingShareAt", () => {
   it("counts a request that went out at time zero, and a window with no length", () => {
     expect(polishingShareAt(polishing(0, 2_000), 1_000)).toBeCloseTo(landing / 2);
     expect(polishingShareAt(polishing(2_000, 2_000), 2_000)).toBe(landing);
+  });
+});
+
+describe("voiceSubmitWaitCaption", () => {
+  it("offers Enter as the way to send as dictated only while the cleanup is awaited", () => {
+    expect(voiceSubmitWaitCaption(polishing(1_000, 3_000))).toMatch(/Enter.*as dictated/);
+    expect(voiceSubmitWaitCaption(finishing)).not.toMatch(/Enter/);
+    for (const wait of [polishing(null, null), finishing]) {
+      expect(voiceSubmitWaitCaption(wait)).toMatch(/Esc/);
+    }
   });
 });
 
@@ -168,6 +182,63 @@ describe("VoiceSubmitProgress", () => {
     expect(half.from).toBeCloseTo(half.to);
     expect(whole.from).toBeCloseTo(whole.to);
     expect(half.from).toBeCloseTo(whole.from / 2);
+  });
+
+  describe("receipt", () => {
+    const sent = (cleanup?: VoiceSubmitOutcome["cleanup"]): VoiceSubmitOutcome =>
+      cleanup ? { kind: "sent", attempt: 1, cleanup } : { kind: "sent", attempt: 1 };
+    const captionOf = (container: HTMLElement) =>
+      container.querySelector("[data-voice-submit-caption]")?.textContent ?? null;
+    const reachesFull = () =>
+      animate.mock.calls.some(([keyframes]) =>
+        keyframes.some((frame) => frame.transform !== undefined && shareOf(frame) === 1)
+      );
+
+    function settle(outcome: VoiceSubmitOutcome, options: { gateOpened: boolean }) {
+      const onPresentChange = vi.fn();
+      const wait = polishing(1_000, 3_000);
+      const view = render(
+        <VoiceSubmitProgress wait={wait} outcome={null} onPresentChange={onPresentChange} />
+      );
+      if (options.gateOpened) {
+        act(() => {
+          vi.advanceTimersByTime(UI_INLINE_LOADING_GATE_MS);
+        });
+      }
+      view.rerender(
+        <VoiceSubmitProgress wait={null} outcome={outcome} onPresentChange={onPresentChange} />
+      );
+      return { caption: captionOf(view.container), onPresentChange, unmount: view.unmount };
+    }
+
+    it("ends a send whose cleanup landed on Sent, and one without it on a receipt saying which", () => {
+      const captions = (["landed", "skipped", "failed"] as const).map((how) => {
+        const settled = settle(sent(how === "landed" ? undefined : how), { gateOpened: true });
+        settled.unmount();
+        return settled.caption;
+      });
+
+      expect(captions[0]).toBe("Sent");
+      expect(captions[1]).toMatch(/^Sent.*skipped/);
+      expect(captions[2]).toMatch(/^Sent.*failed/);
+    });
+
+    it("fills the bar for a send that went without its cleanup, as for any that went", () => {
+      settle(sent("skipped"), { gateOpened: true });
+      expect(reachesFull()).toBe(true);
+    });
+
+    it("tells a send that went without its cleanup even when its wait ended inside the gate", () => {
+      const { caption, onPresentChange } = settle(sent("failed"), { gateOpened: false });
+      expect(caption).toMatch(/failed/);
+      expect(onPresentChange).toHaveBeenLastCalledWith(true);
+    });
+
+    it("leaves a clean send whose wait ended inside the gate unsaid", () => {
+      const { caption, onPresentChange } = settle(sent(), { gateOpened: false });
+      expect(caption).toBeNull();
+      expect(onPresentChange).not.toHaveBeenCalledWith(true);
+    });
   });
 
   it("never moves back as the wait goes from finishing to polishing to writing", () => {

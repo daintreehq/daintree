@@ -52,12 +52,21 @@ export type VoiceSubmitWait = { attempt: number; startedAt: number } & (
 );
 
 /**
+ * A send that went without its cleanup: a second Enter sent what stood while
+ * the cleanup was still on its way, or the cleanup failed and the words went
+ * as dictated (#14959).
+ */
+export type VoiceSendCleanup = "skipped" | "failed";
+
+/**
  * How the last wait ended: sent, called off by Escape, or held back unsent;
  * `sending` while the composer is still handing the text over.
  */
 export interface VoiceSubmitOutcome {
   kind: "sending" | "sent" | "cancelled" | "held";
   attempt: number;
+  /** Set on a send, or one being handed over, that went without its cleanup. */
+  cleanup?: VoiceSendCleanup;
 }
 
 interface UseVoiceWaitSubmitParams {
@@ -280,6 +289,9 @@ export function useVoiceWaitSubmit({
       const target = voiceDraftNow();
       const sessions = voiceRecordingService.sendSessions(target.panelId, target.projectId);
       const releaseSend = claimWaitingSend(voiceId, sessions);
+      // From before the stop, so a stop-time cleanup that fails before any
+      // wait for it begins still counts.
+      const observed = voiceRecordingService.observeSendCorrections(voiceId, sessions);
       store.setVoiceSubmitting(voiceId, true);
       setVoiceSubmitWait({ attempt, phase: "finishing", startedAt: performance.now() });
 
@@ -332,6 +344,7 @@ export function useVoiceWaitSubmit({
       void (async () => {
         let sent: boolean | Promise<boolean> = false;
         let tooShort = false;
+        let cleanup: VoiceSendCleanup | undefined;
         try {
           if (isVoiceSessionActiveFor(voiceId)) {
             await voiceRecordingService.stop("Submitting command.", {
@@ -417,23 +430,30 @@ export function useVoiceWaitSubmit({
             tooShort = voiceSend.text.trim() !== "";
             return;
           }
+          // Read with nothing awaited before the send: a cleanup still on its
+          // way is one the send drops.
+          if (voiceRecordingService.hasPendingCorrection(voiceId, sessions)) cleanup = "skipped";
+          else if (observed.failed()) cleanup = "failed";
           sent = sendFromEditorRef.current(handBack, voiceSend, options?.route) ?? true;
         } finally {
           releaseKeys();
           releaseSend();
+          observed.release();
           if (activeWaitRef.current?.controller === controller) activeWaitRef.current = null;
           if (activeAttemptRef.current === attempt) {
             activeAttemptRef.current = null;
             useTerminalInputStore.getState().setVoiceSubmitting(voiceId, false);
             setVoiceSubmitWait(null);
+            const went = (kind: "sending" | "sent"): VoiceSubmitOutcome =>
+              cleanup ? { kind, attempt, cleanup } : { kind, attempt };
             if (typeof sent === "boolean") {
-              setVoiceSubmitOutcome({ kind: sent ? "sent" : "held", attempt });
+              setVoiceSubmitOutcome(sent ? went("sent") : { kind: "held", attempt });
               if (tooShort) onSpokenSendTooShortRef.current?.();
             } else {
-              setVoiceSubmitOutcome({ kind: "sending", attempt });
-              const settle = (went: boolean) => {
+              setVoiceSubmitOutcome(went("sending"));
+              const settle = (taken: boolean) => {
                 if (attemptRef.current !== attempt) return;
-                setVoiceSubmitOutcome({ kind: went ? "sent" : "held", attempt });
+                setVoiceSubmitOutcome(taken ? went("sent") : { kind: "held", attempt });
               };
               sent.then(settle, () => settle(false));
             }

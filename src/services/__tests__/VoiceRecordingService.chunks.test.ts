@@ -645,7 +645,10 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
   });
 
   it("gives a chunk whose cleanup failed back to the stop-time pass", async () => {
-    const { service, say, pause, draft, flush, baseline } = await setup();
+    const { service, sessionId, say, pause, draft, flush, baseline } = await setup();
+    // A send following this dictation from its start: the stop's pass cleaned
+    // what the chunk couldn't.
+    const observed = service.observeSendCorrections(PANEL, new Set([sessionId]));
     correct.mockResolvedValueOnce({
       action: "no_change",
       correctedText: OPENING_TEXT,
@@ -675,10 +678,11 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
       id: expect.any(String),
       correctedText: `${CLEANED_OPENING} ${NEXT}`,
     });
+    expect(observed.failed()).toBe(false);
   });
 
   it("cleans a chunk whose cleanup failed after the stop began in a pass of its own, which a send waits for", async () => {
-    const { service, say, pause, draft, flush, baseline } = await setup();
+    const { service, sessionId, say, pause, draft, flush, baseline } = await setup();
     const chunk = deferred<CorrectResult>();
     const tail = deferred<CorrectResult>();
     const retry = deferred<CorrectResult>();
@@ -689,6 +693,7 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     for (const sentence of OPENING) say(sentence);
     pause();
     say(NEXT);
+    const observed = service.observeSendCorrections(PANEL, new Set([sessionId]));
     await service.stop();
     expect(correct).toHaveBeenCalledTimes(2);
 
@@ -709,10 +714,13 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     );
     expect(sent).toBe(false);
     expect(setHistoryCorrection).not.toHaveBeenCalled();
+    // The retry took the failed chunk's words over.
+    expect(observed.failed()).toBe(false);
 
     retry.resolve({ action: "replace", correctedText: CLEANED_OPENING });
     await flush();
     expect(sent).toBe(true);
+    expect(observed.failed()).toBe(false);
     expect(draft()).toBe(`${CLEANED_OPENING} ${cleanedNext}`);
     expect(baseline()).toBe(`${CLEANED_OPENING} ${cleanedNext}`);
     expect(setHistoryCorrection).toHaveBeenCalledWith({
@@ -789,7 +797,7 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
   });
 
   it("cleans a failed chunk once more after the stop, and no more than that", async () => {
-    const { service, say, pause, draft, flush } = await setup();
+    const { service, sessionId, say, pause, draft, flush } = await setup();
     const chunk = deferred<CorrectResult>();
     correct
       .mockReturnValueOnce(chunk.promise)
@@ -801,6 +809,7 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     for (const sentence of OPENING) say(sentence);
     pause();
     say(NEXT);
+    const observed = service.observeSendCorrections(PANEL, new Set([sessionId]));
     await service.stop();
     chunk.resolve({
       action: "no_change",
@@ -819,6 +828,8 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     expect(service.hasPendingCorrection(PANEL)).toBe(false);
     expect(draft()).toBe(`${OPENING_TEXT} ${NEXT}`);
     expect(setHistoryCorrection).not.toHaveBeenCalled();
+    // The retry failed too: those words went uncleaned.
+    expect(observed.failed()).toBe(true);
   });
 
   it("doesn't clean again a chunk a send took the draft from", async () => {

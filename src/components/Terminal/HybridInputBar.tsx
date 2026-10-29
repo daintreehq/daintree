@@ -69,7 +69,11 @@ import {
   COMPOSER_CONTROL_TEXT_CLASS,
   COMPOSER_MARKER_TEXT_CLASS,
 } from "./composerControlStyles";
-import { useVoiceWaitSubmit, type VoiceSubmitOutcome } from "./hooks/useVoiceWaitSubmit";
+import {
+  useVoiceWaitSubmit,
+  type VoiceSendCleanup,
+  type VoiceSubmitOutcome,
+} from "./hooks/useVoiceWaitSubmit";
 import {
   COMPOSER_BORDER_CAPTION_CLASS,
   VoiceSubmitProgress,
@@ -346,6 +350,10 @@ const VOICE_SUBMIT_OUTCOME_STATUS: Record<VoiceSubmitOutcome["kind"], string> = 
   sent: "Sent",
   cancelled: "Send cancelled",
   held: SEND_HELD_STATUS,
+};
+const VOICE_SEND_UNCLEANED_STATUS: Record<VoiceSendCleanup, string> = {
+  skipped: "Sent, cleanup skipped",
+  failed: "Sent, cleanup failed",
 };
 
 function FileDropOverlay({ className }: { className?: string }) {
@@ -1444,13 +1452,21 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       }
       slot.querySelector("button")?.focus({ preventScroll: true });
     }, [isVoiceSubmitting]);
+    // A send that went without its cleanup says so even when its wait went
+    // unannounced, as its receipt does.
+    const voiceSendUncleaned =
+      voiceSubmitOutcome?.kind === "sent" ? voiceSubmitOutcome.cleanup : undefined;
     const voiceSubmitStatus = voiceSubmitWait
       ? showVoiceSubmitStatus
-        ? `${voiceSubmitWait.phase === "polishing" ? "Polishing dictation" : "Finishing dictation"}. Press Escape to cancel the send.`
+        ? voiceSubmitWait.phase === "polishing"
+          ? "Polishing dictation. Press Enter to send it as dictated, or Escape to cancel the send."
+          : "Finishing dictation. Press Escape to cancel the send."
         : ""
-      : voiceSubmitOutcome?.attempt === announcedVoiceAttempt
-        ? VOICE_SUBMIT_OUTCOME_STATUS[voiceSubmitOutcome.kind]
-        : "";
+      : voiceSendUncleaned
+        ? VOICE_SEND_UNCLEANED_STATUS[voiceSendUncleaned]
+        : voiceSubmitOutcome?.attempt === announcedVoiceAttempt
+          ? VOICE_SUBMIT_OUTCOME_STATUS[voiceSubmitOutcome.kind]
+          : "";
     // Heard from whichever host holds the editor: a send from the Expanded
     // Editor waits there, and a live region outside its modal goes unheard.
     const voiceSubmitAnnouncer = (

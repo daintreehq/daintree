@@ -901,6 +901,14 @@ class VoiceRecordingService {
   // Each dictation's cleanup across its chunks and the stop-time pass, by
   // session id, until it has stopped and every pass has its reply (#14772).
   private cleanups = new Map<string, DictationCleanup>();
+  // The passes each waiting send has seen for its sessions, kept past their
+  // settling so the send can say whether its words went without their
+  // cleanup (#14959).
+  private sendObservers = new Set<{
+    panelId: string;
+    sessions: ReadonlySet<string>;
+    passes: Set<PendingCorrection>;
+  }>();
   // Where the live session may cut its next chunk.
   private chunkBreak: ChunkBreak | null = null;
   // performance.now() when the live session's last words landed: a long gap
@@ -3577,6 +3585,11 @@ class VoiceRecordingService {
     if (kind === "stop") timeline?.beginCorrection();
     else timeline?.beginChunkPass();
     this.pendingCorrections.add(correction);
+    for (const observer of this.sendObservers) {
+      if (this.correctionFor(correction, observer.panelId, observer.sessions)) {
+        observer.passes.add(correction);
+      }
+    }
     this.watchCorrectionDrafts();
 
     // Show the dotted-underline "correcting" decoration over each passage.
@@ -4402,6 +4415,39 @@ class VoiceRecordingService {
       if (rewrite.panelId === panelId) return true;
     }
     return false;
+  }
+
+  /**
+   * Follows the cleanup a send taking `sessions` owns until `release`: every
+   * pass pending as it starts, and any registered after, the stop's and a
+   * retry's included. `failed` says whether a passage among them kept its
+   * dictated words because its request failed or timed out, with no later
+   * pass taking them over (#14959).
+   */
+  observeSendCorrections(
+    panelId: string,
+    sessions: ReadonlySet<string>
+  ): { failed: () => boolean; release: () => void } {
+    const observer = { panelId, sessions, passes: new Set<PendingCorrection>() };
+    for (const correction of this.pendingCorrections) {
+      if (this.correctionFor(correction, panelId, sessions)) observer.passes.add(correction);
+    }
+    this.sendObservers.add(observer);
+    return {
+      failed: () => {
+        for (const pass of observer.passes) {
+          const { failed, released } = pass.cleanup;
+          const kept = (passage: CorrectionPassage) =>
+            pass.live.has(passage) && failed.has(passage) && !released.has(passage);
+          if (pass.passages.some(kept)) return true;
+        }
+        return false;
+      },
+      release: () => {
+        this.sendObservers.delete(observer);
+        observer.passes.clear();
+      },
+    };
   }
 
   /**
@@ -6004,6 +6050,7 @@ class VoiceRecordingService {
     for (const panelId of correctedPanels) this.syncCorrectionRange(panelId);
     this.correctionStreams.clear();
     this.cleanups.clear();
+    this.sendObservers.clear();
     this.resetChunking();
     this.baselineOwners.clear();
     this.unfollowLearningBaselines();

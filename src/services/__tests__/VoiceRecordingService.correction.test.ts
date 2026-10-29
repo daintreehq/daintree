@@ -850,6 +850,59 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     await expect(waited).resolves.toBe(true);
   });
 
+  it("tells a send its own cleanup failed, and nothing of another panel's, a newer session's, or after it lets go", async () => {
+    const { service, voiceStore, dictate, flush } = await setup();
+    const own = deferred<CorrectResult>();
+    const elsewhere = deferred<CorrectResult>();
+    const newer = deferred<CorrectResult>();
+    correct
+      .mockReturnValueOnce(own.promise)
+      .mockReturnValueOnce(elsewhere.promise)
+      .mockReturnValueOnce(newer.promise);
+
+    dictate("panel-1", "hello wrld");
+    const session = voiceStore.getState().panelBuffers["panel-1"]!.dictationSessionId!;
+    const observed = service.observeSendCorrections("panel-1", new Set([session]));
+    await service.stop();
+    dictate("panel-2", "elsewhere");
+    await service.stop();
+    dictate("panel-1", "and more");
+    await service.stop();
+
+    elsewhere.resolve({ action: "no_change", correctedText: "elsewhere", failed: true });
+    newer.resolve({ action: "no_change", correctedText: "and more", failed: true });
+    await flush();
+    expect(observed.failed()).toBe(false);
+
+    own.resolve({
+      action: "no_change",
+      correctedText: "hello wrld",
+      failed: true,
+      verdict: "timed_out",
+    });
+    await flush();
+    expect(observed.failed()).toBe(true);
+
+    observed.release();
+    expect(observed.failed()).toBe(false);
+  });
+
+  it("doesn't tell a send a passage an edit reached failed its cleanup", async () => {
+    const { service, voiceStore, inputStore, dictate, flush } = await setup();
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+
+    dictate("panel-1", "hello wrld");
+    const session = voiceStore.getState().panelBuffers["panel-1"]!.dictationSessionId!;
+    await service.stop();
+    const observed = service.observeSendCorrections("panel-1", new Set([session]));
+    inputStore.getState().setDraftInput("panel-1", "hello world, edited");
+    pending.resolve({ action: "no_change", correctedText: "hello wrld", failed: true });
+    await flush();
+
+    expect(observed.failed()).toBe(false);
+  });
+
   it("keeps the learning baseline with its own passage when two say the same words", async () => {
     const { service, dictate, flush, baseline } = await setup();
     const first = deferred<CorrectResult>();

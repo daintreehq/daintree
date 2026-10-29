@@ -263,6 +263,8 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
     expect(sent).toEqual(["Hello world."]);
     expect(result.current.voiceSubmitPhase).toBeNull();
     expect(isEditable()).toBe(true);
+    // The cleanup landed, so the receipt says only that it went.
+    expect(result.current.voiceSubmitOutcome).toEqual({ kind: "sent", attempt: 1 });
   });
 
   it("sends an image between two corrected passages still attached (#14781)", async () => {
@@ -417,6 +419,11 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
     expect(sent).toEqual(["hello wrld"]);
     expect(result.current.voiceSubmitPhase).toBeNull();
     expect(isEditable()).toBe(true);
+    expect(result.current.voiceSubmitOutcome).toEqual({
+      kind: "sent",
+      attempt: 1,
+      cleanup: "skipped",
+    });
 
     // The draft still holds the passage while the submit is in flight; the
     // late result must not rewrite it under the send.
@@ -426,6 +433,7 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
 
     expect(draft(PANEL_ID)).toBe("hello wrld");
     expect(sent).toEqual(["hello wrld"]);
+    expect(result.current.voiceSubmitOutcome?.cleanup).toBe("skipped");
   });
 
   it("sends the raw text once a slow cleanup fails", async () => {
@@ -451,6 +459,37 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
 
     expect(sent).toEqual(["hello wrld"]);
     expect(result.current.voiceSubmitPhase).toBeNull();
+    expect(result.current.voiceSubmitOutcome).toEqual({
+      kind: "sent",
+      attempt: 1,
+      cleanup: "failed",
+    });
+  });
+
+  it("says the cleanup failed when it fails before the wait for it begins", async () => {
+    correct.mockResolvedValueOnce({ action: "no_change", correctedText: "hello wrld", failed: true });
+    dictate(PANEL_ID, "hello wrld");
+    const result = renderComposer();
+
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+
+    expect(sent).toEqual(["hello wrld"]);
+    expect(result.current.voiceSubmitOutcome?.cleanup).toBe("failed");
+  });
+
+  it("says nothing of a cleanup that came back with nothing to change", async () => {
+    correct.mockResolvedValueOnce({ action: "no_change", correctedText: "hello world" });
+    dictate(PANEL_ID, "hello world");
+    const result = renderComposer();
+
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+
+    expect(sent).toEqual(["hello world"]);
+    expect(result.current.voiceSubmitOutcome).toEqual({ kind: "sent", attempt: 1 });
   });
 
   it("sends the raw text when the cleanup request throws", async () => {
@@ -469,6 +508,7 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
     });
 
     expect(sent).toEqual(["hello wrld"]);
+    expect(result.current.voiceSubmitOutcome?.cleanup).toBe("failed");
   });
 
   it("still sends the corrected text when a session elsewhere starts and stops meanwhile", async () => {
