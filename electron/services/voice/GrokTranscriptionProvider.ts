@@ -831,7 +831,9 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
         (typeof payload.message === "string" && payload.message.trim()) || "Grok error";
       logError(`${P} ← server error event`, undefined, { ready: this.isReady });
       if (this.isDraining && this.isReady) {
-        this.settleDrain("server-error");
+        // An error already on its way proves no more about the stop than a
+        // result does.
+        if (!this.redialUnansweredStop("server-error")) this.settleDrain("server-error");
         return;
       }
       if (!this.isReady) {
@@ -1573,6 +1575,14 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
     if (confirmedSeconds <= 0) return;
     const confirmedOffset =
       Math.round(confirmedSeconds * AUDIO_SAMPLE_RATE) * AUDIO_BYTES_PER_SAMPLE;
+    // A final can't cover audio xAI never had, so it proves delivery as a pong
+    // does. Without it, results that keep landing just ahead of each tick hold
+    // the pings off, and a dying socket's first ping is allowed the backlog of
+    // the whole healthy stretch before it.
+    this.heartbeatDeliveredBytes = Math.max(
+      this.heartbeatDeliveredBytes,
+      Math.min(confirmedOffset, this.heartbeatBytesSent)
+    );
     while (this.unconfirmedAudio.length > 0) {
       const chunk = this.unconfirmedAudio[0];
       const chunkEnd = this.unconfirmedOffset + chunk.byteLength;

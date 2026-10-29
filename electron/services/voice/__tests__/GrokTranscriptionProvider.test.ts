@@ -40,7 +40,11 @@ class MockWebSocket {
     for (const listener of this.listeners.get(event) ?? []) listener(...args);
   }
 
+  // Throws for the frames it picks, as the send on a socket going down does.
+  failSend: ((payload: string | Buffer) => boolean) | null = null;
+
   send(payload: string | Buffer): void {
+    if (this.failSend?.(payload)) throw new Error("WebSocket is not open");
     this.sent.push(payload);
   }
 
@@ -1613,7 +1617,7 @@ describe("GrokTranscriptionProvider", () => {
       ]);
     });
 
-    it("resolves the drain after its backstop if the server never answers", async () => {
+    it("resolves the drain after its backstop when the server never sends transcript.done", async () => {
       const { provider, events } = setup();
       const socket = await bringSessionReady(provider);
       socket.simulateMessage(partial("hanging", { start: 0, duration: 1 }));
@@ -2134,6 +2138,14 @@ describe("GrokTranscriptionProvider", () => {
       return elapsed;
     }
 
+    /** Streams 100ms chunks of silence for `limitMs`. */
+    function streamSilence(provider: GrokProvider, limitMs: number): void {
+      for (let elapsed = 0; elapsed < limitMs; elapsed += 100) {
+        provider.sendAudioChunk(pcm(0));
+        vi.advanceTimersByTime(100);
+      }
+    }
+
     /** Lets `limitMs` pass with no audio from the renderer, as a paused dictation does. */
     function idleUntilTerminated(socket: MockWebSocket, limitMs: number): number {
       let elapsed = 0;
@@ -2198,13 +2210,14 @@ describe("GrokTranscriptionProvider", () => {
       const { provider, events } = setup();
       const socket = await bringSessionReady(provider);
 
-      streamUntilTerminated(provider, socket, 120_000);
+      streamSilence(provider, 120_000);
 
       expect(socket.pingCalls).toBeGreaterThan(1);
       expect(socket.terminateCalls).toBe(0);
       expect(instances).toHaveLength(1);
       expect(provider.getSessionStats().droppedReplay).toBeGreaterThan(0);
       expect(events.some((e) => e.type === "error")).toBe(false);
+      expect(speechStartsOf(events)).toBe(0);
       provider.stop();
     });
 
@@ -2223,12 +2236,16 @@ describe("GrokTranscriptionProvider", () => {
     });
 
     it("notices a paused dictation's dead socket and reconnects it before speech resumes", async () => {
-      const { provider } = setup();
+      const { provider, events } = setup();
       const socket = await bringSessionReady(provider);
       socket.respondsToPing = false;
 
       expect(idleUntilTerminated(socket, 60_000)).toBeLessThan(60_000);
       expect(socket.terminateCalls).toBe(1);
+      vi.advanceTimersToNextTimer();
+      latestInstance().simulateReady();
+      expect(instances).toHaveLength(2);
+      expect(statusesOf(events).at(-1)).toBe("recording");
       provider.stop();
     });
 
@@ -2264,6 +2281,25 @@ describe("GrokTranscriptionProvider", () => {
       provider.stop();
     });
 
+    it("keeps a dying socket's allowance short when results kept the pings off", async () => {
+      const { provider } = setup();
+      const socket = await bringSessionReady(provider);
+      // Each chunk is answered before the next tick, so no ping goes out, and a
+      // chunk final confirms the audio every 3s.
+      for (let sent = 1; sent <= 600; sent++) {
+        provider.sendAudioChunk(chunk(sent));
+        vi.advanceTimersByTime(50);
+        socket.simulateMessage(partial("still talking", { start: 0, duration: 0.5 }));
+        if (sent % 30 === 0) socket.simulateMessage(chunkFinal("", 0, sent / 10));
+        vi.advanceTimersByTime(50);
+      }
+      expect(socket.pingCalls).toBe(0);
+
+      socket.respondsToPing = false;
+      expect(streamUntilTerminated(provider, socket, 90_000)).toBeLessThanOrEqual(10_000);
+      provider.stop();
+    });
+
     it("notices a reconnected socket that swallows the replay with nothing said since", async () => {
       const { provider } = setup();
       const socket = await bringSessionReady(provider);
@@ -2275,7 +2311,11 @@ describe("GrokTranscriptionProvider", () => {
       reconnect.simulateReady();
       expect(reconnect.binaryFrames()).toHaveLength(10);
 
-      expect(idleUntilTerminated(reconnect, 20_000)).toBeLessThanOrEqual(8_000);
+      // The replay alone makes the first tick ping, ahead of any keep-alive silence.
+      vi.advanceTimersByTime(2_000);
+      expect(reconnect.pingCalls).toBe(1);
+      expect(reconnect.binaryFrames()).toHaveLength(10);
+      expect(idleUntilTerminated(reconnect, 20_000)).toBeLessThanOrEqual(6_000);
       expect(reconnect.terminateCalls).toBe(1);
       provider.stop();
     });
@@ -2292,9 +2332,14 @@ describe("GrokTranscriptionProvider", () => {
       expect(socket.terminateCalls).toBe(0);
 
       const stopPromise = provider.stopGracefully();
-      expect(socket.pings.at(-1)).toBeDefined();
+      expect(socket.pings).toEqual(["stop"]);
       expect(audioDoneFrames(socket)).toBe(1);
-      vi.advanceTimersByTime(3_000);
+      // The heartbeat is done: only the stop's own ping is judged now.
+      vi.advanceTimersByTime(2_500);
+      expect(socket.pingCalls).toBe(1);
+      expect(socket.terminateCalls).toBe(0);
+      expect(instances).toHaveLength(1);
+      vi.advanceTimersByTime(500);
 
       expect(instances).toHaveLength(2);
       const fresh = latestInstance();
@@ -2352,7 +2397,10 @@ describe("GrokTranscriptionProvider", () => {
       fresh.respondsToPing = false;
       fresh.simulateReady();
       expect(fresh.binaryFrames()).toHaveLength(8);
-      vi.advanceTimersByTime(3_000);
+      // No heartbeat on a socket that came up only to finish the stop.
+      vi.advanceTimersByTime(2_000);
+      expect(fresh.pingCalls).toBe(1);
+      vi.advanceTimersByTime(1_000);
       await stopPromise;
 
       expect(stopLossReportsOf(events)).toHaveLength(1);
@@ -2421,6 +2469,82 @@ describe("GrokTranscriptionProvider", () => {
       await stopPromise;
 
       expect(stopLossReportsOf(events)).toEqual([]);
+    });
+
+    it("doesn't redial again when the fresh socket closes unanswered", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.respondsToPing = false;
+      for (let i = 0; i < 8; i++) provider.sendAudioChunk(chunk(i));
+
+      const stopPromise = provider.stopGracefully();
+      vi.advanceTimersByTime(3_000);
+      const fresh = latestInstance();
+      fresh.respondsToPing = false;
+      fresh.simulateReady();
+      fresh.simulateClose(1006);
+      await stopPromise;
+
+      expect(instances).toHaveLength(2);
+      expect(stopLossReportsOf(events)).toHaveLength(1);
+      expect(statusesOf(events).at(-1)).toBe("idle");
+    });
+
+    it("resends from a fresh socket when a server error beats the stop's answer", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.respondsToPing = false;
+      for (let i = 0; i < 8; i++) provider.sendAudioChunk(chunk(i));
+
+      const stopPromise = provider.stopGracefully();
+      socket.simulateMessage({ type: "error", message: "stream timed out" });
+      expect(instances).toHaveLength(2);
+      const fresh = latestInstance();
+      fresh.simulateReady();
+      expect(fresh.binaryFrames()).toEqual(socket.binaryFrames());
+      fresh.simulateMessage({ type: "transcript.done" });
+      await stopPromise;
+
+      expect(stopLossReportsOf(events)).toEqual([]);
+      expect(fatalErrorsOf(events)).toHaveLength(0);
+    });
+
+    it("replays on a fresh socket when audio.done can't go out on the dead one", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.respondsToPing = false;
+      for (let i = 0; i < 8; i++) provider.sendAudioChunk(chunk(i));
+      socket.failSend = (payload) => typeof payload === "string" && payload.includes("audio.done");
+
+      const stopPromise = provider.stopGracefully();
+      expect(instances).toHaveLength(2);
+      const fresh = latestInstance();
+      fresh.simulateReady();
+      expect(fresh.binaryFrames()).toEqual(socket.binaryFrames());
+      expect(audioDoneFrames(fresh)).toBe(1);
+      fresh.simulateMessage({ type: "transcript.done" });
+      await stopPromise;
+
+      expect(stopLossReportsOf(events)).toEqual([]);
+      expect(statusesOf(events).at(-1)).toBe("idle");
+    });
+
+    it("ignores a superseded socket's stop pong", async () => {
+      const { provider } = setup();
+      const old = await bringSessionReady(provider);
+      old.simulateClose(1006);
+      vi.advanceTimersToNextTimer();
+      const socket = latestInstance();
+      socket.simulateReady();
+      socket.respondsToPing = false;
+      for (let i = 0; i < 8; i++) provider.sendAudioChunk(chunk(i));
+
+      void provider.stopGracefully();
+      old.simulatePong("stop");
+      vi.advanceTimersByTime(3_000);
+
+      expect(instances).toHaveLength(3);
+      provider.stop();
     });
 
     it("doesn't take a result that was already in flight as the stop's answer", async () => {
@@ -2535,6 +2659,7 @@ describe("GrokTranscriptionProvider", () => {
       const fresh = latestInstance();
       provider.stop();
       await stopPromise;
+      expect(vi.getTimerCount()).toBe(0);
       fresh.simulateReady();
       vi.advanceTimersByTime(60_000);
 
@@ -2575,11 +2700,17 @@ describe("GrokTranscriptionProvider", () => {
 
     it("tells the user once when the replay ledger has to drop audio nothing proved arrived", async () => {
       const { provider, events } = setup();
-      await bringSessionReady(provider);
-      // Well past the ledger, with no time for a pong: no final result ever
-      // confirms any of it.
-      for (let i = 0; i < 600; i++) provider.sendAudioChunk(chunk(i));
+      const socket = await bringSessionReady(provider);
+      socket.respondsToPing = false;
+      for (let i = 0; i < 400; i++) provider.sendAudioChunk(chunk(i));
+      vi.advanceTimersByTime(2_000);
+      expect(socket.pingCalls).toBe(1);
+      // Still waiting on that ping, the ledger overflows, with no final result
+      // ever confirming any of it.
+      for (let i = 400; i < 600; i++) provider.sendAudioChunk(chunk(i));
 
+      expect(provider.getSessionStats().droppedReplay).toBe(200);
+      expect(socket.terminateCalls).toBe(0);
       const reports = events.flatMap((e) =>
         e.type === "error" && e.error.code === VOICE_REPLAY_AUDIO_LOST_CODE ? [e.error] : []
       );
@@ -2625,7 +2756,7 @@ describe("GrokTranscriptionProvider", () => {
 
       // Exactly enough to push that first chunk out, and nothing after it.
       let sent = 1;
-      while (provider.getSessionStats().droppedReplay === 0) {
+      while (provider.getSessionStats().droppedReplay === 0 && sent < 600) {
         provider.sendAudioChunk(chunk(sent++));
       }
       expect(provider.getSessionStats().droppedReplay).toBe(1);
@@ -2636,23 +2767,25 @@ describe("GrokTranscriptionProvider", () => {
       provider.stop();
     });
 
-    it("remembers what an earlier socket proved it received through a reconnect", async () => {
+    it("carries only the prefix an earlier socket proved through a reconnect", async () => {
       const { provider, events } = setup();
       const socket = await bringSessionReady(provider);
-      // A long healthy silence: delivered, never confirmed, the ledger full.
-      streamUntilTerminated(provider, socket, 45_000);
-      expect(provider.getSessionStats().droppedReplay).toBeGreaterThan(0);
-
+      // 45s of healthy silence: the ledger holds the newest 40s, and the last
+      // pong, at 44s, proved all of it but the final second.
+      streamSilence(provider, 45_000);
       socket.simulateClose(1006);
       vi.advanceTimersToNextTimer();
       latestInstance().simulateReady();
-      // Live audio pushes out the head of the replay before the new socket's
-      // first pong could prove anything.
-      const droppedBefore = provider.getSessionStats().droppedReplay;
-      for (let i = 0; i < 10; i++) provider.sendAudioChunk(chunk(i));
 
-      expect(provider.getSessionStats().droppedReplay).toBeGreaterThan(droppedBefore);
-      expect(replayLossReportsOf(events)).toBe(0);
+      // Before the new socket proves anything, live audio pushes the replay's
+      // head out: quietly through the proven 39s, and reported past it.
+      let quiet = 0;
+      while (replayLossReportsOf(events) === 0 && quiet < 400) {
+        provider.sendAudioChunk(chunk(quiet));
+        if (replayLossReportsOf(events) === 0) quiet++;
+      }
+      expect(quiet).toBe(390);
+      expect(replayLossReportsOf(events)).toBe(1);
       provider.stop();
     });
 
