@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render as rtlRender, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render as rtlRender, screen, fireEvent, waitFor } from "@testing-library/react";
 import { useContext, type ReactElement, type ReactNode } from "react";
 import { SettingsValidationProvider } from "@/components/Settings/SettingsValidationRegistry";
 import {
   SettingsFlushContext,
   SettingsFlushProvider,
+  type FailedSettingsFlush,
 } from "@/components/Settings/SettingsFlushRegistry";
 
 // The editor reports errors to the sidebar and registers a close-time flush, both
@@ -358,7 +359,7 @@ describe("EnvironmentVariablesEditor save controls", () => {
 describe("EnvironmentVariablesEditor close-time flush", () => {
   // Matches the global Environment page: closing Settings keeps a valid draft
   // rather than silently dropping it, and never stores an invalid one.
-  let flushAll: (() => Promise<void>) | undefined;
+  let flushAll: (() => Promise<FailedSettingsFlush[]>) | undefined;
   function CaptureFlush() {
     flushAll = useContext(SettingsFlushContext)?.flushAll;
     return null;
@@ -384,7 +385,7 @@ describe("EnvironmentVariablesEditor close-time flush", () => {
     fireEvent.change(screen.getByLabelText("Environment variable value"), {
       target: { value: "b" },
     });
-    await flushAll!();
+    await expect(flushAll!()).resolves.toEqual([]);
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange.mock.calls[0]![0][0]).toMatchObject({ key: "MY_VAR", value: "b" });
     expect(onFlush).toHaveBeenCalled();
@@ -394,12 +395,38 @@ describe("EnvironmentVariablesEditor close-time flush", () => {
     const onChange = vi.fn<(value: EnvVar[]) => void>();
     const onFlush = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
     renderEditor(onChange, onFlush);
-    fireEvent.change(screen.getByLabelText("Environment variable name"), {
-      target: { value: "1BAD" },
+    fireEvent.click(screen.getAllByRole("button", { name: /add variable/i })[0]!);
+    const [healthy, name] = screen.getAllByLabelText("Environment variable name");
+    fireEvent.change(name!, { target: { value: "1BAD" } });
+    let failed: FailedSettingsFlush[] = [];
+    await act(async () => {
+      failed = await flushAll!();
     });
-    await flushAll!();
     expect(onChange).not.toHaveBeenCalled();
     expect(onFlush).not.toHaveBeenCalled();
+    // The close stays open on the row in error, not the healthy one above it.
+    expect(failed).toHaveLength(1);
+    expect(failed[0]!.tab).toBe("project:variables");
+    const landing = document.getElementById(failed[0]!.landOn);
+    expect(landing?.contains(name!)).toBe(true);
+    expect(landing?.contains(healthy!)).toBe(false);
+    expect(name!.getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("keeps a draft whose save failed when the dialog flushes", async () => {
+    const onChange = vi.fn<(value: EnvVar[]) => void>();
+    const onFlush = vi.fn<() => Promise<void>>().mockRejectedValue(new Error("disk full"));
+    renderEditor(onChange, onFlush);
+    const value = screen.getByLabelText("Environment variable value");
+    fireEvent.change(value, { target: { value: "b" } });
+    let failed: FailedSettingsFlush[] = [];
+    await act(async () => {
+      failed = await flushAll!();
+    });
+    expect(failed).toHaveLength(1);
+    const landing = document.getElementById(failed[0]!.landOn);
+    expect(landing?.contains(value)).toBe(true);
+    expect(landing?.contains(screen.getByRole("alert"))).toBe(true);
   });
 
   it("registers nothing while the draft is clean", async () => {

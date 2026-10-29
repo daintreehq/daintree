@@ -88,7 +88,11 @@ import {
   SettingsValidationProvider,
   SettingsValidationContext,
 } from "./SettingsValidationRegistry";
-import { SettingsFlushProvider, SettingsFlushContext } from "./SettingsFlushRegistry";
+import {
+  SettingsFlushProvider,
+  SettingsFlushContext,
+  type FailedSettingsFlush,
+} from "./SettingsFlushRegistry";
 import { useProgressiveRenderLimit } from "@/hooks/useProgressiveRenderLimit";
 import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
 import { pluralize, pluralNoun } from "@/lib/pluralize";
@@ -507,12 +511,13 @@ function SettingsDialogInner({
 
   // Coalesced: a visibility change landing mid-close would otherwise re-issue
   // every registered tab flusher alongside the one already in flight.
-  const flushInFlightRef = useRef<Promise<void> | null>(null);
+  const flushInFlightRef = useRef<Promise<FailedSettingsFlush[]> | null>(null);
   const flushDialog = () => {
     if (flushInFlightRef.current) return flushInFlightRef.current;
     const pending = (async () => {
-      if (flushAllTabs) await flushAllTabs();
+      const failed = flushAllTabs ? await flushAllTabs() : [];
       await projectForm.flush();
+      return failed;
     })();
     flushInFlightRef.current = pending;
     return pending.finally(() => {
@@ -523,8 +528,11 @@ function SettingsDialogInner({
   // Electron 41 WebContentsView detach (project switch, window close) does not
   // fire beforeunload — visibilitychange is the reliable signal. Flushing on
   // hide ensures debounced autosaves and per-tab dirty state persist before
-  // the view is evicted.
-  useFlushOnHide(flushDialog, isOpen);
+  // the view is evicted. A hide can't be held open, so a page that couldn't
+  // save is left as it is.
+  useFlushOnHide(async () => {
+    await flushDialog();
+  }, isOpen);
 
   const [globalEnvVars, setGlobalEnvVars] = useState<Record<string, string>>({});
   useEffect(() => {
@@ -539,24 +547,10 @@ function SettingsDialogInner({
       });
   }, [isOpen]);
 
-  const handleBeforeClose = async () => {
-    await flushDialog();
-    return true;
-  };
-
   // AppDialog-mediated closes (Escape, backdrop, the header's close button) have
   // already flushed via onBeforeClose, so this only dismisses. Flushing again
   // would re-issue every tab's persistence IPC and the full project save.
   const handleDialogClose = () => {
-    onClose();
-  };
-
-  // Handed to tab content via the registry's `needsOnClose` flag. That route
-  // never passes through onBeforeClose, so it keeps its own flush — no tab
-  // invokes it today (AppThemePicker only tests it for presence), but a caller
-  // that did would otherwise close without persisting.
-  const handleClose = async () => {
-    await flushDialog();
     onClose();
   };
 
@@ -606,12 +600,54 @@ function SettingsDialogInner({
   // even when its parent was already on.
   const pendingRequirementRef = useRef<{ settingId: string; label: string } | null>(null);
 
+  // A page whose close-time save didn't go through keeps Settings open on its
+  // draft and error, rather than closing as if it had saved: the user fixes it
+  // or uses that page's Discard. The page shown wins over others that failed.
+  const flushBeforeClose = async () => {
+    // A hide flush still running took its list of drafts when it started, so one
+    // made since isn't in it: let it finish, then flush again for the close.
+    const lifecycleFlush = flushInFlightRef.current;
+    if (lifecycleFlush) await lifecycleFlush;
+    const failed = await flushDialog();
+    const shown = failed.find((f) => f.tab === activeTabRef.current) ?? failed[0];
+    if (!shown) return true;
+    revealFailedFlush(shown);
+    return false;
+  };
+
+  // Everything that could cover the page goes: search, another machine's page,
+  // the hidden-setting note. Its tab is already mounted, since only a mounted
+  // tab registers a flush, so the switch can't suspend and needs no transition.
+  const revealFailedFlush = ({ tab, landOn }: FailedSettingsFlush) => {
+    const scope = scopeForTab(tab);
+    // Judged by the scope the page is in, not the one shown: a close from project
+    // scope still lands behind the other machine's page once global comes back.
+    if (target !== null && scope === "global") {
+      if (ownerForTab(tab) === "device") setShowingDevicePage(true);
+      else setTargetHostId(null);
+    }
+    setSearchQuery("");
+    setHiddenSettingBanner(null);
+    pendingRequirementRef.current = null;
+    setActiveScope(scope);
+    setActiveTab(tab);
+    setScrollToSection(landOn);
+  };
+
+  // Handed to tab content via the registry's `needsOnClose` flag. That route
+  // never passes through onBeforeClose, so it keeps its own flush — no tab
+  // invokes it today (AppThemePicker only tests it for presence), but a caller
+  // that did would otherwise close without persisting.
+  const handleClose = async () => {
+    if (await flushBeforeClose()) onClose();
+  };
+
   // A plugin's setting lives in the plugin manager or Project settings → Plugins,
   // so it goes through the action `host.settings.open` uses instead of a tab here.
   const openPluginSetting = async (plugin: NonNullable<SettingsSearchEntry["plugin"]>) => {
     // The action may open the plugin manager over this dialog, which closes it
     // without passing through the dialog's own close flush.
-    await flushDialog();
+    if (!(await flushBeforeClose())) return;
     const result = await actionService.dispatch(
       "plugin.openSettings",
       {
@@ -867,7 +903,7 @@ function SettingsDialogInner({
     <AppDialog
       isOpen={isOpen}
       onClose={handleDialogClose}
-      onBeforeClose={handleBeforeClose}
+      onBeforeClose={flushBeforeClose}
       size="4xl"
       // Search owns first focus (below), not the first tabbable — which was the scope
       // control, so every open painted a focus ring on "Global" and typing did nothing.

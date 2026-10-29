@@ -96,7 +96,8 @@ export function EnvVarRow({
   const errorId = `${row.id}-error`;
   const name = row.key.trim();
   return (
-    <div className="px-4 py-2.5" data-env-row="">
+    // The id is what a close blocked on this row's error lands on.
+    <div id={row.id} className="px-4 py-2.5" data-env-row="">
       <div className={ENV_ROW_GRID}>
         <div className="relative min-w-0">
           <Input
