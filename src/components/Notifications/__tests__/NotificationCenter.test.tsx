@@ -1213,6 +1213,144 @@ describe("NotificationCenter — Needs attention pinned section", () => {
     expect(within(screen.getByTestId("chrono-section")).getByText("Failure 6")).toBeTruthy();
   });
 
+  it("stops pinning an unread error from weeks ago but keeps it in All and Unread", async () => {
+    setEntries([
+      makeEntry({ type: "warning", message: "Token expiring", seenAsToast: false }),
+      makeEntry({
+        type: "error",
+        message: "September failure",
+        timestamp: Date.now() - 40 * 24 * 60 * 60 * 1000,
+        seenAsToast: false,
+      }),
+    ]);
+
+    render(<NotificationCenter open onClose={vi.fn()} />);
+
+    const pinned = () => screen.getByTestId("needs-attention-section");
+    expect(within(pinned()).queryByText("September failure")).toBeNull();
+    expect(within(pinned()).getByText("Token expiring")).toBeTruthy();
+    expect(screen.queryByTestId("needs-attention-overflow")).toBeNull();
+    expect(
+      within(screen.getByTestId("chrono-section")).getByText("September failure")
+    ).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Unread"));
+    });
+    expect(within(pinned()).queryByText("September failure")).toBeNull();
+    expect(
+      within(screen.getByTestId("chrono-section")).getByText("September failure")
+    ).toBeTruthy();
+  });
+
+  it("drops a thread from the rail when it ages out while the inbox stays open", () => {
+    vi.useFakeTimers();
+    try {
+      const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+      setEntries([
+        makeEntry({ type: "warning", message: "Token expiring", seenAsToast: false }),
+        makeEntry({
+          type: "error",
+          message: "Yesterday's failure",
+          timestamp: dayAgo + 90_000,
+          seenAsToast: false,
+        }),
+      ]);
+
+      render(<NotificationCenter open onClose={vi.fn()} />);
+      const pinned = () => screen.getByTestId("needs-attention-section");
+      expect(within(pinned()).getByText("Yesterday's failure")).toBeTruthy();
+
+      // Nothing in history changes and no quiet-hours tick is running: the
+      // rail's own wake-up is the only thing that can move it, and switching
+      // tabs on the way must not push that wake-up back.
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      act(() => {
+        fireEvent.click(screen.getByText("Unread"));
+      });
+      act(() => {
+        vi.advanceTimersByTime(31_000);
+      });
+      expect(within(pinned()).queryByText("Yesterday's failure")).toBeNull();
+      expect(within(pinned()).getByText("Token expiring")).toBeTruthy();
+      expect(
+        within(screen.getByTestId("chrono-section")).getByText("Yesterday's failure")
+      ).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a thread off the rail when it wakes from a snooze after aging out", () => {
+    vi.useFakeTimers();
+    try {
+      const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+      setEntries([
+        makeEntry({ type: "warning", message: "Token expiring", seenAsToast: false }),
+        makeEntry({
+          type: "error",
+          message: "Snoozed failure",
+          correlationId: "snoozed-thread",
+          timestamp: dayAgo + 90_000,
+          seenAsToast: false,
+        }),
+      ]);
+      useNotificationHistoryStore.setState({
+        snoozedThreads: { "snoozed-thread": Date.now() + 10 * 60_000 },
+      });
+
+      render(<NotificationCenter open onClose={vi.fn()} />);
+      const pinned = () => screen.getByTestId("needs-attention-section");
+      expect(within(pinned()).queryByText("Snoozed failure")).toBeNull();
+
+      // It ages out while snoozed; waking it is not new history, so only the
+      // clock having moved at its horizon keeps it off the rail.
+      act(() => {
+        vi.advanceTimersByTime(120_000);
+      });
+      act(() => {
+        useNotificationHistoryStore.setState({ snoozedThreads: {} });
+      });
+      expect(within(pinned()).queryByText("Snoozed failure")).toBeNull();
+      expect(
+        within(screen.getByTestId("chrono-section")).getByText("Snoozed failure")
+      ).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("judges an entry marked unread against the time it was marked, not when the inbox opened", () => {
+    vi.useFakeTimers();
+    try {
+      const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+      const failure = makeEntry({
+        type: "error",
+        message: "Yesterday's failure",
+        timestamp: dayAgo + 30_000,
+        seenAsToast: true,
+      });
+      setEntries([failure]);
+
+      render(<NotificationCenter open onClose={vi.fn()} />);
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      act(() => {
+        setEntries([{ ...failure, seenAsToast: false }]);
+      });
+
+      expect(screen.queryByTestId("needs-attention-section")).toBeNull();
+      expect(
+        within(screen.getByTestId("chrono-section")).getByText("Yesterday's failure")
+      ).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("omits the overflow note when severe unread threads fit within the cap", () => {
     setEntries([makeEntry({ type: "error", message: "Build failed", seenAsToast: false })]);
 

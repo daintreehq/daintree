@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   ArrowDown,
@@ -62,10 +62,12 @@ import {
   PANE_TOOLBAR_TEXT_BUTTON_CLASS,
 } from "@/components/ui/paneToolbarStyles";
 import { FilterChip } from "@/components/ui/FilterChip";
+import { useWallClock } from "@/hooks/useWallClock";
 import {
   buildFlatRows,
   deriveTriageView,
   filterTriageEntries,
+  msUntilNeedsAttentionExpiry,
   type NotificationFilter,
 } from "./notificationTriageModel";
 import { useNotificationRowActions } from "./useNotificationRowActions";
@@ -321,6 +323,17 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     [entries, filter, frozenUnreadIds, snoozedThreads]
   );
 
+  // In state, not a render-time Date.now(): the compiler caches that with the
+  // memo reading it, and an open inbox would keep pinning a thread that had
+  // aged out. Re-read on new history and the moment a pinned thread ages out.
+  // The delay stays stable across unrelated re-renders, each of which would
+  // otherwise re-arm the wake-up from the old reading and push it back.
+  const nextRailExpiry = useCallback(
+    (at: number) => msUntilNeedsAttentionExpiry(entries, at),
+    [entries]
+  );
+  const railNow = useWallClock(entries, nextRailExpiry);
+
   const { needsAttentionGroups, needsAttentionOverflow, chronoSections, dividerGroupId } = useMemo(
     () =>
       deriveTriageView({
@@ -330,8 +343,9 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
         groupByContext,
         lastClosedAt,
         snoozedThreads,
+        now: railNow,
       }),
-    [entries, filteredEntries, groupByContext, lastClosedAt, filter, snoozedThreads]
+    [entries, filteredEntries, groupByContext, lastClosedAt, filter, snoozedThreads, railNow]
   );
 
   const totalChronoGroups = chronoSections.reduce((sum, s) => sum + s.groups.length, 0);
