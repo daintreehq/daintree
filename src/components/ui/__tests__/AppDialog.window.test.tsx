@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppDialog, type DialogPlacement } from "../AppDialog";
 import { _resetForTests } from "@/lib/escapeStack";
 import { useGlobalEscapeDispatcher } from "@/hooks/useGlobalEscapeDispatcher";
+import { UI_ENTER_EASING, UI_EXIT_EASING } from "@/lib/animationUtils";
 
 const PORTAL_WIDTH = 320;
 
@@ -20,22 +21,32 @@ vi.mock("@/hooks/useOverlayState", () => ({
   useOverlayState: () => {},
 }));
 
-let mockPrevOpen = false;
+// While set, a closing dialog stays painted, mid-exit, until a render with it
+// cleared. Otherwise the exit runs at once, handing focus back as the real
+// presence does at its end.
+let mockExitPending = false;
 
-// The exit runs at once, handing focus back as the real presence does at its end.
-vi.mock("@/hooks/useAnimatedPresence", () => ({
-  useAnimatedPresence: ({
-    isOpen,
-    onAnimateOut,
-  }: {
-    isOpen: boolean;
-    onAnimateOut?: () => void;
-  }) => {
-    if (mockPrevOpen && !isOpen) onAnimateOut?.();
-    mockPrevOpen = isOpen;
-    return { isVisible: isOpen, shouldRender: isOpen };
-  },
-}));
+vi.mock("@/hooks/useAnimatedPresence", async () => {
+  const { useRef } = await import("react");
+  return {
+    useAnimatedPresence: ({
+      isOpen,
+      onAnimateOut,
+    }: {
+      isOpen: boolean;
+      onAnimateOut?: () => void;
+    }) => {
+      const painted = useRef(false);
+      if (isOpen) {
+        painted.current = true;
+      } else if (painted.current && !mockExitPending) {
+        painted.current = false;
+        onAnimateOut?.();
+      }
+      return { isVisible: isOpen, shouldRender: painted.current };
+    },
+  };
+});
 
 vi.mock("@/lib/scrollbarGutter", () => ({
   SCROLLBAR_GUTTER_VAR: "--app-scrollbar-gutter",
@@ -126,7 +137,7 @@ function header(): HTMLElement {
 }
 
 beforeEach(() => {
-  mockPrevOpen = false;
+  mockExitPending = false;
   _resetForTests();
   vi.useFakeTimers({ shouldAdvanceTime: true });
   vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
@@ -170,7 +181,14 @@ describe("AppDialog window placement", () => {
     const { rerender } = render(<Stack windowOpen />);
     expect(screen.getByTestId("nested-dialog").style.right).toBe("0px");
 
+    // Still painted while it fades out, so still covering what it covered.
+    mockExitPending = true;
     rerender(<Stack windowOpen={false} />);
+    expect(screen.getByTestId("nested-dialog").style.right).toBe("0px");
+
+    mockExitPending = false;
+    rerender(<Stack windowOpen={false} />);
+    expect(screen.queryByTestId("test-dialog")).toBeNull();
     expect(screen.getByTestId("nested-dialog").style.right).toBe(`${PORTAL_WIDTH}px`);
   });
 
@@ -214,13 +232,18 @@ describe("AppDialog window placement", () => {
     expect(layer().className).toContain("starting:opacity-0");
   });
 
-  it("fades on a view's curves, not the scrim's linear one", () => {
+  it("fades in and out on a view's curves, where a card's scrim fades on its own", () => {
     const { unmount } = render(<Dialog placement="center" />);
     const scrim = layer().style.transitionTimingFunction;
     unmount();
 
-    render(<Dialog placement="window" />);
-    expect(layer().style.transitionTimingFunction).not.toBe(scrim);
+    const { rerender } = render(<Dialog placement="window" />);
+    expect(scrim).not.toBe(UI_ENTER_EASING);
+    expect(layer().style.transitionTimingFunction).toBe(UI_ENTER_EASING);
+
+    mockExitPending = true;
+    rerender(<Dialog placement="window" isOpen={false} />);
+    expect(layer().style.transitionTimingFunction).toBe(UI_EXIT_EASING);
   });
 
   it("claims no-drag over the window and makes its header the title bar", () => {
