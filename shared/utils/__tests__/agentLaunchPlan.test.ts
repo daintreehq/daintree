@@ -12,6 +12,7 @@ function input(overrides: Partial<AgentLaunchPlanInput> = {}): AgentLaunchPlanIn
     settings: null,
     ccrPresets: undefined,
     projectPresets: undefined,
+    presetInventory: { ccr: true, project: true },
     options: undefined,
     shellDialect: "posix",
     resolveBaseCommand: (command) => command,
@@ -80,6 +81,104 @@ describe("buildAgentLaunchPlan", () => {
     );
 
     expect(onStalePreset).toHaveBeenCalledExactlyOnceWith("agent");
+  });
+
+  describe("a preset whose inventory hasn't loaded (#15025)", () => {
+    const TEAM = { id: "team", name: "Team", env: { WHO: "team" } };
+
+    it("refuses before any fallback, cleanup or probe while the project's presets are unread", async () => {
+      const onStalePreset = vi.fn();
+      const getCliDetail = vi.fn(async () => undefined);
+      const plan = await buildAgentLaunchPlan(
+        input({
+          settings: settingsWith({
+            presetId: "global",
+            worktreePresets: { "/repo-wt/a": "team" },
+            customPresets: PRESETS,
+          }),
+          presetInventory: { ccr: true, project: false },
+          onStalePreset,
+          getCliDetail,
+        })
+      );
+
+      expect(plan.unloadedPresetId).toBe("team");
+      expect(plan.command).toBeUndefined();
+      expect(plan.preset).toBeUndefined();
+      expect(onStalePreset).not.toHaveBeenCalled();
+      expect(getCliDetail).not.toHaveBeenCalled();
+    });
+
+    it("resolves the same pick once the project's presets arrive", async () => {
+      const plan = await buildAgentLaunchPlan(
+        input({
+          settings: settingsWith({ worktreePresets: { "/repo-wt/a": "team" } }),
+          projectPresets: [TEAM],
+          presetInventory: { ccr: true, project: false },
+        })
+      );
+
+      expect(plan.unloadedPresetId).toBeUndefined();
+      expect(plan.preset?.id).toBe("team");
+      expect(plan.env).toEqual({ WHO: "team" });
+    });
+
+    it("holds an explicitly requested id the unread inventory might still hold", async () => {
+      const plan = await buildAgentLaunchPlan(
+        input({ options: { presetId: "team" }, presetInventory: { ccr: true, project: false } })
+      );
+
+      expect(plan.unloadedPresetId).toBe("team");
+    });
+
+    it("waits on unread CCR routes only for a CCR id", async () => {
+      const onStalePreset = vi.fn();
+      const unread = { ccr: false, project: true };
+      const ccrPick = await buildAgentLaunchPlan(
+        input({ settings: settingsWith({ presetId: "ccr-opus" }), presetInventory: unread })
+      );
+      const customPick = await buildAgentLaunchPlan(
+        input({
+          settings: settingsWith({ presetId: "user-gone", customPresets: PRESETS }),
+          presetInventory: unread,
+          onStalePreset,
+        })
+      );
+
+      expect(ccrPick.unloadedPresetId).toBe("ccr-opus");
+      expect(customPick.unloadedPresetId).toBeUndefined();
+      expect(onStalePreset).toHaveBeenCalledExactlyOnceWith("agent");
+    });
+
+    it("holds a stale worktree pick whose agent-default fallback is still unread", async () => {
+      const onStalePreset = vi.fn();
+      const plan = await buildAgentLaunchPlan(
+        input({
+          settings: settingsWith({
+            presetId: "ccr-opus",
+            worktreePresets: { "/repo-wt/a": "user-gone" },
+          }),
+          presetInventory: { ccr: false, project: true },
+          onStalePreset,
+        })
+      );
+
+      expect(plan.unloadedPresetId).toBe("ccr-opus");
+      expect(onStalePreset).not.toHaveBeenCalled();
+    });
+
+    it("never holds a launch that asks for no preset", async () => {
+      const plan = await buildAgentLaunchPlan(
+        input({
+          settings: settingsWith({ presetId: "team" }),
+          options: { presetId: null },
+          presetInventory: { ccr: false, project: false },
+        })
+      );
+
+      expect(plan.unloadedPresetId).toBeUndefined();
+      expect(plan.command).toBeDefined();
+    });
   });
 
   it("launches the bare agent for an explicit null, ignoring every saved pick", async () => {

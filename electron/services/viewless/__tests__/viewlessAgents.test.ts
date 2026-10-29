@@ -137,6 +137,31 @@ describe("agent.launch with no frontend", () => {
     });
   });
 
+  it("refuses rather than launch without a saved preset whose project presets failed to read (#15025)", async () => {
+    const settings = {
+      agents: { claude: { presetId: "team", customPresets: [{ id: "zai", name: "Z.ai" }] } },
+    } as unknown as AgentSettings;
+    const { deps, invoke, store } = launchDeps();
+    deps.agents.getSettings = async () => settings;
+    deps.agents.getProjectPresets = async () => {
+      throw new Error("EACCES");
+    };
+
+    const result = await executeViewlessAction(
+      request("agent.launch", { agentId: "claude" }),
+      deps
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      result: { launched: false, spawnStatus: "presets-loading", terminalId: null },
+    });
+    expect(invoke.mock.calls.some(([, channel]) => channel === CHANNELS.TERMINAL_SPAWN)).toBe(
+      false
+    );
+    expect(store.read()?.terminals ?? []).toEqual([]);
+  });
+
   it("launches against the bare agent when asked for no preset", async () => {
     const settings = {
       agents: { claude: { presetId: "zai", customPresets: [{ id: "zai", name: "Z.ai" }] } },

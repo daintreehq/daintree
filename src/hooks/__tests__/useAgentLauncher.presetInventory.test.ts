@@ -107,7 +107,9 @@ function saveChoices(entry: Record<string, unknown>): void {
 }
 
 function launchedPresetIds(): unknown[] {
-  return addPanel.mock.calls.map(([options]) => (options as { agentPresetId?: string }).agentPresetId);
+  return addPanel.mock.calls.map(
+    ([options]) => (options as { agentPresetId?: string }).agentPresetId
+  );
 }
 
 describe("useAgentLauncher — a saved preset whose inventory hasn't loaded (#15025)", () => {
@@ -169,7 +171,10 @@ describe("useAgentLauncher — a saved preset whose inventory hasn't loaded (#15
     expect(updateWorktreePreset).not.toHaveBeenCalled();
     expect(updateAgent).not.toHaveBeenCalled();
     expect(notify).toHaveBeenCalledOnce();
-    expect(notify.mock.calls[0]?.[0]).toMatchObject({ type: "error", action: { label: "Try again" } });
+    expect(notify.mock.calls[0]?.[0]).toMatchObject({
+      type: "error",
+      action: { label: "Try again" },
+    });
   });
 
   it("launches the saved pick from the refusal's Try again once the presets have loaded", async () => {
@@ -198,7 +203,11 @@ describe("useAgentLauncher — a saved preset whose inventory hasn't loaded (#15
   it("waits for CCR routes only for a CCR id, so a deleted custom pick is still cleaned up", async () => {
     useCcrPresetsStore.setState({ ccrPresetsByAgent: {}, isInitialized: false });
     useProjectPresetsStore.getState().setPresetsByAgent("proj-1", {});
-    saveChoices({ presetId: "mine", customPresets: [MINE], worktreePresets: { "wt-1": "user-gone" } });
+    saveChoices({
+      presetId: "mine",
+      customPresets: [MINE],
+      worktreePresets: { "wt-1": "user-gone" },
+    });
     const { result } = renderHook(() => useAgentLauncher());
 
     await act(async () => {

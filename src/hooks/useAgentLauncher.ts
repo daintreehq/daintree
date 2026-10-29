@@ -250,11 +250,7 @@ export interface LaunchAgentOptions {
 
 /** Why `launchAgent` resolved to `null` without throwing. */
 export type LaunchDeclineReason =
-  | "panel-limit"
-  | "already-launching"
-  | "spawn-failed"
-  | "unavailable"
-  | "presets-loading";
+  "panel-limit" | "already-launching" | "spawn-failed" | "unavailable" | "presets-loading";
 
 export interface LaunchDecline {
   reason: LaunchDeclineReason;

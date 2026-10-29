@@ -141,6 +141,29 @@ describe("PresetSelector", () => {
     expect(getByTestId("preset-option-default").getAttribute("aria-selected")).toBe("false");
   });
 
+  it("shows a saved preset that hasn't loaded as loading, not as Default (#15025)", () => {
+    const custom = mkPreset("user-x", "X");
+    const props = {
+      selectedPresetId: "team-opus",
+      allPresets: [custom],
+      ccrPresets: [],
+      customPresets: [custom],
+      onChange,
+      agentColor: "#888",
+    };
+    const { getByTestId, queryAllByTestId, rerender } = render(
+      <PresetSelector {...props} selectionLoading />
+    );
+
+    expect(getByTestId("preset-selector-trigger").textContent).not.toContain("Default");
+    expect(getByTestId("preset-option-default").getAttribute("aria-current")).toBeNull();
+    expect(queryAllByTestId("check-icon")).toHaveLength(0);
+
+    // Once its presets have loaded without it, it's an ordinary stale id again.
+    rerender(<PresetSelector {...props} />);
+    expect(getByTestId("preset-selector-trigger").textContent).toContain("Default");
+  });
+
   it("renders 'Project shared' group and badge when project presets are present", () => {
     const project = mkPreset("team-opus", "Team Opus");
     const { getByTestId, queryByTestId } = render(

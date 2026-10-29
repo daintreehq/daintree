@@ -208,7 +208,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         ])
         .nullable()
         .describe(
-          "Null on a launch, else why not: panel-limit (see panelLimit), already-launching or presets-loading (retry), missing-cli (setup panel opened)."
+          "Null if launched. Retry already-launching or presets-loading; missing-cli opened a setup panel."
         ),
       worktreeId: z.string().nullable(),
       worktreePath: z.string().nullable(),

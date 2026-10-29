@@ -3,7 +3,6 @@ import { join } from "path";
 import { homedir } from "os";
 import type { AgentPreset } from "../../shared/config/agentRegistry.js";
 import { setAgentPresets } from "../../shared/config/agentRegistry.js";
-import { CCR_PRESET_ID_PREFIX } from "../../shared/utils/agentPresets.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 
@@ -220,7 +219,7 @@ export class CcrConfigService {
     }
 
     return {
-      id: `${CCR_PRESET_ID_PREFIX}${id}`,
+      id: `ccr-${id}`,
       name: `CCR: ${name}`,
       description: `Routed via Claude Code Router (${id})`,
       env: Object.keys(env).length > 0 ? env : undefined,
