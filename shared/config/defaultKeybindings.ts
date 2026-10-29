@@ -1076,11 +1076,14 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Voice",
   },
   // Stop and send, staying where you are. Not Cmd+Alt+D: macOS takes that to
-  // hide the Dock before the app sees it, and Cmd+Shift+D opens changes.
+  // hide the Dock before the app sees it, and Cmd+Shift+D opens changes. Not
+  // Cmd+Shift+Enter either: the Review Hub's commit box commits without pushing
+  // on it. Recent dictations copies the original on this chord, so it yields there.
   {
     actionId: "voiceInput.stopAndSend",
-    combo: "Cmd+Shift+Enter",
+    combo: "Cmd+Alt+Enter",
     scope: "global",
+    when: "paletteId != 'recent-dictations'",
     priority: 0,
     description: "Stop voice dictation and send the prompt",
     category: "Voice",

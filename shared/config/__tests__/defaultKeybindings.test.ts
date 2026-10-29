@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildDefaultKeybindings } from "../defaultKeybindings.js";
+import { evaluateWhenClause } from "../../utils/whenClause/index.js";
 import type { KeybindingConfig } from "../../types/keybinding.js";
 
 function globalCombo(bindings: KeybindingConfig[], actionId: string): string[] {
@@ -37,7 +38,7 @@ describe("buildDefaultKeybindings", () => {
   });
 
   it("gives stop-and-send its own key on every platform, clear of every other default", () => {
-    expect(globalCombo(mac, "voiceInput.stopAndSend")).toEqual(["Cmd+Shift+Enter"]);
+    expect(globalCombo(mac, "voiceInput.stopAndSend")).toEqual(["Cmd+Alt+Enter"]);
     expect(globalCombo(windows, "voiceInput.stopAndSend")).toEqual(["Cmd+Alt+D"]);
     expect(globalCombo(linux, "voiceInput.stopAndSend")).toEqual(["Ctrl+Shift+Alt+."]);
     for (const table of [mac, windows, linux]) {
@@ -47,6 +48,13 @@ describe("buildDefaultKeybindings", () => {
       );
       expect(collisions).toEqual([]);
     }
+  });
+
+  it("leaves Cmd+Alt+Enter to recent dictations, where it copies the original", () => {
+    const [own] = mac.filter((b) => b.actionId === "voiceInput.stopAndSend");
+    expect(evaluateWhenClause(own!.when, { paletteId: "recent-dictations" })).toBe(false);
+    expect(evaluateWhenClause(own!.when, { paletteId: "" })).toBe(true);
+    expect(evaluateWhenClause(own!.when, { paletteId: "action" })).toBe(true);
   });
 
   it("replaces the Linux dictation default instead of adding a second one", () => {
