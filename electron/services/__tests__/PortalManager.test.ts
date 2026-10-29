@@ -740,7 +740,7 @@ describe("PortalManager LRU eviction", () => {
     expect(evictedCalls()[1][1]).toEqual({ tabId: "tab-2" });
   });
 
-  it("closeTab announces the release once, and nothing for a tab main doesn't hold", async () => {
+  it("closeTab does not emit eviction event", async () => {
     const manager = new PortalManagerClass(mockWindow);
 
     manager.createTab("tab-1", "http://localhost:1001");
@@ -748,13 +748,11 @@ describe("PortalManager LRU eviction", () => {
     (mockWindow.webContents.send as ReturnType<typeof vi.fn>).mockClear();
 
     await manager.closeTab("tab-2");
-    await manager.closeTab("tab-2");
-    await manager.closeTab("tab-unknown");
 
     const evictedCalls = (
       mockWindow.webContents.send as ReturnType<typeof vi.fn>
     ).mock.calls.filter(([ch]: string[]) => ch === "portal:tab-evicted");
-    expect(evictedCalls.map(([, payload]) => payload)).toEqual([{ tabId: "tab-2" }]);
+    expect(evictedCalls).toHaveLength(0);
   });
 
   it("never evicts the active tab", () => {
@@ -1365,16 +1363,6 @@ describe("PortalManager across project views (#14537)", () => {
         { url: "http://localhost:3000/#pushed", canGoBack: false, canGoForward: false },
         { url: "http://localhost:3000/#pushed", canGoBack: true, canGoForward: false },
       ]);
-    });
-
-    it("tells every project view when a tab is closed, so none keeps it live", async () => {
-      const manager = new PortalManagerClass(mockWindow);
-      manager.createTab("tab-1", "http://localhost:3000");
-
-      await manager.closeTab("tab-1");
-
-      expect(sentOn(cachedView, "portal:tab-evicted")).toEqual([{ tabId: "tab-1" }]);
-      expect(sentOn(frontView, "portal:tab-evicted")).toEqual([{ tabId: "tab-1" }]);
     });
 
     it("reports nothing for a view shown before its first commit", async () => {

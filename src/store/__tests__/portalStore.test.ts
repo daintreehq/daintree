@@ -823,8 +823,10 @@ describe("portalStore tab history (#15040)", () => {
     });
   });
 
-  it("replaces a tab's history when it changes, and leaves the store alone when it doesn't", () => {
+  it("replaces a tab's history when either direction changes, and leaves the store alone when neither does", () => {
     report("tab-1", true);
+    report("tab-1", true, true);
+    expect(history()["tab-1"]).toEqual({ canGoBack: true, canGoForward: true });
     report("tab-1", false, true);
     expect(history()["tab-1"]).toEqual({ canGoBack: false, canGoForward: true });
     const before = usePortalStore.getState();
