@@ -11,6 +11,7 @@ import {
   Globe,
   PanelLeftClose,
   PanelLeftOpen,
+  PanelTop,
   RefreshCw,
   WrapText,
   X,
@@ -250,6 +251,13 @@ export interface FileBrowserViewerProps {
    * opened from, or to the idle body (#13194). The pane decides which.
    */
   onCloseSelection: () => void;
+  /**
+   * Opens the file on show as its own persistent grid panel — the viewer's
+   * route to what a tree row's Enter or double-click does, which the folder
+   * listing's single-click contract can't offer. Absent (a workspace with no
+   * resolvable root, a test) hides the control.
+   */
+  onOpenAsPanel?: (absolutePath: string) => void;
 }
 
 /** Toolbar sort menu entries, in menu order. */
@@ -362,6 +370,7 @@ export function FileBrowserViewer({
   missingFilePath,
   onShowFolder,
   onCloseSelection,
+  onOpenAsPanel,
 }: FileBrowserViewerProps) {
   const [state, setState] = useState<ViewerState>({ status: "idle" });
   // The reader's explicit Source/Rendered choice, `null` until they touch the
@@ -999,6 +1008,7 @@ export function FileBrowserViewer({
               openLabel={openAction.label}
               openIcon={openAction.icon}
               onOpen={runOpen}
+              onOpenAsPanel={onOpenAsPanel ? () => onOpenAsPanel(filePath) : undefined}
             />
           )}
           {/* Outside `FileActions` so it never folds into "More actions": it
@@ -1626,6 +1636,7 @@ function FileActions({
   openLabel,
   openIcon: OpenIcon,
   onOpen,
+  onOpenAsPanel,
 }: {
   filePath: string;
   contents: string | null;
@@ -1636,6 +1647,7 @@ function FileActions({
   openLabel: string;
   openIcon: LucideIcon;
   onOpen: () => void;
+  onOpenAsPanel: (() => void) | undefined;
 }) {
   const compact = useFileViewerToolbarCompact();
 
@@ -1661,6 +1673,12 @@ function FileActions({
             </DropdownMenuCheckboxItem>
             <DropdownMenuSeparator />
           </>
+        )}
+        {onOpenAsPanel && (
+          <DropdownMenuItem onSelect={onOpenAsPanel}>
+            <PanelTop className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+            Open as panel
+          </DropdownMenuItem>
         )}
         {contents !== null && (
           <DropdownMenuItem onSelect={() => copyWithToast("File contents", contents)}>
@@ -1702,6 +1720,14 @@ function FileActions({
           onClick={() => wrap.onValueChange(!wrap.value)}
         >
           <WrapText className={TOOLBAR_ICON_CLASS} />
+        </FileViewerToolbar.IconButton>
+      )}
+      {/* Ahead of the copy/reveal/open suffix, which stays identical to FilePane's;
+          this is the one control here that has no FilePane counterpart, because
+          a panel is already what FilePane is. */}
+      {onOpenAsPanel && (
+        <FileViewerToolbar.IconButton label="Open as panel" onClick={onOpenAsPanel}>
+          <PanelTop className={TOOLBAR_ICON_CLASS} />
         </FileViewerToolbar.IconButton>
       )}
       {/* Same control, same order as FilePane's action group. Raw text only:
