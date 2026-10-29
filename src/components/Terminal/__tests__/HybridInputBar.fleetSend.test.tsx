@@ -155,8 +155,10 @@ async function mount() {
 
   const type = async (text: string) => {
     await act(async () => {
+      const end = view.state.doc.length;
       view.dispatch({
-        changes: { from: view.state.doc.length, insert: text },
+        changes: { from: end, insert: text },
+        selection: { anchor: end + text.length },
         userEvent: "input.type",
       });
     });
@@ -278,5 +280,99 @@ describe("HybridInputBar's fleet send", () => {
     expect(view.state.doc.toString()).toBe("try again");
     expect(draft("term-1")).toBe("try again");
     expect(draft("term-2")).toBe("try again");
+  });
+
+  // Enter on a `/` row runs it; the fleet gets it, as it gets a typed Enter (#14948).
+  it("runs a slash command picked from the menu on every armed pane", async () => {
+    const { view, type, pressEnter, settle, onSend, draft } = await mount();
+    await type("/compa");
+    await settle();
+    expect(document.querySelector('[role="option"]')?.textContent).toContain("/compact");
+
+    await pressEnter();
+    await settle();
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(submitMock.mock.calls.sort(([a], [b]) => a.localeCompare(b))).toEqual([
+      ["term-1", "/compact"],
+      ["term-2", "/compact"],
+    ]);
+    expect(view.state.doc.toString()).toBe("");
+    expect(draft("term-1")).toBe("");
+    expect(draft("term-2")).toBe("");
+  });
+
+  it("runs a slash command from the menu on every armed pane when Enter arrives as input", async () => {
+    const { view, type, settle, onSend } = await mount();
+    await type("/compa");
+    await settle();
+
+    await act(async () => {
+      view.contentDOM.dispatchEvent(
+        new InputEvent("beforeinput", { inputType: "insertLineBreak", cancelable: true })
+      );
+    });
+    await settle();
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(submitMock.mock.calls.map(([id, text]) => `${id} ${text}`).sort()).toEqual([
+      "term-1 /compact",
+      "term-2 /compact",
+    ]);
+  });
+
+  it.each([
+    ["armed alone", "term-2"],
+    ["not armed", "term-1"],
+  ])("runs a slash command from the menu on this pane when it is %s", async (_, disarmed) => {
+    useFleetArmingStore.getState().disarmId(disarmed);
+    const { view, type, pressEnter, settle, onSend } = await mount();
+    await type("/compa");
+    await settle();
+
+    await pressEnter();
+    await settle();
+
+    expect(submitMock).not.toHaveBeenCalled();
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onSend.mock.calls[0]![0]).toMatchObject({ text: "/compact" });
+    expect(view.state.doc.toString()).toBe("");
+  });
+
+  it("runs a slash command from the menu on no pane when every target is excluded", async () => {
+    useFleetTargetOverridesStore.getState().setSkipped("term-1", true);
+    useFleetTargetOverridesStore.getState().setSkipped("term-2", true);
+    const { view, type, pressEnter, settle, onSend, draft } = await mount();
+    await type("/compa");
+    await settle();
+
+    await pressEnter();
+    await settle();
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(submitMock).not.toHaveBeenCalled();
+    expect(view.state.doc.toString()).toBe("/compa");
+    expect(draft("term-1")).toBe("/compa");
+  });
+
+  it("keeps what was typed while a slash command from the menu was on its way", async () => {
+    const submits = holdSubmits();
+    const { view, type, pressEnter, settle, draft } = await mount();
+    try {
+      await type("/compa");
+      await settle();
+      await pressEnter();
+      await settle();
+      expect(submits.count).toBe(2);
+
+      await type(" then summarize");
+    } finally {
+      await act(async () => submits.release());
+    }
+    await settle();
+
+    expect(submitMock.mock.calls.map(([, text]) => text)).toEqual(["/compact", "/compact"]);
+    expect(view.state.doc.toString()).toBe("/compa then summarize");
+    expect(draft("term-1")).toBe("/compa then summarize");
   });
 });

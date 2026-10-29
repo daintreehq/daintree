@@ -1600,12 +1600,29 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       return false;
     };
 
+    // A `/` row run from the menu goes where a typed Enter would: to the armed
+    // fleet, else to this pane (#14948).
+    const runCompletedCommand = (text: string) => {
+      const latest = latestRef.current;
+      // The menu takes Enter before the keymap asks whether the composer is
+      // disabled, and the fleet would never ask.
+      if (!latest || latest.disabled) return;
+      // The editor still reads the partial token: only that leaves the draft.
+      const isDraftUnchanged = guardSentDraft(latest.projectId);
+      const intercepted = tryComposerFleetBroadcast(isFocusedTerminal, terminalId, text, () => {
+        if (!isDraftUnchanged()) return;
+        clearDraftInput(terminalId, projectId);
+        resetEditorDoc();
+      });
+      if (!intercepted) void sendText(text);
+    };
+
     const { applyAutocompleteSelection, handleAutocompleteSelect } = useAutocompleteApply({
       editorViewRef,
       latestRef,
       lastQueryRef,
       applyEditorValue,
-      sendText,
+      onExecute: runCompletedCommand,
       setActiveCompletionContext,
       setSelectedIndex,
     });
