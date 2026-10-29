@@ -186,9 +186,7 @@ describe("FileEditorHintBar", () => {
     const tipLabel = dismiss().getAttribute("aria-label");
     cleanup();
 
-    render(
-      <FileEditorHintBar {...BASE} error="The plugin couldn't start" onDismiss={onDismiss} />
-    );
+    render(<FileEditorHintBar {...BASE} error="The plugin couldn't start" onDismiss={onDismiss} />);
     const buttons = screen.getAllByRole("button");
     const close = buttons[buttons.length - 1]!;
     const errorLabel = close.getAttribute("aria-label");
