@@ -814,12 +814,7 @@ export function ThemeBrowser() {
         <Button variant="ghost" size="sm" onClick={handleCancel}>
           Cancel
         </Button>
-        <Button
-          ref={commitButtonRef}
-          variant="contrast"
-          size="sm"
-          onClick={handleCommit}
-        >
+        <Button ref={commitButtonRef} variant="contrast" size="sm" onClick={handleCommit}>
           Set theme
         </Button>
       </div>
