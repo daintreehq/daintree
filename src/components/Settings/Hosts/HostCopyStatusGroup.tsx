@@ -3,6 +3,7 @@ import { RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { FactSeparator } from "@/components/ui/FactSeparator";
+import { TimeAgo } from "@/components/ui/TimeAgo";
 import { deviceOwnerPhrase } from "@/hooks/useSettingsOwner";
 import {
   PORTABLE_SETTINGS_CATEGORIES,
@@ -275,7 +276,7 @@ export function HostLastCopyGroup({
         description={
           <>
             <span className="flex flex-wrap items-center gap-x-1.5">
-              <span>{formatRelativeTime(lastCopy.at)}</span>
+              <TimeAgo timestamp={lastCopy.at} verbose />
               <FactSeparator />
               <span>
                 {pluralize(applied, "setting")} copied{skipped > 0 ? `, ${skipped} skipped` : ""}

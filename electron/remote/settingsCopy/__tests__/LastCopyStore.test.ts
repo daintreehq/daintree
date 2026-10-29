@@ -49,7 +49,10 @@ describe("LastCopyStore", () => {
       leaves: [{ ...RECORD.leaves![0], before: "x".repeat(LAST_COPY_MAX_BYTES) }],
     };
     const kept = await store.write(huge);
-    expect(kept).toEqual({ copy: { ...RECORD.copy, undo: "unavailable" } });
+    // Kept without its undo, and saying why, so the page can tell the user.
+    expect(kept).toEqual({
+      copy: { ...RECORD.copy, undo: "unavailable", undoUnavailable: "too-large" },
+    });
     expect(await store.read()).toEqual(kept);
     expect((await fs.stat(file)).size).toBeLessThan(LAST_COPY_MAX_BYTES);
   });

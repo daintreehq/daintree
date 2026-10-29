@@ -152,7 +152,7 @@ export function categoryReports(
   preview: SettingsCopyPreview,
   categories: readonly PortableSettingsCategory[]
 ): CategoryReport[] {
-  const labels = new Map(
+  const labels = new Map<string, string>(
     preview.sections.flatMap((section) => [
       ...section.changes.map(
         (change) => [`${section.section}:${change.key}`, change.label] as const

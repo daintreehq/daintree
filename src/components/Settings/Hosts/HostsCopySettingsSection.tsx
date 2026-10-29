@@ -221,6 +221,16 @@ function outcomeOf(copy: HostCopy): Outcome | null {
         }
       : not(`${pluralize(failed, "setting")} couldn't be written`, 1);
   }
+  if (applied === 0) {
+    return {
+      severity: "warning",
+      label: "Not copied",
+      detail: `${pluralize(skipped, "setting")} skipped`,
+      rank: 3,
+      retry: false,
+      ok: false,
+    };
+  }
   return {
     severity: "success",
     label: `${pluralize(applied, "setting")} copied${skipped > 0 ? `, ${skipped} skipped` : ""}`,
@@ -280,7 +290,7 @@ function previewSummary(
           : "Nothing to copy",
     totals.notCopied > 0 ? `${totals.notCopied} won't copy` : null,
     totals.tooOld > 0
-      ? `${pluralize(totals.tooOld, "category", "categories")} need a newer Daintree`
+      ? `${pluralize(totals.tooOld, "category", "categories")} ${totals.tooOld === 1 ? "needs" : "need"} a newer Daintree`
       : null,
   ].filter((part): part is string => part !== null);
   return { items, total, kind, tooOld: totals.tooOld, text: parts.join(". ") };

@@ -345,7 +345,12 @@ describe("what a copy would change, and undoing the last one (#13347)", () => {
       ["agentSettings", "globalEnvironment", "worktreeConfig"].sort()
     );
     expect(hostSide.service.revision).not.toHaveBeenCalled();
-    expect(status).toEqual({ supported: true, changes: ["worktreePath"], lastCopy: null });
+    expect(status).toEqual({
+      supported: true,
+      changes: ["worktreePath"],
+      changeCounts: { worktreePath: { add: 0, update: 1 } },
+      lastCopy: null,
+    });
   });
 
   it("records who copied, when and what, and shows it without any value", async () => {
