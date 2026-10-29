@@ -18,7 +18,7 @@ import {
 } from "./worktreeSnapshotReconciliation";
 import {
   abandonDelete,
-  discardTerminalRestores,
+  discardDeleteRestores,
   findDeleteOutboxEntryForWorktree,
   findIssueOutboxEntryForWorktree,
   findOutboxEntriesForWorktree,
@@ -722,7 +722,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         // ghost row (#11232) deliberately leaves surviving panels alive (their
         // agent processes keep running) until the user acts or the auto-cleanup
         // TTL trashes them.
-        discardTerminalRestores(
+        discardDeleteRestores(
           worktreeId,
           outboxEntries.map((entry) => entry.mutationId)
         );
