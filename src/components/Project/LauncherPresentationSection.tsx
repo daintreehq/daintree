@@ -161,9 +161,9 @@ export function LauncherPresentationSection() {
       description: entry.pluginName,
     })),
     // A choice whose plugin is not loaded right now stays visible, so it can
-    // still be seen and let go.
+    // still be seen and let go. Its ref is an internal id, never a label.
     ...(featuredLaunchEntry !== null && !ownEntries.some((e) => e.ref === featuredLaunchEntry)
-      ? [{ value: featuredLaunchEntry, label: featuredLaunchEntry, description: "Not loaded" }]
+      ? [{ value: featuredLaunchEntry, label: "An entry from a plugin that isn't loaded" }]
       : []),
   ];
 

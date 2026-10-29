@@ -1163,6 +1163,25 @@ describe("update menu lifecycle", () => {
       }
     );
 
+    it("on darwin gives the menu the window role, so AppKit lists the open windows (#15232)", () => {
+      Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+      createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
+
+      const top = capturedTemplate.find((m) => m.label === "Window");
+      expect(top?.role).toBe("window");
+      // The role keeps the custom submenu rather than Electron's default one.
+      expect(findSubmenu(capturedTemplate, "Window").map((i) => i.role ?? i.type)).toContain(
+        "front"
+      );
+    });
+
+    it.each(["win32", "linux"] as const)("on %s leaves the Window menu without a role", (platform) => {
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+      createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
+
+      expect(capturedTemplate.find((m) => m.label === "Window")?.role).toBeUndefined();
+    });
+
     it("on darwin keeps Cmd+M minimizing the window", () => {
       Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
       createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);

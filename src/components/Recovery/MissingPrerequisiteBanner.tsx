@@ -348,6 +348,21 @@ export function MissingPrerequisiteBanner() {
             onClick: () => void recheck(),
           };
 
+  // Re-check beside any other action while nothing is installing: the
+  // automatic re-probe waits for window focus, which never comes when the
+  // command is pasted into one of Daintree's own terminals (#15232).
+  const recheckButton = (
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={() => void recheck()}
+      loading={isRechecking}
+      disabled={isRechecking}
+    >
+      Re-check
+    </Button>
+  );
+
   // A failed install is an error the user has to act on; everything else here
   // is an advisory about the environment.
   if (failed) {
@@ -367,16 +382,23 @@ export function MissingPrerequisiteBanner() {
         onClose={dismiss}
         closeAriaLabel="Dismiss missing tool warning"
         trailingSlot={
-          guidance?.result.installUrl ? (
-            <Button variant="ghost" size="sm" onClick={openInstallUrl}>
-              View install guide
-            </Button>
+          guidance?.result.installUrl || canInstall ? (
+            <>
+              {guidance?.result.installUrl && (
+                <Button variant="ghost" size="sm" onClick={openInstallUrl}>
+                  View install guide
+                </Button>
+              )}
+              {/* Retry is the re-check when there is nothing to run. */}
+              {canInstall && recheckButton}
+            </>
           ) : undefined
         }
         action={{
           id: "retry",
           label: "Retry",
           variant: "primary",
+          disabled: isRechecking,
           onClick: () => void (canInstall ? runInstall() : recheck()),
         }}
       />
@@ -396,6 +418,7 @@ export function MissingPrerequisiteBanner() {
       ariaLive={isRunning ? "off" : undefined}
       onClose={dismiss}
       closeAriaLabel="Dismiss missing tool warning"
+      trailingSlot={!isRunning && action.id !== "recheck" ? recheckButton : undefined}
       actions={[action]}
     />
   );

@@ -7,8 +7,8 @@ import type {
   ProjectTemplatePreview,
 } from "../../../shared/types/plugin.js";
 import { load as parseYaml } from "js-yaml";
-import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { foldFileName } from "../../../shared/utils/fileNameFold.js";
+import { logError } from "../../utils/logger.js";
 import { YAML_MERGE_SCHEMA } from "../../utils/yamlMergeSchema.js";
 import { PROJECT_TEMPLATES_DIR } from "../../utils/pluginArchiveConstants.js";
 import { getPluginProjectTemplatePluginDir } from "./PluginProjectTemplateRegistry.js";
@@ -445,10 +445,10 @@ export async function previewProjectTemplate(
     return toProjectTemplatePreview(await loadProjectTemplateInventory(pluginId, templateId));
   } catch (err) {
     if (err instanceof ProjectTemplateError) return { status: "unusable", reason: err.message };
-    return {
-      status: "unusable",
-      reason: `Couldn't read this template's files: ${formatErrorMessage(err, "unknown error")}`,
-    };
+    // A filesystem error names the errno and an absolute path: the log keeps
+    // where it happened, the dialog says only what did (#15232).
+    logError("Couldn't read a project template's files", err, { pluginId, templateId });
+    return { status: "unusable", reason: "Couldn't read this template's files.", retryable: true };
   }
 }
 

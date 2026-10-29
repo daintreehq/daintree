@@ -761,6 +761,8 @@ export function createApplicationMenu(
     },
     {
       label: "Window",
+      // The role is what makes AppKit list the open windows in this menu.
+      ...(process.platform === "darwin" ? { role: "window" as const } : {}),
       // Off macOS the minimize role registers a hidden Ctrl+M accelerator that
       // fires whenever the focused page leaves the key unhandled (any text field).
       // Ctrl+M is Enter to a terminal and means nothing like minimize there.

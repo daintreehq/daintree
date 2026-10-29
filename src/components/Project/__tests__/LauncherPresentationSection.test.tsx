@@ -282,7 +282,9 @@ describe("LauncherPresentationSection", () => {
   it("keeps a featured entry whose plugin is not loaded, and lets it go", async () => {
     await renderSection(snapshot({}, { featuredLaunchEntry: "acme.gone.entry" }));
     const row = document.getElementById("project-launcher-featured");
-    expect(row?.textContent).toContain("acme.gone.entry");
+    // Named in words: the stored ref is an internal id.
+    expect(row?.textContent).toContain("An entry from a plugin that isn't loaded");
+    expect(row?.textContent).not.toContain("acme.gone.entry");
     fireEvent.click(within(row!).getByRole("button", { name: /reset/i }));
     await act(async () => {});
     expect(setFeaturedLaunchEntry).toHaveBeenCalledWith(null);

@@ -501,6 +501,55 @@ describe("MissingPrerequisiteBanner", () => {
       expect(useMissingPrerequisiteStore.getState().install?.status).toBe("running");
     });
 
+    it("re-checks beside the install guide, with no window focus needed", async () => {
+      // A command pasted into one of Daintree's own terminals never blurs the
+      // window, so the focus re-probe never fires (#15232).
+      checkCommandMock.mockResolvedValue(false);
+      useMissingPrerequisiteStore.setState({ missing: [missingGit()] });
+      render(<MissingPrerequisiteBanner />);
+
+      expect(await screen.findByRole("button", { name: "View install guide" })).toBeTruthy();
+      await click(screen.getByRole("button", { name: "Re-check" }));
+
+      await waitFor(() => expect(useMissingPrerequisiteStore.getState().missing).toEqual([]));
+      expect(healthCheckMock).toHaveBeenCalledWith({ fatalOnly: true, force: true });
+    });
+
+    it("re-checks beside the install it offers", async () => {
+      useMissingPrerequisiteStore.setState({ missing: [missingGit()] });
+      render(<MissingPrerequisiteBanner />);
+
+      expect(await screen.findByRole("button", { name: "Install Git" })).toBeTruthy();
+      await click(screen.getByRole("button", { name: "Re-check" }));
+
+      await waitFor(() => expect(useMissingPrerequisiteStore.getState().missing).toEqual([]));
+      expect(installAgentMock).not.toHaveBeenCalled();
+    });
+
+    it("re-checks beside the Retry of a failed install", async () => {
+      installAgentMock.mockResolvedValue({ success: false, exitCode: 1 });
+      useMissingPrerequisiteStore.setState({ missing: [missingGit()] });
+      render(<MissingPrerequisiteBanner />);
+
+      await click(await screen.findByRole("button", { name: "Install Git" }));
+      expect(await screen.findByRole("button", { name: "Retry" })).toBeTruthy();
+      await click(screen.getByRole("button", { name: "Re-check" }));
+
+      await waitFor(() => expect(useMissingPrerequisiteStore.getState().missing).toEqual([]));
+      // The Retry still reruns the install, so it never doubles as the re-check.
+      expect(installAgentMock).toHaveBeenCalledOnce();
+    });
+
+    it("offers one Re-check when it is already the banner's action", async () => {
+      checkCommandMock.mockResolvedValue(false);
+      useMissingPrerequisiteStore.setState({ missing: [missingGit({ installUrl: undefined })] });
+      render(<MissingPrerequisiteBanner />);
+
+      await waitFor(() => expect(checkCommandMock).toHaveBeenCalledWith("brew"));
+      await act(async () => {});
+      expect(screen.getAllByRole("button", { name: "Re-check" })).toHaveLength(1);
+    });
+
     it("renders a live job as installing even straight after a remount", async () => {
       // The remount restarts the package-manager probe, which must not flash a
       // Re-check button over a running install.
