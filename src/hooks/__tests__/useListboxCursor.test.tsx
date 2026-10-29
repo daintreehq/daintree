@@ -7,6 +7,7 @@ import {
   stepListboxCursor,
   useListboxCursor,
   type ListboxCursorKeyEvent,
+  type UseListboxCursorResult,
 } from "../useListboxCursor";
 
 function keyEvent(
@@ -256,9 +257,18 @@ describe("useListboxCursor — scrolling the cursor row into view", () => {
     });
   });
 
+  interface HarnessProps {
+    open: boolean;
+    initialIndex?: number;
+    tick?: number;
+    /** Keep the list node through a close, as a popover reopened mid-exit-animation does. */
+    keepMounted?: boolean;
+    onCursor?: (cursor: UseListboxCursorResult) => void;
+  }
+
   // The list mounts after the render that opens it, as a Radix popover's does.
-  function Harness({ open, initialIndex, tick }: CursorProps & { tick?: number }) {
-    const { listRef } = useListboxCursor({
+  function Harness({ open, initialIndex, tick, keepMounted, onCursor }: HarnessProps) {
+    const cursor = useListboxCursor({
       itemCount: 6,
       open,
       initialIndex,
@@ -267,12 +277,15 @@ describe("useListboxCursor — scrolling the cursor row into view", () => {
     });
     const [listMounted, setListMounted] = useState(false);
     useLayoutEffect(() => {
-      setListMounted(open);
-    }, [open]);
+      setListMounted((mounted) => open || (keepMounted === true && mounted));
+    }, [open, keepMounted]);
+    useLayoutEffect(() => {
+      onCursor?.(cursor);
+    });
     return (
       <div data-tick={tick}>
         {listMounted && (
-          <div ref={listRef} data-testid="list">
+          <div ref={cursor.listRef} data-testid="list">
             {[0, 1, 2, 3, 4, 5].map((i) => (
               <div key={i} data-option-index={i} />
             ))}
@@ -283,30 +296,58 @@ describe("useListboxCursor — scrolling the cursor row into view", () => {
   }
 
   it("scrolls the committed row into view once a late-mounting list appears", () => {
-    const { rerender } = render(<Harness itemCount={6} open={false} initialIndex={4} />);
+    const { rerender } = render(<Harness open={false} initialIndex={4} />);
     expect(scrolled).toEqual([]);
 
-    rerender(<Harness itemCount={6} open={true} initialIndex={4} />);
+    rerender(<Harness open={true} initialIndex={4} />);
     expect(scrolled).toContain("4");
   });
 
   it("scrolls again when the list reopens on the row the cursor was already on", () => {
-    const { rerender } = render(<Harness itemCount={6} open={true} initialIndex={4} />);
-    rerender(<Harness itemCount={6} open={false} initialIndex={4} />);
+    const { rerender } = render(<Harness open={true} initialIndex={4} />);
+    rerender(<Harness open={false} initialIndex={4} />);
     scrolled.length = 0;
 
-    rerender(<Harness itemCount={6} open={true} initialIndex={4} />);
+    rerender(<Harness open={true} initialIndex={4} />);
     expect(scrolled).toContain("4");
   });
 
+  it("scrolls to the row the cursor moves to while the list stays mounted", () => {
+    let cursor: UseListboxCursorResult | null = null;
+    render(<Harness open={true} initialIndex={1} onCursor={(c) => (cursor = c)} />);
+    scrolled.length = 0;
+
+    act(() => cursor!.handleKeyDown(keyEvent("ArrowDown")));
+
+    expect(scrolled.at(-1)).toBe("2");
+  });
+
+  it("scrolls on a reopen that keeps the same list node and the same row", () => {
+    let cursor: UseListboxCursorResult | null = null;
+    const props = {
+      initialIndex: 3,
+      keepMounted: true,
+      onCursor: (c: UseListboxCursorResult) => (cursor = c),
+    };
+    const { rerender } = render(<Harness open={true} {...props} />);
+    act(() => cursor!.handleKeyDown(keyEvent("Home")));
+    rerender(<Harness open={false} {...props} />);
+    scrolled.length = 0;
+
+    rerender(<Harness open={true} {...props} />);
+
+    expect(cursor!.activeIndex).toBe(3);
+    expect(scrolled).toEqual(["3"]);
+  });
+
   it("does not scroll a closed list, or re-scroll on an unrelated render", () => {
-    const { rerender } = render(<Harness itemCount={6} open={true} initialIndex={2} tick={0} />);
+    const { rerender } = render(<Harness open={true} initialIndex={2} tick={0} />);
     const afterOpen = scrolled.length;
 
-    rerender(<Harness itemCount={6} open={true} initialIndex={2} tick={1} />);
+    rerender(<Harness open={true} initialIndex={2} tick={1} />);
     expect(scrolled).toHaveLength(afterOpen);
 
-    rerender(<Harness itemCount={6} open={false} initialIndex={2} tick={1} />);
+    rerender(<Harness open={false} initialIndex={2} tick={1} />);
     expect(scrolled).toHaveLength(afterOpen);
   });
 });

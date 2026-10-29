@@ -262,11 +262,15 @@ describe("RecipePickerPopover — keyboard", () => {
     });
 
     it("reopens on the pick that was just made rather than where the cursor wandered", () => {
+      const recipes = [
+        makeRecipe({ id: "a", name: "Alpha" }),
+        makeRecipe({ id: "b", name: "Beta" }),
+      ];
       const picker = (open: boolean, selectedRecipeId: string | null) => (
         <RecipePickerPopover
-          recipes={[makeRecipe({ id: "a", name: "Alpha" }), makeRecipe({ id: "b", name: "Beta" })]}
+          recipes={recipes}
           selectedRecipeId={selectedRecipeId}
-          selectedRecipe={undefined}
+          selectedRecipe={recipes.find((recipe) => recipe.id === selectedRecipeId)}
           open={open}
           onOpenChange={vi.fn()}
           onSelectRecipe={vi.fn()}
@@ -275,8 +279,8 @@ describe("RecipePickerPopover — keyboard", () => {
         />
       );
       const { rerender } = render(picker(true, "a"));
-      fireEvent.keyDown(screen.getByRole("combobox"), { key: "End" });
-      expect(cursorIndex()).toBe(3);
+      fireEvent.keyDown(screen.getByRole("combobox"), { key: "Home" });
+      expect(cursorIndex()).toBe(0);
 
       rerender(picker(false, "b"));
       rerender(picker(true, "b"));
