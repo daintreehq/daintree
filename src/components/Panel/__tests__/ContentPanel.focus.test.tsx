@@ -348,9 +348,7 @@ describe("ContentPanel focus", () => {
 
       focus(true);
 
-      expect(document.activeElement).toBe(
-        container.querySelector('[data-confirm-role="confirm"]')
-      );
+      expect(document.activeElement).toBe(container.querySelector('[data-confirm-role="confirm"]'));
       outside.remove();
     });
 

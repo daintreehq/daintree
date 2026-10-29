@@ -273,7 +273,6 @@ describe("WebviewDialog accessibility", () => {
     const labelEl = container.querySelector(`[id="${describedBy}"]`);
     expect(labelEl?.textContent).toBe("Enter a value");
   });
-
 });
 
 // jsdom doesn't implement a button's native Enter-to-click activation, so the
