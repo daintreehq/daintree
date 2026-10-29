@@ -308,6 +308,21 @@ describe("registerWebviewHandlers", () => {
                 isOwn: true,
               },
               {
+                name: "both",
+                get: { type: "function", objectId: "getter-2", description: "get both() {}" },
+                set: { type: "function", objectId: "setter-2", description: "set both(v) {}" },
+                configurable: true,
+                enumerable: true,
+                isOwn: true,
+              },
+              {
+                name: "writeOnly",
+                set: { type: "function", objectId: "setter-3", description: "set writeOnly(v) {}" },
+                configurable: true,
+                enumerable: true,
+                isOwn: true,
+              },
+              {
                 name: "missing",
                 value: { type: "undefined" },
                 configurable: true,
@@ -326,13 +341,20 @@ describe("registerWebviewHandlers", () => {
       const handler = getHandler("webview:get-console-properties");
       const result = await handler(null, 42, "pane-1", rowId, "obj-acc");
 
-      const [total, sink, missing] = result.properties;
+      const [total, sink, both, writeOnly, missing] = result.properties;
       expect(total.value).toBeUndefined();
       expect(total.accessor).toEqual({ getter: true, setter: false });
       expect(sink.value).toBeUndefined();
       expect(sink.accessor).toEqual({ getter: false, setter: true });
+      expect(both.accessor).toEqual({ getter: true, setter: true });
+      expect(writeOnly.accessor).toEqual({ getter: false, setter: true });
       expect(missing.accessor).toBeUndefined();
       expect(missing.value).toEqual({ type: "primitive", kind: "undefined", value: null });
+
+      // Expanding never runs the getter: nothing but the property read reaches the page.
+      const commands = debuggerMock.sendCommand.mock.calls.map(([cmd]: [string]) => cmd);
+      expect(commands).not.toContain("Runtime.callFunctionOn");
+      expect(commands).not.toContain("Runtime.evaluate");
     });
 
     it("returns empty properties when object not found", async () => {
