@@ -798,7 +798,7 @@ describe("AgentNotificationService adversarial", () => {
     expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
     expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
       "Agent waiting",
-      "agent-1 is waiting for input",
+      "Agent is waiting for input",
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
       { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"], category: "waiting" }
@@ -817,7 +817,7 @@ describe("AgentNotificationService adversarial", () => {
     expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
     expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
       "Agent finished",
-      "agent-1 finished its task",
+      "Agent finished its task",
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
       { silent: true, ownerWebContentsId: OWNER, category: "completed" }
@@ -830,7 +830,7 @@ describe("AgentNotificationService adversarial", () => {
     internal.notificationQueue.push(
       {
         title: "Agent finished",
-        body: "agent-1 finished its task",
+        body: "Agent finished its task",
         terminalId: "term-1",
         agentId: "agent-1",
         worktreeId: "wt-1",
@@ -839,7 +839,7 @@ describe("AgentNotificationService adversarial", () => {
       },
       {
         title: "Agent finished",
-        body: "agent-2 finished its task",
+        body: "Agent finished its task",
         terminalId: "term-2",
         agentId: "agent-2",
         worktreeId: "wt-2",
@@ -875,7 +875,7 @@ describe("AgentNotificationService adversarial", () => {
     expect(notificationServiceMock.showWatchNotification).toHaveBeenNthCalledWith(
       1,
       "Agent waiting",
-      "agent-1 is waiting for input",
+      "Agent is waiting for input",
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
       { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"], category: "waiting" }
@@ -883,7 +883,7 @@ describe("AgentNotificationService adversarial", () => {
     expect(notificationServiceMock.showWatchNotification).toHaveBeenNthCalledWith(
       2,
       "Agent finished",
-      "agent-1 finished its task",
+      "Agent finished its task",
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
       { silent: true, ownerWebContentsId: OWNER, category: "completed" }

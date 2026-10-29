@@ -17,6 +17,7 @@ import {
   hasLiveProjectView,
   redirectToProjectOwner,
   releaseCachedOwner,
+  requestProjectSwitchInWindow,
   revealWindow,
 } from "../projectOwnership.js";
 import type { ProjectViewManager } from "../ProjectViewManager.js";
@@ -311,6 +312,30 @@ describe("releaseCachedOwner", () => {
     } finally {
       release();
     }
+  });
+});
+
+describe("requestProjectSwitchInWindow", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("asks the window's own renderer to switch, with the landing parked for the switch", () => {
+    const pvm = makePvm("q", ["q"]);
+    const win = makeBrowserWindow({ minimized: true });
+    const appWebContents = makeWebContents();
+    getAppWebContentsMock.mockReturnValue(appWebContents);
+    const focusIntent = { intent: "focus-panel", panelId: "x" } as const;
+
+    requestProjectSwitchInWindow(makeContext(2, pvm, win), pvm as never, PROJECT, focusIntent);
+
+    expect(pvm.setPendingFocusIntent).toHaveBeenCalledWith("p", focusIntent);
+    expect(appWebContents.send).toHaveBeenCalledWith(CHANNELS.MENU_ACTION, {
+      actionId: "project.switch",
+      args: { projectId: "p" },
+    });
+    expect(win.restore).toHaveBeenCalled();
+    expect(win.focus).toHaveBeenCalled();
   });
 });
 

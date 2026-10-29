@@ -885,6 +885,21 @@ export interface RoutingCase {
 }
 
 /**
+ * The subject a banner names for each fleet agent: its display name, never its
+ * id (#15233). Restated rather than read from the registry, for the same reason
+ * the copy below is.
+ */
+const AGENT_DISPLAY_NAMES: Record<string, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  gemini: "Gemini",
+};
+
+function expectedSubject(agentId: string): string {
+  return AGENT_DISPLAY_NAMES[agentId] ?? "Agent";
+}
+
+/**
  * Independent restatement of the waiting copy.
  *
  * Deliberately NOT `describeWaiting` from `shared/utils/waitingReasonDisplay`:
@@ -934,10 +949,13 @@ export function buildRoutingScript(fleet: readonly FleetTerminal[]): RoutingCase
       worktreeId: terminal.worktreeId,
     };
     const waitingExpected: ExpectedNotification | null = terminal.watched
-      ? { title: "Agent waiting", body: expectedWaitingBody(terminal.agentId, reason) }
+      ? {
+          title: "Agent waiting",
+          body: expectedWaitingBody(expectedSubject(terminal.agentId), reason),
+        }
       : null;
     const completedExpected: ExpectedNotification | null = terminal.watched
-      ? { title: "Agent finished", body: `${terminal.agentId} finished its task` }
+      ? { title: "Agent finished", body: `${expectedSubject(terminal.agentId)} finished its task` }
       : null;
     const watchNote = terminal.watched ? "watched panel" : "no renderer watches this panel";
 

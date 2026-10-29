@@ -241,6 +241,24 @@ export function redirectToProjectOwner(
 }
 
 /**
+ * Ask a window on this machine to switch to a project no window holds a view
+ * of, landing `focusIntent` once it arrives, exactly as picking the project in
+ * that window would: its own renderer runs the switch, so the layout it is
+ * leaving is saved. A window on a remote host must not be asked: its
+ * renderer's switch would ask the host for a project it doesn't have.
+ */
+export function requestProjectSwitchInWindow(
+  context: WindowContext,
+  projectViewManager: ProjectViewManager,
+  project: Project,
+  focusIntent?: ProjectFocusOnActivateIntent
+): void {
+  if (focusIntent) projectViewManager.setPendingFocusIntent(project.id, focusIntent);
+  requestOwnerSwitch(ownerSwitchRenderer(projectViewManager, context.browserWindow), project.id);
+  revealWindow(context.browserWindow);
+}
+
+/**
  * Switch an owner window that is on a host back to this machine. The request
  * has already been answered, so a switch that fails says so in a dialog on
  * that window, which stayed on its host.

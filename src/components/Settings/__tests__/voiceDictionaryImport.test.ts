@@ -3,6 +3,7 @@ import {
   MAX_DICTIONARY_IMPORT_TERMS,
   parseDictionaryInput,
   parseHeardAsField,
+  summarizeDictionaryAdds,
 } from "../voiceDictionaryImport";
 import { MAX_DICTIONARY_HEARD_AS } from "@shared/utils/voiceDictionary";
 
@@ -79,5 +80,46 @@ describe("parseDictionaryInput", () => {
 describe("parseHeardAsField", () => {
   it("splits on new lines and keeps commas inside a phrase", () => {
     expect(parseHeardAsField("zoo stand\n  one, two \n")).toEqual(["zoo stand", "one, two"]);
+  });
+});
+
+describe("summarizeDictionaryAdds", () => {
+  const entry = (term: string, heardAs: string[] = []) => ({
+    term,
+    heardAs,
+    source: "manual" as const,
+    addedAt: 1,
+  });
+
+  it("counts new terms, extended terms and untouched ones, ignoring case", () => {
+    const before = [entry("Daintree"), entry("Zustand", ["zoo stand"])];
+    const after = [
+      entry("Daintree"),
+      entry("Zustand", ["zoo stand", "zu stand", "zoostand"]),
+      entry("Vitest"),
+    ];
+    expect(
+      summarizeDictionaryAdds(
+        [{ term: "daintree" }, { term: "ZUSTAND" }, { term: "Vitest" }],
+        before,
+        after
+      )
+    ).toEqual({ added: 1, extended: 1, addedHeardAs: 2, unchanged: 1 });
+  });
+
+  it("says nothing changed when every term was already whole", () => {
+    const stored = [entry("Daintree", ["dane tree"])];
+    expect(summarizeDictionaryAdds([{ term: "Daintree" }], stored, stored)).toEqual({
+      added: 0,
+      extended: 0,
+      addedHeardAs: 0,
+      unchanged: 1,
+    });
+  });
+
+  it("counts a term repeated in one batch once", () => {
+    expect(
+      summarizeDictionaryAdds([{ term: "Vitest" }, { term: "vitest" }], [], [entry("Vitest")])
+    ).toEqual({ added: 1, extended: 0, addedHeardAs: 0, unchanged: 0 });
   });
 });

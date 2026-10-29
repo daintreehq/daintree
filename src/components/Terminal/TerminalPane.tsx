@@ -59,6 +59,7 @@ import { ScrollbackRestoreErrorBanner } from "./ScrollbackRestoreErrorBanner";
 import { TerminalSubmitStatusBanner } from "./TerminalSubmitStatusBanner";
 import { useTerminalSubmitStatus } from "./useTerminalSubmitStatus";
 import { TerminalAttachErrorBanner } from "./TerminalAttachErrorBanner";
+import { isAttachedProcessRunning } from "./attachedProcessRunning";
 import { useShouldSuppressLocalError } from "@/components/Recovery/useShouldSuppressLocalError";
 import { UpdateCwdDialog } from "./UpdateCwdDialog";
 import { CompactErrorList } from "../Errors/CompactErrorList";
@@ -579,6 +580,7 @@ function TerminalPaneComponent({
         sessionPreservingExit: pty?.sessionPreservingExit === true,
         isTrashedOrRemoved: terminal?.location === "trash" || terminal === undefined,
         spawnStatus: pty?.spawnStatus,
+        runtimeStatus: pty?.runtimeStatus,
         eagerAttach: pty?.eagerAttach ?? false,
         isHeldForRecovery: pty?.restoreRecovery !== undefined,
       };
@@ -593,6 +595,7 @@ function TerminalPaneComponent({
     sessionPreservingExit,
     isTrashedOrRemoved,
     spawnStatus,
+    runtimeStatus,
     eagerAttach,
     isHeldForRecovery,
   } = terminalState;
@@ -1470,6 +1473,15 @@ function TerminalPaneComponent({
   const showScrollbackRestoreError =
     !suppressParseError && Boolean(scrollbackRestoreError) && !restartError;
   const showRestartStatus = restartBannerVariant.type !== "none";
+  const attachedProcessRunning = isAttachedProcessRunning({
+    spawnStatus,
+    runtimeStatus,
+    isExited,
+    isRestarting,
+    hasSpawnError: Boolean(spawnError),
+    hasRestartError: Boolean(restartError),
+    backendStatus,
+  });
   const offeredSessionId =
     restartBannerVariant.type === "agent-resume-offer" ? restartBannerVariant.sessionId : undefined;
 
@@ -1647,6 +1659,7 @@ function TerminalPaneComponent({
           <TerminalAttachErrorBanner
             terminalId={id}
             error={attachError}
+            processRunning={attachedProcessRunning}
             onRetry={handleRetryAttach}
             isRetrying={isRebuildingDisplay}
           />
@@ -1771,7 +1784,7 @@ function TerminalPaneComponent({
               containerRef={recoveryGateRef}
               agentId={agentId}
               onLaunchAnyway={() => launchDespiteMemoryPressure(panelHoldKey(id))}
-              onCancel={() => onClose(true)}
+              onCancel={() => onClose()}
             />
           ) : isWaitingForControl ? (
             <DriveLeaseGate agentId={agentId} containerRef={recoveryGateRef} />

@@ -31,9 +31,28 @@ function install(dictionaryOverrides: Record<string, unknown>) {
   return voiceDictionary;
 }
 
+// Answers like main: the dictionary so far, with each add folded in.
+function mainLikeAdd(initial: VoiceDictionaryEntry[] = []) {
+  let dictionary = initial;
+  return vi.fn(async ({ term: value, heardAs = [] }: { term: string; heardAs?: string[] }) => {
+    const existing = dictionary.find((entry) => entry.term.toLowerCase() === value.toLowerCase());
+    if (!existing) {
+      dictionary = [...dictionary, { ...term(value), heardAs }];
+    } else {
+      const merged = [...new Set([...existing.heardAs, ...heardAs])];
+      if (merged.length > existing.heardAs.length) {
+        dictionary = dictionary.map((entry) =>
+          entry === existing ? { ...existing, heardAs: merged } : entry
+        );
+      }
+    }
+    return { dictionary, suggestedDictionary: [] } satisfies VoiceDictionaryState;
+  });
+}
+
 // Stands in for the voice tab: shows whatever dictionary main returned.
-function Page() {
-  const [entries, setEntries] = useState<VoiceDictionaryEntry[]>([]);
+function PageWith({ initial }: { initial: VoiceDictionaryEntry[] }) {
+  const [entries, setEntries] = useState<VoiceDictionaryEntry[]>(initial);
   return (
     <VoiceDictionaryPage
       entries={entries}
@@ -49,6 +68,8 @@ function Page() {
     />
   );
 }
+
+const Page = () => <PageWith initial={[]} />;
 
 const addField = () => screen.getByLabelText<HTMLTextAreaElement>("Add terms");
 
@@ -75,7 +96,7 @@ describe("VoiceDictionaryPage", () => {
   });
 
   it("adds a paste up to the import cap and says how many it left out", async () => {
-    const add = vi.fn().mockResolvedValue({ dictionary: [], suggestedDictionary: [] });
+    const add = mainLikeAdd();
     install({ add });
     const { container } = render(<Page />);
 
@@ -89,5 +110,36 @@ describe("VoiceDictionaryPage", () => {
       )
     );
     expect(add).toHaveBeenCalledTimes(MAX_DICTIONARY_IMPORT_TERMS);
+  });
+
+  it("reports what a paste changed, not how many terms it held (#15233)", async () => {
+    const stored = [term("Daintree"), { ...term("Zustand"), heardAs: ["zoo stand"] }];
+    install({ add: mainLikeAdd(stored) });
+    const { container } = render(<PageWith initial={stored} />);
+
+    fireEvent.change(addField(), {
+      target: { value: "daintree\nzoo stand -> Zustand\nzu stand -> Zustand\nVitest" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    await waitFor(() =>
+      expect(container.textContent).toContain(
+        "Added 1 term. Added 1 heard-as phrase to 1 existing term. 1 term was already in the dictionary"
+      )
+    );
+  });
+
+  it("says a paste of terms already stored added nothing", async () => {
+    const stored = [term("Daintree"), term("Zustand")];
+    install({ add: mainLikeAdd(stored) });
+    const { container } = render(<PageWith initial={stored} />);
+
+    fireEvent.change(addField(), { target: { value: "Daintree, Zustand" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    await waitFor(() =>
+      expect(container.textContent).toContain("2 terms were already in the dictionary")
+    );
+    expect(container.textContent).not.toMatch(/Added \d/);
   });
 });

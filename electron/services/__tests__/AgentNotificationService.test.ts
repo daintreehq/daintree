@@ -99,6 +99,16 @@ const DEFAULT_NOTIFICATION_SETTINGS = {
   quietHoursWeekdays: [] as number[],
 };
 
+interface TerminalFixture {
+  id: string;
+  kind: string;
+  agentId: string;
+  title: string;
+  titleMode?: "default" | "custom" | "user";
+  location: string;
+  worktreeId: string;
+}
+
 const DEFAULT_APP_STATE = {
   activeWorktreeId: "wt-1",
   terminals: [
@@ -110,7 +120,7 @@ const DEFAULT_APP_STATE = {
       location: "dock",
       worktreeId: "wt-1",
     },
-  ],
+  ] as TerminalFixture[],
 };
 
 function mockStore(
@@ -506,6 +516,29 @@ describe("AgentNotificationService", () => {
       expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
     });
 
+    function escalateWith(terminal: Record<string, unknown>) {
+      mockStore({ waitingEnabled: true }, {
+        terminals: [
+          { id: "term-1", kind: "terminal", location: "dock", worktreeId: "wt-1", ...terminal },
+        ],
+      } as never);
+      events.emit("agent:state-changed", { ...makePayload("waiting"), agentId: "claude" });
+      vi.advanceTimersByTime(180_000);
+      return vi.mocked(notificationServiceMock.showNativeNotification).mock.calls.at(-1)?.[1];
+    }
+
+    it("names an escalation by the agent, not the pane's default title (#15233)", () => {
+      expect(escalateWith({ agentId: "claude", title: "Claude Agent" })).toBe(
+        "Claude has been waiting for input"
+      );
+    });
+
+    it("names an escalation by a title someone gave the pane", () => {
+      expect(escalateWith({ agentId: "claude", title: "Review", titleMode: "custom" })).toBe(
+        "Review has been waiting for input"
+      );
+    });
+
     it("uses terminal title in escalation notification", () => {
       mockStore(
         { waitingEnabled: true },
@@ -516,6 +549,7 @@ describe("AgentNotificationService", () => {
               kind: "terminal",
               agentId: "agent-1",
               title: "My Custom Agent",
+              titleMode: "user",
               location: "dock",
               worktreeId: "wt-1",
             },
@@ -699,7 +733,7 @@ describe("AgentNotificationService", () => {
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
         "Agent waiting",
-        expect.stringContaining("agent-1 is waiting for input"),
+        expect.stringContaining("Agent is waiting for input"),
         expect.any(Object),
         "notification:watch-navigate",
         {
@@ -722,7 +756,7 @@ describe("AgentNotificationService", () => {
 
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
         "Agent waiting",
-        expect.stringContaining("agent-1 is waiting for approval"),
+        expect.stringContaining("Agent is waiting for approval"),
         expect.any(Object),
         "notification:watch-navigate",
         {
@@ -745,7 +779,7 @@ describe("AgentNotificationService", () => {
 
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
         "Agent waiting",
-        expect.stringContaining("agent-1 is waiting for input"),
+        expect.stringContaining("Agent is waiting for input"),
         expect.any(Object),
         "notification:watch-navigate",
         {
@@ -1723,11 +1757,55 @@ describe("AgentNotificationService", () => {
 
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
         "Agent finished",
-        expect.stringContaining("claude"),
-        expect.objectContaining({ panelId: "term-1" }),
+        "Claude finished its task",
+        expect.objectContaining({ panelId: "term-1", panelTitle: "Claude" }),
         "notification:watch-navigate",
         { silent: true, ownerWebContentsId: OWNER, category: "completed" }
       );
+    });
+
+    function completeOn(
+      terminal: Record<string, unknown>,
+      payload: { agentId?: string; worktreeId?: string }
+    ) {
+      mockStore({ completedEnabled: true }, { terminals: [terminal] as never });
+      events.emit("agent:state-changed", {
+        state: "completed" as const,
+        previousState: "working" as const,
+        terminalId: "term-1",
+        timestamp: Date.now(),
+        trigger: "heuristic" as const,
+        confidence: 1,
+        ...payload,
+      });
+      vi.advanceTimersByTime(5000);
+      return vi.mocked(notificationServiceMock.showWatchNotification).mock.calls.at(-1);
+    }
+
+    it("never names a worktree path when no agent is known (#15233)", () => {
+      const call = completeOn(
+        { id: "term-1", kind: "terminal", title: "Terminal", location: "dock" },
+        { worktreeId: "/Users/me/proj/worktrees/feature-x" }
+      );
+      expect(call?.[1]).toBe("Agent finished its task");
+      expect(call?.[2]).toMatchObject({ panelTitle: "Agent" });
+    });
+
+    it("names a completed agent by its display name, not a title in the legacy terminal list", () => {
+      // The global list is a migration-era record: a named title there may be
+      // long stale, so completion never reads it.
+      const call = completeOn(
+        {
+          id: "term-1",
+          kind: "terminal",
+          title: "Stale name",
+          titleMode: "user",
+          location: "dock",
+        },
+        { agentId: "codex" }
+      );
+      expect(call?.[1]).toBe("Codex finished its task");
+      expect(call?.[2]).toMatchObject({ panelTitle: "Codex" });
     });
   });
 
@@ -1883,7 +1961,7 @@ describe("AgentNotificationService", () => {
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
         "Agent waiting",
-        expect.stringContaining("agent-2 is waiting for input"),
+        expect.stringContaining("Agent is waiting for input"),
         expect.any(Object),
         "notification:watch-navigate",
         {
@@ -2458,7 +2536,7 @@ describe("AgentNotificationService", () => {
       expect(soundServiceMock.playFile).toHaveBeenCalledWith("waiting.wav");
       expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
         "Agent waiting",
-        "agent-1 is waiting for approval",
+        "Agent is waiting for approval",
         expect.objectContaining({
           closeWithPanels: ["term-1"],
           navigation: expect.objectContaining({

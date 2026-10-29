@@ -1,10 +1,15 @@
 import { MonitorX, RefreshCw } from "lucide-react";
 import { InlineStatusBanner } from "./InlineStatusBanner";
-import { boundedErrorText } from "@/utils/errorText";
+import { sanitizeErrorText } from "@/utils/errorText";
 
 export interface TerminalAttachErrorBannerProps {
   terminalId: string;
   error: string;
+  /**
+   * Whether the pane's process is known to be alive. `attachError` outlives an
+   * exit or a failed spawn, so the banner can't assume it is.
+   */
+  processRunning: boolean;
   onRetry: (id: string) => void;
   isRetrying?: boolean;
   className?: string;
@@ -25,21 +30,29 @@ export interface TerminalAttachErrorBannerProps {
  *
  * Copy leads with the reassurance that nothing is lost, because the failure
  * looks exactly like a hung agent and that is the wrong conclusion to draw.
+ * It only says so while the process is running: after an exit the restart
+ * banner below says what happened, and this one is just about the display.
  */
 export function TerminalAttachErrorBanner({
   terminalId,
   error,
+  processRunning,
   onRetry,
   isRetrying = false,
   className,
 }: TerminalAttachErrorBannerProps) {
-  const sanitized = boundedErrorText(error);
-  const tail = "The process is still running and its output is being recorded.";
   return (
     <InlineStatusBanner
       icon={MonitorX}
       title="Terminal display failed"
-      description={sanitized ? `${sanitized} ${tail}` : tail}
+      description={
+        processRunning
+          ? "The process is still running and its output is being recorded."
+          : undefined
+      }
+      // Unbounded, as the scrollback banner's is: one clipped row whose tooltip
+      // holds the whole message, so the reassurance stays first.
+      contextLine={sanitizeErrorText(error).replace(/\s+/g, " ").trim() || undefined}
       severity="error"
       action={{
         id: "retry-attach",

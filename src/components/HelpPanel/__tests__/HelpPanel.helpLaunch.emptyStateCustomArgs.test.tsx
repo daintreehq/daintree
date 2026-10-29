@@ -118,6 +118,8 @@ const {
     >,
     isInitialized: true,
     hasRealData: true,
+    error: null as string | null,
+    refresh: vi.fn().mockResolvedValue(undefined),
     details: {} as Record<string, unknown>,
   },
   agentSettingsState: {
@@ -316,6 +318,7 @@ vi.mock("@/lib/notify", () => ({
 
 vi.mock("@/utils/logger", () => ({
   logError: (...args: unknown[]) => mockLogError(...args),
+  logWarn: vi.fn(),
 }));
 
 vi.mock("@/utils/safeFireAndForget", () => ({
@@ -503,6 +506,8 @@ function resetState() {
   };
   cliAvailabilityState.isInitialized = true;
   cliAvailabilityState.hasRealData = true;
+  cliAvailabilityState.error = null;
+  cliAvailabilityState.refresh = vi.fn().mockResolvedValue(undefined);
   cliAvailabilityState.details = {};
 
   agentSettingsState.settings = { agents: {} };
@@ -887,18 +892,59 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     });
   });
 
-  it("falls back to settings when no installed agent can run the assistant", () => {
+  it("names the agents to install when none that can run the assistant is installed", () => {
     helpPanelState.preferredAgentId = null;
     cliAvailabilityState.availability = {};
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
 
     render(<HelpPanel width={380} />);
 
-    expect(
-      screen.getByText(/Configure an assistant agent in settings to get started/i)
-    ).toBeTruthy();
+    expect(screen.getByText("Install Claude or Codex to use Daintree Assistant.")).toBeTruthy();
+    expect(screen.queryByText(/Configure an assistant agent/i)).toBeNull();
     expect(screen.queryByTestId("help-agent-chooser")).toBeNull();
     expect(screen.queryByTestId("help-start-assistant")).toBeNull();
+  });
+
+  it("waits quietly while agent detection runs, instead of sending people to settings (#15233)", () => {
+    vi.useFakeTimers();
+    try {
+      helpPanelState.preferredAgentId = null;
+      cliAvailabilityState.hasRealData = false;
+      cliAvailabilityState.availability = {};
+      mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+
+      render(<HelpPanel width={380} />);
+
+      expect(screen.queryByText(/Install Claude/)).toBeNull();
+      expect(screen.queryByText(/Configure an assistant agent/i)).toBeNull();
+      expect(screen.queryByText("Checking installed agents…")).toBeNull();
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      expect(screen.getByText("Checking installed agents…")).toBeTruthy();
+      expect(screen.queryByTestId("help-start-assistant")).toBeNull();
+      expect(mockProvisionSession).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("offers Retry when agent detection failed before it had any answer", async () => {
+    helpPanelState.preferredAgentId = null;
+    cliAvailabilityState.hasRealData = false;
+    cliAvailabilityState.error = "Failed to check CLI availability";
+    cliAvailabilityState.availability = {};
+    // The store records the error and rethrows: the click must not leave that unhandled.
+    cliAvailabilityState.refresh = vi.fn().mockRejectedValue(new Error("still failing"));
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+
+    render(<HelpPanel width={380} />);
+
+    expect(screen.getByText("Couldn't check which agents are installed.")).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+    expect(cliAvailabilityState.refresh).toHaveBeenCalledWith(true);
   });
 
   it("dispatches navigation actions (not agent.launch) when the empty-state links are clicked", async () => {

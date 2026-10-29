@@ -4,18 +4,22 @@ import { levelFromPeak, startMicTest, SILENCE_AFTER_MS } from "../voiceMicTest";
 
 let peak = 0;
 let trackStop: ReturnType<typeof vi.fn>;
+let trackListeners: Map<string, () => void>;
 let contextClose: ReturnType<typeof vi.fn>;
 
 function installMedia(
   opts: { label?: string; actualId?: string; error?: Error; contextState?: string } = {}
 ) {
   trackStop = vi.fn();
+  trackListeners = new Map();
   contextClose = vi.fn().mockResolvedValue(undefined);
   const track = {
     label: opts.label ?? "MacBook Pro Microphone",
     stop: trackStop,
     getSettings: () => ({ deviceId: opts.actualId ?? "mic-1" }),
-    addEventListener: vi.fn(),
+    addEventListener: vi.fn((event: string, handler: () => void) => {
+      trackListeners.set(event, handler);
+    }),
     removeEventListener: vi.fn(),
   };
   const stream = { getAudioTracks: () => [track], getTracks: () => [track] };
@@ -232,6 +236,26 @@ describe("startMicTest", () => {
     await startMicTest({ deviceId: "", onSample: vi.fn(), onEnded });
     vi.advanceTimersByTime(60_000);
     expect(onEnded).toHaveBeenCalledTimes(1);
+    expect(onEnded).toHaveBeenCalledWith("time-limit");
     expect(trackStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("says the device ended when its track does, and only once", async () => {
+    installMedia();
+    const onEnded = vi.fn();
+    await startMicTest({ deviceId: "", onSample: vi.fn(), onEnded });
+    trackListeners.get("ended")?.();
+    vi.advanceTimersByTime(60_000);
+    expect(onEnded).toHaveBeenCalledTimes(1);
+    expect(onEnded).toHaveBeenCalledWith("device-ended");
+  });
+
+  it("reports no end after the user stopped it", async () => {
+    installMedia();
+    const onEnded = vi.fn();
+    const h = await startMicTest({ deviceId: "", onSample: vi.fn(), onEnded });
+    h.stop();
+    vi.advanceTimersByTime(60_000);
+    expect(onEnded).not.toHaveBeenCalled();
   });
 });

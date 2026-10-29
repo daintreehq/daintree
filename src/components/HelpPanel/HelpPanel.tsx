@@ -64,11 +64,12 @@ import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { selectMicNoticeForPanel, useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useFocusStore } from "@/store/focusStore";
-import { getAgentConfig } from "@/config/agents";
+import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
 import { buildResumeCommand } from "@shared/types/agentSettings";
 import { actionService } from "@/services/ActionService";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { useAssistantAgentChoices } from "@/hooks/useAssistantAgentChoices";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { TerminalRefreshTier } from "@/types";
 import { CLOSE_CONFIRM_AGENT_STATES } from "@shared/types/agent";
@@ -99,6 +100,13 @@ const ASSISTANT_INSTALLER_URL = "https://daintree.org/download";
 // flap (#10911) bounces back to a live state well within the window — keeping a
 // spurious tick from tearing down a running conversation.
 const ASSISTANT_AGENT_EXIT_SETTLE_MS = 750;
+
+/** "Claude or Codex": the agents that can run the assistant, for the line saying what to install. */
+function assistantAgentNames(): string {
+  const names = getAssistantSupportedAgentIds().map((id) => getAgentConfig(id)?.name ?? id);
+  if (names.length === 0) return "a supported agent";
+  return new Intl.ListFormat("en", { type: "disjunction" }).format(names);
+}
 
 // Stock starter prompts, shown whenever the assistant has no session and the
 // project supplies none of its own. Clicking one starts the assistant AND seeds
@@ -408,6 +416,11 @@ export function HelpPanel({
   // "New session with…" items, which the toolbar button offers from the same list.
   const supportedInstalledAgentIds = useAssistantAgentChoices();
   const supportedInstalledAgentIdsKey = supportedInstalledAgentIds.join(",");
+  // The choices stay empty until detection has real data, so an empty list
+  // only means "none installed" once it does (#15233).
+  const agentDetectionDone = useCliAvailabilityStore((s) => s.hasRealData);
+  const agentDetectionFailed = useCliAvailabilityStore((s) => Boolean(s.error));
+  const showAgentDetection = useDohertyGate(!agentDetectionDone && !agentDetectionFailed);
 
   // A conversation the eviction/crash path captured for this workspace but never
   // resumed. On LRU eviction (or renderer crash) main kills the assistant PTY
@@ -1398,11 +1411,38 @@ export function HelpPanel({
                     onChoose={handleChooseAssistant}
                   />
                 </div>
-              ) : (
+              ) : agentDetectionDone ? (
                 <p className="text-xs text-text-secondary max-w-[32ch]">
-                  Configure an assistant agent in settings to get started.
+                  {`Install ${assistantAgentNames()} to use Daintree Assistant.`}
                 </p>
-              )}
+              ) : agentDetectionFailed ? (
+                <div className="flex flex-col items-center gap-2">
+                  <p className="text-xs text-text-secondary max-w-[32ch]">
+                    Couldn&apos;t check which agents are installed.
+                  </p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      // The store keeps the error that drives this line; a
+                      // second failure only needs logging.
+                      void useCliAvailabilityStore
+                        .getState()
+                        .refresh(true)
+                        .catch((error: unknown) =>
+                          logWarn("[HelpPanel] Agent detection retry failed", { error })
+                        )
+                    }
+                  >
+                    Retry
+                  </Button>
+                </div>
+              ) : showAgentDetection ? (
+                <p className="text-xs text-text-secondary max-w-[32ch]">
+                  Checking installed agents…
+                </p>
+              ) : null}
               <div className="flex flex-col gap-2">
                 <button
                   type="button"
