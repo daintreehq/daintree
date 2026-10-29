@@ -533,17 +533,35 @@ describe("HelpPanelBanners — tier mismatch (#12119)", () => {
     // The grant is reusable on a 15-minute sliding window under a 30-minute
     // ceiling — stating only the ceiling would overstate an idle grant's life.
     expect(text).toContain("repeat calls for 15 minutes after the last one, 30 at most");
-    // The project write feeds agents launched in the project; new *help*
-    // sessions provision from the global settings tier, so the copy must not
-    // promise them anything (HelpSessionService.doProvision).
+    // The project write feeds agents launched in the project. Every launchMcp
+    // agent reads it, not only Claude Code, and there are no Assistant panes
+    // left to name (#13502).
     expect(text).toContain(
-      "applies to Claude Code and Daintree Assistant panes launched in this project"
+      "gives the full tool set to agents launched in this project that support Daintree tools"
     );
+    expect(text).not.toMatch(/Daintree Assistant panes|Claude Code/);
     // Deliberately broad: nothing in a denied-tool banner has any business
     // promising "new sessions" anything, and that promise was the bug.
     expect(text).not.toContain("new sessions");
     // The session lift is the half that lapses.
     expect(text).toContain("raises this session for 30 minutes");
+    // New help sessions provision from the global tool set, never the project
+    // default (HelpSessionService.doProvision), so the banner says where the
+    // next conversation's tool set comes from (#14993).
+    expect(text).toContain("New assistant sessions use the tool set in Assistant settings.");
+  });
+
+  it("opens Assistant settings from the new-session note", () => {
+    const onOpenAssistantSettings = vi.fn();
+    const { getByRole } = render(
+      <HelpPanelBanners
+        {...baseProps()}
+        tierMismatch={tierMismatch}
+        onOpenAssistantSettings={onOpenAssistantSettings}
+      />
+    );
+    fireEvent.click(getByRole("button", { name: "Assistant settings" }));
+    expect(onOpenAssistantSettings).toHaveBeenCalledTimes(1);
   });
 
   it("routes each button to its own handler", () => {
@@ -569,20 +587,27 @@ describe("HelpPanelBanners — tier mismatch (#12119)", () => {
     expect(onDismissTierMismatch).toHaveBeenCalledTimes(1);
   });
 
-  it("makes every control inert while an approval is in flight, and spins only the one clicked", () => {
+  it("makes every approval control inert while an approval is in flight, and spins only the one clicked", () => {
     const props = { ...baseProps(), tierMismatch };
-    const { getByTestId, getByText, getByLabelText, rerender } = render(
+    const { getByTestId, getByText, getByLabelText, getByRole, rerender } = render(
       <HelpPanelBanners {...props} />
     );
     fireEvent.click(getByText("Set project default"));
     rerender(<HelpPanelBanners {...props} isApprovingTier />);
 
     const banner = getByTestId("help-tier-mismatch-banner");
-    const buttons = Array.from(banner.querySelectorAll("button"));
+    // The inline Assistant settings link stays live: it neither dismisses the
+    // banner nor touches the approval.
+    const settingsLink = getByRole("button", { name: "Assistant settings" });
+    const buttons = Array.from(banner.querySelectorAll("button")).filter((b) => b !== settingsLink);
     expect(buttons.length).toBe(3);
     // The × is inert too: dismissing mid-flight would strand the in-flight
     // grant with no banner to report its outcome.
     expect(buttons.every((b) => b.getAttribute("aria-disabled") === "true")).toBe(true);
+    expect(settingsLink.hasAttribute("disabled")).toBe(false);
+    expect(settingsLink.getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(settingsLink);
+    expect(props.onOpenAssistantSettings).toHaveBeenCalledTimes(1);
     const busy = buttons.filter((b) => b.getAttribute("aria-busy") === "true");
     expect(busy.map((b) => b.textContent?.trim())).toEqual(["Set project default"]);
 
@@ -607,6 +632,7 @@ describe("HelpPanelBanners — tier mismatch (#12119)", () => {
     // reworded body can't leak back into this branch unnoticed.
     expect(banner.textContent).not.toContain("Allowing the tool");
     expect(banner.textContent).not.toContain("The project default");
+    expect(banner.textContent).not.toContain("New assistant sessions");
     expect(queryByText("Allow this tool")).toBeNull();
     expect(queryByText("Set project default")).toBeNull();
   });
