@@ -127,7 +127,7 @@ describe("restart impact", () => {
   it("lists what a restart ends from the host's own inventory", () => {
     const impact = { detail, agents: null };
     expect(restartImpactLines(impact)).toEqual([
-      "api: 3 terminals (agents 1 working, 2 waiting)",
+      "api: 3 terminals, 1 agent working, 2 waiting",
       "Outside any project: 1 terminal",
       "Possibly more terminals: the host couldn't list them all",
       "2 operations still running",

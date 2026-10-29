@@ -203,7 +203,7 @@ function ProbeSummary({
   local: string | null;
 }) {
   const rows: Array<[string, string]> = [
-    [via, probe.reachable ? "Works" : "Didn't connect"],
+    [via, probe.reachable ? (via === "WSL" ? "Starts" : "Works") : "Didn't connect"],
     ...(probe.reachable
       ? ([
           ["Platform", platformLabel(probe.platform, probe.arch)],
@@ -625,7 +625,8 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   ) => {
     setBusy(true);
     setError(null);
-    work().then(
+    // A bridge call that throws before it returns a promise fails like one that rejects.
+    new Promise<T>((resolve) => resolve(work())).then(
       (value) => {
         setBusy(false);
         then(value);
@@ -2063,7 +2064,8 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
           </p>
         )}
         {error && <ErrorLine message={error} />}
-        <p role="status" className="sr-only">
+        {/* No role: the discovery list's own status line stays the dialog's one status. */}
+        <p aria-live="polite" aria-atomic="true" className="sr-only">
           {announce}
         </p>
       </AppDialog.Body>

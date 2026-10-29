@@ -539,7 +539,7 @@ describe("AddHostDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Set up…" }));
     // Checked again rather than trusting the probe the link just contradicted.
     await waitFor(() => expect(remoteHosts.probe).toHaveBeenCalledTimes(2));
-    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Set up Host mode…" }));
     expect(await screen.findByRole("button", { name: "Turn on Host mode" })).toBeTruthy();
     // The saved record keeps its target: no way back to change it.
     expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
@@ -567,7 +567,7 @@ describe("AddHostDialog", () => {
       target: { value: "greg@studio" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Check host" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Set up Host mode…" }));
     fireEvent.click(await screen.findByRole("button", { name: "Skip" }));
     fireEvent.click(await screen.findByRole("button", { name: "Add host" }));
     expect(await screen.findByText("Saved, not connected")).toBeTruthy();
@@ -582,7 +582,7 @@ describe("AddHostDialog", () => {
       target: { value: "greg@studio" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Check host" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Set up Host mode…" }));
     expect(remoteHosts.add).not.toHaveBeenCalled();
     fireEvent.click(await screen.findByRole("button", { name: "Turn on Host mode" }));
     expect(await screen.findByText(/studio is saved in your host list/)).toBeTruthy();
@@ -640,7 +640,7 @@ describe("AddHostDialog", () => {
       target: { value: "greg@studio" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Check host" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Set up Host mode…" }));
     fireEvent.click(await screen.findByRole("button", { name: "Turn on Host mode" }));
     expect(screen.getByRole("button", { name: "Skip" }).getAttribute("aria-disabled")).toBe("true");
     fireEvent.keyDown(screen.getByTestId("add-host-dialog"), { key: "Escape" });
@@ -657,7 +657,29 @@ describe("AddHostDialog", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
   });
 
+  it("checks an existing host as it opens, titled for why it was opened", async () => {
+    remoteHosts.probe!.mockResolvedValue(probeResult({ hostModeListening: false }));
+    render(
+      <AddHostDialog
+        isOpen
+        onClose={() => {}}
+        existing={{
+          hostId: "studio",
+          name: "studio",
+          connection: { kind: "ssh", target: "greg@studio" },
+          intent: "setup",
+        }}
+      />
+    );
+    expect(screen.getByText("Set up studio")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Check host" })).toBeNull();
+    expect(await screen.findByRole("heading", { name: "Host mode is off on studio" })).toBeTruthy();
+    expect(remoteHosts.probe).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", { name: "Set up Host mode…" })).toBeTruthy();
+  });
+
   it("asks before an update that ends the host's terminals, naming the host", async () => {
+    remoteHosts.probe!.mockResolvedValue(probeResult({ matchesClient: false }));
     render(
       <AddHostDialog
         isOpen
@@ -669,12 +691,11 @@ describe("AddHostDialog", () => {
         }}
       />
     );
-    remoteHosts.probe!.mockResolvedValue(probeResult({ matchesClient: false }));
-    fireEvent.click(screen.getByRole("button", { name: "Check host" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Plan update" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Update host" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Review update" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Update studio" }));
     // What the restart ends, as the host listed it, before anything is changed.
-    await screen.findByText("api: 3 terminals (agents 1 working, 1 waiting)");
+    await screen.findByText("api: 3 terminals, 1 agent working, 1 waiting");
+    expect(screen.getByRole("heading", { name: "Restart Daintree on studio?" })).toBeTruthy();
     expect(screen.getByText("1 operation still running")).toBeTruthy();
     expect(screen.getByText("Sessions from greg-air")).toBeTruthy();
     expect(remoteHosts.install).toHaveBeenCalledOnce();
@@ -682,16 +703,34 @@ describe("AddHostDialog", () => {
       expect.objectContaining({ whileWorking: "refuse" })
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Update now…" }));
-    expect(await screen.findByText("Update 'studio' now?")).toBeTruthy();
-    expect(screen.getByText(/3 terminals there end/)).toBeTruthy();
-    expect(remoteHosts.install).toHaveBeenCalledOnce();
-
+    // The one decision: ending what runs is named for what it ends.
     fireEvent.click(screen.getByRole("button", { name: "Update and end 3 terminals" }));
     await waitFor(() => expect(remoteHosts.install).toHaveBeenCalledTimes(2));
     // The confirmed set travels with it, so anything new stops the restart.
     expect(remoteHosts.install).toHaveBeenLastCalledWith(
       expect.objectContaining({ whileWorking: "proceed", hostId: "studio", confirmed: IMPACT })
+    );
+  });
+
+  it("waits for idle agents from the same decision", async () => {
+    remoteHosts.probe!.mockResolvedValue(probeResult({ matchesClient: false }));
+    render(
+      <AddHostDialog
+        isOpen
+        onClose={() => {}}
+        existing={{
+          hostId: "studio",
+          name: "studio",
+          connection: { kind: "ssh", target: "greg@studio" },
+        }}
+      />
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Review update" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Update studio" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Update when idle" }));
+    await waitFor(() => expect(remoteHosts.install).toHaveBeenCalledTimes(2));
+    expect(remoteHosts.install).toHaveBeenLastCalledWith(
+      expect.objectContaining({ whileWorking: "wait-for-idle", confirmed: IMPACT })
     );
   });
 
@@ -701,6 +740,7 @@ describe("AddHostDialog", () => {
       agents: null,
     };
     remoteHosts.install!.mockResolvedValue({ status: "needs-confirmation", impact });
+    remoteHosts.probe!.mockResolvedValue(probeResult({ matchesClient: false }));
     render(
       <AddHostDialog
         isOpen
@@ -712,13 +752,9 @@ describe("AddHostDialog", () => {
         }}
       />
     );
-    remoteHosts.probe!.mockResolvedValue(probeResult({ matchesClient: false }));
-    fireEvent.click(screen.getByRole("button", { name: "Check host" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Plan update" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Update host" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Update now…" }));
-    await screen.findByText("Update 'studio' now?");
-    expect(screen.getByText(/which ends everything listed/)).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Review update" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Update studio" }));
+    await screen.findByRole("heading", { name: "Restart Daintree on studio?" });
     expect(screen.queryByText(/\b0 terminals\b/)).toBeNull();
 
     fireEvent.click(
@@ -746,6 +782,7 @@ describe("AddHostDialog", () => {
         agents: null,
       },
     });
+    remoteHosts.probe!.mockResolvedValue(probeResult({ matchesClient: false }));
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       render(
@@ -759,10 +796,8 @@ describe("AddHostDialog", () => {
           }}
         />
       );
-      remoteHosts.probe!.mockResolvedValue(probeResult({ matchesClient: false }));
-      fireEvent.click(screen.getByRole("button", { name: "Check host" }));
-      fireEvent.click(await screen.findByRole("button", { name: "Plan update" }));
-      fireEvent.click(await screen.findByRole("button", { name: "Update host" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Review update" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Update studio" }));
       await screen.findByTestId("host-restart-impact");
       expect(screen.getAllByText("api: 1 terminal")).toHaveLength(2);
       expect(consoleError.mock.calls.some((call) => String(call[0]).includes("same key"))).toBe(
@@ -795,21 +830,24 @@ describe("AddHostDialog", () => {
       Object.assign(window.electron, { update: { checkForUpdates } });
       remoteHosts.probe!.mockResolvedValue(NEWER);
       render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
-      fireEvent.click(screen.getByRole("button", { name: "Check host" }));
-      expect(await screen.findByText("Newer build")).toBeTruthy();
-      expect(screen.getByTestId("add-host-newer").textContent).toContain("Daintree 1.5.0");
-      expect(screen.queryByRole("button", { name: "Plan update" })).toBeNull();
+      expect(
+        await screen.findByRole("heading", { name: "studio is ahead of this machine" })
+      ).toBeTruthy();
+      expect(document.body.textContent).toContain("Daintree 1.5.0");
+      expect(screen.queryByRole("button", { name: "Review update" })).toBeNull();
       fireEvent.click(screen.getByRole("button", { name: "Update this machine" }));
       expect(checkForUpdates).toHaveBeenCalledOnce();
+      // The press shows what this machine's updater is doing, and can't be repeated.
+      expect(await screen.findByText("Checking for an update to this machine")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Update this machine" })).toBeNull();
       expect(remoteHosts.planInstall).not.toHaveBeenCalled();
       expect(remoteHosts.install).not.toHaveBeenCalled();
     });
 
-    it("downgrades it only through a confirmation that names the downgrade", async () => {
+    it("downgrades it from a plan that says so once, and confirms the restart as one", async () => {
       remoteHosts.probe!.mockResolvedValue(NEWER);
       remoteHosts.planInstall!.mockResolvedValue({ ...UPDATE_PLAN, downgrade: true });
       render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
-      fireEvent.click(screen.getByRole("button", { name: "Check host" }));
       fireEvent.click(await screen.findByRole("button", { name: "Downgrade studio…" }));
       await waitFor(() =>
         expect(remoteHosts.planInstall).toHaveBeenLastCalledWith(
@@ -817,20 +855,18 @@ describe("AddHostDialog", () => {
         )
       );
       expect((await screen.findByTestId("add-host-downgrade")).textContent).toMatch(
-        /over the newer 1\.5\.0 on studio: a downgrade/
+        /This is a downgrade.*Daintree 1\.5\.0 saved on studio may not open in 1\.4\.0/
       );
-      expect(screen.queryByRole("button", { name: "Update host" })).toBeNull();
-      fireEvent.click(screen.getByRole("button", { name: "Downgrade studio…" }));
-      expect(await screen.findByText("Downgrade 'studio'?")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Update studio" })).toBeNull();
       expect(remoteHosts.install).not.toHaveBeenCalled();
-      fireEvent.click(screen.getByRole("button", { name: "Downgrade host" }));
+      fireEvent.click(screen.getByRole("button", { name: "Downgrade studio" }));
       await waitFor(() => expect(remoteHosts.install).toHaveBeenCalledOnce());
       expect(remoteHosts.install).toHaveBeenLastCalledWith(
         expect.objectContaining({ allowDowngrade: true, whileWorking: "refuse" })
       );
-      // The restart it needs is confirmed as any other, named as the downgrade it is.
-      fireEvent.click(await screen.findByRole("button", { name: "Downgrade now…" }));
-      expect(await screen.findByText("Downgrade 'studio' now?")).toBeTruthy();
+      // The restart it needs is decided as any other, named as the downgrade it is.
+      await screen.findByRole("heading", { name: "Restart Daintree on studio?" });
+      expect(screen.getByText(/Downgrading restarts it/)).toBeTruthy();
       fireEvent.click(screen.getByRole("button", { name: "Downgrade and end 3 terminals" }));
       await waitFor(() => expect(remoteHosts.install).toHaveBeenCalledTimes(2));
       expect(remoteHosts.install).toHaveBeenLastCalledWith(
@@ -847,7 +883,6 @@ describe("AddHostDialog", () => {
         })
       );
       render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
-      fireEvent.click(screen.getByRole("button", { name: "Check host" }));
       expect(await screen.findByText("Daintree 1.4.0")).toBeTruthy();
       fireEvent.click(screen.getByRole("button", { name: "Install downloaded update" }));
       await waitFor(() => expect(remoteHosts.install).toHaveBeenCalledOnce());
@@ -855,9 +890,8 @@ describe("AddHostDialog", () => {
         expect.objectContaining({ applyStaged: { version: "1.4.0" }, whileWorking: "refuse" })
       );
       expect(remoteHosts.planInstall).not.toHaveBeenCalled();
-      await screen.findByText("api: 3 terminals (agents 1 working, 1 waiting)");
-      fireEvent.click(screen.getByRole("button", { name: "Update now…" }));
-      fireEvent.click(await screen.findByRole("button", { name: "Update and end 3 terminals" }));
+      await screen.findByText("api: 3 terminals, 1 agent working, 1 waiting");
+      fireEvent.click(screen.getByRole("button", { name: "Update and end 3 terminals" }));
       await waitFor(() => expect(remoteHosts.install).toHaveBeenCalledTimes(2));
       expect(remoteHosts.install).toHaveBeenLastCalledWith(
         expect.objectContaining({
@@ -885,15 +919,13 @@ describe("AddHostDialog", () => {
           })
         );
       render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
-      fireEvent.click(screen.getByRole("button", { name: "Check host" }));
       fireEvent.click(await screen.findByRole("button", { name: "Install downloaded update" }));
-      fireEvent.click(await screen.findByRole("button", { name: "Update now…" }));
       fireEvent.click(await screen.findByRole("button", { name: "Update and end 3 terminals" }));
       fireEvent.click(await screen.findByRole("button", { name: "Check again" }));
       await waitFor(() => expect(remoteHosts.probe).toHaveBeenCalledTimes(2));
     });
 
-    it("lets a plan refused for a newer host go on to the downgrade, or check again", async () => {
+    it("lets a plan refused for a newer host go on to the downgrade", async () => {
       remoteHosts.probe!.mockResolvedValue(probeResult({ matchesClient: false }));
       remoteHosts
         .planInstall!.mockResolvedValueOnce({
@@ -906,11 +938,9 @@ describe("AddHostDialog", () => {
         })
         .mockResolvedValueOnce({ ...UPDATE_PLAN, downgrade: true });
       render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
-      fireEvent.click(screen.getByRole("button", { name: "Check host" }));
-      fireEvent.click(await screen.findByRole("button", { name: "Plan update" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Review update" }));
       expect(await screen.findByText(/newer than 1\.4\.0 here/)).toBeTruthy();
       expect(screen.getByRole("button", { name: "Update this machine" })).toBeTruthy();
-      expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
       fireEvent.click(screen.getByRole("button", { name: "Downgrade studio…" }));
       await waitFor(() =>
         expect(remoteHosts.planInstall).toHaveBeenLastCalledWith(
@@ -930,8 +960,7 @@ describe("AddHostDialog", () => {
           "The host has downloaded Daintree 1.4.0, which installs when Daintree there restarts. Install that update first.",
       });
       render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
-      fireEvent.click(screen.getByRole("button", { name: "Check host" }));
-      fireEvent.click(await screen.findByRole("button", { name: "Plan update" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Review update" }));
       fireEvent.click(await screen.findByRole("button", { name: "Check again" }));
       await waitFor(() => expect(remoteHosts.probe).toHaveBeenCalledTimes(2));
     });
@@ -945,8 +974,10 @@ describe("AddHostDialog", () => {
         })
       );
       render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
-      fireEvent.click(screen.getByRole("button", { name: "Check host" }));
       expect(await screen.findByText("Daintree 1.4.0, still being prepared")).toBeTruthy();
+      expect(
+        screen.getByRole("heading", { name: "studio is still preparing an update" })
+      ).toBeTruthy();
       expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Install downloaded update" })).toBeNull();
     });
@@ -960,18 +991,19 @@ describe("AddHostDialog", () => {
         })
       );
       render(<AddHostDialog isOpen onClose={() => {}} existing={EXISTING} />);
-      fireEvent.click(screen.getByRole("button", { name: "Check host" }));
       expect(await screen.findByText(/from Restart to update on its own screen/)).toBeTruthy();
-      expect(screen.getByRole("button", { name: "Plan update" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Review update" })).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Install downloaded update" })).toBeNull();
     });
   });
 
-  it("dispatches nothing when the update confirmation is cancelled", async () => {
+  it("dispatches nothing when the restart decision is cancelled", async () => {
+    const onClose = vi.fn();
+    remoteHosts.probe!.mockResolvedValue(probeResult({ matchesClient: false }));
     render(
       <AddHostDialog
         isOpen
-        onClose={() => {}}
+        onClose={onClose}
         existing={{
           hostId: "studio",
           name: "studio",
@@ -979,20 +1011,11 @@ describe("AddHostDialog", () => {
         }}
       />
     );
-    remoteHosts.probe!.mockResolvedValue(probeResult({ matchesClient: false }));
-    fireEvent.click(screen.getByRole("button", { name: "Check host" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Plan update" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Update host" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Update now…" }));
-    await screen.findByText("Update 'studio' now?");
-    const confirm = screen
-      .getByText("Update 'studio' now?")
-      .closest("[role='alertdialog'], [role='dialog']")!;
-    const cancel = screen
-      .getAllByRole("button", { name: "Cancel" })
-      .find((button) => confirm.contains(button))!;
-    fireEvent.click(cancel);
-    await waitFor(() => expect(screen.queryByText("Update 'studio' now?")).toBeNull());
+    fireEvent.click(await screen.findByRole("button", { name: "Review update" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Update studio" }));
+    await screen.findByRole("heading", { name: "Restart Daintree on studio?" });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onClose).toHaveBeenCalledOnce();
     expect(remoteHosts.install).toHaveBeenCalledOnce();
   });
 
@@ -1082,7 +1105,7 @@ describe("AddHostDialog", () => {
       target: { value: "greg@bigbox" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Check host" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Set up Host mode…" }));
 
     expect(
       await screen.findByText(/listening on bigbox for now, but isn't switched on there/)
@@ -1225,7 +1248,7 @@ describe("AddHostDialog on Windows (WSL distros)", () => {
       })
     );
     expect(await screen.findByText("Starts")).toBeTruthy();
-    expect(screen.getByText("Matches this machine")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Ubuntu-24.04 is up to date" })).toBeTruthy();
   });
 
   it("lists every distro without a filter, however many there are", async () => {
@@ -1321,7 +1344,7 @@ describe("AddHostDialog on Windows (WSL distros)", () => {
         }}
       />
     );
-    fireEvent.click(await screen.findByRole("button", { name: "Check host" }));
+    // Checked as it opens, as the distro it is.
     await waitFor(() =>
       expect(remoteHosts.probe).toHaveBeenCalledWith({
         connection: { kind: "wsl", distro: "Ubuntu" },
