@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { beforeEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { applyFleetBroadcastResult, broadcastFleetRawInput } from "../fleetRawInputBroadcast";
-import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { armCrossHostTarget } from "../crossHostFleet";
+import { selectFleetMemberCount, useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
@@ -84,6 +85,7 @@ function resetStores(): void {
     lastArmedId: null,
     broadcastSignal: 0,
     previewArmedIds: new Set<string>(),
+    crossHostTargets: [],
   });
   useFleetFailureStore.getState().clear();
   useFleetBroadcastProgressStore.setState({ isActive: false });
@@ -204,6 +206,33 @@ describe("broadcastFleetRawInput", () => {
     expect(broadcastFleetRawInput("a", "x")).toBe(false);
     expect(broadcastMock).not.toHaveBeenCalled();
     expect(useFleetArmingStore.getState().armedIds.has("b")).toBe(true);
+  });
+
+  it("keeps raw input to this view's panes when agents on another host are armed (#14957)", () => {
+    seedPanels([makeTerminal("t1"), makeTerminal("t2")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    armCrossHostTarget({ hostId: "mini", hostName: "mini", terminalId: "r1", title: "Remote" });
+
+    expect(selectFleetMemberCount(useFleetArmingStore.getState())).toBe(3);
+
+    expect(broadcastFleetRawInput("t1", "\r")).toBe(true);
+
+    expect(broadcastMock.mock.calls).toEqual([[["t1", "t2"], "\r", false]]);
+    expect(notifyUserInputMock.mock.calls.map(([id]) => id)).toEqual(["t2"]);
+    expect(notifyEnterPressedMock.mock.calls.map(([id]) => id)).toEqual(["t1", "t2"]);
+  });
+
+  it("types into the pane alone when its only armed peer is on another host (#14957)", () => {
+    seedPanels([makeTerminal("t1")]);
+    useFleetArmingStore.getState().armIds(["t1"]);
+    armCrossHostTarget({ hostId: "mini", hostName: "mini", terminalId: "r1", title: "Remote" });
+    const before = useFleetArmingStore.getState().broadcastSignal;
+    expect(selectFleetMemberCount(useFleetArmingStore.getState())).toBe(2);
+
+    expect(broadcastFleetRawInput("t1", "x")).toBe(false);
+
+    expect(broadcastMock).not.toHaveBeenCalled();
+    expect(useFleetArmingStore.getState().broadcastSignal).toBe(before);
   });
 
   it("returns false for empty raw input", () => {

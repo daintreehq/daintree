@@ -40,4 +40,26 @@ describe("TerminalChipRow", () => {
     const row = fleet?.parentElement;
     expect(row?.className.split(/\s+/)).toContain("flex");
   });
+
+  it("puts a notice on its own line above the chips, outside their hit targets", () => {
+    const { container } = render(
+      <TerminalChipRow
+        leading={<button>fleet</button>}
+        trailing={<button>pill</button>}
+        notice={<div role="note">notice</div>}
+      />
+    );
+    const row = container.firstElementChild;
+    const noticeLine = screen.getByRole("note").parentElement;
+    const chipLine = screen.getByText("fleet").parentElement?.parentElement;
+    expect(noticeLine?.parentElement).toBe(row);
+    expect(chipLine?.parentElement).toBe(row);
+    expect(noticeLine?.nextElementSibling).toBe(chipLine);
+    expect(noticeLine?.className.split(/\s+/)).not.toContain("pointer-events-auto");
+  });
+
+  it("adds no notice line when there is no notice", () => {
+    const row = renderRow();
+    expect(row.children).toHaveLength(1);
+  });
 });
