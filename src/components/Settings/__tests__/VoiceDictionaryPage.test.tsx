@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { useState } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { VoiceDictionaryPage } from "../VoiceDictionaryPage";
 import { MAX_DICTIONARY_IMPORT_TERMS } from "../voiceDictionaryImport";
@@ -81,12 +81,15 @@ function mainLike(
 const mainLikeAdd = (initial: VoiceDictionaryEntry[] = []) => mainLike(initial).add;
 
 // Stands in for the voice tab: shows whatever dictionary main returned.
+// With `retry`, a change that fails runs once more, as the tab's Retry button would.
 function PageWith({
   initial,
   suggestions = [],
+  retry = false,
 }: {
   initial: VoiceDictionaryEntry[];
   suggestions?: SuggestedDictionaryEntry[];
+  retry?: boolean;
 }) {
   const [entries, setEntries] = useState<VoiceDictionaryEntry[]>(initial);
   return (
@@ -96,7 +99,10 @@ function PageWith({
       failure={null}
       onBack={() => {}}
       onChange={async (_label, run, onSaved) => {
-        const next = await run();
+        const next = await run().catch((error: unknown) => {
+          if (!retry) throw error;
+          return run();
+        });
         setEntries(next.dictionary);
         onSaved?.();
         return true;
@@ -288,19 +294,70 @@ describe("VoiceDictionaryPage", () => {
       expect(container.textContent.match(/Heard as "zoo stand"/g)).toHaveLength(1);
     });
 
-    it("keeps the editor open and asks when main refuses an edit", async () => {
+    it("keeps the editor open and asks when main refuses an edit, on a retry too", async () => {
       const main = mainLike([zustand, term("Zoostand")]);
-      install(main);
-      render(<PageWith initial={[term("Zustand"), term("Zoostand")]} />);
+      const update = vi.fn(main.update).mockRejectedValueOnce(new Error("EROFS"));
+      install({ ...main, update });
+      render(<PageWith initial={[term("Zustand"), term("Zoostand")]} retry />);
 
       fireEvent.click(screen.getByRole("button", { name: "Edit Zoostand" }));
       fireEvent.change(screen.getByLabelText("Heard-as phrases for Zoostand"), {
         target: { value: "zoo stand" },
       });
-      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      const save = screen.getByRole("button", { name: "Save" });
+      act(() => save.focus());
+      fireEvent.click(save);
+      expect(update).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("button", { name: "Move phrase" })).toBeNull();
 
-      expect(await screen.findByRole("button", { name: "Move phrase" })).toBeTruthy();
+      await waitFor(() => expect(screen.getByRole("button", { name: "Move phrase" })).toBeTruthy());
+      expect(update).toHaveBeenCalledTimes(2);
       expect(screen.getByLabelText("Heard-as phrases for Zoostand")).toBeTruthy();
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
+    });
+
+    it("says a refused add wasn't saved when the draft has moved on", async () => {
+      let finish: (state: VoiceDictionaryChange) => void = () => {};
+      install({ add: vi.fn(() => new Promise((resolve) => (finish = resolve))) });
+      const { container } = render(<PageWith initial={[]} />);
+
+      fireEvent.change(addField(), { target: { value: "zoo stand -> Zoostand" } });
+      fireEvent.keyDown(addField(), { key: "Enter" });
+      fireEvent.change(addField(), { target: { value: "Vite" } });
+      await act(async () =>
+        finish({
+          dictionary: [zustand],
+          suggestedDictionary: [],
+          conflicts: [{ phrase: "zoo stand", owner: "Zustand" }],
+        })
+      );
+
+      expect(container.textContent).toContain(
+        "Didn't add Zoostand: “zoo stand” already belongs to Zustand"
+      );
+      expect(addField().value).toBe("Vite");
+      expect(screen.queryByRole("button", { name: "Move phrase" })).toBeNull();
+    });
+
+    it("reports a paste's left-out phrases once when the batch is retried", async () => {
+      const main = mainLike([zustand]);
+      let calls = 0;
+      const add = vi.fn((input: AddDictionaryEntryInput) => {
+        calls++;
+        return calls === 2 ? Promise.reject(new Error("EROFS")) : main.add(input);
+      });
+      install({ add });
+      const { container } = render(<PageWith initial={[zustand]} retry />);
+
+      fireEvent.change(addField(), {
+        target: { value: "zoo stand -> Zoostand\nzoo stand -> Zoo\nVite" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+      await waitFor(() => expect(container.textContent).toContain("Left out"));
+      expect(container.textContent).toContain(
+        "Added 3 terms. Left out 2 heard-as phrases: “zoo stand” already belongs to Zustand"
+      );
     });
 
     it("marks a phrase stored twice on the entry it never fires for", () => {
@@ -325,6 +382,17 @@ describe("VoiceDictionaryPage", () => {
       );
     });
 
+    it("says nothing extra when an added suggestion keeps its phrase", async () => {
+      const suggestion = { word: "Vite", utterance: "veet", suggestedAt: 1, frequency: 1 };
+      const main = mainLike([zustand], [suggestion]);
+      install(main);
+      const { container } = render(<PageWith initial={[zustand]} suggestions={[suggestion]} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Add Vite to dictionary" }));
+      await waitFor(() => expect(container.textContent).toContain('Heard as "veet"'));
+      expect(container.textContent).not.toContain("already belongs");
+    });
+
     it("restores a removed term without a phrase another term took meanwhile", async () => {
       const zoostand = { ...term("Zoostand"), heardAs: ["zoo stand"] };
       const main = mainLike([zoostand]);
@@ -344,6 +412,34 @@ describe("VoiceDictionaryPage", () => {
       expect(main.add).toHaveBeenLastCalledWith(
         expect.objectContaining({ term: "Zoostand", heardAsConflict: "skip" })
       );
+    });
+
+    it("keeps that report in view while an earlier removal can still be undone", async () => {
+      const zoostand = { ...term("Zoostand"), heardAs: ["zoo stand"] };
+      const main = mainLike([term("Vite"), zoostand]);
+      install(main);
+      const { container } = render(<PageWith initial={[term("Vite"), zoostand]} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Remove Vite" }));
+      await screen.findByText("Removed Vite");
+      fireEvent.click(screen.getByRole("button", { name: "Remove Zoostand" }));
+      await screen.findByText("Removed Zoostand");
+      await main.add({ term: "Zustand", heardAs: ["zoo stand"] });
+      fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+
+      await waitFor(() => expect(container.textContent).toContain("Restored Zoostand without"));
+      expect(screen.getByText("Removed Vite")).toBeTruthy();
+    });
+
+    it("restores a removed term without a report when nothing took its phrases", async () => {
+      const zoostand = { ...term("Zoostand"), heardAs: ["zoo stand"] };
+      install(mainLike([zoostand]));
+      const { container } = render(<PageWith initial={[zoostand]} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Remove Zoostand" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
+      await screen.findByRole("button", { name: "Remove Zoostand" });
+      expect(container.textContent).not.toContain("Restored");
     });
   });
 });

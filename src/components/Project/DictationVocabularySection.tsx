@@ -91,6 +91,8 @@ export function DictationVocabularySection({ projectId }: { projectId: string })
     heardAs: string;
     conflicts: HeardAsConflict[];
   } | null>(null);
+  // A refused add whose draft had moved on by the time main answered.
+  const [notice, setNotice] = useState<string | null>(null);
   const termInputRef = useRef<HTMLInputElement>(null);
   // The draft as typed, read when a save lands after further edits.
   const draftRef = useRef({ term, heardAs });
@@ -111,6 +113,7 @@ export function DictationVocabularySection({ projectId }: { projectId: string })
     setEntries([]);
     setFailure(null);
     setMoving(null);
+    setNotice(null);
     enqueue(
       { queueRef, visitRef, setEntries, setFailure },
       () => window.electron.voiceDictionary.getProject({ projectId }),
@@ -160,6 +163,7 @@ export function DictationVocabularySection({ projectId }: { projectId: string })
       }
     }
     setMoving(null);
+    setNotice(null);
     termInputRef.current?.focus();
     let left: HeardAsConflict[] = [];
     change(
@@ -173,15 +177,21 @@ export function DictationVocabularySection({ projectId }: { projectId: string })
         left = result.conflicts;
         return result.dictionary;
       },
-      // A draft edited while this was saving is the user's next entry.
       () => {
-        if (draftRef.current.term !== submittedTerm) return;
-        if (draftRef.current.heardAs !== submittedHeardAs) return;
-        // Refused for a phrase another term took since this page last read the list: ask.
+        // A draft edited while this was saving is the user's next entry.
+        const unchanged =
+          draftRef.current.term === submittedTerm && draftRef.current.heardAs === submittedHeardAs;
+        // Refused for a phrase another term took since this page last read the list: ask, or
+        // say so when the draft has moved on and the question has nothing to hang on.
         if (left.length > 0) {
-          setMoving({ term: submittedTerm, heardAs: submittedHeardAs, conflicts: left });
+          if (unchanged) {
+            setMoving({ term: submittedTerm, heardAs: submittedHeardAs, conflicts: left });
+          } else {
+            setNotice(`Didn't add ${nextTerm}: ${describeHeardAsConflicts(left)}`);
+          }
           return;
         }
+        if (!unchanged) return;
         setTerm("");
         setHeardAs("");
       }
@@ -255,13 +265,15 @@ export function DictationVocabularySection({ projectId }: { projectId: string })
                 </Button>
               </div>
               <div role="status" className="empty:hidden">
-                {pendingMove && (
+                {pendingMove ? (
                   <HeardAsMovePrompt
                     term={term.trim()}
                     conflicts={pendingMove.conflicts}
                     onMove={() => add(true)}
                     onCancel={cancelMove}
                   />
+                ) : (
+                  notice && <p className="text-sm text-text-secondary">{notice}</p>
                 )}
               </div>
             </div>

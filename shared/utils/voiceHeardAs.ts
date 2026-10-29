@@ -1,5 +1,5 @@
 import type { VoiceDictionaryEntry } from "../types/ipc/api.js";
-import { MAX_DICTIONARY_TERM_LENGTH, heardAsKey } from "./voiceDictionary.js";
+import { heardAsKey, heardAsRule } from "./voiceDictionary.js";
 import { findProtectedRanges } from "./voiceProtectedSpans.js";
 import type { VoiceTextEdit } from "./voiceUncertainWords.js";
 
@@ -36,8 +36,6 @@ const BEFORE = `(?<!${WORD})(?<!${WORD}${JOINER})`;
 const AFTER = `(?=(?:['’]s)?(?!${WORD})(?!${JOINER}${WORD}))`;
 // Words of a phrase may be split by any run of spaces, but never a line break.
 const GAP = "[^\\S\\r\\n]+";
-const HAS_WORD_RE = /[\p{L}\p{N}]/u;
-const LINE_BREAK_RE = /[\r\n]/;
 
 const identity: HeardAsRewriter = (text) => text;
 
@@ -47,27 +45,18 @@ function escapeRegExp(value: string): string {
 
 /**
  * Every heard-as pair, oldest entry first. A heard form claimed by two
- * entries belongs to the first, as `heardAsOwners` reports. A form with no letters or digits can't be
- * matched as a word, and a term with a line break would move the breaks a
- * transcript is split on, so neither becomes a rule.
+ * entries belongs to the first, as `heardAsOwners` reports, and a form
+ * `heardAsRule` refuses never becomes a rule.
  */
 export function collectHeardAsRules(entries: readonly VoiceDictionaryEntry[]): HeardAsRule[] {
   const rules: HeardAsRule[] = [];
   const claimed = new Set<string>();
   for (const { term, heardAs } of entries) {
-    if (LINE_BREAK_RE.test(term)) continue;
     for (const raw of heardAs) {
-      const heard = raw.trim().split(/\s+/).join(" ");
-      const key = heardAsKey(heard);
-      if (
-        !HAS_WORD_RE.test(heard) ||
-        heard.length > MAX_DICTIONARY_TERM_LENGTH ||
-        claimed.has(key)
-      ) {
-        continue;
-      }
-      claimed.add(key);
-      rules.push({ heard, term });
+      const rule = heardAsRule(term, raw);
+      if (!rule || claimed.has(rule.key)) continue;
+      claimed.add(rule.key);
+      rules.push({ heard: rule.heard, term });
     }
   }
   return rules.slice(-MAX_HEARD_AS_RULES);

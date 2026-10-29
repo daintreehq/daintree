@@ -158,6 +158,8 @@ export function VoiceDictionaryPage({
       "The dictionary",
       async () => {
         let state: VoiceDictionaryChange | undefined;
+        // A retried batch reports from scratch.
+        left.length = 0;
         for (const { term, heardAs } of terms) {
           state = await window.electron.voiceDictionary.add({
             term,
@@ -176,9 +178,14 @@ export function VoiceDictionaryPage({
         return state!;
       },
       () => {
-        // Main refused a phrase another term took since this page last saw it: ask the same question.
+        // Main refused a phrase another term took since this page last saw it: ask the same
+        // question, or say so when the draft has moved on and the question has nothing to hang on.
         if (!imported && left.length > 0) {
-          setMoving({ text, term: terms[0]!.term, conflicts: left });
+          if (draftRef.current?.value === text) {
+            setMoving({ text, term: terms[0]!.term, conflicts: [...left] });
+          } else {
+            setNotice(`Didn't add ${terms[0]!.term}: ${describeHeardAsConflicts(left)}`);
+          }
           return;
         }
         // Keep anything typed while the add was in flight.
@@ -228,7 +235,7 @@ export function VoiceDictionaryPage({
     void onChange(
       "The dictionary",
       async () => {
-        // A phrase another term took since stays with it.
+        // A phrase another term took since stays with it, and is reported.
         const result = await window.electron.voiceDictionary.add({
           term: entry.term,
           heardAs: entry.heardAs,
@@ -412,16 +419,19 @@ export function VoiceDictionaryPage({
                   onCancel={cancelMove}
                 />
               </div>
-            ) : lastRemoved ? (
-              <div className="flex items-center gap-4 px-4 py-2 text-sm text-text-secondary">
-                <span className="min-w-0 flex-1 truncate">Removed {lastRemoved.term}</span>
-                <Button size="sm" variant="outline" onClick={undoRemove}>
-                  Undo
-                </Button>
-              </div>
-            ) : notice ? (
-              <p className="px-4 py-2 text-sm text-text-secondary">{notice}</p>
-            ) : null}
+            ) : (
+              <>
+                {notice && <p className="px-4 py-2 text-sm text-text-secondary">{notice}</p>}
+                {lastRemoved && (
+                  <div className="flex items-center gap-4 px-4 py-2 text-sm text-text-secondary">
+                    <span className="min-w-0 flex-1 truncate">Removed {lastRemoved.term}</span>
+                    <Button size="sm" variant="outline" onClick={undoRemove}>
+                      Undo
+                    </Button>
+                  </div>
+                )}
+              </>
+            )}
           </div>
 
           <div ref={listRef} className="divide-y divide-border-subtle empty:hidden">
@@ -443,9 +453,9 @@ export function VoiceDictionaryPage({
                       setEditing(null);
                       refocusEdit(entry.term);
                     }}
-                    onSave={(term, heardAs, heardAsConflict) => {
+                    onSave={(term, heardAs, heardAsConflict, onRefused) => {
                       let left: HeardAsConflict[] = [];
-                      return onChange(
+                      void onChange(
                         "The dictionary",
                         async () => {
                           const result = await window.electron.voiceDictionary.update({
@@ -457,14 +467,17 @@ export function VoiceDictionaryPage({
                         },
                         () => {
                           // Refused for a phrase another term took meanwhile: the editor asks.
-                          if (left.length > 0) return;
+                          if (left.length > 0) {
+                            onRefused(left);
+                            return;
+                          }
                           // Another row may have been opened while this saved.
                           setEditing((current) =>
                             current !== null && fold(current) === fold(entry.term) ? null : current
                           );
                           refocusEdit(term);
                         }
-                      ).then((saved) => (saved ? left : []));
+                      );
                     }}
                   />
                 ) : (
@@ -544,8 +557,13 @@ function EntryEditor({
   entry: VoiceDictionaryEntry;
   others: VoiceDictionaryEntry[];
   owners: ReadonlyMap<string, string>;
-  /** Resolves with the phrases main refused for another term, empty once saved or failed. */
-  onSave: (term: string, heardAs: string[], heardAsConflict?: "move") => Promise<HeardAsConflict[]>;
+  /** `onRefused` gets the phrases main refused for another term, on whichever attempt saved. */
+  onSave: (
+    term: string,
+    heardAs: string[],
+    heardAsConflict: "move" | undefined,
+    onRefused: (conflicts: HeardAsConflict[]) => void
+  ) => void;
   onCancel: () => void;
 }) {
   const [term, setTerm] = useState(entry.term);
@@ -554,8 +572,11 @@ function EntryEditor({
     term: string;
     heard: string;
     conflicts: HeardAsConflict[];
+    /** Asked from the buttons the question replaces, so it takes the keyboard. */
+    takesFocus: boolean;
   } | null>(null);
   const heardRef = useRef<HTMLTextAreaElement>(null);
+  const actionsRef = useRef<HTMLDivElement>(null);
   const trimmed = term.trim();
   const heardAs = parseHeardAsField(heard);
   const tooLong =
@@ -576,16 +597,20 @@ function EntryEditor({
   // Editing either field drops the question: a move applies to the fields it was asked about.
   const pendingMove =
     moving !== null && moving.term === term && moving.heard === heard ? moving : null;
+  const ask = (asked: { term: string; heard: string }, conflicts: HeardAsConflict[]) =>
+    setMoving({
+      ...asked,
+      conflicts,
+      takesFocus: actionsRef.current?.contains(document.activeElement) ?? false,
+    });
   const save = (heardAsConflict?: "move") => {
     const asked = { term, heard };
-    void onSave(trimmed, heardAs, heardAsConflict).then((conflicts) => {
-      if (conflicts.length > 0) setMoving({ ...asked, conflicts });
-    });
+    onSave(trimmed, heardAs, heardAsConflict, (conflicts) => ask(asked, conflicts));
   };
   const submit = () => {
     if (error || !dirty) return;
     const conflicts = findHeardAsConflicts(owners, entry.term, heardAs);
-    if (conflicts.length > 0) setMoving({ term, heard, conflicts });
+    if (conflicts.length > 0) ask({ term, heard }, conflicts);
     else save();
   };
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -624,25 +649,31 @@ function EntryEditor({
             onChange={(e) => setHeard(e.target.value)}
             onKeyDown={onKeyDown}
           />
-          {pendingMove ? (
-            <HeardAsMovePrompt
-              term={trimmed}
-              conflicts={pendingMove.conflicts}
-              onMove={() => save("move")}
-              onCancel={() => {
-                setMoving(null);
-                heardRef.current?.focus();
-              }}
-            />
-          ) : (
-            <SettingsRowActions>
-              <Button size="sm" variant="outline" onClick={onCancel}>
-                Cancel
-              </Button>
-              <Button size="sm" variant="contrast" onClick={submit} disabled={!!error || !dirty}>
-                Save
-              </Button>
-            </SettingsRowActions>
+          <div role="status" className="empty:hidden">
+            {pendingMove && (
+              <HeardAsMovePrompt
+                term={trimmed}
+                conflicts={pendingMove.conflicts}
+                takesFocus={pendingMove.takesFocus}
+                onMove={() => save("move")}
+                onCancel={() => {
+                  setMoving(null);
+                  heardRef.current?.focus();
+                }}
+              />
+            )}
+          </div>
+          {!pendingMove && (
+            <div ref={actionsRef}>
+              <SettingsRowActions>
+                <Button size="sm" variant="outline" onClick={onCancel}>
+                  Cancel
+                </Button>
+                <Button size="sm" variant="contrast" onClick={submit} disabled={!!error || !dirty}>
+                  Save
+                </Button>
+              </SettingsRowActions>
+            </div>
           )}
         </div>
       )}

@@ -220,6 +220,28 @@ describe("DictationVocabularySection", () => {
       expect(termInput().value).toBe("Zoostand");
     });
 
+    it("says a refused add wasn't saved when the draft has moved on", async () => {
+      let resolveAdd!: (change: ProjectVoiceDictionaryChange) => void;
+      api.addToProject.mockReturnValueOnce(new Promise((resolve) => (resolveAdd = resolve)));
+      render(<DictationVocabularySection projectId="p1" />);
+      await waitFor(() => expect(api.getProject).toHaveBeenCalled());
+      fireEvent.change(termInput(), { target: { value: "Zoostand" } });
+      fireEvent.change(heardAsInput(), { target: { value: "zoo stand" } });
+      fireEvent.click(screen.getByRole("button", { name: "Add" }));
+      fireEvent.change(termInput(), { target: { value: "Vite" } });
+
+      await act(async () =>
+        resolveAdd(
+          changed([entry("Zustand", ["zoo stand"])], [{ phrase: "zoo stand", owner: "Zustand" }])
+        )
+      );
+      expect(
+        screen.getByText("Didn't add Zoostand: “zoo stand” already belongs to Zustand")
+      ).toBeTruthy();
+      expect(termInput().value).toBe("Vite");
+      expect(screen.queryByRole("button", { name: "Move phrase" })).toBeNull();
+    });
+
     it("marks a phrase stored twice on the entry it never fires for", async () => {
       api.getProject.mockResolvedValue([
         entry("Zustand", ["zoo stand"]),

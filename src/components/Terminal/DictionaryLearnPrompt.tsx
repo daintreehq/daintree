@@ -123,6 +123,8 @@ export function DictionaryLearnPrompt({
           return;
         }
         // Learned without a phrase another term fires for: the line says so, then goes as usual.
+        // A newer offer has the line now, and the keyboard with it.
+        if (useDictionaryLearnPromptStore.getState().prompts.get(terminalId) !== offer) return;
         const hadFocus = rootRef.current?.contains(document.activeElement) ?? false;
         setLine((prev) =>
           prev.offer === offer ? { ...prev, answer: null, leftOut, focused: false } : prev

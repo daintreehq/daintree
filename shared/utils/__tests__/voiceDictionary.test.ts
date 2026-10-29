@@ -118,7 +118,12 @@ describe("addDictionaryEntry", () => {
     });
 
     it("moves the phrase, in every case and spacing, keeping each entry where it was", () => {
-      const legacy = [...entries, entry("Zoo", { heardAs: ["ZOO STAND"], addedAt: 9 })];
+      const legacy = [
+        entry("Zustand", { heardAs: ["zoo stand", "zu stand"] }),
+        entry("Vite", { source: "imported", addedAt: 7 }),
+        entry("Zoo", { heardAs: ["ZOO\tSTAND", "zoo"], source: "learned", addedAt: 9 }),
+        entry("Zoo2", { heardAs: [" Zoo   Stand "] }),
+      ];
       const conflicts: HeardAsConflict[] = [];
       const next = addDictionaryEntry(
         legacy,
@@ -128,9 +133,58 @@ describe("addDictionaryEntry", () => {
       );
       expect(next).toEqual([
         entry("Zustand", { heardAs: ["zu stand"] }),
-        entry("Vite", { heardAs: ["zoo  stand"] }),
-        entry("Zoo", { heardAs: [], addedAt: 9 }),
+        entry("Vite", { heardAs: ["zoo  stand"], source: "imported", addedAt: 7 }),
+        entry("Zoo", { heardAs: ["zoo"], source: "learned", addedAt: 9 }),
+        entry("Zoo2", { heardAs: [] }),
       ]);
+      expect(conflicts).toEqual([]);
+    });
+
+    it("counts only a copy that can fire as the phrase's owner", () => {
+      const legacy = [
+        entry("Two\nlines", { heardAs: ["zoo stand"] }),
+        entry("Zustand", { heardAs: ["zoo stand", "--"] }),
+      ];
+      const conflicts: HeardAsConflict[] = [];
+      expect(
+        updateDictionaryEntry(
+          legacy,
+          "Zustand",
+          { heardAs: ["zoo stand", "--", "zu"] },
+          conflicts
+        )[1]
+      ).toEqual(entry("Zustand", { heardAs: ["zoo stand", "--", "zu"] }));
+      expect(
+        addDictionaryEntry(legacy, { term: "Dashes", heardAs: ["--"] }, T1, conflicts)
+      ).toHaveLength(3);
+      expect(conflicts).toEqual([]);
+    });
+
+    it("reports a phrase asked for twice in different spacing once", () => {
+      const conflicts: HeardAsConflict[] = [];
+      addDictionaryEntry(
+        entries,
+        { term: "Zoo", heardAs: ["zoo stand", "Zoo  Stand"] },
+        T1,
+        conflicts
+      );
+      expect(conflicts).toEqual([{ phrase: "zoo stand", owner: "Zustand" }]);
+    });
+
+    it("refuses invalid input before it looks for conflicts", () => {
+      const conflicts: HeardAsConflict[] = [];
+      const tooLong = "a".repeat(MAX_DICTIONARY_TERM_LENGTH + 1);
+      expect(() =>
+        addDictionaryEntry(entries, { term: "Zoo", heardAs: ["zoo stand", tooLong] }, T1, conflicts)
+      ).toThrow(/longer than/);
+      expect(() =>
+        updateDictionaryEntry(
+          entries,
+          "Vite",
+          { term: "zustand", heardAs: ["zoo stand"] },
+          conflicts
+        )
+      ).toThrow(/already in the dictionary/);
       expect(conflicts).toEqual([]);
     });
 
@@ -231,6 +285,16 @@ describe("updateDictionaryEntry", () => {
     );
     expect(next).toBe(entries);
     expect(conflicts).toEqual([{ phrase: "Zoo  Stand", owner: "zustand" }]);
+  });
+
+  it("moves a phrase back from its owner to an entry holding a copy that never fires", () => {
+    const legacy = [...entries, entry("Zoo", { heardAs: ["zoo stand"], addedAt: 9 })];
+    const next = updateDictionaryEntry(legacy, "Zoo", {
+      heardAs: ["zoo stand"],
+      heardAsConflict: "move",
+    });
+    expect(next[1]!.heardAs).toEqual([]);
+    expect(next[2]).toBe(legacy[2]);
   });
 
   it("moves heard-as forms from the entry that had them when asked to", () => {

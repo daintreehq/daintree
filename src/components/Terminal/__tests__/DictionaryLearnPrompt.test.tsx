@@ -233,6 +233,29 @@ describe("DictionaryLearnPrompt", () => {
     expect(acceptSuggestion).toHaveBeenCalledTimes(1);
   });
 
+  it("leaves a newer offer and its focus alone when an older add settles with a left-out phrase", async () => {
+    let finish: (state: VoiceDictionaryChange) => void = () => {};
+    acceptSuggestion.mockImplementationOnce(
+      () => new Promise<VoiceDictionaryChange>((r) => (finish = r))
+    );
+    const onReturnFocus = vi.fn();
+    render(<DictionaryLearnPrompt terminalId="t1" onReturnFocus={onReturnFocus} />);
+    offer();
+    fireEvent.click(screen.getByText("Add"));
+    act(() => {
+      useDictionaryLearnPromptStore
+        .getState()
+        .offer("t1", { word: "Vitest", utterance: "vee test" });
+    });
+    const add = screen.getByRole("button", { name: "Add" });
+    act(() => add.focus());
+    await act(async () => finish(saved([{ phrase: "zoo stand", owner: "Zoostand" }])));
+
+    expect(screen.getByRole("status").textContent).toContain("Learn “Vitest”");
+    expect(document.activeElement).toBe(add);
+    expect(onReturnFocus).not.toHaveBeenCalled();
+  });
+
   it("hands the keyboard back to the composer when it goes with focus inside", async () => {
     const onReturnFocus = vi.fn();
     render(<DictionaryLearnPrompt terminalId="t1" onReturnFocus={onReturnFocus} />);

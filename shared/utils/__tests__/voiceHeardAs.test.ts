@@ -64,7 +64,7 @@ describe("collectHeardAsRules", () => {
   it("fires a heard form moved to a newer entry for that entry, not the one it left", () => {
     const entries = [entry("Zustand", ["zoo stand"]), entry("Daintree")];
     const refused = addDictionaryEntry(entries, { term: "Zoostand", heardAs: ["Zoo  Stand"] }, 1);
-    expect(rewriterFor(...refused)("use zoo stand here")).toBe("use Zustand here");
+    expect(refused).toBe(entries);
     const moved = addDictionaryEntry(
       entries,
       { term: "Zoostand", heardAs: ["Zoo  Stand"], heardAsConflict: "move" },

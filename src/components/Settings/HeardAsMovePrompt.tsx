@@ -11,11 +11,14 @@ import { SettingsRowActions } from "./SettingsGroup";
 export function HeardAsMovePrompt({
   term,
   conflicts,
+  takesFocus = false,
   onMove,
   onCancel,
 }: {
   term: string;
   conflicts: readonly HeardAsConflict[];
+  /** Puts the keyboard on Cancel when the question replaces the control it was on. */
+  takesFocus?: boolean;
   onMove: () => void;
   onCancel: () => void;
 }) {
@@ -26,7 +29,7 @@ export function HeardAsMovePrompt({
         {describeHeardAsConflicts(conflicts)}. Move {one ? "it" : "them"} to {term}?
       </p>
       <SettingsRowActions>
-        <Button size="sm" variant="outline" onClick={onCancel}>
+        <Button size="sm" variant="outline" onClick={onCancel} autoFocus={takesFocus}>
           Cancel
         </Button>
         <Button size="sm" variant="contrast" onClick={onMove}>

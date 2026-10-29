@@ -70,16 +70,31 @@ export function heardAsKey(phrase: string): string {
   return phrase.trim().split(/\s+/).join(" ").toLowerCase();
 }
 
+const LINE_BREAK_RE = /[\r\n]/;
+const HAS_WORD_RE = /[\p{L}\p{N}]/u;
+
+/**
+ * The rule a heard-as phrase on the entry for `term` becomes, or null when it
+ * can't be one. A form with no letters or digits can't be matched as a word,
+ * and a term with a line break would move the breaks a transcript is split on.
+ */
+export function heardAsRule(term: string, phrase: string): { heard: string; key: string } | null {
+  if (LINE_BREAK_RE.test(term)) return null;
+  const heard = phrase.trim().split(/\s+/).join(" ");
+  if (!HAS_WORD_RE.test(heard) || heard.length > MAX_DICTIONARY_TERM_LENGTH) return null;
+  return { heard, key: heard.toLowerCase() };
+}
+
 /**
  * The term each heard-as phrase fires for, keyed by `heardAsKey`: the first
- * entry that lists it, as the dictation rules give phrases out.
+ * entry whose copy can be a rule, as the dictation rules give phrases out.
  */
 export function heardAsOwners(entries: readonly VoiceDictionaryEntry[]): Map<string, string> {
   const owners = new Map<string, string>();
   for (const { term, heardAs } of entries) {
     for (const phrase of heardAs) {
-      const key = heardAsKey(phrase);
-      if (!owners.has(key)) owners.set(key, term);
+      const key = heardAsRule(term, phrase)?.key;
+      if (key !== undefined && !owners.has(key)) owners.set(key, term);
     }
   }
   return owners;

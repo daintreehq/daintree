@@ -198,6 +198,7 @@ describe("voiceDictionary operations", () => {
       const added = await op("add", { term: "Zoostand", heardAs: ["Zoo Stand"] });
       expect(added.conflicts).toEqual([{ phrase: "Zoo Stand", owner: "Zustand" }]);
       expect(added.dictionary.map((e) => e.term)).toEqual(["Zustand"]);
+      expect(store.set).not.toHaveBeenCalled();
 
       await op("add", { term: "Vite" });
       vi.mocked(store.set).mockClear();
@@ -215,6 +216,9 @@ describe("voiceDictionary operations", () => {
       });
       expect(added.conflicts).toEqual([{ phrase: "zoo stand", owner: "Zustand" }]);
       expect(added.dictionary[1]).toMatchObject({ term: "Zoostand", heardAs: ["zoo-stand"] });
+      expect(store.set).toHaveBeenCalledTimes(1);
+      expect(stored()).not.toHaveProperty("conflicts");
+      expect(storedTerms()).toEqual(["Zustand", "Zoostand"]);
     });
 
     it("moves the phrase in one write, and never stores the report", async () => {
@@ -536,6 +540,24 @@ describe("project vocabulary operations", () => {
     }
     expect(projects.local.get("local")?.[1]).toMatchObject({ heardAs: ["zoo stand"] });
     expect(projects.repo.get("/repos/shared")?.[1]).toMatchObject({ heardAs: ["zoo stand"] });
+
+    for (const projectId of ["local", "shared"]) {
+      const refused = (await projectOp("updateInProject", {
+        projectId,
+        term: "Zustand",
+        changes: { heardAs: ["Zoo Stand"] },
+      })) as unknown as ProjectVoiceDictionaryChange;
+      expect(refused.conflicts).toEqual([{ phrase: "Zoo Stand", owner: "Zoostand" }]);
+      expect(refused.dictionary[0]).toMatchObject({ term: "Zustand", heardAs: [] });
+
+      const moved = (await projectOp("updateInProject", {
+        projectId,
+        term: "Zustand",
+        changes: { heardAs: ["Zoo Stand"], heardAsConflict: "move" },
+      })) as unknown as ProjectVoiceDictionaryChange;
+      expect(moved.conflicts).toEqual([]);
+      expect(moved.dictionary.map(({ heardAs }) => heardAs)).toEqual([["Zoo Stand"], []]);
+    }
   });
 
   it("removes a term from a project that keeps its vocabulary locally", async () => {

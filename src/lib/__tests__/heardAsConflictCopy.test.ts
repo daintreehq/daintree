@@ -19,6 +19,15 @@ describe("describeHeardAsConflicts", () => {
     );
   });
 
+  it("names a phrase two terms asked for once", () => {
+    expect(
+      describeHeardAsConflicts([
+        { phrase: "zoo stand", owner: "Zustand" },
+        { phrase: "Zoo  Stand", owner: "Zustand" },
+      ])
+    ).toBe("“zoo stand” already belongs to Zustand");
+  });
+
   it("counts the phrases past the limit", () => {
     const conflicts = ["a", "b", "c", "d"].map((phrase) => ({ phrase, owner: "Term" }));
     expect(describeHeardAsConflicts(conflicts, 2)).toBe(
