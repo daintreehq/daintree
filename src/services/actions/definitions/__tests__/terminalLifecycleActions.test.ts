@@ -1144,7 +1144,9 @@ describe("terminal.startHeld (#15270)", () => {
     ["a pane that isn't held", { restoreRecovery: undefined }, /isn't held/],
     [
       "a pane waiting for a worktree",
-      { restoreRecovery: { reason: "destination-unavailable", awaitingDestination: true as const } },
+      {
+        restoreRecovery: { reason: "destination-unavailable", awaitingDestination: true as const },
+      },
       /waiting for a worktree/,
     ],
     ["a held pane in the trash", { location: "trash" as const }, /in the trash/],
