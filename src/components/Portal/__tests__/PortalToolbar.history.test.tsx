@@ -33,6 +33,7 @@ function renderToolbar(history: { canGoBack?: boolean; canGoForward?: boolean })
         onGoBack={onGoBack}
         onGoForward={onGoForward}
         hasActiveUrl
+        enabledLinks={[]}
         {...history}
       />
     </TooltipProvider>
