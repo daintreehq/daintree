@@ -624,9 +624,11 @@ export function useDevServer({
 
     // Cross-remount guard: skip ensure() if a previous mount already ensured
     // this exact config. The onStateChanged subscription handles crash propagation
-    // independently, and getState() hydrates current state on mount.
+    // independently, and getState() hydrates current state on mount. An ensure in
+    // flight here makes the cache stale: switching back to the cached config
+    // mid-ensure must queue, or the in-flight config is what ends up running.
     const cachedKey = persistedEnsureCache.get(panelId);
-    if (cachedKey === configKey) {
+    if (cachedKey === configKey && !isEnsuringRef.current) {
       lastEnsureConfigRef.current = configKey;
       return;
     }

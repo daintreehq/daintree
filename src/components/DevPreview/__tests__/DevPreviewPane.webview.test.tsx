@@ -2416,20 +2416,49 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         browserHistory: { past: [], present: "", future: [] },
         browserZoom: 1.0,
         devPreviewConsoleOpen: false,
+        // Whitespace is no command of its own: the preview inherits the default.
+        devCommand: "   ",
         devPreviewScrollPosition: scrollPositionRef.current,
       }));
-      withTwoScripts();
-      render(<DevPreviewPane {...baseProps} />);
+      let projectDefault = "npm run dev";
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      useProjectSettingsStoreMock.mockImplementation((selector: (state: any) => unknown) =>
+        selector({
+          projectId: "project-1",
+          settings: {
+            devServerCommand: projectDefault,
+            environmentVariables: {},
+            runCommands: [],
+          },
+          detectedRunners: [],
+          allDetectedRunners: [
+            { id: "r1", name: "Dev", command: "npm run dev", source: "package.json" as const },
+            { id: "r2", name: "Start", command: "npm start", source: "package.json" as const },
+          ],
+          isLoading: false,
+          error: null,
+          loadSettings: vi.fn(),
+          setSettings: vi.fn(),
+        })
+      );
+      saveSettingsMock.mockImplementation(async (settings: { devServerCommand: string }) => {
+        projectDefault = settings.devServerCommand;
+      });
+      const { rerender } = render(<DevPreviewPane {...baseProps} />);
 
       await act(async () => {
         fireEvent.click(screen.getByRole("menuitem", { name: /Start.*npm start/ }));
         await Promise.resolve();
         await Promise.resolve();
       });
+      rerender(<DevPreviewPane {...baseProps} />);
 
       expect(saveSettingsMock).toHaveBeenCalledWith(
         expect.objectContaining({ devServerCommand: "npm start" })
       );
+      const lastDevServerArgs = (useDevServerMock.mock.lastCall as unknown[] | undefined)?.[0] as
+        { devCommand?: string } | undefined;
+      expect(lastDevServerArgs?.devCommand).toBe("npm start");
       expect(terminalStoreState.setDevPreviewCommand).not.toHaveBeenCalled();
       expect(devServerStateRef.current.stop).not.toHaveBeenCalled();
     });

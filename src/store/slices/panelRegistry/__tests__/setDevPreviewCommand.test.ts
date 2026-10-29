@@ -97,15 +97,16 @@ describe("setDevPreviewCommand", () => {
     (usePanelStore.getState().panelsById["dev-1"] as DevPreviewPanelData | undefined)?.devCommand;
 
   it("replaces a preview's own command, trimmed, and persists it", () => {
-    usePanelStore.setState({
-      panelsById: { "dev-1": devPreview("npm run dev") },
-      panelIds: ["dev-1"],
-    });
+    const before = devPreview("npm run dev");
+    usePanelStore.setState({ panelsById: { "dev-1": before }, panelIds: ["dev-1"] });
 
     usePanelStore.getState().setDevPreviewCommand("dev-1", "  npm run dev:web ");
 
     expect(storedCommand()).toBe("npm run dev:web");
-    expect(saveMock).toHaveBeenCalled();
+    // A new panel object, so selectors on it see the change.
+    expect(usePanelStore.getState().panelsById["dev-1"]).not.toBe(before);
+    const saved = saveMock.mock.lastCall?.[0] as DevPreviewPanelData[] | undefined;
+    expect(saved?.find((p) => p.id === "dev-1")?.devCommand).toBe("npm run dev:web");
   });
 
   it("gives an inheriting preview a command of its own", () => {
@@ -123,6 +124,17 @@ describe("setDevPreviewCommand", () => {
     });
 
     usePanelStore.getState().setDevPreviewCommand("dev-1", " npm run dev");
+
+    expect(saveMock).not.toHaveBeenCalled();
+  });
+
+  it("compares against the stored command trimmed", () => {
+    usePanelStore.setState({
+      panelsById: { "dev-1": devPreview("  npm run dev  ") },
+      panelIds: ["dev-1"],
+    });
+
+    usePanelStore.getState().setDevPreviewCommand("dev-1", "npm run dev");
 
     expect(saveMock).not.toHaveBeenCalled();
   });
@@ -149,8 +161,9 @@ describe("setDevPreviewCommand", () => {
 
     usePanelStore.getState().setDevPreviewCommand("browser-1", "npm run dev");
 
-    const stored = usePanelStore.getState().panelsById["browser-1"] as Record<string, unknown>;
-    expect(stored.devCommand).toBeUndefined();
+    const stored = usePanelStore.getState().panelsById["browser-1"] as
+      Record<string, unknown> | undefined;
+    expect(stored?.devCommand).toBeUndefined();
     expect(saveMock).not.toHaveBeenCalled();
   });
 });
