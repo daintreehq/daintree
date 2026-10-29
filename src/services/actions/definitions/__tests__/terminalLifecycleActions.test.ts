@@ -1248,6 +1248,17 @@ describe("terminal.startHeld (#15270)", () => {
     expect(launchFromRestoreRecoveryMock).not.toHaveBeenCalled();
   });
 
+  it("names the trash, not a start in flight, for a pane trashed mid-start", async () => {
+    setHeldPane({ location: "trash" });
+    isRestoreRecoveryLaunchingMock.mockImplementation((id: string) => id === "p1");
+    const run = setupActions();
+
+    const failure = run("terminal.startHeld", { terminalId: "p1", start: "fresh" });
+
+    await expect(failure).rejects.toThrow(/in the trash/);
+    expect(launchFromRestoreRecoveryMock).not.toHaveBeenCalled();
+  });
+
   it("fails without retry advice when another pane has the conversation", async () => {
     setHeldPane();
     launchFromRestoreRecoveryMock.mockResolvedValue("held-elsewhere");
