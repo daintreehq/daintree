@@ -314,6 +314,7 @@ interface ViewerOpts {
   /** Worktree-relative path of the open file; defaults to its file name. */
   relativePath?: string | null;
   onCloseSelection?: () => void;
+  onOpenAsPanel?: (absolutePath: string) => void;
 }
 
 function change(relativePath: string, status: GitStatus = "modified"): WorkingTreeFileChange {
@@ -375,6 +376,7 @@ function viewerJsx(filePath: string | null, opts: ViewerOpts = {}) {
         missingFilePath={opts.missingFilePath ?? null}
         onShowFolder={opts.onShowFolder ?? vi.fn()}
         onCloseSelection={opts.onCloseSelection ?? vi.fn()}
+        onOpenAsPanel={opts.onOpenAsPanel}
       />
     </TooltipProvider>
   );
@@ -1765,6 +1767,52 @@ describe("FileBrowserViewer copy file contents (#12136)", () => {
       "Open in editor",
       "Close file",
     ]);
+  });
+});
+
+describe("opening the shown file as a panel (#15015)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("hands the shown file's absolute path to the pane", async () => {
+    readMock.mockResolvedValue({ content: "x" });
+    const onOpenAsPanel = vi.fn();
+    renderViewer("/repo/src/notes.txt", { onOpenAsPanel });
+    await screen.findByTestId("code-viewer-mock");
+
+    fireEvent.click(screen.getByRole("button", { name: "Open as panel" }));
+
+    expect(onOpenAsPanel).toHaveBeenCalledExactlyOnceWith("/repo/src/notes.txt");
+  });
+
+  it("moves into the folded menu at compact widths, leaving no loose button", async () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, 0, 320, 30)
+    );
+    readMock.mockResolvedValue({ content: "x" });
+    const onOpenAsPanel = vi.fn();
+    renderViewer("/repo/src/notes.txt", { onOpenAsPanel });
+    await screen.findByTestId("code-viewer-mock");
+
+    expect(screen.queryByRole("button", { name: "Open as panel" })).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Open as panel" }));
+
+    expect(onOpenAsPanel).toHaveBeenCalledExactlyOnceWith("/repo/src/notes.txt");
+  });
+
+  it("offers nothing when the pane supplies no route", async () => {
+    readMock.mockResolvedValue({ content: "x" });
+    renderViewer("/repo/src/notes.txt");
+    await screen.findByTestId("code-viewer-mock");
+
+    expect(screen.queryByRole("button", { name: "Open as panel" })).toBeNull();
+  });
+
+  it("offers nothing when no file is shown", () => {
+    renderViewer(null, { folderPath: "src", folderRows: [], onOpenAsPanel: vi.fn() });
+
+    expect(screen.queryByRole("button", { name: "Open as panel" })).toBeNull();
   });
 });
 
