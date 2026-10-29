@@ -225,10 +225,13 @@ export function useVoiceWaitSubmit({
   // must do neither under the second.
   const attemptRef = useRef(0);
   const activeAttemptRef = useRef<number | null>(null);
-  // The active attempt's way out of its wait, and its hold on Enter and Escape.
-  const activeWaitRef = useRef<{ controller: AbortController; releaseKeys: () => void } | null>(
-    null
-  );
+  // The active attempt's way out of its wait, its hold on Enter and Escape, and
+  // its watch on the cleanup it owns.
+  const activeWaitRef = useRef<{
+    controller: AbortController;
+    releaseKeys: () => void;
+    releaseObserved: () => void;
+  } | null>(null);
   const [voiceSubmitWait, setVoiceSubmitWait] = useState<VoiceSubmitWait | null>(null);
   const [voiceSubmitOutcome, setVoiceSubmitOutcome] = useState<VoiceSubmitOutcome | null>(null);
 
@@ -242,6 +245,7 @@ export function useVoiceWaitSubmit({
       const wait = activeWaitRef.current;
       activeWaitRef.current = null;
       wait?.releaseKeys();
+      wait?.releaseObserved();
       wait?.controller.abort();
       useTerminalInputStore.getState().setVoiceSubmitting(voiceId, false);
       setVoiceSubmitWait(null);
@@ -259,6 +263,7 @@ export function useVoiceWaitSubmit({
       const wait = activeWaitRef.current;
       activeWaitRef.current = null;
       wait?.releaseKeys();
+      wait?.releaseObserved();
       wait?.controller.abort();
       store.setVoiceSubmitting(voiceId, false);
       setVoiceSubmitWait(null);
@@ -332,7 +337,7 @@ export function useVoiceWaitSubmit({
           window.addEventListener("keyup", refocus, true);
         },
       });
-      activeWaitRef.current = { controller, releaseKeys };
+      activeWaitRef.current = { controller, releaseKeys, releaseObserved: observed.release };
 
       const view = editorViewRef.current;
       if (view) {

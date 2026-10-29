@@ -862,9 +862,15 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
 
     dictate("panel-1", "hello wrld");
     const session = voiceStore.getState().panelBuffers["panel-1"]!.dictationSessionId!;
-    const observed = service.observeSendCorrections("panel-1", new Set([session]));
+    const sessions = new Set([session]);
+    const observed = service.observeSendCorrections("panel-1", sessions);
+    // Let go before the stop registers the pass: it never hears of it.
+    const released = service.observeSendCorrections("panel-1", new Set([session]));
+    released.release();
     await service.stop();
     dictate("panel-2", "elsewhere");
+    // Named among the send's sessions, so only the panel keeps it out.
+    sessions.add(voiceStore.getState().panelBuffers["panel-2"]!.dictationSessionId!);
     await service.stop();
     dictate("panel-1", "and more");
     await service.stop();
@@ -882,9 +888,25 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     });
     await flush();
     expect(observed.failed()).toBe(true);
+    expect(released.failed()).toBe(false);
 
     observed.release();
     expect(observed.failed()).toBe(false);
+  });
+
+  it("tells a send of a pass already on its way when it started", async () => {
+    const { service, voiceStore, dictate, flush } = await setup();
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+
+    dictate("panel-1", "hello wrld");
+    const session = voiceStore.getState().panelBuffers["panel-1"]!.dictationSessionId!;
+    await service.stop();
+    const observed = service.observeSendCorrections("panel-1", new Set([session]));
+    pending.resolve({ action: "no_change", correctedText: "hello wrld", failed: true });
+    await flush();
+
+    expect(observed.failed()).toBe(true);
   });
 
   it("doesn't tell a send a passage an edit reached failed its cleanup", async () => {

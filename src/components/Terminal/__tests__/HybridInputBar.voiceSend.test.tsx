@@ -25,6 +25,7 @@ import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { subscribeDictationRangeTracking } from "@/store/dictationRangeStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { HybridInputBar } from "../HybridInputBar";
 
 type DeltaPayload = { text: string; itemId?: string };
@@ -185,7 +186,43 @@ async function mount(onSend: (payload: { text: string }) => void) {
   return EditorView.findFromDOM(result.container.querySelector<HTMLElement>(".cm-editor")!)!;
 }
 
-describe("HybridInputBar dictated send whose cleanup failed (#14959)", () => {
+const statuses = () =>
+  [...document.querySelectorAll('[role="status"]')].map((el) => el.textContent ?? "");
+
+describe("HybridInputBar dictated send without its cleanup (#14959)", () => {
+  it("names Enter while the cleanup is awaited, and says a second one skipped it", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const onSend = vi.fn();
+    act(() => {
+      dictate("hello wrld");
+    });
+    const view = await mount(onSend);
+
+    await act(async () => {
+      runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, UI_INLINE_LOADING_GATE_MS + 50));
+    });
+    expect(statuses().some((text) => /Press Enter/.test(text))).toBe(true);
+
+    await act(async () => {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })
+      );
+    });
+    expect(onSend.mock.calls.map(([payload]) => payload.text)).toEqual(["hello wrld"]);
+    expect(document.querySelector("[data-voice-submit-caption]")?.textContent).toMatch(
+      /cleanup skipped/
+    );
+    expect(statuses().some((text) => /cleanup skipped/.test(text))).toBe(true);
+
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+  });
+
   it("sends the words as dictated and says on its receipt that the cleanup failed", async () => {
     const pending = deferred<CorrectResult>();
     correct.mockReturnValueOnce(pending.promise);
@@ -206,8 +243,8 @@ describe("HybridInputBar dictated send whose cleanup failed (#14959)", () => {
     expect(document.querySelector("[data-voice-submit-caption]")?.textContent).toMatch(
       /cleanup failed/
     );
-    const statuses = [...document.querySelectorAll('[role="status"]')].map((el) => el.textContent);
-    expect(statuses.some((text) => /cleanup failed/.test(text ?? ""))).toBe(true);
+    // Its wait went inside the progress gate, unannounced, and still says so.
+    expect(statuses().some((text) => /cleanup failed/.test(text))).toBe(true);
   });
 });
 

@@ -668,7 +668,37 @@ describe("useVoiceWaitSubmit", () => {
     expect(result.current.voiceSubmitOutcome).toEqual({ kind: "held", attempt: 2 });
   });
 
+  it.each(["refused", "rejected"] as const)(
+    "leaves the cleanup's word off a handover that was %s",
+    async (how) => {
+      observeMock.mockReturnValue({ failed: () => true, release: () => {} });
+      let refuse!: () => void;
+      const handover = new Promise<boolean>((resolve, reject) => {
+        refuse = how === "refused" ? () => resolve(false) : () => reject(new Error("no host"));
+      });
+      const { result } = renderHook(() =>
+        useVoiceWaitSubmit({
+          terminalId: PANEL_ID,
+          editorViewRef: { current: null },
+          editableCompartmentRef: { current: new Compartment() },
+          sendFromEditor: () => handover,
+        })
+      );
+
+      await act(async () => {
+        result.current.startVoiceWaitSubmit();
+      });
+      expect(result.current.voiceSubmitOutcome?.kind).toBe("sending");
+      await act(async () => {
+        refuse();
+      });
+      expect(result.current.voiceSubmitOutcome).toEqual({ kind: "held", attempt: 1 });
+    }
+  );
+
   it("leaves the correction to land when Escape cancels the wait for it", async () => {
+    const release = vi.fn();
+    observeMock.mockReturnValueOnce({ failed: () => false, release });
     let finishCorrection!: (landed: boolean) => void;
     hasPendingMock.mockReturnValue(true);
     waitMock.mockImplementation(
@@ -686,6 +716,8 @@ describe("useVoiceWaitSubmit", () => {
       expect(result.current.cancelVoiceWaitSubmit()).toBe(true);
     });
     expect(result.current.voiceSubmitPhase).toBeNull();
+    // At Escape, not once the wait it abandoned settles.
+    expect(release).toHaveBeenCalled();
 
     await act(async () => {
       finishCorrection(true);
@@ -875,6 +907,20 @@ describe("useVoiceWaitSubmit keys during the wait (#14780)", () => {
       resolveStop();
     });
     expect(waitMock).not.toHaveBeenCalled();
+    expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    expect(result.current.voiceSubmitOutcome?.cleanup).toBe("skipped");
+  });
+
+  it("says a send that dropped a cleanup still on its way skipped it, whatever else failed", async () => {
+    observeMock.mockReturnValue({ failed: () => true, release: () => {} });
+    const { result } = renderWaitSubmit();
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    await act(async () => {
+      pressKey("Enter");
+    });
+
     expect(sendFromEditor).toHaveBeenCalledTimes(1);
     expect(result.current.voiceSubmitOutcome?.cleanup).toBe("skipped");
   });

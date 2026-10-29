@@ -79,7 +79,12 @@ import { useVoiceWaitSubmit } from "../useVoiceWaitSubmit";
 
 type DeltaPayload = { text: string; itemId?: string };
 type CompletePayload = { text: string; willCorrect: boolean; itemId?: string };
-type CorrectResult = { action: "no_change" | "replace"; correctedText: string; failed?: true };
+type CorrectResult = {
+  action: "no_change" | "replace";
+  correctedText: string;
+  failed?: true;
+  verdict?: "replaced" | "unchanged" | "failed" | "timed_out";
+};
 
 const callbacks: {
   delta: ((payload: DeltaPayload) => void) | null;
@@ -453,7 +458,12 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
 
     // What main hands back when the request times out.
     await act(async () => {
-      pending.resolve({ action: "no_change", correctedText: "hello wrld", failed: true });
+      pending.resolve({
+        action: "no_change",
+        correctedText: "hello wrld",
+        failed: true,
+        verdict: "timed_out",
+      });
       await vi.advanceTimersByTimeAsync(0);
     });
 
@@ -473,14 +483,30 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
       failed: true,
     });
     dictate(PANEL_ID, "hello wrld");
-    const result = renderComposer();
+    // A stop that returns only once its cleanup has failed: no wait for it
+    // begins, so only a watch kept from the Enter knows it failed.
+    const stop = voiceRecordingService.stop.bind(voiceRecordingService);
+    const stopSpy = vi
+      .spyOn(voiceRecordingService, "stop")
+      .mockImplementation(async (...args: Parameters<typeof stop>) => {
+        const stopped = await stop(...args);
+        while (voiceRecordingService.hasPendingCorrection(PANEL_ID)) {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        return stopped;
+      });
+    try {
+      const result = renderComposer();
+      await act(async () => {
+        result.current.startVoiceWaitSubmit();
+        await vi.waitFor(() => expect(sent).toEqual(["hello wrld"]));
+      });
 
-    await act(async () => {
-      result.current.startVoiceWaitSubmit();
-    });
-
-    expect(sent).toEqual(["hello wrld"]);
-    expect(result.current.voiceSubmitOutcome?.cleanup).toBe("failed");
+      expect(result.current.voiceSubmitPhase).toBeNull();
+      expect(result.current.voiceSubmitOutcome?.cleanup).toBe("failed");
+    } finally {
+      stopSpy.mockRestore();
+    }
   });
 
   it("says nothing of a cleanup that came back with nothing to change", async () => {

@@ -234,6 +234,41 @@ describe("VoiceSubmitProgress", () => {
       expect(onPresentChange).toHaveBeenLastCalledWith(true);
     });
 
+    it("tells it once: a receipt that has faded stays gone", () => {
+      const onPresentChange = vi.fn();
+      const view = render(
+        <VoiceSubmitProgress
+          wait={polishing(1_000, 3_000)}
+          outcome={null}
+          onPresentChange={onPresentChange}
+        />
+      );
+      view.rerender(
+        <VoiceSubmitProgress
+          wait={null}
+          outcome={sent("failed")}
+          onPresentChange={onPresentChange}
+        />
+      );
+      expect(captionOf(view.container)).toMatch(/failed/);
+
+      const fade = animate.mock.results.at(-1)!.value as { onfinish: (() => void) | null };
+      act(() => {
+        fade.onfinish?.();
+      });
+      expect(captionOf(view.container)).toBeNull();
+      expect(onPresentChange).toHaveBeenLastCalledWith(false);
+
+      view.rerender(
+        <VoiceSubmitProgress
+          wait={null}
+          outcome={sent("failed")}
+          onPresentChange={onPresentChange}
+        />
+      );
+      expect(captionOf(view.container)).toBeNull();
+    });
+
     it("leaves a clean send whose wait ended inside the gate unsaid", () => {
       const { caption, onPresentChange } = settle(sent(), { gateOpened: false });
       expect(caption).toBeNull();
