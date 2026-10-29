@@ -137,7 +137,14 @@ export type BindingState =
 export type WorkspaceState =
   | { status: "idle" }
   | { status: "no-worktree" }
-  | { status: "opening" }
+  | {
+      status: "opening";
+      /** The app the user just chose, when the opening is their choice. */
+      appPath?: string;
+      /** The candidates the choice was made from, kept on screen while it opens. */
+      appPaths?: string[];
+      serverCwd?: string | null;
+    }
   | {
       status: "ready";
       workspaceId: string;
@@ -148,8 +155,21 @@ export type WorkspaceState =
       scanComplete: boolean;
     }
   /** More than one app and nothing says which the preview serves: the user chooses. */
-  | { status: "ambiguous"; appPaths: string[]; scanComplete: boolean }
-  | { status: "failed"; message: string };
+  | {
+      status: "ambiguous";
+      appPaths: string[];
+      scanComplete: boolean;
+      /** Where the preview's dev server runs, as the panel reports it; null when it doesn't. */
+      serverCwd: string | null;
+    }
+  | { status: "failed"; reason: WorkspaceFailure; message: string };
+
+/**
+ * Why the source couldn't be opened, which decides the way forward: a read
+ * error is retried, a remembered app that has gone is chosen again, and a
+ * server running from another checkout can only be restarted from this one.
+ */
+export type WorkspaceFailure = "read-error" | "invalid-app" | "unknown-worktree" | "other-worktree";
 
 export interface PageState {
   epoch: number;
@@ -185,7 +205,14 @@ export type SelectionState =
    * the old markup. `retrying` while the click is being asked for again by itself.
    */
   | { status: "settling"; retrying?: boolean }
-  | { status: "failed"; message: string };
+  | { status: "failed"; reason: SelectionFailure; message: string };
+
+/**
+ * Why a pick ended without a selection. A page still loading is routine
+ * timing, not an error; a reported location the file contradicts has its own
+ * way forward; anything else is the host failing, whose words are a diagnostic.
+ */
+export type SelectionFailure = "loading" | "mismatch" | "host";
 
 /**
  * The last proven element, in the terms the page can be asked for it again:
@@ -308,6 +335,8 @@ export interface InspectorIssue {
   code?: string;
   /** The framework the page's verdict is about, when it named one. */
   framework?: ElementPickerProviderId;
+  /** What the verdict means for a request, in the product's words. */
+  body?: string;
   /**
    * The diagnostic behind the title. Separate, because a raw error message is
    * evidence, not a headline, and the notice needs a headline to put a
@@ -469,7 +498,9 @@ export class InspectorController implements DevPreviewToolSession {
   private readonly listeners = new Set<() => void>();
   private readonly unsubscribers: Array<() => void> = [];
   private context: InspectorContext = { projectId: null, worktreeId: null, worktreePath: null };
-  private workspaceKey: string | null = null;
+  // Undefined until the first context arrives: a preview that starts with no
+  // worktree has a null key, and must still be told so.
+  private workspaceKey: string | null | undefined = undefined;
   private workspaceRequest = 0;
   private projectRequest = 0;
   private bindRequest = 0;
@@ -595,7 +626,7 @@ export class InspectorController implements DevPreviewToolSession {
     // Only a server change keeps the app the user chose.
     const sameWorktree =
       key !== null &&
-      this.workspaceKey !== null &&
+      typeof this.workspaceKey === "string" &&
       key.slice(0, key.lastIndexOf("\n")) ===
         this.workspaceKey.slice(0, this.workspaceKey.lastIndexOf("\n"));
     if (!sameWorktree) this.chosenAppPath = undefined;
@@ -609,7 +640,11 @@ export class InspectorController implements DevPreviewToolSession {
     void this.openWorkspace();
   }
 
-  async openWorkspace(appPath: string | undefined = this.chosenAppPath): Promise<void> {
+  async openWorkspace(
+    appPath: string | undefined = this.chosenAppPath,
+    /** The candidates a choice was made from, when the workspace that listed them is already gone. */
+    candidates?: string[]
+  ): Promise<void> {
     this.chosenAppPath = appPath;
     const { projectId, worktreeId, worktreePath } = this.context;
     if (!projectId || !worktreeId || !worktreePath) return;
@@ -619,16 +654,24 @@ export class InspectorController implements DevPreviewToolSession {
     const cwd = panelCwd(usePanelStore.getState().panelsById[this.panelId]);
     if (cwd !== null && !isWithin(worktreePath, cwd)) {
       this.patchState({
-        workspace: {
-          status: "failed",
-          message:
-            "This preview's dev server runs from another worktree. Restart it from this worktree to trace elements.",
-        },
+        workspace: { status: "failed", reason: "other-worktree", message: cwd },
       });
       this.releaseHeld();
       return;
     }
-    this.patchState({ workspace: { status: "opening" }, project: null });
+    // The candidates stay on screen while the choice opens: the list the user
+    // chose from is where their focus is, and the drawer must not blink shut.
+    const before = this.state.workspace;
+    const listed =
+      candidates ??
+      (before.status === "ambiguous" || before.status === "ready" ? before.appPaths : undefined);
+    this.patchState({
+      workspace: {
+        status: "opening",
+        ...(appPath !== undefined && listed ? { appPath, appPaths: listed, serverCwd: cwd } : {}),
+      },
+      project: null,
+    });
     // A window attached to another machine shows the page at this machine's
     // address, which on the machine holding the source names something else:
     // that workspace fetches no maps rather than the wrong ones.
@@ -647,6 +690,7 @@ export class InspectorController implements DevPreviewToolSession {
       this.patchState({
         workspace: {
           status: "failed",
+          reason: "read-error",
           message: wireFailureMessage(error, "Couldn't open the source"),
         },
       });
@@ -677,6 +721,7 @@ export class InspectorController implements DevPreviewToolSession {
             status: "ambiguous",
             appPaths: result.appPaths,
             scanComplete: result.scanComplete,
+            serverCwd: cwd,
           },
         });
         this.releaseHeld();
@@ -685,10 +730,8 @@ export class InspectorController implements DevPreviewToolSession {
         this.patchState({
           workspace: {
             status: "failed",
-            message:
-              result.reason === "invalid-app"
-                ? "That app isn't in this worktree any more."
-                : "This worktree isn't one of the project's open worktrees.",
+            reason: result.reason,
+            message: appPath ?? "",
           },
         });
         this.releaseHeld();
@@ -698,6 +741,15 @@ export class InspectorController implements DevPreviewToolSession {
 
   private releaseWorkspace(workspaceId: string): void {
     void this.deps.picker.closeWorkspace({ workspaceId }).catch(() => undefined);
+  }
+
+  /** Forget the remembered app and ask the host for the candidates again. */
+  chooseAnotherApp(): void {
+    // Cleared here, not passed: `openWorkspace(undefined)` takes the default,
+    // which is the very choice that has gone.
+    this.chosenAppPath = undefined;
+    this.closeWorkspace();
+    void this.openWorkspace();
   }
 
   /**
@@ -715,8 +767,11 @@ export class InspectorController implements DevPreviewToolSession {
       this.held = null;
       this.selectionRequest++;
     }
+    // The candidates go with the workspace being released; the switch keeps
+    // them on screen while the new app opens, as a first choice does.
+    const candidates = workspace.status === "ready" ? workspace.appPaths : undefined;
     this.closeWorkspace();
-    void this.openWorkspace(appPath);
+    void this.openWorkspace(appPath, candidates);
   }
 
   private closeWorkspace(): void {
@@ -1095,11 +1150,12 @@ export class InspectorController implements DevPreviewToolSession {
   }
 
   private raiseRuntimeIssue(event: Extract<ElementPickerEvent, { type: "runtimeIssue" }>): void {
-    const message = runtimeIssueMessage(event.code, event.framework);
+    const message = runtimeIssueMessage(event.code, event.framework, event.detail);
     this.patchState({
       issue: {
         severity: event.code === "internal" ? "error" : "warning",
-        message: message ?? event.detail,
+        message: message?.title ?? event.detail,
+        ...(message?.body ? { body: message.body } : {}),
         code: event.code,
         ...(event.framework ? { framework: event.framework } : {}),
         // The page's own words, under ours. A known code has a headline that
@@ -1255,7 +1311,7 @@ export class InspectorController implements DevPreviewToolSession {
     const binding = this.state.binding;
     if (binding.status !== "bound") return;
     if (!page || page.epoch !== epoch) {
-      refuse({ status: "failed", message: "The page is still loading — select again" }, true);
+      refuse({ status: "failed", reason: "loading", message: "" }, true);
       return;
     }
 
@@ -1337,6 +1393,7 @@ export class InspectorController implements DevPreviewToolSession {
       refuse(
         {
           status: "failed",
+          reason: "host",
           message: clientErrorText(error, "Couldn't find the source for this element"),
         },
         false
@@ -1386,6 +1443,7 @@ export class InspectorController implements DevPreviewToolSession {
       refuse(
         {
           status: "failed",
+          reason: "mismatch",
           message: mismatchMessage({
             tagName: primary.tagName,
             file: claim.candidate.file,

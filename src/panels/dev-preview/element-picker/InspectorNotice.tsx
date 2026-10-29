@@ -77,11 +77,12 @@ export function InspectorNotice({
           {onDismiss ? (
             // The shared dismiss control: hover, focus ring, radius and glyph
             // are the ones every other closable surface draws. The offsets pull
-            // its 24px box back onto the title's optical line.
+            // its 24px box back onto the title's optical line, above and below,
+            // so a one-line title sits as close to its body as an undismissable one.
             <DismissButton
               aria-label="Dismiss"
               onClick={() => onDismiss()}
-              className="-mr-1 -mt-1 shrink-0"
+              className="-my-1 -mr-1 shrink-0"
             />
           ) : null}
         </div>
