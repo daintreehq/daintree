@@ -140,8 +140,9 @@ export async function prepareSwitchScreenHandoff(
     const key = await Promise.race([inserting.catch(() => null), timedOut]);
     if (key === TIMED_OUT) {
       // Too late for the frame the swap uncovers. The fade is queued behind it
-      // to the same renderer, so a cover that lands after the swap lands
-      // already faded, and both come off once they have.
+      // to the same renderer, so a cover that lands after the swap normally
+      // lands already faded (unless that renderer draws between the two), and
+      // both come off once they have.
       for (const late of [inserting, incoming.insertCSS(FADE_CSS)]) {
         void late.then(
           (lateKey) => removeCss(incoming, lateKey),

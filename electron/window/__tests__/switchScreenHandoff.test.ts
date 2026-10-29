@@ -268,7 +268,7 @@ describe("prepareSwitchScreenHandoff", () => {
     expect(incoming.wc.executeJavaScript).not.toHaveBeenCalled();
   });
 
-  it("lands a cover that comes past the budget already faded, and takes both off", async () => {
+  it("queues the fade behind a cover that misses the budget, and takes both off", async () => {
     const incoming = makeIncoming();
     let land!: (key: string) => void;
     incoming.wc.insertCSS.mockImplementationOnce(
