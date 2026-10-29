@@ -15,9 +15,9 @@ const lister = vi.hoisted(() => ({
 vi.mock("../../../services/helpPastSessions.js", () => lister);
 vi.mock("../../../services/HelpSessionService.js", () => ({
   helpSessionService: {
-    getSessionPathForProject: (_p: string, agentId: string) =>
-      agentId === "claude" ? "/sessions/h" : `/sessions/h.${agentId}`,
-    getLegacySessionPathForProject: () => "/sessions/h",
+    getSessionPathForProject: (projectPath: string, agentId: string) =>
+      agentId === "claude" ? `${projectPath}/h` : `${projectPath}/h.${agentId}`,
+    getLegacySessionPathForProject: (projectPath: string) => `${projectPath}/h`,
   },
 }));
 vi.mock("../../../services/claude/ClaudeSessionStore.js", () => ({
@@ -26,9 +26,14 @@ vi.mock("../../../services/claude/ClaudeSessionStore.js", () => ({
 vi.mock("../../../services/codex/CodexSubagentService.js", () => ({
   listCodexSessionsForCwd: vi.fn(),
 }));
-vi.mock("../../../services/ProjectStore.js", () => ({
-  projectStore: { getProjectById: (id: string) => (id === "p1" ? { path: "/repo" } : undefined) },
-}));
+// Both projects are real, so only the guard stands between a view and the other's history.
+vi.mock("../../../services/ProjectStore.js", () => {
+  const projects = new Map([
+    ["p1", { path: "/repo" }],
+    ["p2", { path: "/other" }],
+  ]);
+  return { projectStore: { getProjectById: (id: string) => projects.get(id) } };
+});
 vi.mock("../../../services/ScratchStore.js", () => ({
   scratchStore: { getScratchById: () => undefined },
 }));
@@ -65,7 +70,7 @@ describe("handleListPastSessions (#14984)", () => {
     );
     // Paths come from main's record of the project, never the renderer.
     expect(lister.listHelpPastSessions).toHaveBeenCalledWith(
-      { claude: "/sessions/h", codex: ["/sessions/h.codex", "/sessions/h"] },
+      { claude: "/repo/h", codex: ["/repo/h.codex", "/repo/h"] },
       expect.objectContaining({ claudeProjectsRoot: "/home/.claude/projects" })
     );
   });
