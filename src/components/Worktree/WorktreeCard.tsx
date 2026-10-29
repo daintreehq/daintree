@@ -85,7 +85,7 @@ import {
 import type { MenuActionSourceValue } from "@/components/ui/menu-source";
 import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
 import type { WhenClauseContext } from "@shared/utils/whenClause";
-import { isAgentFleetActionEligible, isFleetArmEligible } from "@/store/fleetArmingStore";
+import { isAgentTerminalFleetEligible, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useWorktreeStatus } from "./WorktreeCard/hooks/useWorktreeStatus";
 import { useWorktreeDevServerSession } from "@/hooks/app/useWorktreeDevServerSession";
 import { computeChipState } from "./utils/computeChipState";
@@ -388,10 +388,10 @@ export function WorktreeCard({
   const eligibleTerminals = worktreeTerminals.filter(isFleetArmEligible);
   const eligibleTerminalCount = eligibleTerminals.length;
   const waitingAgentCount = eligibleTerminals.filter(
-    (t) => isAgentFleetActionEligible(t) && t.agentState === "waiting"
+    (t) => isAgentTerminalFleetEligible(t) && t.agentState === "waiting"
   ).length;
   const workingAgentCount = eligibleTerminals.filter(
-    (t) => isAgentFleetActionEligible(t) && t.agentState === "working"
+    (t) => isAgentTerminalFleetEligible(t) && t.agentState === "working"
   ).length;
 
   const worktreeErrors = useErrorStore(

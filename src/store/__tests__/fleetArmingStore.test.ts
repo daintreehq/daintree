@@ -307,6 +307,26 @@ describe("fleetArmingStore", () => {
       expect([...useFleetArmingStore.getState().armedIds]).toEqual(["t1"]);
     });
 
+    it("arms plugin-contributed agents in the observed state (#14961)", () => {
+      seedPanels([
+        makeAgentTerminal("a1", { agentState: "waiting" }),
+        makeAgentTerminal("plugin", {
+          agentState: "waiting",
+          detectedAgentId: undefined,
+          launchAgentId: "acme-plugin-agent",
+          everDetectedAgent: false,
+        }),
+        makeAgentTerminal("pluginWorking", {
+          agentState: "working",
+          detectedAgentId: undefined,
+          launchAgentId: "acme-plugin-agent",
+          everDetectedAgent: false,
+        }),
+      ]);
+      useFleetArmingStore.getState().armByState("waiting", "current", false);
+      expect([...useFleetArmingStore.getState().armedIds].sort()).toEqual(["a1", "plugin"]);
+    });
+
     it("excludes plain terminals whose agentState matches the preset", () => {
       // Fleet is detection-based. A plain shell with no detectedAgentId must not
       // enter the fleet even if its agentState matches the preset.
@@ -895,6 +915,19 @@ describe("fleetArmingStore", () => {
     it("returns ids that armByState would arm — all scope", () => {
       const ids = computeArmByStateIds("working", "all", "wt-1");
       expect(ids.sort()).toEqual(["t1", "t3"]);
+    });
+
+    it("counts plugin-contributed agents the same as built-ins (#14961)", () => {
+      seedPanels([
+        makeAgentTerminal("t1", { agentState: "waiting" }),
+        makeAgentTerminal("plugin", {
+          agentState: "waiting",
+          detectedAgentId: undefined,
+          launchAgentId: "acme-plugin-agent",
+          everDetectedAgent: false,
+        }),
+      ]);
+      expect(computeArmByStateIds("waiting", "current", "wt-1").sort()).toEqual(["plugin", "t1"]);
     });
 
     it("returns empty when no panels match the preset", () => {

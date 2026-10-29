@@ -85,8 +85,8 @@ export function isAgentFleetActionEligible(
 
 /**
  * Predicate for the sidebar's filter-scoped bulk arm, which addresses agents
- * rather than terminals. (The ribbon's state presets still run on the built-in
- * predicate below — a separate, pre-existing gap, not this one.)
+ * rather than terminals. Also backs the ribbon's state presets and state-filtered
+ * saved fleets (#14961).
  *
  * Deliberately NOT `isAgentFleetActionEligible`: that one resolves a *built-in*
  * capability id because accept/reject/interrupt/restart drive built-in agent
