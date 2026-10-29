@@ -114,6 +114,39 @@ function PinHint({
   );
 }
 
+/** A failure under the field, with the one recovery that repeats it. */
+function QuickRunFailure({
+  summary,
+  command,
+  onRetry,
+}: {
+  summary: string;
+  command: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="mt-1 flex min-w-0 items-center gap-1.5 text-2xs text-text-primary">
+      <SeverityMark severity="error" label="Error" decorative className="h-3 w-3" />
+      <TruncatedTooltip content={`${summary} ${command}`}>
+        <span role="alert" className="min-w-0 flex-1 truncate">
+          {summary} <span className={COMMAND_TEXT_CLASS}>{command}</span>
+        </span>
+      </TruncatedTooltip>
+      <Button
+        variant="ghost"
+        size="xs"
+        // Keep the field focused, as Run does, so the retry lands where the
+        // command was given back.
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={onRetry}
+        className="-mr-1.5 shrink-0"
+      >
+        Retry
+      </Button>
+    </div>
+  );
+}
+
 /** Case-insensitive substring ranges for `HighlightedText`. */
 function matchRanges(text: string, search: string): Array<[number, number]> | undefined {
   if (!search) return undefined;
@@ -161,6 +194,10 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
     options: { dock: boolean; restart: boolean };
     worktreeId: string | null;
   } | null>(null);
+  // The pin or unpin whose save failed, as it was acted on, so Retry repeats
+  // exactly that — a saved row is unpinned, anything else pinned. The row stays
+  // where it was, so typing or moving the highlight doesn't resolve it.
+  const [pinError, setPinError] = useState<SuggestionItem | null>(null);
   const [launchOverride, setLaunchOverride] = useState<{
     value: string;
     dock?: boolean;
@@ -220,6 +257,12 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
     quietFocusRef.current = false;
   }, []);
 
+  const returnToField = () => {
+    quietFocusRef.current = true;
+    inputRef.current?.focus({ preventScroll: true });
+    quietFocusRef.current = false;
+  };
+
   useEffect(() => {
     const saved = localStorage.getItem(
       `${QUICK_RUN_HISTORY_KEY_PREFIX}${hostScopedKey(projectId)}`
@@ -270,6 +313,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
 
   const togglePin = (item: SuggestionItem) => {
     setRefocus({ value: item.value, wasSaved: item.type === "saved" });
+    setPinError(null);
     if (item.type === "saved") void handleUnpin(item);
     else void handlePin(item);
   };
@@ -294,6 +338,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
       await promoteToSaved(commandToSave);
     } catch (err) {
       setRefocus(null);
+      setPinError(item);
       logError("Failed to pin command", err);
     }
   };
@@ -303,6 +348,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
       await removeFromSaved(item.value);
     } catch (err) {
       setRefocus(null);
+      setPinError(item);
       logError("Failed to unpin command", err);
     }
   };
@@ -1060,33 +1106,26 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
             {/* Only for the worktree it failed in, and only until the options
                 change: past either, Retry would no longer mean the same launch. */}
             {launchError && launchError.worktreeId === activeWorktreeId && (
-              <div className="mt-1 flex min-w-0 items-center gap-1.5 text-2xs text-text-primary">
-                <SeverityMark severity="error" label="Error" decorative className="h-3 w-3" />
-                <TruncatedTooltip content={`Couldn't start ${launchError.item.value}`}>
-                  <span role="alert" className="min-w-0 flex-1 truncate">
-                    Couldn't start{" "}
-                    <span className={COMMAND_TEXT_CLASS}>{launchError.item.value}</span>
-                  </span>
-                </TruncatedTooltip>
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  // Keep the field focused, as Run does, so the retry lands
-                  // where the command was given back.
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    // Retrying removes this row, and with it the focused
-                    // button, so a keyboard user lands back in the field.
-                    quietFocusRef.current = true;
-                    inputRef.current?.focus({ preventScroll: true });
-                    quietFocusRef.current = false;
-                    void handleRunItem(launchError.item, launchError.options);
-                  }}
-                  className="-mr-1.5 shrink-0"
-                >
-                  Retry
-                </Button>
-              </div>
+              <QuickRunFailure
+                summary="Couldn't start"
+                command={launchError.item.value}
+                onRetry={() => {
+                  // Retrying removes this row, and with it the focused
+                  // button, so a keyboard user lands back in the field.
+                  returnToField();
+                  void handleRunItem(launchError.item, launchError.options);
+                }}
+              />
+            )}
+            {pinError && (
+              <QuickRunFailure
+                summary={pinError.type === "saved" ? "Couldn't unpin" : "Couldn't pin"}
+                command={pinError.value}
+                onRetry={() => {
+                  returnToField();
+                  togglePin(pinError);
+                }}
+              />
             )}
           </>
         )}
