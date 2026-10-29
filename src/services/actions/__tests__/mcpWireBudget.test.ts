@@ -914,7 +914,13 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // joins the full tier beside `terminal.restart`, so an assistant that finds a
   // held pane starts it in place instead of launching a replacement. In-app
   // only, so the external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 154_070;
+  // 154_070 → 160_850 for #15399, measured at 160_846 B (+6_786):
+  // `forge.listIssueComments` (1_145 B), `forge.getPRs` (3_816 B) and
+  // `forge.getChecks` (1_825 B) join core with the five forge reads that moved
+  // down from full, so the default assistant reads a whole issue thread,
+  // several agents' PRs in one call, and which check failed. In-app only, so
+  // the external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 160_850;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

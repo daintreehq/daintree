@@ -2168,7 +2168,14 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "danger": "safe",
     "dangerRationale": undefined,
     "description": "Fetch one known pull request number with its body, draft state and branches; page the PR listing to find numbers. Read it before editing or merging. A missing PR comes back as \`pr: null\` rather than failing.",
-    "examples": undefined,
+    "examples": [
+      {
+        "args": {
+          "prNumber": 42,
+        },
+        "description": "Fetch PR #42 from the active worktree's repo",
+      },
+    ],
     "id": "forge.getPR",
     "keywords": undefined,
     "kind": "query",

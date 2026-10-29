@@ -659,6 +659,113 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "forge",
     danger: "safe",
     description:
+      "List every CI check on one pull request: name, run state, conclusion, and a log link where the forge reports one. Reach for it once the roll-up shows trouble. A check with no conclusion has not passed; the roll-up stays the authority on whether a PR is green. An empty list means no checks, a null one no such PR, and a provider that cannot read checks fails instead.",
+    enabled: true,
+    examples: [
+      {
+        args: {
+          prNumber: 42,
+        },
+        description: "List the checks on PR #42 to find which one failed",
+      },
+    ],
+    id: "forge.getChecks",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        worktreeId: {
+          description:
+            "Worktree id from the worktree listing. Omit it and the path for the active worktree; fails when none is active.",
+          type: "string",
+          minLength: 1,
+        },
+        worktreePath: {
+          description:
+            "Absolute worktree root, instead of the id. The id wins if both; the path is never swapped for the active one.",
+          type: "string",
+          minLength: 1,
+        },
+        cwd: {
+          description: "Legacy alias for `worktreePath`.",
+          type: "string",
+          minLength: 1,
+        },
+        prNumber: {
+          type: "integer",
+          exclusiveMinimum: 0,
+          maximum: 9007199254740991,
+          description: "Pull request number whose checks to list",
+        },
+      },
+      required: ["prNumber"],
+    },
+    kind: "query",
+    name: "forge.getChecks",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        checks: {
+          anyOf: [
+            {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  name: {
+                    type: "string",
+                    description: "Check name as the forge reports it; matrix jobs repeat names",
+                  },
+                  status: {
+                    type: "string",
+                    enum: ["queued", "in_progress", "completed"],
+                  },
+                  conclusion: {
+                    description:
+                      "Outcome once completed; absent while running or when the forge reported no verdict",
+                    type: "string",
+                    enum: [
+                      "success",
+                      "failure",
+                      "neutral",
+                      "cancelled",
+                      "timed_out",
+                      "action_required",
+                      "skipped",
+                    ],
+                  },
+                  required: {
+                    description:
+                      "Whether this check gates merging, when the provider reports required checks",
+                    type: "boolean",
+                  },
+                  detailsUrl: {
+                    description: "Link to this check's output or job log",
+                    type: "string",
+                  },
+                },
+                required: ["name", "status"],
+                additionalProperties: false,
+              },
+            },
+            {
+              type: "null",
+            },
+          ],
+        },
+      },
+      required: ["checks"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Get CI checks",
+  },
+  {
+    band: "external-effect",
+    category: "forge",
+    danger: "safe",
+    description:
       "Fetch one issue by number, with its body; use it instead of paging the listing for a known number. A missing issue comes back empty rather than failing. Reports the comment count, not comment text.",
     enabled: true,
     examples: [
@@ -719,6 +826,14 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     description:
       "Fetch one known pull request number with its body, draft state and branches; page the PR listing to find numbers. Read it before editing or merging. A missing PR comes back as `pr: null` rather than failing.",
     enabled: true,
+    examples: [
+      {
+        args: {
+          prNumber: 42,
+        },
+        description: "Fetch PR #42 from the active worktree's repo",
+      },
+    ],
     id: "forge.getPR",
     inputSchema: {
       $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -862,6 +977,302 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     },
     requiresArgs: true,
     title: "Get pull request",
+  },
+  {
+    band: "external-effect",
+    category: "forge",
+    danger: "safe",
+    description:
+      'Fetch 2-20 KNOWN pull request numbers in one call — reach for this instead of calling the single-PR lookup once per number. Results come back in the order asked, each with its own status: found, not_found, or unresolved. Treat unresolved as "could not find out", never as "does not exist". Use the PR listing instead when the numbers are not already known.',
+    enabled: true,
+    examples: [
+      {
+        args: {
+          prNumbers: [12142, 12137, 12147],
+        },
+        description: "Fetch three known PRs from the active worktree's repo in one call",
+      },
+    ],
+    id: "forge.getPRs",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        worktreeId: {
+          description:
+            "Worktree id from the worktree listing. Omit it and the path for the active worktree; fails when none is active.",
+          type: "string",
+          minLength: 1,
+        },
+        worktreePath: {
+          description:
+            "Absolute worktree root, instead of the id. The id wins if both; the path is never swapped for the active one.",
+          type: "string",
+          minLength: 1,
+        },
+        cwd: {
+          description: "Legacy alias for `worktreePath`.",
+          type: "string",
+          minLength: 1,
+        },
+        prNumbers: {
+          minItems: 2,
+          maxItems: 20,
+          type: "array",
+          items: {
+            type: "integer",
+            exclusiveMinimum: 0,
+            maximum: 9007199254740991,
+          },
+          uniqueItems: true,
+          description:
+            "The pull request numbers to fetch: at least 2 DISTINCT numbers, at most 20. Use the singular lookup for one number.",
+        },
+      },
+      required: ["prNumbers"],
+    },
+    kind: "query",
+    name: "forge.getPRs",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        results: {
+          type: "array",
+          items: {
+            oneOf: [
+              {
+                type: "object",
+                properties: {
+                  number: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  status: {
+                    type: "string",
+                    const: "found",
+                    description: "The forge returned this pull request.",
+                  },
+                  pr: {
+                    type: "object",
+                    properties: {
+                      number: {
+                        type: "number",
+                      },
+                      title: {
+                        type: "string",
+                      },
+                      body: {
+                        type: "string",
+                      },
+                      state: {
+                        type: "string",
+                      },
+                      rawState: {
+                        description: "The forge's own spelling of the state",
+                        type: "string",
+                      },
+                      isDraft: {
+                        type: "boolean",
+                      },
+                      merged: {
+                        type: "boolean",
+                      },
+                      url: {
+                        type: "string",
+                      },
+                      author: {
+                        type: "object",
+                        properties: {
+                          login: {
+                            type: "string",
+                          },
+                          avatarUrl: {
+                            type: "string",
+                          },
+                        },
+                        required: ["login"],
+                        additionalProperties: false,
+                      },
+                      baseRef: {
+                        type: "string",
+                      },
+                      headRef: {
+                        type: "string",
+                      },
+                      mergeable: {
+                        description: "null when the provider has not computed mergeability yet",
+                        type: ["boolean", "null"],
+                      },
+                      reviewDecision: {
+                        description:
+                          "APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED, or null when reviews aren't gated",
+                        type: ["string", "null"],
+                      },
+                      ciStatus: {
+                        description:
+                          "Roll-up head-commit CI state: success, failure, pending, neutral or unknown",
+                        type: "string",
+                      },
+                      mergeState: {
+                        type: "string",
+                      },
+                      commentCount: {
+                        type: "number",
+                      },
+                      createdAt: {
+                        type: "number",
+                      },
+                      updatedAt: {
+                        type: "number",
+                      },
+                      closedAt: {
+                        type: ["number", "null"],
+                      },
+                      mergedAt: {
+                        type: ["number", "null"],
+                      },
+                    },
+                    required: [
+                      "number",
+                      "title",
+                      "body",
+                      "state",
+                      "isDraft",
+                      "merged",
+                      "url",
+                      "baseRef",
+                      "headRef",
+                    ],
+                    additionalProperties: false,
+                  },
+                },
+                required: ["number", "status", "pr"],
+                additionalProperties: false,
+              },
+              {
+                type: "object",
+                properties: {
+                  number: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  status: {
+                    type: "string",
+                    const: "not_found",
+                    description:
+                      "The forge was asked and has no such pull request. This is an answer.",
+                  },
+                },
+                required: ["number", "status"],
+                additionalProperties: false,
+              },
+              {
+                type: "object",
+                properties: {
+                  number: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  status: {
+                    type: "string",
+                    const: "unresolved",
+                    description:
+                      "Nothing was learned about this number — the request failed or was rate-limited. Retriable, and NOT evidence the pull request is missing.",
+                  },
+                  reason: {
+                    type: "string",
+                    enum: ["provider_unsupported", "provider_error"],
+                    description:
+                      "Why nothing was learned. `provider_error` is a failed or rate-limited request; `provider_unsupported` adds that the provider has no batch lookup at all. Both are retriable.",
+                  },
+                },
+                required: ["number", "status", "reason"],
+                additionalProperties: false,
+              },
+            ],
+          },
+          description:
+            "One entry per requested number, in the order requested. Duplicate numbers collapse to their first occurrence, so this can be shorter than the input.",
+        },
+      },
+      required: ["results"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Get pull requests",
+  },
+  {
+    band: "external-effect",
+    category: "forge",
+    danger: "safe",
+    description:
+      "Read one page of an issue's comment thread from the active forge provider. Use it when comment text matters: the single-issue lookup reports only how many exist. Comments arrive oldest first, so reaching the newest reply means paging to the end. An empty page genuinely means nobody has commented; a missing issue or a provider that cannot read threads fails instead, so silence is never ambiguous.",
+    enabled: true,
+    examples: [
+      {
+        args: {
+          issueNumber: 42,
+        },
+        description: "Read the first page of comments on issue #42",
+      },
+      {
+        args: {
+          issueNumber: 42,
+          cursor: "Y3Vyc29yOnYyOpHOAAAAAQ==",
+          perPage: 50,
+        },
+        description: "Read the next 50 comments after a previous page's `nextCursor`",
+      },
+    ],
+    id: "forge.listIssueComments",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        worktreeId: {
+          description:
+            "Worktree id from the worktree listing. Omit it and the path for the active worktree; fails when none is active.",
+          type: "string",
+          minLength: 1,
+        },
+        worktreePath: {
+          description:
+            "Absolute worktree root, instead of the id. The id wins if both; the path is never swapped for the active one.",
+          type: "string",
+          minLength: 1,
+        },
+        cwd: {
+          description: "Legacy alias for `worktreePath`.",
+          type: "string",
+          minLength: 1,
+        },
+        issueNumber: {
+          type: "integer",
+          exclusiveMinimum: 0,
+          maximum: 9007199254740991,
+          description: "Issue number whose comments to read",
+        },
+        cursor: {
+          description: "The previous response's `nextCursor`, for the next page.",
+          type: "string",
+        },
+        perPage: {
+          description: "Comments per page (1-100, default 20)",
+          type: "integer",
+          minimum: 1,
+          maximum: 100,
+        },
+      },
+      required: ["issueNumber"],
+    },
+    kind: "query",
+    name: "forge.listIssueComments",
+    requiresArgs: true,
+    title: "List issue comments",
   },
   {
     band: "external-effect",
