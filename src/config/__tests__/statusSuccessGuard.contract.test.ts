@@ -102,9 +102,7 @@ const PAINT_VAR = new RegExp(`var\\(--color-${SUCCESS_TOKEN}\\)`);
  * outside this guard by construction.
  */
 function isPaintLexeme(lexeme: string): boolean {
-  return (
-    PAINT_UTILITY.test(lexeme) || PAINT_VAR_SHORTHAND.test(lexeme) || PAINT_VAR.test(lexeme)
-  );
+  return PAINT_UTILITY.test(lexeme) || PAINT_VAR_SHORTHAND.test(lexeme) || PAINT_VAR.test(lexeme);
 }
 
 function normalise(value: string): string {

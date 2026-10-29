@@ -376,9 +376,10 @@ describe("applyColorVisionMode status text inks", () => {
       }
       expect(ink, text).not.toBe(scheme.tokens[text]);
       for (const backdrop of resolveStatusTextBackdrops(hue, scheme.tokens)) {
-        expect(contrastRatio(ink, backdrop.hex), `${text} on ${backdrop.label}`).toBeGreaterThanOrEqual(
-          STATUS_TEXT_CONTRAST.minimum
-        );
+        expect(
+          contrastRatio(ink, backdrop.hex),
+          `${text} on ${backdrop.label}`
+        ).toBeGreaterThanOrEqual(STATUS_TEXT_CONTRAST.minimum);
       }
       return true;
     });
