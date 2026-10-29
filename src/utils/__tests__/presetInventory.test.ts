@@ -55,6 +55,13 @@ describe("readLaunchPresetSources", () => {
     expect(
       readLaunchPresetSources("claude", { projectId: "b", scratchId: undefined })
     ).toMatchObject({ projectPresets: undefined, presetInventory: { project: false } });
+    expect(
+      readLaunchPresetSources("claude", { projectId: undefined, scratchId: "s" }).projectPresets
+    ).toBeUndefined();
+    expect(
+      readLaunchPresetSources("claude", { projectId: undefined, scratchId: undefined })
+        .projectPresets
+    ).toBeUndefined();
   });
 });
 

@@ -266,44 +266,36 @@ export interface LaunchAgentResult extends LaunchAgentIdentity {
 }
 
 /**
- * Whether a launch carries work its caller owns: a prompt or a reply to wait
- * for, a reserved panel id, credentials, lifetime rules or flags. That caller
- * hears a refusal through its own result and starts again its own way; a toast
- * replaying its options would run that work outside the flow that owns it.
- */
-function carriesCallerState(options: LaunchAgentOptions | undefined): boolean {
-  if (!options) return false;
-  return (
-    options.prompt !== undefined ||
-    options.handbackCode !== undefined ||
-    options.requestedId !== undefined ||
-    options.env !== undefined ||
-    options.systemPromptArgs !== undefined ||
-    options.agentLaunchFlags !== undefined ||
-    options.launchedByPluginId !== undefined ||
-    options.excludeFromPersistence === true ||
-    options.removeOnExit === true
-  );
-}
-
-/**
  * Why a launch that would have run without its saved preset didn't start at
  * all: running a different setup than the one chosen is worse than not
- * running, and nothing else on screen would say so.
+ * running, and nothing else on screen would say so. Every caller gets it,
+ * whatever it does with the refusal, and the way out is the one that holds
+ * for all of them: the agent's preset, to wait on or swap.
  */
 function notifyPresetsLoading(
+  agentId: string,
   agentName: string,
-  worktreeId: string | null | undefined,
-  retry: () => void
+  worktreeId: string | null | undefined
 ): void {
+  const target = { tab: "agents", subtab: agentId, sectionId: "agents-presets" } as const;
   notify({
     type: "error",
     title: `Couldn't start ${agentName}`,
-    message: "Its saved preset hasn't loaded yet, so it wasn't started without it.",
+    message:
+      "Its saved preset hasn't loaded yet, so it wasn't started without it. Try again in a moment, or choose another preset.",
     context: { eventKind: "agent", ...(worktreeId ? { worktreeId } : {}) },
     urgent: true,
-    replaceKey: `launch-presets-loading:${agentName}`,
-    action: { label: "Try again", onClick: retry },
+    replaceKey: `launch-presets-loading:${agentId}`,
+    action: {
+      label: "Open settings",
+      actionId: "app.settings.openTab",
+      actionArgs: target,
+      onClick: () => {
+        void import("@/services/ActionService").then(({ actionService }) =>
+          actionService.dispatch("app.settings.openTab", target, { source: "user" })
+        );
+      },
+    },
   });
 }
 
@@ -336,7 +328,6 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
 
   const isMounted = useRef(true);
   const launchingAgentsRef = useRef<Set<string>>(new Set());
-  const launchAgentRef = useRef<UseAgentLauncherReturn["launchAgent"] | null>(null);
 
   const checkAvailabilityAndLoadSettings = useCallback(async () => {
     if (!isElectronAvailable()) {
@@ -532,21 +523,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         });
         const declinePresetsLoading = (): null => {
           logWarn(`Declined a launch of ${agentId}: its preset's inventory hasn't loaded`);
-          if (!carriesCallerState(launchOptions)) {
-            // The same launch again, to where this one was headed: an empty id
-            // keeps a worktree-less launch from following a later selection.
-            const retryOptions: LaunchAgentOptions = {
-              ...launchOptions,
-              worktreeId: effectiveWorktreeId ?? "",
-              onDecline: undefined,
-            };
-            notifyPresetsLoading(agentConfig?.name ?? agentId, effectiveWorktreeId, () => {
-              if (!isMounted.current) return;
-              launchAgentRef.current?.(agentId, retryOptions).catch((error: unknown) => {
-                logError(`Failed to retry a launch of ${agentId}`, error);
-              });
-            });
-          }
+          notifyPresetsLoading(agentId, agentConfig?.name ?? agentId, effectiveWorktreeId);
           return decline("presets-loading");
         };
         // A preset that isn't found while its inventory is still loading is
@@ -802,10 +779,6 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
       homeDir,
     ]
   );
-  // Read by a refusal's Try again, which runs well after this render.
-  useEffect(() => {
-    launchAgentRef.current = launchAgent;
-  }, [launchAgent]);
 
   return {
     launchAgent,

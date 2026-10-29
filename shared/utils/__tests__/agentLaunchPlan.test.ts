@@ -198,6 +198,21 @@ describe("buildAgentLaunchPlan", () => {
       expect(plan.unloadedPresetId).toBe("ccr-opus");
     });
 
+    it("holds a built-in registry match while the project's presets could still outrank it", async () => {
+      const mistral = (project: boolean) =>
+        buildAgentLaunchPlan(
+          input({
+            agentId: "mistral",
+            agentConfig: getEffectiveAgentConfig("mistral"),
+            settings: { agents: { mistral: { presetId: "plan" } } } as unknown as AgentSettings,
+            presetInventory: { ccr: true, project },
+          })
+        );
+
+      expect((await mistral(false)).unloadedPresetId).toBe("plan");
+      expect((await mistral(true)).preset?.id).toBe("plan");
+    });
+
     it("never holds a custom match, which nothing unread can outrank", async () => {
       const plan = await buildAgentLaunchPlan(
         input({

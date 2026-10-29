@@ -18,7 +18,7 @@ interface PanelOptions {
 }
 interface NotifyPayload {
   type?: string;
-  action?: { label: string; onClick: () => void };
+  action?: { label: string; actionId?: string; actionArgs?: Record<string, unknown> };
 }
 
 const addPanel = vi.fn<(options: PanelOptions) => Promise<string | null>>();
@@ -185,48 +185,17 @@ describe("useAgentLauncher — a saved preset whose inventory hasn't loaded (#15
     expect(updateWorktreePreset).not.toHaveBeenCalled();
     expect(updateAgent).not.toHaveBeenCalled();
     expect(notify).toHaveBeenCalledOnce();
+    // The way out is the agent's own preset, to wait on or swap.
     expect(notify.mock.calls[0]?.[0]).toMatchObject({
       type: "error",
-      action: { label: "Try again" },
+      action: {
+        actionId: "app.settings.openTab",
+        actionArgs: { tab: "agents", subtab: "claude", sectionId: "agents-presets" },
+      },
     });
   });
 
-  it("runs the same launch again from the refusal's Try again, where it was headed", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const onDecline = vi.fn();
-    const { result } = renderHook(() => useAgentLauncher());
-    await act(async () => {
-      const launch = result.current.launchAgent("claude", {
-        force: true,
-        onDecline,
-        cwd: "/repo/packages/app",
-        location: "dock",
-        activateDockOnCreate: true,
-      });
-      await vi.advanceTimersByTimeAsync(3_000);
-      await launch;
-    });
-
-    vi.useRealTimers();
-    useProjectPresetsStore.getState().setPresetsByAgent("proj-1", { claude: [TEAM] });
-    const action = notify.mock.calls[0]?.[0]?.action;
-    await act(async () => {
-      action?.onClick();
-      await vi.waitFor(() => expect(addPanel).toHaveBeenCalled());
-    });
-
-    expect(launchedPresetIds()).toEqual(["team"]);
-    expect(addPanel.mock.calls[0]?.[0]).toMatchObject({
-      worktreeId: "wt-1",
-      cwd: "/repo/packages/app",
-      location: "dock",
-      activateDockOnCreate: true,
-    });
-    // The first launch's caller already heard its answer.
-    expect(onDecline).toHaveBeenCalledOnce();
-  });
-
-  it("leaves a refused launch carrying a caller's work to that caller, with no toast to replay it", async () => {
+  it("tells the user even when a caller owns the launch", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const onDecline = vi.fn();
     const { result } = renderHook(() => useAgentLauncher());
@@ -246,6 +215,27 @@ describe("useAgentLauncher — a saved preset whose inventory hasn't loaded (#15
       reason: "presets-loading",
       panelLimit: null,
     });
+    expect(notify).toHaveBeenCalledOnce();
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+
+  it("goes quiet when the launcher unmounts during the wait", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const onDecline = vi.fn();
+    const { result, unmount } = renderHook(() => useAgentLauncher());
+
+    let launch: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      launch = result.current.launchAgent("claude", { force: true, onDecline });
+      await Promise.resolve();
+    });
+    unmount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+      await launch;
+    });
+
+    expect(onDecline).toHaveBeenCalledExactlyOnceWith({ reason: "unavailable", panelLimit: null });
     expect(notify).not.toHaveBeenCalled();
     expect(addPanel).not.toHaveBeenCalled();
   });
