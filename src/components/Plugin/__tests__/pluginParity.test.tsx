@@ -413,7 +413,7 @@ describe("the switch notice", () => {
     const { result } = renderHook(() => useSettingsDialog());
     act(() => result.current.handleOpenSettingsTab(payload.action.actionArgs));
     expect(result.current.settingsTab).toBe("hosts");
-    expect(takePendingHostPlugins()).toBe("studio-01");
+    expect(takePendingHostPlugins()).toEqual({ hostId: "studio-01", sectionId: "host-plugins" });
     expect(dispatchMock).not.toHaveBeenCalledWith("host.add", expect.anything(), expect.anything());
   });
 

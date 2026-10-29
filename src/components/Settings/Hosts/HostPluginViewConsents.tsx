@@ -5,6 +5,8 @@ import type { PluginViewConsentEntry } from "@shared/types/ipc/remoteHosts";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
 import { clientErrorText } from "@/utils/clientAppError";
+import { HOST_PLUGIN_VIEWS_SECTION_ID } from "./hostPluginRequests";
+import { notePluginViewConsentReset } from "./pluginViewConsentResets";
 
 interface HostPluginViewConsentsProps {
   hostId: string;
@@ -73,6 +75,7 @@ export function HostPluginViewConsents({ hostId, hostName }: HostPluginViewConse
     remoteHostsClient.resetPluginViewConsent(hostId, pluginId).then(
       () => {
         settle();
+        notePluginViewConsentReset(hostId, pluginId);
         load();
       },
       (err: unknown) => {
@@ -90,6 +93,7 @@ export function HostPluginViewConsents({ hostId, hostName }: HostPluginViewConse
 
   return (
     <SettingsSection
+      id={HOST_PLUGIN_VIEWS_SECTION_ID}
       title="Plugin views"
       description={`Plugins from ${hostName} you were asked about running on this computer. A view already open keeps running until its window reloads.`}
     >

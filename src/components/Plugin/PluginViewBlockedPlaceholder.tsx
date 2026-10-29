@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useEffectEvent, useRef } from "react";
 import { Lock, ShieldOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -6,6 +6,13 @@ import { drivenElsewhereBy, useHostConnection, useLinkDownHost } from "@/hooks/u
 import { useControlFacts, useDriveLeaseView } from "@/components/Recovery/driveLeaseState";
 import { getControlRefusalCopy } from "@/components/Recovery/recoveryCopy";
 import { TakeControlOffer } from "@/components/Recovery/TakeControlOffer";
+import {
+  HOST_PLUGIN_VIEWS_SECTION_ID,
+  hostPluginsSettingsTarget,
+} from "@/components/Settings/Hosts/hostPluginRequests";
+import { onPluginViewConsentReset } from "@/components/Settings/Hosts/pluginViewConsentResets";
+import { actionService } from "@/services/ActionService";
+import { pluginViewHostId } from "./remotePluginView";
 
 /** Thrown when this computer won't run a host plugin's view: the person said no, or it couldn't be checked. */
 export class PluginViewBlockedError extends Error {
@@ -25,10 +32,13 @@ export function isPluginViewBlockedError(error: unknown): boolean {
  * couldn't be checked against what they allowed.
  */
 export function PluginViewBlockedPlaceholder({
+  pluginId,
   pluginDisplayName,
   onRetry,
   leave,
 }: {
+  /** The plugin's instance id on the host, which this computer's answer is kept under. */
+  pluginId: string;
   pluginDisplayName: string;
   onRetry: () => void;
   /** A host's way out of the view, beside the placeholder's own action (the sidebar's "Show worktrees"). */
@@ -58,6 +68,15 @@ export function PluginViewBlockedPlaceholder({
       onRetry();
     }
   }, [driver, lease?.drivingHere, onRetry]);
+
+  // Reset in Settings, the view asks again by itself once Settings closes.
+  const hostId = pluginViewHostId();
+  const blockedHere = driver === null || !lease || facts === null;
+  const retryAfterReset = useEffectEvent(() => onRetry());
+  useEffect(() => {
+    if (hostId === null || !blockedHere) return undefined;
+    return onPluginViewConsentReset(hostId, pluginId, () => retryAfterReset());
+  }, [hostId, pluginId, blockedHere]);
 
   if (driver !== null && lease && facts !== null) {
     // Held like a file preview or a launch: the host serves the view only to
@@ -94,9 +113,24 @@ export function PluginViewBlockedPlaceholder({
         className="my-auto w-full shrink-0"
         icon={<ShieldOff />}
         title={`${pluginDisplayName} is blocked on this computer`}
-        description={`Its view comes from ${machine} and runs here only with your yes. To be asked again, reset it in Settings → Hosts → ${machine} → Plugin views, then try again.`}
+        description={`Its view comes from ${machine} and runs here only with your yes. Reset that answer in ${machine}'s plugin views and it asks again when you close Settings.`}
         action={
           <div className="flex flex-wrap items-center justify-center gap-2">
+            {hostId !== null && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  void actionService.dispatch(
+                    "app.settings.openTab",
+                    hostPluginsSettingsTarget(hostId, HOST_PLUGIN_VIEWS_SECTION_ID),
+                    { source: "user" }
+                  )
+                }
+              >
+                Open plugin views
+              </Button>
+            )}
             <Button variant="outline" size="sm" onClick={onRetry}>
               Try again
             </Button>

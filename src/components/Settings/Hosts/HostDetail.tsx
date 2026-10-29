@@ -21,7 +21,7 @@ import { HostPluginsSection } from "./HostPluginsSection";
 import { HostSessionsSection } from "./HostSessionsSection";
 import { HostCopySettingsSection } from "./HostCopySettingsSection";
 import { takeFirstConnect } from "./hostCopySettingsRequests";
-import { HOST_PLUGINS_SECTION_ID } from "./hostPluginRequests";
+import type { HostPluginsSectionId } from "./hostPluginRequests";
 import { HostClipboardGrants } from "./HostClipboardGrants";
 import { HostPluginViewConsents } from "./HostPluginViewConsents";
 import {
@@ -43,8 +43,8 @@ interface HostDetailProps {
   onBack: (viaKeyboard?: boolean) => void;
   /** Open straight into this host's update flow (the host chip's "Update …"). */
   openUpdate?: boolean;
-  /** Scroll to this host's plugins (the switch notice's "Review"). */
-  focusPlugins?: boolean;
+  /** Scroll to this section: its plugins (the switch notice's "Review") or their views (a blocked view's way here). */
+  focusSection?: HostPluginsSectionId;
   /** Just added and connected: scroll to Copy settings and offer it. */
   offerCopySettings?: boolean;
   /** Opened from the keyboard: focus the header's way back once it is there. */
@@ -113,7 +113,7 @@ export function HostDetail({
   entry,
   onBack,
   openUpdate = false,
-  focusPlugins = false,
+  focusSection,
   offerCopySettings = false,
   focusBackOnMount = false,
 }: HostDetailProps) {
@@ -203,9 +203,8 @@ export function HostDetail({
   }, [focusBackOnMount]);
 
   useEffect(() => {
-    if (focusPlugins)
-      document.getElementById(HOST_PLUGINS_SECTION_ID)?.scrollIntoView({ block: "start" });
-  }, [focusPlugins]);
+    if (focusSection) document.getElementById(focusSection)?.scrollIntoView({ block: "start" });
+  }, [focusSection]);
 
   // A host added here that first connects after the add flow closed still
   // gets the one offer, the first time it is seen connected.

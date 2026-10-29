@@ -16,8 +16,13 @@ vi.mock("@/clients/remoteHostsClient", () => ({
 }));
 
 import { HostPluginViewConsents } from "../HostPluginViewConsents";
+import {
+  _resetPluginViewConsentResetsForTesting,
+  onPluginViewConsentReset,
+} from "../pluginViewConsentResets";
 
 beforeEach(() => {
+  _resetPluginViewConsentResetsForTesting();
   client.plugins = [];
   client.listPluginViewConsents.mockReset().mockImplementation(async () => client.plugins);
   client.resetPluginViewConsent.mockReset().mockImplementation(async (_h: string, id: string) => {
@@ -74,6 +79,35 @@ describe("HostPluginViewConsents", () => {
     });
     expect(screen.queryByText("Couldn't load plugin views")).toBeNull();
     expect(screen.getByText("acme.graph")).toBeTruthy();
+  });
+
+  it("lets a view blocked on that plugin ask again once a reset succeeds, and not before", async () => {
+    const peek = `project__${"a".repeat(64)}__acme.peek`;
+    client.plugins = [{ pluginId: peek, state: "refused" }];
+    client.resetPluginViewConsent.mockRejectedValueOnce(new Error("host gone"));
+    const retry = vi.fn();
+    onPluginViewConsentReset("studio-01", peek, retry);
+    // The reset settles, then the list read after it fails: the answer is still gone.
+    client.listPluginViewConsents
+      .mockImplementationOnce(async () => client.plugins)
+      .mockRejectedValueOnce(new Error("link down"));
+    await act(async () => {
+      render(<HostPluginViewConsents hostId="studio-01" hostName="studio" />);
+    });
+    expect(document.getElementById("host-plugin-views")?.textContent).toContain("Plugin views");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Reset the plugin view for acme.peek" }));
+    });
+    expect(retry).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Retry resetting the plugin view for acme.peek" })
+      );
+    });
+    expect(client.resetPluginViewConsent).toHaveBeenLastCalledWith("studio-01", peek);
+    expect(retry).toHaveBeenCalledTimes(1);
   });
 
   it("keeps a failed reset on its own row, and its Retry resets again", async () => {

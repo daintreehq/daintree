@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { SettingsTab, SettingsNavTarget } from "@/components/Settings";
 import { isSettingsTab } from "@/components/Settings/settingsTabIds";
 import {
-  hostPluginsTargetHost,
+  hostPluginsTargetRequest,
   requestHostPlugins,
 } from "@/components/Settings/Hosts/hostPluginRequests";
 import { BUILTIN_GITHUB_PROVIDER_ID, normalizeProviderId } from "@shared/utils/forgeProviderIds";
@@ -53,11 +53,11 @@ export function useSettingsDialog() {
         sectionId: target.sectionId,
       };
     }
-    const pluginsHost = hostPluginsTargetHost(normalized);
-    if (pluginsHost !== null) {
-      // The host's details open on its plugins once the request reaches them.
+    const pluginsRequest = hostPluginsTargetRequest(normalized);
+    if (pluginsRequest !== null) {
+      // The host's details open on that section once the request reaches them.
       // Left in the target, the section would be scrolled to before they exist.
-      requestHostPlugins(pluginsHost);
+      requestHostPlugins(pluginsRequest.hostId, pluginsRequest.sectionId);
       normalized = { tab: normalized.tab };
     }
     const tab = isSettingsTab(normalized.tab) ? normalized.tab : "general";
