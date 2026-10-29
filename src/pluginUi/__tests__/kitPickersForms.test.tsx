@@ -293,7 +293,37 @@ describe("TimePicker", () => {
     });
     fireEvent.keyDown(segment("Hour"), { key: "ArrowDown" });
     expect(onValueChange).not.toHaveBeenCalled();
-    expect(screen.getByRole("group", { name: "Start" }).getAttribute("aria-invalid")).toBe("true");
+    const group = screen.getByRole("group", { name: "Start" });
+    expect(group.getAttribute("aria-invalid")).toBe("true");
+    // The bounds are named, not just a red edge.
+    expect(screen.getByRole("alert").textContent).toBe("Choose a time from 09:00 to 17:00");
+    expect(group.getAttribute("aria-describedby")).toContain(screen.getByRole("alert").id);
+  });
+
+  it("puts the committed time back when focus leaves on a refused time", () => {
+    const onValueChange = vi.fn();
+    renderLoose(kit.TimePicker, {
+      value: "09:00",
+      min: "09:00",
+      hourCycle: 24,
+      name: "start",
+      onValueChange,
+      "aria-label": "Start",
+    });
+    const hour = segment("Hour");
+    hour.focus();
+    fireEvent.keyDown(hour, { key: "0" });
+    fireEvent.keyDown(hour, { key: "8" });
+    expect(segment("Hour").textContent).toBe("08");
+    fireEvent.blur(screen.getByRole("group", { name: "Start" }), { relatedTarget: document.body });
+    // What is on screen is what the form holds.
+    expect(segment("Hour").textContent).toBe("09");
+    expect(document.querySelector<HTMLInputElement>('input[name="start"]')?.value).toBe("09:00");
+    expect(screen.getByRole("group", { name: "Start" }).getAttribute("aria-invalid")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toBe(
+      "Choose 09:00 or later. The time wasn't changed."
+    );
+    expect(onValueChange).not.toHaveBeenCalled();
   });
 
   it("clears with Backspace on every segment, and with the clear button", () => {
@@ -489,6 +519,42 @@ describe("DateTimePicker", () => {
     fireEvent.change(date, { target: { value: "2026-10-01" } });
     fireEvent.keyDown(date, { key: "Enter" });
     expect(onValueChange).toHaveBeenLastCalledWith("2026-10-01T08:30");
+  });
+
+  it("keeps a time typed before any day when today is ruled out, and uses it on the day chosen", () => {
+    const onValueChange = vi.fn();
+    renderLoose(kit.DateTimePicker, {
+      hourCycle: 24,
+      isDateDisabled: () => true,
+      onValueChange,
+      "aria-label": "Starts",
+    });
+    const hour = segment("Hour");
+    hour.focus();
+    fireEvent.keyDown(hour, { key: "1" });
+    fireEvent.keyDown(hour, { key: "4" });
+    fireEvent.keyDown(segment("Minute"), { key: "3" });
+    fireEvent.keyDown(segment("Minute"), { key: "0" });
+    expect(onValueChange).not.toHaveBeenCalled();
+    expect(segment("Hour").textContent).toBe("14");
+    expect(segment("Minute").textContent).toBe("30");
+    expect(screen.getByRole("status").textContent).toBe("Choose a date to use this time");
+    cleanup();
+    renderLoose(kit.DateTimePicker, {
+      hourCycle: 24,
+      isDateDisabled: (iso: string) => iso !== "2026-10-07",
+      onValueChange,
+      "aria-label": "Starts",
+    });
+    fireEvent.keyDown(segment("Hour"), { key: "1" });
+    fireEvent.keyDown(segment("Hour"), { key: "4" });
+    fireEvent.keyDown(segment("Minute"), { key: "3" });
+    fireEvent.keyDown(segment("Minute"), { key: "0" });
+    const date = screen.getByRole("textbox", { name: "Date" });
+    fireEvent.change(date, { target: { value: "2026-10-07" } });
+    fireEvent.keyDown(date, { key: "Enter" });
+    expect(onValueChange).toHaveBeenLastCalledWith("2026-10-07T14:30");
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("holds a kept time to the bounds of the day it moves to", () => {

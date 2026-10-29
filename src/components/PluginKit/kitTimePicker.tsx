@@ -5,7 +5,7 @@ import type {
   PluginTimePickerProps,
 } from "@shared/types/plugin-sdk-react";
 import { Button } from "@/components/ui/button";
-import { FieldBoundary } from "@/components/ui/field";
+import { FieldBoundary, InlineError } from "@/components/ui/field";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { todayIso } from "@/pluginUi/dateMath";
 import {
   clamp,
+  field,
   fn,
   nonEmpty,
   pickRootProps,
@@ -21,6 +22,7 @@ import {
   str,
   useKitOwnerAttributes,
 } from "./kitProps";
+import { joinIds } from "./kitTextInputHelpers";
 import { useKitOverlayZClass, KitFocusScopeContext } from "./kitScope";
 import { pluginKitDates } from "./PluginKitDates";
 import {
@@ -259,7 +261,14 @@ function TimeField({
     digits: string;
     source: number | null;
   } | null>(null);
-  const [typedInvalid, setTypedInvalid] = useState(false);
+  // Why a whole typed time was refused. While the draft stays the field is
+  // invalid; once leaving it put the committed time back, the line says the
+  // time wasn't changed, so what is on screen is always what the form holds.
+  const [refusal, setRefusal] = useState<{ reason: string; reverted: boolean } | null>(null);
+  const typedInvalid = refusal !== null && !refusal.reverted;
+  const setTypedInvalid = (invalidNow: boolean) =>
+    setRefusal(invalidNow ? { reason: boundsReason(), reverted: false } : null);
+  const refusalId = useId();
   const typed = typedState;
   const setTyped = (next: { segment: SegmentKind; digits: string } | null) =>
     setTypedState(next === null ? null : { ...next, source: value });
@@ -293,6 +302,12 @@ function TimeField({
 
   const inRange = (minutes: number) =>
     !(min !== null && minutes < min) && !(max !== null && minutes > max);
+  function boundsReason(): string {
+    const from = min === null ? null : formatTimeLabel(min, cycle);
+    const to = max === null ? null : formatTimeLabel(max, cycle);
+    if (from !== null && to !== null) return `Choose a time from ${from} to ${to}`;
+    return from !== null ? `Choose ${from} or later` : `Choose ${to ?? ""} or earlier`;
+  }
 
   /** Takes an edited draft: commits it once it is a whole allowed time, or empties the value. */
   const apply = (next: TimeDraft) => {
@@ -436,7 +451,7 @@ function TimeField({
   const compact = density === "compact";
   const spokenValue = value === null ? undefined : formatTimeLabel(value, cycle);
 
-  return (
+  const box = (
     <Popover modal open={isOpen} onOpenChange={setOpen}>
       <PopoverAnchor asChild>
         <div
@@ -461,19 +476,28 @@ function TimeField({
             aria-labelledby={str(ariaProps["aria-labelledby"])}
             aria-describedby={str(ariaProps["aria-describedby"])}
             {...controlProps}
+            {...(refusal
+              ? {
+                  "aria-describedby": joinIds([
+                    refusalId,
+                    str(field(controlProps, "aria-describedby")) ??
+                      str(ariaProps["aria-describedby"]),
+                  ]),
+                }
+              : {})}
             id={nonEmpty(ariaProps.id) ?? controlProps.id}
             aria-disabled={disabled || undefined}
             aria-description={spokenValue}
             onBlur={(event) => {
-              // Leaving the field with half a time, or an empty one that may
-              // not be cleared, puts the committed time back.
-              const next = event.relatedTarget;
-              if (next instanceof Node && event.currentTarget.contains(next)) return;
+              // Leaving the field with any draft it hasn't committed (half a
+              // time, an empty one that may not be cleared, or a whole one out
+              // of range) puts the committed time back. The field's own list
+              // is not leaving it.
+              if (!focusLeft(event, focusScope.id)) return;
               setTyped(null);
-              if (draft !== null && minutesOf(draft, cycle) === null) {
-                setDraft(null);
-                setTypedInvalid(false);
-              }
+              if (draft === null) return;
+              setDraft(null);
+              setRefusal(typedInvalid ? { reason: boundsReason(), reverted: true } : null);
             }}
             className="flex min-w-0 flex-1 items-center py-1"
           >
@@ -596,6 +620,18 @@ function TimeField({
       </PopoverContent>
     </Popover>
   );
+  // Beside the field rather than in it, as the DatePicker's: a fragment keeps
+  // the segments mounted when the line comes and goes.
+  return (
+    <>
+      {box}
+      {refusal ? (
+        <InlineError id={refusalId} role="alert" className="mt-1.5 basis-full">
+          {refusal.reverted ? `${refusal.reason}. The ${noun} wasn't changed.` : refusal.reason}
+        </InlineError>
+      ) : null}
+    </>
+  );
 }
 
 function readCycle(value: unknown): 12 | 24 {
@@ -679,6 +715,9 @@ export function KitDateTimePicker(props: PluginDateTimePickerProps) {
   const value = controlled ? parseIsoDateTime(props.value) : own;
   // A day picked with no time yet, or a time with no day, held until the pair is whole.
   const [pendingDate, setPendingDate] = useState<string | null>(null);
+  // A time typed before any day, when today is ruled out: kept and shown, and
+  // used once a day is chosen, rather than dropped without a word.
+  const [pendingTime, setPendingTime] = useState<number | null>(null);
   const onValueChange = fn(props.onValueChange);
   const onBlur = fn(props.onBlur);
   const lo = parseIsoDateTime(min);
@@ -701,6 +740,7 @@ export function KitDateTimePicker(props: PluginDateTimePickerProps) {
   // A held day only stands in while there is no value; a whole value from
   // outside replaces it, so clearing that later cannot bring it back.
   if (value !== null && pendingDate !== null) setPendingDate(null);
+  if (value !== null && pendingTime !== null) setPendingTime(null);
   const date = value?.date ?? pendingDate;
   // The zone's name on the day chosen, not today: daylight saving can start
   // between now and then. Noon UTC on that day falls on the same day in every
@@ -748,9 +788,14 @@ export function KitDateTimePicker(props: PluginDateTimePickerProps) {
                 emit(null);
                 return;
               }
-              // The time kept from before, or the day's earliest, held to the new day's bounds.
+              // The time kept from before (or typed while there was no day),
+              // else the day's earliest, held to the new day's bounds.
               setPendingDate(null);
-              emit({ date: nextDate, minutes: fitTime(nextDate, value?.minutes ?? 0) });
+              setPendingTime(null);
+              emit({
+                date: nextDate,
+                minutes: fitTime(nextDate, value?.minutes ?? pendingTime ?? 0),
+              });
             }}
             min={lo?.date}
             max={hi?.date}
@@ -764,20 +809,25 @@ export function KitDateTimePicker(props: PluginDateTimePickerProps) {
           />
           <div className="min-w-28 flex-[2]">
             <TimeField
-              value={value?.minutes ?? null}
+              value={value?.minutes ?? pendingTime}
               onChange={(minutes) => {
+                setPendingTime(null);
                 if (minutes === null) {
                   if (value !== null) setPendingDate(value.date);
                   emit(null);
                   return;
                 }
                 // No day yet: today, held to the allowed days. A day the plugin
-                // rules out is not filled in behind the user's back.
+                // rules out is not filled in behind the user's back; the time
+                // waits for one instead.
                 let day = date ?? todayIso(Date.now());
                 if (date === null) {
                   if (lo !== null && day < lo.date) day = lo.date;
                   if (hi !== null && day > hi.date) day = hi.date;
-                  if (dayDisabled(isDateDisabled, day)) return;
+                  if (dayDisabled(isDateDisabled, day)) {
+                    setPendingTime(minutes);
+                    return;
+                  }
                 }
                 setPendingDate(null);
                 emit({ date: day, minutes: fitTime(day, minutes) });
@@ -802,6 +852,11 @@ export function KitDateTimePicker(props: PluginDateTimePickerProps) {
           </div>
         </FieldBoundary>
       </KitFocusScopeContext.Provider>
+      {pendingTime !== null && date === null ? (
+        <p role="status" className="m-0 basis-full text-xs text-text-secondary">
+          Choose a date to use this time
+        </p>
+      ) : null}
       {zoneName ? (
         <Tooltip>
           <TooltipTrigger asChild>
