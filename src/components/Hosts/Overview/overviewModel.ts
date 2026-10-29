@@ -320,6 +320,8 @@ export interface PlacementOption {
   name: string;
   /** What the host reported, worded as its card words it; never an interpretation. */
   facts: string;
+  /** The same facts one per entry, for a caller that sets them apart. */
+  parts: string[];
 }
 
 export interface PlacementComparison {
@@ -356,10 +358,10 @@ function freeCapacity(candidate: PlacementCandidate, summary: HostMetricsSummary
   } satisfies FreeCapacity;
 }
 
-function describePlacementFacts(candidate: PlacementCandidate): string {
-  if (!candidate.reachable) return "Not connected";
+function placementFactParts(candidate: PlacementCandidate): string[] {
+  if (!candidate.reachable) return ["Not connected"];
   const summary = candidate.summary;
-  if (!summary) return "No measurements reported";
+  if (!summary) return ["No measurements reported"];
   const memory = reportsMemoryCapacity(summary)
     ? describeMemoryCapacity(summary)
     : describeMemory(summary);
@@ -369,7 +371,7 @@ function describePlacementFacts(candidate: PlacementCandidate): string {
     `Memory ${memory ?? "not measured"}`,
     `Memory pressure ${describeMemoryPressure(summary) ?? "not measured"}`,
     ...(load ? [`Load (1 min) ${load}`] : []),
-  ].join(" · ");
+  ];
 }
 
 /**
@@ -387,11 +389,10 @@ function describePlacementFacts(candidate: PlacementCandidate): string {
 export function compareHostCapacity(
   candidates: readonly PlacementCandidate[]
 ): PlacementComparison {
-  const options = candidates.map(({ hostId, name, ...rest }) => ({
-    hostId,
-    name,
-    facts: describePlacementFacts({ hostId, name, ...rest }),
-  }));
+  const options = candidates.map(({ hostId, name, ...rest }) => {
+    const parts = placementFactParts({ hostId, name, ...rest });
+    return { hostId, name, facts: parts.join(" · "), parts };
+  });
   const compared: FreeCapacity[] = [];
   for (const candidate of candidates) {
     if (!candidate.reachable || !candidate.summary) continue;

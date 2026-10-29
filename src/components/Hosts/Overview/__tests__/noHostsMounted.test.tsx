@@ -93,6 +93,7 @@ describe("with no host added", () => {
         <LazyWorktreePlacementRow
           projectId="p1"
           rootPath="/p1"
+          worktreePath="/p1-worktrees/feature"
           getDraft={() => null}
           onLeave={() => {}}
         />

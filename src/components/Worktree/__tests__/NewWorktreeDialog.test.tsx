@@ -20,16 +20,16 @@ const mockDispatch = vi.fn();
 /** The form's draft for another host, as the placement row would ask for it. */
 const placement = vi.hoisted(() => ({
   getDraft: null as null | (() => unknown),
-  onElsewhereChange: null as null | ((hostName: string | null) => void),
+  onCommitChange: null as null | ((commit: unknown) => void),
 }));
 
 vi.mock("@/components/Hosts/Overview/LazyHostOverviewParts", () => ({
   LazyWorktreePlacementRow: (props: {
     getDraft: () => unknown;
-    onElsewhereChange?: (hostName: string | null) => void;
+    onCommitChange?: (commit: unknown) => void;
   }) => {
     placement.getDraft = props.getDraft;
-    placement.onElsewhereChange = props.onElsewhereChange ?? null;
+    placement.onCommitChange = props.onCommitChange ?? null;
     return null;
   },
 }));
@@ -278,7 +278,12 @@ vi.mock("@/components/ui/AppDialog", () => {
   Dialog.Title = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
   Dialog.CloseButton = () => <button aria-label="Close" />;
   Dialog.Body = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
-  Dialog.Footer = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
+  Dialog.Footer = ({ children, hint }: { children: React.ReactNode; hint?: React.ReactNode }) => (
+    <div>
+      {hint}
+      {children}
+    </div>
+  );
   return { AppDialog: Dialog };
 });
 
@@ -2277,7 +2282,7 @@ describe("NewWorktreeDialog — creating on another host (#14991)", () => {
 
   afterEach(() => {
     recipePickerCalls.selected = null;
-    placement.onElsewhereChange = null;
+    placement.onCommitChange = null;
     vi.useRealTimers();
     cleanup();
     vi.clearAllMocks();
@@ -2292,11 +2297,72 @@ describe("NewWorktreeDialog — creating on another host (#14991)", () => {
     await advanceTimersGradually(500);
   }
 
-  async function chooseHost(hostName: string | null) {
+  /** What the row hands the dialog for another host; null for this window's own. */
+  async function chooseHost(hostName: string | null, overrides: Record<string, unknown> = {}) {
+    const submit = vi.fn();
     await act(async () => {
-      placement.onElsewhereChange?.(hostName);
+      placement.onCommitChange?.(
+        hostName === null
+          ? null
+          : {
+              hostId: hostName,
+              hostName,
+              status: "idle",
+              unavailable: null,
+              relativePath: "../root-worktrees/feature-placed",
+              submit,
+              ...overrides,
+            }
+      );
     });
+    return submit;
   }
+
+  it("makes its one primary create on the chosen host, by click and by Cmd+Enter", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    const submit = await chooseHost("studio-02");
+
+    const primary = screen.getByTestId("create-worktree-button");
+    expect(primary.textContent).toContain("Create on studio-02");
+    expect(primary.getAttribute("aria-disabled")).toBeNull();
+    expect(screen.getByTestId("placed-worktree-path").textContent).toBe(
+      "../root-worktrees/feature-placedBeside the project on studio-02"
+    );
+
+    await act(async () => {
+      fireEvent.click(primary, { metaKey: true });
+    });
+    expect(submit).toHaveBeenLastCalledWith(expect.objectContaining({ metaKey: true }));
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    });
+    expect(submit).toHaveBeenCalledTimes(2);
+    // The keyboard chord carries no click: this window, not a new one.
+    expect(submit).toHaveBeenLastCalledWith(undefined);
+    expect(mockDispatch).not.toHaveBeenCalledWith(
+      "worktree.create",
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it("holds the primary with the reason while the chosen host can't take it", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    const submit = await chooseHost("studio-02", { unavailable: "Not connected" });
+
+    const primary = screen.getByTestId("create-worktree-button");
+    expect(primary.getAttribute("aria-disabled")).toBe("true");
+    const reason = document.getElementById(primary.getAttribute("aria-describedby")!);
+    expect(reason?.textContent).toBe("studio-02: Not connected");
+    await act(async () => {
+      fireEvent.click(primary);
+    });
+    expect(submit).not.toHaveBeenCalled();
+  });
 
   function draft(): { recipeId?: string | null } | null {
     let value: { recipeId?: string | null } | null = null;

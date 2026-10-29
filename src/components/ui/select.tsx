@@ -330,6 +330,17 @@ SelectLabel.displayName = "SelectLabel";
 
 interface SelectItemProps extends React.ComponentPropsWithoutRef<typeof SelectPrimitiveType.Item> {
   description?: React.ReactNode;
+  /**
+   * Listed and reachable by the arrow keys, but it can't be chosen; its
+   * `description` says why. Unlike `disabled`, which Radix skips, so a
+   * keyboard or screen reader user never learns the option exists.
+   */
+  unavailable?: boolean;
+}
+
+/** Enter and Space choose the highlighted option; an unavailable one stays put. */
+function blockChoice(event: React.SyntheticEvent): void {
+  if (!("key" in event) || event.key === "Enter" || event.key === " ") event.preventDefault();
 }
 
 /* Same highlighted-row focus ring as the dropdown-menu primitives: Radix's
@@ -340,8 +351,9 @@ interface SelectItemProps extends React.ComponentPropsWithoutRef<typeof SelectPr
 const SelectItem = React.forwardRef<
   React.ElementRef<typeof SelectPrimitiveType.Item>,
   SelectItemProps
->(({ className, children, description, onPointerMove, ...props }, ref) => {
+>(({ className, children, description, unavailable, onPointerMove, ...props }, ref) => {
   const radix = useRadixPrimitives();
+  const descriptionId = React.useId();
   if (!radix) return null;
   const Item = radix.SelectPrimitive.Item;
   const ItemIndicator = radix.SelectPrimitive.ItemIndicator;
@@ -353,9 +365,19 @@ const SelectItem = React.forwardRef<
         "relative flex w-full cursor-pointer select-none items-start rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors duration-150 ease-out",
         "data-[highlighted]:bg-overlay-highlight focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px]",
         "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "data-[unavailable]:cursor-default data-[unavailable]:text-text-secondary",
         className
       )}
       {...props}
+      aria-describedby={description ? descriptionId : undefined}
+      {...(unavailable && {
+        "aria-disabled": true,
+        "data-unavailable": "",
+        // Radix skips its own choice when an earlier handler prevented the event.
+        onClick: composeHandlers(props.onClick, blockChoice),
+        onPointerUp: composeHandlers(props.onPointerUp, blockChoice),
+        onKeyDown: composeHandlers(props.onKeyDown, blockChoice),
+      })}
       onPointerMove={(event) => menuRowPointerMove(event, onPointerMove)}
     >
       <span className="absolute left-2 top-1.5 flex h-3.5 w-3.5 items-center justify-center">
@@ -380,7 +402,9 @@ const SelectItem = React.forwardRef<
       {description ? (
         <span className="flex min-w-0 flex-col gap-0.5">
           <ItemText>{children}</ItemText>
-          <span className="text-2xs text-text-secondary">{description}</span>
+          <span id={descriptionId} className="text-2xs text-text-secondary">
+            {description}
+          </span>
         </span>
       ) : (
         <span className="flex min-w-0 flex-col">
