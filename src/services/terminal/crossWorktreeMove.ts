@@ -100,6 +100,8 @@ function confirmHeldPanelDestination(panelId: string, worktreeId: string): void 
 function alignMovedDevPreviewCwd(panelId: string, worktreeId: string): void {
   const panel = usePanelStore.getState().panelsById[panelId];
   if (!panel || !isDevPreviewPanel(panel) || panel.previewsResourceEndpoint) return;
+  // A grouped move refused for capacity leaves the preview where it was.
+  if (panel.worktreeId !== worktreeId) return;
   const worktrees = readWorktreePaths();
   if (classifyLaunchRootAlignment(panel.cwd, worktrees, worktreeId) !== "launch-root-mismatch") {
     return;

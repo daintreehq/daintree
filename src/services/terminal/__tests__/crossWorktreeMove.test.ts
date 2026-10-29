@@ -64,8 +64,12 @@ const terminalInstanceService = (
 const { terminalClient } = await import("@/clients");
 const { usePanelStore } = await import("@/store/panelStore");
 const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
-const { moveTerminalToWorktreeAndFollowRescue, moveDroppedPanelToWorktree, isPanelProcessLive } =
-  await import("../crossWorktreeMove");
+const {
+  moveTerminalToWorktreeAndFollowRescue,
+  moveDroppedPanelToWorktree,
+  isPanelProcessLive,
+  reconcileMovedPanel,
+} = await import("../crossWorktreeMove");
 
 /**
  * An exited terminal. A dead panel never raises the move notice, so this keeps
@@ -1041,6 +1045,14 @@ describe("moveTerminalToWorktreeAndFollowRescue — dev previews (#14958)", () =
     moveTerminalToWorktreeAndFollowRescue("p1", "wt-b");
 
     expect(usePanelStore.getState().panelsById["p1"]?.worktreeId).toBe("wt-b");
+    expect(previewCwdOf("p1")).toBe("/repo/wt-a");
+  });
+
+  it("leaves a preview's directory alone when the move didn't take it", () => {
+    seedPanels([preview()]);
+
+    reconcileMovedPanel("p1", "wt-b");
+
     expect(previewCwdOf("p1")).toBe("/repo/wt-a");
   });
 

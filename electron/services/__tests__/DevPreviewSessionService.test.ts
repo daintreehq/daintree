@@ -307,6 +307,45 @@ describe("DevPreviewSessionService", () => {
     expect(onStateChanged).toHaveBeenCalledWith(expect.objectContaining({ worktreeId: "wt-b" }));
   });
 
+  it("hands the worktree a preview left to a preview still running there", async () => {
+    await service.ensure({ ...baseRequest, panelId: "panel-stays", worktreeId: "wt-a" });
+    await service.ensure({ ...baseRequest, panelId: "panel-moves", worktreeId: "wt-a" });
+    expect(service.getByWorktree("wt-a")?.panelId).toBe("panel-moves");
+
+    await service.ensure({ ...baseRequest, panelId: "panel-moves", worktreeId: "wt-b" });
+
+    expect(service.getByWorktree("wt-a")?.panelId).toBe("panel-stays");
+    expect(service.getByWorktree("wt-b")?.panelId).toBe("panel-moves");
+  });
+
+  it("leaves another preview's claim on the worktree a preview left", async () => {
+    await service.ensure({ ...baseRequest, panelId: "panel-moves", worktreeId: "wt-a" });
+    await service.ensure({ ...baseRequest, panelId: "panel-stays", worktreeId: "wt-a" });
+
+    await service.ensure({ ...baseRequest, panelId: "panel-moves", worktreeId: "wt-b" });
+
+    expect(service.getByWorktree("wt-a")?.panelId).toBe("panel-stays");
+  });
+
+  it("persists the new worktree for a running server it re-files", async () => {
+    service.dispose();
+    const persistManifest = vi.fn();
+    service = new DevPreviewSessionService(
+      ptyClient as unknown as PtyClient,
+      onStateChanged,
+      [],
+      persistManifest
+    );
+    await service.ensure({ ...baseRequest, worktreeId: "wt-a" });
+    persistManifest.mockClear();
+
+    await service.ensure({ ...baseRequest, worktreeId: "wt-b" });
+
+    expect(persistManifest).toHaveBeenLastCalledWith([
+      expect.objectContaining({ panelId: baseRequest.panelId, worktreeId: "wt-b" }),
+    ]);
+  });
+
   it("restarts in the new directory when a move changes the worktree and cwd", async () => {
     const first = await service.ensure({
       ...baseRequest,

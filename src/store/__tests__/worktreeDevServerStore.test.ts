@@ -62,4 +62,40 @@ describe("worktreeDevServerStore", () => {
     store.removeSession("w1");
     expect(useWorktreeDevServerStore.getState().sessionsByWorktreeId.w1).toBeUndefined();
   });
+
+  it("drops a moved preview's entry from the worktree it left (#14958)", () => {
+    const store = useWorktreeDevServerStore.getState();
+    store.setSession(
+      "w1",
+      makeSession({ worktreeId: "w1", panelId: "p1", status: "running", updatedAt: 100 })
+    );
+    store.setSession(
+      "w2",
+      makeSession({ worktreeId: "w2", panelId: "p1", status: "running", updatedAt: 200 })
+    );
+
+    const sessions = useWorktreeDevServerStore.getState().sessionsByWorktreeId;
+    expect(sessions.w1).toBeUndefined();
+    expect(sessions.w2?.panelId).toBe("p1");
+  });
+
+  it("keeps another preview's entry and a newer one for the same panel", () => {
+    const store = useWorktreeDevServerStore.getState();
+    store.setSession(
+      "w1",
+      makeSession({ worktreeId: "w1", panelId: "p2", status: "running", updatedAt: 100 })
+    );
+    store.setSession(
+      "w3",
+      makeSession({ worktreeId: "w3", panelId: "p1", status: "running", updatedAt: 300 })
+    );
+    store.setSession(
+      "w2",
+      makeSession({ worktreeId: "w2", panelId: "p1", status: "running", updatedAt: 200 })
+    );
+
+    const sessions = useWorktreeDevServerStore.getState().sessionsByWorktreeId;
+    expect(sessions.w1?.panelId).toBe("p2");
+    expect(sessions.w3?.updatedAt).toBe(300);
+  });
 });

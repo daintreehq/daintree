@@ -291,12 +291,13 @@ export class DevPreviewSessionService {
   }
 
   /**
-   * After a session is deleted, remove its stale worktreeToSession entry and
-   * hand the mapping back to any surviving session that still claims the same worktreeId.
+   * After a session is deleted or moves to another worktree, remove its stale
+   * worktreeToSession entry and hand the mapping back to any surviving session
+   * that still claims the same worktreeId.
    */
-  private restoreWorktreeMapping(worktreeId: string | undefined, deletedKey: string): void {
+  private restoreWorktreeMapping(worktreeId: string | undefined, departedKey: string): void {
     if (!worktreeId) return;
-    if (this.worktreeToSession.get(worktreeId) !== deletedKey) return;
+    if (this.worktreeToSession.get(worktreeId) !== departedKey) return;
     this.worktreeToSession.delete(worktreeId);
     for (const [survivingKey, survivingSession] of this.sessions) {
       if (survivingSession.worktreeId === worktreeId) {
@@ -531,8 +532,10 @@ export class DevPreviewSessionService {
         const mapped = this.sessions.get(mappedKey);
         return !mapped || !RUNNING_STATES.has(mapped.status);
       };
-      if (prevWorktreeId && prevWorktreeId !== session.worktreeId && ownsMapping(prevWorktreeId)) {
-        this.worktreeToSession.delete(prevWorktreeId);
+      // Only this session's own claim on the worktree it left goes, and it goes
+      // to a preview still there rather than leaving that worktree's card bare.
+      if (prevWorktreeId && prevWorktreeId !== session.worktreeId) {
+        this.restoreWorktreeMapping(prevWorktreeId, key);
       }
       if (session.worktreeId && ownsMapping(session.worktreeId)) {
         this.worktreeToSession.set(session.worktreeId, key);
