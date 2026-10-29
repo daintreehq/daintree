@@ -2,11 +2,11 @@
 
 ## [0.47.1] - 2026-10-29
 
-A patch for three rough edges in 0.47.0: a dictation cleanup that turned one spoken name into a command you hadn't asked for was thrown away whole, the dictation caret took width and pushed the text after it aside, and Canopy's All hosts view warned about every host that was simply off.
+A patch for three rough edges in 0.47.0: a dictation cleanup that wrote an agent command or skill streamed in and then snapped back to the raw words, the dictation caret took width and pushed the text after it aside, and Canopy's All hosts view warned about every host that was simply off.
 
 ### Bug Fixes
 
-- A dictation cleanup that turns a spoken name into an agent command you never named ("a design review workflow" coming back as "a /design-review workflow") now lands with that one command written back as the words you said, instead of the whole passage losing every correction, which Grok's punctuation of pauses ("the next... batch. Skill.") made frequent (#15078)
+- Dictation cleanup lands exactly as the model writes it: a passage cleaned into an agent command or skill ("Okay, go ahead and use the github create issue skill to create a new issue for this." becoming `/github-create-issue to create a new issue for this.`, or "a design review workflow" becoming "a /design-review workflow") no longer streams in and then snaps back to the raw words, a long dictation no longer loses every other correction over one command, and no cleanup is held back for low confidence (#15078, #15240)
 - The dictation caret is one mark that takes no width: text after a mid-draft insertion no longer shifts, a line no longer wraps because of the meter, the keyboard caret no longer shows a second mark where grey interim words begin, and the "Listening…" placeholder is gone, with the meter alone at the start of an empty draft (#14942)
 - In Canopy's All hosts view, a host that's off or out of range is left out quietly: no warning callout, Retry button or "Not every host could be read" header, and its agents reappear on their own when the link comes back; picking that host on its own still shows "Can't reach" with Retry (#15230)
 

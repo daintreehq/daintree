@@ -49,8 +49,6 @@ describe("countPassageFates", () => {
     "applied",
     "unchanged",
     "skipped",
-    "rejected_command",
-    "rejected_low_confidence",
     "failed",
     "timed_out",
     "dropped",

@@ -954,7 +954,7 @@ describe("VoiceRecordingService — the target agent's commands (#14655)", () =>
     expect(draft().trim()).toBe("/compact");
   });
 
-  it("drops a command correction wrote once text is typed in front of the passage", async () => {
+  it("lands a command correction wrote even once text is typed in front of the passage", async () => {
     const { service, voiceStore, draft, setDraft } = await setup();
     let resolveCorrection!: (value: unknown) => void;
     correct.fn.mockReturnValue(new Promise((resolve) => (resolveCorrection = resolve)));
@@ -967,7 +967,7 @@ describe("VoiceRecordingService — the target agent's commands (#14655)", () =>
 
     resolveCorrection({ action: "replace", correctedText: "/compact" });
     await vi.waitFor(() => expect(service.hasPendingCorrection(PANEL)).toBe(false));
-    expect(draft()).toBe("First: run the compact command");
+    expect(draft()).toBe("First: /compact");
   });
 
   it("lands a path correction once text is typed in front of the passage", async () => {

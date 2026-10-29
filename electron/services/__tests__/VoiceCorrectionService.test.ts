@@ -1414,38 +1414,23 @@ describe("VoiceCorrectionService", () => {
       return new VoiceCorrectionService().correct({ rawText }, { ...BASE_SETTINGS, ...settings });
     }
 
-    it("does not apply a low-confidence replacement", async () => {
-      const result = await correctWith("the promise rejects when it times out", {
-        corrected_text: "The promise regex when it times out.",
-        confidence: "low",
-      });
-      expect(result.action).toBe("no_change");
-      expect(result.confirmedText).toBe("the promise rejects when it times out");
-    });
-
-    it("says which check turned a cleanup down and what it would have written", async () => {
-      const lowConfidence = await correctWith("the promise rejects when it times out", {
-        corrected_text: "The promise regex when it times out.",
-        confidence: "low",
-      });
-      expect(lowConfidence.rejected).toEqual({
-        reason: "low_confidence",
-        candidate: "The promise regex when it times out.",
-      });
-
-      const applied = await correctWith("um wire up the racked component", {
+    it("lands a low-confidence replacement as the model wrote it", async () => {
+      const result = await correctWith("wire up the racked component", {
         corrected_text: "Wire up the React component.",
+        confidence: "low",
       });
-      expect(applied.rejected).toBeUndefined();
+      expect(result.action).toBe("replace");
+      expect(result.confirmedText).toBe("Wire up the React component.");
+      expect(result.verdict).toBe("replaced");
     });
 
     it("keeps the reply as the model gave it, whatever landed", async () => {
-      const rejected = await correctWith("um don't delete the branch yet", {
+      const unsure = await correctWith("um don't delete the branch yet", {
         corrected_text: "Um, delete the branch yet.",
         confidence: "low",
       });
-      expect(rejected.confirmedText).toBe("um don't delete the branch yet");
-      expect(rejected.proposal).toEqual({
+      expect(unsure.confirmedText).toBe("delete the branch yet.");
+      expect(unsure.proposal).toEqual({
         action: "replace",
         correctedText: "delete the branch yet.",
         confidence: "low",
@@ -1548,20 +1533,6 @@ describe("VoiceCorrectionService", () => {
       }
     });
 
-    it("falls back to the exact raw text, not a recased copy, when a result is rejected", async () => {
-      const rawText = "  ask daintree not to push  ";
-      const result = await correctWith(
-        rawText,
-        { corrected_text: "Ask Daintree not to push.", confidence: "low" },
-        { customDictionary: ["Daintree"] }
-      );
-      expect(result.action).toBe("no_change");
-      expect(result.correctedText).toBe(rawText);
-      expect(result.confirmedText).toBe(rawText);
-      // The request worked; only its answer was refused.
-      expect(result.failed).toBeUndefined();
-    });
-
     it("rejects a malformed reply instead of applying it", async () => {
       const result = await correctWith("react is great", {
         corrected_text: "React is great.",
@@ -1596,50 +1567,6 @@ describe("VoiceCorrectionService", () => {
       expect(await verdictOf("react is great", { corrected_text: "react is great" })).toBe(
         "unchanged"
       );
-    });
-
-    it.each([
-      [
-        "rejected_low_confidence",
-        "the promise rejects when it times out",
-        { corrected_text: "The promise regex when it times out.", confidence: "low" },
-      ],
-    ] as const)("names a check's refusal %s", async (verdict, rawText, reply) => {
-      expect(await verdictOf(rawText, reply)).toBe(verdict);
-    });
-
-    it("names a refused command rejected_command", async () => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn().mockResolvedValue(makeFetchResponse({ corrected_text: "/compact" }))
-      );
-      const result = await new VoiceCorrectionService().correct(
-        { rawText: "run the compact command", startsPrompt: true },
-        BASE_SETTINGS
-      );
-      expect(result.verdict).toBe("rejected_command");
-    });
-
-    it("logs a check's refusal where a production log keeps it: its reason and lengths, never the text", async () => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn().mockResolvedValue(makeFetchResponse({ corrected_text: "/compact" }))
-      );
-      for (const log of [logDebug, logInfo, logWarn]) vi.mocked(log).mockClear();
-      await new VoiceCorrectionService().correct(
-        { rawText: "run the compact command", startsPrompt: true },
-        BASE_SETTINGS
-      );
-      const rejected = vi
-        .mocked(logInfo)
-        .mock.calls.filter(([message]) => String(message).includes("Correction rejected"));
-      expect(rejected.map(([, fields]) => fields)).toEqual([
-        { reason: "unknown_command", rawLen: "run the compact command".length, correctedLen: 8 },
-      ]);
-      const logged = JSON.stringify(
-        [logDebug, logInfo, logWarn].flatMap((log) => vi.mocked(log).mock.calls)
-      );
-      expect(logged).not.toContain("compact");
     });
 
     it("names a passage it never sent skipped", async () => {
@@ -1876,19 +1803,43 @@ describe("VoiceCorrectionService", () => {
     });
 
     it.each([
-      ["a command the target doesn't have", "run the deploy skill", "/deploy", true],
-      ["another agent's syntax", "use the plugin creator skill", "$plugin-creator", true],
-      ["a command away from the start it never named", "then tidy things up", "/compact", false],
-      ["a bare imperative that opens like a command", "compact the conversation", "/compact", true],
-      ["a mention turned into a command", "the review skill is broken", "/review is broken", true],
-    ])("keeps the raw text for %s", async (_label, rawText, reply, startsPrompt) => {
+      [
+        "a skill whose lead-in it dropped",
+        "Okay, go ahead and use the github create issue skill to create a new issue for this.",
+        "/github-create-issue to create a new issue for this.",
+        true,
+      ],
+      ["a command away from the start", "then tidy things up", "/compact", false],
+      ["a command the target doesn't list", "run the deploy skill", "/deploy", true],
+    ])("lands %s as the model wrote it", async (_label, rawText, reply, startsPrompt) => {
       stubReply(reply);
       const result = await new VoiceCorrectionService().correct(
         { rawText, startsPrompt },
         { ...BASE_SETTINGS, commandTarget: targetFor("claude") }
       );
-      expect(result.confirmedText).toBe(rawText);
-      expect(result.action).toBe("no_change");
+      expect(result.confirmedText).toBe(reply);
+      expect(result.verdict).toBe("replaced");
+    });
+
+    it("logs a landed command reply by its lengths, never its text", async () => {
+      const rawText =
+        "Okay, go ahead and use the github create issue skill to create a new issue for this.";
+      const reply = "/github-create-issue to create a new issue for this.";
+      stubReply(reply);
+      for (const log of [logDebug, logInfo, logWarn]) vi.mocked(log).mockClear();
+      await new VoiceCorrectionService().correct(
+        { rawText, startsPrompt: true },
+        { ...BASE_SETTINGS, commandTarget: targetFor("claude") }
+      );
+      const success = vi
+        .mocked(logDebug)
+        .mock.calls.find(([message]) => String(message).includes("Correction success"));
+      expect(success?.[1]).toMatchObject({ rawLen: rawText.length, correctedLen: reply.length });
+      const logged = JSON.stringify(
+        [logDebug, logInfo, logWarn].flatMap((log) => vi.mocked(log).mock.calls)
+      );
+      expect(logged).not.toContain("go ahead");
+      expect(logged).not.toContain("new issue");
     });
 
     it("writes a command named partway into the prompt where the dictation named it", async () => {
@@ -1901,38 +1852,6 @@ describe("VoiceCorrectionService", () => {
       expect(result.confirmedText).toBe("Then do a full pass, using the /review skill.");
       expect(result.action).toBe("replace");
     });
-
-    it("says a command check turned the cleanup down, and what it would have written", async () => {
-      stubReply("/deploy");
-      const result = await new VoiceCorrectionService().correct(
-        { rawText: "run the deploy skill", startsPrompt: true },
-        { ...BASE_SETTINGS, commandTarget: targetFor("claude") }
-      );
-      expect(result.rejected).toEqual({ reason: "unknown_command", candidate: "/deploy" });
-    });
-
-    it.each([
-      ["claude", "Delete the unused imports in the auth module", "/delete"],
-      ["claude", "Archive the old release branches", "/archive"],
-      ["claude", "Clear the build cache and rebuild", "/clear"],
-      ["claude", "Rewind the migration before you change it", "/rewind"],
-      ["codex", "Delete the unused imports in the auth module", "/delete"],
-      ["codex", "Archive the old release branches", "/archive"],
-      ["codex", "Clear the build cache and rebuild", "/clear"],
-      ["codex", "Rewind the migration before you change it", "/rewind"],
-    ] as const)(
-      "keeps %s's instruction %j out of %s whatever the model returns",
-      async (agentId, rawText, command) => {
-        const [, ...words] = rawText.split(" ");
-        stubReply(`${command} ${words.join(" ")}`);
-        const result = await new VoiceCorrectionService().correct(
-          { rawText, startsPrompt: true },
-          { ...BASE_SETTINGS, commandTarget: targetFor(agentId) }
-        );
-        expect(result.confirmedText).toBe(rawText);
-        expect(result.action).toBe("no_change");
-      }
-    );
 
     it("still writes a built-in the dictation spoke with its trigger or asked to run", async () => {
       stubReply("/clear the build cache and rebuild");
@@ -1950,15 +1869,6 @@ describe("VoiceCorrectionService", () => {
       expect(asked.confirmedText).toBe("/archive on the old release branches");
     });
 
-    it("keeps a leading command's arguments as dictated", async () => {
-      stubReply("/review The last commit.");
-      const result = await new VoiceCorrectionService().correct(
-        { rawText: "/review the last commit", startsPrompt: true },
-        { ...BASE_SETTINGS, commandTarget: targetFor("claude") }
-      );
-      expect(result.confirmedText).toBe("/review the last commit");
-    });
-
     it("keeps dictionary casing out of a command's arguments", async () => {
       stubReply("", "no_change");
       const result = await new VoiceCorrectionService().correct(
@@ -1970,15 +1880,6 @@ describe("VoiceCorrectionService", () => {
         }
       );
       expect(result.confirmedText).toBe("/review the daintree changes");
-    });
-
-    it("rejects invented command syntax with no target at all", async () => {
-      stubReply("/compact");
-      const result = await new VoiceCorrectionService().correct(
-        { rawText: "run the compact command", startsPrompt: true },
-        BASE_SETTINGS
-      );
-      expect(result.confirmedText).toBe("run the compact command");
     });
 
     it("keys the prompt cache by target", async () => {

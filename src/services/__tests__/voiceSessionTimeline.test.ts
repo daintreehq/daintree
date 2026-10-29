@@ -191,11 +191,11 @@ describe("VoiceSessionTimeline", () => {
     const t = timeline();
     t.beginCorrection();
     t.finish("user");
-    t.endCorrection("discarded", countPassageFates(["applied", "rejected_command", "unlanded"]));
+    t.endCorrection("discarded", countPassageFates(["applied", "failed", "unlanded"]));
     expect(logged().correctionPassages).toMatchObject({
       sent: 3,
       applied: 1,
-      rejectedCommand: 1,
+      failed: 1,
       unlanded: 1,
     });
   });
@@ -223,15 +223,15 @@ describe("VoiceSessionTimeline", () => {
     t.endCorrection("unchanged", countPassageFates(["unchanged"]));
     expect(log).not.toHaveBeenCalled();
 
-    // The chunk's turned-down passage goes out again before the chunk ends.
+    // The chunk's failed passage goes out again before the chunk ends.
     t.beginChunkPass();
-    t.endChunkPass(countPassageFates(["rejected_low_confidence", "applied"]));
+    t.endChunkPass(countPassageFates(["failed", "applied"]));
     expect(log).not.toHaveBeenCalled();
     t.endChunkPass(countPassageFates(["applied"]));
     expect(logged()).toMatchObject({
       correctionChunks: 1,
       correctionPassages: { sent: 1, unchanged: 1 },
-      correctionChunkPassages: { sent: 3, applied: 2, rejectedLowConfidence: 1 },
+      correctionChunkPassages: { sent: 3, applied: 2, failed: 1 },
     });
   });
 

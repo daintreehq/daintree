@@ -5,7 +5,6 @@ import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { hasCleanupKey, hasTranscriptionKey } from "@shared/config/voiceProviders";
-import { introducesVoiceCommand } from "@shared/utils/voiceAgentCommands";
 import {
   carrySpansThroughEdits,
   shiftSpans,
@@ -172,8 +171,6 @@ const LOG_PREFIX = "[VoiceRecording]";
 
 /** A chunk passage's fates that leave its words for a later pass to clean (#14932). */
 const CLEANED_AGAIN: ReadonlySet<PassageFate> = new Set<PassageFate>([
-  "rejected_command",
-  "rejected_low_confidence",
   "failed",
   "timed_out",
   "unlanded",
@@ -3881,7 +3878,6 @@ class VoiceRecordingService {
 
     const inputStore = useTerminalInputStore.getState();
     const voiceStore = useVoiceRecordingStore.getState();
-    const draftNow = inputStore.getDraftInput(panelId, projectId);
     const edits: Array<{ from: number; to: number; text: string; passage: CorrectionPassage }> = [];
     let skipped = 0;
     const fates: PassageFate[] = [];
@@ -3894,13 +3890,7 @@ class VoiceRecordingService {
         return;
       }
       const span = spans.get(passage);
-      // A command correction wrote for the start of the prompt is no longer at
-      // the start once text was typed in front of the passage.
-      const commandMoved =
-        span !== undefined &&
-        introducesVoiceCommand(passage.text, corrected) &&
-        draftNow.slice(0, span.from).trim() !== "";
-      if (!span || commandMoved) {
+      if (!span) {
         skipped++;
         fates.push("unlanded");
         return;
@@ -3965,8 +3955,8 @@ class VoiceRecordingService {
     }
     logDebug(`${LOG_PREFIX} Correction settled`, { panelId, applied: edits.length, skipped });
 
-    // A chunk passage still in place that a check turned down, the model
-    // couldn't clean, or the draft couldn't take gives its words to a later
+    // A chunk passage still in place that the model couldn't clean, or the
+    // draft couldn't take, gives its words to a later
     // pass. One an edit reached keeps only the words it left, already given.
     if (correction.kind === "chunk") {
       const again = correction.passages.filter(
@@ -4609,20 +4599,11 @@ class VoiceRecordingService {
     const ranges: VoiceCorrectionRange[] = [];
     for (const correction of this.pendingCorrections) {
       if (correction.panelId !== panelId) continue;
-      const draft = useTerminalInputStore
-        .getState()
-        .getDraftInput(correction.panelId, correction.projectId);
       for (const [passage, span] of this.locateLivePassages(correction)) {
         const rewrite = correction.rewrites.get(passage);
-        // A command that no longer opens the prompt won't land (see
-        // requestCorrection), so it isn't shown either.
-        const commandMoved =
-          rewrite !== undefined &&
-          introducesVoiceCommand(passage.text, rewrite.text) &&
-          draft.slice(0, span.from).trim() !== "";
         const range = correction.sessionId ? { ...span, session: correction.sessionId } : span;
         ranges.push(
-          rewrite && !commandMoved
+          rewrite
             ? { ...range, rewrite: { to: span.from + rewrite.rawTo, text: rewrite.text } }
             : range
         );
