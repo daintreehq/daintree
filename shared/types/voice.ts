@@ -169,7 +169,7 @@ export interface VoiceSessionSnapshot {
   worktreeLabel: string | null;
   micLabel: string | null;
   micSignal: VoiceMicSignal;
-  micNotice: { kind: "lost" | "silent"; bluetooth: boolean } | null;
+  micNotice: { kind: "lost" | "silent"; bluetooth: boolean; appReplaced?: true } | null;
   /** The owner is warning that its auto-stop is close: of the pause, or of no new words. */
   stopWarning: boolean;
   correctionEnabled: boolean;

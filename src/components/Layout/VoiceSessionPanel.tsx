@@ -35,7 +35,7 @@ export interface VoiceSessionDetails {
   worktreeLabel: string | null;
   micLabel: string | null;
   micSignal: VoiceMicSignal;
-  micNotice: { kind: "lost" | "silent"; bluetooth: boolean } | null;
+  micNotice: { kind: "lost" | "silent"; bluetooth: boolean; appReplaced?: true } | null;
   providerName: string | null;
   /** Wall time since the session began, pauses included; null before it has begun or once it stops. */
   elapsedMs: number | null;
@@ -118,6 +118,9 @@ function micProblem(details: VoiceSessionDetails): string | null {
   if (phase !== "connecting" && phase !== "recording") return null;
   if (micNotice?.kind === "lost") return `${mic} stopped delivering audio`;
   if (!hasNoAudio(details)) return null;
+  if (micNotice?.appReplaced) {
+    return `Nothing heard from ${mic}. Daintree was updated while running and needs a restart.`;
+  }
   return micNotice?.bluetooth
     ? `Nothing heard from ${mic}. Bluetooth mics can take a moment to start.`
     : `Nothing heard from ${mic}. Check the selected microphone.`;

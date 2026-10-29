@@ -148,6 +148,8 @@ import { defineIpcNamespace, op, opValidated } from "../define.js";
 import { ValidationError } from "../validationError.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { VOICE_INPUT_METHOD_CHANNELS } from "./voiceInput.preload.js";
+import { isAppBundleLaunchable, isAppBundleReplaced } from "../../lifecycle/appBundleIdentity.js";
+import { relaunchApp } from "../../lifecycle/appRelaunch.js";
 import { openExternalUrl } from "../../utils/openExternal.js";
 import { openLinuxSoundSettings } from "../../services/voice/linuxSoundSettings.js";
 import {
@@ -2401,6 +2403,18 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
   const handleOpenMicSettings = () => openMicSettings();
 
+  // A silent mic in an app whose bundle was replaced under it (#14937): macOS
+  // feeds this process zeros until it restarts as the new bundle.
+  const handleIsAppReplaced = async (): Promise<boolean> => isAppBundleReplaced();
+
+  // False when there is no whole bundle to come back up as, so the pane can
+  // say so rather than quit Daintree into nothing.
+  const handleRestartReplacedApp = async (): Promise<boolean> => {
+    if (!isAppBundleLaunchable()) return false;
+    relaunchApp("bundle-replaced");
+    return true;
+  };
+
   const handleValidateApiKey = async (apiKey: string) => {
     const settings = getVoiceSettings();
     return validateOpenAIKey(apiKey, settings.organizationId, settings.projectId);
@@ -2919,6 +2933,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         { withContext: true }
       ),
       getLastTerms: op(VOICE_INPUT_METHOD_CHANNELS.getLastTerms, handleGetLastTerms),
+      isAppReplaced: op(VOICE_INPUT_METHOD_CHANNELS.isAppReplaced, handleIsAppReplaced),
+      restartReplacedApp: op(
+        VOICE_INPUT_METHOD_CHANNELS.restartReplacedApp,
+        handleRestartReplacedApp
+      ),
       prefetchCorrections: opValidated(
         VOICE_INPUT_METHOD_CHANNELS.prefetchCorrections,
         VoiceInputPrefetchCorrectionsSchema,

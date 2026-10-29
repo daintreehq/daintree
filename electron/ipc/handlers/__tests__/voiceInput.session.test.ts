@@ -193,6 +193,15 @@ vi.mock("../../../services/menuAccelerators.js", () => ({
   isDictationKey: vi.fn((input: { key: string }) => input.key === "."),
 }));
 
+const bundle = vi.hoisted(() => ({ replaced: false, launchable: false }));
+
+vi.mock("../../../lifecycle/appBundleIdentity.js", () => ({
+  isAppBundleReplaced: vi.fn(() => bundle.replaced),
+  isAppBundleLaunchable: vi.fn(() => bundle.launchable),
+}));
+
+vi.mock("../../../lifecycle/appRelaunch.js", () => ({ relaunchApp: vi.fn() }));
+
 import {
   registerVoiceInputHandlers,
   getLiveVoiceSession,
@@ -206,6 +215,7 @@ import {
   _resetDictationViewHoldsForTests,
   isDictationViewHeld,
 } from "../../../services/voice/dictationViewHold.js";
+import { relaunchApp } from "../../../lifecycle/appRelaunch.js";
 
 type Sent = { channel: string; payload: unknown };
 
@@ -2189,6 +2199,17 @@ describe("voiceInput — one dictation across hosts (#14773)", () => {
       ).rejects.toThrow();
     });
 
+    it("passes on that the app was replaced under it, so no view blames the mic (#14937)", async () => {
+      await startIn(local, "a", "Alpha");
+      const micNotice = { kind: "silent", bluetooth: false, appReplaced: true };
+
+      expect(await publish(local, "a", details({ micSignal: "silent", micNotice }))).toBe(true);
+
+      expect(await invoke(CHANNELS.VOICE_INPUT_GET_LIVE_SESSION, studio1)).toMatchObject({
+        session: { details: { micNotice } },
+      });
+    });
+
     it("sends about ten level readings a second however fast chunks arrive", async () => {
       await startIn(local, "a", "Alpha");
 
@@ -2302,5 +2323,58 @@ describe("voiceInput — one dictation across hosts (#14773)", () => {
 
       expect(held(local)).toBe(false);
     });
+  });
+});
+
+describe("voiceInput — an app bundle replaced under it (#14937)", () => {
+  let cleanup: () => void;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    bundle.replaced = false;
+    bundle.launchable = false;
+    cleanup = registerVoiceInputHandlers({
+      mainWindow: { webContents: { send: vi.fn() }, isDestroyed: () => false },
+    } as unknown as Parameters<typeof registerVoiceInputHandlers>[0]);
+  });
+
+  afterEach(() => {
+    cleanup?.();
+  });
+
+  it("answers whether the bundle on disk is still the one running", async () => {
+    const ask = () => getHandler(CHANNELS.VOICE_INPUT_IS_APP_REPLACED)({ sender: makeSender() });
+    expect(await ask()).toBe(false);
+
+    bundle.replaced = true;
+    expect(await ask()).toBe(true);
+  });
+
+  it("restarts into the new bundle, keeping the session", async () => {
+    bundle.replaced = true;
+    bundle.launchable = true;
+
+    expect(
+      await getHandler(CHANNELS.VOICE_INPUT_RESTART_REPLACED_APP)({ sender: makeSender() })
+    ).toBe(true);
+    expect(relaunchApp).toHaveBeenCalledExactlyOnceWith("bundle-replaced");
+  });
+
+  it("restarts into a bundle that was put back as it was, since the user asked", async () => {
+    bundle.launchable = true;
+
+    expect(
+      await getHandler(CHANNELS.VOICE_INPUT_RESTART_REPLACED_APP)({ sender: makeSender() })
+    ).toBe(true);
+    expect(relaunchApp).toHaveBeenCalledExactlyOnceWith("bundle-replaced");
+  });
+
+  it("refuses a restart with no bundle to come back up as", async () => {
+    bundle.replaced = true;
+
+    expect(
+      await getHandler(CHANNELS.VOICE_INPUT_RESTART_REPLACED_APP)({ sender: makeSender() })
+    ).toBe(false);
+    expect(relaunchApp).not.toHaveBeenCalled();
   });
 });

@@ -923,6 +923,8 @@ export const CHANNELS = {
   VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",
   VOICE_INPUT_FILE_TOKEN_RESOLVED: "voice-input:file-token-resolved",
   VOICE_INPUT_SESSION_ENDED: "voice-input:session-ended",
+  VOICE_INPUT_IS_APP_REPLACED: "voice-input:is-app-replaced",
+  VOICE_INPUT_RESTART_REPLACED_APP: "voice-input:restart-replaced-app",
   VOICE_DICTIONARY_ADD: "voice-dictionary:add",
   VOICE_DICTIONARY_REMOVE: "voice-dictionary:remove",
   VOICE_DICTIONARY_UPDATE: "voice-dictionary:update",

@@ -117,6 +117,21 @@ describe("buildOwnVoiceSessionDetails (#14920)", () => {
         })
       )!.micNotice
     ).toEqual({ kind: "silent", bluetooth: true });
+    expect(
+      buildOwnVoiceSessionDetails(
+        input({
+          micSignal: "silent",
+          micNotice: {
+            kind: "silent",
+            target: { panelId: "p-1" },
+            deviceLabel: "Blue Yeti",
+            bluetooth: false,
+            builtIn: null,
+            appReplaced: true,
+          },
+        })
+      )!.micNotice
+    ).toEqual({ kind: "silent", bluetooth: false, appReplaced: true });
   });
 
   it("says the target is locked only when the lock is on it", () => {

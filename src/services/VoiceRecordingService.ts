@@ -5410,40 +5410,75 @@ class VoiceRecordingService {
 
   /**
    * Shows the silent-mic warning in the pane, offering the built-in mic when
-   * there is one other than the silent mic. The device list is dropped if the
-   * session moved on, or the mic came alive, while it was read.
+   * there is one other than the silent mic. When the app's bundle was replaced
+   * since launch (#14937), the warning offers a restart instead: macOS denies
+   * the mic to the old process, so every mic is as silent as this one. Each
+   * answer is dropped if the session moved on, began stopping, or the mic came
+   * alive while it was read.
    */
   private async raiseSilentMicNotice(generation: number): Promise<void> {
     const capture = this.sessionCapture;
     const target = useVoiceRecordingStore.getState().activeTarget;
     if (!capture || !target) return;
     const { deviceId, deviceLabel } = capture;
-    let builtIn: VoiceMicDevice | null = null;
+    const isStale = (state: ReturnType<typeof useVoiceRecordingStore.getState>) =>
+      this.generation !== generation ||
+      this.sessionCapture !== capture ||
+      this.stopPromise !== null ||
+      state.status === "finishing" ||
+      state.micSignal !== "silent" ||
+      state.micNotice?.kind === "lost";
+    const bluetooth = isBluetoothMicLabel(deviceLabel);
+    // Listed alongside the bundle check, but only waited on when the mic
+    // advice is the answer.
+    const builtInMic = this.findOtherBuiltInMic(deviceId, deviceLabel);
+
+    if (await this.isAppReplaced()) {
+      const state = useVoiceRecordingStore.getState();
+      if (isStale(state)) return;
+      logWarn(`${LOG_PREFIX} Silent microphone after the app bundle was replaced`);
+      state.setMicNotice({
+        kind: "silent",
+        target,
+        deviceLabel,
+        bluetooth,
+        builtIn: null,
+        appReplaced: true,
+      });
+      state.announce("Daintree was updated while running and needs a restart.");
+      return;
+    }
+
+    const builtIn = await builtInMic;
+    const state = useVoiceRecordingStore.getState();
+    if (isStale(state)) return;
+    state.setMicNotice({ kind: "silent", target, deviceLabel, bluetooth, builtIn });
+  }
+
+  private async findOtherBuiltInMic(
+    deviceId: string | null,
+    deviceLabel: string | null
+  ): Promise<VoiceMicDevice | null> {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const candidate = findBuiltInMic(devices.filter((device) => device.kind === "audioinput"));
       if (candidate && candidate.deviceId !== deviceId && candidate.label !== deviceLabel) {
-        builtIn = candidate;
+        return candidate;
       }
     } catch (err) {
       logDebug(`${LOG_PREFIX} Could not list microphones`, voiceErrorLogFields(err));
     }
-    const state = useVoiceRecordingStore.getState();
-    if (
-      this.generation !== generation ||
-      this.sessionCapture !== capture ||
-      state.micSignal !== "silent" ||
-      state.micNotice?.kind === "lost"
-    ) {
-      return;
+    return null;
+  }
+
+  // Unknown reads as not replaced, so the mic advice stands.
+  private async isAppReplaced(): Promise<boolean> {
+    try {
+      return (await window.electron.voiceInput.isAppReplaced()) === true;
+    } catch (err) {
+      logDebug(`${LOG_PREFIX} Could not check the app bundle`, voiceErrorLogFields(err));
+      return false;
     }
-    state.setMicNotice({
-      kind: "silent",
-      target,
-      deviceLabel,
-      bluetooth: isBluetoothMicLabel(deviceLabel),
-      builtIn,
-    });
   }
 
   // The saved id went stale and the mic's name found it again: save the id it
