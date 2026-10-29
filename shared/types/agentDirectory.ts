@@ -76,7 +76,7 @@ export const AgentDirectoryConfirmationSchema = z.object({
   actionId: z.string().min(1).max(128),
   /** Epoch ms the call started waiting on the person. */
   since: z.number(),
-  /** Epoch ms past which the call fails unanswered and the dialog stops offering approval. */
+  /** Epoch ms by which the call has failed if still unanswered; it can end sooner. */
   expiresAt: z.number(),
 });
 export type AgentDirectoryConfirmation = z.infer<typeof AgentDirectoryConfirmationSchema>;

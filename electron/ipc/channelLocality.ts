@@ -569,6 +569,8 @@ export const CHANNEL_LOCALITY = {
   "mcp-server:get-turn-outcome-records": "host",
   "mcp-server:grant-lifecycle": "host",
   "mcp-server:help-display-image": "host",
+  // The dispatch bridge's own clock: a view holds the call its machine sent it (#14989).
+  "mcp-server:hold-dispatch": "shell",
   "mcp-server:issue-grant": "host",
   "mcp-server:issue-native-grant": "host",
   "mcp-server:list-active-bearers": "host",
