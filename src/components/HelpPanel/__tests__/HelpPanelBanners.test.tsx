@@ -345,9 +345,7 @@ describe("HelpPanelBanners — active grant countdown (#10042)", () => {
       });
       expect(getByTestId("help-grant-active-banner").textContent).toContain("0s left");
 
-      rerender(
-        <HelpPanelBanners {...baseProps()} activeGrants={slid(base + 605_000)} />
-      );
+      rerender(<HelpPanelBanners {...baseProps()} activeGrants={slid(base + 605_000)} />);
       const text = getByTestId("help-grant-active-banner").textContent ?? "";
       expect(text).toContain("10m left");
       expect(text).not.toContain("limit");
@@ -374,9 +372,7 @@ describe("HelpPanelBanners — active grant countdown (#10042)", () => {
       expect(getByTestId("help-grant-active-banner").textContent).toContain("15m left");
 
       // Only the ceiling changes: the countdown must re-target it.
-      rerender(
-        <HelpPanelBanners {...baseProps()} activeGrants={capped(base + 120_000)} />
-      );
+      rerender(<HelpPanelBanners {...baseProps()} activeGrants={capped(base + 120_000)} />);
       expect(getByTestId("help-grant-active-banner").textContent).toContain(
         "2m left · 30-minute limit"
       );
@@ -503,9 +499,9 @@ describe("HelpPanelBanners — several live approvals (#14975)", () => {
       act(() => {
         vi.advanceTimersByTime(2_000);
       });
-      const rows = Array.from(
-        getByTestId("help-grant-active-banner").querySelectorAll("li")
-      ).map((li) => li.textContent ?? "");
+      const rows = Array.from(getByTestId("help-grant-active-banner").querySelectorAll("li")).map(
+        (li) => li.textContent ?? ""
+      );
       expect(rows[0]).toContain("3s left");
       expect(rows[1]).toContain("7s left");
       unmount();

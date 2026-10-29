@@ -655,7 +655,11 @@ describe("HttpLifecycle", () => {
         toolId: "terminal.kill",
         revoked: true,
       });
-      expect(grantCacheOf(deps).revokeGrant).toHaveBeenCalledWith("sess-1", "terminal.kill", "user");
+      expect(grantCacheOf(deps).revokeGrant).toHaveBeenCalledWith(
+        "sess-1",
+        "terminal.kill",
+        "user"
+      );
       expect(grantCacheOf(deps).revokeSession).not.toHaveBeenCalled();
     });
 

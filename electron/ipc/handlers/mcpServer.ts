@@ -317,7 +317,10 @@ export const mcpServerNamespace = defineIpcNamespace({
     ),
     revokeGrant: op(
       MCP_SERVER_METHOD_CHANNELS.revokeGrant,
-      async (ctx, payload: { sessionId: string; toolId: string }): Promise<McpRevokeGrantResult> => {
+      async (
+        ctx,
+        payload: { sessionId: string; toolId: string }
+      ): Promise<McpRevokeGrantResult> => {
         if (!payload || typeof payload !== "object") {
           throw new Error("Invalid payload");
         }

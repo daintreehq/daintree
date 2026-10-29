@@ -795,11 +795,7 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
     const native = (
       grantId: string,
       type:
-        | "grant.issued"
-        | "grant.refreshed"
-        | "grant.expired"
-        | "grant.revoked"
-        | "grant.exhausted",
+        "grant.issued" | "grant.refreshed" | "grant.expired" | "grant.revoked" | "grant.exhausted",
       extra: { toolId?: string; expiresAt?: number } = {}
     ) =>
       grantLifecycleListeners[0]?.({
