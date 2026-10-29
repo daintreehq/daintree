@@ -352,7 +352,9 @@ describe("AgentQuotaSection project presets (#15047)", () => {
     });
     // A custom preset with the same id is the one that launches.
     useAgentSettingsStore.setState({
-      settings: { agents: { codex: { customPresets: [project("mine", "Mine")] } } } as AgentSettings,
+      settings: {
+        agents: { codex: { customPresets: [project("mine", "Mine")] } },
+      } as AgentSettings,
     });
     await renderFor("codex");
 
