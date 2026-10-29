@@ -654,6 +654,22 @@ function keepInnermost(records: ComponentRecord[], count: number): ComponentReco
   return kept;
 }
 
+/**
+ * The client component named `componentId` among those `host` renders inside,
+ * found by the walk a selection's render chain takes. An owner outside that
+ * chain, or a server component, has no roots around the element to widen to.
+ */
+function enclosingComponent(host: Fiber, componentId: string, ids: FiberIds): Fiber | null {
+  const ancestry = new Budget(STEPS.ancestry);
+  for (let at = parentOf(host); at !== null && ancestry.spend(); at = parentOf(at)) {
+    if (tagOf(at) === FIBER_TAGS.hostRoot) return null;
+    if (isComponentFiber(at) && !isMemoImplementation(at) && ids.idOf(at) === componentId) {
+      return canonicalFiber(at);
+    }
+  }
+  return null;
+}
+
 export function createReactExtractor(): ElementPickerExtractor {
   // Per install, so ids last as long as the bootstrap that shows them.
   const ids = new FiberIds("react-");
@@ -665,6 +681,21 @@ export function createReactExtractor(): ElementPickerExtractor {
       return phase === "hover"
         ? hoverOf(host.fiber, ids, serverIds)
         : selectionOf(host, ids, serverIds, refs);
+    },
+    locate(query, anchor) {
+      if (anchor === null || field(query, "kind") !== "roots") return null;
+      const componentId = field(query, "componentId");
+      if (typeof componentId !== "string") return null;
+      const host = hostFiberOf(anchor);
+      if (host === null) return null;
+      const component = enclosingComponent(host.fiber, componentId, ids);
+      if (component === null) return null;
+      const roots = hostRoots(
+        committedFiber(component, new Budget(STEPS.commit)),
+        LIMITS.roots,
+        new Budget(STEPS.rootsPerRecord)
+      );
+      return { elements: roots.elements, data: { complete: roots.complete } };
     },
   };
 }
