@@ -318,6 +318,7 @@ vi.mock("@/lib/notify", () => ({
 
 vi.mock("@/utils/logger", () => ({
   logError: (...args: unknown[]) => mockLogError(...args),
+  logWarn: vi.fn(),
 }));
 
 vi.mock("@/utils/safeFireAndForget", () => ({
