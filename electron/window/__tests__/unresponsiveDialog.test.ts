@@ -97,24 +97,31 @@ describe("attachUnresponsiveDialog (#15232)", () => {
     expect(target.forcefullyCrashRenderer).not.toHaveBeenCalled();
   });
 
-  it("gives the next hang a fresh box rather than stacking on the closed one", async () => {
-    const { win, target } = attach();
-    win.emit("unresponsive");
-    win.emit("responsive");
-    win.emit("unresponsive");
+  it.each([
+    ["fails", (box: OpenBox) => box.fail()],
+    ["answers Wait", (box: OpenBox) => box.answer(0)],
+    ["answers Restart view", (box: OpenBox) => box.answer(1)],
+  ])(
+    "gives the next hang a fresh box, which stays the open one when the closed box %s late",
+    async (_label, settleLate) => {
+      const { win, target } = attach();
+      win.emit("unresponsive");
+      win.emit("responsive");
+      win.emit("unresponsive");
 
-    expect(mocks.showMessageBox).toHaveBeenCalledTimes(2);
-    expect(boxes[1]!.options.signal).not.toBe(boxes[0]!.options.signal);
-    expect(boxes[1]!.options.signal!.aborted).toBe(false);
+      expect(mocks.showMessageBox).toHaveBeenCalledTimes(2);
+      expect(boxes[1]!.options.signal).not.toBe(boxes[0]!.options.signal);
+      expect(boxes[1]!.options.signal!.aborted).toBe(false);
 
-    // The first box settling late leaves the open one standing.
-    await boxes[0]!.fail();
-    win.emit("unresponsive");
-    expect(mocks.showMessageBox).toHaveBeenCalledTimes(2);
+      await settleLate(boxes[0]!);
+      expect(target.forcefullyCrashRenderer).not.toHaveBeenCalled();
+      win.emit("unresponsive");
+      expect(mocks.showMessageBox).toHaveBeenCalledTimes(2);
 
-    await boxes[1]!.answer(1);
-    expect(target.forcefullyCrashRenderer).toHaveBeenCalledOnce();
-  });
+      await boxes[1]!.answer(1);
+      expect(target.forcefullyCrashRenderer).toHaveBeenCalledOnce();
+    }
+  );
 
   it("restarts the view on Restart view, and does nothing on Wait", async () => {
     const { win, target } = attach();
@@ -129,6 +136,10 @@ describe("attachUnresponsiveDialog (#15232)", () => {
       "user force-restarted view"
     );
     expect(target.forcefullyCrashRenderer).toHaveBeenCalledOnce();
+    // Attributed before the crash, so it never reads as a real one.
+    expect(mocks.noteTerminationIntent.mock.invocationCallOrder[0]).toBeLessThan(
+      target.forcefullyCrashRenderer.mock.invocationCallOrder[0]!
+    );
   });
 
   it("lets a failed box be shown again on the next hang", async () => {

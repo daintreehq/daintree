@@ -341,13 +341,33 @@ describe("previewProjectTemplate", () => {
         reason: "Couldn't read this template's files.",
         retryable: true,
       });
-      expect(mocks.logError).toHaveBeenCalledWith(
-        "Couldn't read a project template's files",
-        failure,
-        { pluginId: "acme.sites", templateId: "site" }
-      );
+      expect(mocks.logError).toHaveBeenCalledWith("Couldn't read this template's files.", failure, {
+        pluginId: "acme.sites",
+        templateId: "site",
+      });
     } finally {
       readdir.mockRestore();
+    }
+  });
+
+  it("reads a folder it can't inspect as a read failure, not a missing folder", async () => {
+    await put("README.md");
+    registerPluginProjectTemplates("acme.sites", "Acme Sites", pluginDir, [
+      { id: "site", title: "Site", description: "A site." },
+    ]);
+    const failure = Object.assign(new Error(`EACCES: permission denied, lstat '${templateDir}'`), {
+      code: "EACCES",
+    });
+    const lstat = vi.spyOn(fs, "lstat").mockRejectedValueOnce(failure);
+
+    try {
+      expect(await previewProjectTemplate("acme.sites", "site")).toEqual({
+        status: "unusable",
+        reason: "Couldn't read this template's files.",
+        retryable: true,
+      });
+    } finally {
+      lstat.mockRestore();
     }
   });
 

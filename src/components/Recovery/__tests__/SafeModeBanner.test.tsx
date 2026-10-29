@@ -167,7 +167,7 @@ describe("SafeModeBanner", () => {
     expect(screen.getByText("Restart Daintree normally?")).toBeTruthy();
     const body = screen.getByRole("dialog").textContent ?? "";
     // The restart keeps the session, so the confirm never warns of losing it.
-    expect(body).toContain("agents come back with their conversations");
+    expect(body).toContain("agent conversations come back");
     expect(body).not.toMatch(/killed|lost/);
     expect(resetAndRelaunch).not.toHaveBeenCalled();
   });

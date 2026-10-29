@@ -47,10 +47,12 @@ export function ProjectToolbarProfileNotice() {
     demoted > 0 ? `moves ${pluralize(demoted, "item")} into …` : null,
     promoted.length > 0 ? `shows ${pluralize(promoted.length, "plugin button")}` : null,
   ].filter((change): change is string => change !== null);
+  // The overlay sits on the app-wide layout below rather than replacing it,
+  // so that layout still shapes this project's toolbar.
   const summary = overlay.active
     ? changes.length > 0
-      ? `${project.name} ${changes.join(" and ")}. Buttons and order below apply everywhere else`
-      : `Buttons shown or hidden from the toolbar apply to ${project.name} only. Buttons and order below apply everywhere else`
+      ? `${project.name} ${changes.join(" and ")}, on top of the buttons and order below`
+      : `Buttons shown or hidden from the toolbar apply to ${project.name} only, on top of the buttons and order below`
     : overlay.hasOverrides
       ? `${project.name} uses the app-wide toolbar. Its own choices are kept for when this is back on`
       : `Lets buttons shown or hidden from the toolbar apply to ${project.name} only`;
@@ -106,17 +108,16 @@ export function ProjectToolbarResetRow() {
         label="Reset this project's toolbar"
         description={`Clears which items ${project.name} shows or moves into …, the plugin buttons it adds and whether it uses its own toolbar`}
         rootAttributes={{ "data-testid": "project-toolbar-reset" }}
-        control={({ labelId, descriptionId, disabled }) => (
+        control={({ descriptionId, disabled }) => (
           <Button
             type="button"
             variant="ghost-danger"
             size="sm"
             onClick={() => setIsConfirmOpen(true)}
             disabled={disabled}
-            aria-labelledby={labelId}
             aria-describedby={descriptionId}
           >
-            Reset
+            Reset project toolbar
           </Button>
         )}
       />
@@ -143,7 +144,7 @@ export function ProjectToolbarResetRow() {
         }}
         title={`Reset ${project.name}'s toolbar?`}
         description={`The items ${project.name} shows or moves into …, the plugin buttons it adds and whether it uses its own toolbar are all cleared, so it goes back to the app-wide toolbar. The app-wide toolbar isn't changed.`}
-        confirmLabel="Reset toolbar"
+        confirmLabel="Reset project toolbar"
       />
     </>
   );

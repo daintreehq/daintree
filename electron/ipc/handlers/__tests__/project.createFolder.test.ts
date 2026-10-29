@@ -165,6 +165,30 @@ describe("project:create-folder with a project template (#13825)", () => {
     expect(await fs.readdir(parent)).toEqual([]);
   });
 
+  it("refuses a template it can't read in words, without the errno or path (#15232)", async () => {
+    const digest = await approvedDigest();
+    const readdir = vi.spyOn(fs, "readdir").mockRejectedValueOnce(
+      Object.assign(new Error(`EACCES: permission denied, scandir '${pluginDir}'`), {
+        code: "EACCES",
+      })
+    );
+
+    try {
+      const failure = await createFolder({
+        parentPath: parent,
+        folderName: "my-site",
+        template: { pluginId: "acme.sites", templateId: "site", digest },
+      }).then(
+        () => null,
+        (err: unknown) => err as Error
+      );
+      expect(failure?.message).toBe("Couldn't read this template's files.");
+    } finally {
+      readdir.mockRestore();
+    }
+    expect(await fs.readdir(parent)).toEqual([]);
+  });
+
   it("refuses a template no plugin offers any more, and creates nothing", async () => {
     const digest = await approvedDigest();
     clearPluginProjectTemplateRegistry();

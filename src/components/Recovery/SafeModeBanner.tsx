@@ -194,7 +194,7 @@ export function SafeModeBanner() {
         title="Restart Daintree normally?"
         // `resetAndRelaunch` keeps the session through the capture chain, so the
         // restart takes back nothing a normal quit wouldn't.
-        description="Running processes restart and agents come back with their conversations. The panels safe mode skipped load again, and only a turn an agent is in the middle of is interrupted."
+        description="Daintree restarts with this session: the layout, terminal scrollback and agent conversations come back, along with the panels safe mode skipped. Whatever is running in a terminal stops, including a turn an agent is in the middle of."
         confirmLabel="Restart normally"
         variant="default"
         onConfirm={handleRestart}

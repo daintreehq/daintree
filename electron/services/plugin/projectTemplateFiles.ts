@@ -264,7 +264,13 @@ export async function resolveProjectTemplateDir(
   let current = await fs.realpath(pluginDir);
   for (const segment of [PROJECT_TEMPLATES_DIR, templateId]) {
     current = path.join(current, segment);
-    const stat = await fs.lstat(current).catch(() => null);
+    // Only a missing folder is the plugin's to answer for; a read failure
+    // (permissions, I/O) is the disk's, and may pass on another try.
+    const stat = await fs.lstat(current).catch((err: unknown) => {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") return null;
+      throw err;
+    });
     if (!stat) {
       throw new ProjectTemplateError(
         `The plugin has no ${PROJECT_TEMPLATES_DIR}/${templateId}/ folder for this template.`
@@ -436,6 +442,22 @@ export async function loadProjectTemplateInventory(
   return buildProjectTemplateInventory(await resolveProjectTemplateDir(pluginDir, templateId));
 }
 
+/**
+ * `err` as the dialog may show it (#15232): a template's own refusal as it is,
+ * anything else as `message`. A filesystem error names the errno and an
+ * absolute path, so the log keeps where it happened and the person sees only
+ * what did.
+ */
+export function plainProjectTemplateError(
+  err: unknown,
+  message: string,
+  context: { pluginId: string; templateId: string }
+): ProjectTemplateError {
+  if (err instanceof ProjectTemplateError) return err;
+  logError(message, err, context);
+  return new ProjectTemplateError(message);
+}
+
 /** {@link loadProjectTemplateInventory} for the dialog, with any failure as data. */
 export async function previewProjectTemplate(
   pluginId: string,
@@ -444,11 +466,14 @@ export async function previewProjectTemplate(
   try {
     return toProjectTemplatePreview(await loadProjectTemplateInventory(pluginId, templateId));
   } catch (err) {
-    if (err instanceof ProjectTemplateError) return { status: "unusable", reason: err.message };
-    // A filesystem error names the errno and an absolute path: the log keeps
-    // where it happened, the dialog says only what did (#15232).
-    logError("Couldn't read a project template's files", err, { pluginId, templateId });
-    return { status: "unusable", reason: "Couldn't read this template's files.", retryable: true };
+    const failure = plainProjectTemplateError(err, "Couldn't read this template's files.", {
+      pluginId,
+      templateId,
+    });
+    // A refusal stands until the template changes; a read failure may not.
+    return failure === err
+      ? { status: "unusable", reason: failure.message }
+      : { status: "unusable", reason: failure.message, retryable: true };
   }
 }
 

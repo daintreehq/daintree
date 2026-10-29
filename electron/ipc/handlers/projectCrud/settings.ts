@@ -215,15 +215,27 @@ export function registerProjectSettingsHandlers(deps: HandlerDependencies = {}):
     // changed or can't be copied leaves nothing behind.
     let writeTemplate: (() => Promise<void>) | null = null;
     if (template !== undefined) {
-      const { loadProjectTemplateInventory, writeProjectTemplate } =
+      const { loadProjectTemplateInventory, plainProjectTemplateError, writeProjectTemplate } =
         await import("../../../services/plugin/projectTemplateFiles.js");
-      const inventory = await loadProjectTemplateInventory(template.pluginId, template.templateId);
+      const ids = { pluginId: template.pluginId, templateId: template.templateId };
+      const inventory = await loadProjectTemplateInventory(ids.pluginId, ids.templateId).catch(
+        (err: unknown) => {
+          throw plainProjectTemplateError(err, "Couldn't read this template's files.", ids);
+        }
+      );
       if (inventory.digest !== template.digest) {
         throw new Error(
           "The template's files changed after they were listed. Check the list again, then create the folder."
         );
       }
-      writeTemplate = () => writeProjectTemplate(fullPath, inventory);
+      writeTemplate = () =>
+        writeProjectTemplate(fullPath, inventory).catch((err: unknown) => {
+          throw plainProjectTemplateError(
+            err,
+            "Couldn't copy the template's files into the new folder.",
+            ids
+          );
+        });
     }
 
     try {

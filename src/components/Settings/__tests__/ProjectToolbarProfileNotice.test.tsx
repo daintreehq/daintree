@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "@shared/types/project";
 import type { PresentationLevels } from "@shared/config/presentationProfile";
@@ -53,6 +53,9 @@ afterEach(() => {
 
 const reset = () => document.querySelector('[data-testid="project-toolbar-reset"]');
 const toolbarSwitch = () => screen.getByRole("switch", { name: "Use this project's toolbar" });
+// The dialog's confirm shares this name; the row's button is the one outside it.
+const resetButton = () =>
+  within(reset() as HTMLElement).getByRole("button", { name: "Reset project toolbar" });
 
 describe("ProjectToolbarProfileNotice", () => {
   it("offers the switch once the project's profile has loaded, even an untouched one", () => {
@@ -141,15 +144,17 @@ describe("ProjectToolbarResetRow", () => {
     expect(reset()?.textContent).toContain(
       "Clears which items Repo shows or moves into …, the plugin buttons it adds and whether it uses its own toolbar"
     );
-    fireEvent.click(screen.getByRole("button", { name: "Reset this project's toolbar" }));
+    fireEvent.click(resetButton());
     expect(resetToolbar).not.toHaveBeenCalled();
     const dialog = screen.getByRole("alertdialog");
     expect(dialog.textContent).toContain("Reset Repo's toolbar?");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(resetToolbar).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Reset this project's toolbar" }));
-    fireEvent.click(screen.getByRole("button", { name: "Reset toolbar" }));
+    fireEvent.click(resetButton());
+    fireEvent.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", { name: "Reset project toolbar" })
+    );
     expect(resetToolbar).toHaveBeenCalledOnce();
     expect(resetAppWide).not.toHaveBeenCalled();
   });
