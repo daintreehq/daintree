@@ -155,7 +155,11 @@ import {
   outsideWriteChange,
   takeLandedCorrection,
 } from "@/services/voiceCorrectionLanding";
-import { takeScratchLanded } from "@/services/voiceScratchCommand";
+import {
+  SCRATCH_REFUSAL_CAPTION,
+  SCRATCH_REFUSAL_STATUS,
+  takeScratchLanded,
+} from "@/services/voiceScratchCommand";
 import { registerComposerSelectionSource } from "@/services/voiceRewriteSelection";
 import type { VoiceDraftSend } from "@/services/voiceDraftSend";
 import {
@@ -1390,12 +1394,23 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       ? SPOKEN_SEND_TOO_SHORT_STATUS
       : SEND_HELD_STATUS;
     const showSendRefusedCaption = isSendRefused && !isVoiceSubmitting && !isVoiceSubmitPresenting;
+    // A "scratch that" that removed nothing (#14973), on an empty draft too:
+    // the placeholder doesn't say it.
+    const scratchRefusal = useVoiceRecordingStore((s) =>
+      s.scratchRefusal?.panelId === voiceId ? s.scratchRefusal : null
+    );
+    const showScratchRefusalCaption =
+      scratchRefusal !== null &&
+      !isVoiceSubmitting &&
+      !isVoiceSubmitPresenting &&
+      !showSendRefusedCaption;
     const showVoiceSessionCaption =
       voiceSessionStatus !== null &&
       (value.length > 0 || hasVoicePreview) &&
       !isVoiceSubmitting &&
       !isVoiceSubmitPresenting &&
-      !showSendRefusedCaption;
+      !showSendRefusedCaption &&
+      !showScratchRefusalCaption;
 
     const voiceSlotRef = useRef<HTMLSpanElement>(null);
     const voiceSlotFocusedRef = useRef(false);
@@ -1434,6 +1449,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       ) : isSendRefused ? (
         <span aria-hidden="true" className="ml-auto mr-3 text-xs text-text-secondary">
           {sendRefusedCaption}
+        </span>
+      ) : scratchRefusal ? (
+        <span aria-hidden="true" className="ml-auto mr-3 text-xs text-text-secondary">
+          {SCRATCH_REFUSAL_CAPTION[scratchRefusal.reason]}
         </span>
       ) : null;
 
@@ -1989,7 +2008,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             that says this for every other composer goes unheard. */}
         {voiceTarget && (
           <div role="status" aria-live="polite" className="sr-only">
-            {dictationCancelConfirm ? DICTATION_CANCEL_CONFIRM_PROMPT : ""}
+            {dictationCancelConfirm
+              ? DICTATION_CANCEL_CONFIRM_PROMPT
+              : scratchRefusal
+                ? // A second refusal saying the same is still a change to read.
+                  `${SCRATCH_REFUSAL_STATUS[scratchRefusal.reason]}${scratchRefusal.id % 2 ? "" : "\u200b"}`
+                : ""}
           </div>
         )}
         <div className="flex items-end gap-2">
@@ -2071,6 +2095,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 className={COMPOSER_BORDER_CAPTION_CLASS}
               >
                 {sendRefusedCaption}
+              </div>
+            )}
+            {showScratchRefusalCaption && (
+              <div
+                aria-hidden="true"
+                data-scratch-refused-caption=""
+                className={COMPOSER_BORDER_CAPTION_CLASS}
+              >
+                {SCRATCH_REFUSAL_CAPTION[scratchRefusal.reason]}
               </div>
             )}
             <AutocompleteMenu
