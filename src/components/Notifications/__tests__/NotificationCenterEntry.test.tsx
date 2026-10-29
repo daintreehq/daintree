@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 import { render as rtlRender, screen, act, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
+import {
+  useNotificationHistoryStore,
+  type NotificationHistoryEntry,
+} from "@/store/slices/notificationHistorySlice";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import { NotificationCenterEntry, formatSnoozeWake } from "../NotificationCenterEntry";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
@@ -1121,6 +1124,25 @@ describe("NotificationCenterEntry — go to source", () => {
     });
     const focusCalls = dispatchMock.mock.calls.filter(([id]) => id === "panel.focus");
     expect(focusCalls).toEqual([["panel.focus", { panelId: "pane-42" }]]);
+  });
+
+  it("marks the entry read once Go to source arrives", async () => {
+    seedPanel("pane-42", "grid");
+    const entry = makeEntry({
+      id: "unread-1",
+      seenAsToast: false,
+      context: { panelId: "pane-42" },
+    });
+    useNotificationHistoryStore.setState({ entries: [entry], unreadCount: 1 });
+    render(<NotificationCenterEntry entry={entry} />);
+    await openMenu();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Go to source"));
+    });
+    await waitFor(() => {
+      expect(useUIStore.getState().notificationCenterOpen).toBe(false);
+    });
+    expect(useNotificationHistoryStore.getState().entries[0]!.seenAsToast).toBe(true);
   });
 
   it("makes a row whose panel is gone inert, readable, and says so", async () => {

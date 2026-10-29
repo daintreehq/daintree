@@ -224,6 +224,21 @@ describe("goToNotificationSource", () => {
       expect(readIds().sort()).toEqual(["e1", "e2"]);
     });
 
+    it("waits for arrival before marking read or closing", async () => {
+      seedPanels({ "pane-1": { location: "grid", worktreeId: "wt-1" } });
+      seed([entry("e1")]);
+      let resolveFocus!: (value: { ok: boolean }) => void;
+      dispatchMock.mockReturnValueOnce(new Promise((resolve) => (resolveFocus = resolve)));
+      const pending = goToNotificationSource({ panelId: "pane-1" }, "e1");
+      await Promise.resolve();
+      expect(readIds()).toEqual([]);
+      expect(useUIStore.getState().notificationCenterOpen).toBe(true);
+      resolveFocus({ ok: true });
+      await pending;
+      expect(readIds()).toEqual(["e1"]);
+      expect(useUIStore.getState().notificationCenterOpen).toBe(false);
+    });
+
     it("leaves the entry unread when navigation fails", async () => {
       seedPanels({ "pane-1": { location: "grid", worktreeId: "wt-1" } });
       seed([entry("e1")]);
