@@ -1,4 +1,12 @@
-import { useEffect, useRef, useState, useCallback, useMemo, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useCallback,
+  useMemo,
+  type ReactNode,
+} from "react";
 import { DiffStat } from "@/components/ui/DiffStat";
 import { GitCompare, ChevronLeft, ChevronRight, Folder, RefreshCw, WrapText } from "lucide-react";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -335,7 +343,8 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
     [leftPath, leftBranch, rightBranch, ignoreWhitespace]
   );
 
-  useEffect(() => {
+  // Layout, not passive: a response can land between commit and passive effects.
+  useLayoutEffect(() => {
     selectedFileRef.current = selectedFile;
     fileDiffRef.current = fileDiff;
   }, [selectedFile, fileDiff]);
