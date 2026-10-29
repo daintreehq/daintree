@@ -1,3 +1,4 @@
+// eager-import-allow: stats the launched bundle synchronously at boot, before anything can replace it
 /**
  * Whether the app bundle on disk is still the one this process was launched
  * from (#14937). Replacing `/Applications/Daintree.app` under a running
@@ -100,14 +101,15 @@ export function isAppBundleReplaced(): boolean {
 }
 
 /**
- * A restart for a replaced bundle is only worth starting when there is one to
- * come back up as: mid-swap, or with the app moved to the Trash, the relaunch
- * would quit Daintree and start nothing.
+ * Whether a restart has a whole bundle to come back up as. Mid-swap, after an
+ * interrupted copy, or with the app moved to the Trash, a relaunch would quit
+ * Daintree and start nothing.
  */
-export function canRelaunchReplacedApp(): boolean {
-  if (!baseline || !isAppBundleReplaced()) return false;
+export function isAppBundleLaunchable(): boolean {
+  if (!baseline) return false;
+  const { files, statSync } = baseline;
   try {
-    return baseline.statSync(baseline.files[0]!.path, { bigint: true }).isFile();
+    return files.every((file) => statSync(file.path, { bigint: true }).isFile());
   } catch {
     return false;
   }

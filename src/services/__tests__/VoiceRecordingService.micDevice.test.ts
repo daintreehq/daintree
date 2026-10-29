@@ -952,28 +952,78 @@ describe("VoiceRecordingService — silent mic (#14606)", () => {
       const { service } = await load();
       await service.start(TARGET);
       harness.status.emit("recording");
+      sendChunk(harness.workletNodes[0]!, 0);
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(harness.voiceInput.isAppReplaced).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(harness.voiceInput.isAppReplaced).toHaveBeenCalledTimes(1);
+    });
+
+    it("never asks about a mic that is delivering audio", async () => {
+      const harness = setupGlobals({ tracks: [AIRPODS] });
+      const { service } = await load();
+      await service.start(TARGET);
+      harness.status.emit("recording");
       sendChunk(harness.workletNodes[0]!, 3000);
       await vi.advanceTimersByTimeAsync(3_000);
 
       expect(harness.voiceInput.isAppReplaced).not.toHaveBeenCalled();
     });
 
+    it("offers the restart without waiting on the device list", async () => {
+      const yeti = { label: "Blue Yeti", deviceId: "yeti" };
+      const harness = setupGlobals({ tracks: [yeti] });
+      harness.enumerateDevices.mockImplementation(() => new Promise(() => {}));
+      harness.voiceInput.isAppReplaced.mockResolvedValue(true);
+      const { store, service } = await load();
+      await service.start(TARGET);
+      harness.status.emit("recording");
+      await vi.advanceTimersByTimeAsync(3_000);
+
+      expect(store.getState().micNotice).toMatchObject({ kind: "silent", appReplaced: true });
+    });
+
+    function deferAnswer() {
+      const pending: { answer: (replaced: boolean) => void } = { answer: () => {} };
+      const ask = () =>
+        new Promise<boolean>((resolve) => {
+          pending.answer = resolve;
+        });
+      return { pending, ask };
+    }
+
     it("drops the answer when the mic came alive while it was asked", async () => {
-      let answer: (replaced: boolean) => void = () => {};
-      const { store, harness } = await startSilentInReplacedApp(
-        () =>
-          new Promise<boolean>((resolve) => {
-            answer = resolve;
-          })
-      );
+      const { pending, ask } = deferAnswer();
+      const { store, harness } = await startSilentInReplacedApp(ask);
       expect(store.getState().micSignal).toBe("silent");
+      expect(harness.voiceInput.isAppReplaced).toHaveBeenCalledTimes(1);
 
       sendChunk(harness.workletNodes[0]!, 3000);
-      answer(true);
+      pending.answer(true);
       await vi.advanceTimersByTimeAsync(0);
 
       expect(store.getState().micSignal).toBe("live");
       expect(store.getState().micNotice).toBeNull();
+    });
+
+    it("says nothing of a restart once dictation has begun stopping", async () => {
+      const { pending, ask } = deferAnswer();
+      const { store, service, harness } = await startSilentInReplacedApp(ask);
+      expect(harness.voiceInput.isAppReplaced).toHaveBeenCalledTimes(1);
+      // The worklet never answers the stop's flush, holding the drain open.
+      harness.workletNodes[0]!.port.postMessage = vi.fn();
+      void service.stop();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.getState().status).toBe("finishing");
+
+      pending.answer(true);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(store.getState().micNotice).toBeNull();
+      expect(store.getState().announcement?.text).not.toBe(
+        "Daintree was updated while running and needs a restart."
+      );
     });
   });
 

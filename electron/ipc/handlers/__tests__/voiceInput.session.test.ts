@@ -193,11 +193,11 @@ vi.mock("../../../services/menuAccelerators.js", () => ({
   isDictationKey: vi.fn((input: { key: string }) => input.key === "."),
 }));
 
-const bundle = vi.hoisted(() => ({ replaced: false, canRelaunch: false }));
+const bundle = vi.hoisted(() => ({ replaced: false, launchable: false }));
 
 vi.mock("../../../lifecycle/appBundleIdentity.js", () => ({
   isAppBundleReplaced: vi.fn(() => bundle.replaced),
-  canRelaunchReplacedApp: vi.fn(() => bundle.canRelaunch),
+  isAppBundleLaunchable: vi.fn(() => bundle.launchable),
 }));
 
 vi.mock("../../../lifecycle/appRelaunch.js", () => ({ relaunchApp: vi.fn() }));
@@ -2332,7 +2332,7 @@ describe("voiceInput — an app bundle replaced under it (#14937)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     bundle.replaced = false;
-    bundle.canRelaunch = false;
+    bundle.launchable = false;
     cleanup = registerVoiceInputHandlers({
       mainWindow: { webContents: { send: vi.fn() }, isDestroyed: () => false },
     } as unknown as Parameters<typeof registerVoiceInputHandlers>[0]);
@@ -2352,7 +2352,7 @@ describe("voiceInput — an app bundle replaced under it (#14937)", () => {
 
   it("restarts into the new bundle, keeping the session", async () => {
     bundle.replaced = true;
-    bundle.canRelaunch = true;
+    bundle.launchable = true;
 
     expect(
       await getHandler(CHANNELS.VOICE_INPUT_RESTART_REPLACED_APP)({ sender: makeSender() })

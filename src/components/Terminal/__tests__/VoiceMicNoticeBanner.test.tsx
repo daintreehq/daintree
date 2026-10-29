@@ -147,8 +147,8 @@ describe("VoiceMicNoticeBanner", () => {
     };
 
     // The dialog portals out of the render container; the banner's button stays in it.
-    function bannerRestart(container: HTMLElement): HTMLButtonElement {
-      return within(container).getByRole("button", { name: "Restart Daintree" });
+    function bannerRestart(container: HTMLElement, name = "Restart Daintree"): HTMLButtonElement {
+      return within(container).getByRole("button", { name });
     }
 
     async function confirmRestart(container: HTMLElement) {
@@ -182,18 +182,54 @@ describe("VoiceMicNoticeBanner", () => {
       expect(mocks.dispatch).not.toHaveBeenCalled();
     });
 
-    it.each([
-      ["refuses it", () => mocks.restartReplacedApp.mockResolvedValue(false)],
-      ["fails", () => mocks.restartReplacedApp.mockRejectedValue(new Error("ipc down"))],
-    ])("says how to restart by hand when main %s", async (_case, arrange) => {
-      arrange();
+    it("asks main once however often the restart is confirmed while it runs", async () => {
+      let settle: (restarted: boolean) => void = () => {};
+      mocks.restartReplacedApp.mockImplementation(
+        () =>
+          new Promise<boolean>((resolve) => {
+            settle = resolve;
+          })
+      );
+      const { container } = renderNotice(REPLACED);
+
+      await confirmRestart(container);
+      const dialog = screen.getByRole("alertdialog");
+      fireEvent.click(within(dialog).getByRole("button", { name: "Restart Daintree" }));
+
+      expect(mocks.restartReplacedApp).toHaveBeenCalledTimes(1);
+      expect(bannerRestart(container).getAttribute("aria-disabled")).toBe("true");
+      await act(async () => settle(true));
+    });
+
+    it("says the update isn't installed yet when main has no whole app to restart into", async () => {
+      mocks.restartReplacedApp.mockResolvedValueOnce(false);
+      const { container } = renderNotice(REPLACED);
+
+      await confirmRestart(container);
+
+      expect(text()).toContain("Couldn't restart: the updated app isn't fully installed yet");
+      expect(text()).not.toContain("Quit and reopen");
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      const retry = bannerRestart(container, "Retry");
+      expect(retry.getAttribute("aria-disabled")).toBeNull();
+
+      await act(async () => {
+        fireEvent.click(retry);
+      });
+
+      // Confirmed once already: the retry goes straight to main.
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(mocks.restartReplacedApp).toHaveBeenCalledTimes(2);
+    });
+
+    it("says how to restart by hand when the restart can't be asked for", async () => {
+      mocks.restartReplacedApp.mockRejectedValueOnce(new Error("ipc down"));
       const { container } = renderNotice(REPLACED);
 
       await confirmRestart(container);
 
       expect(text()).toContain("Couldn't restart from here. Quit and reopen Daintree");
-      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
-      expect(bannerRestart(container).disabled).toBe(false);
+      expect(bannerRestart(container, "Retry").getAttribute("aria-disabled")).toBeNull();
     });
   });
 

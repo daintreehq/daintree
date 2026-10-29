@@ -28,11 +28,17 @@ type SharedBannerProps = {
   closeAriaLabel: string;
 };
 
+const RESTART_FAILURE_COPY = {
+  // Main found no whole app on disk to come back up as: an install still copying, or undone.
+  incomplete: "Couldn't restart: the updated app isn't fully installed yet",
+  error: "Couldn't restart from here. Quit and reopen Daintree",
+} as const;
+
 /**
  * A silent mic in an app whose bundle was replaced while it ran (#14937):
  * macOS feeds the old process zeros, so no mic or setting helps and a restart
  * does. The restart keeps the session, but closes terminals and interrupts
- * agents mid-task, so it is confirmed first.
+ * agents mid-task, so it is confirmed first; a retry after a failed one isn't.
  */
 function AppReplacedMicNotice({
   deviceLabel,
@@ -43,25 +49,28 @@ function AppReplacedMicNotice({
 }) {
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [isRestarting, setIsRestarting] = useState(false);
-  const [restartFailed, setRestartFailed] = useState(false);
+  const [failure, setFailure] = useState<keyof typeof RESTART_FAILURE_COPY | null>(null);
   const restartingRef = useRef(false);
 
   const restart = async () => {
     if (restartingRef.current) return;
     restartingRef.current = true;
     setIsRestarting(true);
-    let restarted = false;
+    let outcome: "restarting" | keyof typeof RESTART_FAILURE_COPY;
     try {
-      restarted = await window.electron.voiceInput.restartReplacedApp();
+      outcome = (await window.electron.voiceInput.restartReplacedApp())
+        ? "restarting"
+        : "incomplete";
     } catch (err) {
       logError("Failed to restart Daintree after it was updated", err);
+      outcome = "error";
     }
     // Daintree is on its way down; the banner goes with it.
-    if (restarted) return;
+    if (outcome === "restarting") return;
     restartingRef.current = false;
     setIsRestarting(false);
     setIsConfirmOpen(false);
-    setRestartFailed(true);
+    setFailure(outcome);
   };
 
   return (
@@ -71,16 +80,16 @@ function AppReplacedMicNotice({
         severity="warning"
         title={`No audio from ${deviceLabel ?? "the microphone"}`}
         description={
-          restartFailed
-            ? "Couldn't restart from here. Quit and reopen Daintree"
+          failure
+            ? RESTART_FAILURE_COPY[failure]
             : "Daintree was updated while running and needs a restart"
         }
         action={{
           id: "restart-daintree",
-          label: "Restart Daintree",
+          label: failure ? "Retry" : "Restart Daintree",
           variant: "primary",
           loading: isRestarting,
-          onClick: () => setIsConfirmOpen(true),
+          onClick: () => (failure ? void restart() : setIsConfirmOpen(true)),
         }}
       />
       <ConfirmDialog

@@ -5412,48 +5412,47 @@ class VoiceRecordingService {
    * Shows the silent-mic warning in the pane, offering the built-in mic when
    * there is one other than the silent mic. When the app's bundle was replaced
    * since launch (#14937), the warning offers a restart instead: macOS denies
-   * the mic to the old process, so every mic is as silent as this one. Both
-   * answers are dropped if the session moved on, or the mic came alive, while
-   * they were read.
+   * the mic to the old process, so every mic is as silent as this one. Each
+   * answer is dropped if the session moved on, began stopping, or the mic came
+   * alive while it was read.
    */
   private async raiseSilentMicNotice(generation: number): Promise<void> {
     const capture = this.sessionCapture;
     const target = useVoiceRecordingStore.getState().activeTarget;
     if (!capture || !target) return;
     const { deviceId, deviceLabel } = capture;
-    const [builtIn, appReplaced] = await Promise.all([
-      this.findOtherBuiltInMic(deviceId, deviceLabel),
-      this.isAppReplaced(),
-    ]);
-    const state = useVoiceRecordingStore.getState();
-    if (
+    const isStale = (state: ReturnType<typeof useVoiceRecordingStore.getState>) =>
       this.generation !== generation ||
       this.sessionCapture !== capture ||
+      this.stopPromise !== null ||
+      state.status === "finishing" ||
       state.micSignal !== "silent" ||
-      state.micNotice?.kind === "lost"
-    ) {
-      return;
-    }
-    if (appReplaced) {
+      state.micNotice?.kind === "lost";
+    const bluetooth = isBluetoothMicLabel(deviceLabel);
+    // Listed alongside the bundle check, but only waited on when the mic
+    // advice is the answer.
+    const builtInMic = this.findOtherBuiltInMic(deviceId, deviceLabel);
+
+    if (await this.isAppReplaced()) {
+      const state = useVoiceRecordingStore.getState();
+      if (isStale(state)) return;
       logWarn(`${LOG_PREFIX} Silent microphone after the app bundle was replaced`);
       state.setMicNotice({
         kind: "silent",
         target,
         deviceLabel,
-        bluetooth: isBluetoothMicLabel(deviceLabel),
+        bluetooth,
         builtIn: null,
         appReplaced: true,
       });
       state.announce("Daintree was updated while running and needs a restart.");
       return;
     }
-    state.setMicNotice({
-      kind: "silent",
-      target,
-      deviceLabel,
-      bluetooth: isBluetoothMicLabel(deviceLabel),
-      builtIn,
-    });
+
+    const builtIn = await builtInMic;
+    const state = useVoiceRecordingStore.getState();
+    if (isStale(state)) return;
+    state.setMicNotice({ kind: "silent", target, deviceLabel, bluetooth, builtIn });
   }
 
   private async findOtherBuiltInMic(
