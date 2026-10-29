@@ -544,9 +544,9 @@ describe("PluginSettingsForm", () => {
 
     fireEvent.change(input, { target: { value: "sk-second" } });
     expect(input.type).toBe("password");
-    expect(
-      screen.getByRole("button", { name: "Show Token" }).getAttribute("aria-pressed")
-    ).toBe("false");
+    expect(screen.getByRole("button", { name: "Show Token" }).getAttribute("aria-pressed")).toBe(
+      "false"
+    );
   });
 
   it("lets Tab reach the eye to check a typed secret before it saves", async () => {
