@@ -258,6 +258,11 @@ describe("getThemeContrastWarnings", () => {
       "status-warning": "#000000" as AppColorSchemeTokens["status-warning"],
       "status-danger": "#000000" as AppColorSchemeTokens["status-danger"],
       "status-info": "#000000" as AppColorSchemeTokens["status-info"],
+      // Their text twins, which a hand-built scheme does not re-derive.
+      "status-success-text": "#000000" as AppColorSchemeTokens["status-success-text"],
+      "status-warning-text": "#000000" as AppColorSchemeTokens["status-warning-text"],
+      "status-danger-text": "#000000" as AppColorSchemeTokens["status-danger-text"],
+      "status-info-text": "#000000" as AppColorSchemeTokens["status-info-text"],
       // The destructive button paints this on a status-danger fill; white keeps it clear.
       "text-inverse": "#ffffff" as AppColorSchemeTokens["text-inverse"],
       "surface-panel": "#ffffff" as AppColorSchemeTokens["surface-panel"],

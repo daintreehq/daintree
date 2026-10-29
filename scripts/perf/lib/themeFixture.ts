@@ -30,6 +30,7 @@ import {
   BLUE_YELLOW_OVERRIDES,
   ALL_CVD_TOKENS,
 } from "../../../src/theme/applyAppTheme";
+import { deriveColorVisionStatusTextInks } from "../../../shared/theme/colorVisionOverrides.js";
 import { parseAppThemeContent } from "../../../electron/utils/appThemeImporter";
 import { AGENT_REGISTRY } from "../../../shared/config/agentRegistry";
 import { BRAND_MARK_SURFACES, resolveBrandMarkInk } from "../../../src/lib/brandIcon";
@@ -813,10 +814,16 @@ export function runThemeSwitchChain(stand: RootStandIn, grade: boolean): SwitchP
 
   const last = BUILT_IN_APP_SCHEMES[BUILT_IN_APP_SCHEMES.length - 1]!;
   const base = getAppThemeCssVariables(last);
-  for (const [mode, overrides] of [
+  for (const [mode, staticOverrides] of [
     ["red-green", RED_GREEN_OVERRIDES],
     ["blue-yellow", BLUE_YELLOW_OVERRIDES],
   ] as const) {
+    // A mode also writes the text inks it re-derives from its own hues against
+    // the active theme, so those count as overridden, not as tokens to restore.
+    const overrides = {
+      ...staticOverrides,
+      ...deriveColorVisionStatusTextInks(staticOverrides, last.tokens),
+    };
     applyColorVisionMode(stand.root, mode, last);
     cvdOverridden += Object.keys(overrides).length;
     if (!grade) continue;

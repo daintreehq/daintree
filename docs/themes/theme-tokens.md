@@ -136,6 +136,12 @@ Fixed hue families across all themes. Each theme tunes brightness/saturation.
 | `status-warning-surface` | Wash for caution banners/pills | Derived: same rule |
 | `status-danger-surface` | Validation wash for invalid fields | Derived: same rule |
 | `status-info-surface` | Wash for informational banners/pills | Derived: same rule |
+| `status-success-text` | Text-grade success ink for small status text such as git status letters | Derived: `success` moved toward `text-primary` until it clears 4.5:1 on every display surface, under the hover and selection fills, and on its own 15% wash |
+| `status-warning-text` | Text-grade caution ink | Derived: same rule |
+| `status-danger-text` | Text-grade error ink | Derived: same rule |
+| `status-info-text` | Text-grade informational ink | Derived: same rule |
+
+The plain status inks are graphical colours held to 3:1 for dots, icons and borders; painted as small text they fall under AA on most themes, which is what the four `*-text` inks are for. A theme that names one keeps it, and the contrast gate reports it if it falls short. Colour-vision modes re-derive them from the hues they swap in.
 
 The four `*-surface` washes are built with `withAlpha` (plain `rgba` for a hex input) rather than `color-mix(…, transparent)` — the `color-mix` form black-shifts on light backgrounds in oklab under Chromium.
 
