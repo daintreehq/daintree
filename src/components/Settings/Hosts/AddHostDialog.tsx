@@ -1,19 +1,11 @@
-import {
-  useEffect,
-  useEffectEvent,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type ReactNode,
-} from "react";
-import { Check } from "lucide-react";
+import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
+import { Check, CircleCheck } from "lucide-react";
 import { AppDialog, type DialogAction } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
-import { Callout } from "@/components/ui/Callout";
+import { Callout, type CalloutSeverity } from "@/components/ui/Callout";
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { ProgressBar } from "@/components/ui/ProgressBar";
-import { SearchField } from "@/components/ui/SearchField";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/utils";
@@ -54,6 +46,9 @@ import type {
   InstallHostResult,
   LinuxPackagePreference,
 } from "@shared/types/ipc/remoteHosts";
+import { AddHostDiscovery } from "./AddHostDiscovery";
+import { AddHostNotes } from "./AddHostNotes";
+import { WizardFooterActions, WizardStepBar, type WizardStepView } from "./AddHostWizardChrome";
 import { HostCommand } from "./HostCommand";
 import { SshRefusalHelp } from "./SshRefusalHelp";
 import {
@@ -83,12 +78,13 @@ import {
 
 type Step = "discover" | "check" | "install" | "enable" | "advise" | "done";
 
+/** Named for what each step does to the machine; the last is where this machine connects to it. */
 const STEPS: Array<{ id: Step; label: string }> = [
   { id: "discover", label: "Find" },
   { id: "check", label: "Check" },
   { id: "install", label: "Install" },
-  { id: "enable", label: "Enable" },
-  { id: "advise", label: "Advise" },
+  { id: "enable", label: "Host mode" },
+  { id: "advise", label: "Connect" },
 ];
 
 /**
@@ -114,19 +110,6 @@ function matchesQuery(host: DiscoveredHost, needle: string): boolean {
     host.name.toLowerCase().includes(needle) ||
     formatHostConnection(host.connection).toLowerCase().includes(needle)
   );
-}
-
-const SOURCE_LABEL: Record<DiscoveredHost["source"], string> = {
-  tailscale: "Tailnet",
-  netbird: "NetBird",
-  bonjour: "Local network",
-  manual: "Entered",
-  wsl: "WSL",
-};
-
-function sourceLabel(host: DiscoveredHost): string {
-  const label = SOURCE_LABEL[host.source];
-  return host.netbirdStatus ? `${label} · ${host.netbirdStatus}` : label;
 }
 
 /** What the dialog's one field holds for a connection: an ssh target, or a WSL distro. */
@@ -160,23 +143,58 @@ interface AddHostDialogProps {
   } | null;
 }
 
-function StepBar({ current }: { current: Step }) {
-  const index = STEPS.findIndex((s) => s.id === current);
+/**
+ * Where setup stands: what ran, what it passed over and why, and what's left.
+ * Install and Host mode are passed over once the check shows nothing to do,
+ * and say so the moment it does, so neither ever reads as having run.
+ */
+function stepViews({
+  current,
+  probe,
+  installRan,
+  hostModeTurnedOn,
+}: {
+  current: Step;
+  probe: HostProbeResult | null;
+  installRan: boolean;
+  hostModeTurnedOn: boolean;
+}): WizardStepView[] {
+  const at = STEPS.findIndex((s) => s.id === current);
+  // Only a check of this target speaks for it; back on Find there is none yet.
+  const seen = at > 0 ? probe : null;
+  return STEPS.map((step, index): WizardStepView => {
+    const base = { id: step.id, label: step.label };
+    if (index === at) return { ...base, state: "current" };
+    // What ran stays done, whichever step Back has returned to.
+    if (step.id === "install") {
+      if (installRan) return { ...base, state: "done" };
+      if (seen?.reachable && seen.matchesClient === true) {
+        return { ...base, state: "skipped", note: "Not needed" };
+      }
+      if (index < at) return { ...base, state: "skipped", note: "Skipped" };
+    }
+    if (step.id === "enable") {
+      if (hostModeTurnedOn) return { ...base, state: "done" };
+      if (hostModeSwitchedOn(seen)) return { ...base, state: "skipped", note: "Already on" };
+    }
+    return { ...base, state: index < at ? "done" : "upcoming" };
+  });
+}
+
+/** An outcome screen's lead: the state setup ended in, marked by its severity. */
+function Outcome({
+  severity,
+  title,
+  children,
+}: {
+  severity: CalloutSeverity;
+  title: string;
+  children?: ReactNode;
+}) {
   return (
-    <ol className="mb-4 flex items-center gap-3 text-xs" aria-label="Steps">
-      {STEPS.map((step, i) => (
-        <li
-          key={step.id}
-          aria-current={i === index ? "step" : undefined}
-          className={cn(
-            i === index ? "font-medium text-text-primary" : "text-text-secondary",
-            i > index && "opacity-70"
-          )}
-        >
-          {i + 1}. {step.label}
-        </li>
-      ))}
-    </ol>
+    <Callout severity={severity} title={title} role="status" className="text-sm">
+      {children && <div className="space-y-2 text-sm [text-wrap:pretty]">{children}</div>}
+    </Callout>
   );
 }
 
@@ -457,6 +475,8 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   // What this dialog adds or updates.
   const connectionFor = () => makeConnection(target.trim());
   const [name, setName] = useState(existing?.name ?? "");
+  /** The user typed a name: a target typed or picked after that no longer renames the host. */
+  const [nameEdited, setNameEdited] = useState(existing !== null);
   const [probe, setProbe] = useState<HostProbeResult | null>(null);
   const [plan, setPlan] = useState<HostInstallPlan | null>(null);
   // The AppImage is the Linux build the release feed publishes a checksum for.
@@ -490,6 +510,15 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   /** Enable was skipped: setup ends saved but not connected. */
   const [skipped, setSkipped] = useState(false);
+  /** Host mode was switched on from this dialog, rather than found on already. */
+  const [hostModeTurnedOn, setHostModeTurnedOn] = useState(false);
+  /** Dialling the saved host: nothing changes there, so the dialog can close meanwhile. */
+  const [connecting, setConnecting] = useState(false);
+  /** A scan running after the first, keeping what it found until the new one lands. */
+  const [rescanning, setRescanning] = useState(false);
+  /** The target this dialog installed Daintree on: a recheck of it doesn't undo that. */
+  const [installedOn, setInstalledOn] = useState<string | null>(null);
+  const installRan = installedOn !== null && installedOn === target.trim();
   const install = useRemoteHostsStore((s) => (opId ? (s.installs[opId] ?? null) : null));
   // The package choice is disabled while it re-plans, which drops focus; it's
   // handed back to the chosen package once the plan settles.
@@ -499,6 +528,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   const knownHosts = useRemoteHostsStore((s) => s.hosts);
   const discovering = !existing && discovered === null && discoverError === null;
   const showDiscovering = useDeferredLoading(discovering, UI_DOHERTY_THRESHOLD);
+  const showConnecting = useDeferredLoading(connecting, UI_DOHERTY_THRESHOLD);
   // An existing host's first check, before there is anything to show.
   const checking = step === "check" && probe === null && busy;
   const showChecking = useDeferredLoading(checking, UI_DOHERTY_THRESHOLD);
@@ -511,10 +541,14 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     let live = true;
     remoteHostsClient.discover().then(
       (found) => {
-        if (live) setDiscovered(sortDiscovered(found));
+        if (!live) return;
+        setDiscovered(sortDiscovered(found));
+        setRescanning(false);
       },
       (err: unknown) => {
-        if (live) setDiscoverError(clientErrorText(err, "Discovery failed"));
+        if (!live) return;
+        setDiscoverError(clientErrorText(err, "Discovery failed"));
+        setRescanning(false);
       }
     );
     return () => {
@@ -597,6 +631,33 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     setDiscoverAttempt((n) => n + 1);
   };
 
+  /** Look again, keeping what's listed, typed and filtered until the new scan lands. */
+  const rescan = () => {
+    setDiscoverError(null);
+    setRescanning(true);
+    setDiscoverAttempt((n) => n + 1);
+  };
+
+  /** Another target: what was checked, installed or switched on spoke for the last one. */
+  const retarget = (address: string) => {
+    setTarget(address);
+    if (probe && sshTargetOf(probe.connection) !== address.trim()) {
+      setProbe(null);
+      setPlan(null);
+      setInstallResult(null);
+      setHostModeTurnedOn(false);
+      setLingerRefused(null);
+    }
+    if (installedOn !== null && installedOn !== address.trim()) setInstalledOn(null);
+  };
+
+  /** A target typed or picked names the host too, until the user names it themselves. */
+  const nameFromTarget = (address: string, suggested?: string) => {
+    if (nameEdited) return;
+    const trimmed = address.trim();
+    setName(suggested ?? (trimmed ? defaultHostName(trimmed) : ""));
+  };
+
   const hostLabel =
     existing?.name ?? saved?.name ?? (name.trim() || defaultHostName(target.trim()));
   const savedHost: SavedHost | null = existing
@@ -662,21 +723,29 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   };
 
   /**
-   * On to Enable; a host already switched on there is saved now. An existing
-   * host with Host mode on for good has nothing left to set up, so it ends on
-   * what the update did.
+   * On to Host mode, or past it when it's on there for good: an existing host
+   * then ends on what the update did, and a new one goes on to Connect, saved
+   * now.
    */
   const toEnable = (seen: HostProbeResult | null) => {
-    if (existing && hostModeSwitchedOn(seen)) {
+    if (!hostModeSwitchedOn(seen)) {
+      setStep("enable");
+      return;
+    }
+    if (existing) {
       setStep("done");
       return;
     }
-    setStep("enable");
-    if (hostModeSwitchedOn(seen)) run(save, () => {});
+    // Adding: Host mode is on there for good, so Connect is next and the host is saved now.
+    setStep("advise");
+    run(save, () => {});
   };
 
   const check = (nextTarget?: string) => {
-    if (nextTarget !== undefined) setTarget(nextTarget);
+    if (nextTarget !== undefined) {
+      setTarget(nextTarget);
+      nameFromTarget(nextTarget);
+    }
     // Asked from past the check (a failed or stopped run, a command handed
     // over): the screen becomes the check, not the run it came from.
     if (step === "install" || step === "done") {
@@ -763,6 +832,9 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       (result) => {
         setInstalling(false);
         setInstallResult(result);
+        if (result.status === "installed" || result.status === "staged-applied") {
+          setInstalledOn(target.trim());
+        }
         if (
           result.status === "installed" ||
           result.status === "up-to-date" ||
@@ -825,15 +897,33 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         setLingerRefused(result.lingerRefused);
         // Host mode is on there now: the host is saved before anything else can
         // go wrong. A failed save is its own error, never a reason to switch it on again.
-        if (hostModeSwitchedOn(result.probe)) run(save, () => {});
+        if (hostModeSwitchedOn(result.probe)) {
+          setHostModeTurnedOn(true);
+          setStep("advise");
+          run(save, () => {});
+        }
       }
     );
 
+  /** Setup ends here, saved but not connected: nothing after Host mode applies without it. */
+  const skipHostMode = () => {
+    setSkipped(true);
+    run(save, () => setOutcome("skipped"));
+  };
+
   /** Connect and end on what the link reported, not on the dial having started. */
-  const connectSaved = (host: SavedHost) =>
+  const connectSaved = (host: SavedHost) => {
+    setOutcome(null);
+    setConnecting(true);
     run(
-      () => remoteHostsClient.connectAndSettle(host.hostId),
+      () =>
+        remoteHostsClient.connectAndSettle(host.hostId).catch((err: unknown) => {
+          setConnecting(false);
+          throw err;
+        }),
       (state) => {
+        // With the outcome, in one render: the Connect page never flashes back between them.
+        setConnecting(false);
         if (!isUsable(state)) {
           setOutcome(state);
           return;
@@ -844,6 +934,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         if (takeFirstConnect(host.hostId)) requestHostCopySettings(host.hostId);
       }
     );
+  };
 
   const finish = () => {
     if (existing) {
@@ -863,7 +954,9 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   const installRunning = installing && step === "install";
   // Work that changes the host settles with the dialog in view: closing it left
   // an install or Host mode setup running with nothing to say how it ended.
-  const locked = busy && (step === "install" || step === "enable" || step === "advise");
+  // Dialling changes nothing there: the host stays saved and its status shows in Settings → Hosts.
+  const locked =
+    busy && !connecting && (step === "install" || step === "enable" || step === "advise");
 
   // A restart for a downgrade is named as one, wherever it is confirmed.
   const restartVerb: "Update" | "Downgrade" = !applying && plan?.downgrade ? "Downgrade" : "Update";
@@ -905,8 +998,11 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       ? { label: "Close", onClick: onClose, disabled: locked }
       : { label: "Cancel", onClick: onClose, disabled: locked };
   let leading: DialogAction | undefined;
+  let back: DialogAction | undefined;
   let hint: string | undefined;
   let body: React.ReactNode;
+  // Setup over: the outcome takes the step bar's place.
+  let finished = false;
 
   /**
    * The footer while the host is ahead: "Update this machine" until it's
@@ -960,31 +1056,59 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   let screen: string = step;
   let focusCancel = false;
 
-  if (outcome && savedHost) {
+  if (connecting && savedHost) {
+    body = (
+      <div className="space-y-1" role="status">
+        <p className="flex items-center gap-2 text-sm font-medium text-text-primary">
+          <Spinner size="sm" className={cn(!showConnecting && "invisible")} />
+          Connecting to {savedHost.name}
+        </p>
+        <p className="text-sm [text-wrap:pretty] text-text-secondary">
+          It&apos;s saved in your host list. Closing leaves it connecting, with its status in
+          Settings&nbsp;→&nbsp;Hosts.
+        </p>
+      </div>
+    );
+    primary = undefined;
+    secondary = { label: "Close", onClick: onClose };
+    screen = "connecting";
+    focusCancel = true;
+  } else if (outcome && savedHost) {
+    finished = true;
+    screen = `outcome:${outcome === "skipped" ? outcome : outcome.status}`;
     const close: DialogAction = { label: "Close", onClick: onClose, disabled: busy };
     if (outcome === "skipped") {
       body = (
-        <div className="space-y-2 text-sm">
-          <p className="font-medium text-text-primary">Saved, not connected</p>
-          <p className="text-text-secondary">
-            {savedHost.name} is in your host list. Host mode isn&apos;t on there, so this machine
-            can&apos;t connect yet. Set it up from its details in Settings → Hosts.
+        <Outcome severity="info" title={`${savedHost.name} is saved, not connected`}>
+          <p>
+            Host mode was skipped, so this machine can&apos;t connect to it yet. Turn it on from{" "}
+            {savedHost.name}&apos;s details in Settings&nbsp;→&nbsp;Hosts whenever you&apos;re
+            ready.
           </p>
-        </div>
+        </Outcome>
       );
       primary = { label: "Close", onClick: onClose };
       secondary = undefined;
+      // Changed their mind: nothing past Host mode happened, so it's still there to turn on.
+      back = {
+        label: "Back",
+        onClick: () => {
+          setOutcome(null);
+          setSkipped(false);
+          setStep("enable");
+        },
+      };
     } else if (outcome.status === "unreachable" && outcome.hostModeOff) {
       body = (
-        <div className="space-y-2 text-sm">
-          <p className="font-medium text-text-primary">
-            {savedHost.name} is saved, but Host mode is off there
-          </p>
-          <p className="text-text-secondary">
+        <Outcome
+          severity="warning"
+          title={`${savedHost.name} is saved, but Host mode is off there`}
+        >
+          <p>
             {viaWsl ? "The distribution started" : "SSH reached it"}, and Daintree isn&apos;t
             running in Host mode there. Set it up to connect.
           </p>
-        </div>
+        </Outcome>
       );
       primary = {
         label: "Set up…",
@@ -999,14 +1123,14 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       secondary = close;
     } else if (outcome.status === "version-mismatch") {
       body = (
-        <div className="space-y-2 text-sm">
-          <p className="font-medium text-text-primary">
-            {savedHost.name} is saved, but needs a compatible Daintree build
-          </p>
-          <p className="text-text-secondary">
+        <Outcome
+          severity="warning"
+          title={`${savedHost.name} is saved, but needs a compatible Daintree build`}
+        >
+          <p>
             It runs a different build, so this machine can&apos;t connect until it&apos;s updated.
           </p>
-        </div>
+        </Outcome>
       );
       primary = {
         label: "Update…",
@@ -1020,20 +1144,20 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       secondary = close;
     } else if (outcome.status === "unreachable") {
       body = (
-        <div className="space-y-2 text-sm">
-          <p className="font-medium text-text-primary">Couldn&apos;t connect to {savedHost.name}</p>
+        <Outcome severity="error" title={`Couldn't connect to ${savedHost.name}`}>
           {outcome.detail && (
             <pre
               role="alert"
-              className="whitespace-pre-wrap rounded-[var(--radius-md)] bg-surface-input p-2 text-xs text-text-secondary select-text"
+              className="whitespace-pre-wrap break-words rounded-[var(--radius-md)] border border-border-default bg-surface-input p-2 font-mono text-xs text-text-secondary select-text"
             >
               {outcome.detail}
             </pre>
           )}
-          <p className="text-text-secondary">
-            It stays in your host list, so you can connect now or later from Settings → Hosts.
+          <p>
+            It stays in your host list, so you can connect now or later from
+            Settings&nbsp;→&nbsp;Hosts.
           </p>
-        </div>
+        </Outcome>
       );
       primary = {
         label: "Retry",
@@ -1044,12 +1168,9 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       secondary = close;
     } else if (outcome.status === "disconnected") {
       body = (
-        <div className="space-y-2 text-sm">
-          <p className="font-medium text-text-primary">{savedHost.name} is saved, not connected</p>
-          <p className="text-text-secondary">
-            Its connection closed before it was up. It stays in your host list.
-          </p>
-        </div>
+        <Outcome severity="warning" title={`${savedHost.name} is saved, but its connection closed`}>
+          <p>It closed before it was up. It stays in your host list, so you can connect again.</p>
+        </Outcome>
       );
       primary = {
         label: "Connect",
@@ -1060,12 +1181,9 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       secondary = close;
     } else {
       body = (
-        <div className="space-y-2 text-sm">
-          <p className="font-medium text-text-primary">{savedHost.name} is saved</p>
-          <p className="text-text-secondary">
-            It&apos;s still connecting. Its status shows in Settings → Hosts.
-          </p>
-        </div>
+        <Outcome severity="info" title={`${savedHost.name} is saved and still connecting`}>
+          <p>Its status shows in Settings&nbsp;→&nbsp;Hosts, where it carries on connecting.</p>
+        </Outcome>
       );
       primary = { label: "Close", onClick: onClose };
       secondary = undefined;
@@ -1121,7 +1239,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
                       aria-pressed={target === address}
                       onClick={() => {
                         setTarget(address);
-                        setName(host.name);
+                        nameFromTarget(address, host.name);
                       }}
                       className={cn(
                         "flex w-full items-center justify-between gap-3 px-3 py-2 text-left",
@@ -1159,7 +1277,10 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
           <Input
             value={name}
             placeholder={target || "Ubuntu"}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => {
+              setName(e.target.value);
+              setNameEdited(e.target.value.trim() !== "");
+            }}
           />
           {nameError && <FieldError>{nameError}</FieldError>}
         </Field>
@@ -1178,157 +1299,78 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       loading: busy,
     };
   } else if (step === "discover") {
-    const query = discoveryQuery.trim();
-    const needle = query.toLowerCase();
-    const filterable = discovered !== null && discovered.length > FILTER_THRESHOLD;
-    const shown =
-      discovered === null
-        ? []
-        : needle
-          ? discovered.filter((host) => matchesQuery(host, needle))
-          : discovered;
     const pick = (host: DiscoveredHost) => {
-      setTarget(sshTargetOf(host.connection) ?? "");
-      setName(host.name);
+      const address = sshTargetOf(host.connection) ?? "";
+      retarget(address);
+      nameFromTarget(address, host.name);
     };
-    const pickOnlyMatch = (event: KeyboardEvent<HTMLInputElement>) => {
-      if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
-      const only = shown.length === 1 ? shown[0]! : null;
-      if (!only || only.alreadyAdded || busy) return;
-      event.preventDefault();
-      pick(only);
-      targetInputRef.current?.focus();
-    };
+    // Both ways in sit on equal terms: the target typed here, or a machine picked
+    // below, which fills it. The fields hold still while discovery lands.
     body = (
-      <div className="space-y-4">
-        <div>
-          <p className="mb-2 text-sm font-medium text-text-primary">Machines found</p>
-          {filterable && (
-            <SearchField
-              fieldClassName="mb-2"
-              value={discoveryQuery}
-              onChange={(e) => setDiscoveryQuery(e.target.value)}
-              onClear={() => setDiscoveryQuery("")}
-              onKeyDown={pickOnlyMatch}
-              // It mounts when the results arrive; a target already being typed keeps the keyboard.
-              autoFocus={target.trim() === ""}
-              placeholder="Filter by name or address"
-              aria-label="Filter machines"
+      <div className="space-y-5">
+        <div className="flex flex-wrap items-start gap-x-3 gap-y-4">
+          <Field className="min-w-0 flex-[2_1_15rem]">
+            <FieldLabel>SSH target</FieldLabel>
+            <Input
+              ref={targetInputRef}
+              value={target}
+              placeholder="user@devbox.local"
+              disabled={busy}
               spellCheck={false}
               autoCapitalize="off"
+              onChange={(e) => {
+                retarget(e.target.value);
+                nameFromTarget(e.target.value);
+              }}
             />
-          )}
-          {discoverError !== null ? (
-            <div className="flex items-start justify-between gap-3">
-              <p role="alert" className="text-sm text-text-secondary select-text">
-                Couldn&apos;t look for machines: {discoverError}
-              </p>
-              <Button variant="outline" size="sm" onClick={retryDiscover}>
-                Retry
-              </Button>
-            </div>
-          ) : discovered === null ? (
-            // Holds its line from the start, so the heading never stands alone and nothing jumps when it shows.
-            <p
-              className={cn(
-                "flex items-center gap-2 text-sm text-text-secondary",
-                !showDiscovering && "invisible"
-              )}
-              aria-hidden={!showDiscovering}
-            >
-              <Spinner size="sm" /> Looking for Macs and Linux machines
-            </p>
-          ) : discovered.length === 0 ? (
-            <p className="text-sm text-text-secondary">
-              No machines answered on your tailnet or local network. Enter an SSH target below.
-            </p>
-          ) : shown.length === 0 ? (
-            <p className="text-sm text-text-secondary" role="status">
-              No machines match &quot;{query}&quot;. Enter an SSH target below if it isn&apos;t
-              listed.
-            </p>
-          ) : (
-            <ul
-              className="max-h-64 divide-y divide-border-subtle overflow-y-auto rounded-[var(--radius-lg)] border border-border-default"
-              data-testid="add-host-discovered"
-            >
-              {shown.map((host) => (
-                <li key={`${host.source}:${formatHostConnection(host.connection)}`}>
-                  <button
-                    type="button"
-                    disabled={host.alreadyAdded || busy}
-                    data-known-machine={host.knownMachine && !host.alreadyAdded ? "" : undefined}
-                    aria-pressed={target === sshTargetOf(host.connection)}
-                    onClick={() => pick(host)}
-                    className={cn(
-                      "flex w-full items-center justify-between gap-3 px-3 py-2 text-left",
-                      "hover:bg-overlay-soft disabled:cursor-default disabled:hover:bg-transparent",
-                      target === sshTargetOf(host.connection) && "bg-overlay-subtle"
-                    )}
-                  >
-                    <span className="min-w-0">
-                      <span className="block text-sm font-medium text-text-primary">
-                        {host.name}
-                      </span>
-                      <span className="block truncate text-xs text-text-secondary">
-                        {formatHostConnection(host.connection)} ·{" "}
-                        {platformLabel(host.platform, null)}
-                      </span>
-                    </span>
-                    <span className="shrink-0 text-xs text-text-secondary">
-                      {host.alreadyAdded
-                        ? "Added"
-                        : host.knownMachine
-                          ? "Added as another account"
-                          : sourceLabel(host)}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-          {discovered !== null && discovered.length > 0 && (
-            <p className="mt-2 text-xs text-text-secondary">
-              Pick one to fill in its SSH target, or enter one below. Whether Daintree is ready
-              there is checked next.
-            </p>
-          )}
+            <FieldDescription>{SSH_TARGET_HINT}</FieldDescription>
+            {duplicate && (
+              <FieldError>
+                {formatHostConnection(typed!)} is already in your host list as &quot;
+                {duplicate.descriptor.name}&quot;
+              </FieldError>
+            )}
+          </Field>
+          <Field className="min-w-0 flex-[1_1_9rem]">
+            <FieldLabel>Name</FieldLabel>
+            <Input
+              value={name}
+              placeholder="devbox"
+              disabled={busy}
+              onChange={(e) => {
+                setName(e.target.value);
+                setNameEdited(e.target.value.trim() !== "");
+              }}
+            />
+            {nameError && <FieldError>{nameError}</FieldError>}
+          </Field>
         </div>
-        <Field>
-          <FieldLabel>SSH target</FieldLabel>
-          <Input
-            ref={targetInputRef}
-            value={target}
-            placeholder="user@devbox.local"
-            disabled={busy}
-            spellCheck={false}
-            autoCapitalize="off"
-            onChange={(e) => setTarget(e.target.value)}
-          />
-          <FieldDescription>{SSH_TARGET_HINT}</FieldDescription>
-          {duplicate && (
-            <FieldError>
-              {formatHostConnection(typed!)} is already in your host list as &quot;
-              {duplicate.descriptor.name}&quot;
-            </FieldError>
-          )}
-        </Field>
         {sameMachine && (
-          <p className="text-xs text-text-secondary" data-testid="add-host-same-machine">
+          <p className="-mt-2 text-xs text-text-secondary" data-testid="add-host-same-machine">
             &quot;{sameMachine.descriptor.name}&quot; already reaches this machine as{" "}
             {formatHostConnection(sameMachine.descriptor.connection)}. This one is saved as a
             separate host.
           </p>
         )}
-        <Field>
-          <FieldLabel>Name</FieldLabel>
-          <Input
-            value={name}
-            placeholder={target ? defaultHostName(target) : "devbox"}
-            onChange={(e) => setName(e.target.value)}
-          />
-          {nameError && <FieldError>{nameError}</FieldError>}
-        </Field>
+        <AddHostDiscovery
+          discovered={discovered}
+          error={discoverError}
+          showLooking={showDiscovering}
+          rescanning={rescanning}
+          query={discoveryQuery}
+          onQueryChange={setDiscoveryQuery}
+          filterThreshold={FILTER_THRESHOLD}
+          matches={matchesQuery}
+          target={target}
+          disabled={busy}
+          onPick={pick}
+          onRescan={rescan}
+          onPickOnlyMatch={(host) => {
+            pick(host);
+            targetInputRef.current?.focus();
+          }}
+          autoFocusFilter={target.trim() === ""}
+        />
       </div>
     );
     primary = {
@@ -1553,7 +1595,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     // Not while a check runs: its result would land against an edited target.
     // Nor once saved: the record names this target, so it stays.
     if (!existing && !saved)
-      secondary = { label: "Back", onClick: () => setStep("discover"), disabled: busy };
+      back = { label: "Back", onClick: () => setStep("discover"), disabled: busy };
   } else if (step === "install") {
     const progress = install?.progress ?? null;
     const impact = installResult?.status === "needs-confirmation" ? installResult.impact : null;
@@ -1860,6 +1902,8 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         loading: busy,
       };
     }
+    // Back to what the check found: nothing on the host changes until an install starts.
+    if (!runShown) back = { label: "Back", onClick: () => setStep("check"), disabled: busy };
   } else if (step === "done") {
     const result =
       installResult?.status === "installed" || installResult?.status === "staged-applied"
@@ -1894,8 +1938,6 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     announce = title;
   } else if (step === "enable") {
     const switchedOn = hostModeSwitchedOn(probe);
-    const installed =
-      installResult?.status === "installed" || installResult?.status === "staged-applied";
     const enableBody = switchedOn ? (
       <p className="text-sm text-text-primary">
         Host mode is on at {hostLabel} and starts {viaWsl ? "with it" : "at login there"}. This
@@ -1903,10 +1945,10 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       </p>
     ) : (
       <div className="space-y-2 text-sm">
-        <p className="text-text-primary">
+        <p className="font-medium text-text-primary">
           {probe?.hostModeListening
-            ? `Host mode is listening on ${hostLabel} for now, but isn't switched on there, so it stops when Daintree quits.`
-            : `Host mode is off on ${hostLabel}.`}
+            ? `Host mode is listening on ${hostLabel} for now, but isn't switched on there, so it stops when Daintree quits`
+            : `Host mode is off on ${hostLabel}`}
         </p>
         <p className="text-text-secondary">
           {probe?.platform === "darwin"
@@ -1915,12 +1957,20 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
               ? "Daintree installs its Host mode service there (a systemd user unit), starts it, and turns on Host mode, so it starts whenever the distribution does."
               : "Daintree installs its Host mode service there (a systemd user unit), starts it, and turns on Host mode with start at login. It also asks the host to let the service run after you log out."}
         </p>
+        {!existing && (
+          <p className="text-xs text-text-secondary">
+            Skipping saves {hostLabel} to your host list without connecting. You can turn Host mode
+            on later from its details in Settings&nbsp;→&nbsp;Hosts.
+          </p>
+        )}
       </div>
     );
-    body = installed ? (
+    // An install this dialog ran stays done through a recheck of the same machine.
+    body = installRan ? (
       <div className="space-y-4">
         <Callout severity="success" role="status">
-          Daintree {probe?.install?.version ?? targetVersion} is installed on {hostLabel}.
+          Daintree {probe?.install?.version ?? targetVersion} is installed on {hostLabel}
+          {existing ? "." : ", and stays there if you cancel or skip Host mode."}
         </Callout>
         {enableBody}
       </div>
@@ -1930,111 +1980,59 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     primary = switchedOn
       ? { label: "Continue", onClick: () => setStep("advise") }
       : { label: "Turn on Host mode", onClick: startHostMode, disabled: busy, loading: busy };
-    if (!switchedOn) {
-      secondary = {
-        label: "Skip",
-        onClick: () => {
-          setSkipped(true);
-          setStep("advise");
-        },
-        disabled: busy,
-      };
+    // An existing host is in the list already, so Cancel leaves it as it was: no Skip to offer.
+    if (!switchedOn && !existing) {
+      leading = { label: "Skip Host mode", onClick: skipHostMode, disabled: busy };
     }
+    back = { label: "Back", onClick: () => setStep("check"), disabled: busy };
   } else {
     body = (
-      <div className="space-y-4 text-sm">
-        {viaWsl ? (
-          <div>
-            <p className="font-medium text-text-primary">Running</p>
-            <p className="text-text-secondary">
-              Daintree keeps {hostLabel} running while it&apos;s open on this PC. After you quit,
-              WSL stops it about 15 seconds after nothing else is using it, and its terminals and
-              agents stop with it.
-            </p>
-          </div>
-        ) : (
-          <div>
-            <p className="font-medium text-text-primary">Sleep</p>
-            <p className="text-text-secondary">
-              {probe?.advice.sleepDisabled === true
-                ? "The host is set not to sleep when idle."
-                : probe?.advice.sleepObserved
-                  ? `Observed: ${probe.platform === "darwin" ? `sleep ${probe.advice.sleepObserved}` : `sleep.target ${probe.advice.sleepObserved}`}. A sleeping host drops its connection.`
-                  : "A sleeping host drops its connection."}
-            </p>
-          </div>
-        )}
-        <div>
-          <p className="font-medium text-text-primary">Keychain</p>
+      <div className="space-y-4">
+        <div className="space-y-1 text-sm">
+          <p className="font-medium text-text-primary">
+            {existing
+              ? `${hostLabel} is set up`
+              : saved
+                ? `${hostLabel} is saved and ready to connect`
+                : `${hostLabel} is ready to connect`}
+          </p>
           <p className="text-text-secondary">
-            {probe?.hostModeState?.keychain.checked
-              ? `Checked by Daintree on ${hostLabel}: ${probe.hostModeState.keychain.detail}.`
-              : probe?.platform === "linux"
-                ? probe.advice.keyring === "running"
-                  ? `A keyring process was running for the ${viaWsl ? "distribution's" : "SSH"} user when checked. Whether plugin secrets can be stored there is known once Host mode runs its own keyring check on that machine.`
-                  : probe.advice.keyring === "not-running"
-                    ? `No keyring process was seen running for the ${viaWsl ? "distribution's" : "SSH"} user when checked. Host mode runs its own keyring check on that machine.`
-                    : "The host's keyring wasn't checked. Host mode runs its own keyring check on that machine."
-                : "Plugin secrets live in the host's own keychain. Credentials aren't copied between machines: each host signs in for itself."}
+            Host mode is on there and starts {viaWsl ? "with the distribution" : "at login"}.
           </p>
         </div>
-        {lingerRefused !== null ? (
-          <div>
-            <p className="font-medium text-text-primary">Running after logout</p>
-            <p className="text-text-secondary">
-              Daintree asked {hostLabel} to let its Host mode service run with nobody logged in
-              (loginctl enable-linger), and the host refused:
-            </p>
-            <pre className="mt-1 whitespace-pre-wrap rounded-[var(--radius-md)] bg-surface-input p-2 text-xs text-text-secondary select-text">
-              {lingerRefused}
-            </pre>
-            <p className="text-text-secondary">
-              Until someone allowed to runs the command below there, the service stops when the last
-              login session on {hostLabel} ends.
-            </p>
-          </div>
-        ) : (
-          probe?.platform === "linux" &&
-          probe.advice.linger === false && (
-            <p className="text-text-secondary">
-              Lingering is off, so the Host mode service stops when you log out there.
-            </p>
-          )
-        )}
-        {(isMac() || probe?.platform === "darwin") && (
-          <div>
-            <p className="font-medium text-text-primary">Local network</p>
-            {isMac() && (
-              <p className="text-text-secondary">
-                macOS may ask whether Daintree can find devices on your local network. Whether a
-                connection needs it depends on how macOS routes to that host, not on its address, so
-                allow it if you use hosts on your network. If it&apos;s denied, connections macOS
-                treats as local fail until Daintree is turned on in System Settings → Privacy &amp;
-                Security → Local Network.
-              </p>
-            )}
-            {probe?.platform === "darwin" && (
-              <p className="text-text-secondary">
-                {hostLabel} asks the same on its own screen, for everything its terminals and agents
-                run. Until someone allows Daintree there, or turns it on in that Mac&apos;s Local
-                Network settings, they can&apos;t reach other machines on your network, and names
-                like .local can take half a minute to look up.
-              </p>
-            )}
-          </div>
-        )}
-        {(probe?.suggestedCommands ?? []).map((c) => (
-          <HostCommand key={c.command} label={c.label} command={c.command} />
-        ))}
+        <AddHostNotes
+          probe={probe}
+          hostLabel={hostLabel}
+          viaWsl={viaWsl}
+          lingerRefused={lingerRefused}
+          localIsMac={isMac()}
+        />
       </div>
     );
     primary = {
-      label: existing || saved ? "Done" : "Add host",
+      label: existing ? "Done" : "Connect",
       onClick: finish,
       disabled: busy,
       loading: busy,
     };
+    back = {
+      label: "Back",
+      onClick: () => setStep(hostModeTurnedOn ? "enable" : "check"),
+      disabled: busy,
+    };
   }
+
+  // Each new view hands focus to its answer, the way the first one did: the
+  // target on Find, else the primary, or Cancel/Close where that is the answer.
+  const steps = stepViews({ current: step, probe, installRan, hostModeTurnedOn });
+  const savedHint =
+    saved && !existing && !finished && !connecting && step !== "advise" ? (
+      // Why the way out reads Close: leaving now keeps the host.
+      <>
+        <CircleCheck className="size-3.5 shrink-0" aria-hidden="true" />
+        <span className="truncate">Saved to your host list</span>
+      </>
+    ) : undefined;
 
   return (
     <AppDialog
@@ -2042,7 +2040,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       onClose={onClose}
       dismissible={!locked}
       size="md"
-      initialFocus={step === "discover" ? undefined : focusCancel ? "cancel" : "confirm"}
+      initialFocus={screen === "discover" ? undefined : focusCancel ? "cancel" : "confirm"}
       focusResetKey={screen}
       data-testid="add-host-dialog"
     >
@@ -2050,19 +2048,16 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         <AppDialog.Title>
           {existing
             ? `${existing.intent === "setup" ? "Set up" : "Update"} ${existing.name}`
-            : "Add host"}
+            : step === "discover"
+              ? "Add host"
+              : `Add ${hostLabel}`}
         </AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>
       <AppDialog.Body>
         {/* An existing host's flow branches on what the check finds: no fixed steps to show. */}
-        {!existing && step !== "done" && <StepBar current={step} />}
+        {!existing && step !== "done" && !finished && <WizardStepBar steps={steps} />}
         {body}
-        {saved && !existing && !outcome && (
-          <p className="mt-3 text-xs text-text-secondary">
-            {saved.name} is saved in your host list. Closing leaves it there.
-          </p>
-        )}
         {error && <ErrorLine message={error} />}
         {/* No role: the discovery list's own status line stays the dialog's one status. */}
         <p aria-live="polite" aria-atomic="true" className="sr-only">
@@ -2070,11 +2065,13 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         </p>
       </AppDialog.Body>
       <AppDialog.Footer
-        primaryAction={primary}
-        secondaryAction={secondary}
+        // A step with an alternative and three actions wraps it onto its own row when narrow.
+        className="flex-wrap gap-y-3"
         leadingAction={leading}
-        hint={hint}
-      />
+        hint={hint ?? savedHint}
+      >
+        <WizardFooterActions dismiss={secondary} back={back} primary={primary} />
+      </AppDialog.Footer>
     </AppDialog>
   );
 }

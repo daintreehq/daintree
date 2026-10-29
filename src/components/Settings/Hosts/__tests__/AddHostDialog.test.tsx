@@ -152,10 +152,21 @@ async function walkToAddHost() {
     target: { value: "greg@studio" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+  // Host mode was on there already: Continue goes past it to Connect, saving the host on the way.
   fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
-  fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
-  // Host mode was on there already, so the host was saved on the way.
-  fireEvent.click(await screen.findByRole("button", { name: "Done" }));
+  await connectOnceSaved();
+}
+
+/** Connect, once the save on the way to it has settled and the button takes a press. */
+async function connectOnceSaved() {
+  const connect = await screen.findByRole("button", { name: "Connect" });
+  await waitFor(() => expect(connect.getAttribute("aria-disabled")).toBeNull());
+  fireEvent.click(connect);
+}
+
+/** The discovered machines' rows, in order. */
+function discoveredRows(): HTMLElement[] {
+  return [...screen.getByTestId("add-host-discovered").querySelectorAll("label")];
 }
 
 describe("AddHostDialog", () => {
@@ -223,8 +234,9 @@ describe("AddHostDialog", () => {
   it("shows a discovery failure with Retry rather than an empty scan", async () => {
     remoteHosts.discover!.mockRejectedValueOnce(new Error("tailscale crashed"));
     render(<AddHostDialog isOpen onClose={() => {}} />);
-    expect(await screen.findByText(/Couldn't look for machines: tailscale crashed/)).toBeTruthy();
-    expect(screen.queryByText(/No machines answered/)).toBeNull();
+    expect(await screen.findByText("Couldn't look for machines")).toBeTruthy();
+    expect(screen.getByText("tailscale crashed")).toBeTruthy();
+    expect(screen.queryByText(/Nothing answered/)).toBeNull();
 
     remoteHosts.discover!.mockResolvedValueOnce([
       {
@@ -268,10 +280,8 @@ describe("AddHostDialog", () => {
       found("Studio-03"),
     ]);
     render(<AddHostDialog isOpen onClose={() => {}} />);
-    const list = (await screen.findByText("studio-10")).closest("ul")!;
-    const names = [...list.querySelectorAll("li")].map(
-      (item) => item.querySelector(".font-medium")!.textContent
-    );
+    await screen.findByText("studio-10");
+    const names = discoveredRows().map((row) => row.querySelector(".font-medium")!.textContent);
     expect(names).toEqual(["studio-2", "Studio-03", "studio-10", "studio-01"]);
   });
 
@@ -296,9 +306,7 @@ describe("AddHostDialog", () => {
     const mesh = (count: number) =>
       Array.from({ length: count }, (_, i) => peer(`node-${i + 1}`, i % 2 ? idle : {}));
     const rowNames = () =>
-      [...screen.getByTestId("add-host-discovered").querySelectorAll("li")].map(
-        (item) => item.querySelector(".font-medium")!.textContent
-      );
+      discoveredRows().map((row) => row.querySelector(".font-medium")!.textContent);
     const filter = () => screen.getByLabelText("Filter machines") as HTMLInputElement;
     const sshTarget = () => screen.getByPlaceholderText("user@devbox.local") as HTMLInputElement;
 
@@ -335,15 +343,18 @@ describe("AddHostDialog", () => {
       ]);
       render(<AddHostDialog isOpen onClose={() => {}} />);
       await screen.findByText("dev-vm");
-      const labels = [...screen.getByTestId("add-host-discovered").querySelectorAll("li")].map(
-        (item) => item.querySelector("button > span:last-child")!.textContent
+      // Where each was found, then what's known of it: its membership and NetBird's own word.
+      const routes = discoveredRows().map((row) =>
+        [...row.querySelector('[id$="-route"]')!.children]
+          .map((line) => line.textContent)
+          .join(" / ")
       );
-      expect(labels).toEqual([
-        "NetBird · connected",
-        "Added as another account",
-        "NetBird · idle",
+      expect(routes).toEqual([
         "NetBird",
-        "Added",
+        "NetBird / Added as another account · Idle",
+        "NetBird / Idle",
+        "NetBird",
+        "NetBird / Added · Idle",
       ]);
     });
 
@@ -391,7 +402,7 @@ describe("AddHostDialog", () => {
       fireEvent.change(filter(), { target: { value: " prod-db " } });
       expect(screen.queryByTestId("add-host-discovered")).toBeNull();
       expect(screen.getByRole("status").textContent).toBe(
-        'No machines match "prod-db". Enter an SSH target below if it isn\'t listed.'
+        'No machines match "prod-db". Enter its SSH target above if it isn\'t listed.'
       );
       expect(filter().value).toBe(" prod-db ");
       fireEvent.keyDown(filter(), { key: "Enter" });
@@ -424,7 +435,7 @@ describe("AddHostDialog", () => {
       remoteHosts.discover!.mockResolvedValueOnce([...mesh(8), peer("dev-vm")]);
       render(<AddHostDialog isOpen onClose={() => {}} />);
       await screen.findByText("dev-vm");
-      fireEvent.click(screen.getByRole("button", { name: /node-1\b/ }));
+      fireEvent.click(screen.getByRole("radio", { name: /node-1\b/ }));
       fireEvent.click(screen.getByRole("button", { name: "Check host" }));
       fireEvent.change(filter(), { target: { value: "dev-vm" } });
       fireEvent.keyDown(filter(), { key: "Enter" });
@@ -541,7 +552,9 @@ describe("AddHostDialog", () => {
     await waitFor(() => expect(remoteHosts.probe).toHaveBeenCalledTimes(2));
     fireEvent.click(await screen.findByRole("button", { name: "Set up Host mode…" }));
     expect(await screen.findByRole("button", { name: "Turn on Host mode" })).toBeTruthy();
-    // The saved record keeps its target: no way back to change it.
+    // The saved record keeps its target: Back reaches the check, never Find.
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(await screen.findByRole("button", { name: "Set up Host mode…" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
   });
 
@@ -568,9 +581,9 @@ describe("AddHostDialog", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Check host" }));
     fireEvent.click(await screen.findByRole("button", { name: "Set up Host mode…" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Skip" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Add host" }));
-    expect(await screen.findByText("Saved, not connected")).toBeTruthy();
+    // Skipping ends setup there: saved, with nothing after Host mode to walk through.
+    fireEvent.click(await screen.findByRole("button", { name: "Skip Host mode" }));
+    expect(await screen.findByText("studio is saved, not connected")).toBeTruthy();
     expect(remoteHosts.add).toHaveBeenCalledOnce();
     expect(remoteHosts.connect).not.toHaveBeenCalled();
   });
@@ -585,14 +598,13 @@ describe("AddHostDialog", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Set up Host mode…" }));
     expect(remoteHosts.add).not.toHaveBeenCalled();
     fireEvent.click(await screen.findByRole("button", { name: "Turn on Host mode" }));
-    expect(await screen.findByText(/studio is saved in your host list/)).toBeTruthy();
+    expect(await screen.findByText("studio is saved and ready to connect")).toBeTruthy();
     expect(remoteHosts.add).toHaveBeenCalledOnce();
     expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
     expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
 
     // Finishing reuses the record rather than adding a second.
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Done" }));
+    await connectOnceSaved();
     await waitFor(() => expect(remoteHosts.connect).toHaveBeenCalled());
     expect(remoteHosts.add).toHaveBeenCalledOnce();
   });
@@ -606,7 +618,8 @@ describe("AddHostDialog", () => {
     const check = () => screen.getByRole("button", { name: "Check host" });
     expect(check().getAttribute("aria-disabled")).toBe("true");
 
-    fireEvent.change(screen.getByPlaceholderText("studio"), { target: { value: "this mac" } });
+    // The name fills in from the target, as a value rather than a hint.
+    fireEvent.change(screen.getByDisplayValue("studio"), { target: { value: "this mac" } });
     expect(document.body.textContent).toContain("is what Daintree calls this machine");
 
     fireEvent.change(screen.getByDisplayValue("this mac"), { target: { value: "Lab two" } });
@@ -621,7 +634,7 @@ describe("AddHostDialog", () => {
     fireEvent.change(screen.getByPlaceholderText("user@devbox.local"), {
       target: { value: "greg@lab.local" },
     });
-    fireEvent.change(screen.getByPlaceholderText("lab"), { target: { value: "Lab (greg)" } });
+    fireEvent.change(screen.getByDisplayValue("lab"), { target: { value: "Lab (greg)" } });
     expect(screen.getByTestId("add-host-same-machine").textContent).toContain(
       '"Lab" already reaches this machine as admin@lab.local'
     );
@@ -642,7 +655,9 @@ describe("AddHostDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Check host" }));
     fireEvent.click(await screen.findByRole("button", { name: "Set up Host mode…" }));
     fireEvent.click(await screen.findByRole("button", { name: "Turn on Host mode" }));
-    expect(screen.getByRole("button", { name: "Skip" }).getAttribute("aria-disabled")).toBe("true");
+    expect(
+      screen.getByRole("button", { name: "Skip Host mode" }).getAttribute("aria-disabled")
+    ).toBe("true");
     fireEvent.keyDown(screen.getByTestId("add-host-dialog"), { key: "Escape" });
     expect(onClose).not.toHaveBeenCalled();
     await act(async () => finish({ probe: probeResult(), lingerRefused: null }));
@@ -1040,7 +1055,6 @@ describe("AddHostDialog", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Check host" }));
     fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     expect(await screen.findByText(/A keyring process was running for the SSH user/)).toBeTruthy();
     expect(screen.queryByText(/can be stored there\./)).toBeNull();
   });
@@ -1111,14 +1125,12 @@ describe("AddHostDialog", () => {
       await screen.findByText(/listening on bigbox for now, but isn't switched on there/)
     ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Turn on Host mode" }));
-    expect(
-      await screen.findByText(/Host mode is on at bigbox and starts at login there/)
-    ).toBeTruthy();
+    // Switched on for good there: on to Connect, saved.
+    expect(await screen.findByText("bigbox is saved and ready to connect")).toBeTruthy();
     expect(remoteHosts.startHostMode).toHaveBeenCalledWith({
       connection: { kind: "ssh", target: "greg@bigbox" },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     expect(
       await screen.findByText("Could not enable linger: Interactive authentication required.")
     ).toBeTruthy();
@@ -1138,7 +1150,6 @@ describe("AddHostDialog", () => {
           target: { value: "greg@studio" },
         });
         fireEvent.click(screen.getByRole("button", { name: "Check host" }));
-        fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
         fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
         await screen.findByText("Keychain");
       };
@@ -1164,7 +1175,6 @@ describe("AddHostDialog", () => {
         target: { value: "greg@studio" },
       });
       fireEvent.click(screen.getByRole("button", { name: "Check host" }));
-      fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
       fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
       const copy = (await screen.findByText(/find devices on your local network/)).textContent!;
       expect(copy).toContain("depends on how macOS routes to that host, not on its address");
@@ -1269,9 +1279,11 @@ describe("AddHostDialog on Windows (WSL distros)", () => {
     render(<AddHostDialog isOpen onClose={() => {}} />);
     fireEvent.click(await screen.findByRole("button", { name: /Debian/ }));
     fireEvent.click(screen.getByRole("button", { name: "Check distribution" }));
+    // Host mode is on there already, so Continue lands on Connect.
     fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
-    expect(await screen.findByText(/Host mode is on at .+ and starts with it/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(
+      await screen.findByText("Host mode is on there and starts with the distribution.")
+    ).toBeTruthy();
     await screen.findByText("Keychain");
     expect(screen.getByText("Running")).toBeTruthy();
     expect(
