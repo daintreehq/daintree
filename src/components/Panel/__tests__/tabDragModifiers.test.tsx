@@ -35,18 +35,11 @@ vi.mock("framer-motion", async () => {
         if (!cache.has(tag)) {
           cache.set(
             tag,
-            forwardRef<HTMLElement, { children?: React.ReactNode; [prop: string]: unknown }>(
-              ({ children, ...props }, ref) =>
-                createElement(
-                  tag,
-                  {
-                    ref,
-                    ...Object.fromEntries(
-                      Object.entries(props).filter(([k]) => !motionOnly.has(k))
-                    ),
-                  },
-                  children
-                )
+            forwardRef<HTMLElement, Record<string, unknown>>((props, ref) =>
+              createElement(tag, {
+                ref,
+                ...Object.fromEntries(Object.entries(props).filter(([k]) => !motionOnly.has(k))),
+              })
             )
           );
         }
