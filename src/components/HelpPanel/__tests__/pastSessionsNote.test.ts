@@ -38,8 +38,17 @@ describe("usePastSessionsNote", () => {
     rerender({ open: false, agentId: null });
     expect(result.current).toBe(shown);
 
-    // Reopened for another lane, it says what holds for that one at once.
+    // Reopened for another lane, it says what holds for that one at once, and that
+    // is what its own close keeps — not the first lane's note.
     rerender({ open: true, agentId: "copilot" });
     expect(result.current).toBe("The agent stops");
+    rerender({ open: false, agentId: null });
+    expect(result.current).toBe("The agent stops");
+
+    // A change while open is what the close keeps.
+    rerender({ open: true, agentId: "copilot" });
+    rerender({ open: true, agentId: "codex" });
+    rerender({ open: false, agentId: null });
+    expect(result.current).toMatch(/past sessions/);
   });
 });
