@@ -1969,6 +1969,29 @@ describe("installPlugin — blocklist interaction (#10891)", () => {
 
     service.dispose();
   });
+
+  it("lists a blocklisted disabled install once when it's switched back on", async () => {
+    storeState.set("plugins", { disabled: ["acme.off-bad"] });
+    const service = new PluginService(pluginsRoot, "0.0.0", {
+      blocklistService: fakeBlocklist([
+        { name: "acme.off-bad", ranges: [">=2.0.0"], reason: "revoked" },
+      ]),
+    });
+    try {
+      await service.initialize();
+      const archive = await makeArchive({ name: "acme.off-bad", version: "2.0.0" });
+      expect((await service.installPlugin(archive)).status).toBe("installed");
+
+      await service.setEnabled("acme.off-bad", true);
+
+      const rows = service.listPlugins().filter((p) => p.instanceId === "acme.off-bad");
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ blocklisted: true, manifest: { version: "2.0.0" } });
+      expect(service.hasPlugin("acme.off-bad")).toBe(false);
+    } finally {
+      service.dispose();
+    }
+  });
 });
 
 // #12612: a confirmed update re-downloads its URL, so the installer is handed the
