@@ -292,7 +292,7 @@ describe("HybridInputBar with a host that says whether the terminal took the sen
   });
 
   it("gives the border to a later scratch refusal, and a later refused send takes it back (#14973)", async () => {
-    const { container, type, pressEnter, settle, caption } = await mount();
+    const { container, submitText, type, pressEnter, settle, caption } = await mount();
     const scratchCaption = () => container.querySelector("[data-scratch-refused-caption]");
     await type("ship it");
     await pressEnter();
@@ -307,8 +307,12 @@ describe("HybridInputBar with a host that says whether the terminal took the sen
     expect(scratchCaption()).not.toBeNull();
     expect(caption()).toBeNull();
 
+    // Refused in the same tick it went, the note never stops saying "refused".
+    submitText.mockImplementationOnce(() => {
+      throw new Error("pty gone");
+    });
     await pressEnter();
-    await settle(false);
+    await act(async () => {});
     expect(useVoiceRecordingStore.getState().scratchRefusal).toBeNull();
     expect(scratchCaption()).toBeNull();
     expect(caption()?.textContent).toBe("Not sent");

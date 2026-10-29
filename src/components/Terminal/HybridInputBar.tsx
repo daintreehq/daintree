@@ -48,7 +48,7 @@ import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore, useVoiceRecordingStore } from "@/store";
-import type { VoiceRecordingTarget } from "@/store/voiceRecordingStore";
+import type { VoiceRecordingTarget, VoiceScratchRefusal } from "@/store/voiceRecordingStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -1170,6 +1170,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       terminalId: string;
       refused: boolean;
       tooShort?: true;
+      retires?: VoiceScratchRefusal | null;
     } | null>(null);
     const dropSendRefusal = (dictationKeepsReply = false) =>
       setSendNote((note) =>
@@ -1190,20 +1191,24 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             accepted = false;
           }
           if (!accepted && submitAttemptRef.current === attempt) {
+            const standing = useVoiceRecordingStore.getState().scratchRefusal;
+            const retires = standing?.panelId === voiceId ? standing : null;
             // A voice wait begun since this send went has taken the status over.
             setSendNote((note) =>
-              dictated || note !== null ? { terminalId, refused: true } : note
+              dictated || note !== null ? { terminalId, refused: true, retires } : note
             );
           }
           return accepted;
         },
-      [terminalId]
+      [terminalId, voiceId]
     );
     const noteSpokenSendTooShort = useCallback(() => {
       // An earlier send still on its way can't say over it that it wasn't sent.
       ++submitAttemptRef.current;
-      setSendNote({ terminalId, refused: true, tooShort: true });
-    }, [terminalId]);
+      const standing = useVoiceRecordingStore.getState().scratchRefusal;
+      const retires = standing?.panelId === voiceId ? standing : null;
+      setSendNote({ terminalId, refused: true, tooShort: true, retires });
+    }, [terminalId, voiceId]);
 
     // Every way this composer sends — Enter, a picked slash command, a prompt
     // from the command picker — goes through `submitText` when it is given, so
@@ -1394,13 +1399,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const sendRefusedStatus = ownSendNote?.tooShort
       ? SPOKEN_SEND_TOO_SHORT_STATUS
       : SEND_HELD_STATUS;
-    // A refused send retires a scratch refusal already on the border. One the
-    // send took outlives it: it says what went out.
+    // A refused send retires the scratch refusal it found on the border, never
+    // a newer one. One the send took outlives it: it says what went out.
+    const retiredScratch = isSendRefused ? (ownSendNote?.retires ?? null) : null;
     useEffect(() => {
-      if (!isSendRefused) return;
       const voice = useVoiceRecordingStore.getState();
-      if (voice.scratchRefusal?.panelId === voiceId) voice.setScratchRefusal(null);
-    }, [isSendRefused, voiceId]);
+      if (retiredScratch && voice.scratchRefusal === retiredScratch) voice.setScratchRefusal(null);
+    }, [retiredScratch]);
     // A "scratch that" that removed nothing (#14973), on an empty draft too:
     // the placeholder doesn't say it.
     const scratchRefusal = useVoiceRecordingStore((s) =>
