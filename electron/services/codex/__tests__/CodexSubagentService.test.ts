@@ -869,6 +869,7 @@ describe("matchCodexRestoreSessions", () => {
     id,
     sessionId: id,
     preview,
+    source: "cli",
     createdAt,
     recencyAt: createdAt,
     ...extra,
@@ -883,7 +884,7 @@ describe("matchCodexRestoreSessions", () => {
     scriptSession((method, params) => {
       if (method !== "thread/list") return {};
       requests.push(params);
-      if (params.sortKey === "recency_at") return { data: recency };
+      if (params.sortKey === "recency_at") return { data: recency, nextCursor: null };
       return pages[(params.cursor as string | undefined) ?? "first"] ?? { data: [] };
     });
     return requests;
@@ -911,7 +912,8 @@ describe("matchCodexRestoreSessions", () => {
       sortDirection: "desc",
       useStateDbOnly: true,
     });
-    expect(requests[0]).not.toHaveProperty("sourceKinds");
+    // A pane launched with `codex exec` has a thread too, and it has to count.
+    expect(requests[0]?.sourceKinds).toEqual(expect.arrayContaining(["cli", "exec"]));
     expect(requests[0]).not.toHaveProperty("archived");
   });
 
@@ -970,15 +972,86 @@ describe("matchCodexRestoreSessions", () => {
     expect(result.matches).toEqual([]);
   });
 
-  it("answers nothing when a full page doesn't say whether more follow", async () => {
+  it.each([
+    ["a full page", 50],
+    ["a short page", 2],
+  ])("answers nothing when %s doesn't say whether more follow", async (_label, length) => {
     scriptPages({
       first: {
-        data: Array.from({ length: 50 }, (_, i) => row(`t-${i}`, `Task ${i}`, AT_S + 100 - i)),
+        data: Array.from({ length }, (_, i) => row(`t-${i}`, `Task ${i}`, AT_S + 100 - i)),
       },
     });
 
     const result = await matchCodexRestoreSessions({
       scopes: [{ cwd: "/repo", panes: [pane("a", "Task 1")] }],
+      exclude: [],
+    });
+
+    expect(result.matches).toEqual([]);
+  });
+
+  it("answers nothing when a row past the cut-off is out of order", async () => {
+    scriptPages({
+      first: {
+        data: [row("t-a", "Task A"), row("t-old", "Old", AT_S - 3_600), row("t-b", "Task A")],
+        nextCursor: null,
+      },
+    });
+
+    const result = await matchCodexRestoreSessions({
+      scopes: [{ cwd: "/repo", panes: [pane("a", "Task A")] }],
+      exclude: [],
+    });
+
+    expect(result.matches).toEqual([]);
+  });
+
+  it.each([
+    ["a root with no id", { id: undefined, sessionId: undefined }],
+    ["a root with no first message", { preview: undefined }],
+  ])("answers nothing when it reads %s", async (_label, broken) => {
+    scriptPages({
+      first: { data: [row("t-a", "Task A"), row("t-x", "x", AT_S + 2, broken)], nextCursor: null },
+    });
+
+    const result = await matchCodexRestoreSessions({
+      scopes: [{ cwd: "/repo", panes: [pane("a", "Task A")] }],
+      exclude: [],
+    });
+
+    expect(result.matches).toEqual([]);
+  });
+
+  it("answers nothing when one thread is listed twice with different details", async () => {
+    scriptPages({
+      first: {
+        data: [row("t-x", "Task A", AT_S + 900), row("t-y", "Task A"), row("t-x", "Task A")],
+        nextCursor: null,
+      },
+    });
+
+    const result = await matchCodexRestoreSessions({
+      scopes: [{ cwd: "/repo", panes: [pane("a", "Task A")] }],
+      exclude: [],
+    });
+
+    expect(result.matches).toEqual([]);
+  });
+
+  it("counts a `codex exec` thread as a rival but never hands it out", async () => {
+    scriptPages({
+      first: {
+        data: [
+          row("t-exec", "Task A", AT_S + 4, { source: "exec" }),
+          row("t-a", "Task A"),
+          row("t-only-exec", "Task B", AT_S + 2, { source: "exec" }),
+        ],
+        nextCursor: null,
+      },
+    });
+
+    const result = await matchCodexRestoreSessions({
+      scopes: [{ cwd: "/repo", panes: [pane("a", "Task A"), pane("b", "Task B")] }],
       exclude: [],
     });
 
@@ -999,6 +1072,29 @@ describe("matchCodexRestoreSessions", () => {
     });
 
     expect(result.matches).toEqual([{ key: "a", sessionId: "t-a" }]);
+  });
+
+  it("answers nothing when the tie for `--last` may run on past the page", async () => {
+    scriptSession((method, params) => {
+      if (method !== "thread/list") return {};
+      if (params.sortKey === "recency_at") {
+        // Only the top of a tie that the next page may continue: t-a could be in it.
+        return {
+          data: [row("t-b", "Task B", AT_S + 3, { recencyAt: AT_S + 50 })],
+          nextCursor: "more",
+        };
+      }
+      return { data: [row("t-b", "Task B", AT_S + 4), row("t-a", "Task A")], nextCursor: null };
+    });
+
+    const result = await matchCodexRestoreSessions({
+      scopes: [
+        { cwd: "/repo", reserveLatest: true, panes: [pane("a", "Task A"), pane("b", "Task B")] },
+      ],
+      exclude: [],
+    });
+
+    expect(result.matches).toEqual([]);
   });
 
   it("keeps the thread a sibling's `--last` would open for that sibling", async () => {

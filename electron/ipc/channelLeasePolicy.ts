@@ -131,6 +131,7 @@ export const CHANNEL_LEASE_POLICY = {
   "clipboard:thumbnail-from-path": "free",
   "codex:find-sessions": "free",
   "codex:list-subagents": "free",
+  "codex:match-restore-sessions": "free",
   "codex:read-quota": "free",
   "codex:refresh-quota": "free",
   "codex:read-subagent-transcript": "free",

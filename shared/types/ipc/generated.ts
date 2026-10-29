@@ -1224,7 +1224,7 @@ export interface GeneratedIpcInvokeMap {
               sourceMap: {
                 mapUrl: string | null;
                 mapRevision: string;
-                sourceCheck: "unchecked" | "matches" | "differs";
+                sourceCheck: "matches" | "unchecked" | "differs";
               };
               candidateId: string;
               claim:
@@ -1259,7 +1259,7 @@ export interface GeneratedIpcInvokeMap {
                 | {
                     mapUrl: string | null;
                     mapRevision: string;
-                    sourceCheck: "unchecked" | "matches" | "differs";
+                    sourceCheck: "matches" | "unchecked" | "differs";
                   }
                 | undefined;
               placedBy?: "structure" | undefined;
@@ -1305,7 +1305,7 @@ export interface GeneratedIpcInvokeMap {
                     sourceMap: {
                       mapUrl: string | null;
                       mapRevision: string;
-                      sourceCheck: "unchecked" | "matches" | "differs";
+                      sourceCheck: "matches" | "unchecked" | "differs";
                     };
                   }
                 | {
@@ -1326,7 +1326,7 @@ export interface GeneratedIpcInvokeMap {
                       | {
                           mapUrl: string | null;
                           mapRevision: string;
-                          sourceCheck: "unchecked" | "matches" | "differs";
+                          sourceCheck: "matches" | "unchecked" | "differs";
                         }
                       | undefined;
                     placedBy?: "structure" | undefined;
@@ -1375,7 +1375,7 @@ export interface GeneratedIpcInvokeMap {
                     sourceMap: {
                       mapUrl: string | null;
                       mapRevision: string;
-                      sourceCheck: "unchecked" | "matches" | "differs";
+                      sourceCheck: "matches" | "unchecked" | "differs";
                     };
                   }
                 | {
@@ -1396,7 +1396,7 @@ export interface GeneratedIpcInvokeMap {
                       | {
                           mapUrl: string | null;
                           mapRevision: string;
-                          sourceCheck: "unchecked" | "matches" | "differs";
+                          sourceCheck: "matches" | "unchecked" | "differs";
                         }
                       | undefined;
                     placedBy?: "structure" | undefined;

@@ -3028,9 +3028,12 @@ describe("restorePanelsPhase — naming held panes' conversations by launch prom
     ]);
   });
 
-  it("ignores a match for a pane that wasn't asking", async () => {
+  it("ignores a match for a pane that wasn't asking, so it claims nothing", async () => {
     matchRestoreSessionsMock.mockResolvedValue({
-      matches: [{ key: "winner", sessionId: "sess-x" }],
+      matches: [
+        { key: "winner", sessionId: "sess-x" },
+        { key: "loser", sessionId: "sess-x" },
+      ],
     });
 
     const ctx = await restore([
@@ -3039,6 +3042,44 @@ describe("restorePanelsPhase — naming held panes' conversations by launch prom
     ]);
 
     expect(argsById(ctx).get("winner")?.savedAgentSessionId).toBeUndefined();
+    expect(argsById(ctx).get("loser")?.savedAgentSessionId).toBe("sess-x");
+  });
+
+  it("sends a sent or option-like prompt as a claimant, never as a pane asking", async () => {
+    await restore([
+      codexPane("kept", undefined, { agentSessionId: "s-1" }),
+      codexPane("a", "Task A"),
+      codexPane("sent", undefined, {
+        firstPrompt: { text: "Task S", via: "send", at: AT },
+      } as Partial<TerminalState>),
+      codexPane("flag", "  --help"),
+    ]);
+
+    expect(sentPanes().map((pane) => [pane.key, pane.resolve])).toEqual([
+      ["a", true],
+      ["sent", false],
+      ["flag", false],
+    ]);
+  });
+
+  it("leaves a pane that has to be told where to run waiting for that", async () => {
+    matchRestoreSessionsMock.mockResolvedValue({ matches: [{ key: "held", sessionId: "sess-h" }] });
+    const panels = [
+      codexPane("held", "Task A", {
+        cwd: "/worktrees/deleted",
+        worktreeId: "/worktrees/deleted",
+        conversationCwd: "/repo",
+        restoreRecovery: { reason: "sibling-owns-resume-latest-slot" },
+      }),
+    ];
+
+    const ctx = await restore(panels, {
+      worktreesPromise: Promise.resolve(wtList("/repo")),
+      activeWorktreeId: "/repo",
+    });
+
+    expect(argsById(ctx).get("held")?.savedAgentSessionId).toBeUndefined();
+    expect(matchRestoreSessionsMock).not.toHaveBeenCalled();
   });
 
   it("only treats a launch prompt kept whole as evidence", async () => {
@@ -3056,17 +3097,62 @@ describe("restorePanelsPhase — naming held panes' conversations by launch prom
     expect(matchRestoreSessionsMock).not.toHaveBeenCalled();
   });
 
-  it("asks under the pane's own profile, and leaves out one it can't name", async () => {
+  it("asks under the pane's own profile, and sends a claimant under another spelling", async () => {
     await restore([
       codexPane("kept", undefined, { agentSessionId: "s-1" }),
       codexPane("a", "Task A", { env: { CODEX_HOME: "/profiles/work" } }),
-      codexPane("b", "Task B", { env: { CODEX_HOME: "relative/profile" } }),
+      codexPane("b", "Task A", {
+        env: { CODEX_HOME: "/profiles/work/." },
+        restoreRecovery: { reason: "resume-deferred" },
+      }),
     ]);
 
     const request = matchRestoreSessionsMock.mock.calls[0]?.[0];
-    expect(request?.scopes).toHaveLength(1);
-    expect(request?.scopes[0]?.codexHome).toBe("/profiles/work");
-    expect(sentPanes().map((pane) => pane.key)).toEqual(["a"]);
+    expect(
+      request?.scopes.map((scope) => [scope.codexHome, scope.panes.map((p) => p.resolve)])
+    ).toEqual([
+      ["/profiles/work", [true]],
+      ["/profiles/work/.", [false]],
+    ]);
+  });
+
+  it("asks nothing for a folder with a pane under a profile it can't name", async () => {
+    await restore([
+      codexPane("kept", undefined, { agentSessionId: "s-1" }),
+      codexPane("a", "Task A"),
+      codexPane("b", "Task B", { env: { CODEX_HOME: "relative/profile" } }),
+    ]);
+
+    expect(matchRestoreSessionsMock).not.toHaveBeenCalled();
+  });
+
+  it("asks nothing for a folder with a pane whose id is alive in another workspace", async () => {
+    const panels = [
+      codexPane("kept", undefined, { agentSessionId: "s-1" }),
+      codexPane("a", "Task A"),
+    ];
+    const ctx = makeContext({
+      prefetchedReconnectResults: {
+        kept: { exists: false, conflict: true },
+        a: { exists: false },
+      },
+    });
+
+    await restorePanelsPhase(panels, ctx);
+
+    expect(matchRestoreSessionsMock).not.toHaveBeenCalled();
+  });
+
+  it("asks nothing when the probe missed a pane, even one with a saved id", async () => {
+    const panels = [
+      codexPane("kept", undefined, { agentSessionId: "s-1" }),
+      codexPane("a", "Task A"),
+    ];
+    const ctx = makeContext({ prefetchedReconnectResults: { a: { exists: false } } });
+
+    await restorePanelsPhase(panels, ctx);
+
+    expect(matchRestoreSessionsMock).not.toHaveBeenCalled();
   });
 
   it("asks nothing for a folder where a live pane runs a conversation nobody can name", async () => {

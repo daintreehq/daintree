@@ -8,7 +8,10 @@ import {
   type RestoreMatchPane,
   type RestoreMatchThread,
 } from "../codexRestoreMatch.js";
-import { launchPromptArgText } from "../../../../shared/types/agentSettings.js";
+import {
+  generateAgentCommand,
+  launchPromptArgText,
+} from "../../../../shared/types/agentSettings.js";
 import { appendHandbackInstruction } from "../../../../shared/utils/handback.js";
 
 const AT = 1_800_000_000_000;
@@ -37,8 +40,25 @@ function pane(
 describe("promptHashesForFirstMessage", () => {
   it("recognizes a launch prompt in the single-line form the CLI received", () => {
     const written = "  Triage #12\n\nRead the logs\r\nthen report  \n";
+    // What the CLI got, spelled out rather than derived: trimmed, each line
+    // break one space, and the launch command carries exactly this.
+    const received = "Triage #12  Read the logs then report";
 
-    expect(promptHashesForFirstMessage(launchPromptArgText(written))).toContain(paneHash(written));
+    expect(
+      generateAgentCommand("codex", {}, "codex", { initialPrompt: written }).endsWith(
+        `'${received}'`
+      )
+    ).toBe(true);
+    expect(promptHashesForFirstMessage(received)).toContain(paneHash(written));
+  });
+
+  it("keeps a lone carriage return, as the launch command does", () => {
+    expect(promptHashesForFirstMessage("Line one\rline two")).toContain(
+      paneHash("Line one\rline two")
+    );
+    expect(promptHashesForFirstMessage("Line one line two")).not.toContain(
+      paneHash("Line one\rline two")
+    );
   });
 
   it("recognizes the written prompt under the handback instruction appended at launch", () => {
@@ -166,6 +186,20 @@ describe("matchRestorePanes", () => {
     );
 
     expect(matches).toEqual([]);
+  });
+
+  it("never answers a pane that isn't asking, even with a unique match", () => {
+    const matches = matchRestorePanes(
+      [
+        {
+          threads: [thread("t-a", "Task A"), thread("t-w", "Task W")],
+          panes: [pane("a", "Task A"), pane("winner", "Task W", { resolve: false })],
+        },
+      ],
+      new Set()
+    );
+
+    expect(matches).toEqual([{ key: "a", sessionId: "t-a" }]);
   });
 
   it("matches one broadcast prompt in each folder it went to", () => {

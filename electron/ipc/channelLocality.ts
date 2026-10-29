@@ -185,6 +185,7 @@ export const CHANNEL_LOCALITY = {
   "clipboard:write-text": "shell",
   "codex:find-sessions": "host",
   "codex:list-subagents": "host",
+  "codex:match-restore-sessions": "host",
   // Quota is the Codex account on the machine the agents run on.
   "codex:read-quota": "host",
   "codex:refresh-quota": "host",

@@ -105,6 +105,8 @@ interface RawThread {
   preview?: unknown;
   /** The user's own name for the thread, when they gave it one. */
   name?: unknown;
+  /** Where the session came from: `"cli"` for the TUI, `"exec"` for `codex exec`. */
+  source?: unknown;
   cwd?: unknown;
   status?: unknown;
   createdAt?: unknown;
@@ -688,13 +690,32 @@ const RESTORE_MATCH_MAX_PAGES = 10;
 class RestoreMatchIncomplete extends Error {}
 
 /**
+ * Every source a thread can be filed under. The listing default is interactive
+ * sources only, which would leave out the thread of a pane launched with
+ * `codex exec` — and a thread nobody could see can't make a prompt ambiguous.
+ */
+const ALL_THREAD_SOURCE_KINDS = [
+  "cli",
+  "vscode",
+  "exec",
+  "appServer",
+  "subAgent",
+  "subAgentReview",
+  "subAgentCompact",
+  "subAgentThreadSpawn",
+  "subAgentOther",
+  "unknown",
+];
+
+/**
  * Every root thread in `cwds` created at or after `sinceMs`, newest first.
  *
  * A thread no listed pane could have opened is left unread, so the walk stops
- * at the first row older than the earliest launch — which is only proof of
- * having seen the rest when the rows really arrive newest first. A row out of
- * order, one with no creation time, a server that won't say whether more
- * follow, or a folder deeper than the page cap ends the match instead.
+ * after the first page that reaches back past the earliest launch — which is
+ * only proof of having seen the rest when the rows really arrive newest first.
+ * So every row on every page read is checked: one out of order, one with no
+ * creation time, a server that doesn't say whether more follow, or a folder
+ * deeper than the page cap ends the match instead.
  */
 async function listRootThreadsCreatedSince(
   call: CodexAppServerCall,
@@ -710,44 +731,53 @@ async function listRootThreadsCreatedSince(
       sortKey: "created_at",
       sortDirection: "desc",
       limit: RESTORE_MATCH_PAGE_LIMIT,
+      sourceKinds: ALL_THREAD_SOURCE_KINDS,
       useStateDbOnly: true,
       ...(cursor !== undefined && { cursor }),
     });
     if (!Array.isArray(response?.data)) throw new RestoreMatchIncomplete();
-    const threads = response.data as Array<RawThread | null | undefined>;
-    for (const thread of threads) {
+    let reachedCutoff = false;
+    for (const thread of response.data as Array<RawThread | null | undefined>) {
       const createdAt = numberOf(thread?.createdAt);
       if (!thread || createdAt === null || createdAt > previousCreatedAt) {
         throw new RestoreMatchIncomplete();
       }
       previousCreatedAt = createdAt;
-      if (createdAt * 1000 < sinceMs) return roots;
-      if (asString(thread.parentThreadId) === null) roots.push(thread);
+      if (createdAt * 1000 < sinceMs) {
+        reachedCutoff = true;
+      } else if (asString(thread.parentThreadId) === null) {
+        roots.push(thread);
+      }
     }
-    const next = response.nextCursor;
-    if (typeof next === "string") {
-      cursor = next;
-      continue;
-    }
-    if (next === null || (next === undefined && threads.length < RESTORE_MATCH_PAGE_LIMIT)) {
-      return roots;
-    }
-    throw new RestoreMatchIncomplete();
+    if (reachedCutoff || response.nextCursor === null) return roots;
+    if (typeof response.nextCursor !== "string") throw new RestoreMatchIncomplete();
+    cursor = response.nextCursor;
   }
   throw new RestoreMatchIncomplete();
 }
 
 /**
  * Every root `codex resume --last` could open in `cwds`: the most recent one,
- * and any tied with it, since the CLI breaks that tie itself.
+ * and any tied with it, since the CLI breaks that tie itself. Asked the way
+ * `--last` selects (see {@link resolveCodexResumeLatestSession}); a tie that
+ * may run on past the page ends the match rather than leave one out.
  */
 async function listResumeLatestIds(call: CodexAppServerCall, cwds: string[]): Promise<string[]> {
+  const response = await call<{ data?: unknown; nextCursor?: unknown }>("thread/list", {
+    cwd: cwds,
+    sortKey: "recency_at",
+    sortDirection: "desc",
+    limit: PARENT_CANDIDATE_LIMIT,
+    useStateDbOnly: true,
+  });
+  if (!Array.isArray(response?.data)) throw new RestoreMatchIncomplete();
+  const threads = response.data as Array<RawThread | null | undefined>;
   let top = Number.NEGATIVE_INFINITY;
   let ids: string[] = [];
-  for (const thread of await listThreadsInCwd(call, cwds)) {
-    const threadId = asString(thread.id);
-    if (threadId === null || asString(thread.parentThreadId) !== null) continue;
-    const id = asString(thread.sessionId) ?? threadId;
+  for (const thread of threads) {
+    if (!thread || asString(thread.parentThreadId) !== null) continue;
+    const id = asString(thread.sessionId) ?? asString(thread.id);
+    if (id === null) throw new RestoreMatchIncomplete();
     const activity = activityOf(thread);
     if (activity > top) {
       top = activity;
@@ -755,6 +785,10 @@ async function listResumeLatestIds(call: CodexAppServerCall, cwds: string[]): Pr
     } else if (activity === top) {
       ids.push(id);
     }
+  }
+  const last = threads[threads.length - 1];
+  if (last && ids.length > 0 && activityOf(last) === top && response.nextCursor !== null) {
+    throw new RestoreMatchIncomplete();
   }
   return ids;
 }
@@ -822,34 +856,38 @@ export async function matchCodexRestoreSessions(
 }
 
 /**
- * One entry per session. A thread listed twice with different creation times
- * can't be placed, and one whose id isn't safe to put on a command line can't
- * be resumed — both stay candidates, so they still make a pane ambiguous, but
- * neither is ever handed out.
+ * One entry per session. A thread a pane's `codex resume` couldn't reopen — one
+ * filed under another source, or whose id isn't safe to put on a command line
+ * — stays a candidate, so it still makes a pane ambiguous, but is never handed
+ * out. A root that can't be read, or one listed twice with different details,
+ * ends the match: dropping it could leave a rival out of the count.
  */
 function toRestoreMatchThreads(
   threads: RawThread[],
   unavailable: Set<string>
 ): RestoreMatchThread[] {
-  const byId = new Map<string, RestoreMatchThread>();
+  const byId = new Map<string, { thread: RestoreMatchThread; preview: string }>();
   for (const thread of threads) {
     const id = asString(thread.sessionId) ?? asString(thread.id);
-    if (id === null) continue;
-    if (!CODEX_SESSION_ID_PATTERN.test(id)) unavailable.add(id);
+    if (id === null || typeof thread.preview !== "string") throw new RestoreMatchIncomplete();
     const createdAtMs = secondsToMs(thread.createdAt);
     const existing = byId.get(id);
     if (existing) {
-      if (existing.createdAtMs !== createdAtMs) unavailable.add(id);
+      if (existing.thread.createdAtMs !== createdAtMs || existing.preview !== thread.preview) {
+        throw new RestoreMatchIncomplete();
+      }
       continue;
     }
+    if (!CODEX_SESSION_ID_PATTERN.test(id) || thread.source !== "cli") unavailable.add(id);
     byId.set(id, {
-      sessionId: id,
-      createdAtMs,
-      // The session's own first message, compared as a digest and never kept.
-      promptHashes: promptHashesForFirstMessage(
-        typeof thread.preview === "string" ? thread.preview : ""
-      ),
+      preview: thread.preview,
+      thread: {
+        sessionId: id,
+        createdAtMs,
+        // The session's own first message, compared as a digest and never kept.
+        promptHashes: promptHashesForFirstMessage(thread.preview),
+      },
     });
   }
-  return [...byId.values()];
+  return [...byId.values()].map((entry) => entry.thread);
 }

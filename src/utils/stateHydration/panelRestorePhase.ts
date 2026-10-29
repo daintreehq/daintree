@@ -466,13 +466,16 @@ async function resolveNamedResumeLatestSession(
 interface CodexRestoreMatchPlan {
   /** Saved panes whose respawn waits on {@link matches}. */
   paneIds: ReadonlySet<string>;
-  /** Saved pane id → the conversation its launch prompt names, already claimed. */
-  matches: Promise<ReadonlyMap<string, string>>;
+  /**
+   * Saved pane id → the conversation its launch prompt names, already claimed.
+   * Asked of main once, by the first pane that can use the answer.
+   */
+  matches: () => Promise<ReadonlyMap<string, string>>;
 }
 
 const NO_CODEX_RESTORE_MATCHES: CodexRestoreMatchPlan = {
   paneIds: new Set(),
-  matches: Promise.resolve(new Map()),
+  matches: () => Promise.resolve(new Map()),
 };
 
 // What the IPC op accepts, so a request that would be refused is never sent.
@@ -509,21 +512,26 @@ async function launchPromptHash(text: string): Promise<string> {
  * began in one folder without a saved id (#15269), when its launch prompt
  * points at exactly one thread there.
  *
- * Runs right after the election, before any task dispatches, and asks main once
- * for the whole restore: a pane's answer depends on every other claimant in its
- * folder, so the panes can't be matched one at a time. Two kinds of pane ask:
+ * Planned right after the election, before any task dispatches, and asked of
+ * main once for the whole restore: a pane's answer depends on every other
+ * claimant in its folder, so the panes can't be matched one at a time. Two kinds of pane ask:
  * one the election just denied the folder's resume-latest slot, and one an
  * earlier restore held for the same reason with nothing in hand — the case of
  * anyone who came back to a row of them before this existed. Every other Codex
- * pane in the folder with a launch prompt goes along as a claimant only, so a
- * thread it might own is never handed to someone else; one whose PTY is still
- * running a conversation nobody knows the id of takes its folder out entirely,
- * since nothing could keep a match off its transcript.
+ * pane with a prompt on record goes along as a claimant only, so a thread it
+ * might own is never handed to someone else. A folder is left out entirely
+ * where something could be running a conversation nobody knows the id of: a
+ * live PTY with no id, a pane the bulk probe didn't report or found alive in
+ * another workspace, or a pane under a profile that can't be named to main.
  *
- * Only a launch prompt kept whole is evidence. A prompt cut at the record's
- * cap could be the opening of another conversation, and a sent one may follow
- * whatever was typed by hand. Each prompt crosses as a digest of the form the
- * CLI received, so no conversation text leaves the renderer.
+ * Only a launch prompt kept whole is evidence. A sent one may follow whatever
+ * was typed by hand, and one starting with `-` reached the CLI as an option.
+ * A prompt cut at the record's cap opened a thread longer than any prompt that
+ * asks, so it can't be a rival. A sibling with no prompt on record opened its
+ * thread with something typed, which would have to repeat another pane's
+ * launch prompt exactly, within minutes of that launch, to be mistaken for it.
+ * Each prompt crosses as a digest of the form the CLI received, so no
+ * conversation text leaves the renderer.
  *
  * Matches are claimed in `claimedSessionKeys` the moment they arrive, all at
  * once, so the order panes reach their respawn can't decide who keeps what. A
@@ -593,15 +601,16 @@ function planCodexRestoreMatches(
     }
 
     if (savedAgentId !== CODEX_AGENT_ID) continue;
-    if (saved.agentSessionId) {
-      exclude.add(saved.agentSessionId);
-      continue;
-    }
     const cwd = conversationScopeCwd(saved, savedAgentId) || context.projectRoot;
     const scope = resumeScopeKey(savedAgentId, cwd);
-    // Unprobed, so its own reconnect may yet find it running something unknown.
-    if (prefetched === undefined) {
+    // Unprobed, its own reconnect may yet find it running something other than
+    // what the snapshot says; alive in another workspace, it is running now.
+    if (prefetched === undefined || prefetched.conflict === true) {
       blockedScopes.add(scope);
+      continue;
+    }
+    if (saved.agentSessionId) {
+      exclude.add(saved.agentSessionId);
       continue;
     }
     const recovery = sanitizeRestoreRecovery(saved.restoreRecovery);
@@ -611,13 +620,18 @@ function planCodexRestoreMatches(
     }
 
     const prompt = sanitizeFirstPrompt("firstPrompt" in saved ? saved.firstPrompt : undefined);
-    if (!prompt || prompt.via !== "launch" || prompt.truncated || prompt.at <= 0) continue;
+    if (!prompt || prompt.truncated || prompt.at <= 0) continue;
     const codexHome = codexHomeOf(saved.env);
-    if (codexHome === null) continue;
-    if (!MATCH_KEY_PATTERN.test(saved.id)) {
+    if (codexHome === null || !MATCH_KEY_PATTERN.test(saved.id)) {
       blockedScopes.add(scope);
       continue;
     }
+    const held =
+      recovery === undefined
+        ? resumeSuppression.resumeLatest.has(saved.id)
+        : recovery.reason === "sibling-owns-resume-latest-slot" &&
+          recovery.sessionId === undefined &&
+          !recovery.awaitingDestination;
     entries.push({
       scope,
       cwd,
@@ -625,12 +639,7 @@ function planCodexRestoreMatches(
       key: saved.id,
       at: prompt.at,
       text: prompt.text,
-      resolve:
-        recovery === undefined
-          ? resumeSuppression.resumeLatest.has(saved.id)
-          : recovery.reason === "sibling-owns-resume-latest-slot" &&
-            recovery.sessionId === undefined &&
-            !recovery.awaitingDestination,
+      resolve: held && prompt.via === "launch" && !launchPromptArgText(prompt.text).startsWith("-"),
     });
   }
 
@@ -653,26 +662,28 @@ function planCodexRestoreMatches(
     if (group) group.push(entry);
     else groups.set(groupKey, [entry]);
   }
-  const asking = [...groups.values()].filter((group) => group.some((entry) => entry.resolve));
+  // Every group goes, not only the asking ones: a claimant under another
+  // spelling of the same profile or folder still has to be counted.
+  const sending = [...groups.values()];
   const excluded = [...exclude].filter((id) => MATCH_KEY_PATTERN.test(id));
+  const paneIds = new Set(
+    sending
+      .flat()
+      .filter((entry) => entry.resolve)
+      .map((entry) => entry.key)
+  );
   if (
-    asking.length === 0 ||
-    asking.length > MATCH_MAX_SCOPES ||
-    asking.some((group) => group.length > MATCH_MAX_PANES_PER_SCOPE) ||
+    paneIds.size === 0 ||
+    sending.length > MATCH_MAX_SCOPES ||
+    sending.some((group) => group.length > MATCH_MAX_PANES_PER_SCOPE) ||
     excluded.length > MATCH_MAX_EXCLUDED
   ) {
     return NO_CODEX_RESTORE_MATCHES;
   }
 
-  const paneIds = new Set(
-    asking
-      .flat()
-      .filter((entry) => entry.resolve)
-      .map((entry) => entry.key)
-  );
-  const matches = (async (): Promise<ReadonlyMap<string, string>> => {
+  const lookUp = async (): Promise<ReadonlyMap<string, string>> => {
     const scopes = await Promise.all(
-      asking.map(async (group): Promise<CodexRestoreMatchScope> => {
+      sending.map(async (group): Promise<CodexRestoreMatchScope> => {
         const first = group[0]!;
         const panes = await Promise.all(
           group.map(async (entry): Promise<CodexRestoreMatchPane> => ({
@@ -701,8 +712,12 @@ function planCodexRestoreMatches(
       claimed.set(key, sessionId);
     }
     return claimed;
-  })().catch((): ReadonlyMap<string, string> => new Map());
-  return { paneIds, matches };
+  };
+  let pending: Promise<ReadonlyMap<string, string>> | undefined;
+  return {
+    paneIds,
+    matches: () => (pending ??= lookUp().catch((): ReadonlyMap<string, string> => new Map())),
+  };
 }
 
 /**
@@ -1368,8 +1383,14 @@ export async function restorePanelsPhase(
                         allowResumeLatest
                       )
                 );
+                // One still waiting on a destination stays held for that
+                // choice, so it doesn't wait on an answer it can't use.
                 const matchedSessionPromise = codexRestoreMatches.paneIds.has(saved.id)
-                  ? codexRestoreMatches.matches.then((matches) => matches.get(saved.id))
+                  ? coldLaunchPromise.then((coldLaunch) =>
+                      coldLaunch?.awaitingDestination
+                        ? undefined
+                        : codexRestoreMatches.matches().then((matches) => matches.get(saved.id))
+                    )
                   : Promise.resolve(undefined);
                 const [resolvedAgentBaseCommand, coldLaunch, namedSessionId, matchedSessionId] =
                   await Promise.all([
@@ -1393,10 +1414,9 @@ export async function restorePanelsPhase(
                 }
                 // Held for want of a conversation, now named by its launch
                 // prompt (#15269): it resumes like a pane that kept its id,
-                // and an earlier hold it carried is answered by that. One
-                // still waiting on a destination stays held for that choice.
+                // and an earlier hold it carried is answered by that.
                 const respawnSaved =
-                  matchedSessionId !== undefined && !coldLaunch?.awaitingDestination
+                  matchedSessionId !== undefined
                     ? { ...saved, agentSessionId: matchedSessionId, restoreRecovery: undefined }
                     : saved;
                 if (respawnSaved !== saved) {
