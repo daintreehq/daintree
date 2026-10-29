@@ -202,7 +202,12 @@ export function moveTerminalToWorktreeAndFollowRescue(
     usePanelStore.getState().panelsById[focusedId]?.worktreeId === targetWorktreeId
   ) {
     if (focusStaysInView) {
-      // Re-asserted so a pane that left the dock for the grid drops the dock pointer.
+      // A pane arriving in the grid with the keyboard can't be parked behind
+      // another pane's fullscreen (#11060), and re-asserting focus makes the dock
+      // let go of one that came from there.
+      if (usePanelStore.getState().panelsById[focusedId]?.location === "grid") {
+        usePanelStore.getState().exitMaximize();
+      }
       usePanelStore.getState().setFocused(focusedId);
     } else {
       if (focusWasDocked) usePanelStore.getState().closeDockTerminal(focusedId);

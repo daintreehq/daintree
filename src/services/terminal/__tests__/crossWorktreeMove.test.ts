@@ -6,6 +6,7 @@ import {
   type PtyPanelData,
 } from "@shared/types/panel";
 import type { DeletedWorktree } from "@/store/worktreeStore";
+import { NO_WORKTREE } from "@/store/slices/panelRegistry/worktreeIndex";
 
 vi.mock("@/clients", () => ({
   terminalClient: { resize: vi.fn(), submit: vi.fn().mockResolvedValue(undefined) },
@@ -587,11 +588,29 @@ describe("focus after a cross-worktree move (#14974)", () => {
 
     moveTerminalToWorktreeAndFollowRescue("d1", "wt-a");
 
-    // Still on screen, now in the grid: the pane keeps the keyboard and the dock
-    // lets go of it.
+    // Now in the grid: the pane keeps the keyboard and the dock lets go of it.
     expect(usePanelStore.getState().panelsById["d1"]?.location).toBe("grid");
     expect(usePanelStore.getState().focusedId).toBe("d1");
     expect(usePanelStore.getState().activeDockTerminalId).toBeNull();
+  });
+
+  it("brings an arriving focused pane out from behind another pane's maximize", () => {
+    const globalDock: PtyPanelData = { ...panel("d1", "wt-a", "dock"), worktreeId: undefined };
+    usePanelStore.setState({
+      panelsById: { d1: globalDock, g1: panel("g1", "wt-a") },
+      panelIds: ["d1", "g1"],
+      panelIdsByWorktreeId: { "wt-a": ["g1"] },
+      maximizedId: "g1",
+      maximizeTarget: { type: "panel", id: "g1" },
+    });
+    standIn("wt-a");
+    setLiveWorktrees(["wt-a"]);
+    usePanelStore.getState().setFocused("d1");
+
+    moveTerminalToWorktreeAndFollowRescue("d1", "wt-a");
+
+    expect(usePanelStore.getState().focusedId).toBe("d1");
+    expect(usePanelStore.getState().maximizedId).toBeNull();
   });
 
   it("hands focus on in a view with no worktree selected", () => {
@@ -599,7 +618,7 @@ describe("focus after a cross-worktree move (#14974)", () => {
     usePanelStore.setState({
       panelsById: { t1: loose("t1"), t2: loose("t2") },
       panelIds: ["t1", "t2"],
-      panelIdsByWorktreeId: {},
+      panelIdsByWorktreeId: { [NO_WORKTREE]: ["t1", "t2"] },
     });
     useWorktreeSelectionStore.setState({ activeWorktreeId: null });
     setLiveWorktrees(["wt-b"]);
@@ -608,6 +627,7 @@ describe("focus after a cross-worktree move (#14974)", () => {
     moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
 
     expect(usePanelStore.getState().focusedId).toBe("t2");
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBeNull();
   });
 
   it("still lands on the destination's last-focused pane when rescuing the focused one", () => {
