@@ -77,12 +77,10 @@ export function HostPluginViewConsents({ hostId, hostName }: HostPluginViewConse
       },
       (err: unknown) => {
         settle();
+        const why = clientErrorText(err, "");
         setResetErrors((prev) => ({
           ...prev,
-          [pluginId]: clientErrorText(
-            err,
-            `Couldn't reset the plugin view for ${pluginLabel(pluginId)}`
-          ),
+          [pluginId]: why ? `Couldn't reset it: ${why}` : "Couldn't reset it",
         }));
       }
     );

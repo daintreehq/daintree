@@ -85,9 +85,7 @@ describe("HostPluginViewConsents", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Reset the plugin view for acme.graph" }));
     });
-    expect(screen.getByRole("alert").textContent).toBe(
-      "Couldn't reset the plugin view for acme.graph"
-    );
+    expect(screen.getByRole("alert").textContent).toBe("Couldn't reset it: host gone");
     expect(screen.queryByText("Couldn't load plugin views")).toBeNull();
     expect(client.listPluginViewConsents).toHaveBeenCalledTimes(1);
 
