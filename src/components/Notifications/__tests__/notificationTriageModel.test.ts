@@ -94,6 +94,20 @@ describe("notificationTriageModel", () => {
     expect(result.needsAttentionOverflow).toBe(0);
   });
 
+  it("stops pinning an unread error from weeks ago, leaving it in Unread and All", () => {
+    const now = Date.now();
+    const day = 24 * 60 * 60 * 1000;
+    const stale = entry({ type: "error", seenAsToast: false, timestamp: now - 40 * day });
+    const recent = entry({ type: "warning", seenAsToast: false, timestamp: now - 60_000 });
+    const result = view([recent, stale]);
+    expect(result.needsAttentionGroups.map((g) => g.entries[0]!.id)).toEqual([recent.id]);
+    expect(result.needsAttentionOverflow).toBe(0);
+    for (const filter of ["all", "unread"] as const) {
+      const rows = view([recent, stale], { filter }).chronoSections.flatMap((s) => s.groups);
+      expect(rows.map((g) => g.entries[0]!.id)).toEqual([recent.id, stale.id]);
+    }
+  });
+
   it("keeps the pinned rail out of Archived and Snoozed", () => {
     const err = entry({ type: "error", seenAsToast: false });
     for (const filter of ["archived", "snoozed"] as const) {
