@@ -16,6 +16,8 @@ const state = vi.hoisted(() => ({
   dispatch: vi.fn(async () => ({ ok: true })),
   retryHostProjects: vi.fn(),
   switchWindowHost: vi.fn(),
+  reportError: vi.fn(),
+  readWork: vi.fn(async (_hostId: string) => Promise.reject(new Error("no records"))),
 }));
 
 vi.mock("react-dom", async () => {
@@ -43,6 +45,7 @@ vi.mock("@/clients/canopyHostClient", () => ({
   canopyHostClient: {
     invoke: state.invoke,
     release: state.release,
+    readAssistantWork: state.readWork,
     onEvent: (callback: (event: CanopyHostEvent) => void) => {
       state.listeners.add(callback);
       return () => state.listeners.delete(callback);
@@ -59,6 +62,9 @@ vi.mock("../CanopyTerminal", () => ({
 }));
 vi.mock("@/components/Terminal/HybridInputBar", () => ({ HybridInputBar: () => null }));
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
+vi.mock("@/utils/rendererGlobalErrorHandlers", () => ({
+  reportRendererGlobalError: state.reportError,
+}));
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CanopyView } from "../CanopyView";
@@ -748,7 +754,7 @@ describe("the Canopy host picker", () => {
       }),
     ];
     state.invoke.mockRejectedValue(
-      Object.assign(new Error("Host studio is not connected"), { code: "HOST_DISCONNECTED" })
+      new Error("[AppError|HOST_DISCONNECTED] Host studio is not connected")
     );
     installElectron();
     useCanopyStore.setState({ hostId: "studio" });
@@ -757,11 +763,46 @@ describe("the Canopy host picker", () => {
     expect(document.body.textContent).toContain("Can't reach studio-01");
     expect(document.body.textContent).toContain("Unreachable.");
     expect(document.querySelector("[data-canopy-card]")).toBeNull();
+    expect(state.reportError).not.toHaveBeenCalled();
 
     state.invoke.mockClear();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await settle();
     expect(channelsCalled()).toContain("studio canopy:set-active");
+  });
+
+  it("reports no refusal from a host whose link is down, and still reports any other failure", async () => {
+    state.hosts = [host("studio", "studio-01", { status: "disconnected" })];
+    const refused = () =>
+      Promise.reject(new Error("[AppError|HOST_DISCONNECTED] Host studio is not connected"));
+    state.invoke.mockImplementation(refused);
+    state.release.mockImplementation(refused);
+    installElectron();
+    useCanopyStore.setState({ hostId: "studio" });
+    render(<CanopyView />);
+    await settle();
+    expect(channelsCalled()).toContain("studio canopy:set-scope");
+    expect(channelsCalled()).toContain("studio canopy:set-shown");
+    act(() => useCanopyStore.getState().setHostId(null));
+    await settle();
+    expect(state.release).toHaveBeenCalledWith("studio");
+    expect(state.reportError).not.toHaveBeenCalled();
+
+    state.invoke.mockImplementation(async (_hostId: string, channel: string) => {
+      if (channel === "canopy:set-scope") throw new Error("[AppError|INTERNAL] scope refused");
+      return channel === "fleet:get-snapshot"
+        ? remoteFleet
+        : channel === "canopy:set-active"
+          ? remoteCanopy
+          : null;
+    });
+    act(() => useCanopyStore.getState().setHostId("studio"));
+    await settle();
+    expect(state.reportError).toHaveBeenCalledWith(
+      "unhandledrejection",
+      expect.objectContaining({ code: "INTERNAL" }),
+      expect.anything()
+    );
   });
 
   it("goes back to the window's own host when the host shown is removed", async () => {
@@ -1023,25 +1064,75 @@ describe("All hosts", () => {
     expect(document.body.textContent).not.toContain("Not every host");
   });
 
-  it("says a host whose link fails can't be reached, with Retry", async () => {
-    installElectron();
-    useFleetSnapshotStore.setState({ snapshot: fleet([]) });
+  /** Nothing about the host is said, and the hosts that answered read as they would alone. */
+  function saysNothingOf(name: string) {
+    for (const words of [`reach ${name}`, `Connecting to ${name}`, `${name} isn't connected`]) {
+      expect(document.body.textContent).not.toContain(words);
+    }
+    expect(document.body.textContent).not.toContain("Not every host");
+    expect(document.querySelector("[data-callout]")).toBeNull();
+    expect(document.querySelector("[data-testid=canopy-host-issues]")).toBeNull();
+    expect(document.querySelector("[data-testid=canopy-hosts-connecting]")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  }
+
+  function calmEverywhere() {
+    const settled = canopySnapshot({ cards: [calmCard("shared-run")] });
+    remoteFleet = workingFleet(["shared-run"]);
+    remoteCanopy = settled;
+    useFleetSnapshotStore.setState({ snapshot: workingFleet(["shared-run"]) });
+    useCanopyStore.setState({ snapshot: settled });
+    installElectron().setActive.mockResolvedValue(settled);
+  }
+
+  it("leaves out a host it can't reach, saying nothing of it, and lists it once it comes back", async () => {
+    calmEverywhere();
     state.hosts = [
       host("studio", "studio-01", { status: "unreachable", lastSeenAt: null, detail: null }),
+      host("build", "build-02"),
     ];
-    state.invoke.mockRejectedValue(
-      new Error("[AppError|HOST_DISCONNECTED] Host studio is not connected")
+    const answers = state.invoke.getMockImplementation()!;
+    state.invoke.mockImplementation((hostId: string, ...rest: unknown[]) =>
+      hostId === "studio"
+        ? Promise.reject(new Error("[AppError|HOST_DISCONNECTED] Host studio is not connected"))
+        : answers(hostId, ...rest)
     );
-    render(<CanopyView />);
+    const { rerender } = render(<CanopyView />);
     await settle();
-    expect(document.body.textContent).toContain("Can't reach studio-01");
-    expect(document.body.textContent).toContain("Not every host could be read");
-    expect(document.querySelector('[data-callout="warning"]')).not.toBeNull();
+    expect(cardOf("local", "shared-run")).not.toBeNull();
+    expect(cardOf("build", "shared-run")).not.toBeNull();
+    expect(cardOf("studio", "shared-run")).toBeNull();
+    saysNothingOf("studio-01");
+    expect(summaryWords()).toBe("Nothing needs you");
+    expect(bandWords()).toBe("No action needed");
 
-    state.invoke.mockClear();
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    // Its link retried in the background, and still not answering: still nothing said.
+    state.hosts = [
+      host("studio", "studio-01", { status: "connecting", attempt: 2 }),
+      host("build", "build-02"),
+    ];
+    rerender(<CanopyView />);
     await settle();
-    expect(channelsCalled()).toContain("studio canopy:set-active");
+    saysNothingOf("studio-01");
+    expect(summaryWords()).toBe("Nothing needs you");
+    // Left out, not let go: its viewer stays open for the link to come back on,
+    // and no assistant's work is read from it meanwhile.
+    expect(state.release).not.toHaveBeenCalled();
+    expect(state.readWork.mock.calls.map((call) => call[0])).toContain("build");
+    expect(state.readWork.mock.calls.map((call) => call[0])).not.toContain("studio");
+
+    // Back: the link comes up and says `resync`, and its agents are read and listed.
+    state.invoke.mockImplementation(answers);
+    state.hosts = [host("studio", "studio-01"), host("build", "build-02")];
+    rerender(<CanopyView />);
+    act(() => {
+      for (const listener of state.listeners) listener({ kind: "resync", hostId: "studio" });
+    });
+    await settle();
+    expect(cardOf("studio", "shared-run")).not.toBeNull();
+    expect(cardOf("build", "shared-run")).not.toBeNull();
+    saysNothingOf("studio-01");
+    expect(summaryWords()).toBe("Nothing needs you");
   });
 
   it("says a host whose link failed can't be reached while its reads are still owed", async () => {
@@ -1062,41 +1153,66 @@ describe("All hosts", () => {
 
   it.each([
     ["disconnected", { status: "disconnected" }],
+    ["redialling", { status: "connecting", attempt: 1 }],
     ["unreachable", { status: "unreachable", lastSeenAt: null, detail: null }],
   ] as const)(
-    "says a host's agents are as last seen once its link drops after they were read (%s)",
+    "drops a host's agents once its link goes after they were read, and brings them back with it (%s)",
     async (_status, connection) => {
-      installElectron();
+      calmEverywhere();
       // Its model still downloading when it was read: progress, until the link drops.
       remoteCanopy = canopySnapshot({
+        cards: [calmCard("shared-run")],
         model: { id: "m", status: "downloading", received: 1, total: 2 },
       });
       const { rerender } = render(<CanopyView />);
       await settle();
       expect(cardOf("studio", "shared-run")).not.toBeNull();
       expect(document.body.textContent).toContain("Downloading Canopy's model on studio-01");
-      expect(document.querySelector('[data-callout="warning"]')).toBeNull();
 
       state.hosts = [host("studio", "studio-01", connection)];
       rerender(<CanopyView />);
       await settle();
-      const lastSeen = "studio-01 isn't connected. Its agents are as last seen";
-      expect(document.body.textContent).toContain(lastSeen);
+      expect(cardOf("studio", "shared-run")).toBeNull();
+      expect(cardOf("local", "shared-run")).not.toBeNull();
+      saysNothingOf("studio-01");
+      expect(summaryWords()).toBe("Nothing needs you");
 
-      // Read again over the dropped link: refused, and the agents still as last seen.
-      state.invoke.mockClear();
-      state.invoke.mockRejectedValue(
-        new Error("[AppError|HOST_DISCONNECTED] Host studio is not connected")
-      );
-      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      // The link is back: what it last showed is listed again until its reread lands.
+      remoteCanopy = canopySnapshot({ cards: [calmCard("shared-run")] });
+      state.hosts = [host("studio", "studio-01")];
+      rerender(<CanopyView />);
       await settle();
-      expect(channelsCalled()).toContain("studio canopy:set-active");
-      expect(channelsCalled()).toContain("studio fleet:get-snapshot");
-      expect(document.body.textContent).toContain(lastSeen);
-      expect(document.body.textContent).not.toContain("Can't reach studio-01");
       expect(cardOf("studio", "shared-run")).not.toBeNull();
+      act(() => {
+        for (const listener of state.listeners) listener({ kind: "resync", hostId: "studio" });
+      });
+      await settle();
+      expect(cardOf("studio", "shared-run")).not.toBeNull();
+      saysNothingOf("studio-01");
+      expect(summaryWords()).toBe("Nothing needs you");
     }
   );
+
+  it("keeps a host's agents as last seen when its link is refused for another build", async () => {
+    installElectron();
+    const { rerender } = render(<CanopyView />);
+    await settle();
+    expect(cardOf("studio", "shared-run")).not.toBeNull();
+
+    state.hosts = [
+      host("studio", "studio-01", {
+        status: "version-mismatch",
+        mismatch: { kind: "protocol", local: 2, remote: 1 },
+        remote: HANDSHAKE,
+      }),
+    ];
+    rerender(<CanopyView />);
+    await settle();
+    expect(document.body.textContent).toContain(
+      "studio-01 isn't connected. Its agents are as last seen"
+    );
+    expect(cardOf("studio", "shared-run")).not.toBeNull();
+  });
 
   it("hands a host over to the single-host panel without releasing it after it is read again", async () => {
     installElectron();
@@ -1320,7 +1436,11 @@ describe("All hosts", () => {
 
     it("keeps a failing host's warning while another host is still connecting", async () => {
       state.hosts = [
-        host("studio", "studio-01", { status: "unreachable", lastSeenAt: null, detail: null }),
+        host("studio", "studio-01", {
+          status: "version-mismatch",
+          mismatch: { kind: "protocol", local: 2, remote: 1 },
+          remote: HANDSHAKE,
+        }),
         host("build", "build-02", { status: "connecting", attempt: 1 }),
       ];
       state.invoke.mockImplementation((hostId: string) =>
@@ -1351,7 +1471,8 @@ describe("All hosts", () => {
       render(<CanopyView />);
       await settle();
       await gate(1_000);
-      expect(document.body.textContent).toContain("Can't reach studio-01");
+      expect(document.body.textContent).not.toContain("studio-01");
+      expect(document.querySelector("[data-callout]")).toBeNull();
       expect(spinner()).toBeNull();
     });
 

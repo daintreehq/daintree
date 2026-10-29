@@ -27,7 +27,7 @@ import {
   workLinksByRun,
 } from "./canopyRelationships";
 import { allHostsKey, parseAllHostsKey } from "./canopyAllHosts";
-import type { CanopyApi } from "./canopyHostSource";
+import { unlessHostDisconnected, type CanopyApi } from "./canopyHostSource";
 import { placeOf } from "./canopyInboxPlace";
 import { isWorkerEntry, projectCanopyInbox } from "./canopyInboxProjection";
 import { useListReorderMotion } from "./useListReorderMotion";
@@ -338,7 +338,9 @@ export function useCanopyInboxFilters({
   const shownKey = isOpen ? visible.map((item) => item.runId).join(" ") : null;
   useEffect(() => {
     if (shownKey === null) return;
-    safeFireAndForget(api.setShown(shownKey === "" ? [] : shownKey.split(" ")));
+    safeFireAndForget(
+      unlessHostDisconnected(api.setShown(shownKey === "" ? [] : shownKey.split(" ")))
+    );
   }, [shownKey, api, recoveries]);
   const listRef = useRef<HTMLDivElement>(null);
   // A search narrows the list, and a terminal's matches landing widen it: neither is a move.

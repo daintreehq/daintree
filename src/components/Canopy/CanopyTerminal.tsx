@@ -21,7 +21,11 @@ import { streamRangeOf, stripCoveredOutput } from "@/services/terminal/streamFen
 import { isTerminalReply } from "@/services/terminal/inputUtils";
 import { logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import { ownCanopyTerminalApi, type CanopyTerminalApi } from "./canopyHostSource";
+import {
+  ownCanopyTerminalApi,
+  unlessHostDisconnected,
+  type CanopyTerminalApi,
+} from "./canopyHostSource";
 
 const SCROLLBACK = 2_000;
 /** The smallest grid worth handing an agent; a smaller measure is a pane mid-layout. */
@@ -442,7 +446,7 @@ export function CanopyTerminal({
       if (disposed) {
         // Opened for a pane already gone: let that one stream go, and only it.
         if (opened.watchId !== null) {
-          safeFireAndForget(api.unwatchTerminal(opened.watchId), {
+          safeFireAndForget(unlessHostDisconnected(api.unwatchTerminal(opened.watchId)), {
             context: "Ending a canopy terminal stream that opened too late",
           });
         }
@@ -533,7 +537,7 @@ export function CanopyTerminal({
       const ownWatchId = view?.watchId ?? null;
       if (ownWatchId !== null) {
         safeFireAndForget(
-          api.unwatchTerminal(ownWatchId).finally(() => release?.()),
+          unlessHostDisconnected(api.unwatchTerminal(ownWatchId)).finally(() => release?.()),
           { context: "Ending the canopy terminal stream" }
         );
       } else {
