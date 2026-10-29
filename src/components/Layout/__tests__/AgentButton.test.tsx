@@ -772,16 +772,14 @@ describe("AgentButton preset UX", () => {
       mockMergedPresetsFn = () => [{ id: "user-alpha", name: "Alpha" }];
 
       const { getAllByTestId, rerender, container } = render(
-        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+        <AgentButton type="claude" availability="ready" />
       );
       expect(rowByText(getAllByTestId, "Agent default").textContent).toContain("Current default");
       expect(rowByText(getAllByTestId, "Alpha").textContent).not.toContain("Current default");
       expect(container.textContent).not.toContain("Start Claude · Alpha");
 
       mockActiveWorktreeId = "wt-B";
-      rerender(
-        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
-      );
+      rerender(<AgentButton type="claude" availability="ready" />);
       expect(rowByText(getAllByTestId, "Alpha").textContent).toContain("Current default");
       expect(container.textContent).toContain("Start Claude · Alpha");
     });

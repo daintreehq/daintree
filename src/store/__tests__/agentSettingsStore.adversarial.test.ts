@@ -352,24 +352,39 @@ describe("agentSettingsStore adversarial", () => {
           agents: {
             claude: { presetId: "user-111", worktreePresets: { "wt-B": "user-222" } },
           },
-        } as never,
+        },
         isInitialized: true,
         isLoading: false,
       });
+      let respond!: () => void;
       clientMock.set.mockImplementation(
-        async (_agentId: string, updates: Record<string, unknown>) => ({
-          agents: { claude: { presetId: "user-111", worktreePresets: updates.worktreePresets } },
-        })
+        (_agentId: string, updates: Record<string, unknown>) =>
+          new Promise((resolve) => {
+            respond = () =>
+              resolve({
+                agents: {
+                  claude: { presetId: "user-111", worktreePresets: updates.worktreePresets },
+                },
+              });
+          })
       );
+      const readEntry = () => useAgentSettingsStore.getState().settings?.agents?.claude;
 
-      await useAgentSettingsStore.getState().updateWorktreePreset("claude", "wt-A", null);
+      const pending = useAgentSettingsStore.getState().updateWorktreePreset("claude", "wt-A", null);
 
       expect(clientMock.set).toHaveBeenCalledWith("claude", {
         worktreePresets: { "wt-B": "user-222", "wt-A": null },
       });
-      const entry = useAgentSettingsStore.getState().settings?.agents?.claude;
-      expect(entry?.presetId).toBe("user-111");
-      expect(entry?.worktreePresets).toEqual({ "wt-B": "user-222", "wt-A": null });
+      // The optimistic state already resolves wt-A to the bare agent, so a
+      // launch while the save is in flight can't pick up the agent-level preset.
+      expect(readEntry()?.presetId).toBe("user-111");
+      expect(readEntry()?.worktreePresets).toEqual({ "wt-B": "user-222", "wt-A": null });
+
+      respond();
+      await pending;
+
+      expect(readEntry()?.presetId).toBe("user-111");
+      expect(readEntry()?.worktreePresets).toEqual({ "wt-B": "user-222", "wt-A": null });
     });
 
     it("collapses an empty map to undefined when the last key is removed", async () => {
