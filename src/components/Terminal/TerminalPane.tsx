@@ -1721,6 +1721,7 @@ function TerminalPaneComponent({
       <BannerSlot visible={worktreeMoveBanner.visible}>
         <WorktreeMoveBanner
           destinationPath={worktreeMoveBanner.destinationPath}
+          carriesDraft={worktreeMoveBanner.carriesDraft}
           deliveryFailed={worktreeMoveBanner.deliveryFailed}
           onTell={worktreeMoveBanner.tell}
           onDismiss={worktreeMoveBanner.dismiss}

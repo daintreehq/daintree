@@ -75,6 +75,8 @@ vi.mock("../../../store/slices/panelRegistry/persistence", async () => {
 });
 
 const { usePanelStore } = await import("@/store/panelStore");
+const { useTerminalInputStore } = await import("@/store/terminalInputStore");
+const { useProjectStore } = await import("@/store/projectStore");
 const { useWorktreeMoveBanner, resolveWorktreeMoveRoute } =
   await import("../useWorktreeMoveBanner");
 
@@ -212,6 +214,48 @@ describe("useWorktreeMoveBanner", () => {
 
     expect(result.current.visible).toBe(true);
     expect(result.current.destinationPath).toBeUndefined();
+  });
+
+  describe("carriesDraft (#14950)", () => {
+    const setDraft = (value: string, projectId = "proj-1") =>
+      useTerminalInputStore.getState().setDraftInput("t-1", value, projectId);
+
+    beforeEach(() => {
+      useTerminalInputStore.setState({ draftInputs: new Map() });
+      useProjectStore.setState({ currentProject: { id: "proj-1" } as never });
+      seed(panel("t-1", NOTICE));
+    });
+
+    it("is true on the hybrid route with something in the composer", () => {
+      setDraft("half a task");
+      expect(render("t-1", "hybrid").result.current.carriesDraft).toBe(true);
+    });
+
+    it("is false for an empty or whitespace-only draft, which composes to the sentence alone", () => {
+      expect(render("t-1", "hybrid").result.current.carriesDraft).toBe(false);
+      setDraft("  \n ");
+      expect(render("t-1", "hybrid").result.current.carriesDraft).toBe(false);
+    });
+
+    it("is false on the fleet route and the other routes, whatever the draft holds", () => {
+      setDraft("half a task");
+      expect(render("t-1", "direct").result.current.carriesDraft).toBe(false);
+      expect(render("t-1", "blocked").result.current.carriesDraft).toBe(false);
+    });
+
+    it("ignores another project's draft for the same terminal", () => {
+      setDraft("half a task", "proj-2");
+      expect(render("t-1", "hybrid").result.current.carriesDraft).toBe(false);
+    });
+
+    it("follows the draft as it is typed and cleared", () => {
+      const { result } = render("t-1", "hybrid");
+      expect(result.current.carriesDraft).toBe(false);
+      act(() => setDraft("x"));
+      expect(result.current.carriesDraft).toBe(true);
+      act(() => setDraft(""));
+      expect(result.current.carriesDraft).toBe(false);
+    });
   });
 
   describe("direct route", () => {

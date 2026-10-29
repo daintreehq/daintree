@@ -31,7 +31,11 @@ beforeAll(() => {
   });
 });
 
-function renderBanner(destinationPath: string | undefined, deliveryFailed = false) {
+function renderBanner(
+  destinationPath: string | undefined,
+  deliveryFailed = false,
+  carriesDraft = false
+) {
   const onTell = vi.fn();
   const onDismiss = vi.fn();
   // Stands in for TerminalPane, which focuses the pane from a React `onClick`
@@ -43,6 +47,7 @@ function renderBanner(destinationPath: string | undefined, deliveryFailed = fals
       <div onClick={onPaneClick}>
         <WorktreeMoveBanner
           destinationPath={destinationPath}
+          carriesDraft={carriesDraft}
           deliveryFailed={deliveryFailed}
           onTell={onTell}
           onDismiss={onDismiss}
@@ -68,6 +73,25 @@ describe("WorktreeMoveBanner", () => {
     const tell = screen.getByRole("button", { name: TELL });
     expect(tell.textContent).not.toContain(PATH);
     expect(screen.getByText(`Sends “Please continue in the directory ${PATH}”`)).not.toBeNull();
+  });
+
+  it("says the draft goes too when the click will carry one (#14950)", () => {
+    // The tooltip is the only place the button describes what it sends, and the
+    // draft rides along by design (#11867): it has to be named, sentence intact.
+    renderBanner(PATH, false, true);
+
+    expect(
+      screen.getByText(`Sends your draft, then “Please continue in the directory ${PATH}”`)
+    ).not.toBeNull();
+    expect(screen.queryByText(`Sends “Please continue in the directory ${PATH}”`)).toBeNull();
+  });
+
+  it("keeps the same disclosure on the retry after a failed send", () => {
+    renderBanner(PATH, true, true);
+
+    expect(
+      screen.getByText(`Sends your draft, then “Please continue in the directory ${PATH}”`)
+    ).not.toBeNull();
   });
 
   it("offers exactly two outcomes while the destination resolves", () => {
