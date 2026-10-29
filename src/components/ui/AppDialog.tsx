@@ -8,6 +8,7 @@ import {
   useId,
   createContext,
   useContext,
+  useSyncExternalStore,
   type CSSProperties,
 } from "react";
 import { InsetSurface } from "@/components/ui/insetSurface";
@@ -245,6 +246,28 @@ const PLACEMENT_MOTION: Record<
   window: { starting: "", shown: "", hidden: "" },
 };
 
+// Window dialogs up right now. A dialog opened over one covers the whole window
+// too: the strip it would leave for the Portal holds the window dialog by then,
+// and left unscrimmed there, a click would reach it from behind a modal.
+let windowDialogsUp = 0;
+const windowDialogListeners = new Set<() => void>();
+
+function subscribeWindowDialogs(listener: () => void): () => void {
+  windowDialogListeners.add(listener);
+  return () => {
+    windowDialogListeners.delete(listener);
+  };
+}
+
+function isWindowDialogUp(): boolean {
+  return windowDialogsUp > 0;
+}
+
+function noteWindowDialog(delta: 1 | -1): void {
+  windowDialogsUp += delta;
+  for (const listener of windowDialogListeners) listener();
+}
+
 export function AppDialog({
   isOpen,
   onClose,
@@ -301,7 +324,12 @@ export function AppDialog({
   );
   // A window covers the Portal's strip with the rest: the Portal is hidden
   // while any overlay is up, so there is nothing there to keep in reach.
-  const portalOffset = portalOpen && placement !== "window" ? portalWidth : 0;
+  const overWindowDialog = useSyncExternalStore(
+    subscribeWindowDialogs,
+    isWindowDialogUp,
+    isWindowDialogUp
+  );
+  const portalOffset = portalOpen && placement !== "window" && !overWindowDialog ? portalWidth : 0;
 
   // Hold the latest `restoreFocusTo` in a ref so `restoreFocus` stays
   // identity-stable. It feeds the unmount-cleanup effect's dep array; if it
@@ -369,6 +397,13 @@ export function AppDialog({
   });
 
   useOverlayState(isOpen || shouldRender);
+
+  const coversWindow = placement === "window" && shouldRender;
+  useEffect(() => {
+    if (!coversWindow) return;
+    noteWindowDialog(1);
+    return () => noteWindowDialog(-1);
+  }, [coversWindow]);
 
   // Re-measure the platform's reserved scrollbar gutter as the dialog opens.
   // It is a UA/OS property, not a stylesheet value — and one the user can
@@ -687,7 +722,16 @@ export function AppDialog({
         style={{
           right: portalOffset,
           transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
-          transitionTimingFunction: UI_SCRIM_EASING,
+          // A window's layer is the view itself, so it fades on the view's
+          // curves (as the plugin manager does) rather than a scrim's linear
+          // one: opaque early on the way in and late on the way out, which
+          // keeps a terminal Canopy holds at its own size out of sight behind.
+          transitionTimingFunction:
+            placement === "window"
+              ? isVisible
+                ? UI_ENTER_EASING
+                : UI_EXIT_EASING
+              : UI_SCRIM_EASING,
         }}
         ref={setBackdropNode}
         onPointerDown={handleBackdropPointerDown}

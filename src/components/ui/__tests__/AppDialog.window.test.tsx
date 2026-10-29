@@ -140,7 +140,7 @@ afterEach(() => {
   if (originalPlatform) {
     Object.defineProperty(window.navigator, "platform", originalPlatform);
   } else {
-    delete (window.navigator as unknown as Record<string, unknown>).platform;
+    Reflect.deleteProperty(window.navigator, "platform");
   }
 });
 
@@ -152,6 +152,26 @@ describe("AppDialog window placement", () => {
 
     render(<Dialog placement="window" />);
     expect(layer().style.right).toBe("0px");
+  });
+
+  it("has a dialog opened over it cover the Portal's strip too, until it goes", () => {
+    function Stack({ windowOpen }: { windowOpen: boolean }) {
+      return (
+        <>
+          <Dialog placement="window" isOpen={windowOpen} />
+          <AppDialog isOpen onClose={() => {}} zIndex="nested" data-testid="nested-dialog">
+            <AppDialog.Body>
+              <button type="button">Nested</button>
+            </AppDialog.Body>
+          </AppDialog>
+        </>
+      );
+    }
+    const { rerender } = render(<Stack windowOpen />);
+    expect(screen.getByTestId("nested-dialog").style.right).toBe("0px");
+
+    rerender(<Stack windowOpen={false} />);
+    expect(screen.getByTestId("nested-dialog").style.right).toBe(`${PORTAL_WIDTH}px`);
   });
 
   it("lets nothing of the app show through: no scrim tint or blur over it", () => {
@@ -192,6 +212,15 @@ describe("AppDialog window placement", () => {
     expect(card).toMatch(/starting:scale-/);
     expect(whole).not.toMatch(/starting:(translate|scale|opacity)/);
     expect(layer().className).toContain("starting:opacity-0");
+  });
+
+  it("fades on a view's curves, not the scrim's linear one", () => {
+    const { unmount } = render(<Dialog placement="center" />);
+    const scrim = layer().style.transitionTimingFunction;
+    unmount();
+
+    render(<Dialog placement="window" />);
+    expect(layer().style.transitionTimingFunction).not.toBe(scrim);
   });
 
   it("claims no-drag over the window and makes its header the title bar", () => {

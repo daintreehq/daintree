@@ -611,24 +611,29 @@ describe("CanopyView", () => {
 
   it("covers the window, with nothing of the app behind it and no picture taken of it", async () => {
     const createObjectURL = vi.fn(() => "blob:still");
+    const original = Object.getOwnPropertyDescriptor(URL, "createObjectURL");
     Object.defineProperty(URL, "createObjectURL", { value: createObjectURL, configurable: true });
-    const off = { ...canopySnapshot, activated: false };
-    installElectron(off);
-    useCanopyStore.setState({ snapshot: off });
-    render(<CanopyView />);
-    await frames();
-    const layer = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
-    expect(layer.className).not.toMatch(/\bbackdrop-blur-|\bbg-scrim-/);
-    expect((layer.firstElementChild as HTMLElement).className).not.toMatch(/\bmax-w-/);
-    // The inbox and the offer share one frame, so the list stays put between them.
-    expect(layer.querySelector(".canopy-frame [role=listbox]")).not.toBeNull();
-    await openOffer();
-    expect(
-      document.querySelector("[data-testid=canopy-dialog] .canopy-frame #canopy-pitch-title")
-    ).not.toBeNull();
-    expect(createObjectURL).not.toHaveBeenCalled();
-    expect(document.querySelector("img[src^='blob:']")).toBeNull();
-    delete (URL as unknown as { createObjectURL?: unknown }).createObjectURL;
+    try {
+      const off = { ...canopySnapshot, activated: false };
+      installElectron(off);
+      useCanopyStore.setState({ snapshot: off });
+      render(<CanopyView />);
+      await frames();
+      const layer = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
+      expect(layer.className).not.toMatch(/\bbackdrop-blur-|\bbg-scrim-/);
+      expect(layer.firstElementChild?.className ?? "").not.toMatch(/\bmax-w-/);
+      // The inbox and the offer share one frame, so the list stays put between them.
+      expect(layer.querySelector(".canopy-frame [role=listbox]")).not.toBeNull();
+      await openOffer();
+      expect(
+        document.querySelector("[data-testid=canopy-dialog] .canopy-frame #canopy-pitch-title")
+      ).not.toBeNull();
+      expect(createObjectURL).not.toHaveBeenCalled();
+      expect(document.querySelector("img[src^='blob:']")).toBeNull();
+    } finally {
+      if (original) Object.defineProperty(URL, "createObjectURL", original);
+      else Reflect.deleteProperty(URL, "createObjectURL");
+    }
   });
 
   it("still offers reading, quietly, when the reader is off and no agent runs", async () => {

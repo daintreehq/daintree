@@ -11,6 +11,7 @@ import { attachUnresponsiveDialog } from "./unresponsiveDialog.js";
 import { getWindowRegistry } from "./windowRef.js";
 import { routeNewWindowRequest } from "./windowHost.js";
 import { toggleWindowFullscreen } from "./fullscreen.js";
+import { sendFullscreenChange } from "./fullscreenBroadcast.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import path from "path";
 import { createWindowWithState, disposeWindowStateTracking } from "../windowState.js";
@@ -566,16 +567,10 @@ export function setupBrowserWindow(
   });
 
   // Fullscreen events
-  const sendFullscreen = (isFullscreen: boolean) => {
-    sendToRenderer(win, CHANNELS.EVENTS_PUSH, {
-      name: "window:fullscreen-change",
-      payload: isFullscreen,
-    });
-  };
-  win.on("enter-full-screen", () => sendFullscreen(true));
-  win.on("leave-full-screen", () => sendFullscreen(false));
-  win.on("enter-html-full-screen", () => sendFullscreen(true));
-  win.on("leave-html-full-screen", () => sendFullscreen(false));
+  win.on("enter-full-screen", () => sendFullscreenChange(win, true));
+  win.on("leave-full-screen", () => sendFullscreenChange(win, false));
+  win.on("enter-html-full-screen", () => sendFullscreenChange(win, true));
+  win.on("leave-html-full-screen", () => sendFullscreenChange(win, false));
 
   // Memory reclamation: clear renderer caches after sustained minimize
   const RECLAIM_DELAY_MS = 5_000;

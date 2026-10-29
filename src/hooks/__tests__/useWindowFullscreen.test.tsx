@@ -38,7 +38,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  delete (window as unknown as { electron?: unknown }).electron;
+  Reflect.deleteProperty(window, "electron");
 });
 
 describe("useWindowFullscreen", () => {
@@ -76,7 +76,7 @@ describe("useWindowFullscreen", () => {
   });
 
   it("reads as windowed without a bridge, and starts listening once one is there", async () => {
-    delete (window as unknown as { electron?: unknown }).electron;
+    Reflect.deleteProperty(window, "electron");
     const Probe = await loadHook();
     const { unmount } = render(<Probe id="bare" />);
     expect(screen.getByTestId("bare").textContent).toBe("windowed");
