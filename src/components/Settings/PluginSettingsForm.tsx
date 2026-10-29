@@ -43,6 +43,7 @@ import { logError } from "@/utils/logger";
 import { useHostConnection } from "@/hooks/useHostConnection";
 import { useHostPlatform } from "@/hooks/useHostPlatform";
 import { pluginViewHostId } from "@/components/Plugin/remotePluginView";
+import { projectIdFromPluginInstanceKey } from "@shared/types/plugin";
 import type {
   LoadedPluginInfo,
   PluginPickPathRequest,
@@ -70,6 +71,18 @@ const SCOPE_BADGE_LABEL: Record<PluginSettingsScope, string> = {
   project: "This project",
   local: "This project, this machine",
 };
+
+/**
+ * A `user` value is stored under the instance key, and a project-owned
+ * instance's key carries its project id, so there the value reaches this
+ * project on this machine, never every project.
+ */
+function scopeBadgeLabel(scope: PluginSettingsScope, pluginId: string): string {
+  if (scope === "user" && projectIdFromPluginInstanceKey(pluginId) !== null) {
+    return SCOPE_BADGE_LABEL.local;
+  }
+  return SCOPE_BADGE_LABEL[scope];
+}
 
 /**
  * Scopes whose file is resolved from a project, so their values reload on a
@@ -570,7 +583,7 @@ function SettingField({
   };
   const scopeBadge = (
     <>
-      <Badge size="xs">{SCOPE_BADGE_LABEL[scope]}</Badge>
+      <Badge size="xs">{scopeBadgeLabel(scope, pluginId)}</Badge>
       {def.required === true && <Badge size="xs">Required</Badge>}
     </>
   );

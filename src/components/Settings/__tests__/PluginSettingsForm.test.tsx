@@ -13,6 +13,10 @@ import type {
   PluginViewHostContext,
   SettingDefinition,
 } from "@shared/types/plugin";
+import {
+  makeInstalledProjectInstanceKey,
+  makeProjectPluginInstanceKey,
+} from "@shared/types/plugin";
 import { _resetPluginRuntimeStatusStoreForTest } from "@/store/pluginRuntimeStatusStore";
 import {
   _resetPluginHostedViewsStoreForTest,
@@ -738,6 +742,33 @@ describe("PluginSettingsForm", () => {
     expect(screen.queryByRole("button", { name: /Open (plugin manager|project settings)/ })).toBe(
       null
     );
+  });
+
+  it.each([
+    ["a repository plugin", makeProjectPluginInstanceKey("proj-1", "acme.test")],
+    ["an installed per-project instance", makeInstalledProjectInstanceKey("proj-1", "acme.test")],
+  ])("badges %s's user-scope fields for the one project they reach", async (_, instanceId) => {
+    currentProjectId = "proj-1";
+    const plugin: LoadedPluginInfo = {
+      ...makePlugin([
+        { id: "u", type: "string", label: "U" },
+        { id: "p", type: "string", label: "P", scope: "project" },
+      ]),
+      instanceId,
+      origin: "project",
+      projectId: "proj-1",
+    };
+    render(<PluginSettingsForm plugin={plugin} viewScope="project" />);
+    // Its user-scope file is named by an instance key that carries the project
+    // id, so the value stays with this project on this machine — unlike a
+    // project-scope value, which the repository shares.
+    const userRow = (await screen.findByLabelText("U")).closest<HTMLElement>(
+      "[data-settings-row]"
+    )!;
+    const projectRow = screen.getByLabelText("P").closest<HTMLElement>("[data-settings-row]")!;
+    expect(within(userRow).getByText("This project, this machine")).toBeTruthy();
+    expect(within(projectRow).getByText("This project")).toBeTruthy();
+    expect(screen.queryByText("All projects")).toBeNull();
   });
 
   it("shows an unstored required field as unset, with its default as the way to set it", async () => {
