@@ -1336,7 +1336,9 @@ describe("FileDropzone", () => {
   it("reports every file a single-file zone leaves out, in the order they came", () => {
     const onFiles = vi.fn();
     const onReject = vi.fn();
-    render(createElement(kit.FileDropzone, { onFiles, onReject, accept: ".md", "data-testid": "zone" }));
+    render(
+      createElement(kit.FileDropzone, { onFiles, onReject, accept: ".md", "data-testid": "zone" })
+    );
     const files = [file("a.png"), file("b.md"), file("c.md"), file("d.md")];
     fireEvent.drop(screen.getByTestId("zone"), { dataTransfer: { types: ["Files"], files } });
     expect(onFiles.mock.calls[0]![0].map((f: File) => f.name)).toEqual(["b.md"]);

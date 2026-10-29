@@ -600,8 +600,10 @@ function DateField({ mode, props }: DateFieldProps) {
   /** Why `iso` can't be taken, or `null` when it can. */
   const refusalOf = (iso: string): string | null => {
     const what = mode === "range" ? "dates" : "a date";
-    if (minIso !== null && iso < minIso) return `Choose ${what} on or after ${formatFieldDate(minIso)}`;
-    if (maxIso !== null && iso > maxIso) return `Choose ${what} on or before ${formatFieldDate(maxIso)}`;
+    if (minIso !== null && iso < minIso)
+      return `Choose ${what} on or after ${formatFieldDate(minIso)}`;
+    if (maxIso !== null && iso > maxIso)
+      return `Choose ${what} on or before ${formatFieldDate(maxIso)}`;
     if (callDisabled(disabledCheck, iso)) return "That date isn't available";
     return null;
   };

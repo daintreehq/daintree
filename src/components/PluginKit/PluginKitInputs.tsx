@@ -692,7 +692,8 @@ function KitSlider(props: PluginSliderProps) {
         <SliderReadout
           text={words ?? String(current)}
           reserve={[lo, hi].map(
-            (end) => (formatter ? nonEmpty(safeFormat(formatter, end, String)) : undefined) ?? String(end)
+            (end) =>
+              (formatter ? nonEmpty(safeFormat(formatter, end, String)) : undefined) ?? String(end)
           )}
           className={disabled === true ? "opacity-50" : undefined}
         />

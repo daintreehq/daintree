@@ -78,7 +78,10 @@ export function SkippedNote({
     <div role="alert" data-skipped-files="" className={cn("grid gap-1", className)}>
       {lines.map((line) => (
         <p key={line} className="m-0 flex items-start gap-1.5 text-left text-xs text-text-primary">
-          <WarningGlyph aria-hidden="true" className="mt-px h-3.5 w-3.5 shrink-0 text-status-warning" />
+          <WarningGlyph
+            aria-hidden="true"
+            className="mt-px h-3.5 w-3.5 shrink-0 text-status-warning"
+          />
           <span className="min-w-0 break-words">{line}</span>
         </p>
       ))}

@@ -808,7 +808,9 @@ describe("charts", () => {
     cleanup();
     mount(createElement(kit.Gauge, { value: 50, target: 80, "aria-label": "On scale" }));
     const onScale = screen.getByRole("meter", { name: "On scale" });
-    expect(onScale.querySelector("[data-chart-gauge-target]")?.getAttribute("stroke-dasharray")).toBeNull();
+    expect(
+      onScale.querySelector("[data-chart-gauge-target]")?.getAttribute("stroke-dasharray")
+    ).toBeNull();
     expect(document.getElementById(onScale.getAttribute("aria-describedby")!)?.textContent).toBe(
       "Target 80%"
     );

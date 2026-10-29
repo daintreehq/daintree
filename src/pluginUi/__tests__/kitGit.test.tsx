@@ -342,8 +342,16 @@ describe("WorktreePicker", () => {
       return createElement(
         "div",
         null,
-        createElement(kit.WorktreePicker, { worktrees: list, value: "wt-2", "aria-label": "Worktree" }),
-        createElement("button", { type: "button", onClick: () => setList(WORKTREES.slice(0, 2)) }, "drop")
+        createElement(kit.WorktreePicker, {
+          worktrees: list,
+          value: "wt-2",
+          "aria-label": "Worktree",
+        }),
+        createElement(
+          "button",
+          { type: "button", onClick: () => setList(WORKTREES.slice(0, 2)) },
+          "drop"
+        )
       );
     }
     render(withTooltips(createElement(Shrinking)));
@@ -351,14 +359,20 @@ describe("WorktreePicker", () => {
     expect(trigger.textContent).toContain("fix-crash");
     expect(trigger.querySelector("[data-worktree-missing]")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "drop" }));
-    expect(trigger.querySelector("[data-worktree-missing]")?.textContent).toBe("fix-crashNot found");
+    expect(trigger.querySelector("[data-worktree-missing]")?.textContent).toBe(
+      "fix-crashNot found"
+    );
     expect(trigger.hasAttribute("data-placeholder")).toBe(false);
   });
 
   it("shows an unknown id on the trigger rather than the placeholder", () => {
     render(
       withTooltips(
-        createElement(kit.WorktreePicker, { worktrees: WORKTREES, value: "gone", placeholder: "Pick one" })
+        createElement(kit.WorktreePicker, {
+          worktrees: WORKTREES,
+          value: "gone",
+          placeholder: "Pick one",
+        })
       )
     );
     const trigger = screen.getByRole("combobox", { name: "Worktree" });
