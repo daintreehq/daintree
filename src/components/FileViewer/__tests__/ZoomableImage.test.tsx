@@ -259,16 +259,43 @@ describe("ZoomableImage keyboard", () => {
   it.each([{ metaKey: true }, { ctrlKey: true }, { altKey: true }])(
     "leaves a chord to the app (%o)",
     (modifier) => {
-      const stage = renderImage();
+      const seen: string[] = [];
+      render(
+        <TooltipProvider>
+          <div onKeyDown={(event) => seen.push(event.key)}>
+            <ZoomableImage filePath="/repo/a.png" rootPath="/repo" alt="a.png" />
+          </div>
+        </TooltipProvider>
+      );
+      const stage = screen.getByRole("group", { name: /^a\.png/ });
       const image = screen.getByRole("img", { name: "a.png" });
-      for (const key of ["+", "-", "0", "ArrowLeft"]) {
+      const keys = ["+", "-", "0", "ArrowLeft"];
+      for (const key of keys) {
         const notCancelled = fireEvent.keyDown(stage, { key, ...modifier });
-        // An uncancelled key is still the app's to act on.
+        // Neither acted on nor cancelled, so it is still the app's to act on.
         expect(notCancelled).toBe(true);
       }
       expect(image.style.transform).toBe("translate(0px, 0px) scale(1)");
+      // And not stopped here either: the grid and the app's own handlers see it.
+      expect(seen).toEqual(keys);
     }
   );
+
+  it("acts on every key it tells the type-anywhere rescue it owns", () => {
+    const stage = renderImage();
+    const image = screen.getByRole("img", { name: "a.png" });
+    const owned = stage.getAttribute("data-owned-keys") ?? "";
+    expect(owned).not.toBe("");
+    for (const key of owned) {
+      // Every key starts from a zoomed view, where each of them has something
+      // to change, so one that does nothing can't hide behind the last one's.
+      fireEvent.keyDown(stage, { key: "0" });
+      fireEvent.keyDown(stage, { key: "+" });
+      const before = image.style.transform;
+      fireEvent.keyDown(stage, { key });
+      expect(image.style.transform, `key ${key}`).not.toBe(before);
+    }
+  });
 
   it("keeps the keys it handles from reaching an ancestor's own key handling", () => {
     // The content grid pans panel focus on bare arrows and doesn't look at

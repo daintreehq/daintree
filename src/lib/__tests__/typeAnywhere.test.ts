@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import {
   findPanelIdForElement,
+  focusOwnsKey,
   getFocusTarget,
   hasBlockingOverlay,
   hasUsefulFocus,
@@ -173,6 +174,35 @@ describe("hasUsefulFocus", () => {
     host.attachShadow({ mode: "open" });
     document.body.appendChild(host);
     expect(hasUsefulFocus(host)).toBe(true);
+  });
+});
+
+describe("focusOwnsKey", () => {
+  beforeEach(() => {
+    document.body.innerHTML = `
+      <div id="stage" tabindex="0" data-owned-keys="+-0"><span id="inner"></span></div>
+      <div id="plain" tabindex="0"></div>`;
+  });
+
+  it("owns only the keys the surface names", () => {
+    const stage = document.getElementById("stage");
+    expect(focusOwnsKey(stage, "+")).toBe(true);
+    expect(focusOwnsKey(stage, "0")).toBe(true);
+    // Not named, so the rescue still applies: the surface would eat it.
+    expect(focusOwnsKey(stage, "r")).toBe(false);
+  });
+
+  it("applies to focus on a descendant of the surface", () => {
+    expect(focusOwnsKey(document.getElementById("inner"), "-")).toBe(true);
+  });
+
+  it("owns nothing on a surface that names no keys", () => {
+    expect(focusOwnsKey(document.getElementById("plain"), "+")).toBe(false);
+    expect(focusOwnsKey(null, "+")).toBe(false);
+  });
+
+  it("never matches an empty key", () => {
+    expect(focusOwnsKey(document.getElementById("stage"), "")).toBe(false);
   });
 });
 

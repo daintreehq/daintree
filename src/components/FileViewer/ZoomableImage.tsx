@@ -264,6 +264,9 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
         onDoubleClick={resetView}
         onKeyDown={handleKeyDown}
         tabIndex={0}
+        // Keeps the hybrid input's type-anywhere rescue from typing these into
+        // an agent's draft before `handleKeyDown` sees them.
+        data-owned-keys="+=-0"
         role="group"
         aria-label={`${alt}. Arrow keys pan, plus and minus zoom, 0 fits to screen.`}
         className={cn(

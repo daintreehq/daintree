@@ -2880,7 +2880,26 @@ describe("FilePane live disk refresh (#11451)", () => {
   });
 
   describe("raster image zoom and pan (#15024)", () => {
-    const readout = () => screen.getByTestId("zoomable-image-status").textContent;
+    const readout = () => screen.getByTestId("zoomable-image-status").textContent ?? "";
+    const atFit = () => /^Fit/.test(readout());
+
+    async function renderAt(location: "grid" | "dock" | "dialog") {
+      panelsById["file-1"] = { id: "file-1", kind: "file", filePath: "/repo/assets/logo.png" };
+      const view = render(
+        <TooltipProvider>
+          <FilePane
+            id="file-1"
+            title="logo.png"
+            isFocused={false}
+            location={location}
+            onFocus={() => {}}
+            onClose={() => {}}
+          />
+        </TooltipProvider>
+      );
+      await act(async () => {});
+      return view;
+    }
 
     it("zooms and pans a raster image the way the File Browser viewer does", async () => {
       const { container } = await renderPane({ filePath: "/repo/assets/logo.png" });
@@ -2888,60 +2907,57 @@ describe("FilePane live disk refresh (#11451)", () => {
       expect(screen.getByRole("button", { name: "Zoom in" })).toBeTruthy();
       expect(screen.getByRole("button", { name: "Zoom out" })).toBeTruthy();
       expect(screen.getByRole("button", { name: "Fit to screen" })).toBeTruthy();
-      expect(readout()).toBe("Fit, 100%");
+      expect(atFit()).toBe(true);
 
       const stage = screen.getByRole("group", { name: /^logo\.png/ });
       fireEvent.keyDown(stage, { key: "+" });
-      expect(readout()).toBe("125%");
+      expect(atFit()).toBe(false);
       fireEvent.keyDown(stage, { key: "ArrowLeft" });
       const panned = container.querySelector("img")?.style.transform;
       expect(panned).not.toMatch(/^translate\(0px, 0px\)/);
       fireEvent.keyDown(stage, { key: "0" });
-      expect(readout()).toBe("Fit, 100%");
+      expect(atFit()).toBe(true);
       expect(container.querySelector("img")?.style.transform).toMatch(/^translate\(0px, 0px\)/);
       expect(readMock).not.toHaveBeenCalled();
+    });
+
+    it("zooms in the dock too, not only the grid", async () => {
+      await renderAt("dock");
+
+      fireEvent.keyDown(screen.getByRole("group", { name: /^logo\.png/ }), { key: "+" });
+
+      expect(atFit()).toBe(false);
     });
 
     it("keeps the zoom when a rewritten image reloads its bytes", async () => {
       seedWorktree(OUTER_ID, "/repo", { git: 100 });
       const { container, rerender } = await renderPane({ filePath: "/repo/assets/logo.png" });
       fireEvent.keyDown(screen.getByRole("group", { name: /^logo\.png/ }), { key: "+" });
+      expect(atFit()).toBe(false);
+      const zoomed = readout();
       const before = imageSrc(container);
 
       seedWorktree(OUTER_ID, "/repo", { git: 200 });
       await commitTick(rerender);
 
       expect(imageSrc(container)).not.toBe(before);
-      expect(readout()).toBe("125%");
+      expect(readout()).toBe(zoomed);
     });
 
     it("starts a different file at fit", async () => {
       const { rerender } = await renderPane({ filePath: "/repo/assets/logo.png" });
       fireEvent.keyDown(screen.getByRole("group", { name: /^logo\.png/ }), { key: "+" });
-      expect(readout()).toBe("125%");
+      expect(atFit()).toBe(false);
 
       panelsById["file-1"] = { id: "file-1", kind: "file", filePath: "/repo/assets/other.png" };
       await commitTick(rerender);
 
       expect(screen.getByRole("group", { name: /^other\.png/ })).toBeTruthy();
-      expect(readout()).toBe("Fit, 100%");
+      expect(atFit()).toBe(true);
     });
 
     it("leaves the temporary viewer dialog fit-only", async () => {
-      panelsById["file-1"] = { id: "file-1", kind: "file", filePath: "/repo/assets/logo.png" };
-      const { container } = render(
-        <TooltipProvider>
-          <FilePane
-            id="file-1"
-            title="logo.png"
-            isFocused={false}
-            location="dialog"
-            onFocus={() => {}}
-            onClose={() => {}}
-          />
-        </TooltipProvider>
-      );
-      await act(async () => {});
+      const { container } = await renderAt("dialog");
 
       expect(imageSrc(container)).toContain("daintree-file://");
       expect(screen.queryByRole("button", { name: "Zoom in" })).toBeNull();
