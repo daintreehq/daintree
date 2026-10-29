@@ -5,6 +5,12 @@ import {
   type ClipScore,
 } from "../../../e2e/helpers/voiceReplayScore";
 import type { GrokTranscriptionTuning } from "../../../electron/services/voice/grokTranscriptionTuning";
+import {
+  trailingDictationCommands,
+  trailingSendCommand,
+} from "../../../electron/services/voiceDictationCommands";
+import { mayReferenceFile } from "../../../shared/utils/voiceFileLinkCommands";
+import { stripHesitations } from "../../../shared/utils/voiceHesitations";
 import { percentile, requestCost, type TokenUsage } from "./voiceCleanupScore";
 
 /**
@@ -138,6 +144,8 @@ export interface ScoredPipelineSession {
   verdict: string;
   /** Share of the final transcript's words on screen, as preview or text, when stop was pressed. */
   shownAtStop: number | null;
+  /** How the text at the stop compares with the final, for a cleanup started at the stop. */
+  stopPreview: StopPreview;
   errored: boolean;
   firstDeltaMs: number | null;
   firstFinalMs: number | null;
@@ -238,6 +246,112 @@ export function shownAtStop(session: PipelineSession): number | null {
 }
 
 /**
+ * How the text the provider held at the stop compares with the text the final
+ * commits, for a cleanup started at the stop and kept only when the stop's own
+ * request would be the same (#15076).
+ */
+export type StopPreviewFate =
+  /**
+   * Errored, reconnected or dropped audio, ended on an utterance whose final
+   * never came (landed from its preview), or transcribed nothing.
+   */
+  | "invalid"
+  /** Nothing was pending at the stop: the draft already held its final text, the prefetch's case. */
+  | "settled"
+  /** Production rewrites the final once it lands: a spoken command, or a file named. */
+  | "excluded"
+  | "match"
+  | "mismatch";
+
+export interface StopPreview {
+  fate: StopPreviewFate;
+  /** The text held at the stop is the final's, whatever the fate. */
+  equal: boolean;
+  /**
+   * Words landing after the stop end in a break command, or in a send that
+   * nothing heard after it let go as words.
+   */
+  command: boolean;
+  /** A completion says a command that inserts a file reference, whose lookup the drain awaits. */
+  file: boolean;
+}
+
+// Each completion as production lands it before cleanup reads it: trimmed,
+// its hesitations gone (voiceInput's forwardEvent, for English), joined to
+// the last as the draft joins them.
+function landedText(pieces: readonly string[]): string {
+  return pieces
+    .map((piece) => stripHesitations(piece.trim()).trim())
+    .filter(Boolean)
+    .join(" ");
+}
+
+function sessionErrored(session: PipelineSession): boolean {
+  return (
+    session.startError !== null ||
+    session.events.some((event) => event.type === "error") ||
+    session.reconnects > 0 ||
+    session.droppedConnect > 0
+  );
+}
+
+export function stopPreview(session: PipelineSession): StopPreview {
+  const completed: string[] = [];
+  const done = new Set<string>();
+  // Each open item's latest preview, in the order the items opened. Times are
+  // whole milliseconds, so an event timed at the stop counts as before it.
+  const previews = new Map<string | null, string>();
+  for (const event of session.events) {
+    if (event.at > session.stopMs) break;
+    if (event.type === "complete") {
+      completed.push(event.text);
+      if (event.itemId) {
+        done.add(event.itemId);
+        previews.delete(event.itemId);
+      }
+    } else if (event.type === "delta" && !(event.itemId && done.has(event.itemId))) {
+      previews.set(event.itemId, event.text);
+    }
+  }
+  const completes = session.events.filter(
+    (event): event is Extract<PipelineEvent, { type: "complete" }> => event.type === "complete"
+  );
+  const later = completes
+    .filter((event) => event.at > session.stopMs)
+    .map((event) => landedText([event.text]))
+    .filter(Boolean);
+  const pending = [...previews.values()].filter((text) => text.trim() !== "");
+  const final = landedText(completes.map((event) => event.text));
+  const equal = landedText([...completed, ...pending]) === final;
+  // A send heard in the drain waits for its end, and goes out as words, its
+  // break commands with it, once a preview or more words arrive first
+  // (voiceInput's settleHeldSend, UtteranceCommands' literal release).
+  const heardAfter = (index: number) =>
+    session.events
+      .slice(index + 1)
+      .some(
+        (event) => event.type === "delta" || (event.type === "complete" && event.text.trim() !== "")
+      );
+  const command = session.events.some((event, index) => {
+    if (event.type !== "complete" || event.at <= session.stopMs) return false;
+    const text = landedText([event.text]);
+    if (!text) return false;
+    return trailingSendCommand(text)
+      ? !heardAfter(index)
+      : trailingDictationCommands(text) !== null;
+  });
+  // Main reads each completion for a file command on its own, never across two.
+  const file = completes.some((event) => mayReferenceFile(landedText([event.text])));
+  const facts = { equal, command, file };
+  if (sessionErrored(session) || !final || completes.some((event) => event.incomplete)) {
+    return { fate: "invalid", ...facts };
+  }
+  if (pending.length === 0 && later.length === 0) return { fate: "settled", ...facts };
+  if (command || file) return { fate: "excluded", ...facts };
+  return { fate: equal ? "match" : "mismatch", ...facts };
+}
+
+/**
  * Other ways of writing a clip's reference that are just as right, kept to two
  * kinds so the scores can't be argued up: spellings the audio can't tell apart,
  * and the layout cleanup's own prompt asks for, a counted list as a numbered
@@ -312,11 +426,8 @@ export function scorePipelineSession(
     brokenWords: brokenWords(finalReference, session.raw, finalText),
     verdict: cleanup?.verdict ?? "none",
     shownAtStop: shownAtStop(session),
-    errored:
-      session.startError !== null ||
-      session.events.some((event) => event.type === "error") ||
-      session.reconnects > 0 ||
-      session.droppedConnect > 0,
+    stopPreview: stopPreview(session),
+    errored: sessionErrored(session),
     firstDeltaMs: firstOf("delta"),
     firstFinalMs: firstOf("complete"),
     stopToLastFinalMs: lastFinal === null ? null : lastFinal - session.stopMs,
@@ -527,6 +638,85 @@ export function renderVoiceTable(
       `| ${voice} | ${mine.length} | ${pct(pooledWer(mine.map((s) => s.rawScore)))} → ${pct(pooledWer(mine.map((s) => s.finalScore)))} | ${pct(pooledFormWer(mine.map((s) => s.rawForm)))} → ${pct(pooledFormWer(mine.map((s) => s.finalForm)))} | ${pct(mine.filter((s) => s.finalForm.exact).length / (mine.length || 1))} |`
     );
   }
+  return lines.join("\n");
+}
+
+export interface StopPreviewSummary {
+  sessions: number;
+  invalid: number;
+  /** Valid dictations with something pending at the stop. */
+  waited: number;
+  match: number;
+  /** Waited dictations a spoken command or a file named excludes; one can carry both. */
+  command: number;
+  file: number;
+  /** Matches over the dictations that waited, the excluded counted as misses. */
+  exactShare: number | null;
+  /** Over the dictations that waited: stop to the last words landing, and to the drain's end. */
+  stopToFinalMs: Stat;
+  stopToDrainMs: Stat;
+  /** Stop to the drain's end over the matches: how long a kept cleanup could run ahead. */
+  matchStopToDrainMs: Stat;
+}
+
+export function summariseStopPreview(rows: readonly ScoredPipelineSession[]): StopPreviewSummary {
+  const waited = rows.filter((row) =>
+    ["excluded", "match", "mismatch"].includes(row.stopPreview.fate)
+  );
+  const matches = waited.filter((row) => row.stopPreview.fate === "match");
+  return {
+    sessions: rows.length,
+    invalid: rows.filter((row) => row.stopPreview.fate === "invalid").length,
+    waited: waited.length,
+    match: matches.length,
+    command: waited.filter((row) => row.stopPreview.command).length,
+    file: waited.filter((row) => row.stopPreview.file).length,
+    exactShare: waited.length === 0 ? null : matches.length / waited.length,
+    stopToFinalMs: stat(
+      waited.map((row) =>
+        row.stopToLastFinalMs === null ? null : Math.max(0, row.stopToLastFinalMs)
+      )
+    ),
+    stopToDrainMs: stat(waited.map((row) => row.stopToDrainMs)),
+    matchStopToDrainMs: stat(matches.map((row) => row.stopToDrainMs)),
+  };
+}
+
+/**
+ * Whether the text at the stop is the text the final commits, for one arm,
+ * per stop tail and voice, then every stop together (#15076). A cleanup
+ * started at the stop and kept on an exact match could run while the drain
+ * does, so the drain is timed over the matches as well as everything that
+ * waited.
+ */
+export function renderStopPreviewTable(
+  scored: readonly ScoredPipelineSession[],
+  arm: string,
+  arms: readonly string[] = [arm]
+): string {
+  const shared = sharedSessions(scored, arms);
+  const rows = scored.filter((s) => s.session.arm === arm && shared.has(sessionKey(s.session)));
+  const tails = [...new Set(rows.map((s) => s.session.stopTailMs))].sort((a, b) => a - b);
+  const voices = [...new Set(rows.map((s) => s.session.voice))];
+  const lines = [
+    `| Tail | Voice (${arm}) | n | Invalid | Waited | Exact | Command | File | Exact of waited | Stop → final | Stop → drain | Stop → drain, exact |`,
+    "| --- | --- | --: | --: | --: | --: | --: | --: | --: | --- | --- | --- |",
+  ];
+  const row = (tail: string, voice: string, mine: readonly ScoredPipelineSession[]) => {
+    const s = summariseStopPreview(mine);
+    lines.push(
+      `| ${tail} | ${voice} | ${s.sessions} | ${s.invalid} | ${s.waited} | ${s.match} | ${s.command} | ${s.file} | ${s.exactShare === null ? "–" : pct(s.exactShare)} | ${statCell(s.stopToFinalMs)} | ${statCell(s.stopToDrainMs)} | ${statCell(s.matchStopToDrainMs)} |`
+    );
+  };
+  for (const tail of tails) {
+    const atTail = rows.filter((s) => s.session.stopTailMs === tail);
+    for (const voice of voices) {
+      const mine = atTail.filter((s) => s.session.voice === voice);
+      if (mine.length > 0) row(`${tail} ms`, voice, mine);
+    }
+    row(`${tail} ms`, "all", atTail);
+  }
+  row("all", "all", rows);
   return lines.join("\n");
 }
 
