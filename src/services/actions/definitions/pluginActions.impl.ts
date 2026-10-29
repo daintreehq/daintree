@@ -84,7 +84,14 @@ export const pluginActionRuns = {
       throw new Error(`Panel "${panelId}" is not a plugin panel`);
     }
     if (!approved && hasViewUnsavedChanges(panelId)) {
-      confirm.request({ panelId, panelTitle: panel.title });
+      // A blank title would read "Reload ''?"; the kind's name is what the
+      // panel's header falls back to as well.
+      const panelTitle = panel.title.trim() || getPanelKindConfig(kind)?.name.trim() || "";
+      if (!confirm.request({ panelId, panelTitle })) {
+        throw new Error(
+          "Reloading this panel was not performed — another panel's reload is waiting for the user to confirm it. Nothing changed; try again once that one is answered."
+        );
+      }
       throw new ConfirmationStagedError(confirmationStagedMessage("Reloading this panel"));
     }
     const outcome: "scheduled" | "not-mounted" = requestUserViewReload(panelId)
