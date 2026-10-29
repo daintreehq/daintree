@@ -286,22 +286,47 @@ describe("DevPreviewSessionService", () => {
     ).rejects.toThrow(/turbopackEnabled/);
   });
 
-  it("restarts terminal when worktree changes", async () => {
+  it("re-files a running server under a new worktree without restarting it (#14958)", async () => {
     const first = await service.ensure({
       ...baseRequest,
       worktreeId: "wt-a",
     });
+    vi.mocked(onStateChanged).mockClear();
+
     const second = await service.ensure({
       ...baseRequest,
       worktreeId: "wt-b",
     });
 
-    expect(first.terminalId).toBeTruthy();
-    expect(second.terminalId).toBeTruthy();
+    expect(second.terminalId).toBe(first.terminalId);
+    expect(second.worktreeId).toBe("wt-b");
+    expect(ptyClient.kill).not.toHaveBeenCalled();
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    expect(service.getByWorktree("wt-b")?.panelId).toBe(baseRequest.panelId);
+    expect(service.getByWorktree("wt-a")).toBeNull();
+    expect(onStateChanged).toHaveBeenCalledWith(expect.objectContaining({ worktreeId: "wt-b" }));
+  });
+
+  it("restarts in the new directory when a move changes the worktree and cwd", async () => {
+    const first = await service.ensure({
+      ...baseRequest,
+      cwd: "/repo/wt-a",
+      worktreeId: "wt-a",
+    });
+    const second = await service.ensure({
+      ...baseRequest,
+      cwd: "/repo/wt-b",
+      worktreeId: "wt-b",
+    });
+
     expect(second.terminalId).not.toBe(first.terminalId);
     expect(second.worktreeId).toBe("wt-b");
     expect(ptyClient.kill).toHaveBeenCalledWith(first.terminalId, "dev-preview:config-change");
     expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
+    expect(ptyClient.spawn).toHaveBeenLastCalledWith(
+      second.terminalId,
+      expect.objectContaining({ cwd: "/repo/wt-b" })
+    );
   });
 
   it("keeps simultaneous panels isolated within the same project and worktree", async () => {
@@ -1789,6 +1814,32 @@ describe("DevPreviewSessionService", () => {
       expect(remount.status).toBe("stopped");
       expect(remount.userStopped).toBe(true);
       expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps a stopped preview stopped when it moves to another worktree (#14958)", async () => {
+      await service.ensure({ ...baseRequest, cwd: "/repo/wt-a", worktreeId: "wt-a" });
+      await service.stop(sessionRequest);
+
+      const moved = await service.ensure({
+        ...baseRequest,
+        cwd: "/repo/wt-b",
+        worktreeId: "wt-b",
+      });
+
+      expect(moved.status).toBe("stopped");
+      expect(moved.worktreeId).toBe("wt-b");
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+
+      const resumed = await service.ensure({
+        ...baseRequest,
+        cwd: "/repo/wt-b",
+        worktreeId: "wt-b",
+        resumeUserStopped: true,
+      });
+      expect(ptyClient.spawn).toHaveBeenLastCalledWith(
+        resumed.terminalId,
+        expect.objectContaining({ cwd: "/repo/wt-b" })
+      );
     });
 
     it("refuses an automatic ensure even when the config changed while stopped", async () => {

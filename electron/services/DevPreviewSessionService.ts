@@ -495,6 +495,10 @@ export class DevPreviewSessionService {
       if (session.turbopackEnabled !== nextTurbopackEnabled) changedFields.push("turbopackEnabled");
       if (envChanged) changedFields.push("env");
       const configChanged = changedFields.length > 0;
+      // The server runs from `cwd`; the worktree only says where it's filed. A
+      // move that changes nothing else re-files it, never restarts it in the
+      // directory it was already in (#14958).
+      const launchConfigChanged = changedFields.some((field) => field !== "worktreeId");
 
       this.recordSessionDiagnostic(session, { type: "ensure-requested", configChanged });
       if (configChanged) {
@@ -514,7 +518,7 @@ export class DevPreviewSessionService {
       // A config change is an explicit "try again with new settings" — clear a
       // tripped crash-loop guard so the fresh config gets its full attempt
       // budget instead of inheriting a stopped state from the old config.
-      if (configChanged) {
+      if (launchConfigChanged) {
         resetCrashLoopGuard(session);
       }
 
@@ -554,7 +558,7 @@ export class DevPreviewSessionService {
           message: capDiagnosticText(commandError),
         });
         invalidatePendingLaunch(session);
-        if (configChanged && session.terminalId) {
+        if (launchConfigChanged && session.terminalId) {
           await this.stopSessionTerminal(session, "invalid-command");
         }
         this.updateSession(session, {
@@ -568,12 +572,17 @@ export class DevPreviewSessionService {
         return;
       }
 
-      if (configChanged) {
+      if (launchConfigChanged) {
         invalidatePendingLaunch(session);
         if (session.terminalId) {
           const epoch = await this.stopSessionTerminal(session, "config-change");
           if (this.relaunchSuperseded(session, epoch)) return;
         }
+      } else if (configChanged) {
+        // Nothing relaunches to announce the new worktree, so cards, the
+        // dashboard and the restore manifest hear it here.
+        this.updateSession(session, {});
+        if (RUNNING_STATES.has(session.status)) this.persistManifest();
       }
 
       await this.ensureSessionTerminal(session);

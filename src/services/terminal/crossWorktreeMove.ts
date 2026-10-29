@@ -6,7 +6,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { classifyLaunchRootAlignment } from "@/utils/worktreeAlignment";
 import { isRuntimeAgentTerminal } from "@/utils/terminalType";
-import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
+import { isDevPreviewPanel, isPtyPanel, type PanelInstance } from "@shared/types/panel";
 
 /**
  * Whether the panel's process can still act on the filesystem right now.
@@ -90,6 +90,26 @@ function confirmHeldPanelDestination(panelId: string, worktreeId: string): void 
 }
 
 /**
+ * A command-backed preview serves whatever directory it runs in, so it goes
+ * where it was moved (#14958): its next ensure restarts the server in the
+ * destination rather than filing the source's server under it. A user-stopped
+ * preview only takes the new directory and stays stopped. An endpoint preview
+ * follows the destination's endpoint instead, and a directory under no
+ * worktree stays where the user put it, as with `alignDeadPanelCwd`.
+ */
+function alignMovedDevPreviewCwd(panelId: string, worktreeId: string): void {
+  const panel = usePanelStore.getState().panelsById[panelId];
+  if (!panel || !isDevPreviewPanel(panel) || panel.previewsResourceEndpoint) return;
+  const worktrees = readWorktreePaths();
+  if (classifyLaunchRootAlignment(panel.cwd, worktrees, worktreeId) !== "launch-root-mismatch") {
+    return;
+  }
+  const destination = worktrees.find((w) => w.id === worktreeId);
+  if (!destination?.path) return;
+  usePanelStore.getState().updateTerminalCwd(panelId, destination.path);
+}
+
+/**
  * Bring one moved panel's after-effects in line with where it now lives.
  *
  * Three outcomes, and the split is the whole point of #11853:
@@ -107,6 +127,10 @@ function confirmHeldPanelDestination(panelId: string, worktreeId: string): void 
 export function reconcileMovedPanel(panelId: string, destinationWorktreeId: string): void {
   const store = usePanelStore.getState();
   const panel = store.panelsById[panelId];
+  if (panel && isDevPreviewPanel(panel)) {
+    alignMovedDevPreviewCwd(panelId, destinationWorktreeId);
+    return;
+  }
   if (!panel || !isPtyPanel(panel)) return;
 
   if (panel.restoreRecovery) {

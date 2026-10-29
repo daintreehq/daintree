@@ -1,6 +1,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import {
   isPtyPanel,
+  type DevPreviewPanelData,
   type PanelInstance,
   type PanelLocation,
   type PtyPanelData,
@@ -86,7 +87,7 @@ function panel(id: string, worktreeId: string, location: PanelLocation = "grid")
   };
 }
 
-function seedPanels(panels: PtyPanelData[]): void {
+function seedPanels(panels: PanelInstance[]): void {
   const panelIdsByWorktreeId: Record<string, string[]> = {};
   for (const p of panels) {
     const bucket = panelIdsByWorktreeId[p.worktreeId!];
@@ -977,6 +978,93 @@ describe("moveTerminalToWorktreeAndFollowRescue — move notice (#11853)", () =>
     expect(terminalClient.submit).not.toHaveBeenCalled();
     expect(terminalInstanceService.addAgentStateListener).not.toHaveBeenCalled();
     expect(terminalInstanceService.captureBufferText).not.toHaveBeenCalled();
+  });
+});
+
+describe("moveTerminalToWorktreeAndFollowRescue — dev previews (#14958)", () => {
+  beforeEach(() => {
+    setWorktreesWithPaths([
+      { id: "wt-a", path: "/repo/wt-a" },
+      { id: "wt-b", path: "/repo/wt-b" },
+    ]);
+  });
+
+  function preview(overrides: Partial<DevPreviewPanelData> = {}): DevPreviewPanelData {
+    return {
+      id: "p1",
+      title: "Dev server",
+      kind: "dev-preview",
+      cwd: "/repo/wt-a",
+      devCommand: "npm run dev",
+      worktreeId: "wt-a",
+      location: "grid",
+      isVisible: true,
+      ...overrides,
+    };
+  }
+
+  function previewCwdOf(id: string): string | undefined {
+    const p = usePanelStore.getState().panelsById[id];
+    return p?.kind === "dev-preview" ? p.cwd : undefined;
+  }
+
+  it("runs a moved command preview in the destination worktree", () => {
+    seedPanels([preview()]);
+
+    moveTerminalToWorktreeAndFollowRescue("p1", "wt-b");
+
+    expect(usePanelStore.getState().panelsById["p1"]?.worktreeId).toBe("wt-b");
+    expect(previewCwdOf("p1")).toBe("/repo/wt-b");
+  });
+
+  it("puts a preview dragged back home back in its own worktree", () => {
+    seedPanels([preview()]);
+
+    moveTerminalToWorktreeAndFollowRescue("p1", "wt-b");
+    moveTerminalToWorktreeAndFollowRescue("p1", "wt-a");
+
+    expect(previewCwdOf("p1")).toBe("/repo/wt-a");
+  });
+
+  it("leaves a preview launched outside every worktree where it is", () => {
+    seedPanels([preview({ cwd: "/somewhere/else" })]);
+
+    moveTerminalToWorktreeAndFollowRescue("p1", "wt-b");
+
+    expect(previewCwdOf("p1")).toBe("/somewhere/else");
+  });
+
+  it("leaves an endpoint preview's directory alone", () => {
+    // It follows the destination's endpoint, not a directory.
+    seedPanels([preview({ previewsResourceEndpoint: true, devCommand: undefined })]);
+
+    moveTerminalToWorktreeAndFollowRescue("p1", "wt-b");
+
+    expect(usePanelStore.getState().panelsById["p1"]?.worktreeId).toBe("wt-b");
+    expect(previewCwdOf("p1")).toBe("/repo/wt-a");
+  });
+
+  it("moves a preview riding in a tab group along with its terminal", () => {
+    seedPanels([preview(), { ...panel("t1", "wt-a"), cwd: "/repo/wt-a" }]);
+    usePanelStore.setState({
+      tabGroups: new Map([
+        [
+          "g1",
+          {
+            id: "g1",
+            location: "grid" as const,
+            worktreeId: "wt-a",
+            activeTabId: "t1",
+            panelIds: ["t1", "p1"],
+          },
+        ],
+      ]),
+    });
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
+
+    expect(previewCwdOf("p1")).toBe("/repo/wt-b");
+    expect(cwdOf("t1")).toBe("/repo/wt-b");
   });
 });
 
