@@ -155,7 +155,7 @@ describe("MediaPlayer", () => {
   });
 
   it("rests on an empty state with no source, rather than loading forever", async () => {
-    const { container } = render(inPlugin(createElement(kit.MediaPlayer, { source: null })));
+    const { container } = render(inPlugin(createElement(kit.MediaPlayer, { source: "" })));
     await settle();
     expect(artifactSource).not.toHaveBeenCalled();
     expect(container.querySelector("[data-media-empty]")?.textContent).toBe(

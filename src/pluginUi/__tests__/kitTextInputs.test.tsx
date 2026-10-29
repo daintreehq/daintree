@@ -16,6 +16,7 @@ import {
   listErrors,
   parseAssignments,
 } from "@/components/PluginKit/PluginKitTextInputs";
+import { setPluginKitHost } from "@/components/PluginKit/kitHost";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { keybindingService } from "@/services/KeybindingService";
 
@@ -776,8 +777,8 @@ describe("KeyValueEditor", () => {
       clipboardData: { getData: () => "A=1\nB=2\nC=3" },
     });
     const keys = () =>
-      (JSON.parse(screen.getByTestId("pairs").textContent ?? "[]") as KeyValuePair[]).map(
-        (pair) => pair.key
+      [...(screen.getByTestId("pairs").textContent ?? "").matchAll(/"key":"([^"]*)"/g)].map(
+        (match) => match[1]
       );
     expect(keys()).toEqual(["Authorization", "Accept", "A"]);
     expect(screen.getByRole("alert").textContent).toBe("2 lines skipped, up to 3 entries");
@@ -878,6 +879,8 @@ describe("SecretInput", () => {
     const input = screen.getByLabelText("Key") as HTMLInputElement;
     fireEvent.keyDown(input, { key: "Enter" });
     const thrown = screen.getByRole("alert");
+    // The draft is kept to try again.
+    expect(input.value).toBe("ghp_bad");
     expect(thrown.textContent).toBe("Token rejected by GitHub");
     expect(input.getAttribute("aria-invalid")).toBe("true");
     expect(input.getAttribute("aria-describedby")).toBe(thrown.id);
@@ -889,18 +892,51 @@ describe("SecretInput", () => {
     expect(input.getAttribute("aria-invalid")).toBeNull();
   });
 
-  it("never shows a failure message that repeats the secret", () => {
-    render(
-      <kit.SecretInput
-        aria-label="Key"
-        defaultValue="sk-live-123"
-        onSubmit={(secret) => {
-          throw new Error(`bad key ${secret}`);
-        }}
-      />
-    );
+  it("never shows a failure message that repeats the secret, padded or not", async () => {
+    for (const typed of ["sk-live-123", "  sk-live-123  "]) {
+      render(
+        <kit.SecretInput
+          aria-label="Key"
+          defaultValue={typed}
+          onSubmit={(secret) => Promise.reject(new Error(secret))}
+        />
+      );
+      fireEvent.keyDown(screen.getByLabelText("Key"), { key: "Enter" });
+      await flush();
+      expect(screen.getByRole("alert").textContent).toBe("Couldn't save");
+      cleanup();
+    }
+  });
+
+  it("drops a failure once the value is replaced from outside", async () => {
+    let reject: (error: Error) => void = () => {};
+    function Owner() {
+      const [value, setValue] = useState("first");
+      return (
+        <>
+          <kit.SecretInput
+            aria-label="Key"
+            value={value}
+            onValueChange={setValue}
+            onSubmit={() =>
+              new Promise<void>((_resolve, fail) => {
+                reject = fail;
+              })
+            }
+          />
+          <button type="button" onClick={() => setValue("second")}>
+            Reset
+          </button>
+        </>
+      );
+    }
+    render(<Owner />);
     fireEvent.keyDown(screen.getByLabelText("Key"), { key: "Enter" });
-    expect(screen.getByRole("alert").textContent).toBe("Couldn't save");
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    reject(new Error("Network down"));
+    await flush();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByLabelText("Key").getAttribute("aria-invalid")).toBeNull();
   });
 
   it("masks the value, reveals it and blocks copying by default", () => {
@@ -1253,13 +1289,36 @@ describe("ShortcutRecorder", () => {
     expect(keybindingService.isCapturingShortcut()).toBe(true);
   });
 
-  it("names a conflicting action by its title, never its id", () => {
-    vi.spyOn(keybindingService, "findConflicts").mockReturnValue([
-      { actionId: "acme.sync.run", combo: "Cmd+T", kind: "conflict" } as never,
+  it("names a conflicting action by its title, never its id or a restricted title", () => {
+    vi.spyOn(keybindingService, "findConflicts").mockImplementation((combo: string) => [
+      {
+        actionId: combo === "Cmd+T" ? "acme.sync.run" : combo === "Cmd+Y" ? "acme.secret" : "x.y",
+        combo,
+        scope: "global",
+        priority: 0,
+        kind: "conflict",
+      },
     ]);
-    render(<kit.ShortcutRecorder value="Cmd+T" />);
-    expect(screen.queryByText(/acme\.sync\.run/)).toBeNull();
-    expect(screen.getByText(/Daintree uses this for another action/)).toBeTruthy();
+    const uninstall = setPluginKitHost({
+      getAction: (id) =>
+        id === "acme.sync.run"
+          ? { title: "Sync now", danger: "safe", enabled: true }
+          : id === "acme.secret"
+            ? { title: "Rotate keys", danger: "restricted", enabled: true }
+            : null,
+    });
+    try {
+      const { rerender } = render(<kit.ShortcutRecorder value="Cmd+T" />);
+      expect(screen.getByText(/Daintree uses this for Sync now/)).toBeTruthy();
+      rerender(<kit.ShortcutRecorder value="Cmd+Y" />);
+      expect(screen.queryByText(/Rotate keys|acme\.secret/)).toBeNull();
+      expect(screen.getByText(/Daintree uses this for another action/)).toBeTruthy();
+      rerender(<kit.ShortcutRecorder value="Cmd+U" />);
+      expect(screen.queryByText(/x\.y/)).toBeNull();
+      expect(screen.getByText(/Daintree uses this for another action/)).toBeTruthy();
+    } finally {
+      uninstall();
+    }
   });
 
   it("flags a combo Daintree uses and the plugin's own conflicts", () => {

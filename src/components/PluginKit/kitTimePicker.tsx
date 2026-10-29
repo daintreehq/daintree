@@ -492,7 +492,8 @@ function TimeField({
               // Leaving the field with any draft it hasn't committed (half a
               // time, an empty one that may not be cleared, or a whole one out
               // of range) puts the committed time back. The field's own list
-              // is not leaving it.
+              // is not leaving it: it is modal, and closing it hands focus back
+              // to the segment it opened from.
               if (!focusLeft(event, focusScope.id)) return;
               setTyped(null);
               if (draft === null) return;

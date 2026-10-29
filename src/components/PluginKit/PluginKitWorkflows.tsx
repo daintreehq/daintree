@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { InlineError } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/Spinner";
+import { getVisibleTabbableElements } from "@/lib/accessibility";
 import { pluralize } from "@/lib/pluralize";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
@@ -216,27 +217,26 @@ function KitAttachmentChip({
   );
 }
 
-const TABBABLE =
-  'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
 /**
  * Focus for a standalone chip's removal, taken before the plugin drops it:
- * the nearest control on from the chip, else the one before it, searched
- * outward from its parent, so a keyboard user is never left on the page.
+ * the nearest visible control on from the chip, else the ones before it,
+ * searched outward from its parent and checked to have taken focus, so a
+ * keyboard user is never left on the page.
  */
 function focusPastChip(button: HTMLButtonElement) {
-  if (button.ownerDocument.activeElement !== button) return;
+  const doc = button.ownerDocument;
+  if (doc.activeElement !== button) return;
   const chip = button.closest<HTMLElement>("[data-attachment]") ?? button;
   for (let scope = chip.parentElement; scope !== null; scope = scope.parentElement) {
-    const others = [...scope.querySelectorAll<HTMLElement>(TABBABLE)].filter(
-      (element) => !chip.contains(element)
-    );
-    if (others.length === 0) continue;
-    const after = others.find(
+    const others = getVisibleTabbableElements(scope).filter((element) => !chip.contains(element));
+    const after = others.filter(
       (element) => chip.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING
     );
-    (after ?? others[others.length - 1])!.focus();
-    return;
+    const before = others.filter((element) => !after.includes(element)).reverse();
+    for (const candidate of [...after, ...before]) {
+      candidate.focus();
+      if (doc.activeElement === candidate) return;
+    }
   }
 }
 

@@ -815,16 +815,42 @@ describe("charts", () => {
       "Target 80%"
     );
     cleanup();
-    // A target past the end is still drawn, pinned to it and dashed, and said to be off the scale.
-    mount(createElement(kit.Gauge, { value: 50, target: 120, "aria-label": "Stretch" }));
-    const stretch = screen.getByRole("meter", { name: "Stretch" });
-    const tick = stretch.querySelector("[data-chart-gauge-target]");
-    expect(tick?.getAttribute("data-chart-gauge-target")).toBe("above");
-    expect(tick?.getAttribute("stroke-dasharray")).not.toBeNull();
-    expect(document.getElementById(stretch.getAttribute("aria-describedby")!)?.textContent).toBe(
-      "Target 120%, above the scale"
-    );
-    cleanup();
+    // A target past either end is still drawn, pinned to that end and dashed,
+    // and said to be off the scale.
+    const tickAt = (target: number) => {
+      mount(createElement(kit.Gauge, { value: 50, target, "aria-label": `At ${target}` }));
+      const meter = screen.getByRole("meter", { name: `At ${target}` });
+      const line = meter.querySelector("[data-chart-gauge-target]")!;
+      const spoken = document.getElementById(meter.getAttribute("aria-describedby")!)?.textContent;
+      const drawn = {
+        at: ["x1", "y1", "x2", "y2"].map((name) => line.getAttribute(name)).join(","),
+        side: line.getAttribute("data-chart-gauge-target"),
+        dashed: line.getAttribute("stroke-dasharray") !== null,
+        spoken,
+      };
+      cleanup();
+      return drawn;
+    };
+    const top = tickAt(100);
+    const bottom = tickAt(0);
+    const middle = tickAt(50);
+    const above = tickAt(120);
+    const below = tickAt(-20);
+    expect(above).toEqual({
+      at: top.at,
+      side: "above",
+      dashed: true,
+      spoken: "Target 120%, above the scale",
+    });
+    expect(below).toEqual({
+      at: bottom.at,
+      side: "below",
+      dashed: true,
+      spoken: "Target -20%, below the scale",
+    });
+    expect(top.dashed).toBe(false);
+    expect(middle.at).not.toBe(top.at);
+    expect(middle.at).not.toBe(bottom.at);
     // Below the smallest size its figure, label and ends fit in, it holds that size.
     mount(createElement(kit.Gauge, { value: 5, size: 48, label: "Lines", "aria-label": "Tiny" }));
     expect(screen.getByRole("meter", { name: "Tiny" }).style.width).toBe("96px");

@@ -695,7 +695,7 @@ function TimelineListItem({
   item,
   ...props
 }: ItemProps<unknown> & { context: TimelineContext }) {
-  const day = (item as TimelineRow | undefined)?.kind === "day";
+  const day = typeof item === "object" && item !== null && Reflect.get(item, "kind") === "day";
   return <div {...props} role={day ? "none" : "listitem"} />;
 }
 

@@ -43,7 +43,7 @@ const PERMANENT_FAILURE: Record<string, string> = {
  */
 function errorParts(error: unknown): { message: string; detail: string; retryable: boolean } {
   const raw = formatErrorMessage(error, "");
-  const own = (error as { code?: unknown } | null)?.code;
+  const own = typeof error === "object" && error !== null ? Reflect.get(error, "code") : undefined;
   const code =
     (typeof own === "string" ? own : null) ?? /^([A-Z][A-Z_]+):\s*/.exec(raw)?.[1] ?? null;
   const detail = raw.replace(/^[A-Z][A-Z_]+:\s*/, "").trim() || "The file couldn't be loaded";

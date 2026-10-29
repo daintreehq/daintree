@@ -510,7 +510,13 @@ describe("review regressions", () => {
             onRemove: () => setNames((all) => all.filter((other) => other !== name)),
           })
         ),
-        createElement("button", { type: "button" }, "Send")
+        // Hidden controls take no focus: the handoff passes over them.
+        createElement(
+          "button",
+          { key: "hidden", type: "button", style: { display: "none" } },
+          "Hidden"
+        ),
+        createElement("button", { key: "send", type: "button" }, "Send")
       );
     }
     render(createElement(Probe));

@@ -61,7 +61,9 @@ export function KitSecretInput(props: PluginSecretInputProps) {
   const [saving, setSaving] = useState(false);
   // Why the last save failed, shown under the field until the next edit, as
   // InlineEdit does: a failed save must not look like one that went through.
-  const [saveError, setSaveError] = useState<string | null>(null);
+  // Held with the text it was for, so a value replaced from outside never
+  // wears another value's failure.
+  const [saveFailure, setSaveFailure] = useState<{ message: string; text: string } | null>(null);
   const errorId = useId();
   // A save under 400ms shows nothing, per the app's loading gate.
   const showSaving = useDohertyGate(saving);
@@ -74,6 +76,7 @@ export function KitSecretInput(props: PluginSecretInputProps) {
   const compact = oneOf(density, ["default", "compact"] as const) === "compact";
   const hint = nonEmpty(storedHint)?.slice(-6);
   const showStored = stored === true && !replacing;
+  const saveError = saveFailure !== null && saveFailure.text === text ? saveFailure.message : null;
   const canReveal = revealable !== false;
   // Turning `revealable` off hides a value that was showing.
   const revealed = canReveal && shown;
@@ -96,7 +99,7 @@ export function KitSecretInput(props: PluginSecretInputProps) {
       // The draft that was saved is not kept behind the saved state.
       setReplacing(false);
       setShown(false);
-      setSaveError(null);
+      setSaveFailure(null);
       if (!controlled) setOwn("");
     }
   }
@@ -108,7 +111,7 @@ export function KitSecretInput(props: PluginSecretInputProps) {
   }, [focusTarget]);
 
   const change = (next: string) => {
-    setSaveError(null);
+    setSaveFailure(null);
     if (!controlled) setOwn(next);
     safely("SecretInput onValueChange", handleValue, next);
   };
@@ -120,12 +123,17 @@ export function KitSecretInput(props: PluginSecretInputProps) {
   const submitDraft = () => {
     // One save at a time: a second Enter while one is out does nothing.
     if (savingRef.current) return;
-    // The plugin's reason, unless it repeats the secret: that never goes on screen.
+    // The plugin's reason, unless it repeats the secret: that never goes on
+    // screen, padded or not (the reason arrives trimmed).
     const failed = (reason: unknown) => {
       const message = faultMessage(reason, "Couldn't save");
-      setSaveError(text !== "" && message.includes(text) ? "Couldn't save" : message);
+      const secret = text.trim();
+      setSaveFailure({
+        message: secret !== "" && message.includes(secret) ? "Couldn't save" : message,
+        text,
+      });
     };
-    setSaveError(null);
+    setSaveFailure(null);
     const outcome = attempt(() => submit?.(text));
     if (!outcome.ok) {
       reportPluginFault("SecretInput onSubmit threw", outcome.error);
