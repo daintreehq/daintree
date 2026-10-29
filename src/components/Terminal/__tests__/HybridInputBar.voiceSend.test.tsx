@@ -29,7 +29,17 @@ import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { HybridInputBar } from "../HybridInputBar";
 
 type DeltaPayload = { text: string; itemId?: string };
-type CompletePayload = { text: string; willCorrect: boolean; itemId?: string };
+type CompletePayload = {
+  text: string;
+  willCorrect: boolean;
+  itemId?: string;
+  transcriptId?: string;
+};
+type FileTokenPayload = {
+  sessionId: string;
+  transcriptId: string;
+  references: Array<{ description: string; path: string | null; failed?: true }>;
+};
 type CorrectResult = { action: "no_change" | "replace"; correctedText: string; failed?: true };
 
 const WT_ID = "/repo/wt";
@@ -38,7 +48,8 @@ const PANEL_ID = "term-1";
 const callbacks: {
   delta: ((payload: DeltaPayload) => void) | null;
   complete: ((payload: CompletePayload) => void) | null;
-} = { delta: null, complete: null };
+  fileToken: ((payload: FileTokenPayload) => void) | null;
+} = { delta: null, complete: null, fileToken: null };
 
 const correct = vi.fn<(request: { rawText: string }) => Promise<CorrectResult>>();
 
@@ -132,7 +143,10 @@ beforeEach(async () => {
         }),
         onParagraphBoundary: vi.fn(() => () => {}),
         onCorrectionProgress: vi.fn(() => () => {}),
-        onFileTokenResolved: vi.fn(() => () => {}),
+        onFileTokenResolved: vi.fn((cb: (payload: FileTokenPayload) => void) => {
+          callbacks.fileToken = cb;
+          return () => {};
+        }),
         onError: vi.fn(() => () => {}),
         onStatus: vi.fn(() => () => {}),
         onSessionEnded: vi.fn(() => () => {}),
@@ -426,7 +440,15 @@ describe("HybridInputBar with a missed file reference arriving during a dictated
     correct.mockReturnValueOnce(pending.promise);
     const onSend = vi.fn();
     act(() => {
-      dictate("link to the old API");
+      useVoiceRecordingStore.getState().beginSession({ panelId: PANEL_ID }, "session-links");
+      useVoiceRecordingStore.getState().setStatus("recording");
+      callbacks.delta!({ text: "link to the old API", itemId: "item-links" });
+      callbacks.complete!({
+        text: "link to the old API",
+        willCorrect: false,
+        itemId: "item-links",
+        transcriptId: "t1",
+      });
     });
     const view = await mount(onSend);
     const caption = () => document.querySelector("[data-file-reference-caption]");
@@ -435,10 +457,15 @@ describe("HybridInputBar with a missed file reference arriving during a dictated
       runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
     });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const note = { panelId: PANEL_ID, references: [{ description: "old API" }], id: 1 };
     act(() => {
-      useVoiceRecordingStore.setState({ fileReferenceNote: note });
+      callbacks.fileToken!({
+        sessionId: "session-links",
+        transcriptId: "t1",
+        references: [{ description: "old API", path: null }],
+      });
     });
+    const note = useVoiceRecordingStore.getState().fileReferenceNote;
+    expect(note).toMatchObject({ panelId: PANEL_ID, references: [{ description: "old API" }] });
     expect(caption()).toBeNull();
 
     // A cleanup slower than the note lasts.

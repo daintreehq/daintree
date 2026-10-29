@@ -463,21 +463,28 @@ describe("voiceInput — spoken file references", () => {
     ]);
   });
 
-  it("sends a lookup that threw as failed, beside the references that settled", async () => {
+  it("sends a lookup that threw as failed, once the slower ones beside it settle", async () => {
     await start(owner, "a");
     shared.detect.mockResolvedValueOnce([
       { description: "router" },
       { description: "store" },
       { description: "old API" },
     ]);
+    const router = deferred<string | null>();
     shared.resolve
-      .mockResolvedValueOnce("src/router.ts")
+      .mockReturnValueOnce(router.promise)
       .mockRejectedValueOnce(new Error("search crashed"))
       .mockResolvedValueOnce(null);
 
     emitComplete("Link to the router, link to the store and link to the old API.");
-    await stop(owner, "a");
+    const stopping = stop(owner, "a");
+    await vi.waitFor(() => expect(shared.resolve).toHaveBeenCalledTimes(3));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(fileReferences()).toEqual([]);
+    router.resolve("src/router.ts");
+    await stopping;
 
+    expect(fileReferences()).toHaveLength(1);
     expect(fileReferences()[0]!.references).toEqual([
       { description: "router", path: "src/router.ts" },
       { description: "store", path: null, failed: true },

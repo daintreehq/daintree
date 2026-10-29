@@ -1234,12 +1234,14 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     lookup.descriptions = descriptions;
     if (descriptions.length === 0 || signal.aborted) return;
     // Each lands as it settles, so one still searching at the deadline
-    // doesn't take the others with it.
+    // doesn't take the others with it. One settling after the job gave up
+    // was cut short, not a miss.
     const lookUpEach = (find: (description: string, i: number) => Promise<string | null>) =>
       Promise.all(
         descriptions.map(async (description, i) => {
           try {
-            lookup.found[i] = { description, path: await find(description, i) };
+            const path = await find(description, i);
+            if (!signal.aborted) lookup.found[i] = { description, path };
           } catch (error) {
             logWarn("[VoiceInput] File link resolution failed", voiceErrorLogFields(error));
           }
@@ -1295,10 +1297,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     const references = descriptions.map(
       (description, i) => found[i] ?? { description, path: null, failed: true as const }
     );
+    const settled = found.filter((reference) => reference !== undefined);
+    const resolved = settled.filter((reference) => reference.path !== null).length;
     logDebug("[VoiceInput] File links resolved", {
       detected: references.length,
-      resolved: references.filter((reference) => reference.path).length,
-      failed: references.length - found.filter(Boolean).length,
+      resolved,
+      failed: references.length - settled.length,
     });
     // The view that started the session, wherever it is now; never the app's
     // current view (#14599).

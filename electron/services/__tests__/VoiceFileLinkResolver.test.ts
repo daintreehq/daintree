@@ -89,7 +89,7 @@ describe("VoiceFileLinkResolver", () => {
     expect(result).toBe("src/components/Input.tsx");
   });
 
-  it("returns null on AI rerank API error (does not bypass confidence gate)", async () => {
+  it("rejects on AI rerank API error, so it isn't taken for a miss (does not bypass confidence gate)", async () => {
     searchNaturalLanguageMock.mockResolvedValue([
       "src/components/Bar.tsx",
       "src/components/Input.tsx",
@@ -104,15 +104,12 @@ describe("VoiceFileLinkResolver", () => {
     );
 
     const resolver = new VoiceFileLinkResolver();
-    const result = await resolver.resolve({
-      ...BASE_PAYLOAD,
-      description: "input component",
-    });
-
-    expect(result).toBeNull();
+    await expect(
+      resolver.resolve({ ...BASE_PAYLOAD, description: "input component" })
+    ).rejects.toThrow("AI rerank API error");
   });
 
-  it("returns null when AI rerank fetch rejects (network error)", async () => {
+  it("rejects when AI rerank fetch rejects (network error)", async () => {
     searchNaturalLanguageMock.mockResolvedValue([
       "src/components/Bar.tsx",
       "src/components/Input.tsx",
@@ -121,15 +118,36 @@ describe("VoiceFileLinkResolver", () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
 
     const resolver = new VoiceFileLinkResolver();
+    await expect(
+      resolver.resolve({ ...BASE_PAYLOAD, description: "input component" })
+    ).rejects.toThrow("network down");
+  });
+
+  it("finds nothing once its caller has aborted the rerank", async () => {
+    searchNaturalLanguageMock.mockResolvedValue([
+      "src/components/Bar.tsx",
+      "src/components/Input.tsx",
+    ]);
+    const controller = new AbortController();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        controller.abort();
+        throw new DOMException("aborted", "AbortError");
+      })
+    );
+
+    const resolver = new VoiceFileLinkResolver();
     const result = await resolver.resolve({
       ...BASE_PAYLOAD,
       description: "input component",
+      signal: controller.signal,
     });
 
     expect(result).toBeNull();
   });
 
-  it("returns null when AI rerank returns OK but no text content", async () => {
+  it("rejects when AI rerank returns OK but no text content", async () => {
     searchNaturalLanguageMock.mockResolvedValue([
       "src/components/Bar.tsx",
       "src/components/Input.tsx",
@@ -144,12 +162,9 @@ describe("VoiceFileLinkResolver", () => {
     );
 
     const resolver = new VoiceFileLinkResolver();
-    const result = await resolver.resolve({
-      ...BASE_PAYLOAD,
-      description: "input component",
-    });
-
-    expect(result).toBeNull();
+    await expect(
+      resolver.resolve({ ...BASE_PAYLOAD, description: "input component" })
+    ).rejects.toThrow("empty text");
   });
 
   it("returns null when AI rerank picks a path not in candidates", async () => {
@@ -207,13 +222,11 @@ describe("VoiceFileLinkResolver", () => {
     expect(body.store).toBe(false);
   });
 
-  it("handles searchNaturalLanguage throwing", async () => {
+  it("rejects when searchNaturalLanguage throws", async () => {
     searchNaturalLanguageMock.mockRejectedValue(new Error("disk error"));
 
     const resolver = new VoiceFileLinkResolver();
-    const result = await resolver.resolve(BASE_PAYLOAD);
-
-    expect(result).toBeNull();
+    await expect(resolver.resolve(BASE_PAYLOAD)).rejects.toThrow("disk error");
   });
 
   it("does not high-confidence-match short tokens against longer words", async () => {
