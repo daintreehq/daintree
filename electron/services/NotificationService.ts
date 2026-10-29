@@ -3,6 +3,10 @@ import type { WindowRegistry, WindowContext } from "../window/WindowRegistry.js"
 import { sendToRenderer } from "../ipc/utils.js";
 import { getAppWebContents, getWindowForWebContents } from "../window/webContentsRegistry.js";
 import { revealWindow } from "../window/projectOwnership.js";
+import type {
+  NotificationPlace,
+  NotificationProjectOpener,
+} from "../window/notificationNavigation.js";
 import { getLinuxWindowIcon } from "../window/linuxWindowIcon.js";
 import {
   FALLBACK_WINDOW_TITLE,
@@ -120,6 +124,7 @@ interface TrackedWindow {
 class NotificationService {
   private registry: WindowRegistry | null = null;
   private projectLookup: ProjectTitleLookup | null = null;
+  private openProject: NotificationProjectOpener | null = null;
   private debounceTimer: NodeJS.Timeout | null = null;
   private statesByOwner = new Map<NotificationOwnerId, NotificationState>();
   private focusedWindows = new Set<number>();
@@ -217,12 +222,19 @@ class NotificationService {
    * `projectLookup` resolves a ProjectViewManager id to its project row so each
    * window's title can name what it is showing. Injected rather than imported
    * so the service stays free of the SQLite-backed project store — omit it and
-   * every window falls back to the app name.
+   * every window falls back to the app name. `openProject` is how a click on a
+   * banner for a project that isn't on screen switches to it; omit it and the
+   * click is delivered to the owning view where it is.
    */
-  initialize(registry: WindowRegistry, projectLookup?: ProjectTitleLookup): void {
+  initialize(
+    registry: WindowRegistry,
+    projectLookup?: ProjectTitleLookup,
+    openProject?: NotificationProjectOpener
+  ): void {
     this.detachAllWindowListeners();
     this.registry = registry;
     this.projectLookup = projectLookup ?? null;
+    this.openProject = openProject ?? null;
 
     for (const ctx of registry.all()) {
       this.attachWindowListeners(ctx);
@@ -531,9 +543,11 @@ class NotificationService {
         }
       });
     } else if (navigation) {
+      // Taken now, while the owning view is alive: the banner can outlive it.
+      const place = this.placeOf(ownerWebContentsId);
       notification.once("click", () => {
         cleanup();
-        this.routeNavigation(navigation.channel, navigation.context, ownerWebContentsId);
+        this.routeNavigation(navigation.channel, navigation.context, ownerWebContentsId, place);
       });
     }
 
@@ -551,19 +565,19 @@ class NotificationService {
    * straight to the owning webContents instead. The primary window is the
    * explicit last resort for a notification whose owner is gone.
    *
-   * Known limit: if the owning view is cached (its project isn't the one the
-   * window is showing), the panel is focused in that renderer's store but the
-   * project is not switched to — making a background project visible from main
-   * means driving the full renderer-owned project-switch path, which persists
-   * outgoing layout state. Still strictly better than before, when the click
-   * went to the primary window's active view and matched no panel at all.
+   * A project that isn't on screen — its view cached, or evicted since the
+   * banner went up — is switched to through the renderer-owned project switch
+   * instead (#15233), which saves the outgoing layout and lands on the panel
+   * once the project is showing.
    */
   private routeNavigation(
     navigateChannel: string,
     context: WatchNotificationContext,
-    ownerWebContentsId?: NotificationOwnerId
+    ownerWebContentsId?: NotificationOwnerId,
+    place?: NotificationPlace | null
   ): void {
     if (this.sendToOwner(navigateChannel, context, ownerWebContentsId)) return;
+    if (place && this.openProject?.(place, context.panelId)) return;
 
     // The owner is gone, or died between the guard and the send. Falling back to
     // the primary window is a guess — it delivers to whichever view that window
@@ -588,6 +602,11 @@ class NotificationService {
 
     const ownerWindow = getWindowForWebContents(ownerWebContents);
     if (ownerWindow && !ownerWindow.isDestroyed()) {
+      // A cached view: its project switches in rather than being told to focus
+      // a panel nobody can see.
+      const showing = getAppWebContents(ownerWindow).id === ownerWebContentsId;
+      const place = showing ? null : this.placeOf(ownerWebContentsId);
+      if (place && this.openProject?.(place, context.panelId)) return true;
       revealWindow(ownerWindow);
     }
 
@@ -596,6 +615,26 @@ class NotificationService {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /** The window and workspace a local view belongs to, or null when it is neither. */
+  private placeOf(ownerWebContentsId: NotificationOwnerId | undefined): NotificationPlace | null {
+    if (ownerWebContentsId === undefined || isRemoteNotificationOwner(ownerWebContentsId)) {
+      return null;
+    }
+    try {
+      const ctx = this.registry?.getByWebContentsId(ownerWebContentsId);
+      const entry = ctx?.services.projectViewManager
+        ?.getAllViews()
+        .find(
+          (view) =>
+            !view.view.webContents.isDestroyed() && view.view.webContents.id === ownerWebContentsId
+        );
+      return ctx && entry ? { windowId: ctx.windowId, workspaceKey: entry.projectId } : null;
+    } catch {
+      // A window tearing down can throw from any of these reads.
+      return null;
     }
   }
 
@@ -618,6 +657,7 @@ class NotificationService {
 
     this.registry = null;
     this.projectLookup = null;
+    this.openProject = null;
     this.remoteSink = null;
   }
 }

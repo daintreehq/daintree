@@ -138,6 +138,12 @@ function projectViewManagerOf(w: WindowMock) {
   return {
     getActiveProjectId: () => w.activeProjectId ?? null,
     getOutgoingBridgeProjectId: () => w.bridgedProjectId,
+    // Each view is keyed `project-<webContents id>`, so a test can tell which one a click named.
+    getAllViews: () =>
+      w.ownerIds.map((id) => ({
+        projectId: `project-${id}`,
+        view: { webContents: electronMock.webContentsById.get(id) },
+      })),
   };
 }
 
@@ -1027,6 +1033,101 @@ describe("NotificationService", () => {
 
   describe("click routing", () => {
     const context = { panelId: "term-9", panelTitle: "Agent", worktreeId: "wt-1" };
+
+    describe("a project that isn't on screen (#15233)", () => {
+      function cachedOwnerWindow() {
+        const win = createWindowMock(false, [11, 12]);
+        win.activeProjectId = "project-11";
+        return win;
+      }
+
+      it("switches to a cached view's project instead of focusing a panel nobody can see", () => {
+        const win = cachedOwnerWindow();
+        const openProject = vi.fn(() => true);
+        notificationService.initialize(createRegistryMock([win]) as never, undefined, openProject);
+
+        notificationService.showWatchNotification(
+          "Agent waiting",
+          "Needs input",
+          context,
+          "notification:watch-navigate",
+          { ownerWebContentsId: 12 }
+        );
+        electronMock.notificationInstances.at(-1)!.trigger("click");
+
+        expect(openProject).toHaveBeenCalledWith(
+          { windowId: win.id, workspaceKey: "project-12" },
+          "term-9"
+        );
+        expect(ownerSend(12)).not.toHaveBeenCalled();
+        expect(ownerSend(11)).not.toHaveBeenCalled();
+        expect(sendToRendererMock).not.toHaveBeenCalled();
+      });
+
+      it("still reaches a cached view when its project can't be switched to", () => {
+        const win = cachedOwnerWindow();
+        const openProject = vi.fn(() => false);
+        notificationService.initialize(createRegistryMock([win]) as never, undefined, openProject);
+
+        notificationService.showWatchNotification(
+          "Agent waiting",
+          "Needs input",
+          context,
+          "notification:watch-navigate",
+          { ownerWebContentsId: 12 }
+        );
+        electronMock.notificationInstances.at(-1)!.trigger("click");
+
+        expect(openProject).toHaveBeenCalledTimes(1);
+        expect(ownerSend(12)).toHaveBeenCalledWith("notification:watch-navigate", context);
+      });
+
+      it("leaves a view the window is showing to its own navigate", () => {
+        const win = cachedOwnerWindow();
+        const openProject = vi.fn(() => true);
+        notificationService.initialize(createRegistryMock([win]) as never, undefined, openProject);
+
+        notificationService.showWatchNotification(
+          "Agent waiting",
+          "Needs input",
+          context,
+          "notification:watch-navigate",
+          { ownerWebContentsId: 11 }
+        );
+        electronMock.notificationInstances.at(-1)!.trigger("click");
+
+        expect(openProject).not.toHaveBeenCalled();
+        expect(ownerSend(11)).toHaveBeenCalledWith("notification:watch-navigate", context);
+      });
+
+      it("opens the project the banner came from once its view is gone, not the primary window's", () => {
+        const primary = createWindowMock(true, [11]);
+        const other = cachedOwnerWindow();
+        const openProject = vi.fn(() => true);
+        notificationService.initialize(
+          createRegistryMock([primary, other]) as never,
+          undefined,
+          openProject
+        );
+
+        notificationService.showWatchNotification(
+          "Agent waiting",
+          "Needs input",
+          context,
+          "notification:watch-navigate",
+          { ownerWebContentsId: 12 }
+        );
+        // Evicted while the banner sat in Notification Center.
+        electronMock.webContentsById.delete(12);
+        electronMock.notificationInstances.at(-1)!.trigger("click");
+
+        expect(openProject).toHaveBeenCalledWith(
+          { windowId: other.id, workspaceKey: "project-12" },
+          "term-9"
+        );
+        expect(sendToRendererMock).not.toHaveBeenCalled();
+      });
+    });
 
     it("focuses the window that owns the panel, not the primary window", () => {
       const primary = createWindowMock(true, [11]);
