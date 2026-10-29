@@ -401,6 +401,24 @@ describe("GlobalAssistantPane (#14454)", () => {
     expect(help.restartGlobalAssistant).toHaveBeenCalledWith(7);
   });
 
+  it("confirms a stop without claiming the conversation is gone or in past sessions (#14979)", async () => {
+    installHelp(running({ generation: 7, inputOwner: "a1", inputEpoch: 3 }));
+    help.discardGlobalAssistant.mockResolvedValue(true);
+    renderPane();
+    await flush();
+    fireEvent.pointerDown(screen.getByTestId("help-global-more"), { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByText("Stop global assistant"));
+    const body = (await screen.findByRole("alertdialog")).textContent ?? "";
+    // The transcript stays in the agent's own store, and the global assistant has
+    // no picker to resume it from: neither "discarded" nor "past sessions" holds.
+    expect(body).not.toMatch(/discard|delet|past session/i);
+    expect(body).toContain("new conversation");
+    expect(help.discardGlobalAssistant).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("button", { name: "Stop global assistant" }));
+    await flush();
+    expect(help.discardGlobalAssistant).toHaveBeenCalledWith(7);
+  });
+
   describe("a refused send or key (#14977)", () => {
     it("says why a refused message didn't go, and that the draft is still there", async () => {
       const api = await renderOwned();
