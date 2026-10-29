@@ -104,12 +104,22 @@ export async function restartPanesOnPreset(
     refused.length === 1
       ? `Couldn't restart ${first.pane.title?.trim() ? paneName(first.pane) : "the terminal"} on ${preset.name}`
       : `Couldn't restart ${pluralize(refused.length, "pane")} on ${preset.name}`;
-  // The way to a pane that is still open; one that closed has nowhere to go.
-  const target = refused.find(({ refusal }) => refusal !== "closed")?.pane;
-  const worktreeId = target ? worktreeIds.get(target.id) : undefined;
+  // The way to a pane that is still open now, after the restarts settled: one
+  // that closed, or went to the trash meanwhile, has nowhere to go.
+  const panelsById = usePanelStore.getState().panelsById;
+  const target = refused.find(({ pane, refusal }) => {
+    const panel = panelsById[pane.id];
+    return refusal !== "closed" && panel !== undefined && panel.location !== "trash";
+  })?.pane;
+  const worktreeId = worktreeIds.get((target ?? first.pane).id);
   if (!target) {
     // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok. Every pane it names has closed, so there is nothing left to go to or retry.
-    notify({ type: "error", title, message, context: { eventKind: "agent" } });
+    notify({
+      type: "error",
+      title,
+      message,
+      context: { eventKind: "agent", ...(worktreeId ? { worktreeId } : {}) },
+    });
     return;
   }
   notify({

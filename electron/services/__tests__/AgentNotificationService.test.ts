@@ -1791,9 +1791,17 @@ describe("AgentNotificationService", () => {
       expect(call?.[2]).toMatchObject({ panelTitle: "Agent" });
     });
 
-    it("names a completed agent by its display name even when its pane has a default title", () => {
+    it("names a completed agent by its display name, not a title in the legacy terminal list", () => {
+      // The global list is a migration-era record: a named title there may be
+      // long stale, so completion never reads it.
       const call = completeOn(
-        { id: "term-1", kind: "terminal", title: "Terminal", location: "dock" },
+        {
+          id: "term-1",
+          kind: "terminal",
+          title: "Stale name",
+          titleMode: "user",
+          location: "dock",
+        },
         { agentId: "codex" }
       );
       expect(call?.[1]).toBe("Codex finished its task");

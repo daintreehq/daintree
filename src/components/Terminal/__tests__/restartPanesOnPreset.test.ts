@@ -14,6 +14,8 @@ vi.mock("@/store/accessibilityAnnouncerStore", () => ({
 vi.mock("@/utils/logger", () => ({ logWarn: vi.fn() }));
 
 import { restartPanesOnPreset } from "../restartPanesOnPreset";
+import { usePanelStore } from "@/store/panelStore";
+import type { PtyPanelData } from "@shared/types/panel";
 
 const preset = { id: "work", name: "Work" };
 const refused = (message: string) => ({
@@ -21,7 +23,26 @@ const refused = (message: string) => ({
   error: { code: "EXECUTION_ERROR", message },
 });
 
+// Open panes the toast may point at; tests close them by deleting entries.
+function openPanes(...ids: string[]) {
+  const pane = (id: string): PtyPanelData => ({
+    id,
+    kind: "terminal",
+    title: id,
+    cwd: "/repo",
+    cols: 80,
+    rows: 24,
+    location: "grid",
+    worktreeId: `wt-${id}`,
+  });
+  usePanelStore.setState({
+    panelsById: Object.fromEntries(ids.map((id) => [id, pane(id)])),
+    panelIds: ids,
+  });
+}
+
 beforeEach(() => {
+  openPanes("t1", "a", "b", "c", "d", "busy");
   dispatchMock.mockReset();
   notifyMock.mockReset();
   announceMock.mockReset();
@@ -137,13 +158,44 @@ describe("restartPanesOnPreset", () => {
     expect(toast.action.actionArgs).toEqual({ panelId: "busy" });
   });
 
-  it("offers no way to a pane when every refused one has closed", async () => {
-    dispatchMock.mockResolvedValue(refused("terminal not found"));
+  it("offers no way to a pane when every refused one has closed, but keeps its worktree", async () => {
+    openPanes("gone");
+    dispatchMock.mockImplementation(async () => {
+      // Closed while its restart was being refused.
+      usePanelStore.setState({ panelsById: {}, panelIds: [] });
+      return refused("terminal not found");
+    });
 
     await restartPanesOnPreset([{ id: "gone", title: "Closed" }], preset, "user", () => "x");
 
     const toast = notifyMock.mock.calls[0]![0];
     expect(toast.action).toBeUndefined();
     expect(toast.message).toBe("'Closed' is no longer open.");
+    expect(toast.context).toMatchObject({ worktreeId: "wt-gone" });
+  });
+
+  it("skips a refused pane that closed while another restart was still settling", async () => {
+    let settle: () => void = () => {};
+    dispatchMock.mockImplementation((_id: string, args: { terminalId: string }) => {
+      if (args.terminalId === "a") return Promise.resolve(refused("already restarting"));
+      return new Promise((resolve) => (settle = () => resolve(refused("already restarting"))));
+    });
+
+    const done = restartPanesOnPreset(
+      [
+        { id: "a", title: "One" },
+        { id: "b", title: "Two" },
+      ],
+      preset,
+      "user",
+      () => "x"
+    );
+    openPanes("b");
+    settle();
+    await done;
+
+    const toast = notifyMock.mock.calls[0]![0];
+    expect(toast.action.actionArgs).toEqual({ panelId: "b" });
+    expect(toast.context).toMatchObject({ panelId: "b", worktreeId: "wt-b" });
   });
 });
