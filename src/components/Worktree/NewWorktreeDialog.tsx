@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, useId, Fragment } from "react";
 import { Callout } from "@/components/ui/Callout";
 import { InlineError } from "@/components/ui/field";
 import { useShallow } from "zustand/react/shallow";
@@ -8,6 +8,7 @@ import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { FolderGit2, GitBranch } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
@@ -65,7 +66,10 @@ import {
 import { useFirstAgentOptions } from "./hooks/useFirstAgentOptions";
 import { Textarea } from "@/components/ui/textarea";
 import { LazyWorktreePlacementRow } from "@/components/Hosts/Overview/LazyHostOverviewParts";
-import type { PlacementDraft } from "@/components/Hosts/Overview/WorktreePlacementRow";
+import type {
+  PlacementCommit,
+  PlacementDraft,
+} from "@/components/Hosts/Overview/WorktreePlacementRow";
 
 import {
   PrHeader,
@@ -1186,10 +1190,11 @@ export function NewWorktreeDialog({
     [handleIssueSelect, markTouched, clearErrors]
   );
 
-  // Another host chosen for the worktree, by name: the project continues there,
-  // nothing is created here.
-  const [placementHost, setPlacementHost] = useState<string | null>(null);
-  const placementElsewhere = placementHost !== null;
+  // Another host chosen for the worktree: the project continues there, nothing
+  // is created here, and the primary creates it on that host instead.
+  const [placement, setPlacement] = useState<PlacementCommit | null>(null);
+  const placementHost = placement?.hostName ?? null;
+  const placementElsewhere = placement !== null;
   // Another host runs only a team recipe, from its own copy of the repository:
   // a cloned layout or a recipe kept on this host is never sent (#14991).
   // Provenance first, as `getRecipeScope` reads it: a plugin's id can carry the
@@ -1239,23 +1244,30 @@ export function NewWorktreeDialog({
       recipeId: placedRecipeId,
     };
   };
+  const placementPending = placement?.status === "pending";
   const submitDisabled =
-    placementElsewhere ||
+    placementPending ||
+    (placement?.unavailable ?? null) !== null ||
     loading ||
     isCheckingBranch ||
     isGeneratingPath ||
     (initialPR !== null && initialPR !== undefined && prBranchResolved === false);
+  // One primary for the dialog: it creates the worktree wherever the Host row says.
+  const submit = (click?: Pick<MouseEvent, "metaKey" | "ctrlKey">) => {
+    if (placement) placement.submit(click);
+    else void handleCreate();
+  };
 
   // Cmd/Ctrl+Enter submits from anywhere in the dialog. Advertised on the
   // primary button, so it has to actually work from the pickers too — a hint
   // for a shortcut that only fires in one field is worse than no hint.
   //
-  // `handleCreate` is not memoised and changes identity every render, so it is
+  // `submit` is not memoised and changes identity every render, so it is
   // held in a ref: depending on it directly would tear down and re-add the
   // window listener on every keystroke in the form.
-  const submitRef = useRef({ handleCreate, submitDisabled });
+  const submitRef = useRef({ submit, submitDisabled });
   useEffect(() => {
-    submitRef.current = { handleCreate, submitDisabled };
+    submitRef.current = { submit, submitDisabled };
   });
 
   useEffect(() => {
@@ -1265,10 +1277,12 @@ export function NewWorktreeDialog({
     if (!isOpen || isDiscardConfirmOpen || (issuePickerOpen && showIssueRow)) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || e.isComposing) return;
-      const { handleCreate: create, submitDisabled: blocked } = submitRef.current;
+      // An open list (the Host select) keeps Enter for its own options.
+      if (e.target instanceof Element && e.target.closest('[role="listbox"]')) return;
+      const { submit: create, submitDisabled: blocked } = submitRef.current;
       if (blocked || isCreatingRef.current) return;
       e.preventDefault();
-      void create();
+      create();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -1307,6 +1321,35 @@ export function NewWorktreeDialog({
           : "Name the branch to continue"}
     </span>
   );
+
+  // Another host chosen, the footer says what stops its primary, or what
+  // became of the last attempt, before the branch it creates.
+  // Its id describes the primary while it's unavailable: the footer only wires
+  // that itself for an action it renders, and this one is the dialog's own.
+  const footerHintId = useId();
+  // The branch check runs on every keystroke, so it's only named once it has
+  // held the primary long enough to notice, as the field's own spinner is.
+  const footerBusy = useDohertyGate(isCheckingBranch || isGeneratingPath);
+  const footerHint = (
+    <span id={footerHintId} className="flex min-w-0 flex-1 items-center gap-1">
+      {placement?.unavailable != null ? (
+        <span className="truncate">
+          {placement.hostName}: {placement.unavailable}
+        </span>
+      ) : footerBusy && (isCheckingBranch || isGeneratingPath) ? (
+        <span className="truncate">
+          {isCheckingBranch ? "Checking the branch name…" : "Generating the path…"}
+        </span>
+      ) : placement?.status === "cancelled" ? (
+        <span className="truncate">Nothing created on {placement.hostName}</span>
+      ) : (
+        outcomeSummary
+      )}
+    </span>
+  );
+  // A host name too long to share the row with the branch summary gives the
+  // summary its own row rather than squeezing it to nothing.
+  const longPlacementHost = (placement?.hostName.length ?? 0) > 20;
 
   // Without saved recipes the layout silently defaults to a clone of the
   // current one, which can itself start an agent — so once an agent is picked
@@ -1548,28 +1591,60 @@ export function NewWorktreeDialog({
                 </FormSection>
 
                 <FormSection title="Destination">
-                  <FormRow
-                    label="Path"
-                    htmlFor="worktree-path"
-                    hint={
-                      fieldError("worktree-path") ?? (pathWasAutoResolved && <PathResolvedHint />)
-                    }
-                  >
-                    <WorktreePathPicker
-                      value={worktreePath}
-                      onChange={handleWorktreePathChange}
-                      isGeneratingPath={isGeneratingPath}
-                      errorField={errors.errorField}
-                      onBrowseClick={handleBrowseClick}
-                    />
-                  </FormRow>
+                  {/* The machine first, then the path on it. */}
                   <LazyWorktreePlacementRow
                     projectId={currentProject?.id ?? null}
                     rootPath={rootPath}
+                    worktreePath={worktreePath}
                     getDraft={getPlacementDraft}
                     onLeave={onClose}
-                    onElsewhereChange={setPlacementHost}
+                    onCommitChange={setPlacement}
                   />
+                  {placement ? (
+                    // This machine's folder picker can't reach another host's
+                    // disk: the path is shown as that host lays it out.
+                    <FormRow label="Path" hint={fieldError("worktree-path")}>
+                      {/* With no field box around it, the note rides the value's
+                          own line rather than a hint row that would float under it;
+                          the note gives way first when the row is short. */}
+                      <p
+                        className="flex h-8 min-w-0 items-center gap-2 text-xs"
+                        data-testid="placed-worktree-path"
+                      >
+                        {placement.relativePath !== null ? (
+                          <>
+                            <span className="max-w-full shrink-0 truncate font-mono text-text-primary">
+                              {placement.relativePath}
+                            </span>
+                            <span className="min-w-0 truncate text-text-secondary">
+                              {placement.relativePath.startsWith("../") ? "Beside" : "Inside"} the
+                              project on {placement.hostName}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="truncate text-text-secondary">
+                            Where {placement.hostName} puts new worktrees
+                          </span>
+                        )}
+                      </p>
+                    </FormRow>
+                  ) : (
+                    <FormRow
+                      label="Path"
+                      htmlFor="worktree-path"
+                      hint={
+                        fieldError("worktree-path") ?? (pathWasAutoResolved && <PathResolvedHint />)
+                      }
+                    >
+                      <WorktreePathPicker
+                        value={worktreePath}
+                        onChange={handleWorktreePathChange}
+                        isGeneratingPath={isGeneratingPath}
+                        errorField={errors.errorField}
+                        onBrowseClick={handleBrowseClick}
+                      />
+                    </FormRow>
+                  )}
                 </FormSection>
 
                 <FormSection title="Setup" note="Optional">
@@ -1750,22 +1825,32 @@ export function NewWorktreeDialog({
           )}
         </AppDialog.Body>
 
-        <AppDialog.Footer hint={outcomeSummary}>
-          <div className="flex items-center gap-3 shrink-0">
+        <AppDialog.Footer hint={footerHint} hintPlacement={longPlacementHost ? "above" : "inline"}>
+          <div className={cn("flex items-center gap-3 shrink-0", longPlacementHost && "ml-auto")}>
             <Button variant="ghost" onClick={handleRequestClose}>
               Cancel
             </Button>
             <Button
               variant="contrast"
-              onClick={() => {
-                if (!submitDisabled) handleCreate();
+              loading={placementPending}
+              onClick={(event) => {
+                if (!submitDisabled) submit(event);
               }}
               aria-disabled={submitDisabled || undefined}
+              aria-describedby={submitDisabled ? footerHintId : undefined}
               className={cn(submitDisabled && ARIA_DISABLED_CLASSES)}
               aria-keyshortcuts="Meta+Enter Control+Enter"
               data-testid="create-worktree-button"
             >
-              {initialPR ? "Check out" : "Create worktree"}
+              {placement ? (
+                <span className="max-w-60 truncate">
+                  {initialPR ? "Check out on" : "Create on"} {placement.hostName}
+                </span>
+              ) : initialPR ? (
+                "Check out"
+              ) : (
+                "Create worktree"
+              )}
               {/* Hidden from the name: `aria-keyshortcuts` already says it. */}
               <span className="inline-flex" aria-hidden="true">
                 <KbdChord shortcut="Cmd+Enter" density="compact" foreground="inverse" />

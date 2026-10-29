@@ -310,14 +310,21 @@ export function hostMenuRowHasTrouble(row: HostMenuRow): boolean {
 
 /** The host's installed agent CLIs, as its own detection reported them. */
 export function describeHostAgentClis(row: HostMenuRow): string | null {
-  const clis = liveSummary(row)?.agentClis ?? [];
-  if (clis.length === 0) return null;
-  return clis
-    .map(({ agentId, version }) => {
-      const name = getAgentConfig(agentId)?.name ?? agentId;
-      return version ? `${name} ${version}` : name;
-    })
-    .join(" · ");
+  const clis = hostAgentCliNames(row);
+  return clis && clis.length > 0 ? clis.join(" · ") : null;
+}
+
+/**
+ * Each installed agent CLI with its version, one per entry. Null when the
+ * host didn't report its CLIs, which is not the same as reporting none.
+ */
+export function hostAgentCliNames(row: HostMenuRow): string[] | null {
+  const clis = liveSummary(row)?.agentClis;
+  if (!clis) return null;
+  return clis.map(({ agentId, version }) => {
+    const name = getAgentConfig(agentId)?.name ?? agentId;
+    return version ? `${name} ${version}` : name;
+  });
 }
 
 export type HostChipStatus =
