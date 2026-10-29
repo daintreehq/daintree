@@ -988,7 +988,8 @@ describe("destructive button label", () => {
       expect(warnings.map((w) => w.kind)).toEqual(["unevaluable"]);
       expect(warnings[0]?.message).toContain("translucent");
     }
-    // An opaque alpha channel is only a spelling.
+    // An opaque alpha channel is only a spelling, measured like any other.
     expect(destructiveWarnings("#FFFFFFFF", "#8B0000FF")).toEqual([]);
+    expect(failingStates("#FFFF", "#FFFFFFFF")).toEqual(["at rest", "hovered", "pressed"]);
   });
 });

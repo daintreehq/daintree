@@ -374,7 +374,7 @@ describe("destructive variant", () => {
       active: DESTRUCTIVE_BUTTON_CONTRAST.brightness.press,
     });
     const unmodelled =
-      /^(?:(?:hover|active):(?:bg|text|opacity)-|(?:(?:hover|active):)?(?:contrast|saturate|grayscale|invert|sepia|hue-rotate)(?:-|$))/;
+      /^(?:(?:hover|active):(?:bg|text|opacity)-|(?:(?:hover|active):)?(?:-?(?:contrast|saturate|grayscale|invert|sepia|hue-rotate)(?:-|$)|\[filter:))/;
     expect(classes().filter((c) => unmodelled.test(c))).toEqual([]);
   });
 });
