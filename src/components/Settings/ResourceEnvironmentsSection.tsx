@@ -199,6 +199,11 @@ export function ResourceEnvironmentsSection({
     [resourceEnvironments, currentEnvName]
   );
 
+  // A default naming an environment that no longer exists is Local in effect:
+  // that is where New Worktree starts.
+  const effectiveDefaultMode =
+    defaultWorktreeMode && envKeys.includes(defaultWorktreeMode) ? defaultWorktreeMode : "local";
+
   const updateEnv = (patch: Partial<ResourceEnvironment>) => {
     const envs = { ...(resourceEnvironments ?? {}) };
     envs[currentEnvName] = { ...env, ...patch };
@@ -241,6 +246,7 @@ export function ResourceEnvironmentsSection({
       setSelectedEnvName(next);
       onActiveResourceEnvironmentChange(next);
     }
+    if (defaultWorktreeMode === name) onDefaultWorktreeModeChange("local");
     setPendingDeleteEnvironment(null);
   };
 
@@ -495,7 +501,7 @@ export function ResourceEnvironmentsSection({
                 <RadioChoiceRow
                   name="worktreeMode"
                   value="local"
-                  checked={(defaultWorktreeMode ?? "local") === "local"}
+                  checked={effectiveDefaultMode === "local"}
                   onChange={() => onDefaultWorktreeModeChange("local")}
                   label="Local"
                   description="Run worktrees directly on this machine"
@@ -507,7 +513,7 @@ export function ResourceEnvironmentsSection({
                     key={key}
                     name="worktreeMode"
                     value={key}
-                    checked={defaultWorktreeMode === key}
+                    checked={effectiveDefaultMode === key}
                     onChange={() => onDefaultWorktreeModeChange(key)}
                     label={key}
                     description="Run worktrees in this resource environment"

@@ -1,7 +1,29 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { ResourceEnvironmentsSection } from "../ResourceEnvironmentsSection";
+
+// The real dialog portals and pulls in the app's icons; what matters here is what it is given.
+vi.mock("@/components/ui/ConfirmDialog", () => ({
+  ConfirmDialog: (props: {
+    isOpen: boolean;
+    title: React.ReactNode;
+    description?: React.ReactNode;
+    children?: React.ReactNode;
+    confirmLabel: string;
+    onClose: () => void;
+    onConfirm: () => void;
+  }) =>
+    props.isOpen ? (
+      <div role="dialog">
+        <h2>{props.title}</h2>
+        <div>{props.description}</div>
+        {props.children}
+        <button onClick={props.onClose}>Cancel</button>
+        <button onClick={props.onConfirm}>{props.confirmLabel}</button>
+      </div>
+    ) : null,
+}));
 
 const mockResourceEnvironments = {
   "docker-local": {
@@ -179,5 +201,77 @@ describe("ResourceEnvironmentsSection — DOM anchors for settings deep-links", 
     );
 
     expect(container.querySelector("#tab-nav-project\\:environments")).not.toBeNull();
+  });
+});
+
+describe("ResourceEnvironmentsSection — removing an environment", () => {
+  const twoEnvironments = {
+    ...mockResourceEnvironments,
+    cloud: { provision: ["cloud up"], teardown: ["cloud down"] },
+  };
+
+  function removeEnvironment(name: string) {
+    fireEvent.click(screen.getByRole("button", { name: `Delete ${name} environment` }));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove environment" }));
+  }
+
+  it("moves the default worktree mode to Local when the default environment is removed", () => {
+    const onResourceEnvironmentsChange = vi.fn();
+    const onDefaultWorktreeModeChange = vi.fn();
+    render(
+      <ResourceEnvironmentsSection
+        resourceEnvironments={twoEnvironments}
+        onResourceEnvironmentsChange={onResourceEnvironmentsChange}
+        activeResourceEnvironment="cloud"
+        onActiveResourceEnvironmentChange={vi.fn()}
+        defaultWorktreeMode="cloud"
+        onDefaultWorktreeModeChange={onDefaultWorktreeModeChange}
+        isOpen={true}
+      />
+    );
+
+    removeEnvironment("cloud");
+
+    expect(Object.keys(onResourceEnvironmentsChange.mock.calls[0]![0])).toEqual(["docker-local"]);
+    expect(onDefaultWorktreeModeChange).toHaveBeenCalledWith("local");
+  });
+
+  it("leaves the default worktree mode alone when another environment is removed", () => {
+    const onDefaultWorktreeModeChange = vi.fn();
+    render(
+      <ResourceEnvironmentsSection
+        resourceEnvironments={twoEnvironments}
+        onResourceEnvironmentsChange={vi.fn()}
+        activeResourceEnvironment="cloud"
+        onActiveResourceEnvironmentChange={vi.fn()}
+        defaultWorktreeMode="docker-local"
+        onDefaultWorktreeModeChange={onDefaultWorktreeModeChange}
+        isOpen={true}
+      />
+    );
+
+    removeEnvironment("cloud");
+
+    expect(onDefaultWorktreeModeChange).not.toHaveBeenCalled();
+  });
+
+  it("shows Local as the default when the saved default names a removed environment", () => {
+    render(
+      <ResourceEnvironmentsSection
+        resourceEnvironments={mockResourceEnvironments}
+        onResourceEnvironmentsChange={vi.fn()}
+        activeResourceEnvironment="docker-local"
+        onActiveResourceEnvironmentChange={vi.fn()}
+        defaultWorktreeMode="cloud"
+        onDefaultWorktreeModeChange={vi.fn()}
+        isOpen={true}
+      />
+    );
+
+    expect((screen.getByRole("radio", { name: "Local" }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole("radio", { name: "docker-local" }) as HTMLInputElement).checked).toBe(
+      false
+    );
   });
 });
