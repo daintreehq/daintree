@@ -36,7 +36,8 @@ vi.mock("@/components/TerminalRecipe/RecipeVariablePreview", () => ({
 import { RecipeEditor } from "../RecipeEditor";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
-import type { Project, TerminalRecipe } from "@/types";
+import type { RecipeLayoutOmissions } from "@/store/recipeStore";
+import type { Project, RecipeTerminal, TerminalRecipe } from "@/types";
 
 const RECIPE: TerminalRecipe = {
   id: "r1",
@@ -369,6 +370,61 @@ describe("RecipeEditor", () => {
       );
       await pickType(0, "Dev server");
       expect(value("terminal-dev-command-0")).toBe("");
+    });
+  });
+
+  describe("layout capture omissions (#14968)", () => {
+    const CAPTURED: RecipeTerminal[] = [
+      { type: "terminal", command: "npm test", env: {} },
+      { type: "claude", env: {} },
+    ];
+    const notice = () => screen.queryByTestId("recipe-layout-omissions");
+    const renderCapture = (layoutOmissions: RecipeLayoutOmissions, recipe?: TerminalRecipe) =>
+      render(
+        <RecipeEditor
+          recipe={recipe}
+          initialTerminals={CAPTURED}
+          layoutOmissions={layoutOmissions}
+          isOpen
+          onClose={() => {}}
+        />
+      );
+
+    it("says which panels a recipe can't hold and how many steps the cap cut", () => {
+      renderCapture({ panelKinds: { browser: 2, file: 1 }, cappedTerminalCount: 3 });
+      const paragraphs = [...notice()!.querySelectorAll("p")].map((p) => p.textContent);
+      expect(paragraphs).toEqual([
+        "Some panels weren't captured",
+        "Recipes can't hold 2 browsers and 1 file viewer, so they were left out.",
+        "3 more terminals were left out: a recipe holds at most 10.",
+      ]);
+      expect(notice()!.dataset.callout).toBe("warning");
+    });
+
+    it("counts plugin panel kinds together without naming them", () => {
+      renderCapture({ panelKinds: { "acme.kanban": 1 }, cappedTerminalCount: 0 });
+      expect(notice()!.textContent).toContain(
+        "Recipes can't hold 1 other panel, so it was left out."
+      );
+      expect(notice()!.textContent).not.toContain("acme");
+      expect(notice()!.dataset.callout).toBe("info");
+    });
+
+    it("stays quiet for a complete capture and for an existing recipe", () => {
+      const view = renderCapture({ panelKinds: {}, cappedTerminalCount: 0 });
+      expect(notice()).toBeNull();
+      view.unmount();
+
+      renderCapture({ panelKinds: { browser: 1 }, cappedTerminalCount: 1 }, RECIPE);
+      expect(notice()).toBeNull();
+    });
+
+    it("keeps describing the capture after a step is removed", () => {
+      renderCapture({ panelKinds: {}, cappedTerminalCount: 1 });
+      act(() => {
+        screen.getByRole("button", { name: "Remove terminal 2" }).click();
+      });
+      expect(notice()!.textContent).toContain("1 more terminal was left out");
     });
   });
 });

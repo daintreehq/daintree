@@ -114,13 +114,17 @@ vi.mock("@/components/TerminalRecipe/RecipeEditor", () => ({
     recipe,
     worktreeId,
     initialTerminals,
+    layoutOmissions,
     defaultScope,
+    onClose,
   }: {
     isOpen: boolean;
     recipe?: { id: string };
     worktreeId?: string;
     initialTerminals?: unknown[];
+    layoutOmissions?: unknown;
     defaultScope?: string;
+    onClose: () => void;
   }) => (
     <div
       data-testid="recipe-editor"
@@ -128,8 +132,11 @@ vi.mock("@/components/TerminalRecipe/RecipeEditor", () => ({
       data-recipe={recipe?.id ?? ""}
       data-worktree={worktreeId ?? ""}
       data-terminals={String(initialTerminals?.length ?? 0)}
+      data-omissions={layoutOmissions ? JSON.stringify(layoutOmissions) : ""}
       data-scope={defaultScope ?? ""}
-    />
+    >
+      <button onClick={onClose}>close recipe editor</button>
+    </div>
   ),
 }));
 
@@ -414,6 +421,55 @@ describe("ProjectDialogHost", () => {
       expect(editor.dataset.worktree).toBe("wt-1");
       expect(editor.dataset.terminals).toBe("2");
       expect(useRecipeEditorActivityStore.getState().openCount).toBe(1);
+    });
+
+    it("hands a captured draft's omissions to the editor and drops them on close (#14968)", async () => {
+      render(<ProjectDialogHost />);
+      const omitted = { panelKinds: { browser: 2 }, cappedTerminalCount: 1 };
+      const open = (detail: Record<string, unknown>) =>
+        act(() => {
+          window.dispatchEvent(new CustomEvent("daintree:open-recipe-editor", { detail }));
+        });
+
+      open({
+        worktreeId: "wt-1",
+        initialTerminals: [{ type: "terminal" }],
+        layoutOmissions: omitted,
+      });
+      const editor = await screen.findByTestId("recipe-editor");
+      expect(JSON.parse(editor.dataset.omissions ?? "")).toEqual(omitted);
+
+      fireEvent.click(screen.getByText("close recipe editor"));
+      expect(editor.dataset.open).toBe("false");
+      expect(editor.dataset.omissions).toBe("");
+
+      open({
+        worktreeId: "wt-1",
+        initialTerminals: [{ type: "terminal" }],
+        layoutOmissions: omitted,
+      });
+      open({ worktreeId: "wt-1", initialTerminals: [{ type: "terminal" }] });
+      expect(editor.dataset.omissions).toBe("");
+    });
+
+    it("drops a malformed omission report rather than show it", async () => {
+      render(<ProjectDialogHost />);
+
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:open-recipe-editor", {
+            detail: {
+              worktreeId: "wt-1",
+              initialTerminals: [{ type: "terminal" }],
+              layoutOmissions: { panelKinds: { browser: -1 }, cappedTerminalCount: 0 },
+            },
+          })
+        );
+      });
+
+      const editor = await screen.findByTestId("recipe-editor");
+      expect(editor.dataset.open).toBe("true");
+      expect(editor.dataset.omissions).toBe("");
     });
 
     it("opens an existing recipe by id in its own scope", async () => {

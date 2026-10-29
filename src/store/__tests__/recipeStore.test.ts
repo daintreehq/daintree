@@ -358,7 +358,12 @@ describe("recipeStore", () => {
     it("reports nothing omitted for a layout that fits", () => {
       panelStoreState.panelIds = ["panel-shell"];
       panelStoreState.panelsById = {
-        "panel-shell": { id: "panel-shell", kind: "terminal", worktreeId: "wt-1", location: "grid" },
+        "panel-shell": {
+          id: "panel-shell",
+          kind: "terminal",
+          worktreeId: "wt-1",
+          location: "grid",
+        },
       };
 
       const { omitted } = useRecipeStore.getState().captureRecipeFromLayout("wt-1");

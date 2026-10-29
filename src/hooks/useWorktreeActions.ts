@@ -322,7 +322,7 @@ export function useWorktreeActions(): WorktreeActions {
 
   const handleSaveLayout = useCallback(
     (worktree: WorktreeSnapshot) => {
-      const terminals = useRecipeStore.getState().generateRecipeFromActiveTerminals(worktree.id);
+      const { terminals, omitted } = useRecipeStore.getState().captureRecipeFromLayout(worktree.id);
 
       if (terminals.length === 0) {
         addError({
@@ -340,7 +340,11 @@ export function useWorktreeActions(): WorktreeActions {
       // recipe actions fire.
       window.dispatchEvent(
         new CustomEvent("daintree:open-recipe-editor", {
-          detail: { worktreeId: worktree.id, initialTerminals: terminals },
+          detail: {
+            worktreeId: worktree.id,
+            initialTerminals: terminals,
+            layoutOmissions: omitted,
+          },
         })
       );
     },

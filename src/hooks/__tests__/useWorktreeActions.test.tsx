@@ -9,7 +9,7 @@ const {
   addNotificationMock,
   updateNotificationMock,
   addErrorStoreMock,
-  generateRecipeMock,
+  captureRecipeMock,
 } = vi.hoisted(() => ({
   dispatchMock: vi.fn(),
   addErrorMock: vi.fn(),
@@ -19,7 +19,10 @@ const {
   addNotificationMock: vi.fn<(notification: { message: string }) => string>(() => "toast-123"),
   updateNotificationMock: vi.fn(),
   addErrorStoreMock: vi.fn(),
-  generateRecipeMock: vi.fn((): unknown[] => []),
+  captureRecipeMock: vi.fn((): { terminals: unknown[]; omitted: unknown } => ({
+    terminals: [],
+    omitted: { panelKinds: {}, cappedTerminalCount: 0 },
+  })),
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -48,7 +51,7 @@ vi.mock("@/store/notificationStore", () => ({
 vi.mock("@/store/recipeStore", () => ({
   useRecipeStore: {
     getState: () => ({
-      generateRecipeFromActiveTerminals: generateRecipeMock,
+      captureRecipeFromLayout: captureRecipeMock,
     }),
   },
 }));
@@ -115,15 +118,19 @@ describe("useWorktreeActions", () => {
       // The editor mounts in the project dialog host, so the handoff can't be a
       // callback threaded down from whichever surface offered Save Layout.
       const terminals = [{ type: "terminal" }, { type: "claude" }];
-      generateRecipeMock.mockReturnValueOnce(terminals);
+      // What the capture left out travels with the draft, so the editor can say so (#14968).
+      const omitted = { panelKinds: { browser: 2 }, cappedTerminalCount: 1 };
+      captureRecipeMock.mockReturnValueOnce({ terminals, omitted });
       const requests = captureEditorRequests();
       const { result } = renderHook(() => useWorktreeActions());
 
       result.current.handleSaveLayout(worktree);
       requests.stop();
 
-      expect(generateRecipeMock).toHaveBeenCalledWith("wt-1");
-      expect(requests.details).toEqual([{ worktreeId: "wt-1", initialTerminals: terminals }]);
+      expect(captureRecipeMock).toHaveBeenCalledWith("wt-1");
+      expect(requests.details).toEqual([
+        { worktreeId: "wt-1", initialTerminals: terminals, layoutOmissions: omitted },
+      ]);
       expect(addErrorMock).not.toHaveBeenCalled();
     });
 

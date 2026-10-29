@@ -103,6 +103,12 @@ afterEach(() => {
 
 const OK_SPAWN_RESULTS = { spawned: [{ index: 0, terminalId: "term-1" }], failed: [] };
 
+const NOTHING_OMITTED = { panelKinds: {}, cappedTerminalCount: 0 };
+
+function capturedLayout(terminals: unknown[], omitted: unknown = NOTHING_OMITTED) {
+  return vi.fn(() => ({ terminals, omitted }));
+}
+
 function setRecipeState(state: {
   recipes?: Array<{
     id: string;
@@ -117,7 +123,7 @@ function setRecipeState(state: {
   runRecipeWithResults?: ReturnType<typeof vi.fn>;
   saveToRepo?: ReturnType<typeof vi.fn>;
   deleteRecipe?: ReturnType<typeof vi.fn>;
-  generateRecipeFromActiveTerminals?: (id: string) => unknown[];
+  captureRecipeFromLayout?: (id: string) => { terminals: unknown[]; omitted: unknown };
 }) {
   recipeStoreMock.getState.mockReturnValue({
     recipes: state.recipes ?? [],
@@ -127,7 +133,7 @@ function setRecipeState(state: {
     runRecipeWithResults: state.runRecipeWithResults ?? vi.fn().mockResolvedValue(OK_SPAWN_RESULTS),
     saveToRepo: state.saveToRepo ?? vi.fn().mockResolvedValue(undefined),
     deleteRecipe: state.deleteRecipe ?? vi.fn().mockResolvedValue(undefined),
-    generateRecipeFromActiveTerminals: state.generateRecipeFromActiveTerminals ?? vi.fn(() => []),
+    captureRecipeFromLayout: state.captureRecipeFromLayout ?? capturedLayout([]),
   });
 }
 
@@ -494,9 +500,8 @@ describe("recipeActions adversarial", () => {
 
   it("recipe.editor.openFromLayout dispatches terminals from the live layout", async () => {
     const terminals = [{ title: "t1" }, { title: "t2" }];
-    setRecipeState({
-      generateRecipeFromActiveTerminals: vi.fn(() => terminals),
-    });
+    const omitted = { panelKinds: { browser: 10 }, cappedTerminalCount: 0 };
+    setRecipeState({ captureRecipeFromLayout: capturedLayout(terminals, omitted) });
 
     const run = setupActions();
     await run("recipe.editor.openFromLayout", { worktreeId: "wt-a" });
@@ -504,15 +509,17 @@ describe("recipeActions adversarial", () => {
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
     const event = dispatchSpy.mock.calls[0]![0] as unknown as {
       type: string;
-      detail: { worktreeId: string; initialTerminals: unknown[] };
+      detail: { worktreeId: string; initialTerminals: unknown[]; layoutOmissions: unknown };
     };
     expect(event.type).toBe("daintree:open-recipe-editor");
     expect(event.detail.worktreeId).toBe("wt-a");
     expect(event.detail.initialTerminals).toEqual(terminals);
+    // The editor, not the result, tells the person what the capture left out (#14968).
+    expect(event.detail.layoutOmissions).toEqual(omitted);
   });
 
   it("recipe.editor.openFromLayout rejects empty layouts without dispatching", async () => {
-    setRecipeState({ generateRecipeFromActiveTerminals: vi.fn(() => []) });
+    setRecipeState({ captureRecipeFromLayout: capturedLayout([]) });
 
     const run = setupActions();
 
@@ -601,7 +608,7 @@ describe("recipeActions adversarial", () => {
 
     it("reports the captured pane count from a live layout", async () => {
       setRecipeState({
-        generateRecipeFromActiveTerminals: vi.fn(() => [{ type: "terminal" }, { type: "claude" }]),
+        captureRecipeFromLayout: capturedLayout([{ type: "terminal" }, { type: "claude" }]),
       });
 
       const run = setupActions();
@@ -699,7 +706,7 @@ describe("recipeActions adversarial", () => {
       // fields silently rather than failing loudly here.
       setRecipeState({
         recipes: [{ id: "r1", worktreeId: "wt-b", terminals: [{ type: "terminal" }] }],
-        generateRecipeFromActiveTerminals: vi.fn(() => [{ type: "terminal" }]),
+        captureRecipeFromLayout: capturedLayout([{ type: "terminal" }]),
       });
       const run = setupActions();
 
