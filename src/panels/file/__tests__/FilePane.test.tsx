@@ -102,7 +102,8 @@ vi.mock("@/lib/viewCacheState", () => ({
   },
 }));
 vi.mock("@/store/projectStore", () => ({
-  useProjectStore: (selector: (state: unknown) => unknown) => selector({ currentProject: null }),
+  useProjectStore: (selector: (state: unknown) => unknown) =>
+    selector({ currentProject: null, projects: [] }),
 }));
 const { setMarkdownFontSizeMock, setDiffWrapLinesMock, setMarkdownWrapLinesMock } = vi.hoisted(
   () => ({
@@ -4514,7 +4515,7 @@ describe("FilePane in a remote window (#13925)", () => {
     );
   }
 
-  it("says another window has control of a refused image, and loads it once this view drives", async () => {
+  it("says a refused image waits for control, names who has it, and loads it once this view drives", async () => {
     setDriveLeaseSnapshot(lease(false));
     fetchMock.mockResolvedValue({
       ok: false,
@@ -4531,8 +4532,9 @@ describe("FilePane in a remote window (#13925)", () => {
       image.dispatchEvent(new Event("error"));
     });
 
-    await screen.findByText("Another window has control");
-    expect(container.textContent).toContain("greg-mbp has control of this project");
+    await screen.findByText("Waiting for control");
+    expect(container.textContent).toContain("greg-mbp has control of");
+    expect(container.textContent).toContain("read-only on greg-mbp");
     expect(container.textContent).not.toMatch(/damaged/);
     expect(screen.getByRole("button", { name: "Take control" })).toBeTruthy();
     expect(container.querySelector("img")).toBeNull();

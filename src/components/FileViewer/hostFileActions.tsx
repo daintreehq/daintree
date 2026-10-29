@@ -82,8 +82,6 @@ export function ControlRefusedState({
 }) {
   const facts = useControlFacts();
   const linkDownHost = useLinkDownHost();
-  // This view's own project: a lease snapshot can name another.
-  const projectId = getViewWorkspaceId();
   const copy = getControlRefusalCopy(what, facts, linkDownHost);
   return (
     <FileUnavailableState
@@ -93,8 +91,8 @@ export function ControlRefusedState({
       live="off"
       data-testid={testId}
       action={
-        linkDownHost === null && facts !== null && projectId !== null ? (
-          <TakeControlOffer projectId={projectId} facts={facts} />
+        linkDownHost === null && facts !== null ? (
+          <TakeControlOffer projectId={facts.projectId} facts={facts} />
         ) : undefined
       }
     />

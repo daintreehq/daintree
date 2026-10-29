@@ -195,10 +195,20 @@ export function useDriveLeaseBanner(): DriveLeaseBannerState | null {
  * Who has control of this view's project, of what and where, as every surface
  * that offers Take control names them; null while this view has control. The
  * host's own screen goes by the name this machine knows the host by, not the
- * name it reports itself.
+ * name it reports itself. Read from this view's mirror of the lease, else
+ * straight from the input gate's snapshot it mirrors, so a surface outside
+ * the banner's sync still names the same holder.
  */
-export function useControlFacts(): ControlFacts | null {
-  const view = useDriveLeaseView();
+export function useControlFacts(): (ControlFacts & { projectId: string }) | null {
+  const mirrored = useDriveLeaseView();
+  const snapshot = useSyncExternalStore(
+    subscribeDriveLeaseSnapshot,
+    getDriveLeaseSnapshot,
+    getDriveLeaseSnapshot
+  );
+  const view =
+    mirrored ??
+    (snapshot !== null && snapshot.projectId === getViewWorkspaceId() ? snapshot : null);
   const hostName = useHostConnectionStore((s) => s.hostName ?? s.hostId);
   const projectId = view?.projectId ?? null;
   const projectName = useProjectStore((s) =>
@@ -213,6 +223,7 @@ export function useControlFacts(): ControlFacts | null {
   const host = getViewHostId() !== null ? (hostName ?? "the host") : null;
   const holderIsHostScreen = holder.isHostLocal && host !== null;
   return {
+    projectId: view.projectId,
     holder: holderIsHostScreen ? hostScreenName(host) : holder.clientName,
     holderIsHostScreen,
     project: projectName ?? "this project",

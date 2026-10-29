@@ -100,8 +100,10 @@ describe("HostConnectionBanner", () => {
     act(() => {
       vi.advanceTimersByTime(1_000);
     });
-    expect(screen.getByText("Connection to studio-01 lost. Reconnecting…")).toBeTruthy();
-    expect(screen.getByText("Terminals are read-only until it reconnects.")).toBeTruthy();
+    expect(screen.getByText(/^Lost connection to studio-01/)).toBeTruthy();
+    expect(
+      screen.getByText("Reconnecting on its own. Terminals are read-only until it's back.")
+    ).toBeTruthy();
     expect(screen.getByRole("status")).toBeTruthy();
     // Stalled past the window: a way to try now rather than wait for the next dial.
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -131,7 +133,7 @@ describe("HostConnectionBanner", () => {
     act(() => {
       vi.advanceTimersByTime(2_000);
     });
-    expect(screen.getByText("Connection to studio-01 lost. Reconnecting…")).toBeTruthy();
+    expect(screen.getByText(/^Lost connection to studio-01/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     // Stalled past the settle window: an error with its recovery, like unreachable.
     expect(glyphSeverity(container)).toBe("error");
@@ -253,7 +255,7 @@ describe("HostConnectionBanner", () => {
     expect(screen.getByRole("status").textContent).not.toContain("set up there");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(connect).toHaveBeenCalledWith({ hostId: "studio-01", restart: true });
-    expect(screen.getByRole("button", { name: "Set up…" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Set up Host mode…" })).toBeTruthy();
   });
 
   it("keeps counting how long ago a host whose Daintree isn't listening was last seen", () => {
@@ -280,7 +282,7 @@ describe("HostConnectionBanner", () => {
     }
   });
 
-  it("says ssh couldn't log in, in ssh's words, with Retry and the host's settings", () => {
+  it("says ssh couldn't log in, with ssh's words beneath, Retry and the host's details", () => {
     seed({
       status: "unreachable",
       lastSeenAt: null,
@@ -288,23 +290,44 @@ describe("HostConnectionBanner", () => {
       stoppedRetrying: true,
     });
     render(<HostConnectionBanner />);
-    expect(screen.getByText("ssh couldn't log in to studio-01")).toBeTruthy();
+    expect(screen.getByText("Couldn't log in to studio-01 over ssh")).toBeTruthy();
     expect(screen.getByRole("status").textContent).toContain(
-      "ssh said: greg@studio-01: Permission denied (publickey)"
+      "ssh: greg@studio-01: Permission denied (publickey)"
     );
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Settings…" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Host details…" })).toBeTruthy();
   });
 
-  it("names a different build without an action", () => {
+  it("says which build is behind and offers updating that side", () => {
+    seed({
+      status: "version-mismatch",
+      mismatch: { kind: "version", local: "0.47.0", remote: "0.48.1" },
+      remote: HANDSHAKE,
+    });
+    const { unmount } = render(<HostConnectionBanner />);
+    expect(screen.getByText(/^This machine runs an older version of Daintree/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Update this machine" })).toBeTruthy();
+    unmount();
+
+    seed({
+      status: "version-mismatch",
+      mismatch: { kind: "version", local: "0.48.1", remote: "0.47.0" },
+      remote: HANDSHAKE,
+    });
+    render(<HostConnectionBanner />);
+    expect(screen.getByText("studio-01 runs an older version of Daintree")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Update studio-01" })).toBeTruthy();
+  });
+
+  it("calls builds a commit apart different, not older, and still offers the update", () => {
     seed({
       status: "version-mismatch",
       mismatch: { kind: "commit", local: "a", remote: "b" },
       remote: HANDSHAKE,
     });
     render(<HostConnectionBanner />);
-    expect(screen.getByText("studio-01 runs a different build")).toBeTruthy();
-    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.getByText("studio-01 runs a different build of Daintree")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Update studio-01" })).toBeTruthy();
   });
 
   it("says it is checking with the host while an unanswered mutation is resolved", () => {
@@ -352,20 +375,16 @@ describe("getHostConnectionBannerCopy", () => {
       "",
     ].join("\n");
     const copy = getHostConnectionBannerCopy("access-denied", "studio-01", null, 0, detail);
-    expect(copy.title).toBe("ssh couldn't log in to studio-01");
-    expect(copy.description).toBe(
-      "ssh said: Host key verification failed. Not retrying until you connect again."
-    );
+    expect(copy.title).toBe("Couldn't log in to studio-01 over ssh");
+    expect(copy.contextLine).toBe("ssh: Host key verification failed");
   });
 
   it("quotes the refusal itself when ssh trails it with a closed connection", () => {
     const detail =
       "greg@studio-01: Permission denied (publickey).\nConnection closed by UNKNOWN port 65535";
     expect(
-      getHostConnectionBannerCopy("access-denied", "studio-01", null, 0, detail).description
-    ).toBe(
-      "ssh said: greg@studio-01: Permission denied (publickey). Not retrying until you connect again."
-    );
+      getHostConnectionBannerCopy("access-denied", "studio-01", null, 0, detail).contextLine
+    ).toBe("ssh: greg@studio-01: Permission denied (publickey)");
   });
 
   it("drops the last-seen clause when nothing was ever seen", () => {

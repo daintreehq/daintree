@@ -1864,18 +1864,17 @@ describe("SidebarContent reconnecting indicator — issue #8074", () => {
   it("keeps the reconnecting badge on one line and moves the relative time into a tooltip — issue #10727", () => {
     // The escalated string "Reconnecting… last updated X ago" used to render
     // inline with no width constraint, wrapping and breaking the header layout.
-    // Both badge branches must now stay single-line (whitespace-nowrap) and the
-    // text size must match across them (text-xs parity), scoped to the badge so
-    // an unrelated element keeping these classes can't mask a regression.
-    // Asserted as a rule over both matched badges rather than as two literal
-    // class strings: the muted branch's colour token is free to change, the
-    // single-line + shared-text-size contract is not.
-    const badges = [
+    // The mark (one shape for both states, drawn beside the title or on its
+    // own row) must stay single-line (whitespace-nowrap) at text-xs, scoped to
+    // the badge so an unrelated element keeping these classes can't mask a
+    // regression. Escalation steps the words up a text tier rather than into a
+    // status colour, which has no contrast floor across the themes (#15105).
+    const marks = [
       ...badge.matchAll(/inline-flex items-center gap-1 whitespace-nowrap shrink-0 ([^"]*)"/g),
     ].map((m) => m[1] ?? "");
-    expect(badges).toHaveLength(2);
-    for (const cls of badges) expect(cls).toContain("text-xs");
-    expect(badges.filter((cls) => cls.includes("text-status-warning"))).toHaveLength(1);
+    expect(marks).toHaveLength(1);
+    expect(marks[0]).toContain("text-xs");
+    expect(badge).not.toMatch(/text-status-warning/);
     // The relative-time detail moved off the visible badge into hover tooltip
     // content; the old inline combined template literal must be gone (the
     // explanatory comment at the tick may still mention the phrasing).

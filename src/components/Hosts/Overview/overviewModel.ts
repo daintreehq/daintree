@@ -254,8 +254,9 @@ export function describeDriver(summary: HostMetricsSummary): string | null {
   const launches = driverLaunches(drivers);
   if (launches.length === 0) return null;
   const labels = launches.map((launch) => launchLabel(launch, launches, summary.sampledAt));
-  const names = joinNames(labels);
-  return `${names.charAt(0).toUpperCase()}${names.slice(1)} ${launches.length === 1 ? "has" : "have"} control`;
+  // A machine's name keeps its own case; only "its own screen" opens a sentence.
+  const names = joinNames(labels).replace(/^its own screen/, "Its own screen");
+  return `${names} ${launches.length === 1 ? "has" : "have"} control`;
 }
 
 /**

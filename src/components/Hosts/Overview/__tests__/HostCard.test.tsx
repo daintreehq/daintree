@@ -41,7 +41,7 @@ describe("HostCard", () => {
     expect(fact(card, "Memory")).toBe("4 GB of 16 GB");
     expect(card.textContent).toContain("1 working · 2 waiting · 3 idle (observed)");
     expect(fact(card, "Link")).toBe("12 ms");
-    expect(fact(card, "Driving")).toBe("Driven from greg-mbp");
+    expect(fact(card, "Control")).toBe("greg-mbp has control");
     expect(screen.getAllByTestId("host-sparkline")).toHaveLength(2);
   });
 
@@ -74,8 +74,8 @@ describe("HostCard", () => {
       ],
     });
     render(<HostCard row={makeRow({ summary })} history={[summary]} onSwitch={() => {}} />);
-    expect(fact(screen.getByTestId("host-overview-card"), "Driving")).toBe(
-      "Driven from studio-02 and greg-mbp (away)"
+    expect(fact(screen.getByTestId("host-overview-card"), "Control")).toBe(
+      "studio-02 and greg-mbp (away) have control"
     );
   });
 

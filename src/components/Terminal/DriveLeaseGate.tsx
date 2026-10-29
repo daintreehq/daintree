@@ -3,11 +3,7 @@ import { Lock } from "lucide-react";
 import { PaneState } from "@/components/ui/PaneState";
 import { getAgentConfig } from "@/config/agents";
 import { useLinkDownHost } from "@/hooks/useHostConnection";
-import {
-  useControlFacts,
-  useDriveLeaseHolderAway,
-  useDriveLeaseView,
-} from "@/components/Recovery/driveLeaseState";
+import { useControlFacts, useDriveLeaseHolderAway } from "@/components/Recovery/driveLeaseState";
 import { getDriveLeaseGateCopy } from "@/components/Recovery/recoveryCopy";
 import { TakeControlOffer } from "@/components/Recovery/TakeControlOffer";
 
@@ -35,7 +31,6 @@ export function DriveLeaseGate({
   const linkDownHost = useLinkDownHost();
   const facts = useControlFacts();
   const away = useDriveLeaseHolderAway();
-  const projectId = useDriveLeaseView()?.projectId ?? null;
   const copy = getDriveLeaseGateCopy(subject, facts, away, linkDownHost);
   return (
     <div
@@ -50,8 +45,8 @@ export function DriveLeaseGate({
         // Who has control, and the link, are the window's to announce, once.
         live="off"
       >
-        {linkDownHost === null && facts !== null && projectId !== null && (
-          <TakeControlOffer projectId={projectId} facts={facts} panelId={panelId} />
+        {linkDownHost === null && facts !== null && (
+          <TakeControlOffer projectId={facts.projectId} facts={facts} panelId={panelId} />
         )}
       </PaneState>
     </div>
