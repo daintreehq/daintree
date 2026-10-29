@@ -21,10 +21,10 @@ const MAX_ALIGNMENT_CELLS = 250_000;
  * subsequence under `same`, framed by the common head and tail. A stretch too
  * long to align word by word keeps only its head and tail.
  */
-export function alignWords(
-  a: readonly WordToken[],
-  b: readonly WordToken[],
-  same: (x: WordToken, y: WordToken) => boolean
+export function alignWords<T extends WordToken>(
+  a: readonly T[],
+  b: readonly T[],
+  same: (x: T, y: T) => boolean
 ): [number, number][] {
   let head = 0;
   while (head < a.length && head < b.length && same(a[head]!, b[head]!)) head++;

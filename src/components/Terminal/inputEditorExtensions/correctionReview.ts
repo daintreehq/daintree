@@ -24,7 +24,7 @@ import {
   VOICE_CORRECTION_MARK_DWELL_MS,
   VOICE_CORRECTION_MARK_FADE_MS,
 } from "@/lib/animationUtils";
-import { alignWords, tokenizeWords } from "@/lib/wordAlignment";
+import { alignWords, tokenizeWords, type WordToken } from "@/lib/wordAlignment";
 import { chipCardText, chipHoverTooltip, chipTooltip } from "./chipCard";
 
 /** A correction swapped into a dictated passage of the draft. */
@@ -49,18 +49,59 @@ export interface CorrectionChanges {
   removed: { at: number; afterWord: boolean; heard: string }[];
 }
 
+// Punctuation that rides on a word's edge without changing the word. The two
+// sets differ so `foo()` keeps its `(` and still reads as another word than `foo`.
+const LEADING_PUNCTUATION = /^[(\[{"'“‘«…—–]+/u;
+const TRAILING_PUNCTUATION = /[)\]}"'”’».,;:!?…—–]+$/u;
+const SENTENCE_END = /[.!?…][)\]}"'”’»]*$/u;
+const PRONOUN_I = /^I(?:['’]\p{L}+)?$/u;
+
+interface DiffWord extends WordToken {
+  /** What two words must share to be the same word: see `diffWords`. */
+  key: string;
+}
+
+/**
+ * The words of `text` as the review compares them. Punctuation on a word's
+ * edges and the capital a word takes from sitting first in a sentence (or from
+ * being the pronoun I) don't make it another word, and a token that is only
+ * punctuation isn't a word. Anything inside the word does: an apostrophe, a
+ * digit for a spelled number, a capital that makes a name.
+ */
+function diffWords(text: string): DiffWord[] {
+  const tokens = tokenizeWords(text);
+  const words: DiffWord[] = [];
+  tokens.forEach((token, i) => {
+    const core = token.text
+      .replace(LEADING_PUNCTUATION, "")
+      .replace(TRAILING_PUNCTUATION, "")
+      .replaceAll("’", "'");
+    if (core === "") return;
+    const prev = tokens[i - 1];
+    const sentenceStart =
+      !prev || SENTENCE_END.test(prev.text) || text.slice(prev.to, token.from).includes("\n");
+    const key =
+      sentenceStart || PRONOUN_I.test(core)
+        ? core.replace(/^\p{Lu}/u, (letter) => letter.toLowerCase())
+        : core;
+    words.push({ ...token, key });
+  });
+  return words;
+}
+
 /**
  * The words a correction changed. Words are whitespace-separated and compared
- * exactly, so a capital or a punctuation mark the correction added counts; a
+ * as `diffWords` reads them, so punctuation and a sentence's capital the
+ * correction added land quietly while a change to the word itself counts; a
  * change to the spacing alone does not.
  */
 export function diffCorrection(rawText: string, correctedText: string): CorrectionChanges {
-  const a = tokenizeWords(rawText);
-  const b = tokenizeWords(correctedText);
+  const a = diffWords(rawText);
+  const b = diffWords(correctedText);
   // Framed by the positions just outside either end, so every gap is between two pairs.
   const kept: [number, number][] = [
     [-1, -1],
-    ...alignWords(a, b, (x, y) => x.text === y.text),
+    ...alignWords(a, b, (x, y) => x.key === y.key),
     [a.length, b.length],
   ];
 

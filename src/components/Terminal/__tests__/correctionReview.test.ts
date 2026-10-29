@@ -39,11 +39,81 @@ describe("diffCorrection", () => {
     ]);
   });
 
-  it("counts a capital or a punctuation mark the correction added", () => {
-    expect(changedWords("so we need to fix it", "So we need to fix it.")).toEqual([
-      ["So", "so"],
-      ["it.", "it"],
+  it("leaves a sentence's capital and the punctuation the correction added quiet", () => {
+    expect(diffCorrection("hello world", "Hello, world.")).toEqual({ changed: [], removed: [] });
+    expect(diffCorrection("so we need to fix it", "So we need to fix it.")).toEqual({
+      changed: [],
+      removed: [],
+    });
+  });
+
+  it("marks only the word that changed in a recapitalised, punctuated passage", () => {
+    expect(changedWords("so i think its broken", "So I think it's broken.")).toEqual([
+      ["it's", "its"],
     ]);
+    expect(changedWords("use 2 workers", "Use two workers.")).toEqual([["two", "2"]]);
+  });
+
+  it("reads the capital of every sentence's first word as position, not a change", () => {
+    const raw = "it failed. then we retried. i'm not sure\nwhy";
+    expect(diffCorrection(raw, "It failed. Then we retried. I'm not sure\nWhy")).toEqual({
+      changed: [],
+      removed: [],
+    });
+    // The capital a joined sentence gives up goes quietly too.
+    expect(diffCorrection("It failed. Then we retried", "It failed, then we retried.")).toEqual({
+      changed: [],
+      removed: [],
+    });
+  });
+
+  it("reads the pronoun I as itself wherever it sits", () => {
+    expect(diffCorrection("and i said i'll go", "and I said I'll go")).toEqual({
+      changed: [],
+      removed: [],
+    });
+  });
+
+  it("still marks a change inside the word", () => {
+    expect(changedWords("it dont work", "It doesn't work.")).toEqual([["doesn't", "dont"]]);
+    expect(changedWords("we dont know", "We don't know.")).toEqual([["don't", "dont"]]);
+    expect(changedWords("push to github now", "Push to GitHub now.")).toEqual([
+      ["GitHub", "github"],
+    ]);
+    expect(changedWords("call usestate here", "Call useState here.")).toEqual([
+      ["useState", "usestate"],
+    ]);
+    expect(changedWords("open the github page", "Open the Github page")).toEqual([
+      ["Github", "github"],
+    ]);
+    expect(changedWords("ship it ok", "Ship it OK.")).toEqual([["OK.", "ok"]]);
+  });
+
+  it("still marks a symbol the correction put on a word", () => {
+    expect(changedWords("run build now", "Run build() now.")).toEqual([["build()", "build"]]);
+    expect(changedWords("run github-create-issue", "Run /github-create-issue.")).toEqual([
+      ["/github-create-issue.", "github-create-issue"],
+    ]);
+    expect(changedWords("it costs 5 dollars", "It costs $5 dollars.")).toEqual([
+      ["$5", "5"],
+    ]);
+  });
+
+  it("reads a curly apostrophe as the straight one", () => {
+    expect(diffCorrection("we don't know", "We don’t know.")).toEqual({ changed: [], removed: [] });
+  });
+
+  it("ignores a token that is only punctuation", () => {
+    expect(diffCorrection("yes no", "Yes — no.")).toEqual({ changed: [], removed: [] });
+    expect(diffCorrection("yes ... no", "Yes, no.")).toEqual({ changed: [], removed: [] });
+  });
+
+  it("keeps the gap for words dropped beside a quiet capital", () => {
+    const corrected = "So we need it.";
+    expect(diffCorrection("um so we need it", corrected)).toEqual({
+      changed: [],
+      removed: [{ at: 0, afterWord: false, heard: "um" }],
+    });
   });
 
   it("marks words the correction added with nothing heard", () => {
@@ -178,7 +248,7 @@ describe("correction review", () => {
     land(view, review);
 
     expect(view.state.doc.toString()).toBe(INTRO + CORRECTED);
-    expect(marked(view)).toEqual(["Open", "Zustand store."]);
+    expect(marked(view)).toEqual(["Zustand"]);
     expect(view.contentDOM.querySelector(".cm-voice-restore")).toBeNull();
     expect(onShown).toHaveBeenCalledWith(review);
   });
@@ -237,7 +307,7 @@ describe("correction review", () => {
     view.dispatch(
       outsideDraftWrite({ from: end, insert: more }, view.state.doc.toString() + more, null)
     );
-    expect(marked(view)).toEqual(["Open", "Zustand store."]);
+    expect(marked(view)).toEqual(["Zustand"]);
     expect(reviewing(view)).toBe(true);
 
     vi.advanceTimersByTime(VOICE_CORRECTION_MARK_DWELL_MS / 2);
@@ -249,7 +319,7 @@ describe("correction review", () => {
     land(view, review);
 
     view.dispatch(outsideDraftWrite({ from: 0, insert: "Note. " }, "Note. ", null));
-    expect(marked(view)).toEqual(["Open", "Zustand store."]);
+    expect(marked(view)).toEqual(["Zustand"]);
     expect(view.state.doc.toString()).toBe("Note. " + INTRO + CORRECTED);
   });
 
@@ -296,7 +366,7 @@ describe("correction review", () => {
 
     redoKey(view);
     expect(view.state.doc.toString()).toBe(INTRO + CORRECTED);
-    expect(marked(view)).toEqual(["Open", "Zustand store."]);
+    expect(marked(view)).toEqual(["Zustand"]);
     expect(onSwapped).toHaveBeenLastCalledWith(review, "corrected");
   });
 
@@ -328,7 +398,7 @@ describe("correction review", () => {
     replayLandedCorrection(view, review);
 
     expect(view.state.doc.toString()).toBe(INTRO + CORRECTED);
-    expect(marked(view)).toEqual(["Open", "Zustand store."]);
+    expect(marked(view)).toEqual(["Zustand"]);
     expect(undoDepth(view.state)).toBe(1);
 
     undoKey(view);
@@ -401,7 +471,7 @@ describe("correction review", () => {
     expect(view.state.doc.toString()).toBe(INTRO + RAW);
     expect(onSwapped).toHaveBeenLastCalledWith(review, "raw");
     redoKey(view);
-    expect(marked(view)).toEqual(["Open", "Zustand store."]);
+    expect(marked(view)).toEqual(["Zustand"]);
     expect(onSwapped).toHaveBeenLastCalledWith(review, "corrected");
   });
 
