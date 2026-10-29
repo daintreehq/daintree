@@ -828,43 +828,62 @@ describe("ReviewHub", () => {
       });
     });
 
-    it("scans again when a status read overtakes a scan still in flight", async () => {
-      let fireTick: (() => void) | undefined;
-      onUpdateMock.mockImplementation((type: string, callback: (data: unknown) => void) => {
-        if (type === "worktree-tick") {
-          fireTick = () => callback({ tick: { worktreeId: "main-wt", path: WORKTREE_PATH } });
-        }
-        return mockUnsubscribe;
-      });
-      getStagingStatusMock.mockImplementation(async () => makeMergingStatus());
-      let resolveFirst: ((entries: ConflictMarkerScanEntry[]) => void) | undefined;
-      scanConflictMarkersMock.mockImplementationOnce(
-        () =>
-          new Promise<ConflictMarkerScanEntry[]>((resolve) => {
-            resolveFirst = resolve;
-          })
-      );
+    it.each(["answers", "fails"] as const)(
+      "keeps the newer scan when one a status read overtook %s late",
+      async (outcome) => {
+        let fireTick: (() => void) | undefined;
+        onUpdateMock.mockImplementation((type: string, callback: (data: unknown) => void) => {
+          if (type === "worktree-tick") {
+            fireTick = () => callback({ tick: { worktreeId: "main-wt", path: WORKTREE_PATH } });
+          }
+          return mockUnsubscribe;
+        });
+        getStagingStatusMock.mockImplementation(async () => makeMergingStatus());
+        let settleFirst:
+          | { resolve: (entries: ConflictMarkerScanEntry[]) => void; reject: (err: Error) => void }
+          | undefined;
+        scanConflictMarkersMock.mockImplementationOnce(
+          () =>
+            new Promise<ConflictMarkerScanEntry[]>((resolve, reject) => {
+              settleFirst = { resolve, reject };
+            })
+        );
 
-      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      await waitFor(() => expect(scanConflictMarkersMock).toHaveBeenCalledTimes(1));
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        await waitFor(() => expect(scanConflictMarkersMock).toHaveBeenCalledTimes(1));
 
-      scanConflictMarkersMock.mockResolvedValue([
-        { path: "src/app.ts", hunkCount: 1, firstMarkerLine: 40 },
-      ]);
-      act(() => fireTick?.());
-      await waitFor(() => expect(scanConflictMarkersMock).toHaveBeenCalledTimes(2));
-      await waitFor(() =>
-        expect(screen.getByTestId("conflict-hunk-count-src/app.ts").textContent).toBe("1 region")
-      );
+        scanConflictMarkersMock.mockResolvedValue([
+          { path: "src/app.ts", hunkCount: 1, firstMarkerLine: 40 },
+        ]);
+        act(() => fireTick?.());
+        await waitFor(() => expect(scanConflictMarkersMock).toHaveBeenCalledTimes(2));
+        await waitFor(() =>
+          expect(screen.getByTestId("conflict-hunk-count-src/app.ts").textContent).toBe("1 region")
+        );
 
-      // The overtaken scan read the file before the newer one did.
-      await act(async () => {
-        resolveFirst?.([{ path: "src/app.ts", hunkCount: 3, firstMarkerLine: 12 }]);
-      });
-      expect(screen.getByTestId("conflict-hunk-count-src/app.ts").textContent).toBe("1 region");
-    });
+        // The overtaken scan read the file before the newer one did.
+        await act(async () => {
+          if (outcome === "answers") {
+            settleFirst?.resolve([{ path: "src/app.ts", hunkCount: 3, firstMarkerLine: 12 }]);
+          } else {
+            settleFirst?.reject(new Error("EACCES"));
+          }
+        });
+        expect(screen.getByTestId("conflict-hunk-count-src/app.ts").textContent).toBe("1 region");
+        fireEvent.click(
+          screen.getByRole("button", { name: /Open src\/app\.ts in external editor/i })
+        );
+        await waitFor(() => {
+          expect(openInEditorMock).toHaveBeenCalledWith({
+            path: `${WORKTREE_PATH}/src/app.ts`,
+            line: 40,
+            projectId: REVIEW_PROJECT_ID,
+          });
+        });
+      }
+    );
 
-    it("rescans when the app regains focus", async () => {
+    it("rescans each time the app regains focus", async () => {
       getStagingStatusMock.mockResolvedValue(makeMergingStatus());
       scanConflictMarkersMock.mockResolvedValue([
         { path: "src/app.ts", hunkCount: 3, firstMarkerLine: 12 },
@@ -875,16 +894,20 @@ describe("ReviewHub", () => {
         "3 regions"
       );
 
-      scanConflictMarkersMock.mockResolvedValue([
-        { path: "src/app.ts", hunkCount: 2, firstMarkerLine: 30 },
-      ]);
-      act(() => {
-        window.dispatchEvent(new Event("focus"));
-      });
-
-      await waitFor(() =>
-        expect(screen.getByTestId("conflict-hunk-count-src/app.ts").textContent).toBe("2 regions")
-      );
+      for (const [hunkCount, label] of [
+        [2, "2 regions"],
+        [1, "1 region"],
+      ] as const) {
+        scanConflictMarkersMock.mockResolvedValue([
+          { path: "src/app.ts", hunkCount, firstMarkerLine: 30 },
+        ]);
+        act(() => {
+          window.dispatchEvent(new Event("focus"));
+        });
+        await waitFor(() =>
+          expect(screen.getByTestId("conflict-hunk-count-src/app.ts").textContent).toBe(label)
+        );
+      }
     });
 
     it("never shows another worktree's scan on a same-named file after a switch", async () => {
@@ -902,24 +925,25 @@ describe("ReviewHub", () => {
       expect((await screen.findByTestId("conflict-hunk-count-src/app.ts")).textContent).toBe(
         "3 regions"
       );
+      const panel = screen.getByTestId("conflict-panel");
 
+      // Every scan of the other worktree shares one answer, held back until
+      // the switch has been checked.
       let resolveOther: ((entries: ConflictMarkerScanEntry[]) => void) | undefined;
-      scanConflictMarkersMock.mockImplementation(
-        () =>
-          new Promise<ConflictMarkerScanEntry[]>((resolve) => {
-            resolveOther = resolve;
-          })
-      );
+      const otherScan = new Promise<ConflictMarkerScanEntry[]>((resolve) => {
+        resolveOther = resolve;
+      });
+      scanConflictMarkersMock.mockImplementation(() => otherScan);
       rerender(<ReviewHubContent isOpen={true} worktreePath={OTHER_PATH} onClose={vi.fn()} />);
       await waitFor(() =>
         expect(scanConflictMarkersMock).toHaveBeenCalledWith(OTHER_PATH, ["src/app.ts"])
       );
 
-      screen.getByTestId("conflict-panel");
+      expect(screen.getByTestId("conflict-panel")).toBe(panel);
       expect(screen.queryByTestId("conflict-hunk-count-src/app.ts")).toBeNull();
-      fireEvent.click(
-        screen.getByRole("button", { name: /Open src\/app\.ts in external editor/i })
-      );
+      const openButton = () =>
+        screen.getByRole("button", { name: /Open src\/app\.ts in external editor/i });
+      fireEvent.click(openButton());
       await waitFor(() => {
         expect(openInEditorMock).toHaveBeenCalledWith({
           path: `${OTHER_PATH}/src/app.ts`,
@@ -929,6 +953,15 @@ describe("ReviewHub", () => {
 
       await act(async () => {
         resolveOther?.([{ path: "src/app.ts", hunkCount: 1, firstMarkerLine: 5 }]);
+      });
+      expect(screen.getByTestId("conflict-hunk-count-src/app.ts").textContent).toBe("1 region");
+      fireEvent.click(openButton());
+      await waitFor(() => {
+        expect(openInEditorMock).toHaveBeenCalledWith({
+          path: `${OTHER_PATH}/src/app.ts`,
+          line: 5,
+          projectId: REVIEW_PROJECT_ID,
+        });
       });
     });
 
