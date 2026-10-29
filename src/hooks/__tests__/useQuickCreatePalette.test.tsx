@@ -2,16 +2,21 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import type { TerminalRecipe } from "@/types";
+import type { QuickCreateItem } from "../useQuickCreatePalette";
 
 const mockRecipes = vi.hoisted(() => ({ value: [] as TerminalRecipe[] }));
 const paletteCapture = vi.hoisted(() => ({
-  items: [] as unknown[],
+  items: [] as QuickCreateItem[],
   selectedIndex: 0,
 }));
 const dispatchMock = vi.hoisted(() => vi.fn());
 const quickCreateContext = vi.hoisted(() => ({
   value: {
-    issue: { number: 7, title: "Fix the thing" } as { number: number; title: string } | null,
+    issue: { number: 7, title: "Fix the thing" } as {
+      number: number;
+      title: string;
+      branchName?: string;
+    } | null,
     pr: null as { number: number; title: string } | null,
   },
 }));
@@ -58,7 +63,7 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 vi.mock("../useSearchablePalette", () => ({
-  useSearchablePalette: ({ items }: { items: unknown[] }) => {
+  useSearchablePalette: ({ items }: { items: QuickCreateItem[] }) => {
     paletteCapture.items = items;
     return {
       isOpen: true,
@@ -89,6 +94,16 @@ function makeRecipe(overrides: Partial<TerminalRecipe>): TerminalRecipe {
   } as TerminalRecipe;
 }
 
+function listedIds(): string[] {
+  return paletteCapture.items.map((i) => i.id);
+}
+
+function listedRow(id: string): QuickCreateItem {
+  const row = paletteCapture.items.find((i) => i.id === id);
+  if (!row) throw new Error(`No palette row ${id}`);
+  return row;
+}
+
 beforeEach(() => {
   dispatchMock.mockReset();
   openCreateDialogMock.mockReset();
@@ -107,9 +122,8 @@ describe("useQuickCreatePalette — shadowed recipes (#11510)", () => {
 
     renderHook(() => useQuickCreatePalette());
 
-    const ids = (paletteCapture.items as Array<{ id: string }>).map((i) => i.id);
-    expect(ids).toContain("loser");
-    expect(ids).toContain("winner");
+    expect(listedIds()).toContain("loser");
+    expect(listedIds()).toContain("winner");
   });
 
   it("derives the auto-assign prompt from the winner, not the shadowed row", () => {
@@ -135,10 +149,9 @@ describe("useQuickCreatePalette — shadowed recipes (#11510)", () => {
     ];
 
     const { result } = renderHook(() => useQuickCreatePalette());
-    const loser = (paletteCapture.items as Array<{ id: string }>).find((i) => i.id === "loser");
 
     await act(async () => {
-      result.current.confirmItem(loser as never);
+      result.current.confirmItem(listedRow("loser"));
     });
 
     expect(dispatchMock).toHaveBeenCalledWith(
@@ -155,8 +168,12 @@ describe("useQuickCreatePalette — worktree-scoped recipes (#14994)", () => {
     makeRecipe({ id: "pinned", name: "Pinned", projectId: "p", worktreeId: "wt-1" }),
   ];
 
-  function listedIds(): string[] {
-    return (paletteCapture.items as Array<{ id: string }>).map((i) => i.id);
+  function expectDispatchedSource(source: Record<string, unknown>): void {
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "worktree.createWithRecipe",
+      expect.objectContaining({ source: expect.objectContaining(source) }),
+      expect.anything()
+    );
   }
 
   it("leaves worktree recipes out when a pick opens the New Worktree dialog", () => {
@@ -170,29 +187,35 @@ describe("useQuickCreatePalette — worktree-scoped recipes (#14994)", () => {
     expect(listedIds()).toEqual(["project", "__customize__"]);
   });
 
-  it("hands the dialog the recipe that was picked", () => {
+  it("hands the dialog the recipe under the cursor when confirmed from the keyboard", () => {
     quickCreateContext.value = { issue: null, pr: null };
     mockRecipes.value = recipes();
 
     const { result } = renderHook(() => useQuickCreatePalette());
-    const project = (paletteCapture.items as Array<{ id: string }>).find((i) => i.id === "project");
 
     act(() => {
-      result.current.confirmItem(project as never);
+      result.current.confirmSelection();
     });
 
     expect(openCreateDialogMock).toHaveBeenCalledWith(null, { initialRecipeId: "project" });
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
-  it("leaves worktree recipes out when the issue title can't name a branch", () => {
+  it("leaves worktree recipes out and passes the issue on when its title can't name a branch", () => {
     // A title that slugs to nothing also falls through to the dialog.
-    quickCreateContext.value = { issue: { number: 7, title: "!!!" }, pr: null };
+    const issue = { number: 7, title: "!!!" };
+    quickCreateContext.value = { issue, pr: null };
     mockRecipes.value = recipes();
 
-    renderHook(() => useQuickCreatePalette());
-
+    const { result } = renderHook(() => useQuickCreatePalette());
     expect(listedIds()).toEqual(["project", "__customize__"]);
+
+    act(() => {
+      result.current.confirmItem(listedRow("project"));
+    });
+
+    expect(openCreateDialogMock).toHaveBeenCalledWith(issue, { initialRecipeId: "project" });
+    expect(dispatchMock).not.toHaveBeenCalled();
   });
 
   it("keeps worktree recipes when an issue names the branch and the recipe runs directly", async () => {
@@ -201,9 +224,8 @@ describe("useQuickCreatePalette — worktree-scoped recipes (#14994)", () => {
     const { result } = renderHook(() => useQuickCreatePalette());
     expect(listedIds()).toEqual(["project", "pinned", "__customize__"]);
 
-    const pinned = (paletteCapture.items as Array<{ id: string }>).find((i) => i.id === "pinned");
     await act(async () => {
-      result.current.confirmItem(pinned as never);
+      result.current.confirmItem(listedRow("pinned"));
     });
 
     expect(dispatchMock).toHaveBeenCalledWith(
@@ -211,27 +233,59 @@ describe("useQuickCreatePalette — worktree-scoped recipes (#14994)", () => {
       expect.objectContaining({ recipeId: "pinned" }),
       expect.anything()
     );
+    expectDispatchedSource({
+      kind: "newBranch",
+      branchName: "bugfix/issue-7-fix-thing",
+      issueNumber: 7,
+    });
   });
 
-  it("keeps worktree recipes for a PR, whose title names the branch", () => {
+  it("keeps worktree recipes for a PR, whose title names the branch", async () => {
     quickCreateContext.value = { issue: null, pr: { number: 12, title: "Tidy the sidebar" } };
     mockRecipes.value = recipes();
 
-    renderHook(() => useQuickCreatePalette());
-
+    const { result } = renderHook(() => useQuickCreatePalette());
     expect(listedIds()).toEqual(["project", "pinned", "__customize__"]);
+
+    await act(async () => {
+      result.current.confirmItem(listedRow("pinned"));
+    });
+
+    expectDispatchedSource({ branchName: "feature/tidy-sidebar" });
+    expect(openCreateDialogMock).not.toHaveBeenCalled();
   });
 
-  it("keeps worktree recipes when a provider-suggested branch stands in for an unusable title", () => {
+  it("keeps worktree recipes when a provider-suggested branch stands in for an unusable title", async () => {
     quickCreateContext.value = {
-      issue: { number: 7, title: "!!!", branchName: "eng-7-fix" } as never,
+      issue: { number: 7, title: "!!!", branchName: "eng-7-fix" },
       pr: null,
     };
     mockRecipes.value = recipes();
 
-    renderHook(() => useQuickCreatePalette());
-
+    const { result } = renderHook(() => useQuickCreatePalette());
     expect(listedIds()).toEqual(["project", "pinned", "__customize__"]);
+
+    await act(async () => {
+      result.current.confirmItem(listedRow("pinned"));
+    });
+
+    expectDispatchedSource({ branchName: "eng-7-fix" });
+  });
+
+  it("prefers the provider-suggested branch over one built from a usable title", async () => {
+    quickCreateContext.value = {
+      issue: { number: 7, title: "Fix the thing", branchName: "eng-7-fix" },
+      pr: null,
+    };
+    mockRecipes.value = recipes();
+
+    const { result } = renderHook(() => useQuickCreatePalette());
+
+    await act(async () => {
+      result.current.confirmItem(listedRow("project"));
+    });
+
+    expectDispatchedSource({ branchName: "eng-7-fix" });
   });
 
   it("still offers Customize… when every recipe is a worktree recipe and the pick opens the dialog", () => {
@@ -242,10 +296,27 @@ describe("useQuickCreatePalette — worktree-scoped recipes (#14994)", () => {
     expect(listedIds()).toEqual(["__customize__"]);
 
     act(() => {
-      result.current.confirmItem(paletteCapture.items[0] as never);
+      result.current.confirmSelection();
     });
 
     expect(openCreateDialogMock).toHaveBeenCalledWith(null);
+  });
+
+  it("offers no rows and opens the recipe manager when there are no recipes at all", () => {
+    quickCreateContext.value = { issue: null, pr: null };
+    mockRecipes.value = [];
+
+    const { result } = renderHook(() => useQuickCreatePalette());
+    expect(listedIds()).toEqual([]);
+
+    act(() => {
+      result.current.confirmSelection();
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith("recipe.manager.open", undefined, {
+      source: "user",
+    });
+    expect(openCreateDialogMock).not.toHaveBeenCalled();
   });
 
   it("judges a shadowed row by its own scope, not its winner's, on the dialog path", () => {
@@ -262,11 +333,8 @@ describe("useQuickCreatePalette — worktree-scoped recipes (#14994)", () => {
     const { result } = renderHook(() => useQuickCreatePalette());
     expect(listedIds()).toEqual(["winner", "project-loser", "__customize__"]);
 
-    const loser = (paletteCapture.items as Array<{ id: string }>).find(
-      (i) => i.id === "project-loser"
-    );
     act(() => {
-      result.current.confirmItem(loser as never);
+      result.current.confirmItem(listedRow("project-loser"));
     });
 
     expect(openCreateDialogMock).toHaveBeenCalledWith(null, { initialRecipeId: "project-loser" });
