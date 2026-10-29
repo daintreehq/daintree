@@ -323,7 +323,7 @@ describe("recipeStore", () => {
 
     it("reports panels a recipe can't hold and steps past the cap (#14968)", () => {
       const shellIds = Array.from({ length: 12 }, (_, i) => `shell-${i}`);
-      const panels: Array<Record<string, unknown>> = [
+      const panels: Array<{ id: string } & Record<string, unknown>> = [
         { id: "browser-a", kind: "browser" },
         ...shellIds.slice(0, 6).map((id) => ({ id, kind: "terminal", command: id })),
         { id: "file-a", kind: "file" },
@@ -335,7 +335,7 @@ describe("recipeStore", () => {
         { id: "trashed", kind: "terminal", location: "trash" },
         { id: "elsewhere", kind: "browser", worktreeId: "wt-2" },
       ];
-      panelStoreState.panelIds = panels.map((p) => p.id as string);
+      panelStoreState.panelIds = panels.map((p) => p.id);
       panelStoreState.panelsById = Object.fromEntries(
         panels.map((p) => [p.id, { worktreeId: "wt-1", location: "grid", title: "", ...p }])
       );

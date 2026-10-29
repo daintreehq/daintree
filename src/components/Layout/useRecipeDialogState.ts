@@ -22,16 +22,18 @@ function isCount(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /** The event detail is untyped; a malformed report is dropped rather than shown. */
 function readLayoutOmissions(value: unknown): RecipeLayoutOmissions | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const { panelKinds, cappedTerminalCount } = value as Record<string, unknown>;
-  if (!isCount(cappedTerminalCount)) return undefined;
-  if (typeof panelKinds !== "object" || panelKinds === null || Array.isArray(panelKinds)) {
-    return undefined;
-  }
-  if (!Object.values(panelKinds).every(isCount)) return undefined;
-  return { panelKinds: { ...(panelKinds as Record<string, number>) }, cappedTerminalCount };
+  if (!isPlainRecord(value)) return undefined;
+  const { panelKinds, cappedTerminalCount } = value;
+  if (!isCount(cappedTerminalCount) || !isPlainRecord(panelKinds)) return undefined;
+  const entries = Object.entries(panelKinds);
+  if (!entries.every((entry): entry is [string, number] => isCount(entry[1]))) return undefined;
+  return { panelKinds: Object.fromEntries(entries), cappedTerminalCount };
 }
 
 function useRecipeDialogState(): UseRecipeDialogStateReturn {
