@@ -2,9 +2,10 @@ import { useMemo } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Button } from "@/components/ui/button";
+import { PickerChevron } from "@/components/ui/PickerChevron";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { useListboxCursor } from "@/hooks/useListboxCursor";
-import { Check, ChevronsUpDown, Copy, Play } from "lucide-react";
+import { Check, Copy, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FIELD_TRIGGER } from "./WorktreeFormLayout";
 import type { TerminalRecipe } from "@/types";
@@ -132,7 +133,7 @@ export function RecipePickerPopover({
               </>
             )}
           </span>
-          <ChevronsUpDown className="text-text-secondary shrink-0" />
+          <PickerChevron />
         </Button>
       </PopoverTrigger>
       <PopoverContent
