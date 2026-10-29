@@ -233,6 +233,99 @@ describe("forced-colors heavier-border hooks survive the 1px pin-back", () => {
       expect(exempt).toContain(hook);
     }
   });
+
+  // The danger ghost's cue is a double rule, and a pinned 1px double draws as
+  // one solid line: exactly the Cancel beside it.
+  it("exempts the ghost-danger hook, whose double rule the pin-back would thin to one line", () => {
+    const blocks = readForcedColorsBlocks(readIndexCss())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/'/g, '"');
+    const pin = blocks.match(
+      /html\s*:where\([^)]*\):not\(([^)]*)\)\s*\{\s*border-width:\s*1px;\s*\}/
+    );
+    expect(pin).not.toBeNull();
+    const exempt = pin![1]!.split(",").map((arg) => arg.trim());
+    expect(exempt).toContain('[data-variant="ghost-danger"]');
+  });
+});
+
+// #15377: a `ghost-danger` button carries its meaning in its red label alone,
+// and forced colours repaints every label ButtonText, so the destructive answer
+// on a dialog footer's leading edge rendered as the same 1px box as the Cancel
+// beside it. It cannot take the destructive variant's 2px weight: the same
+// footer carries a contrast primary at 2px, and two heavy buttons would mark
+// the destroying one as a default. So it needs a stroke the others don't draw.
+describe("forced-colors ghost-danger button distinction (#15377)", () => {
+  function liveBlocks(): string {
+    return readForcedColorsBlocks(readIndexCss())
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/'/g, '"');
+  }
+
+  function ruleBody(blocks: string, variant: string): string {
+    const match = blocks.match(
+      new RegExp(`button\\[data-variant="${variant}"\\]\\s*\\{([^}]*)\\}`)
+    );
+    expect(match, variant).not.toBeNull();
+    return match![1]!;
+  }
+
+  function borderStyle(body: string): string | undefined {
+    return (
+      body.match(/border-style:\s*([a-z]+)/)?.[1] ??
+      body.match(/border:\s*[\d.]+px\s+([a-z]+)/)?.[1]
+    );
+  }
+
+  function borderWidthPx(body: string): number | undefined {
+    const raw = body.match(/border-width:\s*([\d.]+)px/)?.[1] ?? body.match(/border:\s*([\d.]+)px/)?.[1];
+    return raw === undefined ? undefined : Number(raw);
+  }
+
+  it("gives ghost-danger a border style no neighbouring button draws", () => {
+    const blocks = liveBlocks();
+    const danger = borderStyle(ruleBody(blocks, "ghost-danger"));
+    expect(danger).toBeDefined();
+    // The blanket button frame Cancel and the plain ghost take.
+    const blanket = blocks.match(/button,\s*\[role="button"\][^{]*\{([^}]*)\}/);
+    expect(blanket).not.toBeNull();
+    for (const neighbour of [
+      borderStyle(blanket![1]!),
+      borderStyle(ruleBody(blocks, "contrast")),
+      borderStyle(ruleBody(blocks, "destructive")),
+    ]) {
+      expect(neighbour).toBeDefined();
+      expect(danger).not.toBe(neighbour);
+    }
+  });
+
+  it("is wide enough for its style to draw as more than one line", () => {
+    const body = ruleBody(liveBlocks(), "ghost-danger");
+    const minimum: Record<string, number> = { double: 3, groove: 2, ridge: 2 };
+    const style = borderStyle(body)!;
+    const width = borderWidthPx(body);
+    expect(width).toBeDefined();
+    expect(width!).toBeGreaterThanOrEqual(minimum[style] ?? 1);
+  });
+
+  // A shorthand would reset border-color to ButtonText at the same specificity
+  // as the aria-disabled rule, and win on source order: a blocked "Discard
+  // changes" would keep an available-looking frame round its GrayText label.
+  it("leaves border-color to the blanket and aria-disabled rules", () => {
+    const body = ruleBody(liveBlocks(), "ghost-danger");
+    expect(body).not.toMatch(/border(-color)?\s*:/);
+  });
+
+  it("does not use outline for that distinction — the focus ring owns outline and would win", () => {
+    expect(ruleBody(liveBlocks(), "ghost-danger")).not.toMatch(/outline\s*:/);
+  });
+
+  it("targets a variant Button actually has, and the destructive leading action renders it", () => {
+    const button = fs.readFileSync(path.join(REPO_ROOT, "src/components/ui/button.tsx"), "utf8");
+    expect(button).toMatch(/"ghost-danger":/);
+    const dialog = fs.readFileSync(path.join(REPO_ROOT, "src/components/ui/AppDialog.tsx"), "utf8");
+    expect(dialog).toMatch(/leadingAction\.intent === "destructive" \? "ghost-danger"/);
+  });
 });
 
 // #11981: a destructive button is distinguished from Cancel only by its fill,
