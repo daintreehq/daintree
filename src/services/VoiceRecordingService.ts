@@ -63,6 +63,7 @@ import {
   isActiveVoiceSession,
   VOICE_REPLAY_AUDIO_LOST_CODE,
   VOICE_STOP_AUDIO_LOST_CODE,
+  type VoiceCleanupFailure,
   type VoiceInputStatus,
   type VoiceRecordingMode,
   type VoiceSessionElsewhere,
@@ -241,6 +242,21 @@ function formatTargetLabel(target: VoiceRecordingTarget): string {
   if (project) return project;
   if (worktree) return worktree;
   return "current panel";
+}
+
+function cleanupFailureMessage({ reason, provider }: VoiceCleanupFailure): string {
+  const issuer = cleanupKeyIssuer(provider);
+  const kept = "so dictation is kept as you said it.";
+  switch (reason) {
+    case "key_rejected":
+      return `${issuer} rejected the API key, ${kept} Update the key in voice settings.`;
+    case "billing_required":
+      return `The ${issuer} account is out of credit or at its spending limit, ${kept} Add credit, raise the limit, or use a key from another account.`;
+    case "region_refused":
+      return `${issuer} isn't available in your region, ${kept} Choose another cleanup provider in voice settings.`;
+    case "access_denied":
+      return `The cleanup model isn't available to this ${issuer} key, ${kept} Check the key's access or choose another model in voice settings.`;
+  }
 }
 
 /**
@@ -4108,6 +4124,8 @@ class VoiceRecordingService {
         ...correctionRequest(passage, correction.context, correction.sessionId),
         streamId,
       });
+      // Told whatever became of the draft: the account fails the next passage too.
+      if (result.cleanupFailure) this.reportCleanupFailure(result.cleanupFailure);
       // The passage runs from its first word to its last; its separators and
       // paragraph breaks either side stay the session's, not the model's.
       text = result.action === "replace" ? result.correctedText.trim() || null : null;
@@ -4275,6 +4293,20 @@ class VoiceRecordingService {
         });
         return;
     }
+  }
+
+  /** Main hands a failure that will recur to one reply per outage, so this is said once. */
+  private reportCleanupFailure(failure: VoiceCleanupFailure): void {
+    const message = cleanupFailureMessage(failure);
+    useVoiceRecordingStore.getState().announce(message);
+    notify({
+      type: "error",
+      title: "Dictation cleanup unavailable",
+      message,
+      replaceKey: "voice-cleanup-failure",
+      context: { eventKind: "connectivity" },
+      action: this.settingsAction(),
+    });
   }
 
   private reportPassageFailed(): void {

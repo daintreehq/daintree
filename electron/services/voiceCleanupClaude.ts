@@ -113,6 +113,30 @@ export function claudeErrorCode(body: unknown): string | undefined {
   return typeof type === "string" ? type : undefined;
 }
 
+// An account out of credit or at a spend limit it set is answered as a bad
+// request, told apart from the others only by the API's own sentence: read for
+// that, never kept or logged. The tier's monthly cap comes as a rate limit with
+// a code of its own.
+const BILLING_REFUSED_RE =
+  /^(?:Your credit balance is too low|You have reached your specified API usage limits)\b/;
+
+/** Whether a failed request's body says the account can't be billed for more. */
+export function claudeBillingRefused(body: unknown): boolean {
+  const error = (
+    body as {
+      error?: { type?: unknown; message?: unknown; details?: { error_code?: unknown } };
+    } | null
+  )?.error;
+  if (error?.type === "rate_limit_error") {
+    return error.details?.error_code === "enforced_spend_limit_reached";
+  }
+  return (
+    error?.type === "invalid_request_error" &&
+    typeof error.message === "string" &&
+    BILLING_REFUSED_RE.test(error.message)
+  );
+}
+
 export interface ClaudeStreamEvent {
   type?: string;
   index?: number;

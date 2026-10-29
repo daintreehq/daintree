@@ -359,11 +359,39 @@ describe("VoiceCorrectionService streaming", () => {
     );
 
     expect(result).toMatchObject({ action: "no_change", failed: true });
+    expect(result).not.toHaveProperty("cleanupFailure");
     expect(logWarn).toHaveBeenCalledWith(
       expect.stringContaining("Correction failed"),
       expect.objectContaining({ code: "server_error" })
     );
     expect(JSON.stringify(vi.mocked(logWarn).mock.calls)).not.toContain("parser");
+  });
+
+  // #14963: the stream answered 200, so only the code says why.
+  it.each([
+    ["insufficient_quota", "billing_required"],
+    ["invalid_api_key", "key_rejected"],
+    ["model_not_found", "access_denied"],
+  ] as const)("names a %s mid-stream a failure that will recur", async (code, reason) => {
+    const frames = replyFrames(reply("Fix the parser now."), null).slice(0, 3);
+    frames.push({
+      type: "response.failed",
+      response: { error: { code, message: "fix the parser now" } },
+    });
+    stubFetch(streamed(frames));
+
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "fix the parser now" },
+      SETTINGS,
+      undefined,
+      vi.fn()
+    );
+
+    expect(result).toMatchObject({
+      confirmedText: "fix the parser now",
+      failed: true,
+      cleanupFailure: { reason, provider: "openai" },
+    });
   });
 
   describe("verdicts", () => {

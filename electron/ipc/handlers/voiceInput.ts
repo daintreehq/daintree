@@ -1,5 +1,5 @@
 // eager-import-allow: reads voice-input settings via store.get synchronously in the IPC handler
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { ipcMain, systemPreferences } from "electron";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
@@ -14,6 +14,7 @@ import {
 } from "../../services/VoiceCorrectionService.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import type {
+  VoiceCleanupFailure,
   VoiceDictionaryEntry,
   VoiceInputSettings,
   VoiceInputSettingsPatch,
@@ -541,6 +542,34 @@ interface CorrectReply {
   failed?: true;
   verdict?: VoiceCorrectionVerdict;
   timing?: VoiceCorrectionTiming;
+  cleanupFailure?: VoiceCleanupFailure;
+}
+
+// The account a cleanup runs on, as far as its failures go: the key, what it
+// bills and the model it asks for. Hashed, so the latch holds no key.
+function cleanupAccountOf(settings: VoiceInputSettings): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        settings.correctionModel,
+        cleanupApiKey(settings),
+        settings.organizationId ?? null,
+        settings.projectId ?? null,
+      ])
+    )
+    .digest("hex");
+}
+
+// Whether the document that sent an invoke is still there for its answer. A
+// reload brings a document with a token of its own, whose frame the old one's
+// may follow, and the old one's pending invoke reaches no one. Read as the
+// invoke arrives, while the event's frame is still current.
+function askerStillThere(ctx: IpcContext): () => boolean {
+  const sender = ctx.event?.sender;
+  const frame = ctx.event?.senderFrame;
+  const token = frame?.frameToken;
+  return () =>
+    !sender?.isDestroyed() && (!frame || (!frame.isDestroyed() && frame.frameToken === token));
 }
 
 /** What a cleanup sends OpenAI, once its context is read. */
@@ -2513,6 +2542,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
   // Cleanup requests still out, cancelled when the handlers go.
   const openCorrections = new Set<AbortController>();
+  // Accounts whose cleanup failure has been told, each until a cleanup on it works.
+  const toldCleanupFailures = new Set<string>();
   // Cleanup started at a pause while a dictation runs, for its stop to take.
   const prefetcher = new CorrectionPrefetcher<PrefetchRun>();
   const prefetchOwner = (webContentsId: number, sessionId: string) =>
@@ -2541,6 +2572,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       return { action: "no_change", correctedText: request.rawText, verdict: "skipped" };
     }
     const answered = holdForCleanup(ctx.webContentsId);
+    const asker = askerStillThere(ctx);
     try {
       const prefetched = request.sessionId
         ? prefetcher.take(
@@ -2548,7 +2580,13 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             correctionKey(request, settings)
           )
         : null;
-      if (!prefetched) return await correctPassage(ctx, request, settings, startedAt);
+      if (!prefetched) {
+        return settleReply(
+          asker,
+          settings,
+          await correctPassage(ctx, request, settings, startedAt)
+        );
+      }
       // The stop reads its own context, as it always would, and takes the run
       // only if the pause sent OpenAI exactly what it would: a terminal that
       // printed more or an agent that changed since makes it start its own.
@@ -2569,15 +2607,43 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       }
       if (mine !== null && mine === theirs) {
         const reply = await adoptPrefetch(ctx, request, prefetched);
-        // One that failed gets the stop's own try, as if it had never started.
-        if (!reply.failed) return reply;
+        // One that failed gets the stop's own try, as if it had never started,
+        // unless the account refused it: the same account would again.
+        if (!reply.failed || reply.cleanupFailure) return settleReply(asker, settings, reply);
       } else {
         prefetched.cancel();
       }
-      return await correctPassage(ctx, request, settings, startedAt, { prepared });
+      return settleReply(
+        asker,
+        settings,
+        await correctPassage(ctx, request, settings, startedAt, { prepared })
+      );
     } finally {
       answered();
     }
+  };
+
+  // A failure that will recur is told once per outage, on the first reply that
+  // meets it from any view, until a cleanup on that account works again or the
+  // account changes (#14963). A prefetch reaches here only once a stop takes it.
+  const settleReply = (
+    askerThere: () => boolean,
+    settings: VoiceInputSettings,
+    reply: CorrectReply
+  ): CorrectReply => {
+    const account = cleanupAccountOf(settings);
+    const { cleanupFailure, ...rest } = reply;
+    if (!cleanupFailure) {
+      if (reply.verdict === "replaced" || reply.verdict === "unchanged") {
+        toldCleanupFailures.delete(account);
+      }
+      return reply;
+    }
+    // A view that went or reloaded since it asked has no one to tell; the
+    // next passage tells it instead.
+    if (toldCleanupFailures.has(account) || disposed || !askerThere()) return rest;
+    toldCleanupFailures.add(account);
+    return reply;
   };
 
   // The stop's passage is the one a pause already sent: its text so far goes
@@ -2830,6 +2896,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         correctedText: result.confirmedText,
         ...(result.failed ? { failed: true as const } : {}),
         verdict: result.verdict,
+        ...(result.cleanupFailure ? { cleanupFailure: result.cleanupFailure } : {}),
         timing: {
           prepMs: Math.max(0, sentAt - startedAt),
           requestMs: result.roundTrip ? result.roundTrip.ms : null,

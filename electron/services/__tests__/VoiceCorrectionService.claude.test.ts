@@ -322,6 +322,114 @@ describe("VoiceCorrectionService on Claude", () => {
     expect(JSON.stringify(vi.mocked(logWarn).mock.calls)).not.toContain("echoes");
   });
 
+  // #14963: an account every passage will fail on says why, as a code, and
+  // isn't asked twice; the message that told it never travels.
+  it.each([
+    [401, { type: "authentication_error", message: "invalid x-api-key" }, "key_rejected"],
+    [402, { type: "billing_error", message: "payment declined" }, "billing_required"],
+    [403, { type: "permission_error", message: "not allowed" }, "access_denied"],
+    // A 402 is billing whatever type it names.
+    [402, { type: "api_error", message: "billing trouble" }, "billing_required"],
+    [
+      400,
+      {
+        type: "invalid_request_error",
+        message: "Your credit balance is too low to access the Anthropic API.",
+      },
+      "billing_required",
+    ],
+    [
+      400,
+      {
+        type: "invalid_request_error",
+        message: "You have reached your specified API usage limits.",
+      },
+      "billing_required",
+    ],
+    [
+      429,
+      {
+        type: "rate_limit_error",
+        message: "You have reached your API usage limits for the month.",
+        details: { error_code: "enforced_spend_limit_reached" },
+      },
+      "billing_required",
+    ],
+  ] as const)("names a %i %o a failure that will recur", async (status, error, reason) => {
+    const fetchMock = stubFetch(jsonResponse({ type: "error", error }, status));
+    const result = await new VoiceCorrectionService().correct({ rawText: "run v test" }, SETTINGS);
+    expect(result).toMatchObject({
+      confirmedText: "run v test",
+      failed: true,
+      verdict: "failed",
+      cleanupFailure: { reason, provider: "anthropic" },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(logWarn).toHaveBeenLastCalledWith(
+      expect.stringContaining("Correction failed"),
+      expect.objectContaining({ status, code: error.type, persistent: reason })
+    );
+    expect(JSON.stringify(result)).not.toContain(error.message);
+    expect(JSON.stringify(vi.mocked(logWarn).mock.calls)).not.toContain(error.message);
+  });
+
+  it.each([
+    [400, "invalid_request_error", "The prompt says your credit balance is too low."],
+    // The sentence only counts from the type that sends it.
+    [500, "api_error", "Your credit balance is too low to access the Anthropic API."],
+    [429, "rate_limit_error", "slow down"],
+    [529, "overloaded_error", "busy"],
+  ] as const)("leaves a %i %s unnamed: the next passage may pass", async (status, type, text) => {
+    const failure = () => jsonResponse({ type: "error", error: { type, message: text } }, status);
+    stubFetch(failure(), failure());
+    const result = await new VoiceCorrectionService().correct({ rawText: "run v test" }, SETTINGS);
+    expect(result.failed).toBe(true);
+    expect(result).not.toHaveProperty("cleanupFailure");
+  });
+
+  it.each([
+    [{ type: "billing_error", message: "echoes ok" }, "billing_required"],
+    [{ type: "authentication_error", message: "echoes ok" }, "key_rejected"],
+    [{ type: "permission_error", message: "echoes ok" }, "access_denied"],
+    [
+      {
+        type: "rate_limit_error",
+        message: "You have reached your API usage limits for the month.",
+        details: { error_code: "enforced_spend_limit_reached" },
+      },
+      "billing_required",
+    ],
+    [
+      {
+        type: "invalid_request_error",
+        message: "Your credit balance is too low to access the Anthropic API.",
+      },
+      "billing_required",
+    ],
+  ] as const)("names a %o mid-stream, where the status says 200", async (error, reason) => {
+    stubFetch(streamed([frames(reply("Ok."))[0]!, { type: "error", error }]));
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "ok" },
+      SETTINGS,
+      undefined,
+      () => undefined
+    );
+    expect(result).toMatchObject({
+      failed: true,
+      cleanupFailure: { reason, provider: "anthropic" },
+    });
+  });
+
+  it("sends a cleanup once more after an ordinary rate limit", async () => {
+    const fetchMock = stubFetch(
+      jsonResponse({ type: "error", error: { type: "rate_limit_error", message: "slow" } }, 429),
+      jsonResponse(message(reply("Run Vitest.")))
+    );
+    const result = await new VoiceCorrectionService().correct({ rawText: "run v test" }, SETTINGS);
+    expect(result).toMatchObject({ confirmedText: "Run Vitest.", verdict: "replaced" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("warms with the passage's own request shape, without OpenAI's store flag", async () => {
     const fetchMock = stubFetch(jsonResponse(message(reply("x"), "max_tokens")));
     await new VoiceCorrectionService().warm(SETTINGS);

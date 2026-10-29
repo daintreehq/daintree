@@ -18,6 +18,7 @@ import {
   type VoiceReasoningEffort,
 } from "../../shared/config/voiceCorrection.js";
 import type {
+  VoiceCleanupFailure,
   VoiceCorrectionProvider,
   VoiceTranscriptionProvider,
 } from "../../shared/types/ipc/api.js";
@@ -42,6 +43,7 @@ import {
   CLAUDE_ORIGIN,
   ClaudeStreamReader,
   claudeErrorCode,
+  claudeBillingRefused,
   claudeHeaders,
   claudeMessageText,
   claudeRequestBody,
@@ -273,6 +275,8 @@ export interface VoiceCorrectionResult {
   verdict: VoiceCorrectionVerdict;
   /** The request failed or was cancelled, so the raw text stands untried. */
   failed?: true;
+  /** The failure will recur on every passage until the account or settings change. */
+  cleanupFailure?: VoiceCleanupFailure;
   /** The reply as the model gave it; absent when none parsed. Transcript content, so never logged. */
   proposal?: VoiceCorrectionProposal;
   /**
@@ -442,15 +446,51 @@ function reasoningHeadroom(effort: VoiceReasoningEffort): number {
   return effort === "none" ? 0 : THINKING_HEADROOM_TOKENS;
 }
 
+/**
+ * A rejection no retry or later passage gets past until the key, account or
+ * settings change. Codes come inside a stream's 200 too, so the status only
+ * settles one without a code it knows.
+ */
+function persistentFailureOf(
+  status: number,
+  code: string | undefined
+): VoiceCleanupFailure["reason"] | undefined {
+  switch (code) {
+    case "invalid_api_key":
+    case "authentication_error":
+      return "key_rejected";
+    case "insufficient_quota":
+    case "credit_balance_exhausted":
+    case "organization_spend_limit_exceeded":
+    case "organization_usage_limit_exceeded":
+    case "project_spend_limit_exceeded":
+    case "billing_error":
+      return "billing_required";
+    case "unsupported_country_region_territory":
+      return "region_refused";
+    case "model_not_found":
+    case "permission_error":
+      return "access_denied";
+  }
+  if (status === 401) return "key_rejected";
+  if (status === 402) return "billing_required";
+  if (status === 403) return "access_denied";
+  return undefined;
+}
+
 class CleanupRequestError extends Error {
+  readonly persistent: VoiceCleanupFailure["reason"] | undefined;
+
   constructor(
     readonly status: number,
     readonly code: string | undefined,
-    provider: VoiceCorrectionProvider = "openai"
+    provider: VoiceCorrectionProvider = "openai",
+    billingRefused = false
   ) {
     super(
       `${provider === "anthropic" ? "Anthropic" : "OpenAI"} API error: ${status}${code ? ` (${code})` : ""}`
     );
+    this.persistent = billingRefused ? "billing_required" : persistentFailureOf(status, code);
   }
 
   static async fromResponse(
@@ -458,14 +498,21 @@ class CleanupRequestError extends Error {
     provider: VoiceCorrectionProvider = "openai"
   ): Promise<CleanupRequestError> {
     let code: string | undefined;
+    let billingRefused = false;
     try {
-      const body = (await response.json()) as { error?: { code?: unknown } };
-      if (provider === "anthropic") code = claudeErrorCode(body);
-      else if (typeof body.error?.code === "string") code = body.error.code;
+      const body = (await response.json()) as { error?: { code?: unknown; type?: unknown } };
+      if (provider === "anthropic") {
+        code = claudeErrorCode(body);
+        billingRefused = claudeBillingRefused(body);
+      } else {
+        if (typeof body.error?.code === "string") code = body.error.code;
+        // The type every billing refusal shares, whichever code it names.
+        billingRefused = body.error?.type === "insufficient_quota";
+      }
     } catch {
       // Non-JSON error body: the status alone is enough.
     }
-    return new CleanupRequestError(response.status, code, provider);
+    return new CleanupRequestError(response.status, code, provider, billingRefused);
   }
 }
 
@@ -557,7 +604,12 @@ function claudeStreamReader(status: number): StreamReader<ClaudeMessage> {
     take(raw) {
       const event = raw as ClaudeStreamEvent;
       if (event.type === "error") {
-        throw new CleanupRequestError(status, claudeErrorCode(event), "anthropic");
+        throw new CleanupRequestError(
+          status,
+          claudeErrorCode(event),
+          "anthropic",
+          claudeBillingRefused(event)
+        );
       }
       return reader.take(event);
     },
@@ -709,10 +761,12 @@ export class VoiceCorrectionService {
         };
       }
       const rejection = error instanceof CleanupRequestError ? error : undefined;
+      const reason = rejection?.persistent;
       logWarn(`${P} Correction failed, using raw text`, {
         ...voiceErrorLogFields(error),
         status: rejection?.status,
         code: rejection?.code,
+        persistent: reason,
       });
       return {
         action: "no_change",
@@ -722,6 +776,9 @@ export class VoiceCorrectionService {
         failed: true,
         verdict:
           error instanceof DOMException && error.name === "TimeoutError" ? "timed_out" : "failed",
+        ...(reason
+          ? { cleanupFailure: { reason, provider: voiceCleanupProviderOf(settings.model) } }
+          : {}),
       };
     }
   }
@@ -1480,7 +1537,11 @@ export class VoiceCorrectionService {
           // can't take back text it already showed.
           const stalled = stall?.signal.aborted === true;
           const rejection = error instanceof CleanupRequestError ? error : undefined;
-          const busy = rejection !== undefined && RETRY_STATUSES.has(rejection.status);
+          // An empty account answers 429 too, and a retry only delays the raw text.
+          const busy =
+            rejection !== undefined &&
+            rejection.persistent === undefined &&
+            RETRY_STATUSES.has(rejection.status);
           const unreached =
             !answered && error instanceof TypeError && error.message === FETCH_FAILED;
           if (attempt > 1 || !(stalled || busy || unreached)) throw error;

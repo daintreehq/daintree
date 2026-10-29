@@ -385,6 +385,104 @@ describe("VoiceCorrectionService", () => {
     expect(JSON.stringify(vi.mocked(logWarn).mock.calls.at(-1))).not.toContain("secret");
   });
 
+  // #14963: a rejection every passage will meet says why, as a code, and isn't
+  // sent again; one the next passage may get past says nothing.
+  it.each([
+    [401, "invalid_api_key", "key_rejected"],
+    [401, undefined, "key_rejected"],
+    [429, "insufficient_quota", "billing_required"],
+    [429, "credit_balance_exhausted", "billing_required"],
+    [429, "project_spend_limit_exceeded", "billing_required"],
+    [429, "organization_spend_limit_exceeded", "billing_required"],
+    [429, "organization_usage_limit_exceeded", "billing_required"],
+    [403, "unsupported_country_region_territory", "region_refused"],
+    // The code decides whatever the status says.
+    [400, "invalid_api_key", "key_rejected"],
+    [403, undefined, "access_denied"],
+    [404, "model_not_found", "access_denied"],
+  ] as const)("names a %i (%s) a failure that will recur", async (status, code, reason) => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status,
+      json: async () => (code ? { error: { code, message: "secret dictation text" } } : {}),
+    } as unknown as Response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const svc = new VoiceCorrectionService();
+    const result = await svc.correct({ rawText: "react is great" }, BASE_SETTINGS);
+
+    expect(result).toMatchObject({
+      action: "no_change",
+      confirmedText: "react is great",
+      failed: true,
+      verdict: "failed",
+      cleanupFailure: { reason, provider: "openai" },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(result)).not.toContain("secret");
+  });
+
+  it("names any refusal of the billing type, whichever code it carries", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 429,
+        json: async () => ({ error: { type: "insufficient_quota", code: "a_code_added_later" } }),
+      } as unknown as Response)
+    );
+
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "react is great" },
+      BASE_SETTINGS
+    );
+
+    expect(result.cleanupFailure).toEqual({ reason: "billing_required", provider: "openai" });
+  });
+
+  it.each([
+    [429, "rate_limit_exceeded"],
+    [500, undefined],
+    [400, "string_above_max_length"],
+  ] as const)("leaves a %i (%s) unnamed", async (status, code) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status,
+        json: async () => (code ? { error: { code } } : {}),
+      } as unknown as Response)
+    );
+
+    const svc = new VoiceCorrectionService();
+    const result = await svc.correct({ rawText: "react is great" }, BASE_SETTINGS);
+
+    expect(result.failed).toBe(true);
+    expect(result).not.toHaveProperty("cleanupFailure");
+  });
+
+  it("leaves a timed-out passage unnamed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_url: string, init: RequestInit) =>
+          new Promise<Response>((_resolve, reject) =>
+            init.signal!.addEventListener("abort", () => reject(init.signal!.reason), {
+              once: true,
+            })
+          )
+      )
+    );
+
+    const svc = new VoiceCorrectionService();
+    const pending = svc.correct({ rawText: "react is great" }, NO_REASONING);
+    await vi.advanceTimersByTimeAsync(60_000);
+    const result = await pending;
+
+    expect(result).toMatchObject({ failed: true, verdict: "timed_out" });
+    expect(result).not.toHaveProperty("cleanupFailure");
+  });
+
   it("keeps prompt_cache_key within OpenAI's 64-character limit for any project and dictionary", async () => {
     const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse({ corrected_text: "Ok." }));
     vi.stubGlobal("fetch", fetchMock);
