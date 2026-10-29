@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, act, cleanup } from "@testing-library/react";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import type { PanelKindDefinition } from "@/panels/registry";
+import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 
 const PROBE_KIND = "acme.probe";
 const PLUGIN_KIND = "acme.dashboard";
@@ -166,6 +167,7 @@ describe("PanelDialogHost extension state (#12608)", () => {
 
   afterEach(() => {
     cleanup();
+    _resetPluginRuntimeStoreForTest();
   });
 
   it("hands the kind's component the record's persisted state and version", () => {
@@ -248,6 +250,9 @@ describe("PanelDialogHost extension state (#12608)", () => {
   });
 
   it("refuses state written by a newer build of the plugin instead of mounting the view", () => {
+    usePluginRuntimeStore.setState({
+      pluginMetaById: new Map([["acme", { devMode: false, displayName: "Acme Tools" }]]),
+    });
     registry.publish(PLUGIN_KIND, makePluginViewHost(pluginConfig()));
     openDialog({
       id: "plugin-1",
@@ -260,6 +265,9 @@ describe("PanelDialogHost extension state (#12608)", () => {
     expect(screen.queryByTestId("plugin-content")).toBeNull();
     expect(contentRender).not.toHaveBeenCalled();
     expect(screen.getByText("Dashboard unavailable")).toBeTruthy();
-    expect(screen.getByText(/state format 3; this version reads 2/)).toBeTruthy();
+    // The plugin that owns the panel, not the panel's own name; the state
+    // formats go to the log (#15236).
+    expect(screen.getByText(/newer version of the Acme Tools plugin/)).toBeTruthy();
+    expect(screen.queryByText(/state format/)).toBeNull();
   });
 });
