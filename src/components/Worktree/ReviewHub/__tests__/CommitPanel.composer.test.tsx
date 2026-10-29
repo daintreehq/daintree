@@ -178,6 +178,22 @@ describe("CommitPanel composer", () => {
       expect(pressAtStart("ArrowUp", { shiftKey: true })).toBe(true);
     });
 
+    it("releases Down after Up found no history to recall", async () => {
+      const listCommits = vi.fn().mockResolvedValue({ items: [] });
+      Object.defineProperty(window, "electron", {
+        value: { git: { listCommits } },
+        configurable: true,
+      });
+      renderPanel({ commitMessage: "subject\nbody" });
+      const box = screen.getByLabelText("Commit message") as HTMLTextAreaElement;
+      box.setSelectionRange(0, 0);
+      await act(async () => {
+        fireEvent.keyDown(box, { key: "ArrowUp" });
+      });
+      expect(listCommits).toHaveBeenCalled();
+      expect(fireEvent.keyDown(box, { key: "ArrowDown" })).toBe(true);
+    });
+
     it("still claims Up at the start for history recall", () => {
       expect(pressAtStart("ArrowUp")).toBe(false);
     });

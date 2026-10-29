@@ -449,7 +449,10 @@ export function CommitPanel({
 
           const messages = historyMessagesRef.current;
           if (messages !== null) {
-            if (messages.length === 0) return;
+            if (messages.length === 0) {
+              pendingFirstApplyRef.current = false;
+              return;
+            }
 
             if (pendingFirstApplyRef.current) {
               pendingFirstApplyRef.current = false;
@@ -465,7 +468,10 @@ export function CommitPanel({
             });
           } else {
             void fetchHistoryMessages().then((msgs) => {
-              if (msgs.length === 0) return;
+              if (msgs.length === 0) {
+                pendingFirstApplyRef.current = false;
+                return;
+              }
 
               if (pendingFirstApplyRef.current) {
                 const visibleIndex = msgs.indexOf(visibleMessage);
