@@ -183,6 +183,7 @@ export class VoiceFileLinkResolver {
           input: `Description: ${description}\n\nCandidates:\n${candidates.map((c, i) => `${i + 1}. ${c}`).join("\n")}`,
           prompt_cache_key: AI_RERANK_CACHE_PREFIX,
           service_tier: "auto",
+          store: false,
           reasoning: { effort: VOICE_DICTATION_REASONING_EFFORT },
           text: {
             format: {

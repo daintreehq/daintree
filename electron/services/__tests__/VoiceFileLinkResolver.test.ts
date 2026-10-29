@@ -204,6 +204,7 @@ describe("VoiceFileLinkResolver", () => {
     // can't silently inherit gpt-6-luna's "medium" default (issue #11365).
     expect(body.model).toBe("gpt-6-luna");
     expect(body.reasoning).toEqual({ effort: "none" });
+    expect(body.store).toBe(false);
   });
 
   it("handles searchNaturalLanguage throwing", async () => {

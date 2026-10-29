@@ -964,6 +964,7 @@ export class VoiceCorrectionService {
                 ],
                 prompt_cache_key: REWRITE_CACHE_PREFIX,
                 service_tier: "auto",
+                store: false,
                 reasoning: { effort },
                 text: {
                   format: {
@@ -1057,6 +1058,7 @@ export class VoiceCorrectionService {
           input: trimmed,
           prompt_cache_key: FILE_LINK_CACHE_PREFIX,
           service_tier: "auto",
+          store: false,
           reasoning: { effort: VOICE_DICTATION_REASONING_EFFORT },
           text: {
             format: {
@@ -1274,6 +1276,9 @@ export class VoiceCorrectionService {
       ],
       prompt_cache_key: this.buildPromptCacheKey(settings),
       service_tier: "auto",
+      // Every request is one-shot: nothing reads a response back or continues
+      // one, so OpenAI has no reason to keep it as application state.
+      store: false,
       // Explicit low-latency effort: the dictation models default to "medium"
       // when omitted, so we pin the lowest tier rather than inherit that default.
       reasoning: { effort: settings.reasoningEffort ?? VOICE_DICTATION_REASONING_EFFORT },
@@ -1333,17 +1338,14 @@ export class VoiceCorrectionService {
     const deadline = createTimeoutSignal(WARM_TIMEOUT_MS);
     const sentAt = performance.now();
     const { url, headers } = this.endpointFor(settings);
-    const isClaude = voiceCleanupProviderOf(settings.model) === "anthropic";
     try {
       const response = await fetch(url, {
         method: "POST",
         headers,
         signal: deadline.signal,
-        body: JSON.stringify({
-          ...this.correctionBody(settings, systemPrompt, WARM_USER_MESSAGE, WARM_MAX_OUTPUT_TOKENS),
-          // Anthropic stores nothing to opt out of.
-          ...(isClaude ? {} : { store: false }),
-        }),
+        body: JSON.stringify(
+          this.correctionBody(settings, systemPrompt, WARM_USER_MESSAGE, WARM_MAX_OUTPUT_TOKENS)
+        ),
       });
       // Read to the end, so the socket goes back to the pool.
       await response.arrayBuffer();

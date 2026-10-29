@@ -88,7 +88,9 @@ describe("VoiceCorrectionService streaming", () => {
       (text) => heard.push(text)
     );
 
-    expect(JSON.parse(fetchMock.mock.calls[0]![1].body as string).stream).toBe(true);
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string);
+    expect(body.stream).toBe(true);
+    expect(body.store).toBe(false);
     expect(result).toMatchObject({ action: "replace", correctedText: corrected });
     expect(heard.length).toBeGreaterThan(3);
     heard.forEach((text, i) => {
