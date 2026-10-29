@@ -83,6 +83,7 @@ import { copyableBranchName, isExternalWorktree } from "@/lib/worktreeFilters";
 import { hostFileManagerRevealLabel, isRemoteWindow } from "@/hooks/useHostPlatform";
 import { BrandMark } from "@/components/icons/BrandMark";
 import { getBrandColorHex } from "@/lib/colorUtils";
+import { isReservedEnvironmentKey } from "@/lib/resourceEnvironments";
 import { useMenuActionSource, type MenuActionSourceValue } from "@/components/ui/menu-source";
 import { actionService } from "@/services/ActionService";
 import type { ActionId } from "@shared/types/actions";
@@ -912,7 +913,10 @@ export function WorktreeMenuItems({
   );
 
   // --------------------------------------------------------------- Runtime
-  const hasEnvironments = Boolean(hasResourceConfig) && (resourceEnvironmentKeys?.length ?? 0) > 0;
+  const switchableEnvironmentKeys = (resourceEnvironmentKeys ?? []).filter(
+    (key) => !isReservedEnvironmentKey(key)
+  );
+  const hasEnvironments = Boolean(hasResourceConfig) && switchableEnvironmentKeys.length > 0;
   const isLocalEnvironment = !worktreeMode || worktreeMode === "local";
   const lifecycle = resourceLifecycleVisibility(resourceStatus);
 
@@ -967,18 +971,11 @@ export function WorktreeMenuItems({
                   <C.RadioItem value="local" disabled={!onSwitchEnvironment}>
                     Local
                   </C.RadioItem>
-                  {/* Settings only rejects blank and duplicate environment names,
-                    so a key literally called "local" is representable — and it
-                    would render a second radio carrying the fixed row's value,
-                    leaving two items marked checked. The fixed row already
-                    selects it. */}
-                  {resourceEnvironmentKeys
-                    ?.filter((key) => key !== "local")
-                    .map((key) => (
-                      <C.RadioItem key={key} value={key} disabled={!onSwitchEnvironment}>
-                        {key}
-                      </C.RadioItem>
-                    ))}
+                  {switchableEnvironmentKeys.map((key) => (
+                    <C.RadioItem key={key} value={key} disabled={!onSwitchEnvironment}>
+                      {key}
+                    </C.RadioItem>
+                  ))}
                 </C.RadioGroup>
               </C.SubContent>
             </C.Sub>

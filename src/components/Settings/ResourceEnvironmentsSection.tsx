@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { InlineError } from "@/components/ui/field";
+import { Callout } from "@/components/ui/Callout";
 import {
   Plus,
   Trash2,
@@ -23,6 +24,7 @@ import type { ResourceEnvironment } from "@shared/types/project";
 import type { WorktreeSnapshot } from "@shared/types";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { pluralize } from "@/lib/pluralize";
+import { isReservedEnvironmentKey, usableEnvironmentKeys } from "@/lib/resourceEnvironments";
 import { RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -162,15 +164,23 @@ export function ResourceEnvironmentsSection({
   isOpen: _isOpen,
 }: EnvironmentSettingsTabProps) {
   const envKeys = useMemo(() => Object.keys(resourceEnvironments ?? {}), [resourceEnvironments]);
+  const usableEnvKeys = useMemo(
+    () => usableEnvironmentKeys(resourceEnvironments),
+    [resourceEnvironments]
+  );
   const [isAddingEnvironment, setIsAddingEnvironment] = useState(false);
   const [newEnvironmentName, setNewEnvironmentName] = useState("");
   const [addEnvironmentError, setAddEnvironmentError] = useState<string | null>(null);
   const [pendingDeleteEnvironment, setPendingDeleteEnvironment] = useState<string | null>(null);
+  // Local worktrees carry the reserved key as their mode, but none of them run
+  // in the environment saved under it, so its removal has no users to wait for.
+  const checksPendingUsers =
+    pendingDeleteEnvironment !== null && !isReservedEnvironmentKey(pendingDeleteEnvironment);
   // Watched only while a removal is being confirmed, so the dialog follows a
   // worktree switching in or out of the environment without the page
   // re-rendering on every worktree change.
   const worktreeMap = useWorktreeStoreOptional(
-    (state) => (pendingDeleteEnvironment !== null ? state.worktrees : NO_WORKTREES),
+    (state) => (checksPendingUsers ? state.worktrees : NO_WORKTREES),
     NO_WORKTREES
   );
   // The removed environment's commands are the only teardown Daintree has for
@@ -185,7 +195,7 @@ export function ResourceEnvironmentsSection({
   // The map is empty until the first snapshot lands, which says nothing about
   // whether worktrees use the environment, so removal waits for it.
   const worktreesLoaded = useWorktreeStoreOptional(
-    (state) => pendingDeleteEnvironment === null || state.isInitialized,
+    (state) => !checksPendingUsers || state.isInitialized,
     true
   );
   const removalBlocked = !worktreesLoaded || worktreesInPendingEnvironment.length > 0;
@@ -247,6 +257,11 @@ export function ResourceEnvironmentsSection({
     const trimmed = newEnvironmentName.trim();
     if (!trimmed) {
       setAddEnvironmentError("Enter a name for the environment");
+      return;
+    }
+    // Any casing: a second "Local" beside the fixed Local choice reads as a duplicate.
+    if (isReservedEnvironmentKey(trimmed.toLowerCase())) {
+      setAddEnvironmentError(`The name "${trimmed}" is reserved for Local mode`);
       return;
     }
     if ((resourceEnvironments ?? {})[trimmed]) {
@@ -348,14 +363,23 @@ export function ResourceEnvironmentsSection({
                   </SelectTrigger>
                   <SelectContent>
                     {envKeys.map((name) => (
-                      <SelectItem key={name} value={name} className="font-mono">
+                      <SelectItem
+                        key={name}
+                        value={name}
+                        className="font-mono"
+                        description={
+                          isReservedEnvironmentKey(name)
+                            ? "Reserved for Local mode, so worktrees can't run in it"
+                            : undefined
+                        }
+                      >
                         {name}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
                 <IconPickerButton currentIcon={env.icon} onChange={(icon) => updateEnv({ icon })} />
-                {envKeys.length > 1 && (
+                {(envKeys.length > 1 || isReservedEnvironmentKey(currentEnvName)) && (
                   <Button
                     type="button"
                     variant="ghost-danger"
@@ -425,6 +449,13 @@ export function ResourceEnvironmentsSection({
 
       {envKeys.length > 0 && (
         <>
+          {isReservedEnvironmentKey(currentEnvName) && (
+            <Callout severity="warning" title={`Worktrees can't run in "${currentEnvName}"`}>
+              Local mode already uses that name. To keep these commands, add an environment under
+              another name, copy them across, then remove this one.
+            </Callout>
+          )}
+
           <SettingsGroup label="Lifecycle commands">
             <SettingsListRow
               items={env.provision ?? []}
@@ -515,7 +546,7 @@ export function ResourceEnvironmentsSection({
         </>
       )}
 
-      {envKeys.length > 0 && (
+      {usableEnvKeys.length > 0 && (
         <SettingsGroup className="checkbox-neutral">
           <SettingsRow
             label="Default worktree mode"
@@ -537,7 +568,7 @@ export function ResourceEnvironmentsSection({
                   bare
                   className="w-full px-4 py-3"
                 />
-                {envKeys.map((key) => (
+                {usableEnvKeys.map((key) => (
                   <RadioChoiceRow
                     key={key}
                     name="worktreeMode"
@@ -564,7 +595,7 @@ export function ResourceEnvironmentsSection({
             ? undefined
             : worktreesInPendingEnvironment.length > 0
               ? `${pluralize(worktreesInPendingEnvironment.length, "worktree still runs", "worktrees still run")} in "${pendingDeleteEnvironment}". Its teardown commands are the only way Daintree can clean up what they provisioned, so tear them down before switching them to another environment.`
-              : `This removes the saved commands for "${pendingDeleteEnvironment}" from project settings.${defaultWorktreeMode === pendingDeleteEnvironment ? " New worktrees will start on Local." : ""}`
+              : `This removes the saved commands for "${pendingDeleteEnvironment}" from project settings.${defaultWorktreeMode === pendingDeleteEnvironment && !isReservedEnvironmentKey(pendingDeleteEnvironment) ? " New worktrees will start on Local." : ""}`
         }
         confirmLabel="Remove environment"
         confirmDisabled={removalBlocked}
@@ -577,6 +608,8 @@ export function ResourceEnvironmentsSection({
         }
         hasPreview={worktreesInPendingEnvironment.length > 0}
         variant="destructive"
+        // Removing the last entry, or leaving one, unmounts the delete button.
+        restoreFocusTo={() => selectorRef.current ?? addButtonRef.current}
         onConfirm={() => {
           if (pendingDeleteEnvironment) {
             handleRemoveEnv(pendingDeleteEnvironment);
