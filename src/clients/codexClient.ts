@@ -2,6 +2,8 @@ import type {
   AgentSubagentsResult,
   AgentSubagentTranscriptResult,
   CodexFolderSessionsResult,
+  CodexRestoreMatchRequest,
+  CodexRestoreMatchResult,
 } from "@shared/types/ipc/agentSubagents";
 import type { CodexQuotaProfile } from "@shared/types/ipc/agentQuota";
 
@@ -43,6 +45,16 @@ export const codexClient = {
     codexHome?: string;
   }): Promise<CodexFolderSessionsResult> => {
     return window.electron.codex.findSessions(payload);
+  },
+
+  /**
+   * The conversations restore can name for held same-folder panes from their
+   * launch prompts (#15269): only a pane whose prompt points at exactly one
+   * thread that nobody else could own comes back. Never rejects on a failed
+   * read; an empty list leaves every pane held.
+   */
+  matchRestoreSessions: (payload: CodexRestoreMatchRequest): Promise<CodexRestoreMatchResult> => {
+    return window.electron.codex.matchRestoreSessions(payload);
   },
 
   /**

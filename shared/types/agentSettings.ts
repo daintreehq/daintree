@@ -750,6 +750,15 @@ export interface GenerateAgentCommandOptions {
 }
 
 /**
+ * The text an agent receives as its launch prompt: trimmed, with a multi-line
+ * prompt normalized to a single line. Restore compares a pane's recorded first
+ * prompt in this form against the first message the agent stored (#15269).
+ */
+export function launchPromptArgText(prompt: string): string {
+  return prompt.trim().replace(/\r\n/g, " ").replace(/\n/g, " ");
+}
+
+/**
  * Generates a complete agent command string including base command, flags, and optional initial prompt.
  *
  * @param baseCommand - The base command for the agent (e.g., "claude", "gemini")
@@ -869,9 +878,7 @@ export function generateAgentCommand(
   const prompt = options?.initialPrompt?.trim();
   if (prompt) {
     const interactive = options?.interactive ?? true;
-    // Normalize multi-line prompts to single line (replace newlines with spaces)
-    const normalizedPrompt = prompt.replace(/\r\n/g, " ").replace(/\n/g, " ");
-    const escapedPrompt = quoteAgentArg(normalizedPrompt);
+    const escapedPrompt = quoteAgentArg(launchPromptArgText(prompt));
 
     switch (agentId) {
       case "claude":

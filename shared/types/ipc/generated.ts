@@ -542,6 +542,20 @@ export interface GeneratedIpcInvokeMap {
     args: [__0: { terminalId: string }];
     result: import("./agentSubagents.js").AgentSubagentsResult;
   };
+  "codex:match-restore-sessions": {
+    args: [
+      request: {
+        scopes: {
+          cwd: string;
+          panes: { key: string; promptHash: string; at: number; resolve: boolean }[];
+          codexHome?: string | undefined;
+          reserveLatest?: boolean | undefined;
+        }[];
+        exclude: string[];
+      },
+    ];
+    result: import("./agentSubagents.js").CodexRestoreMatchResult;
+  };
   "codex:read-quota": {
     args: [];
     result: import("./agentQuota.js").CodexQuotaProfile[];

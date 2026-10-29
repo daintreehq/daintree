@@ -582,6 +582,7 @@ export const CHANNELS = {
   CODEX_READ_SUBAGENT_TRANSCRIPT: "codex:read-subagent-transcript",
   CODEX_RESOLVE_RESUME_LATEST_SESSION: "codex:resolve-resume-latest-session",
   CODEX_FIND_SESSIONS: "codex:find-sessions",
+  CODEX_MATCH_RESTORE_SESSIONS: "codex:match-restore-sessions",
   CODEX_READ_QUOTA: "codex:read-quota",
   CODEX_REFRESH_QUOTA: "codex:refresh-quota",
 
