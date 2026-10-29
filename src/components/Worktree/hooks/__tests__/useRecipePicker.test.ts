@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi } from "vitest";
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { useRecipePicker, CLONE_LAYOUT_ID } from "../useRecipePicker";
 import type { TerminalRecipe } from "@/types";
 
@@ -112,5 +112,49 @@ describe("useRecipePicker", () => {
     );
     expect(setter).toHaveBeenCalledWith("test-project", undefined);
     expect(result.current.selectedRecipeId).toBe(CLONE_LAYOUT_ID);
+  });
+
+  it("keeps a still-valid remembered recipe when an unsaved pick disappears", () => {
+    const setter = vi.fn();
+    const args = {
+      ...defaultArgs,
+      startingLayoutRecipes: [makeRecipe("remembered"), makeRecipe("picked")],
+      lastSelectedWorktreeRecipeId: "remembered",
+      setLastSelectedWorktreeRecipeIdByProject: setter,
+    };
+    const { result, rerender } = renderHook((props) => useRecipePicker(props), {
+      initialProps: args,
+    });
+    expect(result.current.selectedRecipeId).toBe("remembered");
+
+    act(() => {
+      result.current.recipeSelectionTouchedRef.current = true;
+      result.current.setSelectedRecipeId("picked");
+    });
+    rerender({ ...args, startingLayoutRecipes: [makeRecipe("remembered")] });
+
+    expect(result.current.selectedRecipeId).toBe(null);
+    expect(setter).not.toHaveBeenCalled();
+  });
+
+  it("forgets the remembered recipe when it is the selection that disappears", () => {
+    const setter = vi.fn();
+    const args = {
+      ...defaultArgs,
+      startingLayoutRecipes: [makeRecipe("remembered"), makeRecipe("other")],
+      lastSelectedWorktreeRecipeId: "remembered",
+      setLastSelectedWorktreeRecipeIdByProject: setter,
+    };
+    const { result, rerender } = renderHook((props) => useRecipePicker(props), {
+      initialProps: args,
+    });
+    expect(result.current.selectedRecipeId).toBe("remembered");
+
+    // Touched, so the auto-select effect stands aside and only invalidation runs.
+    result.current.recipeSelectionTouchedRef.current = true;
+    rerender({ ...args, startingLayoutRecipes: [makeRecipe("other")] });
+
+    expect(result.current.selectedRecipeId).toBe(null);
+    expect(setter).toHaveBeenCalledWith("test-project", undefined);
   });
 });

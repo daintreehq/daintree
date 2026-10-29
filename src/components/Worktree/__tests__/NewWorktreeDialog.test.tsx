@@ -2586,6 +2586,24 @@ describe("NewWorktreeDialog — remembered setup on discard (#14996)", () => {
     expect(mockSetLastAgent).toHaveBeenCalledWith("test-project", "claude");
   });
 
+  it("writes nothing when Create stops at validation", async () => {
+    recipeFixtures.recipes = [WORK];
+    recipePickerCalls.selected = WORK;
+    const onClose = vi.fn();
+    renderDialog({ onClose });
+    await advanceTimersGradually(500);
+
+    await pickWorkRecipe();
+    await pickAgent();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(mockSetLastRecipe).not.toHaveBeenCalled();
+    expect(mockSetLastAgent).not.toHaveBeenCalled();
+  });
+
   it("doesn't pin a setup the user never picked as the remembered one", async () => {
     recipeFixtures.recipes = [WORK];
     recipePickerCalls.selected = WORK;

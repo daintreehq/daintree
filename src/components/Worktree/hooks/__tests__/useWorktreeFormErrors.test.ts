@@ -54,4 +54,19 @@ describe("useWorktreeFormErrors", () => {
 
     expect(result.current.isFormDirty()).toBe(true);
   });
+
+  it("counts an agent pick as an edit, until the form resets", () => {
+    const { result } = renderHook(() => useWorktreeFormErrors());
+
+    act(() => {
+      result.current.markTouched("agent");
+      result.current.clearErrors();
+    });
+    expect(result.current.isFormDirty()).toBe(true);
+
+    act(() => {
+      result.current.resetErrors();
+    });
+    expect(result.current.isFormDirty()).toBe(false);
+  });
 });
