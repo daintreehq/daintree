@@ -928,51 +928,67 @@ describe("contrast-CTA pair (text-inverse on text-primary)", () => {
 });
 
 describe("destructive button label", () => {
-  const destructiveMessages = (label: string, fill: string) =>
-    getThemeContrastWarnings(
-      makeScheme({
-        "text-inverse": label as AppColorSchemeTokens["text-inverse"],
-        "status-danger": fill as AppColorSchemeTokens["status-danger"],
-      })
-    )
-      .map((w) => w.message)
-      .filter((m) => m.includes("destructive button"));
+  const schemeWith = (label: string, fill: string) =>
+    makeScheme({
+      "text-inverse": label as AppColorSchemeTokens["text-inverse"],
+      "status-danger": fill as AppColorSchemeTokens["status-danger"],
+    });
+  const destructiveWarnings = (label: string, fill: string) =>
+    getThemeContrastWarnings(schemeWith(label, fill)).filter((w) =>
+      w.message.includes("destructive button")
+    );
+  const failingStates = (label: string, fill: string) =>
+    destructiveWarnings(label, fill).map((w) => {
+      expect(w.kind).toBe("low-contrast");
+      return /\(destructive button, ([a-z ]+)\)/.exec(w.message)?.[1];
+    });
 
   it("fails a dark label that clears the fill at rest but not once pressed darkens both", () => {
     // 4.81:1 at rest; brightness(0.95) on both colours leaves 4.41:1.
-    const messages = destructiveMessages("#000000", "#B85F56");
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toContain("pressed");
+    expect(failingStates("#000000", "#B85F56")).toEqual(["pressed"]);
   });
 
   it("fails a white label that clears the fill at rest but not once hover brightens it", () => {
-    // The label is already at the clamp, so only the fill moves: 4.99:1 to 4.31:1.
-    const messages = destructiveMessages("#FDFEFB", "#C0453A");
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toContain("hovered");
+    // The label is already at the clamp, so only the fill moves: 4.99:1 to 4.30:1.
+    expect(failingStates("#FDFEFB", "#C0453A")).toEqual(["hovered"]);
   });
 
   it("names each state that falls short", () => {
-    const messages = destructiveMessages("#1B1715", "#B85F56");
-    expect(messages.map((m) => /\(destructive button, ([a-z ]+)\)/.exec(m)?.[1])).toEqual([
-      "at rest",
-      "pressed",
-    ]);
+    expect(failingStates("#1B1715", "#B85F56")).toEqual(["at rest", "pressed"]);
+  });
+
+  it("holds the resting label to the AA floor for normal text", () => {
+    // White on #777777 is 4.48:1 and on #767676 4.54:1, either side of 4.5.
+    expect(failingStates("#FFFFFF", "#777777")).toContain("at rest");
+    expect(failingStates("#FFFFFF", "#767676")).not.toContain("at rest");
   });
 
   it("passes a pair that holds the floor in every state", () => {
-    expect(destructiveMessages("#1a1918", "#C8746C")).toEqual([]);
+    expect(destructiveWarnings("#1a1918", "#C8746C")).toEqual([]);
   });
 
   it("leaves a non-hex fill to the unevaluable notice the surface pairs already raise", () => {
-    const warnings = getThemeContrastWarnings(
-      makeScheme({
-        "status-danger": "color-mix(in oklab, red, black)" as AppColorSchemeTokens["status-danger"],
-      })
-    );
+    // Missing its `#`, the fill would still parse as white if the gate read it, and
+    // fail all three states against the white label.
+    const warnings = getThemeContrastWarnings(schemeWith("#FFFFFF", "FFFFFF"));
     expect(warnings.some((w) => w.message.includes("destructive button"))).toBe(false);
-    expect(
-      warnings.some((w) => w.kind === "unevaluable" && w.message.includes("status-danger"))
-    ).toBe(true);
+    expect(warnings.some((w) => w.kind === "unevaluable" && w.message.includes('"FFFFFF"'))).toBe(
+      true
+    );
+  });
+
+  it("refuses to measure a translucent label or fill as if it were opaque", () => {
+    // As opaque colours both pairs clear every state comfortably.
+    expect(destructiveWarnings("#FFFFFF", "#8B0000")).toEqual([]);
+    for (const [label, fill] of [
+      ["#FFFFFF33", "#8B0000"],
+      ["#FFFFFF", "#8B000033"],
+    ] as const) {
+      const warnings = destructiveWarnings(label, fill);
+      expect(warnings.map((w) => w.kind)).toEqual(["unevaluable"]);
+      expect(warnings[0]?.message).toContain("translucent");
+    }
+    // An opaque alpha channel is only a spelling.
+    expect(destructiveWarnings("#FFFFFFFF", "#8B0000FF")).toEqual([]);
   });
 });

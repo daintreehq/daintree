@@ -48,7 +48,7 @@ export const ACCENT_CONTRAST_PAIR = {
 // gamma-encoded sRGB and clamp (Filter Effects 1 §5), so a near-white label cannot
 // brighten with its fill on hover, and the ratio's fixed 0.05 flare term keeps a
 // near-black label from tracking its fill down on press. A pair just over the floor at
-// rest dips under it in one state or the other: bali measured 4.99:1 at rest and 4.31:1
+// rest dips under it in one state or the other: bali measured 4.99:1 at rest and 4.30:1
 // hovered. Exported so the button's own suite holds the variant's classes to the pair
 // and states measured here.
 export const DESTRUCTIVE_BUTTON_CONTRAST = {
@@ -937,6 +937,22 @@ function getDestructiveButtonWarnings(scheme: AppColorScheme): AppThemeValidatio
   if (!isHexColor(label) || !isHexColor(fill)) return [];
 
   const warnings: AppThemeValidationWarning[] = [];
+  // Those pairs read `#RGBA`/`#RRGGBBAA` as opaque. A translucent label or fill
+  // composites over whatever the button sits on, so measuring it here as opaque
+  // would pass a label that has all but vanished.
+  for (const [token, value] of [
+    [foreground, label],
+    [background, fill],
+  ] as const) {
+    if ((splitHexAlpha(value)?.opacity ?? 1) < 1) {
+      warnings.push({
+        kind: "unevaluable",
+        message: `Cannot evaluate destructive button contrast: ${token}="${value}" is translucent`,
+      });
+    }
+  }
+  if (warnings.length > 0) return warnings;
+
   for (const [state, amount] of [
     ["at rest", 1],
     ["hovered", brightness.hover],

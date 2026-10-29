@@ -345,9 +345,11 @@ describe("destructive variant", () => {
   // different pair, or moves its states to a filter or fill the validator does not
   // model, would leave that guarantee describing a button nobody sees.
   it("paints the label and fill the theme validator measures", () => {
-    const fill = classes().filter((c) => /^bg-[a-z-]+$/.test(c));
+    // Arbitrary values count too: a later `bg-[#fff]` would win over the token fill.
+    const fill = classes().filter((c) => c.startsWith("bg-"));
     const label = classes().filter(
-      (c) => /^text-[a-z-]+$/.test(c) && !/^text-(xs|sm|base)$/.test(c)
+      (c) =>
+        c.startsWith("text-") && !/^text-(3xs|2xs|xs|sm|base|lg|\d?xl|left|center|right)$/.test(c)
     );
     expect(fill).toHaveLength(1);
     expect(label).toHaveLength(1);
@@ -356,14 +358,24 @@ describe("destructive variant", () => {
   });
 
   it("signals hover and press with the brightness the validator models, and nothing else", () => {
-    const brightness = (variant: string) =>
-      classes()
-        .map((c) => new RegExp(`^${variant}:brightness-(\\d+)$`).exec(c)?.[1])
-        .filter((value) => value !== undefined)
-        .map((value) => Number(value) / 100);
-    expect(brightness("hover")).toEqual([DESTRUCTIVE_BUTTON_CONTRAST.brightness.hover]);
-    expect(brightness("active")).toEqual([DESTRUCTIVE_BUTTON_CONTRAST.brightness.press]);
-    expect(classes().filter((c) => /^(hover|active):(bg|text|opacity)-/.test(c))).toEqual([]);
+    const amounts = classes()
+      .filter((c) => c.includes("brightness-"))
+      .map((c) => {
+        const match = /^(?:(hover|active):)?brightness-(?:(\d+)|\[(\d*\.?\d+)(%?)\])$/.exec(c);
+        expect(match, `a brightness the validator does not model: ${c}`).toBeTruthy();
+        const [, state = "rest", percent, value, unit] = match!;
+        const amount =
+          percent !== undefined ? Number(percent) / 100 : Number(value) / (unit ? 100 : 1);
+        return [state, amount] as const;
+      });
+    expect(amounts).toHaveLength(2);
+    expect(Object.fromEntries(amounts)).toEqual({
+      hover: DESTRUCTIVE_BUTTON_CONTRAST.brightness.hover,
+      active: DESTRUCTIVE_BUTTON_CONTRAST.brightness.press,
+    });
+    const unmodelled =
+      /^(?:(?:hover|active):(?:bg|text|opacity)-|(?:(?:hover|active):)?(?:contrast|saturate|grayscale|invert|sepia|hue-rotate)(?:-|$))/;
+    expect(classes().filter((c) => unmodelled.test(c))).toEqual([]);
   });
 });
 
