@@ -26,6 +26,7 @@ import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
+import { useReviewCommitDraftStore } from "@/store/reviewCommitDraftStore";
 import type { DiffChangeSetEntry } from "@/components/FileViewer/diffChangeSet";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -164,9 +165,9 @@ export interface ReviewHubContentProps {
   keyboardScope?: Document | HTMLElement | null;
   /**
    * Seed value for the commit message on open. The first open after `isOpen`
-   * flips from false to true populates the textarea with this value if it is
-   * not empty; subsequent edits by the user are preserved. Reset to empty on
-   * close so a future reopen without a seed starts blank.
+   * flips from false to true shows this value if it is not empty and the
+   * worktree has no typed draft; the draft always wins. The seed itself is
+   * never kept: dropped on close so a future reopen without one starts blank.
    */
   initialCommitMessage?: string;
   /**
@@ -191,7 +192,8 @@ const selectNoProviderHealth = () => null;
  * `isOpen` prop drives the start/reset lifecycle: when it flips from false to
  * true the staging fetch + worktree subscription arm; when it flips back to
  * false every transient field is reset atomically so a later reopen starts
- * from a clean slate (preserves the lesson-4958 atomic-reset invariant).
+ * from a clean slate (preserves the lesson-4958 atomic-reset invariant). The
+ * typed commit message is not transient: it lives in reviewCommitDraftStore.
  */
 export function ReviewHubContent({
   isOpen,
@@ -262,6 +264,36 @@ export function ReviewHubContent({
       clearReviewMark: () => markTargetRef.current.clearReviewMark(),
     });
   }, [isOpen, panelId, worktreeId, isDialog]);
+  // What the user typed outlives this panel (#15007); the note's seed only
+  // fills the box while there is no draft, and is held against the worktree
+  // it was read for so a path change never shows one worktree's hint in another.
+  const commitDraft = useReviewCommitDraftStore(
+    useCallback((state) => state.draftsByWorktree[worktreePath], [worktreePath])
+  );
+  const [commitSeed, setCommitSeed] = useState<{ worktreePath: string; message: string } | null>(
+    null
+  );
+  const commitMessage =
+    commitDraft ?? (commitSeed?.worktreePath === worktreePath ? commitSeed.message : "");
+  const handleCommitMessageChange = useCallback(
+    (message: string) => {
+      setCommitSeed(null);
+      useReviewCommitDraftStore.getState().setDraft(worktreePath, message);
+    },
+    [worktreePath]
+  );
+  // Only the draft that was committed goes: the hub can close, reopen and be
+  // typed into again, or move to another worktree, while a commit and push run.
+  const dropCommittedMessage = useCallback((committedPath: string, message: string) => {
+    setCommitSeed((seed) => (seed?.worktreePath === committedPath ? null : seed));
+    useReviewCommitDraftStore.getState().clearCommitted(committedPath, message);
+  }, []);
+  // A draft typed in another hub on this worktree replaces the seed for good,
+  // so clearing it there can't bring an old hint back here.
+  const hasCommitDraft = commitDraft !== undefined;
+  useEffect(() => {
+    if (hasCommitDraft) setCommitSeed(null);
+  }, [hasCommitDraft]);
   const {
     pushError,
     showPushBanner,
@@ -284,8 +316,13 @@ export function ReviewHubContent({
     handleForcePush,
     clearPushError,
     reset: resetPush,
-  } = useReviewHubCommitAndPush({ worktreePath, refresh, setActionError, debouncedBgRefreshRef });
-  const [commitMessage, setCommitMessage] = useState("");
+  } = useReviewHubCommitAndPush({
+    worktreePath,
+    refresh,
+    setActionError,
+    debouncedBgRefreshRef,
+    onCommitted: dropCommittedMessage,
+  });
   const [selectedFile, setSelectedFile] = useState<{
     path: string;
     status: GitStatus;
@@ -906,7 +943,9 @@ export function ReviewHubContent({
       setActionError(null);
       clearPushError();
       const seed = readInitialCommitMessage();
-      if (seed) setCommitMessage(seed);
+      const hasDraft =
+        useReviewCommitDraftStore.getState().draftsByWorktree[worktreePath] !== undefined;
+      setCommitSeed(seed && !hasDraft ? { worktreePath, message: seed } : null);
       void refresh();
     } else {
       // Abandons every in-flight read by bumping its request generation, and
@@ -919,7 +958,8 @@ export function ReviewHubContent({
       resetPush();
       setActionError(null);
       setSelectedFile(null);
-      setCommitMessage("");
+      // The typed draft stays in its store for the next open (#15007).
+      setCommitSeed(null);
       setDiffMode("working-tree");
       setSelectedBaseBranchFile(null);
       setSelectedSinceReviewPath(null);
@@ -2145,7 +2185,7 @@ export function ReviewHubContent({
               worktreePath={worktreePath}
               currentBranch={status.currentBranch}
               commitMessage={commitMessage}
-              onCommitMessageChange={setCommitMessage}
+              onCommitMessageChange={handleCommitMessageChange}
               onCommit={handleCommit}
               onCommitAndPush={handleCommitAndPush}
               onFocusBlocker={handleFocusBlocker}

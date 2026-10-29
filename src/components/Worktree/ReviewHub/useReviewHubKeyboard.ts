@@ -93,9 +93,9 @@ export function useReviewHubKeyboard({
       } else if (selectedPaths.size > 0) {
         clearSelection();
       } else if (isTextWidget(e.target)) {
-        // Leaving a text field is as far as Escape goes from inside one: the
-        // commit message lives only in this panel, so closing here would lose
-        // the draft to a key pressed to dismiss something smaller.
+        // Leaving a text field is as far as Escape goes from inside one: a key
+        // pressed to dismiss something smaller shouldn't take the whole panel
+        // away mid-sentence, even though the draft now outlives it (#15007).
         // With the file list collapsed there is nowhere steadier to go, so
         // focus stays put rather than dropping to the document.
         const list = fileListRef.current;
@@ -105,7 +105,7 @@ export function useReviewHubKeyboard({
         }
       } else if (!e.repeat) {
         // Never on auto-repeat: a held Escape that just left the commit box
-        // would otherwise run on into closing the panel and its draft.
+        // would otherwise run on into closing the panel.
         onClose();
       }
       return;

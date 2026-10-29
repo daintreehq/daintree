@@ -7,6 +7,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { usePulseStore } from "@/store/pulseStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore, recordSidebarWorktreeOrder } from "@/store/worktreeStore";
+import { useReviewCommitDraftStore } from "@/store/reviewCommitDraftStore";
 import type { ProjectPulse, WorktreeSnapshot, WorktreeEventVersion } from "@shared/types";
 import type { Project } from "@shared/types/project";
 
@@ -483,6 +484,66 @@ describe("WorktreeStoreProvider — surviving terminals on worktree removal", ()
     });
 
     expect(useWorktreeSelectionStore.getState().deletedWorktrees.has("wt-1")).toBe(false);
+  });
+});
+
+describe("WorktreeStoreProvider — typed Review & commit drafts (#15007)", () => {
+  beforeEach(() => {
+    useReviewCommitDraftStore.setState({ draftsByWorktree: {} });
+  });
+
+  const draftFor = (path: string) => useReviewCommitDraftStore.getState().draftsByWorktree[path];
+
+  it("drops a deleted worktree's draft so a new worktree at that path starts empty", async () => {
+    const { store } = await renderProvider();
+    // The sole worktree: emptying the map skips the snapshot backstop, so only
+    // the removal event's own clear can drop the draft.
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1")], nextV());
+    });
+    useReviewCommitDraftStore.getState().setDraft("/repo/wt-1", "feat: gone with it");
+    useReviewCommitDraftStore.getState().setDraft("/repo/wt-2", "feat: still here");
+
+    act(() => {
+      emit("worktree-removed", removeEvent("wt-1"));
+    });
+
+    expect(draftFor("/repo/wt-1")).toBeUndefined();
+    expect(draftFor("/repo/wt-2")).toBe("feat: still here");
+  });
+
+  it("drops the draft when a snapshot reconciles the worktree away before any event", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1"), makeWorktree("wt-2")], nextV());
+    });
+    useReviewCommitDraftStore.getState().setDraft("/repo/wt-2", "feat: gone with it");
+
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1")], nextV());
+    });
+
+    expect(draftFor("/repo/wt-2")).toBeUndefined();
+  });
+
+  it("keeps the draft when a removal event is a stale replay for a worktree still listed", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1")], nextV());
+    });
+    useReviewCommitDraftStore.getState().setDraft("/repo/wt-1", "feat: still here");
+
+    act(() => {
+      emit("worktree-removed", {
+        type: "worktree-removed",
+        worktreeId: "wt-1",
+        epoch: TEST_EPOCH,
+        seq: 0,
+      });
+    });
+
+    expect(store.getState().worktrees.has("wt-1")).toBe(true);
+    expect(draftFor("/repo/wt-1")).toBe("feat: still here");
   });
 });
 

@@ -275,6 +275,7 @@ vi.mock("@/components/ui/EmptyState", () => ({
 
 import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
+import { useReviewCommitDraftStore } from "@/store/reviewCommitDraftStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { resetStagingStatusCacheForTests } from "../stagingStatusCache";
 
@@ -431,6 +432,8 @@ describe("ReviewHub windowed file list (#12241)", () => {
     // renders, and clearing also stops a test that collapses it from leaking
     // into the next one.
     useUIStore.setState({ reviewHubFileListExpanded: {} });
+    // Typed drafts outlive the hub (#15007); one test's draft must not seed the next.
+    useReviewCommitDraftStore.setState({ draftsByWorktree: {} });
 
     // #8025: reset the per-worktree push-confirm opt-out so a previous test
     // that pre-set it can't leak into the next one.

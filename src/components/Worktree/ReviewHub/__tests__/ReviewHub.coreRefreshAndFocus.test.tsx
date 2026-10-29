@@ -275,6 +275,7 @@ vi.mock("@/components/ui/EmptyState", () => ({
 
 import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
+import { useReviewCommitDraftStore } from "@/store/reviewCommitDraftStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { resetStagingStatusCacheForTests } from "../stagingStatusCache";
 
@@ -335,6 +336,8 @@ describe("ReviewHub", () => {
     // renders, and clearing also stops a test that collapses it from leaking
     // into the next one.
     useUIStore.setState({ reviewHubFileListExpanded: {} });
+    // Typed drafts outlive the hub (#15007); one test's draft must not seed the next.
+    useReviewCommitDraftStore.setState({ draftsByWorktree: {} });
 
     // #8025: reset the per-worktree push-confirm opt-out so a previous test
     // that pre-set it can't leak into the next one.
@@ -549,7 +552,9 @@ describe("ReviewHub", () => {
     await waitFor(() => expect(debounceCancelSpy).toHaveBeenCalled());
   });
 
-  it("resets commit message on close then reopen", async () => {
+  // The reverse of the old reset (#15007): what the user typed outlives the
+  // close, while the rest of the hub's transient state still starts over.
+  it("keeps the typed commit message across close then reopen", async () => {
     const { rerender } = render(
       <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
     );
@@ -560,11 +565,12 @@ describe("ReviewHub", () => {
     expect((textarea as HTMLTextAreaElement).value).toBe("draft message");
 
     rerender(<ReviewHubContent isOpen={false} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+    expect(screen.queryByLabelText("Commit message")).toBeNull();
     rerender(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
     await waitFor(() => {
       const ta = screen.getByLabelText("Commit message") as HTMLTextAreaElement;
-      expect(ta.value).toBe("");
+      expect(ta.value).toBe("draft message");
     });
   });
 

@@ -114,6 +114,10 @@ interface CommitPanelProps {
   currentBranch?: string | null;
   commitMessage: string;
   onCommitMessageChange: (message: string) => void;
+  /**
+   * Resolves once the commit lands. Clearing `commitMessage` is the parent's
+   * job: only it can tell whether the draft is still the one committed.
+   */
   onCommit: (message: string) => Promise<void>;
   onCommitAndPush: (message: string) => Promise<void>;
   onFocusBlocker?: (blocker: "conflicts" | "staged-files") => void;
@@ -161,6 +165,9 @@ export function CommitPanel({
   // drops the live count to what is left, often zero, before the push begins.
   const [pendingCount, setPendingCount] = useState(0);
   const [pushConfirmOpen, setPushConfirmOpen] = useState(false);
+  // The preview's own copy: the composer clears the moment the commit lands,
+  // which can be before the closing dialog has finished fading out.
+  const [pushConfirmMessage, setPushConfirmMessage] = useState("");
   const destinationLabel = pushDestination
     ? `${pushDestination.remote}/${pushDestination.branch}`
     : null;
@@ -320,31 +327,32 @@ export function CommitPanel({
     setPendingAction("commit");
     try {
       await onCommit(commitMessage);
-      onCommitMessageChange("");
     } catch {
       // Error is handled by the parent via setActionError
     } finally {
       setPendingAction(null);
       actionInFlightRef.current = false;
     }
-  }, [canCommit, actionsBusy, stagedCount, commitMessage, onCommit, onCommitMessageChange]);
+  }, [canCommit, actionsBusy, stagedCount, commitMessage, onCommit]);
 
-  const handleCommitAndPush = useCallback(async () => {
-    if (!canCommit || actionsBusy) return;
-    if (actionInFlightRef.current) return;
-    actionInFlightRef.current = true;
-    setPendingCount(stagedCount);
-    setPendingAction("commit-push");
-    try {
-      await onCommitAndPush(commitMessage);
-      onCommitMessageChange("");
-    } catch {
-      // Error is handled by the parent via setActionError
-    } finally {
-      setPendingAction(null);
-      actionInFlightRef.current = false;
-    }
-  }, [canCommit, actionsBusy, stagedCount, commitMessage, onCommitAndPush, onCommitMessageChange]);
+  const handleCommitAndPush = useCallback(
+    async (message: string) => {
+      if (!canCommit || actionsBusy) return;
+      if (actionInFlightRef.current) return;
+      actionInFlightRef.current = true;
+      setPendingCount(stagedCount);
+      setPendingAction("commit-push");
+      try {
+        await onCommitAndPush(message);
+      } catch {
+        // Error is handled by the parent via setActionError
+      } finally {
+        setPendingAction(null);
+        actionInFlightRef.current = false;
+      }
+    },
+    [canCommit, actionsBusy, stagedCount, onCommitAndPush]
+  );
 
   const handlePrimaryClick = useCallback(() => {
     if (isBlocked) {
@@ -361,10 +369,11 @@ export function CommitPanel({
       // push will be refused by the handler, and silently attempting it would
       // leave the user with a failed write and no explanation.
       if (!skipPushConfirm || pushDestination === null) {
+        setPushConfirmMessage(commitMessage);
         setPushConfirmOpen(true);
         return;
       }
-      void handleCommitAndPush();
+      void handleCommitAndPush(commitMessage);
     } else {
       void handleCommit();
     }
@@ -374,6 +383,7 @@ export function CommitPanel({
     hasRemote,
     pushDestination,
     skipPushConfirm,
+    commitMessage,
     focusBlocker,
     handleCommitAndPush,
     handleCommit,
@@ -387,8 +397,10 @@ export function CommitPanel({
     setPushConfirmOpen(false);
     setDontAskChecked(false);
     setOutgoing(null);
-    void handleCommitAndPush();
-  }, [dontAskChecked, onSetSkipPushConfirm, handleCommitAndPush]);
+    // What the dialog previewed is what gets pushed, even if a history recall
+    // landed in the composer behind it while it was open.
+    void handleCommitAndPush(pushConfirmMessage);
+  }, [dontAskChecked, onSetSkipPushConfirm, handleCommitAndPush, pushConfirmMessage]);
 
   const handleClosePushConfirm = useCallback(() => {
     setPushConfirmOpen(false);
@@ -763,7 +775,7 @@ export function CommitPanel({
               "bg-surface-inset px-3 py-2 text-xs font-mono whitespace-pre-wrap break-words text-text-primary"
             )}
           >
-            {commitMessage}
+            {pushConfirmMessage}
           </pre>
           {stagedPaths.length > 0 && (
             <div className="flex flex-col gap-1">
