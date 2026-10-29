@@ -76,6 +76,7 @@ import {
 import { saveHostFile, saveHostFileLabel } from "@/services/hostFileSave";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { copyWithToast } from "@/lib/copyWithToast";
+import { SVG_DRAW_ERROR, sanitizeSvgForPreview } from "@/lib/svg";
 import { Skeleton, SkeletonBone, SkeletonHint, SkeletonText } from "@/components/ui/Skeleton";
 import { isProseFilePath } from "@/components/FileViewer/isProseFile";
 import { useDiffContent } from "@/panels/diff/useDiffContent";
@@ -94,7 +95,6 @@ import type {
 import type { FolderListingStatus } from "./useFileBrowserTree";
 import { filesClient } from "@/clients/filesClient";
 import { isClientAppError } from "@/utils/clientAppError";
-import { sanitizeSvg } from "@shared/utils/svgSanitizer";
 import { useFileEditor } from "@/registry/fileEditorRegistry";
 import { useFileDocumentDraftText } from "@/store/fileDocumentStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
@@ -685,9 +685,9 @@ export function FileBrowserViewer({
         setCanonicalFilePath(result.pathIsCanonical === true ? filePath : null);
         if (isSvg) {
           // Sanitized here, never handed to the viewer raw: `FileImagePreview`
-          // documents that its input must already be safe. A rejected SVG shows
-          // the sanitizer's reason rather than a blank pane.
-          const outcome = sanitizeSvg(result.content);
+          // documents that its input must already be safe. A rejected or
+          // unparseable SVG shows why rather than a blank pane.
+          const outcome = sanitizeSvgForPreview(result.content);
           if (!outcome.ok) {
             setState({ status: "error", reason: "SVG_REJECTED", message: outcome.error });
             return;
@@ -1338,7 +1338,7 @@ export function FileBrowserViewer({
           );
         }
         const copy = unavailableCopy(state.reason, state.message, remoteFile);
-        const action =
+        const wayOut =
           copy.action === "save" ? (
             <SaveHostFileButton hostPath={filePath} />
           ) : copy.action === "open" ? (
@@ -1357,6 +1357,20 @@ export function FileBrowserViewer({
               Retry
             </Button>
           ) : undefined;
+        // A rejected SVG is often one caught mid-write by an agent, which a
+        // second read fixes once the write lands.
+        const action =
+          state.reason === "SVG_REJECTED" && wayOut !== undefined ? (
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              {wayOut}
+              <Button variant="subtle" size="sm" onClick={onRefresh}>
+                <RefreshCw />
+                Retry
+              </Button>
+            </div>
+          ) : (
+            wayOut
+          );
         return (
           <UnavailableState
             data-testid="file-browser-unavailable"
@@ -1397,6 +1411,13 @@ export function FileBrowserViewer({
               rootPath={rootPath}
               alt={fileName}
               sanitizedSvg={state.markup}
+              onError={(error) =>
+                setState({
+                  status: "error",
+                  reason: "SVG_REJECTED",
+                  message: error?.title ?? SVG_DRAW_ERROR,
+                })
+              }
               maxHeightClassName="max-h-full"
             />
           </div>

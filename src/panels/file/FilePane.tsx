@@ -32,6 +32,7 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { NO_WATCHED_PATHS, useExternalChangeTick } from "@/hooks/useExternalChangeTick";
 import { copyWithToast } from "@/lib/copyWithToast";
+import { SVG_DRAW_ERROR } from "@/lib/svg";
 import { lookupLocalChangeStatus } from "./localChangeStatus";
 import { useHeightHold } from "./useHeightHold";
 import type { ProjectSurfaceChoice } from "@shared/types/plugin";
@@ -852,7 +853,11 @@ export function FilePane({
                 sanitizedSvg={loadState === "svg" ? sanitizedSvg : null}
                 cacheBust={String(reloadNonce)}
                 onError={(error) => {
-                  failPreview(previewErrorCode(error, "NOT_FOUND"));
+                  // Drawn from markup already read, so an SVG's failure is the
+                  // markup's: the sanitizer rejection's surface, not a lost file.
+                  if (loadState === "svg")
+                    failPreview("INVALID_PATH", error?.title ?? SVG_DRAW_ERROR);
+                  else failPreview(previewErrorCode(error, "NOT_FOUND"));
                 }}
                 maxHeightClassName="max-h-full"
               />

@@ -7,8 +7,8 @@
  * this machine. The data URL is namespace-strict, which is the regression the
  * xmlns tests pin: a real-world SVG without an `xmlns` must still render.
  */
-import { describe, it, expect } from "vitest";
-import { render, cleanup } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import { render, cleanup, fireEvent } from "@testing-library/react";
 import { afterEach } from "vitest";
 import { FileImagePreview } from "../FileImagePreview";
 import { buildDaintreeFileUrl } from "../filePreviewKinds";
@@ -18,13 +18,14 @@ afterEach(cleanup);
 const SVG_NS = "http://www.w3.org/2000/svg";
 const SVG_DATA_PREFIX = "data:image/svg+xml,";
 
-function renderSvg(markup: string) {
+function renderSvg(markup: string, onError?: () => void) {
   const { container } = render(
     <FileImagePreview
       filePath="/repo/icon.svg"
       rootPath="/repo"
       alt="icon.svg"
       sanitizedSvg={markup}
+      onError={onError}
     />
   );
   return container;
@@ -56,14 +57,62 @@ describe("FileImagePreview SVG", () => {
     expect(svg?.querySelector("circle")).not.toBeNull();
   });
 
-  it("renders nothing for markup that does not parse", () => {
-    expect(renderSvg("<svg><unclosed></svg>").querySelector("img")).toBeNull();
-  });
-
-  it("renders nothing when the root element is not an svg", () => {
-    const container = renderSvg(`<wrapper xmlns="${SVG_NS}"><svg /></wrapper>`);
+  it("reports markup that does not parse instead of showing an empty stage (#15030)", () => {
+    const onError = vi.fn();
+    const container = renderSvg("<svg><unclosed></svg>", onError);
 
     expect(container.querySelector("img")).toBeNull();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0][0]?.title).toMatch(/couldn't be parsed/);
+  });
+
+  it("reports a root element that is not an svg", () => {
+    const onError = vi.fn();
+    const container = renderSvg(`<wrapper xmlns="${SVG_NS}"><svg /></wrapper>`, onError);
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports unusable markup once, not on every render", () => {
+    const onError = vi.fn();
+    const { rerender } = render(
+      <FileImagePreview
+        filePath="/repo/icon.svg"
+        rootPath="/repo"
+        alt="icon.svg"
+        sanitizedSvg="<svg><a></svg>"
+        onError={onError}
+      />
+    );
+    rerender(
+      <FileImagePreview
+        filePath="/repo/icon.svg"
+        rootPath="/repo"
+        alt="icon.svg"
+        sanitizedSvg="<svg><a></svg>"
+        onError={() => onError()}
+      />
+    );
+
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays quiet for markup that renders", () => {
+    const onError = vi.fn();
+    renderSvg(`<svg xmlns="${SVG_NS}" />`, onError);
+
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("reports an SVG the image decoder can't draw with its own reason", () => {
+    const onError = vi.fn();
+    const container = renderSvg(`<svg xmlns="${SVG_NS}"><rect /></svg>`, onError);
+
+    fireEvent.error(container.querySelector("img")!);
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0][0]?.title).toMatch(/couldn't be drawn/);
   });
 
   it("keeps the SVG's own styles out of this document", () => {

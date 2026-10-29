@@ -2788,6 +2788,21 @@ describe("FilePane live disk refresh (#11451)", () => {
     expect(screen.queryByTestId("file-pane-unavailable")).toBeNull();
   });
 
+  it("names an SVG the image decoder couldn't draw as the markup's failure, not a lost file", async () => {
+    readMock.mockResolvedValue({
+      content: '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>',
+    });
+    const { container } = await renderPane({ filePath: "/repo/assets/icon.svg" });
+    await waitFor(() => expect(shownSvgPart(container, "rect")).not.toBeNull());
+
+    fireEvent.error(container.querySelector('img[src^="data:image/svg+xml,"]')!);
+
+    const body = await screen.findByTestId("file-pane-unavailable");
+    expect(body.textContent).toContain("Can't preview this SVG");
+    expect(body.textContent).toContain("couldn't be drawn");
+    expect(within(body).getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
   it("re-reads an SVG when the app window regains the foreground", async () => {
     // A separate listener from the pane-focus one, and the only automatic
     // signal a file outside every worktree ever gets — no tick can reach it.

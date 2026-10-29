@@ -1060,6 +1060,53 @@ describe("FileBrowserViewer unparseable SVG (#15030)", () => {
     expect(within(unavailable).queryAllByRole("button").length).toBeGreaterThan(0);
     expect(container.querySelector('img[src^="data:image/svg+xml,"]')).toBeNull();
   });
+
+  it("offers Retry beside the way to the source, reading the file again", async () => {
+    readMock.mockResolvedValue({ content: '<svg xmlns="http://www.w3.org/2000/svg"><rect>' });
+    const onRefresh = vi.fn();
+    renderViewer("/repo/icon.svg", { onRefresh });
+
+    const unavailable = await screen.findByTestId("file-browser-unavailable");
+    const buttons = within(unavailable).getAllByRole("button");
+    expect(buttons.length).toBe(2);
+    fireEvent.click(within(unavailable).getByRole("button", { name: "Retry" }));
+
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("recovers once Refresh brings back markup that parses", async () => {
+    readMock.mockResolvedValue({ content: '<svg xmlns="http://www.w3.org/2000/svg"><rect>' });
+    const { container, rerender } = renderViewer("/repo/icon.svg", { surfaceRefreshNonce: 0 });
+    await screen.findByTestId("file-browser-unavailable");
+
+    readMock.mockResolvedValue({
+      content: '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>',
+    });
+    rerender(viewerJsx("/repo/icon.svg", { surfaceRefreshNonce: 1 }));
+
+    await waitFor(() =>
+      expect(container.querySelector('img[src^="data:image/svg+xml,"]')).not.toBeNull()
+    );
+    expect(screen.queryByTestId("file-browser-unavailable")).toBeNull();
+  });
+
+  it("shows an error, not a blank stage, when the image decoder can't draw the SVG", async () => {
+    readMock.mockResolvedValue({
+      content: '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>',
+    });
+    const { container } = renderViewer("/repo/icon.svg");
+    const img = await waitFor(() => {
+      const found = container.querySelector('img[src^="data:image/svg+xml,"]');
+      if (!found) throw new Error("svg preview not rendered");
+      return found;
+    });
+
+    fireEvent.error(img);
+
+    const unavailable = await screen.findByTestId("file-browser-unavailable");
+    expect(unavailable.textContent).toContain("Can't preview this SVG");
+    expect(unavailable.textContent).toContain("couldn't be drawn");
+  });
 });
 
 describe("FileBrowserViewer Refresh control (#11586, #11938)", () => {

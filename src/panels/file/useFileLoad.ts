@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FileReadErrorCode, FileTextEncoding } from "@shared/types/ipc/files";
-import { sanitizeSvg } from "@shared/utils/svgSanitizer";
+import { sanitizeSvgForPreview } from "@/lib/svg";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { refusalReason } from "@/components/FileViewer/FileUnavailableState";
@@ -281,11 +281,11 @@ export function useFileLoad(filePath: string | undefined, effectiveRootPath: str
           }) => {
             if (requestRef.current !== requestId) return;
             setCanonicalFilePath(pathIsCanonical === true ? filePath : null);
-            // SVG is text on disk but a picture on screen: sanitize before it can
-            // be inlined, and surface a sanitizer rejection as a load error
-            // rather than silently rendering nothing.
+            // SVG is text on disk but a picture on screen: sanitize it and check
+            // it parses before it is drawn, and surface a rejection as a load
+            // error rather than silently rendering nothing.
             if (isSvgFilePath(filePath)) {
-              const sanitized = sanitizeSvg(fileContent);
+              const sanitized = sanitizeSvgForPreview(fileContent);
               if (sanitized.ok) {
                 setSanitizedSvg(sanitized.svg);
                 setContent(null);
@@ -298,12 +298,12 @@ export function useFileLoad(filePath: string | undefined, effectiveRootPath: str
                 // tick until one lands.
                 setCanonicalFilePath(null);
                 // A background pass catching a half-written file mid-save reads
-                // as a sanitizer rejection, so keep the last good drawing rather
+                // as a rejection, so keep the last good drawing rather
                 // than replacing it — the same bargain the text path's transient
                 // -failure guard below makes.
                 setLoadState(lastGoodStateRef.current);
               } else {
-                // The file read fine; its contents just aren't safe to inline.
+                // The file read fine; its contents just can't be drawn safely.
                 setErrorCode("INVALID_PATH");
                 setErrorMessage(sanitized.error);
                 setLoadState("error");
