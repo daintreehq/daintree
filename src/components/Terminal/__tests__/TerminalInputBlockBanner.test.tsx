@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { DriveLeaseView } from "@shared/types/ipc/driveLease";
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -23,6 +23,12 @@ import {
   getTerminalInputBlock,
   setLeaseInputBlock,
 } from "@/services/terminal/inputGate";
+import { setTakeControlPending } from "@/components/Recovery/takeControlPending";
+import {
+  _resetDriveLeaseBannerForTesting,
+  seedDriveLeaseView,
+} from "@/components/Recovery/driveLeaseState";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 
 const takeOver = vi.fn<(payload: { projectId: string }) => Promise<DriveLeaseView>>();
 
@@ -146,6 +152,59 @@ describe("TerminalInputBlockBanner", () => {
       />
     );
     expect(screen.getByRole("button", { name: "Take control" })).toBeTruthy();
+  });
+
+  // The busy button says what it's busy doing, so the consequence beside it
+  // stays the consequence rather than giving way to a progress line.
+  it("keeps Take control readable and the consequence in place while a take-over is in flight (#15304)", () => {
+    vi.useFakeTimers();
+    try {
+      act(() =>
+        seedDriveLeaseView({
+          projectId: "proj-1",
+          holder: {
+            leaseId: 3,
+            endpointId: "view-4",
+            clientId: "client-2",
+            clientName: "greg-mbp",
+            isHostLocal: false,
+            acquiredAt: 2,
+          },
+          drivingHere: false,
+          isHolderEndpoint: false,
+          viewerIsHostLocal: true,
+        })
+      );
+      render(
+        <TerminalInputBlockBanner
+          block={{ kind: "driven-elsewhere", driverName: "greg-mbp", projectId: "proj-1" }}
+        />
+      );
+      const consequence = screen.getByText(/read-only on greg-mbp/);
+      const idleConsequence = consequence.textContent;
+      const button = screen.getByRole("button", { name: /^Take control/ });
+      // Opted in before it's busy: the slot is there idle, holding the width.
+      const slot = button.querySelector('[data-slot="button-spinner-slot"]');
+      expect(slot).toBeTruthy();
+      act(() => setTakeControlPending("proj-1", true));
+      act(() => {
+        vi.advanceTimersByTime(UI_DOHERTY_THRESHOLD);
+      });
+      expect(screen.getByRole("button", { name: /^Take control/ })).toBe(button);
+      expect(button.getAttribute("aria-busy")).toBe("true");
+      expect(button.getAttribute("aria-disabled")).toBe("true");
+      const content = button.querySelector('[data-slot="button-content"]')!;
+      expect(content.className).not.toContain("opacity-0");
+      expect(content.textContent).toBe("Take control");
+      expect(button.querySelector('[data-slot="button-spinner-slot"]')).toBe(slot);
+      expect(slot!.querySelector("svg")).toBeTruthy();
+      expect(screen.getByText(/read-only on greg-mbp/).textContent).toBe(idleConsequence);
+    } finally {
+      cleanup();
+      setTakeControlPending("proj-1", false);
+      _resetDriveLeaseBannerForTesting();
+      vi.useRealTimers();
+    }
   });
 
   it("keeps the block when the host refuses the takeover", async () => {

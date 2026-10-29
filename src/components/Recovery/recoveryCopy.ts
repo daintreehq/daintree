@@ -226,22 +226,15 @@ export function takeControlConsequence(facts: ControlFacts): string {
  */
 export function getDriveLeaseBannerCopy(
   facts: ControlFacts,
-  awaySeconds: number | null = null,
-  busy = false
+  awaySeconds: number | null = null
 ): RecoveryBannerCopy {
   const title = `Read-only · ${facts.project}${facts.host !== null ? ` on ${facts.host}` : ""}`;
   const who =
     awaySeconds !== null
       ? `${facts.holder} is away. Control passes on in ${formatCountdown(awaySeconds)} unless it comes back.`
       : `${facts.holder} has control.`;
-  return { title, description: `${who} ${busy ? TAKING_CONTROL : takeControlSentence(facts)}` };
+  return { title, description: `${who} ${takeControlSentence(facts)}` };
 }
-
-/**
- * What stands in for the consequence while a request is in flight, so the
- * busy button beside it is never a spinner with no words.
- */
-export const TAKING_CONTROL = "Taking control here…";
 
 /** The offer's accessible name: its visible label, then what it does. */
 export function takeControlAriaLabel(facts: ControlFacts): string {

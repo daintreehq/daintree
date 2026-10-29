@@ -12,11 +12,7 @@ import {
   useTakeControlBusy,
 } from "@/components/Recovery/takeControl";
 import { useControlFacts } from "@/components/Recovery/driveLeaseState";
-import {
-  TAKING_CONTROL,
-  takeControlAriaLabel,
-  takeControlSentence,
-} from "@/components/Recovery/recoveryCopy";
+import { takeControlAriaLabel, takeControlSentence } from "@/components/Recovery/recoveryCopy";
 import { InlineStatusBanner, type BannerAction } from "./InlineStatusBanner";
 
 /**
@@ -67,6 +63,7 @@ export function TerminalInputBlockBanner({
       ...(facts !== null && { ariaLabel: takeControlAriaLabel(facts) }),
       variant: "primary",
       loading: busy,
+      loadingPresentation: "labelled",
       onClick: () => void takeControl(projectId, panelId),
     });
   }
@@ -78,11 +75,7 @@ export function TerminalInputBlockBanner({
       layout="pane"
       title={getTerminalInputBlockMessage(block)}
       description={
-        block.kind === "driven-elsewhere" && facts !== null
-          ? busy
-            ? TAKING_CONTROL
-            : takeControlSentence(facts)
-          : undefined
+        block.kind === "driven-elsewhere" && facts !== null ? takeControlSentence(facts) : undefined
       }
       role="status"
       // Said once for the window (a change of control by driveLeaseState, a

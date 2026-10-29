@@ -29,6 +29,8 @@ import {
   useDriveLeaseSync,
 } from "../driveLeaseState";
 import { getDriveLeaseBannerCopy, type ControlFacts } from "../recoveryCopy";
+import { setTakeControlPending } from "../takeControlPending";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import {
@@ -250,6 +252,38 @@ describe("DriveLeaseBanner", () => {
     await waitFor(() => expect(takeOver).toHaveBeenCalledWith({ projectId: "p1" }));
     await waitFor(() => expect(screen.queryByText(copy.title)).toBeNull());
     expect(getTerminalInputBlock()).toBeNull();
+  });
+
+  // The busy button says what it's busy doing, so the consequence stays where
+  // it is instead of giving way to a progress line.
+  it("keeps Take control readable and the consequence in place while a take-over is in flight (#15304)", () => {
+    vi.useFakeTimers();
+    try {
+      render(<Harness />);
+      act(() => emit?.({ type: "changed", state: view() }));
+      const copy = getDriveLeaseBannerCopy(facts());
+      const button = screen.getByRole("button", TAKE_CONTROL);
+      // Opted in before it's busy: the slot is there idle, holding the width.
+      const slot = button.querySelector('[data-slot="button-spinner-slot"]');
+      expect(slot).toBeTruthy();
+      act(() => setTakeControlPending("p1", true));
+      act(() => {
+        vi.advanceTimersByTime(UI_DOHERTY_THRESHOLD);
+      });
+      expect(screen.getByRole("button", TAKE_CONTROL)).toBe(button);
+      expect(button.getAttribute("aria-busy")).toBe("true");
+      expect(button.getAttribute("aria-disabled")).toBe("true");
+      const content = button.querySelector('[data-slot="button-content"]')!;
+      expect(content.className).not.toContain("opacity-0");
+      expect(content.textContent).toBe("Take control");
+      expect(button.querySelector('[data-slot="button-spinner-slot"]')).toBe(slot);
+      expect(slot!.querySelector("svg")).toBeTruthy();
+      expect(screen.getByText(copy.description)).toBeTruthy();
+    } finally {
+      cleanup();
+      setTakeControlPending("p1", false);
+      vi.useRealTimers();
+    }
   });
 
   it("tells a client that isn't driving which machine has control, and what taking it does", async () => {

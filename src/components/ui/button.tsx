@@ -3,7 +3,7 @@ import { Slot, Slottable } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
 
 import { cn } from "@/lib/utils";
-import { Spinner } from "@/components/ui/Spinner";
+import { Spinner, SPINNER_SIZE_CLASSES } from "@/components/ui/Spinner";
 
 // Every paint property `transition` covers except the spatial ones: `scale`
 // stays out so the press snaps back as well as in, and `press-scale` is what
@@ -110,7 +110,7 @@ type ButtonSize = NonNullable<VariantProps<typeof buttonVariants>["size"]>;
 
 // Spinner size per button size — kept in lockstep with the CVA `[&_svg]:size-*`
 // rules so the overlay matches inline icon sizing.
-const SPINNER_SIZE_MAP: Record<ButtonSize, React.ComponentProps<typeof Spinner>["size"]> = {
+const SPINNER_SIZE_MAP: Record<ButtonSize, keyof typeof SPINNER_SIZE_CLASSES> = {
   default: "md",
   sm: "sm",
   xs: "xs",
@@ -134,16 +134,48 @@ const GAP_CLASS_MAP: Record<ButtonSize, string> = {
   inline: "gap-1",
 };
 
+// The labelled presentation is opt-in, not the default (#15304). Most busy
+// buttons are a lone Save or an icon, where the overlay already reads, and the
+// labelled form costs layout the rest can't pay: its content wrapper is a real
+// box even when idle, so a caller's `w-full justify-between` and `truncate`
+// rows (#8843) no longer reach the button's flex directly, and the reserved
+// slot widens every button that opts in. Reach for it where a spinner alone
+// can't say which action is busy: several actions side by side, or one with
+// consequences.
+//
+// The slot plus its gap sits before the label in both states, so the width
+// never changes. Idle, the content shifts back by half of that so the label
+// reads centred; busy, the shift drops and spinner and label centre together.
+// Half of spinner + gap per size, in lockstep with SPINNER_SIZE_MAP and
+// GAP_CLASS_MAP. The shift snaps, so reduced motion has nothing to remove.
+// Icon sizes have no label to keep readable, and `inline` sizes every glyph
+// to the text around it (`size-[1em]`), which would outgrow a fixed slot and
+// run into the label; both stay on the overlay.
+const LABELLED_IDLE_SHIFT_CLASS_MAP: Partial<Record<ButtonSize, string>> = {
+  default: "-translate-x-3",
+  sm: "-translate-x-2.5",
+  xs: "-translate-x-2",
+  lg: "-translate-x-3.25",
+};
+
 export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement>, VariantProps<typeof buttonVariants> {
   asChild?: boolean;
   /**
-   * When true, overlays a centered spinner and hides the label without swapping
-   * it (preserving width + accessible name). Sets `aria-busy`/`aria-disabled`
-   * and blocks clicks/keyboard activation without using the native `disabled`
-   * attribute, so focus is preserved.
+   * When true, the button is busy: sets `aria-busy`/`aria-disabled` and blocks
+   * clicks/keyboard activation without using the native `disabled` attribute,
+   * so focus is preserved. `loadingPresentation` decides what it looks like.
    */
   loading?: boolean;
+  /**
+   * `"overlay"` (the default) draws a centred spinner and hides the label
+   * behind it without swapping it, preserving width and accessible name.
+   * `"labelled"` keeps the label readable, with the spinner in its own slot
+   * before it. Pass it on every render, not only while loading: the slot is
+   * reserved while idle too, which is what holds the width. Ignored for icon
+   * sizes, `inline` and `asChild`, which keep the overlay.
+   */
+  loadingPresentation?: "overlay" | "labelled";
   /**
    * Makes the button a toggle: sets `aria-pressed` and draws the shared pressed
    * treatment while it is true. Leave it undefined for an ordinary button, and
@@ -161,6 +193,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       asChild = false,
       type,
       loading = false,
+      loadingPresentation = "overlay",
       pressed,
       onClick,
       disabled,
@@ -176,6 +209,11 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     // the inline one rather than the default's 32px padded frame.
     const resolvedSize: ButtonSize = size ?? (variant === "link" ? "inline" : "default");
     const resolvedAriaDisabled = loading || disabled ? true : ariaDisabled || undefined;
+    const labelledShift =
+      loadingPresentation === "labelled" && !asChild
+        ? LABELLED_IDLE_SHIFT_CLASS_MAP[resolvedSize]
+        : undefined;
+    const labelled = labelledShift !== undefined;
 
     const handleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
       if (loading) {
@@ -186,15 +224,16 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       onClick?.(event);
     };
 
-    const spinner = loading ? (
-      <span
-        data-slot="button-spinner"
-        className="pointer-events-none absolute inset-0 flex items-center justify-center"
-        aria-hidden="true"
-      >
-        <Spinner size={SPINNER_SIZE_MAP[resolvedSize]} />
-      </span>
-    ) : null;
+    const spinner =
+      loading && !labelled ? (
+        <span
+          data-slot="button-spinner"
+          className="pointer-events-none absolute inset-0 flex items-center justify-center"
+          aria-hidden="true"
+        >
+          <Spinner size={SPINNER_SIZE_MAP[resolvedSize]} />
+        </span>
+      ) : null;
 
     return (
       <Comp
@@ -240,6 +279,24 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
             combines asChild with loading. */}
         {asChild ? (
           <Slottable>{children}</Slottable>
+        ) : labelled ? (
+          <span
+            data-slot="button-content"
+            className={cn(
+              "inline-flex min-w-0 max-w-full items-center justify-center",
+              GAP_CLASS_MAP[resolvedSize],
+              !loading && labelledShift
+            )}
+          >
+            <span
+              data-slot="button-spinner-slot"
+              className={cn("flex shrink-0", SPINNER_SIZE_CLASSES[SPINNER_SIZE_MAP[resolvedSize]])}
+              aria-hidden="true"
+            >
+              {loading && <Spinner size={SPINNER_SIZE_MAP[resolvedSize]} />}
+            </span>
+            {children}
+          </span>
         ) : (
           // `display: contents` when not loading so the wrapper is transparent
           // to layout — children are flex items of the <button> directly, which

@@ -4,7 +4,8 @@ import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { RootAttributes } from "@/components/ui/rootAttributes";
 
-const SIZE_CLASSES = {
+/** Exported so a slot that holds a spinner only some of the time can reserve its box all of the time. */
+export const SPINNER_SIZE_CLASSES = {
   xs: "w-3 h-3",
   sm: "w-3.5 h-3.5",
   md: "w-4 h-4",
@@ -13,7 +14,7 @@ const SIZE_CLASSES = {
   "2xl": "w-8 h-8",
 } as const;
 
-type SpinnerSize = keyof typeof SIZE_CLASSES;
+type SpinnerSize = keyof typeof SPINNER_SIZE_CLASSES;
 
 interface SpinnerProps {
   size?: SpinnerSize;
@@ -40,7 +41,7 @@ export function Spinner({ size = "md", className, style, rootAttributes }: Spinn
       {...rootAttributes}
       className={cn(
         "flex shrink-0 items-center justify-center animate-spin motion-reduce:animate-none",
-        SIZE_CLASSES[size],
+        SPINNER_SIZE_CLASSES[size],
         className
       )}
       style={style}

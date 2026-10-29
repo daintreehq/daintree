@@ -11,6 +11,8 @@ import {
   _resetTerminalInputGateForTesting,
   setHostInputBlock,
 } from "@/services/terminal/inputGate";
+import { setTakeControlPending } from "@/components/Recovery/takeControlPending";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 
 vi.mock("@/config/agents", () => ({
   getAgentConfig: (id: string) => (id === "claude" ? { name: "Claude" } : undefined),
@@ -71,6 +73,38 @@ describe("DriveLeaseGate", () => {
     expect(describedBy && document.getElementById(describedBy)?.textContent).toContain(
       "read-only on greg-mbp"
     );
+  });
+
+  it("keeps Take control readable and its consequence in place while a take-over is in flight (#15304)", () => {
+    vi.useFakeTimers();
+    try {
+      act(() => seedDriveLeaseView(heldBy("greg-mbp")));
+      render(<DriveLeaseGate agentId="claude" />);
+      const button = screen.getByRole("button", { name: "Take control" });
+      // Opted in before it's busy: the slot is there idle, holding the width.
+      const slot = button.querySelector('[data-slot="button-spinner-slot"]');
+      expect(slot).toBeTruthy();
+      act(() => setTakeControlPending("p1", true));
+      act(() => {
+        vi.advanceTimersByTime(UI_DOHERTY_THRESHOLD);
+      });
+      expect(screen.getByRole("button", { name: "Take control" })).toBe(button);
+      expect(button.getAttribute("aria-busy")).toBe("true");
+      expect(button.getAttribute("aria-disabled")).toBe("true");
+      const content = button.querySelector('[data-slot="button-content"]')!;
+      expect(content.className).not.toContain("opacity-0");
+      expect(content.textContent).toBe("Take control");
+      expect(button.querySelector('[data-slot="button-spinner-slot"]')).toBe(slot);
+      expect(slot!.querySelector("svg")).toBeTruthy();
+      const describedBy = button.getAttribute("aria-describedby");
+      expect(describedBy && document.getElementById(describedBy)?.textContent).toContain(
+        "read-only on greg-mbp"
+      );
+    } finally {
+      cleanup();
+      setTakeControlPending("p1", false);
+      vi.useRealTimers();
+    }
   });
 
   it("says an away holder is away without promising when the launch starts", () => {

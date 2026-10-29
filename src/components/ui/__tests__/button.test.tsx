@@ -226,6 +226,160 @@ describe("Button loading state", () => {
   });
 });
 
+describe("Button labelled loading presentation", () => {
+  const spacing = (className: string, utility: string): number | null => {
+    const match = className
+      .split(/\s+/)
+      .map((token) => token.match(new RegExp(`^${utility}-(\\d+(?:\\.\\d+)?)$`)))
+      .find(Boolean);
+    return match ? Number(match[1]) : null;
+  };
+  const parts = (container: HTMLElement) => ({
+    button: container.querySelector("button")!,
+    content: container.querySelector('[data-slot="button-content"]')!,
+    slot: container.querySelector('[data-slot="button-spinner-slot"]'),
+  });
+
+  it("keeps the label readable with the spinner in a slot before it", () => {
+    const onClick = vi.fn();
+    const { container, getByRole, getAllByText } = render(
+      <Button loading loadingPresentation="labelled" onClick={onClick}>
+        Take control
+      </Button>
+    );
+    const { button, content, slot } = parts(container);
+    expect(button.getAttribute("aria-busy")).toBe("true");
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(button.hasAttribute("disabled")).toBe(false);
+    expect(getByRole("button", { name: "Take control" })).toBe(button);
+    // No overlay, and nothing hiding the label.
+    expect(container.querySelector('[data-slot="button-spinner"]')).toBeNull();
+    expect(content.className).not.toContain("opacity-0");
+    expect(getAllByText("Take control")).toHaveLength(1);
+    expect(content.firstElementChild).toBe(slot);
+    expect(slot!.getAttribute("aria-hidden")).toBe("true");
+    expect(slot!.querySelector("svg")).toBeTruthy();
+    expect(content.textContent).toBe("Take control");
+
+    fireEvent.click(button);
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  // The slot is what holds the width, so it has to be there before the
+  // button is busy and still there after.
+  it("reserves the same slot while idle, so going busy keeps the width and focus", () => {
+    const { container, rerender } = render(
+      <Button loadingPresentation="labelled">Take control</Button>
+    );
+    const idle = parts(container);
+    idle.button.focus();
+    expect(idle.slot).toBeTruthy();
+    expect(idle.slot!.childElementCount).toBe(0);
+    const idleSlotClass = idle.slot!.className;
+    expect(spacing(idle.content.className, "-translate-x")).not.toBeNull();
+
+    rerender(
+      <Button loading loadingPresentation="labelled">
+        Take control
+      </Button>
+    );
+    const busy = parts(container);
+    expect(busy.button).toBe(idle.button);
+    expect(busy.slot).toBe(idle.slot);
+    expect(busy.slot!.className).toBe(idleSlotClass);
+    expect(busy.slot!.querySelector("svg")).toBeTruthy();
+    expect(spacing(busy.content.className, "-translate-x")).toBeNull();
+    expect(document.activeElement).toBe(busy.button);
+
+    rerender(<Button loadingPresentation="labelled">Take control</Button>);
+    const after = parts(container);
+    expect(after.slot).toBe(idle.slot);
+    expect(after.slot!.childElementCount).toBe(0);
+    expect(after.button.hasAttribute("aria-busy")).toBe(false);
+    expect(spacing(after.content.className, "-translate-x")).not.toBeNull();
+  });
+
+  // Idle, the label sits after an empty slot and a gap; shifting back by half
+  // of both is what centres it, at every size that has a label.
+  it("shifts the idle label back by half the slot and gap at every labelled size", () => {
+    for (const size of ["default", "sm", "xs", "lg"] as const) {
+      const { container, unmount } = render(
+        <Button size={size} loadingPresentation="labelled">
+          Save
+        </Button>
+      );
+      const { content, slot } = parts(container);
+      const slotWidth = spacing(slot!.className, "w");
+      const gap = spacing(content.className, "gap");
+      expect(slotWidth, size).not.toBeNull();
+      expect(gap, size).not.toBeNull();
+      expect(spacing(content.className, "-translate-x"), size).toBe((slotWidth! + gap!) / 2);
+      unmount();
+    }
+  });
+
+  it("sizes the slot to the spinner it holds", () => {
+    for (const size of ["default", "sm", "xs", "lg"] as const) {
+      const { container, unmount } = render(
+        <Button size={size} loading loadingPresentation="labelled">
+          Save
+        </Button>
+      );
+      const slot = container.querySelector('[data-slot="button-spinner-slot"]')!;
+      const spinner = slot.querySelector("svg")!.parentElement!;
+      expect(spacing(slot.className, "w"), size).toBe(spacing(spinner.className, "w"));
+      expect(spacing(slot.className, "h"), size).toBe(spacing(spinner.className, "h"));
+      unmount();
+    }
+  });
+
+  it("keeps the overlay for icon sizes, inline links and asChild", () => {
+    const icon = render(
+      <Button size="icon-sm" loading loadingPresentation="labelled" aria-label="Delete">
+        <svg />
+      </Button>
+    );
+    expect(icon.container.querySelector('[data-slot="button-spinner"]')).toBeTruthy();
+    expect(icon.container.querySelector('[data-slot="button-spinner-slot"]')).toBeNull();
+
+    // An inline link draws its glyphs at 1em, which no fixed slot can hold.
+    const link = render(
+      <Button variant="link" loading loadingPresentation="labelled">
+        Retry
+      </Button>
+    );
+    expect(link.container.querySelector('[data-slot="button-spinner"]')).toBeTruthy();
+    expect(link.container.querySelector('[data-slot="button-spinner-slot"]')).toBeNull();
+
+    const slotted = render(
+      <Button asChild loading loadingPresentation="labelled">
+        <a href="/x">Link</a>
+      </Button>
+    );
+    expect(slotted.container.querySelector('[data-slot="button-spinner"]')).toBeTruthy();
+    expect(slotted.container.querySelector('[data-slot="button-spinner-slot"]')).toBeNull();
+  });
+
+  it("stays undimmed when loading and disabled together", () => {
+    const { container } = render(
+      <Button
+        loading
+        disabled
+        loadingPresentation="labelled"
+        className="aria-disabled:opacity-50 disabled:opacity-40"
+      >
+        Save
+      </Button>
+    );
+    const button = container.querySelector("button")!;
+    expect(button.hasAttribute("disabled")).toBe(false);
+    const dimming = button.className
+      .split(/\s+/)
+      .filter((c) => /^(aria-)?disabled:opacity-/.test(c));
+    expect(dimming.every((c) => c.endsWith("opacity-100"))).toBe(true);
+  });
+});
+
 function renderToggle(props: Parameters<typeof Button>[0], pressed: boolean | undefined) {
   const { container } = render(
     <Button {...props} pressed={pressed}>
