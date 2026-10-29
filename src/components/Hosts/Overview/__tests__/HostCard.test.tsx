@@ -253,6 +253,22 @@ describe("HostCard", () => {
     expect(onOpenProject).toHaveBeenCalledWith("p7", true);
   });
 
+  it("reserves the emoji slot on every row once any project has one", () => {
+    const render1 = (projects: { id: string; name: string; path: string; emoji?: string }[]) => {
+      const { unmount } = render(
+        <HostCard row={makeRow({})} history={[]} onSwitch={() => {}} projects={projects} />
+      );
+      const slots = screen
+        .getByTestId("host-overview-projects")
+        .querySelectorAll("li button > span[aria-hidden]");
+      unmount();
+      return slots.length;
+    };
+    const plain = { id: "a", name: "alpha", path: "/a" };
+    expect(render1([plain, { id: "b", name: "beta", path: "/b", emoji: "🌲" }])).toBe(2);
+    expect(render1([plain])).toBe(0);
+  });
+
   it("says a host has no projects yet, and lists nothing it hasn't read", () => {
     const row = makeRow({});
     const { rerender } = render(
