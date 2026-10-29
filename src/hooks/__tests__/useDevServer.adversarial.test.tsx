@@ -1554,6 +1554,88 @@ describe("useDevServer adversarial races", () => {
     );
   });
 
+  it("settles on the command it actually sent after switching away and back mid-ensure (#15026)", async () => {
+    const switched = createDeferred<DevPreviewSessionState>();
+    let held = true;
+    ensureMock.mockImplementation((request: { devCommand: string; projectId: string }) => {
+      if (request.devCommand === "npm run dev:web" && held) {
+        held = false;
+        return switched.promise;
+      }
+      return Promise.resolve(
+        buildState({ panelId: "panel-1", projectId: request.projectId, status: "running" })
+      );
+    });
+
+    const { rerender } = renderHook(
+      ({ devCommand }: { devCommand: string }) =>
+        useDevServer({ panelId: "panel-1", devCommand, cwd: "/repo" }),
+      { initialProps: { devCommand: "npm run dev" } }
+    );
+    await waitFor(() => expect(ensureMock).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    rerender({ devCommand: "npm run dev:web" });
+    await waitFor(() => expect(ensureMock).toHaveBeenCalledTimes(2));
+    rerender({ devCommand: "npm run dev" });
+    rerender({ devCommand: "npm run dev:web" });
+
+    await act(async () => {
+      switched.resolve(
+        buildState({ panelId: "panel-1", projectId: "project-1", status: "starting" })
+      );
+      await Promise.resolve();
+    });
+    // Back where the in-flight ensure was headed: nothing new to send.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(ensureMock).toHaveBeenCalledTimes(2);
+
+    rerender({ devCommand: "npm run dev" });
+    await waitFor(() => expect(ensureMock).toHaveBeenCalledTimes(3));
+    expect(ensureMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ devCommand: "npm run dev" })
+    );
+  });
+
+  it("an unmounted hook does not drain an ensure queued behind its in-flight one", async () => {
+    const inFlight = createDeferred<DevPreviewSessionState>();
+    ensureMock.mockImplementation((request: { devCommand: string; projectId: string }) => {
+      if (request.devCommand === "npm run dev:web") return inFlight.promise;
+      return Promise.resolve(
+        buildState({ panelId: "panel-1", projectId: request.projectId, status: "running" })
+      );
+    });
+
+    const { rerender, unmount } = renderHook(
+      ({ devCommand }: { devCommand: string }) =>
+        useDevServer({ panelId: "panel-1", devCommand, cwd: "/repo" }),
+      { initialProps: { devCommand: "npm run dev" } }
+    );
+    await waitFor(() => expect(ensureMock).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    rerender({ devCommand: "npm run dev:web" });
+    await waitFor(() => expect(ensureMock).toHaveBeenCalledTimes(2));
+    rerender({ devCommand: "npm run dev" });
+    unmount();
+
+    await act(async () => {
+      inFlight.resolve(
+        buildState({ panelId: "panel-1", projectId: "project-1", status: "starting" })
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(ensureMock).toHaveBeenCalledTimes(2);
+  });
+
   it("only applies the latest queued config after many rapid changes", async () => {
     const firstEnsure = createDeferred<DevPreviewSessionState>();
 

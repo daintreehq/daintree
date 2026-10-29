@@ -126,6 +126,30 @@ function buildEnsureConfigKey(params: {
   ].join("|");
 }
 
+/** The key of the config an ensure sends from this context; null without a project. */
+function ensureKeyFor(context: {
+  projectId: string | null;
+  panelId: string;
+  cwd: string;
+  worktreeId?: string;
+  devCommand: string;
+  endpoint?: string | null;
+  env?: Record<string, string>;
+  turbopackEnabled?: boolean;
+}): string | null {
+  if (!context.projectId) return null;
+  return buildEnsureConfigKey({
+    projectId: context.projectId,
+    panelId: context.panelId,
+    cwd: context.cwd,
+    worktreeId: context.worktreeId,
+    devCommand: context.devCommand,
+    endpoint: context.endpoint,
+    envSignature: serializeEnv(context.env),
+    turbopackEnabled: context.turbopackEnabled,
+  });
+}
+
 export function useDevServer({
   panelId,
   devCommand,
@@ -172,7 +196,7 @@ export function useDevServer({
   /** The latest host resync's ask; an older one's answer is dropped. */
   const resyncAskRef = useRef(0);
   const lastEnsureConfigRef = useRef<string>("");
-  const pendingEnsureRef = useRef<{ configKey: string; resume: boolean } | null>(null);
+  const pendingEnsureRef = useRef<{ resume: boolean } | null>(null);
   const userStoppedRef = useRef(false);
   // Bumped by every endpoint restart and every Stop. A restart whose resource
   // cycle finishes after its number moved on was superseded and must not connect.
@@ -280,19 +304,18 @@ export function useDevServer({
   // stopped, so a queued Start keeps its resume through later config changes
   // and always drains; only a Stop cancels it.
   const ensureLatestConfig = useCallback(
-    async (configKey: string, resume = false) => {
+    async (resume = false) => {
       if (isEnsuringRef.current) {
-        const pending = pendingEnsureRef.current;
         pendingEnsureRef.current = {
-          configKey,
-          resume: resume || (pending?.resume ?? false),
+          resume: resume || (pendingEnsureRef.current?.resume ?? false),
         };
         return;
       }
 
       const latest = latestContextRef.current;
       const requestProjectId = latest.projectId;
-      if (!requestProjectId) return;
+      const sentKey = ensureKeyFor(latest);
+      if (!requestProjectId || !sentKey) return;
 
       if (!launchTarget(latest.devCommand, latest.endpoint)) return;
       const endpointMode = latest.endpoint !== undefined;
@@ -301,7 +324,10 @@ export function useDevServer({
       const requestVersion = requestVersionRef.current;
 
       isEnsuringRef.current = true;
-      lastEnsureConfigRef.current = configKey;
+      lastEnsureConfigRef.current = sentKey;
+      // Nothing is settled until this lands, so switching back to the last
+      // settled config mid-ensure queues instead of hitting the cache.
+      persistedEnsureCache.delete(requestPanelId);
 
       try {
         const nextState = await window.electron.devPreview.ensure({
@@ -318,7 +344,7 @@ export function useDevServer({
 
         if (isRequestCurrent(requestVersion, requestProjectId, requestPanelId)) {
           applyState(nextState);
-          persistedEnsureCache.set(requestPanelId, configKey);
+          persistedEnsureCache.set(requestPanelId, sentKey);
         }
       } catch (err) {
         if (isRequestCurrent(requestVersion, requestProjectId, requestPanelId)) {
@@ -328,8 +354,13 @@ export function useDevServer({
         isEnsuringRef.current = false;
         const pending = pendingEnsureRef.current;
         pendingEnsureRef.current = null;
-        if (pending && (pending.configKey !== configKey || pending.resume)) {
-          safeFireAndForget(ensureLatestConfig(pending.configKey, pending.resume), {
+        // Drain against the config as it is now, not as it was when queued: a
+        // switch away and back mid-ensure leaves nothing new to send. An
+        // unmounted hook leaves that to whichever mount replaced it.
+        const nextKey =
+          pending && isMountedRef.current ? ensureKeyFor(latestContextRef.current) : null;
+        if (pending && nextKey && (nextKey !== sentKey || pending.resume)) {
+          safeFireAndForget(ensureLatestConfig(pending.resume), {
             context: "Re-running queued dev preview ensure",
           });
         }
@@ -355,17 +386,7 @@ export function useDevServer({
       return;
     }
 
-    const configKey = buildEnsureConfigKey({
-      projectId: latest.projectId,
-      panelId: latest.panelId,
-      cwd: latest.cwd,
-      worktreeId: latest.worktreeId,
-      devCommand: latest.devCommand,
-      endpoint: latest.endpoint,
-      envSignature: serializeEnv(latest.env),
-      turbopackEnabled: latest.turbopackEnabled,
-    });
-    await ensureLatestConfig(configKey, true);
+    await ensureLatestConfig(true);
   }, [applyInvokeError, ensureLatestConfig]);
 
   const stop = useCallback(() => {
@@ -624,16 +645,14 @@ export function useDevServer({
 
     // Cross-remount guard: skip ensure() if a previous mount already ensured
     // this exact config. The onStateChanged subscription handles crash propagation
-    // independently, and getState() hydrates current state on mount. An ensure in
-    // flight here makes the cache stale: switching back to the cached config
-    // mid-ensure must queue, or the in-flight config is what ends up running.
+    // independently, and getState() hydrates current state on mount.
     const cachedKey = persistedEnsureCache.get(panelId);
-    if (cachedKey === configKey && !isEnsuringRef.current) {
+    if (cachedKey === configKey) {
       lastEnsureConfigRef.current = configKey;
       return;
     }
 
-    safeFireAndForget(ensureLatestConfig(configKey), {
+    safeFireAndForget(ensureLatestConfig(), {
       context: "Ensuring dev preview config matches latest",
     });
   }, [
