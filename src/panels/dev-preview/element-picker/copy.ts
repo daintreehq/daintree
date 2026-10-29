@@ -31,6 +31,23 @@ export const STALE_COPY: Record<StaleReason, { title: string; detail: string }> 
   },
 };
 
+/**
+ * What Send's note says while the page is being asked for the element again:
+ * the drawer is deliberately silent then, because "select it again" would be
+ * withdrawn a moment later, so the note says what is happening instead.
+ */
+export const REPROVING_NOTE = "Checking this selection again";
+
+/**
+ * A picked component whose file wasn't found, said by the identity's path slot
+ * and by the note under Send in one voice. The slot sits under a header that
+ * names the component; the note names it, because the Target control can
+ * point the composer at a different one than the identity describes.
+ */
+export function missingComponentSource(label?: string): string {
+  return label ? `Couldn't find the source for ${label}` : "Couldn't find the source";
+}
+
 /** The selection outcomes that end without a selection, as headline and reason. */
 export const SELECTION_OUTCOME_COPY = {
   settled: {
@@ -186,19 +203,17 @@ export function runtimeIssueMessage(
   detail = ""
 ): { title: string; body?: string } | null {
   const name = framework ? FRAMEWORK_NAMES[framework] : null;
-  const carries = "A request still carries the selector, markup, styles and a screenshot.";
   switch (code) {
     case "not-dev-build":
       return {
         title: "Production build — elements can't be traced to source",
-        body: `${carries} Run the app's dev server to trace elements to their files.`,
+        body: "Run the app's dev server to trace elements to their files.",
       };
     case "metadata-unavailable":
       return {
         title: name
           ? `No ${name} source locations on this page`
           : "No source locations on this page",
-        body: carries,
       };
     case "overlay-blocked":
       return { title: "The page blocked the selection outline" };
@@ -223,7 +238,6 @@ export function runtimeIssueMessage(
         title: name
           ? `Couldn't read this page's ${name} components`
           : "Couldn't read this page's components",
-        body: `${carries} It can't name a file or line.`,
       };
     case "internal":
       return { title: "The Element Picker hit a problem inside the page" };

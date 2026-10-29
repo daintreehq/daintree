@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { wireFailureMessage } from "../copy.js";
+import { missingComponentSource, runtimeIssueMessage, wireFailureMessage } from "../copy.js";
 
 describe("wireFailureMessage", () => {
   /**
@@ -48,5 +48,38 @@ describe("wireFailureMessage", () => {
       "Couldn't open the site source"
     );
     expect(message).toContain("EACCES");
+  });
+});
+
+describe("runtimeIssueMessage", () => {
+  /**
+   * What a request includes is the composer's Includes row's to say, and it
+   * says when there is no screenshot. A verdict that listed the parts would
+   * promise one the row then contradicts.
+   */
+  it.each(["not-dev-build", "metadata-unavailable", "extractor-failed"])(
+    "does not list what a request carries for %s",
+    (code) => {
+      const message = runtimeIssueMessage(code, "svelte");
+      expect(message).not.toBeNull();
+      const said = `${message!.title} ${message!.body ?? ""}`;
+      expect(said).not.toMatch(/screenshot|markup|styles|request/i);
+    }
+  );
+
+  it("still tells a production build's reader the way forward", () => {
+    expect(runtimeIssueMessage("not-dev-build", undefined)?.body).toBe(
+      "Run the app's dev server to trace elements to their files."
+    );
+  });
+});
+
+describe("missingComponentSource", () => {
+  /** The identity's slot is the same sentence as the note under Send, which adds the name. */
+  it("is one sentence, with the component named only where it can't be read from a header", () => {
+    expect(missingComponentSource()).toBe("Couldn't find the source");
+    expect(missingComponentSource("PricingCard")).toBe(
+      `${missingComponentSource()} for PricingCard`
+    );
   });
 });
