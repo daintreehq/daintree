@@ -284,7 +284,7 @@ describe("useUpdateListener", () => {
         message: "Version 2.5.0",
         duration: 0,
         dismissed: false,
-        action: expect.objectContaining({ label: "Restart to update" }),
+        action: expect.objectContaining({ label: "Restart to update", dismissOnClick: false }),
       })
     );
 
@@ -409,7 +409,7 @@ describe("useUpdateListener", () => {
         priority: "high",
         urgent: true,
         duration: 0,
-        action: expect.objectContaining({ label: "Restart to update" }),
+        action: expect.objectContaining({ label: "Restart to update", dismissOnClick: false }),
         // The fresh-toast branch is the one that writes an inbox entry, so the
         // changelog link has to ride this payload too — not just the
         // in-place update path.

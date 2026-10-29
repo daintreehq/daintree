@@ -1466,6 +1466,30 @@ describe("Toast success dwell — 2000ms (issue #6844)", () => {
     expect(screen.queryByText("Retried")).toBeNull();
   });
 
+  it("an action that opts out of dismissOnClick keeps the toast up and clickable", async () => {
+    const onClick = vi.fn();
+    render(<Toaster />);
+    await act(async () => {
+      addToast({
+        duration: 0,
+        message: "Update ready",
+        action: { label: "Restart to update", onClick, dismissOnClick: false },
+      });
+      vi.advanceTimersByTime(16);
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Restart to update"));
+      vi.advanceTimersByTime(400);
+    });
+    expect(screen.getByText("Update ready")).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Restart to update"));
+    });
+    expect(onClick).toHaveBeenCalledTimes(2);
+  });
+
   it("action without successLabel dismisses immediately on click (no dwell)", async () => {
     render(<Toaster />);
     await act(async () => {
