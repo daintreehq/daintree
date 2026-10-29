@@ -191,7 +191,7 @@ export class WorktreeSetupCoordinator {
     provisionResource?: boolean,
     environmentId?: string
   ): Promise<LifecycleSetupOutcome> {
-    const ctx: WorkspaceHostContext = this.host.getLifecycleContext() ?? {
+    const hostCtx: WorkspaceHostContext = this.host.getLifecycleContext() ?? {
       projectRootPath,
       projectEnvVars: this.host.getProjectEnvVars(),
       getMonitor: (id) => this.host.getMonitor(id),
@@ -200,11 +200,29 @@ export class WorktreeSetupCoordinator {
 
     // Ids are paths, so the monitor is pinned before the first await: only the
     // incarnation this run started against may record or clear what it was
-    // asked to do.
+    // asked to do. The same goes for its resource environment: once the
+    // worktree switches, a run started for the old one publishes nothing, or
+    // it would put back the config the switch just cleared (#15005).
     const monitorAtStart = this.host.getMonitor(worktreeId);
+    const environmentEpoch = monitorAtStart?.resourceEnvironmentEpoch;
+    const environmentChanged = (): boolean => {
+      const live = this.host.getMonitor(worktreeId);
+      return (
+        live !== undefined &&
+        environmentEpoch !== undefined &&
+        live.resourceEnvironmentEpoch !== environmentEpoch
+      );
+    };
+    const ctx: WorkspaceHostContext = {
+      ...hostCtx,
+      getMonitor: (id) => {
+        const live = hostCtx.getMonitor(id);
+        return id === worktreeId && environmentChanged() ? undefined : live;
+      },
+    };
     const recordAwaitingApproval = (awaiting: boolean): void => {
       const live = this.host.getMonitor(worktreeId);
-      if (!live || live !== monitorAtStart) return;
+      if (!live || live !== monitorAtStart || environmentChanged()) return;
       if (!awaiting) {
         this.setupAwaitingApproval.delete(live);
         return;
@@ -241,7 +259,7 @@ export class WorktreeSetupCoordinator {
       }
     }
 
-    if (shouldProvision && this.host.getProjectRootPath()) {
+    if (shouldProvision && !environmentChanged() && this.host.getProjectRootPath()) {
       const provision = await this.host.runResourceAction(
         `auto-provision-${worktreeId}`,
         worktreeId,

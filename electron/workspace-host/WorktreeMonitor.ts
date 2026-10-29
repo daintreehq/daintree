@@ -303,6 +303,9 @@ export class WorktreeMonitor {
   private _attachments: import("../../shared/types/worktree.js").WorktreeAttachment[] | undefined;
   private _worktreeMode: string = "local";
   private _worktreeEnvironmentLabel: string | undefined;
+  // Bumped each time the worktree leaves a resource environment, so work
+  // started for the old one can tell it no longer speaks for this worktree.
+  private _resourceEnvironmentEpoch = 0;
 
   // Resource status auto-polling — owned by `resourcePollTimer`.
   private readonly resourcePollTimer: ResourcePollTimer;
@@ -1608,6 +1611,39 @@ export class WorktreeMonitor {
 
   setWorktreeEnvironmentLabel(label: string | undefined): void {
     this._worktreeEnvironmentLabel = label;
+  }
+
+  get resourceEnvironmentEpoch(): number {
+    return this._resourceEnvironmentEpoch;
+  }
+
+  /**
+   * Forget what was observed of, and configured for, the resource environment
+   * this worktree is leaving: its status, endpoint and ssh target, connect
+   * command, provider, commands, poll cadence and any resource phase on show.
+   * The next environment's config puts back its own; its status stays unknown
+   * until it reports.
+   *
+   * `hasResourceConfig` survives because the environment switcher hangs off
+   * it: a worktree moved to Local, where nothing resolves, must still be able
+   * to move back.
+   */
+  leaveResourceEnvironment(): void {
+    this._resourceEnvironmentEpoch++;
+    this._resourceStatus = undefined;
+    this._resourceConnectCommand = undefined;
+    this._resourceProvider = undefined;
+    this._hasStatusCommand = false;
+    this._hasPauseCommand = false;
+    this._hasResumeCommand = false;
+    this._hasTeardownCommand = false;
+    this._hasProvisionCommand = false;
+    this.resourcePollIntervalMs = 0;
+    this.resourcePollIntervalExplicit = false;
+    this.clearResourcePollTimer();
+    if (this._lifecycleStatus?.phase.startsWith("resource-")) {
+      this._lifecycleStatus = undefined;
+    }
   }
 
   setMood(mood: WorktreeMood): void {

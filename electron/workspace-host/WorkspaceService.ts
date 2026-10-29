@@ -2112,6 +2112,7 @@ export class WorkspaceService {
   ): Promise<void> {
     try {
       if (!this.projectRootPath) return;
+      const environmentEpoch = monitor.resourceEnvironmentEpoch;
       const resolvedConfig = await this.lifecycleService.resolveConfig(
         worktreePath,
         this.projectRootPath
@@ -2154,6 +2155,8 @@ export class WorkspaceService {
         resourceEnvironments,
         this.projectRootPath
       );
+      // A switch while this resolved applies the new environment's config itself.
+      if (monitor.resourceEnvironmentEpoch !== environmentEpoch) return;
 
       // Cache resource config metadata regardless of monitor.isRunning state.
       // This ensures the UI shows the Resource submenu even during cold start
@@ -6077,6 +6080,9 @@ export class WorkspaceService {
       return;
     }
 
+    // Nothing observed of the environment being left describes the one being
+    // entered (#15005). Re-selecting the current one keeps what it reported.
+    if (monitor.worktreeMode !== envKey) monitor.leaveResourceEnvironment();
     monitor.setWorktreeMode(envKey);
     monitor.setWorktreeEnvironmentLabel(envKey);
 

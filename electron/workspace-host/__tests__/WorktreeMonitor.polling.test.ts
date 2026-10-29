@@ -485,6 +485,44 @@ describe("WorktreeMonitor", () => {
       monitor.stop();
     });
 
+    it("stops polling the status of an environment the worktree has left", async () => {
+      const activeWorktree: Worktree = { ...TEST_WORKTREE, isCurrent: true };
+      const callbacks = makeCallbacks({ onResourceStatusPoll: vi.fn() });
+      const monitor = new WorktreeMonitor(activeWorktree, TEST_CONFIG, callbacks, "main");
+
+      monitor.startWithoutGitStatus();
+      monitor.setHasResourceConfig(true);
+      monitor.setHasStatusCommand(true);
+      monitor.leaveResourceEnvironment();
+
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(callbacks.onResourceStatusPoll).not.toHaveBeenCalled();
+
+      monitor.stop();
+    });
+
+    it("drops the left environment's explicit interval for the next one's default", async () => {
+      const activeWorktree: Worktree = { ...TEST_WORKTREE, isCurrent: true };
+      const callbacks = makeCallbacks({ onResourceStatusPoll: vi.fn() });
+      const monitor = new WorktreeMonitor(activeWorktree, TEST_CONFIG, callbacks, "main");
+
+      monitor.startWithoutGitStatus();
+      monitor.setHasResourceConfig(true);
+      monitor.setHasStatusCommand(true);
+      monitor.setResourcePollInterval(5_000);
+      monitor.leaveResourceEnvironment();
+      monitor.setHasResourceConfig(true);
+      monitor.setHasStatusCommand(true);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(callbacks.onResourceStatusPoll).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(callbacks.onResourceStatusPoll).toHaveBeenCalledTimes(1);
+
+      monitor.stop();
+    });
+
     it("explicit setResourcePollInterval overrides defaults", async () => {
       const activeWorktree: Worktree = { ...TEST_WORKTREE, isCurrent: true };
       const callbacks = makeCallbacks({ onResourceStatusPoll: vi.fn() });
