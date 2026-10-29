@@ -393,12 +393,12 @@ describe("VoiceInputSettingsTab copy", () => {
     }
   });
 
-  it("describes the once-per-stop pass and offers the provider's cleanup models, the default picked", async () => {
+  it("describes the stop-time and chunked passes and offers the provider's cleanup models, the default picked", async () => {
     install({ correctionEnabled: true, openaiApiKey: "sk-test" });
     render(<VoiceInputSettingsTab />);
     const models = await screen.findByRole("radiogroup", { name: "Cleanup model" });
     const section = models.closest("#voice-ai-correction");
-    expect(section?.textContent).toContain("whole passage is corrected once");
+    expect(section?.textContent).toContain("long ones are corrected a stretch at a time");
 
     const choices = within(models).getAllByRole("radio");
     expect(choices).toHaveLength(VOICE_CLEANUP_MODELS_BY_PROVIDER.openai.length);

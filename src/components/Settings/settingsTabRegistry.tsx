@@ -1750,7 +1750,8 @@ export const SETTINGS_REGISTRY = [
         id: "voice-ai-correction-enable",
         section: "AI text correction",
         title: "AI text correction",
-        description: "Correct the whole passage once when you stop dictating",
+        description:
+          "Correct dictation when you stop, or a stretch at a time during long dictations",
         keywords: ["correction", "ai", "cleanup", "post-process", "filler"],
         requiresEnabled: VOICE_REQUIRES_ENABLED,
       },
