@@ -79,6 +79,7 @@ import { buildResumeCommand } from "@shared/types/agentSettings";
 import { actionService } from "@/services/ActionService";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { useAssistantAgentChoices } from "@/hooks/useAssistantAgentChoices";
+import { resolveLaunchableAssistantAgentId } from "@/hooks/assistantAgentSelection";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { TerminalRefreshTier } from "@/types";
@@ -953,9 +954,10 @@ export function HelpPanel({
   // user's preference, or the sole installed assistant backend. Mirrors the
   // controller's own auto-launch eligibility so the CTA is shown only when a
   // single unambiguous target exists; with several, the empty state asks.
-  const launchableAgentId =
-    preferredAgentId ??
-    (supportedInstalledAgentIds.length === 1 ? (supportedInstalledAgentIds[0] ?? null) : null);
+  const launchableAgentId = resolveLaunchableAssistantAgentId(
+    preferredAgentId,
+    supportedInstalledAgentIds
+  );
 
   // Each empty-state CTA wears the mark of the agent it would actually launch,
   // so the button says what's about to start. Rendered bare: the Button variant

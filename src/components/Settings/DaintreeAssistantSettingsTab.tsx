@@ -20,6 +20,11 @@ import { DEFAULT_DANGEROUS_ARGS } from "@shared/types/agentSettings";
 import { resolveAssistantModelId } from "@shared/config/agentRegistry";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import {
+  resolveLaunchableAssistantAgentId,
+  selectInstalledAssistantAgentIds,
+} from "@/hooks/assistantAgentSelection";
 import { DAINTREE_CONFIRMATION_OPTIONS } from "@/config/assistantDaintreeConfirmations";
 import {
   assistantSkipsDaintreeConfirmations,
@@ -210,24 +215,44 @@ export function DaintreeAssistantSettingsTab() {
   const droppedPreferredAgentId = useHelpPanelStore((s) => s.droppedPreferredAgentId);
   const clearDroppedPreferredAgent = useHelpPanelStore((s) => s.clearDroppedPreferredAgent);
 
-  const versionWarning = useAssistantVersionWarning(preferredAgentId);
+  const cliAvailability = useCliAvailabilityStore((s) => s.availability);
+  const cliAvailabilityKnown = useCliAvailabilityStore((s) => s.hasRealData);
+  const supportedAgentIds = useMemo(() => getAssistantSupportedAgentIds(), []);
+  const installedAgentIds = useMemo(
+    () =>
+      selectInstalledAssistantAgentIds(supportedAgentIds, cliAvailability, cliAvailabilityKnown),
+    [supportedAgentIds, cliAvailability, cliAvailabilityKnown]
+  );
+  // The agent a new session starts on: the saved choice, or the only installed
+  // agent the dock launches without asking. Everything that belongs to "the
+  // assistant's agent" (model, bypass, skip, version) follows it, because the
+  // launch reads those for the agent it starts, not for the saved choice.
+  const effectiveAgentId = resolveLaunchableAssistantAgentId(preferredAgentId, installedAgentIds);
+
+  const versionWarning = useAssistantVersionWarning(effectiveAgentId);
 
   const agentOptions = useMemo(() => {
-    return getAssistantSupportedAgentIds().map((id) => ({
+    return supportedAgentIds.map((id) => ({
       value: id,
       label: getAgentConfig(id)?.name ?? id,
     }));
-  }, []);
-  // Track the persisted choice exactly — falling back to a default would visually
-  // suggest a value is set when it isn't, leaving onChange unfired and the help
-  // panel still in its empty state. The placeholder makes "no selection" explicit.
+  }, [supportedAgentIds]);
+  // The select tracks the persisted choice exactly. Showing the only installed
+  // agent as selected would read as saved, and picking a value the select
+  // already shows never fires onChange, so the user couldn't save it. The
+  // description names the agent in use instead.
   const agentSelectValue = preferredAgentId ?? "";
+  const agentDescription = preferredAgentId
+    ? "The CLI that runs the help assistant in the dock"
+    : effectiveAgentId
+      ? `Using ${getAgentConfig(effectiveAgentId)?.name ?? effectiveAgentId}, the only installed agent the assistant supports`
+      : "The help assistant can't start until you choose one";
 
   const globalSkipPermissions = useAgentSettingsStore(
     (state) => state.settings?.globalSkipPermissions === true
   );
   const agentEntries = useAgentSettingsStore((state) => state.settings?.agents);
-  const assistantAgentSkip = resolveAssistantAgentSkip(preferredAgentId, {
+  const assistantAgentSkip = resolveAssistantAgentSkip(effectiveAgentId, {
     agents: agentEntries ?? {},
     globalSkipPermissions,
   });
@@ -236,8 +261,8 @@ export function DaintreeAssistantSettingsTab() {
     assistantAgentSkip.skips
   );
   const bypassCopy = useMemo(
-    () => getBypassCopy(preferredAgentId, settings.tier, confirmationsSkipped),
-    [preferredAgentId, settings.tier, confirmationsSkipped]
+    () => getBypassCopy(effectiveAgentId, settings.tier, confirmationsSkipped),
+    [effectiveAgentId, settings.tier, confirmationsSkipped]
   );
 
   const {
@@ -248,7 +273,7 @@ export function DaintreeAssistantSettingsTab() {
     modelOptions,
     modelSelectValue,
     showModelPicker,
-  } = useAssistantModelCatalog(preferredAgentId, settings.modelIds);
+  } = useAssistantModelCatalog(effectiveAgentId, settings.modelIds);
 
   const saveError = (group: SaveGroup) =>
     saveFailure?.group === group ? (
@@ -315,14 +340,14 @@ export function DaintreeAssistantSettingsTab() {
   };
 
   const handleModelChange = (value: string) => {
-    if (!preferredAgentId) return;
+    if (!effectiveAgentId) return;
     const modelId = value === MODEL_DEFAULT_SENTINEL ? "" : value;
     // Picking the recommended model stores "no choice", so it keeps tracking
     // the recommendation and doesn't read as modified.
-    const recommended = resolveAssistantModelId(preferredAgentId, null, catalogIds);
+    const recommended = resolveAssistantModelId(effectiveAgentId, null, catalogIds);
     void persist({
       modelIds: {
-        [preferredAgentId]: modelId !== "" && modelId === recommended ? null : modelId,
+        [effectiveAgentId]: modelId !== "" && modelId === recommended ? null : modelId,
       },
     });
   };
@@ -348,10 +373,10 @@ export function DaintreeAssistantSettingsTab() {
   };
 
   const handleGoToAssistantAgentSettings = () => {
-    if (!preferredAgentId) return;
+    if (!effectiveAgentId) return;
     void actionService.dispatch(
       "app.settings.openTab",
-      { tab: "agents", subtab: preferredAgentId },
+      { tab: "agents", subtab: effectiveAgentId },
       { source: "user" }
     );
   };
@@ -365,7 +390,7 @@ export function DaintreeAssistantSettingsTab() {
         Settings &gt; Agents &gt; Skip permission prompts
       </Button>
     );
-    if (!preferredAgentId) {
+    if (!effectiveAgentId) {
       return (
         <>
           By default it follows the assistant agent&apos;s skip permission prompts setting. With no
@@ -373,7 +398,7 @@ export function DaintreeAssistantSettingsTab() {
         </>
       );
     }
-    const agentName = getAgentConfig(preferredAgentId)?.name ?? preferredAgentId;
+    const agentName = getAgentConfig(effectiveAgentId)?.name ?? effectiveAgentId;
     if (assistantAgentSkip.source === "agent") {
       return (
         <>
@@ -464,11 +489,7 @@ export function DaintreeAssistantSettingsTab() {
         <SettingsGroup>
           <SettingsSelect
             label="Agent"
-            description={
-              preferredAgentId
-                ? "The CLI that runs the help assistant in the dock"
-                : "The help assistant can't start until you choose one"
-            }
+            description={agentDescription}
             value={agentSelectValue}
             onValueChange={handleAgentChange}
             options={agentOptions}
@@ -499,7 +520,7 @@ export function DaintreeAssistantSettingsTab() {
               disabled={settingsUnavailable}
               isModified={savedModelId !== null}
               onReset={() => {
-                if (preferredAgentId) void persist({ modelIds: { [preferredAgentId]: null } });
+                if (effectiveAgentId) void persist({ modelIds: { [effectiveAgentId]: null } });
               }}
             />
           )}
