@@ -186,7 +186,7 @@ function Verdict({ title, children }: { title: string; children?: ReactNode }) {
     <div className="space-y-1">
       <h3 className="text-sm font-medium text-text-primary [overflow-wrap:anywhere]">{title}</h3>
       {children && (
-        <div className="text-sm text-pretty text-text-secondary select-text">{children}</div>
+        <div className="text-sm [text-wrap:pretty] text-text-secondary select-text">{children}</div>
       )}
     </div>
   );
@@ -1653,7 +1653,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
                 <li key={`${index}:${line}`}>{line}</li>
               ))}
             </ul>
-            <p className="text-xs text-pretty">
+            <p className="text-xs [text-wrap:pretty]">
               {canWaitForIdle(impact)
                 ? `${restartVerb} when idle waits until no agent is seen working or waiting there, then restarts it and ends these terminals. `
                 : ""}
