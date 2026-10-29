@@ -13,7 +13,7 @@ describe("DndProvider Trash drop wiring (#14943)", () => {
       /if\s*\(\s*overId\s*===\s*TRASH_DROPPABLE_ID\s*\)\s*\{([\s\S]*?)\breturn;\s*\}/
     );
 
-    expect(branch?.[1].replace(/\s+/g, "")).toBe("trashDroppedPanel(draggedId);");
+    expect(branch?.[1]?.replace(/\s+/g, "")).toBe("trashDroppedPanel(draggedId);");
     expect(source).not.toMatch(/trashPanelGroup\(\s*draggedId\s*\)/);
     expect(source.indexOf("overId === TRASH_DROPPABLE_ID")).toBeLessThan(
       source.indexOf("pushLayoutSnapshot()")
