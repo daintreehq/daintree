@@ -1,4 +1,5 @@
 import { MAX_DICTIONARY_HEARD_AS, MAX_DICTIONARY_TERM_LENGTH } from "@shared/utils/voiceDictionary";
+import type { VoiceDictionaryEntry } from "@shared/types";
 
 /** Terms one paste adds. Each is its own write to main, so a huge paste is trimmed, not queued. */
 export const MAX_DICTIONARY_IMPORT_TERMS = 500;
@@ -78,4 +79,43 @@ export function parseHeardAsField(text: string): string[] {
     .split(/\r?\n/)
     .map((phrase) => phrase.trim())
     .filter(Boolean);
+}
+
+export interface DictionaryAddOutcome {
+  /** Terms that weren't in the dictionary before. */
+  added: number;
+  /** Terms already there that gained heard-as phrases, and how many phrases they gained. */
+  extended: number;
+  addedHeardAs: number;
+  /** Terms already there whole: the add wrote nothing for them. */
+  unchanged: number;
+}
+
+/**
+ * What a batch of adds actually changed, read off the dictionary before and
+ * after it, the way `addDictionaryEntry` matches terms: ignoring case.
+ */
+export function summarizeDictionaryAdds(
+  terms: readonly Pick<ParsedDictionaryTerm, "term">[],
+  before: readonly VoiceDictionaryEntry[],
+  after: readonly VoiceDictionaryEntry[]
+): DictionaryAddOutcome {
+  const fold = (value: string) => value.toLowerCase();
+  const beforeByTerm = new Map(before.map((entry) => [fold(entry.term), entry]));
+  const afterByTerm = new Map(after.map((entry) => [fold(entry.term), entry]));
+  const outcome: DictionaryAddOutcome = { added: 0, extended: 0, addedHeardAs: 0, unchanged: 0 };
+  for (const key of new Set(terms.map(({ term }) => fold(term)))) {
+    const was = beforeByTerm.get(key);
+    const now = afterByTerm.get(key);
+    if (!was) {
+      if (now) outcome.added++;
+      else outcome.unchanged++;
+    } else if (now && now.heardAs.length > was.heardAs.length) {
+      outcome.extended++;
+      outcome.addedHeardAs += now.heardAs.length - was.heardAs.length;
+    } else {
+      outcome.unchanged++;
+    }
+  }
+  return outcome;
 }

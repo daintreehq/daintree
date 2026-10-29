@@ -14,6 +14,8 @@ import {
   MAX_DICTIONARY_IMPORT_TERMS,
   parseDictionaryInput,
   parseHeardAsField,
+  summarizeDictionaryAdds,
+  type DictionaryAddOutcome,
 } from "./voiceDictionaryImport";
 import { pluralNoun, pluralize } from "@/lib/pluralize";
 import { MAX_DICTIONARY_KEYTERMS } from "@shared/config/voiceKeyterms";
@@ -40,6 +42,26 @@ interface VoiceDictionaryPageProps {
 }
 
 const fold = (value: string) => value.toLowerCase();
+
+/** The clauses of the add notice, one per kind of change, in the order they matter. */
+function describeDictionaryAdds({
+  added,
+  extended,
+  addedHeardAs,
+  unchanged,
+}: DictionaryAddOutcome): string[] {
+  const parts: string[] = [];
+  if (added > 0) parts.push(`Added ${pluralize(added, "term")}`);
+  if (addedHeardAs > 0) {
+    parts.push(
+      `Added ${pluralize(addedHeardAs, "heard-as phrase")} to ${pluralize(extended, "existing term")}`
+    );
+  }
+  if (unchanged > 0) {
+    parts.push(`${pluralize(unchanged, "term was", "terms were")} already in the dictionary`);
+  }
+  return parts;
+}
 
 export function sourceLabel(entry: VoiceDictionaryEntry): string {
   if (entry.source === "learned") {
@@ -95,6 +117,8 @@ export function VoiceDictionaryPage({
     }
     const imported = terms.length > 1 || skipped + overflowTerms + overflowHeardAs > 0;
     const text = draft;
+    const before = entries;
+    let outcome: DictionaryAddOutcome | undefined;
     draftRef.current?.focus();
     setRemoved([]);
     void onChange(
@@ -108,12 +132,15 @@ export function VoiceDictionaryPage({
             ...(imported ? { source: "imported" as const } : {}),
           });
         }
+        // Counted from what main kept, not from what was pasted: a term it
+        // already had writes nothing (#15233).
+        outcome = summarizeDictionaryAdds(terms, before, state!.dictionary);
         return state!;
       },
       () => {
         // Keep anything typed while the add was in flight.
         setDraft((current) => (current === text ? "" : current));
-        const parts = [`Added ${pluralize(terms.length, "term")}`];
+        const parts = outcome ? describeDictionaryAdds(outcome) : [];
         if (skipped > 0) {
           parts.push(
             `Skipped ${pluralize(skipped, "entry", "entries")} over ${MAX_DICTIONARY_TERM_LENGTH} characters`
