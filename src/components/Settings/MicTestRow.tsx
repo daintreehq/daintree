@@ -67,7 +67,7 @@ interface MicTestRowProps {
 
 function describe(state: TestState, block: DictationBlock): string {
   if (block === "open") {
-    return "Dictation is still running, so what you say could land in its draft. Stop it to test the microphone.";
+    return "A dictation is still open, so what you say could land in its draft. Stop it to test the microphone.";
   }
   if (block === "finishing")
     return "Dictation is finishing. You can test the microphone once it ends.";

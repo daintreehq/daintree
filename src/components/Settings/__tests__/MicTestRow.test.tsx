@@ -19,12 +19,31 @@ vi.mock("@/services/VoiceRecordingService", () => ({ voiceRecordingService: serv
 const opened = { label: "Headset", substituted: false, bluetooth: true };
 
 function elsewhere(phase: VoiceSessionSnapshot["phase"] | null): VoiceSessionElsewhere {
+  const details: VoiceSessionSnapshot | null = phase && {
+    phase,
+    kind: "dictation",
+    targetTitle: "Claude",
+    targetChrome: null,
+    targetHostId: null,
+    projectName: "Alpha",
+    worktreeLabel: null,
+    micLabel: null,
+    micSignal: "live",
+    micNotice: null,
+    stopWarning: false,
+    correctionEnabled: false,
+    locked: false,
+    wordCount: 0,
+    transcript: "",
+    provider: null,
+    clock: null,
+  };
   return {
     sessionId: "session-elsewhere",
     hostId: "local",
     projectId: "alpha",
     projectName: "Alpha",
-    details: phase ? ({ phase } as VoiceSessionSnapshot) : null,
+    details,
   };
 }
 
@@ -200,13 +219,16 @@ describe("MicTestRow", () => {
       }
     );
 
-    it("counts a start queued behind a finishing session as one to stop", () => {
-      useVoiceRecordingStore.setState({ status: "finishing", pendingTarget: { panelId: "p2" } });
-      render(<MicTestRow deviceId="" />);
-      expect(testButton().disabled).toBe(true);
-      fireEvent.click(screen.getByRole("button", { name: "Stop dictation" }));
-      expect(service.stopActiveSession).toHaveBeenCalledTimes(1);
-    });
+    it.each(["finishing", "idle"] as const)(
+      "counts a start queued while this view is %s as one to stop",
+      (status) => {
+        useVoiceRecordingStore.setState({ status, pendingTarget: { panelId: "p2" } });
+        render(<MicTestRow deviceId="" />);
+        expect(testButton().disabled).toBe(true);
+        fireEvent.click(screen.getByRole("button", { name: "Stop dictation" }));
+        expect(service.stopActiveSession).toHaveBeenCalledWith({ returnToTarget: false });
+      }
+    );
 
     it.each([null, "recording", "paused"] as const)(
       "won't test while another view's dictation is %s, and stops that one",
@@ -228,27 +250,43 @@ describe("MicTestRow", () => {
       expect(screen.getByRole("status").textContent).toContain("finishing");
       expect(screen.queryByRole("button", { name: "Stop dictation" })).toBeNull();
 
-      act(() =>
+      act(() => {
         useVoiceRecordingStore.setState({
           status: "idle",
           activeTarget: null,
           sessionElsewhere: elsewhere("finishing"),
-        })
-      );
+        });
+      });
       rerender(<MicTestRow deviceId="" />);
       expect(testButton().disabled).toBe(true);
       expect(screen.queryByRole("button", { name: "Stop dictation" })).toBeNull();
+
+      act(() => {
+        useVoiceRecordingStore.setState({ sessionElsewhere: null });
+      });
+      expect(testButton().disabled).toBe(false);
+      startMicTest.mockReturnValue(new Promise(() => {}));
+      fireEvent.click(testButton());
+      expect(startMicTest).toHaveBeenCalledTimes(1);
     });
 
-    it("tests again once the dictation ends, without starting by itself", () => {
-      useVoiceRecordingStore.setState({ status: "recording", activeTarget: { panelId: "p1" } });
-      render(<MicTestRow deviceId="" />);
-      act(() => useVoiceRecordingStore.setState({ status: "error", activeTarget: null }));
-      expect(testButton().disabled).toBe(false);
-      expect(screen.getByRole("status").textContent).toContain("Nothing is recorded");
-      expect(screen.queryByRole("button", { name: "Stop dictation" })).toBeNull();
-      expect(startMicTest).not.toHaveBeenCalled();
-    });
+    it.each(["idle", "error"] as const)(
+      "tests again once the dictation ends as %s, without starting by itself",
+      (status) => {
+        useVoiceRecordingStore.setState({ status: "recording", activeTarget: { panelId: "p1" } });
+        render(<MicTestRow deviceId="" />);
+        act(() => {
+          useVoiceRecordingStore.setState({ status, activeTarget: null });
+        });
+        expect(testButton().disabled).toBe(false);
+        expect(screen.getByRole("status").textContent).toContain("Nothing is recorded");
+        expect(screen.queryByRole("button", { name: "Stop dictation" })).toBeNull();
+        expect(startMicTest).not.toHaveBeenCalled();
+        startMicTest.mockReturnValue(new Promise(() => {}));
+        fireEvent.click(testButton());
+        expect(startMicTest).toHaveBeenCalledTimes(1);
+      }
+    );
 
     it("stops a running test when a dictation starts", async () => {
       const stop = vi.fn();
@@ -260,7 +298,9 @@ describe("MicTestRow", () => {
         startMicTest.mock.calls[0]![0].onSample({ level: 0.8, heardSound: true, silent: false });
       });
 
-      act(() => useVoiceRecordingStore.setState({ sessionElsewhere: elsewhere("recording") }));
+      act(() => {
+        useVoiceRecordingStore.setState({ sessionElsewhere: elsewhere("recording") });
+      });
       expect(stop).toHaveBeenCalledTimes(1);
       expect(testButton().textContent).toBe("Test microphone");
       expect(testButton().disabled).toBe(true);
@@ -277,10 +317,13 @@ describe("MicTestRow", () => {
       startMicTest.mockReturnValue(new Promise((r) => (resolve = r)));
       render(<MicTestRow deviceId="" />);
       fireEvent.click(testButton());
-      act(() =>
-        useVoiceRecordingStore.setState({ status: "connecting", activeTarget: { panelId: "p1" } })
-      );
-      expect(startMicTest.mock.calls[0]![0].isCurrent()).toBe(false);
+      const { isCurrent } = startMicTest.mock.calls[0]![0];
+      expect(isCurrent()).toBe(true);
+      act(() => {
+        useVoiceRecordingStore.setState({ status: "connecting", activeTarget: { panelId: "p1" } });
+        // Before the row has re-rendered and its cleanup has run.
+        expect(isCurrent()).toBe(false);
+      });
       await act(async () => resolve({ opened, stop }));
       expect(stop).toHaveBeenCalledTimes(1);
       expect(screen.queryByRole("button", { name: "Stop test" })).toBeNull();
