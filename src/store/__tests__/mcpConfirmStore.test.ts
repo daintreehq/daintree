@@ -324,7 +324,10 @@ describe("mcpConfirmStore", () => {
 
       useMcpConfirmStore.getState().expire("a");
       expect(await expiring).toEqual({ decision: "timeout" });
-      expect(useMcpConfirmStore.getState().current).toMatchObject({ requestId: "a", expired: true });
+      expect(useMcpConfirmStore.getState().current).toMatchObject({
+        requestId: "a",
+        expired: true,
+      });
 
       useMcpConfirmStore.getState().resolveCurrent("approved");
       expect(useMcpConfirmStore.getState().current?.requestId).toBe("a");

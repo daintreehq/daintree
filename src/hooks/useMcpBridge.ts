@@ -943,7 +943,10 @@ const GATE_RECHECK_BUDGET_MS = 5_000;
  * the call. For `approved` that null is final: past main's deadline it has
  * told the agent the call failed, so nothing may run on the approval.
  */
-async function holdDispatch(requestId: string, phase: McpDispatchHoldPhase): Promise<number | null> {
+async function holdDispatch(
+  requestId: string,
+  phase: McpDispatchHoldPhase
+): Promise<number | null> {
   const answer = await window.electron.mcpServer.holdDispatch({ requestId, phase });
   return answer.held ? answer.remainingMs : null;
 }
@@ -1377,72 +1380,72 @@ export function useMcpBridge(): void {
               try {
                 resolution = await requestMcpConfirmation(
                   {
-                  requestId,
-                  actionId,
-                  actionTitle: definition.title,
-                  actionDescription: definition.description,
-                  // Carry the "why this is gated" rationale into the host
-                  // confirm dialog so the human sees the same justification the
-                  // model does — parity with the removed elicitation prompt,
-                  // which used to be the only surface that showed it (#11342).
-                  ...(closeApproval
-                    ? { dangerRationale: PROTECTED_CLOSE_RATIONALE }
-                    : definition.dangerRationale
-                      ? { dangerRationale: definition.dangerRationale }
+                    requestId,
+                    actionId,
+                    actionTitle: definition.title,
+                    actionDescription: definition.description,
+                    // Carry the "why this is gated" rationale into the host
+                    // confirm dialog so the human sees the same justification the
+                    // model does — parity with the removed elicitation prompt,
+                    // which used to be the only surface that showed it (#11342).
+                    ...(closeApproval
+                      ? { dangerRationale: PROTECTED_CLOSE_RATIONALE }
+                      : definition.dangerRationale
+                        ? { dangerRationale: definition.dangerRationale }
+                        : {}),
+                    argsSummary: summarizeMcpArgs(args),
+                    // Names WHICH worktree/recipe in the title. Resolved from the
+                    // renderer's stores, not from the redacted args summary, or
+                    // for another machine's call from that machine's preview.
+                    ...(hostLines !== undefined
+                      ? hostSubject
+                        ? { subject: hostSubject }
+                        : {}
+                      : previewTarget
+                        ? (() => {
+                            const subject = resolveMcpConfirmSubject(previewTarget);
+                            return subject ? { subject } : {};
+                          })()
+                        : {}),
+                    // A protected close is confirm-tier in effect even though
+                    // `terminal.close` declares safe: it is what made main ask.
+                    danger: closeApproval ? "confirm" : definition.danger,
+                    // Display-only requesting-bearer identity (#9157). Present
+                    // only for unpinned external dispatch; the dialog renders a
+                    // "Requested by" row when set, stays provenance-free when not.
+                    callerInfo,
+                    // Origin travels with the identity so the dialog can name the
+                    // requester positively instead of inferring one from an
+                    // absence that has two very different causes.
+                    sessionOrigin,
+                    // Only where "Allow for this session" can deliver what it says.
+                    // A target-picking tool's dialog is raised again on every
+                    // call, so offering to stop asking would be untrue (#12692).
+                    ...(offerSessionApproval === true && isGenericNativeGrantEligible(actionId)
+                      ? { offerSessionApproval: true }
                       : {}),
-                  argsSummary: summarizeMcpArgs(args),
-                  // Names WHICH worktree/recipe in the title. Resolved from the
-                  // renderer's stores, not from the redacted args summary, or
-                  // for another machine's call from that machine's preview.
-                  ...(hostLines !== undefined
-                    ? hostSubject
-                      ? { subject: hostSubject }
-                      : {}
-                    : previewTarget
-                      ? (() => {
-                          const subject = resolveMcpConfirmSubject(previewTarget);
-                          return subject ? { subject } : {};
-                        })()
+                    // Another machine's call is not above any tier of this
+                    // view's: it is that machine's question, asked here.
+                    ...(approvalOnly === true && hostLines === undefined
+                      ? { approvalReason: approvalReason ?? ("above-tier" as const) }
                       : {}),
-                  // A protected close is confirm-tier in effect even though
-                  // `terminal.close` declares safe: it is what made main ask.
-                  danger: closeApproval ? "confirm" : definition.danger,
-                  // Display-only requesting-bearer identity (#9157). Present
-                  // only for unpinned external dispatch; the dialog renders a
-                  // "Requested by" row when set, stays provenance-free when not.
-                  callerInfo,
-                  // Origin travels with the identity so the dialog can name the
-                  // requester positively instead of inferring one from an
-                  // absence that has two very different causes.
-                  sessionOrigin,
-                  // Only where "Allow for this session" can deliver what it says.
-                  // A target-picking tool's dialog is raised again on every
-                  // call, so offering to stop asking would be untrue (#12692).
-                  ...(offerSessionApproval === true && isGenericNativeGrantEligible(actionId)
-                    ? { offerSessionApproval: true }
-                    : {}),
-                  // Another machine's call is not above any tier of this
-                  // view's: it is that machine's question, asked here.
-                  ...(approvalOnly === true && hostLines === undefined
-                    ? { approvalReason: approvalReason ?? ("above-tier" as const) }
-                    : {}),
-                  previewPending,
-                  ...(hostLines !== undefined ? { preview: hostLines } : {}),
-                  ...(hostLines === undefined && previewTarget?.kind === "worktreeDelete"
-                    ? { worktreeDeleteNotesTargetId: previewTarget.worktreeId }
-                    : {}),
-                  ...((hasAsyncPreview || hostLines !== undefined) && previewTarget
-                    ? { previewTitle: mcpConfirmPreviewTitle(previewTarget) }
-                    : {}),
-                  ...(selectableTargets
-                    ? {
-                        selectableTargets,
-                        selectionConfirmLabel:
-                          previewTarget?.kind === "terminalClose"
-                            ? { verb: "Close", one: "panel", many: "panels" }
-                            : { verb: "Kill", one: "terminal", many: "terminals" },
-                      }
-                    : {}),
+                    previewPending,
+                    ...(hostLines !== undefined ? { preview: hostLines } : {}),
+                    ...(hostLines === undefined && previewTarget?.kind === "worktreeDelete"
+                      ? { worktreeDeleteNotesTargetId: previewTarget.worktreeId }
+                      : {}),
+                    ...((hasAsyncPreview || hostLines !== undefined) && previewTarget
+                      ? { previewTitle: mcpConfirmPreviewTitle(previewTarget) }
+                      : {}),
+                    ...(selectableTargets
+                      ? {
+                          selectableTargets,
+                          selectionConfirmLabel:
+                            previewTarget?.kind === "terminalClose"
+                              ? { verb: "Close", one: "panel", many: "panels" }
+                              : { verb: "Kill", one: "terminal", many: "terminals" },
+                        }
+                      : {}),
                   },
                   // Main holds the call open while it waits and while it is on
                   // screen (#14989); until it grants that, the plain deadline it

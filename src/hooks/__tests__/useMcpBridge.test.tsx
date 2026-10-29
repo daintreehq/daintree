@@ -1788,7 +1788,10 @@ describe("useMcpBridge", () => {
       requestId: "req-short-run",
       result: {
         ok: false,
-        error: { code: "CONFIRMATION_TIMEOUT", message: expect.stringContaining("dispatch deadline") },
+        error: {
+          code: "CONFIRMATION_TIMEOUT",
+          message: expect.stringContaining("dispatch deadline"),
+        },
       },
       confirmationDecision: "approved",
     });

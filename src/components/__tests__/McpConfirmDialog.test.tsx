@@ -115,31 +115,31 @@ function enqueue(
 ) {
   return requestMcpConfirmation(
     {
-    requestId: overrides.requestId ?? "req-1",
-    actionId: "worktree.delete",
-    actionTitle: overrides.actionTitle ?? "Delete worktree",
-    actionDescription: "Permanently delete a worktree.",
-    argsSummary: overrides.argsSummary ?? '{"worktreeId":"wt-1"}',
-    danger: overrides.danger ?? "confirm",
-    callerInfo: overrides.callerInfo,
-    ...(overrides.sessionOrigin ? { sessionOrigin: overrides.sessionOrigin } : {}),
-    ...(overrides.subject ? { subject: overrides.subject } : {}),
-    ...(overrides.dangerRationale ? { dangerRationale: overrides.dangerRationale } : {}),
-    ...(overrides.preview ? { preview: overrides.preview } : {}),
-    ...(overrides.previewTitle ? { previewTitle: overrides.previewTitle } : {}),
-    ...(overrides.previewPending ? { previewPending: overrides.previewPending } : {}),
-    ...(overrides.typedNameTarget ? { typedNameTarget: overrides.typedNameTarget } : {}),
-    ...(overrides.offerSessionApproval ? { offerSessionApproval: true } : {}),
-    ...(overrides.approvalReason ? { approvalReason: overrides.approvalReason } : {}),
-    ...(overrides.worktreeDeleteNotesTargetId
-      ? { worktreeDeleteNotesTargetId: overrides.worktreeDeleteNotesTargetId }
-      : {}),
-    ...(overrides.selectableTargets
-      ? {
-          selectableTargets: overrides.selectableTargets,
-          selectionConfirmLabel: { verb: "Kill", one: "terminal", many: "terminals" },
-        }
-      : {}),
+      requestId: overrides.requestId ?? "req-1",
+      actionId: "worktree.delete",
+      actionTitle: overrides.actionTitle ?? "Delete worktree",
+      actionDescription: "Permanently delete a worktree.",
+      argsSummary: overrides.argsSummary ?? '{"worktreeId":"wt-1"}',
+      danger: overrides.danger ?? "confirm",
+      callerInfo: overrides.callerInfo,
+      ...(overrides.sessionOrigin ? { sessionOrigin: overrides.sessionOrigin } : {}),
+      ...(overrides.subject ? { subject: overrides.subject } : {}),
+      ...(overrides.dangerRationale ? { dangerRationale: overrides.dangerRationale } : {}),
+      ...(overrides.preview ? { preview: overrides.preview } : {}),
+      ...(overrides.previewTitle ? { previewTitle: overrides.previewTitle } : {}),
+      ...(overrides.previewPending ? { previewPending: overrides.previewPending } : {}),
+      ...(overrides.typedNameTarget ? { typedNameTarget: overrides.typedNameTarget } : {}),
+      ...(overrides.offerSessionApproval ? { offerSessionApproval: true } : {}),
+      ...(overrides.approvalReason ? { approvalReason: overrides.approvalReason } : {}),
+      ...(overrides.worktreeDeleteNotesTargetId
+        ? { worktreeDeleteNotesTargetId: overrides.worktreeDeleteNotesTargetId }
+        : {}),
+      ...(overrides.selectableTargets
+        ? {
+            selectableTargets: overrides.selectableTargets,
+            selectionConfirmLabel: { verb: "Kill", one: "terminal", many: "terminals" },
+          }
+        : {}),
     },
     deadline
   );
@@ -269,10 +269,7 @@ describe("McpConfirmDialog", () => {
       vi.useFakeTimers();
       try {
         visibility = "visible";
-        const pending = enqueue(
-          { requestId: "req-preview", previewPending: true },
-          mainDeadline()
-        );
+        const pending = enqueue({ requestId: "req-preview", previewPending: true }, mainDeadline());
         render(<McpConfirmDialog />);
         await act(async () => {
           await vi.advanceTimersByTimeAsync(2_000);
@@ -324,8 +321,14 @@ describe("McpConfirmDialog", () => {
       try {
         const firstDeadline = mainDeadline();
         const secondDeadline = mainDeadline();
-        const first = enqueue({ requestId: "req-first", actionTitle: "Delete worktree" }, firstDeadline);
-        const second = enqueue({ requestId: "req-second", actionTitle: "Push branch" }, secondDeadline);
+        const first = enqueue(
+          { requestId: "req-first", actionTitle: "Delete worktree" },
+          firstDeadline
+        );
+        const second = enqueue(
+          { requestId: "req-second", actionTitle: "Push branch" },
+          secondDeadline
+        );
         render(<McpConfirmDialog />);
         // Long past the plain deadline both dispatches started with.
         await act(async () => {
@@ -355,7 +358,10 @@ describe("McpConfirmDialog", () => {
     it("does not renew the window when a preview lands late", async () => {
       vi.useFakeTimers();
       try {
-        const pending = enqueue({ requestId: "req-late-preview", previewPending: true }, mainDeadline());
+        const pending = enqueue(
+          { requestId: "req-late-preview", previewPending: true },
+          mainDeadline()
+        );
         render(<McpConfirmDialog />);
         await act(async () => {
           await vi.advanceTimersByTimeAsync(MCP_CONFIRM_DECISION_MS - 5_000);
@@ -376,7 +382,11 @@ describe("McpConfirmDialog", () => {
       vi.useFakeTimers();
       try {
         const expiring = enqueue(
-          { requestId: "req-expiring", actionTitle: "Delete worktree", typedNameTarget: "feature/x" },
+          {
+            requestId: "req-expiring",
+            actionTitle: "Delete worktree",
+            typedNameTarget: "feature/x",
+          },
           mainDeadline()
         );
         const next = enqueue({ requestId: "req-next", actionTitle: "Push branch" }, mainDeadline());

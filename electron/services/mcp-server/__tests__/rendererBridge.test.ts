@@ -2993,7 +2993,15 @@ describe("rendererBridge — holding a confirm-gated dispatch open (#14989)", ()
     });
     let outcome: DispatchEnvelope | Error | undefined;
     void bridge
-      .dispatchActionForWebContents(id, "worktree.delete", {}, false, undefined, "external", approval)
+      .dispatchActionForWebContents(
+        id,
+        "worktree.delete",
+        {},
+        false,
+        undefined,
+        "external",
+        approval
+      )
       .then(
         (envelope) => {
           outcome = envelope;
