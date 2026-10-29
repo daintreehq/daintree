@@ -121,6 +121,34 @@ describe("Callout", () => {
     }
   });
 
+  it("carries the glyph inside the message, so it moves with the words", () => {
+    // A one-line message centres on a taller action; a glyph left beside the
+    // row would stay at the top while the words it marks moved down.
+    const { container, getByText } = render(
+      <Callout severity="error" action={<button type="button">Retry</button>}>
+        Couldn't load branches
+      </Callout>
+    );
+    const glyph = container.querySelector("[data-severity-glyph]");
+    const body = getByText("Couldn't load branches");
+
+    expect(body.contains(glyph)).toBe(true);
+    expect(glyph?.parentElement).not.toBe(container.firstElementChild);
+  });
+
+  it("centres the root only for a dismiss X, so a one-line message shares its line", () => {
+    const rootClass = (dismiss?: ReactNode) =>
+      render(
+        <Callout severity="info" dismiss={dismiss}>
+          Saved
+        </Callout>
+      ).container.firstElementChild?.getAttribute("class");
+
+    expect(rootClass(<button type="button">Dismiss</button>)).toMatch(/\bitems-center\b/);
+    expect(rootClass()).toMatch(/\bitems-start\b/);
+    expect(rootClass()).not.toMatch(/\bitems-center\b/);
+  });
+
   it("announces nothing unless the caller asks it to", () => {
     const { container } = render(<Callout severity="error">Failed</Callout>);
     expect(container.firstElementChild?.getAttribute("role")).toBeNull();
