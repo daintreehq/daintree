@@ -113,7 +113,8 @@ import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { terminalClient } from "@/clients";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { openSendToAgentPaletteWithText } from "@/hooks/useSendToAgentPalette";
-import { formatForTerminalPaste } from "@shared/utils/terminalInputProtocol";
+import { paneHandoffHeading, type AgentHandoffContent } from "@/services/agentHandoff/agentDraft";
+import { draftAssistantContext } from "@/services/agentHandoff/assistantDraft";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import type { HybridInputBarHandle } from "./HybridInputBar";
 const LazyHybridInputBar = lazy(() =>
@@ -392,6 +393,16 @@ export interface TerminalPaneProps {
   onTabClose?: (tabId: string) => void;
   onTabRename?: (tabId: string, newTitle: string) => void;
   onAddTab?: () => void;
+}
+
+/**
+ * What a completion hand-off carries: the tail of the buffer, headed so the
+ * receiving draft says where it came from. It is the scrollback rather than an
+ * extracted answer, which is why it lands in a draft the user reads first.
+ */
+function captureCompletionHandoff(terminalId: string): AgentHandoffContent | null {
+  const text = peekTerminalService()?.captureBufferText(terminalId, 20000) ?? "";
+  return text ? { text, ...paneHandoffHeading(terminalId, "Terminal output") } : null;
 }
 
 function TerminalPaneComponent({
@@ -1349,26 +1360,12 @@ function TerminalPaneComponent({
     }
   };
 
-  // "Send to assistant" relays this agent's completion output into the active
-  // assistant session. It's only offered when the assistant terminal exists
-  // and is idle/waiting — writing into a working or directing agent would
-  // corrupt its input mid-stream.
+  // "Send to assistant" drafts this agent's completion output into the active
+  // assistant session's composer. Offered whenever that session exists: a
+  // draft never submits, so a working assistant can take one too, and a
+  // session that can't take one says why when the button is pressed.
   const helpTerminalId = useHelpPanelStore((s) => selectActiveSlot(s).terminalId);
-  const helpAgentState = usePanelStore((s) => {
-    if (!helpTerminalId) return undefined;
-    const p = s.panelsById[helpTerminalId];
-    return p && isPtyPanel(p) ? p.agentState : undefined;
-  });
-  const helpInputLocked = usePanelStore((s) => {
-    if (!helpTerminalId) return false;
-    const p = s.panelsById[helpTerminalId];
-    return p && isPtyPanel(p) ? p.isInputLocked === true : false;
-  });
-  const assistantAvailable =
-    !!helpTerminalId &&
-    helpTerminalId !== id &&
-    !helpInputLocked &&
-    (helpAgentState === "idle" || helpAgentState === "waiting");
+  const assistantAvailable = !!helpTerminalId && helpTerminalId !== id;
 
   // The "Send to agent" palette has nothing to offer when this is the only
   // eligible PTY pane — hide it rather than render a button that no-ops.
@@ -1392,35 +1389,14 @@ function TerminalPaneComponent({
   );
 
   const handleSendToAssistant = useCallback(() => {
-    const helpTid = selectActiveSlot(useHelpPanelStore.getState()).terminalId;
-    if (!helpTid || helpTid === id) return;
-    const state = peekTerminalService()?.getAgentState(helpTid);
-    if (state !== "idle" && state !== "waiting") return;
-    const _helpPanel = usePanelStore.getState().panelsById[helpTid];
-    if (_helpPanel && isPtyPanel(_helpPanel) && _helpPanel.isInputLocked === true) return;
-    const text = peekTerminalService()?.captureBufferText(id, 20000) ?? "";
-    if (!text) return;
-
-    const managed = peekTerminalService()?.get(helpTid) ?? null;
-    // Buffer text is whatever the agent printed, escape sequences included, so
-    // it can't reach the parser as it stands. No managed instance means no mode
-    // to read, and wrapped is the safe reading of text we cannot ask about.
-    terminalClient.write(
-      helpTid,
-      formatForTerminalPaste(text, {
-        bracketedPasteMode: managed ? managed.terminal.modes.bracketedPasteMode : true,
-      })
-    );
-    withTerminalService((service) => service.notifyUserInput(helpTid), helpTid);
-    const help = useHelpPanelStore.getState();
-    help.setOpen(true);
-    help.requestFocus();
+    if (selectActiveSlot(useHelpPanelStore.getState()).terminalId === id) return;
+    const content = captureCompletionHandoff(id);
+    if (content) draftAssistantContext(content);
   }, [id]);
 
   const handleSendToAgent = useCallback(() => {
-    const text = peekTerminalService()?.captureBufferText(id, 20000) ?? "";
-    if (!text) return;
-    openSendToAgentPaletteWithText(text, id);
+    const content = captureCompletionHandoff(id);
+    if (content) openSendToAgentPaletteWithText(content, id);
   }, [id]);
 
   const isWorking = agentState === "working";

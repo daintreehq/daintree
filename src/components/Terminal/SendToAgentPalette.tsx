@@ -9,10 +9,12 @@ import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import type { SendToAgentItem } from "@/hooks/useSendToAgentPalette";
 
 // Names the pane, since Enter writes into another terminal and this is the
-// last look before it does. "Paste", not "send to agent": the text lands in
-// the pane's input unsubmitted, and a plain shell is a valid target too.
-const getSendToAgentActionLabel = (item: SendToAgentItem): string | null =>
-  item.isInputLocked ? null : `Paste into ${item.title}`;
+// last look before it does. Neither is "send": an agent gets the text in its
+// draft, a plain shell in its own input, and neither submits it.
+const getSendToAgentActionLabel = (item: SendToAgentItem): string | null => {
+  if (item.isInputLocked) return null;
+  return item.delivery === "draft" ? `Add to draft in ${item.title}` : `Paste into ${item.title}`;
+};
 
 export interface SendToAgentPaletteProps {
   isOpen: boolean;

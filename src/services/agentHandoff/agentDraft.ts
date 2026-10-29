@@ -35,6 +35,15 @@ export interface AgentHandoffContent {
   sourceLabel?: string;
 }
 
+/** The heading for text taken from a pane: the pane's title, then what was taken. */
+export function paneHandoffHeading(
+  terminalId: string,
+  title: string
+): Pick<AgentHandoffContent, "title" | "sourceLabel"> {
+  const panel = usePanelStore.getState().panelsById[terminalId];
+  return { title, ...(panel ? { sourceLabel: getTerminalDisplayTitle(panel, "full") } : {}) };
+}
+
 /** The draft gate's live inputs, read from the stores at call time. */
 export function readDraftTargetInputs(): DraftTargetInputs {
   const panelState = usePanelStore.getState();
@@ -115,6 +124,39 @@ export function reportDraftNotAdded(why: string): void {
   report({ kind: "draft-refused", lead: `Not added to draft: ${why}` });
 }
 
+/** The receipt pill, naming where the draft went when there is a name to give. */
+export function reportDraftAdded(target: string | undefined): void {
+  report({
+    kind: "draft-added",
+    lead: "Added to draft in",
+    ...(target !== undefined ? { target } : {}),
+  });
+}
+
+/**
+ * Append a handoff's block below `terminalId`'s draft, ungated. Callers have
+ * already passed their own gate; this is only the write.
+ */
+export function appendHandoffToDraft(terminalId: string, content: AgentHandoffContent): void {
+  const inputStore = useTerminalInputStore.getState();
+  const projectId = useProjectStore.getState().currentProject?.id;
+  const block = formatAgentContextBlock(content);
+  inputStore.setDraftInput(
+    terminalId,
+    appendAgentContextToDraft(inputStore.getDraftInput(terminalId, projectId), block),
+    projectId
+  );
+  inputStore.bumpExternalDraftRevision();
+}
+
+/** The receipt for a grid pane: ping it, then name it. */
+function reportDraftAddedToPane(terminalId: string): void {
+  const panelState = usePanelStore.getState();
+  panelState.pingTerminal(terminalId);
+  const panel = panelState.panelsById[terminalId];
+  reportDraftAdded(panel ? getTerminalDisplayTitle(panel, "full") : undefined);
+}
+
 /**
  * Append a handoff to an agent's draft, or refuse with the reason.
  *
@@ -143,24 +185,8 @@ export function draftAgentContext(
     return { status: "refused", reason: refusal };
   }
 
-  const inputStore = useTerminalInputStore.getState();
-  const projectId = useProjectStore.getState().currentProject?.id;
-  const block = formatAgentContextBlock(content);
-  inputStore.setDraftInput(
-    terminalId,
-    appendAgentContextToDraft(inputStore.getDraftInput(terminalId, projectId), block),
-    projectId
-  );
-  inputStore.bumpExternalDraftRevision();
-
-  const panelState = usePanelStore.getState();
-  panelState.pingTerminal(terminalId);
-  const panel = panelState.panelsById[terminalId];
-  report({
-    kind: "draft-added",
-    lead: "Added to draft in",
-    ...(panel ? { target: getTerminalDisplayTitle(panel, "full") } : {}),
-  });
+  appendHandoffToDraft(terminalId, content);
+  reportDraftAddedToPane(terminalId);
   return { status: "drafted", terminalId };
 }
 
@@ -227,13 +253,6 @@ export function draftAgentContextReference(
   );
   inputStore.bumpExternalDraftRevision();
 
-  const panelState = usePanelStore.getState();
-  panelState.pingTerminal(terminalId);
-  const panel = panelState.panelsById[terminalId];
-  report({
-    kind: "draft-added",
-    lead: "Added to draft in",
-    ...(panel ? { target: getTerminalDisplayTitle(panel, "full") } : {}),
-  });
+  reportDraftAddedToPane(terminalId);
   return { status: "drafted", terminalId };
 }

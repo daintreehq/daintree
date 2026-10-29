@@ -13,12 +13,11 @@ export interface AgentCompletionBannerProps {
   onReview: () => void;
   onDismiss: () => void;
   /**
-   * Relay the completion into the active assistant session. Omitted (button
-   * hidden) when no assistant terminal exists or it's mid-stream — a missing
-   * guard would inject text into a working agent.
+   * Draft the completion into the active assistant session's composer. Omitted
+   * (button hidden) when no assistant session exists.
    */
   onSendToAssistant?: () => void;
-  /** Open the send-to-agent palette pre-populated with the agent's output. */
+  /** Open the send-to-agent palette with the agent's output, to draft into another agent. */
   onSendToAgent?: () => void;
   className?: string;
 }

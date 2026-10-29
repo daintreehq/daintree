@@ -238,7 +238,7 @@ describe("useSendToAgentPalette worktree identity", () => {
       panel("b", { worktreeId: "/repo" }),
     ]);
     act(() => {
-      openSendToAgentPaletteWithText("hello", "source");
+      openSendToAgentPaletteWithText({ text: "hello" }, "source");
     });
 
     const { result } = renderHook(() => useSendToAgentPalette());

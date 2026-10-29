@@ -76,7 +76,7 @@ function sendFromSourceToTarget(text: string): void {
     panelsById: { a: panel("a"), b: panel("b") },
     panelIds: ["a", "b"],
   });
-  expect(openSendToAgentPaletteWithText(text, "a")).toBe(true);
+  expect(openSendToAgentPaletteWithText({ text }, "a")).toBe(true);
   usePaletteStore.setState({ activePaletteId: "send-to-agent" });
 
   const { result } = renderHook(() => useSendToAgentPalette());
@@ -226,7 +226,7 @@ describe("send to agent, a target that locks while the palette is open", () => {
       panelsById: { a: panel("a"), b: panel("b") },
       panelIds: ["a", "b"],
     });
-    expect(openSendToAgentPaletteWithText("hello", "a")).toBe(true);
+    expect(openSendToAgentPaletteWithText({ text: "hello" }, "a")).toBe(true);
 
     const { result } = renderHook(() => useSendToAgentPalette());
     const target = result.current.results.find((item) => item.id === "b")!;
@@ -266,7 +266,7 @@ describe("send to agent, a target that leaves the grid while the palette is open
       panelsById: { a: panel("a"), b: panel("b") },
       panelIds: ["a", "b"],
     });
-    expect(openSendToAgentPaletteWithText("hello", "a")).toBe(true);
+    expect(openSendToAgentPaletteWithText({ text: "hello" }, "a")).toBe(true);
 
     const { result } = renderHook(() => useSendToAgentPalette());
     const target = result.current.results.find((item) => item.id === "b")!;

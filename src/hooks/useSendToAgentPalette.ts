@@ -9,8 +9,23 @@ import { terminalClient } from "@/clients";
 import { formatForTerminalPaste } from "@shared/utils/terminalInputProtocol";
 import { usePaletteStore } from "@/store/paletteStore";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
+import { getBuiltInRuntimeAgentId } from "@/utils/terminalType";
+import {
+  draftAgentContext,
+  paneHandoffHeading,
+  type AgentHandoffContent,
+} from "@/services/agentHandoff/agentDraft";
+import { requestPaneFocus } from "@/components/Terminal/paneFocusRequest";
+import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { useWorktreeStoreOptional } from "./useWorktreeStore";
 import type { WorktreeSnapshot } from "@shared/types";
+
+/**
+ * How a row takes the text: an agent with a composer gets it drafted there,
+ * anything else — a shell, an agent Daintree draws no composer for — gets it
+ * pasted into its own input, which is the one the user sees.
+ */
+export type SendToAgentDelivery = "draft" | "paste";
 
 export interface SendToAgentItem {
   id: string;
@@ -19,6 +34,7 @@ export interface SendToAgentItem {
   terminalKind?: PanelKind;
   chrome: TerminalChromeDescriptor;
   isInputLocked?: boolean;
+  delivery: SendToAgentDelivery;
   /**
    * Resolved whether or not the row draws it, because a worktree name has to
    * find its pane even in the single-worktree case where naming every row would
@@ -28,7 +44,10 @@ export interface SendToAgentItem {
 }
 
 // Module-level state for the opener function (object to avoid react-compiler reassignment warning)
-const pendingState = { sourceId: null as string | null, selection: "" };
+const pendingState = {
+  sourceId: null as string | null,
+  content: null as AgentHandoffContent | null,
+};
 
 type PanelRecord = ReturnType<typeof usePanelStore.getState>["panelsById"][string];
 
@@ -59,28 +78,30 @@ function hasSendTargets(sourceTerminalId: string | null): boolean {
 export function openSendToAgentPalette(sourceTerminalId: string): boolean {
   const selection = peekTerminalService()?.getCachedSelection(sourceTerminalId);
   if (!selection) return false;
-  if (!hasSendTargets(sourceTerminalId)) return false;
-
-  pendingState.sourceId = sourceTerminalId;
-  pendingState.selection = selection;
-  usePaletteStore.getState().openPalette("send-to-agent");
-  return true;
+  return openSendToAgentPaletteWithText(
+    { text: selection, ...paneHandoffHeading(sourceTerminalId, "Selection") },
+    sourceTerminalId
+  );
 }
 
 /**
  * Opens the send-to-agent palette pre-populated with arbitrary text instead of
  * a cached terminal selection. Used by handoff surfaces (e.g. the agent
- * completion banner) that already have the text to relay. `sourceTerminalId`,
- * when provided, is excluded from the target list so an agent doesn't send its
- * own output back to itself.
+ * completion banner) that already have the text to relay, under the heading
+ * an agent's draft will show it with. `sourceTerminalId`, when provided, is
+ * excluded from the target list so an agent doesn't send its own output back
+ * to itself.
  */
-export function openSendToAgentPaletteWithText(text: string, sourceTerminalId?: string): boolean {
-  if (!text.trim()) return false;
+export function openSendToAgentPaletteWithText(
+  content: AgentHandoffContent,
+  sourceTerminalId?: string
+): boolean {
+  if (!content.text.trim()) return false;
   const sourceId = sourceTerminalId ?? null;
   if (!hasSendTargets(sourceId)) return false;
 
   pendingState.sourceId = sourceId;
-  pendingState.selection = text;
+  pendingState.content = content;
   usePaletteStore.getState().openPalette("send-to-agent");
   return true;
 }
@@ -125,20 +146,21 @@ function subtitleFor(
   return [lead, worktreeName].filter(Boolean).join(" · ") || undefined;
 }
 
-/**
- * Whether the pane can take the text right now. Read at send time, not from
- * the row: a pane can lock, exit or close while the palette sits open.
- */
-function isSendableTarget(targetId: string): boolean {
-  const t = usePanelStore.getState().panelsById[targetId];
-  return isListedTarget(t) && !t.isInputLocked;
+function deliveryFor(panel: PanelRecord): SendToAgentDelivery {
+  return getBuiltInRuntimeAgentId(panel) !== undefined ? "draft" : "paste";
 }
 
-function sendSelectionToTarget(targetId: string): void {
-  const text = pendingState.selection;
-  if (!text) return;
-  if (targetId === pendingState.sourceId) return;
+/**
+ * How the pane would take the text right now, or `null` when it can't. Read at
+ * send time, not from the row: a pane can lock, exit or close while the palette
+ * sits open.
+ */
+function liveDelivery(targetId: string): SendToAgentDelivery | null {
+  const t = usePanelStore.getState().panelsById[targetId];
+  return isListedTarget(t) && !t.isInputLocked ? deliveryFor(t) : null;
+}
 
+function pasteToTarget(targetId: string, text: string): void {
   // Terminal selection text carries whatever the source pane printed, so it
   // goes through the paste boundary in either mode. Without a managed instance
   // there is no mode to read — wrapped is the safe reading — and nothing to
@@ -156,9 +178,11 @@ function sendSelectionToTarget(targetId: string): void {
   } else {
     terminalClient.write(targetId, formatForTerminalPaste(text, { bracketedPasteMode: true }));
   }
+}
 
+function clearPending(): void {
   pendingState.sourceId = null;
-  pendingState.selection = "";
+  pendingState.content = null;
 }
 
 const MAX_RESULTS = 20;
@@ -206,6 +230,7 @@ export function useSendToAgentPalette() {
         terminalKind: t.kind,
         chrome,
         isInputLocked: t.isInputLocked,
+        delivery: deliveryFor(t),
         worktreeName: t.worktreeId ? worktrees.get(t.worktreeId)?.name : undefined,
       });
     }
@@ -260,11 +285,28 @@ export function useSendToAgentPalette() {
 
   const selectItem = useCallback(
     (item: SendToAgentItem) => {
+      const content = pendingState.content;
+      if (!content || item.id === pendingState.sourceId) return;
       // Stay open on a refusal: the row redraws with its reason from the same
-      // store change, and the selection is still there to send elsewhere.
-      if (!isSendableTarget(item.id)) return;
-      sendSelectionToTarget(item.id);
+      // store change, and the text is still there to send elsewhere. That
+      // includes a row whose delivery changed under it — an agent that quit
+      // back to its shell would otherwise take a paste its row never offered.
+      if (liveDelivery(item.id) !== item.delivery) return;
+      if (item.delivery === "paste") {
+        pasteToTarget(item.id, content.text);
+        clearPending();
+        palette.close();
+        return;
+      }
+      // The draft gate reports its own refusal.
+      if (draftAgentContext(item.id, content).status !== "drafted") return;
+      clearPending();
+      // The keyboard goes to the composer the text went into, so the user can
+      // write the instruction that goes with it.
+      suppressPaletteFocusRestore();
       palette.close();
+      usePanelStore.getState().activateTerminal(item.id);
+      requestPaneFocus(item.id, "hybridInput");
     },
     [palette]
   );

@@ -5,13 +5,15 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vite
 import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
 import { primeRadix } from "@/components/ui/radix-loader";
 import type { ForgeCheckRun } from "@shared/types/ipc/forge";
+import type { AgentHandoffContent } from "@/services/agentHandoff/agentDraft";
 
 const getChecksMock = vi.fn();
 const getPRMock = vi.fn<(cwd: string, prNumber: number) => Promise<unknown>>();
 const getRepoMetadataMock = vi.fn<(cwd: string) => Promise<unknown>>();
 // Typed rather than bare `vi.fn()`: an untyped mock returns `any`, and the cast
 // back at the call site is exactly what `no-unsafe-type-assertion` flags.
-const openSendToAgentMock = vi.fn<(text: string, sourceTerminalId?: string) => boolean>();
+const openSendToAgentMock =
+  vi.fn<(content: AgentHandoffContent, sourceTerminalId?: string) => boolean>();
 
 vi.mock("@/clients/forgeClient", () => ({
   forgeClient: {
@@ -22,8 +24,8 @@ vi.mock("@/clients/forgeClient", () => ({
 }));
 
 vi.mock("@/hooks/useSendToAgentPalette", () => ({
-  openSendToAgentPaletteWithText: (text: string, sourceTerminalId?: string) =>
-    openSendToAgentMock(text, sourceTerminalId),
+  openSendToAgentPaletteWithText: (content: AgentHandoffContent, sourceTerminalId?: string) =>
+    openSendToAgentMock(content, sourceTerminalId),
 }));
 
 import { PrChecksPopover } from "../PrChecksPopover";
@@ -443,9 +445,11 @@ describe("PrChecksPopover", () => {
     fireEvent.click(await screen.findByTestId("pr-checks-send"));
     expect(openSendToAgentMock).toHaveBeenCalledTimes(1);
 
-    const [text, sourceTerminalId] = openSendToAgentMock.mock.calls[0]!;
+    const [{ text, sourceLabel }, sourceTerminalId] = openSendToAgentMock.mock.calls[0]!;
     // The Review Hub is not a terminal, so nothing may be excluded as the source.
     expect(sourceTerminalId).toBeUndefined();
+    // The receiving draft heads the block with the pull request it came from.
+    expect(sourceLabel).toContain("#42");
     expect(text).toContain("pull request #42");
     expect(text).toContain("build");
     expect(text).not.toContain("lint");

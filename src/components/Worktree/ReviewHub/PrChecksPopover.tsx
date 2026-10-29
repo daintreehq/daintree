@@ -212,7 +212,13 @@ export function PrChecksPopover({
     if (state.kind !== "loaded") return;
     const text = composePrChecksAgentText({ prNumber, prUrl, worktreePath, rows: state.rows });
     if (!text) return;
-    if (openSendToAgentPaletteWithText(text)) {
+    if (
+      openSendToAgentPaletteWithText({
+        text,
+        sourceLabel: `PR #${prNumber}`,
+        title: "Failing checks",
+      })
+    ) {
       suppressCloseFocusRef.current = true;
       setOpen(false);
       return;
