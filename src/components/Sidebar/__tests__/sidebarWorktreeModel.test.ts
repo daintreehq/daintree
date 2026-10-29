@@ -140,9 +140,8 @@ describe("filterSidebarWorktrees — quick-state counterfactual", () => {
 });
 
 describe("filterSidebarWorktrees — always-show bypasses", () => {
-  // A query of spaces scores nothing, so it hides every row, but the bypasses
-  // trim before deciding a query is active. That is the one narrowing-free
-  // case in which a bypass changes what shows.
+  // A query of spaces is no query, so nothing narrows the list; the bypasses
+  // only matter once a quick-state filter narrows it.
   const active = makeWorktree("active");
   const waiting = makeWorktree("waiting-one");
   const idle = makeWorktree("idle");
@@ -156,10 +155,10 @@ describe("filterSidebarWorktrees — always-show bypasses", () => {
     derivedMetaMap,
   };
 
-  it("keeps the active and waiting worktrees when nothing narrows the list", () => {
+  it("shows every worktree for a whitespace-only query", () => {
     const result = filterSidebarWorktrees(filterInput(worktrees, bypassing));
 
-    expect(ids(result.filteredWorktrees)).toEqual(["active", "waiting-one"]);
+    expect(ids(result.filteredWorktrees)).toEqual(["active", "waiting-one", "idle"]);
   });
 
   it("drops the bypasses once a real query is typed", () => {
@@ -171,7 +170,7 @@ describe("filterSidebarWorktrees — always-show bypasses", () => {
   });
 
   it("drops the bypasses while a facet filter is active", () => {
-    const statusFilters = new Set<StatusFilter>(["active"]);
+    const statusFilters = new Set<StatusFilter>(["dirty"]);
     const result = filterSidebarWorktrees(
       filterInput(worktrees, { ...bypassing, statusFilters, hasFacetFiltersActive: true })
     );
@@ -228,7 +227,7 @@ describe("filterSidebarWorktrees — always-show bypasses", () => {
       const result = filterSidebarWorktrees(
         filterInput(worktrees, {
           ...narrowed,
-          statusFilters: new Set<StatusFilter>(["active"]),
+          statusFilters: new Set<StatusFilter>(["dirty"]),
           hasFacetFiltersActive: true,
         })
       );
