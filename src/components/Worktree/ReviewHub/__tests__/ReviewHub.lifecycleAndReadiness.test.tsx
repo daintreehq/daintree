@@ -743,6 +743,149 @@ describe("ReviewHub", () => {
       expect(hub.textarea.value).toBe("");
     });
 
+    it("clears an untouched seed once it is committed", async () => {
+      const hub = await openHub({ initialCommitMessage: "fix: from AI note" });
+      fireEvent.click(screen.getByTestId("review-hub-commit-primary"));
+      await waitFor(() =>
+        expect(commitMock).toHaveBeenCalledWith(WORKTREE_PATH, "fix: from AI note")
+      );
+      await waitFor(() => expect(hub.textarea.value).toBe(""));
+    });
+
+    it("drops the committed draft as soon as the commit lands, before its push finishes", async () => {
+      getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+      usePreferencesStore.getState().setSkipPushConfirmForWorktree(WORKTREE_PATH, true);
+      let finishPush: () => void = () => {};
+      pushMock.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishPush = resolve;
+          })
+      );
+      const first = await openHub();
+      fireEvent.change(first.textarea, { target: { value: "feat: pushed" } });
+      fireEvent.click(screen.getByTestId("review-hub-commit-primary"));
+      await waitFor(() => expect(pushMock).toHaveBeenCalled());
+      expect(useReviewCommitDraftStore.getState().draftsByWorktree).toEqual({});
+      first.unmount();
+
+      // Reopened mid-push, the box must not offer the message just committed.
+      const second = await openHub();
+      expect(second.textarea.value).toBe("");
+      await act(async () => {
+        finishPush();
+      });
+    });
+
+    it("drops the committed draft even when the push after it fails", async () => {
+      getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+      usePreferencesStore.getState().setSkipPushConfirmForWorktree(WORKTREE_PATH, true);
+      pushMock.mockRejectedValueOnce(new Error("rejected"));
+      const hub = await openHub();
+      fireEvent.change(hub.textarea, { target: { value: "feat: committed anyway" } });
+      fireEvent.click(screen.getByTestId("review-hub-commit-primary"));
+      await waitFor(() => expect(pushMock).toHaveBeenCalled());
+      await waitFor(() => expect(hub.textarea.value).toBe(""));
+      expect(useReviewCommitDraftStore.getState().draftsByWorktree).toEqual({});
+    });
+
+    it("holds no seed behind a draft it opens onto", async () => {
+      useReviewCommitDraftStore.getState().setDraft(WORKTREE_PATH, "typed earlier");
+      const hub = await openHub({ initialCommitMessage: "from AI note" });
+      expect(hub.textarea.value).toBe("typed earlier");
+
+      act(() => {
+        useReviewCommitDraftStore.getState().setDraft(WORKTREE_PATH, "");
+      });
+      expect(hub.textarea.value).toBe("");
+    });
+
+    it("reopens a mounted hub onto its draft, with no seed held behind it", async () => {
+      const hub = await openHub({ initialCommitMessage: "from AI note" });
+      fireEvent.change(hub.textarea, { target: { value: "human edit" } });
+      const props = { worktreePath: WORKTREE_PATH, onClose: vi.fn() };
+      hub.rerender(
+        <ReviewHubContent {...props} isOpen={false} initialCommitMessage="from AI note" />
+      );
+      expect(screen.queryByLabelText("Commit message")).toBeNull();
+      hub.rerender(
+        <ReviewHubContent {...props} isOpen={true} initialCommitMessage="newer AI note" />
+      );
+      const textarea = (await screen.findByLabelText("Commit message")) as HTMLTextAreaElement;
+      expect(textarea.value).toBe("human edit");
+
+      act(() => {
+        useReviewCommitDraftStore.getState().setDraft(WORKTREE_PATH, "");
+      });
+      expect(textarea.value).toBe("");
+    });
+
+    it("follows an open hub between worktrees with each one's own draft and seed", async () => {
+      const OTHER = "/home/user/other";
+      const box = () => screen.getByLabelText("Commit message") as HTMLTextAreaElement;
+      const hub = await openHub({ initialCommitMessage: "seed A" });
+      fireEvent.change(hub.textarea, { target: { value: "draft A" } });
+
+      hub.rerender(
+        <ReviewHubContent
+          isOpen={true}
+          worktreePath={OTHER}
+          onClose={vi.fn()}
+          initialCommitMessage="seed B"
+        />
+      );
+      await waitFor(() => expect(box().value).toBe("seed B"));
+      fireEvent.change(box(), { target: { value: "draft B" } });
+
+      hub.rerender(
+        <ReviewHubContent
+          isOpen={true}
+          worktreePath={WORKTREE_PATH}
+          onClose={vi.fn()}
+          initialCommitMessage="seed A"
+        />
+      );
+      await waitFor(() => expect(box().value).toBe("draft A"));
+      expect(useReviewCommitDraftStore.getState().draftsByWorktree).toEqual({
+        [WORKTREE_PATH]: "draft A",
+        [OTHER]: "draft B",
+      });
+    });
+
+    it("leaves another worktree's seed alone when a commit lands after the hub moved", async () => {
+      const OTHER = "/home/user/other";
+      let landCommit: (value: { hash: string; summary: string }) => void = () => {};
+      commitMock.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            landCommit = resolve;
+          })
+      );
+      const hub = await openHub();
+      fireEvent.change(hub.textarea, { target: { value: "feat: on A" } });
+      fireEvent.click(screen.getByTestId("review-hub-commit-primary"));
+      await waitFor(() => expect(commitMock).toHaveBeenCalled());
+
+      hub.rerender(
+        <ReviewHubContent
+          isOpen={true}
+          worktreePath={OTHER}
+          onClose={vi.fn()}
+          initialCommitMessage="seed B"
+        />
+      );
+      const box = () => screen.getByLabelText("Commit message") as HTMLTextAreaElement;
+      await waitFor(() => expect(box().value).toBe("seed B"));
+      await act(async () => {
+        landCommit({ hash: "abc123", summary: "commit" });
+      });
+
+      await waitFor(() =>
+        expect(useReviewCommitDraftStore.getState().draftsByWorktree).toEqual({})
+      );
+      expect(box().value).toBe("seed B");
+    });
+
     it("keeps the draft when the commit fails", async () => {
       commitMock.mockRejectedValueOnce(new Error("hook rejected"));
       const first = await openHub();

@@ -496,8 +496,10 @@ describe("WorktreeStoreProvider — typed Review & commit drafts (#15007)", () =
 
   it("drops a deleted worktree's draft so a new worktree at that path starts empty", async () => {
     const { store } = await renderProvider();
+    // The sole worktree: emptying the map skips the snapshot backstop, so only
+    // the removal event's own clear can drop the draft.
     act(() => {
-      store.getState().applySnapshot([makeWorktree("wt-1"), makeWorktree("wt-2")], nextV());
+      store.getState().applySnapshot([makeWorktree("wt-1")], nextV());
     });
     useReviewCommitDraftStore.getState().setDraft("/repo/wt-1", "feat: gone with it");
     useReviewCommitDraftStore.getState().setDraft("/repo/wt-2", "feat: still here");

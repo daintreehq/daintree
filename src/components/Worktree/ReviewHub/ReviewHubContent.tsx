@@ -264,6 +264,36 @@ export function ReviewHubContent({
       clearReviewMark: () => markTargetRef.current.clearReviewMark(),
     });
   }, [isOpen, panelId, worktreeId, isDialog]);
+  // What the user typed outlives this panel (#15007); the note's seed only
+  // fills the box while there is no draft, and is held against the worktree
+  // it was read for so a path change never shows one worktree's hint in another.
+  const commitDraft = useReviewCommitDraftStore(
+    useCallback((state) => state.draftsByWorktree[worktreePath], [worktreePath])
+  );
+  const [commitSeed, setCommitSeed] = useState<{ worktreePath: string; message: string } | null>(
+    null
+  );
+  const commitMessage =
+    commitDraft ?? (commitSeed?.worktreePath === worktreePath ? commitSeed.message : "");
+  const handleCommitMessageChange = useCallback(
+    (message: string) => {
+      setCommitSeed(null);
+      useReviewCommitDraftStore.getState().setDraft(worktreePath, message);
+    },
+    [worktreePath]
+  );
+  // Only the draft that was committed goes: the hub can close, reopen and be
+  // typed into again, or move to another worktree, while a commit and push run.
+  const dropCommittedMessage = useCallback((committedPath: string, message: string) => {
+    setCommitSeed((seed) => (seed?.worktreePath === committedPath ? null : seed));
+    useReviewCommitDraftStore.getState().clearCommitted(committedPath, message);
+  }, []);
+  // A draft typed in another hub on this worktree replaces the seed for good,
+  // so clearing it there can't bring an old hint back here.
+  const hasCommitDraft = commitDraft !== undefined;
+  useEffect(() => {
+    if (hasCommitDraft) setCommitSeed(null);
+  }, [hasCommitDraft]);
   const {
     pushError,
     showPushBanner,
@@ -286,54 +316,13 @@ export function ReviewHubContent({
     handleForcePush,
     clearPushError,
     reset: resetPush,
-  } = useReviewHubCommitAndPush({ worktreePath, refresh, setActionError, debouncedBgRefreshRef });
-  // What the user typed outlives this panel (#15007); the note's seed only
-  // fills the box while there is no draft, and is held against the worktree
-  // it was read for so a path change never shows one worktree's hint in another.
-  const commitDraft = useReviewCommitDraftStore(
-    useCallback((state) => state.draftsByWorktree[worktreePath], [worktreePath])
-  );
-  const [commitSeed, setCommitSeed] = useState<{ worktreePath: string; message: string } | null>(
-    null
-  );
-  const commitMessage =
-    commitDraft ?? (commitSeed?.worktreePath === worktreePath ? commitSeed.message : "");
-  const handleCommitMessageChange = useCallback(
-    (message: string) => {
-      setCommitSeed(null);
-      useReviewCommitDraftStore.getState().setDraft(worktreePath, message);
-    },
-    [worktreePath]
-  );
-  // The composer clears only once the commit lands, and only the draft it
-  // committed: the hub can close and reopen while a commit and push run.
-  const dropCommittedMessage = useCallback(
-    (message: string) => {
-      setCommitSeed(null);
-      useReviewCommitDraftStore.getState().clearCommitted(worktreePath, message);
-    },
-    [worktreePath]
-  );
-  const commitFromComposer = useCallback(
-    async (message: string) => {
-      await handleCommit(message);
-      dropCommittedMessage(message);
-    },
-    [handleCommit, dropCommittedMessage]
-  );
-  const commitAndPushFromComposer = useCallback(
-    async (message: string) => {
-      await handleCommitAndPush(message);
-      dropCommittedMessage(message);
-    },
-    [handleCommitAndPush, dropCommittedMessage]
-  );
-  // A draft typed in another hub on this worktree replaces the seed for good,
-  // so clearing it there can't bring an old hint back here.
-  const hasCommitDraft = commitDraft !== undefined;
-  useEffect(() => {
-    if (hasCommitDraft) setCommitSeed(null);
-  }, [hasCommitDraft]);
+  } = useReviewHubCommitAndPush({
+    worktreePath,
+    refresh,
+    setActionError,
+    debouncedBgRefreshRef,
+    onCommitted: dropCommittedMessage,
+  });
   const [selectedFile, setSelectedFile] = useState<{
     path: string;
     status: GitStatus;
@@ -2197,8 +2186,8 @@ export function ReviewHubContent({
               currentBranch={status.currentBranch}
               commitMessage={commitMessage}
               onCommitMessageChange={handleCommitMessageChange}
-              onCommit={commitFromComposer}
-              onCommitAndPush={commitAndPushFromComposer}
+              onCommit={handleCommit}
+              onCommitAndPush={handleCommitAndPush}
               onFocusBlocker={handleFocusBlocker}
               isPushing={isPushing}
               pushProgress={pushProgress}

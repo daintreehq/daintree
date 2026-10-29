@@ -21,6 +21,11 @@ interface UseReviewHubCommitAndPushArgs {
   refresh: () => Promise<void>;
   setActionError: (failure: ReviewHubActionFailure | null) => void;
   debouncedBgRefreshRef: RefObject<ReturnType<typeof debounce> | null>;
+  /**
+   * Called the moment a commit lands, before the refresh and any push: a
+   * message must not sit in the composer as unsent while its push runs.
+   */
+  onCommitted: (worktreePath: string, message: string) => void;
 }
 
 /**
@@ -34,6 +39,7 @@ export function useReviewHubCommitAndPush({
   refresh,
   setActionError,
   debouncedBgRefreshRef,
+  onCommitted,
 }: UseReviewHubCommitAndPushArgs) {
   const [pushError, setPushError] = useState<PushErrorState | null>(null);
   // Provider-classified push-error state, resolved async via the active forge
@@ -103,6 +109,7 @@ export function useReviewHubCommitAndPush({
       debouncedBgRefreshRef.current?.cancel();
       try {
         await window.electron.git.commit(worktreePath, message);
+        onCommitted(worktreePath, message);
         // A commit resets the review: anything still (or newly) changed after
         // it is a new change, so stale viewed markers must not stick to it.
         useDiffViewedStore.getState().clearWorktree(worktreePath);
@@ -118,7 +125,7 @@ export function useReviewHubCommitAndPush({
         throw err;
       }
     },
-    [worktreePath, refresh, setActionError, debouncedBgRefreshRef]
+    [worktreePath, refresh, setActionError, debouncedBgRefreshRef, onCommitted]
   );
 
   const isPushingRef = useRef(false);
@@ -215,6 +222,7 @@ export function useReviewHubCommitAndPush({
           });
           throw err;
         }
+        onCommitted(worktreePath, message);
         // Same review reset as handleCommit — the changeset starts over.
         useDiffViewedStore.getState().clearWorktree(worktreePath);
         await refresh();
@@ -223,7 +231,7 @@ export function useReviewHubCommitAndPush({
         setIsCommitPushInFlight(false);
       }
     },
-    [worktreePath, refresh, runPush, setActionError, debouncedBgRefreshRef]
+    [worktreePath, refresh, runPush, setActionError, debouncedBgRefreshRef, onCommitted]
   );
 
   const handleRetryPush = useCallback(async () => {
