@@ -59,7 +59,8 @@ const REALPATH_TIMEOUT_MS = 1_000;
 
 /**
  * Bound on folder resolutions still outstanding. Past it nothing new is asked
- * and the pass is skipped: each stuck `realpath` holds a threadpool thread.
+ * and every pass is skipped until one settles: each stuck `realpath` holds a
+ * threadpool thread, and asking again would only stick another.
  */
 const MAX_PENDING_FOLDERS = 8;
 
@@ -254,6 +255,7 @@ export interface CodexLiveSessionAttributionDeps {
   listThreads?: typeof listCodexThreadsCreatedSince;
   persist?: typeof acceptLiveSessionAttribution;
   canonicalFolder?: (cwd: string) => Promise<string>;
+  now?: () => number;
   attemptDelaysMs?: readonly number[];
 }
 
@@ -276,10 +278,16 @@ export class CodexLiveSessionAttribution {
    * Folder resolutions still in flight, shared across passes. `realpath` can
    * hang on a dead network mount and hold a threadpool thread while it does,
    * so a stuck folder is asked once rather than on every attempt. Each leaves
-   * when it settles, so the next pass resolves afresh: a symlink retargeted
-   * since, or a folder that failed and now resolves, is read as it is now.
+   * when it settles; a failure is never kept, so the next pass asks again.
    */
   private readonly resolving = new Map<string, Promise<string | null>>();
+  /**
+   * The folder each run resolved to, kept for that run's generation. The
+   * process went on running where its path led when it launched, so a symlink
+   * retargeted since must not move it out of its rivals' group. A relaunch
+   * resolves afresh.
+   */
+  private readonly runFolders = new Map<string, { generation: number; folder: string }>();
   private draining = false;
   private disposed = false;
   private readonly unsubscribe: () => void;
@@ -296,6 +304,7 @@ export class CodexLiveSessionAttribution {
       listThreads: deps.listThreads ?? listCodexThreadsCreatedSince,
       persist: deps.persist ?? ((attribution) => acceptLiveSessionAttribution(attribution)),
       canonicalFolder: deps.canonicalFolder ?? ((cwd) => realpath(cwd)),
+      now: deps.now ?? Date.now,
       attemptDelaysMs: deps.attemptDelaysMs ?? ATTEMPT_DELAYS_MS,
     };
     this.unsubscribe = events.on("agent:state-changed", (payload) => {
@@ -421,9 +430,9 @@ export class CodexLiveSessionAttribution {
   /**
    * One pass over every folder a due pane runs in. Returns the due panes that
    * are finished — attributed, or no longer a run attribution could apply to;
-   * the rest try again. A partial inventory, a run whose record can't be read,
-   * or a failed query finishes nothing, since each could be hiding the rival
-   * that makes a match ambiguous.
+   * the rest try again. A partial inventory, a run whose record or folder
+   * can't be read, a relaunch caught mid-way, or a failed query finishes
+   * nothing, since each could be hiding the rival that makes a match ambiguous.
    */
   private async attempt(due: ReadonlyMap<string, number>): Promise<Set<string>> {
     const finished = new Set<string>();
@@ -432,6 +441,10 @@ export class CodexLiveSessionAttribution {
       return finished;
     }
     const { ptyClient } = this.deps;
+    // Taken before the inventory is asked for. A thread created from this
+    // second on can belong to a run the inventory doesn't show, whether newly
+    // spawned or relaunched while the pass was out, so none of those count.
+    const readAtSeconds = Math.floor(this.deps.now() / 1000);
     const inventory = await ptyClient.getAllTerminalsWithCompletenessAsync();
     if (inventory.degraded || this.disposed) return finished;
 
@@ -452,11 +465,22 @@ export class CodexLiveSessionAttribution {
       return state;
     };
     const folders = new Map<string, Promise<string | null>>();
-    const folderOf = (cwd: string): Promise<string | null> => {
-      let folder = folders.get(cwd);
-      if (!folder) {
-        folder = withinMs(this.resolveFolder(cwd), REALPATH_TIMEOUT_MS);
-        folders.set(cwd, folder);
+    const folderOf = async (terminalId: string, generation: number, cwd: string) => {
+      const known = this.runFolders.get(terminalId);
+      if (known?.generation === generation) return known.folder;
+      let resolving = folders.get(cwd);
+      if (!resolving) {
+        resolving = withinMs(this.resolveFolder(cwd), REALPATH_TIMEOUT_MS);
+        folders.set(cwd, resolving);
+      }
+      const folder = await resolving;
+      if (folder !== null) {
+        this.runFolders.delete(terminalId);
+        this.runFolders.set(terminalId, { generation, folder });
+        if (this.runFolders.size > MAX_SETTLED_RUNS) {
+          const oldest = this.runFolders.keys().next().value;
+          if (oldest !== undefined) this.runFolders.delete(oldest);
+        }
       }
       return folder;
     };
@@ -481,7 +505,14 @@ export class CodexLiveSessionAttribution {
         finished.add(info.id);
         observed = undefined;
       }
-      const folder = await folderOf(info.cwd);
+      // The prompt and spawn time are only this run's if the record that
+      // answered is the generation Main is running. Mid-relaunch they aren't,
+      // and the run's folder isn't known either, so it could be anyone's rival.
+      const generation = info.launchGeneration;
+      if (typeof generation !== "number" || ptyClient.getLiveGeneration(info.id) !== generation) {
+        return finished;
+      }
+      const folder = await folderOf(info.id, generation, info.cwd);
       // Unresolved, this pane could be any folder's rival, so nothing can be
       // shown unique this pass.
       if (folder === null) return finished;
@@ -491,14 +522,6 @@ export class CodexLiveSessionAttribution {
         groups.set(folder, group);
       }
       group.cwds.add(info.cwd);
-
-      // The prompt and spawn time are only this run's if the record that
-      // answered is the generation Main is running; mid-relaunch they aren't.
-      const generation = info.launchGeneration;
-      if (typeof generation !== "number" || ptyClient.getLiveGeneration(info.id) !== generation) {
-        group.unavailable = true;
-        continue;
-      }
       const projectId = info.projectId as string;
       const state = await stateOf(projectId);
       const saved = state?.terminals?.find((pane) => pane.id === info.id);
@@ -553,9 +576,10 @@ export class CodexLiveSessionAttribution {
         // the window are missing from its own list, so it can't be accepted.
         // Every pane in the folder competes whatever its profile: two homes can
         // be one directory, and a rival counted wrongly only costs a match.
-        const threads = await this.deps.listThreads([...group.cwds], since, codexHome);
+        const listed = await this.deps.listThreads([...group.cwds], since, codexHome);
         if (this.disposed || this.deps.isQuitting()) return finished;
-        if (!threads) continue;
+        if (!listed) continue;
+        const threads = listed.filter((thread) => thread.createdAt < readAtSeconds);
         const matches = matchLiveCodexThreads(group.panes, threads, claimed);
         logger.info("Live Codex session attribution pass", {
           panes: group.panes.length,

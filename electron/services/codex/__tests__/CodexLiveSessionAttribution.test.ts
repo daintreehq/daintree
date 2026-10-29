@@ -196,6 +196,8 @@ type TerminalRecord = Awaited<
 >["terminals"][number];
 
 const PROJECT_ID = "project-1";
+/** When each pass reads the inventory: a minute after the panes launched. */
+const NOW_MS = SPAWN_MS + 60_000;
 const DELAYS = [10, 20, 40];
 /** A pass starts a timer tick after its attempt comes due, so same-tick attempts can join it. */
 const PASS_YIELD_MS = 1;
@@ -280,6 +282,7 @@ function harness(
     listThreads,
     persist,
     canonicalFolder,
+    now: () => NOW_MS,
     attemptDelaysMs: options.delays ?? DELAYS,
   });
   return { world, ptyClient, getProjectState, listThreads, persist, canonicalFolder, service };
@@ -762,9 +765,11 @@ describe("CodexLiveSessionAttribution", () => {
     h.world.threads = [thread("session-1", "Fix the tests"), thread("session-2", "Fix the lint")];
     await vi.advanceTimersByTimeAsync(DELAYS[1] + PASS_YIELD_MS);
 
-    expect(h.persist.mock.calls.map(([call]) => [call.terminalId, call.generation])).toEqual([
-      ["pane-1", 1],
-      ["pane-2", 2],
+    expect(
+      h.persist.mock.calls.map(([call]) => [call.terminalId, call.generation, call.sessionId])
+    ).toEqual([
+      ["pane-1", 1, "session-1"],
+      ["pane-2", 2, "session-2"],
     ]);
   });
 
@@ -853,6 +858,43 @@ describe("CodexLiveSessionAttribution", () => {
     expect(h.ptyClient.getAllTerminalsWithCompletenessAsync.mock.calls.length).toBeGreaterThan(8);
     expect(new Set(h.canonicalFolder.mock.calls.map(([cwd]) => cwd)).size).toBe(8);
     expect(h.listThreads).not.toHaveBeenCalled();
+  });
+
+  it("keeps a run in the folder it resolved to, until it relaunches", async () => {
+    const folders: Record<string, string> = { "/alias/repo": "/repo" };
+    const h = track(
+      harness({
+        terminals: [terminal("pane-1"), terminal("pane-2", { cwd: "/alias/repo" })],
+        panes: [saved("pane-1", "Fix the tests"), saved("pane-2", "Fix the tests")],
+        threads: [thread("session-2", "Fix the tests")],
+        folders,
+      })
+    );
+
+    working("pane-1");
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
+    // The link moves on, but pane-2's process is still running in /repo.
+    folders["/alias/repo"] = "/elsewhere";
+    await vi.advanceTimersByTimeAsync(DELAYS[1] + PASS_YIELD_MS);
+
+    expect(h.listThreads).toHaveBeenCalledTimes(2);
+    expect(h.persist).not.toHaveBeenCalled();
+    expect(h.canonicalFolder.mock.calls.filter(([cwd]) => cwd === "/alias/repo")).toHaveLength(1);
+
+    relaunch(h, "pane-2", 2);
+    await vi.advanceTimersByTimeAsync(DELAYS[2] + PASS_YIELD_MS);
+    expect(h.canonicalFolder.mock.calls.filter(([cwd]) => cwd === "/alias/repo")).toHaveLength(2);
+  });
+
+  it("ignores threads from the second the inventory was read onward", async () => {
+    // A run spawned or relaunched after the read isn't in it to compete.
+    const h = track(harness({ threads: [thread("later", "Triage issue #1", NOW_MS / 1000)] }));
+
+    working("pane-1");
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
+
+    expect(h.listThreads).toHaveBeenCalledTimes(1);
+    expect(h.persist).not.toHaveBeenCalled();
   });
 
   it("stops writing once disposed mid-pass", async () => {
