@@ -2261,6 +2261,7 @@ describe("useTerminalFileTransfer hook", () => {
     function holdClipboardUpload() {
       const seen: MaterializeSource[] = [];
       let finish!: () => void;
+      let progress!: (fraction: number) => void;
       setRemoteMaterializer(
         (source, options) =>
           new Promise<MaterializeResult>((resolve, reject) => {
@@ -2268,6 +2269,7 @@ describe("useTerminalFileTransfer hook", () => {
             options?.signal?.addEventListener("abort", () =>
               reject(Object.assign(new Error("Upload cancelled"), { code: "CANCELLED" }))
             );
+            progress = (fraction) => options?.onProgress?.(fraction);
             finish = () =>
               resolve({
                 hostPath: "/tmp/daintree-inbox/clipboard/clipboard-1.png",
@@ -2276,11 +2278,11 @@ describe("useTerminalFileTransfer hook", () => {
               });
           })
       );
-      return { seen, finish: () => finish() };
+      return { seen, finish: () => finish(), progress: (fraction: number) => progress(fraction) };
     }
 
     it("tracks a Ctrl+V clipboard image under the terminal's chip until it lands", async () => {
-      const { seen, finish } = holdClipboardUpload();
+      const { seen, finish, progress } = holdClipboardUpload();
       renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
       const pasted = getClipboardImagePaster("term-1")!();
       await act(async () => {
@@ -2290,6 +2292,8 @@ describe("useTerminalFileTransfer hook", () => {
       expect(seen).toEqual([{ kind: "clipboard-image" }]);
       expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(true);
       expect(terminalClient.write).not.toHaveBeenCalled();
+      act(() => progress(0.5));
+      expect(getPendingUploads(terminalUploadSurface("term-1"))[0]!.fraction).toBe(0.5);
 
       await act(async () => {
         finish();
@@ -2316,6 +2320,25 @@ describe("useTerminalFileTransfer hook", () => {
       });
       expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(false);
       expect(terminalClient.write).not.toHaveBeenCalled();
+    });
+
+    it("types a pasted clipboard image's host path once its tracked upload lands", async () => {
+      const { finish } = holdClipboardUpload();
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+      await act(async () => {
+        container.dispatchEvent(makePasteEvent(true));
+        await settle();
+      });
+      expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(true);
+      expect(terminalClient.write).not.toHaveBeenCalled();
+
+      await act(async () => {
+        finish();
+        await settle();
+      });
+      expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(false);
+      expect(terminalClient.write).toHaveBeenCalledTimes(1);
+      expect(lastWrittenPayload()).toContain("/tmp/daintree-inbox/clipboard/clipboard-1.png");
     });
 
     it("tracks a pasted clipboard image under the terminal's chip, and a cancel writes nothing", async () => {

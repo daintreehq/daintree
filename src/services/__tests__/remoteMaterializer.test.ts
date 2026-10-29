@@ -332,11 +332,12 @@ describe("remote materialize", () => {
       { kind: "local-file", path: "/Users/me/spec.md" },
       { destination: { kind: "worktree", directory: "/srv/proj" } }
     );
-    await expect(failure).rejects.not.toMatchObject({ code: "CANCELLED" });
+    await expect(failure).rejects.toMatchObject({ name: "MaterializeError", code: "CONFLICT" });
     expect(confirmReplace).not.toHaveBeenCalled();
     expect(fileTransfer.uploadLocalFile).toHaveBeenCalledTimes(1);
     expect(reportFailure).toHaveBeenCalledTimes(1);
-    const [{ title, message }] = reportFailure.mock.calls[0]!;
+    const [{ title, message, code }] = reportFailure.mock.calls[0]!;
+    expect(code).toBe("CONFLICT");
     expect(title).toBe("Couldn't send spec.md");
     expect(message).toContain("spec.md");
     expect(message).toContain("studio-01");
@@ -361,11 +362,12 @@ describe("remote materialize", () => {
       { kind: "local-file", path: "/Users/me/spec.md" },
       { destination: { kind: "worktree", directory: "/srv/proj/docs" } }
     );
-    await expect(failure).rejects.not.toMatchObject({ code: "CANCELLED" });
+    await expect(failure).rejects.toMatchObject({ name: "MaterializeError", code: "CONFLICT" });
     expect(confirmReplace).toHaveBeenCalledTimes(1);
     expect(fileTransfer.uploadLocalFile).toHaveBeenCalledTimes(2);
     expect(reportFailure).toHaveBeenCalledTimes(1);
-    const [{ title, message }] = reportFailure.mock.calls[0]!;
+    const [{ title, message, code }] = reportFailure.mock.calls[0]!;
+    expect(code).toBe("CONFLICT");
     expect(title).toBe("Couldn't send spec.md");
     expect(message).toContain("spec.md");
     expect(message).toContain("studio-01");
@@ -387,10 +389,13 @@ describe("remote materialize", () => {
         { kind: "local-bytes", bytes: new Uint8Array([1, 2, 3]), name: "shot.png", mimeType: null },
         { destination: { kind: "worktree", directory: "/srv/proj" } }
       )
-    ).rejects.not.toMatchObject({ code: "CANCELLED" });
+    ).rejects.toMatchObject({ name: "MaterializeError", code: "CONFLICT" });
     expect(fileTransfer.uploadBytes).toHaveBeenCalledTimes(2);
     expect(reportFailure).toHaveBeenCalledTimes(1);
-    expect(reportFailure.mock.calls[0]![0].title).toBe("Couldn't send shot.png");
+    expect(reportFailure.mock.calls[0]![0]).toMatchObject({
+      title: "Couldn't send shot.png",
+      code: "CONFLICT",
+    });
   });
 
   it("says nothing when the user declines to replace", async () => {
