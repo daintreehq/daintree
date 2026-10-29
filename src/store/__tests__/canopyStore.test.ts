@@ -420,3 +420,35 @@ describe("assistant handbacks seen across views", () => {
     expect(store.getState().assistantHandbacksSeen).toEqual({ a: 2_000, b: 1_000 });
   });
 });
+
+describe("the reading offer's callout", () => {
+  const KEY = "daintree-canopy-reading-offer-dismissed";
+  afterEach(() => window.localStorage.removeItem(KEY));
+  const reload = async () => {
+    vi.resetModules();
+    return (await import("../canopyStore")).useCanopyStore;
+  };
+
+  it("stays dismissed across launches once put away", async () => {
+    const store = await reload();
+    expect(store.getState().readingOfferDismissed).toBe(false);
+    store.getState().dismissReadingOffer();
+    expect(store.getState().readingOfferDismissed).toBe(true);
+    expect((await reload()).getState().readingOfferDismissed).toBe(true);
+  });
+
+  it("goes from a sibling view as soon as that view dismisses it", async () => {
+    const store = await reload();
+    window.localStorage.setItem(KEY, "1");
+    window.dispatchEvent(new StorageEvent("storage", { key: KEY }));
+    expect(store.getState().readingOfferDismissed).toBe(true);
+  });
+
+  it("isn't brought back by a sibling's storage being cleared", async () => {
+    const store = await reload();
+    store.getState().dismissReadingOffer();
+    window.localStorage.removeItem(KEY);
+    window.dispatchEvent(new StorageEvent("storage", { key: KEY }));
+    expect(store.getState().readingOfferDismissed).toBe(true);
+  });
+});

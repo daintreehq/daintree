@@ -234,13 +234,18 @@ function installElectron(
   return canopy;
 }
 
+/** The status bar's offer: there whether or not the callout above the list is. */
 async function openOffer() {
+  const bar = document.querySelector<HTMLElement>("[data-canopy-status]")!;
   await act(async () => {
-    fireEvent.click(
-      within(document.body).getByRole("button", { name: "Turn on reading", hidden: true })
-    );
+    fireEvent.click(within(bar).getByRole("button", { name: "Turn on reading", hidden: true }));
   });
   await frames();
+}
+
+/** The callout offering reading above a listed inbox; null while it isn't shown. */
+function readingCallout(): HTMLElement | null {
+  return document.querySelector<HTMLElement>("[data-canopy-reading-offer]");
 }
 
 function screenButton(root: HTMLElement, name: string): HTMLElement {
@@ -335,8 +340,10 @@ afterEach(() => {
     scope: "all",
     orders: {},
     unreadOnly: false,
+    readingOfferDismissed: false,
   });
   window.localStorage.removeItem("daintree-canopy-order");
+  window.localStorage.removeItem("daintree-canopy-reading-offer-dismissed");
   vi.useRealTimers();
   vi.stubGlobal("IntersectionObserver", realIntersectionObserver);
   vi.clearAllMocks();
@@ -634,6 +641,76 @@ describe("CanopyView", () => {
       if (original) Object.defineProperty(URL, "createObjectURL", original);
       else Reflect.deleteProperty(URL, "createObjectURL");
     }
+  });
+
+  it("offers reading above a listed inbox with the reader off, opening the pitch from it", async () => {
+    const off = { ...canopySnapshot, activated: false, cards: [], glances: [] };
+    const canopy = installElectron(off);
+    useCanopyStore.setState({ snapshot: off });
+    render(<CanopyView />);
+    await frames();
+    const callout = readingCallout()!;
+    expect(callout.textContent).toContain("what each agent did");
+    expect(callout.textContent).toContain("on this computer");
+    // The status bar keeps its own offer beside it.
+    const bar = document.querySelector<HTMLElement>("[data-canopy-status]")!;
+    expect(within(bar).queryByRole("button", { name: "Turn on reading" })).not.toBeNull();
+    // Nothing on a row says a reading is coming.
+    const rows = [...document.querySelectorAll<HTMLElement>("[data-canopy-card]")];
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.some((row) => callout.contains(row))).toBe(false);
+    await act(async () => {
+      fireEvent.click(within(callout).getByRole("button", { name: "Turn on reading" }));
+    });
+    await frames();
+    expect(document.getElementById("canopy-pitch-title")).not.toBeNull();
+    expect(canopy.setMode).not.toHaveBeenCalled();
+  });
+
+  it("puts the reading callout away for good, keeping the status bar's offer and the keyboard", async () => {
+    const off = { ...canopySnapshot, activated: false, cards: [], glances: [] };
+    installElectron(off);
+    useCanopyStore.setState({ snapshot: off });
+    const { unmount } = render(<CanopyView />);
+    await frames();
+    const dismiss = within(readingCallout()!).getByRole("button", {
+      name: "Dismiss reading offer",
+    });
+    act(() => dismiss.focus());
+    await act(async () => {
+      fireEvent.click(dismiss);
+    });
+    await frames();
+    expect(readingCallout()).toBeNull();
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Search agents");
+    const bar = document.querySelector<HTMLElement>("[data-canopy-status]")!;
+    expect(within(bar).queryByRole("button", { name: "Turn on reading" })).not.toBeNull();
+    // Closed and opened again: still away.
+    unmount();
+    render(<CanopyView />);
+    await frames();
+    expect(document.querySelector("[data-canopy-card]")).not.toBeNull();
+    expect(readingCallout()).toBeNull();
+  });
+
+  it("offers no reading callout with the reader on, or over an empty list", async () => {
+    installElectron();
+    const { unmount } = render(<CanopyView />);
+    await frames();
+    expect(document.querySelector("[data-canopy-card]")).not.toBeNull();
+    expect(readingCallout()).toBeNull();
+    unmount();
+
+    const off = { ...canopySnapshot, activated: false, cards: [], glances: [] };
+    installElectron(off);
+    useCanopyStore.setState({ snapshot: off });
+    useFleetSnapshotStore.setState({
+      snapshot: { ...useFleetSnapshotStore.getState().snapshot!, runs: [] },
+    });
+    render(<CanopyView />);
+    await frames();
+    expect(document.body.textContent).toContain("Launch an agent from the toolbar");
+    expect(readingCallout()).toBeNull();
   });
 
   it("still offers reading, quietly, when the reader is off and no agent runs", async () => {

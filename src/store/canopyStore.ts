@@ -97,6 +97,12 @@ interface CanopyState {
   assistantHandbacksSeen: AssistantHandbacksSeen;
   seeAssistantHandback: (assistantId: string, observedAt: number) => void;
   /**
+   * The callout offering reading above a listed inbox was put away: for good,
+   * on every host and across launches. The status bar's offer stays.
+   */
+  readingOfferDismissed: boolean;
+  dismissReadingOffer: () => void;
+  /**
    * The row a dictation is writing a reply into, asked for from the recording
    * indicator (#14778): the panel opens on its host and selects it with the
    * keyboard in its reply, then settles the request whether or not it could.
@@ -136,6 +142,7 @@ const ORDER_STORAGE_KEY = "daintree-canopy-order";
 export const CANOPY_ACKNOWLEDGED_STORAGE_KEY = "daintree-canopy-acknowledged";
 export const CANOPY_ROLE_STORAGE_KEY = "daintree-canopy-role";
 const HANDBACKS_SEEN_STORAGE_KEY = "daintree-canopy-assistant-handbacks";
+const READING_OFFER_DISMISSED_STORAGE_KEY = "daintree-canopy-reading-offer-dismissed";
 /** Assistants whose seen handback is kept at most, the oldest seen dropped first: as many as one directory names. */
 const MAX_HANDBACKS_SEEN = AGENT_DIRECTORY_ENTRIES_MAX;
 
@@ -242,6 +249,22 @@ function saveRoleFilter(roleFilter: CanopyRoleFilter): void {
     window.localStorage.setItem(CANOPY_ROLE_STORAGE_KEY, roleFilter);
   } catch {
     // Best effort: the choice still holds for this session.
+  }
+}
+
+function loadReadingOfferDismissed(): boolean {
+  try {
+    return window.localStorage.getItem(READING_OFFER_DISMISSED_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function saveReadingOfferDismissed(): void {
+  try {
+    window.localStorage.setItem(READING_OFFER_DISMISSED_STORAGE_KEY, "1");
+  } catch {
+    // Best effort: the callout still stays away for this session.
   }
 }
 
@@ -500,6 +523,11 @@ export const useCanopyStore = create<CanopyState>((set, get) => ({
             ),
           }
     ),
+  readingOfferDismissed: loadReadingOfferDismissed(),
+  dismissReadingOffer: () => {
+    saveReadingOfferDismissed();
+    set({ readingOfferDismissed: true });
+  },
   resume: null,
   // Every opening starts on the window's own host, unless the user chose All
   // hosts or is coming back from "Go to terminal".
@@ -571,6 +599,10 @@ if (typeof window !== "undefined") {
           readHandbacksSeen()
         ),
       }));
+      return;
+    }
+    if (event.key === READING_OFFER_DISMISSED_STORAGE_KEY) {
+      if (loadReadingOfferDismissed()) useCanopyStore.setState({ readingOfferDismissed: true });
       return;
     }
     if (event.key !== CANOPY_ACKNOWLEDGED_STORAGE_KEY) return;
