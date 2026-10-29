@@ -1469,8 +1469,8 @@ export function ReviewHubContent({
               REVIEW_HUB_HEADER_ROWS,
               "transition-colors",
               isDialog
-                ? "grid-cols-[minmax(0,1fr)_auto] @max-[959px]/header:grid-cols-[minmax(0,1fr)]"
-                : "grid-cols-[minmax(0,1fr)_auto_auto] @max-[959px]/header:grid-cols-[minmax(0,1fr)_auto]",
+                ? "grid-cols-[minmax(0,1fr)_auto] @max-[960px]/header:grid-cols-[minmax(0,1fr)]"
+                : "grid-cols-[minmax(0,1fr)_auto_auto] @max-[960px]/header:grid-cols-[minmax(0,1fr)_auto]",
               location === "grid" &&
                 isFocused && [SURFACE_HEADER_FOCUS_LIFT_CLASS, "border-overlay"]
             )}
@@ -1483,7 +1483,7 @@ export function ReviewHubContent({
               {!isDialog && (
                 <h2
                   id="review-hub-title"
-                  className="shrink-0 text-xs font-medium text-text-primary @max-[519px]/header:sr-only"
+                  className="shrink-0 text-xs font-medium text-text-primary @max-[520px]/header:sr-only"
                 >
                   Review & commit
                 </h2>
@@ -1495,7 +1495,7 @@ export function ReviewHubContent({
                 <Badge size="sm" tone="warning" data-testid="review-hub-protected-branch-chip">
                   <AlertTriangle aria-hidden="true" />
                   {/* The protected-branch line under the header says it in full. */}
-                  <span className="@max-[519px]/header:sr-only">Protected</span>
+                  <span className="@max-[520px]/header:sr-only">Protected</span>
                 </Badge>
               )}
               <PrStatusChip
@@ -1516,7 +1516,7 @@ export function ReviewHubContent({
                 // branch name; Working tree and Since review stay whole. A
                 // disabled segment sits in its tooltip's wrapper, hence :has.
                 className={cn(
-                  "@max-[959px]/header:min-w-0 @max-[959px]/header:shrink [&>*]:shrink-0",
+                  "@max-[960px]/header:min-w-0 @max-[960px]/header:shrink [&>*]:shrink-0",
                   "[&>[data-testid=review-hub-diff-mode-base-branch]]:shrink [&>:has(>[data-testid=review-hub-diff-mode-base-branch])]:shrink"
                 )}
                 value={diffMode}
@@ -1550,7 +1550,7 @@ export function ReviewHubContent({
                     aria-disabled={markBlockedReason !== null || undefined}
                     aria-busy={isMarking || undefined}
                     // In the strip the two actions sit at its far end, under Close.
-                    className={cn(PANE_TOOLBAR_ICON_BUTTON_CLASS, "@max-[959px]/header:ml-auto")}
+                    className={cn(PANE_TOOLBAR_ICON_BUTTON_CLASS, "@max-[960px]/header:ml-auto")}
                     aria-label="Mark reviewed"
                     data-testid="review-hub-mark-reviewed"
                   >
@@ -1607,7 +1607,7 @@ export function ReviewHubContent({
                     onClick={onClose}
                     aria-label="Close review & commit"
                     data-testid="review-hub-close"
-                    className="col-start-3 row-start-1 @max-[959px]/header:col-start-2"
+                    className="col-start-3 row-start-1 @max-[960px]/header:col-start-2"
                   />
                 </TooltipTrigger>
                 <TooltipContent side="bottom">Close review & commit</TooltipContent>

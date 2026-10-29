@@ -396,7 +396,7 @@ export const REVIEW_HUB_STICKY_BAND = "sticky top-0 z-10 bg-surface-canvas";
  * its bottom border.
  */
 export const REVIEW_HUB_HEADER_ROWS =
-  "grid grid-rows-1 gap-x-2 @max-[959px]/header:h-16 @max-[959px]/header:grid-rows-[minmax(0,1fr)_2rem]";
+  "grid grid-rows-1 gap-x-2 @max-[960px]/header:h-16 @max-[960px]/header:grid-rows-[minmax(0,1fr)_2rem]";
 
 /**
  * The toolbar's cell: beside the title bar's content when there is room, a
@@ -405,7 +405,7 @@ export const REVIEW_HUB_HEADER_ROWS =
  * every other pane's toolbar, and its divider takes the header's border colour.
  */
 export const REVIEW_HUB_HEADER_TOOLBAR =
-  "col-start-2 row-start-1 flex items-center gap-2 @max-[959px]/header:col-span-full @max-[959px]/header:row-start-2 @max-[959px]/header:-mx-3 @max-[959px]/header:min-w-0 @max-[959px]/header:self-stretch @max-[959px]/header:border-t @max-[959px]/header:border-inherit @max-[959px]/header:bg-surface-canvas @max-[959px]/header:px-3";
+  "col-start-2 row-start-1 flex items-center gap-2 @max-[960px]/header:col-span-full @max-[960px]/header:row-start-2 @max-[960px]/header:-mx-3 @max-[960px]/header:min-w-0 @max-[960px]/header:self-stretch @max-[960px]/header:border-t @max-[960px]/header:border-inherit @max-[960px]/header:bg-surface-canvas @max-[960px]/header:px-3";
 
 /**
  * The band itself: every section heading in the hub ("Staged", "Changed vs

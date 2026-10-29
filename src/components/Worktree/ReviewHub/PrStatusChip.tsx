@@ -157,7 +157,7 @@ export function PrStatusChip({
                 word the glyph already shows, then the CI word beside its
                 glyph. Every one stays in the trigger's description and the
                 checks popover. */}
-            <span className="inline-flex items-center gap-1 @max-[639px]/header:hidden">
+            <span className="inline-flex items-center gap-1 @max-[640px]/header:hidden">
               <span className="text-text-muted" aria-hidden="true">
                 ·
               </span>
@@ -184,7 +184,7 @@ export function PrStatusChip({
                       />
                     )}
                   </span>
-                  <span className="text-text-secondary @max-[519px]/header:hidden">
+                  <span className="text-text-secondary @max-[520px]/header:hidden">
                     {ciVisual.shortLabel}
                   </span>
                 </span>
@@ -206,12 +206,12 @@ export function PrStatusChip({
                   )}
                   {/* The method is its own segment, behind the chip's own separator,
                       rather than a dot typed inside one label. */}
-                  <span className="text-text-secondary @max-[1099px]/header:hidden">
+                  <span className="text-text-secondary @max-[1100px]/header:hidden">
                     {mergeIntent.kind === "queued" ? mergeIntentLabel(mergeIntent) : "auto-merge"}
                   </span>
                 </span>
                 {mergeIntent.kind === "auto-merge" && mergeIntent.method && (
-                  <span className="inline-flex items-center gap-1 @max-[1099px]/header:hidden">
+                  <span className="inline-flex items-center gap-1 @max-[1100px]/header:hidden">
                     <span className="text-text-muted" aria-hidden="true">
                       ·
                     </span>

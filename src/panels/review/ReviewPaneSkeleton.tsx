@@ -24,7 +24,7 @@ export function ReviewPaneSkeleton() {
             className={cn(
               surfaceHeaderVariants({ density: "compact" }),
               REVIEW_HUB_HEADER_ROWS,
-              "grid-cols-[minmax(0,1fr)_auto] @max-[959px]/header:grid-cols-[minmax(0,1fr)]"
+              "grid-cols-[minmax(0,1fr)_auto] @max-[960px]/header:grid-cols-[minmax(0,1fr)]"
             )}
           >
             <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-2">
