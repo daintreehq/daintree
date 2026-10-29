@@ -2763,6 +2763,21 @@ export class PtyClient extends EventEmitter {
     this.shardForTerminal(id).send({ type: "update-observed-title", id, title });
   }
 
+  /**
+   * Hand the host the conversation a live run was attributed to (#15268). The
+   * cached spawn options are deliberately left alone, unlike `updateTitle`:
+   * crash recovery replays them as a fresh launch, and a fresh launch starts a
+   * new conversation that this id doesn't describe.
+   */
+  noteLiveAgentSessionId(id: string, sessionId: string, launchGeneration: number): void {
+    this.shardForTerminal(id).send({
+      type: "note-live-agent-session-id",
+      id,
+      sessionId,
+      launchGeneration,
+    });
+  }
+
   updateTitle(id: string, title: string, titleMode: PanelTitleMode): void {
     // Keep the cached spawn options in step. `respawnPendingForShard` replays
     // them verbatim after a pty-host crash and `TerminalProcess` re-stamps the

@@ -237,6 +237,10 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
       ptyManager.updateTitle(msg.id, msg.title, msg.titleMode);
     },
 
+    "note-live-agent-session-id": (msg) => {
+      ptyManager.noteLiveAgentSessionId(msg.id, msg.sessionId, msg.launchGeneration);
+    },
+
     "update-worktree-id": (msg) => {
       ptyManager.updateWorktreeId(msg.id, msg.worktreeId, msg.expectedProjectId);
     },

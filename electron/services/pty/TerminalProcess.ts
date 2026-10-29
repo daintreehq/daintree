@@ -1021,6 +1021,22 @@ export class TerminalProcess {
   }
 
   /**
+   * Adopt the conversation Main attributed this run to while it is live
+   * (#15268), so the subagent lookup and the exit backstop key off it. Fills
+   * only, and only for the incarnation Main matched: a respawn, an id already
+   * held, or another agent now running in the pane each mean the answer
+   * describes a run this record no longer is. Not marked as a teardown capture,
+   * so a quit that never prints its hint still reaches the exit backstop.
+   */
+  noteLiveAgentSessionId(sessionId: string, launchGeneration: number): void {
+    const info = this.terminalInfo;
+    if (info.launchGeneration !== launchGeneration || info.agentSessionId) return;
+    if (info.agentIncarnation !== 0) return;
+    if ((info.detectedAgentId ?? info.launchAgentId) !== info.launchAgentId) return;
+    info.agentSessionId = sessionId;
+  }
+
+  /**
    * Mirror a renderer-side rename onto the authoritative record. `title` and
    * `titleMode` move together: a title without its mode would still read as
    * `"default"` and be overwritten by the next agent-detection sweep (#10794).

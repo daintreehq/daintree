@@ -1250,6 +1250,11 @@ export class PtyManager extends EventEmitter {
     terminal.setTitle(title, titleMode);
   }
 
+  /** See `TerminalProcess.noteLiveAgentSessionId`; a terminal that has gone is a no-op. */
+  noteLiveAgentSessionId(id: string, sessionId: string, launchGeneration: number): void {
+    this.registry.get(id)?.noteLiveAgentSessionId(sessionId, launchGeneration);
+  }
+
   /**
    * Apply a renderer-side worktree move to the authoritative record. A move for
    * a terminal that has already gone is a no-op — never a synthetic record, and

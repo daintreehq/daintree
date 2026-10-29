@@ -17,9 +17,11 @@
  * the same code that renders Claude's children. The protocol below is the only
  * Codex-specific part, which is the whole point of the split.
  *
- * Attribution is the hard part. Daintree only learns a Codex session id from
- * the `codex resume` footer during post-quit teardown, so a *running* terminal
- * has no id to key off. The fallback is the terminal's own cwd plus recency,
+ * Attribution is the hard part. A running terminal has an id to key off only
+ * once something learned it: a resume, the teardown scrape of the `codex
+ * resume` footer, or live attribution matching the prompt Daintree sent
+ * (`CodexLiveSessionAttribution`), which declines whenever its match isn't
+ * unique. Without one the fallback is the terminal's own cwd plus recency,
  * which is exact per worktree and ambiguous when two Codex sessions share one.
  * When it is ambiguous the caller is told so rather than silently shown some
  * other session's children.
@@ -610,6 +612,87 @@ export async function resolveCodexResumeLatestSession(cwd: string): Promise<stri
   } catch {
     // Degrading to `--last` loses the id capture; failing the restore would lose
     // the pane. The pane is worth more.
+    return null;
+  }
+}
+
+/** A root thread as live attribution reads it. `preview` is conversation text: never log it. */
+export interface CodexCreatedThread {
+  sessionId: string;
+  preview: string;
+  /** Unix seconds, as the protocol reports it. */
+  createdAt: number;
+}
+
+const CREATED_SINCE_PAGE_SIZE = 50;
+const CREATED_SINCE_MAX_PAGES = 4;
+const CREATED_SINCE_LOOKUP_TIMEOUT_MS = 5_000;
+
+/**
+ * Every root thread in `cwd` created at or after `sinceSeconds`, newest first,
+ * for attributing a live pane to its conversation. Null when the answer can't
+ * be complete — a failed query, or more threads in the window than the page
+ * budget reaches — because attribution is a uniqueness claim, and a thread left
+ * unread could be the rival that makes a match ambiguous.
+ *
+ * Same request boundaries as the folder picker (default interactive sources,
+ * unarchived, state DB only), sorted by creation so the walk can stop as soon
+ * as it passes the window.
+ */
+export async function listCodexThreadsCreatedSince(
+  cwd: string,
+  sinceSeconds: number,
+  codexHome?: string
+): Promise<CodexCreatedThread[] | null> {
+  try {
+    return await runCodexAppServerSession(
+      async (call) => {
+        const cwds = await resolveCwdSpellings(cwd);
+        const found: CodexCreatedThread[] = [];
+        let cursor: string | undefined;
+        for (let page = 0; page < CREATED_SINCE_MAX_PAGES; page++) {
+          const response = await call<{ data?: unknown; nextCursor?: unknown }>("thread/list", {
+            cwd: cwds,
+            sortKey: "created_at",
+            sortDirection: "desc",
+            limit: CREATED_SINCE_PAGE_SIZE,
+            useStateDbOnly: true,
+            ...(cursor !== undefined && { cursor }),
+          });
+          const threads = Array.isArray(response?.data) ? (response.data as RawThread[]) : [];
+          let passedWindow = false;
+          for (const thread of threads) {
+            const createdAt = numberOf(thread.createdAt);
+            // An undated row can't be placed inside or outside the window.
+            if (createdAt === null) return null;
+            if (createdAt < sinceSeconds) {
+              passedWindow = true;
+              continue;
+            }
+            if (asString(thread.parentThreadId) !== null) continue;
+            const threadId = asString(thread.id);
+            if (threadId === null) continue;
+            const sessionId = asString(thread.sessionId) ?? threadId;
+            if (!CODEX_SESSION_ID_PATTERN.test(sessionId)) continue;
+            found.push({
+              sessionId,
+              preview: typeof thread.preview === "string" ? thread.preview : "",
+              createdAt,
+            });
+          }
+          if (passedWindow) return found;
+          const next = response?.nextCursor;
+          if (next === null) return found;
+          // A server that omits the cursor can only be read by the page size.
+          if (next === undefined && threads.length < CREATED_SINCE_PAGE_SIZE) return found;
+          if (typeof next !== "string") return null;
+          cursor = next;
+        }
+        return null;
+      },
+      { timeoutMs: CREATED_SINCE_LOOKUP_TIMEOUT_MS, codexHome }
+    );
+  } catch {
     return null;
   }
 }

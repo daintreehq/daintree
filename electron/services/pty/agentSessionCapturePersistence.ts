@@ -33,6 +33,7 @@ export type PaneWritebackOutcome =
   | "missing-project"
   | "missing-pane"
   | "ineligible-pane"
+  | "sealed"
   | "failed";
 
 export type JournalOutcome = "written" | "skipped" | "failed";
@@ -58,6 +59,12 @@ interface AuthoredId {
   generation: number;
   sessionId: string;
   projectId: string;
+  /**
+   * Learned while the run was still going (#15268), not captured as it ended.
+   * The run can switch conversations after that, so its own exit capture may
+   * replace this id even within the same generation.
+   */
+  live?: true;
   /**
    * The claim this one replaced, kept until this one's save lands: if that
    * save fails, the pane still holds the older id, which is still ours.
@@ -93,6 +100,19 @@ const authoredIds = new Map<string, AuthoredId>();
  */
 const revokedGenerations = new Map<string, number>();
 
+/**
+ * Renderer identity edits seen per pane. A live attribution reads the saved
+ * pane before its write is queued, so it carries the count from before that
+ * read and is refused if an edit landed in between: unlike an exit capture, its
+ * generation is still open, so `revokedGenerations` can't fence it.
+ */
+const identityEditRevisions = new Map<string, number>();
+
+/** The current renderer identity-edit count for a pane; see `identityEditRevisions`. */
+export function sessionIdentityRevision(terminalId: string): number {
+  return identityEditRevisions.get(terminalId) ?? 0;
+}
+
 function rememberBounded<V>(map: Map<string, V>, key: string, value: V): void {
   map.delete(key);
   map.set(key, value);
@@ -111,6 +131,7 @@ export function noteRendererSessionIdentityEdits(terminalIds: Iterable<string>):
   const ledger = getLifecycleLedger();
   for (const terminalId of terminalIds) {
     authoredIds.delete(terminalId);
+    rememberBounded(identityEditRevisions, terminalId, sessionIdentityRevision(terminalId) + 1);
     const entry = ledger.getEntry(terminalId);
     if (entry?.closedAt !== undefined) {
       rememberBounded(revokedGenerations, terminalId, entry.generation);
@@ -128,13 +149,20 @@ function describeError(error: unknown, fallback: string, sessionId: string): str
   return sessionId ? message.split(sessionId).join("[session]") : message;
 }
 
-function decidePaneWriteback(
-  state: ProjectState | null,
-  capture: CapturedAgentSession,
-  generation: number,
-  projectId: string
-): PaneWritebackOutcome {
-  const { terminalId, record } = capture;
+/** One id offered for one saved pane, by an exit capture or a live attribution. */
+interface PaneClaim {
+  terminalId: string;
+  agentId: string;
+  sessionId: string;
+  generation: number;
+  projectId: string;
+  source: "exit" | "live";
+  /** Live only: `sessionIdentityRevision` from before the saved pane was read. */
+  identityRevision?: number;
+}
+
+function decidePaneWriteback(state: ProjectState | null, claim: PaneClaim): PaneWritebackOutcome {
+  const { terminalId, agentId, sessionId, generation, projectId } = claim;
 
   // Ownership is read here, when the queued update runs, not when it was
   // enqueued: a respawn of the same id can land while this waits. A closed
@@ -143,8 +171,14 @@ function decidePaneWriteback(
   if (!entry) return "unknown-generation";
   if (entry.generation !== generation) return "stale-generation";
   if (entry.facts.projectId !== projectId) return "project-mismatch";
-  if (entry.facts.launchAgentId !== record.agentId) return "agent-mismatch";
+  if (entry.facts.launchAgentId !== agentId) return "agent-mismatch";
   if (revokedGenerations.get(terminalId) === generation) return "identity-edited";
+  if (
+    claim.identityRevision !== undefined &&
+    sessionIdentityRevision(terminalId) !== claim.identityRevision
+  ) {
+    return "identity-edited";
+  }
 
   if (!state?.terminals) return "missing-project";
   const pane = state.terminals.find((t) => t.id === terminalId);
@@ -156,21 +190,25 @@ function decidePaneWriteback(
   ) {
     return "ineligible-pane";
   }
-  if (pane.launchAgentId !== record.agentId) return "agent-mismatch";
+  if (pane.launchAgentId !== agentId) return "agent-mismatch";
 
   if (!pane.agentSessionId) {
-    pane.agentSessionId = record.sessionId;
+    pane.agentSessionId = sessionId;
     return "filled";
   }
-  if (pane.agentSessionId === record.sessionId) return "unchanged";
+  if (pane.agentSessionId === sessionId) return "unchanged";
+  // A live attribution only ever fills: whatever already holds the pane was
+  // either captured as a run ended or chosen by the user.
+  if (claim.source === "live") return "conflict";
 
   const authored = authoredIds.get(terminalId);
   if (
     authored !== undefined &&
-    authored.generation < generation &&
+    (authored.generation < generation ||
+      (authored.live === true && authored.generation === generation)) &&
     claimCovers(authored, pane.agentSessionId)
   ) {
-    pane.agentSessionId = record.sessionId;
+    pane.agentSessionId = sessionId;
     return "superseded";
   }
   return "conflict";
@@ -194,19 +232,36 @@ export async function writeBackCapturedSessionId(
   if (typeof generation !== "number") return "unknown-generation";
   const projectId = record.projectId;
   if (!projectId) return "no-project";
+  return writeBackPaneClaim({
+    terminalId,
+    agentId: record.agentId,
+    sessionId: record.sessionId,
+    generation,
+    projectId,
+    source: "exit",
+  });
+}
 
+async function writeBackPaneClaim(claim: PaneClaim): Promise<PaneWritebackOutcome> {
+  const { terminalId, sessionId, generation, projectId } = claim;
   // Assigned by the updater; the cast keeps TS from narrowing it to the seed.
   let outcome = "missing-project" as PaneWritebackOutcome;
   let claimed: { mine: AuthoredId; previous: AuthoredId | undefined } | undefined;
   try {
     await projectStore.enqueueProjectStateUpdate(projectId, (state) => {
-      outcome = decidePaneWriteback(state, capture, generation, projectId);
+      outcome = decidePaneWriteback(state, claim);
       if (outcome === "filled" || outcome === "superseded") {
         // Claimed at decision time, not after the save: a renderer edit that
         // lands while the save is pending drops this claim, and must stay the
         // last word.
         const previous = authoredIds.get(terminalId);
-        const mine: AuthoredId = { generation, sessionId: record.sessionId, projectId, previous };
+        const mine: AuthoredId = {
+          generation,
+          sessionId,
+          projectId,
+          previous,
+          ...(claim.source === "live" && { live: true as const }),
+        };
         claimed = { mine, previous };
         rememberBounded(authoredIds, terminalId, mine);
       }
@@ -224,7 +279,8 @@ export async function writeBackCapturedSessionId(
     logger.warn("Saved-pane writeback of a captured session failed", {
       terminalId,
       projectId,
-      error: describeError(error, "project state update failed", record.sessionId),
+      source: claim.source,
+      error: describeError(error, "project state update failed", sessionId),
     });
     return "failed";
   }
@@ -419,6 +475,47 @@ export function acceptCapturedAgentSession(capture: CapturedAgentSession): void 
   );
 }
 
+export interface LiveSessionAttribution {
+  terminalId: string;
+  generation: number;
+  projectId: string;
+  agentId: string;
+  sessionId: string;
+  /** `sessionIdentityRevision(terminalId)`, read before the saved pane was. */
+  identityRevision: number;
+}
+
+/**
+ * Write the conversation a still-running pane was attributed to onto its saved
+ * pane (#15268), so a quit, crash or kill that never reaches the teardown
+ * scrape still restores it. Not a journal record: the run hasn't closed, and
+ * the journal's one record per generation belongs to the close.
+ *
+ * Fills an absent id and nothing else, under the same generation and renderer
+ * authority checks as an exit capture. The claim it leaves is marked live, so
+ * the same run's exit capture can still replace it after a `/new`, and a fresh
+ * relaunch releases it like any other id this module wrote. Tracked for the
+ * quit drain; never rejects.
+ */
+export function acceptLiveSessionAttribution(
+  attribution: LiveSessionAttribution
+): Promise<PaneWritebackOutcome> {
+  if (isHostThrowawayWorkspaceId(attribution.projectId)) return Promise.resolve("no-project");
+  if (sealed) return Promise.resolve("sealed");
+  const work = writeBackPaneClaim({ ...attribution, source: "live" }).then((pane) => {
+    // Correlation only — never the session id, which is a resume credential.
+    logger.info("Live agent session attribution outcome", {
+      terminalId: attribution.terminalId,
+      projectId: attribution.projectId,
+      generation: attribution.generation,
+      pane,
+    });
+    return pane;
+  });
+  track(work.then(() => {}));
+  return work;
+}
+
 /** Register settled-safe work so a quit's drain waits for it. */
 function track(work: Promise<void>): void {
   inFlight.add(work);
@@ -458,6 +555,7 @@ export async function sealAndDrainCapturedSessionPersistence(
 export function resetCapturedSessionPersistenceForTests(): void {
   authoredIds.clear();
   revokedGenerations.clear();
+  identityEditRevisions.clear();
   requestedLaunches.clear();
   confirmedLaunches.clear();
   inFlight.clear();
