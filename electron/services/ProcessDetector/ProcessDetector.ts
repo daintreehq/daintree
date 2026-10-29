@@ -31,6 +31,14 @@ export { type DetectionResult } from "./types.js";
 // the whole snapshot and `getChildren` is a Map lookup — so the node cap only
 // bounds per-node string work on a pathologically wide tree. It also bounds the
 // PID set diffed by `evictDisappearedImagePathPids`.
+// Generated ids are `terminal-<uuid>`, where the uuid tail is distinctive. Caller-chosen ids
+// (agent.launch) are often readable and share a suffix, so they stay whole.
+const GENERATED_TERMINAL_ID = /^terminal-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+
+export function formatTerminalLogTag(terminalId: string): string {
+  return GENERATED_TERMINAL_ID.test(terminalId) ? terminalId.slice(-8) : terminalId;
+}
+
 const MAX_PROCESS_TREE_DEPTH = 8;
 const MAX_PROCESS_TREE_NODES = 128;
 // Probes are NOT free: an unseen PID costs an `lsof`/PowerShell subprocess.
@@ -90,6 +98,7 @@ export class ProcessDetector {
   private readonly shellCommandTimers: ShellCommandTimers = resolveShellCommandTimers();
 
   private terminalId: string;
+  private readonly logTag: string;
   private spawnedAt: number;
   private ptyPid: number;
   private callback: DetectionCallback;
@@ -141,6 +150,7 @@ export class ProcessDetector {
     imagePathProbe: ImagePathProbe | null = null
   ) {
     this.terminalId = terminalId;
+    this.logTag = formatTerminalLogTag(terminalId);
     this.spawnedAt = spawnedAt;
     this.ptyPid = ptyPid;
     this.callback = callback;
@@ -180,7 +190,7 @@ export class ProcessDetector {
     this.e2eExpiryReported = false;
 
     logIdentityDebug(
-      `[IdentityDebug] shell-evidence term=${this.terminalId.slice(-8)} ` +
+      `[IdentityDebug] shell-evidence term=${this.logTag} ` +
         `agent=${identity.agentType ?? "<none>"} icon=${identity.processIconId ?? "<none>"} ` +
         `name=${JSON.stringify(identity.processName)}`
     );
@@ -227,7 +237,7 @@ export class ProcessDetector {
 
     if (this.shellCommandIdentity !== null) {
       logIdentityDebug(
-        `[IdentityDebug] shell-evidence-clear term=${this.terminalId.slice(-8)} ` +
+        `[IdentityDebug] shell-evidence-clear term=${this.logTag} ` +
           `reason=${reason} agent=${this.shellCommandIdentity.agentType ?? "<none>"} ` +
           `icon=${this.shellCommandIdentity.processIconId ?? "<none>"} ` +
           `soleSupport=${shellWasSoleSupport} promptReturned=${promptReturned}`
@@ -269,15 +279,13 @@ export class ProcessDetector {
   start(): void {
     if (this.isStarted) {
       logIdentityDebug(
-        `[IdentityDebug] detector START-SKIPPED term=${this.terminalId.slice(-8)} pid=${this.ptyPid} reason=already-started`
+        `[IdentityDebug] detector START-SKIPPED term=${this.logTag} pid=${this.ptyPid} reason=already-started`
       );
       logWarn(`ProcessDetector for terminal ${this.terminalId} already started`);
       return;
     }
 
-    logIdentityDebug(
-      `[IdentityDebug] detector START term=${this.terminalId.slice(-8)} pid=${this.ptyPid}`
-    );
+    logIdentityDebug(`[IdentityDebug] detector START term=${this.logTag} pid=${this.ptyPid}`);
 
     this.isStarted = true;
     this.detect();
@@ -287,7 +295,7 @@ export class ProcessDetector {
       if (firstRefresh) {
         firstRefresh = false;
         logIdentityDebug(
-          `[IdentityDebug] detector FIRST-TICK term=${this.terminalId.slice(-8)} pid=${this.ptyPid} children=${this.cache.getChildren(this.ptyPid).length}`
+          `[IdentityDebug] detector FIRST-TICK term=${this.logTag} pid=${this.ptyPid} children=${this.cache.getChildren(this.ptyPid).length}`
         );
       }
       this.detect();
@@ -360,7 +368,7 @@ export class ProcessDetector {
           if (signature !== this.lastShellEvidenceRetentionSignature) {
             this.lastShellEvidenceRetentionSignature = signature;
             logIdentityDebug(
-              `[IdentityDebug] shell-evidence-retain term=${this.terminalId.slice(-8)} ` +
+              `[IdentityDebug] shell-evidence-retain term=${this.logTag} ` +
                 `reason=agent-requires-explicit-exit agent=${this.shellCommandIdentity.agentType} ` +
                 `children=${childCount}`
             );
@@ -385,7 +393,7 @@ export class ProcessDetector {
           if (passSignature !== this.lastPassSignature) {
             this.lastPassSignature = passSignature;
             logIdentityDebug(
-              `[IdentityDebug] pass term=${this.terminalId.slice(-8)} pid=${this.ptyPid} ` +
+              `[IdentityDebug] pass term=${this.logTag} pid=${this.ptyPid} ` +
                 `state=${result.detectionState} agent=${result.agentType ?? "<none>"} ` +
                 `src=${result.evidenceSource ?? "<none>"} procs=[${procs}]`
             );
@@ -486,7 +494,7 @@ export class ProcessDetector {
             ) {
               this.setLaunchAnchored(true);
               logIdentityDebug(
-                `[IdentityDebug] runtime-agent-anchored term=${this.terminalId.slice(-8)} ` +
+                `[IdentityDebug] runtime-agent-anchored term=${this.logTag} ` +
                   `agent=${rawAgent} evidence=${this.lastEvidenceSource}`
               );
             }
@@ -510,7 +518,7 @@ export class ProcessDetector {
           // below only when shell-command evidence is absent.
           if (this.offStreak === 0) {
             logIdentityDebug(
-              `[IdentityDebug] demote-hold term=${this.terminalId.slice(-8)} ` +
+              `[IdentityDebug] demote-hold term=${this.logTag} ` +
                 `reason=agent-requires-explicit-exit agent=${committedAgent} ` +
                 `rawIcon=${rawIcon ?? "<none>"}`
             );
@@ -576,7 +584,7 @@ export class ProcessDetector {
         // side-channel change).
         if (gatedCommitted) {
           logIdentityDebug(
-            `[IdentityDebug] commit term=${this.terminalId.slice(-8)} pid=${this.ptyPid} state=${result.detectionState} agent=${result.agentType ?? "null"} icon=${result.processIconId ?? "null"} src=${result.evidenceSource ?? "process_tree"}`
+            `[IdentityDebug] commit term=${this.logTag} pid=${this.ptyPid} state=${result.detectionState} agent=${result.agentType ?? "null"} icon=${result.processIconId ?? "null"} src=${result.evidenceSource ?? "process_tree"}`
           );
         }
         this.callback(result, this.spawnedAt);
@@ -760,7 +768,7 @@ export class ProcessDetector {
       if (signature !== this.lastUnknownSignature) {
         this.lastUnknownSignature = signature;
         console.warn(
-          `[ProcessDetector ${this.terminalId.slice(-8)}] unmatched children of pid ${this.ptyPid}:`,
+          `[ProcessDetector ${this.logTag}] unmatched children of pid ${this.ptyPid}:`,
           processes
             .map(
               (p) => `pid=${p.pid} comm=${JSON.stringify(p.name)} argv0=${redactArgv(p.command)}`
@@ -958,7 +966,7 @@ export class ProcessDetector {
     const provenance = treeMatch?.provenance;
     const argv0 = treeMatch ? redactArgv(treeMatch.processCommand) : "";
     logInfo(
-      `[ProcessDetector ${this.terminalId.slice(-8)}] agent identity committed: ` +
+      `[ProcessDetector ${this.logTag}] agent identity committed: ` +
         `agent=${agentType} evidence=${evidenceSource} ` +
         `match=${provenance?.matchSource ?? "<none>"} ` +
         `pid=${provenance?.pid ?? "<none>"} ` +
