@@ -21,6 +21,7 @@ import { HostPluginsSection } from "./HostPluginsSection";
 import { HostSessionsSection } from "./HostSessionsSection";
 import { HostCopySettingsSection } from "./HostCopySettingsSection";
 import { takeFirstConnect } from "./hostCopySettingsRequests";
+import { HOST_PLUGINS_SECTION_ID } from "./hostPluginRequests";
 import { HostClipboardGrants } from "./HostClipboardGrants";
 import { HostPluginViewConsents } from "./HostPluginViewConsents";
 import {
@@ -202,7 +203,8 @@ export function HostDetail({
   }, [focusBackOnMount]);
 
   useEffect(() => {
-    if (focusPlugins) document.getElementById("host-plugins")?.scrollIntoView({ block: "start" });
+    if (focusPlugins)
+      document.getElementById(HOST_PLUGINS_SECTION_ID)?.scrollIntoView({ block: "start" });
   }, [focusPlugins]);
 
   // A host added here that first connects after the add flow closed still

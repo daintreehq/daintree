@@ -386,18 +386,18 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
           // Resolve supersede target inside the same set() so the insert + archive
           // land atomically — observers never see an unread count that omits one
           // change but includes the other.
-          let archiveId: string | undefined;
+          let archived: NotificationHistoryEntry | undefined;
           if (supersedes) {
             const target = state.entries.find((e) => e.id === supersedes);
-            if (target && !target.archivedAt) archiveId = target.id;
+            if (target && !target.archivedAt) archived = target;
           } else if (rest.supersedeKey) {
-            const target = state.entries.find(
+            archived = state.entries.find(
               (e) => e.supersedeKey === rest.supersedeKey && !e.archivedAt
             );
-            if (target) archiveId = target.id;
           }
 
           const now = Date.now();
+          const archiveId = archived?.id;
           const sourceEntries = archiveId
             ? state.entries.map((e) =>
                 e.id === archiveId ? { ...e, archivedAt: now, seenAsToast: true } : e
@@ -406,9 +406,17 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
 
           const candidate = [newEntry, ...sourceEntries];
           const updated = pruneNotificationEntries(candidate, now);
+          // A superseded entry is archived like any other: a thread it leaves
+          // empty mustn't keep its snooze.
+          const snoozedThreads = clearSnoozeIfThreadGone(
+            state.snoozedThreads,
+            updated,
+            archived?.correlationId
+          );
           return {
             entries: updated,
-            unreadCount: computeUnreadCount(updated, state.snoozedThreads, now),
+            snoozedThreads,
+            unreadCount: computeUnreadCount(updated, snoozedThreads, now),
           };
         });
         return newEntry.id;

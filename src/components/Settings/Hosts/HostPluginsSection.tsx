@@ -9,6 +9,7 @@ import {
 } from "@/components/Plugin/pluginParityCopy";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
+import { HOST_PLUGINS_SECTION_ID } from "./hostPluginRequests";
 
 interface HostPluginsSectionProps {
   hostId: HostId;
@@ -91,7 +92,7 @@ export function HostPluginsSection({ hostId, hostName, connected }: HostPluginsS
 
   const section = (children: ReactNode) => (
     <SettingsSection
-      id="host-plugins"
+      id={HOST_PLUGINS_SECTION_ID}
       title="Plugins"
       description={`Windows on ${hostName} run ${hostName}'s plugins. Nothing is copied between machines unless you ask`}
     >
