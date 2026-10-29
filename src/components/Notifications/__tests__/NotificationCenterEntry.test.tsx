@@ -1323,7 +1323,9 @@ describe("NotificationCenterEntry — go to source", () => {
         });
         expect(navigable()).toEqual([null, "true"]);
       } finally {
-        useScratchStore.setState({ scratches: initialScratches });
+        act(() => {
+          useScratchStore.setState({ scratches: initialScratches });
+        });
       }
     });
 

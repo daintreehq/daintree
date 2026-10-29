@@ -335,7 +335,12 @@ describe("goToNotificationSource", () => {
       await goToNotificationSource({ projectId: SCRATCH, panelId: "pane-9" }, "e1");
       await vi.waitFor(() => expect(notifyMock).toHaveBeenCalledOnce());
       const toast = notifyMock.mock.calls[0]![0];
-      expect(toast).toMatchObject({ type: "error", message: "The scratch is busy" });
+      // The inbox has closed, so the failure has to toast rather than file quietly.
+      expect(toast).toMatchObject({
+        type: "error",
+        message: "The scratch is busy",
+        priority: "high",
+      });
       toast.actions[0].onClick();
       expect(switchScratch).toHaveBeenCalledTimes(2);
       expect(switchScratch).toHaveBeenLastCalledWith(SCRATCH, {
