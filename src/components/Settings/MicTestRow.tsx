@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { SettingsRow } from "./SettingsGroup";
 import {
+  MAX_TEST_MS,
   startMicTest,
+  type MicTestEndReason,
   type MicTestHandle,
   type MicTestOpened,
   type MicTestSample,
@@ -16,6 +19,8 @@ type TestState =
   | { phase: "idle" }
   | { phase: "starting" }
   | { phase: "running"; opened: MicTestOpened; sample: MicTestSample }
+  /** Stopped on its own, not by the user: the outcome stays until the next test. */
+  | { phase: "ended"; reason: MicTestEndReason }
   | { phase: "failed"; reason: "denied" | "unavailable" };
 
 /**
@@ -63,6 +68,8 @@ interface MicTestRowProps {
    */
   active?: boolean;
   disabled?: boolean;
+  /** Why the test can't run while `disabled`, shown under the row. */
+  disabledReason?: ReactNode;
 }
 
 function describe(state: TestState, block: DictationBlock): string {
@@ -76,6 +83,10 @@ function describe(state: TestState, block: DictationBlock): string {
       return "Check that the selected microphone is picking you up. Nothing is recorded or sent anywhere.";
     case "starting":
       return "Opening the microphone…";
+    case "ended":
+      return state.reason === "time-limit"
+        ? `Test stopped after ${Math.round(MAX_TEST_MS / 1000)} seconds.`
+        : "The microphone stopped sending sound, so the test ended. Check it's still connected, then test again.";
     case "failed":
       return state.reason === "denied"
         ? "Microphone access is blocked, so the test can't listen. Allow it above, then try again."
@@ -99,7 +110,13 @@ function describe(state: TestState, block: DictationBlock): string {
   }
 }
 
-export function MicTestRow({ deviceId, deviceLabel, active = true, disabled }: MicTestRowProps) {
+export function MicTestRow({
+  deviceId,
+  deviceLabel,
+  active = true,
+  disabled,
+  disabledReason,
+}: MicTestRowProps) {
   const [state, setState] = useState<TestState>({ phase: "idle" });
   const block = useVoiceRecordingStore(dictationBlock);
   const handleRef = useRef<MicTestHandle | null>(null);
@@ -131,10 +148,10 @@ export function MicTestRow({ deviceId, deviceLabel, active = true, disabled }: M
           if (run !== runRef.current) return;
           setState((prev) => (prev.phase === "running" ? { ...prev, sample } : prev));
         },
-        onEnded: () => {
+        onEnded: (reason) => {
           if (run !== runRef.current) return;
           handleRef.current = null;
-          setState({ phase: "idle" });
+          setState({ phase: "ended", reason });
         },
       });
       if (run !== runRef.current) {
@@ -184,6 +201,7 @@ export function MicTestRow({ deviceId, deviceLabel, active = true, disabled }: M
         </>
       }
       disabled={disabled}
+      disabledReason={disabledReason}
       control={({ disabled: rowDisabled, descriptionId }) => (
         <div className="flex items-center gap-3">
           <Button

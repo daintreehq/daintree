@@ -33,9 +33,15 @@ async function dispatchSetting(actionId: ActionId, args: unknown): Promise<void>
 
 /**
  * Ctrl+V in an agent terminal of a window attached to a remote host sends this
- * machine's clipboard image. Shown only once remote hosts are in use.
+ * machine's clipboard image. Shown only once remote hosts are in use. A save
+ * that fails rolls the switch back and hands the section a retry for its
+ * banner, so it never just snaps back.
  */
-function RemoteClipboardImagesRow() {
+function RemoteClipboardImagesRow({
+  onSaveResult,
+}: {
+  onSaveResult: (retry: (() => void) | null) => void;
+}) {
   const [inUse, setInUse] = useState(false);
   const [enabled, setEnabled] = useState(shouldInterceptCtrlVImages);
   useEffect(() => {
@@ -58,10 +64,17 @@ function RemoteClipboardImagesRow() {
   if (!inUse) return null;
   const update = (next: boolean) => {
     setEnabled(next);
-    setInterceptCtrlVImages(next).catch((error: unknown) => {
-      setEnabled(!next);
-      logError("[AgentInputSettings] Failed to save the Ctrl+V image setting", error);
-    });
+    setInterceptCtrlVImages(next).then(
+      (preferences) => {
+        setEnabled(preferences.interceptCtrlVImages);
+        onSaveResult(null);
+      },
+      (error: unknown) => {
+        setEnabled(shouldInterceptCtrlVImages());
+        logError("[AgentInputSettings] Failed to save the Ctrl+V image setting", error);
+        onSaveResult(() => update(next));
+      }
+    );
   };
   return (
     <SettingsSwitchCard
@@ -150,7 +163,7 @@ export function AgentInputSettings() {
             onReset={() => void setHybridInputAutoFocus(true)}
           />
         </SettingsDependents>
-        <RemoteClipboardImagesRow />
+        <RemoteClipboardImagesRow onSaveResult={(next) => setRetry(() => next)} />
       </SettingsGroup>
     </SettingsSection>
   );

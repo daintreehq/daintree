@@ -791,6 +791,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
               deviceLabel={settings.deviceLabel}
               active={isActive}
               disabled={micPermission === "denied" || micPermission === "restricted"}
+              disabledReason="Microphone access is blocked. Allow it under Microphone access above, then re-check."
             />
           </SettingsGroup>
         )}

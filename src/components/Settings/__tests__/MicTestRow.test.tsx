@@ -6,7 +6,8 @@ import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import type { VoiceSessionElsewhere, VoiceSessionSnapshot } from "@shared/types";
 
 const startMicTest = vi.fn();
-vi.mock("@/services/voiceMicTest", () => ({
+vi.mock("@/services/voiceMicTest", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/services/voiceMicTest")>()),
   startMicTest: (...args: unknown[]) => startMicTest(...args),
 }));
 
@@ -74,6 +75,43 @@ describe("MicTestRow", () => {
     fireEvent.click(screen.getByRole("button", { name: "Stop test" }));
     expect(stop).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "Test microphone" })).toBeTruthy();
+  });
+
+  it("says a test stopped at its time limit instead of going quietly back to idle (#15233)", async () => {
+    startMicTest.mockResolvedValue({ opened, stop: vi.fn() });
+    render(<MicTestRow deviceId="" />);
+    fireEvent.click(screen.getByRole("button", { name: "Test microphone" }));
+    await waitFor(() => screen.getByRole("button", { name: "Stop test" }));
+    act(() => {
+      startMicTest.mock.calls[0]![0].onEnded("time-limit");
+    });
+    expect(screen.getByRole("status").textContent).toBe("Test stopped after 60 seconds.");
+    expect(screen.getByRole("button", { name: "Test microphone" })).toBeTruthy();
+
+    // A new test replaces the outcome.
+    fireEvent.click(screen.getByRole("button", { name: "Test microphone" }));
+    await waitFor(() => screen.getByRole("button", { name: "Stop test" }));
+    expect(screen.getByRole("status").textContent).not.toContain("Test stopped");
+  });
+
+  it("says the microphone went away when its stream ends mid-test", async () => {
+    startMicTest.mockResolvedValue({ opened, stop: vi.fn() });
+    render(<MicTestRow deviceId="" />);
+    fireEvent.click(screen.getByRole("button", { name: "Test microphone" }));
+    await waitFor(() => screen.getByRole("button", { name: "Stop test" }));
+    act(() => {
+      startMicTest.mock.calls[0]![0].onEnded("device-ended");
+    });
+    expect(screen.getByRole("status").textContent).toContain("stopped sending sound");
+  });
+
+  it("says why the test is unavailable when it is disabled", () => {
+    render(<MicTestRow deviceId="" disabled disabledReason="Microphone access is blocked." />);
+    expect(testButton().disabled).toBe(true);
+    const reason = screen.getByText("Microphone access is blocked.");
+    const describedBy = testButton().getAttribute("aria-describedby") ?? "";
+    const reasonId = reason.closest("[id]")?.id;
+    expect(reasonId && describedBy.split(" ")).toContain(reasonId);
   });
 
   it("says so in words when the device stays silent", async () => {

@@ -1,10 +1,21 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const dispatch = vi.fn().mockResolvedValue({ ok: true });
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: (...args: unknown[]) => dispatch(...args) },
+}));
+
+const ctrlV = vi.hoisted(() => ({ saved: true, supported: false, setInterceptCtrlVImages: vi.fn() }));
+vi.mock("@/components/Terminal/uploads/ctrlVImagePaste", () => ({
+  refreshUploadPreferences: vi.fn().mockResolvedValue(undefined),
+  shouldInterceptCtrlVImages: () => ctrlV.saved,
+  setInterceptCtrlVImages: (enabled: boolean) => ctrlV.setInterceptCtrlVImages(enabled),
+}));
+vi.mock("@/lib/remoteHosts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/remoteHosts")>()),
+  isRemoteShellSupported: () => ctrlV.supported,
 }));
 
 import { AgentInputSettings } from "../AgentInputSettings";
@@ -13,6 +24,9 @@ import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHost
 
 beforeEach(() => {
   dispatch.mockClear();
+  ctrlV.saved = true;
+  ctrlV.supported = false;
+  ctrlV.setInterceptCtrlVImages.mockReset();
   useTerminalInputStore.setState({ hybridInputEnabled: true, hybridInputAutoFocus: true });
   Reflect.set(window, "electron", { remoteHosts: { isInUse: vi.fn().mockResolvedValue(false) } });
 });
@@ -80,5 +94,30 @@ describe("AgentInputSettings", () => {
       delete window.__DAINTREE_HOST_ID__;
       _resetHostPlatformForTests();
     }
+  });
+
+  it("says a failed save of the remote Ctrl+V switch, and retries the value that was asked for (#15233)", async () => {
+    ctrlV.supported = true;
+    Reflect.set(window, "electron", { remoteHosts: { isInUse: vi.fn().mockResolvedValue(true) } });
+    ctrlV.setInterceptCtrlVImages.mockRejectedValueOnce(new Error("store locked"));
+    render(<AgentInputSettings />);
+
+    const toggle = await screen.findByRole("switch", {
+      name: "Send my clipboard images to remote agents on Ctrl+V",
+    });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(toggle);
+
+    expect(await screen.findByText("Couldn't save that change")).toBeTruthy();
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+
+    ctrlV.setInterceptCtrlVImages.mockImplementationOnce(async (enabled: boolean) => {
+      ctrlV.saved = enabled;
+      return { interceptCtrlVImages: enabled };
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.queryByText("Couldn't save that change")).toBeNull());
+    expect(ctrlV.setInterceptCtrlVImages).toHaveBeenLastCalledWith(false);
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
   });
 });

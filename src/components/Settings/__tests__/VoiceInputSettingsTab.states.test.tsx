@@ -961,6 +961,22 @@ describe("VoiceInputSettingsTab mic settings button", () => {
     await waitFor(() => expect(container.textContent).toContain("Couldn't open the settings app"));
   });
 
+  it("says why Test microphone is off while access is denied (#15233)", async () => {
+    install(
+      { openaiApiKey: "sk-proj-abcdefghijklmnop6789" },
+      { checkMicPermission: vi.fn().mockResolvedValue("denied") }
+    );
+    render(<VoiceInputSettingsTab />);
+    expect(
+      await screen.findByText(
+        "Microphone access is blocked. Allow it under Microphone access above, then re-check."
+      )
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Test microphone" }).hasAttribute("disabled")
+    ).toBe(true);
+  });
+
   it("stays quiet when the settings app opened", async () => {
     const container = await openSettings(true);
     // Long enough for the resolved open to reach the handler's state update.
