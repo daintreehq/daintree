@@ -582,3 +582,22 @@ describe("IssuePickerDialog stale behavior", () => {
     }
   });
 });
+
+describe("IssuePickerDialog paging", () => {
+  const pageOf = (from: number, count: number) =>
+    Array.from({ length: count }, (_, i) => makeIssue(from + i, `Issue ${from + i}`));
+
+  it("never announces one page as the whole set, and offers the rest", async () => {
+    listIssuesMock.mockResolvedValue({
+      items: pageOf(1, 20),
+      hasMore: true,
+      nextCursor: "page-2",
+      totalCount: 200,
+    });
+    const { container } = renderDialog();
+    await waitFor(() => screen.getByText("Issue 20", VISIBLE));
+
+    expect(liveStatus(container)).toBe("Showing 20 of 200 open issues");
+    expect(screen.getByRole("option", { name: "Load more" })).toBeTruthy();
+  });
+});
