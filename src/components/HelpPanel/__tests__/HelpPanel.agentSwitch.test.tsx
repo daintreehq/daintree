@@ -259,6 +259,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
   ConfirmDialog: ({
     isOpen,
     title,
+    description,
     confirmLabel,
     cancelLabel = "Cancel",
     onConfirm,
@@ -266,6 +267,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
   }: {
     isOpen: boolean;
     title: React.ReactNode;
+    description?: React.ReactNode;
     confirmLabel: string;
     cancelLabel?: string;
     onConfirm: () => void;
@@ -274,6 +276,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
     isOpen ? (
       <div role="dialog" data-testid="confirm-dialog">
         <h2 data-testid="dialog-title">{title}</h2>
+        <p data-testid="dialog-description">{description}</p>
         <button data-testid="dialog-cancel" onClick={onClose}>
           {cancelLabel}
         </button>
@@ -402,6 +405,27 @@ describe("HelpPanel agent switch (#8353, #13345)", () => {
     });
     expect(controllerSpies.selectAgent).toHaveBeenCalledWith("claude-code");
     expect(helpPanelState.agentSwitchRequest).toBeNull();
+  });
+
+  // The conversation being left is the running agent's: only its store decides
+  // whether "Resume a past session…" can bring it back (#14979).
+  it.each([
+    { from: "codex", to: "claude-code", listed: true },
+    { from: "claude-code", to: "codex", listed: false },
+  ])("says what holds for the conversation $from leaves behind", async ({ from, to, listed }) => {
+    bindTerminal(from, "working");
+    helpPanelState.preferredAgentId = from;
+    const { rerender } = render(<HelpPanel width={380} />);
+
+    await act(async () => {
+      pickInSettings(to);
+      rerender(<HelpPanel width={380} />);
+    });
+
+    const description =
+      document.querySelector('[data-testid="dialog-description"]')?.textContent ?? "";
+    expect(description).not.toMatch(/discard|delet/i);
+    expect(/stays in past sessions/.test(description)).toBe(listed);
   });
 
   it("names the picked agent in the confirm even after the host's default moves on", async () => {
