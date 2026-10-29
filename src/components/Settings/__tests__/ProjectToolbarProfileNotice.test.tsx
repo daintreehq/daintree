@@ -9,7 +9,10 @@ import {
   useProjectPresentationStore,
 } from "@/store/projectPresentationStore";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
-import { ProjectToolbarProfileNotice, ProjectToolbarResetRow } from "../ProjectToolbarProfileNotice";
+import {
+  ProjectToolbarProfileNotice,
+  ProjectToolbarResetRow,
+} from "../ProjectToolbarProfileNotice";
 
 const PROJECT: Project = {
   id: "a".repeat(64),

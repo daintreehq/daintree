@@ -1175,12 +1175,15 @@ describe("update menu lifecycle", () => {
       );
     });
 
-    it.each(["win32", "linux"] as const)("on %s leaves the Window menu without a role", (platform) => {
-      Object.defineProperty(process, "platform", { value: platform, configurable: true });
-      createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
+    it.each(["win32", "linux"] as const)(
+      "on %s leaves the Window menu without a role",
+      (platform) => {
+        Object.defineProperty(process, "platform", { value: platform, configurable: true });
+        createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
 
-      expect(capturedTemplate.find((m) => m.label === "Window")?.role).toBeUndefined();
-    });
+        expect(capturedTemplate.find((m) => m.label === "Window")?.role).toBeUndefined();
+      }
+    );
 
     it("on darwin keeps Cmd+M minimizing the window", () => {
       Object.defineProperty(process, "platform", { value: "darwin", configurable: true });

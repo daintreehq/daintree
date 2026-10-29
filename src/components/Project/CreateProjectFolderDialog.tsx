@@ -152,7 +152,11 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
       .catch((err: unknown): ProjectTemplatePreview => {
         // The raw message can carry a path or errno; the log keeps it (#15232).
         logError("Couldn't preview a project template", err);
-        return { status: "unusable", reason: "Couldn't read this template's files.", retryable: true };
+        return {
+          status: "unusable",
+          reason: "Couldn't read this template's files.",
+          retryable: true,
+        };
       })
       .then((preview) => {
         if (!cancelled) setTemplatePreview({ key, preview });
