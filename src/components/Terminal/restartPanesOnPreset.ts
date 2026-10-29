@@ -64,10 +64,14 @@ export async function restartPanesOnPreset(
   );
   const outcomes = await Promise.all(
     panes.map(async (pane) => {
-      const result = await restart(pane).catch((error: unknown) => ({
-        ok: false as const,
-        error: { message: formatErrorMessage(error, "Couldn't restart the terminal") },
-      }));
+      // Caught here, so a restart that throws before returning a promise is a refusal too.
+      let result: ActionDispatchResult;
+      try {
+        result = await restart(pane);
+      } catch (error) {
+        const message = formatErrorMessage(error, "Couldn't restart the terminal");
+        result = { ok: false, error: { code: "EXECUTION_ERROR", message } };
+      }
       return result.ok ? { pane, refusal: null } : { pane, refusal: result.error.message };
     })
   );

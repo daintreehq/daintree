@@ -131,6 +131,21 @@ describe("restartPanesOnPreset", () => {
     expect(toast.message).toBe("The terminal didn't restart.");
   });
 
+  it("reports the other panes when one restart throws before returning a promise", async () => {
+    dispatchMock.mockResolvedValue({ ok: true, result: {} });
+    const throwing = (pane: { id: string }) => (pane.id === "a" ? fail() : restart(pane));
+    const fail = (): never => {
+      throw new Error("boom");
+    };
+    const panes = [
+      { id: "a", title: "One" },
+      { id: "b", title: "Two" },
+    ];
+    await restartPanesOnPreset(panes, "Work", throwing, (count) => `Restarting ${count}`);
+    expect(announceMock).toHaveBeenCalledWith("Restarting 1");
+    expect(notifyMock.mock.calls[0]![0].message).toBe("'One' didn't restart.");
+  });
+
   it("says a missing preset once, rather than blaming each pane", async () => {
     dispatchMock.mockResolvedValue(refused('preset "work" not found'));
 
