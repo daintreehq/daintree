@@ -169,7 +169,9 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   // Plugins whose unsaved-work read is in flight, so a double-click on the
   // switch can't start two disables.
   const unsavedReadsRef = useRef<Set<string>>(new Set());
-  const confirmingDiscardRef = useRef(false);
+  // The prompt whose Discard is being re-read, so a replacement prompt's own
+  // Discard isn't held up by a cancelled one's read.
+  const confirmingDiscardRef = useRef<PendingDiscard | null>(null);
   // Bumped whenever the list may have changed under an open confirm (a
   // provenance change, a reopen). An answer read across a bump is dropped: it
   // was given about a record that may be gone.
@@ -642,10 +644,10 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
 
   const confirmDiscard = async () => {
     const prompt = pendingDiscardRef.current;
-    if (!prompt || confirmingDiscardRef.current) return;
-    confirmingDiscardRef.current = true;
+    if (!prompt || confirmingDiscardRef.current === prompt) return;
+    confirmingDiscardRef.current = prompt;
     const current = await readUnsavedPanels(prompt.plugin.manifest.name);
-    confirmingDiscardRef.current = false;
+    if (confirmingDiscardRef.current === prompt) confirmingDiscardRef.current = null;
     if (pendingDiscardRef.current !== prompt) return;
     if (current === null) {
       setPendingDiscard(null);
@@ -786,7 +788,10 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     }
     if (review) {
       const pluginId = review.update.plugin.manifest.name;
+      const generation = listGenerationRef.current;
       const current = await readUnsavedPanels(pluginId);
+      // A reopen abandoned this update (and any batch) while it was read.
+      if (!isBatchActiveRef.current && listGenerationRef.current !== generation) return;
       if (current === null) {
         setError(UNSAVED_READ_FAILED);
         if (isBatchActiveRef.current) advanceUpdateQueue();

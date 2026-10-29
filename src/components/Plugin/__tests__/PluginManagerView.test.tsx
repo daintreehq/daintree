@@ -2348,7 +2348,7 @@ describe("PluginManagerView — unsaved plugin panels (#15031)", () => {
     expect(window.electron.plugin.setEnabled).not.toHaveBeenCalled();
   });
 
-  it("asks again when the switch is used after cancelling a discard mid-read", async () => {
+  it("answers a new prompt while a cancelled one's re-read is still pending", async () => {
     vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
     const reread = deferred<PluginUnsavedPanel[]>();
     vi.mocked(window.electron.plugin.getUnsavedPanels)
@@ -2364,11 +2364,36 @@ describe("PluginManagerView — unsaved plugin panels (#15031)", () => {
     await waitFor(() => expect(discardPrompt()).toBeNull());
 
     fireEvent.click(enableSwitch());
-    await waitFor(() => expect(discardPrompt()).toBeTruthy());
-    await act(async () => reread.resolve([invoice]));
+    fireEvent.click(await screen.findByRole("button", { name: "Discard changes" }));
+    await waitFor(() =>
+      expect(vi.mocked(window.electron.plugin.setEnabled).mock.calls).toEqual([
+        ["acme.demo", false],
+      ])
+    );
 
-    expect(discardPrompt()).toBeTruthy();
+    await act(async () => reread.resolve([invoice]));
+    expect(window.electron.plugin.setEnabled).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a switch click whose read lands after a cross-window provenance change", async () => {
+    let fireProvenance: (() => void) | undefined;
+    vi.mocked(window.electron.plugin.onProvenanceChanged).mockImplementation((cb) => {
+      fireProvenance = () => cb({});
+      return () => {};
+    });
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
+    const read = deferred<PluginUnsavedPanel[]>();
+    vi.mocked(window.electron.plugin.getUnsavedPanels).mockReturnValueOnce(read.promise);
+    renderDialog();
+    await screen.findAllByText("Acme Demo");
+
+    fireEvent.click(enableSwitch());
+    await waitFor(() => expect(window.electron.plugin.getUnsavedPanels).toHaveBeenCalledTimes(1));
+    act(() => fireProvenance?.());
+    await act(async () => read.resolve([]));
+
     expect(window.electron.plugin.setEnabled).not.toHaveBeenCalled();
+    expect(discardPrompt()).toBeNull();
   });
 
   it("asks before retrying a plugin that failed to start", async () => {
@@ -2423,6 +2448,25 @@ describe("PluginManagerView — unsaved plugin panels (#15031)", () => {
     expect(window.electron.plugin.uninstall).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the uninstall confirm up with an error when the re-read fails", async () => {
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
+    vi.mocked(window.electron.plugin.getUnsavedPanels)
+      .mockResolvedValueOnce([])
+      .mockRejectedValue(new Error("gone"));
+    renderDialog();
+    await selectPlugin();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Uninstall Acme Demo" }));
+    await waitFor(() => expect(window.electron.plugin.getUnsavedPanels).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "Uninstall plugin" }));
+
+    const dialog = await screen.findByRole("alertdialog", { name: "Uninstall 'Acme Demo'?" });
+    await waitFor(() =>
+      expect(within(dialog).getByText(/Couldn't check this plugin's panels/)).toBeTruthy()
+    );
+    expect(window.electron.plugin.uninstall).not.toHaveBeenCalled();
+  });
+
   it("leaves the uninstall confirm unchanged for a plugin with no dirty panels", async () => {
     vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
     renderDialog();
@@ -2468,6 +2512,29 @@ describe("PluginManagerView — unsaved plugin panels (#15031)", () => {
       )
     );
     expect(window.electron.plugin.installFromUrl).toHaveBeenCalledTimes(1);
+  });
+
+  it("installs an HTTP update when nothing new turned dirty behind the HTTP confirm", async () => {
+    updatablePlugin("http://example.com/p.dntr");
+    vi.mocked(window.electron.plugin.getUnsavedPanels).mockResolvedValue([invoice]);
+    renderDialog();
+    await selectPlugin();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Check Acme Demo for updates" }));
+    await waitFor(() =>
+      expect(screen.getByText("Updating discards unsaved work in 1 panel")).toBeTruthy()
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Install over HTTP" }));
+
+    await waitFor(() =>
+      expect(window.electron.plugin.installFromUrl).toHaveBeenCalledWith(
+        "http://example.com/p.dntr",
+        expect.any(String),
+        { pluginId: "acme.demo", archiveHash: REVIEWED_HASH }
+      )
+    );
+    expect(window.electron.plugin.getUnsavedPanels).toHaveBeenCalledTimes(3);
   });
 
   it("puts an HTTP update back up when a panel turned dirty behind the HTTP confirm", async () => {
