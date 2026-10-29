@@ -513,6 +513,37 @@ describe("Review Hub review marks (#14585)", () => {
     expect(screen.getByTestId("review-hub-review-mark-since").textContent).toBe("1 file since");
   });
 
+  it("keeps the separator in the status's own clipping box, so a narrow pane can't strand it", async () => {
+    useReviewMarksStore.setState({ marks: { [WT]: summary(2) }, revision: 2, loaded: true });
+    bridge.compare.mockResolvedValue({
+      status: "compared",
+      markRevision: 2,
+      result: comparable(["a.ts"], 0),
+    } satisfies ReviewMarkCompareOutcome);
+    renderHub();
+
+    const line = await screen.findByTestId("review-hub-review-mark");
+    const status = await screen.findByTestId("review-hub-review-mark-since");
+    const separator = within(line).getByText("·");
+    expect(separator.getAttribute("aria-hidden")).toBe("true");
+    expect(separator.parentElement).not.toBe(line);
+    expect(separator.parentElement?.contains(status)).toBe(true);
+    expect(status.textContent).toBe("1 file since");
+  });
+
+  it("names Clear by its action when a narrow pane hides the visible label", async () => {
+    useReviewMarksStore.setState({ marks: { [WT]: summary(2) }, revision: 2, loaded: true });
+    bridge.clear.mockResolvedValue({ status: "cleared", snapshot: snapshot({}, 3) });
+    renderHub();
+
+    const clear = await screen.findByTestId("review-hub-review-mark-clear");
+    const label = within(clear).getByText("Clear review mark");
+    label.hidden = true;
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear review mark" }));
+    await waitFor(() => expect(bridge.clear).toHaveBeenCalledWith(WT, 2));
+  });
+
   it("clears the mark and drops the line once the host says it's gone", async () => {
     useReviewMarksStore.setState({ marks: { [WT]: summary(2) }, revision: 2, loaded: true });
     bridge.clear.mockResolvedValue({ status: "cleared", snapshot: snapshot({}, 3) });

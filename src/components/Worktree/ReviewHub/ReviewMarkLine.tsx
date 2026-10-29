@@ -1,6 +1,7 @@
 import { RefreshCw, X } from "lucide-react";
 import { BookmarkCheck } from "@/components/icons";
 import { TimeAgo } from "@/components/ui/TimeAgo";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import type { ReviewMarkCompareOutcome } from "@shared/types/ipc/reviewMarks";
 import type { WorktreeReviewMark } from "@/store/reviewMarksStore";
@@ -67,57 +68,69 @@ export function ReviewMarkLine({
 
   return (
     <>
-      <div
-        className="flex items-center gap-1.5 min-w-0 px-3 py-1.5 border-b border-divider text-xs text-text-secondary"
-        data-testid="review-hub-review-mark"
-      >
-        <BookmarkCheck className="size-3.5 shrink-0" aria-hidden="true" />
-        <span className="shrink-0">
-          Reviewed <TimeAgo timestamp={mark.markedAt} /> {at}
-        </span>
-        <span className="shrink-0" aria-hidden="true">
-          ·
-        </span>
-        <span
-          className="truncate"
-          role="status"
-          aria-live="polite"
-          data-testid="review-hub-review-mark-since"
-          data-state={view.kind}
+      {/* The row's own padding would come off the width the container query
+          measures, so the query lives on a wrapper. */}
+      <div className="@container/review-mark shrink-0">
+        <div
+          className="flex items-center gap-1.5 min-w-0 px-3 py-1.5 border-b border-divider text-xs text-text-secondary"
+          data-testid="review-hub-review-mark"
         >
-          {since}
-        </span>
-        {view.kind === "failed" && (
-          <button
-            type="button"
-            className="shrink-0 inline-flex items-center gap-1 text-text-secondary hover:text-text-primary"
-            onClick={onRetry}
-            data-testid="review-hub-review-mark-retry"
-          >
-            <RefreshCw className="size-3" aria-hidden="true" />
-            <span>Retry</span>
-          </button>
-        )}
-        {onOpenSinceReview && applicability === "applicable" && (
-          <button
-            type="button"
-            className="shrink-0 text-text-secondary hover:text-text-primary underline-offset-2 hover:underline"
-            onClick={onOpenSinceReview}
-            data-testid="review-hub-review-mark-open"
-          >
-            View
-          </button>
-        )}
-        <button
-          type="button"
-          className="ml-auto shrink-0 inline-flex items-center gap-1 text-text-secondary hover:text-text-primary"
-          onClick={onClear}
-          aria-disabled={isClearing || undefined}
-          data-testid="review-hub-review-mark-clear"
-        >
-          <X className="size-3" aria-hidden="true" />
-          <span>Clear review mark</span>
-        </button>
+          <BookmarkCheck className="size-3.5 shrink-0" aria-hidden="true" />
+          <span className="shrink-0">
+            Reviewed <TimeAgo timestamp={mark.markedAt} /> {at}
+          </span>
+          {/* The separator shares the status's clipping box, so it can't outlive
+              the text it introduces. The floor keeps a few words on screen: a
+              box clipped to a few pixels paints a sliver of the dot. */}
+          <span className="min-w-[8ch] truncate">
+            <span aria-hidden="true">·&nbsp;</span>
+            <span
+              role="status"
+              aria-live="polite"
+              data-testid="review-hub-review-mark-since"
+              data-state={view.kind}
+            >
+              {since}
+            </span>
+          </span>
+          {view.kind === "failed" && (
+            <button
+              type="button"
+              className="shrink-0 inline-flex items-center gap-1 text-text-secondary hover:text-text-primary"
+              onClick={onRetry}
+              data-testid="review-hub-review-mark-retry"
+            >
+              <RefreshCw className="size-3" aria-hidden="true" />
+              <span>Retry</span>
+            </button>
+          )}
+          {onOpenSinceReview && applicability === "applicable" && (
+            <button
+              type="button"
+              className="shrink-0 text-text-secondary hover:text-text-primary underline-offset-2 hover:underline"
+              onClick={onOpenSinceReview}
+              data-testid="review-hub-review-mark-open"
+            >
+              View
+            </button>
+          )}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                className="ml-auto shrink-0 inline-flex items-center gap-1 text-text-secondary hover:text-text-primary"
+                onClick={onClear}
+                aria-label="Clear review mark"
+                aria-disabled={isClearing || undefined}
+                data-testid="review-hub-review-mark-clear"
+              >
+                <X className="size-3" aria-hidden="true" />
+                <span className="@max-[520px]/review-mark:hidden">Clear review mark</span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Clear review mark</TooltipContent>
+          </Tooltip>
+        </div>
       </div>
       {isRecording && (
         <p
