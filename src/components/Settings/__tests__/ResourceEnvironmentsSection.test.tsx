@@ -6,6 +6,9 @@ import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import { createWorktreeStore } from "@/store/createWorktreeStore";
 import { ResourceEnvironmentsSection } from "../ResourceEnvironmentsSection";
 
+// The last confirm handler the dialog was given, so a test can call it past a disabled button.
+const dialog = vi.hoisted(() => ({ onConfirm: null as (() => void) | null }));
+
 // The real dialog portals and pulls in the app's icons; what matters here is what it is given.
 vi.mock("@/components/ui/ConfirmDialog", () => ({
   ConfirmDialog: (props: {
@@ -18,8 +21,9 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
     hint?: React.ReactNode;
     onClose: () => void;
     onConfirm: () => void;
-  }) =>
-    props.isOpen ? (
+  }) => {
+    dialog.onConfirm = props.onConfirm;
+    return props.isOpen ? (
       <div role="dialog">
         <h2>{props.title}</h2>
         <div>{props.description}</div>
@@ -30,7 +34,8 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
           {props.confirmLabel}
         </button>
       </div>
-    ) : null,
+    ) : null;
+  },
 }));
 
 const mockResourceEnvironments = {
@@ -246,11 +251,12 @@ describe("ResourceEnvironmentsSection — removing an environment", () => {
   });
 
   it("leaves the default worktree mode alone when another environment is removed", () => {
+    const onResourceEnvironmentsChange = vi.fn();
     const onDefaultWorktreeModeChange = vi.fn();
     render(
       <ResourceEnvironmentsSection
         resourceEnvironments={twoEnvironments}
-        onResourceEnvironmentsChange={vi.fn()}
+        onResourceEnvironmentsChange={onResourceEnvironmentsChange}
         activeResourceEnvironment="cloud"
         onActiveResourceEnvironmentChange={vi.fn()}
         defaultWorktreeMode="docker-local"
@@ -261,6 +267,7 @@ describe("ResourceEnvironmentsSection — removing an environment", () => {
 
     removeEnvironment("cloud");
 
+    expect(Object.keys(onResourceEnvironmentsChange.mock.calls[0]![0])).toEqual(["docker-local"]);
     expect(onDefaultWorktreeModeChange).not.toHaveBeenCalled();
   });
 
@@ -285,12 +292,23 @@ describe("ResourceEnvironmentsSection — removing an environment", () => {
 
   describe("while worktrees still run in it", () => {
     function worktree(id: string, name: string, worktreeMode: string): WorktreeSnapshot {
-      return { id, worktreeId: id, path: `/repo/${name}`, name, worktreeMode } as WorktreeSnapshot;
+      return { id, worktreeId: id, path: `/repo/${name}`, name, isCurrent: false, worktreeMode };
     }
 
-    function renderWithWorktrees(worktrees: WorktreeSnapshot[]) {
+    function renderWithWorktrees(
+      worktrees: WorktreeSnapshot[],
+      {
+        activeResourceEnvironment = "cloud",
+        defaultWorktreeMode = "cloud",
+        isInitialized = true,
+      }: {
+        activeResourceEnvironment?: string;
+        defaultWorktreeMode?: string;
+        isInitialized?: boolean;
+      } = {}
+    ) {
       const store = createWorktreeStore();
-      store.setState({ worktrees: new Map(worktrees.map((w) => [w.id, w])) });
+      store.setState({ worktrees: new Map(worktrees.map((w) => [w.id, w])), isInitialized });
       const onResourceEnvironmentsChange = vi.fn();
       const onDefaultWorktreeModeChange = vi.fn();
       render(
@@ -298,9 +316,9 @@ describe("ResourceEnvironmentsSection — removing an environment", () => {
           <ResourceEnvironmentsSection
             resourceEnvironments={twoEnvironments}
             onResourceEnvironmentsChange={onResourceEnvironmentsChange}
-            activeResourceEnvironment="cloud"
+            activeResourceEnvironment={activeResourceEnvironment}
             onActiveResourceEnvironmentChange={vi.fn()}
-            defaultWorktreeMode="cloud"
+            defaultWorktreeMode={defaultWorktreeMode}
             onDefaultWorktreeModeChange={onDefaultWorktreeModeChange}
             isOpen={true}
           />
@@ -318,18 +336,37 @@ describe("ResourceEnvironmentsSection — removing an environment", () => {
       ]);
 
       fireEvent.click(screen.getByRole("button", { name: "Delete cloud environment" }));
-      const dialog = screen.getByRole("dialog");
+      const confirmDialog = screen.getByRole("dialog");
 
-      expect(dialog.textContent).toContain('2 worktrees still run in "cloud"');
-      const listed = within(within(dialog).getByRole("list")).getAllByRole("listitem");
+      expect(confirmDialog.textContent).toContain('2 worktrees still run in "cloud"');
+      expect(confirmDialog.textContent).toContain("Switch or delete these worktrees first");
+      const listed = within(within(confirmDialog).getByRole("list")).getAllByRole("listitem");
       expect(listed.map((item) => item.textContent)).toEqual(["feature-a", "feature-b"]);
+      const confirm = within(confirmDialog).getByRole("button", { name: "Remove environment" });
+      expect(confirm.hasAttribute("disabled")).toBe(true);
 
-      const confirm = within(dialog).getByRole("button", { name: "Remove environment" });
-      expect((confirm as HTMLButtonElement).disabled).toBe(true);
-      // The handler holds the line too, not just the disabled button.
-      fireEvent.click(confirm);
+      // The handler refuses too, not only the disabled button.
+      act(() => dialog.onConfirm?.());
       expect(onResourceEnvironmentsChange).not.toHaveBeenCalled();
       expect(onDefaultWorktreeModeChange).not.toHaveBeenCalled();
+      expect(screen.getByRole("dialog")).toBe(confirmDialog);
+    });
+
+    it("lists only the worktrees in the environment being removed", () => {
+      renderWithWorktrees(
+        [
+          worktree("/repo/a", "feature-a", "cloud"),
+          worktree("/repo/c", "feature-c", "docker-local"),
+        ],
+        { activeResourceEnvironment: "docker-local", defaultWorktreeMode: "cloud" }
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Delete docker-local environment" }));
+      const confirmDialog = screen.getByRole("dialog");
+
+      expect(confirmDialog.textContent).toContain('1 worktree still runs in "docker-local"');
+      const listed = within(within(confirmDialog).getByRole("list")).getAllByRole("listitem");
+      expect(listed.map((item) => item.textContent)).toEqual(["feature-c"]);
     });
 
     it("allows the removal once the last of them leaves the environment", () => {
@@ -338,8 +375,8 @@ describe("ResourceEnvironmentsSection — removing an environment", () => {
       ]);
 
       fireEvent.click(screen.getByRole("button", { name: "Delete cloud environment" }));
-      const dialog = screen.getByRole("dialog");
-      expect(dialog.textContent).toContain('1 worktree still runs in "cloud"');
+      const confirmDialog = screen.getByRole("dialog");
+      expect(confirmDialog.textContent).toContain('1 worktree still runs in "cloud"');
 
       act(() => {
         store.setState({
@@ -347,10 +384,37 @@ describe("ResourceEnvironmentsSection — removing an environment", () => {
         });
       });
 
-      expect(within(dialog).queryByRole("list")).toBeNull();
-      expect(dialog.textContent).toContain("New worktrees will start on Local");
-      fireEvent.click(within(dialog).getByRole("button", { name: "Remove environment" }));
+      expect(within(confirmDialog).queryByRole("list")).toBeNull();
+      expect(confirmDialog.textContent).not.toContain("Switch or delete these worktrees first");
+      expect(confirmDialog.textContent).toContain("New worktrees will start on Local");
+      fireEvent.click(within(confirmDialog).getByRole("button", { name: "Remove environment" }));
       expect(Object.keys(onResourceEnvironmentsChange.mock.calls[0]![0])).toEqual(["docker-local"]);
+    });
+
+    it("waits for the worktree list before allowing the removal", () => {
+      const { store, onResourceEnvironmentsChange } = renderWithWorktrees([], {
+        isInitialized: false,
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Delete cloud environment" }));
+      const confirmDialog = screen.getByRole("dialog");
+
+      // An empty list before the first snapshot is not proof nothing uses it.
+      expect(confirmDialog.textContent).toContain("Waiting for this project's worktrees to load");
+      const confirm = within(confirmDialog).getByRole("button", { name: "Remove environment" });
+      expect(confirm.hasAttribute("disabled")).toBe(true);
+      act(() => dialog.onConfirm?.());
+      expect(onResourceEnvironmentsChange).not.toHaveBeenCalled();
+
+      act(() => {
+        store.setState({
+          worktrees: new Map([["/repo/a", worktree("/repo/a", "feature-a", "cloud")]]),
+          isInitialized: true,
+        });
+      });
+
+      expect(confirmDialog.textContent).toContain('1 worktree still runs in "cloud"');
+      expect(confirm.hasAttribute("disabled")).toBe(true);
     });
   });
 });

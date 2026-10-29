@@ -182,6 +182,13 @@ export function ResourceEnvironmentsSection({
         .sort((a, b) => a.name.localeCompare(b.name)),
     [worktreeMap, pendingDeleteEnvironment]
   );
+  // The map is empty until the first snapshot lands, which says nothing about
+  // whether worktrees use the environment, so removal waits for it.
+  const worktreesLoaded = useWorktreeStoreOptional(
+    (state) => pendingDeleteEnvironment === null || state.isInitialized,
+    true
+  );
+  const removalBlocked = !worktreesLoaded || worktreesInPendingEnvironment.length > 0;
   // The inline add form unmounts the focused field when it closes, so say where
   // focus goes: the selector showing the new environment, or back to Add.
   const [returnFocus, setReturnFocus] = useState<"selector" | "add" | null>(null);
@@ -258,7 +265,7 @@ export function ResourceEnvironmentsSection({
   };
 
   const handleRemoveEnv = (name: string) => {
-    if (worktreesInPendingEnvironment.length > 0) return;
+    if (removalBlocked) return;
     const envs = { ...(resourceEnvironments ?? {}) };
     delete envs[name];
     onResourceEnvironmentsChange(envs);
@@ -560,11 +567,13 @@ export function ResourceEnvironmentsSection({
               : `This removes the saved commands for "${pendingDeleteEnvironment}" from project settings.${defaultWorktreeMode === pendingDeleteEnvironment ? " New worktrees will start on Local." : ""}`
         }
         confirmLabel="Remove environment"
-        confirmDisabled={worktreesInPendingEnvironment.length > 0}
+        confirmDisabled={removalBlocked}
         hint={
-          worktreesInPendingEnvironment.length > 0
-            ? "Switch or delete these worktrees first"
-            : undefined
+          !worktreesLoaded
+            ? "Waiting for this project's worktrees to load"
+            : worktreesInPendingEnvironment.length > 0
+              ? "Switch or delete these worktrees first"
+              : undefined
         }
         hasPreview={worktreesInPendingEnvironment.length > 0}
         variant="destructive"
