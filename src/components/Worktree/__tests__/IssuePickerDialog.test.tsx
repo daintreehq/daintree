@@ -600,4 +600,165 @@ describe("IssuePickerDialog paging", () => {
     expect(liveStatus(container)).toBe("Showing 20 of 200 open issues");
     expect(screen.getByRole("option", { name: "Load more" })).toBeTruthy();
   });
+
+  it("says more are available when the forge reports no total", async () => {
+    listIssuesMock.mockResolvedValue({ items: pageOf(1, 2), hasMore: true, nextCursor: "page-2" });
+    const { container } = renderDialog();
+    await waitFor(() => expect(liveStatus(container)).toBe("Showing 2 open issues, more available"));
+  });
+
+  it("offers no Load more once the forge says the set is complete", async () => {
+    listIssuesMock.mockResolvedValue({
+      items: pageOf(1, 2),
+      hasMore: false,
+      nextCursor: null,
+      totalCount: 2,
+    });
+    const { container } = renderDialog();
+    await waitFor(() => expect(liveStatus(container)).toBe("2 open issues"));
+    expect(screen.queryByRole("option", { name: "Load more" })).toBeNull();
+  });
+
+  it("reaches Load more from the keyboard and appends the next page of the same query", async () => {
+    listIssuesMock
+      .mockResolvedValueOnce({
+        items: pageOf(1, 2),
+        hasMore: true,
+        nextCursor: "page-2",
+        totalCount: 4,
+      })
+      .mockResolvedValueOnce({
+        // Issue 2 moved between fetches and comes back on the next page.
+        items: [makeIssue(2, "Issue 2"), ...pageOf(3, 2)],
+        hasMore: false,
+        nextCursor: null,
+        totalCount: 4,
+      });
+    const { container } = renderDialog();
+    await waitFor(() => screen.getByText("Issue 2", VISIBLE));
+
+    const combobox = input();
+    fireEvent.keyDown(combobox, { key: "End" });
+    const loadMore = screen.getByRole("option", { name: "Load more" });
+    expect(combobox.getAttribute("aria-activedescendant")).toBe(loadMore.id);
+    expect(loadMore.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByTestId("footer").textContent).toContain("to load more");
+
+    fireEvent.keyDown(combobox, { key: "Enter" });
+    await waitFor(() => screen.getByText("Issue 4", VISIBLE));
+
+    expect(listIssuesMock.mock.calls[1]?.[1]).toEqual({
+      search: undefined,
+      state: "open",
+      cursor: "page-2",
+    });
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+      expect.stringContaining("Issue 1"),
+      expect.stringContaining("Issue 2"),
+      expect.stringContaining("Issue 3"),
+      expect.stringContaining("Issue 4"),
+    ]);
+    expect(liveStatus(container)).toBe("4 open issues");
+    // The cursor stays where Load more was, which is now the first new issue.
+    const activeId = combobox.getAttribute("aria-activedescendant");
+    expect(activeId ? document.getElementById(activeId)?.textContent : null).toContain("Issue 3");
+  });
+
+  it("starts one request however many times Load more is pressed", async () => {
+    listIssuesMock.mockResolvedValueOnce({
+      items: pageOf(1, 2),
+      hasMore: true,
+      nextCursor: "page-2",
+    });
+    listIssuesMock.mockReturnValueOnce(new Promise(() => {}));
+    renderDialog();
+    await waitFor(() => screen.getByText("Issue 2", VISIBLE));
+
+    const loadMore = screen.getByRole("option", { name: "Load more" });
+    fireEvent.click(loadMore);
+    fireEvent.click(loadMore);
+    fireEvent.keyDown(input(), { key: "End" });
+    fireEvent.keyDown(input(), { key: "Enter" });
+
+    await waitFor(() => expect(loadMore.getAttribute("aria-disabled")).toBe("true"));
+    expect(listIssuesMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the rows when a page fails, and retries the same page from the same row", async () => {
+    listIssuesMock
+      .mockResolvedValueOnce({ items: pageOf(1, 2), hasMore: true, nextCursor: "page-2" })
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce({ items: pageOf(3, 1), hasMore: false, nextCursor: null });
+    const { container } = renderDialog();
+    await waitFor(() => screen.getByText("Issue 2", VISIBLE));
+
+    fireEvent.click(screen.getByRole("option", { name: "Load more" }));
+    const retry = await screen.findByRole("option", { name: /Couldn't load more issues.*Retry/ });
+    expect(liveStatus(container)).toBe("Couldn't load more issues");
+    expect(screen.getByText("Issue 1", VISIBLE)).toBeTruthy();
+    expect(screen.getByText("Issue 2", VISIBLE)).toBeTruthy();
+
+    fireEvent.click(retry);
+    await waitFor(() => screen.getByText("Issue 3", VISIBLE));
+    expect(listIssuesMock.mock.calls[2]?.[1]).toEqual(listIssuesMock.mock.calls[1]?.[1]);
+    expect(listIssuesMock.mock.calls[2]?.[1]?.cursor).toBe("page-2");
+    expect(liveStatus(container)).toBe("3 open issues");
+  });
+
+  it("keeps the scroll position when a page is appended", async () => {
+    let resolvePage: ((value: unknown) => void) | undefined;
+    listIssuesMock
+      .mockResolvedValueOnce({ items: pageOf(1, 2), hasMore: true, nextCursor: "page-2" })
+      .mockReturnValueOnce(
+        new Promise((r) => {
+          resolvePage = r;
+        })
+      );
+    renderDialog();
+    await waitFor(() => screen.getByText("Issue 2", VISIBLE));
+
+    const scroller = screen.getByRole("listbox").parentElement!;
+    scroller.scrollTop = 120;
+    fireEvent.click(screen.getByRole("option", { name: "Load more" }));
+    await act(async () => {
+      resolvePage?.({ items: pageOf(3, 2), hasMore: false, nextCursor: null });
+    });
+    await waitFor(() => screen.getByText("Issue 4", VISIBLE));
+    expect(scroller.scrollTop).toBe(120);
+  });
+
+  it("drops a page that lands after the query changed", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolvePage: ((value: unknown) => void) | undefined;
+      listIssuesMock
+        .mockResolvedValueOnce({ items: pageOf(1, 2), hasMore: true, nextCursor: "page-2" })
+        .mockReturnValueOnce(
+          new Promise((r) => {
+            resolvePage = r;
+          })
+        )
+        .mockResolvedValueOnce({
+          items: [makeIssue(50, "Searched issue")],
+          hasMore: false,
+          nextCursor: null,
+        });
+      renderDialog();
+      await flush(FIRST_PAINT_MS);
+
+      fireEvent.click(screen.getByRole("option", { name: "Load more" }));
+      fireEvent.change(input(), { target: { value: "searched" } });
+      await flush(300);
+      expect(screen.getByText("Searched issue", VISIBLE)).toBeTruthy();
+
+      await act(async () => {
+        resolvePage?.({ items: pageOf(3, 2), hasMore: false, nextCursor: null });
+        await vi.runAllTimersAsync();
+      });
+      expect(screen.queryByText("Issue 3", VISIBLE)).toBeNull();
+      expect(screen.getAllByRole("option")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

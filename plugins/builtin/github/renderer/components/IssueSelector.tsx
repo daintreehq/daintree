@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { useListboxCursor } from "@/hooks/useListboxCursor";
+import { UI_DOHERTY_THRESHOLD, UI_STILL_WORKING_MS } from "@/lib/animationUtils";
 import {
   Button,
   Callout,
@@ -8,6 +10,7 @@ import {
   Icon,
   PopoverSearchField,
   ScrollShadow,
+  Spinner,
   Tooltip,
 } from "@daintreehq/plugin-ui";
 import { cn } from "@/lib/utils";
@@ -28,6 +31,17 @@ export type IssueSelectorProps = ForgeIssueSelectorProps;
 
 const LIST_ID = "issue-list";
 const OPTION_ID_PREFIX = "issue-option-";
+
+/** A later page can repeat a row when issues move between fetches. */
+function appendUnique(existing: Issue[], page: Issue[]): Issue[] {
+  const seen = new Set(existing.map((issue) => issue.number));
+  const added = page.filter((issue) => {
+    if (seen.has(issue.number)) return false;
+    seen.add(issue.number);
+    return true;
+  });
+  return added.length > 0 ? [...existing, ...added] : existing;
+}
 
 /**
  * The forge's contribution to the create-worktree form's "Issue" row.
@@ -55,6 +69,15 @@ export function IssueSelector({
   // looking current.
   const [loadFailed, setLoadFailed] = useState(false);
   const [retryTick, setRetryTick] = useState(0);
+  // Where the next page starts, or null once the forge says there is none. The
+  // provider hands back one page at a time, so without this a long backlog
+  // read as if its first page were all of it (#15014).
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreFailed, setLoadMoreFailed] = useState(false);
+  // The generation a page is in flight for, read synchronously so a second
+  // Enter before the next render can't start a second request.
+  const loadMoreGenRef = useRef<number | null>(null);
   const debouncedQuery = useDebounce(query, 300);
   const requestGenRef = useRef(0);
   const prevProjectPathRef = useRef(projectPath);
@@ -65,6 +88,7 @@ export function IssueSelector({
     if (prevProjectPathRef.current !== projectPath) {
       prevProjectPathRef.current = projectPath;
       setIssues([]);
+      setNextCursor(null);
     }
     if (!open) return;
 
@@ -72,6 +96,8 @@ export function IssueSelector({
     const gen = ++requestGenRef.current;
     setLoading(true);
     setLoadFailed(false);
+    setLoadingMore(false);
+    setLoadMoreFailed(false);
     forgeClient
       .listIssues(projectPath, {
         state: "open",
@@ -79,12 +105,16 @@ export function IssueSelector({
       })
       .then((res) => {
         if (!abortController.signal.aborted && requestGenRef.current === gen) {
-          setIssues(res.items);
+          setIssues(appendUnique([], res.items));
+          setNextCursor(res.hasMore ? res.nextCursor : null);
         }
       })
       .catch((err) => {
         if (!abortController.signal.aborted && requestGenRef.current === gen) {
           setLoadFailed(true);
+          // The rows left on screen answer an earlier query; their next page
+          // would continue a set this request was meant to replace.
+          setNextCursor(null);
           logError("Failed to fetch issues", err);
         }
       })
@@ -94,8 +124,45 @@ export function IssueSelector({
         }
       });
 
-    return () => abortController.abort();
+    return () => {
+      abortController.abort();
+      // A page in flight continues the set this run fetched; a close, a new
+      // query, a new project or a retry replaces that set.
+      requestGenRef.current++;
+    };
   }, [open, debouncedQuery, projectPath, retryTick]);
+
+  const loadMore = () => {
+    if (loading || nextCursor === null) return;
+    const gen = requestGenRef.current;
+    if (loadMoreGenRef.current === gen) return;
+    loadMoreGenRef.current = gen;
+    setLoadingMore(true);
+    setLoadMoreFailed(false);
+    forgeClient
+      .listIssues(projectPath, {
+        state: "open",
+        search: debouncedQuery || undefined,
+        cursor: nextCursor,
+      })
+      .then((res) => {
+        if (requestGenRef.current !== gen) return;
+        setIssues((prev) => appendUnique(prev, res.items));
+        setNextCursor(res.hasMore ? res.nextCursor : null);
+      })
+      .catch((err) => {
+        if (requestGenRef.current !== gen) return;
+        setLoadMoreFailed(true);
+        logError("Failed to fetch more issues", err);
+      })
+      .finally(() => {
+        if (loadMoreGenRef.current === gen) loadMoreGenRef.current = null;
+        if (requestGenRef.current === gen) setLoadingMore(false);
+      });
+  };
+
+  const showLoadingMore = useDeferredLoading(loadingMore, UI_DOHERTY_THRESHOLD);
+  const isSlowLoadingMore = useDeferredLoading(loadingMore, UI_STILL_WORKING_MS);
 
   const handleOpenChange = (nextOpen: boolean) => {
     setOpen(nextOpen);
@@ -103,6 +170,9 @@ export function IssueSelector({
       setQuery("");
       setIssues([]);
       setLoadFailed(false);
+      setNextCursor(null);
+      setLoadingMore(false);
+      setLoadMoreFailed(false);
     }
   };
 
@@ -111,8 +181,10 @@ export function IssueSelector({
     handleOpenChange(false);
   };
 
+  const hasMore = nextCursor !== null && issues.length > 0;
   const { activeIndex, setActiveIndex, listRef, handleKeyDown } = useListboxCursor({
-    itemCount: issues.length,
+    // Load more is the list's last option, so the cursor reaches it like a row.
+    itemCount: issues.length + (hasMore ? 1 : 0),
     open,
     // The rows are fetched, not filtered locally, so a new query replaces the
     // whole set — the cursor rewinds with it rather than keeping a raw index
@@ -121,6 +193,7 @@ export function IssueSelector({
     onSelect: (index) => {
       const issue = issues[index];
       if (issue) handleSelect(issue);
+      else if (hasMore && index === issues.length) loadMore();
     },
     onClose: () => handleOpenChange(false),
   });
@@ -331,6 +404,44 @@ export function IssueSelector({
                 )}
               </div>
             ))
+          )}
+          {hasMore && (
+            <div
+              id={`${OPTION_ID_PREFIX}${issues.length}`}
+              data-option-index={issues.length}
+              role="option"
+              aria-selected={activeIndex === issues.length}
+              aria-disabled={loadingMore || undefined}
+              onPointerMove={() => setActiveIndex(issues.length)}
+              // The popover stays open, so the search keeps focus and the
+              // arrow keys keep working after a click.
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={loadMore}
+              className={cn(
+                PALETTE_ROW_CLASS,
+                FORGE_OPTION_ROW,
+                "cursor-pointer justify-center text-text-secondary"
+              )}
+            >
+              {loadMoreFailed ? (
+                // One way on, not two: the row that failed is the row that retries.
+                <>
+                  <span>Couldn&apos;t load more issues</span>
+                  <span aria-hidden="true">·</span>
+                  <span className="flex items-center gap-1.5 text-text-primary">
+                    <Icon name="refresh" className="h-3.5 w-3.5" />
+                    Retry
+                  </span>
+                </>
+              ) : showLoadingMore ? (
+                <>
+                  <Spinner />
+                  {isSlowLoadingMore ? "Still working…" : "Loading…"}
+                </>
+              ) : (
+                "Load more"
+              )}
+            </div>
           )}
         </ScrollShadow>
       </PopoverContent>
