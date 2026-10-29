@@ -21,7 +21,7 @@ interface UseContextDetectionParams {
   activeTriggers: ReadonlySet<ComposerTrigger>;
   // Owner stores the next document value (typically into a ref + setState pair).
   // Returning true signals the value actually changed (i.e. differed from the last emit).
-  applyDocChange: (next: string) => boolean;
+  applyDocChange: (next: string, update: ViewUpdate) => boolean;
   // Reads-and-clears an "external value being applied" flag. Returning true means the
   // change came from our own dispatch and should not be treated as user input.
   consumeExternalValueFlag: () => boolean;
@@ -90,7 +90,7 @@ export function useContextDetection({
 
       if (update.docChanged) {
         const nextValue = update.state.doc.toString();
-        applyDocChange(nextValue);
+        applyDocChange(nextValue, update);
 
         const isExternal = consumeExternalValueFlag();
         const latest = latestRef.current;

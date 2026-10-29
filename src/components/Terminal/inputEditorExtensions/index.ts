@@ -94,6 +94,7 @@ export {
   correctionLanded,
   createCorrectionReview,
   endCorrectionReview,
+  outsideWrite,
   replayLandedCorrection,
 } from "./correctionReview";
 export type { CorrectionReview } from "./correctionReview";
