@@ -14,6 +14,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import type { BranchInfo, CreateWorktreeOptions } from "@/types/electron";
+import type { TerminalRecipe } from "@/types";
 import type { Issue, PR } from "@shared/types/forge";
 
 import { worktreeClient, forgeClient } from "@/clients";
@@ -89,6 +90,7 @@ import {
   EnvironmentHint,
   RecipePickerPopover,
   AgentPickerPopover,
+  type RecipeOption,
   FormGrid,
   FormSection,
   FormRow,
@@ -221,6 +223,16 @@ export function NewWorktreeDialog({
   const [firstAgentId, setFirstAgentId] = useState<string | null>(null);
   const [firstPrompt, setFirstPrompt] = useState("");
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
+  // A recipe picked while another host is chosen is that host's, so this
+  // window's own choice (and the one it remembers) comes back untouched when
+  // the Host row does. Undefined until one is picked: the host then runs this
+  // window's choice if it can, and no recipe if it can't.
+  const [placedRecipeChoice, setPlacedRecipeChoice] = useState<string | null | undefined>(
+    undefined
+  );
+  useEffect(() => {
+    if (!isOpen) setPlacedRecipeChoice(undefined);
+  }, [isOpen]);
   const [issuePickerOpen, setIssuePickerOpen] = useState(false);
   // The picker reports its own closes; one that goes away with the dialog
   // can't, so its flag must not outlive the dialog either.
@@ -642,6 +654,7 @@ export function NewWorktreeDialog({
     if (errors.touchedFields.branchInput && branchInput.trim()) return true;
     if (errors.touchedFields.issue && selectedIssue !== null) return true;
     if (errors.touchedFields.recipe) return true;
+    if (placedRecipeChoice !== undefined) return true;
     if (errors.touchedFields.agent) return true;
     if (errors.touchedFields.worktreePath && worktreePath.trim()) return true;
     if (worktreeMode !== "local") return true;
@@ -654,6 +667,7 @@ export function NewWorktreeDialog({
     selectedIssue,
     selectedExistingBranch,
     worktreeMode,
+    placedRecipeChoice,
     errors.touchedFields,
   ]);
 
@@ -1162,14 +1176,43 @@ export function NewWorktreeDialog({
     }
   }, [setWorktreePath, pathTouchedRef, markTouched, clearErrors, setValidationError]);
 
+  // Another host chosen for the worktree: the project continues there, nothing
+  // is created here, and the primary creates it on that host instead.
+  const [placement, setPlacement] = useState<PlacementCommit | null>(null);
+  const placementHost = placement?.hostName ?? null;
+  const placementElsewhere = placement !== null;
+
+  // Another host runs only a team recipe, from its own copy of the repository:
+  // a cloned layout or a recipe kept on this host is never sent (#14991).
+  // Provenance first, as `getRecipeScope` reads it: a plugin's id can carry the
+  // legacy in-repo prefix.
+  const runsElsewhere = (recipe: TerminalRecipe | undefined): recipe is TerminalRecipe =>
+    recipe ? !isPluginRecipe(recipe) && isInRepoRecipeId(recipe) : false;
+  const placedChoiceRecipe = placedRecipeChoice
+    ? startingLayoutRecipes.find((recipe) => recipe.id === placedRecipeChoice)
+    : undefined;
+  const placedRecipe =
+    placedRecipeChoice === undefined
+      ? runsElsewhere(selectedRecipe)
+        ? selectedRecipe
+        : undefined
+      : runsElsewhere(placedChoiceRecipe)
+        ? placedChoiceRecipe
+        : undefined;
+
   const handleRecipeSelect = useCallback(
     (id: string | null) => {
-      recipeSelectionTouchedRef.current = true;
-      markTouched("recipe");
-      setSelectedRecipeId(id);
       clearErrors();
+      // Not this window's pick, so not one a create here should remember.
+      if (placementElsewhere) {
+        setPlacedRecipeChoice(id);
+        return;
+      }
+      markTouched("recipe");
+      recipeSelectionTouchedRef.current = true;
+      setSelectedRecipeId(id);
     },
-    [recipeSelectionTouchedRef, markTouched, setSelectedRecipeId, clearErrors]
+    [placementElsewhere, recipeSelectionTouchedRef, markTouched, setSelectedRecipeId, clearErrors]
   );
 
   const handleFirstAgentSelect = useCallback(
@@ -1197,22 +1240,7 @@ export function NewWorktreeDialog({
     [handleIssueSelect, markTouched, clearErrors]
   );
 
-  // Another host chosen for the worktree: the project continues there, nothing
-  // is created here, and the primary creates it on that host instead.
-  const [placement, setPlacement] = useState<PlacementCommit | null>(null);
-  const placementHost = placement?.hostName ?? null;
-  const placementElsewhere = placement !== null;
-  // Another host runs only a team recipe, from its own copy of the repository:
-  // a cloned layout or a recipe kept on this host is never sent (#14991).
-  // Provenance first, as `getRecipeScope` reads it: a plugin's id can carry the
-  // legacy in-repo prefix.
-  const placedRecipeId =
-    selectedRecipeId !== null &&
-    selectedRecipe &&
-    !isPluginRecipe(selectedRecipe) &&
-    isInRepoRecipeId(selectedRecipe)
-      ? selectedRecipeId
-      : null;
+  const placedRecipeId = placedRecipe?.id ?? null;
   // The form as it stands, for another host to create: validated here, so the
   // same errors show on the same fields as a create on this host would.
   const getPlacementDraft = (): PlacementDraft | null => {
@@ -1401,14 +1429,76 @@ export function NewWorktreeDialog({
     "agent",
     showPromptRow ? "prompt" : null,
   ].filter((skip): skip is string => skip !== null);
-  const placedRecipeNote =
-    placementHost === null || selectedRecipeId === null
-      ? null
-      : selectedRecipeId === CLONE_LAYOUT_ID
-        ? `${placementHost} can't clone this window's layout, so the worktree opens there without it`
-        : placedRecipeId !== null
-          ? `Runs only if ${placementHost}'s copy of the repository has this recipe`
-          : `${placementHost} only runs team recipes from the repository, so this one won't run there`;
+
+  // The field says what the chosen host will make. This window's own choice,
+  // when that host won't make it, is named as kept rather than shown as set.
+  const homeName = placement?.homeName ?? null;
+  const recipeChoiceName = (id: string | null, recipe: TerminalRecipe | undefined) =>
+    id === CLONE_LAYOUT_ID ? "Clone current layout" : (recipe?.name ?? "No recipe");
+  const shownRecipeId = placementElsewhere ? placedRecipeId : selectedRecipeId;
+  const shownRecipe = placementElsewhere ? placedRecipe : selectedRecipe;
+  const shownRecipeName = recipeChoiceName(shownRecipeId, shownRecipe);
+  const recipeUnavailableReason =
+    homeName === null
+      ? undefined
+      : (option: RecipeOption) =>
+          option.kind === "clone" || (option.kind === "recipe" && !runsElsewhere(option.recipe))
+            ? `${homeName} only`
+            : null;
+  const placedRecipeNote = (() => {
+    if (placementHost === null || homeName === null) return null;
+    // "No recipe" isn't anything to keep.
+    const kept =
+      selectedRecipeId !== null && selectedRecipeId !== placedRecipeId
+        ? `${recipeChoiceName(selectedRecipeId, selectedRecipe)} is kept for ${homeName}`
+        : null;
+    // Why the host isn't running this window's choice, unless another was picked for it.
+    const why =
+      placedRecipeChoice !== undefined || kept === null
+        ? null
+        : selectedRecipeId === CLONE_LAYOUT_ID
+          ? `${placementHost} can't clone this window's layout`
+          : `${placementHost} runs only team recipes`;
+    const caveat =
+      placedRecipeId !== null
+        ? `Runs only if ${placementHost}'s copy of the repository has this recipe`
+        : null;
+    const sentences = [caveat ?? why, kept].filter((part): part is string => part !== null);
+    if (sentences.length === 0) return null;
+    return sentences.length === 1 ? sentences[0] : `${sentences.join(". ")}.`;
+  })();
+  const placedRecipeNoteId = useId();
+
+  // Said once, above the first of the rows it turns off: the agent's when no
+  // issue or environment row comes before the Recipe row.
+  const placementSetupNoteFirst = showIssueRow || hasAnyEnvironments;
+  const placementSetupNote = placementHost !== null && homeName !== null && (
+    <div className="col-span-2" data-testid="placement-setup-note">
+      <Callout severity="info">
+        <p>
+          The {setupList.format(placementSkips)} {placementSkips.length === 1 ? "is" : "are"} off on{" "}
+          {placementHost}. Your {placementSkips.length === 1 ? "choice is" : "choices are"} kept for{" "}
+          {homeName}.
+        </p>
+      </Callout>
+    </div>
+  );
+
+  // A Host change that changes the starting layout is said without moving
+  // focus off the Host select, even when coming back hides the Recipe row.
+  const shownRecipeRef = useRef({ host: placementHost, id: shownRecipeId });
+  useEffect(() => {
+    const previous = shownRecipeRef.current;
+    shownRecipeRef.current = { host: placementHost, id: shownRecipeId };
+    if (previous.host === placementHost || previous.id === shownRecipeId) return;
+    useAnnouncerStore
+      .getState()
+      .announce(
+        placementHost === null
+          ? `Recipe: ${shownRecipeName}`
+          : `Recipe on ${placementHost}: ${shownRecipeName}`
+      );
+  }, [placementHost, shownRecipeId, shownRecipeName]);
 
   // Same flags the real sections are built from, so the skeleton is the shape
   // that is actually about to render rather than a generic three-block guess.
@@ -1655,18 +1745,7 @@ export function NewWorktreeDialog({
                 </FormSection>
 
                 <FormSection title="Setup" note="Optional">
-                  {placementHost !== null && (
-                    <div className="col-span-2" data-testid="placement-setup-note">
-                      <Callout severity="info">
-                        <p>
-                          {placementHost} creates the worktree and can run a team recipe. The{" "}
-                          {setupList.format(placementSkips)}{" "}
-                          {placementSkips.length === 1 ? "applies" : "apply"} only to a worktree
-                          created on this host.
-                        </p>
-                      </Callout>
-                    </div>
-                  )}
+                  {placementSetupNoteFirst && placementSetupNote}
 
                   {showIssueRow && (
                     <FormRow
@@ -1719,6 +1798,7 @@ export function NewWorktreeDialog({
                       hint={
                         placedRecipeNote && (
                           <span
+                            id={placedRecipeNoteId}
                             className="text-xs text-text-secondary"
                             data-testid="placed-recipe-note"
                           >
@@ -1729,19 +1809,23 @@ export function NewWorktreeDialog({
                     >
                       <RecipePickerPopover
                         recipes={startingLayoutRecipes}
-                        selectedRecipeId={selectedRecipeId}
-                        selectedRecipe={selectedRecipe}
+                        selectedRecipeId={shownRecipeId}
+                        selectedRecipe={shownRecipe}
                         defaultRecipeId={defaultRecipeId}
                         open={recipePickerOpen}
                         onOpenChange={setRecipePickerOpen}
                         onSelectRecipe={handleRecipeSelect}
                         onMarkTouched={() => {
-                          markTouched("recipe");
+                          if (!placementElsewhere) markTouched("recipe");
                         }}
                         listId="recipe-selector"
+                        describedBy={placedRecipeNote ? placedRecipeNoteId : undefined}
+                        unavailableReason={recipeUnavailableReason}
                       />
                     </FormRow>
                   )}
+
+                  {!placementSetupNoteFirst && placementSetupNote}
 
                   <FormRow
                     label="Agent"
