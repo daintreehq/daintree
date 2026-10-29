@@ -78,7 +78,7 @@ export function AddPresetDialog({
       case "blank":
         void submit({ name: "New preset", env: {} });
         break;
-      case "clone":
+      case "clone": {
         // Guarded rather than defaulted: `canCreate` keeps the button disabled
         // instead of quietly creating something other than what was asked for.
         if (!currentPreset) return;
@@ -94,6 +94,7 @@ export function AddPresetDialog({
           fallbacks: currentPreset.fallbacks ? [...currentPreset.fallbacks] : undefined,
         });
         break;
+      }
       case "template":
         if (!selectedTemplate) return;
         void submit({
