@@ -1,7 +1,7 @@
 import { usePanelStore } from "@/store/panelStore";
 import { isFilePanel } from "@shared/types/panel";
 import { join } from "@shared/utils/path";
-import { useFileDocumentStore } from "@/store/fileDocumentStore";
+import { useFileDocumentStore, type FileDocumentSaveOutcome } from "@/store/fileDocumentStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -61,6 +61,8 @@ export interface EditorViewState {
 const PERSIST_DEBOUNCE_MS = 1000;
 const REVALIDATE_COALESCE_MS = 100;
 const TOO_LARGE_MESSAGE = "This draft is over 2 MiB and can't be saved here";
+const CONFLICT_REASON = "The file changed on disk";
+const UNAVAILABLE_REASON = "The file isn't where it was";
 
 const controllers = new Map<string, DocumentController>();
 /**
@@ -461,15 +463,22 @@ export class DocumentController {
 
   // ── Saving ─────────────────────────────────────────────────────────
 
-  async save(): Promise<boolean> {
+  async save(): Promise<FileDocumentSaveOutcome> {
     const record = this.record();
-    if (record.status !== "ready" || !record.base || record.saving) return false;
-    if (record.conflict) return false;
+    // A known conflict is checked first: nothing is written over it, whatever
+    // else the record says.
+    if (record.conflict) return { status: "conflict", reason: CONFLICT_REASON };
+    if (record.status === "unavailable")
+      return { status: "unavailable", reason: UNAVAILABLE_REASON };
+    if (record.status !== "ready" || !record.base) {
+      return { status: "refused", reason: "The file hasn't finished loading" };
+    }
+    if (record.saving) return { status: "refused", reason: "A save is already running" };
     const base = record.base;
     const snapshot = record.draft?.text ?? base.text;
     if (utf8Length(snapshot) > MAX_EDITABLE_BYTES) {
       this.update((current) => ({ ...current, error: TOO_LARGE_MESSAGE }));
-      return false;
+      return { status: "refused", reason: TOO_LARGE_MESSAGE };
     }
     this.update((current) => ({ ...current, saving: true, error: null }));
     let result: DocumentSaveResult;
@@ -520,7 +529,9 @@ export class DocumentController {
           (this.disposed ? survivor(key) : this)?.schedulePersist();
         }
         if (!this.disposed) announce("Saved");
-        return clean;
+        return clean
+          ? { status: "saved" }
+          : { status: "refused", reason: "Edits made during the save are still unsaved" };
       }
       case "conflict":
         updateShared(key, (current) => ({
@@ -534,24 +545,22 @@ export class DocumentController {
           },
         }));
         if (!this.disposed) announce("File changed on disk");
-        return false;
+        return { status: "conflict", reason: CONFLICT_REASON };
       case "unavailable":
         updateShared(key, (current) => ({ ...current, saving: false, status: "unavailable" }));
         if (!this.disposed) announce("File is no longer available");
-        return false;
-      case "refused":
-        updateShared(key, (current) => ({
-          ...current,
-          saving: false,
-          error:
-            result.reason === "TOO_LARGE"
-              ? TOO_LARGE_MESSAGE
-              : "This file can't be saved as Markdown",
-        }));
-        return false;
+        return { status: "unavailable", reason: UNAVAILABLE_REASON };
+      case "refused": {
+        const message =
+          result.reason === "TOO_LARGE"
+            ? TOO_LARGE_MESSAGE
+            : "This file can't be saved as Markdown";
+        updateShared(key, (current) => ({ ...current, saving: false, error: message }));
+        return { status: "refused", reason: message };
+      }
       case "error":
         updateShared(key, (current) => ({ ...current, saving: false, error: result.message }));
-        return false;
+        return { status: "error", reason: result.message };
     }
   }
 

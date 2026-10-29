@@ -2,14 +2,21 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const panelsById = vi.hoisted(
+  () => ({}) as Record<string, { id: string; kind: string; filePath: string; location?: string }>
+);
+const notifyMock = vi.hoisted(() => vi.fn());
+const showFileDraftMock = vi.hoisted(() => vi.fn());
+
 vi.mock("@/utils/logger", () => ({ logError: vi.fn(), logWarn: vi.fn() }));
 vi.mock("@/store/panelStore", () => ({
-  usePanelStore: {
-    getState: () => ({
-      panelsById: { p1: { id: "p1", kind: "file", filePath: "/repo/docs/plan.md" } },
-    }),
-  },
+  usePanelStore: { getState: () => ({ panelsById }) },
 }));
+vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
+vi.mock("@/lib/notificationAddress", () => ({
+  panelNotificationAddress: (panelId: string) => ({ panelId, worktreeId: "wt-1" }),
+}));
+vi.mock("../showFileDraft", () => ({ showFileDraft: showFileDraftMock }));
 
 import { FileDocumentCloseGuardHost } from "../FileDocumentCloseGuardHost";
 import { useFileDocumentStore, type FileDocumentProjection } from "@/store/fileDocumentStore";
@@ -26,7 +33,7 @@ function projection(overrides: Partial<FileDocumentProjection> = {}): FileDocume
     draftText: "draft",
     dirty: true,
     conflict: false,
-    save: vi.fn(async () => true),
+    save: vi.fn(async () => ({ status: "saved" as const })),
     discard: vi.fn(async () => {}),
     ...overrides,
   };
@@ -41,6 +48,10 @@ function publish(panelId: string, next: FileDocumentProjection) {
 beforeEach(() => {
   __resetPanelCloseGuardsForTests();
   useFileDocumentStore.setState({ byPanelId: {} });
+  for (const id of Object.keys(panelsById)) delete panelsById[id];
+  panelsById.p1 = { id: "p1", kind: "file", filePath: "/repo/docs/plan.md" };
+  notifyMock.mockReset();
+  showFileDraftMock.mockReset();
 });
 
 afterEach(() => {
@@ -73,7 +84,7 @@ describe("FileDocumentCloseGuardHost (#12323)", () => {
         <FileDocumentCloseGuardHost />
       </TooltipProvider>
     );
-    const save = vi.fn(async () => true);
+    const save = vi.fn(async () => ({ status: "saved" as const }));
     publish("p1", projection({ save }));
 
     let verdict = consultPanelCloseGuards(["p1"]);
@@ -89,6 +100,7 @@ describe("FileDocumentCloseGuardHost (#12323)", () => {
     });
     await expect(verdict).resolves.toBe(true);
     expect(save).toHaveBeenCalledTimes(1);
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 
   it("a refused save or a failed discard answers Cancel, never proceed", async () => {
@@ -100,7 +112,7 @@ describe("FileDocumentCloseGuardHost (#12323)", () => {
     publish(
       "p1",
       projection({
-        save: vi.fn(async () => false),
+        save: vi.fn(async () => ({ status: "error" as const, reason: "Disk full" })),
         discard: vi.fn(async () => {
           throw new Error("disk full");
         }),
@@ -154,5 +166,107 @@ describe("FileDocumentCloseGuardHost (#12323)", () => {
     publish("p1", projection({ dirty: false, draftText: null }));
     await expect(verdict).resolves.toBe(false);
     await waitFor(() => expect(screen.queryByTestId("file-pane-close-prompt")).toBeNull());
+  });
+});
+
+describe("FileDocumentCloseGuardHost: a Save that doesn't land (#15017)", () => {
+  async function pressSave() {
+    await screen.findByRole("button", { name: "Save" });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    });
+  }
+
+  it.each([
+    ["conflict", "The file changed on disk", "The file changed on disk. Your draft is kept."],
+    [
+      "unavailable",
+      "The file isn't where it was",
+      "The file isn't where it was. Your draft is kept.",
+    ],
+    ["error", "EACCES: permission denied.", "EACCES: permission denied. Your draft is kept."],
+  ] as const)(
+    "on %s, Save answers Cancel and says why, with a way back to the editor",
+    async (status, reason, message) => {
+      render(
+        <TooltipProvider>
+          <FileDocumentCloseGuardHost />
+        </TooltipProvider>
+      );
+      publish("p1", projection({ save: vi.fn(async () => ({ status, reason })) }));
+      const verdict = consultPanelCloseGuards(["p1"]);
+      await pressSave();
+      await expect(verdict).resolves.toBe(false);
+      await waitFor(() => expect(screen.queryByTestId("file-pane-close-prompt")).toBeNull());
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      const payload = notifyMock.mock.calls[0]![0];
+      expect(payload).toMatchObject({
+        type: "error",
+        title: "Couldn't save 'plan.md'",
+        message,
+        priority: "high",
+        context: { eventKind: "uiFeedback", panelId: "p1", worktreeId: "wt-1" },
+      });
+      expect(payload.action.label).toBe("Review draft");
+      expect(payload.actions).toBeUndefined();
+      payload.action.onClick();
+      expect(showFileDraftMock).toHaveBeenCalledWith("p1");
+    }
+  );
+
+  it("a save that throws answers Cancel and reports the error", async () => {
+    render(
+      <TooltipProvider>
+        <FileDocumentCloseGuardHost />
+      </TooltipProvider>
+    );
+    publish(
+      "p1",
+      projection({
+        save: vi.fn(async () => {
+          throw new Error("Save channel closed");
+        }),
+      })
+    );
+    const verdict = consultPanelCloseGuards(["p1"]);
+    await pressSave();
+    await expect(verdict).resolves.toBe(false);
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(notifyMock.mock.calls[0]![0].message).toBe("Save channel closed. Your draft is kept.");
+  });
+
+  it("names the file as the prompt did when the document is released before the save answers", async () => {
+    render(
+      <TooltipProvider>
+        <FileDocumentCloseGuardHost />
+      </TooltipProvider>
+    );
+    const save = vi.fn(async () => {
+      useFileDocumentStore.getState().clearFileDocument("p1");
+      return { status: "unavailable" as const, reason: "The file isn't where it was" };
+    });
+    publish("p1", projection({ fileName: "notes.md", save }));
+    const verdict = consultPanelCloseGuards(["p1"]);
+    await pressSave();
+    await expect(verdict).resolves.toBe(false);
+    expect(notifyMock.mock.calls[0]![0].title).toBe("Couldn't save 'notes.md'");
+  });
+
+  it("stays quiet when the panel was removed while the save ran", async () => {
+    render(
+      <TooltipProvider>
+        <FileDocumentCloseGuardHost />
+      </TooltipProvider>
+    );
+    const save = vi.fn(async () => {
+      delete panelsById.p1;
+      return { status: "error" as const, reason: "Disk full" };
+    });
+    publish("p1", projection({ save }));
+    const verdict = consultPanelCloseGuards(["p1"]);
+    await pressSave();
+    await expect(verdict).resolves.toBe(false);
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 });

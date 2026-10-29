@@ -1,10 +1,18 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { registerPanelCloseGuard, type PanelCloseVerdict } from "@/services/panelCloseGuard";
-import { getFileDocumentProjection, useFileDocumentStore } from "@/store/fileDocumentStore";
+import {
+  getFileDocumentProjection,
+  useFileDocumentStore,
+  type FileDocumentSaveOutcome,
+} from "@/store/fileDocumentStore";
 import { usePanelStore } from "@/store/panelStore";
+import { notify } from "@/lib/notify";
+import { panelNotificationAddress } from "@/lib/notificationAddress";
 import { isFilePanel } from "@shared/types/panel";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
+import { showFileDraft } from "./showFileDraft";
 
 /**
  * Holds the close of any dirty file panel behind Save / Discard / Cancel
@@ -18,7 +26,9 @@ import { logError } from "@/utils/logger";
  * Prompts queue: two guarded closes in one gesture ask one after the other.
  * Each prompt is its own token, so a Save or Discard that started on an
  * earlier prompt can never answer a later one, and any failure answers
- * Cancel — the panel stays, the draft stays.
+ * Cancel — the panel stays, the draft stays. A Save that doesn't land also
+ * says why in a toast (#15017): the editor banner that would show it is only
+ * mounted in Edit, and the next queued prompt can take over at once.
  */
 interface Prompt {
   panelId: string;
@@ -31,6 +41,24 @@ function panelFileName(panelId: string): string {
   const panel = usePanelStore.getState().panelsById[panelId];
   const filePath = panel && isFilePanel(panel) ? panel.filePath : undefined;
   return filePath?.split(/[/\\]/).filter(Boolean).pop() ?? "this file";
+}
+
+function notifySaveFailed(panelId: string, fileName: string, reason: string): void {
+  // A panel removed while the save ran has nowhere left to take the user.
+  const panel = usePanelStore.getState().panelsById[panelId];
+  if (!panel || panel.location === "trash") return;
+  const trimmed = reason.trim();
+  const sentence = /[.!?…]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+  notify({
+    type: "error",
+    title: `Couldn't save '${fileName}'`,
+    message: `${sentence} Your draft is kept.`,
+    // uiFeedback is passive, and a toast is the point: the failure happened
+    // on a modal the user was looking at, and its reason is off screen.
+    priority: "high",
+    context: { eventKind: "uiFeedback", ...panelNotificationAddress(panelId) },
+    action: { label: "Review draft", onClick: () => showFileDraft(panelId) },
+  });
 }
 
 export function FileDocumentCloseGuardHost() {
@@ -93,13 +121,15 @@ export function FileDocumentCloseGuardHost() {
 
   const current = queue[0] ?? null;
 
-  const settle = useCallback((prompt: Prompt, verdict: PanelCloseVerdict) => {
+  /** Answers `prompt`; false when it was already answered or dropped. */
+  const settle = useCallback((prompt: Prompt, verdict: PanelCloseVerdict): boolean => {
     // Only the prompt an operation started on may be answered by it.
     if (busyPromptRef.current === prompt) busyPromptRef.current = null;
-    if (!queueRef.current.includes(prompt)) return;
+    if (!queueRef.current.includes(prompt)) return false;
     prompt.resolve(verdict);
     setQueue((existing) => existing.filter((entry) => entry !== prompt));
     setBusy(null);
+    return true;
   }, []);
 
   const handleSave = useCallback(
@@ -109,15 +139,24 @@ export function FileDocumentCloseGuardHost() {
         settle(prompt, "cancel");
         return;
       }
+      // Named as the prompt showed it: a refused save can leave the document
+      // released by the time it answers.
+      const fileName = panelFileName(prompt.panelId);
       setBusy("save");
       busyPromptRef.current = prompt;
+      let outcome: FileDocumentSaveOutcome;
       try {
-        const saved = await projection.save();
-        settle(prompt, saved ? "proceed" : "cancel");
+        outcome = await projection.save();
       } catch (error) {
         logError("[FileDocumentCloseGuardHost] save failed", error);
-        settle(prompt, "cancel");
+        outcome = { status: "error", reason: formatErrorMessage(error, "The save failed") };
       }
+      if (outcome.status === "saved") {
+        settle(prompt, "proceed");
+        return;
+      }
+      // A stale prompt was answered elsewhere; its failure isn't this one's to report.
+      if (settle(prompt, "cancel")) notifySaveFailed(prompt.panelId, fileName, outcome.reason);
     },
     [settle]
   );

@@ -121,7 +121,9 @@ describe("DocumentController (#12323)", () => {
   it("saves the draft, adopts the new revision, clears the record, and announces", async () => {
     const controller = await open();
     controller.setText("# Plan\n\nedit\n");
-    await expect(getFileDocumentProjection("panel-1")!.save()).resolves.toBe(true);
+    await expect(getFileDocumentProjection("panel-1")!.save()).resolves.toEqual({
+      status: "saved",
+    });
     const record = controller.record();
     expect(record.base).toMatchObject({
       text: "# Plan\n\nedit\n",
@@ -158,7 +160,10 @@ describe("DocumentController (#12323)", () => {
     await flush();
     controller.setText("# Plan\n\nfirst\n\nsecond\n");
     release({ status: "saved", revision: sha("# Plan\n\nfirst\n"), wrote: true });
-    await expect(saving).resolves.toBe(false);
+    await expect(saving).resolves.toEqual({
+      status: "refused",
+      reason: "Edits made during the save are still unsaved",
+    });
     const record = controller.record();
     expect(record.base?.text).toBe("# Plan\n\nfirst\n");
     expect(record.draft).toEqual({
@@ -172,13 +177,19 @@ describe("DocumentController (#12323)", () => {
     const controller = await open();
     controller.setText("# Plan\n\nmine\n");
     main.files.set(PROPS.filePath, "# Plan\n\ntheirs\n");
-    await expect(controller.save()).resolves.toBe(false);
+    await expect(controller.save()).resolves.toEqual({
+      status: "conflict",
+      reason: "The file changed on disk",
+    });
     expect(controller.record().conflict).toMatchObject({ text: "# Plan\n\ntheirs\n" });
     expect(getFileDocumentProjection("panel-1")?.conflict).toBe(true);
     expect(announceMock).toHaveBeenCalledWith("File changed on disk");
     // Ordinary save is held while the conflict stands.
     main.calls.length = 0;
-    await expect(controller.save()).resolves.toBe(false);
+    await expect(controller.save()).resolves.toEqual({
+      status: "conflict",
+      reason: "The file changed on disk",
+    });
     expect(main.calls.some((c) => c.channel === CHANNELS.save)).toBe(false);
 
     const generation = controller.record().loadGeneration;
@@ -232,6 +243,43 @@ describe("DocumentController (#12323)", () => {
     expect(controller.record().status).toBe("unavailable");
     expect(controller.record().draft?.text).toBe("# Plan\n\nmine\n");
     expect(getFileDocumentProjection("panel-1")).toMatchObject({ dirty: true, conflict: true });
+    main.calls.length = 0;
+    await expect(getFileDocumentProjection("panel-1")!.save()).resolves.toEqual({
+      status: "unavailable",
+      reason: "The file isn't where it was",
+    });
+    expect(main.calls.some((c) => c.channel === CHANNELS.save)).toBe(false);
+  });
+
+  it("a save that main fails or refuses names its reason and keeps the draft (#15017)", async () => {
+    const controller = await open();
+    controller.setText("# Plan\n\nmine\n");
+    main.overrides.set(CHANNELS.save, () => ({
+      status: "error",
+      message: "EACCES: permission denied",
+    }));
+    await expect(getFileDocumentProjection("panel-1")!.save()).resolves.toEqual({
+      status: "error",
+      reason: "EACCES: permission denied",
+    });
+    expect(controller.record()).toMatchObject({
+      saving: false,
+      error: "EACCES: permission denied",
+    });
+
+    main.overrides.set(CHANNELS.save, () => ({ status: "refused", reason: "NOT_MARKDOWN" }));
+    await expect(getFileDocumentProjection("panel-1")!.save()).resolves.toEqual({
+      status: "refused",
+      reason: "This file can't be saved as Markdown",
+    });
+
+    main.overrides.set(CHANNELS.save, () => ({ status: "unavailable" }));
+    await expect(getFileDocumentProjection("panel-1")!.save()).resolves.toEqual({
+      status: "unavailable",
+      reason: "The file isn't where it was",
+    });
+    expect(controller.record().draft?.text).toBe("# Plan\n\nmine\n");
+    expect(getFileDocumentProjection("panel-1")?.dirty).toBe(true);
   });
 
   it("restores a stored draft on open, as a conflict when the base moved", async () => {
@@ -357,7 +405,10 @@ describe("DocumentController (#12323)", () => {
     await flush();
     controller.setText("# Plan\n");
     release({ status: "saved", revision: sha("# Plan\n\nedit\n"), wrote: true });
-    await expect(saving).resolves.toBe(false);
+    await expect(saving).resolves.toEqual({
+      status: "refused",
+      reason: "Edits made during the save are still unsaved",
+    });
     const record = controller.record();
     expect(record.base?.text).toBe("# Plan\n\nedit\n");
     expect(record.draft).toEqual({ text: "# Plan\n", baseRevision: sha("# Plan\n\nedit\n") });
@@ -416,7 +467,10 @@ describe("DocumentController (#12323)", () => {
     main.push(PUSH_CHANNELS.documentChanged, { identityKey: KEY });
     await flush(200);
     expect(controller.record().conflict).toMatchObject({ text: null, revision: sha("changed") });
-    await expect(controller.save()).resolves.toBe(false);
+    await expect(controller.save()).resolves.toEqual({
+      status: "conflict",
+      reason: "The file changed on disk",
+    });
   });
 
   it("the panel switching to another file releases the binding", async () => {
@@ -625,7 +679,10 @@ describe("DocumentController (#12323)", () => {
     const controller = await open();
     controller.setText("x".repeat(2 * 1024 * 1024 + 1));
     expect(controller.record().error).toMatch(/over 2 MiB/);
-    await expect(controller.save()).resolves.toBe(false);
+    await expect(controller.save()).resolves.toEqual({
+      status: "refused",
+      reason: expect.stringMatching(/over 2 MiB/),
+    });
     expect(main.calls.some((c) => c.channel === CHANNELS.save)).toBe(false);
   });
 });

@@ -20,6 +20,16 @@ import { useShallow } from "zustand/react/shallow";
  *
  * Renderer-local and per project view, like every store under `src/store`.
  */
+/**
+ * How a {@link FileDocumentProjection.save} came out. `reason` is one
+ * user-facing clause: `conflict` is disk moving under the draft, `unavailable`
+ * the file gone or unreadable, `refused` a save that never started (too large,
+ * still loading, newer edits left over), `error` a write that failed.
+ */
+export type FileDocumentSaveOutcome =
+  | { status: "saved" }
+  | { status: "conflict" | "unavailable" | "refused" | "error"; reason: string };
+
 export interface FileDocumentProjection {
   /** Opaque identity the plugin keys the underlying document by. */
   identityKey: string;
@@ -36,10 +46,11 @@ export interface FileDocumentProjection {
   /** Disk moved under a dirty draft, or a save was refused as stale. */
   conflict: boolean;
   /**
-   * Save the draft. Resolves true once the document is clean; false when the
-   * save was refused (conflict, error) and the draft is still standing.
+   * Save the draft. Resolves `saved` once the document is clean; anything
+   * else means the draft is still standing, with the reason in words the
+   * close prompt can show where the editor's own banner isn't on screen.
    */
-  save: () => Promise<boolean>;
+  save: () => Promise<FileDocumentSaveOutcome>;
   /** Drop the draft and its recovery record. */
   discard: () => Promise<void>;
 }

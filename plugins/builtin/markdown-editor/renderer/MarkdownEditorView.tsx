@@ -224,8 +224,8 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
     const from = document.activeElement;
     const fromSaveButton =
       from instanceof HTMLElement && from.dataset.testid === "markdown-editor-save";
-    const clean = await controller.save();
-    if (!clean || !fromSaveButton) return;
+    const outcome = await controller.save();
+    if (outcome.status !== "saved" || !fromSaveButton) return;
     const now = document.activeElement;
     if (now === from || now === null || now === document.body) viewRef.current?.focus();
   }, [controller]);

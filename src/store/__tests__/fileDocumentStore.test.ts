@@ -15,7 +15,7 @@ function projection(overrides: Partial<FileDocumentProjection> = {}): FileDocume
     draftText: null,
     dirty: false,
     conflict: false,
-    save: vi.fn(async () => true),
+    save: vi.fn(async () => ({ status: "saved" as const })),
     discard: vi.fn(async () => {}),
     ...overrides,
   };

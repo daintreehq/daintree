@@ -5,7 +5,11 @@ import type {
   PluginFileDocumentReadResult,
   PluginFileDocumentSaveResult,
 } from "@shared/types/plugin";
-import { useFileDocumentStore, type FileDocumentProjection } from "@/store/fileDocumentStore";
+import {
+  useFileDocumentStore,
+  type FileDocumentProjection,
+  type FileDocumentSaveOutcome,
+} from "@/store/fileDocumentStore";
 import { logWarn } from "@/utils/logger";
 import { clientErrorText } from "@/utils/clientAppError";
 import { relativeFilePath } from "@/registry/fileEditorGlob";
@@ -180,15 +184,46 @@ async function save(
   return result;
 }
 
-/** The close prompt's Save: the host's draft against the revision it was based on. */
-async function saveDraft(record: DocumentRecord): Promise<boolean> {
+function refusedOutcome(
+  reason: Extract<PluginFileDocumentSaveResult, { status: "refused" }>["reason"]
+): FileDocumentSaveOutcome {
+  switch (reason) {
+    case "unavailable":
+      return { status: "unavailable", reason: "The file isn't where it was" };
+    case "too-large":
+      return { status: "refused", reason: "The draft is too large for this editor to save" };
+    case "read-only":
+      return { status: "refused", reason: "This file is read-only here" };
+    default:
+      return { status: "refused", reason: "The save was refused" };
+  }
+}
+
+/**
+ * The close prompt's Save: the host's draft against the revision it was based
+ * on. A failure names its reason, since the editor that would show it may not
+ * be on screen.
+ */
+async function saveDraft(record: DocumentRecord): Promise<FileDocumentSaveOutcome> {
   const draft = record.draft;
-  if (draft === null) return true;
-  if (record.revision === null) return false;
+  if (draft === null) return { status: "saved" };
+  if (record.revision === null) {
+    return { status: "refused", reason: "The file hasn't finished loading" };
+  }
   const result = await save(record, draft, record.revision);
-  if (result.status !== "saved") return false;
-  emit(record, { reason: "saved", revision: result.revision });
-  return record.draft === null;
+  switch (result.status) {
+    case "saved":
+      emit(record, { reason: "saved", revision: result.revision });
+      return record.draft === null
+        ? { status: "saved" }
+        : { status: "refused", reason: "Edits made during the save are still unsaved" };
+    case "conflict":
+      return { status: "conflict", reason: "The file changed on disk" };
+    case "refused":
+      return refusedOutcome(result.reason);
+    case "error":
+      return { status: "error", reason: result.message };
+  }
 }
 
 function discardDraft(record: DocumentRecord): void {
