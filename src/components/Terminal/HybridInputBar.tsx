@@ -1550,7 +1550,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           {SCRATCH_REFUSAL_CAPTION[scratchRefusal.reason]}
         </span>
       ) : showFileReferenceCaption ? (
-        <span aria-hidden="true" className="ml-auto mr-3 min-w-0 truncate text-xs text-text-secondary">
+        <span
+          aria-hidden="true"
+          className="ml-auto mr-3 min-w-0 truncate text-xs text-text-secondary"
+        >
           {unresolvedFileReferencesCaption(fileReferenceNote.references)}
         </span>
       ) : isSendRefused ? (

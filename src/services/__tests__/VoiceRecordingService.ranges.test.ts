@@ -1326,7 +1326,10 @@ describe("VoiceRecordingService — a spoken file reference that finds no file (
     fileReferences("t1", [{ description: "old API", path: null }]);
 
     expect(draft()).toBe("Link to the old API.");
-    expect(await note()).toMatchObject({ panelId: PANEL, references: [{ description: "old API" }] });
+    expect(await note()).toMatchObject({
+      panelId: PANEL,
+      references: [{ description: "old API" }],
+    });
     expect(voiceStore.getState().announcement?.text).toBe("No file found for “old API”.");
   });
 
