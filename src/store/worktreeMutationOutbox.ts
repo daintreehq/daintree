@@ -244,8 +244,9 @@ const pendingTerminalRestores = new Map<string, WorktreeTerminalRestoreSnapshot[
 
 /**
  * Dev-preview panels whose servers were live when a delete stopped them ahead
- * of the removal (#9084), held and consumed exactly like
- * {@link pendingTerminalRestores} (#15002). Main drops a stopped session
+ * of the removal (#9084), held and consumed like {@link pendingTerminalRestores}
+ * (#15002), except that every attempt adds to it: a retry also stops whatever
+ * started since the last one. Main drops a stopped session
  * outright and the panel's own auto-start has already fired for its config, so
  * without this an abandoned delete leaves a server down that nobody asked to
  * stop.
@@ -459,15 +460,15 @@ export async function runDeleteAsync(
     const worktreeBefore = get().worktrees.get(worktreeId);
     const worktreeName =
       worktreeBefore?.name ?? worktreeBefore?.branch ?? worktreeNameFromId(worktreeId);
-    // The live panels are held per mutation like the terminal snapshot, first
-    // capture wins: a retry finds them already stopped (#15002).
+    // The live panels are held per mutation like the terminal snapshot (#15002).
     const [existingDevPreview, liveDevPreviewPanelIds] = await Promise.all([
       window.electron.devPreview.getByWorktree({ worktreeId }),
       captureLiveDevPreviewPanels(worktreeId),
     ]);
     const hadDevPreview = existingDevPreview !== null;
-    if (liveDevPreviewPanelIds.length > 0 && !pendingDevPreviewRestores.has(mutationId)) {
-      pendingDevPreviewRestores.set(mutationId, liveDevPreviewPanelIds);
+    if (liveDevPreviewPanelIds.length > 0) {
+      const held = pendingDevPreviewRestores.get(mutationId) ?? [];
+      pendingDevPreviewRestores.set(mutationId, [...new Set([...held, ...liveDevPreviewPanelIds])]);
     }
     await window.electron.devPreview.stopByWorktree({ worktreeId });
     reachedDelete = true;

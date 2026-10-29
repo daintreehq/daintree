@@ -991,12 +991,17 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
       expect(resumeDevPreviewsMock).toHaveBeenCalledTimes(1);
     });
 
-    it("restarts the first attempt's servers once the retry cap is hit", async () => {
+    it("restarts every attempt's servers once the retry cap is hit", async () => {
       worktreeClientDeleteMock.mockRejectedValue(new Error("git error: ref already exists"));
-      // A later capture (a server started mid-retry) must not replace the first.
+      // A server started between attempts is stopped by the retry too, so it
+      // joins the first attempt's rather than replacing them; one seen twice
+      // comes back once.
       devPreviewGetAllSessionsMock
         .mockResolvedValueOnce([session("panel-1", "wt-1", "running")])
-        .mockResolvedValueOnce([session("panel-started-mid-retry", "wt-1", "running")])
+        .mockResolvedValueOnce([
+          session("panel-1", "wt-1", "running"),
+          session("panel-started-mid-retry", "wt-1", "running"),
+        ])
         .mockResolvedValue([]);
 
       const store = createWorktreeStore();
@@ -1015,7 +1020,10 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
 
       expect([...store.getState().mutationOutbox.values()][0]!.status).toBe("failed");
       expect(resumeDevPreviewsMock).toHaveBeenCalledTimes(1);
-      expect(resumeDevPreviewsMock).toHaveBeenCalledWith("wt-1", ["panel-1"]);
+      expect(resumeDevPreviewsMock).toHaveBeenCalledWith("wt-1", [
+        "panel-1",
+        "panel-started-mid-retry",
+      ]);
     });
 
     it("does not restart them on a connectivity failure, which stays pending for replay", async () => {
