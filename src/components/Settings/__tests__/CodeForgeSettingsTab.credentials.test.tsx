@@ -205,6 +205,41 @@ describe("CodeForgeSettingsTab — generic credential form", () => {
     });
   });
 
+  it.each([
+    {
+      roles: ["issues"] as const,
+      consequence:
+        "Daintree's copy is deleted. Linear issues stop until you add credentials again.",
+    },
+    {
+      roles: ["code"] as const,
+      consequence:
+        "Daintree's copy is deleted. Linear pull requests and pulse data stop until you add credentials again.",
+    },
+    {
+      roles: undefined,
+      consequence:
+        "Daintree's copy is deleted. Linear issues, pull requests and pulse data stop until you add credentials again.",
+    },
+  ])(
+    "says only what the provider's roles lose when its credentials are cleared: $roles (#15236)",
+    async ({ roles, consequence }) => {
+      const provider = makeProvider("daintree.linear", "linear", "Linear", [
+        { id: "token", label: "Personal API key", type: "password" },
+      ]);
+      if (roles) provider.contribution.roles = [...roles];
+      installForgeMocks({ providers: [provider], hasCredential: true });
+
+      render(
+        <CodeForgeSettingsTab activeSubtab="daintree.linear.linear" onSubtabChange={vi.fn()} />
+      );
+      fireEvent.click(await screen.findByRole("button", { name: /clear credentials/i }));
+
+      const dialog = await screen.findByRole("alertdialog");
+      expect(within(dialog).getByText(consequence)).toBeTruthy();
+    }
+  );
+
   it("says whether the host is signed in, in a window attached to another host", async () => {
     window.__DAINTREE_HOST_ID__ = { id: "studio" };
     setHostPlatformInfo({ hostName: "studio-01" });

@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState, useMemo, Suspense } from "react";
 import { Check } from "lucide-react";
 import type { ForgeProviderContribution, ForgeProviderEntry } from "@shared/types";
+import type { ForgeProviderRole } from "@shared/types/forge";
 import type { ForgeAuditRecord, ForgeAuditStats } from "@shared/types/ipc/forge";
 import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "@shared/types/ipc/forge";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
+import { forgeProviderRoles } from "@shared/utils/forgeProviderRoles";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -358,6 +360,7 @@ function ProviderSettingsBody({ providerId, pluginId, contribution }: ProviderSe
           providerId={providerId}
           providerName={contribution.name}
           fields={credentialFields}
+          roles={forgeProviderRoles(contribution)}
         />
       ) : (
         <SettingsSection title="Authentication">
@@ -392,6 +395,28 @@ interface GenericCredentialFormProps {
   providerId: string;
   providerName: string;
   fields: CredentialField[];
+  /** What the provider serves, which is what stops when its credentials go. */
+  roles: readonly ForgeProviderRole[];
+}
+
+/**
+ * What stops working once a provider's credentials are cleared, from the roles
+ * it declares: an issues-only provider (Linear) leaves pull requests and pulse
+ * with the code forge, so the confirmation must not claim they stop too.
+ */
+function clearedCredentialConsequence(
+  providerName: string,
+  roles: readonly ForgeProviderRole[]
+): string {
+  const issues = roles.includes("issues");
+  const code = roles.includes("code");
+  const what =
+    issues && code
+      ? "issues, pull requests and pulse data"
+      : code
+        ? "pull requests and pulse data"
+        : "issues";
+  return `Daintree's copy is deleted. ${providerName} ${what} stop until you add credentials again.`;
 }
 
 type CredentialResult = "success" | "error" | null;
@@ -401,7 +426,12 @@ function primaryFieldId(fields: CredentialField[]): string {
   return primary?.id ?? "";
 }
 
-function GenericCredentialForm({ providerId, providerName, fields }: GenericCredentialFormProps) {
+function GenericCredentialForm({
+  providerId,
+  providerName,
+  fields,
+  roles,
+}: GenericCredentialFormProps) {
   const [values, setValues] = useState<Record<string, string>>({});
   const [isSaving, setIsSaving] = useState(false);
   const [result, setResult] = useState<CredentialResult>(null);
@@ -639,7 +669,7 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
         onConfirm={() => void handleClear()}
         onClose={() => setConfirmingClear(false)}
         title={`Clear ${providerName} credentials?`}
-        description={`Daintree's copy is deleted. ${providerName} issues, pull requests and pulse data stop until you add credentials again.`}
+        description={clearedCredentialConsequence(providerName, roles)}
         confirmLabel="Clear credentials"
         zIndex="nested"
       />
