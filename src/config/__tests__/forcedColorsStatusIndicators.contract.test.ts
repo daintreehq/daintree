@@ -136,10 +136,10 @@ function forcedColorsRules(): ForcedColorsRule[] {
     }));
 }
 
-// Every rule whose selector list carries all of these whole, in source order.
-function rulesFor(rules: ForcedColorsRule[], selectors: string[]): ForcedColorsRule[] {
-  const found = rules.filter((rule) => selectors.every((s) => rule.selectors.includes(s)));
-  expect(found.length, selectors.join(", ")).toBeGreaterThan(0);
+// Every rule whose selector list carries this selector whole, in source order.
+function rulesFor(rules: ForcedColorsRule[], selector: string): ForcedColorsRule[] {
+  const found = rules.filter((rule) => rule.selectors.includes(selector));
+  expect(found.length, selector).toBeGreaterThan(0);
   return found;
 }
 
@@ -157,23 +157,41 @@ const LINE_STYLES = new Set([
 ]);
 
 // The border style and width these rules leave on the element, later
-// declarations winning. A shorthand resets what it omits, and a per-side value
-// list reads as "mixed": no single stroke describes that frame.
+// declarations winning unless an earlier one is !important. A shorthand resets
+// what it omits, and a per-side value list reads as "mixed": no single stroke
+// describes that frame.
 function borderOf(rules: ForcedColorsRule[]): { style?: string; width?: string } {
-  let style: string | undefined;
-  let width: string | undefined;
-  for (const [property, value] of rules.flatMap((rule) => rule.declarations)) {
-    const tokens = value.split(" ");
+  const frame: { style?: string; width?: string } = {};
+  const important = new Set<keyof typeof frame>();
+  const set = (key: keyof typeof frame, value: string | undefined, isImportant: boolean) => {
+    if (important.has(key) && !isImportant) return;
+    if (isImportant) important.add(key);
+    frame[key] = value;
+  };
+  for (const [property, raw] of rules.flatMap((rule) => rule.declarations)) {
+    const isImportant = /!\s*important$/i.test(raw);
+    const tokens = raw.replace(/\s*!\s*important$/i, "").split(" ");
     if (property === "border") {
-      style = tokens.find((t) => LINE_STYLES.has(t)) ?? "none";
-      width = tokens.find((t) => /^[\d.]+px$|^(thin|medium|thick)$/.test(t)) ?? "medium";
+      set("style", tokens.find((t) => LINE_STYLES.has(t)) ?? "none", isImportant);
+      const width = tokens.find((t) => /^[\d.]+px$|^(thin|medium|thick)$/.test(t));
+      set("width", width ?? "medium", isImportant);
     } else if (property === "border-style") {
-      style = tokens.length === 1 ? tokens[0] : "mixed";
+      set("style", tokens.length === 1 ? tokens[0] : "mixed", isImportant);
     } else if (property === "border-width") {
-      width = tokens.length === 1 ? tokens[0] : "mixed";
+      set("width", tokens.length === 1 ? tokens[0] : "mixed", isImportant);
     }
   }
-  return { style, width };
+  return frame;
+}
+
+// A button's frame: every rule on bare `button`, then its variant's own, which
+// outrank those on specificity wherever they sit in the file.
+function buttonFrame(
+  rules: ForcedColorsRule[],
+  variant?: string
+): { style?: string; width?: string } {
+  const own = variant ? rulesFor(rules, `button[data-variant="${variant}"]`) : [];
+  return borderOf([...rulesFor(rules, "button"), ...own]);
 }
 
 // The `:not()` arguments of the 1px pin-back on buttons.
@@ -397,11 +415,9 @@ describe("forced-colors heavier-border hooks survive the 1px pin-back", () => {
 // That AppDialog renders the destructive leading action as this variant, on a
 // real button, is pinned in AppDialog.test.tsx.
 describe("forced-colors ghost-danger button distinction (#15377)", () => {
-  const DANGER = ['button[data-variant="ghost-danger"]'];
-
   it("gives ghost-danger a border style no neighbouring button draws", () => {
     const rules = forcedColorsRules();
-    const danger = borderOf(rulesFor(rules, DANGER)).style;
+    const danger = buttonFrame(rules, "ghost-danger").style;
     expect(danger).toBeDefined();
     // Not drawn at all, drawn in shades the forced palette doesn't have, or
     // already the drop frame's stroke.
@@ -415,22 +431,17 @@ describe("forced-colors ghost-danger button distinction (#15377)", () => {
       "outset",
       "dashed",
     ]).not.toContain(danger);
-    const neighbours = [
-      // The blanket frame Cancel and the plain ghost take.
-      ["button", '[role="button"]', '[type="button"]', '[type="submit"]', '[type="reset"]'],
-      ['button[data-variant="contrast"]'],
-      ['button[data-variant="destructive"]'],
-    ];
-    for (const selectors of neighbours) {
-      const neighbour = borderOf(rulesFor(rules, selectors)).style;
-      expect(neighbour, selectors.join(", ")).toBeDefined();
-      expect(danger, selectors.join(", ")).not.toBe(neighbour);
+    // Undefined is the plain frame Cancel and the neutral ghost take.
+    for (const variant of [undefined, "contrast", "destructive"]) {
+      const neighbour = buttonFrame(rules, variant).style;
+      expect(neighbour, variant).toBeDefined();
+      expect(danger, variant).not.toBe(neighbour);
     }
   });
 
   // Under 3px a double border has no room for its gap and draws one solid line.
   it("is wide enough for its style to draw as intended", () => {
-    const { style, width } = borderOf(rulesFor(forcedColorsRules(), DANGER));
+    const { style, width } = buttonFrame(forcedColorsRules(), "ghost-danger");
     const px = Number(width?.match(/^([\d.]+)px$/)?.[1]);
     expect(px).toBeGreaterThanOrEqual(style === "double" ? 3 : 1);
   });
@@ -441,9 +452,8 @@ describe("forced-colors ghost-danger button distinction (#15377)", () => {
   // focus ring owns outline: a later outline rule would erase the cue on the
   // very button the user has focused.
   it("sets only border width and style, leaving colour and outline to other rules", () => {
-    const properties = rulesFor(forcedColorsRules(), DANGER).flatMap((rule) =>
-      rule.declarations.map(([property]) => property)
-    );
+    const danger = rulesFor(forcedColorsRules(), 'button[data-variant="ghost-danger"]');
+    const properties = danger.flatMap((rule) => rule.declarations.map(([property]) => property));
     for (const property of properties) expect(["border-width", "border-style"]).toContain(property);
   });
 });
