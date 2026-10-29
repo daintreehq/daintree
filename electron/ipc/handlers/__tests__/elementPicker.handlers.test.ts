@@ -184,6 +184,8 @@ describe("elementPicker handlers", () => {
       [all.reselect.schema, { sessionId: "s1", projectId: "project-b" }],
       [all.reselect.schema, { sessionId: "s1", script: "alert(1)" }],
       [all.reselect.schema, { sessionId: "s1", framework: "jquery" }],
+      [all.reselect.schema, { sessionId: "s1", componentId: "" }],
+      [all.reselect.schema, { sessionId: "s1", componentId: "c".repeat(129) }],
       [
         all.reselect.schema,
         { sessionId: "s1", locator: { loc: { file: "a", line: 1, column: 0 }, index: 0, x: 1 } },
