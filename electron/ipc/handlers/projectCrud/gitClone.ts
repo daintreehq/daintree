@@ -462,14 +462,14 @@ export function registerGitCloneHandlers(): () => void {
     const rawOpId = payload?.opId;
     const requested = normalizeOperationId(rawOpId);
     // A malformed id is refused, never read as "no id": that would widen a
-    // cancel meant for one clone into a cancel of every clone.
+    // cancel meant for one clone into a cancel of every clone the view started.
     if (rawOpId !== undefined && requested === null) {
       throw new AppError({ code: "VALIDATION", message: "Invalid operation id" });
     }
     const registry = getOperationRegistry();
     if ((ctx.endpoint as ClientEndpoint | undefined)?.kind === "remote-view") {
       // A remote client may stop only its own project's clone, by id, through
-      // the scoped registry. Cancel-all is this machine's own UI's alone.
+      // the scoped registry. Only this machine's own views cancel unnamed.
       if (requested === null) {
         throw new AppError({
           code: "VALIDATION",

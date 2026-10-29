@@ -256,10 +256,17 @@ describe("clone as an operation", () => {
     await started(1);
     const b = clone(localCtx(), options({ opId: "op-b", folderName: "b" }));
     await started(2);
+    const elsewhere = clone(localCtx("project-a", 2), options({ folderName: "c" }));
+    await started(3);
 
     await cancel(localCtx());
     await expect(a).rejects.toMatchObject({ code: "CANCELLED" });
     await expect(b).rejects.toMatchObject({ code: "CANCELLED" });
+
+    const other = pending.find((p) => p.folder === "c")!;
+    expect(other.signal.aborted).toBe(false);
+    other.resolve();
+    await expect(elsewhere).resolves.toBeDefined();
   });
 
   it("lets a joined caller cancel the shared clone by its own id", async () => {
