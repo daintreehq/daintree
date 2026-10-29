@@ -86,7 +86,7 @@ describe("VoiceInputButton", () => {
       isConfigured: false,
       status: "recording",
       micSignal: "live",
-      activeTarget: { panelId: "panel-1" } as never,
+      activeTarget: { panelId: "panel-1" },
     });
     const { getByRole } = render(
       <VoiceInputButton panelId="panel-1" projectId="project-1" projectName="Daintree" />
@@ -102,7 +102,7 @@ describe("VoiceInputButton", () => {
     useVoiceRecordingStore.setState({
       isConfigured: false,
       status: "finishing",
-      activeTarget: { panelId: "panel-1" } as never,
+      activeTarget: { panelId: "panel-1" },
     });
     const { getByRole } = render(
       <VoiceInputButton panelId="panel-1" projectId="project-1" projectName="Daintree" />

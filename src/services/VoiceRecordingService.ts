@@ -1399,6 +1399,9 @@ class VoiceRecordingService {
           // release mustn't act on whatever runs by then.
           this.dropHeldPress();
           void this.stopAnySession(returnToTarget === true ? { pressedHere: false } : undefined);
+          // Dictation turned off in another view asks this way too, and that
+          // view's settings event never reaches this one (#14947).
+          void this.refreshConfiguration();
           return;
         }
         // Started here before a reload: nothing in this view holds its

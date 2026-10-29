@@ -1823,6 +1823,24 @@ describe("VoiceRecordingService adversarial", () => {
       });
     });
 
+    it("rereads its settings, since dictation may have been turned off in that view (#14947)", async () => {
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      await voiceRecordingService.start(panelOne);
+      runtime.voiceState.activeTarget = panelOne;
+      runtime.voiceState.status = "recording";
+      runtime.voiceInput.getSettings.mockResolvedValue({
+        enabled: false,
+        openaiApiKey: "sk-key",
+        correctionEnabled: true,
+      });
+
+      requestHandlers().stopRequested({ sessionId: liveSessionId() });
+
+      await vi.waitFor(() => {
+        expect(runtime.voiceState.isConfigured).toBe(false);
+      });
+    });
+
     it("ends at main a session it no longer holds, leaving its own live one alone", async () => {
       const { voiceRecordingService } = await import("../VoiceRecordingService");
       await voiceRecordingService.start(panelOne);

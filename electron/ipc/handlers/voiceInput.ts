@@ -1379,11 +1379,6 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // Events and the ended notice go back to the view that started it.
     const sender = ctx.event?.sender;
     if (!sender || sender.isDestroyed()) return SUPERSEDED;
-    // A view that read the settings just before dictation was turned off, or
-    // waited behind the session that turning it off stopped (#14947).
-    if (!getVoiceSettings().enabled) {
-      return { status: "failed", error: "Dictation is off in Voice settings." };
-    }
     // Two sessions under one id would make every chunk and stop ambiguous.
     if (liveSession?.id === sessionId || drainingSession?.id === sessionId) {
       throw new AppError({ code: "VALIDATION", message: "Voice session already started" });
@@ -1449,6 +1444,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       endSession(session, "cancelled");
       if (ownsProvider) service?.stop();
     });
+    // Dictation turned off after this view read the settings, or while it
+    // waited behind the session turning it off stopped (#14947). It may already
+    // hold speech, so it stops as a stop would rather than being refused.
+    if (!getVoiceSettings().enabled) requestLiveSessionStop(session.id);
     // Main-process clock only; correlate with renderer start steps by session id.
     const startedAt = performance.now();
     // Whatever already ended it (a stop, a newer start, its view going away)

@@ -1657,14 +1657,15 @@ describe("voiceInput — a session live in another view (#14601)", () => {
     expect(winA.focus).not.toHaveBeenCalled();
   });
 
-  it("refuses a start that reaches main after dictation was turned off", async () => {
+  it("stops a start that reaches main after dictation was turned off, keeping its speech", async () => {
     await invoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, viewB, { enabled: false });
 
-    expect(await start(ownerA, "a")).toEqual({ status: "failed", error: expect.any(String) });
+    await start(ownerA, "a");
 
-    expect(getLiveVoiceSession()).toBeNull();
-    expect(liveUpdates(viewB)).toEqual([]);
-    expect(shared.calls).toEqual([]);
+    // The owner may already hold queued speech, so it drains rather than being refused.
+    expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([{ sessionId: "a" }]);
+    expect(getLiveVoiceSession()?.sessionId).toBe("a");
+    expect(shared.calls).not.toContain("hard-stop");
   });
 
   it("asks nothing of a view when dictation is turned off with nothing live", async () => {
