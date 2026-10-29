@@ -113,11 +113,7 @@ export function diffCorrection(rawText: string, correctedText: string): Correcti
   const a = diffWords(rawText);
   const b = diffWords(correctedText);
   // Framed by the positions just outside either end, so every gap is between two pairs.
-  const kept: [number, number][] = [
-    [-1, -1],
-    ...alignWords(a, b, sameWord),
-    [a.length, b.length],
-  ];
+  const kept: [number, number][] = [[-1, -1], ...alignWords(a, b, sameWord), [a.length, b.length]];
 
   const changes: CorrectionChanges = { changed: [], removed: [] };
   for (let k = 0; k < kept.length - 1; k++) {
