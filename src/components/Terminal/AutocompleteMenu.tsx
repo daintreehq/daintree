@@ -106,12 +106,20 @@ export function getComboboxState({
   };
 }
 
-interface KeyHint {
+interface HintKey {
   key: string;
   /** Spoken name of the key; the glyph reads badly aloud. */
   keyName: string;
+}
+
+interface KeyHint {
+  /** Keys that do the same thing share one label. */
+  keys: HintKey[];
   label: string;
 }
+
+const ENTER: HintKey = { key: "↵", keyName: "Enter" };
+const TAB: HintKey = { key: "⇥", keyName: "Tab" };
 
 /**
  * What the keys will do to the selected row, derived here rather than handed
@@ -124,15 +132,39 @@ function getKeyHints(item: AutocompleteItem | undefined, isStale: boolean): KeyH
   if (!item || isStale) return [];
   if (item.enterAction === "execute") {
     return [
-      { key: "↵", keyName: "Enter", label: "run" },
-      { key: "⇥", keyName: "Tab", label: "complete" },
+      { keys: [ENTER], label: "run" },
+      { keys: [TAB], label: "complete" },
     ];
   }
-  return [{ key: "↵", keyName: "Enter", label: "insert" }];
+  // Tab completes an insert row exactly as Enter does (`useEditorKeymap`).
+  return [{ keys: [ENTER, TAB], label: "insert" }];
 }
 
 /** With no row selected, Tab still takes the first one; Enter does not. */
-const TAB_FIRST_HINT: KeyHint = { key: "⇥", keyName: "Tab", label: "insert first" };
+const TAB_FIRST_HINT: KeyHint = { keys: [TAB], label: "insert first" };
+
+function spokenHint(hint: KeyHint): string {
+  return `${hint.keys.map((k) => k.keyName).join(" or ")} to ${hint.label}`;
+}
+
+/**
+ * Bring a row into view by scrolling only the menu's own list. `scrollIntoView`
+ * scrolls every scrollable ancestor too, and a grid pane is one
+ * (`overflow-hidden`): a menu wider than the pane slid the whole pane sideways.
+ * Honours the list's scroll padding, which keeps the row clear of the fades.
+ */
+function revealInList(row: Element, scroller: HTMLElement): void {
+  const style = getComputedStyle(scroller);
+  const padTop = parseFloat(style.scrollPaddingTop) || 0;
+  const padBottom = parseFloat(style.scrollPaddingBottom) || 0;
+  const rowBox = row.getBoundingClientRect();
+  const box = scroller.getBoundingClientRect();
+  if (rowBox.top < box.top + padTop) {
+    scroller.scrollTop -= box.top + padTop - rowBox.top;
+  } else if (rowBox.bottom > box.bottom - padBottom) {
+    scroller.scrollTop += rowBox.bottom - (box.bottom - padBottom);
+  }
+}
 
 export interface AutocompleteMenuProps {
   isOpen: boolean;
@@ -181,6 +213,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
     ref
   ) => {
     const listRef = useRef<HTMLDivElement | null>(null);
+    const scrollerRef = useRef<HTMLDivElement | null>(null);
     // Palette-tier presence (150ms enter / 100ms exit) so the menu rises in
     // and fades out like its sibling overlays instead of popping on every
     // `/` or `@` keystroke.
@@ -199,8 +232,22 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
       // A row under the pointer was just claimed by it; revealing it would
       // scroll a half-visible row out from under the pointer.
       if (isPointerClaimed(selected)) return;
-      selected?.scrollIntoView?.({ block: "nearest" });
+      const scroller = scrollerRef.current;
+      if (selected && scroller) revealInList(selected, scroller);
     }, [isOpen, shouldRender, selectedIndex, items]);
+
+    // A caller that fits the menu to its space (the composer, to its pane) can
+    // shrink the list while it is open; keep the selected row in sight.
+    useEffect(() => {
+      const scroller = scrollerRef.current;
+      if (!isOpen || !shouldRender || !scroller || typeof ResizeObserver === "undefined") return;
+      const observer = new ResizeObserver(() => {
+        const selected = listRef.current?.querySelector('[aria-selected="true"]');
+        if (selected && !isPointerClaimed(selected)) revealInList(selected, scroller);
+      });
+      observer.observe(scroller);
+      return () => observer.disconnect();
+    }, [isOpen, shouldRender]);
 
     if (!shouldRender) return null;
 
@@ -235,7 +282,9 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
         ref={ref}
         data-autocomplete-menu=""
         className={cn(
-          "absolute bottom-full mb-0 w-[420px] max-w-[calc(100vw-16px)] overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay",
+          // A column, so a height the caller caps (`maxHeight`) is taken from
+          // the list, which scrolls, never from the header.
+          "absolute bottom-full mb-0 flex w-[420px] max-w-[calc(100vw-16px)] flex-col overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay",
           "z-50 origin-bottom",
           // Reduced motion keeps the fade and drops the rise. The hook, not a
           // `motion-reduce:` class: it also answers the app's own "Reduce UI
@@ -254,7 +303,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
         }}
       >
         {title && (
-          <div className="flex h-7 items-center justify-between gap-2 border-b border-tint/5 px-2">
+          <div className="flex h-7 shrink-0 items-center justify-between gap-2 border-b border-tint/5 px-2">
             <span className={PALETTE_SECTION_LABEL_CLASS}>{title}</span>
             {keyHints.length > 0 ? (
               <span
@@ -262,8 +311,12 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
                 className="flex shrink-0 items-center gap-2.5 text-3xs text-text-secondary"
               >
                 {keyHints.map((hint) => (
-                  <span key={hint.key} className="inline-flex items-center gap-1">
-                    <kbd className={KBD_COMPACT_CLASS}>{hint.key}</kbd>
+                  <span key={hint.label} className="inline-flex items-center gap-1">
+                    {hint.keys.map((k) => (
+                      <kbd key={k.key} className={KBD_COMPACT_CLASS}>
+                        {k.key}
+                      </kbd>
+                    ))}
                     {hint.label}
                   </span>
                 ))}
@@ -279,7 +332,12 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
         )}
         {/* Compact fade, and scroll padding to match: a selection scrolled to the
             edge would otherwise land under the fade and read as disabled. */}
-        <ScrollShadow compact className="max-h-64" scrollClassName="p-1 scroll-py-4">
+        <ScrollShadow
+          ref={scrollerRef}
+          compact
+          className="max-h-64"
+          scrollClassName="p-1 scroll-py-4"
+        >
           {/* Mounted for the menu's whole life, so a change of text is announced —
               a live region inserted already holding its message often is not. */}
           <div
@@ -362,9 +420,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
                   {/* The header's hint band is hidden from assistive tech, so the
                       row Enter acts on carries the same instruction in words. */}
                   {isSelected && keyHints.length > 0 && (
-                    <span className="sr-only">
-                      {`, ${keyHints.map((h) => `${h.keyName} to ${h.label}`).join(", ")}`}
-                    </span>
+                    <span className="sr-only">{`, ${keyHints.map(spokenHint).join(", ")}`}</span>
                   )}
                 </button>
               );

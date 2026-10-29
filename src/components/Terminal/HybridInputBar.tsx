@@ -88,6 +88,7 @@ import {
 } from "@/store/terminalInputStore";
 import type { CommandResult } from "@shared/types/commands";
 import { AppDialog } from "@/components/ui/AppDialog";
+import { ScrollShadowOverlay } from "@/components/ui/ScrollShadow";
 import {
   useTerminalColorSchemeStore,
   selectEffectiveTheme,
@@ -136,8 +137,13 @@ import { useEditorKeymap, type ComposerSendRoute } from "./hooks/useEditorKeymap
 import { useCompartmentDriver } from "./hooks/useCompartmentDriver";
 import { usePasteExtensions } from "./hooks/usePasteExtensions";
 import { useAutocompleteState } from "./hooks/useAutocompleteState";
-import { useAutocompletePositioning } from "./hooks/useAutocompletePositioning";
+import {
+  MENU_SHELL_GAP_PX,
+  useAutocompletePositioning,
+  type MenuPlacement,
+} from "./hooks/useAutocompletePositioning";
 import { useComposerMeasure } from "./hooks/useComposerMeasure";
+import { useEditorScrollEdges } from "./hooks/useEditorScrollEdges";
 import { useAutocompleteApply } from "./hooks/useAutocompleteApply";
 import { useFleetMirror } from "./hooks/useFleetMirror";
 import { useSendHandBack, type SendHandBack } from "./hooks/useSendHandBack";
@@ -479,7 +485,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     const [selectedIndex, setSelectedIndex] = useState(0);
     const lastQueryRef = useRef<string>("");
-    const [menuLeftPx, setMenuLeftPx] = useState<number>(0);
+    const [menuPlacement, setMenuPlacement] = useState<MenuPlacement>({ left: 0 });
     const [initializationState, setInitializationState] = useState<"initializing" | "initialized">(
       "initializing"
     );
@@ -945,14 +951,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     });
 
     const canvasTrackRef = useComposerMeasure({ inputShellRef, trailingGroupRef });
+    const scrollEdges = useEditorScrollEdges(inputShellRef);
 
     useAutocompletePositioning({
       editorViewRef,
       inputShellRef,
-      menuRef,
+      rootRef,
       isAutocompleteOpen,
       activeCompletionContext,
-      setMenuLeftPx,
+      setMenuPlacement,
     });
 
     useAutocompleteState({
@@ -2006,6 +2013,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       "--ib-shadow": inputBarColors.shellShadow,
       "--ib-focus-ring": inputBarColors.shellFocusRing,
       "--ib-marker": showSelectedChrome ? inputBarColors.markerSelected : inputBarColors.marker,
+      "--ib-control-mix": inputBarColors.controlMix,
       "--ib-placeholder": showSelectedChrome
         ? inputBarColors.placeholderSelected
         : inputBarColors.placeholder,
@@ -2188,7 +2196,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               staleKeys={staleItemKeys}
               onSelect={handleAutocompleteSelect}
               onHoverIndex={setSelectedIndex}
-              style={{ left: `${menuLeftPx}px` }}
+              style={{
+                left: `${menuPlacement.left}px`,
+                maxWidth: menuPlacement.maxWidth,
+                maxHeight: menuPlacement.maxHeight,
+                marginBottom: MENU_SHELL_GAP_PX,
+              }}
               listboxId={listboxId}
               title={
                 triggerChar === "/"
@@ -2282,8 +2295,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 <div
                   ref={canvasTrackRef}
                   data-composer-canvas
-                  className="relative flex min-h-6 min-w-0 flex-1 items-center py-0.5 pr-1"
+                  // The fades take the shell's own fill, resting or hovered.
+                  className="relative flex min-h-6 min-w-0 flex-1 items-center py-0.5 pr-1 [--scroll-shadow-color:var(--ib-bg)] group-hover/shell:[--scroll-shadow-color:var(--ib-hover-bg)]"
                 >
+                  {/* At the height cap the draft scrolls inside the editor, and
+                      its first visible row otherwise sits where a first line
+                      would: the app's scroll fade says rows are out of sight. */}
+                  <ScrollShadowOverlay edge="top" visible={scrollEdges.above} compact />
+                  <ScrollShadowOverlay edge="bottom" visible={scrollEdges.below} compact />
                   <div
                     ref={(node) => {
                       editorHostRef.current = node;
@@ -2301,7 +2320,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                       }
                     }}
                     className={cn("w-full min-h-[20px]", disabled && "pointer-events-none")}
-                    style={{ color: inputBarColors.foreground }}
+                    style={{ color: inputBarColors.textInk }}
                   />
                 </div>
               </ContextMenuTrigger>
