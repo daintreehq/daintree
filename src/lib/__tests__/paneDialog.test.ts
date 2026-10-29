@@ -61,6 +61,26 @@ describe("focusPaneDialog", () => {
     expect(document.activeElement?.id).toBe("field");
   });
 
+  it("focuses the card itself when it holds no entry control", () => {
+    document.body.innerHTML = `
+      <div id="pane"><div role="dialog" data-pane-dialog tabindex="-1" id="card"></div></div>`;
+
+    expect(focusPaneDialog(document.getElementById("pane")!)).toBe(true);
+    expect(document.activeElement?.id).toBe("card");
+  });
+
+  it("is false when the dialog refuses focus", () => {
+    document.body.innerHTML = `
+      <div id="pane">
+        <div role="dialog" data-pane-dialog>
+          <button data-confirm-role="confirm" disabled>OK</button>
+        </div>
+      </div>`;
+
+    expect(focusPaneDialog(document.getElementById("pane")!)).toBe(false);
+    expect(document.activeElement).toBe(document.body);
+  });
+
   it("leaves focus already inside the dialog where it is", () => {
     document.body.innerHTML = `
       <div id="pane">

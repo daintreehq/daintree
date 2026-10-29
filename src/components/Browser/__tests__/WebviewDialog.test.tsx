@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { PANE_DIALOG_ATTR } from "@/lib/paneDialog";
+import { isInPaneDialog, PANE_DIALOG_ATTR } from "@/lib/paneDialog";
 import { WebviewDialog, type WebviewDialogRequest } from "../WebviewDialog";
 
 const baseAlert: WebviewDialogRequest = {
@@ -177,6 +177,16 @@ describe("WebviewDialog accessibility", () => {
     expect(document.activeElement).toBe(last);
   });
 
+  it("leaves Tab between the dialog's own controls to the browser", () => {
+    const { container } = render(<WebviewDialog dialog={basePrompt} onRespond={vi.fn()} />);
+    const cancel = getButton(container, "Cancel");
+    cancel.focus();
+
+    expect(fireEvent.keyDown(cancel, { key: "Tab" })).toBe(true);
+    expect(fireEvent.keyDown(cancel, { key: "Tab", shiftKey: true })).toBe(true);
+    expect(document.activeElement).toBe(cancel);
+  });
+
   // The dialog blocks one pane, not the app (#15037): Tab in another pane, the
   // sidebar or a composer moves through the app as it always does.
   it("leaves Tab alone when focus is outside the dialog", () => {
@@ -224,6 +234,71 @@ describe("WebviewDialog accessibility", () => {
     act(() => getButton(container, "page").focus());
 
     expect(document.activeElement).toBe(container.querySelector('input[type="text"]'));
+  });
+
+  // Electron tells the embedder a guest took focus with a `focus` event on the
+  // <webview> that doesn't bubble, so `focusin` never sees it.
+  it("passes on the non-bubbling focus a guest taking focus raises on its webview", () => {
+    const { container } = render(
+      <div>
+        <div data-testid="webview" />
+        <WebviewDialog dialog={baseConfirm} onRespond={vi.fn()} />
+      </div>
+    );
+    const webview = container.querySelector('[data-testid="webview"]')!;
+
+    act(() => {
+      webview.dispatchEvent(new Event("focus"));
+    });
+
+    expect(document.activeElement).toBe(getButton(container, "OK"));
+  });
+
+  it("hands each covered page to its own dialog when two panes have one", () => {
+    const { container } = render(
+      <>
+        <div data-testid="pane-1">
+          <button>page</button>
+          <WebviewDialog dialog={baseConfirm} onRespond={vi.fn()} />
+        </div>
+        <div data-testid="pane-2">
+          <button>page</button>
+          <WebviewDialog dialog={{ ...baseConfirm, dialogId: "dlg-4" }} onRespond={vi.fn()} />
+        </div>
+      </>
+    );
+    const pane2 = container.querySelector<HTMLElement>('[data-testid="pane-2"]')!;
+
+    act(() => getButton(pane2, "page").focus());
+
+    expect(document.activeElement).toBe(getButton(pane2, "OK"));
+  });
+
+  it("stops watching the page once the dialog is answered", () => {
+    const add = vi.spyOn(EventTarget.prototype, "addEventListener");
+    const remove = vi.spyOn(EventTarget.prototype, "removeEventListener");
+    try {
+      const { rerender } = render(
+        <div>
+          <button>page</button>
+          <WebviewDialog dialog={baseConfirm} onRespond={vi.fn()} />
+        </div>
+      );
+      const added = add.mock.calls.find(([type, , capture]) => type === "focus" && capture);
+      expect(added).toBeDefined();
+
+      rerender(
+        <div>
+          <button>page</button>
+          <WebviewDialog dialog={null} onRespond={vi.fn()} />
+        </div>
+      );
+
+      expect(remove).toHaveBeenCalledWith("focus", added![1], true);
+    } finally {
+      add.mockRestore();
+      remove.mockRestore();
+    }
   });
 
   it("lets the page have focus again once the dialog is answered", () => {
@@ -325,6 +400,22 @@ describe("WebviewDialog keyboard handling", () => {
     expect(onRespond).toHaveBeenCalledExactlyOnceWith(true, "edited");
   });
 
+  // keyCode 229 is Chromium's first keydown of an IME composition, before
+  // isComposing is set; either way the value is half-composed.
+  it.each([
+    { name: "while composing", init: { isComposing: true } },
+    { name: "on the composition's first keydown", init: { keyCode: 229 } },
+  ])("leaves Enter in the prompt input to the IME $name", ({ init }) => {
+    const onRespond = vi.fn();
+    const { container } = render(<WebviewDialog dialog={basePrompt} onRespond={onRespond} />);
+    const input = container.querySelector<HTMLInputElement>('input[type="text"]')!;
+
+    const notPrevented = fireEvent.keyDown(input, { key: "Enter", ...init });
+
+    expect(notPrevented).toBe(true);
+    expect(onRespond).not.toHaveBeenCalled();
+  });
+
   it("cancels a prompt on Escape from the input", () => {
     const onRespond = vi.fn();
     const { container } = render(<WebviewDialog dialog={basePrompt} onRespond={onRespond} />);
@@ -366,10 +457,14 @@ describe("WebviewDialog exit", () => {
         <WebviewDialog dialog={baseConfirm} onRespond={vi.fn()} />
       );
       expect(container.querySelector(`[role="dialog"][${PANE_DIALOG_ATTR}]`)).not.toBeNull();
+      expect(container.firstElementChild?.hasAttribute("inert")).toBe(false);
+      const ok = getButton(container, "OK");
+      expect(isInPaneDialog(ok)).toBe(true);
 
       rerender(<WebviewDialog dialog={null} onRespond={vi.fn()} />);
       expect(container.querySelector('[role="dialog"]')).toBeNull();
       expect(container.querySelector(`[${PANE_DIALOG_ATTR}]`)).toBeNull();
+      expect(isInPaneDialog(ok)).toBe(false);
       const fading = container.firstElementChild;
       expect(fading).not.toBeNull();
       expect(fading?.hasAttribute("inert")).toBe(true);

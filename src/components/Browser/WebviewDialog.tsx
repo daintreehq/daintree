@@ -114,19 +114,21 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
   // The scrim covers the page, which is frozen until it has its answer: Tab or a
   // pane handoff that reached the <webview> would leave the keyboard in a guest
   // that can't process it. Anything under the scrim that takes focus passes it on
-  // to the dialog instead.
+  // to the dialog instead. Capture-phase `focus`, not `focusin`: a guest taking
+  // focus reaches this document only as the non-bubbling `focus` Electron
+  // dispatches on the <webview> itself.
   const isOpen = dialog !== null;
   useEffect(() => {
     if (!isOpen) return;
     const scrim = scrimRef.current;
     const covered = scrim?.parentElement;
     if (!scrim || !covered) return;
-    const handleFocusIn = (e: FocusEvent) => {
+    const handleFocus = (e: Event) => {
       if (e.target instanceof Node && scrim.contains(e.target)) return;
       focusPaneDialog(scrim);
     };
-    covered.addEventListener("focusin", handleFocusIn);
-    return () => covered.removeEventListener("focusin", handleFocusIn);
+    covered.addEventListener("focus", handleFocus, true);
+    return () => covered.removeEventListener("focus", handleFocus, true);
   }, [isOpen]);
 
   const handleOk = useCallback(() => {

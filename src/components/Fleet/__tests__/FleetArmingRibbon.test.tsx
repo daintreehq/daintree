@@ -947,17 +947,30 @@ describe("FleetArmingRibbon", () => {
       dispatchSpy.mockRestore();
     });
 
-    it("still confirms the fleet action on Enter from elsewhere", async () => {
+    it.each([
+      { name: "a button in another pane", target: () => document.body.appendChild(button()) },
+      { name: "the page", target: () => document.body },
+    ])("still confirms the fleet action on Enter from $name", async ({ target }) => {
       const actionServiceModule = await import("@/services/ActionService");
       const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
       render(<FleetArmingRibbon />);
+      const el = target();
+      el.focus();
 
-      fireEvent.keyDown(window, { key: "Enter" });
+      const notPrevented = fireEvent.keyDown(el, { key: "Enter" });
 
+      expect(notPrevented).toBe(false);
       const match = dispatchSpy.mock.calls.find((c) => c[0] === "fleet.kill");
       expect(match?.[1]).toEqual({ confirmed: true });
+      if (el !== document.body) el.remove();
       dispatchSpy.mockRestore();
     });
+
+    function button(): HTMLButtonElement {
+      const el = document.createElement("button");
+      el.textContent = "Reload";
+      return el;
+    }
   });
 
   describe("Selection menu", () => {

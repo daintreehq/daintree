@@ -990,6 +990,34 @@ describe("useGlobalKeybindings — palette Escape capture", () => {
       expect(event.defaultPrevented).toBe(false);
     });
 
+    it("clears a pending chord on Escape inside it, but leaves the key to the dialog", () => {
+      mocks.keybindingService.getPendingChord.mockReturnValue("Cmd+K");
+
+      render(<Host />);
+      const event = dispatchEscape(dialog.querySelector("button")!);
+
+      expect(mocks.keybindingService.clearPendingChord).toHaveBeenCalledTimes(1);
+      expect(event.defaultPrevented).toBe(false);
+    });
+
+    it("still runs the escape stack for Escape on a control outside it", () => {
+      const outside = document.createElement("button");
+      document.body.appendChild(outside);
+
+      try {
+        const escapeHandler = vi.fn();
+        registerEscape(escapeHandler);
+
+        render(<Host />);
+        const event = dispatchEscape(outside);
+
+        expect(escapeHandler).toHaveBeenCalledTimes(1);
+        expect(event.defaultPrevented).toBe(true);
+      } finally {
+        outside.remove();
+      }
+    });
+
     it("leaves bare Escape in a terminal beside it to the terminal", () => {
       const xterm = document.createElement("div");
       xterm.className = "xterm";

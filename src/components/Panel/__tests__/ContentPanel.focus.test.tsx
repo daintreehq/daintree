@@ -352,6 +352,24 @@ describe("ContentPanel focus", () => {
       outside.remove();
     });
 
+    it("reports a handoff into a page dialog over the pane as accepted", () => {
+      const { container } = renderPanel("p-1", "browser", {
+        children: (
+          <div role="dialog" data-pane-dialog="">
+            <button data-confirm-role="confirm">OK</button>
+          </div>
+        ),
+      });
+
+      let accepted = false;
+      act(() => {
+        accepted = focusPanelInput("p-1");
+      });
+
+      expect(accepted).toBe(true);
+      expect(document.activeElement).toBe(container.querySelector('[data-confirm-role="confirm"]'));
+    });
+
     it("does not reactively claim focus for PTY kinds", () => {
       // TerminalPane routes PTY focus to xterm or the hybrid input bar. A second
       // claimant here would land focus on the container instead.

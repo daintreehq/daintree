@@ -244,6 +244,12 @@ describe("hasBlockingOverlay", () => {
     ok.focus();
     expect(hasBlockingOverlay()).toBe(true);
   });
+
+  it("still blocks everywhere for an app modal beside a page dialog", () => {
+    document.body.innerHTML = `<div role="dialog" data-pane-dialog></div><div role="dialog" aria-modal="true"></div><button id="elsewhere"></button>`;
+
+    expect(hasBlockingOverlay(document.getElementById("elsewhere"))).toBe(true);
+  });
 });
 
 describe("findPanelIdForElement", () => {

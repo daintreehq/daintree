@@ -308,10 +308,13 @@ describe("useTypeAnywhere", () => {
     // typed at it, and the rest of the window rescues as usual.
     it("refuses a keystroke aimed at a page dialog", () => {
       document.body.innerHTML = `<div role="dialog" data-pane-dialog><button id="ok">OK</button></div>`;
-      document.getElementById("ok")?.focus();
       renderHook(() => useTypeAnywhere());
 
-      const e = press("h");
+      // Judged by where the key landed, not by `document.activeElement`.
+      const e = new KeyboardEvent("keydown", { key: "h", bubbles: true, cancelable: true });
+      act(() => {
+        document.getElementById("ok")!.dispatchEvent(e);
+      });
 
       expect(e.defaultPrevented).toBe(false);
       expect(draftOf("a1")).toBe("");
