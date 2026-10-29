@@ -1183,6 +1183,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         async (outgoing: string): Promise<boolean> => {
           const attempt = ++submitAttemptRef.current;
           setSendNote(dictated ? null : { terminalId, refused: false });
+          // Newer than any scratch refusal, which leaves the border to its outcome.
+          const voice = useVoiceRecordingStore.getState();
+          if (voice.scratchRefusal?.panelId === voiceId) voice.setScratchRefusal(null);
           let accepted: boolean;
           try {
             accepted = await submit(outgoing);
@@ -1197,7 +1200,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           }
           return accepted;
         },
-      [terminalId]
+      [terminalId, voiceId]
     );
     const noteSpokenSendTooShort = useCallback(() => {
       // An earlier send still on its way can't say over it that it wasn't sent.
@@ -1386,24 +1389,27 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       (s) => (s.panelBuffers[voiceId]?.liveText ?? "").trim() !== ""
     );
     // The session's status on the border, for a draft that hides the
-    // placeholder saying it. The send's own caption has the border first.
+    // placeholder saying it. The outcomes of a scratch and a send have the
+    // border first, and a send drops the scratch's, so the newer one shows.
     const ownSendNote = sendNote?.terminalId === terminalId ? sendNote : null;
     const isSendRefused = ownSendNote?.refused === true;
     const sendRefusedCaption = ownSendNote?.tooShort ? SPOKEN_SEND_TOO_SHORT_CAPTION : "Not sent";
     const sendRefusedStatus = ownSendNote?.tooShort
       ? SPOKEN_SEND_TOO_SHORT_STATUS
       : SEND_HELD_STATUS;
-    const showSendRefusedCaption = isSendRefused && !isVoiceSubmitting && !isVoiceSubmitPresenting;
     // A "scratch that" that removed nothing (#14973), on an empty draft too:
     // the placeholder doesn't say it.
     const scratchRefusal = useVoiceRecordingStore((s) =>
       s.scratchRefusal?.panelId === voiceId ? s.scratchRefusal : null
     );
     const showScratchRefusalCaption =
-      scratchRefusal !== null &&
-      !isVoiceSubmitting &&
-      !isVoiceSubmitPresenting &&
-      !showSendRefusedCaption;
+      scratchRefusal !== null && !isVoiceSubmitting && !isVoiceSubmitPresenting;
+    const showSendRefusedCaption =
+      isSendRefused && !isVoiceSubmitting && !isVoiceSubmitPresenting && !showScratchRefusalCaption;
+    // A second refusal saying the same is still a change to read.
+    const scratchRefusalStatus = scratchRefusal
+      ? `${SCRATCH_REFUSAL_STATUS[scratchRefusal.reason]}${scratchRefusal.id % 2 ? "" : "\u200b"}`
+      : "";
     const showVoiceSessionCaption =
       voiceSessionStatus !== null &&
       (value.length > 0 || hasVoicePreview) &&
@@ -1446,13 +1452,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         <span aria-hidden="true" className="ml-auto mr-3 text-xs text-text-secondary">
           {voiceSubmitWaitCaption(voiceSubmitWait)}
         </span>
+      ) : showScratchRefusalCaption ? (
+        <span aria-hidden="true" className="ml-auto mr-3 text-xs text-text-secondary">
+          {SCRATCH_REFUSAL_CAPTION[scratchRefusal.reason]}
+        </span>
       ) : isSendRefused ? (
         <span aria-hidden="true" className="ml-auto mr-3 text-xs text-text-secondary">
           {sendRefusedCaption}
-        </span>
-      ) : scratchRefusal ? (
-        <span aria-hidden="true" className="ml-auto mr-3 text-xs text-text-secondary">
-          {SCRATCH_REFUSAL_CAPTION[scratchRefusal.reason]}
         </span>
       ) : null;
 
@@ -2008,12 +2014,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             that says this for every other composer goes unheard. */}
         {voiceTarget && (
           <div role="status" aria-live="polite" className="sr-only">
-            {dictationCancelConfirm
-              ? DICTATION_CANCEL_CONFIRM_PROMPT
-              : scratchRefusal
-                ? // A second refusal saying the same is still a change to read.
-                  `${SCRATCH_REFUSAL_STATUS[scratchRefusal.reason]}${scratchRefusal.id % 2 ? "" : "\u200b"}`
-                : ""}
+            {dictationCancelConfirm ? DICTATION_CANCEL_CONFIRM_PROMPT : scratchRefusalStatus}
           </div>
         )}
         <div className="flex items-end gap-2">
@@ -2514,6 +2515,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             </ContextMenu>
             {isDragOverModal && <FileDropOverlay />}
             {isExpanded && voiceSubmitAnnouncer}
+            {/* The app's announcer outside this modal goes unheard in it. */}
+            {isExpanded && (
+              <div role="status" aria-live="polite" className="sr-only">
+                {scratchRefusalStatus}
+              </div>
+            )}
           </div>
         </AppDialog>
         {/* One palette per id: while Canopy is open its own composer's is the

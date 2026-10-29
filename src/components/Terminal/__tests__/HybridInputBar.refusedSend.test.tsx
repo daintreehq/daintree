@@ -26,6 +26,7 @@ import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
+import { SCRATCH_REFUSAL_CAPTION, SCRATCH_REFUSAL_STATUS } from "@/services/voiceScratchCommand";
 import { HybridInputBar } from "../HybridInputBar";
 import { _resetPaneFocusRequestsForTesting } from "../paneFocusRequest";
 
@@ -94,7 +95,7 @@ afterEach(() => {
   unregisterTerminal?.();
   unregisterTerminal = null;
   _resetPaneFocusRequestsForTesting();
-  useVoiceRecordingStore.setState({ status: "idle", activeTarget: null });
+  useVoiceRecordingStore.setState({ status: "idle", activeTarget: null, scratchRefusal: null });
   useFleetArmingStore.setState({ armedIds: new Set() });
   if (originalElectron) Object.defineProperty(window, "electron", originalElectron);
   else delete (window as { electron?: unknown }).electron;
@@ -288,6 +289,51 @@ describe("HybridInputBar with a host that says whether the terminal took the sen
     expect(caption()).toBeNull();
     await settle(true);
     expect(caption()).toBeNull();
+  });
+
+  it("gives the border to a later scratch refusal, and the next send takes it back (#14973)", async () => {
+    const { container, type, pressEnter, settle, caption } = await mount();
+    const scratchCaption = () => container.querySelector("[data-scratch-refused-caption]");
+    await type("ship it");
+    await pressEnter();
+    await settle(false);
+    expect(caption()).not.toBeNull();
+
+    act(() => {
+      useVoiceRecordingStore.setState({
+        scratchRefusal: { panelId: "term-1", reason: "edited", id: 1 },
+      });
+    });
+    expect(scratchCaption()).not.toBeNull();
+    expect(caption()).toBeNull();
+
+    await pressEnter();
+    expect(useVoiceRecordingStore.getState().scratchRefusal).toBeNull();
+    await settle(false);
+    expect(scratchCaption()).toBeNull();
+    expect(caption()?.textContent).toBe("Not sent");
+  });
+
+  it("says a scratch refusal in the Expanded Editor's header, and from inside its dialog", async () => {
+    const { chord } = await mount();
+    await chord("e");
+    act(() => {
+      for (const cb of frames.splice(0)) cb(0);
+    });
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+
+    act(() => {
+      useVoiceRecordingStore.setState({
+        scratchRefusal: { panelId: "term-1", reason: "edited", id: 1 },
+      });
+    });
+
+    expect(dialog!.textContent).toContain(SCRATCH_REFUSAL_CAPTION.edited);
+    const spoken = Array.from(dialog!.querySelectorAll('[role="status"]')).map(
+      (node) => node.textContent
+    );
+    expect(spoken.join("|")).toContain(SCRATCH_REFUSAL_STATUS.edited);
   });
 
   it("drops the note when a popped stash replaces the draft", async () => {

@@ -105,6 +105,7 @@ describe("HybridInputBar after a scratch that removed nothing (#14973)", () => {
     const { caption } = await renderComposer();
 
     refuse("term-1", "edited");
+    expect(caption()).not.toBeNull();
     act(() => {
       useVoiceRecordingStore.setState({ scratchRefusal: null });
     });
@@ -120,7 +121,7 @@ describe("HybridInputBar after a scratch that removed nothing (#14973)", () => {
     expect(caption()).toBeNull();
   });
 
-  it("leaves a pane's announcement to the app's announcer", async () => {
+  it("doesn't read a pane's refusal out itself: the app's announcer does", async () => {
     const { status } = await renderComposer();
 
     refuse("term-1", "edited");

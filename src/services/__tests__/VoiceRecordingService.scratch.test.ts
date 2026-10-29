@@ -415,10 +415,13 @@ describe("VoiceRecordingService — a scratch that removes nothing says why (#14
 
     expect(draft()).toBe("Typed before.");
     expect(voiceStore.getState().announcement?.text).toMatch(/nothing/i);
-    expect(voiceStore.getState().scratchRefusal).toMatchObject({
-      panelId: PANEL,
-      reason: "nothing",
-    });
+    const first = voiceStore.getState().scratchRefusal;
+    expect(first).toMatchObject({ panelId: PANEL, reason: "nothing" });
+
+    // The same refusal again is a new one for the composer to read out.
+    complete("Scratch that.", "d");
+    expect(voiceStore.getState().scratchRefusal?.reason).toBe("nothing");
+    expect(voiceStore.getState().scratchRefusal?.id).not.toBe(first?.id);
   });
 
   it("says nothing for a scratch that removed words, and drops an earlier refusal", async () => {
@@ -482,8 +485,7 @@ describe("VoiceRecordingService — a scratch that removes nothing says why (#14
   it("says a refusal the stop's drain brought with the stop, which would cut it off", async () => {
     const { service, voiceStore } = await setup();
     Reflect.set(service, "sessionId", SESSION_ID);
-    const ipcStop = window.electron.voiceInput.stop as unknown as ReturnType<typeof vi.fn>;
-    ipcStop.mockImplementationOnce(async () => {
+    vi.mocked(window.electron.voiceInput.stop).mockImplementationOnce(async () => {
       complete("Scratch that.", "a");
     });
 
@@ -492,6 +494,20 @@ describe("VoiceRecordingService — a scratch that removes nothing says why (#14
     expect(voiceStore.getState().announcement?.text).toMatch(/^Dictation stopped\. .*nothing/i);
     // The note outlives the session it was heard in.
     expect(voiceStore.getState().scratchRefusal?.reason).toBe("nothing");
+  });
+
+  it("says a refusal heard just before the stop with it too, and only a standing one", async () => {
+    const { service, voiceStore, setDraft } = await setup();
+
+    complete("One.", "a");
+    setDraft("0ne.");
+    complete("Scratch that.", "b");
+    await service.stop("Dictation stopped.");
+    expect(voiceStore.getState().announcement?.text).toMatch(/^Dictation stopped\. .*edited/);
+
+    voiceStore.getState().beginSession({ panelId: PANEL, projectId: PROJECT }, "session-2");
+    await service.stop("Dictation stopped.");
+    expect(voiceStore.getState().announcement?.text).toBe("Dictation stopped.");
   });
 
   it("leaves an open Canopy reply's refusal to its own composer", async () => {

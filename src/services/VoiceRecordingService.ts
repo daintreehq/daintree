@@ -3088,7 +3088,6 @@ class VoiceRecordingService {
         : null;
       const correctionEnabled = storeState.correctionEnabled;
       const wasMicLive = storeState.micSignal === "live";
-      const refusalBeforeStop = storeState.scratchRefusal;
 
       logDebug(`${LOG_PREFIX} stop() called`, {
         announcement,
@@ -3210,14 +3209,13 @@ class VoiceRecordingService {
           finished = takeFinishedTranscript(stoppedTarget, stoppedSessionId);
         }
         if (shouldAnnounce && this.stopAnnounces) {
-          // A refusal the drain brought would be cut off by this before it's read.
+          // A refusal still on the border goes with it: this would cut one
+          // just heard off before the announcer reads it.
           const refusal = useVoiceRecordingStore.getState().scratchRefusal;
           useVoiceRecordingStore
             .getState()
             .announce(
-              refusal && refusal !== refusalBeforeStop
-                ? `${announcement} ${SCRATCH_REFUSAL_STATUS[refusal.reason]}`
-                : announcement
+              refusal ? `${announcement} ${SCRATCH_REFUSAL_STATUS[refusal.reason]}` : announcement
             );
         }
       } else if (nextStatus === "idle") {
