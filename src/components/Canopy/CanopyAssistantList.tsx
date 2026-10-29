@@ -3,27 +3,36 @@ import { cn } from "@/lib/utils";
 import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
-import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { PilotRunState } from "@/components/Pilot/PilotRunState";
+import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
+import { formatWaitAge } from "@/lib/projectRowStatus";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { assistantTerminalApi } from "@/services/assistantSubject";
 import { assistantBand, canopyAssistantDomId } from "./openAssistantItem";
 import { CanopyTerminal } from "./CanopyTerminal";
+import { CanopyRowAge, CanopyWhereLine, MetaDot, OVERDUE_WAIT_MS } from "./CanopyRow";
 import {
-  assistantCoverageNote,
-  assistantNoticeSummary,
+  assistantAgePhrase,
+  assistantRowNote,
+  assistantStateSince,
   assistantStatus,
+  assistantSupervision,
   type CanopyAssistantItem,
 } from "./canopyAssistants";
 
 /**
- * One Daintree Assistant in the list. Its role leads, the agent it runs on
- * follows, and where it runs — project and session, or global — tells two
- * apart. No archive, trash or rename: those are a worker's.
+ * One Daintree Assistant in the list, in a worker row's own shape: the same
+ * lead column with the agent it runs on, its role and session as the name
+ * with the clock beside it, one line of what it is doing, and where it runs
+ * on the bottom line. Supervision gets the status line's one note; the rest
+ * is in its description and its pane. No archive, trash or rename: those are
+ * a worker's.
  */
 export function CanopyAssistantRow({
   item,
   isSelected,
   tabbable,
+  nowMs,
   onSelect,
   onOpen,
   onKeyDown,
@@ -31,22 +40,40 @@ export function CanopyAssistantRow({
   item: CanopyAssistantItem;
   isSelected: boolean;
   tabbable: boolean;
+  /** The panel's clock, for how long it has been in its state. */
+  nowMs: number;
   onSelect: () => void;
   onOpen: () => void;
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
 }) {
   const domId = canopyAssistantDomId(item.id);
   const status = assistantStatus(item);
-  const name = ["Daintree Assistant", item.scopeLabel].join(", ");
-  const supervision = [assistantNoticeSummary(item.notices), assistantCoverageNote(item)]
+  const note = assistantRowNote(item);
+  const chrome = deriveTerminalChrome({ launchAgentId: item.agentId ?? undefined });
+  const sinceMs = assistantStateSince(item);
+  const age = sinceMs === null ? null : formatWaitAge(sinceMs, nowMs);
+  // An ask left unanswered for minutes, as a worker's: a handback is news,
+  // not something it waits on.
+  const overdue =
+    item.ask !== null &&
+    item.ask !== "handback" &&
+    sinceMs !== null &&
+    nowMs - sinceMs >= OVERDUE_WAIT_MS;
+  // A place, as a worker's bottom line says one; the global assistant has
+  // no project, so its scope stands there instead.
+  const place = item.projectName ?? "Global";
+  // Its role and session say which assistant this is, as a worker's task
+  // names it; the agent it runs on follows, as a worker's does.
+  const name = ["Daintree Assistant", item.session, item.agentName]
     .filter((part): part is string => !!part)
-    .join(" · ");
+    .join(", ");
   const meta = [
     status,
-    item.agentName,
+    age === null ? null : assistantAgePhrase(item, age),
+    overdue ? "waiting a while" : null,
+    [place, item.hostName].filter(Boolean).join(" · "),
     item.label,
-    item.attached ? null : "no window here",
-    supervision || null,
+    ...assistantSupervision(item),
   ]
     .filter((part): part is string => !!part)
     .join(", ");
@@ -71,42 +98,58 @@ export function CanopyAssistantRow({
       <span id={`${domId}-meta`} className="sr-only">
         {meta}
       </span>
-      <span aria-hidden="true" className="flex w-16 shrink-0 flex-col gap-1">
+      <span aria-hidden="true" data-canopy-lead="" className="flex w-10 shrink-0 flex-col">
         <span className="flex h-5 items-center gap-2">
           <span className="flex size-4 items-center justify-center">
             <PilotRunState band={assistantBand(item)} agentState={item.agentState ?? undefined} />
           </span>
           <span className="flex size-4 items-center justify-center">
-            <DaintreeIcon size={16} />
+            <TerminalIcon chrome={chrome} className="h-4 w-4" brandColor={chrome.color} />
           </span>
         </span>
       </span>
       <span aria-hidden="true" className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="min-w-0 truncate text-sm leading-5 text-text-primary">
-          {item.scopeLabel}
-        </span>
-        <span
-          className={cn(
-            "min-w-0 truncate text-xs leading-4",
-            // An ask stays in full ink; an assistant at its prompt steps down.
-            item.ask ? "text-text-primary" : "text-text-secondary"
-          )}
-        >
-          {status}
-        </span>
-        <span className="min-w-0 truncate text-xs leading-4 text-text-secondary">
-          {["Daintree Assistant", item.agentName, item.attached ? null : "No window here"]
-            .filter(Boolean)
-            .join(" · ")}
-        </span>
-        {supervision && (
+        <span className="flex min-w-0 items-center gap-3">
           <span
-            data-canopy-assistant-supervision=""
-            className="min-w-0 truncate text-xs leading-4 text-text-secondary"
+            data-canopy-assistant-name=""
+            className="flex min-w-0 flex-1 text-sm leading-5 text-text-primary"
           >
-            {supervision}
+            {/* The role gives way first: the session is what tells two apart. */}
+            <span className="min-w-0 truncate">Daintree Assistant</span>
+            {item.session !== null && (
+              <span className="flex shrink-0 whitespace-nowrap">
+                <MetaDot />
+                {item.session}
+              </span>
+            )}
           </span>
-        )}
+          {age !== null && <CanopyRowAge age={age} overdue={overdue} />}
+        </span>
+        <span className="flex h-4 min-w-0 items-center gap-1.5 text-xs leading-4">
+          <span
+            className={cn(
+              "min-w-0 truncate",
+              // An ask stays in full ink; an assistant at its prompt steps down.
+              item.ask ? "text-text-primary" : "text-text-secondary"
+            )}
+          >
+            {status}
+          </span>
+          {note !== null && (
+            <span
+              data-canopy-assistant-note=""
+              className="ml-auto flex max-w-[55%] min-w-0 shrink-0 items-center pl-1.5 text-text-secondary"
+            >
+              <span className="min-w-0 truncate">{note}</span>
+            </span>
+          )}
+        </span>
+        <CanopyWhereLine
+          emoji={item.projectEmoji}
+          project={place}
+          worktree={null}
+          host={item.hostName}
+        />
       </span>
     </div>
   );
@@ -135,6 +178,7 @@ export function CanopyAssistantPane({
   // Made once per pane: the pane is keyed by the exact subject, and a fresh
   // directory read hands over an equal subject that must not reopen the stream.
   const [api] = useState(() => assistantTerminalApi(item.subject));
+  const supervision = assistantSupervision(item);
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="canopy-assistant-pane">
       <div className="flex h-9 min-w-0 shrink-0 items-center gap-2 px-1 text-xs select-none">
@@ -149,6 +193,15 @@ export function CanopyAssistantPane({
           Open in Assistant
         </Button>
       </div>
+      {/* In full: the row has room for one of these. */}
+      {supervision.length > 0 && (
+        <p
+          data-canopy-assistant-supervision=""
+          className="shrink-0 px-1 pb-2 text-xs leading-4 text-text-secondary"
+        >
+          {supervision.join(" · ")}
+        </p>
+      )}
       {item.ask === "confirm" && item.confirmation && (
         <div className="shrink-0 pb-2" data-canopy-assistant-confirmation="">
           <Callout severity="warning" size="compact" title="Waiting on your confirmation">

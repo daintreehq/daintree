@@ -1909,6 +1909,7 @@ function CanopyInbox({
                                       ? selectedAssistant?.id === item.id
                                       : listed.length === 0 && index === 0
                                   }
+                                  nowMs={nowMs}
                                   onSelect={() => selectAssistant(item.id)}
                                   onOpen={() => openAssistant(item)}
                                   onKeyDown={(event) => onAssistantKeyDown(event, item)}
@@ -1953,6 +1954,7 @@ function CanopyInbox({
                                   ? selectedAssistant.id === item.id
                                   : index === 0
                               }
+                              nowMs={nowMs}
                               onSelect={() => selectAssistant(item.id)}
                               onOpen={() => openAssistant(item)}
                               onKeyDown={(event) => onAssistantKeyDown(event, item)}
