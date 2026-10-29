@@ -492,10 +492,11 @@ export function DaintreeAssistantSettingsTab() {
 
       {/* A pick isn't future-only: HelpPanel answers the switch request against the
           project's selected lane, even while Global is on screen, and
-          GlobalAssistantService ends a global run on another agent. */}
+          GlobalAssistantService ends a global run once the launchable agent it
+          resolves to changes. */}
       <SettingsSection
         title="Agent"
-        description="Picking an agent switches this project's selected assistant tab to it, asking first if a conversation there has started. A global assistant on another agent stops."
+        description="Picking an agent switches this project's selected assistant tab to it, asking first unless the tab has been idle since it opened. The global assistant stops if this changes its agent."
       >
         {saveError("agent")}
         <SettingsGroup>
