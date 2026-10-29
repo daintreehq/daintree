@@ -193,7 +193,7 @@ export function createRemoteMaterializer(deps: RemoteMaterializerDeps): Material
     if (replaced.conflict) {
       throw new MaterializeError(
         "CONFLICT",
-        `${name} changed on ${deps.hostLabel()} before it could be replaced. Nothing was changed.`
+        `${name} changed on ${deps.hostLabel()} before it could be replaced. Add it again to retry.`
       );
     }
     return replaced;

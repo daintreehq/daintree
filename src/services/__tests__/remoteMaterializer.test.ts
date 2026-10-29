@@ -371,6 +371,28 @@ describe("remote materialize", () => {
     expect(message).toContain("studio-01");
   });
 
+  it("reports a clash that comes back after Replace for raw bytes too", async () => {
+    const reportFailure = vi.fn();
+    const { materialize, fileTransfer } = setup({ reportFailure });
+    const clash = {
+      hostPath: "/srv/proj/shot.png",
+      bytes: 0,
+      deduplicated: false,
+      conflict: true,
+      replaceToken: REPLACE_TOKEN,
+    };
+    fileTransfer.uploadBytes.mockResolvedValueOnce(clash).mockResolvedValueOnce(clash);
+    await expect(
+      materialize(
+        { kind: "local-bytes", bytes: new Uint8Array([1, 2, 3]), name: "shot.png", mimeType: null },
+        { destination: { kind: "worktree", directory: "/srv/proj" } }
+      )
+    ).rejects.not.toMatchObject({ code: "CANCELLED" });
+    expect(fileTransfer.uploadBytes).toHaveBeenCalledTimes(2);
+    expect(reportFailure).toHaveBeenCalledTimes(1);
+    expect(reportFailure.mock.calls[0]![0].title).toBe("Couldn't send shot.png");
+  });
+
   it("says nothing when the user declines to replace", async () => {
     const reportFailure = vi.fn();
     const { materialize, fileTransfer } = setup({

@@ -14,6 +14,8 @@ export interface FileEditorHintBarProps {
   /** The failure text from the last attempt, or null. */
   error: string | null;
   onAction: () => void;
+  /** Opens Settings → Plugins, where a plugin that failed to start shows why. */
+  onOpenSettings: () => void;
   onDismiss: () => void;
 }
 
@@ -44,6 +46,7 @@ export function FileEditorHintBar({
   pending,
   error,
   onAction,
+  onOpenSettings,
   onDismiss,
 }: FileEditorHintBarProps) {
   if (error) {
@@ -64,8 +67,15 @@ export function FileEditorHintBar({
         ariaLive="polite"
         animated={false}
         action={{ id: "edit-file", label: "Retry", onClick: onAction, disabled: pending }}
+        // Retry stays the one recovery action; this is the way to the page
+        // the error points at.
+        trailingSlot={
+          <Button variant="ghost" size="sm" onClick={onOpenSettings}>
+            Open settings
+          </Button>
+        }
         onClose={onDismiss}
-        closeAriaLabel="Dismiss editing tip"
+        closeAriaLabel="Dismiss editor error"
       />
     );
   }

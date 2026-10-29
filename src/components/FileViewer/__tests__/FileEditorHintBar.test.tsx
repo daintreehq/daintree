@@ -26,6 +26,7 @@ const BASE: FileEditorHintBarProps = {
   pending: false,
   error: null,
   onAction: () => {},
+  onOpenSettings: () => {},
   onDismiss: () => {},
 };
 
@@ -147,6 +148,54 @@ describe("FileEditorHintBar", () => {
     const { container } = render(<FileEditorHintBar {...BASE} error="The plugin couldn't start" />);
     expect(screen.queryByTestId("file-editor-hint")).toBe(null);
     expect(container.querySelector(".lucide-pencil")).toBe(null);
+  });
+
+  it("offers the way to Settings beside Retry on a failure, and nowhere else", () => {
+    // The failure tells the reader where to look, so the banner takes them
+    // there. Retry stays the one recovery action and leads the row.
+    const onAction = vi.fn();
+    const onOpenSettings = vi.fn();
+    render(
+      <FileEditorHintBar
+        {...BASE}
+        error="The plugin couldn't start"
+        onAction={onAction}
+        onOpenSettings={onOpenSettings}
+      />
+    );
+    const retry = screen.getByRole("button", { name: "Retry" });
+    const settings = screen.getByRole("button", { name: "Open settings" });
+    expect(retry.compareDocumentPosition(settings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(settings);
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+    expect(onAction).not.toHaveBeenCalled();
+    cleanup();
+
+    for (const state of ["ready", "disabled"] as const) {
+      render(<FileEditorHintBar {...BASE} state={state} />);
+      expect(screen.queryByRole("button", { name: "Open settings" })).toBe(null);
+      cleanup();
+    }
+  });
+
+  it("names the failure's close button for the failure, not for the tip", () => {
+    // A screen reader on the error's × must not hear that it dismisses the
+    // editing tip the error replaced.
+    const onDismiss = vi.fn();
+    render(<FileEditorHintBar {...BASE} state="disabled" />);
+    const tipLabel = dismiss().getAttribute("aria-label");
+    cleanup();
+
+    render(
+      <FileEditorHintBar {...BASE} error="The plugin couldn't start" onDismiss={onDismiss} />
+    );
+    const buttons = screen.getAllByRole("button");
+    const close = buttons[buttons.length - 1]!;
+    const errorLabel = close.getAttribute("aria-label");
+    expect(errorLabel).toBeTruthy();
+    expect(errorLabel).not.toBe(tipLabel);
+    fireEvent.click(close);
+    expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
   it("uses the current colour vocabulary", () => {

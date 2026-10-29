@@ -3,6 +3,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useResolvedFileEditor } from "@/registry/fileEditorRegistry";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { FileEditorHintBar } from "@/components/FileViewer/FileEditorHintBar";
+import { actionService } from "@/services/ActionService";
 
 interface FileEditorBannerProps {
   filePath: string;
@@ -53,7 +54,7 @@ export function FileEditorBanner({ filePath, content, onEdit }: FileEditorBanner
         const plugin = plugins.find((entry) => entry.instanceId === registration.pluginId);
         usePluginRuntimeStore.getState().refresh();
         if (!plugin || plugin.disabled || plugin.pendingRestart || plugin.loadError) {
-          throw new Error("The plugin couldn't start. Check its status in Preferences → Plugins.");
+          throw new Error("The plugin couldn't start. Check its status in Settings → Plugins.");
         }
       }
       // A file selection can change while enabling. Don't open the previous
@@ -74,6 +75,9 @@ export function FileEditorBanner({ filePath, content, onEdit }: FileEditorBanner
       pending={pending}
       error={error}
       onAction={() => void edit()}
+      onOpenSettings={() =>
+        void actionService.dispatch("app.settings.openTab", { tab: "plugins" }, { source: "user" })
+      }
       onDismiss={() => setDismissed(true)}
     />
   );

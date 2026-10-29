@@ -2361,6 +2361,29 @@ describe("useTerminalFileTransfer hook", () => {
       );
     });
 
+    it("saves without an upload chip: nothing crosses a link here", async () => {
+      let finishSave!: (value: SavedImage) => void;
+      vi.mocked(window.electron.clipboard.saveImage).mockReturnValue(
+        new Promise<SavedImage>((resolve) => {
+          finishSave = resolve;
+        })
+      );
+      renderFileTransferHook();
+      const pasted = getClipboardImagePaster("term-1")!();
+      await act(async () => {
+        await settle();
+      });
+      expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(false);
+
+      await act(async () => {
+        finishSave({
+          filePath: "/tmp/daintree-clipboard/clipboard-123-abc.png",
+          thumbnailDataUrl: "data:image/png;base64,abc",
+        });
+        await expect(pasted).resolves.toBe("inserted");
+      });
+    });
+
     it("reports an empty clipboard as empty and writes nothing", async () => {
       vi.mocked(window.electron.clipboard.saveImage).mockRejectedValue(
         Object.assign(new Error("No image in clipboard"), {
