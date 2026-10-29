@@ -2409,7 +2409,7 @@ describe("restartTerminal starts a moved pane where it is filed (#14954)", () =>
     vi.mocked(buildResumeLatestCommand).mockReturnValue(undefined);
     // Echoes the flags, so a test can see which selectors reached the launch.
     vi.mocked(buildLaunchCommandFromFlags).mockImplementation(
-      (_base: string, agentId: string, flags: string[]) => [agentId, ...flags].join(" ")
+      (_base: string, agentId: string, flags: readonly string[]) => [agentId, ...flags].join(" ")
     );
     const { setWorktreePathIndexAccessor } = await import("@/store/storeAccessors");
     setWorktreePathIndexAccessor(
