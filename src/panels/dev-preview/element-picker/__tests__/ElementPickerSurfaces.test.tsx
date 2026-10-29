@@ -139,6 +139,19 @@ function text(): string {
 /** Send, by the destination it names: "Send to {session}" or "Start a new {agent} session and send". */
 const SEND_NAME = /^(Send to |Start a new .+ session and send$)/;
 
+/** The note under Send, which Send names as its description. */
+function sendNote(): string {
+  const send = screen.getByRole("button", { name: SEND_NAME });
+  return document.getElementById(send.getAttribute("aria-describedby") ?? "")?.textContent ?? "";
+}
+
+/** The identity block and the note under Send word a stale selection the same way. */
+function expectStaleAgrees(headline: string): void {
+  const identity = screen.getByRole("region", { name: "Selected element" });
+  expect(within(identity).getByText(headline)).toBeTruthy();
+  expect(sendNote()).toBe(headline);
+}
+
 /** Send is off through `aria-disabled`, so it stays focusable to say why. */
 function isOff(button: HTMLElement): boolean {
   return button.getAttribute("aria-disabled") === "true";
@@ -311,6 +324,23 @@ describe("page verdicts", () => {
     host.template = () => reactObservation();
     await act(async () => host.select(0));
     await waitFor(() => expect(text()).not.toContain("No React source locations"));
+  });
+
+  it("never promises what a request carries, which the composer's Includes row says", async () => {
+    await mountBound();
+    await act(async () => host.runtimeIssue("not-dev-build"));
+    expect(text()).toContain("dev server");
+    expect(text()).not.toMatch(/screenshot|request still carries/i);
+
+    await act(async () => host.runtimeIssue("metadata-unavailable", { framework: "react" }));
+    expect(text()).toContain("No React source locations");
+    expect(text()).not.toMatch(/screenshot|request still carries/i);
+
+    await act(async () =>
+      host.runtimeIssue("extractor-failed", { framework: "svelte", detail: "no __svelte_meta" })
+    );
+    expect(text()).toContain("Couldn't read this page's Svelte components");
+    expect(text()).not.toMatch(/screenshot|request still carries/i);
   });
 
   it("warns up front when the page's components can't be read", async () => {
@@ -717,7 +747,8 @@ describe("selection identity", () => {
     // Named, but no file claimed for it — not even the file of the element it
     // was reached through.
     expect(identity.textContent).toContain("PricingCard");
-    expect(identity.textContent).toContain("Couldn't find where it's written");
+    // The header names the component, so the slot says only the sentence.
+    expect(within(identity).getByText("Couldn't find the source", { exact: true })).toBeTruthy();
     expect(identity.textContent).not.toContain(`${FILE}:6`);
     const strip = screen.getByRole("toolbar", { name: "Element Picker" });
     expect(strip.textContent).not.toContain(`${FILE}:6`);
@@ -760,7 +791,15 @@ describe("selection identity", () => {
     fireEvent.change(request, { target: { value: "Make the card pop" } });
     const sendButton = () => screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
     expect(isOff(sendButton())).toBe(true);
-    expect(text()).toContain("Couldn't find where PricingCard is written");
+    // The identity says it under the name in its header; the note says it again
+    // only as far as it must, naming the target and what to do.
+    expect(sendNote()).toBe("Couldn't find the source for PricingCard — choose another target");
+    expect(
+      within(screen.getByRole("region", { name: "Selected element" })).getByText(
+        "Couldn't find the source",
+        { exact: true }
+      )
+    ).toBeTruthy();
     // The element itself is still something the request can be about.
     fireEvent.click(screen.getByRole("radio", { name: "Element" }));
     await waitFor(() => expect(isOff(sendButton())).toBe(false));
@@ -1715,6 +1754,22 @@ describe("stale selections", () => {
     expect(screen.queryAllByText("Page reloaded — select it again")).toHaveLength(0);
     await elapse(HMR_SETTLE_MS * 8);
     expect(screen.getAllByText("Page reloaded — select it again").length).toBeGreaterThan(0);
+    // Said once in the identity and again under Send, in the same words.
+    expectStaleAgrees("Page reloaded — select it again");
+  });
+
+  it("words a disconnected preview the same under Send as in the identity", async () => {
+    await mountSelected();
+    // Asked to disconnect, so nothing reattaches and the pick stays unproven.
+    await act(async () =>
+      host.pushPreview({
+        kind: "detached",
+        sessionId: "session-1",
+        projectId: "p1",
+        reason: "requested",
+      })
+    );
+    expectStaleAgrees("Preview disconnected — select it again");
   });
 
   it("proves the selection again after its file changes, and the draft follows it", async () => {
@@ -1730,9 +1785,11 @@ describe("stale selections", () => {
     await waitFor(() => expect(isOff(send)).toBe(false));
 
     await act(async () => host.sourceChanged(FILE, sha("an agent's edit")));
-    // Unproven, so it can't be sent — but nobody is told to click again yet.
+    // Unproven, so it can't be sent — but nobody is told to click again yet,
+    // and Send says what is happening instead of asking for a click.
     expect(isOff(send)).toBe(true);
     expect(screen.queryAllByText("File changed — select it again")).toHaveLength(0);
+    expect(sendNote()).toBe("Checking this selection again");
 
     // Proved again as a new selection, which the pinned draft moves to: it is
     // sendable, and not offered its own subject as a different one.
@@ -1877,6 +1934,7 @@ describe("stale selections", () => {
     });
     await act(async () => host.sourceChanged(FILE));
     await screen.findAllByText("File changed — select it again", {}, { timeout: 4000 });
+    expectStaleAgrees("File changed — select it again");
     expect(host.calls("resolve")).toHaveLength(1);
     // The page is outlining the stand-in; it is told to stop.
     expect(host.preview.clearSelection).toHaveBeenCalledWith({ sessionId: "session-1" });
@@ -3157,6 +3215,25 @@ describe("an element with nothing to trace", () => {
     expect(prompt).not.toContain("- App:");
     expect(prompt).toContain("no source file was traced");
     expect(prompt).not.toContain("file references");
+  });
+
+  it("leaves what a request includes to the Includes row, which says when there is no picture", async () => {
+    withAgent("term-noshot");
+    host.captureElement.mockResolvedValueOnce({ status: "offscreen" });
+    await mountBound();
+    await act(async () => host.select(0, [PAGE_NODE]));
+
+    await screen.findByRole("textbox", { name: "Request for the agent" });
+    const identity = screen.getByRole("region", { name: "Selected element" });
+    expect(identity.textContent).toContain("No source reported for this element");
+    // The notice says why there is no source, never what a request carries.
+    expect(identity.textContent).not.toMatch(/screenshot|markup|styles|request carries/i);
+    // Parts keep their words together with non-breaking spaces.
+    await waitFor(() =>
+      expect(document.querySelector("[data-composer-includes]")?.textContent).toMatch(
+        /no\sscreenshot/
+      )
+    );
   });
 
   it("goes without a picture, and says why, when the element is off screen", async () => {

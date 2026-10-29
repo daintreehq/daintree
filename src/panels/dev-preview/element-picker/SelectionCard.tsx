@@ -18,7 +18,7 @@ import {
   scopesFor,
   type PickedSelection,
 } from "./selection.js";
-import { STALE_COPY, issueSaysUntraced } from "./copy.js";
+import { STALE_COPY, issueSaysUntraced, missingComponentSource } from "./copy.js";
 import { SelectionTrail, trailFor, type CrumbSelect, type TrailCrumb } from "./SelectionTrail.js";
 import { PickerIconButton } from "./PickerIconButton.js";
 
@@ -146,7 +146,7 @@ export function SelectionIdentity({
           <SelectorText selector={observation.context.selector} />
         ) : (
           <p className="text-2xs text-text-secondary">
-            {component ? "Couldn't find where it's written" : "Source unknown"}
+            {component ? missingComponentSource() : "Source unknown"}
           </p>
         )}
       </div>
@@ -469,9 +469,8 @@ function MappingNotice({
     return (
       <InspectorNotice tone="info" title="No source reported for this element" density="compact">
         {chain.state === "unavailable" && chain.reason === "production-build"
-          ? "This page is a production build. "
-          : "The page didn't say where it's written. "}
-        A request carries its selector, markup, styles and a screenshot.
+          ? "This page is a production build."
+          : "The page didn't say where it's written."}
       </InspectorNotice>
     );
   }

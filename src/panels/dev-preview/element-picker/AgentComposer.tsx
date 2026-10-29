@@ -57,6 +57,7 @@ import {
   type TaskScope,
 } from "./selection.js";
 import type { InspectorController, SelectionState } from "./inspectorController.js";
+import { REPROVING_NOTE, STALE_COPY, missingComponentSource } from "./copy.js";
 import { useAgentTargets } from "./useAgentTargets.js";
 import {
   isSettledDelivery,
@@ -326,11 +327,14 @@ export function AgentComposer({
     destination?.kind === "terminal" ? isAgentBusy(destination.target.agentState) : false;
   // A selection the page or its source has moved past can't vouch for the
   // locations a request would name.
-  const subjectStale =
+  const staleSelection =
     subject !== null &&
     selection.status === "ready" &&
     selection.stale !== null &&
-    selection.selection.selectionId === subject.selection.selectionId;
+    selection.selection.selectionId === subject.selection.selectionId
+      ? { reason: selection.stale, reproving: selection.reproving === true }
+      : null;
+  const subjectStale = staleSelection !== null;
   // `busy` is deliberately NOT a gate. It comes from passive PTY output
   // heuristics, which are frequently wrong, and the note beside the button
   // already says what was seen. Blocking on it made a wrong guess
@@ -585,11 +589,18 @@ export function AgentComposer({
         }
       : destinationGone
         ? { text: "The session you chose has closed — choose where to send this" }
-        : subjectStale
-          ? { text: "The source changed since you picked this — select it again in the page" }
+        : staleSelection
+          ? {
+              // The identity's own headline, so the two never word one cause
+              // two ways. While the page is being asked again the drawer says
+              // nothing, and so does this: nobody is told to click yet.
+              text: staleSelection.reproving
+                ? REPROVING_NOTE
+                : STALE_COPY[staleSelection.reason].title,
+            }
           : scopeUnproven && activeScope?.kind === "component"
             ? {
-                text: `Couldn't find where ${activeScope.label} is written — choose another target`,
+                text: `${missingComponentSource(activeScope.label)} — choose another target`,
               }
             : uncertain
               ? {
