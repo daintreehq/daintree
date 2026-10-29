@@ -682,13 +682,18 @@ describe("PortalVisibilityController", () => {
   });
 
   describe("restores that fail (#15043)", () => {
-    const openUncreatedTab = () =>
+    // Selected before mount and then opened, so exactly one effect asks for the
+    // restore.
+    const renderWithClosedTab = () => {
       usePortalStore.setState({
-        isOpen: true,
+        isOpen: false,
         activeTabId: "tab-1",
         tabs: [{ id: "tab-1", title: "A", url: "https://example.com/a" }],
         createdTabs: new Set<string>(),
       });
+      return render(<PortalVisibilityController />);
+    };
+    const openPortal = () => act(() => usePortalStore.setState({ isOpen: true }));
     const settle = () =>
       act(async () => {
         await vi.runAllTimersAsync();
@@ -701,15 +706,15 @@ describe("PortalVisibilityController", () => {
       vi.spyOn(document, "getElementById").mockReturnValue(placeholder);
     };
 
-    it("marks the tab failed when create rejects", async () => {
+    it("marks the tab failed when create rejects, and parks any view still on screen", async () => {
       mockPlaceholder();
       portal.create.mockRejectedValue(new Error("boom"));
-      render(<PortalVisibilityController />);
-
-      act(() => openUncreatedTab());
+      renderWithClosedTab();
+      openPortal();
       await settle();
 
       expect(failed()).toBe(true);
+      expect(portal.hide).toHaveBeenCalledTimes(1);
       expect(usePortalStore.getState().createdTabs.has("tab-1")).toBe(false);
       expect(usePortalStore.getState().tabs[0]!.url).toBe("https://example.com/a");
     });
@@ -717,9 +722,8 @@ describe("PortalVisibilityController", () => {
     it("marks the tab failed when show rejects", async () => {
       mockPlaceholder();
       portal.show.mockRejectedValue(new Error("boom"));
-      render(<PortalVisibilityController />);
-
-      act(() => openUncreatedTab());
+      renderWithClosedTab();
+      openPortal();
       await settle();
 
       expect(failed()).toBe(true);
@@ -728,9 +732,8 @@ describe("PortalVisibilityController", () => {
     it("marks the tab failed when main refuses it on both the show and its retry", async () => {
       mockPlaceholder();
       portal.show.mockResolvedValue(false);
-      render(<PortalVisibilityController />);
-
-      act(() => openUncreatedTab());
+      renderWithClosedTab();
+      openPortal();
       await settle();
 
       expect(portal.show).toHaveBeenCalledTimes(2);
@@ -739,12 +742,112 @@ describe("PortalVisibilityController", () => {
 
     it("marks the tab failed when the placeholder never appears", async () => {
       vi.spyOn(document, "getElementById").mockReturnValue(null);
-      render(<PortalVisibilityController />);
-
-      act(() => openUncreatedTab());
+      renderWithClosedTab();
+      openPortal();
       await settle();
 
       expect(portal.show).not.toHaveBeenCalled();
+      expect(failed()).toBe(true);
+    });
+
+    it("records nothing when the retried create comes back", async () => {
+      mockPlaceholder();
+      portal.show.mockResolvedValueOnce(false).mockResolvedValue(true);
+      renderWithClosedTab();
+      openPortal();
+      await settle();
+
+      expect(usePortalStore.getState().createdTabs.has("tab-1")).toBe(true);
+      expect(failed()).toBe(false);
+    });
+
+    it("records nothing for a tab the user moved off while it was restoring", async () => {
+      mockPlaceholder();
+      const createRequest = deferredPromise();
+      portal.create.mockImplementationOnce(() => createRequest.promise);
+      usePortalStore.setState({
+        isOpen: false,
+        activeTabId: "tab-1",
+        tabs: [
+          { id: "tab-1", title: "A", url: "https://example.com/a" },
+          { id: "tab-2", title: "B", url: "https://example.com/b" },
+        ],
+        createdTabs: new Set<string>(["tab-2"]),
+      });
+      render(<PortalVisibilityController />);
+      openPortal();
+      await act(async () => {
+        await Promise.resolve();
+      });
+      act(() => usePortalStore.setState({ activeTabId: "tab-2" }));
+      createRequest.reject(new Error("boom"));
+      await settle();
+
+      expect(usePortalStore.getState().restoreFailedTabs.size).toBe(0);
+      expect(portal.hide).not.toHaveBeenCalled();
+    });
+
+    it("records nothing when the controller unmounts during the bounds wait", async () => {
+      vi.spyOn(document, "getElementById").mockReturnValue(null);
+      const view = renderWithClosedTab();
+      openPortal();
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      view.unmount();
+      await settle();
+
+      expect(failed()).toBe(false);
+    });
+
+    it("tries again at the same URL when the failure is cleared, and clears it on success", async () => {
+      mockPlaceholder();
+      portal.create.mockRejectedValueOnce(new Error("boom"));
+      renderWithClosedTab();
+      openPortal();
+      await settle();
+      expect(failed()).toBe(true);
+
+      act(() => usePortalStore.getState().clearTabRestoreFailed("tab-1"));
+      await settle();
+
+      expect(portal.create).toHaveBeenCalledTimes(2);
+      expect(portal.create).toHaveBeenLastCalledWith({
+        tabId: "tab-1",
+        url: "https://example.com/a",
+        isRestore: true,
+      });
+      expect(usePortalStore.getState().createdTabs.has("tab-1")).toBe(true);
+      expect(failed()).toBe(false);
+    });
+
+    it("lands back on the failure after a retry that fails, without trying again by itself", async () => {
+      mockPlaceholder();
+      portal.create.mockRejectedValue(new Error("boom"));
+      renderWithClosedTab();
+      openPortal();
+      await settle();
+      act(() => usePortalStore.getState().clearTabRestoreFailed("tab-1"));
+      await settle();
+
+      expect(portal.create).toHaveBeenCalledTimes(2);
+      expect(failed()).toBe(true);
+    });
+
+    it("keeps a failed tab's error through eviction notices and starts nothing", async () => {
+      mockPlaceholder();
+      portal.create.mockRejectedValue(new Error("boom"));
+      renderWithClosedTab();
+      openPortal();
+      await settle();
+      act(() => {
+        for (const cb of evictionCallbacks) cb({ tabId: "tab-1" });
+        for (const cb of tabsEvictedCallbacks) cb({ tabIds: ["tab-1"] });
+      });
+      await settle();
+
+      expect(portal.create).toHaveBeenCalledTimes(1);
       expect(failed()).toBe(true);
     });
   });

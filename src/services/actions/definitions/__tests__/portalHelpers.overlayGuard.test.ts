@@ -144,6 +144,52 @@ describe("activatePortalTab with a tab main released (#14537)", () => {
   });
 });
 
+describe("activatePortalTab when the restore gives up (#15043)", () => {
+  const markTabRestoreFailedMock = vi.fn();
+
+  beforeEach(() => {
+    portalStoreMock.getState.mockReturnValue({
+      isOpen: true,
+      tabs: [{ id: "tab-1", url: "https://example.com", partition: undefined }],
+      createdTabs: new Set<string>(),
+      setActiveTab: setActiveTabMock,
+      markTabCreated: markTabCreatedMock,
+      markTabRestoreFailed: markTabRestoreFailedMock,
+    });
+  });
+
+  it("records the failure when create rejects", async () => {
+    createMock.mockRejectedValueOnce(new Error("boom"));
+
+    await activatePortalTab("tab-1");
+
+    expect(markTabCreatedMock).not.toHaveBeenCalled();
+    expect(markTabRestoreFailedMock).toHaveBeenCalledWith("tab-1");
+  });
+
+  it("records the failure when the placeholder never appears", async () => {
+    vi.useFakeTimers();
+    getPortalPlaceholderBoundsMock.mockReturnValue(null);
+    try {
+      const activation = activatePortalTab("tab-1");
+      await vi.runAllTimersAsync();
+      await activation;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(createMock).not.toHaveBeenCalled();
+    expect(markTabRestoreFailedMock).toHaveBeenCalledWith("tab-1");
+  });
+
+  it("records nothing when the tab comes up", async () => {
+    await activatePortalTab("tab-1");
+
+    expect(showMock).toHaveBeenCalledWith({ tabId: "tab-1", bounds: BOUNDS });
+    expect(markTabRestoreFailedMock).not.toHaveBeenCalled();
+  });
+});
+
 function runDuplicate(): Promise<unknown> {
   const actions: ActionRegistry = new Map();
   registerPortalActions(actions, {} as unknown as ActionCallbacks);
