@@ -790,16 +790,57 @@ describe("selection identity", () => {
     expect(citedRevisions(state.selection)).toEqual({});
   });
 
-  it("offers no crumb to click on a React selection, which the page can't widen to a component", async () => {
+  it("selects a React component from a crumb by the id the page gave it", async () => {
+    // React has no locator, so a crumb is asked for by the component's id in
+    // this document, and only one the page reported roots for can be asked.
     host.template = () => reactObservation();
     await mountBound();
     await act(async () => host.select(0));
     await screen.findByRole("region", { name: "Selected element" });
+    expect(session().componentSelection()).toBe("id");
+    const strip = screen.getByRole("toolbar", { name: "Element Picker" });
     for (const trail of screen.getAllByRole("navigation", { name: "Breadcrumb" })) {
-      expect(trail.textContent).toContain("SaveButton");
-      expect(enabledButtons(trail)).toHaveLength(0);
+      expect(enabledButtons(trail, "SaveButton")).toHaveLength(1);
+      expect(enabledButtons(trail, "Toolbar")).toHaveLength(0);
     }
-    expect(session().canSelectComponent()).toBe(false);
+
+    fireEvent.click(within(strip).getByRole("button", { name: "SaveButton" }));
+    expect(host.picker.reselect).toHaveBeenCalledTimes(1);
+    expect(host.picker.reselect.mock.calls[0]![0]).toEqual({
+      sessionId: "session-1",
+      elementId: "el-r",
+      framework: "react",
+      componentId: "r-save",
+      reveal: true,
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("region", { name: "Selected element" }).textContent).toContain(
+        "Component"
+      )
+    );
+  });
+
+  it("asks nothing by id once the document the element was proved in is gone", async () => {
+    host.template = () => reactObservation();
+    await mountBound();
+    await act(async () => host.select(0));
+    await screen.findByRole("region", { name: "Selected element" });
+    const controller = session();
+    const target = {
+      componentId: "r-save",
+      framework: "react" as const,
+      usedAt: null,
+      rendered: true,
+    };
+    // Toolbar reported no roots: there is nothing an id could select.
+    await expect(
+      controller.selectComponent({ ...target, componentId: "r-toolbar", rendered: false })
+    ).resolves.toBe(false);
+    expect(host.picker.reselect).not.toHaveBeenCalled();
+    await act(async () => host.documentReady(1));
+    expect(controller.componentSelection()).toBeNull();
+    await expect(controller.selectComponent(target)).resolves.toBe(false);
+    expect(host.picker.reselect).not.toHaveBeenCalled();
   });
 });
 
@@ -1404,7 +1445,12 @@ describe("selecting a component from the trail", () => {
     await mountBound();
     const controller = session();
     await expect(
-      controller.selectComponent({ file: CARD_CALL.file, line: 3, column: 0 })
+      controller.selectComponent({
+        componentId: "s-card",
+        framework: "svelte",
+        usedAt: { file: CARD_CALL.file, line: 3, column: 0 },
+        rendered: true,
+      })
     ).resolves.toBe(false);
     expect(host.picker.reselect).not.toHaveBeenCalled();
   });

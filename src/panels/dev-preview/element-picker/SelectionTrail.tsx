@@ -17,6 +17,8 @@ import {
   elementLabel,
   pickedComponent,
   primaryObservation,
+  type ComponentSelectionMode,
+  type ComponentTarget,
   type ComponentView,
   type PickedSelection,
   type SourcePoint,
@@ -46,6 +48,14 @@ export interface TrailCrumb {
    * they cannot share a call site.
    */
   readonly usedAt: SourcePoint | null;
+  /** The component itself, as the page is asked to select it; null for the element. */
+  readonly component: ComponentTarget | null;
+}
+
+/** How a surface selects the component a crumb names, and how it asks the page for it. */
+export interface CrumbSelect {
+  by: ComponentSelectionMode;
+  select(target: ComponentTarget, keepFocus?: boolean): void;
 }
 
 /**
@@ -85,7 +95,12 @@ export function trailFor(selection: PickedSelection): {
   if (picked === null) {
     return {
       above,
-      current: { label: elementLabel(primaryObservation(selection)), file: null, usedAt: null },
+      current: {
+        label: elementLabel(primaryObservation(selection)),
+        file: null,
+        usedAt: null,
+        component: null,
+      },
       truncated,
     };
   }
@@ -97,23 +112,31 @@ function crumbFor(component: ComponentView): TrailCrumb {
     label: component.name ?? "component",
     file: component.definedIn?.path ?? null,
     usedAt: component.usedAt,
+    component: {
+      componentId: component.componentId,
+      framework: component.framework,
+      usedAt: component.usedAt,
+      rendered: component.rendered,
+    },
   };
 }
 
 /**
- * Whether a crumb can be selected from the trail: there is a way to select,
- * the page reported where it was invoked, and no component inside it shares
- * that call site (a recursive component, which the page can only select at
- * its innermost).
+ * Whether a crumb can be selected from the trail. By id, when the page
+ * reported what the component rendered: an id names one invocation, however
+ * deep a recursive component nests. By call site, when the page reported
+ * where it was invoked and no component inside it shares that call site (a
+ * recursive component, which the page can only select at its innermost).
  */
 function selectability(
   crumbs: readonly TrailCrumb[],
   index: number,
   selectionSite: SourcePoint | null,
-  canSelect: boolean
+  by: ComponentSelectionMode | null
 ): "yes" | "no" | "recursive" {
+  if (by === "id") return crumbs[index]!.component?.rendered ? "yes" : "no";
   const site = crumbs[index]!.usedAt;
-  if (!canSelect || site === null) return "no";
+  if (by === null || site === null) return "no";
   const shared = [...crumbs.slice(index + 1).map((inner) => inner.usedAt), selectionSite].some(
     (inner) =>
       inner !== null &&
@@ -154,6 +177,7 @@ export function SelectionTrail({
   currentIndex,
   currentLabel,
   onSelect,
+  selectBy = "site",
   selectionSite = null,
   truncated = false,
   density = "drawer",
@@ -176,6 +200,8 @@ export function SelectionTrail({
    * a portal outside the surface the trail belongs to.
    */
   onSelect?: (crumb: TrailCrumb, fromMenu?: boolean) => void;
+  /** How `onSelect` asks the page for a component, which decides the crumbs it can select. */
+  selectBy?: ComponentSelectionMode;
   /** The selection's own call site when it is not among `crumbs`. */
   selectionSite?: SourcePoint | null;
   /** The page cut the chain from the outside; components above the first were never reported. */
@@ -259,7 +285,7 @@ export function SelectionTrail({
   const visibleFrom = hidden;
   const strip = density === "strip";
   const showOverflow = folded.length > 0 || truncated;
-  const canSelect = onSelect !== undefined;
+  const by = onSelect === undefined ? null : selectBy;
 
   return (
     <nav ref={navRef} aria-label="Breadcrumb" className={cn("relative min-w-0", className)}>
@@ -302,6 +328,7 @@ export function SelectionTrail({
               crumbs={crumbs}
               selectionSite={selectionSite}
               onSelect={onSelect}
+              by={by}
             />
           </li>
         ) : null}
@@ -309,7 +336,7 @@ export function SelectionTrail({
           const index = visibleFrom + offset;
           const last = shown && index === currentIndex;
           const nearest = index === (shown ? currentIndex - 1 : crumbs.length - 1);
-          const can = last ? "no" : selectability(crumbs, index, selectionSite, canSelect);
+          const can = last ? "no" : selectability(crumbs, index, selectionSite, by);
           return (
             <li
               key={`${crumb.label}-${index}`}
@@ -405,6 +432,7 @@ function TrailOverflow({
   crumbs,
   selectionSite,
   onSelect,
+  by,
 }: {
   folded: readonly TrailCrumb[];
   truncated: boolean;
@@ -412,6 +440,7 @@ function TrailOverflow({
   crumbs: readonly TrailCrumb[];
   selectionSite: SourcePoint | null;
   onSelect: ((crumb: TrailCrumb, fromMenu?: boolean) => void) | undefined;
+  by: ComponentSelectionMode | null;
 }) {
   const label =
     folded.length > 0
@@ -446,7 +475,7 @@ function TrailOverflow({
         ) : null}
         {truncated && folded.length > 0 ? <DropdownMenuSeparator /> : null}
         {folded.map((crumb, index) => {
-          const can = selectability(crumbs, index, selectionSite, onSelect !== undefined);
+          const can = selectability(crumbs, index, selectionSite, by);
           return (
             <DropdownMenuItem
               key={`${crumb.label}-${index}`}

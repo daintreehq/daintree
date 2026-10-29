@@ -41,6 +41,8 @@ import {
   heldPaths,
   svelteEvidence,
   unionBounds,
+  type ComponentSelectionMode,
+  type ComponentTarget,
   type PageScreenshot,
   type PickedSelection,
   type SourcePoint,
@@ -1918,38 +1920,63 @@ export class InspectorController implements DevPreviewToolSession {
   }
 
   /**
-   * Whether a component on the trail can be selected right now — the one rule
-   * the crumbs and {@link selectComponent} share, so a crumb is never a button
-   * that does nothing. The page only answers a selection request in Select
-   * mode; a stale trail describes an element the page no longer shows; and the
-   * page finds a component around an element by the framework's own locator,
-   * which only Svelte's dev runtime gives it.
+   * How a component on the trail can be selected right now, if at all — the
+   * one rule the crumbs and {@link selectComponent} share, so a crumb is never
+   * a button that does nothing. The page only answers a selection request in
+   * Select mode, and a stale trail describes an element the page no longer
+   * shows. Svelte's locator finds a component by its call site; any other
+   * page by the id it gave the component, which names it only in the
+   * document the element was proved in.
    */
-  canSelectComponent(): boolean {
+  componentSelection(): ComponentSelectionMode | null {
     const state = this.state;
-    return (
-      state.binding.status === "bound" &&
-      state.mode === "select" &&
-      state.selection.status === "ready" &&
-      state.selection.stale === null &&
-      this.continuity?.locator != null
-    );
+    const record = this.continuity;
+    if (
+      state.binding.status !== "bound" ||
+      state.mode !== "select" ||
+      state.selection.status !== "ready" ||
+      state.selection.stale !== null ||
+      record === null
+    ) {
+      return null;
+    }
+    if (record.locator !== null) return "site";
+    return record.epoch === state.epoch ? "id" : null;
+  }
+
+  canSelectComponent(): boolean {
+    return this.componentSelection() !== null;
   }
 
   /**
-   * Select the component invoked at `usedAt` — what a crumb in the trail names
-   * — the way Option/Alt+Up would, aimed: the page re-selects the element it
-   * last proved as a member of that invocation and reports it back, and the
-   * answer resolves as any fresh pick does. False when the pick can't be made
-   * ({@link canSelectComponent}) or the page no longer has the element.
+   * Select the component a crumb in the trail names, the way Option/Alt+Up
+   * would, aimed: the page re-selects the element it last proved and widens it
+   * to that invocation, and the answer resolves as any fresh pick does. False
+   * when the pick can't be made ({@link componentSelection}), the target can't
+   * be asked for that way, or the page no longer has the element.
    */
-  async selectComponent(usedAt: SourcePoint): Promise<boolean> {
+  async selectComponent(target: ComponentTarget): Promise<boolean> {
     const record = this.continuity;
     const binding = this.state.binding;
-    if (record === null || binding.status !== "bound" || !this.canSelectComponent()) {
-      return false;
+    const by = this.componentSelection();
+    if (record === null || binding.status !== "bound" || by === null) return false;
+    let request: ElementPickerReselectRequest | null;
+    if (by === "site") {
+      request =
+        target.usedAt === null
+          ? null
+          : this.reselectRequest(binding.sessionId, record, target.usedAt, true);
+    } else {
+      request = target.rendered
+        ? {
+            sessionId: binding.sessionId,
+            elementId: record.elementId,
+            framework: target.framework,
+            componentId: target.componentId,
+            reveal: true,
+          }
+        : null;
     }
-    const request = this.reselectRequest(binding.sessionId, record, usedAt, true);
     if (request === null) return false;
     try {
       return await this.deps.picker.reselect(request);

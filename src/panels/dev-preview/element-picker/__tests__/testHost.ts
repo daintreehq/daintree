@@ -164,9 +164,10 @@ export function createFakeHost() {
     ),
     // As the real page does: find the element (by id while it is still that
     // node, else by Svelte's locator), select it — as a member of the
-    // component invoked at `locator.component`, when one is named — and report
-    // a fresh observation on the next tick. `reselectFinds` models a page
-    // where the element is gone.
+    // component named by id, or invoked at `locator.component` — and report a
+    // fresh observation on the next tick. `reselectFinds` models a page where
+    // the element is gone; a component id the chain does not carry, or one it
+    // reported no roots for, selects nothing.
     reselect: vi.fn(async (request: ElementPickerReselectRequest): Promise<boolean> => {
       if (!host.reselectFinds) return false;
       const template = host.template();
@@ -174,7 +175,15 @@ export function createFakeHost() {
         ? atLocator(template, request.locator)
         : { ...template, ...(request.elementId ? { elementId: request.elementId } : {}) };
       const site = request.locator?.component;
-      const componentId = site ? componentAt(observation, site) : null;
+      if (
+        request.componentId !== undefined &&
+        !observation.componentChain.components.some(
+          (record) => record.componentId === request.componentId && record.rootElementIds.length > 0
+        )
+      ) {
+        return false;
+      }
+      const componentId = request.componentId ?? (site ? componentAt(observation, site) : null);
       const scope: SelectionScope =
         componentId === null ? { kind: "element" } : { kind: "component", componentId };
       setTimeout(() => host.select(host.currentEpoch, [observation], "reselect", scope), 0);

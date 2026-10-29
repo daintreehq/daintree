@@ -205,7 +205,22 @@ export interface ComponentView {
   definedIn: HeldPlace | null;
   /** Whether the file came from following the import at the call site, rather than a claim of its own. */
   definedByImport: boolean;
+  /** Whether the page reported elements it rendered: what selecting it by its id would find. */
+  rendered: boolean;
 }
+
+/** A component as the page is asked to select it: by its id, or where it was called. */
+export type ComponentTarget = Pick<
+  ComponentView,
+  "componentId" | "framework" | "usedAt" | "rendered"
+>;
+
+/**
+ * How a component on the trail is asked for. `site` is Svelte's locator aimed
+ * at a call site, which a hot update cannot invalidate; `id` is the page's own
+ * id for one invocation, good only while the element is the node it reported.
+ */
+export type ComponentSelectionMode = "site" | "id";
 
 export function componentView(
   results: readonly ResolutionResult[],
@@ -245,6 +260,7 @@ export function componentView(
     usedAtPlace: heldBy(invoked),
     definedIn,
     definedByImport,
+    rendered: record.rootElementIds.length > 0,
   };
 }
 

@@ -17,10 +17,9 @@ import {
   primaryObservation,
   scopesFor,
   type PickedSelection,
-  type SourcePoint,
 } from "./selection.js";
 import { STALE_COPY, issueSaysUntraced } from "./copy.js";
-import { SelectionTrail, trailFor, type TrailCrumb } from "./SelectionTrail.js";
+import { SelectionTrail, trailFor, type CrumbSelect, type TrailCrumb } from "./SelectionTrail.js";
 import { PickerIconButton } from "./PickerIconButton.js";
 
 type ReadySelection = Extract<SelectionState, { status: "ready" }>;
@@ -47,8 +46,8 @@ export function SelectionIdentity({
   selection: ReadySelection;
   /** Needed only for Open in editor, which wants an absolute path. */
   worktreePath?: string | null;
-  /** Select the component invoked at a call site the trail names. Read-only without it. */
-  onSelectComponent?: (usedAt: SourcePoint, keepFocus?: boolean) => void;
+  /** Select a component the trail names. Read-only without it. */
+  onSelectComponent?: CrumbSelect;
   /** The page's own verdict on itself, when the drawer is already saying it. */
   pageVerdict?: string;
   /** Take the user to the Site source choice, when choosing an app is what's missing. */
@@ -168,10 +167,11 @@ export function SelectionIdentity({
               onSelect={
                 onSelectComponent
                   ? (crumb, fromMenu) => {
-                      if (crumb.usedAt) onSelectComponent(crumb.usedAt, fromMenu);
+                      if (crumb.component) onSelectComponent.select(crumb.component, fromMenu);
                     }
                   : undefined
               }
+              selectBy={onSelectComponent?.by}
               className="min-w-0 flex-1"
             />
           </>
@@ -427,21 +427,16 @@ function MappingNotice({
   pageVerdict?: string;
   onChooseApp?: () => void;
   /** The component around the element, and how to select it. */
-  widen?: { crumb: TrailCrumb; select: (usedAt: SourcePoint) => void };
+  widen?: { crumb: TrailCrumb; select: CrumbSelect };
   /** The preview has no worktree, which Site source already says. */
   noWorktree?: boolean;
 }) {
   const observation = primaryObservation(selection);
   const count = selection.observations.length;
+  const target = widen?.crumb.component;
   const widenAction =
-    widen?.crumb.usedAt != null ? (
-      <Button
-        variant="secondary"
-        size="xs"
-        onClick={() => {
-          if (widen.crumb.usedAt) widen.select(widen.crumb.usedAt);
-        }}
-      >
+    widen && target && (widen.select.by === "id" ? target.rendered : target.usedAt !== null) ? (
+      <Button variant="secondary" size="xs" onClick={() => widen.select.select(target)}>
         Select {widen.crumb.label}
       </Button>
     ) : undefined;
