@@ -273,8 +273,9 @@ describe("CanopyView role filter", () => {
   });
 
   it("builds an assistant's row in the shape of the worker rows around it (#15370)", async () => {
-    // Half a minute into the third, so the clock reads the same however long the suite has run.
-    const since = NOW - 3.5 * 60_000;
+    // The panel's clock starts at the fixtures' own moment, however long the suite has run.
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+    const since = NOW - 3 * 60_000;
     directory.entries = [
       assistant(0, { waitingReason: "question", since }),
       assistant(1, { waitingReason: "question", agentId: "codex", since }),
@@ -294,9 +295,9 @@ describe("CanopyView role filter", () => {
     expect(band.contains(worker)).toBe(true);
 
     const parts = (row: HTMLElement) => {
-      const lead = row.querySelector<HTMLElement>("[data-canopy-lead]")!;
-      const lines = lead.nextElementSibling as HTMLElement;
-      return { lead, lines, where: lines.lastElementChild as HTMLElement };
+      const lead = row.querySelector("[data-canopy-lead]")!;
+      const lines = lead.nextElementSibling!;
+      return { lead, lines, where: lines.lastElementChild! };
     };
     const shape = (row: HTMLElement) => {
       const { lead, lines, where } = parts(row);
@@ -346,10 +347,11 @@ describe("CanopyView role filter", () => {
   });
 
   it("dates each assistant from what its row says, and steps up only an ask left waiting (#15370)", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
     const minutes = (count: number) => NOW - count * 60_000;
     directory.entries = [
-      assistant(0, { waitingReason: "question", since: minutes(5.5) }),
-      assistant(1, { waitingReason: "question", since: minutes(4.5) }),
+      assistant(0, { waitingReason: "question", since: minutes(5) }),
+      assistant(1, { waitingReason: "question", since: minutes(4.9) }),
       assistant(2, { since: minutes(20.5) }),
       assistant(3, { since: null }),
       assistant(4, {
