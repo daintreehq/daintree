@@ -25,14 +25,18 @@ export function useGlobalAssistantActivity(active: boolean): AgentState | null {
     if (!observing) return;
     const help = window.electron.help;
     let disposed = false;
-    // Subscribed before reading: the answer is newer than any change sent
-    // before it, and every change after it arrives here.
+    let told = false;
+    // Subscribed before reading, so no change is missed. The answer and a
+    // change don't share an ordering on the way here, and every change carries
+    // the whole state: once one has landed, the answer has nothing newer to say.
     const off = help.onGlobalAssistantChanged((state) => {
-      if (!disposed) setView(state);
+      if (disposed) return;
+      told = true;
+      setView(state);
     });
     help.getGlobalAssistantState().then(
       (state) => {
-        if (!disposed) setView(state);
+        if (!disposed && !told) setView(state);
       },
       () => {}
     );

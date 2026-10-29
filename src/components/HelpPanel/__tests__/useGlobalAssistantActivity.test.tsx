@@ -92,9 +92,18 @@ describe("useGlobalAssistantActivity", () => {
     expect(result.current).toBeNull();
   });
 
-  it("says nothing of a run it can't name a subject for", async () => {
+  it("never lets an answer that arrives after a change put back what it replaced", async () => {
+    const { result } = renderHook(() => useGlobalAssistantActivity(true));
+    push(viewOf({ agentState: "waiting" }));
+    await reply(viewOf({ agentState: "working" }));
+    expect(result.current).toBe("waiting");
+  });
+
+  it("says nothing of a run it can't name a subject for, or one that isn't running", async () => {
     const { result } = renderHook(() => useGlobalAssistantActivity(true));
     await reply(viewOf({ subject: null, agentState: "waiting" }));
+    expect(result.current).toBeNull();
+    push(viewOf({ phase: "launching", agentState: "waiting" }));
     expect(result.current).toBeNull();
   });
 
