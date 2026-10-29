@@ -290,7 +290,7 @@ describe("SaveFleetDialog", () => {
     return document.getElementById(id)?.textContent ?? "";
   }
 
-  const saveButton = () => screen.getByRole("button", { name: "Save fleet" }) as HTMLButtonElement;
+  const saveButton = () => screen.getByRole("button", { name: "Save fleet" });
 
   it("says only the panes armed here when no agent on another host is armed", () => {
     render(<SaveFleetDialog isOpen onClose={vi.fn()} armedCount={2} />);
@@ -317,8 +317,21 @@ describe("SaveFleetDialog", () => {
     expect(hint).toContain("Claude t1 on studio-01");
     expect(hint).toContain("Claude t2 on studio-02");
     await submitNamed("Remote triage");
-    expect(saveButton().disabled).toBe(true);
+    expect(saveButton().getAttribute("aria-disabled")).toBe("true");
     expect(actionService.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("drops the snapshot's left-out note for a live rule, which can save with no pane here", async () => {
+    armRemote("t1", "studio-01");
+    render(<SaveFleetDialog isOpen onClose={vi.fn()} armedCount={0} />);
+    fireEvent.click(screen.getByRole("radio", { name: "Live rule" }));
+    expect(typeHint()).not.toContain("studio-01");
+    await submitNamed("Waiting");
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "fleet.saveNamedFleet",
+      expect.objectContaining({ kind: "predicate", name: "Waiting" }),
+      { source: "user" }
+    );
   });
 
   it("follows the fleet while open: a host agent armed after opening is named too", () => {

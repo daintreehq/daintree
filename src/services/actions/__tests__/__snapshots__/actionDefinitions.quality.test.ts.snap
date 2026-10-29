@@ -1867,7 +1867,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Persist the current fleet selection (snapshot) or a state filter (predicate) under a name for later recall.",
+    "description": "Persist the armed local panes (snapshot) or a state filter (predicate) under a name for later recall.",
     "examples": undefined,
     "id": "fleet.saveNamedFleet",
     "keywords": undefined,
