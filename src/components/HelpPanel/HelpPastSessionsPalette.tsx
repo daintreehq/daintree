@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
+import { isMac } from "@/lib/platform";
+import { pluralize } from "@/lib/pluralize";
+import { Button } from "@/components/ui/button";
+import { Callout } from "@/components/ui/Callout";
+import { PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
@@ -12,7 +17,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { usePaletteStore, type PaletteId } from "@/store/paletteStore";
 import { logWarn } from "@/utils/logger";
 import type { HelpPastSessionPickOutcome } from "@/services/actions/definitions/helpActions";
-import type { HelpPastSession } from "@shared/types/ipc/help";
+import type { HelpPastSession, HelpPastSessionsListing } from "@shared/types/ipc/help";
 import { isPtyPanel } from "@shared/types/panel";
 import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import type { HelpSessionTab } from "./HelpSessionTabs";
@@ -32,6 +37,32 @@ export type HelpPastSessionsPaletteItem =
   | { kind: "lane"; id: string; title: string; slot: number };
 
 const FUSE_OPTIONS = { keys: ["title"], threshold: 0.4, ignoreLocation: true };
+const RETRY_HINT_ID = "help-past-sessions-retry-hint";
+const NO_LISTING: HelpPastSessionsListing = { sessions: [], unreadable: [], truncated: false };
+
+interface LoadedListing {
+  workspaceId: string;
+  /** The retry that produced it; behind the current one while a retry is in flight. */
+  attempt: number;
+  listing: HelpPastSessionsListing;
+  /** The request itself failed, so nothing is known about either store. */
+  loadFailed: boolean;
+}
+
+/** What came up short, as a headline, or null for a listing that is the whole history. */
+function failureTitle(loaded: LoadedListing): string | null {
+  if (loaded.loadFailed) return "Couldn't load past sessions";
+  const { unreadable } = loaded.listing;
+  if (unreadable.length > 1) return "Couldn't read assistant history";
+  const [agentId] = unreadable;
+  return agentId ? `Couldn't read ${getAgentConfig(agentId)?.name ?? agentId} history` : null;
+}
+
+function isRetryChord(e: React.KeyboardEvent): boolean {
+  return (
+    (isMac() ? e.metaKey : e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "r"
+  );
+}
 
 interface HelpPastSessionsPaletteProps {
   /** The workspace whose assistant history is listed. */
@@ -52,31 +83,53 @@ interface HelpPastSessionsPaletteProps {
 export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPaletteProps) {
   const isOpen = usePaletteStore((s) => s.activePaletteId === PALETTE_ID);
   const workspaceId = workspace?.id ?? null;
-  const [listing, setListing] = useState<{
-    workspaceId: string;
-    sessions: HelpPastSession[];
-  } | null>(null);
+  const [loaded, setLoaded] = useState<LoadedListing | null>(null);
+  const [attempt, setAttempt] = useState(0);
   const [replacing, setReplacing] = useState<HelpPastSession | null>(null);
 
   useEffect(() => {
+    if (isOpen) setReplacing(null);
+  }, [isOpen, workspaceId]);
+
+  useEffect(() => {
     if (!isOpen || !workspaceId) return;
-    setReplacing(null);
     let cancelled = false;
-    window.electron.help
-      .listPastSessions(workspaceId)
-      .then((sessions) => {
-        if (!cancelled) setListing({ workspaceId, sessions });
-      })
-      .catch((err) => {
+    window.electron.help.listPastSessions(workspaceId).then(
+      (answer) => {
+        if (cancelled) return;
+        // A remote host on an older build answers with the bare rows.
+        const listing = Array.isArray(answer) ? { ...NO_LISTING, sessions: answer } : answer;
+        setLoaded({ workspaceId, attempt, listing, loadFailed: false });
+      },
+      (err) => {
         logWarn("HelpPanel: failed to list past assistant sessions", err);
-        if (!cancelled) setListing({ workspaceId, sessions: [] });
-      });
+        if (cancelled) return;
+        // A failed refresh keeps the rows an earlier answer gave.
+        setLoaded((prev) => ({
+          workspaceId,
+          attempt,
+          listing: prev?.workspaceId === workspaceId ? prev.listing : NO_LISTING,
+          loadFailed: true,
+        }));
+      }
+    );
     return () => {
       cancelled = true;
     };
-  }, [isOpen, workspaceId]);
+  }, [isOpen, workspaceId, attempt]);
 
-  const sessions = listing && listing.workspaceId === workspaceId ? listing.sessions : null;
+  const current = loaded && loaded.workspaceId === workspaceId ? loaded : null;
+  const sessions = current ? current.listing.sessions : null;
+  const retrying = current !== null && current.attempt !== attempt;
+  const failure = current && !replacing ? failureTitle(current) : null;
+  // Nothing listed and something failed: the failure is the whole story, and
+  // Enter has no row to resume, so it retries.
+  const failedEmpty = failure !== null && sessions !== null && sessions.length === 0;
+  const truncated = !replacing && current !== null && current.listing.truncated;
+
+  const retry = useCallback(() => {
+    if (!retrying) setAttempt((n) => n + 1);
+  }, [retrying]);
   const laneTerminals = useHelpPanelStore((s) =>
     tabs.map((tab) => s.sessions[tab.slot]?.terminalId ?? null).join("\0")
   );
@@ -153,9 +206,25 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
   );
 
   const handleConfirm = useCallback(() => {
+    if (failedEmpty) {
+      retry();
+      return;
+    }
     const item = results[selectedIndex];
     if (item) void pick(item);
-  }, [results, selectedIndex, pick]);
+  }, [failedEmpty, retry, results, selectedIndex, pick]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      // Tab moves the list selection, so the chord is the keyboard's way to a
+      // Retry that sits beside rows Enter would resume.
+      if (failure === null || !isRetryChord(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      retry();
+    },
+    [failure, retry]
+  );
 
   const handleClose = useCallback(() => {
     // Escape from the tab choice steps back to the list rather than out.
@@ -218,6 +287,27 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
     [pick, setSelectedIndex]
   );
 
+  const retryChord = [isMac() ? "⌘" : "Ctrl", "R"];
+  const retryButton = (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      // Keeps focus in the search field, where the list keys live.
+      onPointerDown={(e) => e.preventDefault()}
+      onClick={retry}
+    >
+      Retry
+    </Button>
+  );
+  const retryHint = (
+    // The field reads this out: focus never leaves it, and the empty state
+    // announces only its title.
+    <span id={RETRY_HINT_ID} className="sr-only">
+      {failedEmpty ? "Press Enter to retry" : `Press ${retryChord.join("+")} to retry`}
+    </span>
+  );
+
   return (
     <SearchablePalette<HelpPastSessionsPaletteItem>
       tier="anchored"
@@ -234,16 +324,76 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
       onHoverIndex={setSelectedIndex}
       getItemId={(item) => item.id}
       renderItem={renderItem}
+      onKeyDown={handleKeyDown}
       label={
         replacing
           ? `All ${MAX_ASSISTANT_SLOTS} tabs are in use — choose one to replace`
           : "Resume a past session"
       }
       ariaLabel={replacing ? "Choose an assistant tab to replace" : "Resume a past session"}
-      searchPlaceholder={replacing ? "Search tabs" : "Search past sessions"}
+      searchPlaceholder={replacing ? "Search tabs" : "Search session titles"}
+      searchAriaDescribedBy={failure !== null ? RETRY_HINT_ID : undefined}
       itemIdPrefix="help-past-session"
-      isLoading={!replacing && sessions === null}
-      emptyMessage={sessions === null ? "Loading past sessions…" : "No past sessions yet"}
+      isLoading={!replacing && (sessions === null || retrying)}
+      emptyMessage={
+        failedEmpty
+          ? failure
+          : sessions === null
+            ? "Loading past sessions…"
+            : "No past sessions yet"
+      }
+      // A failure typed over is still a failure, not "no matches".
+      noMatchMessage={failedEmpty ? failure : undefined}
+      emptyContent={
+        failedEmpty ? (
+          <div className="mt-3 flex justify-center">
+            {retryHint}
+            {retryButton}
+          </div>
+        ) : undefined
+      }
+      noMatchContent={
+        failedEmpty ? (
+          <>
+            {retryHint}
+            {retryButton}
+          </>
+        ) : undefined
+      }
+      beforeList={
+        failure !== null && !failedEmpty ? (
+          <Callout
+            severity="error"
+            size="compact"
+            role="alert"
+            title={failure}
+            action={retryButton}
+            className="mb-1"
+          >
+            {retryHint}
+            <p>Some conversations may be missing</p>
+          </Callout>
+        ) : undefined
+      }
+      afterList={
+        truncated && sessions !== null ? (
+          <p className="px-3 py-2 text-xs text-text-secondary text-center border-t border-divider">
+            Showing the {pluralize(sessions.length, "most recent conversation")}. Use /resume in the
+            assistant for older ones.
+          </p>
+        ) : undefined
+      }
+      footer={
+        failure === null ? undefined : (
+          <PaletteFooterHints
+            primaryHint={
+              failedEmpty
+                ? { keys: ["↵"], label: "to retry" }
+                : { keys: retryChord, label: "to retry" }
+            }
+          />
+        )
+      }
     />
   );
 }
