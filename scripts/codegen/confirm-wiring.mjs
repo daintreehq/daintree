@@ -41,6 +41,7 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "terminal.restart",
   "terminal.restartOnPreset",
   "terminal.restartAll",
+  "terminal.startHeld",
   "terminal.arm",
   "worktree.delete",
   "worktree.sessions.endAll",
@@ -153,6 +154,10 @@ const BYPASS_WIRED = new Set([
   // McpConfirmDialog's selectable checklist, mounted globally, so the action id
   // is not co-located with a ConfirmDialog-family component.
   "terminal.killBatch",
+  // Agent/MCP-only start of a held pane (#15270); palette-hidden, and the user
+  // starts one from its own recovery gate (not ActionService), so the confirm is
+  // the generic McpConfirmDialog and there is nothing to co-locate.
+  "terminal.startHeld",
   "artifact.applyPatch", // ConfirmDialog in ArtifactOverlay.tsx; dispatch in useArtifacts.ts (ID not co-located)
   "agentSettings.reset", // agent/MCP-only; palette-hidden, configured from Settings via client (danger:"confirm" gates agent dispatch only)
   // Forge PR write actions are agent/MCP-only (issue #10654); danger:"confirm"

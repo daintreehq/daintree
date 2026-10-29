@@ -1129,6 +1129,12 @@ describe("McpServerService", () => {
         description: "Restart the terminal process",
       }),
       createManifestEntry({
+        id: "terminal.startHeld" as ActionId,
+        title: "Start Held Pane",
+        description: "Start a pane restore held, in place",
+        danger: "confirm",
+      }),
+      createManifestEntry({
         id: "terminal.arm" as ActionId,
         title: "Arm Terminal",
         description: "Add a terminal to the fleet broadcast set",
@@ -1925,11 +1931,12 @@ describe("McpServerService", () => {
           expect(ids).toContain(id);
         }
       }
-      // The four unscoped panel tools with no owned form stay the assistant's.
+      // The unscoped panel tools with no owned form stay the assistant's.
       for (const id of [
         "copyTree.injectToTerminal",
         "terminal.kill",
         "terminal.restart",
+        "terminal.startHeld",
         "terminal.closeAll",
       ]) {
         expect(ids).not.toContain(id);

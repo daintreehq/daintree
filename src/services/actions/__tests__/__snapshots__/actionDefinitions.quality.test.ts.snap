@@ -5963,7 +5963,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "confirm",
     "dangerRationale": "Restarts the terminal process. Scrollback is lost and the process is re-spawned.",
-    "description": "Restart a terminal's process in place, keeping the pane. Returns before the restart finishes; watch its status before sending. A running agent session is left alone unless confirmed; otherwise whatever ran is killed and unsaved state lost. A panel with no process is ignored.",
+    "description": "Restart a terminal's process in place, keeping the pane. Returns before the restart finishes; watch its status before sending. A running agent session is left alone unless confirmed; otherwise whatever ran is killed and unsaved state lost. Fails on a held pane.",
     "examples": undefined,
     "id": "terminal.restart",
     "keywords": [
@@ -6234,6 +6234,23 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "kind": "command",
     "requiresArgs": true,
     "title": "Hold agent on restart",
+  },
+  {
+    "category": "terminal",
+    "danger": "confirm",
+    "dangerRationale": "Starts the held agent, resuming its recorded conversation or beginning a new one: the choice restore left to you.",
+    "description": "Start a held pane in place under its id, instead of launching a replacement beside it. Only the conversation its hold recorded can be resumed. Returns once the launch is queued; watch its status before sending.",
+    "examples": undefined,
+    "id": "terminal.startHeld",
+    "keywords": [
+      "resume",
+      "recover",
+      "held",
+      "restore",
+    ],
+    "kind": "command",
+    "requiresArgs": true,
+    "title": "Start held pane",
   },
   {
     "category": "terminal",

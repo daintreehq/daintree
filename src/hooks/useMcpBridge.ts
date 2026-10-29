@@ -45,6 +45,13 @@ import {
   formatTerminalLaunchPreviewLines,
   type TerminalLaunchPreview,
 } from "@/lib/mcpTerminalLaunchPreview";
+import {
+  boundStartHeldTitle,
+  formatStartHeldPreviewLines,
+  MAX_START_HELD_SUBJECT_CHARS,
+  type StartHeldChoice,
+  type StartHeldPaneSnapshot,
+} from "@/lib/mcpStartHeldPreview";
 import { useRecipeStore } from "@/store/recipeStore";
 import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import {
@@ -63,7 +70,7 @@ import type {
   McpConfirmationDecision,
   McpSessionOrigin,
 } from "@shared/types/ipc/mcpServer";
-import type { TerminalSpawnSource } from "@shared/types/panel";
+import { isPtyPanel, type TerminalSpawnSource } from "@shared/types/panel";
 import { TerminalKillBatchIdsSchema } from "@shared/types/terminalKillBatch";
 import { TerminalCloseManyArgsSchema } from "@shared/types/mcpBatch";
 import { TRASH_TTL_MS } from "@shared/config/trash";
@@ -231,7 +238,13 @@ export type McpConfirmPreviewTarget =
    * agent-initiated shell, and `ArgumentsDisclosure` redacts every command long
    * enough to be worth reading.
    */
-  | ({ kind: "terminalLaunch" } & TerminalLaunchPreview);
+  | ({ kind: "terminalLaunch" } & TerminalLaunchPreview)
+  /**
+   * The held pane a `terminal.startHeld` dispatch names and how it starts
+   * (#15270): which conversation it continues is the choice the hold left to
+   * the user, and the argument summary never shows the conversation.
+   */
+  | { kind: "terminalStartHeld"; terminalId: string; start: StartHeldChoice };
 
 /** Section heading rendered above each kind's preview lines. */
 const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
@@ -246,6 +259,7 @@ const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
   forgeCreateIssue: "Issue to be filed",
   forgeAddIssueComment: "Comment to be posted",
   terminalLaunch: "Terminal to be opened",
+  terminalStartHeld: "Held pane to be started",
 };
 
 export function mcpConfirmPreviewTitle(target: McpConfirmPreviewTarget): string {
@@ -342,6 +356,25 @@ function terminalIdsArg(args: unknown): readonly string[] | undefined {
   if (args === null || typeof args !== "object" || !("terminalIds" in args)) return undefined;
   const parsed = TerminalKillBatchIdsSchema.safeParse(args.terminalIds);
   return parsed.success ? parsed.data : undefined;
+}
+
+/** The pane and start a `terminal.startHeld` dispatch names, or undefined when malformed. */
+function startHeldArgs(args: unknown): { terminalId: string; start: StartHeldChoice } | undefined {
+  if (args === null || typeof args !== "object") return undefined;
+  const { terminalId, start } = args as { terminalId?: unknown; start?: unknown };
+  if (typeof terminalId !== "string" || terminalId.length === 0) return undefined;
+  return start === "resume" || start === "fresh" ? { terminalId, start } : undefined;
+}
+
+/** The held pane as it stands now, or undefined when it isn't held. */
+function readStartHeldPane(terminalId: string): StartHeldPaneSnapshot | undefined {
+  const panel = usePanelStore.getState().panelsById[terminalId];
+  if (!panel || !isPtyPanel(panel) || !panel.restoreRecovery) return undefined;
+  return {
+    title: panel.title,
+    reason: panel.restoreRecovery.reason,
+    sessionId: panel.restoreRecovery.sessionId,
+  };
 }
 
 /** Why the assistant's close is being put to the user (#12881). */
@@ -555,6 +588,10 @@ export function resolveMcpConfirmPreviewTarget(
     const terminalIds = terminalIdsArg(args);
     return terminalIds === undefined ? undefined : { kind: "terminalKillBatch", terminalIds };
   }
+  if (actionId === "terminal.startHeld") {
+    const target = startHeldArgs(args);
+    return target === undefined ? undefined : { kind: "terminalStartHeld", ...target };
+  }
   if (actionId === "worktree.delete") {
     const worktreeId = worktreeIdArg(args);
     return worktreeId === undefined
@@ -661,6 +698,12 @@ export function resolveMcpConfirmSubject(
     if (target.kind === "recipe") {
       const recipe = useRecipeStore.getState().getRecipeById(target.resolvedRecipeId);
       return recipe?.name !== undefined && recipe.name.length > 0 ? recipe.name : undefined;
+    }
+    if (target.kind === "terminalStartHeld") {
+      const title = readStartHeldPane(target.terminalId)?.title;
+      return title !== undefined && title.length > 0
+        ? boundStartHeldTitle(title, MAX_START_HELD_SUBJECT_CHARS)
+        : undefined;
     }
     // The worktree the chosen directory IS, named from the store rather than
     // from the path itself — the title must not become a place to render
@@ -845,6 +888,11 @@ export async function buildMcpConfirmPreview(
   if (target.kind === "terminalLaunch") {
     return { lines: formatTerminalLaunchPreviewLines(target) };
   }
+  if (target.kind === "terminalStartHeld") {
+    return {
+      lines: formatStartHeldPreviewLines(target.start, readStartHeldPane(target.terminalId)),
+    };
+  }
   const operation = target.kind === "gitPush" ? "push" : "pull-rebase";
   try {
     const preview = await buildGitRemoteOperationPreview(target.cwd, operation);
@@ -1004,6 +1052,8 @@ function withPreviewedWorktreeCwd(
   // to pin, and rewriting the args around it would strip selectors the action
   // resolves for itself.
   if (target.kind === "terminalLaunch") return args;
+  // Names a pane by id and carries no directory to pin.
+  if (target.kind === "terminalStartHeld") return args;
   // Named per kind rather than left to a fall-through: every remaining kind
   // happens to carry a path today, and a future one that does not would
   // otherwise silently pin `cwd: undefined` onto a dispatch.

@@ -35,11 +35,16 @@ import {
 } from "./terminalPlacement";
 import { isForegroundDispatch } from "./dispatchSource";
 import { readTerminalPaneInfo } from "@/services/terminal/readTerminalPaneInfo";
+import {
+  isRestoreRecoveryLaunching,
+  launchFromRestoreRecovery,
+} from "@/services/terminal/restoreRecoveryLaunch";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
 import { logWarn } from "@/utils/logger";
 import {
   RestartOnPresetArgsSchema,
   SetHoldOnRestartArgsSchema,
+  StartHeldArgsSchema,
   TerminalKillBatchArgsSchema,
 } from "./terminalLifecycleActionArgs";
 
@@ -93,6 +98,31 @@ function clearPendingIf(kind: TerminalPendingDestructiveActionKind): void {
   if (pending && pending.kind === kind) {
     useTerminalPendingDestructiveActionStore.getState().clear();
   }
+}
+
+/** Why `terminal.startHeld` can't start this pane as it stands, or undefined if it can. */
+function startHeldRefusal(terminalId: string, start: "resume" | "fresh"): string | undefined {
+  const panel = usePanelStore.getState().panelsById[terminalId];
+  if (!panel || !isPtyPanel(panel)) return `No terminal '${terminalId}' in this project.`;
+  if (panel.location !== "grid" && panel.location !== "dock") {
+    return `Terminal '${terminalId}' is in the ${panel.location}; only a held pane in the grid or dock can start.`;
+  }
+  // Ahead of the hold checks: a launch clears the hold before it finishes, and
+  // a pane mid-start must not be sent to terminal.restart.
+  if (isRestoreRecoveryLaunching(terminalId)) {
+    return `Terminal '${terminalId}' is already starting. Watch its status rather than starting it again.`;
+  }
+  const recovery = panel.restoreRecovery;
+  if (!recovery) {
+    return `Terminal '${terminalId}' isn't held for recovery; use terminal.restart for a running one.`;
+  }
+  if (recovery.awaitingDestination) {
+    return `Terminal '${terminalId}' is waiting for a worktree to run in. Move it onto one, or keep its original folder from the pane.`;
+  }
+  if (start === "resume" && recovery.sessionId === undefined) {
+    return `Terminal '${terminalId}' was held (${recovery.reason}) with no recorded conversation to resume. Start it fresh, or leave the pane for the user to pick one.`;
+  }
+  return undefined;
 }
 
 export const terminalLifecycleActionRuns = {
@@ -269,6 +299,14 @@ export const terminalLifecycleActionRuns = {
     const targetId = terminalId ?? focusedAtDispatch;
     if (!targetId) return;
     const terminal = state.panelsById[targetId];
+    // `restartTerminal` only logs its refusal of a held pane, so without this
+    // the caller reads a pane still waiting for its conversation as restarted
+    // and launches a replacement beside it (#15270).
+    if (terminal && isPtyPanel(terminal) && terminal.restoreRecovery) {
+      throw new UnactionableTargetError(
+        `Terminal '${targetId}' is held for recovery (${terminal.restoreRecovery.reason}) and hasn't started, so there's nothing to restart. Start it in place with terminal.startHeld.`
+      );
+    }
     if (!isConfirmed(args, ctx) && terminalHasRunningAgentSession(terminal)) {
       stageConfirmation(
         {
@@ -284,6 +322,36 @@ export const terminalLifecycleActionRuns = {
     }
     clearPendingIf("restart");
     state.restartTerminal(targetId);
+  },
+  "terminal.startHeld": async (args: unknown) => {
+    const { terminalId, start } = StartHeldArgsSchema.parse(args);
+    const refusal = startHeldRefusal(terminalId, start);
+    if (refusal !== undefined) throw new UnactionableTargetError(refusal);
+    const panel = usePanelStore.getState().panelsById[terminalId];
+    // Only the conversation the hold recorded, never one the caller names:
+    // choosing among the rest is what the hold leaves to the user (#12434).
+    const sessionId =
+      start === "resume" && panel && isPtyPanel(panel)
+        ? panel.restoreRecovery?.sessionId
+        : undefined;
+    const outcome = await launchFromRestoreRecovery(
+      terminalId,
+      sessionId !== undefined ? { kind: "resume", sessionId } : { kind: "fresh" }
+    );
+    if (outcome === "held-elsewhere") {
+      throw new UnactionableTargetError(
+        `Another pane already has conversation '${sessionId}' open, or is opening it.`
+      );
+    }
+    if (outcome === "unavailable") {
+      // Read again: another start of this pane, or its closing, while this one
+      // waited is not a failed launch, and a caller told only "didn't launch"
+      // starts a replacement beside a pane that is already coming up.
+      const after = startHeldRefusal(terminalId, start);
+      if (after !== undefined) throw new UnactionableTargetError(after);
+      throw new Error(`Terminal '${terminalId}' is still held: its launch didn't go through.`);
+    }
+    return { terminalId, start, ...(sessionId !== undefined && { sessionId }) };
   },
   "terminal.restartOnPreset": async (
     args: unknown,

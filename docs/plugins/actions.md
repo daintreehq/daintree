@@ -491,6 +491,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.revealOwned` | Reveal owned terminal | safe | `terminalId` |
 | `terminal.sendToAgent` | Send to agent | safe | `terminalId?` |
 | `terminal.setHoldOnRestart` | Hold agent on restart | safe | `hold`, `terminalId` |
+| `terminal.startHeld` | Start held pane | confirm | `start`, `terminalId` |
 | `terminal.stashInput` | Stash input | safe | — |
 | `terminal.toggleDock` | Toggle dock | safe | `terminalId?` |
 | `terminal.toggleDockAll` | Toggle all dock | safe | — |

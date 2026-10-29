@@ -209,6 +209,9 @@ export const FULL_TIER_ADDONS = [
   "terminal.inject",
   "terminal.kill",
   "terminal.restart",
+  // A held pane's way out in place (#15270), so an orchestrator that finds one
+  // never launches a replacement beside it.
+  "terminal.startHeld",
   "terminal.closeAll",
   // Orchestrator-owned metadata about a panel (#12340). Bounded, invisible in
   // the UI, and confers no ownership.
@@ -296,6 +299,7 @@ export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
   "copyTree.injectToTerminal",
   "terminal.kill",
   "terminal.restart",
+  "terminal.startHeld",
   "terminal.closeAll",
   // Opens a dialog in the window the user is watching, which only the
   // assistant pinned to that window should do.

@@ -548,7 +548,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // first seen meeting the condition, that it only observes and never dials,
   // holds or acts, and that watches expire and can be cancelled or listed.
   // In-app only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 22_400;
+  // 22_400 → 22_600 for `terminal.startHeld` (#15270), measured at 22_585 B.
+  // What the prose has to carry is that the held pane starts in place rather
+  // than beside a replacement, that only its recorded conversation resumes, and
+  // that the launch is only queued. `terminal.restart` gave back 14 B. In-app
+  // only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 22_600;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1088,6 +1093,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "terminal.restartOnPreset",
   "terminal.restartOnPresetOwned",
   "terminal.restartAll",
+  "terminal.startHeld",
   "terminal.arm",
   "worktree.delete",
   // Delegates into `worktree.delete` from the main process, so it has to carry
@@ -1244,6 +1250,11 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // the generic McpConfirmDialog, which is mounted globally and keyed on the
   // pending request rather than on any one action id.
   "terminal.killBatch",
+  // Agent/MCP-only start of a held pane (#15270). Palette-hidden; the user
+  // starts one from the pane's own recovery gate, which calls the launcher
+  // directly rather than ActionService, so the generic McpConfirmDialog is the
+  // only confirm and there is no dispatch path to co-locate a dialog with.
+  "terminal.startHeld",
   // Agent/MCP-only — palette-hidden and unbound, configured from Settings via the
   // client (not ActionService). danger:"confirm" gates agent dispatch (resetting
   // all agents at once is destructive-local with no undo); there is no UI
@@ -1374,6 +1385,8 @@ describe("destructive-action danger metadata", () => {
       terminalIds: ["term-placeholder"],
       // terminal.restartOnPreset names the preset to respawn on.
       presetId: "preset-placeholder",
+      // terminal.startHeld names how the held pane starts.
+      start: "fresh",
       // session.bookmarkAndClose/delete need label + sessionId to clear arg
       // validation and reach the confirm gate.
       label: "placeholder",

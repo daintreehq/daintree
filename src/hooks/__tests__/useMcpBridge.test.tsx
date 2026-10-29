@@ -2920,6 +2920,87 @@ describe("resolveMcpConfirmPreviewTarget (#11538)", () => {
   });
 });
 
+describe("terminal.startHeld confirm preview (#15270)", () => {
+  beforeEach(() => {
+    mocks.panelsById = {
+      held: {
+        id: "held",
+        kind: "terminal",
+        title: "codex triage",
+        restoreRecovery: { reason: "resume-deferred", sessionId: "sess-1" },
+      },
+      live: { id: "live", kind: "terminal", title: "zsh" },
+    };
+  });
+
+  it("resolves the pane and the start the dispatch names", () => {
+    expect(
+      resolveMcpConfirmPreviewTarget(
+        "terminal.startHeld",
+        { terminalId: "held", start: "resume" },
+        undefined
+      )
+    ).toEqual({ kind: "terminalStartHeld", terminalId: "held", start: "resume" });
+  });
+
+  it.each([
+    ["no start", { terminalId: "held" }],
+    ["an unknown start", { terminalId: "held", start: "latest" }],
+    ["no terminal", { start: "fresh" }],
+  ])("gives a dispatch with %s no preview", (_label, args) => {
+    expect(resolveMcpConfirmPreviewTarget("terminal.startHeld", args, undefined)).toBeUndefined();
+  });
+
+  it("shows the recorded conversation a resume reopens, read from the pane", async () => {
+    const { lines } = await buildMcpConfirmPreview({
+      kind: "terminalStartHeld",
+      terminalId: "held",
+      start: "resume",
+    });
+
+    expect(lines.join("\n")).toContain("sess-1");
+    expect(lines.join("\n")).toContain("resume-deferred");
+    expect(hasCautionLine(lines)).toBe(false);
+  });
+
+  it("warns when the named pane isn't held", async () => {
+    const { lines } = await buildMcpConfirmPreview({
+      kind: "terminalStartHeld",
+      terminalId: "live",
+      start: "fresh",
+    });
+
+    expect(hasCautionLine(lines)).toBe(true);
+  });
+
+  it("titles the dialog with the held pane's name", () => {
+    expect(
+      resolveMcpConfirmSubject({ kind: "terminalStartHeld", terminalId: "held", start: "fresh" })
+    ).toBe("codex triage");
+  });
+
+  it("keeps a long or multi-line pane name to one short heading line", () => {
+    mocks.panelsById = {
+      held: {
+        id: "held",
+        kind: "terminal",
+        title: `first\n${"x".repeat(500)}`,
+        restoreRecovery: { reason: "resume-deferred" },
+      },
+    };
+
+    const subject = resolveMcpConfirmSubject({
+      kind: "terminalStartHeld",
+      terminalId: "held",
+      start: "fresh",
+    })!;
+
+    expect(subject).not.toMatch(/[\r\n]/);
+    expect(Array.from(subject).length).toBeLessThanOrEqual(100);
+    expect(subject.endsWith("…")).toBe(true);
+  });
+});
+
 describe("resolveMcpConfirmSubject for a terminal launch (#12216)", () => {
   beforeEach(() => {
     mocks.worktrees.clear();

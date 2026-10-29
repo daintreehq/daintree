@@ -141,6 +141,11 @@ export function buildRestoreRecoveryLaunchOptions(
 const launchingPanelIds = new Set<string>();
 const resumingSessionKeys = new Set<string>();
 
+/** Whether a launch of this held pane is in flight, from any surface. */
+export function isRestoreRecoveryLaunching(panelId: string): boolean {
+  return launchingPanelIds.has(panelId);
+}
+
 /**
  * Conversations being reopened right now by any in-place resume, held from the
  * pick until the launch settles: the replacement publishes its `agentSessionId`
