@@ -5,13 +5,22 @@ vi.mock("@/lib/platform", async (importOriginal) => ({
   isMac: () => true,
 }));
 
+import type { HostConnectionState } from "@shared/types/remoteHosts";
 import { settingsMachineOptions } from "../SettingsMachinePicker";
 
+const HANDSHAKE = {
+  version: "0.48.0",
+  commit: "abc1234",
+  protocolVersion: 1,
+  platform: "darwin",
+  arch: "arm64",
+} as const;
+
 function host(id: string, name: string, connected: boolean) {
-  return {
-    descriptor: { id, name },
-    connection: { status: connected ? ("connected" as const) : ("disconnected" as const) },
-  };
+  const connection: HostConnectionState = connected
+    ? { status: "connected", rttMs: null, handshake: HANDSHAKE }
+    : { status: "disconnected" };
+  return { descriptor: { id, name }, connection };
 }
 
 describe("settingsMachineOptions (#14706)", () => {

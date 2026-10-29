@@ -20,6 +20,46 @@ export interface SettingsMachineOption {
   note: string | null;
   /** Whether its settings can be read now: this machine always, a host while its link is up. */
   connected: boolean;
+  /** What the link reports; null for this machine and the window's own. */
+  connection: HostConnectionState | null;
+}
+
+/** A host's link in a word or two, for a menu row: what it reports, never a guess. */
+export function hostLinkNote(state: HostConnectionState): string | null {
+  switch (state.status) {
+    case "local":
+    case "connected":
+      return null;
+    case "disconnected":
+      return "Not connected";
+    case "connecting":
+      return state.restarting ? "Restarting…" : "Connecting…";
+    case "unreachable":
+      if (state.restarting) return "Restarting…";
+      return state.hostModeOff ? "Daintree isn't listening" : "Unreachable";
+    case "version-mismatch":
+      return "Needs a compatible build";
+    case "driven-elsewhere":
+      return `Driven from ${state.driver.clientName}`;
+  }
+}
+
+/**
+ * A machine's name in a tight spot. Fleet machines are told apart by their
+ * ends (studio-01, …-eu-02.internal), so when it doesn't fit, the middle goes
+ * and the end stays, at whatever width there is. The whole name is the title.
+ */
+export function HostNameText({ name, className }: { name: string; className?: string }) {
+  const tailLength = name.length > 16 ? Math.min(12, Math.floor(name.length / 2)) : 0;
+  if (tailLength === 0) {
+    return <span className={cn("min-w-0 truncate", className)}>{name}</span>;
+  }
+  return (
+    <span className={cn("flex min-w-0", className)} title={name}>
+      <span className="min-w-0 truncate">{name.slice(0, -tailLength)}</span>
+      <span className="shrink-0 whitespace-pre">{name.slice(-tailLength)}</span>
+    </span>
+  );
 }
 
 /**
@@ -29,7 +69,7 @@ export interface SettingsMachineOption {
 export function settingsMachineOptions(
   hosts: readonly {
     descriptor: { id: HostId; name: string };
-    connection: { status: HostConnectionState["status"] };
+    connection: HostConnectionState;
   }[],
   ownHostId: HostId,
   ownHostName: string | null
@@ -41,19 +81,27 @@ export function settingsMachineOptions(
       name: remoteWindow ? (ownHostName ?? ownHostId) : deviceOwnerLabel(),
       note: remoteWindow ? "This window's host" : null,
       connected: true,
+      connection: null,
     },
   ];
-  if (remoteWindow)
-    options.push({ hostId: LOCAL_HOST_ID, name: deviceOwnerLabel(), note: null, connected: true });
+  if (remoteWindow) {
+    options.push({
+      hostId: LOCAL_HOST_ID,
+      name: deviceOwnerLabel(),
+      note: null,
+      connected: true,
+      connection: null,
+    });
+  }
   for (const host of hosts) {
     const id = host.descriptor.id;
     if (id === ownHostId || id === LOCAL_HOST_ID) continue;
-    const connected = host.connection.status === "connected";
     options.push({
       hostId: id,
       name: host.descriptor.name || id,
-      note: connected ? null : "Not connected",
-      connected,
+      note: hostLinkNote(host.connection),
+      connected: host.connection.status === "connected",
+      connection: host.connection,
     });
   }
   return options;
@@ -76,12 +124,14 @@ export function SettingsMachinePicker({
   disabled?: boolean;
 }) {
   const current = options.find((option) => option.hostId === value) ?? options[0];
+  const currentName = current?.name ?? "";
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild disabled={disabled}>
         <button
           type="button"
           aria-haspopup="menu"
+          aria-label={`On ${currentName}`}
           data-settings-machine-trigger=""
           className={cn(
             "settings-scope-trigger group flex items-center gap-1 h-7 max-w-full px-3 rounded-[var(--radius-md)]",
@@ -91,7 +141,7 @@ export function SettingsMachinePicker({
           )}
         >
           <span className="shrink-0">On</span>
-          <span className="truncate font-medium text-text-primary">{current?.name}</span>
+          <HostNameText name={currentName} className="font-medium text-text-primary" />
           <ChevronDown
             data-animated-chevron
             className="w-3.5 h-3.5 shrink-0 text-text-secondary transition-transform duration-150 ease-out group-data-[state=open]:rotate-180"
@@ -107,10 +157,9 @@ export function SettingsMachinePicker({
           {options.map((option) => (
             <DropdownMenuRadioItem key={option.hostId ?? OWN} value={option.hostId ?? OWN}>
               <span className="flex flex-col min-w-0">
-                <span className="truncate">{option.name}</span>
-                {option.note && (
-                  <span className="text-2xs text-text-secondary truncate">{option.note}</span>
-                )}
+                {/* Whole, never truncated: fleet machines differ at their ends. */}
+                <span className="[overflow-wrap:anywhere]">{option.name}</span>
+                {option.note && <span className="text-2xs text-text-secondary">{option.note}</span>}
               </span>
             </DropdownMenuRadioItem>
           ))}

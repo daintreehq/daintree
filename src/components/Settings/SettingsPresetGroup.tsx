@@ -1,7 +1,8 @@
 import { useId, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
-import { SettingsRow, useSettingsGroup } from "./SettingsGroup";
+import { SettingsInlineError, SettingsRow, useSettingsGroup } from "./SettingsGroup";
 
 export interface SettingsPresetOption<T extends string | number> {
   value: T;
@@ -25,6 +26,10 @@ interface SettingsPresetGroupProps<T extends string | number> {
   isModified?: boolean;
   onReset?: () => void;
   disabledReason?: string;
+  /** Why the last change didn't land, under the options and part of their description. */
+  error?: ReactNode;
+  /** A transient state beside the label, such as "Saving…". */
+  status?: ReactNode;
 }
 
 /**
@@ -48,6 +53,8 @@ export function SettingsPresetGroup<T extends string | number>({
   isModified,
   onReset,
   disabledReason,
+  error,
+  status,
 }: SettingsPresetGroupProps<T>) {
   const group = useSettingsGroup();
   const labelId = useId();
@@ -145,6 +152,8 @@ export function SettingsPresetGroup<T extends string | number>({
         onReset={onReset}
         disabled={disabled}
         disabledReason={disabledReason}
+        error={error}
+        accessory={status}
         control={({ descriptionId: rowDescribedBy, disabled: rowDisabled }) => (
           <SegmentedRadioGroup
             aria-label={label}
@@ -226,6 +235,7 @@ export function SettingsPresetGroup<T extends string | number>({
           {description}
         </p>
       )}
+      {error && <SettingsInlineError>{error}</SettingsInlineError>}
     </div>
   );
 }

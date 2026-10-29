@@ -50,6 +50,8 @@ interface SettingsSelectProps {
   controlWidth?: "select" | "wide";
   /** Why the row is disabled, shown with it while it is. */
   disabledReason?: string;
+  /** Inside a group: a transient state beside the label, such as "Saving…". */
+  status?: ReactNode;
 }
 
 const SCOPE_LABEL = { project: "Project", global: "Global", default: "Default" } as const;
@@ -74,6 +76,7 @@ export function SettingsSelect({
   layout = "inline",
   controlWidth = "select",
   disabledReason,
+  status,
 }: SettingsSelectProps) {
   const group = useSettingsGroup();
   const id = useId();
@@ -112,7 +115,16 @@ export function SettingsSelect({
         id={rowId}
         label={label}
         description={description}
-        accessory={scopeBadge}
+        accessory={
+          status ? (
+            <>
+              {scopeBadge}
+              {status}
+            </>
+          ) : (
+            scopeBadge
+          )
+        }
         layout={layout}
         isModified={isModified}
         onReset={onReset}
