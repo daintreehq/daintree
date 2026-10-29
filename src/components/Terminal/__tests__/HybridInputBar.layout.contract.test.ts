@@ -128,6 +128,27 @@ describe("HybridInputBar layout contract", () => {
     expect(inner).not.toMatch(/\bw-(full|screen|\[|\d)/);
   });
 
+  it("draws the `❯` as a glyph as wide as itself, with nothing a control has", () => {
+    // #15309: the marker was a 24px button. It keeps the control height, so it
+    // sits centred on the draft's last row, but takes only the glyph's width
+    // and has no hover, focus or tooltip of its own.
+    const text = declarations();
+    const at = text.indexOf("data-composer-marker");
+    expect(at, "the marker element").toBeGreaterThan(-1);
+    const element = text.slice(text.lastIndexOf("<", at), text.indexOf("</span>", at));
+    const classes = element.slice(element.indexOf("className"));
+
+    expect(element).toMatch(/aria-hidden="true"/);
+    expect(element).not.toMatch(/\b(onClick|tabIndex|role)=/);
+    expect(classes).toMatch(/\bh-6\b/);
+    expect(classes).toMatch(/\bshrink-0\b/);
+    expect(classes).not.toMatch(/(^|[\s"])(min-)?w-/);
+    expect(classes).not.toMatch(/\b(hover|focus-visible|group-hover):/);
+    expect(classes).not.toMatch(/COMPOSER_CONTROL_/);
+    const tooltips = text.match(/<Tooltip>[\s\S]*?<\/Tooltip>/g) ?? [];
+    expect(tooltips.some((block) => block.includes("data-composer-marker"))).toBe(false);
+  });
+
   it("gives the canvas track a zero min-width so it can actually shrink", () => {
     // Flex items default to `min-width: auto`, which stops the canvas
     // shrinking past its longest unbreakable token. Matched on the track's

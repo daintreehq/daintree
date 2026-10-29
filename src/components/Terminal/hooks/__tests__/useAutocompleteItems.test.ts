@@ -190,16 +190,18 @@ describe("useAutocompleteItems", () => {
       expect(result.current.isLoading).toBe(true);
     });
 
-    it("keeps them out of every other menu", () => {
+    it.each([["$"], ["@"], ["#"], [null]] as const)("keeps them out of the %s menu", (trigger) => {
       const { result } = renderHook(() =>
         useAutocompleteItems({
           ...baseParams,
-          activeCompletionContext: { triggerChar: "$", start: 0, tokenEnd: 2, query: "x" },
+          activeCompletionContext:
+            trigger === null ? null : { triggerChar: trigger, start: 0, tokenEnd: 2, query: "x" },
           autocompleteCommands: [command],
+          autocompleteFiles: ["x.ts"],
           templateItems: [template],
         })
       );
-      expect(result.current.autocompleteItems).toEqual([command]);
+      expect(result.current.autocompleteItems.some((item) => item.template)).toBe(false);
     });
   });
 

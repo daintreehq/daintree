@@ -29,7 +29,7 @@ function template(
 }
 
 const reconcile = template("acme::reconcile", "Reconcile this month");
-const invoice = template("acme::chase-invoices", "Chase overdue invoices", {
+const invoice = template("acme::dunning", "Chase overdue invoices", {
   args: [{ name: "client", label: "Client" }],
 });
 const standup = template("team::standup", "Write the standup", { pluginName: "Team Notes" });
@@ -42,6 +42,8 @@ describe("scorePromptTemplate", () => {
   it("matches a word typed from the title, the id or the plugin's name", () => {
     expect(scorePromptTemplate(reconcile, "month")).not.toBeNull();
     expect(scorePromptTemplate(invoice, "chase-inv")).not.toBeNull();
+    // In the id alone, not the title or the plugin's name.
+    expect(scorePromptTemplate(invoice, "dun")).not.toBeNull();
     expect(scorePromptTemplate(standup, "team")).not.toBeNull();
   });
 
@@ -71,7 +73,7 @@ describe("toPromptTemplateItems", () => {
     const items = toPromptTemplateItems([reconcile, invoice, standup], "");
     expect(items.map((item) => item.template?.key)).toEqual([
       "acme::reconcile",
-      "acme::chase-invoices",
+      "acme::dunning",
       "team::standup",
     ]);
   });
@@ -91,7 +93,17 @@ describe("toPromptTemplateItems", () => {
       template: { key: "acme::reconcile", opensForm: false },
     });
     expect(formRow!.template?.opensForm).toBe(true);
-    expect(row!.key).not.toBe(formRow!.key);
+  });
+
+  it("keeps two plugins' templates apart when they declare the same id", () => {
+    const ours = template("acme::reconcile", "Reconcile this month");
+    const theirs = template("ledger::reconcile", "Reconcile this month", { pluginName: "Ledger" });
+    const items = toPromptTemplateItems([ours, theirs], "");
+    expect(new Set(items.map((item) => item.key)).size).toBe(2);
+    expect(items.map((item) => item.template?.key)).toEqual([
+      "acme::reconcile",
+      "ledger::reconcile",
+    ]);
   });
 });
 

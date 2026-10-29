@@ -1738,6 +1738,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       if (!intercepted) void sendText(text);
     };
 
+    // The `/` token a template was picked with, as an undo step of its own: a
+    // pick made straight after typing the token would otherwise merge with
+    // that typing.
+    const cutTemplateToken = (view: EditorView, cut: DraftSpan) => {
+      view.dispatch({
+        changes: cut,
+        annotations: [isolateHistory.of("full"), Transaction.userEvent.of("delete")],
+      });
+    };
+
     // A template fills an empty draft and goes after a written one; routing it
     // through sendText would submit it. After the text rather than at the
     // caret, which sits wherever the `/` token was typed. That token, when one
@@ -1752,22 +1762,26 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const draft = cut ? doc.slice(0, cut.from) + doc.slice(cut.to) : doc;
       const written = draft.trim() !== "";
       if (written && text.trim() === "") {
-        if (view && cut) view.dispatch({ changes: cut, userEvent: "delete" });
+        if (view && cut) cutTemplateToken(view, cut);
         view?.focus();
         return;
       }
       const next = composeDraftWithInstruction(draft, text);
-      if (!view || !written) {
+      if (!view) {
         applyEditorValue(next, {
           selection: EditorSelection.create([EditorSelection.cursor(next.length)]),
           focus: true,
         });
         return;
       }
-      // Only the new span goes in, so the words, chips and undo steps already
-      // there are untouched and undo takes the template back out on its own.
+      // After a written draft only the new span goes in, so the words, chips
+      // and undo steps already there are untouched. Either way the write is an
+      // undo step of its own, or one undo straight after a quick pick would
+      // take the typed token and the template back together.
       view.dispatch({
-        changes: [...(cut ? [cut] : []), { from: doc.length, insert: next.slice(draft.length) }],
+        changes: written
+          ? [...(cut ? [cut] : []), { from: doc.length, insert: next.slice(draft.length) }]
+          : { from: 0, to: doc.length, insert: next },
         selection: EditorSelection.cursor(next.length),
         scrollIntoView: true,
         annotations: [isolateHistory.of("full"), Transaction.userEvent.of("input.paste")],
@@ -1785,10 +1799,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       }
       // The form has the pick from here, so the token it was made with is spent.
       const view = editorViewRef.current;
-      if (view) {
-        const cut = promptTemplateTokenCut(view.state.doc.toString(), token);
-        view.dispatch({ changes: cut, userEvent: "delete" });
-      }
+      if (view) cutTemplateToken(view, promptTemplateTokenCut(view.state.doc.toString(), token));
       setActiveTemplateKey(entry.key);
     };
 

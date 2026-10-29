@@ -12,6 +12,7 @@ import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { useProjectStore } from "@/store/projectStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { toSlashAutocompleteItems } from "@/hooks/slashAutocompleteItems";
@@ -66,6 +67,7 @@ beforeEach(() => {
   setCurrentViewStore(createWorktreeStore());
   useTerminalInputStore.setState({ draftInputs: new Map() });
   usePluginRuntimeStore.setState({ promptTemplates: [] });
+  useProjectStore.setState({ currentProject: null });
   const panel = {
     id: TERMINAL_ID,
     title: "claude",
@@ -281,6 +283,25 @@ describe("HybridInputBar prompt templates in the `/` menu", () => {
     expect(view.state.doc.toString()).toBe("Fix the retry loop. /boiler");
   });
 
+  it("keeps a pick made straight after typing its token apart from that typing in undo", async () => {
+    const { view, type, press } = await renderComposer("", [entry("Run the tests.")]);
+
+    await type("/boiler");
+    await press("Enter");
+    await type("!");
+    expect(view.state.doc.toString()).toBe("Run the tests.!");
+
+    act(() => {
+      undo(view);
+    });
+    expect(view.state.doc.toString()).toBe("Run the tests.");
+
+    act(() => {
+      undo(view);
+    });
+    expect(view.state.doc.toString()).toBe("/boiler");
+  });
+
   it("lands a template written with CRLF breaks, with the caret after it", async () => {
     const { view, type, press } = await renderComposer("Fix the retry loop.", [
       entry("Run:\r\n- tests\r- lint"),
@@ -317,6 +338,73 @@ describe("HybridInputBar prompt templates in the `/` menu", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
+  it("keeps the token it took for a form as its own undo step when the form is cancelled", async () => {
+    const { view, type, press } = await renderComposer("Fix the retry loop.", [
+      entry("Tell {{who}} when done.", [{ name: "who", label: "Who" }]),
+    ]);
+
+    await type(" /boiler");
+    await press("Enter");
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    await act(async () => {});
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(view.state.doc.toString()).toBe("Fix the retry loop.");
+
+    act(() => {
+      undo(view);
+    });
+    expect(view.state.doc.toString()).toBe("Fix the retry loop. /boiler");
+  });
+
+  it.each([[""], ["   "]])(
+    "holds the form open on a required argument left as %j, the draft untouched",
+    async (value) => {
+      const { view, type, press } = await renderComposer("Fix the retry loop.", [
+        entry("Tell {{who}} when done.", [{ name: "who", label: "Who", required: true }]),
+      ]);
+
+      await type(" /boiler");
+      await press("Enter");
+      fireEvent.change(await screen.findByLabelText("Who"), { target: { value } });
+      fireEvent.click(screen.getByRole("button", { name: "Fill draft" }));
+      await act(async () => {});
+
+      expect(screen.getByRole("dialog").textContent).toContain("Required");
+      expect(view.state.doc.toString()).toBe("Fix the retry loop.");
+
+      fireEvent.change(screen.getByLabelText("Who"), { target: { value: "Ada" } });
+      fireEvent.click(screen.getByRole("button", { name: "Fill draft" }));
+      await act(async () => {});
+
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(view.state.doc.toString()).toBe("Fix the retry loop.\n\nTell Ada when done.");
+    }
+  );
+
+  it("offers installed templates and this project's own, never another project's", async () => {
+    useProjectStore.setState({
+      currentProject: { id: "p1", name: "Repo", path: "/repo", emoji: "", lastOpened: 0 },
+    });
+    const own = (key: string, title: string, projectId: string | null): PluginPromptTemplate => ({
+      ...entry("Run the tests."),
+      key,
+      projectId,
+      template: { ...entry("Run the tests.").template, id: key, title },
+    });
+    const { type, rows } = await renderComposer("", [
+      own("acme::installed", "Boilerplate installed", null),
+      own("project__p1__acme::here", "Boilerplate here", "p1"),
+      own("project__p2__acme::there", "Boilerplate there", "p2"),
+    ]);
+
+    await type("/boiler");
+
+    const offered = rows().join("\n");
+    expect(offered).toContain("Boilerplate installed");
+    expect(offered).toContain("Boilerplate here");
+    expect(offered).not.toContain("Boilerplate there");
+  });
+
   it("leaves a written draft as it is when the template renders to nothing", async () => {
     const { view, type, press } = await renderComposer("Fix the retry loop.", [
       entry("{{extra}}", [{ name: "extra", label: "Extra" }]),
@@ -333,12 +421,20 @@ describe("HybridInputBar prompt templates in the `/` menu", () => {
 
   it("accepts an argument named like an inherited property", async () => {
     const { view, type, press } = await renderComposer("", [
-      entry("Build {{constructor}}.", [{ name: "constructor", label: "Constructor" }]),
+      entry("Build {{constructor}}.", [
+        { name: "constructor", label: "Constructor", required: true },
+      ]),
     ]);
 
     await type("/boiler");
     await press("Enter");
-    fireEvent.change(await screen.findByLabelText("Constructor"), {
+    // Required, and empty: an inherited `constructor` must not read as filled.
+    fireEvent.click(await screen.findByRole("button", { name: "Fill draft" }));
+    await act(async () => {});
+    expect(screen.getByRole("dialog").textContent).toContain("Required");
+    expect(view.state.doc.toString()).toBe("");
+
+    fireEvent.change(screen.getByLabelText("Constructor"), {
       target: { value: "the widget" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Fill draft" }));
