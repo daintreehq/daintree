@@ -695,3 +695,100 @@ describe("portalStore restoreLink", () => {
     expect(usePortalStore.getState().links).toEqual(before);
   });
 });
+
+describe("portalStore restore failures (#15043)", () => {
+  const failed = () => usePortalStore.getState().restoreFailedTabs;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    usePortalStore.getState().reset();
+    usePortalStore.setState({
+      isOpen: true,
+      tabs: [
+        { id: "tab-1", title: "One", url: "https://example.com/1" },
+        { id: "tab-2", title: "Two", url: "https://example.com/2" },
+        { id: "tab-3", title: "Three", url: "https://example.com/3" },
+      ],
+      activeTabId: "tab-1",
+      createdTabs: new Set<string>(),
+    });
+  });
+
+  it("records the selected tab's failure and hides whatever main was still showing", () => {
+    usePortalStore.getState().markTabRestoreFailed("tab-1");
+
+    expect([...failed()]).toEqual(["tab-1"]);
+    expect(window.electron.portal.hide).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["a tab that isn't selected", () => usePortalStore.setState({ activeTabId: "tab-2" })],
+    ["a closed Portal", () => usePortalStore.setState({ isOpen: false })],
+    ["a tab main already holds", () => usePortalStore.getState().markTabCreated("tab-1")],
+    [
+      "a blank tab",
+      () => usePortalStore.setState({ tabs: [{ id: "tab-1", title: "New tab", url: null }] }),
+    ],
+  ])("records nothing for %s", (_label, arrange) => {
+    arrange();
+
+    usePortalStore.getState().markTabRestoreFailed("tab-1");
+
+    expect(failed().size).toBe(0);
+    expect(window.electron.portal.hide).not.toHaveBeenCalled();
+  });
+
+  // Two failures, so a removal that clears the whole set shows up.
+  const failTabs1And3 = () => {
+    usePortalStore.getState().markTabRestoreFailed("tab-1");
+    usePortalStore.setState({ activeTabId: "tab-3" });
+    usePortalStore.getState().markTabRestoreFailed("tab-3");
+    expect([...failed()].sort()).toEqual(["tab-1", "tab-3"]);
+  };
+
+  it("clears only the failure of the tab created, or the one asked for", () => {
+    failTabs1And3();
+
+    usePortalStore.getState().markTabCreated("tab-3");
+    expect([...failed()]).toEqual(["tab-1"]);
+
+    usePortalStore.setState({ activeTabId: "tab-3" });
+    usePortalStore.getState().unmarkTabCreated("tab-3");
+    usePortalStore.getState().markTabRestoreFailed("tab-3");
+    usePortalStore.getState().clearTabRestoreFailed("tab-1");
+    expect([...failed()]).toEqual(["tab-3"]);
+  });
+
+  it("keeps the failure through eviction notices for a tab that is already uncreated", () => {
+    usePortalStore.getState().markTabRestoreFailed("tab-1");
+
+    usePortalStore.getState().unmarkTabCreated("tab-1");
+    usePortalStore.getState().markTabsUncreated(["tab-1", "tab-2"]);
+
+    expect(failed().has("tab-1")).toBe(true);
+  });
+
+  it.each([
+    ["closeTab", () => usePortalStore.getState().closeTab("tab-1"), ["tab-3"]],
+    ["closeAllTabs", () => usePortalStore.getState().closeAllTabs(), []],
+    ["closeTabsExcept", () => usePortalStore.getState().closeTabsExcept("tab-3"), ["tab-3"]],
+    ["closeTabsAfter", () => usePortalStore.getState().closeTabsAfter("tab-2"), ["tab-1"]],
+    ["reset", () => usePortalStore.getState().reset(), []],
+  ])("keeps only the failures of tabs %s leaves open", (_label, close, survivors) => {
+    failTabs1And3();
+
+    close();
+
+    expect([...failed()]).toEqual(survivors);
+  });
+
+  it("never persists a failure", () => {
+    usePortalStore.getState().markTabRestoreFailed("tab-1");
+    expect(failed().size).toBe(1);
+
+    const persisted = usePortalStore.persist.getOptions().partialize!(usePortalStore.getState());
+
+    expect(persisted).not.toHaveProperty("restoreFailedTabs");
+    expect(persisted).toHaveProperty("tabs");
+  });
+});
