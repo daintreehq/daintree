@@ -1146,8 +1146,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           Also delete its settings, connected accounts, and stored data
         </label>
         <p id={deleteDataHintId} className="mt-1 pl-6 text-xs text-text-secondary">
-          Covers every project on this machine, secrets included, and signs the plugin out. Settings
-          under a repository's .daintree/ are kept.
+          Covers every project on this machine, secrets included, and signs the plugin out.
+          Databases and files the plugin created are kept, as are settings under a repository's
+          .daintree/.
         </p>
         {/* A failed uninstall leaves this dialog open and sets the error, which
             the master column no longer renders while the dialog owns it — so

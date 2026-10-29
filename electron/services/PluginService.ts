@@ -166,7 +166,7 @@ import { isPluginNotificationSilenced } from "./plugin/pluginNotificationSilence
 /** How long a plugin notification waits on a project's mute before going out anyway. */
 const PLUGIN_NOTIFICATION_MUTE_READ_TIMEOUT_MS = 2_000;
 import { store } from "../store.js";
-import { wipeSettingsFile } from "./PluginSettingsStore.js";
+import { queuedSettingsFiles, wipeSettingsFile } from "./PluginSettingsStore.js";
 import { isProjectWorkspaceId } from "../../shared/utils/workspaceIds.js";
 import type { EventBusEnvelope } from "../../shared/types/ipc/maps.js";
 import {
@@ -7157,9 +7157,9 @@ export class PluginService {
    * and user-scope storage of a plugin id and of every per-project instance of
    * it. Instances are found by filename rather than by the enablement list,
    * which an uninstall has already cleared and which never held projects the
-   * package was enabled in before. The id's own user-scope files are wiped
-   * whether or not they exist yet, so a first write still waiting on the
-   * keychain can't create one afterwards.
+   * package was enabled in before. The id's own user-scope files and any file
+   * with a write still queued are wiped whether or not they exist yet, so a
+   * first write waiting on the keychain can't create one afterwards.
    */
   private async wipeInstalledPluginData(pluginId: string): Promise<void> {
     if (!SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) return;
@@ -7193,6 +7193,16 @@ export class PluginService {
     for (const dir of dirs) {
       for (const name of await listDir(dir)) {
         if (isPluginFile(name)) files.add(path.join(dir, name));
+      }
+    }
+    const userDirSet = new Set(userDirs.map((dir) => path.resolve(dir)));
+    const resolvedLocalRoot = path.resolve(localRoot);
+    for (const file of queuedSettingsFiles()) {
+      const dir = path.dirname(file);
+      const inLocalProject =
+        path.dirname(dir) === resolvedLocalRoot && isProjectWorkspaceId(path.basename(dir));
+      if ((userDirSet.has(dir) || inLocalProject) && isPluginFile(path.basename(file))) {
+        files.add(file);
       }
     }
     for (const file of files) await wipeSettingsFile(file);

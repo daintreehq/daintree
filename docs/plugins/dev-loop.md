@@ -302,7 +302,7 @@ The second form needs a release asset with a fixed name; `package` writes a vers
 npx daintree-plugin uninstall acme.linear-planner [--delete-settings]
 ```
 
-Equivalent to **Uninstall plugin** in the plugin manager (Settings → Plugins → Plugin manager). Settings, connected accounts and stored data are **kept** by default so an API token or sign-in survives a reinstall; `--delete-settings` removes them, in every project on this machine. Project-scope settings under a repository's `.daintree/` are never touched either way. MCP consent pins and capability grants are always revoked, so a reinstall re-prompts rather than inheriting prior approvals.
+Equivalent to **Uninstall plugin** in the plugin manager (Settings → Plugins → Plugin manager). Settings, connected accounts and stored data are **kept** by default so an API token or sign-in survives a reinstall; `--delete-settings` removes them, in every project on this machine. Databases and files the plugin created under `~/.daintree/plugin-data/`, and project-scope settings under a repository's `.daintree/`, are never touched either way. MCP consent pins and capability grants are always revoked, so a reinstall re-prompts rather than inheriting prior approvals.
 
 ### `daintree-plugin doctor <projectRoot>`
 
