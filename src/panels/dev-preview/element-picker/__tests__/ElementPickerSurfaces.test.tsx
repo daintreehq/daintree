@@ -2519,6 +2519,36 @@ describe("delivery across the picker's lifetime", () => {
     await waitFor(() => expect(host.calls("closeWorkspace")).toEqual([{ workspaceId: "ws-1" }]));
   });
 
+  it("lets an idle reopened session go at once, and tells its picks from the restored pin", async () => {
+    panels(true);
+    const agent = await agentActions();
+    await mountSelected();
+    await typeAndSend();
+    fireEvent.change(screen.getByRole("textbox", { name: "Request for the agent" }), {
+      target: { value: "And make it bold" },
+    });
+    cleanup();
+    await switchOff();
+    host.openWith = () => ({
+      status: "ready",
+      workspaceId: "ws-2",
+      appPath: ".",
+      appPaths: ["."],
+      scanComplete: true,
+    });
+    mount();
+    await screen.findByRole("radio", { name: "Browse" });
+    await act(async () => host.documentReady(0));
+    await act(async () => host.select(0));
+    // Same element, same epoch, new session: not the selection the draft was pinned to.
+    await screen.findByRole("button", { name: "Use current selection" });
+
+    cleanup();
+    await switchOff();
+    expect(host.calls("closeWorkspace")).toEqual([{ workspaceId: "ws-2" }]);
+    expect(agent.sent).toEqual([]);
+  });
+
   it("won't send a restored draft whose source changed while the picker was closed", async () => {
     panels(true);
     const agent = await agentActions();
