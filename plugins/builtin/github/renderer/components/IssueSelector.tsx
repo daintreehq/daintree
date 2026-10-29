@@ -148,16 +148,14 @@ export function IssueSelector({
   }, [open, requestedQuery, projectPath, retryTick]);
 
   const resultsAreCurrent =
-    !loading &&
-    !loadFailed &&
-    resultScope?.query === query &&
-    resultScope.projectPath === projectPath;
+    !loading && resultScope?.query === query && resultScope.projectPath === projectPath;
 
   // Enter typed faster than the search: run the query on screen now, or let the
-  // request already running for it land, rather than act on older rows.
+  // request already scheduled or running for it land, rather than act on older
+  // rows. Only a search that failed is run again.
   const runTypedQuery = () => {
     if (requestedQuery !== query) setRequestedQuery(query);
-    else if (!loading) setRetryTick((tick) => tick + 1);
+    else if (loadFailed) setRetryTick((tick) => tick + 1);
   };
 
   const loadMore = () => {
