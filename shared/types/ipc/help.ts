@@ -1,3 +1,4 @@
+import type { AgentState } from "../agent.js";
 import type { AgentDirectorySubject } from "../agentDirectory.js";
 
 /**
@@ -103,6 +104,12 @@ export interface GlobalAssistantState {
  */
 export interface GlobalAssistantView extends GlobalAssistantState {
   subject: AgentDirectorySubject | null;
+  /**
+   * What was last seen on that subject's terminal, observed without attaching,
+   * so a window can mark the run while it shows something else. Null while
+   * nothing has been seen on this exact subject.
+   */
+  agentState: AgentState | null;
 }
 
 /**

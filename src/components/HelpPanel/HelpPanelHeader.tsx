@@ -64,8 +64,8 @@ function AssistantStateAnnouncer({ agentState }: { agentState: AgentState | null
   );
 }
 
-/** The project lane most worth a glance while it is off screen, and every lane's state in words. */
-export interface ProjectScopeActivity {
+/** The lane most worth a glance while its scope is off screen, and every lane's state in words. */
+export interface ScopeActivity {
   agentState: AgentState;
   /** "Session 2 waiting, Session 3 working" — what was seen, lane by lane. */
   summary: string;
@@ -80,7 +80,7 @@ const LANE_STATE_RANK: Partial<Record<NonNullable<AgentState>, number>> = {
 
 export function summarizeLaneActivity(
   tabs: readonly { label: string; agentState: AgentState | null | undefined }[]
-): ProjectScopeActivity | null {
+): ScopeActivity | null {
   const marked = tabs.flatMap((tab) => {
     const rank = tab.agentState ? LANE_STATE_RANK[tab.agentState] : undefined;
     return tab.agentState && rank !== undefined
@@ -97,20 +97,28 @@ export function summarizeLaneActivity(
 
 function scopeOptions(
   scope: AssistantScope,
-  projectActivity: ProjectScopeActivity | null
+  projectActivity: ScopeActivity | null,
+  globalActivity: ScopeActivity | null
 ): SegmentedRadioOption<AssistantScope>[] {
-  // Only the scope NOT on screen carries a mark: the one on screen draws each
-  // lane's state in its own strip.
-  const background = scope === "global" ? projectActivity : null;
+  // Only the scope NOT on screen carries a mark: the one on screen shows its
+  // own state where its conversation is.
+  const project = scope === "global" ? projectActivity : null;
+  const global = scope === "project" ? globalActivity : null;
   return [
     {
       value: "project",
       label: "Project",
-      tooltip: background ? background.summary : "This project's sessions",
-      ariaLabel: background ? `Project, ${background.summary}` : undefined,
-      trailing: background ? <TabStateIndicator agentState={background.agentState} /> : undefined,
+      tooltip: project ? project.summary : "This project's sessions",
+      ariaLabel: project ? `Project, ${project.summary}` : undefined,
+      trailing: project ? <TabStateIndicator agentState={project.agentState} /> : undefined,
     },
-    { value: "global", label: "Global", tooltip: "One assistant for every project and window" },
+    {
+      value: "global",
+      label: "Global",
+      tooltip: global ? global.summary : "One assistant for every project and window",
+      ariaLabel: global ? `Global, ${global.summary}` : undefined,
+      trailing: global ? <TabStateIndicator agentState={global.agentState} /> : undefined,
+    },
   ];
 }
 
@@ -126,7 +134,9 @@ interface HelpPanelHeaderProps {
    */
   globalControlsRef?: Ref<HTMLDivElement>;
   /** Background lane activity, marked on the Project option while Global is shown. */
-  projectActivity?: ProjectScopeActivity | null;
+  projectActivity?: ScopeActivity | null;
+  /** The global run's observed activity, marked on the Global option while Project is shown. */
+  globalActivity?: ScopeActivity | null;
   canRestartConversation: boolean;
   canEndSession: boolean;
   onRestartConversation: () => void;
@@ -151,6 +161,7 @@ export function HelpPanelHeader({
   onScopeChange,
   globalControlsRef,
   projectActivity = null,
+  globalActivity = null,
   canRestartConversation,
   canEndSession,
   onRestartConversation,
@@ -197,7 +208,7 @@ export function HelpPanelHeader({
         <SegmentedRadioGroup
           density="compact"
           aria-label="Assistant scope"
-          options={scopeOptions(scope, projectActivity)}
+          options={scopeOptions(scope, projectActivity, globalActivity)}
           value={scope}
           onChange={onScopeChange}
           testId="assistant-scope"

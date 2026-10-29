@@ -292,7 +292,11 @@ beforeEach(() => {
   // real window's event listeners.
   Object.defineProperty(window, "electron", {
     value: {
-      help: { getPinnedActionContext: vi.fn().mockResolvedValue({}) },
+      help: {
+        getPinnedActionContext: vi.fn().mockResolvedValue({}),
+        getGlobalAssistantState: () => new Promise(() => {}),
+        onGlobalAssistantChanged: () => () => {},
+      },
       app: { onViewRevealed: () => () => {} },
     },
     writable: true,

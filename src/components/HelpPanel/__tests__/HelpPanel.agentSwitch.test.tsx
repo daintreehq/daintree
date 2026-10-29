@@ -323,6 +323,8 @@ beforeEach(() => {
     value: {
       electron: {
         help: {
+          getGlobalAssistantState: () => new Promise(() => {}),
+          onGlobalAssistantChanged: () => () => {},
           getPinnedActionContext: vi.fn().mockResolvedValue({}),
         },
       },
@@ -614,7 +616,11 @@ describe("HelpPanel — agent self-exit debounce (/exit, #10989)", () => {
     Object.defineProperty(globalThis, "window", {
       value: {
         electron: {
-          help: { getPinnedActionContext: vi.fn().mockResolvedValue({}) },
+          help: {
+            getPinnedActionContext: vi.fn().mockResolvedValue({}),
+            getGlobalAssistantState: () => new Promise(() => {}),
+            onGlobalAssistantChanged: () => () => {},
+          },
           app: { onViewRevealed: () => () => {} },
         },
       },

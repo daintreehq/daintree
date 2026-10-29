@@ -156,6 +156,35 @@ describe("HelpPanelHeader", () => {
     expect(getByTestId("assistant-scope-project").getAttribute("aria-label")).toBeNull();
   });
 
+  it("marks the Global option with the global run's observed state only while Project is shown", () => {
+    const activity = summarizeLaneActivity([{ label: "Global assistant", agentState: "waiting" }]);
+    const { getByTestId, rerender } = renderHeader({ scope: "project", globalActivity: activity });
+    const global = getByTestId("assistant-scope-global");
+    expect(global.getAttribute("aria-label")).toBe("Global, Global assistant waiting");
+    expect(global.querySelector("svg")).not.toBeNull();
+    expect(getByTestId("assistant-scope-project").getAttribute("aria-label")).toBeNull();
+
+    rerender(
+      <HelpPanelHeader
+        agentState={null}
+        scope="global"
+        onScopeChange={vi.fn()}
+        globalActivity={activity}
+        canRestartConversation={false}
+        canEndSession={false}
+        onRestartConversation={vi.fn()}
+        onEndSession={vi.fn()}
+        onResumePastSession={vi.fn()}
+        onOpenDocs={vi.fn()}
+        autoLaunchEnabled={false}
+        onAutoLaunchEnabledChange={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    expect(getByTestId("assistant-scope-global").getAttribute("aria-label")).toBeNull();
+    expect(getByTestId("assistant-scope-global").querySelector("svg")).toBeNull();
+  });
+
   it("summarizes nothing when no lane reports a state", () => {
     expect(summarizeLaneActivity([{ label: "Session 1", agentState: null }])).toBeNull();
   });

@@ -654,6 +654,8 @@ beforeEach(() => {
     value: {
       electron: {
         help: {
+          getGlobalAssistantState: () => new Promise(() => {}),
+          onGlobalAssistantChanged: () => () => {},
           getFolderPath: mockGetFolderPath,
           markTerminal: mockMarkTerminal,
           provisionSession: mockProvisionSession,
