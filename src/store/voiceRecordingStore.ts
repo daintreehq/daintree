@@ -329,6 +329,18 @@ export interface VoiceScratchRefusal {
   id: number;
 }
 
+/**
+ * Spoken file references a dictation detected but couldn't resolve (#14983).
+ * Their words stay as spoken; the composer says which found nothing.
+ */
+export interface VoiceFileReferenceNote {
+  panelId: string;
+  /** The misses and failed lookups, in spoken order. */
+  references: ReadonlyArray<{ description: string; failed?: true }>;
+  /** Tells two notes saying the same apart. */
+  id: number;
+}
+
 /** A first Escape that would take dictated words back out of the draft, waiting on the second. */
 export interface DictationCancelConfirm {
   panelId: string;
@@ -353,6 +365,7 @@ interface VoiceRecordingState {
   idleStopWarning: boolean;
   dictationCancelConfirm: DictationCancelConfirm | null;
   scratchRefusal: VoiceScratchRefusal | null;
+  fileReferenceNote: VoiceFileReferenceNote | null;
   activeTarget: VoiceRecordingTarget | null;
   /**
    * Where the next session will record, from the press until it begins. A
@@ -407,6 +420,7 @@ interface VoiceRecordingState {
   setIdleStopWarning: (warning: boolean) => void;
   setDictationCancelConfirm: (confirm: DictationCancelConfirm | null) => void;
   setScratchRefusal: (refusal: VoiceScratchRefusal | null) => void;
+  setFileReferenceNote: (note: VoiceFileReferenceNote | null) => void;
   setErrorPanelId: (panelId: string | null) => void;
   setElapsedSeconds: (seconds: number) => void;
   /** `replace` sets the preview to `delta` instead of appending (a revised hypothesis). */
@@ -478,6 +492,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       idleStopWarning: false,
       dictationCancelConfirm: null,
       scratchRefusal: null,
+      fileReferenceNote: null,
       activeTarget: null,
       pendingTarget: null,
       lockedTarget: null,
@@ -516,6 +531,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       setIdleStopWarning: (idleStopWarning) => set({ idleStopWarning }),
       setDictationCancelConfirm: (dictationCancelConfirm) => set({ dictationCancelConfirm }),
       setScratchRefusal: (scratchRefusal) => set({ scratchRefusal }),
+      setFileReferenceNote: (fileReferenceNote) => set({ fileReferenceNote }),
 
       setErrorPanelId: (errorPanelId) => set({ errorPanelId }),
 
@@ -563,6 +579,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           errorPanelId: null,
           dictationCancelConfirm: null,
           scratchRefusal: null,
+          fileReferenceNote: null,
           elapsedSeconds: 0,
           micSignal: "pending",
           micDeviceLabel: null,
@@ -862,12 +879,17 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
         set((state) => {
           const scratchRefusal =
             state.scratchRefusal?.panelId === panelId ? null : state.scratchRefusal;
+          const fileReferenceNote =
+            state.fileReferenceNote?.panelId === panelId ? null : state.fileReferenceNote;
           if (!(panelId in state.panelBuffers)) {
-            return scratchRefusal === state.scratchRefusal ? state : { scratchRefusal };
+            return scratchRefusal === state.scratchRefusal &&
+              fileReferenceNote === state.fileReferenceNote
+              ? state
+              : { scratchRefusal, fileReferenceNote };
           }
           const next = { ...state.panelBuffers };
           delete next[panelId];
-          return { panelBuffers: next, scratchRefusal };
+          return { panelBuffers: next, scratchRefusal, fileReferenceNote };
         }),
 
       announce: (text) =>

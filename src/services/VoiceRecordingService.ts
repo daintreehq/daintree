@@ -146,7 +146,12 @@ import {
   recordScratchLanded,
   SCRATCH_REFUSAL_STATUS,
 } from "@/services/voiceScratchCommand";
-import { planFileReferenceEdits, planHeardSwaps } from "@/services/voiceFileReferences";
+import {
+  planFileReferenceEdits,
+  planHeardSwaps,
+  type SpokenFileReference,
+  unresolvedFileReferencesStatus,
+} from "@/services/voiceFileReferences";
 import { isSpokenSendable } from "@/services/voiceSpokenSend";
 import { findRewriteComposer, type RewriteSelection } from "@/services/voiceRewriteSelection";
 import {
@@ -848,6 +853,7 @@ class VoiceRecordingService {
   private scratchRefusalTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private scratchRefusalCount = 0;
   private static readonly SCRATCH_REFUSAL_NOTE_MS = 6_000;
+  private fileReferenceNoteCount = 0;
   // Whether the Escape being handled is the key repeating, so holding it
   // down can't press it a second time.
   private escapeRepeat = false;
@@ -1174,6 +1180,10 @@ class VoiceRecordingService {
           }
 
           const { panelId, projectId } = record;
+          // Words no file was found for stay as spoken; the composer says so,
+          // whether or not a hit beside them lands (#14983).
+          const unresolved = references.filter((reference) => !reference.path);
+          if (unresolved.length > 0) this.noteUnresolvedFileReferences(panelId, unresolved);
           const inputStore = useTerminalInputStore.getState();
           const draft = inputStore.getDraftInput(panelId, projectId);
           const edits = planFileReferenceEdits(record, transcriptId, references, draft);
@@ -1831,6 +1841,7 @@ class VoiceRecordingService {
     if (this.scratchRefusalTimeoutId !== null) clearTimeout(this.scratchRefusalTimeoutId);
     const refusal = { panelId: target.panelId, reason, id: ++this.scratchRefusalCount };
     const store = useVoiceRecordingStore.getState();
+    if (store.fileReferenceNote?.panelId === target.panelId) store.setFileReferenceNote(null);
     store.setScratchRefusal(refusal);
     // A reply box's own composer says it while Canopy is open: the app's
     // announcer goes unheard inside its dialog.
@@ -1843,6 +1854,32 @@ class VoiceRecordingService {
       const current = useVoiceRecordingStore.getState();
       if (current.scratchRefusal === refusal) current.setScratchRefusal(null);
     }, VoiceRecordingService.SCRATCH_REFUSAL_NOTE_MS);
+  }
+
+  private noteUnresolvedFileReferences(
+    panelId: string,
+    references: readonly SpokenFileReference[]
+  ): void {
+    const store = useVoiceRecordingStore.getState();
+    // One note on a composer's border at a time, the newer.
+    if (store.scratchRefusal?.panelId === panelId) this.clearScratchRefusal();
+    const note = {
+      panelId,
+      references: references.map(({ description, failed }) => ({
+        description,
+        ...(failed ? { failed } : {}),
+      })),
+      id: ++this.fileReferenceNoteCount,
+    };
+    store.setFileReferenceNote(note);
+    // As a scratch refusal: a reply box's own composer says it while Canopy
+    // is open. The session may have finished already, so its target is read
+    // only while it still names this composer.
+    const target = store.activeTarget;
+    const canopyReply = target?.panelId === panelId && isCanopyReplyTarget(target);
+    if (!canopyReply || !useCanopyStore.getState().isOpen) {
+      store.announce(unresolvedFileReferencesStatus(note.references));
+    }
   }
 
   private clearScratchRefusal(): void {
@@ -3233,16 +3270,18 @@ class VoiceRecordingService {
           finished = takeFinishedTranscript(stoppedTarget, stoppedSessionId);
         }
         if (shouldAnnounce && this.stopAnnounces) {
-          // A refusal still on the session's border goes with it: this would
+          // A note still on the session's border goes with it: this would
           // cut one just heard off before the announcer reads it.
-          const refusal = useVoiceRecordingStore.getState().scratchRefusal;
+          const { scratchRefusal: refusal, fileReferenceNote } = useVoiceRecordingStore.getState();
+          const note =
+            refusal && refusal.panelId === stoppedTarget?.panelId
+              ? SCRATCH_REFUSAL_STATUS[refusal.reason]
+              : fileReferenceNote && fileReferenceNote.panelId === stoppedTarget?.panelId
+                ? unresolvedFileReferencesStatus(fileReferenceNote.references)
+                : null;
           useVoiceRecordingStore
             .getState()
-            .announce(
-              refusal && refusal.panelId === stoppedTarget?.panelId
-                ? `${announcement} ${SCRATCH_REFUSAL_STATUS[refusal.reason]}`
-                : announcement
-            );
+            .announce(note ? `${announcement} ${note}` : announcement);
         }
       } else if (nextStatus === "idle") {
         useVoiceRecordingStore.getState().setStatus("idle");

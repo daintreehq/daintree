@@ -48,7 +48,11 @@ import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore, useVoiceRecordingStore } from "@/store";
-import type { VoiceRecordingTarget, VoiceScratchRefusal } from "@/store/voiceRecordingStore";
+import type {
+  VoiceFileReferenceNote,
+  VoiceRecordingTarget,
+  VoiceScratchRefusal,
+} from "@/store/voiceRecordingStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -164,6 +168,10 @@ import {
   SCRATCH_REFUSAL_STATUS,
   takeScratchLanded,
 } from "@/services/voiceScratchCommand";
+import {
+  unresolvedFileReferencesCaption,
+  unresolvedFileReferencesStatus,
+} from "@/services/voiceFileReferences";
 import { registerComposerSelectionSource } from "@/services/voiceRewriteSelection";
 import type { VoiceDraftSend } from "@/services/voiceDraftSend";
 import {
@@ -327,6 +335,15 @@ type ApplyEditorValue = (
 const EMPTY_STALE_KEYS: ReadonlySet<string> = new Set<string>();
 const NO_CONTEXT_CHIP_PROVIDERS: ReadonlyMap<string, ContextReferenceChipProvider> = new Map();
 const NO_CONTEXT_ITEMS: ContextProviderItem[] = [];
+// As long as a scratch refusal stays, counted from when the border shows it.
+const FILE_REFERENCE_NOTE_MS = 6_000;
+
+/** The voice note on a composer's border, which a send refused there retires. */
+function standingVoiceNote(voiceId: string): VoiceScratchRefusal | VoiceFileReferenceNote | null {
+  const { scratchRefusal, fileReferenceNote } = useVoiceRecordingStore.getState();
+  if (scratchRefusal?.panelId === voiceId) return scratchRefusal;
+  return fileReferenceNote?.panelId === voiceId ? fileReferenceNote : null;
+}
 
 /**
  * Whether the editor holds the caret, judged by the DOM rather than by
@@ -1185,7 +1202,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       refused: boolean;
       tooShort?: true;
       crossHostContext?: true;
-      retires?: VoiceScratchRefusal | null;
+      retires?: VoiceScratchRefusal | VoiceFileReferenceNote | null;
     } | null>(null);
     const dropSendRefusal = (dictationKeepsReply = false) =>
       setSendNote((note) =>
@@ -1206,8 +1223,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             accepted = false;
           }
           if (!accepted && submitAttemptRef.current === attempt) {
-            const standing = useVoiceRecordingStore.getState().scratchRefusal;
-            const retires = standing?.panelId === voiceId ? standing : null;
+            const retires = standingVoiceNote(voiceId);
             // A voice wait begun since this send went has taken the status over.
             setSendNote((note) =>
               dictated || note !== null ? { terminalId, refused: true, retires } : note
@@ -1220,8 +1236,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const noteSpokenSendTooShort = useCallback(() => {
       // An earlier send still on its way can't say over it that it wasn't sent.
       ++submitAttemptRef.current;
-      const standing = useVoiceRecordingStore.getState().scratchRefusal;
-      const retires = standing?.panelId === voiceId ? standing : null;
+      const retires = standingVoiceNote(voiceId);
       setSendNote({ terminalId, refused: true, tooShort: true, retires });
     }, [terminalId, voiceId]);
     const noteCrossHostContextRefusal = () => {
@@ -1435,13 +1450,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       : ownSendNote?.crossHostContext
         ? CROSS_HOST_CONTEXT_REFUSAL
         : SEND_HELD_STATUS;
-    // A refused send retires the scratch refusal it found on the border, never
-    // a newer one. One the send took outlives it: it says what went out.
-    const retiredScratch = isSendRefused ? (ownSendNote?.retires ?? null) : null;
+    // A refused send retires the voice note it found on the border, never a
+    // newer one. One the send took outlives it: it says what went out.
+    const retiredNote = isSendRefused ? (ownSendNote?.retires ?? null) : null;
     useEffect(() => {
       const voice = useVoiceRecordingStore.getState();
-      if (retiredScratch && voice.scratchRefusal === retiredScratch) voice.setScratchRefusal(null);
-    }, [retiredScratch]);
+      if (!retiredNote) return;
+      if (voice.scratchRefusal === retiredNote) voice.setScratchRefusal(null);
+      if (voice.fileReferenceNote === retiredNote) voice.setFileReferenceNote(null);
+    }, [retiredNote]);
     // A "scratch that" that removed nothing (#14973), on an empty draft too:
     // the placeholder doesn't say it.
     const scratchRefusal = useVoiceRecordingStore((s) =>
@@ -1449,19 +1466,42 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     );
     const showScratchRefusalCaption =
       scratchRefusal !== null && !isVoiceSubmitting && !isVoiceSubmitPresenting;
+    // Spoken file references that found no file (#14983). A spoken send hides
+    // the note while it waits, often longer than the note lasts, so it runs
+    // its time only while on the border.
+    const fileReferenceNote = useVoiceRecordingStore((s) =>
+      s.fileReferenceNote?.panelId === voiceId ? s.fileReferenceNote : null
+    );
+    const showFileReferenceCaption =
+      fileReferenceNote !== null && !isVoiceSubmitting && !isVoiceSubmitPresenting;
+    useEffect(() => {
+      if (!showFileReferenceCaption || !fileReferenceNote) return;
+      const timer = setTimeout(() => {
+        const voice = useVoiceRecordingStore.getState();
+        if (voice.fileReferenceNote === fileReferenceNote) voice.setFileReferenceNote(null);
+      }, FILE_REFERENCE_NOTE_MS);
+      return () => clearTimeout(timer);
+    }, [showFileReferenceCaption, fileReferenceNote]);
     const showSendRefusedCaption =
-      isSendRefused && !isVoiceSubmitting && !isVoiceSubmitPresenting && !showScratchRefusalCaption;
-    // A second refusal saying the same is still a change to read.
-    const scratchRefusalStatus = scratchRefusal
+      isSendRefused &&
+      !isVoiceSubmitting &&
+      !isVoiceSubmitPresenting &&
+      !showScratchRefusalCaption &&
+      !showFileReferenceCaption;
+    // A second note saying the same is still a change to read.
+    const voiceNoteStatus = scratchRefusal
       ? `${SCRATCH_REFUSAL_STATUS[scratchRefusal.reason]}${scratchRefusal.id % 2 ? "" : "\u200b"}`
-      : "";
+      : fileReferenceNote
+        ? `${unresolvedFileReferencesStatus(fileReferenceNote.references)}${fileReferenceNote.id % 2 ? "" : "\u200b"}`
+        : "";
     const showVoiceSessionCaption =
       voiceSessionStatus !== null &&
       (value.length > 0 || hasVoicePreview) &&
       !isVoiceSubmitting &&
       !isVoiceSubmitPresenting &&
       !showSendRefusedCaption &&
-      !showScratchRefusalCaption;
+      !showScratchRefusalCaption &&
+      !showFileReferenceCaption;
 
     const voiceSlotRef = useRef<HTMLSpanElement>(null);
     const voiceSlotFocusedRef = useRef(false);
@@ -1508,6 +1548,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       ) : showScratchRefusalCaption ? (
         <span aria-hidden="true" className="ml-auto mr-3 text-xs text-text-secondary">
           {SCRATCH_REFUSAL_CAPTION[scratchRefusal.reason]}
+        </span>
+      ) : showFileReferenceCaption ? (
+        <span aria-hidden="true" className="ml-auto mr-3 min-w-0 truncate text-xs text-text-secondary">
+          {unresolvedFileReferencesCaption(fileReferenceNote.references)}
         </span>
       ) : isSendRefused ? (
         <span aria-hidden="true" className="ml-auto mr-3 text-xs text-text-secondary">
@@ -2067,7 +2111,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             that says this for every other composer goes unheard. */}
         {voiceTarget && (
           <div role="status" aria-live="polite" className="sr-only">
-            {dictationCancelConfirm ? DICTATION_CANCEL_CONFIRM_PROMPT : scratchRefusalStatus}
+            {dictationCancelConfirm ? DICTATION_CANCEL_CONFIRM_PROMPT : voiceNoteStatus}
           </div>
         )}
         <div className="flex items-end gap-2">
@@ -2158,6 +2202,18 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 className={COMPOSER_BORDER_CAPTION_CLASS}
               >
                 {SCRATCH_REFUSAL_CAPTION[scratchRefusal.reason]}
+              </div>
+            )}
+            {showFileReferenceCaption && (
+              <div
+                aria-hidden="true"
+                data-file-reference-caption=""
+                className={cn(
+                  COMPOSER_BORDER_CAPTION_CLASS,
+                  "max-w-[calc(100%-1.25rem)] overflow-hidden text-ellipsis"
+                )}
+              >
+                {unresolvedFileReferencesCaption(fileReferenceNote.references)}
               </div>
             )}
             <AutocompleteMenu
@@ -2571,7 +2627,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             {/* The app's announcer outside this modal goes unheard in it. */}
             {isExpanded && (
               <div role="status" aria-live="polite" className="sr-only">
-                {scratchRefusalStatus}
+                {voiceNoteStatus}
               </div>
             )}
           </div>

@@ -3,6 +3,7 @@ import { formatAtFileToken } from "@/components/Terminal/hybridInputParsing";
 import { FILE_LINK_COMMAND_PATTERN } from "@shared/utils/voiceFileLinkCommands";
 import type { HeardAsRewriter } from "@shared/utils/voiceHeardAs";
 import type { VoiceTextEdit } from "@shared/utils/voiceUncertainWords";
+import { pluralNoun } from "@/lib/pluralize";
 
 /**
  * A file description main detected in a transcript, with the path it resolved
@@ -11,6 +12,49 @@ import type { VoiceTextEdit } from "@shared/utils/voiceUncertainWords";
 export interface SpokenFileReference {
   description: string;
   path: string | null;
+  /** The lookup threw, timed out or had nowhere to look, rather than finding nothing. */
+  failed?: true;
+}
+
+const descriptionList = new Intl.ListFormat("en", { style: "long", type: "conjunction" });
+
+// One clause per outcome, each description quoted once.
+function unresolvedClauses(
+  references: ReadonlyArray<Pick<SpokenFileReference, "description" | "failed">>
+): string[] {
+  const quoted = (failed: boolean) => [
+    ...new Set(
+      references
+        .filter((reference) => (reference.failed === true) === failed)
+        .map((reference) => `“${reference.description}”`)
+    ),
+  ];
+  const missing = quoted(false);
+  const failed = quoted(true);
+  const clauses: string[] = [];
+  if (missing.length > 0) {
+    clauses.push(
+      `No ${pluralNoun(missing.length, "file")} found for ${descriptionList.format(missing)}`
+    );
+  }
+  if (failed.length > 0) clauses.push(`File lookup failed for ${descriptionList.format(failed)}`);
+  return clauses;
+}
+
+/** What a dictation's unresolved file references say aloud (#14983). */
+export function unresolvedFileReferencesStatus(
+  references: ReadonlyArray<Pick<SpokenFileReference, "description" | "failed">>
+): string {
+  return unresolvedClauses(references)
+    .map((clause) => `${clause}.`)
+    .join(" ");
+}
+
+/** The same, on the composer's border. */
+export function unresolvedFileReferencesCaption(
+  references: ReadonlyArray<Pick<SpokenFileReference, "description" | "failed">>
+): string {
+  return unresolvedClauses(references).join(" · ");
 }
 
 export interface DraftEdit {

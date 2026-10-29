@@ -63,7 +63,7 @@ type CompletePayload = {
 type FileTokenPayload = {
   sessionId: string;
   transcriptId: string;
-  references: Array<{ description: string; path: string | null }>;
+  references: Array<{ description: string; path: string | null; failed?: true }>;
 };
 type BoundaryPayload = { sessionId: string; rawText: string | null };
 
@@ -1311,6 +1311,93 @@ describe("VoiceRecordingService — a resolved file reference stays dictated tex
     await service.stop("Dictation stopped.");
 
     expect(sentTexts()).toEqual(["check @src/router.ts please"]);
+  });
+});
+
+describe("VoiceRecordingService — a spoken file reference that finds no file (#14983)", () => {
+  const note = async () =>
+    (await import("@/store/voiceRecordingStore")).useVoiceRecordingStore.getState()
+      .fileReferenceNote;
+
+  it("leaves the words as spoken and says on their composer that no file was found", async () => {
+    const { draft, voiceStore } = await setup();
+
+    complete("Link to the old API.", "item-a", "t1");
+    fileReferences("t1", [{ description: "old API", path: null }]);
+
+    expect(draft()).toBe("Link to the old API.");
+    expect(await note()).toMatchObject({ panelId: PANEL, references: [{ description: "old API" }] });
+    expect(voiceStore.getState().announcement?.text).toBe("No file found for “old API”.");
+  });
+
+  it("swaps a hit and notes only the miss beside it", async () => {
+    const { draft, voiceStore } = await setup();
+
+    complete("Link to the router tests, then link to the router.", "item-a", "t1");
+    fileReferences("t1", [
+      { description: "router tests", path: null },
+      { description: "router", path: "src/router.ts" },
+    ]);
+
+    expect(draft()).toBe("Link to the router tests, then @src/router.ts.");
+    expect((await note())?.references).toEqual([{ description: "router tests" }]);
+    expect(voiceStore.getState().announcement?.text).toBe("No file found for “router tests”.");
+  });
+
+  it("says a lookup that failed apart from one that found nothing", async () => {
+    const { draft, voiceStore } = await setup();
+
+    complete("Link to the router, link to the store and link to the old API.", "item-a", "t1");
+    fileReferences("t1", [
+      { description: "router", path: null, failed: true },
+      { description: "store", path: null },
+      { description: "old API", path: null },
+    ]);
+
+    expect(draft()).toBe("Link to the router, link to the store and link to the old API.");
+    expect(voiceStore.getState().announcement?.text).toBe(
+      "No files found for “store” and “old API”. File lookup failed for “router”."
+    );
+  });
+
+  it("says nothing when every reference resolved, nor for another session's misses", async () => {
+    const { voiceStore } = await setup();
+
+    complete("Link to the router.", "item-a", "t1");
+    fileReferences("t1", [{ description: "router", path: "src/router.ts" }]);
+    fileReferences("t1", [{ description: "router", path: null }], "session-other");
+
+    expect(await note()).toBeNull();
+    expect(voiceStore.getState().announcement).toBeNull();
+  });
+
+  it("notes the final utterance's miss after its session stopped, and keeps it through the send", async () => {
+    const { service, setDraft } = await setup();
+
+    complete("Link to the old API.", "item-a", "t1");
+    await service.stop("Dictation stopped.", { skipRemoteStop: true });
+    fileReferences("t1", [{ description: "old API", path: null }]);
+    expect(await note()).toMatchObject({ panelId: PANEL });
+
+    setDraft("");
+    expect(await note()).toMatchObject({ panelId: PANEL });
+  });
+
+  it("drops the note when the next session begins, or its panel's buffer is cleared", async () => {
+    const { begin, voiceStore } = await setup();
+
+    complete("Link to the old API.", "item-a", "t1");
+    fileReferences("t1", [{ description: "old API", path: null }]);
+    begin("session-2");
+    expect(await note()).toBeNull();
+
+    begin(SESSION_ID);
+    complete("Link to the store.", "item-b", "t2");
+    fileReferences("t2", [{ description: "store", path: null }]);
+    voiceStore.getState().clearPanelBuffer("other-panel");
+    expect(await note()).not.toBeNull();
+    voiceStore.getState().clearPanelBuffer(PANEL);
+    expect(await note()).toBeNull();
   });
 });
 
