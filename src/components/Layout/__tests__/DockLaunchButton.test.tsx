@@ -67,7 +67,14 @@ vi.mock("@/store/recipeStore", () => ({
     (selector: (s: { recipes: typeof mockRecipes; currentProjectId: string | null }) => unknown) =>
       selector({ recipes: mockRecipes, currentProjectId: mockCurrentProjectId }),
     {
-      getState: () => ({ runRecipeWithResults: runRecipeWithResultsMock }),
+      getState: () => ({
+        runRecipeWithResults: runRecipeWithResultsMock,
+        // The fixtures are rows, not recipes: the store hands back one with steps.
+        getRecipeById: (id: string) => {
+          const row = mockRecipes.find((r) => r.id === id);
+          return row && { terminals: [], ...row };
+        },
+      }),
     }
   ),
 }));
@@ -1490,6 +1497,7 @@ describe("DockLaunchButton", () => {
         "r-shadowed",
         "/tmp",
         "wt-1",
+        undefined,
         undefined
       );
     });
@@ -1665,7 +1673,8 @@ describe("DockLaunchButton", () => {
       "r-1",
       "/path/to/wt",
       "wt-1",
-      recipeContext
+      recipeContext,
+      undefined
     );
     // Spawn results route through the failure notifier (which no-ops on success).
     await waitFor(() =>

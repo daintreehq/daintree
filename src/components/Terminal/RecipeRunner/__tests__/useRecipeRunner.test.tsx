@@ -93,6 +93,11 @@ vi.mock("@/utils/logger", () => ({
 
 import { useRecipeRunner } from "../useRecipeRunner";
 import { actionService } from "@/services/ActionService";
+import {
+  cancelRecipeRunConfirmations,
+  resolveRecipeRunConfirmation,
+  useRecipeRunConfirmStore,
+} from "@/store/recipeRunConfirmStore";
 
 const dispatchMock = vi.mocked(actionService.dispatch);
 
@@ -116,6 +121,7 @@ beforeEach(() => {
   logErrorMock.mockReset();
   dispatchMock.mockReset();
   dispatchMock.mockResolvedValue({ ok: true, result: undefined });
+  cancelRecipeRunConfirmations();
 });
 
 async function flush() {
@@ -442,20 +448,122 @@ describe("useRecipeRunner — retry failed terminals", () => {
   });
 });
 
-describe("useRecipeRunner — pre-flight unresolved variables", () => {
-  it("flags missing context for known variables in initialPrompt before spawning", async () => {
+describe("useRecipeRunner — missing variables hold the run (#15022)", () => {
+  function pending() {
+    return useRecipeRunConfirmStore.getState().current;
+  }
+
+  async function answer(approved: boolean) {
+    await act(async () => {
+      resolveRecipeRunConfirmation(pending()!.requestId, approved);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  const reviewRecipe = () =>
+    makeRecipe({
+      id: "r1",
+      name: "Review",
+      terminals: [
+        {
+          type: "claude-code",
+          env: {},
+          initialPrompt:
+            "review issue {{issue_number}} on branch {{branch_name}} for pr {{pr_number}}",
+        },
+      ],
+    });
+
+  it("asks about the missing built-ins and spawns nothing until the user decides", () => {
+    recipes.push(reviewRecipe());
+    runRecipeWithResultsMock.mockResolvedValue({ spawned: [], failed: [] });
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.handleRun("r1");
+    });
+
+    // Only pr_number is missing — issue_number=42 and branch_name="feature/test" are populated.
+    expect(pending()).toMatchObject({ recipeName: "Review", missing: ["pr_number"] });
+    expect(runRecipeWithResultsMock).not.toHaveBeenCalled();
+    expect(result.current.unresolvedVars).toEqual([]);
+  });
+
+  it("runs the recipe the user approved once they choose to run it empty", async () => {
+    recipes.push(reviewRecipe());
+    runRecipeWithResultsMock.mockResolvedValue({ spawned: [], failed: [] });
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+    act(() => {
+      result.current.handleRun("r1");
+    });
+    await answer(true);
+
+    expect(runRecipeWithResultsMock).toHaveBeenCalledTimes(1);
+    expect(runRecipeWithResultsMock).toHaveBeenCalledWith(
+      "r1",
+      "/tmp",
+      "wt-1",
+      expect.objectContaining({ issueNumber: 42 }),
+      {
+        spawnedBy: "recipe",
+        expectedRecipe: { id: "r1", terminalsDigest: expect.any(String) },
+      }
+    );
+  });
+
+  it("backing out spawns nothing, keeps the last failure banner and frees the runner", async () => {
+    recipes.push(
+      makeRecipe({
+        id: "r0",
+        name: "Flaky",
+        terminals: [
+          { type: "terminal", env: {} },
+          { type: "terminal", env: {} },
+        ],
+      }),
+      reviewRecipe()
+    );
+    runRecipeWithResultsMock.mockResolvedValueOnce({
+      spawned: [{ index: 0, terminalId: "t-0" }],
+      failed: [{ index: 1, error: "Panel limit reached" }],
+    });
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+    act(() => {
+      result.current.handleRun("r0");
+    });
+    await flush();
+    expect(result.current.spawnFailureSummary).not.toBeNull();
+
+    act(() => {
+      result.current.handleRun("r1");
+    });
+    await answer(false);
+
+    expect(runRecipeWithResultsMock).toHaveBeenCalledTimes(1);
+    expect(result.current.spawnFailureSummary?.recipeName).toBe("Flaky");
+
+    act(() => {
+      result.current.handleRun("r1");
+    });
+    expect(pending()).not.toBeNull();
+  });
+
+  it("launches a recipe with every value straight away, without asking", () => {
     recipes.push(
       makeRecipe({
         id: "r1",
-        name: "Issue",
-        terminals: [
-          {
-            type: "claude-code",
-            env: {},
-            initialPrompt:
-              "review issue {{issue_number}} on branch {{branch_name}} for pr {{pr_number}}",
-          },
-        ],
+        name: "Resolved",
+        terminals: [{ type: "claude-code", env: {}, initialPrompt: "fix {{issue_number}}" }],
       })
     );
     runRecipeWithResultsMock.mockResolvedValue({ spawned: [], failed: [] });
@@ -463,17 +571,71 @@ describe("useRecipeRunner — pre-flight unresolved variables", () => {
     const { result } = renderHook(() =>
       useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
     );
-
-    // Only pr_number is missing — issue_number=42 and branch_name="feature/test" are populated.
     act(() => {
       result.current.handleRun("r1");
     });
-    await flush();
 
-    expect(result.current.unresolvedVars).toEqual(["pr_number"]);
+    expect(pending()).toBeNull();
+    expect(runRecipeWithResultsMock).toHaveBeenCalledWith(
+      "r1",
+      "/tmp",
+      "wt-1",
+      expect.objectContaining({ issueNumber: 42 }),
+      { spawnedBy: "recipe" }
+    );
   });
 
-  it("does not flag {{vars}} in plain-terminal command (the store does not substitute it)", async () => {
+  it("a second Enter while the question is open doesn't stack another run", () => {
+    recipes.push(reviewRecipe());
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+    act(() => {
+      result.current.handleRun("r1");
+      result.current.handleRun("r1");
+    });
+
+    expect(useRecipeRunConfirmStore.getState().queue).toEqual([]);
+  });
+
+  it("withdraws the question when the worktree changes under it", async () => {
+    recipes.push(reviewRecipe());
+
+    const { result, rerender } = renderHook(
+      ({ wt }: { wt: string }) => useRecipeRunner({ activeWorktreeId: wt, defaultCwd: "/tmp" }),
+      { initialProps: { wt: "wt-1" } }
+    );
+    act(() => {
+      result.current.handleRun("r1");
+    });
+
+    rerender({ wt: "wt-2" });
+    await flush();
+
+    expect(pending()).toBeNull();
+    expect(runRecipeWithResultsMock).not.toHaveBeenCalled();
+    act(() => {
+      result.current.handleRun("r1");
+    });
+    expect(pending()).not.toBeNull();
+  });
+
+  it("withdraws the question when the runner unmounts", () => {
+    recipes.push(reviewRecipe());
+
+    const { result, unmount } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+    act(() => {
+      result.current.handleRun("r1");
+    });
+    unmount();
+
+    expect(pending()).toBeNull();
+  });
+
+  it("does not ask about {{vars}} in a plain-terminal command (the store does not substitute it)", async () => {
     recipes.push(
       makeRecipe({
         id: "r1",
@@ -495,17 +657,19 @@ describe("useRecipeRunner — pre-flight unresolved variables", () => {
     });
     await flush();
 
+    expect(pending()).toBeNull();
+    expect(runRecipeWithResultsMock).toHaveBeenCalledTimes(1);
     expect(result.current.unresolvedVars).toEqual([]);
   });
 
-  it("dismisses each banner independently", async () => {
+  it("asks again before retrying failed terminals whose prompts still miss a value", async () => {
     recipes.push(
       makeRecipe({
         id: "r1",
-        name: "Bad",
+        name: "Pair",
         terminals: [
-          { type: "claude-code", env: {}, initialPrompt: "echo {{pr_number}}" },
           { type: "terminal", env: {} },
+          { type: "claude-code", env: {}, initialPrompt: "review {{pr_number}}" },
         ],
       })
     );
@@ -517,13 +681,74 @@ describe("useRecipeRunner — pre-flight unresolved variables", () => {
     const { result } = renderHook(() =>
       useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
     );
-
     act(() => {
       result.current.handleRun("r1");
     });
+    await answer(true);
+    await flush();
+    expect(result.current.spawnFailureSummary).not.toBeNull();
+
+    act(() => {
+      result.current.handleRetryFailed();
+    });
+    expect(pending()?.missing).toEqual(["pr_number"]);
+    expect(runRecipeWithResultsMock).toHaveBeenCalledTimes(1);
+
+    await answer(true);
+    expect(runRecipeWithResultsMock).toHaveBeenLastCalledWith("r1", "/tmp", "wt-1", expect.anything(), {
+      spawnedBy: "recipe",
+      terminalIndices: [1],
+      expectedRecipe: { id: "r1", terminalsDigest: expect.any(String) },
+    });
+  });
+});
+
+describe("useRecipeRunner — plugin variables", () => {
+  const pluginRecipe = () =>
+    makeRecipe({
+      id: "acme.ledger.review",
+      name: "Ledger review",
+      origin: { kind: "plugin", pluginId: "acme.ledger", contributionId: "review" },
+      terminals: [
+        { type: "claude-code", env: {}, initialPrompt: "review {{plugin.notes}}" },
+        { type: "terminal", env: {} },
+      ],
+    });
+
+  it("launches a plugin recipe's empty variables without asking, then names them", async () => {
+    recipes.push(pluginRecipe());
+    runRecipeWithResultsMock.mockResolvedValue({ spawned: [], failed: [] });
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+    act(() => {
+      result.current.handleRun("acme.ledger.review");
+    });
     await flush();
 
-    expect(result.current.unresolvedVars).toEqual(["pr_number"]);
+    expect(useRecipeRunConfirmStore.getState().current).toBeNull();
+    expect(runRecipeWithResultsMock).toHaveBeenCalledTimes(1);
+    expect(result.current.unresolvedVars).toEqual(["plugin.notes"]);
+  });
+
+  it("dismisses each banner independently", async () => {
+    recipes.push(pluginRecipe());
+    runRecipeWithResultsMock.mockResolvedValue({
+      spawned: [{ index: 0, terminalId: "t-0" }],
+      failed: [{ index: 1, error: "Panel limit reached" }],
+    });
+
+    const { result } = renderHook(() =>
+      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
+    );
+
+    act(() => {
+      result.current.handleRun("acme.ledger.review");
+    });
+    await flush();
+
+    expect(result.current.unresolvedVars).toEqual(["plugin.notes"]);
     expect(result.current.spawnFailureSummary).not.toBeNull();
 
     act(() => {

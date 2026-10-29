@@ -24,6 +24,7 @@ import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { StopProjectConfirmDialog } from "./components/Project/StopProjectConfirmDialog";
 import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
+import { cancelRecipeRunConfirmations } from "@/store/recipeRunConfirmStore";
 import { usePilotStore } from "@/store/pilotStore";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useScratchStore } from "@/store/scratchStore";
@@ -61,6 +62,7 @@ import {
   LazyMcpConfirmDialog,
   LazyPluginConfirmDialog,
   LazyLayoutApplyConfirmDialog,
+  LazyRecipeRunConfirmDialog,
   LazyPluginArchiveInstallConfirmDialog,
   LazyPluginMcpConfirmDialog,
   LazyPluginQuickPickDialog,
@@ -831,6 +833,19 @@ export function ModalHostLayer({
         <ErrorBoundary variant="component" componentName="LayoutApplyConfirmDialog">
           <Suspense fallback={null}>
             <LazyLayoutApplyConfirmDialog />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+      {isStateLoaded && (
+        <ErrorBoundary
+          variant="component"
+          componentName="RecipeRunConfirmDialog"
+          // A held run waits on this dialog; one that can't render must not
+          // leave it, and the runner's guard, pending for good.
+          onError={() => cancelRecipeRunConfirmations()}
+        >
+          <Suspense fallback={null}>
+            <LazyRecipeRunConfirmDialog />
           </Suspense>
         </ErrorBoundary>
       )}

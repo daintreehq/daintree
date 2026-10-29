@@ -1,9 +1,11 @@
 import { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import {
   useRecipeStore,
+  type RecipeRunOptions,
   type RecipeSpawnFailure,
   type RecipeSpawnResults,
 } from "@/store/recipeStore";
+import { requestRecipeRunConfirmation } from "@/store/recipeRunConfirmStore";
 import { pluginOnlyCopyRefusal, recipeUsesPluginOnlyFeatures } from "@/utils/pluginRecipeCopy";
 import { notify } from "@/lib/notify";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
@@ -11,11 +13,9 @@ import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import {
-  NO_PLUGIN_VARIABLE_VALUES,
-  detectUnresolvedVariables,
-  type RecipeContext,
-} from "@/utils/recipeVariables";
+import type { RecipeContext } from "@/utils/recipeVariables";
+import { missingRecipeVariables } from "@/utils/recipeAgentStep";
+import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { getAgentConfig } from "@/config/agents";
 import { recipePanelStepName } from "@/components/Terminal/utils/recipeUtils";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
@@ -65,6 +65,7 @@ export interface UseRecipeRunnerResult {
   focusedItemId: string | undefined;
   suggestions: RunCommand[];
   spawnFailureSummary: SpawnFailureSummary | null;
+  /** A plugin recipe's own variables the last run launched empty: no plugin supplied them. */
   unresolvedVars: string[];
   isRetryingFailed: boolean;
   handleRun: (recipeId: string) => void;
@@ -104,28 +105,6 @@ function getTerminalDisplayName(terminal: RecipeTerminal, index: number): string
   return `Terminal ${index + 1}`;
 }
 
-// Only scans the prompts — initialPrompt and a plugin step's systemPrompt are
-// the fields the store passes through replaceRecipeVariables. terminal.command,
-// terminal.devCommand, and terminal.args are forwarded raw, so flagging
-// {{var}} in them would mislead the user into thinking the substitution was
-// expected to happen.
-function collectUnresolvedVars(recipe: TerminalRecipe, baseContext: RecipeContext): string[] {
-  // A plugin recipe started from here has no values for its own variables.
-  const context: RecipeContext = isPluginRecipe(recipe)
-    ? { ...baseContext, pluginVariables: NO_PLUGIN_VARIABLE_VALUES }
-    : baseContext;
-  const seen = new Set<string>();
-  for (const terminal of recipe.terminals) {
-    for (const text of [terminal.initialPrompt, terminal.systemPrompt]) {
-      if (!text) continue;
-      for (const name of detectUnresolvedVariables(text, context)) {
-        seen.add(name);
-      }
-    }
-  }
-  return Array.from(seen);
-}
-
 export function useRecipeRunner({
   activeWorktreeId,
   defaultCwd,
@@ -151,6 +130,9 @@ export function useRecipeRunner({
   const isSpawningSuggestionRef = useRef(false);
   const isConfirmingDeleteRef = useRef(false);
   const lastRunRecipeIdRef = useRef<string | null>(null);
+  // The run waiting on the missing-variables confirm, so a worktree switch or
+  // unmount can withdraw a question about a target that's no longer here.
+  const pendingConfirmRef = useRef<AbortController | null>(null);
   // Generation counter: every run/retry captures the current value, then any
   // resolved async work checks the latest value before calling setState. If a
   // worktree switch (or a new run) bumps the counter while the old promise is
@@ -226,6 +208,7 @@ export function useRecipeRunner({
     setDeleteError(null);
     lastRunRecipeIdRef.current = null;
     runGenerationRef.current += 1;
+    return () => pendingConfirmRef.current?.abort();
   }, [activeWorktreeId]);
 
   const focusedItemId = useMemo(() => {
@@ -286,6 +269,39 @@ export function useRecipeRunner({
     []
   );
 
+  // Holds a run whose prompts would send built-in variables blank until the
+  // user decides (#15022). With nothing missing, `proceed` runs synchronously,
+  // so a recipe with every value launches exactly as it always has.
+  const gateOnMissingVariables = useCallback(
+    (
+      recipe: TerminalRecipe,
+      missing: string[],
+      runId: number,
+      proceed: (expectedRecipe?: RecipeRunOptions["expectedRecipe"]) => void
+    ) => {
+      if (missing.length === 0) {
+        proceed();
+        return;
+      }
+      const controller = new AbortController();
+      pendingConfirmRef.current = controller;
+      void requestRecipeRunConfirmation(
+        { recipeName: recipe.name, missing },
+        controller.signal
+      ).then((approved) => {
+        if (pendingConfirmRef.current === controller) pendingConfirmRef.current = null;
+        if (!approved || runGenerationRef.current !== runId) {
+          isRunningRef.current = false;
+          return;
+        }
+        // What the user approved is what starts: a recipe edited while the
+        // dialog was open is refused rather than launched as its new self.
+        proceed({ id: recipe.id, terminalsDigest: recipeApprovalDigest(recipe.terminals) });
+      });
+    },
+    []
+  );
+
   const handleRun = useCallback(
     (recipeId: string) => {
       if (!defaultCwd) return;
@@ -296,41 +312,46 @@ export function useRecipeRunner({
 
       const cwd = defaultCwd;
       const context = buildContext(cwd);
+      const missing = missingRecipeVariables(recipe, context);
 
-      // Clear any leftover failure banner from a prior run — the new run is
-      // the user's current intent and the old retry button must not target a
-      // recipe that's no longer relevant.
-      setSpawnFailureSummary(null);
-      // Pre-flight: detect unresolved variables across all terminals so the user
-      // sees a single aggregated warning rather than discovering them per-spawn.
-      setUnresolvedVars(collectUnresolvedVars(recipe, context));
-
+      // Taken before the confirm, so a second Enter can't queue another run
+      // behind the dialog.
       isRunningRef.current = true;
-      lastRunRecipeIdRef.current = recipeId;
       const runId = ++runGenerationRef.current;
 
-      void (async () => {
-        try {
-          const results = await runRecipeWithResults(
-            recipeId,
-            cwd,
-            activeWorktreeId ?? undefined,
-            context,
-            { spawnedBy: "recipe" }
-          );
-          if (runGenerationRef.current === runId) {
-            setSpawnFailureSummary(summarizeFailures(recipe, results));
+      gateOnMissingVariables(recipe, missing.builtIn, runId, (expectedRecipe) => {
+        // Clear any leftover failure banner from a prior run — the new run is
+        // the user's current intent and the old retry button must not target a
+        // recipe that's no longer relevant. Backing out of the confirm keeps it.
+        setSpawnFailureSummary(null);
+        // A plugin's own variables only get values when the plugin runs the
+        // recipe, so started from here they launch empty without asking.
+        setUnresolvedVars(missing.plugin);
+        lastRunRecipeIdRef.current = recipeId;
+
+        void (async () => {
+          try {
+            const results = await runRecipeWithResults(
+              recipeId,
+              cwd,
+              activeWorktreeId ?? undefined,
+              context,
+              { spawnedBy: "recipe", ...(expectedRecipe && { expectedRecipe }) }
+            );
+            if (runGenerationRef.current === runId) {
+              setSpawnFailureSummary(summarizeFailures(recipe, results));
+            }
+          } catch (error) {
+            // The store throws synchronously when the recipe was deleted between
+            // the local lookup and the store call. Don't let this become an
+            // unhandled rejection (Electron 41 crashes utility processes on
+            // unhandled rejections).
+            logError("Recipe run failed", error);
+          } finally {
+            isRunningRef.current = false;
           }
-        } catch (error) {
-          // The store throws synchronously when the recipe was deleted between
-          // the local lookup and the store call. Don't let this become an
-          // unhandled rejection (Electron 41 crashes utility processes on
-          // unhandled rejections).
-          logError("Recipe run failed", error);
-        } finally {
-          isRunningRef.current = false;
-        }
-      })();
+        })();
+      });
     },
     [
       defaultCwd,
@@ -339,6 +360,7 @@ export function useRecipeRunner({
       getRecipeById,
       buildContext,
       summarizeFailures,
+      gateOnMissingVariables,
     ]
   );
 
@@ -355,47 +377,51 @@ export function useRecipeRunner({
     const indices = summary.failures.map((f) => f.index);
     const cwd = defaultCwd;
     const context = buildContext(cwd);
+    const missing = missingRecipeVariables(recipe, context, indices);
 
     isRunningRef.current = true;
-    setIsRetryingFailed(true);
     const runId = ++runGenerationRef.current;
 
-    void (async () => {
-      try {
-        const results = await runRecipeWithResults(
-          recipeId,
-          cwd,
-          activeWorktreeId ?? undefined,
-          context,
-          { spawnedBy: "recipe", terminalIndices: indices }
-        );
-        if (runGenerationRef.current !== runId) return;
-        // Declining the confirm opened nothing, so the outstanding failures
-        // are unchanged — keep the banner as it was rather than re-reporting.
-        if (allDeclined(results)) return;
-        if (results.failed.length === 0) {
-          setSpawnFailureSummary(null);
-        } else {
-          // Carry forward the original total so the banner copy stays anchored
-          // to the original run ("Started X of Y") rather than the retry subset.
-          setSpawnFailureSummary({
-            recipeName: recipe.name,
-            totalCount: summary.totalCount,
-            failures: results.failed.map((f) => ({
-              ...f,
-              displayName: recipe.terminals[f.index]
-                ? getTerminalDisplayName(recipe.terminals[f.index]!, f.index)
-                : `Terminal ${f.index + 1}`,
-            })),
-          });
+    // A retry is another launch: the worktree may have lost a value since.
+    gateOnMissingVariables(recipe, missing.builtIn, runId, (expectedRecipe) => {
+      setIsRetryingFailed(true);
+      void (async () => {
+        try {
+          const results = await runRecipeWithResults(
+            recipeId,
+            cwd,
+            activeWorktreeId ?? undefined,
+            context,
+            { spawnedBy: "recipe", terminalIndices: indices, ...(expectedRecipe && { expectedRecipe }) }
+          );
+          if (runGenerationRef.current !== runId) return;
+          // Declining the confirm opened nothing, so the outstanding failures
+          // are unchanged — keep the banner as it was rather than re-reporting.
+          if (allDeclined(results)) return;
+          if (results.failed.length === 0) {
+            setSpawnFailureSummary(null);
+          } else {
+            // Carry forward the original total so the banner copy stays anchored
+            // to the original run ("Started X of Y") rather than the retry subset.
+            setSpawnFailureSummary({
+              recipeName: recipe.name,
+              totalCount: summary.totalCount,
+              failures: results.failed.map((f) => ({
+                ...f,
+                displayName: recipe.terminals[f.index]
+                  ? getTerminalDisplayName(recipe.terminals[f.index]!, f.index)
+                  : `Terminal ${f.index + 1}`,
+              })),
+            });
+          }
+        } catch (error) {
+          logError("Recipe retry failed", error);
+        } finally {
+          isRunningRef.current = false;
+          setIsRetryingFailed(false);
         }
-      } catch (error) {
-        logError("Recipe retry failed", error);
-      } finally {
-        isRunningRef.current = false;
-        setIsRetryingFailed(false);
-      }
-    })();
+      })();
+    });
   }, [
     spawnFailureSummary,
     defaultCwd,
@@ -403,6 +429,7 @@ export function useRecipeRunner({
     runRecipeWithResults,
     getRecipeById,
     buildContext,
+    gateOnMissingVariables,
   ]);
 
   const dismissSpawnFailures = useCallback(() => {
