@@ -800,6 +800,25 @@ describe("PluginSettingsForm", () => {
     expect(within(rowOf("P")).getByText("This project")).toBeTruthy();
   });
 
+  it("keeps an installed plugin's user-scope secrets badged for every project", async () => {
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([
+          { id: "token", type: "secret", label: "Token" },
+          { id: "legacy", type: "string", secret: true, label: "Legacy" },
+        ])}
+        viewScope="user"
+      />
+    );
+    // Only a project-scope secret is moved off the repository into the local
+    // file; a user-scope one is the installed plugin's, shared by every project.
+    const rowOf = (label: string) =>
+      screen.getByLabelText(label).closest<HTMLElement>("[data-settings-row]")!;
+    await screen.findByLabelText("Token");
+    expect(within(rowOf("Token")).getByText("All projects")).toBeTruthy();
+    expect(within(rowOf("Legacy")).getByText("All projects")).toBeTruthy();
+  });
+
   it("shows an unstored required field as unset, with its default as the way to set it", async () => {
     render(
       <PluginSettingsForm
