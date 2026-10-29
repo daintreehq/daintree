@@ -57,12 +57,12 @@ const ACCENT_FILL_VARIANTS = new Set(["default", "glow", "vibrant"]);
 // refactor stopped matching and the contract went blind. Lower them deliberately, in the
 // same commit that removes the footers.
 const MIN_FOOTERS_INSPECTED = 24;
-// 41, down from 53: the file close guard, the create-folder, update-cwd and
+// 39, down from 53: the file close guard, the create-folder, update-cwd and
 // command picker error dialogs, then the recipe editor, the recipe conflict
 // dialog and the shared recipe import dialog (which replaced two copies) moved
 // onto the footer's action props, which this walk doesn't count as hand-written
-// buttons.
-const MIN_BUTTONS_INSPECTED = 41;
+// buttons; and the command builder went with the command picker (#15309).
+const MIN_BUTTONS_INSPECTED = 39;
 
 function tsxFiles(dir: string, found: string[] = []): string[] {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
