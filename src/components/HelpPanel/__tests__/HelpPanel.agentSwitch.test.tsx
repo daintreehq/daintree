@@ -409,21 +409,26 @@ describe("HelpPanel agent switch (#8353, #13345)", () => {
 
   // The conversation being left is the running agent's: only its store decides
   // whether "Resume a past session…" can bring it back (#14979).
+  // `claude-code` stands in for an agent the picker doesn't list: this suite's
+  // registry knows it, the picker's union doesn't.
   it.each([
+    { from: "claude", to: "claude-code", listed: true },
     { from: "codex", to: "claude-code", listed: true },
+    { from: "claude-code", to: "claude", listed: false },
     { from: "claude-code", to: "codex", listed: false },
   ])("says what holds for the conversation $from leaves behind", async ({ from, to, listed }) => {
     bindTerminal(from, "working");
     helpPanelState.preferredAgentId = from;
-    const { rerender } = render(<HelpPanel width={380} />);
+    const { rerender, getByTestId } = render(<HelpPanel width={380} />);
 
     await act(async () => {
       pickInSettings(to);
       rerender(<HelpPanel width={380} />);
     });
 
-    const description =
-      document.querySelector('[data-testid="dialog-description"]')?.textContent ?? "";
+    expect(controllerSpies.selectAgent).not.toHaveBeenCalled();
+    const description = getByTestId("dialog-description").textContent ?? "";
+    expect(description).toMatch(/^The current agent stops /);
     expect(description).not.toMatch(/discard|delet/i);
     expect(/stays in past sessions/.test(description)).toBe(listed);
   });

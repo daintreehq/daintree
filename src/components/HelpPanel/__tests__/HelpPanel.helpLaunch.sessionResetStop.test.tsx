@@ -714,12 +714,13 @@ const LANE_TABS = '[role="tab"]:not([data-slot="global"])';
  * calling it discarded (#14979).
  */
 function expectStaysInPastSessions(description: string | null) {
-  expect(description).toMatch(/stays in past sessions/);
+  expect(description).toMatch(/^The (current )?agent stops .+\. .*stays in past sessions\.$/);
   expect(description).not.toMatch(/discard|delet/i);
 }
 
 /** An agent the picker doesn't list: its confirm says only what ends. */
 function expectNoPastSessionsNote(description: string | null) {
+  expect(description).toMatch(/^The (current )?agent stops /);
   expect(description).not.toMatch(/past session|discard|delet/i);
 }
 
@@ -1557,16 +1558,26 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       expect(front).not.toHaveBeenCalled();
     });
 
-    it("says what holds for the restarted lane's agent, not the one on screen", () => {
-      setupTwoLanes({ backgroundAgentState: "working" });
-      helpPanelState.sessions[1]!.agentId = "gemini";
+    it.each([
+      { front: "claude", back: "gemini", listed: false },
+      { front: "gemini", back: "codex", listed: true },
+    ])(
+      "says what holds for the restarted lane's agent ($back), not the one on screen ($front)",
+      ({ front, back, listed }) => {
+        setupTwoLanes({ backgroundAgentState: "working" });
+        helpPanelState.agentId = front;
+        helpPanelState.sessions[0]!.agentId = front;
+        helpPanelState.sessions[1]!.agentId = back;
 
-      const { container, getByTestId } = render(<HelpPanel width={380} />);
-      fireEvent.click(tabMenuItem(container, 1, "Restart conversation")!);
+        const { container, getByTestId } = render(<HelpPanel width={380} />);
+        fireEvent.click(tabMenuItem(container, 1, "Restart conversation")!);
 
-      expect(getByTestId("dialog-title").textContent).toBe("Restart this conversation?");
-      expectNoPastSessionsNote(getByTestId("dialog-description").textContent);
-    });
+        expect(getByTestId("dialog-title").textContent).toBe("Restart this conversation?");
+        const description = getByTestId("dialog-description").textContent;
+        if (listed) expectStaysInPastSessions(description);
+        else expectNoPastSessionsNote(description);
+      }
+    );
 
     it("confirms for a touched background lane even while it is idle and the front is untouched", () => {
       setupTwoLanes({ backgroundTouched: true });

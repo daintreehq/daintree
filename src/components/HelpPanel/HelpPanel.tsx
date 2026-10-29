@@ -39,7 +39,7 @@ import {
 } from "@/lib/helpPanelRuntimeGate";
 import { useHelpSessionController } from "@/controllers/helpSessionControllerRegistry";
 import { HelpPanelBanners } from "./HelpPanelBanners";
-import { withPastSessionsNote } from "./pastSessionsNote";
+import { usePastSessionsNote } from "./pastSessionsNote";
 import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
 import { HelpAssistantAgentChooser } from "./HelpAssistantAgentChooser";
 import { HelpLaunchingState } from "./HelpLaunchingState";
@@ -808,6 +808,27 @@ export function HelpPanel({
   const pendingCloseAgentId = useHelpPanelStore((s) =>
     pendingCloseSlot === null ? null : selectSlot(s, pendingCloseSlot).agentId
   );
+  const restartDescription = usePastSessionsNote(
+    pendingRestartSlot !== null,
+    "The agent stops and this tab starts a new conversation",
+    pendingRestartAgentId
+  );
+  const endSessionDescription = usePastSessionsNote(
+    showEndSessionConfirm,
+    "The agent stops and the next start opens a new conversation",
+    agentId
+  );
+  const closeDescription = usePastSessionsNote(
+    pendingCloseSlot !== null,
+    "The agent stops and this tab closes",
+    pendingCloseAgentId
+  );
+  // The conversation being left is the running agent's, not the pick's.
+  const agentSwitchDescription = usePastSessionsNote(
+    showAgentSwitchConfirm,
+    "The current agent stops and the new one starts in this tab",
+    agentId
+  );
 
   // Shows the global run, whichever it is; never starts one.
   // The focus request outstanding when Global was picked on the switch: the
@@ -1505,10 +1526,7 @@ export function HelpPanel({
         // the thing being confirmed is a loss, and it collided with the strip's own
         // new-session control.
         title="Restart this conversation?"
-        description={withPastSessionsNote(
-          "The agent stops and this tab starts a new conversation",
-          pendingRestartAgentId
-        )}
+        description={restartDescription}
         confirmLabel="Restart conversation"
         onConfirm={handleConfirmRestartSlot}
         onClose={handleCancelRestartSlot}
@@ -1520,10 +1538,7 @@ export function HelpPanel({
       <ConfirmDialog
         isOpen={showEndSessionConfirm}
         title="Stop assistant?"
-        description={withPastSessionsNote(
-          "The agent stops and the next start opens a new conversation",
-          agentId
-        )}
+        description={endSessionDescription}
         confirmLabel="Stop assistant"
         onConfirm={handleConfirmEndSession}
         onClose={handleCancelEndSession}
@@ -1532,10 +1547,7 @@ export function HelpPanel({
       <ConfirmDialog
         isOpen={pendingCloseSlot !== null}
         title={`Close ${pendingCloseLabel}?`}
-        description={withPastSessionsNote(
-          "The agent stops and this tab closes",
-          pendingCloseAgentId
-        )}
+        description={closeDescription}
         confirmLabel="Close session"
         onConfirm={handleConfirmCloseSlot}
         onClose={handleCancelCloseSlot}
@@ -1553,11 +1565,7 @@ export function HelpPanel({
           agentSwitchRequest?.agentId ??
           "agent"
         }?`}
-        // The conversation being left is the running agent's, not the pick's.
-        description={withPastSessionsNote(
-          "The current agent stops and the new one starts in this tab",
-          agentId
-        )}
+        description={agentSwitchDescription}
         confirmLabel="Switch agent"
         onConfirm={handleConfirmAgentSwitch}
         onClose={handleCancelAgentSwitch}
