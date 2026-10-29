@@ -87,27 +87,29 @@ vi.mock("@/hooks/useAnimatedPresence", async () => {
       onAnimateOut?: () => void;
     }) => {
       const wasOpen = useRef(isOpen);
-      const [closing, setClosing] = useState(false);
+      // Rendered from opening until a deferred close finishes, as the real
+      // hook keeps it, so an exit never unmounts the dialog early.
+      const [rendered, setRendered] = useState(isOpen);
+      if (isOpen && !rendered) setRendered(true);
       useEffect(() => {
         if (isOpen) {
           // Reopened mid-exit: the close that was under way never finishes.
           presence.finish = null;
-          setClosing(false);
         } else if (wasOpen.current) {
           if (presence.defer) {
-            setClosing(true);
             presence.finish = () => {
               presence.finish = null;
-              setClosing(false);
+              setRendered(false);
               onAnimateOut?.();
             };
           } else {
+            setRendered(false);
             onAnimateOut?.();
           }
         }
         wasOpen.current = isOpen;
       }, [isOpen, onAnimateOut]);
-      return { isVisible: isOpen, shouldRender: isOpen || closing };
+      return { isVisible: isOpen, shouldRender: isOpen || (presence.defer && rendered) };
     },
   };
 });
@@ -1016,16 +1018,18 @@ describe("McpConfirmDialog", () => {
       act(() => {
         fireEvent.click(screen.getByRole("button", { name: "Review request" }));
       });
-      act(() => {
-        fireEvent.click(screen.getByRole("button", { name: "Push" }));
-      });
-      await expect(pending).resolves.toEqual({ decision: "approved" });
+      // Whatever the abandoned exit would have done, it doesn't.
       await act(async () => {
         presence.finish?.();
         await Promise.resolve();
       });
 
       expect(requesterMocks.show).not.toHaveBeenCalled();
+      expect(screen.queryByRole("region", { name: "Approval request" })).toBeNull();
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Push" }));
+      });
+      await expect(pending).resolves.toEqual({ decision: "approved" });
     });
 
     it("still animates out when an identified request is the last one answered", async () => {
@@ -1033,12 +1037,15 @@ describe("McpConfirmDialog", () => {
       const pending = enqueue({ danger: "safe", actionTitle: "Push", requester: PANE });
       render(<McpConfirmDialog />);
       const surface = () => document.querySelector('[role="dialog"], [role="alertdialog"]');
+      const opened = surface();
 
       act(() => {
         fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
       });
       await expect(pending).resolves.toEqual({ decision: "rejected" });
-      expect(surface()).not.toBeNull();
+      // The same surface, exiting, not a fresh one.
+      expect(opened).not.toBeNull();
+      expect(surface()).toBe(opened);
 
       act(() => {
         presence.finish?.();

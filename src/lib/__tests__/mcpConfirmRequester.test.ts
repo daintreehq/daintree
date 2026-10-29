@@ -1,23 +1,18 @@
 // @vitest-environment jsdom
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  panelsById: {} as Record<string, unknown>,
   worktrees: new Map<string, unknown>(),
   viewStoreThrows: false,
   navigate: vi.fn(async (_context: unknown) => true),
   suppressResizes: vi.fn(),
 }));
 
-vi.mock("@/store/panelStore", () => {
-  const getState = () => ({ panelsById: mocks.panelsById });
-  return {
-    usePanelStore: Object.assign(
-      (selector: (state: ReturnType<typeof getState>) => unknown) => selector(getState()),
-      { getState }
-    ),
-  };
+// A real store holding only the roster, so the live hook's subscriptions are exercised.
+vi.mock("@/store/panelStore", async () => {
+  const { create } = await import("zustand");
+  return { usePanelStore: create(() => ({ panelsById: {} as Record<string, unknown> })) };
 });
 
 vi.mock("@/lib/sidebarToggle", () => ({ suppressSidebarResizes: mocks.suppressResizes }));
@@ -39,12 +34,17 @@ import {
   useMcpRequesterLiveState,
 } from "../mcpConfirmRequester";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { usePanelStore } from "@/store/panelStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useFocusStore } from "@/store/focusStore";
 import type { McpConfirmRequester } from "@/store/mcpConfirmStore";
 
 const initialHelp = useHelpPanelStore.getState();
+
+function setPanels(panelsById: Record<string, unknown>): void {
+  usePanelStore.setState({ panelsById } as never);
+}
 const initialSelection = useWorktreeSelectionStore.getState();
 const initialFocus = useFocusStore.getState();
 
@@ -60,7 +60,7 @@ function lane(terminalId: string | null, sessionId: string | null) {
 }
 
 beforeEach(() => {
-  mocks.panelsById = {};
+  setPanels({});
   mocks.worktrees = new Map();
   mocks.viewStoreThrows = false;
   mocks.navigate.mockClear();
@@ -79,7 +79,7 @@ describe("resolveMcpConfirmRequester — a pane", () => {
 
   it("names the pane as its header does, with its agent and worktree", () => {
     mocks.worktrees.set("wt-1", { branch: "feature/auth", name: "auth" });
-    mocks.panelsById = {
+    setPanels({
       p1: {
         id: "p1",
         title: "Orchestrator",
@@ -88,7 +88,7 @@ describe("resolveMcpConfirmRequester — a pane", () => {
         agentState: "working",
         location: "grid",
       },
-    };
+    });
 
     expect(resolveMcpConfirmRequester(identity)).toEqual({
       identity,
@@ -100,9 +100,9 @@ describe("resolveMcpConfirmRequester — a pane", () => {
   });
 
   it("doesn't repeat an agent the pane's title already names", () => {
-    mocks.panelsById = {
+    setPanels({
       p1: { id: "p1", title: "Claude", detectedAgentId: "claude", location: "grid" },
-    };
+    });
 
     const requester = resolveMcpConfirmRequester(identity);
     expect(requester.name).toBe("Claude");
@@ -118,7 +118,7 @@ describe("resolveMcpConfirmRequester — a pane", () => {
       lastObservedTitle: "✳ fix auth tests",
       location: "grid",
     };
-    mocks.panelsById = { p1: pane };
+    setPanels({ p1: pane });
     const shown = resolveMcpConfirmRequester(identity).name;
 
     usePreferencesStore.setState({ showAgentTaskTitles: false });
@@ -133,7 +133,7 @@ describe("resolveMcpConfirmRequester — a pane", () => {
     ["isn't in this view", {}],
     ["is in the trash", { p1: { id: "p1", title: "zsh", location: "trash" } }],
   ])("keeps only the identity for a pane that %s", (_label, panels) => {
-    mocks.panelsById = panels;
+    setPanels(panels);
     expect(resolveMcpConfirmRequester(identity)).toEqual({ identity });
   });
 
@@ -144,7 +144,7 @@ describe("resolveMcpConfirmRequester — a pane", () => {
 
   it("keeps the worktree's id when no worktree store is mounted to name it", () => {
     mocks.viewStoreThrows = true;
-    mocks.panelsById = { p1: { id: "p1", title: "zsh", worktreeId: "wt-1", location: "grid" } };
+    setPanels({ p1: { id: "p1", title: "zsh", worktreeId: "wt-1", location: "grid" } });
 
     const requester = resolveMcpConfirmRequester(identity);
     expect(requester.worktreeId).toBe("wt-1");
@@ -164,7 +164,7 @@ describe("resolveMcpConfirmRequester — an Assistant tab", () => {
   });
 
   it("names the lane by its agent's task while task titles are shown", () => {
-    mocks.panelsById = {
+    setPanels({
       "t-b": {
         id: "t-b",
         kind: "terminal",
@@ -174,7 +174,7 @@ describe("resolveMcpConfirmRequester — an Assistant tab", () => {
         lastObservedTitle: "✳ review the auth changes",
         location: "grid",
       },
-    };
+    });
     useHelpPanelStore.setState({ sessions: { 0: lane("t-b", "help-b") } });
 
     const shown = resolveMcpConfirmRequester(identity).name;
@@ -203,33 +203,34 @@ describe("useMcpRequesterLiveState", () => {
 
   it("names no worktree for a pane in the one on screen", () => {
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
-    mocks.panelsById = { p1: { id: "p1", title: "Orchestrator", worktreeId: "wt-1" } };
+    setPanels({ p1: { id: "p1", title: "Orchestrator", worktreeId: "wt-1" } });
 
     expect(live(PANE)).toEqual({ present: true });
   });
 
   it("names the worktree the pane asked from while another is on screen", () => {
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-9" });
-    mocks.panelsById = { p1: { id: "p1", title: "Orchestrator", worktreeId: "wt-1" } };
+    setPanels({ p1: { id: "p1", title: "Orchestrator", worktreeId: "wt-1" } });
 
     expect(live(PANE)).toEqual({ present: true, otherWorktreeName: "feature/auth" });
   });
 
-  it("follows a pane that moved since it asked, as Show pane will", () => {
+  it("follows the pane while the dialog is up: moved, then trashed", () => {
     mocks.worktrees.set("wt-2", { branch: "feature/moved", name: "moved" });
-    mocks.panelsById = { p1: { id: "p1", title: "Orchestrator", worktreeId: "wt-2" } };
-
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
-    expect(live(PANE)).toEqual({ present: true, otherWorktreeName: "feature/moved" });
-    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-2" });
-    expect(live(PANE)).toEqual({ present: true });
-  });
+    setPanels({ p1: { id: "p1", title: "Orchestrator", worktreeId: "wt-1" } });
+    const { result } = renderHook(() => useMcpRequesterLiveState(PANE));
+    expect(result.current).toEqual({ present: true });
 
-  it("says a pane has gone once it closes or is trashed", () => {
-    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
-    mocks.panelsById = { p1: { id: "p1", title: "Orchestrator", location: "trash" } };
+    // Moved since it asked: named where it is now, as Show pane will go.
+    act(() => setPanels({ p1: { id: "p1", title: "Orchestrator", worktreeId: "wt-2" } }));
+    expect(result.current).toEqual({ present: true, otherWorktreeName: "feature/moved" });
 
-    expect(live(PANE).present).toBe(false);
+    act(() => useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-2" }));
+    expect(result.current).toEqual({ present: true });
+
+    act(() => setPanels({ p1: { id: "p1", title: "Orchestrator", location: "trash" } }));
+    expect(result.current.present).toBe(false);
   });
 
   it("finds an Assistant lane by its session while it holds it", () => {
@@ -238,11 +239,12 @@ describe("useMcpRequesterLiveState", () => {
       name: "Session 1",
     };
     useHelpPanelStore.setState({ sessions: { 0: lane("t-b", "help-b") } });
-    expect(live(tab).present).toBe(true);
+    const { result } = renderHook(() => useMcpRequesterLiveState(tab));
+    expect(result.current.present).toBe(true);
 
     // The same slot, a new conversation.
-    useHelpPanelStore.setState({ sessions: { 0: lane("t-c", "help-c") } });
-    expect(live(tab).present).toBe(false);
+    act(() => useHelpPanelStore.setState({ sessions: { 0: lane("t-c", "help-c") } }));
+    expect(result.current.present).toBe(false);
   });
 });
 
@@ -270,6 +272,8 @@ describe("showMcpRequester", () => {
     expect(state.activeSlot).toBe(1);
     expect(state.isOpen).toBe(true);
     expect(state.focusRequest).toBeGreaterThan(focusBefore);
+    // Opening moves the layout, so the terminals sit out the transition.
+    expect(mocks.suppressResizes).toHaveBeenCalledTimes(1);
   });
 
   it("brings back an Assistant that focus mode hid", async () => {
