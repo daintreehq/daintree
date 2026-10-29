@@ -10,6 +10,7 @@ import {
   isVisibleGridPanel,
   isRenderedGridPanel,
   pickDockCloseFocusId,
+  pickGridSuccessorFocusId,
   type GetPanelGroupInfo,
 } from "../panelFocusFallback";
 
@@ -181,5 +182,80 @@ describe("pickDockCloseFocusId", () => {
     });
 
     expect(id).toBeNull();
+  });
+});
+
+describe("pickGridSuccessorFocusId", () => {
+  type Group = { panelIds: string[]; activeTabId: string };
+
+  function gridOf(panels: Panel[], groups: Group[]) {
+    return {
+      panelIds: panels.map((p) => p.id),
+      panelsById: Object.fromEntries(panels.map((p) => [p.id, p])),
+      getTabGroups: (_location: "grid", worktreeId?: string) =>
+        groups.filter((g) => panels.find((p) => p.id === g.panelIds[0])?.worktreeId === worktreeId),
+    };
+  }
+
+  const solo = (id: string): Group => ({ panelIds: [id], activeTabId: id });
+
+  it("never hands focus from one leaver to another", () => {
+    // A move refiles panels without registering them as closing, so the leavers
+    // alone must keep each other from being picked on the step back.
+    const state = gridOf([panel("a"), panel("b"), panel("c")], []);
+
+    expect(pickGridSuccessorFocusId(state, ["b", "c"])).toBe("a");
+  });
+
+  it("lands on the neighbouring group's visible tab, not its first member", () => {
+    const state = gridOf(
+      [panel("a"), panel("b"), panel("c")],
+      [solo("a"), { panelIds: ["b", "c"], activeTabId: "c" }]
+    );
+
+    expect(pickGridSuccessorFocusId(state, ["a"])).toBe("c");
+  });
+
+  it("takes another member when a group's visible tab is unavailable", () => {
+    const state = gridOf(
+      [panel("a"), panel("b"), panel("c")],
+      [solo("a"), { panelIds: ["b", "c"], activeTabId: "c" }]
+    );
+
+    expect(pickGridSuccessorFocusId(state, ["a"], (id) => id === "c")).toBe("b");
+  });
+
+  it("passes over a pane whose close is still pending", () => {
+    const state = gridOf([panel("a"), panel("b"), panel("c")], [solo("a"), solo("b"), solo("c")]);
+
+    expect(pickGridSuccessorFocusId(state, ["a"], (id) => id === "b")).toBe("c");
+  });
+
+  it("walks the flat order past docked and foreign panes for a leaver with no group", () => {
+    const state = gridOf(
+      [
+        panel("a"),
+        panel("dock-1", { location: "dock" }),
+        panel("x", { worktreeId: "wt-9" }),
+        panel("dock-2", { location: "dock" }),
+        panel("b"),
+      ],
+      [solo("a"), solo("b")]
+    );
+
+    expect(pickGridSuccessorFocusId(state, ["dock-1"])).toBe("b");
+  });
+
+  it("returns null when nothing in the worktree's grid is left", () => {
+    const state = gridOf(
+      [
+        panel("dock-1", { location: "dock" }),
+        panel("x", { worktreeId: "wt-9" }),
+        panel("dock-2", { location: "dock" }),
+      ],
+      []
+    );
+
+    expect(pickGridSuccessorFocusId(state, ["dock-1"])).toBeNull();
   });
 });

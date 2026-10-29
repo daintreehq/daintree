@@ -6,6 +6,7 @@ import {
   type PtyPanelData,
 } from "@shared/types/panel";
 import type { DeletedWorktree } from "@/store/worktreeStore";
+import { NO_WORKTREE } from "@/store/slices/panelRegistry/worktreeIndex";
 
 vi.mock("@/clients", () => ({
   terminalClient: { resize: vi.fn(), submit: vi.fn().mockResolvedValue(undefined) },
@@ -47,6 +48,13 @@ const liveWorktrees = new Map<string, unknown>();
 vi.mock("@/store/createWorktreeStore", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/store/createWorktreeStore")>()),
   getCurrentViewStoreOrNull: () => ({ getState: () => ({ worktrees: liveWorktrees }) }),
+}));
+
+// Panes whose close is hidden but not yet committed: they still sit in the grid
+// as far as the store knows, and must not be handed focus.
+const pendingCloses = new Set<string>();
+vi.mock("@/services/terminal/optimisticPanelCloseIds", () => ({
+  isOptimisticallyClosing: (id: string) => pendingCloses.has(id),
 }));
 
 const terminalInstanceService = (
@@ -173,6 +181,7 @@ beforeEach(() => {
   });
   useWorktreeSelectionStore.getState().reset();
   setLiveWorktrees([]);
+  pendingCloses.clear();
   vi.clearAllMocks();
 });
 
@@ -389,6 +398,266 @@ describe("moveTerminalToWorktreeAndFollowRescue", () => {
     moveTerminalToWorktreeAndFollowRescue("ghost", "wt-b");
 
     expect(usePanelStore.getState().focusedId).toBe("t1");
+  });
+});
+
+describe("focus after a cross-worktree move (#14974)", () => {
+  function standIn(worktreeId: string): void {
+    useWorktreeSelectionStore.setState({
+      activeWorktreeId: worktreeId,
+      restoreWorktreeId: worktreeId,
+    });
+  }
+
+  it("hands focus to the next panel when the focused one moves away", () => {
+    seedPanels([panel("t1", "wt-a"), panel("t2", "wt-a"), panel("t3", "wt-a")]);
+    standIn("wt-a");
+    setLiveWorktrees(["wt-a", "wt-b"]);
+    usePanelStore.getState().setFocused("t2");
+
+    moveTerminalToWorktreeAndFollowRescue("t2", "wt-b");
+
+    expect(usePanelStore.getState().focusedId).toBe("t3");
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-a");
+  });
+
+  it("steps back to the panel before when the focused one was last", () => {
+    seedPanels([panel("t1", "wt-a"), panel("t2", "wt-a"), panel("t3", "wt-a")]);
+    standIn("wt-a");
+    setLiveWorktrees(["wt-a", "wt-b"]);
+    usePanelStore.getState().setFocused("t3");
+
+    moveTerminalToWorktreeAndFollowRescue("t3", "wt-b");
+
+    expect(usePanelStore.getState().focusedId).toBe("t2");
+  });
+
+  it("leaves focus where it is when a panel the user isn't in moves", () => {
+    seedPanels([panel("t1", "wt-a"), panel("t2", "wt-a")]);
+    standIn("wt-a");
+    setLiveWorktrees(["wt-a", "wt-b"]);
+    usePanelStore.getState().setFocused("t1");
+
+    moveTerminalToWorktreeAndFollowRescue("t2", "wt-b");
+
+    expect(usePanelStore.getState().focusedId).toBe("t1");
+    expect(usePanelStore.getState().panelsById["t2"]?.worktreeId).toBe("wt-b");
+  });
+
+  it("leaves focus where it is when another worktree's panel moves", () => {
+    seedPanels([panel("a1", "wt-a"), panel("b1", "wt-b"), panel("b2", "wt-b")]);
+    standIn("wt-a");
+    setLiveWorktrees(["wt-a", "wt-b", "wt-c"]);
+    usePanelStore.getState().setFocused("a1");
+
+    moveTerminalToWorktreeAndFollowRescue("b1", "wt-c");
+
+    expect(usePanelStore.getState().focusedId).toBe("a1");
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-a");
+  });
+
+  it("steps past the whole tab group when a grouped move carries the focused tab", () => {
+    seedPanels([
+      panel("t1", "wt-a"),
+      panel("t2", "wt-a"),
+      panel("t3", "wt-a"),
+      panel("t4", "wt-a"),
+      panel("t5", "wt-a"),
+    ]);
+    usePanelStore.setState({
+      tabGroups: new Map([
+        [
+          "g-moving",
+          {
+            id: "g-moving",
+            location: "grid" as const,
+            worktreeId: "wt-a",
+            activeTabId: "t3",
+            panelIds: ["t2", "t3"],
+          },
+        ],
+        [
+          "g-next",
+          {
+            id: "g-next",
+            location: "grid" as const,
+            worktreeId: "wt-a",
+            activeTabId: "t5",
+            panelIds: ["t4", "t5"],
+          },
+        ],
+      ]),
+    });
+    standIn("wt-a");
+    setLiveWorktrees(["wt-a", "wt-b"]);
+    usePanelStore.getState().setFocused("t3");
+
+    // Dragged by its other tab: what matters is that focus was inside what moved.
+    moveTerminalToWorktreeAndFollowRescue("t2", "wt-b");
+
+    // The neighbouring group's visible tab, not its first member.
+    expect(usePanelStore.getState().focusedId).toBe("t5");
+  });
+
+  it("passes over a pane whose close is still pending", () => {
+    seedPanels([
+      panel("t1", "wt-a"),
+      panel("t2", "wt-a"),
+      panel("t3", "wt-a"),
+      panel("t4", "wt-a"),
+    ]);
+    standIn("wt-a");
+    setLiveWorktrees(["wt-a", "wt-b"]);
+    usePanelStore.getState().setFocused("t2");
+    pendingCloses.add("t3");
+
+    moveTerminalToWorktreeAndFollowRescue("t2", "wt-b");
+
+    expect(usePanelStore.getState().focusedId).toBe("t4");
+  });
+
+  it("leaves focus alone when the move doesn't go through", () => {
+    seedPanels([panel("t1", "wt-a"), panel("t2", "wt-a"), panel("t3", "wt-a")]);
+    standIn("wt-a");
+    setLiveWorktrees(["wt-a", "wt-b"]);
+    usePanelStore.getState().setFocused("t2");
+    const realMove = usePanelStore.getState().moveTerminalToWorktree;
+    usePanelStore.setState({ moveTerminalToWorktree: () => {} });
+
+    try {
+      moveTerminalToWorktreeAndFollowRescue("t2", "wt-b");
+    } finally {
+      usePanelStore.setState({ moveTerminalToWorktree: realMove });
+    }
+
+    expect(usePanelStore.getState().focusedId).toBe("t2");
+  });
+
+  it("keeps focus on the destination's pane when another panel arrives", () => {
+    seedPanels([panel("a1", "wt-a"), panel("b1", "wt-b")]);
+    standIn("wt-b");
+    setLiveWorktrees(["wt-a", "wt-b"]);
+    usePanelStore.getState().setFocused("b1");
+
+    moveTerminalToWorktreeAndFollowRescue("a1", "wt-b");
+
+    expect(usePanelStore.getState().focusedId).toBe("b1");
+  });
+
+  it("hands a moved dock pane's focus back to the pane the user came from", () => {
+    seedPanels([panel("g1", "wt-a"), panel("d1", "wt-a", "dock"), panel("g2", "wt-a")]);
+    standIn("wt-a");
+    setLiveWorktrees(["wt-a", "wt-b"]);
+    usePanelStore.getState().setFocused("g1");
+    usePanelStore.getState().setFocused("d1");
+
+    moveTerminalToWorktreeAndFollowRescue("d1", "wt-b");
+
+    // The flat order would have stepped on to g2; the popover closing returns
+    // the keyboard to where it was opened from instead.
+    expect(usePanelStore.getState().focusedId).toBe("g1");
+    expect(usePanelStore.getState().activeDockTerminalId).toBeNull();
+  });
+
+  it("hands a global dock pane's focus to the grid it was open over", () => {
+    const globalDock: PtyPanelData = { ...panel("d1", "wt-a", "dock"), worktreeId: undefined };
+    usePanelStore.setState({
+      panelsById: { g1: panel("g1", "wt-a"), d1: globalDock },
+      panelIds: ["g1", "d1"],
+      panelIdsByWorktreeId: { "wt-a": ["g1"] },
+    });
+    standIn("wt-a");
+    setLiveWorktrees(["wt-a", "wt-b"]);
+    usePanelStore.getState().setFocused("d1");
+
+    moveTerminalToWorktreeAndFollowRescue("d1", "wt-b");
+
+    expect(usePanelStore.getState().focusedId).toBe("g1");
+  });
+
+  it("keeps focus on a dock pane that lands in the worktree the user is in", () => {
+    const globalDock: PtyPanelData = { ...panel("d1", "wt-a", "dock"), worktreeId: undefined };
+    usePanelStore.setState({
+      panelsById: { d1: globalDock, g1: panel("g1", "wt-a") },
+      panelIds: ["d1", "g1"],
+      panelIdsByWorktreeId: { "wt-a": ["g1"] },
+    });
+    standIn("wt-a");
+    setLiveWorktrees(["wt-a"]);
+    usePanelStore.getState().setFocused("d1");
+
+    moveTerminalToWorktreeAndFollowRescue("d1", "wt-a");
+
+    // Now in the grid: the pane keeps the keyboard and the dock lets go of it.
+    expect(usePanelStore.getState().panelsById["d1"]?.location).toBe("grid");
+    expect(usePanelStore.getState().focusedId).toBe("d1");
+    expect(usePanelStore.getState().activeDockTerminalId).toBeNull();
+  });
+
+  it("brings an arriving focused pane out from behind another pane's maximize", () => {
+    const globalDock: PtyPanelData = { ...panel("d1", "wt-a", "dock"), worktreeId: undefined };
+    usePanelStore.setState({
+      panelsById: { d1: globalDock, g1: panel("g1", "wt-a") },
+      panelIds: ["d1", "g1"],
+      panelIdsByWorktreeId: { "wt-a": ["g1"] },
+      maximizedId: "g1",
+      maximizeTarget: { type: "panel", id: "g1" },
+    });
+    standIn("wt-a");
+    setLiveWorktrees(["wt-a"]);
+    usePanelStore.getState().setFocused("d1");
+
+    moveTerminalToWorktreeAndFollowRescue("d1", "wt-a");
+
+    expect(usePanelStore.getState().focusedId).toBe("d1");
+    expect(usePanelStore.getState().maximizedId).toBeNull();
+    expect(usePanelStore.getState().maximizeTarget).toBeNull();
+  });
+
+  it("hands focus on in a view with no worktree selected", () => {
+    const loose = (id: string): PtyPanelData => ({ ...panel(id, "wt-a"), worktreeId: undefined });
+    usePanelStore.setState({
+      panelsById: { t1: loose("t1"), t2: loose("t2") },
+      panelIds: ["t1", "t2"],
+      panelIdsByWorktreeId: { [NO_WORKTREE]: ["t1", "t2"] },
+    });
+    useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+    setLiveWorktrees(["wt-b"]);
+    usePanelStore.getState().setFocused("t1");
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
+
+    expect(usePanelStore.getState().focusedId).toBe("t2");
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBeNull();
+  });
+
+  it("still lands on the destination's last-focused pane when rescuing the focused one", () => {
+    seedPanels([panel("t1", "wt-dead"), panel("resident", "wt-live")]);
+    useWorktreeSelectionStore.getState().addDeletedWorktree(deletedRow("wt-dead"));
+    useWorktreeSelectionStore.setState({
+      activeWorktreeId: "wt-dead",
+      lastFocusedTerminalByWorktree: new Map([["wt-live", "resident"]]),
+    });
+    unsubscribe = wirePruneSubscriber(["wt-live"]);
+    usePanelStore.getState().setFocused("t1");
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-live");
+
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-live");
+    expect(usePanelStore.getState().focusedId).toBe("resident");
+  });
+
+  it("hands focus to nobody rather than to a worktree the user isn't looking at", () => {
+    seedPanels([panel("a1", "wt-a"), panel("b1", "wt-b"), panel("b2", "wt-b")]);
+    standIn("wt-a");
+    setLiveWorktrees(["wt-a", "wt-b", "wt-c"]);
+    // Focus can sit outside the active worktree while focus-follow is held.
+    usePanelStore.setState({ focusedId: "b1" });
+
+    moveTerminalToWorktreeAndFollowRescue("b1", "wt-c");
+
+    expect(usePanelStore.getState().focusedId).toBeNull();
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-a");
   });
 });
 

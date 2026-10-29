@@ -1,4 +1,6 @@
 import { usePanelStore } from "@/store/panelStore";
+import { pickGridSuccessorFocusId } from "@/store/panelFocusFallback";
+import { isOptimisticallyClosing } from "@/services/terminal/optimisticPanelCloseIds";
 import { selectWorktreeMovePanelIds } from "@/store/slices/panelRegistry/selectors";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
@@ -177,8 +179,45 @@ export function moveTerminalToWorktreeAndFollowRescue(
   // the panels have already been filed under.
   const movedPanelIds = collectMovedPanelIds(terminalId);
 
+  // Focus leaves only if it was inside what moved and the move takes it out of
+  // the worktree the user is in (#14974). A grid pane hands it on the way a close
+  // would, picked before the move for the same reason as the membership above; a
+  // source the user isn't standing in hands it to nobody, since focusing a pane
+  // there would switch worktrees under them. A dock pane's popover closes, and
+  // the dock has its own hand-back for that (#11133).
+  const { focusedId, panelsById } = usePanelStore.getState();
+  const movesFocus = focusedId !== null && movedPanelIds.includes(focusedId);
+  const focusStaysInView = targetWorktreeId === before.activeWorktreeId;
+  const focusWasDocked = movesFocus && panelsById[focusedId]?.location === "dock";
+  const focusSuccessor =
+    movesFocus &&
+    !focusWasDocked &&
+    (sourceWorktreeId ?? undefined) === (before.activeWorktreeId ?? undefined)
+      ? pickGridSuccessorFocusId(usePanelStore.getState(), movedPanelIds, isOptimisticallyClosing)
+      : null;
+
   usePanelStore.getState().moveTerminalToWorktree(terminalId, targetWorktreeId);
-  usePanelStore.getState().setFocused(null);
+  if (
+    movesFocus &&
+    usePanelStore.getState().panelsById[focusedId]?.worktreeId === targetWorktreeId
+  ) {
+    if (focusStaysInView) {
+      // A pane arriving in the grid with the keyboard can't be parked behind
+      // another pane's fullscreen (#11060), and re-asserting focus makes the dock
+      // let go of one that came from there.
+      if (usePanelStore.getState().panelsById[focusedId]?.location === "grid") {
+        usePanelStore.getState().exitMaximize();
+      }
+      usePanelStore.getState().setFocused(focusedId);
+    } else {
+      if (focusWasDocked) usePanelStore.getState().closeDockTerminal(focusedId);
+      // The dock stands down for a popover it doesn't think is open, and focus
+      // still can't stay behind on a pane that has left.
+      if (usePanelStore.getState().focusedId === focusedId) {
+        usePanelStore.getState().setFocused(focusSuccessor);
+      }
+    }
+  }
 
   // Per panel, not per group. A dragged tab group gives each member its own bar
   // when the user switches to it — no one click that messages four agents.
