@@ -1227,7 +1227,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         ? () => unchanged() || (!editorAheadOfStore() && voiceRecordingService.holdsBackFrom(split))
         : unchanged;
 
+      // A fleet send settles a batch, or another host, later: what was typed
+      // since stays, as on a single-pane send.
       const intercepted = tryComposerFleetBroadcast(isFocusedTerminal, terminalId, text, () => {
+        if (!isDraftUnchanged()) return;
         if (keepDraft) {
           keepDraft();
           return;

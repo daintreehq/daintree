@@ -246,11 +246,16 @@ export async function sendDraftToFleet(text: string): Promise<boolean> {
  *
  * Per-target recipe-variable resolution and override application happen in
  * `executeFleetBroadcast`.
+ *
+ * `onDelivered` runs once the broadcast settles having reached at least one
+ * target, so the composer can let go of what it sent. A send that reached
+ * none — every target excluded or gone, or every write refused — leaves the
+ * draft to the user to edit and send again.
  */
 export function tryFleetBroadcastFromEditor(
   terminalId: string,
   text: string,
-  onSent: () => void
+  onDelivered: () => void
 ): boolean {
   const arming = useFleetArmingStore.getState();
   if (!arming.armedIds.has(terminalId) || selectFleetMemberCount(arming) < 2) return false;
@@ -268,13 +273,10 @@ export function tryFleetBroadcastFromEditor(
   const initialSkipped = new Set(overridesState.skippedIds);
 
   // All eligible targets skipped → consume the Enter (so the single-pane
-  // send doesn't also fire) without dispatching anything. Clear the
-  // overrides store and signal the caller so the input bar doesn't stay
-  // in a half-submitted state.
+  // send doesn't also fire) without dispatching anything. The draft stays.
   if (targets.every((id) => initialSkipped.has(id))) {
     useAnnouncerStore.getState().announce("Broadcast skipped — all targets excluded", "polite");
     useFleetTargetOverridesStore.getState().clear();
-    onSent();
     return true;
   }
 
@@ -295,7 +297,6 @@ export function tryFleetBroadcastFromEditor(
           .announce("Broadcast skipped — no eligible targets remain", "polite");
       } finally {
         useFleetTargetOverridesStore.getState().clear();
-        onSent();
       }
       return;
     }
@@ -316,19 +317,23 @@ export function tryFleetBroadcastFromEditor(
     // `resolveFleetBroadcastTargetIds()`; re-run the panel-eligibility
     // filter so disposed PTYs are dropped too.
     const eligibleTargets = filterEligibleIds(effectiveTargets);
+    let delivered = false;
     try {
       // A second Enter while a broadcast is in-flight pre-empts the first;
       // the shared controller lets the ribbon Cancel button abort it too.
       // Run-history recording now happens when the supervised run finalizes
       // (fleetRunStore), so the record carries watch-phase outcomes too.
       const result = await runManagedFleetBroadcast(text, eligibleTargets, overridesArg);
+      // A cancel can't take back writes that already landed, so a cancelled
+      // run that reached anyone still counts as sent.
+      delivered = result.successCount > 0;
       applyFleetBroadcastOutcome(text, eligibleTargets, result);
     } finally {
       // Per-target overrides are ephemeral per-broadcast (#8691 constraint).
       // Clear them so the next broadcast starts from the resolved defaults.
       // Controller teardown is owned by `runManagedFleetBroadcast`.
       useFleetTargetOverridesStore.getState().clear();
-      onSent();
+      if (delivered) onDelivered();
     }
   };
 

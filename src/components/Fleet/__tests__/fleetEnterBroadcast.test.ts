@@ -15,6 +15,31 @@ import { usePanelStore } from "@/store/panelStore";
 import type { PtyPanelData } from "@shared/types/panel";
 
 const submitMock = vi.fn<(id: string, text: string) => Promise<void>>();
+// Lets a test stand in for the armed-set and eligibility reads at dispatch.
+const targetReads = vi.hoisted(() => ({
+  resolve: null as null | ((actual: () => string[]) => string[]),
+  filterEligible: null as null | ((ids: string[]) => string[]),
+}));
+
+vi.mock("../fleetBroadcast", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../fleetBroadcast")>();
+  return {
+    ...actual,
+    resolveFleetBroadcastTargetIds: () =>
+      targetReads.resolve
+        ? targetReads.resolve(actual.resolveFleetBroadcastTargetIds)
+        : actual.resolveFleetBroadcastTargetIds(),
+  };
+});
+
+vi.mock("../fleetExecution", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../fleetExecution")>();
+  return {
+    ...actual,
+    filterEligibleIds: (ids: string[]) =>
+      targetReads.filterEligible ? targetReads.filterEligible(ids) : actual.filterEligibleIds(ids),
+  };
+});
 
 vi.mock("@/clients", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/clients")>();
@@ -58,6 +83,8 @@ function flush(): Promise<void> {
 }
 
 beforeEach(() => {
+  targetReads.resolve = null;
+  targetReads.filterEligible = null;
   submitMock.mockReset();
   submitMock.mockResolvedValue(undefined);
   useFleetArmingStore.setState({
@@ -342,6 +369,81 @@ describe("tryFleetBroadcastFromEditor — fires immediately without confirmation
   });
 });
 
+describe("tryFleetBroadcastFromEditor — the composer lets go only of a delivered draft (#14946)", () => {
+  it("reports delivery when part of the fleet took the draft", async () => {
+    submitMock.mockImplementation(async (id) => {
+      if (id === "b") throw new Error("EPIPE");
+      if (id === "c") throw new Error("ENOSPC: disk full");
+    });
+    arm(["a", "b", "c"]);
+    const onDelivered = vi.fn();
+    tryFleetBroadcastFromEditor("a", "hello", onDelivered);
+    await flush();
+    expect(onDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the draft when every target was unreachable and got disarmed", async () => {
+    submitMock.mockRejectedValue(new Error("EPIPE"));
+    arm(["a", "b"]);
+    const onDelivered = vi.fn();
+    tryFleetBroadcastFromEditor("a", "hello", onDelivered);
+    await flush();
+    expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
+    expect(onDelivered).not.toHaveBeenCalled();
+  });
+
+  it("keeps the draft beside the retry banner when every target failed transiently", async () => {
+    submitMock.mockRejectedValue(new Error("ENOSPC: disk full"));
+    arm(["a", "b"]);
+    const onDelivered = vi.fn();
+    tryFleetBroadcastFromEditor("a", "hello", onDelivered);
+    await flush();
+    expect(onDelivered).not.toHaveBeenCalled();
+    const failure = useFleetFailureStore.getState();
+    expect(failure.payload).toBe("hello");
+    expect([...failure.failedIds].sort()).toEqual(["a", "b"]);
+  });
+
+  it("keeps the draft when a cancel lands and nothing reached the fleet", async () => {
+    arm(["a", "b"]);
+    const pending: Array<() => void> = [];
+    submitMock.mockImplementation(
+      () => new Promise<void>((_resolve, reject) => pending.push(() => reject(new Error("EPIPE"))))
+    );
+    const onDelivered = vi.fn();
+    tryFleetBroadcastFromEditor("a", "hello", onDelivered);
+    while (pending.length < 2) await flush();
+    cancelActiveBroadcast();
+    for (const fn of pending.splice(0)) fn();
+    for (let i = 0; i < 10; i += 1) await flush();
+    expect(useAnnouncerStore.getState().polite?.msg).toMatch(/Broadcast cancelled/);
+    expect(onDelivered).not.toHaveBeenCalled();
+  });
+
+  it("keeps the draft when every target dropped out of the fleet before dispatch", async () => {
+    arm(["a", "b"]);
+    // Enter sees the fleet; by the dispatch-time re-read it has gone.
+    let reads = 0;
+    targetReads.resolve = (actual) => (reads++ === 0 ? actual() : []);
+    const onDelivered = vi.fn();
+    expect(tryFleetBroadcastFromEditor("a", "hello", onDelivered)).toBe(true);
+    await flush();
+    expect(submitMock).not.toHaveBeenCalled();
+    expect(useAnnouncerStore.getState().polite?.msg).toMatch(/no eligible targets/i);
+    expect(onDelivered).not.toHaveBeenCalled();
+  });
+
+  it("keeps the draft when no target can take the draft at dispatch", async () => {
+    arm(["a", "b"]);
+    targetReads.filterEligible = () => [];
+    const onDelivered = vi.fn();
+    expect(tryFleetBroadcastFromEditor("a", "hello", onDelivered)).toBe(true);
+    await flush();
+    expect(submitMock).not.toHaveBeenCalled();
+    expect(onDelivered).not.toHaveBeenCalled();
+  });
+});
+
 describe("cancelActiveBroadcast", () => {
   it("aborts the in-flight controller so the run finalizes as cancelled", async () => {
     arm(["a", "b", "c"]);
@@ -406,15 +508,17 @@ describe("tryFleetBroadcastFromEditor — per-target overrides and skips (#8691)
     expect(submitMock).not.toHaveBeenCalledWith("c", expect.anything());
   });
 
-  it("returns true and skips dispatch when every armed target is skipped", () => {
+  it("returns true and skips dispatch when every armed target is skipped", async () => {
     arm(["a", "b"]);
     useFleetTargetOverridesStore.getState().setSkipped("a", true);
     useFleetTargetOverridesStore.getState().setSkipped("b", true);
-    const onSent = vi.fn();
-    const consumed = tryFleetBroadcastFromEditor("a", "hello", onSent);
+    const onDelivered = vi.fn();
+    const consumed = tryFleetBroadcastFromEditor("a", "hello", onDelivered);
     expect(consumed).toBe(true);
+    await flush();
     expect(submitMock).not.toHaveBeenCalled();
-    expect(onSent).toHaveBeenCalled();
+    // Nothing went out, so the composer keeps the draft (#14946).
+    expect(onDelivered).not.toHaveBeenCalled();
     expect(useAnnouncerStore.getState().polite?.msg).toMatch(/all targets/i);
   });
 
@@ -448,14 +552,14 @@ describe("tryFleetBroadcastFromEditor — per-target overrides and skips (#8691)
     expect(useFleetTargetOverridesStore.getState().skippedIds.size).toBe(0);
   });
 
-  it("clears overrides and calls onSent when all initial targets are skipped", () => {
+  it("clears overrides but keeps the draft when all initial targets are skipped", () => {
     arm(["a", "b"]);
     useFleetTargetOverridesStore.getState().setPayloadOverride("a", "x");
     useFleetTargetOverridesStore.getState().setSkipped("a", true);
     useFleetTargetOverridesStore.getState().setSkipped("b", true);
-    const onSent = vi.fn();
-    tryFleetBroadcastFromEditor("a", "hello", onSent);
-    expect(onSent).toHaveBeenCalled();
+    const onDelivered = vi.fn();
+    tryFleetBroadcastFromEditor("a", "hello", onDelivered);
+    expect(onDelivered).not.toHaveBeenCalled();
     expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({});
     expect(useFleetTargetOverridesStore.getState().skippedIds.size).toBe(0);
   });
