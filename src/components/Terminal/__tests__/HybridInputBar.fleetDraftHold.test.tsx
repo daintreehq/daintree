@@ -90,9 +90,7 @@ function bars(ids: string[]) {
 
 /** The document's text, without the placeholder an empty editor shows. */
 function editorText(container: HTMLElement, id: string): string {
-  const content = container
-    .querySelector(`[data-pane="${id}"] .cm-content`)
-    ?.cloneNode(true);
+  const content = container.querySelector(`[data-pane="${id}"] .cm-content`)?.cloneNode(true);
   if (!(content instanceof HTMLElement)) return "";
   for (const placeholder of content.querySelectorAll(".cm-placeholder")) placeholder.remove();
   return content.textContent ?? "";

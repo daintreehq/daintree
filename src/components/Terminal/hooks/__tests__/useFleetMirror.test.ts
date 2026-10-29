@@ -123,12 +123,9 @@ describe("useFleetMirror", () => {
     });
     editorViewRef.current = view;
     useTerminalInputStore.getState().setDraftInput("term-1", "my own", "proj-1");
-    useTerminalInputStore.getState().mirrorFleetDraft(
-      "term-2",
-      "driver text",
-      new Set(["term-1", "term-2"]),
-      "proj-1"
-    );
+    useTerminalInputStore
+      .getState()
+      .mirrorFleetDraft("term-2", "driver text", new Set(["term-1", "term-2"]), "proj-1");
     const hook = render({ isFleetFollower: true, value: "my own" });
     expect(view.state.doc.toString()).toBe("driver text");
     // An edit made to the fleet's draft while this pane was its primary.
