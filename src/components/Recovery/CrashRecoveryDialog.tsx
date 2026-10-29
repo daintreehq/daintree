@@ -5,6 +5,7 @@ import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { formatBytes } from "@/lib/formatBytes";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { InlineError } from "@/components/ui/field";
 import {
   AlertTriangle,
@@ -110,7 +111,6 @@ export function CrashRecoveryDialog({
   const [showFreshConfirm, setShowFreshConfirm] = useState(false);
   const { copy: copyReport } = useCopyWithFeedback();
   const { copied: stackCopied, copy: copyStack } = useCopyWithFeedback();
-  const { copied: logPathCopied, copy: copyLogPath } = useCopyWithFeedback();
   const reportTextRef = useRef<HTMLTextAreaElement>(null);
 
   const recentActions = useMemo(() => crash.entry.recentActions ?? [], [crash.entry.recentActions]);
@@ -501,10 +501,10 @@ export function CrashRecoveryDialog({
                 </div>
 
                 {logOpenError && (
-                  <div role="alert" className="space-y-1" data-testid="log-open-error">
-                    <p className="text-xs text-status-error">
+                  <div className="space-y-1" data-testid="log-open-error">
+                    <InlineError role="alert">
                       Couldn't open the log file. {logOpenError}
-                    </p>
+                    </InlineError>
                     <div className="flex items-center gap-2">
                       <code
                         className="min-w-0 flex-1 text-xs text-text-secondary bg-overlay-soft rounded p-2 break-all select-text"
@@ -512,15 +512,13 @@ export function CrashRecoveryDialog({
                       >
                         {crash.logPath}
                       </code>
-                      <Button
-                        size="sm"
+                      <CopyButton
+                        label="Copy path"
+                        text={crash.logPath}
                         variant="ghost"
-                        onClick={() => copyLogPath(crash.logPath)}
+                        size="xs"
                         data-testid="copy-log-path-button"
-                      >
-                        <Copy aria-hidden="true" />
-                        {logPathCopied ? "Copied" : "Copy path"}
-                      </Button>
+                      />
                     </div>
                   </div>
                 )}
