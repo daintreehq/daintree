@@ -319,7 +319,8 @@ describe("rendererBridge — drive target and no-frontend dispatch", () => {
         { cwd: "/repo" },
         true,
         "external",
-        { offerSessionApproval: true }
+        // This machine's pane: the driver's view has no such terminal to name.
+        { offerSessionApproval: true, requester: { kind: "pane", terminalId: "t-local" } }
       );
 
       expect(endpoint.request).toHaveBeenCalledWith(
@@ -335,6 +336,7 @@ describe("rendererBridge — drive target and no-frontend dispatch", () => {
       );
       const [, payload] = vi.mocked(endpoint.request).mock.calls[0];
       expect(payload).not.toHaveProperty("requestId");
+      expect(payload).not.toHaveProperty("requester");
       expect(localView.send).not.toHaveBeenCalled();
       expect(envelope).toMatchObject({
         result: { ok: true, result: { terminalId: "t-remote" } },

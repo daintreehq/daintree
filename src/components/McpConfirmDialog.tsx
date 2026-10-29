@@ -218,10 +218,18 @@ export function McpConfirmDialog() {
     pendingShowRef.current = { requestId, identity };
     setInspectingId(requestId);
   }, []);
+  const reviewRequest = useCallback(() => {
+    // Reopened before the exit finished: the close that would have navigated
+    // never completes, and a later one, after an answer, must not go instead.
+    pendingShowRef.current = null;
+    setInspectingId(null);
+  }, []);
   const handleCloseComplete = useCallback(() => {
     const pending = pendingShowRef.current;
     pendingShowRef.current = null;
     if (pending === null) return;
+    // Settled while the dialog was closing: there is nothing left to come back to.
+    if (useMcpConfirmStore.getState().current?.requestId !== pending.requestId) return;
     // Nothing left to look at brings the request straight back, rather than
     // leaving it behind a return control over a pane that isn't there.
     const comeBack = () => setInspectingId((id) => (id === pending.requestId ? null : id));
@@ -477,13 +485,6 @@ export function McpConfirmDialog() {
   // that makes the gate impossible to attach to a non-destructive confirm.
   return (
     <ErrorBoundary variant="component" componentName="McpConfirmDialog" resetKeys={[resetKey]}>
-      {inspecting && (
-        <ReturnToRequest
-          title={confirmTitle(current)}
-          expired={expired}
-          onReview={() => setInspectingId(null)}
-        />
-      )}
       {isDestructive ? (
         <ConfirmDialog
           {...sharedProps}
@@ -500,6 +501,12 @@ export function McpConfirmDialog() {
         <ConfirmDialog {...sharedProps} variant="default">
           {body}
         </ConfirmDialog>
+      )}
+      {/* After the dialog, so the dialog keeps the child slot the empty-queue
+          branch renders it in, and its exit still animates when the queue
+          drains. A portal, so where it sits in the tree is not where it shows. */}
+      {inspecting && (
+        <ReturnToRequest title={confirmTitle(current)} expired={expired} onReview={reviewRequest} />
       )}
     </ErrorBoundary>
   );
