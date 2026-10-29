@@ -1,5 +1,6 @@
 import { Fragment, type ReactNode } from "react";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
+import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { cn } from "@/lib/utils";
 
 type PatchRowKind = "hunk" | "add" | "del" | "context";
@@ -131,7 +132,7 @@ export function FilePatchPreview({
           return (
             <Fragment key={section.label}>
               {showLabels && (
-                <div className="px-3 pt-1.5 pb-1 font-sans text-3xs font-medium uppercase tracking-wide text-text-secondary first:pt-0.5">
+                <div className={cn(LIST_LABEL_CLASS, "px-3 pt-1.5 pb-1 font-sans first:pt-0.5")}>
                   {section.label}
                 </div>
               )}

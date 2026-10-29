@@ -236,7 +236,7 @@ describe("useFileRowMenuItems — canonical order", () => {
       "Copy",
       "---",
       "Discard changes",
-      "Delete file",
+      "Trash file",
     ]);
   });
 
@@ -278,7 +278,7 @@ describe("useFileRowMenuItems — canonical order", () => {
       "Extensions",
       "---",
       "Discard changes",
-      "Delete file",
+      "Trash file",
     ]);
 
     const extensions = await openSubmenu(menu, "Extensions");
@@ -893,20 +893,20 @@ describe("useFileRowMenuItems — reveal", () => {
 
 describe("useFileRowMenuItems — discard and delete (#13424)", () => {
   function mutationItems(menu: HTMLElement): string[] {
-    return labels(menu).filter((label) => label === "Discard changes" || label === "Delete file");
+    return labels(menu).filter((label) => label === "Discard changes" || label === "Trash file");
   }
 
   it.each([
-    ["modified", ["Discard changes", "Delete file"]],
-    ["added", ["Discard changes", "Delete file"]],
-    ["renamed", ["Discard changes", "Delete file"]],
-    ["copied", ["Discard changes", "Delete file"]],
+    ["modified", ["Discard changes", "Trash file"]],
+    ["added", ["Discard changes", "Trash file"]],
+    ["renamed", ["Discard changes", "Trash file"]],
+    ["copied", ["Discard changes", "Trash file"]],
     ["deleted", ["Discard changes"]],
     // Nothing to restore to, so discarding and deleting are one operation.
-    ["untracked", ["Delete file"]],
-    ["ignored", ["Delete file"]],
+    ["untracked", ["Trash file"]],
+    ["ignored", ["Trash file"]],
     ["conflicted", []],
-    [null, ["Delete file"]],
+    [null, ["Trash file"]],
   ] as const)("offers the right items for a %s file", async (status, expected) => {
     const menu = await openMenu({ row: { status } });
     expect(mutationItems(menu)).toEqual(expected);
@@ -935,7 +935,7 @@ describe("useFileRowMenuItems — discard and delete (#13424)", () => {
 
   it.each([
     ["Discard changes", "git.discardFileChanges"],
-    ["Delete file", "file.trash"],
+    ["Trash file", "file.trash"],
   ])("%s dispatches %s with the worktree-relative path", async (label, actionId) => {
     const menu = await openMenu();
     fireEvent.click(within(menu).getByRole("menuitem", { name: label }));
@@ -967,6 +967,62 @@ describe("useFileRowMenuItems — discard and delete (#13424)", () => {
         dispatchMock.mock.calls.filter(([id]) => id === "git.discardFileChanges")
       ).toHaveLength(2)
     );
+  });
+
+  function appError(code: string, message: string): Error {
+    return Object.assign(new Error(message), { name: "AppError", code });
+  }
+
+  it("offers Review changes, not Retry, when the file changed after it was reviewed", async () => {
+    const error = appError("FILE_CHANGED_SINCE_REVIEW", "'src/index.ts' changed");
+    dispatchMock.mockImplementation(() =>
+      Promise.resolve({ ok: false, error: { message: error.message, details: error } })
+    );
+    const menu = await openMenu();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Discard changes" }));
+
+    await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
+    const payload = notifyMock.mock.calls[0]?.[0];
+    expect(payload?.message).toContain("'index.ts' changed after you reviewed it");
+    expect(payload?.action?.label).toBe("Review changes");
+
+    // Reviewing again is a fresh dispatch, which asks again with a new preview.
+    payload?.action?.onClick();
+    await waitFor(() =>
+      expect(
+        dispatchMock.mock.calls.filter(([id]) => id === "git.discardFileChanges")
+      ).toHaveLength(2)
+    );
+  });
+
+  it("stays quiet when the file is already gone", async () => {
+    const error = appError("NOT_FOUND", "'src/index.ts' no longer exists.");
+    dispatchMock.mockImplementation(() =>
+      Promise.resolve({ ok: false, error: { message: error.message, details: error } })
+    );
+    const menu = await openMenu();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Trash file" }));
+
+    await waitFor(() =>
+      expect(dispatchMock).toHaveBeenCalledWith("file.trash", expect.anything(), expect.anything())
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("points a refused Trash at the file manager rather than retrying", async () => {
+    const error = appError("UNSUPPORTED", "Failed to move item to trash");
+    dispatchMock.mockImplementation(() =>
+      Promise.resolve({ ok: false, error: { message: error.message, details: error } })
+    );
+    const menu = await openMenu();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Trash file" }));
+
+    await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
+    const payload = notifyMock.mock.calls[0]?.[0];
+    expect(payload?.title).toBe("Couldn't trash file");
+    expect(payload?.message).not.toContain("Failed to move item");
+    expect(payload?.action?.label).not.toBe("Retry");
   });
 });
 

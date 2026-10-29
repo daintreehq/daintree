@@ -424,7 +424,9 @@ function FileMutationConfirmDialogInner() {
           <span className="block" data-testid="file-mutation-path">
             <PathValue path={pendingConfirm.relativePath} />
           </span>
-          {copy.description && <span className="mt-1.5 block text-pretty">{copy.description}</span>}
+          {copy.description && (
+            <span className="mt-1.5 block [text-wrap:pretty]">{copy.description}</span>
+          )}
         </>
       }
       confirmLabel={copy.confirmLabel}
