@@ -6,7 +6,6 @@ import {
 } from "@shared/types/plugin";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { useFramedSurfaceSlots } from "@/components/Plugin/framedSurfaceSlots";
-import { surfacePluginFallbackName } from "@/hooks/useProjectSurfaceRefusals";
 import {
   claimedSurfaceSlots,
   consentHostSlot,
@@ -51,9 +50,13 @@ export function ProjectSurfaceConsentNotice({
   const setSurfaceChoices = usePluginProjectSurfacesStore((s) => s.setSurfaceChoices);
   const framed = useFramedSurfaceSlots();
   const pluginId = slots[slot]?.defaultOptionId ?? null;
-  const pluginDisplayName = useProjectPluginStore(
-    (s) => s.plugins.find((p) => p.instanceId === pluginId)?.displayName
-  );
+  // Never the manifest id: this is the moment the user decides whether a
+  // third-party plugin replaces part of the app, so until the name has arrived
+  // it says what the plugin is rather than what it's called internally.
+  const pluginDisplayName =
+    useProjectPluginStore(
+      (s) => s.plugins.find((p) => p.instanceId === pluginId)?.displayName
+    )?.trim() || "A project plugin";
 
   // Until main has answered, "no answer" is unknown rather than known, and a
   // project that answered long ago must not be asked again.
@@ -75,7 +78,7 @@ export function ProjectSurfaceConsentNotice({
   return (
     <InlineStatusBanner
       icon={Puzzle}
-      title={`${pluginDisplayName ?? surfacePluginFallbackName(pluginId)} set up this project: ${labels.join(", ")}`}
+      title={`${pluginDisplayName} set up this project: ${labels.join(", ")}`}
       severity="neutral"
       role="status"
       // Equal weight, deliberately: one variant, one size, both answers. Each
