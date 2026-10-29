@@ -642,9 +642,9 @@ test.describe("Full: agent-state transitions, status surfaces, and hidden-pane d
       // not disabled while the backend is connected and the agent is working.
       const editor = panel.locator(SEL.terminal.cmEditor);
       await expect(editor).toBeVisible({ timeout: T_MEDIUM });
-      const picker = panel.locator('[aria-label="Open command picker"]');
-      await expect(picker).toBeVisible({ timeout: T_MEDIUM });
-      await expect(picker).toBeEnabled();
+      const attach = panel.locator('[aria-label="Attach files"]');
+      await expect(attach).toBeVisible({ timeout: T_MEDIUM });
+      await expect(attach).toBeEnabled();
     });
 
     await test.step("agent transitions to waiting once the OSC heartbeat stops", async () => {

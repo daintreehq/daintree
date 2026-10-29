@@ -160,6 +160,49 @@ describe("useAutocompleteItems", () => {
     }
   );
 
+  describe("prompt templates", () => {
+    const command: AutocompleteItem = {
+      key: "x",
+      label: "/x",
+      insertText: "/x",
+      enterAction: "execute",
+      insert: "literal",
+    };
+    const template: AutocompleteItem = {
+      key: "template:acme::x",
+      label: "Add boilerplate",
+      insertText: "",
+      group: "Prompt templates",
+      template: { key: "acme::x", opensForm: false },
+    };
+
+    it("lists them after the agent's commands in a `/` menu", () => {
+      const { result } = renderHook(() =>
+        useAutocompleteItems({
+          ...baseParams,
+          activeCompletionContext: { triggerChar: "/", start: 0, tokenEnd: 2, query: "x" },
+          autocompleteCommands: [command],
+          isCommandsLoading: true,
+          templateItems: [template],
+        })
+      );
+      expect(result.current.autocompleteItems).toEqual([command, template]);
+      expect(result.current.isLoading).toBe(true);
+    });
+
+    it("keeps them out of every other menu", () => {
+      const { result } = renderHook(() =>
+        useAutocompleteItems({
+          ...baseParams,
+          activeCompletionContext: { triggerChar: "$", start: 0, tokenEnd: 2, query: "x" },
+          autocompleteCommands: [command],
+          templateItems: [template],
+        })
+      );
+      expect(result.current.autocompleteItems).toEqual([command]);
+    });
+  });
+
   describe("`#` references", () => {
     function hashContext(query: string): ActiveCompletionContext {
       return { triggerChar: "#", start: 0, tokenEnd: query.length + 1, query };

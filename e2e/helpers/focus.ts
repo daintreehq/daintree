@@ -21,7 +21,6 @@ export async function expectInputBarFocused(
 const paletteSearchSelectors = {
   action: SEL.actionPalette.searchInput,
   quickSwitcher: SEL.quickSwitcher.searchInput,
-  command: SEL.commandPicker.searchInput,
 } as const;
 
 export type PaletteType = keyof typeof paletteSearchSelectors;

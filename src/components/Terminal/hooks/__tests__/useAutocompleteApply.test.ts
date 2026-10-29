@@ -21,6 +21,7 @@ function setup(
   });
   const applyEditorValue = vi.fn<Params["applyEditorValue"]>();
   const onExecute = vi.fn<Params["onExecute"]>();
+  const onPickTemplate = vi.fn<Params["onPickTemplate"]>();
   const setActiveCompletionContext = vi.fn<Params["setActiveCompletionContext"]>();
   const latest: Latest = {
     autocompleteItems: [item],
@@ -34,12 +35,20 @@ function setup(
     lastQueryRef: { current: "" },
     applyEditorValue,
     onExecute,
+    onPickTemplate,
     setActiveCompletionContext,
     setSelectedIndex: vi.fn(),
   };
 
   const { result } = renderHook(() => useAutocompleteApply(params));
-  return { ...result.current, applyEditorValue, onExecute, setActiveCompletionContext, view };
+  return {
+    ...result.current,
+    applyEditorValue,
+    onExecute,
+    onPickTemplate,
+    setActiveCompletionContext,
+    view,
+  };
 }
 
 const dollarContext: ActiveCompletionContext = {
@@ -169,5 +178,73 @@ describe("useAutocompleteApply", () => {
     } finally {
       view.destroy();
     }
+  });
+
+  describe("a prompt template row", () => {
+    const template: AutocompleteItem = {
+      key: "template:acme::boilerplate",
+      label: "Add boilerplate",
+      insertText: "",
+      group: "Prompt templates",
+      template: { key: "acme::boilerplate", opensForm: false },
+    };
+    const midDraft: ActiveCompletionContext = {
+      triggerChar: "/",
+      start: 4,
+      tokenEnd: 9,
+      query: "boil",
+    };
+
+    it.each([
+      ["Enter", "enter"],
+      ["Tab", "complete"],
+    ] as const)("hands %s to the host with the token it was picked with", (_key, mode) => {
+      const {
+        applyAutocompleteSelection,
+        applyEditorValue,
+        onExecute,
+        onPickTemplate,
+        setActiveCompletionContext,
+        view,
+      } = setup("Fix /boil", template, midDraft);
+      try {
+        expect(applyAutocompleteSelection(mode)).toBe(true);
+        expect(onPickTemplate).toHaveBeenCalledWith("acme::boilerplate", { from: 4, to: 9 });
+        expect(applyEditorValue).not.toHaveBeenCalled();
+        expect(onExecute).not.toHaveBeenCalled();
+        expect(setActiveCompletionContext).toHaveBeenCalledWith(null);
+      } finally {
+        view.destroy();
+      }
+    });
+
+    it("hands a click to the host and types nothing", () => {
+      const { handleAutocompleteSelect, applyEditorValue, onPickTemplate, view } = setup(
+        "/boil",
+        template,
+        { ...slashContext, tokenEnd: 5 }
+      );
+      try {
+        handleAutocompleteSelect(template);
+        expect(onPickTemplate).toHaveBeenCalledWith("acme::boilerplate", { from: 0, to: 5 });
+        expect(applyEditorValue).not.toHaveBeenCalled();
+      } finally {
+        view.destroy();
+      }
+    });
+
+    it("does nothing when the token it was picked from is gone", () => {
+      const { applyAutocompleteSelection, onPickTemplate, view } = setup(
+        "Fix it",
+        template,
+        midDraft
+      );
+      try {
+        applyAutocompleteSelection("enter");
+        expect(onPickTemplate).not.toHaveBeenCalled();
+      } finally {
+        view.destroy();
+      }
+    });
   });
 });

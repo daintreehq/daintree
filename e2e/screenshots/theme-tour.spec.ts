@@ -482,9 +482,7 @@ const SCENES: TourScene[] = [
     note: "Selected row = raised fill + neutral leading rail (`selection-outline`), no accent. Is the selected row unambiguous?",
     run: async (page) => {
       const dialog = page.locator(SEL.actionPalette.dialog);
-      // Its own action, not a key: Cmd/Ctrl+K opens the separate Command
-      // Picker, which rendered on top of this palette and left the capture two
-      // stacked surfaces, and double Shift now opens Canopy.
+      // Its own action, not a key: double Shift now opens Canopy.
       await dispatchAction(page, "action.palette.open");
       await dialog.waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
       await page
@@ -492,11 +490,7 @@ const SCENES: TourScene[] = [
         .fill("worktree")
         .catch(() => {});
       await settle(page, 700);
-      await requireSurface(
-        "action-palette",
-        async () =>
-          (await dialog.isVisible()) && !(await page.locator(SEL.commandPicker.dialog).isVisible())
-      );
+      await requireSurface("action-palette", async () => dialog.isVisible());
     },
   },
   {

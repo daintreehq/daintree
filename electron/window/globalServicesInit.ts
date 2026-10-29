@@ -1077,10 +1077,9 @@ export async function initGlobalServices(
 
   // Built-in commands — registration fires the githubCreateIssue/githubWorkIssue
   // chunk imports, so it belongs in the deferred queue, not main-module eval.
-  // Commands must register before the renderer's command picker first calls
-  // commands.list (post-first-interactive); loadCommands refetches on every
-  // picker open, so a near-drain race self-heals. registerCommands() is
-  // fire-and-forget internally and returns synchronously, never stalling the
+  // The commands IPC awaits builtinCommandsReady(), so a settings page that
+  // lists commands before the queue drains still sees them. registerCommands()
+  // is fire-and-forget internally and returns synchronously, never stalling the
   // drain. Registered once per process (initGlobalServices runs once),
   // matching the previous main.ts semantics.
   registerDeferredTask({
