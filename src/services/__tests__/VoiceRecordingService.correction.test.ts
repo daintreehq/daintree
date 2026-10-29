@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { VoiceDictionaryEntry } from "@shared/types";
+import type { VoiceCleanupFailure, VoiceDictionaryEntry } from "@shared/types";
 import { acceptSuggestion } from "@shared/utils/voiceDictionary";
 
 // Drives the real voice and draft stores through stop() to prove a post-stop
@@ -45,6 +45,18 @@ vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
 }));
 
+const notify = vi.hoisted(() =>
+  vi.fn<
+    (payload: {
+      type: string;
+      title: string;
+      message: string;
+      action?: { actionId?: string; actionArgs?: unknown };
+    }) => void
+  >()
+);
+vi.mock("@/lib/notify", () => ({ notify }));
+
 vi.mock("@/services/KeybindingService", () => ({
   keybindingService: {
     getEffectiveCombo: vi.fn(),
@@ -72,7 +84,9 @@ type Span = { from: number; to: number };
 type CorrectResult = {
   action: "no_change" | "replace";
   correctedText: string;
-  verdict?: "replaced" | "unchanged" | "failed";
+  failed?: true;
+  verdict?: "replaced" | "unchanged" | "failed" | "timed_out";
+  cleanupFailure?: VoiceCleanupFailure;
 };
 
 type FileTokenPayload = {
@@ -1880,4 +1894,92 @@ describe("VoiceRecordingService — streamed cleanup (#14779)", () => {
       expect(drafts.filter((text) => text.includes(shown))).toEqual([]);
     }
   );
+});
+
+describe("VoiceRecordingService — a cleanup failure that will recur (#14963)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    callbacks.delta = null;
+    callbacks.complete = null;
+    correct.mockReset();
+    notify.mockReset();
+    dictionary = [];
+  });
+
+  afterEach(() => {
+    unsubscribeRanges?.();
+    unsubscribeRanges = null;
+    vi.unstubAllGlobals();
+  });
+
+  // Any error toast at all: a failure that may pass shows none.
+  const told = () => notify.mock.calls.map(([toast]) => toast).filter((t) => t.type === "error");
+
+  it("says so once, naming the account's provider, and keeps the words as dictated", async () => {
+    const { service, dictate, draft, flush, voiceStore } = await setup();
+    correct.mockResolvedValueOnce({
+      action: "no_change",
+      correctedText: "fix the parsr",
+      failed: true,
+      verdict: "failed",
+      cleanupFailure: { reason: "billing_required", provider: "anthropic" },
+    });
+
+    dictate("panel-1", "fix the parsr");
+    await service.stop();
+    await flush();
+
+    expect(draft("panel-1")).toBe("fix the parsr");
+    expect(told()).toHaveLength(1);
+    const [toast] = told();
+    expect(toast).toMatchObject({
+      type: "error",
+      action: { actionId: "app.settings.openTab", actionArgs: { tab: "voice" } },
+    });
+    // The account that failed, not the provider the settings default to.
+    expect(toast!.message).toContain("Anthropic");
+    expect(voiceStore.getState().announcement?.text).toBe(toast!.message);
+  });
+
+  it("gives each reason its own fix", async () => {
+    const { service, dictate, flush } = await setup();
+    const reasons = ["key_rejected", "billing_required", "region_refused", "access_denied"] as const;
+    for (const reason of reasons) {
+      correct.mockResolvedValueOnce({
+        action: "no_change",
+        correctedText: reason,
+        failed: true,
+        verdict: "failed",
+        cleanupFailure: { reason, provider: "openai" },
+      });
+      dictate(`panel-${reason}`, reason);
+      await service.stop();
+      await flush();
+    }
+
+    const messages = told().map((toast) => toast.message);
+    expect(messages).toHaveLength(reasons.length);
+    expect(new Set(messages).size).toBe(reasons.length);
+  });
+
+  it("stays quiet for a failure main didn't hand the notice", async () => {
+    const { service, dictate, draft, flush } = await setup();
+    correct.mockResolvedValueOnce({
+      action: "no_change",
+      correctedText: "fix the parsr",
+      failed: true,
+      verdict: "timed_out",
+    });
+    dictate("panel-1", "fix the parsr");
+    await service.stop();
+    await flush();
+    correct.mockRejectedValueOnce(new Error("IPC gone"));
+    dictate("panel-2", "and the lexr");
+    await service.stop();
+    await flush();
+
+    expect(draft("panel-1")).toBe("fix the parsr");
+    expect(draft("panel-2")).toBe("and the lexr");
+    expect(told()).toEqual([]);
+  });
 });

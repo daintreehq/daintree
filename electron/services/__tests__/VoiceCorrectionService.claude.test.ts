@@ -322,6 +322,67 @@ describe("VoiceCorrectionService on Claude", () => {
     expect(JSON.stringify(vi.mocked(logWarn).mock.calls)).not.toContain("echoes");
   });
 
+  // #14963: an account every passage will fail on says why, as a code, and
+  // isn't asked twice; the message that told it never travels.
+  it.each([
+    [401, "authentication_error", "key_rejected", "invalid x-api-key"],
+    [402, "billing_error", "billing_required", "payment declined"],
+    [403, "permission_error", "access_denied", "not allowed"],
+    [
+      400,
+      "invalid_request_error",
+      "billing_required",
+      "Your credit balance is too low to access the Anthropic API.",
+    ],
+  ] as const)("names a %i %s a failure that will recur", async (status, type, reason, text) => {
+    const fetchMock = stubFetch(jsonResponse({ type: "error", error: { type, message: text } }, status));
+    const result = await new VoiceCorrectionService().correct({ rawText: "run v test" }, SETTINGS);
+    expect(result).toMatchObject({
+      confirmedText: "run v test",
+      failed: true,
+      verdict: "failed",
+      cleanupFailure: { reason, provider: "anthropic" },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(logWarn).toHaveBeenLastCalledWith(
+      expect.stringContaining("Correction failed"),
+      expect.objectContaining({ status, code: type, persistent: reason })
+    );
+    expect(JSON.stringify(result)).not.toContain(text);
+    expect(JSON.stringify(vi.mocked(logWarn).mock.calls)).not.toContain(text);
+  });
+
+  it.each([
+    [400, "invalid_request_error", "The prompt says your credit balance is too low."],
+    [429, "rate_limit_error", "slow down"],
+    [529, "overloaded_error", "busy"],
+  ] as const)("leaves a %i %s unnamed: the next passage may pass", async (status, type, text) => {
+    const failure = () => jsonResponse({ type: "error", error: { type, message: text } }, status);
+    stubFetch(failure(), failure());
+    const result = await new VoiceCorrectionService().correct({ rawText: "run v test" }, SETTINGS);
+    expect(result.failed).toBe(true);
+    expect(result).not.toHaveProperty("cleanupFailure");
+  });
+
+  it("names an account that runs out of credit mid-stream", async () => {
+    stubFetch(
+      streamed([
+        frames(reply("Ok."))[0]!,
+        { type: "error", error: { type: "billing_error", message: "echoes ok" } },
+      ])
+    );
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "ok" },
+      SETTINGS,
+      undefined,
+      () => undefined
+    );
+    expect(result).toMatchObject({
+      failed: true,
+      cleanupFailure: { reason: "billing_required", provider: "anthropic" },
+    });
+  });
+
   it("warms with the passage's own request shape, without OpenAI's store flag", async () => {
     const fetchMock = stubFetch(jsonResponse(message(reply("x"), "max_tokens")));
     await new VoiceCorrectionService().warm(SETTINGS);

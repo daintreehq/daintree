@@ -34,6 +34,7 @@ import type {
   KeybindingImportResult,
   MicPermissionStatus,
   NotificationSettings,
+  VoiceCleanupFailure,
   VoiceInputSettings,
   VoiceInputSettingsPatch,
 } from "./api.js";
@@ -1336,6 +1337,8 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
       /** Why the passage came back as it did: a code, never text. */
       verdict?: VoiceCorrectionVerdict;
       timing?: VoiceCorrectionTiming;
+      /** A failure that will recur, on the one reply of its outage that should say so. */
+      cleanupFailure?: VoiceCleanupFailure;
     };
   };
 

@@ -2327,6 +2327,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       /** Why the passage came back as it did: a code, never text. */
       verdict?: VoiceCorrectionVerdict;
       timing?: VoiceCorrectionTiming;
+      /** A failure that will recur, on the one reply of its outage that should say so. */
+      cleanupFailure?: VoiceCleanupFailure;
     }>;
     /** A streaming correction's text so far, cut at a word boundary; only ever grows. */
     onCorrectionProgress(
@@ -3004,6 +3006,15 @@ export type VoiceCorrectionModel =
  * (`VOICE_CLEANUP_MODELS_BY_PROVIDER`) and its own key.
  */
 export type VoiceCorrectionProvider = "openai" | "anthropic";
+
+/**
+ * A cleanup failure that will keep happening until the account or its
+ * settings change: a code, never the provider's message (#14963).
+ */
+export interface VoiceCleanupFailure {
+  reason: "key_rejected" | "billing_required" | "region_refused" | "access_denied";
+  provider: VoiceCorrectionProvider;
+}
 
 /**
  * Paragraphing strategy for voice dictation.

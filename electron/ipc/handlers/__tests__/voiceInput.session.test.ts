@@ -47,7 +47,11 @@ const shared = vi.hoisted(() => ({
     finish: (text: string) => void;
     /** Settles it as a request that failed, without its signal aborting. */
     fail: () => void;
+    /** Settles it as refused by the account, a failure every passage will meet. */
+    refuse: (reason: string) => void;
   }>,
+  /** The cleanup key in the voice settings. */
+  openaiApiKey: "sk-test",
   /** When set, the project vocabulary read waits on this. */
   vocabulary: null as null | Promise<never[]>,
   assembleKeyterms: null as null | (() => Promise<string[]>),
@@ -130,6 +134,14 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
           finish: (text) =>
             resolve({ action: "replace", confirmedText: text, verdict: "replaced" }),
           fail,
+          refuse: (reason) =>
+            resolve({
+              action: "no_change",
+              confirmedText: request.rawText,
+              failed: true,
+              verdict: "failed",
+              cleanupFailure: { reason, provider: "openai" },
+            }),
         });
       });
     };
@@ -163,7 +175,7 @@ vi.mock("../../../store.js", () => ({
       key === "voiceInput"
         ? {
             enabled: shared.enabled,
-            openaiApiKey: "sk-test",
+            openaiApiKey: shared.openaiApiKey,
             deepgramApiKey: "dg-test",
             transcriptionProvider: shared.transcriptionProvider,
             correctionEnabled: shared.correctionEnabled,
@@ -361,6 +373,7 @@ describe("voiceInput — session identity", () => {
     shared.endDrain = null;
     shared.correctionEnabled = false;
     shared.cleanups = [];
+    shared.openaiApiKey = "sk-test";
     shared.vocabulary = null;
     shared.assembleKeyterms = null;
     shared.startContext = undefined;
@@ -1398,6 +1411,111 @@ describe("voiceInput — session identity", () => {
       await settle();
 
       expect(shared.cleanups).toEqual([]);
+    });
+  });
+
+  describe("a cleanup failure that will recur (#14963)", () => {
+    beforeEach(() => {
+      shared.correctionEnabled = true;
+    });
+
+    const prefetch = (owner: FakeSender, sessionId: string, rawText: string) =>
+      getHandler(CHANNELS.VOICE_INPUT_PREFETCH_CORRECTIONS)(
+        { sender: owner },
+        { sessionId, requests: [{ rawText, sessionId }] }
+      );
+    // Each passage's request, once it reaches the service, taken in turn.
+    const nextRequest = async (rawText: string) => {
+      const pending = () => shared.cleanups.filter((c) => c.rawText === rawText);
+      await vi.waitFor(() => expect(pending().length).toBeGreaterThan(0));
+      const request = pending()[0]!;
+      shared.cleanups.splice(shared.cleanups.indexOf(request), 1);
+      return request;
+    };
+    const refused = async (owner: FakeSender, rawText: string) => {
+      const reply = correct(owner, "a", rawText);
+      (await nextRequest(rawText)).refuse("key_rejected");
+      return (await reply) as Record<string, unknown>;
+    };
+    const TOLD = { cleanupFailure: { reason: "key_rejected", provider: "openai" } };
+
+    it("tells the first reply of an outage, and no other from any view", async () => {
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+
+      const first = await refused(ownerA, "fix the bug");
+      expect(first).toMatchObject({ correctedText: "fix the bug", failed: true, ...TOLD });
+      const again = await refused(ownerA, "and the lexer");
+      const elsewhere = await refused(ownerB, "in another view");
+
+      for (const reply of [again, elsewhere]) {
+        expect(reply).toMatchObject({ failed: true, verdict: "failed" });
+        expect(reply).not.toHaveProperty("cleanupFailure");
+      }
+    });
+
+    it("tells it again after a cleanup on the account works", async () => {
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+      await refused(ownerA, "fix the bug");
+
+      const worked = correct(ownerA, "a", "fix the bug");
+      (await nextRequest("fix the bug")).finish("Fix the bug.");
+      await expect(worked).resolves.toMatchObject({ correctedText: "Fix the bug." });
+
+      expect(await refused(ownerA, "fix the bug")).toMatchObject(TOLD);
+    });
+
+    it("tells a new key's failure, however recently the old key's was told", async () => {
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+      await refused(ownerA, "fix the bug");
+
+      shared.openaiApiKey = "sk-replaced";
+      expect(await refused(ownerA, "fix the bug")).toMatchObject(TOLD);
+    });
+
+    it("spends nothing on a failure that may pass", async () => {
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+      const failed = correct(ownerA, "a", "fix the bug");
+      (await nextRequest("fix the bug")).fail();
+      expect(await failed).not.toHaveProperty("cleanupFailure");
+
+      expect(await refused(ownerA, "fix the bug")).toMatchObject(TOLD);
+    });
+
+    it("tells nothing to a view that went away", async () => {
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+      const gone = makeSender();
+      const reply = correct(gone, "a", "fix the bug");
+      const request = await nextRequest("fix the bug");
+      gone.destroyed = true;
+      request.refuse("key_rejected");
+      expect(await reply).not.toHaveProperty("cleanupFailure");
+
+      expect(await refused(ownerA, "fix the bug")).toMatchObject(TOLD);
+    });
+
+    it("takes a prefetch's refusal as the stop's, without asking the account again", async () => {
+      await start(ownerA, "a");
+      await prefetch(ownerA, "a", "run the tests");
+      (await nextRequest("run the tests")).refuse("key_rejected");
+
+      await stop(ownerA, "a");
+      await expect(correct(ownerA, "a", "run the tests")).resolves.toMatchObject(TOLD);
+      await settle();
+      expect(shared.cleanups).toEqual([]);
+    });
+
+    it("tells nothing for a prefetch no stop took", async () => {
+      await start(ownerA, "a");
+      await prefetch(ownerA, "a", "run the");
+      (await nextRequest("run the")).refuse("key_rejected");
+
+      await stop(ownerA, "a");
+      expect(await refused(ownerA, "run the tests")).toMatchObject(TOLD);
     });
   });
 

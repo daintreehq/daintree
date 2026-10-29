@@ -113,6 +113,20 @@ export function claudeErrorCode(body: unknown): string | undefined {
   return typeof type === "string" ? type : undefined;
 }
 
+// An account out of credit is answered as a bad request, told apart from the
+// others only by the API's own sentence. Read for that, never kept or logged.
+const OUT_OF_CREDIT_RE = /^Your credit balance is too low\b/;
+
+/** Whether a failed request's body says the account has run out of credit. */
+export function claudeOutOfCredit(body: unknown): boolean {
+  const error = (body as { error?: { type?: unknown; message?: unknown } } | null)?.error;
+  return (
+    error?.type === "invalid_request_error" &&
+    typeof error.message === "string" &&
+    OUT_OF_CREDIT_RE.test(error.message)
+  );
+}
+
 export interface ClaudeStreamEvent {
   type?: string;
   index?: number;

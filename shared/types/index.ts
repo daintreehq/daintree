@@ -303,6 +303,7 @@ export type {
   VoiceTranscriptionProvider,
   VoiceCorrectionModel,
   VoiceCorrectionProvider,
+  VoiceCleanupFailure,
   VoiceParagraphingStrategy,
   VoiceRecordingMode,
   HelpAssistantSettings,
