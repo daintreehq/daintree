@@ -1,7 +1,19 @@
-import { describe, expect, it } from "vitest";
-import type { BrowserPanelData, FilePanelData, PtyPanelData } from "@shared/types/panel";
+import { afterEach, describe, expect, it } from "vitest";
+import type {
+  BrowserPanelData,
+  FilePanelData,
+  PanelInstance,
+  PtyPanelData,
+} from "@shared/types/panel";
+import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
 import type { TabGroup } from "@/types";
-import { buildDockRenderItems } from "../dockRenderItems";
+import {
+  buildDockRenderItems,
+  collectDockPanels,
+  filterRailDockPanels,
+  planDockChipMove,
+  type DockMembershipState,
+} from "../dockRenderItems";
 
 function terminal(id: string, worktreeId?: string): PtyPanelData {
   return {
@@ -371,6 +383,245 @@ describe("buildDockRenderItems", () => {
       null
     );
 
+    expect(idsOf(items)).toEqual(["a", "b"]);
+  });
+});
+
+describe("collectDockPanels", () => {
+  const PLUGIN_KIND = "acme.board.view";
+
+  afterEach(() => {
+    unregisterPanelKind(PLUGIN_KIND);
+  });
+
+  function membership(
+    panels: PanelInstance[],
+    overrides: Partial<DockMembershipState> = {}
+  ): DockMembershipState {
+    return {
+      panelIds: panels.map((panel) => panel.id),
+      panelIdsByWorktreeId: {},
+      panelsById: Object.fromEntries(panels.map((panel) => [panel.id, panel])),
+      trashedTerminals: new Map(),
+      ...overrides,
+    };
+  }
+
+  const ids = (panels: PanelInstance[]) => panels.map((panel) => panel.id);
+
+  it("keeps docked panels in canonical order and drops grid and trashed ones", () => {
+    const panels = [
+      terminal("a"),
+      { ...terminal("in-grid"), location: "grid" } as PtyPanelData,
+      filePanel("notes"),
+      terminal("trashed"),
+      browserPanel("docs"),
+    ];
+
+    const result = collectDockPanels(
+      membership(panels, { trashedTerminals: new Map([["trashed", {}]]) }),
+      null
+    );
+
+    expect(ids(result)).toEqual(["a", "notes", "docs"]);
+  });
+
+  it("keeps a dockable plugin kind (#11332)", () => {
+    registerPanelKind({
+      id: PLUGIN_KIND,
+      name: "Board",
+      iconId: "package",
+      color: "#fff",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "acme.board",
+    });
+    const plugin = {
+      id: "board",
+      title: "board",
+      kind: PLUGIN_KIND,
+      pluginId: "acme.board",
+      location: "dock",
+    } as unknown as PanelInstance;
+
+    expect(ids(collectDockPanels(membership([terminal("a"), plugin]), null))).toEqual([
+      "a",
+      "board",
+    ]);
+  });
+
+  it("drops a kind registered as not dockable", () => {
+    registerPanelKind({
+      id: PLUGIN_KIND,
+      name: "Board",
+      iconId: "package",
+      color: "#fff",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      dockable: false,
+      extensionId: "acme.board",
+    });
+    const plugin = {
+      id: "board",
+      title: "board",
+      kind: PLUGIN_KIND,
+      pluginId: "acme.board",
+      location: "dock",
+    } as unknown as PanelInstance;
+
+    expect(ids(collectDockPanels(membership([terminal("a"), plugin]), null))).toEqual(["a"]);
+  });
+
+  it("appends panels pending in a spawn batch, own worktree first, then global (#9649)", () => {
+    const panels = [
+      terminal("a", "wt-1"),
+      terminal("global-pending"),
+      terminal("foreign-pending", "wt-2"),
+      terminal("own-pending", "wt-1"),
+    ];
+
+    // Buckets inserted global-first, so an unscoped scan would order them
+    // differently and pull in the other worktree's pending panel.
+    const result = collectDockPanels(
+      membership(panels, {
+        panelIds: ["a"],
+        panelIdsByWorktreeId: {
+          __none__: ["global-pending"],
+          "wt-2": ["foreign-pending"],
+          "wt-1": ["a", "own-pending"],
+        },
+      }),
+      "wt-1"
+    );
+
+    expect(ids(result)).toEqual(["a", "own-pending", "global-pending"]);
+  });
+});
+
+describe("filterRailDockPanels", () => {
+  it("keeps the active worktree's own and global panels, minus excluded ids", () => {
+    const panels = [
+      terminal("own", "wt-1"),
+      terminal("global"),
+      terminal("elsewhere", "wt-2"),
+      terminal("assistant", "wt-1"),
+    ];
+
+    const result = filterRailDockPanels(panels, "wt-1", ["assistant"]);
+
+    expect(result.map((panel) => panel.id)).toEqual(["own", "global"]);
+  });
+});
+
+describe("planDockChipMove", () => {
+  /** The rail `buildDockRenderItems` paints once `panelIds` is in `order`. */
+  function railFor(
+    order: readonly string[],
+    panels: readonly PanelInstance[],
+    groups: ReadonlyMap<string, TabGroup>
+  ): string[] {
+    const byId = new Map(panels.map((panel) => [panel.id, panel]));
+    const ordered = order.flatMap((id) => byId.get(id) ?? []);
+    return idsOf(buildDockRenderItems(ordered, groups, null));
+  }
+
+  function plan(
+    panels: PanelInstance[],
+    panelId: string,
+    direction: -1 | 1,
+    groups: ReadonlyMap<string, TabGroup> = NO_GROUPS,
+    panelIds: string[] = panels.map((panel) => panel.id)
+  ) {
+    const items = buildDockRenderItems(panels, groups, null);
+    return planDockChipMove(panelIds, items, panelId, direction);
+  }
+
+  it("swaps a single chip with its neighbour in either direction", () => {
+    const panels = [terminal("a"), terminal("b"), terminal("c")];
+
+    expect(plan(panels, "b", -1)).toEqual(["b", "a", "c"]);
+    expect(plan(panels, "b", 1)).toEqual(["a", "c", "b"]);
+  });
+
+  it("moves nothing for a chip already at the end it is moving towards", () => {
+    const panels = [terminal("a"), terminal("b")];
+
+    expect(plan(panels, "a", -1)).toBeNull();
+    expect(plan(panels, "b", 1)).toBeNull();
+  });
+
+  it("moves nothing for a panel no chip holds", () => {
+    expect(plan([terminal("a"), terminal("b")], "missing", 1)).toBeNull();
+  });
+
+  it("steps a single chip past a whole group, not one of its members", () => {
+    // A one-index reorderTerminals step would give [g1, g2, a, g3]: the group
+    // still paints at g1, so the rail would not change.
+    const panels = [terminal("g1"), terminal("g2"), terminal("g3"), terminal("a")];
+    const groups = groupMap(group(["g1", "g2", "g3"], "g1", { id: "trio" }));
+
+    const next = plan(panels, "a", -1, groups);
+
+    expect(next).toEqual(["a", "g1", "g2", "g3"]);
+    expect(railFor(next!, panels, groups)).toEqual(["a", "trio"]);
+  });
+
+  it("moves a group chip from any of its members, keeping its tab order", () => {
+    const panels = [terminal("g1"), terminal("a"), terminal("g2"), terminal("b")];
+    const groups = groupMap(group(["g2", "g1"], "g2", { id: "pair" }));
+
+    expect(
+      railFor(
+        panels.map((p) => p.id),
+        panels,
+        groups
+      )
+    ).toEqual(["pair", "a", "b"]);
+
+    const next = plan(panels, "g2", 1, groups);
+
+    expect(next).toEqual(["a", "g2", "g1", "b"]);
+    expect(railFor(next!, panels, groups)).toEqual(["a", "pair", "b"]);
+  });
+
+  it("swaps two adjacent group chips", () => {
+    const panels = [terminal("a1"), terminal("a2"), terminal("b1"), terminal("b2")];
+    const groups = groupMap(
+      group(["a1", "a2"], "a1", { id: "first" }),
+      group(["b1", "b2"], "b1", { id: "second" })
+    );
+
+    const next = plan(panels, "a2", 1, groups);
+
+    expect(railFor(next!, panels, groups)).toEqual(["second", "first"]);
+  });
+
+  it("leaves panels the rail doesn't show in their own slots", () => {
+    // `hidden` stands for anything filtered out of the rail: a grid panel,
+    // another worktree's chip, an assistant lane's terminal.
+    const panels = [terminal("a"), terminal("b")];
+
+    const next = plan(panels, "b", -1, NO_GROUPS, ["grid-1", "a", "hidden", "b"]);
+
+    expect(next).toEqual(["grid-1", "b", "hidden", "a"]);
+  });
+
+  it("moves nothing while a rail member is still pending in a spawn batch", () => {
+    const panels = [terminal("a"), terminal("pending")];
+
+    expect(plan(panels, "a", 1, NO_GROUPS, ["a"])).toBeNull();
+  });
+
+  it("does not mutate the order or chips it is given", () => {
+    const panels = [terminal("a"), terminal("b")];
+    const panelIds = ["a", "b"];
+    Object.freeze(panelIds);
+    const items = buildDockRenderItems(panels, NO_GROUPS, null);
+    Object.freeze(items);
+
+    expect(planDockChipMove(panelIds, items, "a", 1)).toEqual(["b", "a"]);
     expect(idsOf(items)).toEqual(["a", "b"]);
   });
 });

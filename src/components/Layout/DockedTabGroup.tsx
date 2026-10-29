@@ -136,9 +136,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   // handler calls preventDefault() to start a keyboard drag, which would
   // suppress this native <button>'s activation click — the sole keyboard path to
   // the chip's primary action. (Grid PanelHeader has no such conflict: its drag
-  // surface is a non-interactive <div>.) Keyboard-driven reordering of dock
-  // chips is intentionally out of scope. Computed before the early return below
-  // to satisfy the Rules of Hooks.
+  // surface is a non-interactive <div>.) The keyboard reorders chips through
+  // `terminal.moveLeft`/`moveRight` instead (#14972). Computed before the early
+  // return below to satisfy the Rules of Hooks.
   const dragHandle = useDragHandle();
   const dragPointerListeners: DraggableSyntheticListeners = dragHandle?.listeners
     ? Object.fromEntries(
