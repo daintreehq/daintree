@@ -335,21 +335,24 @@ export function CommitPanel({
     }
   }, [canCommit, actionsBusy, stagedCount, commitMessage, onCommit]);
 
-  const handleCommitAndPush = useCallback(async () => {
-    if (!canCommit || actionsBusy) return;
-    if (actionInFlightRef.current) return;
-    actionInFlightRef.current = true;
-    setPendingCount(stagedCount);
-    setPendingAction("commit-push");
-    try {
-      await onCommitAndPush(commitMessage);
-    } catch {
-      // Error is handled by the parent via setActionError
-    } finally {
-      setPendingAction(null);
-      actionInFlightRef.current = false;
-    }
-  }, [canCommit, actionsBusy, stagedCount, commitMessage, onCommitAndPush]);
+  const handleCommitAndPush = useCallback(
+    async (message: string) => {
+      if (!canCommit || actionsBusy) return;
+      if (actionInFlightRef.current) return;
+      actionInFlightRef.current = true;
+      setPendingCount(stagedCount);
+      setPendingAction("commit-push");
+      try {
+        await onCommitAndPush(message);
+      } catch {
+        // Error is handled by the parent via setActionError
+      } finally {
+        setPendingAction(null);
+        actionInFlightRef.current = false;
+      }
+    },
+    [canCommit, actionsBusy, stagedCount, onCommitAndPush]
+  );
 
   const handlePrimaryClick = useCallback(() => {
     if (isBlocked) {
@@ -370,7 +373,7 @@ export function CommitPanel({
         setPushConfirmOpen(true);
         return;
       }
-      void handleCommitAndPush();
+      void handleCommitAndPush(commitMessage);
     } else {
       void handleCommit();
     }
@@ -394,8 +397,10 @@ export function CommitPanel({
     setPushConfirmOpen(false);
     setDontAskChecked(false);
     setOutgoing(null);
-    void handleCommitAndPush();
-  }, [dontAskChecked, onSetSkipPushConfirm, handleCommitAndPush]);
+    // What the dialog previewed is what gets pushed, even if a history recall
+    // landed in the composer behind it while it was open.
+    void handleCommitAndPush(pushConfirmMessage);
+  }, [dontAskChecked, onSetSkipPushConfirm, handleCommitAndPush, pushConfirmMessage]);
 
   const handleClosePushConfirm = useCallback(() => {
     setPushConfirmOpen(false);

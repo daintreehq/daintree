@@ -189,6 +189,18 @@ describe("CommitPanel — push confirm", () => {
     expect(screen.getByTestId("commit-panel-push-confirm-message").textContent).toBe("feat: x");
   });
 
+  it("pushes the message it previewed, not one that replaced it behind the dialog", () => {
+    const { onCommitAndPush, setCommitMessage } = renderPanel({
+      currentBranch: "develop",
+      commitMessage: "feat: previewed",
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
+    // A history recall that resolves after the dialog opened.
+    setCommitMessage("feat: recalled late");
+    fireEvent.click(screen.getByRole("button", { name: /Push to origin\/develop/ }));
+    expect(onCommitAndPush).toHaveBeenCalledWith("feat: previewed");
+  });
+
   it("warns about protected branches in the description copy", () => {
     renderPanel({ currentBranch: "main" });
     fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));

@@ -756,19 +756,17 @@ describe("ReviewHub", () => {
       const hub = await openHub();
       fireEvent.change(hub.textarea, { target: { value: "feat: landed" } });
       let finishRead: () => void = () => {};
-      getStagingStatusMock.mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            finishRead = () => resolve(makeStatus());
-          })
-      );
-      const readsBefore = getStagingStatusMock.mock.calls.length;
+      let draftsAtRead: Record<string, string> | null = null;
+      getStagingStatusMock.mockImplementationOnce(() => {
+        draftsAtRead = useReviewCommitDraftStore.getState().draftsByWorktree;
+        return new Promise((resolve) => {
+          finishRead = () => resolve(makeStatus());
+        });
+      });
       fireEvent.click(screen.getByTestId("review-hub-commit-primary"));
-      await waitFor(() =>
-        expect(getStagingStatusMock.mock.calls.length).toBeGreaterThan(readsBefore)
-      );
+      await waitFor(() => expect(draftsAtRead).not.toBeNull());
 
-      expect(useReviewCommitDraftStore.getState().draftsByWorktree).toEqual({});
+      expect(draftsAtRead).toEqual({});
       await act(async () => {
         finishRead();
       });
