@@ -318,6 +318,17 @@ interface FinishSessionOptions {
   committedLiveText?: string;
 }
 
+/**
+ * A spoken "scratch that" that removed nothing (#14973): the session's latest
+ * words were edited by hand, or none of them are left.
+ */
+export interface VoiceScratchRefusal {
+  panelId: string;
+  reason: "edited" | "nothing";
+  /** Tells two refusals with the same reason apart. */
+  id: number;
+}
+
 /** A first Escape that would take dictated words back out of the draft, waiting on the second. */
 export interface DictationCancelConfirm {
   panelId: string;
@@ -341,6 +352,7 @@ interface VoiceRecordingState {
   /** True in the last seconds before a listening session with no new words auto-stops. */
   idleStopWarning: boolean;
   dictationCancelConfirm: DictationCancelConfirm | null;
+  scratchRefusal: VoiceScratchRefusal | null;
   activeTarget: VoiceRecordingTarget | null;
   /**
    * Where the next session will record, from the press until it begins. A
@@ -394,6 +406,7 @@ interface VoiceRecordingState {
   setPauseStopWarning: (warning: boolean) => void;
   setIdleStopWarning: (warning: boolean) => void;
   setDictationCancelConfirm: (confirm: DictationCancelConfirm | null) => void;
+  setScratchRefusal: (refusal: VoiceScratchRefusal | null) => void;
   setErrorPanelId: (panelId: string | null) => void;
   setElapsedSeconds: (seconds: number) => void;
   /** `replace` sets the preview to `delta` instead of appending (a revised hypothesis). */
@@ -464,6 +477,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       pauseStopWarning: false,
       idleStopWarning: false,
       dictationCancelConfirm: null,
+      scratchRefusal: null,
       activeTarget: null,
       pendingTarget: null,
       lockedTarget: null,
@@ -501,6 +515,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       setPauseStopWarning: (pauseStopWarning) => set({ pauseStopWarning }),
       setIdleStopWarning: (idleStopWarning) => set({ idleStopWarning }),
       setDictationCancelConfirm: (dictationCancelConfirm) => set({ dictationCancelConfirm }),
+      setScratchRefusal: (scratchRefusal) => set({ scratchRefusal }),
 
       setErrorPanelId: (errorPanelId) => set({ errorPanelId }),
 
@@ -547,6 +562,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           lastError: null,
           errorPanelId: null,
           dictationCancelConfirm: null,
+          scratchRefusal: null,
           elapsedSeconds: 0,
           micSignal: "pending",
           micDeviceLabel: null,
@@ -844,10 +860,14 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
 
       clearPanelBuffer: (panelId) =>
         set((state) => {
-          if (!(panelId in state.panelBuffers)) return state;
+          const scratchRefusal =
+            state.scratchRefusal?.panelId === panelId ? null : state.scratchRefusal;
+          if (!(panelId in state.panelBuffers)) {
+            return scratchRefusal === state.scratchRefusal ? state : { scratchRefusal };
+          }
           const next = { ...state.panelBuffers };
           delete next[panelId];
-          return { panelBuffers: next };
+          return { panelBuffers: next, scratchRefusal };
         }),
 
       announce: (text) =>

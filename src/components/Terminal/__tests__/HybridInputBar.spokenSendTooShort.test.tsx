@@ -182,6 +182,7 @@ beforeEach(async () => {
     activeTarget: null,
     status: "idle",
     announcement: null,
+    scratchRefusal: null,
   });
   unsubscribeRanges = subscribeDictationRangeTracking();
   voiceRecordingService.initialize();
@@ -397,6 +398,35 @@ describe("HybridInputBar spoken send of a reply too short to send by voice (#149
 
     expect(caption()).toBe(SHORT_CAPTION);
     expect(spoken()).toContain("Not sent: a voice send needs three or more words");
+  });
+
+  it("retires the scratch refusal it found on the border, never a newer one (#14973)", async () => {
+    correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+    const { caption } = await mount();
+    const scratchCaption = () => document.querySelector("[data-scratch-refused-caption]");
+
+    await act(async () => {
+      startDictating();
+      say("Scratch that.");
+    });
+    expect(useVoiceRecordingStore.getState().scratchRefusal?.reason).toBe("nothing");
+    expect(scratchCaption()).not.toBeNull();
+
+    await act(async () => {
+      say("yes", true);
+    });
+
+    expect(useVoiceRecordingStore.getState().scratchRefusal).toBeNull();
+    expect(scratchCaption()).toBeNull();
+    expect(caption()).toBe(SHORT_CAPTION);
+
+    const newer = { panelId: PANEL_ID, reason: "edited" as const, id: 99 };
+    act(() => {
+      useVoiceRecordingStore.setState({ scratchRefusal: newer });
+    });
+
+    expect(useVoiceRecordingStore.getState().scratchRefusal).toBe(newer);
+    expect(scratchCaption()).not.toBeNull();
   });
 
   it("says nothing more than the stop for a send on an empty draft", async () => {

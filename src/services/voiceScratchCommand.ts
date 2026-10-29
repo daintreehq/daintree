@@ -1,4 +1,5 @@
 import { makeDraftKey } from "@/lib/draftKey";
+import type { VoiceScratchRefusal } from "@/store/voiceRecordingStore";
 
 // Only an utterance that is the command and nothing else, so "I'll scratch that
 // idea" stays literal. Trailing punctuation is the transcriber's own.
@@ -7,6 +8,18 @@ const SCRATCH_COMMAND_RE = /^\s*(?:scratch|delete)\s+that[\s.,;:!?]*$/i;
 export function isScratchCommand(text: string): boolean {
   return SCRATCH_COMMAND_RE.test(text);
 }
+
+/** What a scratch that removed nothing says aloud. */
+export const SCRATCH_REFUSAL_STATUS: Record<VoiceScratchRefusal["reason"], string> = {
+  edited: "Not scratched. The last passage was edited by hand.",
+  nothing: "Nothing left to scratch.",
+};
+
+/** The same, on the composer's border. */
+export const SCRATCH_REFUSAL_CAPTION: Record<VoiceScratchRefusal["reason"], string> = {
+  edited: "Not scratched · Edited by hand",
+  nothing: "Nothing left to scratch",
+};
 
 // The draft each scratch left, keyed by draft like a landed correction. An
 // Escape that cancels a dictation records one too. The composer takes it with

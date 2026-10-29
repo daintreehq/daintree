@@ -53,6 +53,7 @@ import {
   type VoiceMicNotice,
   type VoiceRecordingTarget,
   type VoiceRewriteRequest,
+  type VoiceScratchRefusal,
 } from "@/store/voiceRecordingStore";
 import { keepRecentDictation, keepRecentDictationCorrection } from "@/services/recentDictations";
 import { joinCompletedSegments } from "@/lib/voiceTranscriptSegments";
@@ -139,7 +140,11 @@ import {
   type OpenedMic,
   type VoiceMicDevice,
 } from "@/services/voiceMicDevices";
-import { isScratchCommand, recordScratchLanded } from "@/services/voiceScratchCommand";
+import {
+  isScratchCommand,
+  recordScratchLanded,
+  SCRATCH_REFUSAL_STATUS,
+} from "@/services/voiceScratchCommand";
 import { planFileReferenceEdits, planHeardSwaps } from "@/services/voiceFileReferences";
 import { isSpokenSendable } from "@/services/voiceSpokenSend";
 import { findRewriteComposer, type RewriteSelection } from "@/services/voiceRewriteSelection";
@@ -481,6 +486,9 @@ interface DictationCleanup {
   baseline: { text: string; spans: Map<CorrectionPassage, { from: number; to: number }> } | null;
 }
 
+type ScratchOutcome =
+  { kind: "removed"; sources: number } | { kind: "refused"; reason: VoiceScratchRefusal["reason"] };
+
 /** Where the live session may cut its next chunk, waiting on what's said after it. */
 interface ChunkBreak {
   sessionId: string;
@@ -820,6 +828,10 @@ class VoiceRecordingService {
   private idleTimeoutId: ReturnType<typeof setTimeout> | null = null;
   // An Escape that would discard dictated words waits this long for a second.
   private cancelConfirmTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  // Long enough to outlast the replacement words dictated straight after it.
+  private scratchRefusalTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private scratchRefusalCount = 0;
+  private static readonly SCRATCH_REFUSAL_NOTE_MS = 6_000;
   // Whether the Escape being handled is the key repeating, so holding it
   // down can't press it a second time.
   private escapeRepeat = false;
@@ -1009,13 +1021,19 @@ class VoiceRecordingService {
               // Recent dictations keep what landed, so scratched words leave the
               // session's transcript with the draft (#14637), every segment a
               // cleaned chunk ran together included.
-              const sources = this.scratchLastUtterance(
+              const scratch = this.scratchLastUtterance(
                 panelId,
                 projectId,
                 buffer?.dictationSessionId
               );
-              for (let i = 0; i < sources; i++) {
-                useVoiceRecordingStore.getState().dropLastCompletedSegment(panelId);
+              if (scratch.kind === "removed") {
+                for (let i = 0; i < scratch.sources; i++) {
+                  useVoiceRecordingStore.getState().dropLastCompletedSegment(panelId);
+                }
+                this.clearScratchRefusal();
+              } else {
+                // Swallowed with nothing removed, the command looked like it worked.
+                this.noteScratchRefusal(voiceState.activeTarget!, scratch.reason);
               }
               // What a waiting chunk break was judged on is gone.
               this.chunkBreak = null;
@@ -1780,6 +1798,36 @@ class VoiceRecordingService {
       const store = useVoiceRecordingStore.getState();
       if (store.dictationCancelConfirm === confirm) store.setDictationCancelConfirm(null);
     }, PRESS_AGAIN_CONFIRM_MS);
+  }
+
+  private noteScratchRefusal(
+    target: VoiceRecordingTarget,
+    reason: VoiceScratchRefusal["reason"]
+  ): void {
+    if (this.scratchRefusalTimeoutId !== null) clearTimeout(this.scratchRefusalTimeoutId);
+    const refusal = { panelId: target.panelId, reason, id: ++this.scratchRefusalCount };
+    const store = useVoiceRecordingStore.getState();
+    store.setScratchRefusal(refusal);
+    // A reply box's own composer says it while Canopy is open: the app's
+    // announcer goes unheard inside its dialog.
+    if (!isCanopyReplyTarget(target) || !useCanopyStore.getState().isOpen) {
+      store.announce(SCRATCH_REFUSAL_STATUS[reason]);
+    }
+    this.scratchRefusalTimeoutId = setTimeout(() => {
+      this.scratchRefusalTimeoutId = null;
+      // A new session or a closed panel may have dropped it already.
+      const current = useVoiceRecordingStore.getState();
+      if (current.scratchRefusal === refusal) current.setScratchRefusal(null);
+    }, VoiceRecordingService.SCRATCH_REFUSAL_NOTE_MS);
+  }
+
+  private clearScratchRefusal(): void {
+    if (this.scratchRefusalTimeoutId !== null) {
+      clearTimeout(this.scratchRefusalTimeoutId);
+      this.scratchRefusalTimeoutId = null;
+    }
+    const store = useVoiceRecordingStore.getState();
+    if (store.scratchRefusal) store.setScratchRefusal(null);
   }
 
   private clearCancelConfirm(): void {
@@ -3161,7 +3209,16 @@ class VoiceRecordingService {
           finished = takeFinishedTranscript(stoppedTarget, stoppedSessionId);
         }
         if (shouldAnnounce && this.stopAnnounces) {
-          useVoiceRecordingStore.getState().announce(announcement);
+          // A refusal still on the session's border goes with it: this would
+          // cut one just heard off before the announcer reads it.
+          const refusal = useVoiceRecordingStore.getState().scratchRefusal;
+          useVoiceRecordingStore
+            .getState()
+            .announce(
+              refusal && refusal.panelId === stoppedTarget?.panelId
+                ? `${announcement} ${SCRATCH_REFUSAL_STATUS[refusal.reason]}`
+                : announcement
+            );
         }
       } else if (nextStatus === "idle") {
         useVoiceRecordingStore.getState().setStatus("idle");
@@ -4475,17 +4532,17 @@ class VoiceRecordingService {
   }
 
   /**
-   * Removes the session's latest dictated utterance from the draft. Returns
-   * how many of the transcriber's segments it held: none when there was none
-   * left to remove, or only an edited one, and more than one when a chunk's
-   * cleanup ran several together.
+   * Removes the session's latest dictated utterance from the draft, with how
+   * many of the transcriber's segments it held: more than one when a chunk's
+   * cleanup ran several together. Refused when there was none left to remove,
+   * or only an edited one.
    */
   private scratchLastUtterance(
     panelId: string,
     projectId: string | undefined,
     sessionId: string | null | undefined
-  ): number {
-    if (!sessionId) return 0;
+  ): ScratchOutcome {
+    if (!sessionId) return { kind: "refused", reason: "nothing" };
     const inputStore = useTerminalInputStore.getState();
     const draft = inputStore.getDraftInput(panelId, projectId);
     const ranges = useDictationRangeStore.getState();
@@ -4494,7 +4551,7 @@ class VoiceRecordingService {
       .find((record) => record.sessionId === sessionId)
       ?.utterances.at(-1);
     const span = ranges.takeLastUtterance({ sessionId, panelId, projectId }, draft);
-    if (!span) return 0;
+    if (!span) return { kind: "refused", reason: last?.insertion.edited ? "edited" : "nothing" };
     const next = draft.slice(0, span.from) + draft.slice(span.to);
     // A caret that followed the words stays where they were. The composer's
     // own diff could slide it along a run the removal shares with the text
@@ -4515,7 +4572,7 @@ class VoiceRecordingService {
     recordScratchLanded(panelId, projectId, next);
     // Like the words it removes, it leaves the caret to the user.
     inputStore.bumpExternalDraftRevision({ keepsSelection: true });
-    return last?.sources ?? 1;
+    return { kind: "removed", sources: last?.sources ?? 1 };
   }
 
   /**
@@ -5895,6 +5952,7 @@ class VoiceRecordingService {
     this.clearPauseTimeout();
     this.clearIdleTimeout();
     this.clearCancelConfirm();
+    this.clearScratchRefusal();
     this.clearElapsedTimer();
     this.sessionClockRunning = false;
     this.clearMicSilenceTimer();
