@@ -150,10 +150,12 @@ describe("tab strip drag bounds (#14971)", () => {
     await act(() => new Promise((resolve) => setTimeout(resolve, CLICK_GUARD_LAPSE_MS)));
   });
 
-  it.each([
+  const modes = [
     ["animations on", false],
     ["performance mode", true],
-  ])("drags a tab past its neighbours and drops it there (%s)", (_label, performanceMode) => {
+  ] as const;
+
+  it.each(modes)("drags a tab past its neighbours and drops it there (%s)", (_label, performanceMode) => {
     if (performanceMode) document.body.dataset.performanceMode = "true";
     removeStyle = stubLayout();
     const onDragEnd = vi.fn();
@@ -174,20 +176,34 @@ describe("tab strip drag bounds (#14971)", () => {
     expect(onDragEnd.mock.calls[0]![0].over?.id).toBe("tab-c");
   });
 
-  it("stops a tab at the strip's edge", () => {
+  it.each(modes)("stops a tab at the strip's edges (%s)", (_label, performanceMode) => {
+    if (performanceMode) document.body.dataset.performanceMode = "true";
     removeStyle = stubLayout();
     render(<TabStrip onDragEnd={vi.fn()} />);
 
-    const first = screen.getByRole("tab", { name: /Tab 1/ });
-    fireEvent.mouseDown(first, { button: 0, clientX: 50, clientY: 15 });
-    fireEvent.mouseMove(document, { clientX: 60, clientY: 15 });
-    act(() => {
-      fireEvent.mouseMove(document, { clientX: 900, clientY: 15 });
-    });
-    expect(dragTranslateX("tab-a")).toBe(STRIP_WIDTH - TAB_WIDTH);
+    const drag = (tabName: RegExp, fromX: number, toX: number) => {
+      fireEvent.mouseDown(screen.getByRole("tab", { name: tabName }), {
+        button: 0,
+        clientX: fromX,
+        clientY: 15,
+      });
+      fireEvent.mouseMove(document, { clientX: fromX + Math.sign(toX - fromX) * 10, clientY: 15 });
+      act(() => {
+        fireEvent.mouseMove(document, { clientX: toX, clientY: 15 });
+      });
+    };
+    const drop = () => {
+      act(() => {
+        fireEvent.mouseUp(document);
+      });
+    };
 
-    act(() => {
-      fireEvent.mouseUp(document, { clientX: 900, clientY: 15 });
-    });
+    drag(/Tab 1/, 50, 900);
+    expect(dragTranslateX("tab-a")).toBe(STRIP_WIDTH - TAB_WIDTH);
+    drop();
+
+    drag(/Tab 3/, 250, -600);
+    expect(dragTranslateX("tab-c")).toBe(-(STRIP_WIDTH - TAB_WIDTH));
+    drop();
   });
 });
