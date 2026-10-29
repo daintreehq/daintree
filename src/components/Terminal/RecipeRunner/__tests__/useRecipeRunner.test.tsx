@@ -695,11 +695,17 @@ describe("useRecipeRunner — missing variables hold the run (#15022)", () => {
     expect(runRecipeWithResultsMock).toHaveBeenCalledTimes(1);
 
     await answer(true);
-    expect(runRecipeWithResultsMock).toHaveBeenLastCalledWith("r1", "/tmp", "wt-1", expect.anything(), {
-      spawnedBy: "recipe",
-      terminalIndices: [1],
-      expectedRecipe: { id: "r1", terminalsDigest: expect.any(String) },
-    });
+    expect(runRecipeWithResultsMock).toHaveBeenLastCalledWith(
+      "r1",
+      "/tmp",
+      "wt-1",
+      expect.anything(),
+      {
+        spawnedBy: "recipe",
+        terminalIndices: [1],
+        expectedRecipe: { id: "r1", terminalsDigest: expect.any(String) },
+      }
+    );
   });
 });
 

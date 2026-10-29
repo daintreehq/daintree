@@ -392,7 +392,11 @@ export function useRecipeRunner({
             cwd,
             activeWorktreeId ?? undefined,
             context,
-            { spawnedBy: "recipe", terminalIndices: indices, ...(expectedRecipe && { expectedRecipe }) }
+            {
+              spawnedBy: "recipe",
+              terminalIndices: indices,
+              ...(expectedRecipe && { expectedRecipe }),
+            }
           );
           if (runGenerationRef.current !== runId) return;
           // Declining the confirm opened nothing, so the outstanding failures

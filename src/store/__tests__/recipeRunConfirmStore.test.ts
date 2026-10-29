@@ -54,9 +54,7 @@ describe("recipeRunConfirmStore (#15022)", () => {
     const third = requestRecipeRunConfirmation({ recipeName: "C", missing: ["number"] });
 
     queued.abort();
-    expect(useRecipeRunConfirmStore.getState().queue.map((item) => item.recipeName)).toEqual([
-      "C",
-    ]);
+    expect(useRecipeRunConfirmStore.getState().queue.map((item) => item.recipeName)).toEqual(["C"]);
     asking.abort();
     expect(current()?.recipeName).toBe("C");
 
@@ -71,7 +69,10 @@ describe("recipeRunConfirmStore (#15022)", () => {
     controller.abort();
 
     await expect(
-      requestRecipeRunConfirmation({ recipeName: "A", missing: ["issue_number"] }, controller.signal)
+      requestRecipeRunConfirmation(
+        { recipeName: "A", missing: ["issue_number"] },
+        controller.signal
+      )
     ).resolves.toBe(false);
     expect(current()).toBeNull();
   });
