@@ -1636,6 +1636,34 @@ describe("useDevServer adversarial races", () => {
     expect(ensureMock).toHaveBeenCalledTimes(2);
   });
 
+  it("an unmounted hook still delivers a Start queued behind its in-flight ensure (#13169)", async () => {
+    const inFlight = createDeferred<DevPreviewSessionState>();
+    ensureMock.mockImplementationOnce(() => inFlight.promise);
+
+    const { result, unmount } = renderHook(() =>
+      useDevServer({ panelId: "panel-1", devCommand: "npm run dev", cwd: "/repo" })
+    );
+    await waitFor(() => expect(ensureMock).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      await result.current.start();
+    });
+    unmount();
+
+    await act(async () => {
+      inFlight.resolve(
+        buildState({ panelId: "panel-1", projectId: "project-1", status: "stopped" })
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(ensureMock).toHaveBeenCalledTimes(2));
+    expect(ensureMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ devCommand: "npm run dev", resumeUserStopped: true })
+    );
+  });
+
   it("only applies the latest queued config after many rapid changes", async () => {
     const firstEnsure = createDeferred<DevPreviewSessionState>();
 

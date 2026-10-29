@@ -356,9 +356,10 @@ export function useDevServer({
         pendingEnsureRef.current = null;
         // Drain against the config as it is now, not as it was when queued: a
         // switch away and back mid-ensure leaves nothing new to send. An
-        // unmounted hook leaves that to whichever mount replaced it.
-        const nextKey =
-          pending && isMountedRef.current ? ensureKeyFor(latestContextRef.current) : null;
+        // unmounted hook leaves config catch-up to whichever mount replaced it,
+        // but still delivers a Start the user clicked.
+        const drains = pending !== null && (isMountedRef.current || pending.resume);
+        const nextKey = drains ? ensureKeyFor(latestContextRef.current) : null;
         if (pending && nextKey && (nextKey !== sentKey || pending.resume)) {
           safeFireAndForget(ensureLatestConfig(pending.resume), {
             context: "Re-running queued dev preview ensure",
