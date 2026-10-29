@@ -4,6 +4,7 @@ import type { TerminalRecipe, RecipeTerminal, RecipeTerminalType } from "@/types
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Callout } from "@/components/ui/Callout";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -19,7 +20,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
-import { useRecipeStore, MAX_TERMINALS_PER_RECIPE } from "@/store/recipeStore";
+import {
+  useRecipeStore,
+  MAX_TERMINALS_PER_RECIPE,
+  type RecipeLayoutOmissions,
+} from "@/store/recipeStore";
 import { useRecipeEditorActivityStore } from "@/store/recipeEditorActivityStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
@@ -35,6 +40,7 @@ import {
 import { RecipeVariablePreview } from "@/components/TerminalRecipe/RecipeVariablePreview";
 import { getAgentConfig } from "@/config/agents";
 import { getRecipeScope } from "@/utils/recipeScope";
+import { pluralize } from "@/lib/pluralize";
 
 function cloneTerminal(t: RecipeTerminal): RecipeTerminal {
   return { ...t, env: t.env ? { ...t.env } : {} };
@@ -74,6 +80,8 @@ function serializeEditorState(
 interface RecipeEditorProps {
   recipe?: TerminalRecipe;
   initialTerminals?: RecipeTerminal[];
+  /** What the layout capture behind `initialTerminals` left out (#14968). */
+  layoutOmissions?: RecipeLayoutOmissions;
   worktreeId?: string;
   defaultScope?: "global" | "project";
   isOpen: boolean;
@@ -136,6 +144,50 @@ interface TypeStash {
 
 const FAILURE_PRESERVE_CAPTION = "Failures always preserve terminal for debugging";
 
+const OMITTED_PANEL_NOUNS = new Map<string, string>([
+  ["browser", "browser"],
+  ["review", "review panel"],
+  ["file", "file viewer"],
+  ["file-browser", "file browser"],
+  ["diff", "diff viewer"],
+]);
+
+const englishList = new Intl.ListFormat("en", { style: "long", type: "conjunction" });
+
+/**
+ * One sentence per reason a captured panel is missing from the draft. Plugin
+ * panel kinds are counted together rather than named, so a plugin's own kind
+ * string never lands in this copy.
+ */
+function describeLayoutOmissions(omitted: RecipeLayoutOmissions): string[] {
+  const nounCounts = new Map<string, number>();
+  let otherCount = 0;
+  let unsupportedCount = 0;
+  for (const [kind, count] of Object.entries(omitted.panelKinds)) {
+    if (count <= 0) continue;
+    unsupportedCount += count;
+    const noun = OMITTED_PANEL_NOUNS.get(kind);
+    if (noun) nounCounts.set(noun, (nounCounts.get(noun) ?? 0) + count);
+    else otherCount += count;
+  }
+  const parts = [...nounCounts].map(([noun, count]) => pluralize(count, noun));
+  if (otherCount > 0) parts.push(pluralize(otherCount, "other panel"));
+
+  const sentences: string[] = [];
+  if (unsupportedCount > 0) {
+    sentences.push(
+      `Recipes can't hold ${englishList.format(parts)}, so ${unsupportedCount === 1 ? "it was" : "they were"} left out.`
+    );
+  }
+  // "Panel", not "terminal": a dev preview past the cap is counted here too.
+  if (omitted.cappedTerminalCount > 0) {
+    sentences.push(
+      `${pluralize(omitted.cappedTerminalCount, "more panel")} ${omitted.cappedTerminalCount === 1 ? "was" : "were"} left out: a recipe holds at most ${MAX_TERMINALS_PER_RECIPE} terminals.`
+    );
+  }
+  return sentences;
+}
+
 /**
  * Where an existing recipe is saved, in the manager's words and with its
  * section's glyph — a team recipe is a tracked file, so "Project" alone would
@@ -164,6 +216,7 @@ function savedScope(recipe: TerminalRecipe): {
 export function RecipeEditor({
   recipe,
   initialTerminals,
+  layoutOmissions,
   worktreeId,
   defaultScope,
   isOpen,
@@ -441,6 +494,13 @@ export function RecipeEditor({
 
   const recipeDisplayName = (recipe?.name ?? recipeName).trim();
 
+  // Describes the capture the draft started from, so it stays put while steps
+  // are edited or removed.
+  const omissionSentences =
+    !recipe && initialTerminals?.length && layoutOmissions
+      ? describeLayoutOmissions(layoutOmissions)
+      : [];
+
   const submitOnEnter = (event: React.KeyboardEvent) => {
     if (!isEnterToSubmit(event)) return;
     event.preventDefault();
@@ -630,6 +690,18 @@ export function RecipeEditor({
                 </Button>
               }
             >
+              {omissionSentences.length > 0 && (
+                <Callout
+                  severity={layoutOmissions?.cappedTerminalCount ? "warning" : "info"}
+                  title="Some panels weren't captured"
+                  className="col-span-2"
+                  data-testid="recipe-layout-omissions"
+                >
+                  {omissionSentences.map((sentence) => (
+                    <p key={sentence}>{sentence}</p>
+                  ))}
+                </Callout>
+              )}
               {/* Each card is a subgrid of the form, so its fields sit on the
                   same label rail as the recipe's own rows rather than a second
                   layout of stacked labels. */}

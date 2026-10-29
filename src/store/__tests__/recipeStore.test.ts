@@ -296,6 +296,144 @@ describe("recipeStore", () => {
       expect(devEntry?.agentLaunchFlags).toBeUndefined();
     });
 
+    it("counts only recipe-capable panels toward the step cap (#14968)", () => {
+      const browserIds = Array.from({ length: 10 }, (_, i) => `browser-${i}`);
+      panelStoreState.panelIds = [...browserIds, "panel-shell"];
+      panelStoreState.panelsById = Object.fromEntries([
+        ...browserIds.map((id) => [
+          id,
+          { id, kind: "browser", title: "Browser", worktreeId: "wt-1", location: "grid" },
+        ]),
+        [
+          "panel-shell",
+          {
+            id: "panel-shell",
+            kind: "terminal",
+            title: "Shell",
+            worktreeId: "wt-1",
+            location: "grid",
+            command: "npm test",
+          },
+        ],
+      ]);
+
+      const terminals = useRecipeStore.getState().generateRecipeFromActiveTerminals("wt-1");
+      expect(terminals.map((t) => t.command)).toEqual(["npm test"]);
+    });
+
+    it("reports panels a recipe can't hold and steps past the cap (#14968)", () => {
+      const shellIds = Array.from({ length: 12 }, (_, i) => `shell-${i}`);
+      const panels: Array<{ id: string } & Record<string, unknown>> = [
+        { id: "browser-a", kind: "browser" },
+        ...shellIds.slice(0, 6).map((id) => ({ id, kind: "terminal", command: id })),
+        { id: "file-a", kind: "file" },
+        { id: "dev-a", kind: "dev-preview", devCommand: "npm run dev" },
+        ...shellIds.slice(6).map((id) => ({ id, kind: "terminal", command: id })),
+        { id: "browser-b", kind: "browser" },
+        { id: "plugin-a", kind: "acme.kanban" },
+        // Outside the capture: trashed, or another worktree's.
+        { id: "trashed", kind: "terminal", location: "trash" },
+        { id: "elsewhere", kind: "browser", worktreeId: "wt-2" },
+      ];
+      panelStoreState.panelIds = panels.map((p) => p.id);
+      panelStoreState.panelsById = Object.fromEntries(
+        panels.map((p) => [p.id, { worktreeId: "wt-1", location: "grid", title: "", ...p }])
+      );
+
+      const { terminals, omitted } = useRecipeStore.getState().captureRecipeFromLayout("wt-1");
+
+      expect(terminals.map((t) => t.command ?? t.devCommand)).toEqual([
+        ...shellIds.slice(0, 6),
+        "npm run dev",
+        ...shellIds.slice(6, 9),
+      ]);
+      expect(omitted.cappedTerminalCount).toBe(3);
+      expect(omitted.panelKinds).toEqual({ browser: 2, file: 1, "acme.kanban": 1 });
+      expect(Object.keys(omitted.panelKinds)).toEqual(["browser", "file", "acme.kanban"]);
+      expect(useRecipeStore.getState().generateRecipeFromActiveTerminals("wt-1")).toEqual(
+        terminals
+      );
+    });
+
+    it("reports nothing omitted for a layout that fits", () => {
+      panelStoreState.panelIds = ["panel-shell"];
+      panelStoreState.panelsById = {
+        "panel-shell": {
+          id: "panel-shell",
+          kind: "terminal",
+          worktreeId: "wt-1",
+          location: "grid",
+          command: "npm run lint",
+        },
+      };
+
+      const { terminals, omitted } = useRecipeStore.getState().captureRecipeFromLayout("wt-1");
+      expect(terminals.map((t) => t.command)).toEqual(["npm run lint"]);
+      expect(omitted).toEqual({ panelKinds: {}, cappedTerminalCount: 0 });
+    });
+
+    it("reports an unsupported panel even when the cap isn't reached", () => {
+      panelStoreState.panelIds = ["panel-shell", "panel-browser"];
+      panelStoreState.panelsById = {
+        "panel-shell": {
+          id: "panel-shell",
+          kind: "terminal",
+          worktreeId: "wt-1",
+          location: "grid",
+        },
+        "panel-browser": {
+          id: "panel-browser",
+          kind: "browser",
+          worktreeId: "wt-1",
+          location: "grid",
+        },
+      };
+
+      const { terminals, omitted } = useRecipeStore.getState().captureRecipeFromLayout("wt-1");
+      expect(terminals).toHaveLength(1);
+      expect(omitted).toEqual({ panelKinds: { browser: 1 }, cappedTerminalCount: 0 });
+    });
+
+    it("counts a dev preview past the cap as a capped step, not an unsupported kind", () => {
+      const shellIds = Array.from({ length: 10 }, (_, i) => `shell-${i}`);
+      panelStoreState.panelIds = [...shellIds, "panel-dev"];
+      panelStoreState.panelsById = Object.fromEntries([
+        ...shellIds.map((id) => [
+          id,
+          { id, kind: "terminal", worktreeId: "wt-1", location: "grid" },
+        ]),
+        [
+          "panel-dev",
+          { id: "panel-dev", kind: "dev-preview", worktreeId: "wt-1", location: "grid" },
+        ],
+      ]);
+
+      const { terminals, omitted } = useRecipeStore.getState().captureRecipeFromLayout("wt-1");
+      expect(terminals.map((t) => t.type)).toEqual(Array(10).fill("terminal"));
+      expect(omitted).toEqual({ panelKinds: {}, cappedTerminalCount: 1 });
+    });
+
+    it("counts a kind named like an Object.prototype key like any other", () => {
+      panelStoreState.panelIds = ["p-proto", "p-ctor", "p-ctor-2", "panel-shell"];
+      panelStoreState.panelsById = {
+        "p-proto": { id: "p-proto", kind: "__proto__", worktreeId: "wt-1", location: "grid" },
+        "p-ctor": { id: "p-ctor", kind: "constructor", worktreeId: "wt-1", location: "grid" },
+        "p-ctor-2": { id: "p-ctor-2", kind: "constructor", worktreeId: "wt-1", location: "grid" },
+        "panel-shell": {
+          id: "panel-shell",
+          kind: "terminal",
+          worktreeId: "wt-1",
+          location: "grid",
+        },
+      };
+
+      const { omitted } = useRecipeStore.getState().captureRecipeFromLayout("wt-1");
+      expect(Object.entries(omitted.panelKinds)).toEqual([
+        ["__proto__", 1],
+        ["constructor", 2],
+      ]);
+    });
+
     it("captures owned titles and drops derived ones so the clone can't pin them (#11872)", () => {
       panelStoreState.panelIds = ["panel-derived", "panel-custom", "panel-user"];
       panelStoreState.panelsById = {

@@ -104,6 +104,7 @@ function ProjectDialogHost() {
     isRecipeEditorOpen,
     recipeEditorWorktreeId,
     recipeEditorInitialTerminals,
+    recipeEditorLayoutOmissions,
     recipeEditorDefaultScope,
     recipeManagerEdit,
     isRecipeManagerOpen,
@@ -135,6 +136,7 @@ function ProjectDialogHost() {
               recipe={recipeManagerEdit}
               worktreeId={recipeEditorWorktreeId}
               initialTerminals={recipeEditorInitialTerminals}
+              layoutOmissions={recipeEditorLayoutOmissions}
               defaultScope={recipeEditorDefaultScope}
               isOpen={isRecipeEditorOpen}
               onClose={handleCloseRecipeEditor}
