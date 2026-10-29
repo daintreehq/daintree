@@ -295,16 +295,13 @@ export function IssuePickerDialog({
     loadMoreIdRef.current = id;
     setIsLoadingMore(true);
     setLoadMoreFailed(false);
-    let result: Awaited<ReturnType<typeof forgeClient.listIssues>> | null = null;
-    try {
-      result = await forgeClient.listIssues(worktree.path, {
+    const result = await forgeClient
+      .listIssues(worktree.path, {
         search: resultScope.query || undefined,
         state: resultScope.state,
         cursor: nextCursor,
-      });
-    } catch {
-      result = null;
-    }
+      })
+      .catch(() => null);
     if (loadMoreIdRef.current === id) loadMoreIdRef.current = null;
     // A new query, filter, retry or session has replaced the set this page
     // continues; splicing it in would mix two result sets.
@@ -314,12 +311,11 @@ export function IssuePickerDialog({
       setLoadMoreFailed(true);
       return;
     }
-    const page = result;
     // The result scope is left alone on purpose: changing it rewinds the
     // scroll, and an appended page continues the list rather than replacing it.
-    setIssues((prev) => appendUnique(prev, page.items));
-    setNextCursor(page.hasMore ? page.nextCursor : null);
-    if (page.totalCount !== undefined) setTotalCount(page.totalCount);
+    setIssues((prev) => appendUnique(prev, result.items));
+    setNextCursor(result.hasMore ? result.nextCursor : null);
+    if (result.totalCount !== undefined) setTotalCount(result.totalCount);
   };
 
   const retry = useCallback(() => {

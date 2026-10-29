@@ -75,9 +75,12 @@ export function IssueSelector({
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreFailed, setLoadMoreFailed] = useState(false);
-  // The generation a page is in flight for, read synchronously so a second
-  // Enter before the next render can't start a second request.
-  const loadMoreGenRef = useRef<number | null>(null);
+  // The fetch run that produced the rows on screen. A close, a new query, a
+  // new project or a retry aborts it, and with it any page continuing its set.
+  const runRef = useRef<AbortController | null>(null);
+  // The run a page is in flight for, read synchronously so a second Enter
+  // before the next render can't start a second request.
+  const loadMoreRunRef = useRef<AbortController | null>(null);
   const debouncedQuery = useDebounce(query, 300);
   const requestGenRef = useRef(0);
   const prevProjectPathRef = useRef(projectPath);
@@ -93,6 +96,7 @@ export function IssueSelector({
     if (!open) return;
 
     const abortController = new AbortController();
+    runRef.current = abortController;
     const gen = ++requestGenRef.current;
     setLoading(true);
     setLoadFailed(false);
@@ -124,19 +128,14 @@ export function IssueSelector({
         }
       });
 
-    return () => {
-      abortController.abort();
-      // A page in flight continues the set this run fetched; a close, a new
-      // query, a new project or a retry replaces that set.
-      requestGenRef.current++;
-    };
+    return () => abortController.abort();
   }, [open, debouncedQuery, projectPath, retryTick]);
 
   const loadMore = () => {
-    if (loading || nextCursor === null) return;
-    const gen = requestGenRef.current;
-    if (loadMoreGenRef.current === gen) return;
-    loadMoreGenRef.current = gen;
+    const run = runRef.current;
+    if (loading || nextCursor === null || !run || run.signal.aborted) return;
+    if (loadMoreRunRef.current === run) return;
+    loadMoreRunRef.current = run;
     setLoadingMore(true);
     setLoadMoreFailed(false);
     forgeClient
@@ -146,18 +145,18 @@ export function IssueSelector({
         cursor: nextCursor,
       })
       .then((res) => {
-        if (requestGenRef.current !== gen) return;
+        if (run.signal.aborted) return;
         setIssues((prev) => appendUnique(prev, res.items));
         setNextCursor(res.hasMore ? res.nextCursor : null);
       })
       .catch((err) => {
-        if (requestGenRef.current !== gen) return;
+        if (run.signal.aborted) return;
         setLoadMoreFailed(true);
         logError("Failed to fetch more issues", err);
       })
       .finally(() => {
-        if (loadMoreGenRef.current === gen) loadMoreGenRef.current = null;
-        if (requestGenRef.current === gen) setLoadingMore(false);
+        if (loadMoreRunRef.current === run) loadMoreRunRef.current = null;
+        if (!run.signal.aborted) setLoadingMore(false);
       });
   };
 
