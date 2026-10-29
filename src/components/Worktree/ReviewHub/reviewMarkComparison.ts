@@ -128,18 +128,23 @@ export function describeReviewMarkComparison(
       }
       const commits = newCommits(result.commits.commits);
       const files = branchFiles(result.files);
-      const { truncated } = result.commits;
+      // A cut-short list can't say how many new commits there are, or that
+      // there are none: what it left out may be exactly that. The files are
+      // still complete, so they're still counted.
+      if (result.commits.truncated) {
+        return {
+          kind: "incomplete",
+          text:
+            files > 0
+              ? `${pluralize(files, "file")} since · too many commits to list`
+              : "Too many commits to list",
+        };
+      }
       const rewritten = result.commits.history === "rewritten";
       const anyChange = result.commits.commits.length > 0 || result.files.length > 0 || rewritten;
       if (!anyChange) return { kind: "nothing-new" };
-      // A truncated list can't say how many new commits there are, or that
-      // there are none: what it left out may be exactly that.
       const counts = [
-        truncated
-          ? "more commits than can be listed"
-          : commits > 0
-            ? pluralize(commits, "new commit")
-            : null,
+        commits > 0 ? pluralize(commits, "new commit") : null,
         files > 0 ? pluralize(files, "file") : null,
       ].filter((part): part is string => part !== null);
       const since = counts.length > 0 ? `${counts.join(", ")} since` : "Nothing new on this branch";

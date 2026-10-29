@@ -97,8 +97,14 @@ export function SinceReviewPanel({
   // Same gate and dwell as the vs-base list, so a fast comparison paints
   // nothing and a slow one never flashes its skeleton for a frame.
   const showSkeleton = useSkeletonDisplayFloor(useDohertyGate(comparing));
-  if (showSkeleton) {
-    return <ReviewHubListSkeleton label="Comparing with your review" onRetry={onRetry} />;
+  if (comparing || showSkeleton) {
+    return (
+      <div data-testid="since-review-comparing" aria-busy={comparing || undefined}>
+        {showSkeleton && (
+          <ReviewHubListSkeleton label="Comparing with your review" onRetry={onRetry} />
+        )}
+      </div>
+    );
   }
 
   const showWorkingTree = (
@@ -108,8 +114,6 @@ export function SinceReviewPanel({
   );
 
   switch (view.kind) {
-    case "comparing":
-      return null;
     case "unavailable":
       return (
         <EmptyState
