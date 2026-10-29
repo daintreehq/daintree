@@ -6,6 +6,9 @@ import { useFleetTargetOverridesStore } from "@/store/fleetTargetOverridesStore"
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logWarn } from "@/utils/logger";
 import { resolveFleetBroadcastTargetIds } from "./fleetBroadcast";
+import { getCrossHostTarget, isHostQualifiedTargetId } from "./crossHostFleet";
+import { notify } from "@/lib/notify";
+import { requestHostsOverview } from "@/components/Hosts/Overview/hostsOverviewRequests";
 import {
   executeFleetBroadcast,
   filterEligibleIds,
@@ -110,7 +113,15 @@ function describeFailureSplit(permanent: number, transient: number): string {
   return `${transient} failed`;
 }
 
-function buildBroadcastAnnouncement(result: FleetExecutionResult): string {
+/** The hosts a broadcast's failures were on, for words a screen reader can act on. */
+function failedHostsSuffix(failedHosts: readonly string[]): string {
+  return failedHosts.length === 0 ? "" : ` on ${failedHosts.join(" and ")}`;
+}
+
+function buildBroadcastAnnouncement(
+  result: FleetExecutionResult,
+  failedHosts: readonly string[] = []
+): string {
   const permanent = result.permanentlyFailedIds.length;
   const transient = result.transientlyFailedIds.length;
   const skipped =
@@ -126,12 +137,12 @@ function buildBroadcastAnnouncement(result: FleetExecutionResult): string {
       return "Broadcast cancelled";
     }
     if (result.failureCount > 0) {
-      return `Broadcast cancelled — ${result.successCount} sent, ${describeFailureSplit(permanent, transient)}${skipped}`;
+      return `Broadcast cancelled — ${result.successCount} sent, ${describeFailureSplit(permanent, transient)}${failedHostsSuffix(failedHosts)}${skipped}`;
     }
     return `Broadcast cancelled — ${result.successCount} sent${skipped}`;
   }
   if (result.failureCount > 0) {
-    return `Broadcast sent to ${result.successCount} — ${describeFailureSplit(permanent, transient)}`;
+    return `Broadcast sent to ${result.successCount} — ${describeFailureSplit(permanent, transient)}${failedHostsSuffix(failedHosts)}`;
   }
   return `Broadcast sent to ${pluralize(result.successCount, "terminal", "terminals")}`;
 }
@@ -142,6 +153,14 @@ function buildBroadcastAnnouncement(result: FleetExecutionResult): string {
  * failure dot, and the result is announced.
  */
 function applyFleetBroadcastOutcome(text: string, result: FleetExecutionResult): void {
+  // Read before the dead ones are disarmed: afterwards nothing here knows them.
+  const failedRemote = result.failedIds
+    .map((id) => getCrossHostTarget(id))
+    .filter((target) => target !== null);
+  const failedHosts = [...new Set(failedRemote.map((target) => target.hostName))];
+  const goneRemote = failedRemote.filter((target) =>
+    result.permanentlyFailedIds.includes(target.key)
+  );
   if (result.failureCount > 0) {
     logWarn("[fleetEnterBroadcast] broadcast had rejections", {
       failureCount: result.failureCount,
@@ -198,7 +217,10 @@ function applyFleetBroadcastOutcome(text: string, result: FleetExecutionResult):
       }
     }
   }
-  useAnnouncerStore.getState().announce(buildBroadcastAnnouncement(result), "polite");
+  useAnnouncerStore.getState().announce(buildBroadcastAnnouncement(result, failedHosts), "polite");
+  if (goneRemote.length > 0 && selectFleetMemberCount(useFleetArmingStore.getState()) === 0) {
+    notifyFleetEmptied(goneRemote);
+  }
   // Subtle audio confirmation that the prompt fanned out. Reuses the
   // existing context-injected sound — semantically a fleet broadcast
   // IS injecting the same context into N agents. SoundService handles
@@ -210,16 +232,35 @@ function applyFleetBroadcastOutcome(text: string, result: FleetExecutionResult):
 }
 
 /**
+ * The last members were agents on other hosts that are gone, so the ribbon
+ * that would have said so went with them: nothing else on screen tells the
+ * person why their fleet vanished.
+ */
+function notifyFleetEmptied(gone: ReadonlyArray<{ title: string; hostName: string }>): void {
+  const hosts = [...new Set(gone.map((target) => target.hostName))].join(" and ");
+  const who = gone.length === 1 ? `“${gone[0]!.title}” isn't` : `${gone.length} agents aren't`;
+  notify({
+    type: "error",
+    title: `Couldn't reach ${hosts}`,
+    message: `${who} running there anymore, so the fleet is empty. Your message comes back when you add agents again.`,
+    action: { label: "Hosts overview", onClick: () => void requestHostsOverview() },
+  });
+}
+
+/**
  * Send a draft to the whole fleet from outside any pane's composer — the
  * ribbon's own field, which is the only place to type when every member is
- * an agent on another host. True when something was dispatched.
+ * an agent on another host. True when at least one agent took it.
  */
 export async function sendDraftToFleet(text: string): Promise<boolean> {
   const targets = filterEligibleIds(resolveFleetBroadcastTargetIds());
-  if (text.length === 0 || targets.length < 2) return false;
+  // One agent on another host is still a fleet worth messaging: this field is
+  // the only way to reach it from here. A pane here has its own composer.
+  const minimum = targets.every(isHostQualifiedTargetId) ? 1 : 2;
+  if (text.length === 0 || targets.length < minimum) return false;
   const result = await runManagedFleetBroadcast(text, targets);
   applyFleetBroadcastOutcome(text, result);
-  return true;
+  return result.successCount > 0;
 }
 
 /**

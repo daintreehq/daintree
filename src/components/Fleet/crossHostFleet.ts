@@ -17,6 +17,11 @@ export function crossHostTargetKey(hostId: HostId, terminalId: string): string {
   return `${PREFIX}${hostId}:${terminalId}`;
 }
 
+/** The tail of a host's terminal id: enough to tell two same-named agents apart. */
+export function shortTerminalId(terminalId: string): string {
+  return terminalId.length <= 6 ? terminalId : terminalId.slice(-6);
+}
+
 /** Whether `id` names another host's agent: never a local pane, armed or not. */
 export function isHostQualifiedTargetId(id: string): boolean {
   return id.startsWith(PREFIX);
