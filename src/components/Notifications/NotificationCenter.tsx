@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   ArrowDown,
@@ -326,7 +326,13 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   // In state, not a render-time Date.now(): the compiler caches that with the
   // memo reading it, and an open inbox would keep pinning a thread that had
   // aged out. Re-read on new history and the moment a pinned thread ages out.
-  const railNow = useWallClock(entries, (at) => msUntilNeedsAttentionExpiry(entries, at));
+  // The delay stays stable across unrelated re-renders, each of which would
+  // otherwise re-arm the wake-up from the old reading and push it back.
+  const nextRailExpiry = useCallback(
+    (at: number) => msUntilNeedsAttentionExpiry(entries, at),
+    [entries]
+  );
+  const railNow = useWallClock(entries, nextRailExpiry);
 
   const { needsAttentionGroups, needsAttentionOverflow, chronoSections, dividerGroupId } = useMemo(
     () =>

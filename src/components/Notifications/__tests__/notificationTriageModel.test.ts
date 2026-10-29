@@ -184,17 +184,12 @@ describe("notificationTriageModel", () => {
     expect(result.needsAttentionOverflow).toBe(1);
   });
 
-  it("wakes the rail just past the soonest candidate's horizon, snoozed ones included", () => {
+  it("wakes the rail just past the soonest candidate's horizon", () => {
     const now = 50_000_000_000;
     const ageOutIn = (ms: number) => now + ms - NEEDS_ATTENTION_MAX_AGE_MS;
     const later = entry({ type: "error", seenAsToast: false, timestamp: ageOutIn(90_000) });
-    const snoozedSooner = entry({
-      type: "warning",
-      seenAsToast: false,
-      timestamp: ageOutIn(30_000),
-      correlationId: "s",
-    });
-    expect(msUntilNeedsAttentionExpiry([later, snoozedSooner], now)).toBe(30_001);
+    const sooner = entry({ type: "warning", seenAsToast: false, timestamp: ageOutIn(30_000) });
+    expect(msUntilNeedsAttentionExpiry([later, sooner], now)).toBe(30_001);
 
     // Nothing that could ever pin schedules a wake-up.
     const notCandidates = [
