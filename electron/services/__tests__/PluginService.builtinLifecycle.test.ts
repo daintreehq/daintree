@@ -843,8 +843,12 @@ describe("PluginService built-in plugin loading", () => {
       });
       await encryptReached;
       const uninstall = service.uninstallPlugin("acme.wipe", true);
-      // Lets the sweep register its wipe before the held write can land.
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // The sweep registers its wipes synchronously once the install directory
+      // is gone, so the held write can only resume after that.
+      await vi.waitFor(() =>
+        expect(fs.access(path.join(pluginsRoot, "acme.wipe"))).rejects.toThrow()
+      );
+      await new Promise((resolve) => setImmediate(resolve));
       release();
 
       await expect(write).rejects.toThrow(/settings were deleted/);

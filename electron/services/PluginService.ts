@@ -7184,28 +7184,40 @@ export class PluginService {
       path.join(settingsRoot, "accounts"),
       this.storage.storageRoot(),
     ];
-    const files = new Set(userDirs.map((dir) => path.join(dir, ownFile)));
-    const dirs = [...userDirs];
     const localRoot = path.join(settingsRoot, "local");
-    for (const projectId of await listDir(localRoot)) {
-      if (isProjectWorkspaceId(projectId)) dirs.push(path.join(localRoot, projectId));
-    }
-    for (const dir of dirs) {
-      for (const name of await listDir(dir)) {
-        if (isPluginFile(name)) files.add(path.join(dir, name));
-      }
-    }
+    // Registered before the first await: a queued write that finishes while the
+    // directories are read would otherwise create its file after the listing.
     const userDirSet = new Set(userDirs.map((dir) => path.resolve(dir)));
     const resolvedLocalRoot = path.resolve(localRoot);
+    const wiped = new Set(userDirs.map((dir) => path.resolve(dir, ownFile)));
     for (const file of queuedSettingsFiles()) {
       const dir = path.dirname(file);
       const inLocalProject =
         path.dirname(dir) === resolvedLocalRoot && isProjectWorkspaceId(path.basename(dir));
       if ((userDirSet.has(dir) || inLocalProject) && isPluginFile(path.basename(file))) {
-        files.add(file);
+        wiped.add(file);
       }
     }
-    for (const file of files) await wipeSettingsFile(file);
+    const wipes = [...wiped].map((file) => wipeSettingsFile(file));
+    try {
+      const dirs = [...userDirs];
+      for (const projectId of await listDir(localRoot)) {
+        if (isProjectWorkspaceId(projectId)) dirs.push(path.join(localRoot, projectId));
+      }
+      for (const dir of dirs) {
+        for (const name of await listDir(dir)) {
+          const file = path.resolve(dir, name);
+          if (isPluginFile(name) && !wiped.has(file)) {
+            wiped.add(file);
+            wipes.push(wipeSettingsFile(file));
+          }
+        }
+      }
+    } catch (err) {
+      await Promise.allSettled(wipes);
+      throw err;
+    }
+    await Promise.all(wipes);
   }
 
   /** Forget every enablement in a project that was removed from Daintree. */
