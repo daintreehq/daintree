@@ -86,6 +86,10 @@ vi.mock("@/config/agents", () => ({
   getMergedPresets: () => [],
 }));
 
+vi.mock("@/services/layout/reorderGroupTabs", () => ({
+  reorderGroupTabsWithUndo: vi.fn(),
+}));
+
 vi.mock("@/services/terminal/panelDuplicationService", () => ({
   buildPanelDuplicateOptions: vi.fn(),
 }));
