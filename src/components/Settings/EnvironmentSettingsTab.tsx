@@ -10,10 +10,12 @@ import { useRowFocus } from "./useRowFocus";
 import { isSensitiveEnvKey } from "@shared/utils/envVars";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
-import { useSettingsTabFlush } from "./SettingsFlushRegistry";
+import { useSettingsTabFlush, type SettingsFlushFailure } from "./SettingsFlushRegistry";
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { invalidateGlobalEnvCache } from "@/clients/globalEnvClient";
+
+const ENVIRONMENT_SECTION_ID = "environment-variables";
 
 function envVarsFromRecord(record: Record<string, string> | undefined): EnvVarDraft[] {
   if (!record) return [];
@@ -163,10 +165,11 @@ export function EnvironmentSettingsTab() {
     });
   };
 
-  const handleSave = async () => {
-    if (isSaving) return;
+  const save = async (): Promise<SettingsFlushFailure | undefined> => {
     setSaveAttempted(true);
-    if (Object.keys(validateEnvRows(envRows)).length > 0) return;
+    const errors = validateEnvRows(envRows);
+    const firstInvalid = envRows.find((row) => errors[row.id]);
+    if (firstInvalid) return { landOn: firstInvalid.id };
 
     setIsSaving(true);
     setSaveError(null);
@@ -179,11 +182,23 @@ export function EnvironmentSettingsTab() {
       invalidateGlobalEnvCache();
       setSavedSnapshot(record);
       setSaveAttempted(false);
+      return undefined;
     } catch (err) {
       setSaveError(formatErrorMessage(err, "Failed to save environment variables"));
+      return { landOn: ENVIRONMENT_SECTION_ID };
     } finally {
       setIsSaving(false);
     }
+  };
+
+  // A close that lands during a Save reports that Save's outcome, not a success
+  // for a write that can still fail.
+  const saveInFlightRef = useRef<Promise<SettingsFlushFailure | undefined> | null>(null);
+  const handleSave = () => {
+    saveInFlightRef.current ??= save().finally(() => {
+      saveInFlightRef.current = null;
+    });
+    return saveInFlightRef.current;
   };
 
   const handleDiscard = () => {
@@ -194,9 +209,8 @@ export function EnvironmentSettingsTab() {
   };
 
   // Persist pending edits before the dialog dismisses (X click) or the
-  // WebContentsView detaches on project switch. handleSave's validate() gate
-  // is intentional — invalid rows are dropped rather than persisted (matches
-  // user-initiated save).
+  // WebContentsView detaches on project switch. Invalid rows are never
+  // persisted; on a close the failure keeps Settings open on them instead.
   useSettingsTabFlush("environment", handleSave, isDirty);
 
   const sectionTitle = "Global variables";
@@ -208,7 +222,7 @@ export function EnvironmentSettingsTab() {
       <SettingsSection
         title={sectionTitle}
         description={sectionDescription}
-        id="environment-variables"
+        id={ENVIRONMENT_SECTION_ID}
       >
         <SettingsLoadErrorBanner
           title="Couldn't load saved environment variables"
@@ -251,7 +265,7 @@ export function EnvironmentSettingsTab() {
     <SettingsSection
       title={sectionTitle}
       description={sectionDescription}
-      id="environment-variables"
+      id={ENVIRONMENT_SECTION_ID}
       action={envRows.length > 0 ? addButton : undefined}
     >
       <SettingsGroup>

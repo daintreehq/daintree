@@ -24,7 +24,7 @@ import { SettingsSection } from "./SettingsSection";
 import { SECTION_SETTINGS } from "@/components/Settings/settingsSectionOwners";
 import { SettingsSelect } from "./SettingsSelect";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
-import { useSettingsTabFlush } from "./SettingsFlushRegistry";
+import { useSettingsTabFlush, type SettingsFlushFailure } from "./SettingsFlushRegistry";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 // Named for where the worktree lands, since all three sit beside the repository —
@@ -55,6 +55,8 @@ const PATTERN_VARIABLES = [
 ] as const;
 
 const SAMPLE_BRANCH = "feature/example-branch";
+
+const PATH_PATTERN_SECTION_ID = "worktree-path-pattern";
 
 const DELETED_WORKTREE_CLEANUP_OPTIONS = [
   { value: "30", label: "After 30 seconds" },
@@ -159,8 +161,9 @@ export function WorktreeSettingsTab() {
 
   const hasChanges = pattern !== originalPattern;
 
-  const handleSave = async () => {
-    if (unavailable || !validation.valid || isSaving) return;
+  const save = async (): Promise<SettingsFlushFailure | undefined> => {
+    if (unavailable) return undefined;
+    if (!validation.valid) return { landOn: PATH_PATTERN_SECTION_ID };
 
     setIsSaving(true);
     setError(null);
@@ -183,11 +186,23 @@ export function WorktreeSettingsTab() {
       }
       const timeout = setTimeout(() => setSavedMessage(false), 2000);
       setSavedMessageTimeout(timeout);
+      return undefined;
     } catch (err) {
       setError(formatErrorMessage(err, "Failed to save pattern"));
+      return { landOn: PATH_PATTERN_SECTION_ID };
     } finally {
       setIsSaving(false);
     }
+  };
+
+  // A close that lands during a Save reports that Save's outcome, not a success
+  // for a write that can still fail.
+  const saveInFlightRef = useRef<Promise<SettingsFlushFailure | undefined> | null>(null);
+  const handleSave = () => {
+    saveInFlightRef.current ??= save().finally(() => {
+      saveInFlightRef.current = null;
+    });
+    return saveInFlightRef.current;
   };
 
   const patternError = !unavailable && !validation.valid ? validation.error : undefined;
@@ -201,9 +216,8 @@ export function WorktreeSettingsTab() {
   };
 
   // Persist a pending pattern change before the dialog dismisses (X click) or
-  // the WebContentsView detaches. handleSave's internal validation/saving
-  // guards short-circuit cleanly when the pattern is invalid or a save is
-  // already in flight.
+  // the WebContentsView detaches. An invalid pattern is never saved; on a close
+  // the failure keeps Settings open on it instead.
   useSettingsTabFlush("worktree", handleSave, hasChanges && !unavailable);
 
   const errorMessages = [patternError, error].filter(Boolean);
@@ -212,7 +226,7 @@ export function WorktreeSettingsTab() {
   return (
     <div className="space-y-8">
       <SettingsSection
-        id="worktree-path-pattern"
+        id={PATH_PATTERN_SECTION_ID}
         title="Path pattern"
         settings={SECTION_SETTINGS.worktreePathPattern}
         description="Where new worktrees are created. Relative paths (starting with . or ..) resolve from the repository root."
