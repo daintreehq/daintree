@@ -580,10 +580,17 @@ export const createRestartActions = (
     let runtimeSettingsLoaded = false;
     // The caller's verbatim flags (#13046) sit out every rebuild and reconcile
     // below and are re-appended last, once the settings-derived part is final.
-    const { base: storedBaseFlags, caller: callerLaunchFlags } = splitCallerLaunchFlags(
+    const { base: storedBaseFlags, caller: storedCallerFlags } = splitCallerLaunchFlags(
       currentTerminal.agentLaunchFlags,
       currentTerminal.callerLaunchFlags
     );
+    // A restart that moves the pane picks its conversation itself, so a
+    // caller's own selector (`--continue`, `resume --last`) can't ride along
+    // and reopen whichever conversation the new folder has last (#14954).
+    const callerLaunchFlags =
+      plannedCwd !== terminal.cwd
+        ? stripConversationSelectorFlags(storedCallerFlags, effectiveAgentId)
+        : storedCallerFlags;
     let nextAgentLaunchFlags =
       currentTerminal.agentLaunchFlags === undefined ? undefined : storedBaseFlags;
     let nextAgentPresetId = currentTerminal.agentPresetId;
@@ -874,6 +881,8 @@ export const createRestartActions = (
 
       // Settled here, with no await before the command choice and the state
       // write that follow, so the command is chosen for the folder it runs in.
+      // A move landing after the write is an ordinary live move (#11853),
+      // judged against the folder the pane now records.
       launchCwd = keepsCwd ? currentTerminal.cwd : filedLaunchCwd(get, id, currentTerminal);
       const relocated = launchCwd !== currentTerminal.cwd;
 
@@ -1718,10 +1727,11 @@ async function respawnAgentOnPreset(
       terminal.agentLaunchFlags,
       terminal.callerLaunchFlags
     );
-    // A switch promises a new conversation, so a caller's own resume selector
+    // A switch promises a new conversation, and so does a hop that moves the
+    // pane into its worktree (#14954), so a caller's own resume selector
     // (`--continue`, `resume --last`) can't ride along into the new home.
     const callerLaunchFlags =
-      mode.kind === "switch"
+      mode.kind === "switch" || filedLaunchCwd(get, id, terminal) !== terminal.cwd
         ? stripConversationSelectorFlags(storedCallerFlags, effectiveAgentId)
         : storedCallerFlags;
     const systemPromptArgs = extractSystemPromptArgs(storedBaseFlags, effectiveAgentId);
