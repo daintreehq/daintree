@@ -459,7 +459,7 @@ describe("VoiceCorrectionService streaming", () => {
         const heard: string[] = [];
         const pending = new VoiceCorrectionService().correct(
           { rawText: "fix the bug in the parser now" },
-          SETTINGS,
+          { ...SETTINGS, reasoningEffort: "none" },
           undefined,
           (text) => heard.push(text)
         );

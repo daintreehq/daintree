@@ -30,6 +30,8 @@ const BASE_SETTINGS = {
   apiKey: "sk-test",
   customDictionary: [] as string[],
 };
+// The deadlines without the time a reasoning request gets on top.
+const NO_REASONING = { ...BASE_SETTINGS, reasoningEffort: "none" as const };
 
 function makeFetchResponse(
   payload: { action?: "no_change" | "replace"; corrected_text?: string; confidence?: string },
@@ -216,7 +218,7 @@ describe("VoiceCorrectionService", () => {
     );
 
     const svc = new VoiceCorrectionService();
-    const resultPromise = svc.correct({ rawText: "type script compiler" }, BASE_SETTINGS);
+    const resultPromise = svc.correct({ rawText: "type script compiler" }, NO_REASONING);
     await vi.advanceTimersByTimeAsync(6999);
     await Promise.resolve();
 
@@ -230,6 +232,28 @@ describe("VoiceCorrectionService", () => {
     const result = await resultPromise;
     expect(result.confirmedText).toBe("type script compiler");
     expect(result.action).toBe("no_change");
+  });
+
+  it("gives a request that reasons four seconds more", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(
+        (_url: string, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init.signal!.addEventListener("abort", () => reject(init.signal!.reason), {
+              once: true,
+            });
+          })
+      )
+    );
+    let settled = false;
+    const resultPromise = new VoiceCorrectionService()
+      .correct({ rawText: "type script compiler" }, BASE_SETTINGS)
+      .finally(() => (settled = true));
+    await vi.advanceTimersByTimeAsync(10_999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect((await resultPromise).verdict).toBe("timed_out");
   });
 
   it("allows a longer timeout for paragraph-length corrections", async () => {
@@ -254,7 +278,7 @@ describe("VoiceCorrectionService", () => {
     const input =
       "um so the type script compiler is throwing errors and we need to fix the racked component, also the tail wind styles are broken and the zoo stand store needs updating";
     const svc = new VoiceCorrectionService();
-    const resultPromise = svc.correct({ rawText: input }, BASE_SETTINGS);
+    const resultPromise = svc.correct({ rawText: input }, NO_REASONING);
 
     let settled = false;
     resultPromise.finally(() => {
@@ -1041,7 +1065,7 @@ describe("VoiceCorrectionService", () => {
     });
   });
 
-  it("sends the settings' model with explicit none reasoning effort and strict JSON output", async () => {
+  it("sends the settings' model with an explicit low reasoning effort and strict JSON output", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(makeFetchResponse({ corrected_text: "Corrected." }));
@@ -1052,10 +1076,11 @@ describe("VoiceCorrectionService", () => {
 
     const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
     // The dictation models default reasoning to "medium" when omitted, so the
-    // request must pin "none" explicitly — never leave the field off (issue #11365).
+    // request must pin its own explicitly — never leave the field off (issue #11365).
     expect(body.model).toBe(BASE_SETTINGS.model);
-    expect(body.reasoning).toEqual({ effort: "none" });
-    expect(body.max_output_tokens).toBe(1024);
+    expect(body.reasoning).toEqual({ effort: "low" });
+    // The passage's own room, and room for the reasoning that counts toward it.
+    expect(body.max_output_tokens).toBe(1024 + 4096);
     expect(body.text.format.type).toBe("json_schema");
     expect(body.text.format.strict).toBe(true);
   });
@@ -1069,7 +1094,7 @@ describe("VoiceCorrectionService", () => {
         }) as unknown as Response
     );
     vi.stubGlobal("fetch", fetchMock);
-    const settings = { ...BASE_SETTINGS, reasoningEffort: "low" as const };
+    const settings = { ...BASE_SETTINGS, reasoningEffort: "high" as const };
 
     const svc = new VoiceCorrectionService();
     await svc.warm(settings);
@@ -1078,7 +1103,7 @@ describe("VoiceCorrectionService", () => {
     const efforts = fetchMock.mock.calls.map(
       (call) => JSON.parse((call as unknown as [string, RequestInit])[1].body as string).reasoning
     );
-    expect(efforts).toEqual([{ effort: "low" }, { effort: "low" }]);
+    expect(efforts).toEqual([{ effort: "high" }, { effort: "high" }]);
   });
 
   it.each([
@@ -1629,7 +1654,7 @@ describe("VoiceCorrectionService", () => {
       );
       const pending = new VoiceCorrectionService().correct(
         { rawText: "type script compiler" },
-        BASE_SETTINGS
+        NO_REASONING
       );
       await vi.advanceTimersByTimeAsync(7_000);
       const result = await pending;
@@ -1983,7 +2008,7 @@ describe("VoiceCorrectionService", () => {
           )
         );
         const rawText = longPassage(chars);
-        const resultPromise = new VoiceCorrectionService().correct({ rawText }, BASE_SETTINGS);
+        const resultPromise = new VoiceCorrectionService().correct({ rawText }, NO_REASONING);
         let settled = false;
         void resultPromise.finally(() => {
           settled = true;
@@ -2315,19 +2340,19 @@ describe("VoiceCorrectionService.rewrite", () => {
     );
   });
 
-  it("asks for the settings' reasoning effort, and the lowest tier without one", async () => {
+  it("asks for the settings' reasoning effort, and the model's own without one", async () => {
     const fetchMock = vi.fn(async () => rewriteResponse("replace", "Is it fixed?"));
     vi.stubGlobal("fetch", fetchMock);
     const svc = new VoiceCorrectionService();
     const request = { selectedText: "it is fixed", instruction: "rephrase as a question" };
 
-    await svc.rewrite(request, { ...BASE_SETTINGS, reasoningEffort: "low" });
+    await svc.rewrite(request, { ...BASE_SETTINGS, reasoningEffort: "none" });
     await svc.rewrite(request, BASE_SETTINGS);
 
     const efforts = fetchMock.mock.calls.map(
       (call) => JSON.parse((call as unknown as [string, RequestInit])[1].body as string).reasoning
     );
-    expect(efforts).toEqual([{ effort: "low" }, { effort: "none" }]);
+    expect(efforts).toEqual([{ effort: "none" }, { effort: "low" }]);
   });
 
   it("keeps the selection's own leading and trailing whitespace around the rewrite", async () => {
@@ -2503,7 +2528,8 @@ describe("VoiceCorrectionService timing and warm-up", () => {
       BASE_SETTINGS
     );
     expect(result.failed).toBe(true);
-    expect(result.roundTrip).toEqual({ sentAt: 1_000, ms: 300 });
+    // A network failure goes out once more, and the round trip spans both.
+    expect(result.roundTrip).toEqual({ sentAt: 1_000, ms: 600 });
   });
 
   it("reports the tokens each reply was billed for, a discarded one included", async () => {

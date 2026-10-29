@@ -105,7 +105,7 @@ describe("VoiceCorrectionService on Claude", () => {
     vi.restoreAllMocks();
   });
 
-  it("sends a cleanup to the Messages API with the schema enforced and thinking off", async () => {
+  it("sends a cleanup to the Messages API with the schema enforced, Haiku thinking at medium", async () => {
     const fetchMock = stubFetch(jsonResponse(message(reply("Run Vitest."))));
 
     const result = await new VoiceCorrectionService().correct({ rawText: "run v test" }, SETTINGS);
@@ -120,8 +120,8 @@ describe("VoiceCorrectionService on Claude", () => {
     expect(init.headers).not.toHaveProperty("Authorization");
     const body = sentBody(fetchMock);
     expect(body.model).toBe("claude-haiku-5-5");
-    expect(body.thinking).toEqual({ type: "disabled" });
-    expect(body.output_config.effort).toBe("low");
+    expect(body.thinking).toEqual({ type: "adaptive" });
+    expect(body.output_config.effort).toBe("medium");
     expect(body.output_config.format.type).toBe("json_schema");
     expect(body.output_config.format.schema.required).toEqual([
       "action",
@@ -141,13 +141,30 @@ describe("VoiceCorrectionService on Claude", () => {
     expect(body).not.toHaveProperty("store");
   });
 
-  it("turns Sonnet's thinking off the way Sonnet 5.5 accepts", async () => {
+  it("turns thinking off when asked for none, Sonnet's the way Sonnet 5.5 accepts", async () => {
+    const fetchMock = stubFetch(
+      jsonResponse(message(reply("Ok."))),
+      jsonResponse(message(reply("Ok.")))
+    );
+    const svc = new VoiceCorrectionService();
+    await svc.correct({ rawText: "ok" }, { ...SETTINGS, reasoningEffort: "none" });
+    await svc.correct(
+      { rawText: "ok" },
+      { ...SETTINGS, model: "claude-sonnet-5-5", reasoningEffort: "none" }
+    );
+    expect(sentBody(fetchMock, 0).thinking).toEqual({ type: "disabled" });
+    expect(sentBody(fetchMock, 0).output_config.effort).toBe("low");
+    expect(sentBody(fetchMock, 1).thinking).toEqual({ type: "between_tools" });
+  });
+
+  it("thinks at low by default on Sonnet", async () => {
     const fetchMock = stubFetch(jsonResponse(message(reply("Ok."))));
     await new VoiceCorrectionService().correct(
       { rawText: "ok" },
       { ...SETTINGS, model: "claude-sonnet-5-5" }
     );
-    expect(sentBody(fetchMock).thinking).toEqual({ type: "between_tools" });
+    expect(sentBody(fetchMock).thinking).toEqual({ type: "adaptive" });
+    expect(sentBody(fetchMock).output_config.effort).toBe("low");
   });
 
   it("thinks adaptively at the effort asked for, with room for the thinking", async () => {
@@ -267,14 +284,15 @@ describe("VoiceCorrectionService on Claude", () => {
   });
 
   it("logs Anthropic's error type, never its message", async () => {
-    stubFetch(
+    const overloaded = () =>
       jsonResponse(
         { type: "error", error: { type: "overloaded_error", message: "echoes run v test" } },
         529
-      )
-    );
+      );
+    const fetchMock = stubFetch(overloaded(), overloaded());
     const result = await new VoiceCorrectionService().correct({ rawText: "run v test" }, SETTINGS);
     expect(result.failed).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(logWarn).toHaveBeenCalledWith(
       expect.stringContaining("Correction failed"),
       expect.objectContaining({ status: 529, code: "overloaded_error" })
@@ -310,7 +328,7 @@ describe("VoiceCorrectionService on Claude", () => {
     expect(fetchMock.mock.calls[0]![0]).toBe("https://api.anthropic.com/v1/messages");
     const body = sentBody(fetchMock);
     expect(body).not.toHaveProperty("store");
-    expect(body.thinking).toEqual({ type: "disabled" });
+    expect(body.thinking).toEqual({ type: "adaptive" });
     expect(body.output_config.format.type).toBe("json_schema");
   });
 
@@ -373,6 +391,169 @@ describe("VoiceCorrectionService on Claude", () => {
     }
   });
 
+  it("sends a cleanup once more when the API is overloaded", async () => {
+    const fetchMock = stubFetch(
+      jsonResponse({ type: "error", error: { type: "overloaded_error" } }, 529),
+      jsonResponse(message(reply("Run Vitest.")))
+    );
+    const result = await new VoiceCorrectionService().correct({ rawText: "run v test" }, SETTINGS);
+    expect(result).toMatchObject({ confirmedText: "Run Vitest.", verdict: "replaced" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(sentBody(fetchMock, 1)).toEqual(sentBody(fetchMock, 0));
+    expect(logWarn).toHaveBeenCalledWith(
+      expect.stringContaining("retried"),
+      expect.objectContaining({ reason: "status", status: 529 })
+    );
+  });
+
+  it("never sends a refused cleanup again", async () => {
+    const fetchMock = stubFetch(
+      jsonResponse({ type: "error", error: { type: "invalid_request_error" } }, 400)
+    );
+    const result = await new VoiceCorrectionService().correct({ rawText: "run v test" }, SETTINGS);
+    expect(result.failed).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends a streamed cleanup again when the first request never answers", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(
+        (_url: string, init: RequestInit) =>
+          new Promise<Response>((_resolve, reject) =>
+            init.signal!.addEventListener("abort", () => reject(init.signal!.reason), {
+              once: true,
+            })
+          )
+      )
+      .mockResolvedValueOnce(streamed(frames(reply("Run Vitest."))));
+    vi.stubGlobal("fetch", fetchMock);
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const pending = new VoiceCorrectionService().correct(
+        { rawText: "run v test" },
+        SETTINGS,
+        undefined,
+        () => undefined
+      );
+      await vi.advanceTimersByTimeAsync(4_000);
+      const result = await pending;
+      expect(result).toMatchObject({ confirmedText: "Run Vitest.", verdict: "replaced" });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(logWarn).toHaveBeenCalledWith(
+        expect.stringContaining("retried"),
+        expect.objectContaining({ reason: "stalled" })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("names a streamed cleanup that stalls twice timed_out", async () => {
+    const fetchMock = vi.fn(
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((_resolve, reject) =>
+          init.signal!.addEventListener("abort", () => reject(init.signal!.reason), {
+            once: true,
+          })
+        )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let settled = false;
+      // Two segments give the long deadline, so the second stall comes first.
+      const pending = new VoiceCorrectionService()
+        .correct({ rawText: "run v test", segmentCount: 2 }, SETTINGS, undefined, () => undefined)
+        .finally(() => (settled = true));
+      await vi.advanceTimersByTimeAsync(7_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toMatchObject({ failed: true, verdict: "timed_out" });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never sends a streamed cleanup again once it has answered, however slow", async () => {
+    const json = reply("Run Vitest.");
+    const all = frames(json);
+    const bytes = (list: Frame[]) =>
+      new TextEncoder().encode(
+        list.map((f) => `event: ${f.type}\ndata: ${JSON.stringify(f)}\n\n`).join("")
+      );
+    const fetchMock = vi.fn(async () => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes(all.slice(0, -4)));
+          setTimeout(() => {
+            controller.enqueue(bytes(all.slice(-4)));
+            controller.close();
+          }, 6_000);
+        },
+      });
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const heard: string[] = [];
+      const pending = new VoiceCorrectionService().correct(
+        { rawText: "run v test", segmentCount: 2 },
+        SETTINGS,
+        undefined,
+        (text) => heard.push(text)
+      );
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(await pending).toMatchObject({ confirmedText: "Run Vitest.", verdict: "replaced" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(heard.length).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never sends again a request fetch refused to build", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("Headers.append: invalid value"));
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await new VoiceCorrectionService().correct({ rawText: "run v test" }, SETTINGS);
+    expect(result.failed).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends a cleanup once more when the network drops it", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(jsonResponse(message(reply("Run Vitest."))));
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await new VoiceCorrectionService().correct({ rawText: "run v test" }, SETTINGS);
+    expect(result).toMatchObject({ confirmedText: "Run Vitest.", verdict: "replaced" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("never sends a cancelled cleanup again, even after an overloaded reply", async () => {
+    vi.mocked(logWarn).mockClear();
+    const controller = new AbortController();
+    const fetchMock = vi.fn(async () => {
+      controller.abort();
+      return jsonResponse({ type: "error", error: { type: "overloaded_error" } }, 529);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "run v test" },
+      SETTINGS,
+      controller.signal
+    );
+    expect(result.failed).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(logWarn).not.toHaveBeenCalledWith(expect.stringContaining("retried"), expect.anything());
+  });
+
   it("rewrites a selection on Claude", async () => {
     const fetchMock = stubFetch(
       jsonResponse(
@@ -387,6 +568,7 @@ describe("VoiceCorrectionService on Claude", () => {
     expect(fetchMock.mock.calls[0]![0]).toBe("https://api.anthropic.com/v1/messages");
     const body = sentBody(fetchMock);
     expect(body.output_config.format.schema.required).toEqual(["action", "rewritten_text"]);
+    expect(body.output_config.effort).toBe("medium");
     expect(body).not.toHaveProperty("store");
   });
 });
