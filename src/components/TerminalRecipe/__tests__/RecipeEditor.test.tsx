@@ -192,7 +192,7 @@ describe("RecipeEditor", () => {
     const scope = document.getElementById("recipe-scope")!;
     expect(scope.textContent).toMatch(/^Global/);
     fireEvent.keyDown(scope, { key: "ArrowDown" });
-    const project = await screen.findByRole("option", { name: /^Project/ });
+    const project = await screen.findByRole("option", { name: /^Team/ });
     expect(project.getAttribute("aria-disabled")).toBe("true");
     fireEvent.keyDown(project, { key: "Escape" });
 
@@ -203,6 +203,15 @@ describe("RecipeEditor", () => {
     expect(createRecipe).toHaveBeenCalledTimes(1);
     expect(createRecipe.mock.calls[0]?.[0]).toBeUndefined();
     expect(document.querySelector("[data-inline-status-banner]")).toBeNull();
+  });
+
+  it("says a new project recipe is written into the repository before it is saved", () => {
+    renderEditor();
+    const help = document.getElementById("recipe-scope-help")!;
+    expect(help.textContent).toContain(".daintree/recipes/");
+    expect(document.getElementById("recipe-scope")!.getAttribute("aria-describedby")).toBe(
+      "recipe-scope-help"
+    );
   });
 
   // The type picker is one stray click from a long prompt: a switch keeps what
