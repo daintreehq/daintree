@@ -16,6 +16,8 @@ interface DockState {
   sessions: Record<number, Lane>;
   globalSelected: boolean;
   globalTarget: AgentDirectorySubject | null;
+  /** The agent new sessions launch with; a running lane's own agent can differ. */
+  preferredAgentId: string | null;
 }
 
 const {
@@ -30,6 +32,15 @@ const {
   issueNativeGrant,
 } = vi.hoisted(() => {
   const liveStatus = { current: null as HelpSessionLiveStatus | null };
+  const dock: { current: DockState } = {
+    current: {
+      activeSlot: 0,
+      sessions: {},
+      globalSelected: false,
+      globalTarget: null,
+      preferredAgentId: null,
+    },
+  };
   return {
     liveStatus,
     useLiveStatus: vi.fn((sessionId: string | null) =>
@@ -37,8 +48,10 @@ const {
         ? liveStatus.current
         : { connected: false, tier: "core" as const, activeGrants: [] }
     ),
-    dock: { current: null as unknown as DockState },
-    panels: { current: {} as Record<string, { kind: "terminal"; task: string | null }> },
+    dock,
+    panels: {
+      current: {} as Record<string, { kind: "terminal" | "browser"; task: string | null }>,
+    },
     preferences: { showAgentTaskTitles: true },
     viewHostId: { current: null as string | null },
     revokeGrant: vi.fn(),
@@ -81,6 +94,7 @@ vi.mock("@/utils/terminalTitleDisplay", () => ({
 vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 
 import { SessionLiveStatusCard } from "../SessionLiveStatusCard";
+import { logError } from "@/utils/logger";
 
 function perTool(toolId: string): HelpSessionActiveGrant {
   return {
@@ -157,7 +171,9 @@ beforeEach(() => {
     sessions: { 0: LANE_ONE },
     globalSelected: false,
     globalTarget: null,
+    preferredAgentId: null,
   };
+  vi.mocked(logError).mockClear();
   panels.current = {};
   preferences.showAgentTaskTitles = true;
   viewHostId.current = null;
@@ -252,8 +268,9 @@ describe("SessionLiveStatusCard per-tool revoke (#14975)", () => {
       getByRole("button", { name: "Revoke terminal.kill" }).getAttribute("aria-busy")
     ).toBeNull();
 
-    rejectRevoke?.();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await act(async () => {
+      rejectRevoke?.();
+    });
     expect(queryByRole("alert")).toBeNull();
   });
 });
@@ -279,8 +296,9 @@ describe("SessionLiveStatusCard automation grant form (#14982)", () => {
     expect(getByLabelText(/recipe\.run/).dataset.state).toBe("unchecked");
     fireEvent.click(getByLabelText(/worktree\.deleteOwned/));
 
-    rejectIssue?.();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await act(async () => {
+      rejectIssue?.();
+    });
     expect(queryByRole("alert")).toBeNull();
     expect(getByLabelText(/worktree\.deleteOwned/).dataset.state).toBe("checked");
     expect(getByRole("button", { name: "Approve grant" }).hasAttribute("disabled")).toBe(false);
@@ -289,7 +307,12 @@ describe("SessionLiveStatusCard automation grant form (#14982)", () => {
 
 describe("SessionLiveStatusCard names the conversation it describes (#14990)", () => {
   it("names the project lane on screen and the agent running it, and reads that lane", () => {
-    dock.current = { ...dock.current, activeSlot: 1, sessions: { 0: LANE_ONE, 1: LANE_TWO } };
+    dock.current = {
+      ...dock.current,
+      activeSlot: 1,
+      sessions: { 0: LANE_ONE, 1: LANE_TWO },
+      preferredAgentId: "claude",
+    };
     const { container } = render(<SessionLiveStatusCard configuredTier="core" />);
 
     expect(identityOf(container)).toBe("Project · Session 2 · Codex");
@@ -298,23 +321,51 @@ describe("SessionLiveStatusCard names the conversation it describes (#14990)", (
   });
 
   it("names a lane by the task title its tab shows, and by number when titles are off", () => {
-    panels.current = { "t-1": { kind: "terminal", task: "Fix  auth\ntests" } };
+    const title = "Fix the flaky  auth\ntests in the login flow";
+    dock.current = { ...dock.current, activeSlot: 1, sessions: { 0: LANE_ONE, 1: LANE_TWO } };
+    panels.current = {
+      "t-1": { kind: "terminal", task: "Lane one's task" },
+      "t-2": { kind: "terminal", task: title },
+    };
     const { container, rerender } = render(<SessionLiveStatusCard configuredTier="core" />);
-    expect(identityOf(container)).toBe("Project · 'Fix auth tests' · Claude Code");
+    // Given whole, unlike the tab's capped label: Settings has the room.
+    expect(identityOf(container)).toBe(
+      "Project · 'Fix the flaky auth tests in the login flow' · Codex"
+    );
 
     preferences.showAgentTaskTitles = false;
     rerender(<SessionLiveStatusCard configuredTier="core" />);
-    expect(identityOf(container)).toBe("Project · Session 1 · Claude Code");
+    expect(identityOf(container)).toBe("Project · Session 2 · Codex");
   });
 
-  it("reports a lane with a session but no live tool connection as unconnected, not as none", () => {
-    liveStatus.current = null;
+  it("names a lane by number when its terminal isn't a PTY, and an unknown agent by its id", () => {
+    dock.current = {
+      ...dock.current,
+      sessions: { 0: { ...LANE_ONE, agentId: "my-agent" } },
+    };
+    panels.current = { "t-1": { kind: "browser", task: "Not a terminal title" } };
     const { container } = render(<SessionLiveStatusCard configuredTier="core" />);
 
-    expect(identityOf(container)).toBe("Project · Session 1 · Claude Code");
-    expect(container.textContent).toContain("Not connected to Daintree's tools");
-    expect(container.textContent).not.toContain("None.");
+    expect(identityOf(container)).toBe("Project · Session 1 · my-agent");
   });
+
+  it.each([
+    ["a session but no terminal yet", { ...LANE_ONE, terminalId: null }],
+    ["a terminal but no session id", { ...LANE_ONE, sessionId: null }],
+  ])(
+    "reports a lane with %s and no live tool connection as unconnected, not as none",
+    (_, lane) => {
+      liveStatus.current = null;
+      dock.current = { ...dock.current, sessions: { 0: lane } };
+      const { container, queryByRole } = render(<SessionLiveStatusCard configuredTier="core" />);
+
+      expect(identityOf(container)).toBe("Project · Session 1 · Claude Code");
+      expect(container.textContent).toContain("Not connected to Daintree's tools");
+      expect(container.textContent).not.toContain("None.");
+      expect(queryByRole("button", { name: "Approve grant" })).toBeNull();
+      expect(queryByRole("button", { name: /^Revoke/ })).toBeNull();
+    }
+  );
 
   it("says a lane with nothing in it has no session", () => {
     dock.current = {
@@ -384,25 +435,69 @@ describe("SessionLiveStatusCard with Global selected in the dock (#14990)", () =
 
     pushGlobal(globalRunning({ agentId: "codex" }));
     expect(container.textContent).toContain("Running.");
+
+    pushGlobal(globalView({ generation: 1 }));
+    expect(container.textContent).toContain("Not running.");
+    expect(identityOf(container)).toBe("Global");
   });
 
-  it("keeps a change pushed while the first read is in flight over that read's answer", async () => {
-    let answer: ((state: GlobalAssistantView) => void) | undefined;
+  it.each(["resolves", "rejects"] as const)(
+    "keeps a change pushed while the first read is in flight when the read later %s",
+    async (outcome) => {
+      let settle: (() => void) | undefined;
+      getGlobalAssistantState.mockImplementation(() => {
+        // Main changes state between the read leaving and its answer landing: only a
+        // listener already registered when the read was sent can hear it.
+        for (const listener of globalListeners) listener(globalRunning());
+        return new Promise<GlobalAssistantView>((resolve, reject) => {
+          settle = () =>
+            outcome === "resolves" ? resolve(globalView()) : reject(new Error("bridge down"));
+        });
+      });
+      const { container, queryByRole } = render(<SessionLiveStatusCard configuredTier="core" />);
+      expect(container.textContent).toContain("Running.");
+
+      await act(async () => {
+        settle?.();
+      });
+
+      expect(container.textContent).toContain("Running.");
+      expect(container.textContent).not.toContain("Not running");
+      expect(queryByRole("alert")).toBeNull();
+    }
+  );
+
+  it("clears a failed read when main next pushes the run's state", async () => {
+    getGlobalAssistantState.mockRejectedValueOnce(new Error("bridge down"));
+    const { container, findByRole, queryByRole } = render(
+      <SessionLiveStatusCard configuredTier="core" />
+    );
+    await findByRole("alert");
+
+    pushGlobal(globalRunning({ agentId: "codex" }));
+
+    expect(queryByRole("alert")).toBeNull();
+    expect(identityOf(container)).toBe("Global · Codex");
+    expect(container.textContent).toContain("Running.");
+  });
+
+  it("lets go of a read still in flight when the card unmounts", async () => {
+    let fail: (() => void) | undefined;
     getGlobalAssistantState.mockReturnValue(
-      new Promise<GlobalAssistantView>((resolve) => {
-        answer = resolve;
+      new Promise<GlobalAssistantView>((_, reject) => {
+        fail = () => reject(new Error("bridge down"));
       })
     );
-    const { container } = render(<SessionLiveStatusCard configuredTier="core" />);
+    const { unmount } = render(<SessionLiveStatusCard configuredTier="core" />);
     expect(globalListeners.size).toBe(1);
 
-    pushGlobal(globalRunning());
+    unmount();
     await act(async () => {
-      answer?.(globalView());
+      fail?.();
     });
 
-    expect(container.textContent).toContain("Running.");
-    expect(container.textContent).not.toContain("Not running");
+    expect(globalListeners.size).toBe(0);
+    expect(logError).not.toHaveBeenCalled();
   });
 
   it("says the read failed, and reads again on Retry", async () => {
@@ -432,6 +527,16 @@ describe("SessionLiveStatusCard with Global selected in the dock (#14990)", () =
     expect(await findByText("The global assistant session you opened has ended")).toBeTruthy();
     expect(identityOf(container)).toBe("Global");
     expect(container.textContent).not.toContain("Running.");
+  });
+
+  it("keeps naming the exact run the dock opened while it is still the one running", async () => {
+    dock.current = { ...dock.current, globalTarget: globalSubject(1) };
+    getGlobalAssistantState.mockResolvedValue(globalRunning({ agentId: "codex" }));
+    const { container, findByText } = render(<SessionLiveStatusCard configuredTier="core" />);
+
+    expect(await findByText(/^Running\./)).toBeTruthy();
+    expect(identityOf(container)).toBe("Global · Codex");
+    expect(container.textContent).not.toContain("has ended");
   });
 
   it("reads nothing in a window bound to another host", () => {

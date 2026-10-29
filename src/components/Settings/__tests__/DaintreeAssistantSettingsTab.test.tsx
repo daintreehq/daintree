@@ -2414,14 +2414,13 @@ describe("SessionLiveStatusCard (live help session)", () => {
   });
 
   it("names the lane it reads and the agent running it (#14990)", async () => {
+    helpPanelState.sessionId = "help-7";
     helpPanelState.agentId = "claude";
+    const getLiveSessionStatus = vi
+      .fn()
+      .mockResolvedValue({ connected: true, tier: "core", activeGrants: [] });
     installApi(
-      {
-        getSettings: vi.fn().mockResolvedValue(settingsWithTier("core")),
-        getLiveSessionStatus: vi
-          .fn()
-          .mockResolvedValue({ connected: true, tier: "core", activeGrants: [] }),
-      },
+      { getSettings: vi.fn().mockResolvedValue(settingsWithTier("core")), getLiveSessionStatus },
       {}
     );
     const { container } = render(
@@ -2434,6 +2433,8 @@ describe("SessionLiveStatusCard (live help session)", () => {
     expect(
       container.querySelector('[data-testid="assistant-live-session-identity"]')?.textContent
     ).toBe("Project · Session 1 · Claude Code");
+    expect(getLiveSessionStatus).toHaveBeenCalledWith({ sessionId: "help-7" });
+    expect(getLiveSessionStatus).not.toHaveBeenCalledWith({ sessionId: "help-1" });
   });
 
   it("never reads the project lane's status while the dock shows Global (#14990)", async () => {
