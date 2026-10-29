@@ -239,6 +239,7 @@ function harness(
     degraded?: boolean;
     quitting?: boolean;
     folders?: Record<string, string>;
+    delays?: number[];
   } = {}
 ) {
   const world = {
@@ -279,7 +280,7 @@ function harness(
     listThreads,
     persist,
     canonicalFolder,
-    attemptDelaysMs: DELAYS,
+    attemptDelaysMs: options.delays ?? DELAYS,
   });
   return { world, ptyClient, getProjectState, listThreads, persist, canonicalFolder, service };
 }
@@ -738,6 +739,35 @@ describe("CodexLiveSessionAttribution", () => {
     expect(h.persist).not.toHaveBeenCalled();
   });
 
+  it("weighs a replaced observation's current run like any other pane", async () => {
+    const h = track(
+      harness({
+        terminals: [terminal("pane-1"), terminal("pane-2")],
+        panes: [saved("pane-1", "Fix the tests"), saved("pane-2", "Fix the tests")],
+        threads: [thread("session-2", "Fix the tests")],
+      })
+    );
+
+    working("pane-1");
+    working("pane-2");
+    // Both Main and the host are on pane-2's relaunch, which wasn't observed.
+    relaunch(h, "pane-2", 2);
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
+
+    expect(h.listThreads).toHaveBeenCalledTimes(1);
+    expect(h.persist).not.toHaveBeenCalled();
+
+    // Told apart by their prompts, both runs are answered for, the relaunch as itself.
+    h.world.panes = [saved("pane-1", "Fix the tests"), saved("pane-2", "Fix the lint")];
+    h.world.threads = [thread("session-1", "Fix the tests"), thread("session-2", "Fix the lint")];
+    await vi.advanceTimersByTimeAsync(DELAYS[1] + PASS_YIELD_MS);
+
+    expect(h.persist.mock.calls.map(([call]) => [call.terminalId, call.generation])).toEqual([
+      ["pane-1", 1],
+      ["pane-2", 2],
+    ]);
+  });
+
   it("skips the folder while a sibling's host record is a generation behind", async () => {
     const h = track(
       harness({
@@ -777,6 +807,52 @@ describe("CodexLiveSessionAttribution", () => {
     expect(h.canonicalFolder.mock.calls.filter(([cwd]) => cwd === "/mnt/gone/repo")).toHaveLength(
       1
     );
+  });
+
+  it("treats a folder that fails to resolve as unknown, and asks again next pass", async () => {
+    const h = track(
+      harness({
+        terminals: [terminal("pane-1"), terminal("pane-2", { cwd: "/alias/repo" })],
+        panes: [saved("pane-1", "Fix the tests"), saved("pane-2", "Fix the tests")],
+        threads: [thread("session-2", "Fix the tests")],
+        folders: { "/alias/repo": "/repo" },
+      })
+    );
+    h.canonicalFolder.mockRejectedValueOnce(new Error("EIO"));
+
+    working("pane-1");
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
+    expect(h.listThreads).not.toHaveBeenCalled();
+
+    // Resolved now, the alias is the same folder and its pane a rival.
+    await vi.advanceTimersByTimeAsync(DELAYS[1] + PASS_YIELD_MS);
+    expect(h.listThreads).toHaveBeenCalledTimes(1);
+    expect(h.persist).not.toHaveBeenCalled();
+  });
+
+  it("stops asking once too many folders are stuck resolving", async () => {
+    const cwds = Array.from({ length: 12 }, (_, i) => `/mnt/gone/${i}`);
+    const h = track(
+      harness({
+        terminals: cwds.map((cwd, i) => terminal(`pane-${i}`, { cwd })),
+        panes: cwds.map((_, i) => saved(`pane-${i}`, `Task ${i}`)),
+        delays: Array.from({ length: 12 }, () => 10),
+      })
+    );
+    h.canonicalFolder.mockImplementation(() => new Promise<string>(() => {}));
+    // Each pass stops at its first stuck folder, so each read leads with the next one.
+    h.ptyClient.getAllTerminalsWithCompletenessAsync.mockImplementation(async () => {
+      const rows = h.world.terminals;
+      h.world.terminals = [...rows.slice(1), rows[0]!];
+      return { terminals: rows, degraded: false, shardsTotal: 1, shardsFailed: 0 };
+    });
+
+    for (let i = 0; i < cwds.length; i++) working(`pane-${i}`);
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(h.ptyClient.getAllTerminalsWithCompletenessAsync.mock.calls.length).toBeGreaterThan(8);
+    expect(new Set(h.canonicalFolder.mock.calls.map(([cwd]) => cwd)).size).toBe(8);
+    expect(h.listThreads).not.toHaveBeenCalled();
   });
 
   it("stops writing once disposed mid-pass", async () => {

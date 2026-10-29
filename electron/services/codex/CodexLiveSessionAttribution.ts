@@ -57,8 +57,11 @@ const MAX_SETTLED_RUNS = 1_000;
 /** A folder that won't resolve in this long can't be grouped, so the pass is skipped. */
 const REALPATH_TIMEOUT_MS = 1_000;
 
-/** Bound on remembered folder resolutions; one entry per distinct pane cwd. */
-const MAX_RESOLVED_FOLDERS = 256;
+/**
+ * Bound on folder resolutions still outstanding. Past it nothing new is asked
+ * and the pass is skipped: each stuck `realpath` holds a threadpool thread.
+ */
+const MAX_PENDING_FOLDERS = 8;
 
 /** Outcomes after which the pane holds the attributed id. */
 const HOLDS_ID: ReadonlySet<PaneWritebackOutcome> = new Set(["filled", "unchanged"]);
@@ -270,11 +273,13 @@ export class CodexLiveSessionAttribution {
   private readonly settled = new Map<string, number>();
   private readonly due = new Set<string>();
   /**
-   * Each cwd's resolution, kept across passes. `realpath` can hang on a dead
-   * network mount and hold a threadpool thread while it does, so one stuck
-   * folder is asked once rather than on every attempt of every pane in it.
+   * Folder resolutions still in flight, shared across passes. `realpath` can
+   * hang on a dead network mount and hold a threadpool thread while it does,
+   * so a stuck folder is asked once rather than on every attempt. Each leaves
+   * when it settles, so the next pass resolves afresh: a symlink retargeted
+   * since, or a folder that failed and now resolves, is read as it is now.
    */
-  private readonly folders = new Map<string, Promise<string>>();
+  private readonly resolving = new Map<string, Promise<string | null>>();
   private draining = false;
   private disposed = false;
   private readonly unsubscribe: () => void;
@@ -336,6 +341,26 @@ export class CodexLiveSessionAttribution {
       this.due.add(terminalId);
       void this.drain();
     }, delay);
+  }
+
+  /**
+   * `cwd`'s canonical folder, or null when it can't be had. A failure is not
+   * evidence the path names a folder of its own: it can be a symlink to a
+   * sibling's folder that just failed to resolve.
+   */
+  private resolveFolder(cwd: string): Promise<string | null> {
+    const inFlight = this.resolving.get(cwd);
+    if (inFlight) return inFlight;
+    if (this.resolving.size >= MAX_PENDING_FOLDERS) return Promise.resolve(null);
+    const pending = this.deps.canonicalFolder(cwd).then(
+      (folder) => folder,
+      () => null
+    );
+    this.resolving.set(cwd, pending);
+    void pending.then(() => {
+      if (this.resolving.get(cwd) === pending) this.resolving.delete(cwd);
+    });
+    return pending;
   }
 
   private settle(terminalId: string, generation: number): void {
@@ -426,18 +451,14 @@ export class CodexLiveSessionAttribution {
       }
       return state;
     };
+    const folders = new Map<string, Promise<string | null>>();
     const folderOf = (cwd: string): Promise<string | null> => {
-      let folder = this.folders.get(cwd);
+      let folder = folders.get(cwd);
       if (!folder) {
-        // A folder that can't be resolved at all has no other spelling to find.
-        folder = this.deps.canonicalFolder(cwd).catch(() => cwd);
-        this.folders.set(cwd, folder);
-        if (this.folders.size > MAX_RESOLVED_FOLDERS) {
-          const oldest = this.folders.keys().next().value;
-          if (oldest !== undefined) this.folders.delete(oldest);
-        }
+        folder = withinMs(this.resolveFolder(cwd), REALPATH_TIMEOUT_MS);
+        folders.set(cwd, folder);
       }
-      return withinMs(folder, REALPATH_TIMEOUT_MS);
+      return folder;
     };
 
     const claimed = new Set<string>();
@@ -461,7 +482,7 @@ export class CodexLiveSessionAttribution {
         observed = undefined;
       }
       const folder = await folderOf(info.cwd);
-      // Unresolved, this pane could be any folder's rival; nothing here can be
+      // Unresolved, this pane could be any folder's rival, so nothing can be
       // shown unique this pass.
       if (folder === null) return finished;
       let group = groups.get(folder);
