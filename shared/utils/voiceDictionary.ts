@@ -5,7 +5,7 @@ import type {
   VoiceDictionarySource,
   VoiceDictionaryState,
 } from "../types/ipc/api.js";
-import type { CorrectionCandidate } from "./phoneticSimilarity.js";
+import { isEverydayPhrase, type CorrectionCandidate } from "./phoneticSimilarity.js";
 
 /** Deepgram rejects any keyterm over 100 characters, so a term or heard-as phrase can't be longer. */
 export const MAX_DICTIONARY_TERM_LENGTH = 100;
@@ -323,12 +323,19 @@ export function acceptSuggestion(
   if (!suggestion) return state;
   // The pair the user saw, when the queue's copy has since been overwritten.
   const heard = normalizePhrase(utterance ?? suggestion.utterance);
+  const existing = state.dictionary.find((entry) => fold(entry.term) === key);
+  // Only a learned entry keeps an everyday heard form out of the heard-as
+  // rules, so one the user added the term to by hand never takes it on.
+  const keepsHeard =
+    heard !== null &&
+    heard.length <= MAX_DICTIONARY_TERM_LENGTH &&
+    !(existing && existing.source !== "learned" && isEverydayPhrase(heard));
   return {
     dictionary: addDictionaryEntry(
       state.dictionary,
       {
         term: suggestion.word,
-        heardAs: heard && heard.length <= MAX_DICTIONARY_TERM_LENGTH ? [heard] : [],
+        heardAs: keepsHeard ? [heard] : [],
         source: "learned",
       },
       now
