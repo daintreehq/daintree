@@ -855,6 +855,26 @@ describe("TerminalProcess.gracefulShutdown — gated Ctrl-C escalation (#11851)"
     expect(handles.writeMock).toHaveBeenCalledTimes(1);
   });
 
+  it("still presses when the interrupted command itself printed a shutdown line", async () => {
+    // The interrupt stops whatever the turn was running, and a dev server's
+    // last words are often exactly this. Only the composer's own shutdown
+    // rendering means Codex is quitting; vetoing on the command's output would
+    // put every such pane back at one press.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "codex");
+
+    const promise = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    handles.emitData(`  └ Shutting down...\r\n${CODEX_INTERRUPT_FRAME}`);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handles.writeMock).toHaveBeenCalledTimes(2);
+
+    handles.emitData("  codex resume server-said-it\n");
+    await expect(promise).resolves.toBe("server-said-it");
+  });
+
   it("presses no more when a gate arrives after the press was seen quitting", async () => {
     const handles = createMockPty();
     const terminal = createAgentTerminal(handles, "codex");
