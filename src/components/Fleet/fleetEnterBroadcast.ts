@@ -141,11 +141,7 @@ function buildBroadcastAnnouncement(result: FleetExecutionResult): string {
  * disarmed, retryable ones get the failure chip, delivered ones lose any old
  * failure dot, and the result is announced.
  */
-function applyFleetBroadcastOutcome(
-  text: string,
-  eligibleTargets: string[],
-  result: FleetExecutionResult
-): void {
+function applyFleetBroadcastOutcome(text: string, result: FleetExecutionResult): void {
   if (result.failureCount > 0) {
     logWarn("[fleetEnterBroadcast] broadcast had rejections", {
       failureCount: result.failureCount,
@@ -185,10 +181,10 @@ function applyFleetBroadcastOutcome(
       }
     }
   } else if (!result.cancelled) {
-    // A successful broadcast clears any stale failure dot on these
-    // targets — the partial-failure state from a prior attempt is
-    // now resolved.
-    for (const id of eligibleTargets) useFleetFailureStore.getState().dismissId(id);
+    // A successful broadcast clears any stale failure dot on the targets it
+    // reached — the partial-failure state from a prior attempt is now
+    // resolved. A pane locked mid-broadcast was skipped, so its dot stays.
+    for (const t of result.perTarget) useFleetFailureStore.getState().dismissId(t.terminalId);
     // Fire the ribbon's one-shot commit flash, matching the raw-input
     // path (`broadcastFleetRawInput`). The structured path's analog of
     // "committed bytes" is a non-cancelled, fully-successful fan-out.
@@ -222,7 +218,7 @@ export async function sendDraftToFleet(text: string): Promise<boolean> {
   const targets = filterEligibleIds(resolveFleetBroadcastTargetIds());
   if (text.length === 0 || targets.length < 2) return false;
   const result = await runManagedFleetBroadcast(text, targets);
-  applyFleetBroadcastOutcome(text, targets, result);
+  applyFleetBroadcastOutcome(text, result);
   return true;
 }
 
@@ -336,7 +332,7 @@ export function tryFleetBroadcastFromEditor(
       // A cancel can't take back writes that already landed, so a cancelled
       // run that reached anyone still counts as sent.
       delivered = result.successCount > 0;
-      applyFleetBroadcastOutcome(text, eligibleTargets, result);
+      applyFleetBroadcastOutcome(text, result);
     } finally {
       // Per-target overrides are ephemeral per-broadcast (#8691 constraint).
       // Clear them so the next broadcast starts from the resolved defaults.

@@ -544,6 +544,21 @@ describe("tryFleetBroadcastFromEditor — locked panes (#14964)", () => {
     expect(submitMock).not.toHaveBeenCalled();
   });
 
+  it("keeps the failure dot of a pane locked while a large broadcast runs", async () => {
+    const ids = Array.from({ length: 7 }, (_, i) => `p${i}`);
+    arm(ids);
+    const lateId = ids[6]!;
+    useFleetFailureStore.getState().recordFailure("earlier", [lateId]);
+    submitMock.mockImplementation(async (id) => {
+      if (id === ids[0]) lock(lateId, true);
+    });
+
+    expect(await sendDraftToFleet("x".repeat(120_000))).toBe(true);
+
+    expect(submitMock.mock.calls.map((call) => call[0])).not.toContain(lateId);
+    expect(useFleetFailureStore.getState().failedIds.has(lateId)).toBe(true);
+  });
+
   it("never fans out from a locked origin", async () => {
     arm(["a", "b", "c"]);
     lock("a", true);

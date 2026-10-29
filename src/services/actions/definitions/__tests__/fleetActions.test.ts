@@ -675,6 +675,17 @@ describe("fleet.retryFailures", () => {
     seedPanels([makeAgent("t1"), makeAgent("t2", { isInputLocked: true })]);
     useFleetArmingStore.getState().armIds(["t1", "t2"]);
     vi.mocked(filterEligibleIds).mockReturnValueOnce(["t1"]);
+    vi.mocked(runManagedFleetBroadcast).mockResolvedValueOnce({
+      total: 1,
+      successCount: 1,
+      failureCount: 0,
+      perTarget: [{ terminalId: "t1", status: "fulfilled" }],
+      failedIds: [],
+      permanentlyFailedIds: [],
+      transientlyFailedIds: [],
+      cancelled: false,
+      skippedCount: 0,
+    });
     useFleetFailureStore.setState({
       failedIds: new Set(["t1", "t2"]),
       payload: "ls\r",
@@ -682,6 +693,31 @@ describe("fleet.retryFailures", () => {
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
     expect(vi.mocked(runManagedFleetBroadcast).mock.calls[0]?.[1]).toEqual(["t1"]);
+    expect([...useFleetFailureStore.getState().failedIds]).toEqual(["t2"]);
+  });
+
+  it("keeps the failure of a pane locked while the retry ran", async () => {
+    seedPanels([makeAgent("t1"), makeAgent("t2")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    // t2 was picked, then locked before its batch went out, so only t1 was sent.
+    vi.mocked(runManagedFleetBroadcast).mockResolvedValueOnce({
+      total: 1,
+      successCount: 1,
+      failureCount: 0,
+      perTarget: [{ terminalId: "t1", status: "fulfilled" }],
+      failedIds: [],
+      permanentlyFailedIds: [],
+      transientlyFailedIds: [],
+      cancelled: false,
+      skippedCount: 1,
+    });
+    useFleetFailureStore.setState({
+      failedIds: new Set(["t1", "t2"]),
+      payload: "ls\r",
+    });
+    const registry = await buildRegistry();
+    await run(registry, "fleet.retryFailures");
+    expect(vi.mocked(runManagedFleetBroadcast).mock.calls[0]?.[1]).toEqual(["t1", "t2"]);
     expect([...useFleetFailureStore.getState().failedIds]).toEqual(["t2"]);
   });
 
@@ -820,6 +856,7 @@ describe("fleet.retryFailures", () => {
 
   it("guards against double-dispatch (re-entrant retry while in flight)", async () => {
     type BroadcastResult = {
+      perTarget: [];
       failedIds: string[];
       transientlyFailedIds: string[];
       permanentlyFailedIds: string[];
@@ -842,6 +879,7 @@ describe("fleet.retryFailures", () => {
     await run(registry, "fleet.retryFailures");
     expect(runManagedFleetBroadcast).toHaveBeenCalledTimes(1);
     (resolveBroadcast as ((value: BroadcastResult) => void) | null)?.({
+      perTarget: [],
       failedIds: [],
       transientlyFailedIds: [],
       permanentlyFailedIds: [],
