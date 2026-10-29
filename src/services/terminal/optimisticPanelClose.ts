@@ -137,7 +137,7 @@ function advanceFocusPastClosing(hideIds: string[]): void {
   const focusedId = state.focusedId;
   if (!focusedId || !hideIds.includes(focusedId)) return;
 
-  const next = pickGridSuccessorFocusId(state, hideIds, closingIds);
+  const next = pickGridSuccessorFocusId(state, hideIds, isOptimisticallyClosing);
   state.setFocused(next);
   if (next) {
     // Move DOM focus too — the closed pane's xterm textarea is unmounting, so

@@ -49,6 +49,13 @@ vi.mock("@/store/createWorktreeStore", async (importOriginal) => ({
   getCurrentViewStoreOrNull: () => ({ getState: () => ({ worktrees: liveWorktrees }) }),
 }));
 
+// Panes whose close is hidden but not yet committed: they still sit in the grid
+// as far as the store knows, and must not be handed focus.
+const pendingCloses = new Set<string>();
+vi.mock("@/services/terminal/optimisticPanelClose", () => ({
+  isOptimisticallyClosing: (id: string) => pendingCloses.has(id),
+}));
+
 const terminalInstanceService = (
   await import("@/services/TerminalInstanceService")
 ).createTerminalPaintPlane();
@@ -173,6 +180,7 @@ beforeEach(() => {
   });
   useWorktreeSelectionStore.getState().reset();
   setLiveWorktrees([]);
+  pendingCloses.clear();
   vi.clearAllMocks();
 });
 
@@ -488,6 +496,98 @@ describe("focus after a cross-worktree move (#14974)", () => {
 
     // The neighbouring group's visible tab, not its first member.
     expect(usePanelStore.getState().focusedId).toBe("t5");
+  });
+
+  it("passes over a pane whose close is still pending", () => {
+    seedPanels([
+      panel("t1", "wt-a"),
+      panel("t2", "wt-a"),
+      panel("t3", "wt-a"),
+      panel("t4", "wt-a"),
+    ]);
+    standIn("wt-a");
+    setLiveWorktrees(["wt-a", "wt-b"]);
+    usePanelStore.getState().setFocused("t2");
+    pendingCloses.add("t3");
+
+    moveTerminalToWorktreeAndFollowRescue("t2", "wt-b");
+
+    expect(usePanelStore.getState().focusedId).toBe("t4");
+  });
+
+  it("leaves focus alone when the move doesn't go through", () => {
+    seedPanels([panel("t1", "wt-a"), panel("t2", "wt-a"), panel("t3", "wt-a")]);
+    standIn("wt-a");
+    setLiveWorktrees(["wt-a", "wt-b"]);
+    usePanelStore.getState().setFocused("t2");
+    const realMove = usePanelStore.getState().moveTerminalToWorktree;
+    usePanelStore.setState({ moveTerminalToWorktree: () => {} });
+
+    try {
+      moveTerminalToWorktreeAndFollowRescue("t2", "wt-b");
+    } finally {
+      usePanelStore.setState({ moveTerminalToWorktree: realMove });
+    }
+
+    expect(usePanelStore.getState().focusedId).toBe("t2");
+  });
+
+  it("keeps focus on the destination's pane when another panel arrives", () => {
+    seedPanels([panel("a1", "wt-a"), panel("b1", "wt-b")]);
+    standIn("wt-b");
+    setLiveWorktrees(["wt-a", "wt-b"]);
+    usePanelStore.getState().setFocused("b1");
+
+    moveTerminalToWorktreeAndFollowRescue("a1", "wt-b");
+
+    expect(usePanelStore.getState().focusedId).toBe("b1");
+  });
+
+  it("hands a moved dock pane's focus back to the pane the user came from", () => {
+    seedPanels([panel("g1", "wt-a"), panel("d1", "wt-a", "dock"), panel("g2", "wt-a")]);
+    standIn("wt-a");
+    setLiveWorktrees(["wt-a", "wt-b"]);
+    usePanelStore.getState().setFocused("g1");
+    usePanelStore.getState().setFocused("d1");
+
+    moveTerminalToWorktreeAndFollowRescue("d1", "wt-b");
+
+    // The flat order would have stepped on to g2; the popover closing returns
+    // the keyboard to where it was opened from instead.
+    expect(usePanelStore.getState().focusedId).toBe("g1");
+    expect(usePanelStore.getState().activeDockTerminalId).toBeNull();
+  });
+
+  it("hands a global dock pane's focus to the grid it was open over", () => {
+    const globalDock: PtyPanelData = { ...panel("d1", "wt-a", "dock"), worktreeId: undefined };
+    usePanelStore.setState({
+      panelsById: { g1: panel("g1", "wt-a"), d1: globalDock },
+      panelIds: ["g1", "d1"],
+      panelIdsByWorktreeId: { "wt-a": ["g1"] },
+    });
+    standIn("wt-a");
+    setLiveWorktrees(["wt-a", "wt-b"]);
+    usePanelStore.getState().setFocused("d1");
+
+    moveTerminalToWorktreeAndFollowRescue("d1", "wt-b");
+
+    expect(usePanelStore.getState().focusedId).toBe("g1");
+  });
+
+  it("still lands on the destination's last-focused pane when rescuing the focused one", () => {
+    seedPanels([panel("t1", "wt-dead"), panel("resident", "wt-live")]);
+    useWorktreeSelectionStore.getState().addDeletedWorktree(deletedRow("wt-dead"));
+    useWorktreeSelectionStore.setState({
+      activeWorktreeId: "wt-dead",
+      lastFocusedTerminalByWorktree: new Map([["wt-live", "resident"]]),
+    });
+    unsubscribe = wirePruneSubscriber(["wt-live"]);
+    usePanelStore.getState().setFocused("t1");
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-live");
+
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-live");
+    expect(usePanelStore.getState().focusedId).toBe("resident");
   });
 
   it("hands focus to nobody rather than to a worktree the user isn't looking at", () => {

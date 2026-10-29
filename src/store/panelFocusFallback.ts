@@ -81,7 +81,7 @@ export function pickDockCloseFocusId(options: {
 function firstFocusablePanelInGroup(
   panelIds: string[],
   activeTabId: string | undefined,
-  closing: ReadonlySet<string>
+  closing: Pick<ReadonlySet<string>, "has">
 ): string | null {
   if (activeTabId && panelIds.includes(activeTabId) && !closing.has(activeTabId)) {
     return activeTabId;
@@ -94,8 +94,8 @@ function firstFocusablePanelInGroup(
  * closed or moved to another worktree (#14974): the next tab group in visual
  * order, else the nearest one before it, landing on that group's visible tab. A
  * leaver outside the grid's groups (a docked pane) walks the flat panel order
- * the same way. `unavailable` holds panels already on their way out, such as a
- * close still pending, which can't take focus either.
+ * the same way. `isUnavailable` names panels already on their way out, such as
+ * a close still pending, which can't take focus either.
  *
  * Read it before the leavers are refiled: a moved group is gone from this
  * worktree's order afterwards, leaving no position to step on from.
@@ -110,9 +110,9 @@ export function pickGridSuccessorFocusId(
     ) => ReadonlyArray<{ panelIds: string[]; activeTabId: string }>;
   },
   hideIds: readonly string[],
-  unavailable: ReadonlySet<string> = new Set()
+  isUnavailable: (id: string) => boolean = () => false
 ): string | null {
-  const closing = new Set([...unavailable, ...hideIds]);
+  const closing = { has: (id: string) => hideIds.includes(id) || isUnavailable(id) };
   const closingWorktreeId = state.panelsById[hideIds[0] ?? ""]?.worktreeId;
   const groups = state.getTabGroups?.("grid", closingWorktreeId);
 

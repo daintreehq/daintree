@@ -207,19 +207,38 @@ describe("pickGridSuccessorFocusId", () => {
     expect(pickGridSuccessorFocusId(state, ["b", "c"])).toBe("a");
   });
 
+  it("lands on the neighbouring group's visible tab, not its first member", () => {
+    const state = gridOf(
+      [panel("a"), panel("b"), panel("c")],
+      [solo("a"), { panelIds: ["b", "c"], activeTabId: "c" }]
+    );
+
+    expect(pickGridSuccessorFocusId(state, ["a"])).toBe("c");
+  });
+
+  it("takes another member when a group's visible tab is unavailable", () => {
+    const state = gridOf(
+      [panel("a"), panel("b"), panel("c")],
+      [solo("a"), { panelIds: ["b", "c"], activeTabId: "c" }]
+    );
+
+    expect(pickGridSuccessorFocusId(state, ["a"], (id) => id === "c")).toBe("b");
+  });
+
   it("passes over a pane whose close is still pending", () => {
     const state = gridOf([panel("a"), panel("b"), panel("c")], [solo("a"), solo("b"), solo("c")]);
 
-    expect(pickGridSuccessorFocusId(state, ["a"], new Set(["b"]))).toBe("c");
+    expect(pickGridSuccessorFocusId(state, ["a"], (id) => id === "b")).toBe("c");
   });
 
-  it("walks the flat order for a leaver the grid has no group for", () => {
+  it("walks the flat order past docked and foreign panes for a leaver with no group", () => {
     const state = gridOf(
       [
         panel("a"),
         panel("dock-1", { location: "dock" }),
-        panel("b"),
         panel("x", { worktreeId: "wt-9" }),
+        panel("dock-2", { location: "dock" }),
+        panel("b"),
       ],
       [solo("a"), solo("b")]
     );
@@ -228,8 +247,15 @@ describe("pickGridSuccessorFocusId", () => {
   });
 
   it("returns null when nothing in the worktree's grid is left", () => {
-    const state = gridOf([panel("a"), panel("x", { worktreeId: "wt-9" })], [solo("a")]);
+    const state = gridOf(
+      [
+        panel("dock-1", { location: "dock" }),
+        panel("x", { worktreeId: "wt-9" }),
+        panel("dock-2", { location: "dock" }),
+      ],
+      []
+    );
 
-    expect(pickGridSuccessorFocusId(state, ["a"])).toBeNull();
+    expect(pickGridSuccessorFocusId(state, ["dock-1"])).toBeNull();
   });
 });
