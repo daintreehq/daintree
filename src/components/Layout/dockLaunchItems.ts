@@ -73,9 +73,9 @@ export type DockLaunchPresetGroup = "default" | "ccr" | "project" | "custom";
 
 /**
  * One selectable preset for an agent. `presetId: null` is the synthetic
- * "Default" choice — the sentinel that saves the bare agent to the active
- * worktree rather than inheriting a saved preset, so it is deliberately
- * distinct from `undefined`.
+ * "Default" choice — the bare agent rather than whatever preset is saved, so it
+ * is deliberately distinct from `undefined`. `isSelected` marks the saved
+ * default, which launching any choice leaves alone.
  */
 export interface DockLaunchPresetChoice {
   presetId: string | null;
@@ -1262,7 +1262,7 @@ export interface ActivateDockLaunchItemContext {
   /**
    * `presetId` carries a three-way distinction the launcher depends on:
    * `undefined` launches whatever preset is saved, `null` is the explicit
-   * Default that clears it, and a string selects one. Collapsing null into
+   * Default (the bare agent), and a string selects one. Collapsing null into
    * undefined silently relaunches the saved preset when the user asked for
    * plain.
    */
