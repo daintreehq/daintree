@@ -331,6 +331,15 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Git status letter ?, the notation git itself paints green",
     },
   ],
+  "src/components/Worktree/ReviewHub/PrStatusChip.tsx": [
+    {
+      category: "transient",
+      signature: "text-status-success",
+      expectedOccurrences: 1,
+      rationale:
+        "Confirmation beside the PR chip that the merge, arm or cancel the user just confirmed landed; clears on a timer",
+    },
+  ],
   "src/components/Worktree/ReviewHub/prChecks.ts": [
     {
       category: "outcome",
@@ -533,5 +542,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 58;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 60;
+export const EXPECTED_STATUS_SUCCESS_SITES = 59;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 61;

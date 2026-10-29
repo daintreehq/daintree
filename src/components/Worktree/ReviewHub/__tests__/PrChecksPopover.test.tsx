@@ -589,7 +589,7 @@ describe("PrChecksPopover", () => {
 
       await openAndSettle();
       const action = await screen.findByTestId("pr-merge-action");
-      expect(action.textContent).toBe("Merge when ready");
+      expect(action.textContent).toBe("Enable auto-merge");
       expect(screen.getByTestId("pr-merge-method-squash").getAttribute("aria-checked")).toBe(
         "true"
       );
@@ -598,7 +598,30 @@ describe("PrChecksPopover", () => {
 
       // The popover closes and the confirm, mounted outside it, opens.
       await waitFor(() => expect(screen.queryByTestId("pr-checks-popover")).toBeNull());
-      expect(await screen.findByRole("button", { name: "Merge when ready" })).toBeTruthy();
+      expect(await screen.findByRole("button", { name: "Enable auto-merge" })).toBeTruthy();
+    });
+
+    it("says why a draft can't merge instead of leaving the row out", async () => {
+      getChecksMock.mockResolvedValue({ checks: [check()] });
+      getPRMock.mockResolvedValue({ ...openPR, isDraft: true });
+      getRepoMetadataMock.mockResolvedValue(metadata);
+      renderPopover();
+
+      await openAndSettle();
+      const row = await screen.findByTestId("pr-merge-control");
+      expect(row.textContent).toMatch(/Draft pull request/);
+      expect(screen.queryByTestId("pr-merge-action")).toBeNull();
+    });
+
+    it("retries its own read in place", async () => {
+      getChecksMock.mockResolvedValue({ checks: [check()] });
+      getPRMock.mockRejectedValueOnce(new Error("offline")).mockResolvedValue(openPR);
+      getRepoMetadataMock.mockResolvedValue(metadata);
+      renderPopover();
+
+      await openAndSettle();
+      fireEvent.click(await screen.findByTestId("pr-merge-control-retry"));
+      expect((await screen.findByTestId("pr-merge-action")).textContent).toBe("Enable auto-merge");
     });
 
     it("explains a disabled arm instead of hiding it", async () => {

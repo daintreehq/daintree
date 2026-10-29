@@ -95,33 +95,44 @@ async function clickConfirm(name: string) {
   fireEvent.click(button);
 }
 
-function renderDialog(request: React.ComponentProps<typeof PrMergeConfirmDialog>["request"]) {
+type Request = NonNullable<React.ComponentProps<typeof PrMergeConfirmDialog>["request"]>;
+
+/** What the row hands over; only the mode and method vary between these tests. */
+function request(overrides: Pick<Request, "mode" | "method"> & Partial<Request>): Request {
+  return { title: "Ship it", baseRef: "develop", queue: false, intent: null, ...overrides };
+}
+
+function renderDialog(req: Request) {
   const onClose = vi.fn();
+  const onComplete = vi.fn();
   render(
     <PrMergeConfirmDialog
       worktreePath="/tmp/wt"
       prNumber={42}
-      request={request}
+      request={req}
       onClose={onClose}
+      onComplete={onComplete}
     />
   );
-  return { onClose };
+  return { onClose, onComplete };
 }
 
 describe("PrMergeConfirmDialog", () => {
   it("previews what lands and arms pinned to the previewed head", async () => {
     getPRMock.mockResolvedValue(pr());
     dispatchMock.mockResolvedValue({ ok: true, result: { prNumber: 42, outcome: "armed" } });
-    const { onClose } = renderDialog({ mode: "arm", method: "squash" });
+    const { onClose } = renderDialog(request({ mode: "arm", method: "squash" }));
 
     await waitFor(() => expect(screen.getByTestId("pr-merge-head").textContent).toBe("abcdef1"));
     expect(screen.getByTestId("pr-merge-base").textContent).toBe("develop");
     expect(screen.getByText("acme/widgets")).toBeTruthy();
-    expect(screen.getByTestId("pr-merge-method").textContent).toBe("squash");
+    expect(screen.getByTestId("pr-merge-method").textContent).toBe("Squash");
+    // The confirm's own read names the PR once it lands, over what the row handed in.
+    expect(screen.getByTestId("pr-merge-title").textContent).toBe(pr().title);
     expect(screen.getAllByTestId("pr-merge-commit-row")).toHaveLength(1);
     expect(screen.getByTestId("pr-merge-push-warning").textContent).toMatch(/your own agents/);
 
-    await clickConfirm("Merge when ready");
+    await clickConfirm("Enable auto-merge");
 
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(dispatchMock).toHaveBeenCalledWith(
@@ -144,19 +155,19 @@ describe("PrMergeConfirmDialog", () => {
       ok: true,
       result: { prNumber: 42, outcome: "already-mergeable", message: "can merge" },
     });
-    const { onClose } = renderDialog({ mode: "arm", method: "merge" });
+    const { onClose } = renderDialog(request({ mode: "arm", method: "merge" }));
 
     await waitFor(() => screen.getByTestId("pr-merge-head"));
-    await clickConfirm("Merge when ready");
+    await clickConfirm("Enable auto-merge");
 
-    await screen.findByRole("button", { name: "Merge" });
+    await screen.findByRole("button", { name: "Merge pull request" });
     expect(screen.getByTestId("pr-merge-mode-changed")).toBeTruthy();
     expect(onClose).not.toHaveBeenCalled();
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     expect(dispatchMock.mock.calls.some(([id]) => id === "forge.mergePR")).toBe(false);
 
     dispatchMock.mockResolvedValueOnce({ ok: true, result: { prNumber: 42, merged: true } });
-    await clickConfirm("Merge");
+    await clickConfirm("Merge pull request");
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(dispatchMock).toHaveBeenLastCalledWith(
       "forge.mergePR",
@@ -173,9 +184,9 @@ describe("PrMergeConfirmDialog", () => {
 
   it("offers a PR that turned mergeable since the popover as Merge, under a notice", async () => {
     getPRMock.mockResolvedValue(pr({ mergeStatus: "clean" }));
-    renderDialog({ mode: "arm", method: null });
+    renderDialog(request({ mode: "arm", method: null }));
 
-    expect(await screen.findByRole("button", { name: "Merge" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Merge pull request" })).toBeTruthy();
     expect(screen.getByTestId("pr-merge-mode-changed").textContent).toMatch(/can merge now/i);
     expect(dispatchMock).not.toHaveBeenCalled();
   });
@@ -183,7 +194,7 @@ describe("PrMergeConfirmDialog", () => {
   it("names the queue's method rather than inventing one", async () => {
     getPRMock.mockResolvedValue(pr({ mergeQueueRequired: true }));
     dispatchMock.mockResolvedValue({ ok: true, result: { prNumber: 42, outcome: "armed" } });
-    renderDialog({ mode: "arm", method: "squash" });
+    renderDialog(request({ mode: "arm", method: "squash" }));
 
     await waitFor(() =>
       expect(screen.getByTestId("pr-merge-method").textContent).toBe("Set by the merge queue")
@@ -201,20 +212,25 @@ describe("PrMergeConfirmDialog", () => {
   it("keeps a rejected write inside the dialog", async () => {
     getPRMock.mockResolvedValue(pr());
     dispatchMock.mockResolvedValue({ ok: false, error: { message: "has new commits" } });
-    const { onClose } = renderDialog({ mode: "arm", method: "squash" });
+    const { onClose } = renderDialog(request({ mode: "arm", method: "squash" }));
 
     await waitFor(() => screen.getByTestId("pr-merge-head"));
-    await clickConfirm("Merge when ready");
+    await clickConfirm("Enable auto-merge");
 
-    expect((await screen.findByTestId("pr-merge-error")).textContent).toMatch(/new commits/);
+    // Plain words up front; GitHub's own text stays available behind the disclosure.
+    const notice = await screen.findByTestId("pr-merge-error");
+    expect(notice.textContent).toMatch(/GitHub didn't enable auto-merge/);
+    expect(notice.querySelector("details")?.textContent).toMatch(/has new commits/);
     expect(onClose).not.toHaveBeenCalled();
+    // The preview is read again before another attempt can be made.
+    await waitFor(() => expect(getPRMock).toHaveBeenCalledTimes(2));
   });
 
   it("cancels through the disable action", async () => {
     getPRMock.mockResolvedValue(pr({ mergeIntent: { kind: "queued", position: 2 } }));
     // The preview is always read past the provider's cache.
     dispatchMock.mockResolvedValue({ ok: true, result: { prNumber: 42, outcome: "dequeued" } });
-    const { onClose } = renderDialog({ mode: "cancel", method: null });
+    const { onClose } = renderDialog(request({ mode: "cancel", method: null }));
 
     await clickConfirm("Remove from queue");
     await waitFor(() => expect(onClose).toHaveBeenCalled());
@@ -227,7 +243,7 @@ describe("PrMergeConfirmDialog", () => {
 
   it("reads past the provider cache every time it opens", async () => {
     getPRMock.mockResolvedValue(pr());
-    renderDialog({ mode: "arm", method: "merge" });
+    renderDialog(request({ mode: "arm", method: "merge" }));
     await waitFor(() => expect(getPRMock).toHaveBeenCalled());
     expect(getPRMock.mock.calls[0]).toEqual(["/tmp/wt", 42, { fresh: true }]);
   });
@@ -240,8 +256,8 @@ describe("PrMergeConfirmDialog", () => {
       ok: true,
       result: { prNumber: 42, outcome: "already-mergeable", message: "can merge" },
     });
-    renderDialog({ mode: "arm", method: "merge" });
-    await clickConfirm("Merge when ready");
+    renderDialog(request({ mode: "arm", method: "merge" }));
+    await clickConfirm("Enable auto-merge");
 
     // A queue branch never takes the REST merge, whatever the earlier answer said.
     await waitFor(() =>
@@ -258,16 +274,48 @@ describe("PrMergeConfirmDialog", () => {
     ["conflicts", { mergeStatus: "dirty" as const }, /conflicts/],
   ])("blocks the write when the preview has %s", async (_name, overrides, hint) => {
     getPRMock.mockResolvedValue(pr(overrides));
-    renderDialog({ mode: "arm", method: "merge" });
+    renderDialog(request({ mode: "arm", method: "merge" }));
     expect(await screen.findByText(hint)).toBeTruthy();
-    expect(isDisabled(screen.getByRole("button", { name: "Merge when ready" }))).toBe(true);
+    expect(isDisabled(screen.getByRole("button", { name: "Enable auto-merge" }))).toBe(true);
   });
 
   it("blocks a non-queue write when no method was established", async () => {
     getPRMock.mockResolvedValue(pr());
-    renderDialog({ mode: "arm", method: null });
+    renderDialog(request({ mode: "arm", method: null }));
     expect(await screen.findByText(/merge methods/)).toBeTruthy();
-    expect(isDisabled(screen.getByRole("button", { name: "Merge when ready" }))).toBe(true);
+    expect(isDisabled(screen.getByRole("button", { name: "Enable auto-merge" }))).toBe(true);
+  });
+
+  it("blocks rather than guesses when the read carries no merge status", async () => {
+    getPRMock.mockResolvedValue(pr({ mergeStatus: undefined }));
+    renderDialog(request({ mode: "arm", method: "squash" }));
+    expect(await screen.findByTestId("pr-merge-status-unreported")).toBeTruthy();
+    expect(screen.queryByTestId("pr-merge-mode-changed")).toBeNull();
+    expect(isDisabled(screen.getByRole("button", { name: "Enable auto-merge" }))).toBe(true);
+  });
+
+  it("stops offering to cancel once nothing is pending", async () => {
+    getPRMock.mockResolvedValue(pr({ mergeIntent: null }));
+    renderDialog(
+      request({
+        mode: "cancel",
+        method: null,
+        intent: { kind: "auto-merge", method: "squash", enabledAt: 1 },
+      })
+    );
+    expect(await screen.findByText(/Nothing pending for #42/)).toBeTruthy();
+    expect(isDisabled(screen.getByRole("button", { name: "Cancel auto-merge" }))).toBe(true);
+    expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
+  });
+
+  it("hands GitHub's reply over before closing", async () => {
+    getPRMock.mockResolvedValue(pr({ mergeStatus: "clean" }));
+    dispatchMock.mockResolvedValue({ ok: true, result: { prNumber: 42, merged: true } });
+    const { onClose, onComplete } = renderDialog(request({ mode: "merge", method: "squash" }));
+
+    await clickConfirm("Merge pull request");
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(onComplete).toHaveBeenCalledWith({ kind: "merged", baseRef: "develop" });
   });
 
   it("blocks a cancel GitHub says the viewer can't make", async () => {
@@ -277,7 +325,7 @@ describe("PrMergeConfirmDialog", () => {
         viewerCanDisableAutoMerge: false,
       })
     );
-    renderDialog({ mode: "cancel", method: null });
+    renderDialog(request({ mode: "cancel", method: null }));
     const button = await screen.findByRole("button", { name: "Cancel auto-merge" });
     await waitFor(() => screen.getByText(/doesn't let you cancel/));
     expect(isDisabled(button)).toBe(true);

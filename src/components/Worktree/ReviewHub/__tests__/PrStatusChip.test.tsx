@@ -80,7 +80,9 @@ describe("PrStatusChip", () => {
         }}
       />
     );
-    expect(getByTestId("pr-merge-intent").textContent).toBe("auto-merge · squash");
+    // The method is its own chip segment, behind the chip's separator.
+    expect(getByTestId("pr-merge-intent").textContent).toBe("auto-merge");
+    expect(getByTestId("pr-merge-intent-method").textContent).toBe("squash");
     expect(getByTestId("pr-checks-trigger").getAttribute("aria-label")).toMatch(/armed by octocat/);
   });
 

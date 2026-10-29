@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, ChevronDown, ExternalLink, GitPullRequest } from "lucide-react";
 import { GitMerge } from "@/components/icons";
 import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
@@ -6,12 +7,34 @@ import {
   describeMergeIntent,
   HEAD_MOVED_WHILE_ARMED_TEXT,
   mergeIntentLabel,
+  mergeMethodLabel,
 } from "@shared/utils/prMergeIntent";
 import { cn } from "@/lib/utils";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 import { PrChecksPopover } from "./PrChecksPopover";
+import {
+  applyMergeOutcome,
+  describeMergeOutcome,
+  isMergeOutcomeReflected,
+  type PrMergeOutcome,
+} from "./prMergeModel";
+
+/**
+ * How long the acknowledgement beside the chip stays after a merge, arm or
+ * cancel. Long enough to be read once the confirm's exit has finished and the
+ * eye is back on the chip; it is a confirmation, so it clears on its own.
+ */
+const MERGE_ACK_DWELL_MS = 6_000;
+
+/**
+ * How long GitHub's reply to a write stands in for detection. The chip shows
+ * what the reply said until a detection pass reports the same, and gives way
+ * to detection after this however it reads — the reply is a snapshot too.
+ */
+const MERGE_OUTCOME_HOLD_MS = 30_000;
 
 interface WorktreePR {
   prNumber: number;
@@ -35,21 +58,57 @@ export function PrStatusChip({
   worktreePath,
   onOpenExternal,
 }: PrStatusChipProps) {
+  // Keyed to the PR it was for: a reply about one pull request never paints
+  // over another that takes the chip's place.
+  const [stored, setStored] = useState<{ identity: string; outcome: PrMergeOutcome } | null>(null);
+  const [ackVisible, setAckVisible] = useState(false);
+  const identity = worktreePR ? `${worktreePath}:${worktreePR.prNumber}:${worktreePR.prUrl}` : null;
+  const outcome = stored && stored.identity === identity ? stored.outcome : null;
+
+  useEffect(() => {
+    if (!ackVisible) return;
+    const timer = setTimeout(() => setAckVisible(false), MERGE_ACK_DWELL_MS);
+    return () => clearTimeout(timer);
+  }, [ackVisible, outcome]);
+
+  useEffect(() => {
+    if (!stored) return;
+    const timer = setTimeout(() => setStored(null), MERGE_OUTCOME_HOLD_MS);
+    return () => clearTimeout(timer);
+  }, [stored]);
+
+  const handleMergeOutcome = useCallback(
+    (next: PrMergeOutcome) => {
+      if (!identity) return;
+      setStored({ identity, outcome: next });
+      setAckVisible(true);
+    },
+    [identity]
+  );
+
   if (hasRemote && worktreePR && worktreePR.prUrl) {
+    // Only an open PR can still merge; a stale intent on a merged one is noise.
+    const detected = {
+      prState: worktreePR.prState,
+      mergeIntent: worktreePR.prState === "open" ? (worktreePR.mergeIntent ?? null) : null,
+    };
+    const shown =
+      outcome && !isMergeOutcomeReflected(outcome, detected)
+        ? applyMergeOutcome(outcome, detected)
+        : detected;
     const ciVisual = getCIStatusVisual(worktreePR.prCiStatus);
     const prStateLabel =
-      worktreePR.prState === "merged"
+      shown.prState === "merged"
         ? "merged"
-        : worktreePR.prState === "closed" || worktreePR.prState === "declined"
+        : shown.prState === "closed" || shown.prState === "declined"
           ? "closed"
           : "open";
-    const PrStateGlyph = getPrStateGlyph(worktreePR.prState);
-    const prStateColor = getPrStateColor(worktreePR.prState);
+    const PrStateGlyph = getPrStateGlyph(shown.prState);
+    const prStateColor = getPrStateColor(shown.prState);
     // The badge is no longer the accessible element — the disclosure button
     // wrapping it is — so the name lives on the trigger. Two elements carrying
     // it would make "CI failing" match twice and name neither one usefully.
-    // Only an open PR can still merge; a stale intent on a merged one is noise.
-    const mergeIntent = worktreePR.prState === "open" ? (worktreePR.mergeIntent ?? null) : null;
+    const mergeIntent = shown.prState === "open" ? shown.mergeIntent : null;
     const headMoved = mergeIntent !== null && worktreePR.headMovedWhileArmed === true;
     const mergeIntentText = mergeIntent
       ? ` — ${describeMergeIntent(mergeIntent)}${headMoved ? `. ${HEAD_MOVED_WHILE_ARMED_TEXT}` : ""}`
@@ -72,6 +131,7 @@ export function PrStatusChip({
           prUrl={worktreePR.prUrl}
           triggerLabel={triggerLabel}
           onOpenExternal={onOpenExternal}
+          onMergeOutcome={handleMergeOutcome}
         >
           <Badge
             tone="outline"
@@ -127,8 +187,20 @@ export function PrStatusChip({
                   ) : (
                     <GitMerge className="w-3 h-3 shrink-0 text-text-secondary" aria-hidden="true" />
                   )}
-                  <span className="text-text-secondary">{mergeIntentLabel(mergeIntent)}</span>
+                  {/* The method is its own segment, behind the chip's own separator,
+                      rather than a dot typed inside one label. */}
+                  <span className="text-text-secondary">
+                    {mergeIntent.kind === "queued" ? mergeIntentLabel(mergeIntent) : "auto-merge"}
+                  </span>
                 </span>
+                {mergeIntent.kind === "auto-merge" && mergeIntent.method && (
+                  <>
+                    <span className="text-text-muted">·</span>
+                    <span className="text-text-secondary" data-testid="pr-merge-intent-method">
+                      {mergeMethodLabel(mergeIntent.method)}
+                    </span>
+                  </>
+                )}
               </>
             )}
             <ChevronDown
@@ -149,6 +221,7 @@ export function PrStatusChip({
         >
           <ExternalLink aria-hidden="true" />
         </Button>
+        {ackVisible && outcome && <MergeAck outcome={outcome} prNumber={worktreePR.prNumber} />}
       </>
     );
   }
@@ -163,4 +236,28 @@ export function PrStatusChip({
   }
 
   return null;
+}
+
+/**
+ * The confirmation a write gets where the user is looking once the confirm
+ * closes: beside the chip that focus returned to. Hidden from assistive tech
+ * because the popover's status region says it.
+ */
+function MergeAck({ outcome, prNumber }: { outcome: PrMergeOutcome; prNumber: number }) {
+  // Green only for a merge that landed or one GitHub now has armed; a
+  // cancellation or an unconfirmed request is acknowledged without it.
+  const landed = outcome.kind === "merged" || outcome.kind === "armed";
+  const Glyph = outcome.kind === "not-pending" ? SEVERITY_GLYPH.info : SEVERITY_GLYPH.success;
+  return (
+    <span
+      data-testid="pr-merge-ack"
+      aria-hidden="true"
+      className="inline-flex items-center gap-1 text-2xs text-text-secondary whitespace-nowrap"
+    >
+      <Glyph
+        className={cn("w-3 h-3 shrink-0", landed ? "text-status-success" : "text-text-secondary")}
+      />
+      {describeMergeOutcome(outcome, prNumber).short}
+    </span>
+  );
 }
