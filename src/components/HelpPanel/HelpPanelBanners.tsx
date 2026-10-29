@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { formatCountdown } from "@/utils/formatCountdown";
 import { grantDeadline } from "@/utils/grantDeadline";
+import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
+import { pluralize } from "@/lib/pluralize";
 import { Clock, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
@@ -22,80 +24,127 @@ const GRANT_ENDED_TITLE: Record<GrantEndReason, string> = {
   "grant-ceiling": "hit its 30-minute limit",
 };
 
-// The countdown re-derives from `expiresAt` once a second — the tick only
-// drives a re-render, it isn't the source of truth, so a missed beat can't
-// drift the displayed value.
+// The countdowns re-derive from each grant's deadline once a second — the
+// tick only drives a re-render, it isn't the source of truth, so a missed beat
+// can't drift the displayed value.
 const COUNTDOWN_TICK_MS = 1000;
-
-function computeRemainingSeconds(expiresAt: number): number {
-  return Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
-}
 
 function ToolId({ id }: { id: string }) {
   return <span className="font-mono text-text-primary wrap-anywhere">{id}</span>;
 }
 
+/** What a grant approves: its tool, or the tools a native automation grant covers. */
+function grantSubject(grant: ActiveGrantState): string {
+  if (grant.grantId === undefined) return grant.toolId;
+  return grant.allowedTools?.length ? grant.allowedTools.join(", ") : "Automation grant";
+}
+
 /**
- * Ambient countdown for a live per-tool grant (#10042), minted by the
- * tier-mismatch banner's "Allow this tool". Tier 1 — a non-blocking
- * pane-chrome state, not a toast. The countdown derives from the
- * grant's `expiresAt` with a component-local 1s tick; the timestamp is the
- * source of truth, so a missed tick can't drift the displayed value (and the
- * interval is keyed on `expiresAt`, restarting cleanly under StrictMode's
- * double-mount). The grant is sliding-TTL: the countdown is "time left if the
- * tool isn't used again," and each use's `grant.refreshed` push moves it
- * (#14998). Once the 30-minute ceiling ends the grant first, no use can, so the
- * countdown says so.
+ * "4m 59s left", against the earlier of the sliding expiry and the 30-minute
+ * ceiling. The grant is sliding-TTL: the countdown is "time left if the tool
+ * isn't used again," and each use's `grant.refreshed` push moves it (#14998).
+ * Once the ceiling ends the grant first, no use can, so the countdown says so.
+ * Kept out of the banner's polite live region (`aria-live="off"`) so screen
+ * readers announce the approval once instead of the ticking time.
+ */
+function GrantTimeLeft({ grant, now }: { grant: ActiveGrantState; now: number }) {
+  const { endsAt, atCeiling } = grantDeadline(grant.expiresAt, grant.maxExpiresAt);
+  const remainingSeconds = Math.max(0, Math.ceil((endsAt - now) / 1000));
+  return (
+    <span aria-live="off">
+      <span className="tabular-nums">{formatCountdown(remainingSeconds)}</span> left
+      {atCeiling && " · 30-minute limit"}
+    </span>
+  );
+}
+
+/**
+ * Ambient countdown for the session's live grants (#10042), minted by the
+ * tier-mismatch banner's "Allow this tool" or as automation grants in
+ * Settings. Tier 1 — a non-blocking pane-chrome state, not a toast. A session
+ * can hold several at once, so every one gets its own countdown and its own
+ * revoke, which ends that grant alone (#14975). One tick drives every
+ * countdown; each derives from its grant's deadline, so a missed tick can't
+ * drift the displayed value.
  */
 function GrantActiveBanner({
-  grant,
-  isRevoking,
+  grants,
+  revokingKeys,
   onRevoke,
 }: {
-  grant: ActiveGrantState;
-  isRevoking: boolean;
-  onRevoke: () => void;
+  grants: readonly ActiveGrantState[];
+  revokingKeys: readonly string[];
+  onRevoke: (key: string) => void;
 }) {
-  const { endsAt, atCeiling } = grantDeadline(grant.expiresAt, grant.maxExpiresAt);
-  const [remainingSeconds, setRemainingSeconds] = useState(() => computeRemainingSeconds(endsAt));
-  useEffect(() => {
-    setRemainingSeconds(computeRemainingSeconds(endsAt));
-    const id = setInterval(() => {
-      setRemainingSeconds(computeRemainingSeconds(endsAt));
-    }, COUNTDOWN_TICK_MS);
-    return () => clearInterval(id);
-  }, [endsAt]);
+  const [now, setNow] = useState(() => Date.now());
+  useVisibilityAwareInterval(() => setNow(Date.now()), COUNTDOWN_TICK_MS);
+
+  const [only] = grants;
+  if (grants.length === 1 && only) {
+    return (
+      <InlineStatusBanner
+        severity="neutral"
+        layout="inline"
+        animated={false}
+        icon={ShieldCheck}
+        role="status"
+        ariaLive="polite"
+        data-testid="help-grant-active-banner"
+        title={
+          <>
+            <ToolId id={grantSubject(only)} /> approved
+          </>
+        }
+        description={<GrantTimeLeft grant={only} now={now} />}
+        action={{
+          id: "revoke",
+          label: "Revoke access",
+          variant: "primary",
+          onClick: () => onRevoke(only.key),
+          loading: revokingKeys.includes(only.key),
+        }}
+      />
+    );
+  }
 
   return (
     <InlineStatusBanner
       severity="neutral"
-      layout="inline"
+      layout="stacked"
       animated={false}
       icon={ShieldCheck}
       role="status"
       ariaLive="polite"
       data-testid="help-grant-active-banner"
-      title={
-        <>
-          <ToolId id={grant.toolId} /> approved
-        </>
+      title={`${pluralize(grants.length, "approval")} active`}
+      descriptionExtras={
+        <ul className="mt-1 space-y-1">
+          {grants.map((grant) => {
+            const subject = grantSubject(grant);
+            return (
+              <li key={grant.key} className="flex items-center gap-2 text-xs">
+                <span className="min-w-0 flex-1">
+                  <ToolId id={subject} />
+                  <span className="text-text-secondary">
+                    {" · "}
+                    <GrantTimeLeft grant={grant} now={now} />
+                  </span>
+                </span>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="shrink-0"
+                  aria-label={`Revoke access to ${subject}`}
+                  loading={revokingKeys.includes(grant.key)}
+                  onClick={() => onRevoke(grant.key)}
+                >
+                  Revoke
+                </Button>
+              </li>
+            );
+          })}
+        </ul>
       }
-      description={
-        // The countdown re-derives every second; keep it out of the banner's
-        // polite live region (`aria-live="off"`) so screen readers announce
-        // the "<tool> approved" message once instead of the ticking time.
-        <span aria-live="off">
-          <span className="tabular-nums">{formatCountdown(remainingSeconds)}</span> left
-          {atCeiling && " · 30-minute limit"}
-        </span>
-      }
-      action={{
-        id: "revoke",
-        label: "Revoke access",
-        variant: "primary",
-        onClick: onRevoke,
-        loading: isRevoking,
-      }}
     />
   );
 }
@@ -166,14 +215,14 @@ interface HelpPanelBannersProps {
   launchError: LaunchErrorState | null;
   sessionRevoked: SessionRevokedState | null;
   isApprovingTier: boolean;
-  activeGrant: ActiveGrantState | null;
+  activeGrants: readonly ActiveGrantState[];
   grantEnded: GrantEndedState | null;
-  isRevokingGrant: boolean;
+  revokingGrantKeys: readonly string[];
   onDismissResume: () => void;
   onDismissTierMismatch: () => void;
   onApproveOnce: () => void;
   onAlwaysAllow: () => void;
-  onRevokeGrant: () => void;
+  onRevokeGrant: (key: string) => void;
   onDismissGrantEnded: () => void;
   onRetryLaunch: () => void;
   onDismissLaunchError: () => void;
@@ -196,9 +245,9 @@ export function HelpPanelBanners({
   launchError,
   sessionRevoked,
   isApprovingTier,
-  activeGrant,
+  activeGrants,
   grantEnded,
-  isRevokingGrant,
+  revokingGrantKeys,
   onDismissResume,
   onDismissTierMismatch,
   onApproveOnce,
@@ -357,10 +406,10 @@ export function HelpPanelBanners({
           closeAriaLabel="Dismiss tier mismatch notice"
         />
       )}
-      {activeGrant && (
+      {activeGrants.length > 0 && (
         <GrantActiveBanner
-          grant={activeGrant}
-          isRevoking={isRevokingGrant}
+          grants={activeGrants}
+          revokingKeys={revokingGrantKeys}
           onRevoke={onRevokeGrant}
         />
       )}

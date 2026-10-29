@@ -1138,7 +1138,7 @@ describe("SessionStore.getLiveStatusForHelpSession (#10032)", () => {
     expect(store.getLiveStatusForHelpSession(HELP_ID, WC)?.tier).toBe("core");
   });
 
-  it("maps active grants to {toolId, expiresAt, ttlMs} for the resolved transport id", () => {
+  it("maps active grants to {sessionId, toolId, expiresAt, ttlMs} for the resolved transport id", () => {
     wireLiveHelpSession({ tier: "core" });
     store.grantCache.issueGrant(TRANSPORT, "terminal.kill");
     store.grantCache.issueGrant(TRANSPORT, "project.runCheck");
@@ -1149,6 +1149,8 @@ describe("SessionStore.getLiveStatusForHelpSession (#10032)", () => {
 
     expect(grants.map((g) => g.toolId).sort()).toEqual(["project.runCheck", "terminal.kill"]);
     for (const grant of grants) {
+      // The transport id, not the public help id, is what a per-tool revoke names.
+      expect(grant.sessionId).toBe(TRANSPORT);
       expect(grant.expiresAt).toBeGreaterThan(Date.now());
       expect(grant.ttlMs).toBeGreaterThan(0);
     }
@@ -1221,6 +1223,7 @@ describe("SessionStore.getLiveStatusForHelpSession (#10032)", () => {
     });
     expect(store.getLiveStatusForHelpSession(HELP_ID, WC)?.activeGrants).toEqual([
       expect.objectContaining({
+        sessionId: TRANSPORT,
         kind: "native",
         expiresAt: issuedAt + MCP_GRANT_TTL_MS,
         maxExpiresAt: issuedAt + MCP_GRANT_MAX_LIFETIME_MS,

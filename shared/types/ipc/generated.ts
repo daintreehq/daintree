@@ -2288,13 +2288,13 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { sessionId: string }];
     result: void;
   };
+  "mcp-server:revoke-grant": {
+    args: [payload: { sessionId: string; toolId: string }];
+    result: import("./mcpServer.js").McpRevokeGrantResult;
+  };
   "mcp-server:revoke-native-grant": {
     args: [payload: { grantId: string }];
     result: import("./mcpServer.js").McpRevokeNativeGrantResult;
-  };
-  "mcp-server:revoke-session-grants": {
-    args: [payload: { sessionId: string }];
-    result: import("./mcpServer.js").McpRevokeSessionGrantsResult;
   };
   "mcp-server:rotate-api-key": {
     args: [];

@@ -18,7 +18,7 @@ import type {
   McpIssueNativeGrantResult,
   McpLogRecord,
   McpRevokeNativeGrantResult,
-  McpRevokeSessionGrantsResult,
+  McpRevokeGrantResult,
   McpRuntimeSnapshot,
   McpRuntimeState,
   TerminalAdoptionEntry,
@@ -1255,12 +1255,12 @@ export class McpServerService {
   }
 
   /**
-   * Revoke every grant for a session in one call. Caller-pin checked
-   * identically to {@link issueGrant}. Returns the count of grants
-   * dropped so the renderer can show a confirmation toast.
+   * End one per-tool grant, leaving the session's other grants alone.
+   * Caller-pin checked identically to {@link issueGrant}. Idempotent — a grant
+   * already gone reports `revoked: false`.
    */
-  revokeSessionGrants(sessionId: string, callerWcId?: number): McpRevokeSessionGrantsResult {
-    return this.httpLifecycle.revokeSessionGrants(sessionId, callerWcId);
+  revokeGrant(sessionId: string, toolId: string, callerWcId?: number): McpRevokeGrantResult {
+    return this.httpLifecycle.revokeGrant(sessionId, toolId, callerWcId);
   }
 
   /**

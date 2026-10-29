@@ -5,7 +5,14 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/utils", () => ({ cn: (...args: unknown[]) => args.filter(Boolean).join(" ") }));
 
 import { HelpPanelBanners } from "../HelpPanelBanners";
-import type { LaunchErrorKind } from "@/controllers/HelpSessionController";
+import type { ActiveGrantState, LaunchErrorKind } from "@/controllers/HelpSessionController";
+
+function grant(
+  toolId: string,
+  fields: Omit<Partial<ActiveGrantState>, "toolId"> & { expiresAt: number }
+): ActiveGrantState {
+  return { key: `tool:s1:${toolId}`, sessionId: "s1", toolId, ttlMs: 900_000, ...fields };
+}
 
 function baseProps() {
   return {
@@ -14,9 +21,9 @@ function baseProps() {
     launchError: null,
     sessionRevoked: null,
     isApprovingTier: false,
-    activeGrant: null,
+    activeGrants: [] as ActiveGrantState[],
     grantEnded: null,
-    isRevokingGrant: false,
+    revokingGrantKeys: [] as string[],
     onDismissResume: vi.fn(),
     onDismissTierMismatch: vi.fn(),
     onApproveOnce: vi.fn(),
@@ -263,7 +270,7 @@ describe("HelpPanelBanners — session revoked", () => {
 });
 
 describe("HelpPanelBanners — active grant countdown (#10042)", () => {
-  it("renders nothing for the grant slot when activeGrant is null", () => {
+  it("renders nothing for the grant slot when no grant is live", () => {
     const { queryByTestId } = render(<HelpPanelBanners {...baseProps()} />);
     expect(queryByTestId("help-grant-active-banner")).toBeNull();
   });
@@ -273,12 +280,7 @@ describe("HelpPanelBanners — active grant countdown (#10042)", () => {
     const { getByTestId } = render(
       <HelpPanelBanners
         {...baseProps()}
-        activeGrant={{
-          sessionId: "s1",
-          toolId: "search_docs",
-          ttlMs: 900_000,
-          expiresAt: Date.now() + 125_000,
-        }}
+        activeGrants={[grant("search_docs", { expiresAt: Date.now() + 125_000 })]}
       />
     );
     const banner = getByTestId("help-grant-active-banner");
@@ -293,12 +295,7 @@ describe("HelpPanelBanners — active grant countdown (#10042)", () => {
     const { getByTestId } = render(
       <HelpPanelBanners
         {...baseProps()}
-        activeGrant={{
-          sessionId: "s1",
-          toolId: "t1",
-          ttlMs: 900_000,
-          expiresAt: Date.now() - 10_000,
-        }}
+        activeGrants={[grant("t1", { expiresAt: Date.now() - 10_000 })]}
       />
     );
     expect(getByTestId("help-grant-active-banner").textContent).toContain("0s left");
@@ -311,7 +308,7 @@ describe("HelpPanelBanners — active grant countdown (#10042)", () => {
       const { getByTestId, unmount } = render(
         <HelpPanelBanners
           {...baseProps()}
-          activeGrant={{ sessionId: "s1", toolId: "t1", ttlMs: 900_000, expiresAt: base + 5_000 }}
+          activeGrants={[grant("t1", { expiresAt: base + 5_000 })]}
         />
       );
       expect(getByTestId("help-grant-active-banner").textContent).toContain("5s left");
@@ -337,23 +334,18 @@ describe("HelpPanelBanners — active grant countdown (#10042)", () => {
     vi.useFakeTimers();
     try {
       const base = Date.now();
-      const grant = {
-        sessionId: "s1",
-        toolId: "t1",
-        ttlMs: 900_000,
-        maxExpiresAt: base + 1_800_000,
-      };
+      const slid = (expiresAt: number) => [
+        grant("t1", { expiresAt, maxExpiresAt: base + 1_800_000 }),
+      ];
       const { getByTestId, rerender } = render(
-        <HelpPanelBanners {...baseProps()} activeGrant={{ ...grant, expiresAt: base + 5_000 }} />
+        <HelpPanelBanners {...baseProps()} activeGrants={slid(base + 5_000)} />
       );
       act(() => {
         vi.advanceTimersByTime(5_000);
       });
       expect(getByTestId("help-grant-active-banner").textContent).toContain("0s left");
 
-      rerender(
-        <HelpPanelBanners {...baseProps()} activeGrant={{ ...grant, expiresAt: base + 605_000 }} />
-      );
+      rerender(<HelpPanelBanners {...baseProps()} activeGrants={slid(base + 605_000)} />);
       const text = getByTestId("help-grant-active-banner").textContent ?? "";
       expect(text).toContain("10m left");
       expect(text).not.toContain("limit");
@@ -371,22 +363,16 @@ describe("HelpPanelBanners — active grant countdown (#10042)", () => {
     vi.useFakeTimers();
     try {
       const base = Date.now();
-      const grant = { sessionId: "s1", toolId: "t1", ttlMs: 900_000, expiresAt: base + 900_000 };
+      const capped = (maxExpiresAt: number) => [
+        grant("t1", { expiresAt: base + 900_000, maxExpiresAt }),
+      ];
       const { getByTestId, rerender } = render(
-        <HelpPanelBanners
-          {...baseProps()}
-          activeGrant={{ ...grant, maxExpiresAt: base + 1_800_000 }}
-        />
+        <HelpPanelBanners {...baseProps()} activeGrants={capped(base + 1_800_000)} />
       );
       expect(getByTestId("help-grant-active-banner").textContent).toContain("15m left");
 
       // Only the ceiling changes: the countdown must re-target it.
-      rerender(
-        <HelpPanelBanners
-          {...baseProps()}
-          activeGrant={{ ...grant, maxExpiresAt: base + 120_000 }}
-        />
-      );
+      rerender(<HelpPanelBanners {...baseProps()} activeGrants={capped(base + 120_000)} />);
       expect(getByTestId("help-grant-active-banner").textContent).toContain(
         "2m left · 30-minute limit"
       );
@@ -404,32 +390,19 @@ describe("HelpPanelBanners — active grant countdown (#10042)", () => {
 
   it("wires Revoke access to onRevokeGrant and disables it while revoking", () => {
     const onRevokeGrant = vi.fn();
+    const live = [grant("t1", { expiresAt: Date.now() + 60_000 })];
     const { getByText, rerender } = render(
-      <HelpPanelBanners
-        {...baseProps()}
-        activeGrant={{
-          sessionId: "s1",
-          toolId: "t1",
-          ttlMs: 900_000,
-          expiresAt: Date.now() + 60_000,
-        }}
-        onRevokeGrant={onRevokeGrant}
-      />
+      <HelpPanelBanners {...baseProps()} activeGrants={live} onRevokeGrant={onRevokeGrant} />
     );
     const button = getByText("Revoke access");
     fireEvent.click(button);
-    expect(onRevokeGrant).toHaveBeenCalledTimes(1);
+    expect(onRevokeGrant).toHaveBeenCalledWith(live[0]!.key);
 
     rerender(
       <HelpPanelBanners
         {...baseProps()}
-        activeGrant={{
-          sessionId: "s1",
-          toolId: "t1",
-          ttlMs: 900_000,
-          expiresAt: Date.now() + 60_000,
-        }}
-        isRevokingGrant={true}
+        activeGrants={live}
+        revokingGrantKeys={[live[0]!.key]}
         onRevokeGrant={onRevokeGrant}
       />
     );
@@ -437,6 +410,119 @@ describe("HelpPanelBanners — active grant countdown (#10042)", () => {
     const busy = getByText("Revoke access").closest("button")!;
     expect(busy.getAttribute("aria-busy")).toBe("true");
     expect(busy.getAttribute("aria-disabled")).toBe("true");
+  });
+});
+
+describe("HelpPanelBanners — several live approvals (#14975)", () => {
+  function twoGrants() {
+    const now = Date.now();
+    return [
+      grant("terminal.kill", { expiresAt: now + 125_000 }),
+      grant("project.runCheck", { expiresAt: now + 605_000 }),
+    ];
+  }
+
+  function automationGrant(): ActiveGrantState {
+    return {
+      key: "native:s1:g1",
+      sessionId: "s1",
+      toolId: "*",
+      ttlMs: 900_000,
+      expiresAt: Date.now() + 60_000,
+      grantId: "g1",
+      allowedTools: ["recipe.run", "worktree.deleteOwned"],
+    };
+  }
+
+  it("names every approval with its own countdown and says how many there are", () => {
+    const { getByTestId } = render(
+      <HelpPanelBanners {...baseProps()} activeGrants={twoGrants()} />
+    );
+    const banner = getByTestId("help-grant-active-banner");
+    const text = banner.textContent ?? "";
+    expect(text).toContain("2 approvals active");
+    const rows = Array.from(banner.querySelectorAll("li")).map((li) => li.textContent ?? "");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toContain("terminal.kill");
+    expect(rows[0]).toMatch(/2m( [1-5]s)? left/);
+    expect(rows[1]).toContain("project.runCheck");
+    expect(rows[1]).toMatch(/10m( [1-5]s)? left/);
+  });
+
+  it("revokes only the approval whose button was pressed, with no clear-all control", () => {
+    const onRevokeGrant = vi.fn();
+    const grants = [...twoGrants(), automationGrant()];
+    const { getByRole, queryByText } = render(
+      <HelpPanelBanners {...baseProps()} activeGrants={grants} onRevokeGrant={onRevokeGrant} />
+    );
+    fireEvent.click(getByRole("button", { name: "Revoke access to project.runCheck" }));
+    fireEvent.click(
+      getByRole("button", { name: "Revoke access to recipe.run, worktree.deleteOwned" })
+    );
+    fireEvent.click(getByRole("button", { name: "Revoke access to terminal.kill" }));
+    expect(onRevokeGrant.mock.calls).toEqual([
+      [grants[1]!.key],
+      [grants[2]!.key],
+      [grants[0]!.key],
+    ]);
+    expect(queryByText("Revoke access")).toBeNull();
+  });
+
+  it("spins only the approval being revoked", () => {
+    const grants = twoGrants();
+    const { getByRole } = render(
+      <HelpPanelBanners
+        {...baseProps()}
+        activeGrants={grants}
+        revokingGrantKeys={[grants[0]!.key]}
+      />
+    );
+    const busy = getByRole("button", { name: "Revoke access to terminal.kill" });
+    const idle = getByRole("button", { name: "Revoke access to project.runCheck" });
+    expect(busy.getAttribute("aria-busy")).toBe("true");
+    expect(idle.getAttribute("aria-busy")).toBeNull();
+  });
+
+  it("names an automation grant by the tools it covers and counts it", () => {
+    const { getByTestId, getByRole } = render(
+      <HelpPanelBanners {...baseProps()} activeGrants={[...twoGrants(), automationGrant()]} />
+    );
+    const text = getByTestId("help-grant-active-banner").textContent ?? "";
+    expect(text).toContain("3 approvals active");
+    expect(text).not.toContain("*");
+    expect(
+      getByRole("button", { name: "Revoke access to recipe.run, worktree.deleteOwned" })
+    ).toBeTruthy();
+  });
+
+  it("keeps ticking every countdown on one timer and clears it on unmount", () => {
+    vi.useFakeTimers();
+    try {
+      const base = Date.now();
+      const timersBefore = vi.getTimerCount();
+      const { getByTestId, unmount } = render(
+        <HelpPanelBanners
+          {...baseProps()}
+          activeGrants={[
+            grant("t1", { expiresAt: base + 5_000 }),
+            grant("t2", { expiresAt: base + 9_000 }),
+          ]}
+        />
+      );
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      const rows = Array.from(getByTestId("help-grant-active-banner").querySelectorAll("li")).map(
+        (li) => li.textContent ?? ""
+      );
+      expect(rows[0]).toContain("3s left");
+      expect(rows[1]).toContain("7s left");
+      expect(vi.getTimerCount()).toBe(timersBefore + 1);
+      unmount();
+      expect(vi.getTimerCount()).toBe(timersBefore);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -642,7 +728,7 @@ describe("HelpPanelBanners — the stack", () => {
   const everything = () => ({
     ...baseProps(),
     showResumeBanner: true,
-    activeGrant: { sessionId: "s1", toolId: "t1", ttlMs: 900_000, expiresAt: Date.now() + 60_000 },
+    activeGrants: [grant("t1", { expiresAt: Date.now() + 60_000 })],
     grantEnded: { toolId: "t2", reason: "expired" as const },
     tierMismatch: {
       sessionId: "s1",

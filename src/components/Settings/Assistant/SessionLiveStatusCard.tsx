@@ -1,8 +1,13 @@
+import { useState } from "react";
 import { useHelpSessionLiveStatus } from "@/hooks";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
-import type { HelpAssistantTier } from "@shared/types";
+import { Button } from "@/components/ui/button";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { logError } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import type { HelpAssistantTier, HelpSessionActiveGrant } from "@shared/types";
 import { SettingsGroup, SettingsRow } from "../SettingsGroup";
-import { StatusLine } from "./AssistantStatus";
+import { StatusLine, TabError } from "./AssistantStatus";
 import { GrantCountdown } from "./GrantCountdown";
 import { NativeGrantsSection } from "./NativeGrantsSection";
 import { TIER_RANK, TIER_SHORT_LABEL } from "./assistantTiers";
@@ -69,22 +74,9 @@ export function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardP
                   <div className="text-xs text-text-secondary font-mono">
                     Active grants ({perToolGrants.length})
                   </div>
-                  <div className="space-y-1">
-                    {perToolGrants.map((grant) => (
-                      <div
-                        key={grant.toolId}
-                        className="flex items-center justify-between gap-2 text-2xs"
-                      >
-                        <span className="font-mono text-text-secondary break-all">
-                          {grant.toolId}
-                        </span>
-                        <GrantCountdown
-                          expiresAt={grant.expiresAt}
-                          maxExpiresAt={grant.maxExpiresAt}
-                        />
-                      </div>
-                    ))}
-                  </div>
+                  {/* Keyed by session so a pending revoke or its error never
+                      carries over to another session's grants. */}
+                  <PerToolGrantList key={sessionId} grants={perToolGrants} />
                 </div>
               ) : (
                 <div className="text-2xs text-text-secondary">No per-tool grants active</div>
@@ -95,5 +87,55 @@ export function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardP
         }
       />
     </SettingsGroup>
+  );
+}
+
+// Each per-tool grant ends on its own, leaving the session's other grants live
+// (#14975). One click, no confirm: re-approving is one tool call away. The
+// grant-lifecycle push that follows a revoke re-pulls the snapshot, which is
+// what removes the row; a failure leaves it up as its own retry.
+function PerToolGrantList({ grants }: { grants: HelpSessionActiveGrant[] }) {
+  const [revoking, setRevoking] = useState<readonly string[]>([]);
+  const [revokeError, setRevokeError] = useState<string | null>(null);
+
+  const revoke = (grant: HelpSessionActiveGrant) => {
+    setRevoking((current) => [...current, grant.toolId]);
+    setRevokeError(null);
+    safeFireAndForget(
+      window.electron.mcpServer
+        .revokeGrant({ sessionId: grant.sessionId, toolId: grant.toolId })
+        .then(() => undefined)
+        .catch((err: unknown) => {
+          setRevokeError(formatErrorMessage(err, "Couldn't revoke grant"));
+          logError("DaintreeAssistant: revokeGrant failed", err);
+        })
+        .finally(() => {
+          setRevoking((current) => current.filter((toolId) => toolId !== grant.toolId));
+        }),
+      { context: "DaintreeAssistant:revokeGrant" }
+    );
+  };
+
+  return (
+    <div className="space-y-1">
+      {grants.map((grant) => (
+        <div key={grant.toolId} className="flex items-center justify-between gap-2 text-2xs">
+          <span className="font-mono text-text-secondary break-all">{grant.toolId}</span>
+          <span className="flex shrink-0 items-center gap-2">
+            <GrantCountdown expiresAt={grant.expiresAt} maxExpiresAt={grant.maxExpiresAt} />
+            <Button
+              variant="ghost-danger"
+              size="xs"
+              aria-label={`Revoke ${grant.toolId}`}
+              loading={revoking.includes(grant.toolId)}
+              onClick={() => revoke(grant)}
+            >
+              Revoke
+            </Button>
+          </span>
+        </div>
+      ))}
+      {revokeError && <TabError>{revokeError}</TabError>}
+    </div>
   );
 }

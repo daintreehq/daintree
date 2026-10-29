@@ -85,6 +85,8 @@ const snapshot = {
   tierMismatch: null,
   isApprovingTier: false,
   assistantVersionTooOld: null,
+  activeGrants: [],
+  revokingGrantKeys: [],
 };
 
 // Controls `shouldShowHybridInputBar` per test without re-mocking the module.

@@ -3255,6 +3255,12 @@ export interface HelpAssistantSettings {
  */
 export interface HelpSessionActiveGrant {
   /**
+   * The MCP transport session holding the grant — the id a per-tool revoke
+   * names, which differs from the public help-session id the snapshot was
+   * requested with.
+   */
+  sessionId: string;
+  /**
    * For per-tool grants, the dotted `BuiltInActionId` authorized (e.g.
    * `terminal.kill`). For native grants, `"*"` — the authorized tools are
    * listed in {@link allowedTools}.

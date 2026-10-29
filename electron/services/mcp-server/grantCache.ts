@@ -276,6 +276,29 @@ export class GrantCache {
   }
 
   /**
+   * Drop the one per-tool grant for the pair, leaving the session's other
+   * per-tool grants and its native grants alone. Emits `grant.revoked` with
+   * the given reason. Returns false when the pair held no grant, so a revoke
+   * that lost a race to expiry is an idempotent no-op. A dispatch already in
+   * flight through the grant finds no entry to `refresh`, so it can't
+   * resurrect it.
+   */
+  revokeGrant(sessionId: string, toolId: string, reason: McpGrantRevokedReason = "user"): boolean {
+    const k = key(sessionId, toolId);
+    const entry = this.grants.get(k);
+    if (!entry) return false;
+    this.grants.delete(k);
+    this.emitSafely(sessionId, {
+      type: "grant.revoked",
+      sessionId,
+      toolId,
+      ttlMs: entry.ttlMs,
+      revokedReason: reason,
+    });
+    return true;
+  }
+
+  /**
    * Drop every grant held by the session. Emits `grant.revoked` per
    * entry so the audit log and renderer broadcast both see them. The
    * `reason` field lets callers distinguish a user-initiated revoke from

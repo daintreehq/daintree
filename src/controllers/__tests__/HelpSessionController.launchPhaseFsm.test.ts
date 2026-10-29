@@ -12,7 +12,7 @@ const {
   mockMcpSetSessionTier,
   mockMcpIssueGrant,
   mockMcpResetDenialCounts,
-  mockMcpRevokeSessionGrants,
+  mockMcpRevokeGrant,
   mockSystemSleepOnSuspend,
   mockSystemSleepOnWake,
   systemSleepListeners,
@@ -42,7 +42,7 @@ const {
     expiresAt: Date.now() + 900_000,
   }),
   mockMcpResetDenialCounts: vi.fn().mockResolvedValue(undefined),
-  mockMcpRevokeSessionGrants: vi.fn().mockResolvedValue({ sessionId: "", revokedCount: 0 }),
+  mockMcpRevokeGrant: vi.fn().mockResolvedValue({ sessionId: "", toolId: "", revoked: true }),
   mockSystemSleepOnSuspend: vi.fn(),
   mockSystemSleepOnWake: vi.fn(),
   systemSleepListeners: {
@@ -254,8 +254,8 @@ beforeEach(() => {
     ttlMs: 900_000,
     expiresAt: Date.now() + 900_000,
   });
-  mockMcpRevokeSessionGrants.mockReset();
-  mockMcpRevokeSessionGrants.mockResolvedValue({ sessionId: "", revokedCount: 1 });
+  mockMcpRevokeGrant.mockReset();
+  mockMcpRevokeGrant.mockResolvedValue({ sessionId: "", toolId: "", revoked: true });
   mockSystemSleepOnSuspend.mockReset();
   mockSystemSleepOnSuspend.mockImplementation((cb: () => void) => {
     systemSleepListeners.suspend.push(cb);
@@ -308,7 +308,7 @@ beforeEach(() => {
           setSessionTier: mockMcpSetSessionTier,
           issueGrant: mockMcpIssueGrant,
           resetDenialCounts: mockMcpResetDenialCounts,
-          revokeSessionGrants: mockMcpRevokeSessionGrants,
+          revokeGrant: mockMcpRevokeGrant,
         },
         terminal: { gracefulKill: vi.fn().mockResolvedValue(null) },
       },

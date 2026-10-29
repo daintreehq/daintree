@@ -391,6 +391,65 @@ describe("GrantCache.revokeSession", () => {
   });
 });
 
+describe("GrantCache.revokeGrant", () => {
+  // A frozen clock, so a slow run can never age the surviving grants out.
+  const FIXED_NOW = 1_700_000_000_000;
+
+  it("ends one tool's grant and leaves the session's other grants live (#14975)", () => {
+    const { cache, emitted } = newCache({ now: () => FIXED_NOW });
+    cache.issueGrant("s1", "project.runCheck");
+    cache.issueGrant("s1", "terminal.new");
+    cache.issueGrant("s2", "terminal.new");
+    const native = cache.issueNativeGrant({
+      sessionId: "s1",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["project.runCheck"],
+    });
+    emitted.length = 0;
+
+    expect(cache.revokeGrant("s1", "terminal.new")).toBe(true);
+
+    expect(emitted).toEqual([
+      {
+        sessionId: "s1",
+        payload: expect.objectContaining({
+          type: "grant.revoked",
+          toolId: "terminal.new",
+          revokedReason: "user",
+        }),
+      },
+    ]);
+    expect(cache.check("s1", "terminal.new").granted).toBe(false);
+    expect(cache.check("s1", "project.runCheck").granted).toBe(true);
+    expect(cache.check("s2", "terminal.new").granted).toBe(true);
+    expect(cache.getNativeGrant(native.id)).toBeDefined();
+    cache.dispose();
+  });
+
+  it("is an idempotent no-op once the grant is gone", () => {
+    const { cache, emitted } = newCache({ now: () => FIXED_NOW });
+    cache.issueGrant("s1", "terminal.new");
+    cache.revokeGrant("s1", "terminal.new");
+    emitted.length = 0;
+
+    expect(cache.revokeGrant("s1", "terminal.new")).toBe(false);
+    expect(cache.revokeGrant("ghost", "terminal.new")).toBe(false);
+    expect(emitted).toHaveLength(0);
+    cache.dispose();
+  });
+
+  it("a dispatch in flight through the revoked grant can't refresh it back", () => {
+    const { cache } = newCache({ now: () => FIXED_NOW });
+    const { issuedAt } = cache.issueGrant("s1", "terminal.new");
+    cache.revokeGrant("s1", "terminal.new");
+
+    expect(cache.refresh("s1", "terminal.new", issuedAt)).toBe(false);
+    expect(cache.check("s1", "terminal.new").granted).toBe(false);
+    cache.dispose();
+  });
+});
+
 describe("GrantCache denial counters", () => {
   it("incrementDenial counts per (sessionId, toolId) — cross-tool isolated", () => {
     const { cache } = newCache({ denialSilenceThreshold: 2 });

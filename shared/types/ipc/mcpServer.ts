@@ -289,7 +289,7 @@ export interface McpAuditRelay {
  *   passed. Emitted at most once per `(sessionId, toolId)` per grant. The
  *   periodic sweep also drives this when an idle session's grant ages out
  *   without a follow-up read.
- * - `grant.revoked`: an explicit `revokeSessionGrants` IPC, a session
+ * - `grant.revoked`: an explicit `revokeGrant` / `revokeNativeGrant` IPC, a session
  *   teardown, an idle reaper firing, or the hard max-lifetime ceiling being
  *   reached wiped the grant before its sliding TTL elapsed. `revokedReason`
  *   distinguishes those sources.
@@ -569,13 +569,15 @@ export interface McpTurnOutcomeAlertPayload {
 }
 
 /**
- * Result of a renderer-driven `revokeSessionGrants` IPC. The handler
- * deletes every grant for the named session and reports how many entries
- * were affected — useful for UI confirmation copy ("Revoked N grants").
+ * Result of a renderer-driven `revokeGrant` IPC. Ends the one per-tool grant
+ * for the pair; the session's other per-tool and automation grants survive.
+ * `revoked` is false when the grant was already gone (expired, or torn down
+ * with its session), so a retry after a lost race is an idempotent no-op.
  */
-export interface McpRevokeSessionGrantsResult {
+export interface McpRevokeGrantResult {
   sessionId: string;
-  revokedCount: number;
+  toolId: string;
+  revoked: boolean;
 }
 
 /**
