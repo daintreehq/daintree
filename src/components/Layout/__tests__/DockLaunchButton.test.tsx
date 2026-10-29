@@ -2888,28 +2888,44 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
     });
 
     it.each(["toolbar", "dock"] as const)(
-      "saves the bare agent to the active worktree alone when the Default row launches (%s)",
+      "launches the Default row once without touching either saved preset (%s)",
       (placement) => {
-        const { container } = renderButton({ agents: READY, placement, activeWorktreeId: "wt-1" });
+        const onLaunchAgent = vi.fn();
+        const { container } = renderButton({
+          agents: READY,
+          placement,
+          activeWorktreeId: "wt-1",
+          onLaunchAgent,
+        });
         fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
         fireEvent.click(presetRows(container)[0]!);
 
-        // The agent-level preset is every other worktree's default, so an
-        // explicit Default here must leave it alone (#15054).
-        expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-1", null);
+        expect(onLaunchAgent).toHaveBeenCalledWith("claude", null);
+        expect(updateWorktreePresetMock).not.toHaveBeenCalled();
         expect(updateAgentMock).not.toHaveBeenCalled();
       }
     );
 
-    it("persists a chosen preset to the active worktree", () => {
-      const { container } = renderButton({ agents: READY, activeWorktreeId: "wt-1" });
-      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
-      fireEvent.click(presetRows(container)[1]!);
+    it.each(["toolbar", "dock"] as const)(
+      "launches a chosen preset once and leaves the worktree default alone (%s)",
+      (placement) => {
+        const onLaunchAgent = vi.fn();
+        const { container } = renderButton({
+          agents: READY,
+          placement,
+          activeWorktreeId: "wt-1",
+          onLaunchAgent,
+        });
+        fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+        fireEvent.click(presetRows(container)[1]!);
 
-      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-1", "fast");
-      // A named pick is not a reset, so the agent-level preset is left alone.
-      expect(updateAgentMock).not.toHaveBeenCalled();
-    });
+        // A preset carries the account and permission mode, so a one-off
+        // launch must not quietly become what the next plain launch starts (#15051).
+        expect(onLaunchAgent).toHaveBeenCalledWith("claude", "fast");
+        expect(updateWorktreePresetMock).not.toHaveBeenCalled();
+        expect(updateAgentMock).not.toHaveBeenCalled();
+      }
+    );
 
     it("writes no scope when there is no active worktree", () => {
       const { container } = renderButton({

@@ -1181,7 +1181,7 @@ describe("AgentButton preset UX", () => {
       expect(getByTestId("context-radio-group").getAttribute("data-value")).toBe("user-blue");
     });
 
-    it("context-menu preset selection persists and launches (source falls back to 'user' without a menu-source provider)", () => {
+    it("context-menu preset selection launches once and leaves the worktree default alone (source falls back to 'user' without a menu-source provider)", () => {
       mockActiveWorktreeId = "wt-A";
       mockSettings = settingsWith({ claude: {} });
       mockMergedPresetsFn = () => [
@@ -1196,7 +1196,9 @@ describe("AgentButton preset UX", () => {
       const blueItem = items.find((el) => el.textContent?.includes("Blue"))!;
       fireEvent.click(blueItem);
 
-      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", "user-blue");
+      // A preset carries the account and permission mode, so a one-off launch
+      // must not quietly become what the main button starts next (#15051).
+      expect(updateWorktreePresetMock).not.toHaveBeenCalled();
       expect(dispatchMock).toHaveBeenCalledWith(
         "agent.launch",
         { agentId: "claude", presetId: "user-blue" },
@@ -1204,11 +1206,7 @@ describe("AgentButton preset UX", () => {
       );
     });
 
-    it("context-menu Agent default saves the bare agent to this worktree and launches with null preset", () => {
-      // The context-menu sub is a launcher, but it must also persist the bare
-      // agent — an emptied slot falls back to the agent-level value on the
-      // next plain primary click (#6358), and clearing that value instead
-      // reaches every other worktree (#15054).
+    it("context-menu Agent default launches the bare agent once and leaves the worktree default alone", () => {
       mockActiveWorktreeId = "wt-A";
       mockSettings = settingsWith({
         claude: { presetId: "user-blue", worktreePresets: { "wt-A": "user-blue" } },
@@ -1222,7 +1220,7 @@ describe("AgentButton preset UX", () => {
       const defaultItem = items.find((el) => el.textContent?.includes("Agent default"))!;
       fireEvent.click(defaultItem);
 
-      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", null);
+      expect(updateWorktreePresetMock).not.toHaveBeenCalled();
       expect(updateAgentMock).not.toHaveBeenCalled();
       expect(dispatchMock).toHaveBeenCalledWith(
         "agent.launch",
