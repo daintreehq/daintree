@@ -450,7 +450,7 @@ export const REGISTRY: Record<string, Command> = {
   },
   "voice-pipeline": {
     summary:
-      "Replay clips in several voices through the real Grok provider and Terra cleanup: WER and exact prompts raw and cleaned, stop-to-settled wait, cost (needs GROK_API_KEY, OPENAI_API_KEY)",
+      "Replay clips in several voices through the real Grok provider and Terra cleanup: WER and exact prompts raw and cleaned, stop-to-settled wait, preview at stop against the final, cost (needs GROK_API_KEY, and OPENAI_API_KEY unless every arm is raw)",
     kind: "diagnostic",
     runner: tsxScript("voice-pipeline.ts"),
   },

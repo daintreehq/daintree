@@ -631,7 +631,7 @@ function renderReport(run: RunRecord, scored: readonly ScoredPipelineSession[]):
   lines.push(
     "## Preview at stop against the final",
     "",
-    "Whether the text the provider held at the stop, completions and open preview, is exactly the text the final commits, each piece trimmed and without hesitations as production lands it. Waited is the dictations with something pending at the stop. A final ending in a spoken command or naming a file counts as a miss, since production rewrites it once it lands. Stop → final is to the drain's end, when the stop's cleanup goes out, p50 / p95.",
+    "Whether the text the provider held at the stop, completions and open preview, is exactly the text the final commits, each piece trimmed and without hesitations as production lands it. Invalid sessions errored, reconnected, dropped audio, ended on a final that never came or heard nothing, and count nowhere else. Waited is the valid dictations with something pending at the stop. Words after the stop ending in a spoken command, or a final naming a file, count as a miss, since production rewrites them once they land. Stop → final is to the last words landing, Stop → drain to the drain's end, when the stop's cleanup goes out; p50 / p95.",
     ""
   );
   for (const arm of run.arms) lines.push(renderStopPreviewTable(scored, arm, run.arms), "");

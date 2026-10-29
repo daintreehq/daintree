@@ -145,7 +145,7 @@ export interface ScoredPipelineSession {
   /** Share of the final transcript's words on screen, as preview or text, when stop was pressed. */
   shownAtStop: number | null;
   /** How the text at the stop compares with the final, for a cleanup started at the stop. */
-  stopPreview: StopPreviewFate;
+  stopPreview: StopPreview;
   errored: boolean;
   firstDeltaMs: number | null;
   firstFinalMs: number | null;
@@ -251,14 +251,27 @@ export function shownAtStop(session: PipelineSession): number | null {
  * request would be the same (#15076).
  */
 export type StopPreviewFate =
+  /**
+   * Errored, reconnected or dropped audio, ended on an utterance whose final
+   * never came (landed from its preview), or transcribed nothing.
+   */
+  | "invalid"
   /** Nothing was pending at the stop: the draft already held its final text, the prefetch's case. */
   | "settled"
-  /** The final ends in a spoken command, which production rewrites once it lands. */
-  | "command"
-  /** The final names a file, which production swaps for a reference once it lands. */
-  | "file"
+  /** Production rewrites the final once it lands: a spoken command, or a file named. */
+  | "excluded"
   | "match"
   | "mismatch";
+
+export interface StopPreview {
+  fate: StopPreviewFate;
+  /** The text held at the stop is the final's, whatever the fate. */
+  equal: boolean;
+  /** A completion landing after the stop ends in a spoken command. */
+  command: boolean;
+  /** The final says a command that inserts a file reference, whose lookup the drain awaits. */
+  file: boolean;
+}
 
 // Each completion as production lands it before cleanup reads it: trimmed,
 // its hesitations gone (voiceInput's forwardEvent, for English), joined to
@@ -270,10 +283,20 @@ function landedText(pieces: readonly string[]): string {
     .join(" ");
 }
 
-export function stopPreviewFate(session: PipelineSession): StopPreviewFate {
+function sessionErrored(session: PipelineSession): boolean {
+  return (
+    session.startError !== null ||
+    session.events.some((event) => event.type === "error") ||
+    session.reconnects > 0 ||
+    session.droppedConnect > 0
+  );
+}
+
+export function stopPreview(session: PipelineSession): StopPreview {
   const completed: string[] = [];
   const done = new Set<string>();
-  // Each open item's latest preview, in the order the items opened.
+  // Each open item's latest preview, in the order the items opened. Times are
+  // whole milliseconds, so an event timed at the stop counts as before it.
   const previews = new Map<string | null, string>();
   for (const event of session.events) {
     if (event.at > session.stopMs) break;
@@ -287,18 +310,27 @@ export function stopPreviewFate(session: PipelineSession): StopPreviewFate {
       previews.set(event.itemId, event.text);
     }
   }
-  const after = session.events.filter(
-    (event): event is Extract<PipelineEvent, { type: "complete" }> =>
-      event.type === "complete" && event.at > session.stopMs && event.text.trim() !== ""
+  const completes = session.events.filter(
+    (event): event is Extract<PipelineEvent, { type: "complete" }> => event.type === "complete"
   );
+  const later = completes
+    .filter((event) => event.at > session.stopMs)
+    .map((event) => landedText([event.text]))
+    .filter(Boolean);
   const pending = [...previews.values()].filter((text) => text.trim() !== "");
-  if (pending.length === 0 && after.length === 0) return "settled";
-  const final = landedText(
-    session.events.flatMap((event) => (event.type === "complete" ? [event.text] : []))
+  const final = landedText(completes.map((event) => event.text));
+  const equal = landedText([...completed, ...pending]) === final;
+  const command = later.some(
+    (text) => trailingSendCommand(text) !== null || trailingDictationCommands(text) !== null
   );
-  if (trailingSendCommand(final) || trailingDictationCommands(final)) return "command";
-  if (mayReferenceFile(final)) return "file";
-  return landedText([...completed, ...pending]) === final ? "match" : "mismatch";
+  const file = mayReferenceFile(final);
+  const facts = { equal, command, file };
+  if (sessionErrored(session) || !final || completes.some((event) => event.incomplete)) {
+    return { fate: "invalid", ...facts };
+  }
+  if (pending.length === 0 && later.length === 0) return { fate: "settled", ...facts };
+  if (command || file) return { fate: "excluded", ...facts };
+  return { fate: equal ? "match" : "mismatch", ...facts };
 }
 
 /**
@@ -376,12 +408,8 @@ export function scorePipelineSession(
     brokenWords: brokenWords(finalReference, session.raw, finalText),
     verdict: cleanup?.verdict ?? "none",
     shownAtStop: shownAtStop(session),
-    stopPreview: stopPreviewFate(session),
-    errored:
-      session.startError !== null ||
-      session.events.some((event) => event.type === "error") ||
-      session.reconnects > 0 ||
-      session.droppedConnect > 0,
+    stopPreview: stopPreview(session),
+    errored: sessionErrored(session),
     firstDeltaMs: firstOf("delta"),
     firstFinalMs: firstOf("complete"),
     stopToLastFinalMs: lastFinal === null ? null : lastFinal - session.stopMs,
@@ -597,36 +625,51 @@ export function renderVoiceTable(
 
 export interface StopPreviewSummary {
   sessions: number;
-  /** Dictations with something pending at the stop: all but the settled. */
+  invalid: number;
+  /** Valid dictations with something pending at the stop. */
   waited: number;
   match: number;
+  /** Waited dictations a spoken command or a file named excludes; one can carry both. */
   command: number;
   file: number;
-  /** Matches over the dictations that waited, commands and files counted as misses. */
+  /** Matches over the dictations that waited, the excluded counted as misses. */
   exactShare: number | null;
-  /** Stop to the drain's end, when the stop's own cleanup goes out, over the dictations that waited. */
+  /** Over the dictations that waited: stop to the last words landing, and to the drain's end. */
   stopToFinalMs: Stat;
+  stopToDrainMs: Stat;
+  /** Stop to the drain's end over the matches: how long a kept cleanup could run ahead. */
+  matchStopToDrainMs: Stat;
 }
 
 export function summariseStopPreview(rows: readonly ScoredPipelineSession[]): StopPreviewSummary {
-  const waited = rows.filter((row) => row.stopPreview !== "settled");
-  const count = (fate: StopPreviewFate) => rows.filter((row) => row.stopPreview === fate).length;
+  const waited = rows.filter((row) =>
+    ["excluded", "match", "mismatch"].includes(row.stopPreview.fate)
+  );
+  const matches = waited.filter((row) => row.stopPreview.fate === "match");
   return {
     sessions: rows.length,
+    invalid: rows.filter((row) => row.stopPreview.fate === "invalid").length,
     waited: waited.length,
-    match: count("match"),
-    command: count("command"),
-    file: count("file"),
-    exactShare: waited.length === 0 ? null : count("match") / waited.length,
-    stopToFinalMs: stat(waited.map((row) => row.stopToDrainMs)),
+    match: matches.length,
+    command: waited.filter((row) => row.stopPreview.command).length,
+    file: waited.filter((row) => row.stopPreview.file).length,
+    exactShare: waited.length === 0 ? null : matches.length / waited.length,
+    stopToFinalMs: stat(
+      waited.map((row) =>
+        row.stopToLastFinalMs === null ? null : Math.max(0, row.stopToLastFinalMs)
+      )
+    ),
+    stopToDrainMs: stat(waited.map((row) => row.stopToDrainMs)),
+    matchStopToDrainMs: stat(matches.map((row) => row.stopToDrainMs)),
   };
 }
 
 /**
  * Whether the text at the stop is the text the final commits, for one arm,
  * per stop tail and voice, then every stop together (#15076). A cleanup
- * started at the stop and kept on an exact match would save the wait from the
- * stop to the final, so that wait is timed over the dictations that had one.
+ * started at the stop and kept on an exact match could run while the drain
+ * does, so the drain is timed over the matches as well as everything that
+ * waited.
  */
 export function renderStopPreviewTable(
   scored: readonly ScoredPipelineSession[],
@@ -638,13 +681,13 @@ export function renderStopPreviewTable(
   const tails = [...new Set(rows.map((s) => s.session.stopTailMs))].sort((a, b) => a - b);
   const voices = [...new Set(rows.map((s) => s.session.voice))];
   const lines = [
-    `| Tail | Voice (${arm}) | n | Waited | Exact | Command | File | Exact of waited | Stop → final, waited |`,
-    "| --- | --- | --: | --: | --: | --: | --: | --: | --- |",
+    `| Tail | Voice (${arm}) | n | Invalid | Waited | Exact | Command | File | Exact of waited | Stop → final | Stop → drain | Stop → drain, exact |`,
+    "| --- | --- | --: | --: | --: | --: | --: | --: | --: | --- | --- | --- |",
   ];
   const row = (tail: string, voice: string, mine: readonly ScoredPipelineSession[]) => {
     const s = summariseStopPreview(mine);
     lines.push(
-      `| ${tail} | ${voice} | ${s.sessions} | ${s.waited} | ${s.match} | ${s.command} | ${s.file} | ${s.exactShare === null ? "–" : pct(s.exactShare)} | ${statCell(s.stopToFinalMs)} |`
+      `| ${tail} | ${voice} | ${s.sessions} | ${s.invalid} | ${s.waited} | ${s.match} | ${s.command} | ${s.file} | ${s.exactShare === null ? "–" : pct(s.exactShare)} | ${statCell(s.stopToFinalMs)} | ${statCell(s.stopToDrainMs)} | ${statCell(s.matchStopToDrainMs)} |`
     );
   };
   for (const tail of tails) {
