@@ -320,6 +320,8 @@ export interface PanelRegistrySlice {
   setViewportRotated: (id: string, rotated: boolean) => void;
   setViewportDpr: (id: string, dpr: 1 | 2 | 3) => void;
   setViewportFit: (id: string, fit: boolean) => void;
+  /** Give a dev preview its own command, which wins over the project default. */
+  setDevPreviewCommand: (id: string, command: string) => void;
   setDevPreviewScrollPosition: (
     id: string,
     position: { url: string; scrollY: number } | undefined

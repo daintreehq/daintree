@@ -41,6 +41,10 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
       {children}
     </button>
   ),
+  DropdownMenuLabel: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="menu-label">{children}</div>
+  ),
+  DropdownMenuSeparator: () => null,
 }));
 
 import { useDevPreviewCommandConfig } from "../useDevPreviewCommandConfig";
@@ -59,9 +63,10 @@ function baseParams(overrides: Partial<Parameters<typeof useDevPreviewCommandCon
   return {
     currentProjectId: "proj-1",
     devCommand: "",
+    hasOwnCommand: false,
+    setOwnCommand: vi.fn(),
     isUnconfigured: true,
     projectSettings: { turbopackEnabled: true } as never,
-    stop: vi.fn(),
     isMountedRef: { current: true },
     ...overrides,
   };
@@ -243,81 +248,98 @@ describe("useDevPreviewCommandConfig", () => {
 });
 
 describe("useDevPreviewCommandConfig — header script picker", () => {
-  it("picking the already-active script is a no-op (does not save or stop)", async () => {
+  const twoScripts = () =>
     useProjectSettingsStore.setState({
       allDetectedRunners: [
         runner(),
         runner({ id: "start", name: "start", command: "npm run start" }),
       ],
     });
-    const stop = vi.fn();
+
+  async function pick(name: RegExp) {
+    await act(async () => {
+      screen.getByRole("menuitem", { name }).click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  it("picking the already-active script is a no-op", async () => {
+    twoScripts();
+    const setOwnCommand = vi.fn();
     const { result } = renderHook(() =>
       useDevPreviewCommandConfig(
-        baseParams({ isUnconfigured: false, devCommand: "npm run dev", stop })
+        baseParams({ isUnconfigured: false, devCommand: "npm run dev", setOwnCommand })
       )
     );
     render(<>{result.current.headerContent}</>);
 
-    await act(async () => {
-      screen.getByRole("menuitem", { name: /dev.*npm run dev/i }).click();
-      await Promise.resolve();
-    });
+    await pick(/dev.*npm run dev/i);
 
     expect(saveSettingsMock).not.toHaveBeenCalled();
-    expect(stop).not.toHaveBeenCalled();
+    expect(setOwnCommand).not.toHaveBeenCalled();
   });
 
-  it("picking a different script saves it and stops the running server", async () => {
-    getSettingsMock.mockResolvedValue({ turbopackEnabled: true });
-    useProjectSettingsStore.setState({
-      allDetectedRunners: [
-        runner(),
-        runner({ id: "start", name: "start", command: "npm run start" }),
-      ],
-    });
-    const stop = vi.fn();
+  it("gives a preview with its own command the picked script, leaving the project default alone", async () => {
+    getSettingsMock.mockResolvedValue({ turbopackEnabled: true, devServerCommand: "npm run dev" });
+    twoScripts();
+    const setOwnCommand = vi.fn();
     const { result } = renderHook(() =>
       useDevPreviewCommandConfig(
-        baseParams({ isUnconfigured: false, devCommand: "npm run dev", stop })
+        baseParams({
+          isUnconfigured: false,
+          devCommand: "npm run dev",
+          hasOwnCommand: true,
+          setOwnCommand,
+        })
       )
     );
     render(<>{result.current.headerContent}</>);
 
-    await act(async () => {
-      screen.getByRole("menuitem", { name: /start.*npm run start/i }).click();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    await pick(/start.*npm run start/i);
+
+    expect(setOwnCommand).toHaveBeenCalledWith("npm run start");
+    expect(getSettingsMock).not.toHaveBeenCalled();
+    expect(saveSettingsMock).not.toHaveBeenCalled();
+  });
+
+  it("moves the project default when the preview inherits it", async () => {
+    getSettingsMock.mockResolvedValue({ turbopackEnabled: true, devServerCommand: "npm run dev" });
+    twoScripts();
+    const setOwnCommand = vi.fn();
+    const { result } = renderHook(() =>
+      useDevPreviewCommandConfig(
+        baseParams({ isUnconfigured: false, devCommand: "npm run dev", setOwnCommand })
+      )
+    );
+    render(<>{result.current.headerContent}</>);
+
+    await pick(/start.*npm run start/i);
 
     expect(saveSettingsMock).toHaveBeenCalledWith(
       expect.objectContaining({ devServerCommand: "npm run start" })
     );
-    expect(stop).toHaveBeenCalledTimes(1);
+    expect(setOwnCommand).not.toHaveBeenCalled();
   });
 
-  it("does not stop the server when saving the newly picked script fails", async () => {
-    getSettingsMock.mockResolvedValue(null);
-    useProjectSettingsStore.setState({
-      allDetectedRunners: [
-        runner(),
-        runner({ id: "start", name: "start", command: "npm run start" }),
-      ],
-    });
-    const stop = vi.fn();
-    const { result } = renderHook(() =>
+  it("says the pick moves the project default only on an inheriting preview", () => {
+    twoScripts();
+    const inheriting = renderHook(() =>
+      useDevPreviewCommandConfig(baseParams({ isUnconfigured: false, devCommand: "npm run dev" }))
+    );
+    const own = renderHook(() =>
       useDevPreviewCommandConfig(
-        baseParams({ isUnconfigured: false, devCommand: "npm run dev", stop })
+        baseParams({ isUnconfigured: false, devCommand: "npm run dev", hasOwnCommand: true })
       )
     );
-    render(<>{result.current.headerContent}</>);
 
-    await act(async () => {
-      screen.getByRole("menuitem", { name: /start.*npm run start/i }).click();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    const inheritingMenu = render(<>{inheriting.result.current.headerContent}</>);
+    expect(inheritingMenu.getByTestId("menu-label").textContent).toMatch(/project default/i);
+    expect(inheritingMenu.container.textContent).toMatch(/other previews/i);
+    inheritingMenu.unmount();
 
-    expect(saveSettingsMock).not.toHaveBeenCalled();
-    expect(stop).not.toHaveBeenCalled();
+    const ownMenu = render(<>{own.result.current.headerContent}</>);
+    expect(ownMenu.getByTestId("menu-label").textContent).toMatch(/this preview/i);
+    expect(ownMenu.container.textContent).not.toMatch(/project default|other previews/i);
   });
 });
