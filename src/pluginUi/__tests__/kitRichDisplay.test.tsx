@@ -763,6 +763,22 @@ describe("charts", () => {
     expect(text).toContain("67%");
   });
 
+  it("calls a StackedAreaChart's total partial when series are left out", () => {
+    const keys = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    mount(
+      createElement(kit.StackedAreaChart, {
+        data: [Object.fromEntries([["day", 1], ...keys.map((key) => [key, 1])])],
+        x: "day",
+        series: keys.map((key) => ({ key, label: key.toUpperCase() })),
+        "aria-label": "Many",
+      })
+    );
+    fireEvent.keyDown(plot(), { key: "Home" });
+    const drawn = document.querySelectorAll("[data-chart-series]").length;
+    expect(drawn).toBeLessThan(keys.length);
+    expect(tooltip()?.textContent).toContain(`Total of shown ${drawn}`);
+  });
+
   it("announces a Gauge as a meter and turns tone at its thresholds", () => {
     mount(
       createElement(kit.Gauge, {
@@ -789,6 +805,23 @@ describe("charts", () => {
     expect(screen.getByRole("meter", { name: "Over" }).getAttribute("aria-valuetext")).toBe("140%");
     expect(gaugeTone(90, { warning: 80 })).toBe("warning");
     expect(gaugeTone(10, null)).toBe("neutral");
+    cleanup();
+    mount(createElement(kit.Gauge, { value: 50, target: 80, "aria-label": "On scale" }));
+    const onScale = screen.getByRole("meter", { name: "On scale" });
+    expect(onScale.querySelector("[data-chart-gauge-target]")?.getAttribute("stroke-dasharray")).toBeNull();
+    expect(document.getElementById(onScale.getAttribute("aria-describedby")!)?.textContent).toBe(
+      "Target 80%"
+    );
+    cleanup();
+    // A target past the end is still drawn, pinned to it and dashed, and said to be off the scale.
+    mount(createElement(kit.Gauge, { value: 50, target: 120, "aria-label": "Stretch" }));
+    const stretch = screen.getByRole("meter", { name: "Stretch" });
+    const tick = stretch.querySelector("[data-chart-gauge-target]");
+    expect(tick?.getAttribute("data-chart-gauge-target")).toBe("above");
+    expect(tick?.getAttribute("stroke-dasharray")).not.toBeNull();
+    expect(document.getElementById(stretch.getAttribute("aria-describedby")!)?.textContent).toBe(
+      "Target 120%, above the scale"
+    );
     cleanup();
     // Below the smallest size its figure, label and ends fit in, it holds that size.
     mount(createElement(kit.Gauge, { value: 5, size: 48, label: "Lines", "aria-label": "Tiny" }));

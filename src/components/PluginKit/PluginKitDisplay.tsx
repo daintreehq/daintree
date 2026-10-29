@@ -688,12 +688,15 @@ function TimelineList({
   );
 }
 
+// A day row is a heading over the entries, not one of them: as a listitem it
+// would be read as an entry and inflate the count.
 function TimelineListItem({
   context: _context,
-  item: _item,
+  item,
   ...props
 }: ItemProps<unknown> & { context: TimelineContext }) {
-  return <div {...props} role="listitem" />;
+  const day = (item as TimelineRow | undefined)?.kind === "day";
+  return <div {...props} role={day ? "none" : "listitem"} />;
 }
 
 const TIMELINE_COMPONENTS = {
@@ -807,7 +810,11 @@ function KitTimeline({
         endReached={endReached && lastEntry >= 0 ? () => endReached(lastEntry) : undefined}
         itemContent={(_index, row) =>
           row.kind === "day" ? (
-            <div className="px-3 pt-2 pb-1.5 text-xs font-medium text-text-secondary">
+            <div
+              role="heading"
+              aria-level={3}
+              className="px-3 pt-2 pb-1.5 text-xs font-medium text-text-secondary"
+            >
               {row.label}
             </div>
           ) : (

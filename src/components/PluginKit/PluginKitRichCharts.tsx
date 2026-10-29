@@ -1560,7 +1560,9 @@ function KitStackedAreaChart({
       })),
     };
     readout = {
-      title: `${formatPoint(xs[active] ?? 0)} · Total ${formats.full(total)}`,
+      // The pile sums only the drawn series; with some left out, saying so keeps
+      // the figure from passing for the whole.
+      title: `${formatPoint(xs[active] ?? 0)} · ${omitted.length > 0 ? "Total of shown" : "Total"} ${formats.full(total)}`,
       rows,
       x: at,
       y: geometry.top,
