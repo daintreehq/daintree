@@ -2191,17 +2191,21 @@ describe("WorkspaceService.switchWorktreeEnvironment", () => {
     await service.switchWorktreeEnvironment("req-switch", "/test/worktree", "beta");
     const result = await service.runResourceAction("req-prov", "/test/worktree", "provision");
 
+    expect(result.success).toBe(true);
     expect(result.output).not.toMatch(/already/);
     expect(runCommandsSpy).toHaveBeenCalledWith(["beta-provision"], expect.anything());
   });
 
   it("keeps the status when the current environment is selected again", async () => {
     const monitor = createMonitorOnAlpha();
+    const epoch = monitor.resourceEnvironmentEpoch;
 
     await service.switchWorktreeEnvironment("req-switch", "/test/worktree", "alpha");
 
     expect(monitor.resourceStatus?.lastStatus).toBe("ready");
     expect(monitor.resourceStatus?.endpoint).toBe("alpha.example.com");
+    // Work in flight for the environment it is still on keeps reporting.
+    expect(monitor.resourceEnvironmentEpoch).toBe(epoch);
   });
 
   it("drops the old environment's provider and connect command when switching to Local", async () => {
@@ -2215,6 +2219,15 @@ describe("WorkspaceService.switchWorktreeEnvironment", () => {
     expect(monitor.hasStatusCommand).toBe(false);
     // The switcher hangs off this, and Local must still be able to switch back.
     expect(monitor.hasResourceConfig).toBe(true);
+    // Nothing resolves for Local, so only the switch itself tells the renderer.
+    const update = lastWorktreeUpdate();
+    expect(update).toMatchObject({
+      worktreeMode: undefined,
+      resourceStatus: undefined,
+      resourceConnectCommand: undefined,
+      hasResourceConfig: true,
+    });
+    expect(update?.hasStatusCommand).toBeFalsy();
   });
 
   it("doesn't let a status check for the old environment report into the new one", async () => {
@@ -2237,6 +2250,48 @@ describe("WorkspaceService.switchWorktreeEnvironment", () => {
     expect(monitor.resourceStatus).toBeUndefined();
     expect(monitor.lifecycleStatus).toBeUndefined();
     expect(monitor.resourceConnectCommand).toBe("ssh beta");
+    expect(lastWorktreeUpdate()?.resourceStatus).toEqual({ provider: "beta-cloud" });
+  });
+
+  it("doesn't let a status check report after switching away and back", async () => {
+    const monitor = createMonitorOnAlpha();
+    monitor.setResourceStatus(undefined);
+    const held = holdNextCommands();
+
+    const pending = service.runResourceAction("req-status", "/test/worktree", "status");
+    await held.started;
+    await service.switchWorktreeEnvironment("req-beta", "/test/worktree", "beta");
+    await service.switchWorktreeEnvironment("req-alpha", "/test/worktree", "alpha");
+    held.finish({ success: true, output: JSON.stringify({ status: "ready" }) });
+
+    await pending;
+    expect(monitor.resourceStatus).toBeUndefined();
+  });
+
+  it("doesn't let a status check that is writing its wrapper finish on the new environment", async () => {
+    const monitor = createMonitorOnAlpha();
+    monitor.setResourceStatus(undefined);
+    vi.spyOn(service["lifecycleService"], "runCommands").mockResolvedValueOnce({
+      success: true,
+      output: JSON.stringify({ status: "ready", endpoint: "alpha.example.com" }),
+    });
+    const fsModule = await import("fs/promises");
+    let releaseWrite!: () => void;
+    vi.mocked(fsModule.writeFile).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseWrite = resolve;
+        })
+    );
+
+    const pending = service.runResourceAction("req-status", "/test/worktree", "status");
+    await vi.waitFor(() => expect(releaseWrite).toBeDefined());
+    await service.switchWorktreeEnvironment("req-switch", "/test/worktree", "beta");
+    releaseWrite();
+
+    await expect(pending).resolves.toMatchObject({ success: true });
+    expect(monitor.lifecycleStatus).toBeUndefined();
+    expect(monitor.resourceStatus).toBeUndefined();
   });
 
   it("lets the old environment's provision finish without showing it on the new one", async () => {
@@ -2248,7 +2303,13 @@ describe("WorkspaceService.switchWorktreeEnvironment", () => {
     await held.started;
     expect(monitor.lifecycleStatus?.phase).toBe("resource-provision");
 
+    held.progress(1, 2, "alpha-provision --second");
+    expect(monitor.lifecycleStatus?.commandIndex).toBe(1);
+
     await service.switchWorktreeEnvironment("req-switch", "/test/worktree", "beta");
+    expect(monitor.lifecycleStatus).toBeUndefined();
+
+    held.progress(2, 2, "alpha-provision --third");
     expect(monitor.lifecycleStatus).toBeUndefined();
 
     held.finish({ success: true, output: "" });
@@ -2256,6 +2317,32 @@ describe("WorkspaceService.switchWorktreeEnvironment", () => {
     await expect(pending).resolves.toMatchObject({ success: true });
     expect(monitor.lifecycleStatus).toBeUndefined();
     expect(monitor.resourceStatus).toBeUndefined();
+  });
+
+  it("doesn't run the old environment's provision when the switch lands during its approval check", async () => {
+    const monitor = createMonitorOnAlpha();
+    monitor.setResourceStatus(undefined);
+    let approveAlpha!: (approved: boolean) => void;
+    vi.spyOn(service["lifecycleService"], "isResourceApproved").mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          approveAlpha = resolve;
+        })
+    );
+    const runCommandsSpy = vi.spyOn(service["lifecycleService"], "runCommands");
+
+    const pending = service.runResourceAction("req-prov", "/test/worktree", "provision");
+    await vi.waitFor(() => expect(approveAlpha).toBeDefined());
+    await service.switchWorktreeEnvironment("req-switch", "/test/worktree", "beta");
+    approveAlpha(true);
+
+    await expect(pending).resolves.toEqual({
+      success: false,
+      error: "Resource environment changed",
+    });
+    expect(runCommandsSpy).not.toHaveBeenCalled();
+    expect(monitor.resourceProvider).toBe("beta-cloud");
+    expect(monitor.resourceConnectCommand).toBe("ssh beta");
   });
 
   it("doesn't run an action queued for the old environment against the new one", async () => {
@@ -2275,6 +2362,13 @@ describe("WorkspaceService.switchWorktreeEnvironment", () => {
       error: "Resource environment changed",
     });
     expect(runCommandsSpy).toHaveBeenCalledTimes(1);
+    expect(
+      mockSendEvent.mock.calls.filter(
+        ([event]) => event.type === "resource-action-result" && event.requestId === "req-prov"
+      )
+    ).toEqual([
+      [expect.objectContaining({ success: false, error: "Resource environment changed" })],
+    ]);
   });
 
   it("doesn't let a superseded switch put back its environment's config", async () => {
@@ -2321,43 +2415,105 @@ describe("WorkspaceService.switchWorktreeEnvironment", () => {
     expect(monitor.resourceConnectCommand).toBe("ssh beta");
   });
 
-  it("provisions the named resource for the worktree's environment when none is passed", async () => {
-    const monitor = createMonitorOnAlpha();
-    monitor.setResourceStatus(undefined);
-    monitor.setWorktreeMode("beta");
-    vi.mocked(service["lifecycleService"].resolveConfig).mockResolvedValue({
-      config: {
-        resources: {
-          default: { provision: ["default-provision"] },
-          beta: { provision: ["beta-provision"] },
-        },
-      },
-      origin: "project",
-      path: "/test/root/.daintree/config.json",
-    } as never);
-    await setupSpawn(0);
-    const runCommandsSpy = vi.spyOn(service["lifecycleService"], "runCommands");
+  it("doesn't auto-provision for a setup started before the switch", async () => {
+    createMonitorOnAlpha();
+    const settle = holdNextSetup();
+    const runResourceActionSpy = vi.spyOn(service, "runResourceAction");
 
-    await service.runResourceAction("req-prov", "/test/worktree", "provision");
+    const setup = service["setupCoordinator"].runLifecycleSetup(
+      "/test/worktree",
+      "/test/worktree",
+      "/test/root",
+      true
+    );
+    await service.switchWorktreeEnvironment("req-beta", "/test/worktree", "beta");
+    (await settle)({ shouldProvision: true, needsApproval: false });
 
-    expect(runCommandsSpy).toHaveBeenCalledWith(["beta-provision"], expect.anything());
+    await expect(setup).resolves.toEqual({ ok: true });
+    expect(runResourceActionSpy).not.toHaveBeenCalled();
   });
+
+  it("doesn't hold an approval for a setup started before the switch", async () => {
+    const monitor = createMonitorOnAlpha();
+    const settle = holdNextSetup();
+
+    const setup = service["setupCoordinator"].runLifecycleSetup(
+      "/test/worktree",
+      "/test/worktree",
+      "/test/root",
+      true
+    );
+    await service.switchWorktreeEnvironment("req-beta", "/test/worktree", "beta");
+    (await settle)({ shouldProvision: false, needsApproval: true });
+    await setup;
+
+    expect(service["setupCoordinator"]["setupAwaitingApproval"].has(monitor)).toBe(false);
+  });
+
+  it("doesn't let a setup started before the switch drop the new environment's approval", async () => {
+    const monitor = createMonitorOnAlpha();
+    const settle = holdNextSetup();
+    vi.mocked(service["lifecycleService"].runLifecycleSetup).mockResolvedValueOnce({
+      shouldProvision: false,
+      needsApproval: true,
+    });
+
+    const setup = service["setupCoordinator"].runLifecycleSetup(
+      "/test/worktree",
+      "/test/worktree",
+      "/test/root",
+      true
+    );
+    await service.switchWorktreeEnvironment("req-beta", "/test/worktree", "beta");
+    (await settle)({ shouldProvision: false, needsApproval: false });
+    await setup;
+
+    expect(service["setupCoordinator"]["setupAwaitingApproval"].get(monitor)).toEqual({
+      provisionResource: false,
+      environmentId: "beta",
+    });
+  });
+
+  /** Holds the next lifecycle setup open; resolves to its settle function once it has started. */
+  function holdNextSetup() {
+    return new Promise<(outcome: { shouldProvision: boolean; needsApproval: boolean }) => void>(
+      (started) => {
+        vi.spyOn(service["lifecycleService"], "runLifecycleSetup").mockImplementationOnce(
+          () => new Promise((settle) => started(settle))
+        );
+      }
+    );
+  }
+
+  function lastWorktreeUpdate() {
+    const updates = mockSendEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.type === "worktree-update");
+    return updates.at(-1)?.worktree;
+  }
 
   /** Holds the next `runCommands` call open until the test finishes it. */
   function holdNextCommands() {
     let finish!: (result: { success: boolean; output: string }) => void;
+    let onProgress!: (commandIndex: number, totalCommands: number, command: string) => void;
     let markStarted!: () => void;
     const started = new Promise<void>((resolve) => {
       markStarted = resolve;
     });
     vi.spyOn(service["lifecycleService"], "runCommands").mockImplementationOnce(
-      () =>
+      (_commands, options) =>
         new Promise((resolve) => {
           finish = resolve;
+          onProgress = options.onProgress;
           markStarted();
         })
     );
-    return { started, finish: (result: { success: boolean; output: string }) => finish(result) };
+    return {
+      started,
+      progress: (commandIndex: number, totalCommands: number, command: string) =>
+        onProgress(commandIndex, totalCommands, command),
+      finish: (result: { success: boolean; output: string }) => finish(result),
+    };
   }
 
   async function setupSpawn(exitCode: number, stdoutData: string = "") {

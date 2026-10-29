@@ -1019,6 +1019,11 @@ export class WorktreeLifecycleService {
     environmentId?: string
   ): Promise<{ shouldProvision: boolean; needsApproval: boolean }> {
     const projectRootPath = ctx.projectRootPath;
+    // A switch while this runs puts the new environment's config on the
+    // monitor itself; this run's resource config must not land over it.
+    const environmentEpoch = ctx.getMonitor(worktreeId)?.resourceEnvironmentEpoch;
+    const inEnvironment = (m: WorktreeMonitor): boolean =>
+      environmentEpoch === undefined || m.resourceEnvironmentEpoch === environmentEpoch;
     const resolvedConfig = await this.resolveConfig(worktreePath, projectRootPath);
     const config = resolvedConfig?.config ?? null;
     const { resource: resolvedResource, environments: resourceEnvironments } =
@@ -1037,7 +1042,7 @@ export class WorktreeLifecycleService {
       // Cache resource config even if no setup commands
       if (resolvedResource) {
         const m = ctx.getMonitor(worktreeId);
-        if (m) {
+        if (m && inEnvironment(m)) {
           const v = this.buildVariables(worktreePath, projectRootPath, m.name, m.branch);
           const subCache = (cmd: string) => this.substituteVariables(cmd, v);
           applyResourceConfigToMonitor(m, resolvedResource, subCache, resourceApproved);
@@ -1075,7 +1080,7 @@ export class WorktreeLifecycleService {
         completedAt: now,
       });
       monitor.setLifecycleCommandsNeedApproval(true);
-      if (resolvedResource) {
+      if (resolvedResource && inEnvironment(monitor)) {
         applyResourceConfigToMonitor(monitor, resolvedResource, sub, resourceApproved);
       }
       ctx.emitUpdate(monitor);
@@ -1146,7 +1151,7 @@ export class WorktreeLifecycleService {
 
     if (resolvedResource) {
       const m = ctx.getMonitor(worktreeId);
-      if (m) {
+      if (m && inEnvironment(m)) {
         applyResourceConfigToMonitor(m, resolvedResource, sub, resourceApproved);
         ctx.emitUpdate(m);
       }

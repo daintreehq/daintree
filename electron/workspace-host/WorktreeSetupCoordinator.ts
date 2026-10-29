@@ -191,7 +191,7 @@ export class WorktreeSetupCoordinator {
     provisionResource?: boolean,
     environmentId?: string
   ): Promise<LifecycleSetupOutcome> {
-    const hostCtx: WorkspaceHostContext = this.host.getLifecycleContext() ?? {
+    const ctx: WorkspaceHostContext = this.host.getLifecycleContext() ?? {
       projectRootPath,
       projectEnvVars: this.host.getProjectEnvVars(),
       getMonitor: (id) => this.host.getMonitor(id),
@@ -201,8 +201,8 @@ export class WorktreeSetupCoordinator {
     // Ids are paths, so the monitor is pinned before the first await: only the
     // incarnation this run started against may record or clear what it was
     // asked to do. The same goes for its resource environment: once the
-    // worktree switches, a run started for the old one publishes nothing, or
-    // it would put back the config the switch just cleared (#15005).
+    // worktree switches, a run started for the old one neither records nor
+    // clears an approval, and provisions nothing (#15005).
     const monitorAtStart = this.host.getMonitor(worktreeId);
     const environmentEpoch = monitorAtStart?.resourceEnvironmentEpoch;
     const environmentChanged = (): boolean => {
@@ -212,13 +212,6 @@ export class WorktreeSetupCoordinator {
         environmentEpoch !== undefined &&
         live.resourceEnvironmentEpoch !== environmentEpoch
       );
-    };
-    const ctx: WorkspaceHostContext = {
-      ...hostCtx,
-      getMonitor: (id) => {
-        const live = hostCtx.getMonitor(id);
-        return id === worktreeId && environmentChanged() ? undefined : live;
-      },
     };
     const recordAwaitingApproval = (awaiting: boolean): void => {
       const live = this.host.getMonitor(worktreeId);

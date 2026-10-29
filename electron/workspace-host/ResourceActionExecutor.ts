@@ -101,7 +101,7 @@ export class ResourceActionExecutor {
     // Resolve resource config: prefer resources (plural) over resource (singular)
     let resourceConfig = config?.resource;
     if (config?.resources) {
-      const named = ownResource(config.resources, environmentId ?? monitor.worktreeMode);
+      const named = ownResource(config.resources, environmentId);
       if (named) {
         resourceConfig = named;
       } else if (config.resources["default"]) {
