@@ -63,6 +63,7 @@ import {
   _resetPluginHostedViewsStoreForTest,
   usePluginHostedViewsStore,
 } from "@/store/pluginHostedViewsStore";
+import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 
 const HOSTED_ID = "plugin-view:acme.tools/prefs";
 const KIND_ID = "project:p1/acme.dash/overview";
@@ -108,6 +109,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  _resetPluginRuntimeStoreForTest();
   unregisterPanelKind(KIND_ID);
   _resetPluginHostedViewRuntimesForTest();
   _resetPluginHostedViewsStoreForTest();
@@ -413,6 +415,11 @@ describe("PluginHostedView", () => {
 
       // The same plugin downgraded to state version 1 gets the panel's version
       // error rather than a view whose every write would be refused.
+      usePluginRuntimeStore.setState({
+        pluginMetaById: new Map([
+          ["project__p1__acme.dash", { devMode: false, displayName: "Acme Dash" }],
+        ]),
+      });
       registerPanelKind({ ...panelKind(), stateVersion: 1 });
       const before = h.mountCount;
       const downgraded = render(
@@ -423,7 +430,12 @@ describe("PluginHostedView", () => {
         />
       );
       expect(h.mountCount).toBe(before);
-      expect(downgraded.getByTestId("load-error").textContent).toContain("state format 2");
+      // The owning plugin by name, never the view's own name or the formats
+      // (#15236).
+      const message = downgraded.getByTestId("load-error").textContent ?? "";
+      expect(message).toContain("newer version of the Acme Dash plugin");
+      expect(message).not.toContain("Mission Control");
+      expect(message).not.toContain("state format");
       downgraded.unmount();
 
       // The newer build's bag is still there for the newer build.

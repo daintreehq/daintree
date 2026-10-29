@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { CirclePlay } from "lucide-react";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import {
   dismissProjectWelcomeHandoff,
@@ -7,7 +8,12 @@ import {
   startProjectWelcome,
 } from "@/hooks/useProjectApplicationWelcome";
 import { actionService } from "@/services/ActionService";
-import { useProjectWelcomeStore } from "@/store/projectWelcomeStore";
+import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
+import {
+  useProjectWelcomeStore,
+  type ProjectWelcomeHandoff,
+  type ProjectWelcomeOffer,
+} from "@/store/projectWelcomeStore";
 import { logWarn } from "@/utils/logger";
 
 // Same placement as the layout seed strip it follows.
@@ -28,17 +34,50 @@ export function ProjectWelcomeNotice() {
   const offer = useProjectWelcomeStore((s) => s.offer);
   const handoff = useProjectWelcomeStore((s) => s.handoff);
   const [busy, setBusy] = useState<string | null>(null);
+  // Said on the strip it happened on, which stays up to retry from: a Skip that
+  // wasn't recorded, or a workflow that didn't go through.
+  const [failure, setFailure] = useState<NoticeFailure | null>(null);
   // A promise chain rather than try/finally, which the React Compiler can't
   // lower even inside a handler.
-  const run = (id: string, work: () => Promise<void>) => {
+  const run = (id: string, work: () => Promise<void>, onFailure?: (error: unknown) => void) => {
     setBusy(id);
     void Promise.resolve()
       .then(work)
-      .catch((error: unknown) => logWarn("[ProjectWelcome] Notice action failed", { error }))
+      // Cleared only once it worked: a Retry keeps its banner, and its button,
+      // up while it runs.
+      .then(() => setFailure(null))
+      .catch((error: unknown) => {
+        logWarn("[ProjectWelcome] Notice action failed", { error });
+        onFailure?.(error);
+      })
       .finally(() => setBusy(null));
   };
 
   if (offer !== null) {
+    const skip = () =>
+      run("skip", skipProjectWelcome, () => setFailure({ key: offerKey(offer), message: "" }));
+    if (failure?.key === offerKey(offer)) {
+      return (
+        <InlineStatusBanner
+          layout="strip"
+          title="Couldn't skip the welcome"
+          description="Your answer wasn't saved, so the welcome is still on offer."
+          severity="error"
+          role="alert"
+          action={{
+            id: "retry",
+            label: "Retry",
+            variant: "primary",
+            onClick: skip,
+            loading: busy === "skip",
+          }}
+          className={BANNER_CLASS}
+          onClose={() => setFailure(null)}
+          closeAriaLabel="Dismiss"
+          data-testid="project-welcome-offer"
+        />
+      );
+    }
     return (
       <InlineStatusBanner
         icon={CirclePlay}
@@ -60,7 +99,7 @@ export function ProjectWelcomeNotice() {
             id: "skip",
             label: "Skip",
             variant: "dismiss",
-            onClick: () => run("skip", skipProjectWelcome),
+            onClick: skip,
             loading: busy === "skip",
             disabled: busy !== null && busy !== "skip",
           },
@@ -72,6 +111,51 @@ export function ProjectWelcomeNotice() {
   }
 
   if (handoff === null) return null;
+  // The strip goes only once the workflow went through; until then it is the
+  // one place to run it again from.
+  const runWorkflow = () => {
+    const key = handoffKey(handoff);
+    run(
+      "workflow",
+      async () => {
+        const result = await actionService.dispatch(handoff.actionId, undefined, {
+          source: "user",
+        });
+        if (result.ok) {
+          // Only the hand-off it was pressed on: a workflow that changed while
+          // this one ran has its own strip to keep.
+          const current = useProjectWelcomeStore.getState().handoff;
+          if (current !== null && handoffKey(current) === key) dismissProjectWelcomeHandoff();
+          return;
+        }
+        // A dialog now asking the user is not a failure to report.
+        if (isStagedConfirmation(result.error)) return;
+        throw new Error(result.error.message);
+      },
+      (error) => setFailure({ key, message: formatErrorMessage(error, "").trim() })
+    );
+  };
+  if (failure?.key === handoffKey(handoff)) {
+    return (
+      <InlineStatusBanner
+        layout="strip"
+        title={`Couldn't run ${handoff.title}`}
+        description={failure.message || undefined}
+        severity="error"
+        role="alert"
+        action={{
+          id: "retry",
+          label: "Retry",
+          variant: "primary",
+          onClick: runWorkflow,
+          loading: busy === "workflow",
+        }}
+        className={BANNER_CLASS}
+        onClose={() => setFailure(null)}
+        closeAriaLabel="Dismiss"
+      />
+    );
+  }
   return (
     <InlineStatusBanner
       icon={CirclePlay}
@@ -85,16 +169,29 @@ export function ProjectWelcomeNotice() {
           id: "workflow",
           label: handoff.title,
           variant: "primary",
-          onClick: () => {
-            dismissProjectWelcomeHandoff();
-            void actionService.dispatch(handoff.actionId, undefined, { source: "user" });
-          },
+          onClick: runWorkflow,
+          loading: busy === "workflow",
         },
       ]}
       className={BANNER_CLASS}
       onClose={dismissProjectWelcomeHandoff}
+      closeDisabled={busy === "workflow"}
       closeAriaLabel="Dismiss"
       closeTitle="Dismiss"
     />
   );
+}
+
+interface NoticeFailure {
+  /** Which offer or hand-off it belongs to, so a new one never shows an old failure. */
+  key: string;
+  message: string;
+}
+
+function offerKey(offer: ProjectWelcomeOffer): string {
+  return `offer\n${offer.ownerId}\n${offer.localTourId}\n${offer.version}`;
+}
+
+function handoffKey(handoff: ProjectWelcomeHandoff): string {
+  return `handoff\n${handoff.actionId}`;
 }

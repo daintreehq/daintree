@@ -112,8 +112,12 @@ vi.mock("@/hooks/useIsHibernated", () => ({
   useIsHibernated: () => false,
 }));
 
+const contributedItems = vi.hoisted(() => ({
+  current: [] as Array<{ pluginId: string; item: { actionId: string; label: string } }>,
+}));
+
 vi.mock("@/hooks/usePluginContextMenuItems", () => ({
-  usePluginContextMenuItems: () => [],
+  usePluginContextMenuItems: () => contributedItems.current,
 }));
 
 vi.mock("@/store/voiceRecordingStore", () => ({
@@ -563,6 +567,32 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
 
     expect(screen.queryByText("Rename panel")).toBeNull();
     expect(screen.getByText("Rename terminal")).toBeTruthy();
+  });
+
+  it("keeps other plugins' rows above Trash and Kill, so destruction still ends the menu (#15236)", () => {
+    contributedItems.current = [
+      { pluginId: "acme", item: { actionId: "acme.explain", label: "Explain output" } },
+    ];
+    try {
+      renderMenuFor({
+        id: "panel-1",
+        title: "Agent",
+        kind: "terminal",
+        worktreeId: "wt-1",
+      });
+
+      const rows = menuRows();
+      const labels = rows.map((row) => (row === "---" ? row : row.label));
+      const contributed = labels.indexOf("Explain output");
+      expect(contributed).toBeGreaterThan(-1);
+      expect(contributed).toBeLessThan(labels.indexOf("Rename terminal"));
+      expect(labels.at(-1)).toBe("Kill terminal");
+      // Its own group: a separator on either side.
+      expect(labels[contributed - 1]).toBe("---");
+      expect(labels[contributed + 1]).toBe("---");
+    } finally {
+      contributedItems.current = [];
+    }
   });
 
   it("gives a PTY-backed plugin panel the terminal menu, not the generic one", () => {

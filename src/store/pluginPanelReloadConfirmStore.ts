@@ -18,7 +18,13 @@ export interface PluginPanelReloadConfirmRequest {
 interface PluginPanelReloadConfirmState {
   pending: PluginPanelReloadConfirmRequest | null;
   approvedPanelId: string | null;
-  request: (request: PluginPanelReloadConfirmRequest) => void;
+  /**
+   * Stage the dialog for a panel, reporting whether it was. Refused while
+   * another panel's reload is waiting for an answer: there is one dialog, and
+   * replacing its question would drop one the user never got to see while its
+   * caller was told it was staged. Asking again for the waiting panel keeps it.
+   */
+  request: (request: PluginPanelReloadConfirmRequest) => boolean;
   /** The user confirmed: close the dialog and approve one reload of the panel. */
   approve: (panelId: string) => void;
   clear: () => void;
@@ -30,7 +36,12 @@ export const usePluginPanelReloadConfirmStore = create<PluginPanelReloadConfirmS
   (set, get) => ({
     pending: null,
     approvedPanelId: null,
-    request: (request) => set({ pending: request, approvedPanelId: null }),
+    request: (request) => {
+      const { pending } = get();
+      if (pending !== null && pending.panelId !== request.panelId) return false;
+      set({ pending: request, approvedPanelId: null });
+      return true;
+    },
     approve: (panelId) => set({ pending: null, approvedPanelId: panelId }),
     clear: () => set({ pending: null }),
     consumeApproval: (panelId) => {

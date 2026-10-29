@@ -52,6 +52,14 @@ describe("PluginPanelReloadConfirmDialog (#12611)", () => {
     expect(screen.getByRole("button", { name: "Discard and reload" })).toBeTruthy();
   });
 
+  it("asks about the panel without empty quotes when it has no title (#15236)", () => {
+    usePluginPanelReloadConfirmStore.getState().request({ panelId: "plugin-1", panelTitle: " " });
+    render(<PluginPanelReloadConfirmDialog />);
+
+    expect(screen.getByText("Reload this panel?")).toBeTruthy();
+    expect(screen.queryByText(/''/)).toBeNull();
+  });
+
   it("approves one reload of that panel and dispatches it again", () => {
     stage();
     render(<PluginPanelReloadConfirmDialog />);

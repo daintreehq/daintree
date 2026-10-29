@@ -1,9 +1,13 @@
+import { useEffect, useRef, useState } from "react";
+import type { ActionDispatchResult } from "@shared/types/actions";
 import type { PluginSetupStepUiAction } from "@shared/types/plugin";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { usePluginSetupStatus } from "@/hooks/usePluginSetupStatus";
 import { actionService } from "@/services/ActionService";
+import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
 import type { PluginSetupRow } from "@/services/plugin/pluginSetupProgress";
 import { useProjectStore } from "@/store/projectStore";
 
@@ -18,8 +22,15 @@ interface PluginSetupChecklistProps {
   variant: "settings" | "plain";
   /** The settings group's visible label. */
   groupLabel?: string;
-  /** Called after a step's action is dispatched, so a popover can step out of the way. */
+  /** Called once a step's action has gone through, so a popover can step out of the way. */
   onAction?: () => void;
+}
+
+/** A step whose action came back failed, said on its own row. */
+interface StepFailure {
+  pluginId: string;
+  stepId: string;
+  message: string;
 }
 
 /**
@@ -37,9 +48,50 @@ export function PluginSetupChecklist({
   groupLabel,
   onAction,
 }: PluginSetupChecklistProps) {
+  const [runningStepId, setRunningStepId] = useState<string | null>(null);
+  const [failure, setFailure] = useState<StepFailure | null>(null);
+  // A popover's rows unmount when it closes. An answer landing after that
+  // belongs to an opening that's gone, and must not close the next one.
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // The popover stays up until the action answers: closed first, a command
+  // that failed or was refused would leave nothing on screen to say so. The
+  // row's own button is the retry.
+  const run = (stepId: string, action: PluginSetupStepUiAction) => {
+    if (runningStepId !== null) return;
+    setRunningStepId(stepId);
+    setFailure(null);
+    void runSetupAction(pluginId, action)
+      .then(
+        (result) => {
+          if (!mountedRef.current) return;
+          // A staged confirmation is a dialog now asking the user, not a failure.
+          if (result.ok || isStagedConfirmation(result.error)) {
+            onAction?.();
+            return;
+          }
+          setFailure({ pluginId, stepId, message: result.error.message });
+        },
+        (error: unknown) => {
+          setFailure({ pluginId, stepId, message: formatErrorMessage(error, "") });
+        }
+      )
+      .finally(() => setRunningStepId(null));
+  };
+
   const items = rows.map(({ step, done }) => {
     const skipped = !done && step.skipped;
     const action = step.action;
+    const failed =
+      !done && action && failure?.pluginId === pluginId && failure.stepId === step.id
+        ? failureText(action, failure.message)
+        : undefined;
     return (
       <SettingsRow
         key={step.id}
@@ -48,7 +100,7 @@ export function PluginSetupChecklist({
         accessory={
           done ? <Badge size="xs">Done</Badge> : skipped ? <Badge size="xs">Skipped</Badge> : null
         }
-        error={saveErrorStepId === step.id ? "Couldn't save this choice" : undefined}
+        error={failed ?? (saveErrorStepId === step.id ? "Couldn't save this choice" : undefined)}
         rootAttributes={{ "data-setup-step": step.id }}
         control={
           <div className="flex shrink-0 items-center gap-2">
@@ -57,10 +109,8 @@ export function PluginSetupChecklist({
                 variant="outline"
                 size="sm"
                 aria-label={`${actionLabel(action)}: ${step.title}`}
-                onClick={() => {
-                  runSetupAction(pluginId, action);
-                  onAction?.();
-                }}
+                loading={runningStepId === step.id}
+                onClick={() => run(step.id, action)}
               >
                 {actionLabel(action)}
               </Button>
@@ -112,12 +162,19 @@ function actionLabel(action: PluginSetupStepUiAction): string {
   return action.key === null ? "Open settings" : "Open setting";
 }
 
-function runSetupAction(pluginId: string, action: PluginSetupStepUiAction): void {
+function failureText(action: PluginSetupStepUiAction, message: string): string {
+  const what = action.kind === "command" ? "Couldn't run this step" : "Couldn't open settings";
+  return message.trim() ? `${what}: ${message.trim()}` : what;
+}
+
+function runSetupAction(
+  pluginId: string,
+  action: PluginSetupStepUiAction
+): Promise<ActionDispatchResult> {
   if (action.kind === "command") {
-    void actionService.dispatch(action.actionId, undefined, { source: "user" });
-    return;
+    return actionService.dispatch(action.actionId, undefined, { source: "user" });
   }
-  void actionService.dispatch(
+  return actionService.dispatch(
     "plugin.openSettings",
     action.key === null ? { pluginId } : { pluginId, key: action.key },
     { source: "user" }

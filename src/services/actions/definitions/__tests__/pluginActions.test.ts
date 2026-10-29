@@ -543,6 +543,54 @@ describe("plugin.reloadPanel (#12611)", () => {
     expect(usePluginPanelReloadConfirmStore.getState().pending?.panelId).toBe("plugin-1");
   });
 
+  it("refuses a second panel's reload while the first one's question is waiting (#15236)", async () => {
+    panelState.panelsById["plugin-2"] = { id: "plugin-2", kind: "acme.dashboard", title: "Two" };
+    setViewUnsavedChanges("plugin-1", {}, true);
+    setViewUnsavedChanges("plugin-2", {}, true);
+
+    await expect(run("plugin.reloadPanel", { panelId: "plugin-1" })).rejects.toBeInstanceOf(
+      ConfirmationStagedError
+    );
+    const second = run("plugin.reloadPanel", { panelId: "plugin-2" });
+    await expect(second).rejects.not.toBeInstanceOf(ConfirmationStagedError);
+    await expect(second).rejects.toThrow(/another panel's reload is waiting/);
+
+    // The first question is still the one on screen.
+    expect(usePluginPanelReloadConfirmStore.getState().pending?.panelId).toBe("plugin-1");
+    // Asking again for the panel already waiting keeps it staged.
+    await expect(run("plugin.reloadPanel", { panelId: "plugin-1" })).rejects.toBeInstanceOf(
+      ConfirmationStagedError
+    );
+  });
+
+  it("names an untitled panel after its kind in the staged question (#15236)", async () => {
+    const KIND = "acme.dashboard.untitled";
+    registerPanelKind({
+      id: KIND,
+      name: "Acme board",
+      iconId: "layout-dashboard",
+      color: "#38bdf8",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "acme.dashboard",
+    });
+    try {
+      panelState.panelsById["plugin-3"] = { id: "plugin-3", kind: KIND, title: "   " };
+      setViewUnsavedChanges("plugin-3", {}, true);
+
+      await expect(run("plugin.reloadPanel", { panelId: "plugin-3" })).rejects.toBeInstanceOf(
+        ConfirmationStagedError
+      );
+      expect(usePluginPanelReloadConfirmStore.getState().pending).toEqual({
+        panelId: "plugin-3",
+        panelTitle: "Acme board",
+      });
+    } finally {
+      unregisterPanelKind(KIND);
+    }
+  });
+
   it("does not let one panel's approval cover another", async () => {
     panelState.panelsById["plugin-2"] = { id: "plugin-2", kind: "acme.dashboard", title: "Two" };
     setViewUnsavedChanges("plugin-2", {}, true);

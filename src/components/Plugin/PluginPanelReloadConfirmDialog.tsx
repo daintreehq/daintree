@@ -26,12 +26,13 @@ export function PluginPanelReloadConfirmDialog(): ReactElement | null {
   }, [pending, approve]);
 
   if (pending === null) return null;
+  const panelTitle = pending.panelTitle.trim();
 
   return (
     <ConfirmDialog
       isOpen
       onClose={clear}
-      title={`Reload '${pending.panelTitle}'?`}
+      title={panelTitle ? `Reload '${panelTitle}'?` : "Reload this panel?"}
       description="The panel has changes it hasn't saved, and reloading discards them."
       confirmLabel="Discard and reload"
       variant="destructive"

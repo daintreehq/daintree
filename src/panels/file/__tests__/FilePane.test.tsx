@@ -4210,8 +4210,10 @@ describe("FilePane edit mode (#12323)", () => {
           choices: { [SLOT]: { pluginId: "acme.records", choice: "stock", decidedAt: 1 } },
         }));
 
+        // No display name seeded: the notice never falls back to the manifest
+        // id (#15236).
         expect(
-          screen.getByText("acme.records set up this project: Editor for docs/*.md")
+          screen.getByText("A project plugin set up this project: Editor for docs/*.md")
         ).toBeTruthy();
         await act(async () => {
           fireEvent.click(screen.getByRole("button", { name: "Use Daintree's" }));

@@ -9,17 +9,35 @@ import { actionService } from "@/services/ActionService";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import { useProjectStore } from "@/store/projectStore";
 import { notify } from "@/lib/notify";
+import { usePluginRuntimeStore, type PluginRuntimeMeta } from "@/store/pluginRuntimeStore";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useGlobalBannerDismissalStore } from "@/store/globalBannerDismissalStore";
 
-function affectedPlugins(diagnostics: readonly PluginDocumentDiagnostic[]): string {
+/**
+ * The plugins a reload would replace, by the names people know them by — the
+ * manifest id only for one the runtime store can't name yet.
+ */
+function affectedPlugins(
+  diagnostics: readonly PluginDocumentDiagnostic[],
+  metaById: ReadonlyMap<string, PluginRuntimeMeta>
+): string {
   return [
     ...new Set(
       diagnostics.map((item) =>
-        item.pluginId ? pluginManifestIdFromInstanceKey(item.pluginId) : "Unknown plugin"
+        item.pluginId
+          ? (metaById.get(item.pluginId)?.displayName ??
+            pluginManifestIdFromInstanceKey(item.pluginId))
+          : "Unknown plugin"
       )
     ),
   ].join(", ");
+}
+
+/** {@link affectedPlugins}, kept current as the runtime store learns names. */
+function useAffectedPlugins(diagnostics: readonly PluginDocumentDiagnostic[]): string {
+  const initPluginRuntime = usePluginRuntimeStore((s) => s.init);
+  useEffect(() => initPluginRuntime(), [initPluginRuntime]);
+  return usePluginRuntimeStore((s) => affectedPlugins(diagnostics, s.pluginMetaById));
 }
 
 function requestReload() {
@@ -32,6 +50,7 @@ export function PluginDocumentWarning() {
     pluginDocumentRuntime.getSnapshot
   );
   const dismiss = useGlobalBannerDismissalStore((s) => s.dismiss);
+  const affected = useAffectedPlugins(diagnostics);
   if (diagnostics.length === 0) return null;
   return (
     <InlineStatusBanner
@@ -42,7 +61,7 @@ export function PluginDocumentWarning() {
       onClose={() => dismiss("plugin-document")}
       closeAriaLabel="Dismiss plugin reload warning"
       description="Plugin registrations can't be replaced until this project window reloads. Save edits before continuing."
-      contextLine={affectedPlugins(diagnostics)}
+      contextLine={affected}
       action={{ id: "reload-project-window", label: "Reload window", onClick: requestReload }}
     />
   );
@@ -76,6 +95,7 @@ export function usePluginDocumentNotifications() {
     pluginDocumentRuntime.getSnapshot
   );
   const projectId = useProjectStore((state) => state.currentProject?.id);
+  const summary = useAffectedPlugins(diagnostics);
   // Each diagnostic is a new snapshot, but the inbox entry only changes when
   // the set of affected plugins does; re-notifying archives the previous entry
   // and churns unrelated history off the 200-entry cap.
@@ -93,7 +113,6 @@ export function usePluginDocumentNotifications() {
       lastSummary.current = null;
       return;
     }
-    const summary = affectedPlugins(diagnostics);
     if (summary === lastSummary.current) return;
     lastSummary.current = summary;
     notify({
@@ -107,5 +126,5 @@ export function usePluginDocumentNotifications() {
       // action vanishes from the one surface this low-priority entry has.
       action: { label: "Review reload", actionId: "plugin.reloadWindow", onClick: requestReload },
     });
-  }, [diagnostics, projectId]);
+  }, [diagnostics, projectId, summary]);
 }
