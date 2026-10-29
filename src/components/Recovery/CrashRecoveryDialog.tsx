@@ -36,7 +36,6 @@ import {
   SUSPECT_PANEL_BANNER_DESCRIPTION_SELECTED,
 } from "./recoveryCopy";
 import { logError } from "@/utils/logger";
-import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { scrubReportText } from "@shared/utils/reportScrubbers";
@@ -103,6 +102,7 @@ export function CrashRecoveryDialog({
   // Which action is in flight, so only its button shows busy.
   const [resolvingKind, setResolvingKind] = useState<CrashRecoveryAction["kind"] | null>(null);
   const [recoveryError, setRecoveryError] = useState<string | null>(initialError ?? null);
+  const [logOpenError, setLogOpenError] = useState<string | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [showReportPreview, setShowReportPreview] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
@@ -110,6 +110,7 @@ export function CrashRecoveryDialog({
   const [showFreshConfirm, setShowFreshConfirm] = useState(false);
   const { copy: copyReport } = useCopyWithFeedback();
   const { copied: stackCopied, copy: copyStack } = useCopyWithFeedback();
+  const { copied: logPathCopied, copy: copyLogPath } = useCopyWithFeedback();
   const reportTextRef = useRef<HTMLTextAreaElement>(null);
 
   const recentActions = useMemo(() => crash.entry.recentActions ?? [], [crash.entry.recentActions]);
@@ -128,6 +129,7 @@ export function CrashRecoveryDialog({
   // the surrounding open/error state (single effect, not a split init/reset).
   useEffect(() => {
     setShowReportPreview(false);
+    setLogOpenError(null);
     setReportError(null);
     setClipboardFallback(reportResult.usedClipboardFallback);
   }, [crash.entry.id, reportResult.usedClipboardFallback]);
@@ -203,21 +205,12 @@ export function CrashRecoveryDialog({
   }, [allSelected, panels]);
 
   const handleOpenLogFile = useCallback(() => {
+    setLogOpenError(null);
     window.electron.system.openPath(crash.logPath).catch((err) => {
       logError("Failed to open crash log path", err);
-      // shell.openPath rejects when the file is missing or inaccessible. After
-      // the consumeMarker() persistence fix this is exceptional (corruption,
-      // AV lock), but a corrupt V1 log from an older build can still hit it.
-      // Soft warning — the cause-aware title above already tells the user why
-      // the session ended, so an error toast here is more noise than signal.
-      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-      notify({
-        type: "error",
-        priority: "low",
-        title: "Log file isn't available",
-        message: formatErrorMessage(err, "The on-disk crash log couldn't be opened"),
-        duration: 6000,
-      });
+      // notify() is dead on this screen (no Toaster yet), so the failure shows
+      // inline beside the button, with the path so the log is reachable another way.
+      setLogOpenError(formatErrorMessage(err, "The on-disk crash log couldn't be opened"));
     });
   }, [crash.logPath]);
 
@@ -506,6 +499,31 @@ export function CrashRecoveryDialog({
                     Report this crash
                   </Button>
                 </div>
+
+                {logOpenError && (
+                  <div role="alert" className="space-y-1" data-testid="log-open-error">
+                    <p className="text-xs text-status-error">
+                      Couldn't open the log file. {logOpenError}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <code
+                        className="min-w-0 flex-1 text-xs text-text-secondary bg-overlay-soft rounded p-2 break-all select-text"
+                        data-testid="log-open-error-path"
+                      >
+                        {crash.logPath}
+                      </code>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => copyLogPath(crash.logPath)}
+                        data-testid="copy-log-path-button"
+                      >
+                        <Copy aria-hidden="true" />
+                        {logPathCopied ? "Copied" : "Copy path"}
+                      </Button>
+                    </div>
+                  </div>
+                )}
 
                 {recentActions.length > 0 && (
                   <div data-testid="actions-section" className="pt-1">
