@@ -54,6 +54,7 @@ export interface CorrectionChanges {
 const LEADING_PUNCTUATION = /^["“«…—–]+/u;
 const TRAILING_PUNCTUATION = /["”».,;:!?…—–]+$/u;
 const SENTENCE_END = /[.!?…][)\]}"'”’»]*$/u;
+const ONLY_PUNCTUATION = /^\p{P}+$/u;
 const PRONOUN_I = /^I(?:'(?:m|ll|ve|d))?$/;
 // The only capital in the word, as a sentence's first word takes.
 const LONE_CAPITAL = /^\p{Lu}(?=[^\p{Lu}]*$)/u;
@@ -67,9 +68,10 @@ interface DiffWord extends WordToken {
 
 /**
  * The words of `text` as the review compares them. A token of only punctuation
- * isn't a word. Inside a word everything counts: an apostrophe, a digit for a
- * spelled number, a capital that makes a name. Sentences are read from full
- * stops and line breaks, so an abbreviation can open one that isn't.
+ * (a dash, an ellipsis) isn't a word. Inside a word everything counts: an
+ * apostrophe, a digit for a spelled number, a capital that makes a name.
+ * Sentences are read from full stops and line breaks, so an abbreviation can
+ * open one that isn't.
  */
 function diffWords(text: string): DiffWord[] {
   const words: DiffWord[] = [];
@@ -84,7 +86,7 @@ function diffWords(text: string): DiffWord[] {
       .replaceAll("’", "'")
       .replace(LEADING_PUNCTUATION, "")
       .replace(TRAILING_PUNCTUATION, "");
-    if (core !== "") {
+    if (!ONLY_PUNCTUATION.test(core) && core !== "") {
       const folds = opens || PRONOUN_I.test(core);
       words.push({
         ...token,

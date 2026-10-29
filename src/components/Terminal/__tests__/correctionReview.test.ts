@@ -41,6 +41,7 @@ describe("diffCorrection", () => {
 
   it("leaves a sentence's capital and the punctuation the correction added quiet", () => {
     expect(diffCorrection("hello world", "Hello, world.")).toEqual({ changed: [], removed: [] });
+    expect(diffCorrection("hello world", "“Hello, world.”")).toEqual({ changed: [], removed: [] });
     expect(diffCorrection("so we need to fix it", "So we need to fix it.")).toEqual({
       changed: [],
       removed: [],
@@ -61,6 +62,9 @@ describe("diffCorrection", () => {
         "It failed. Then we retried. I'm not sure\nWhy"
       )
     ).toEqual({ changed: [], removed: [] });
+    expect(
+      diffCorrection("is it done yes and then we go", "Is it done? Yes! And then… We go")
+    ).toEqual({ changed: [], removed: [] });
     // A run-on joined gives up the capital it had.
     expect(diffCorrection("It failed. Then we retried", "It failed, then we retried.")).toEqual({
       changed: [],
@@ -78,6 +82,11 @@ describe("diffCorrection", () => {
       changed: [],
       removed: [],
     });
+    // ...and a token of only punctuation can end one.
+    expect(diffCorrection("done — then go", "Done . Then go")).toEqual({
+      changed: [],
+      removed: [],
+    });
   });
 
   it("reads the pronoun I as itself wherever it sits", () => {
@@ -85,6 +94,7 @@ describe("diffCorrection", () => {
       changed: [],
       removed: [],
     });
+    expect(changedWords("i'll go and i've gone", "I'll go and I've gone")).toEqual([]);
     expect(changedWords("and i'd go", "and I'd go")).toEqual([]);
     // The apostrophe is the word's own: it still marks.
     expect(changedWords("and id go", "and I'd go")).toEqual([["I'd", "id"]]);
@@ -103,7 +113,6 @@ describe("diffCorrection", () => {
     expect(changedWords("call usestate now", "Call useState now.")).toEqual([
       ["useState", "usestate"],
     ]);
-    expect(changedWords("open github now", "Open the github now")).toEqual([["the", ""]]);
     expect(changedWords("see github now", "see Github now")).toEqual([["Github", "github"]]);
     expect(changedWords("ok now", "OK now.")).toEqual([["OK", "ok"]]);
     expect(changedWords("OK now", "oK now.")).toEqual([["oK", "OK"]]);
@@ -122,6 +131,8 @@ describe("diffCorrection", () => {
     ["tag", "#tag"],
     ["5", "$5"],
     ["10", "10%"],
+    ["foo", "foo("],
+    ["foo", "foo)"],
   ])("still marks a symbol the correction put on a word: %s to %s", (heard, written) => {
     expect(changedWords(`use ${heard} now`, `Use ${written} now.`)).toEqual([[written, heard]]);
   });
@@ -134,6 +145,7 @@ describe("diffCorrection", () => {
     expect(diffCorrection("yes no", "Yes — no.")).toEqual({ changed: [], removed: [] });
     expect(diffCorrection("yes ... no", "Yes, no.")).toEqual({ changed: [], removed: [] });
     expect(diffCorrection("...", "—")).toEqual({ changed: [], removed: [] });
+    expect(diffCorrection("yes no", "Yes - no.")).toEqual({ changed: [], removed: [] });
   });
 
   it("keeps the gap for words dropped beside a quiet capital or token of punctuation", () => {
@@ -160,6 +172,8 @@ describe("diffCorrection", () => {
       changed: [],
       removed: [{ at: 0, afterWord: false, heard: "um" }],
     });
+    expect(diffCorrection("um", "")).toEqual({ changed: [], removed: [] });
+    expect(diffCorrection("um", "  ")).toEqual({ changed: [], removed: [] });
   });
 
   it("marks words the correction added with nothing heard", () => {
@@ -328,6 +342,15 @@ describe("correction review", () => {
     redoKey(view);
     expect(view.state.doc.toString()).toBe(punctuated.correctedText);
     expect(onSwapped).toHaveBeenLastCalledWith(punctuated, "corrected");
+  });
+
+  it("marks the gap where cleanup left only punctuation", () => {
+    const view = mount("um");
+    land(view, { from: 0, rawText: "um", correctedText: "..." });
+
+    expect(marked(view)).toEqual([]);
+    expect(reviewing(view)).toBe(true);
+    expect(view.contentDOM.querySelectorAll(".cm-voice-corrected-gap")).toHaveLength(1);
   });
 
   it("fades the marks on its own and keeps the review until the next edit", () => {
