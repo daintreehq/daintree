@@ -2,7 +2,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { fitScale, MAX_ZOOM, zoomViewAt, ZoomableImage } from "../ZoomableImage";
+import { fitScale, MAX_ZOOM, MIN_ZOOM, zoomViewAt, ZoomableImage } from "../ZoomableImage";
 
 describe("fitScale", () => {
   it("never reports more than actual size — fitting only ever shrinks", () => {
@@ -47,6 +47,34 @@ describe("zoomViewAt", () => {
     };
     const next = zoomViewAt(view, case_.next, case_.anchor);
     expect(next.zoom).toBe(case_.next);
+    const after = screenPoint(next, point);
+    expect(after.x).toBeCloseTo(case_.anchor.x, 9);
+    expect(after.y).toBeCloseTo(case_.anchor.y, 9);
+  });
+
+  it.each([
+    {
+      zoom: 12,
+      offset: { x: -30, y: 20 },
+      next: MAX_ZOOM * 4,
+      limit: MAX_ZOOM,
+      anchor: { x: 150, y: -90 },
+    },
+    {
+      zoom: 0.4,
+      offset: { x: 15, y: -25 },
+      next: MIN_ZOOM / 10,
+      limit: MIN_ZOOM,
+      anchor: { x: -70, y: 55 },
+    },
+  ])("holds the anchor still at the clamped zoom (zoom $zoom -> limit $limit)", (case_) => {
+    const view = { zoom: case_.zoom, offset: case_.offset };
+    const point = {
+      x: (case_.anchor.x - view.offset.x) / view.zoom,
+      y: (case_.anchor.y - view.offset.y) / view.zoom,
+    };
+    const next = zoomViewAt(view, case_.next, case_.anchor);
+    expect(next.zoom).toBe(case_.limit);
     const after = screenPoint(next, point);
     expect(after.x).toBeCloseTo(case_.anchor.x, 9);
     expect(after.y).toBeCloseTo(case_.anchor.y, 9);
@@ -114,10 +142,11 @@ describe("ZoomableImage wheel", () => {
       x: (anchor.x - first.offset.x) / first.zoom,
       y: (anchor.y - first.offset.y) / first.zoom,
     };
-    fireEvent.wheel(stage, { deltaY: 500, clientX: 160, clientY: 120 });
+    // The opposite step to the first, so the zoom has to come back to where it began.
+    fireEvent.wheel(stage, { deltaY: 300, clientX: 160, clientY: 120 });
 
     const second = view();
-    expect(second.zoom).toBeLessThan(first.zoom);
+    expect(second.zoom).toBeCloseTo(1, 9);
     expect(second.offset.x + second.zoom * point.x).toBeCloseTo(anchor.x, 6);
     expect(second.offset.y + second.zoom * point.y).toBeCloseTo(anchor.y, 6);
   });
@@ -146,18 +175,47 @@ describe("ZoomableImage wheel", () => {
     expect(view().offset.y).toBeCloseTo(zoomed.y, 9);
   });
 
-  it("leaves the pan alone when the zoom buttons and keys step", () => {
+  it.each([
+    {
+      name: "+ key",
+      grows: true,
+      press: (stage: HTMLElement) => fireEvent.keyDown(stage, { key: "+" }),
+    },
+    {
+      name: "- key",
+      grows: false,
+      press: (stage: HTMLElement) => fireEvent.keyDown(stage, { key: "-" }),
+    },
+    {
+      name: "Zoom in button",
+      grows: true,
+      press: () => fireEvent.click(screen.getByRole("button", { name: "Zoom in" })),
+    },
+    {
+      name: "Zoom out button",
+      grows: false,
+      press: () => fireEvent.click(screen.getByRole("button", { name: "Zoom out" })),
+    },
+  ])("steps zoom with the $name and leaves the pan alone", ({ grows, press }) => {
     const { stage, view } = renderStage();
     fireEvent.keyDown(stage, { key: "ArrowLeft" });
+    fireEvent.keyDown(stage, { key: "ArrowUp" });
     const panned = view().offset;
     expect(panned.x).not.toBe(0);
+    expect(panned.y).not.toBe(0);
 
-    fireEvent.keyDown(stage, { key: "+" });
-    expect(view().zoom).toBeGreaterThan(1);
+    press(stage);
+    if (grows) expect(view().zoom).toBeGreaterThan(1);
+    else expect(view().zoom).toBeLessThan(1);
     expect(view().offset).toEqual(panned);
+  });
 
-    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
-    expect(view().offset).toEqual(panned);
+  it("stops key steps at the zoom limits", () => {
+    const { stage, view } = renderStage();
+    for (let i = 0; i < 20; i++) fireEvent.keyDown(stage, { key: "+" });
+    expect(view().zoom).toBe(MAX_ZOOM);
+    for (let i = 0; i < 40; i++) fireEvent.keyDown(stage, { key: "-" });
+    expect(view().zoom).toBe(MIN_ZOOM);
   });
 });
 
