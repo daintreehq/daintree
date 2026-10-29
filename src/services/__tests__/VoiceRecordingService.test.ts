@@ -1706,9 +1706,17 @@ describe("VoiceRecordingService — a lock on a pane with no composer (#14955)",
 
   afterEach(async () => {
     const voice = (await import("@/store/voiceRecordingStore")) as unknown as {
-      __state: { lockedTarget: object | null };
+      __state: {
+        lockedTarget: object | null;
+        status: string;
+        activeTarget: object | null;
+        pendingTarget: object | null;
+      };
     };
     voice.__state.lockedTarget = null;
+    voice.__state.status = "idle";
+    voice.__state.activeTarget = null;
+    voice.__state.pendingTarget = null;
     terminalInput.hybridInputEnabled = true;
     (await import("@/store/fleetArmingStore")).useFleetArmingStore.setState({
       armedIds: new Set<string>(),
