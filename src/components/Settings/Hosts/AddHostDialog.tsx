@@ -1,16 +1,27 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
+import { Check } from "lucide-react";
 import { AppDialog, type DialogAction } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Callout } from "@/components/ui/Callout";
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { ProgressBar } from "@/components/ui/ProgressBar";
 import { SearchField } from "@/components/ui/SearchField";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/utils";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { isMac } from "@/lib/platform";
+import { appClient } from "@/clients/appClient";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { remoteConnectionKind } from "@/lib/remoteHosts";
 import { mintOperationId } from "@/clients/operationsClient";
@@ -32,6 +43,7 @@ import {
   type HostId,
   type HostListEntry,
   type OperationId,
+  type OperationProgress,
 } from "@shared/types/remoteHosts";
 import type {
   DiscoveredHost,
@@ -50,11 +62,14 @@ import {
   takeFirstConnect,
 } from "./hostCopySettingsRequests";
 import {
-  buildMatchLabel,
+  checkVerdict,
+  installFailureLead,
+  shortCommit,
   stagedUpdateLabel,
   defaultHostName,
   deliveryLabel,
   localNameSuggestion,
+  namedProgressMessage,
   sshRefusalAdvice,
   hostModeSwitchedOn,
   installLabel,
@@ -62,12 +77,11 @@ import {
   canWaitForIdle,
   restartConfirmLabel,
   restartImpactLines,
-  restartTerminalCount,
+  verdictCopy,
   SSH_TARGET_HINT,
 } from "./hostLabels";
-import { pluralize } from "@/lib/pluralize";
 
-type Step = "discover" | "check" | "install" | "enable" | "advise";
+type Step = "discover" | "check" | "install" | "enable" | "advise" | "done";
 
 const STEPS: Array<{ id: Step; label: string }> = [
   { id: "discover", label: "Find" },
@@ -133,8 +147,17 @@ function wslRefusal(host: DiscoveredHost): string | null {
 interface AddHostDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  /** Update an existing host: start at the check with its target filled in. */
-  existing?: { hostId: HostId; name: string; connection: HostConnection } | null;
+  /**
+   * An existing host: checked as soon as the dialog opens. `intent` is why the
+   * user came — "Set up…" (Host mode is off there) or "Check for update" — and
+   * names the dialog.
+   */
+  existing?: {
+    hostId: HostId;
+    name: string;
+    connection: HostConnection;
+    intent?: "update" | "setup";
+  } | null;
 }
 
 function StepBar({ current }: { current: Step }) {
@@ -157,12 +180,172 @@ function StepBar({ current }: { current: Step }) {
   );
 }
 
-function Line({ label, value }: { label: string; value: string }) {
+/** A screen's one headline: what was found or what is about to happen, naming the machine. */
+function Verdict({ title, children }: { title: string; children?: ReactNode }) {
   return (
-    <div className="flex items-baseline justify-between gap-4 py-1.5 text-sm">
-      <span className="text-text-secondary">{label}</span>
-      <span className="text-right text-text-primary select-text">{value}</span>
+    <div className="space-y-1">
+      <h3 className="text-sm font-medium text-text-primary [overflow-wrap:anywhere]">{title}</h3>
+      {children && (
+        <div className="text-sm [text-wrap:pretty] text-text-secondary select-text">{children}</div>
+      )}
     </div>
+  );
+}
+
+/** What the check read off the machine: the detail under the verdict, never the lead. */
+function ProbeSummary({
+  probe,
+  via,
+  local,
+}: {
+  probe: HostProbeResult;
+  via: string;
+  local: string | null;
+}) {
+  const rows: Array<[string, string]> = [
+    [via, probe.reachable ? (via === "WSL" ? "Starts" : "Works") : "Didn't connect"],
+    ...(probe.reachable
+      ? ([
+          ["Platform", platformLabel(probe.platform, probe.arch)],
+          ["Installed there", installLabel(probe.install)],
+          ...(local ? [["This machine", `Daintree ${local}`]] : []),
+          ...(probe.stagedUpdate
+            ? [["Downloaded update", stagedUpdateLabel(probe.stagedUpdate)]]
+            : []),
+          ["Host mode", probe.hostModeListening ? "Listening" : "Off"],
+        ] as Array<[string, string]>)
+      : []),
+  ];
+  return (
+    <dl
+      className="mt-4 grid grid-cols-[8rem_1fr] gap-x-4 gap-y-1 border-t border-border-subtle pt-3 text-xs"
+      data-testid="add-host-summary"
+    >
+      {rows.map(([label, value]) => (
+        <div key={label} className="contents">
+          <dt className="text-text-secondary">{label}</dt>
+          <dd className="min-w-0 text-text-primary select-text [overflow-wrap:anywhere]">
+            {value}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+type StageId = "prepare" | "wait" | "stop" | "install" | "start" | "reconnect";
+
+const STAGE_ORDER: StageId[] = ["prepare", "wait", "stop", "install", "start", "reconnect"];
+
+/** The installer's reported stages, grouped into the steps the dialog names. */
+const STAGE_OF: Record<string, StageId> = {
+  checking: "prepare",
+  packing: "prepare",
+  downloading: "prepare",
+  copying: "prepare",
+  verifying: "prepare",
+  "waiting-for-idle": "wait",
+  stopping: "stop",
+  installing: "install",
+  restarting: "start",
+  reconnecting: "reconnect",
+};
+
+/**
+ * The run's steps, done, current and to come, with the installer's own
+ * words for the current one. A failed run keeps its list, marking where it
+ * stopped.
+ */
+function InstallStages({
+  stages,
+  progress,
+  host,
+  failed,
+  started,
+  halted,
+  applying,
+}: {
+  stages: Array<{ id: StageId; label: string }>;
+  /** Installing what the host downloaded itself. */
+  applying: boolean;
+  progress: OperationProgress | null;
+  host: string;
+  failed: boolean;
+  /** Past the loading gate: until then no step is marked current. */
+  started: boolean;
+  /** Stopped where it was, by the user: the step it reached shows without a spinner. */
+  halted: boolean;
+}) {
+  const reported = progress?.stage ? STAGE_OF[progress.stage] : undefined;
+  const current = started
+    ? Math.max(
+        0,
+        stages.findIndex((stage) => stage.id === reported)
+      )
+    : -1;
+  const detail = progress?.message ? namedProgressMessage(progress.message, host) : null;
+  // Where the installer's words add to the step's: how the build travels, who
+  // it's waiting on, a downloaded update the host installs itself. Elsewhere
+  // they repeat the step.
+  const detailed: StageId[] = ["prepare", "wait", ...(applying ? (["install"] as const) : [])];
+  const ErrorGlyph = SEVERITY_GLYPH.error;
+  return (
+    <ol className="space-y-2" data-testid="host-install-stages">
+      {stages.map((stage, index) => {
+        const state =
+          index < current
+            ? "done"
+            : index === current
+              ? failed
+                ? "failed"
+                : halted
+                  ? "halted"
+                  : "current"
+              : "upcoming";
+        return (
+          <li
+            key={stage.id}
+            className="flex items-start gap-2.5"
+            aria-current={state === "current" ? "step" : undefined}
+          >
+            <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center">
+              {state === "done" ? (
+                <Check className="size-3.5 text-text-secondary" aria-hidden="true" />
+              ) : state === "current" ? (
+                <Spinner size="sm" className="text-text-primary" />
+              ) : state === "failed" ? (
+                <ErrorGlyph className="size-3.5 text-status-error" aria-hidden="true" />
+              ) : state === "halted" ? (
+                <span className="size-2 rounded-none bg-text-secondary" aria-hidden="true" />
+              ) : (
+                <span className="size-1.5 rounded-full bg-text-secondary" aria-hidden="true" />
+              )}
+            </span>
+            <div className="min-w-0">
+              <p
+                className={cn(
+                  "text-sm [overflow-wrap:anywhere]",
+                  state === "current" || state === "failed" || state === "halted"
+                    ? "font-medium text-text-primary"
+                    : state === "done"
+                      ? "text-text-primary"
+                      : "text-text-secondary"
+                )}
+              >
+                {stage.label}
+                {state === "done" && <span className="sr-only"> (done)</span>}
+              </p>
+              {state === "current" &&
+                detail &&
+                detailed.includes(stage.id) &&
+                progress?.stage !== "copying" && (
+                  <p className="text-xs text-text-secondary">{detail}</p>
+                )}
+            </div>
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
@@ -185,9 +368,76 @@ function isUsable(state: HostConnectionState): boolean {
 
 function ErrorLine({ message }: { message: string }) {
   return (
-    <p role="alert" className="mt-3 text-xs text-status-error select-text">
+    <Callout severity="error" role="alert" className="mt-4 select-text">
       {message}
-    </p>
+    </Callout>
+  );
+}
+
+/** This machine's own updater, as far as it has said anything since "Update this machine". */
+type LocalUpdate =
+  | { phase: "checking" }
+  | { phase: "quiet" }
+  | { phase: "failed"; message: string }
+  | { phase: "downloading"; version: string | null; percent: number | null }
+  | { phase: "ready"; version: string };
+
+/** How long a check of this machine's updater spins before it is said to be quiet. */
+const LOCAL_UPDATE_QUIET_MS = 10_000;
+
+/** What "Update this machine" led to, under the verdict that offered it. */
+function LocalUpdateStatus({ update }: { update: LocalUpdate }) {
+  const showSpinner = useDeferredLoading(update.phase === "checking", UI_DOHERTY_THRESHOLD);
+  // Ready is the verdict itself, said by the headline above.
+  if (update.phase === "ready") return null;
+  if (update.phase === "failed") {
+    return (
+      <Callout
+        severity="error"
+        title="Couldn't check for an update to this machine"
+        className="mt-4"
+      >
+        {update.message}
+      </Callout>
+    );
+  }
+  if (update.phase === "downloading") {
+    const name = update.version ? `Daintree ${update.version}` : "the update";
+    return (
+      <div className="mt-4 space-y-2" role="status">
+        <p className="flex items-center justify-between gap-3 text-sm text-text-secondary">
+          <span>Downloading {name} to this machine</span>
+          {update.percent !== null && (
+            <span className="text-xs tabular-nums text-text-secondary">
+              {Math.round(update.percent)}%
+            </span>
+          )}
+        </p>
+        <ProgressBar
+          value={update.percent}
+          label={`Downloading ${name} to this machine`}
+          size="thin"
+        />
+        <p className="text-xs text-text-secondary">It keeps downloading if you close this.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="mt-4 space-y-1" role="status">
+      <p className="flex items-center gap-2 text-sm text-text-primary">
+        {update.phase === "checking" && (
+          <Spinner size="sm" className={cn(!showSpinner && "invisible")} />
+        )}
+        {update.phase === "checking"
+          ? "Checking for an update to this machine"
+          : "This machine's updater hasn't reported an update yet"}
+      </p>
+      <p className={cn("text-xs text-text-secondary", update.phase === "checking" && "pl-5.5")}>
+        {update.phase === "checking"
+          ? "One it finds downloads here, with its progress."
+          : "It keeps looking in the background. Its update notice appears once one has downloaded."}
+      </p>
+    </div>
   );
 }
 
@@ -215,12 +465,20 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   const [error, setError] = useState<string | null>(null);
   const [opId, setOpId] = useState<OperationId | null>(null);
   const [installResult, setInstallResult] = useState<InstallHostResult | null>(null);
-  const [confirmProceed, setConfirmProceed] = useState(false);
+  /** How the last install was asked to treat running work; it decides whether waiting is a step. */
+  const [installMode, setInstallMode] = useState<InstallHostPayload["whileWorking"] | null>(null);
+  /** Why the last install stopped, in its own words; the run's steps stay on screen beside it. */
+  const [installError, setInstallError] = useState<string | null>(null);
+  /** It stopped because the user pressed Stop: an outcome they chose, not a failure. */
+  const [installStopped, setInstallStopped] = useState(false);
+  /** An install request is in flight: not any request, since a recheck runs on the same step. */
+  const [installing, setInstalling] = useState(false);
   /** Installing the update the host downloaded itself, rather than this machine's build. */
   const [applying, setApplying] = useState<{ version: string } | null>(null);
   /** The user chose to put this machine's older build over the host's newer one. */
   const [downgrading, setDowngrading] = useState(false);
-  const [confirmDowngrade, setConfirmDowngrade] = useState(false);
+  const [localVersion, setLocalVersion] = useState<string | null>(null);
+  const [localUpdate, setLocalUpdate] = useState<LocalUpdate | null>(null);
   /** Linux: the host refused `loginctl enable-linger`, in its words. */
   const [lingerRefused, setLingerRefused] = useState<string | null>(null);
   /**
@@ -233,9 +491,20 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   /** Enable was skipped: setup ends saved but not connected. */
   const [skipped, setSkipped] = useState(false);
   const install = useRemoteHostsStore((s) => (opId ? (s.installs[opId] ?? null) : null));
+  // The package choice is disabled while it re-plans, which drops focus; it's
+  // handed back to the chosen package once the plan settles.
+  const packageGroup = useRef<HTMLDivElement>(null);
+  const [refocusPackage, setRefocusPackage] = useState(false);
+
   const knownHosts = useRemoteHostsStore((s) => s.hosts);
   const discovering = !existing && discovered === null && discoverError === null;
   const showDiscovering = useDeferredLoading(discovering, UI_DOHERTY_THRESHOLD);
+  // An existing host's first check, before there is anything to show.
+  const checking = step === "check" && probe === null && busy;
+  const showChecking = useDeferredLoading(checking, UI_DOHERTY_THRESHOLD);
+  // The run's screen answers the press at once; its spinner and bar wait out
+  // the gate, since a run that stops to ask comes back within it.
+  const showRun = useDeferredLoading(installing && step === "install", UI_DOHERTY_THRESHOLD);
 
   useEffect(() => {
     if (!isOpen || existing) return;
@@ -252,6 +521,74 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       live = false;
     };
   }, [isOpen, existing, discoverAttempt]);
+
+  // This machine's version, so a verdict can say which side is ahead in numbers.
+  useEffect(() => {
+    if (!isOpen) return;
+    let live = true;
+    Promise.resolve()
+      .then(() => appClient.getVersionInfo())
+      .then(
+        (info) => {
+          if (live) setLocalVersion(info.appVersion);
+        },
+        () => {}
+      );
+    return () => {
+      live = false;
+    };
+  }, [isOpen]);
+
+  // What this machine's updater says after "Update this machine": the dialog
+  // reports it rather than leaving the press with nothing to show.
+  const watchingLocal = localUpdate !== null;
+  useEffect(() => {
+    if (!watchingLocal) return;
+    const update = window.electron.update;
+    const offs = [
+      update.onUpdateAvailable?.((info) =>
+        setLocalUpdate((now) =>
+          now?.phase === "ready"
+            ? now
+            : { phase: "downloading", version: info.version, percent: null }
+        )
+      ),
+      update.onDownloadProgress?.((info) =>
+        setLocalUpdate((now) =>
+          now?.phase === "ready"
+            ? now
+            : {
+                phase: "downloading",
+                version: now?.phase === "downloading" ? now.version : null,
+                percent: info.percent,
+              }
+        )
+      ),
+      update.onUpdateDownloaded?.((info) =>
+        setLocalUpdate({ phase: "ready", version: info.version })
+      ),
+    ];
+    // Nothing heard is not "nothing found": the updater only reports what it finds.
+    const quiet = setTimeout(
+      () => setLocalUpdate((now) => (now?.phase === "checking" ? { phase: "quiet" } : now)),
+      LOCAL_UPDATE_QUIET_MS
+    );
+    return () => {
+      clearTimeout(quiet);
+      for (const off of offs) off?.();
+    };
+  }, [watchingLocal]);
+
+  // Once the group is enabled again, after the commit that re-enables it.
+  useEffect(() => {
+    if (!refocusPackage || busy) return;
+    setRefocusPackage(false);
+    // Only focus that fell out with the disabled group: anyone who moved on keeps their place.
+    if (document.activeElement && document.activeElement !== document.body) return;
+    packageGroup.current
+      ?.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]')
+      ?.focus();
+  }, [refocusPackage, busy]);
 
   const retryDiscover = () => {
     setDiscovered(null);
@@ -281,20 +618,26 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       ? null
       : (others.find((entry) => sameHostMachine(entry.descriptor.connection, typed)) ?? null);
 
-  const run = <T,>(work: () => Promise<T>, then: (value: T) => void) => {
+  const run = <T,>(
+    work: () => Promise<T>,
+    then: (value: T) => void,
+    failed: (message: string, err: unknown) => void = (message) => setError(message)
+  ) => {
     setBusy(true);
     setError(null);
-    work().then(
+    // A bridge call that throws before it returns a promise fails like one that rejects.
+    new Promise<T>((resolve) => resolve(work())).then(
       (value) => {
         setBusy(false);
         then(value);
       },
       (err: unknown) => {
         setBusy(false);
-        setError(
+        failed(
           isClientAppError(err) && err.userMessage
             ? err.userMessage
-            : clientErrorText(err, "Something went wrong")
+            : clientErrorText(err, "Something went wrong"),
+          err
         );
       }
     );
@@ -318,14 +661,30 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     return saving.current;
   };
 
-  /** On to Enable; a host already switched on there is saved now. */
+  /**
+   * On to Enable; a host already switched on there is saved now. An existing
+   * host with Host mode on for good has nothing left to set up, so it ends on
+   * what the update did.
+   */
   const toEnable = (seen: HostProbeResult | null) => {
+    if (existing && hostModeSwitchedOn(seen)) {
+      setStep("done");
+      return;
+    }
     setStep("enable");
     if (hostModeSwitchedOn(seen)) run(save, () => {});
   };
 
   const check = (nextTarget?: string) => {
     if (nextTarget !== undefined) setTarget(nextTarget);
+    // Asked from past the check (a failed or stopped run, a command handed
+    // over): the screen becomes the check, not the run it came from.
+    if (step === "install" || step === "done") {
+      setStep("check");
+      setProbe(null);
+      setInstallResult(null);
+      setInstallError(null);
+    }
     const connection = nextTarget !== undefined ? makeConnection(nextTarget) : connectionFor();
     run(
       () => remoteHostsClient.probe(connection),
@@ -335,12 +694,27 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         setApplying(null);
         setDowngrading(false);
         setInstallResult(null);
+        setInstallError(null);
         setStep("check");
       }
     );
   };
 
-  const loadPlan = (pkg: LinuxPackagePreference, downgrade = downgrading) =>
+  // An existing host is checked as the dialog opens: its target is already known.
+  const autoChecked = useRef(false);
+  const checkOnOpen = useEffectEvent(() => check());
+  const existingId = existing?.hostId ?? null;
+  useEffect(() => {
+    if (!isOpen || existingId === null || autoChecked.current) return;
+    autoChecked.current = true;
+    checkOnOpen();
+  }, [isOpen, existingId]);
+
+  const loadPlan = (
+    pkg: LinuxPackagePreference,
+    downgrade = downgrading,
+    settled: () => void = () => {}
+  ) =>
     run(
       () =>
         remoteHostsClient.planInstall({
@@ -353,6 +727,11 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         setApplying(null);
         setInstallResult(null);
         setStep("install");
+        settled();
+      },
+      (message) => {
+        setError(message);
+        settled();
       }
     );
 
@@ -364,8 +743,11 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     const id = mintOperationId();
     useRemoteHostsStore.getState().trackInstall(id, connectionFor());
     setOpId(id);
-    // A refusal from an earlier attempt says nothing about this one.
+    setInstallMode(whileWorking);
+    // A refusal or failure from an earlier attempt says nothing about this one.
     setInstallResult(null);
+    setInstallError(null);
+    setInstalling(true);
     run(
       () =>
         remoteHostsClient.install({
@@ -379,6 +761,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
           ...(!staged && plan?.downgrade ? { allowDowngrade: true } : {}),
         }),
       (result) => {
+        setInstalling(false);
         setInstallResult(result);
         if (
           result.status === "installed" ||
@@ -388,6 +771,11 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
           setProbe(result.probe);
           toEnable(result.probe);
         }
+      },
+      (message, err) => {
+        setInstalling(false);
+        setInstallError(message);
+        setInstallStopped(isClientAppError(err) && err.code === "CANCELLED");
       }
     );
   };
@@ -402,11 +790,31 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     startInstall("refuse", undefined, staged);
   };
 
-  // This machine's own updater says what it found, as from its menu.
+  // This machine's own updater looks, as from its menu; the dialog then says
+  // what it reports, starting from a download already under way.
   const updateThisMachine = () => {
-    safeFireAndForget(window.electron.update.checkForUpdates(), {
-      context: "Checking for an update to match a newer host",
-    });
+    setLocalUpdate({ phase: "checking" });
+    window.electron.update.checkForUpdates().then(
+      () => {},
+      (err: unknown) =>
+        setLocalUpdate({
+          phase: "failed",
+          message: clientErrorText(err, "This machine's updater didn't answer"),
+        })
+    );
+    window.electron.update.getLatest?.().then(
+      (latest) => {
+        if (!latest) return;
+        setLocalUpdate((now) =>
+          now?.phase === "ready" || now?.phase === "downloading"
+            ? now
+            : latest.downloaded
+              ? { phase: "ready", version: latest.version }
+              : { phase: "downloading", version: latest.version, percent: null }
+        );
+      },
+      () => {}
+    );
   };
 
   const startHostMode = () =>
@@ -452,13 +860,43 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     if (opId) void remoteHostsClient.cancelInstall(opId);
   };
 
-  const installRunning = busy && step === "install" && opId !== null;
+  const installRunning = installing && step === "install";
   // Work that changes the host settles with the dialog in view: closing it left
   // an install or Host mode setup running with nothing to say how it ended.
   const locked = busy && (step === "install" || step === "enable" || step === "advise");
 
   // A restart for a downgrade is named as one, wherever it is confirmed.
   const restartVerb: "Update" | "Downgrade" = !applying && plan?.downgrade ? "Downgrade" : "Update";
+  const verbing = applying
+    ? "Installing the downloaded update"
+    : restartVerb === "Downgrade"
+      ? "Downgrading"
+      : "Updating";
+  // A button names the machine while the name fits one; the heading above it always does.
+  const buttonHost = hostLabel.length <= 20 ? hostLabel : "host";
+  const targetVersion = applying?.version ?? plan?.version ?? null;
+  const fresh = !probe?.install;
+  const runTitle = applying
+    ? `Restarting ${hostLabel} into Daintree ${applying.version}`
+    : plan?.downgrade
+      ? `Downgrading ${hostLabel} to Daintree ${targetVersion}`
+      : fresh
+        ? `Installing Daintree ${targetVersion} on ${hostLabel}`
+        : `Updating ${hostLabel} to Daintree ${targetVersion}`;
+  const stoppedTitle = applying
+    ? `Stopped restarting ${hostLabel}`
+    : plan?.downgrade
+      ? `Stopped downgrading ${hostLabel}`
+      : fresh
+        ? `Stopped installing Daintree on ${hostLabel}`
+        : `Stopped updating ${hostLabel}`;
+  const failedTitle = applying
+    ? `Couldn't restart ${hostLabel} into Daintree ${applying.version}`
+    : plan?.downgrade
+      ? `Couldn't downgrade ${hostLabel}`
+      : fresh
+        ? `Couldn't install Daintree on ${hostLabel}`
+        : `Couldn't update ${hostLabel}`;
 
   let primary: DialogAction | undefined;
   // Once the host is saved, closing keeps it: nothing is cancelled any more.
@@ -467,7 +905,60 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       ? { label: "Close", onClick: onClose, disabled: locked }
       : { label: "Cancel", onClick: onClose, disabled: locked };
   let leading: DialogAction | undefined;
+  let hint: string | undefined;
   let body: React.ReactNode;
+
+  /**
+   * The footer while the host is ahead: "Update this machine" until it's
+   * pressed, then what this machine's updater has reached. A download carries
+   * on after the dialog closes; a ready one restarts from here as from its
+   * notice, where main asks first if anything would end.
+   */
+  const localFooter = (): {
+    primary: DialogAction;
+    secondary: DialogAction | undefined;
+    offerDowngrade: boolean;
+  } => {
+    if (!localUpdate) {
+      return {
+        primary: { label: "Update this machine", onClick: updateThisMachine, disabled: busy },
+        secondary,
+        offerDowngrade: true,
+      };
+    }
+    if (localUpdate.phase === "failed") {
+      return {
+        primary: { label: "Retry", onClick: updateThisMachine },
+        secondary: { label: "Close", onClick: onClose },
+        offerDowngrade: true,
+      };
+    }
+    if (localUpdate.phase === "ready") {
+      return {
+        primary: {
+          label: "Restart to update",
+          onClick: () =>
+            safeFireAndForget(window.electron.update.quitAndInstall(), {
+              context: "Restarting this machine into its update to match a newer host",
+            }),
+        },
+        secondary: { label: "Later", onClick: onClose },
+        offerDowngrade: false,
+      };
+    }
+    return {
+      primary: { label: "Close", onClick: onClose },
+      secondary: undefined,
+      // Downloading is the way forward; only an updater that found nothing leaves the downgrade.
+      offerDowngrade: localUpdate.phase !== "downloading",
+    };
+  };
+  // Said once per screen, politely: the verdict or outcome the user was waiting for.
+  let announce = "";
+  // A new screen hands focus to its answer: the primary, or Cancel where the
+  // answer ends someone's work.
+  let screen: string = step;
+  let focusCancel = false;
 
   if (outcome && savedHost) {
     const close: DialogAction = { label: "Close", onClick: onClose, disabled: busy };
@@ -861,164 +1352,203 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         ? localNameSuggestion(target.trim(), probe.sshError)
         : null;
     const refusal = !viaWsl && probe && !probe.reachable ? sshRefusalAdvice(probe.sshError) : null;
-    const hostNewer = probe?.reachable === true && probe.hostBuild?.order === "newer";
-    // Quitting installs it, so Daintree can restart the host into it from here.
+    const verdict = probe ? checkVerdict(probe) : null;
+    const verdictText =
+      probe && verdict
+        ? verdictCopy(verdict, probe, hostLabel, localVersion, localUpdate !== null)
+        : null;
+    // Once this machine is updating, the verdict is about it: no instruction to do what's under way.
+    // Once this machine's update is ready, that is the news; restarting into it is the next step.
+    const copy =
+      verdict === "newer" && localUpdate?.phase === "ready"
+        ? {
+            title: `Daintree ${localUpdate.version} is ready on this machine`,
+            detail: `${hostLabel} runs Daintree ${probe!.hostBuild?.version ?? localUpdate.version}, newer than this machine's ${localVersion ?? "build"}.`,
+          }
+        : verdictText;
     const stagedHere =
       probe?.reachable === true && probe.hostModeListening && probe.stagedUpdate?.installsOnQuit
         ? probe.stagedUpdate
         : null;
-    const canApply = stagedHere?.ready === true;
-    // A host behind this machine that has the update already only needs to restart into it.
-    const applyIsPrimary = stagedHere !== null && !hostNewer && probe?.matchesClient !== true;
+    // A download the host could restart into while something else is the
+    // verdict: offered beside it, never instead of it.
+    const applyAside =
+      stagedHere?.ready === true && verdict !== "staged-ready" && verdict !== "newer";
+    // Continuing with the build as it is only means something while there is
+    // still Host mode to set up; otherwise it's the same as closing.
+    const continueAnyway: DialogAction | undefined =
+      probe?.install && (!existing || !hostModeSwitchedOn(probe))
+        ? { label: "Continue anyway", onClick: () => toEnable(probe), disabled: busy }
+        : undefined;
+    const downgrade: DialogAction = {
+      label: `Downgrade ${buttonHost}…`,
+      intent: "destructive",
+      onClick: () => {
+        setDowngrading(true);
+        loadPlan(linuxPackage, true);
+      },
+      disabled: busy,
+    };
     body = !probe ? (
-      <p className="flex items-center gap-2 text-sm text-text-secondary">
-        <Spinner size="sm" /> Checking {target}
-      </p>
+      checking ? (
+        <div aria-hidden={!showChecking} className={cn("space-y-1", !showChecking && "invisible")}>
+          <p className="flex items-center gap-2 text-sm font-medium text-text-primary [overflow-wrap:anywhere]">
+            <Spinner size="sm" />
+            Checking {hostLabel}
+          </p>
+          <p className="pl-5.5 text-xs text-text-secondary select-text [overflow-wrap:anywhere]">
+            {viaWsl ? `Starting the ${target} distribution` : `Over SSH as ${target}`}
+          </p>
+        </div>
+      ) : null
     ) : (
       <div>
-        <Line
-          label={viaWsl ? "WSL" : "SSH"}
-          value={probe.reachable ? (viaWsl ? "Starts" : "Works") : "Didn't connect"}
-        />
-        {!probe.reachable && probe.sshError && (
-          <pre className="mt-1 whitespace-pre-wrap rounded-[var(--radius-md)] bg-surface-input p-2 text-xs text-text-secondary select-text">
-            {probe.sshError}
-          </pre>
+        {verdict === "unreachable" ? (
+          <>
+            <Verdict title={copy!.title}>
+              {viaWsl ? "The distribution didn't start." : `SSH as ${target} didn't connect.`}
+            </Verdict>
+            {probe.sshError && (
+              <pre className="mt-3 whitespace-pre-wrap rounded-[var(--radius-md)] bg-surface-input p-2 text-xs text-text-secondary select-text">
+                {probe.sshError}
+              </pre>
+            )}
+            {localSuggestion && (
+              <p className="mt-3 text-xs text-text-secondary">
+                On a local network, a machine usually answers by its .local name.
+              </p>
+            )}
+            {viaWsl ? (
+              <p className="mt-3 text-xs text-text-secondary">
+                Daintree runs programs in the distribution with <code>wsl.exe</code>. Check that{" "}
+                <code>wsl -d {wslCommandArg(target)}</code> opens a shell there.
+              </p>
+            ) : (
+              <SshRefusalHelp refusal={refusal} target={target} testId="add-host-ssh-refusal" />
+            )}
+          </>
+        ) : (
+          <Verdict title={copy!.title}>
+            <p>{copy!.detail}</p>
+            {verdict === "newer" && localUpdate?.phase === "ready" && (
+              <p className="mt-2">
+                Restarting Daintree here installs it, and this machine then matches {hostLabel}.
+                Check {hostLabel} again once it&apos;s back.
+              </p>
+            )}
+            {probe.stagedUpdate && !probe.stagedUpdate.installsOnQuit && (
+              <p className="mt-2 text-xs">
+                {hostLabel} has downloaded Daintree {probe.stagedUpdate.version}, which installs
+                from Restart to update on its own screen, where the package install asks for an
+                administrator password.
+              </p>
+            )}
+            {applyAside && (
+              <p className="mt-2 text-xs">
+                {hostLabel} has also downloaded Daintree {stagedHere!.version}, which installs when
+                Daintree restarts there.
+              </p>
+            )}
+          </Verdict>
         )}
-        {localSuggestion && (
-          <div className="mt-3 flex items-center justify-between gap-3">
-            <p className="text-xs text-text-secondary">
-              On a local network, a machine usually answers by its .local name.
+        {verdict === "newer" && localUpdate && <LocalUpdateStatus update={localUpdate} />}
+        {noSystemd && (
+          <div className="mt-3 space-y-2" data-testid="add-host-no-systemd">
+            <p role="alert" className="text-xs text-status-error">
+              {viaWsl
+                ? `${target} runs without systemd, which Daintree's Host mode needs.`
+                : "This machine runs without systemd, which Daintree's Host mode needs on Linux."}
             </p>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={busy}
-              onClick={() => check(localSuggestion)}
-            >
-              Try {localSuggestion}
-            </Button>
+            {viaWsl && (
+              <>
+                <p className="text-xs text-text-secondary">
+                  Turn it on in that distribution&apos;s <code>/etc/wsl.conf</code> (a{" "}
+                  <code>[boot]</code> section with <code>systemd=true</code>), then restart it and
+                  check again.
+                </p>
+                <HostCommand
+                  label="Restart the distribution"
+                  command={`wsl --terminate ${wslCommandArg(target)}`}
+                />
+              </>
+            )}
           </div>
         )}
         {probe.reachable && (
-          <>
-            <Line label="Platform" value={platformLabel(probe.platform, probe.arch)} />
-            <Line label="Installed" value={installLabel(probe.install)} />
-            {probe.install && <Line label="Matches this machine" value={buildMatchLabel(probe)} />}
-            {probe.stagedUpdate && (
-              <Line label="Downloaded update" value={stagedUpdateLabel(probe.stagedUpdate)} />
-            )}
-            <Line label="Host mode" value={probe.hostModeListening ? "Listening" : "Off"} />
-            {hostNewer && (
-              <div className="mt-3 space-y-2" data-testid="add-host-newer">
-                <p className="text-sm text-text-primary">
-                  {hostLabel} has Daintree {probe.hostBuild?.version ?? "a later release"}, which is
-                  newer than this machine&apos;s build. Update this machine to match it.
-                </p>
-                <p className="text-xs text-text-secondary">
-                  Installing this machine&apos;s build there instead is a downgrade: settings and
-                  data the newer build saved may not open in an older one.
-                </p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => {
-                    setDowngrading(true);
-                    loadPlan(linuxPackage, true);
-                  }}
-                >
-                  Downgrade {hostLabel}…
-                </Button>
-              </div>
-            )}
-            {probe.stagedUpdate && !probe.stagedUpdate.installsOnQuit && (
-              <p className="mt-3 text-xs text-text-secondary">
-                {hostLabel} installs it from Restart to update on its own screen, where the package
-                install asks for an administrator password.
-              </p>
-            )}
-            {canApply && !applyIsPrimary && (
-              <div className="mt-3">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => startApply(probe.stagedUpdate!.version)}
-                >
-                  Install downloaded update
-                </Button>
-              </div>
-            )}
-            {noSystemd && (
-              <div className="mt-3 space-y-2" data-testid="add-host-no-systemd">
-                <p role="alert" className="text-xs text-status-error">
-                  {viaWsl
-                    ? `${target} runs without systemd, which Daintree's Host mode needs.`
-                    : "This machine runs without systemd, which Daintree's Host mode needs on Linux."}
-                </p>
-                {viaWsl && (
-                  <>
-                    <p className="text-xs text-text-secondary">
-                      Turn it on in that distribution&apos;s <code>/etc/wsl.conf</code> (a{" "}
-                      <code>[boot]</code> section with <code>systemd=true</code>), then restart it
-                      and check again.
-                    </p>
-                    <HostCommand
-                      label="Restart the distribution"
-                      command={`wsl --terminate ${wslCommandArg(target)}`}
-                    />
-                  </>
-                )}
-              </div>
-            )}
-          </>
+          <ProbeSummary probe={probe} via={viaWsl ? "WSL" : "SSH"} local={localVersion} />
         )}
-        {!probe.reachable &&
-          (viaWsl ? (
-            <p className="mt-3 text-xs text-text-secondary">
-              Daintree runs programs in the distribution with <code>wsl.exe</code>. Check that{" "}
-              <code>wsl -d {wslCommandArg(target)}</code> opens a shell there.
-            </p>
-          ) : (
-            <SshRefusalHelp refusal={refusal} target={target} testId="add-host-ssh-refusal" />
-          ))}
       </div>
     );
-    if (probe && (!probe.reachable || noSystemd)) {
-      primary = { label: "Check again", onClick: () => check(), disabled: busy, loading: busy };
-    } else if (probe?.matchesClient === true) {
-      primary = { label: "Continue", onClick: () => toEnable(probe), disabled: busy };
-    } else if (probe && hostNewer) {
+    const checkAgain: DialogAction = {
+      label: "Check again",
+      onClick: () => check(),
+      disabled: busy,
+      loading: busy,
+    };
+    screen = `check:${verdict ?? (checking ? "checking" : "none")}:${localUpdate?.phase === "ready" ? "local-ready" : ""}`;
+    announce =
+      verdict === "newer" && localUpdate?.phase === "failed"
+        ? `Couldn't check for an update to this machine. ${localUpdate.message}`
+        : (copy?.title ?? (checking && showChecking ? `Checking ${hostLabel}` : ""));
+    if (!probe) {
+      // The first check is running, or it couldn't run at all (said below).
+      primary = checking ? undefined : checkAgain;
+    } else if (verdict === "unreachable" || noSystemd) {
+      primary = checkAgain;
+      if (localSuggestion) {
+        leading = {
+          label: `Try ${localSuggestion}`,
+          onClick: () => check(localSuggestion),
+          disabled: busy,
+        };
+      }
+    } else if (verdict === "newer") {
+      const local = localFooter();
+      primary = local.primary;
+      secondary = local.secondary;
+      leading = local.offerDowngrade ? downgrade : undefined;
+      // A restart of this machine is offered, never landed on.
+      focusCancel = localUpdate?.phase === "ready";
+    } else if (verdict === "staged-ready") {
       primary = {
-        label: "Update this machine",
-        onClick: updateThisMachine,
+        label: "Install downloaded update",
+        onClick: () => startApply(stagedHere!.version),
         disabled: busy,
       };
-      leading = { label: "Continue anyway", onClick: () => toEnable(probe), disabled: busy };
-    } else if (probe && applyIsPrimary) {
-      primary = canApply
-        ? {
-            label: "Install downloaded update",
-            onClick: () => startApply(stagedHere!.version),
-            disabled: busy,
-          }
-        : // Still being handed to macOS's updater: a restart now would install nothing.
-          { label: "Check again", onClick: () => check(), disabled: busy, loading: busy };
-      leading = { label: "Continue anyway", onClick: () => toEnable(probe), disabled: busy };
-    } else if (probe) {
+      leading = continueAnyway;
+    } else if (verdict === "staged-preparing") {
+      // Still being handed to macOS's updater: a restart now would install nothing.
+      primary = checkAgain;
+      leading = continueAnyway;
+    } else if (verdict === "update" || verdict === "not-installed") {
       primary = {
-        label: probe.install ? "Plan update" : "Plan install",
+        label: probe.install ? "Review update" : "Review install",
         onClick: () => loadPlan(linuxPackage),
         disabled: busy,
         loading: busy,
       };
       // A different build still connects, best effort, with a warning.
-      if (probe.install) {
-        leading = { label: "Continue anyway", onClick: () => toEnable(probe), disabled: busy };
-      }
+      leading = continueAnyway;
+    } else if (verdict === "up-to-date" && existing) {
+      primary = { label: "Done", onClick: onClose };
+      secondary = undefined;
     } else {
-      primary = { label: "Check host", onClick: () => check(), disabled: busy, loading: busy };
+      // Host mode is left to set up there, or (adding) it's on and only needs saving.
+      primary = {
+        label:
+          verdict === "host-mode-off" || verdict === "host-mode-temporary"
+            ? "Set up Host mode…"
+            : "Continue",
+        onClick: () => toEnable(probe),
+        disabled: busy,
+      };
+    }
+    if (applyAside && !leading) {
+      leading = {
+        label: "Install downloaded update",
+        onClick: () => startApply(stagedHere!.version),
+        disabled: busy,
+      };
     }
     // Not while a check runs: its result would land against an edited target.
     // Nor once saved: the record names this target, so it stays.
@@ -1026,11 +1556,177 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       secondary = { label: "Back", onClick: () => setStep("discover"), disabled: busy };
   } else if (step === "install") {
     const progress = install?.progress ?? null;
-    body =
-      plan || applying ? (
-        <div className="space-y-3">
-          {plan && probe?.platform === "linux" && (
-            <div className="flex items-center justify-between gap-4">
+    const impact = installResult?.status === "needs-confirmation" ? installResult.impact : null;
+    const userCommand =
+      installResult?.status === "needs-user-command" ? installResult.command : null;
+    const hostBuild = probe?.hostBuild?.version ?? probe?.install?.version ?? null;
+    const runShown = installRunning || (installError !== null && opId !== null);
+    if (runShown) {
+      const reconnects = savedHost !== null && probe?.hostModeListening === true;
+      const restarts = applying !== null || plan?.restartsHost === true;
+      const ids: StageId[] = [
+        "prepare",
+        ...(installMode === "wait-for-idle" ? (["wait"] as const) : []),
+        ...(restarts ? (["stop"] as const) : []),
+        ...(plan?.packaging === "deb" && !applying ? [] : (["install"] as const)),
+        ...(restarts ? (["start"] as const) : []),
+        ...(restarts && reconnects ? (["reconnect"] as const) : []),
+      ];
+      // A stage the plan didn't foresee still shows, in its place.
+      const reported = progress?.stage ? STAGE_OF[progress.stage] : undefined;
+      if (reported && !ids.includes(reported)) {
+        ids.push(reported);
+        ids.sort((a, b) => STAGE_ORDER.indexOf(a) - STAGE_ORDER.indexOf(b));
+      }
+      const version = targetVersion ? `Daintree ${targetVersion}` : "the new build";
+      const label: Record<StageId, string> = {
+        prepare: applying
+          ? `Check ${hostLabel}`
+          : plan?.delivery === "host-fetch"
+            ? `Download ${version} on ${hostLabel}`
+            : `Copy ${version} to ${hostLabel}`,
+        wait: `Wait for ${hostLabel}'s agents to go idle`,
+        stop: `Stop Daintree on ${hostLabel}`,
+        install: `Install ${version}`,
+        start: `Start Daintree on ${hostLabel}`,
+        reconnect: `Reconnect to ${hostLabel}`,
+      };
+      const ended = installError !== null && !installRunning;
+      const failed = ended && !installStopped;
+      // A stop's own "Install cancelled" is the headline; what it put back, if anything, is the note.
+      const stoppedNote =
+        ended && installStopped
+          ? installError!.replace(/^Install cancelled\.?\s*/, "") || null
+          : null;
+      const title = !ended ? runTitle : installStopped ? stoppedTitle : failedTitle;
+      // A stage that reports none (waiting for idle) is indeterminate, never the last figure.
+      const fraction = progress?.fraction ?? null;
+      const detail = progress?.message ? namedProgressMessage(progress.message, hostLabel) : null;
+      body = (
+        <div className="space-y-4">
+          <Verdict title={title} />
+          {ended && (failed || stoppedNote) ? (
+            <Callout
+              severity={failed ? "error" : "neutral"}
+              role={failed ? "alert" : undefined}
+              title={
+                failed ? (installFailureLead(installError!, hostLabel) ?? undefined) : undefined
+              }
+              className="select-text"
+            >
+              {namedProgressMessage(stoppedNote ?? installError!, hostLabel)}
+            </Callout>
+          ) : ended ? null : (
+            <ProgressBar
+              value={fraction === null ? null : Math.round(fraction * 100)}
+              label={title}
+              valueText={detail ?? undefined}
+              className={cn(!showRun && "invisible")}
+            />
+          )}
+          <InstallStages
+            stages={ids.map((id) => ({ id, label: label[id] }))}
+            progress={progress}
+            host={hostLabel}
+            failed={failed}
+            started={ended || showRun}
+            halted={ended && !failed}
+            applying={applying !== null}
+          />
+        </div>
+      );
+      screen = ended ? "install:ended" : "install:running";
+      announce = ended ? title : (detail ?? title);
+    } else if (impact) {
+      screen = "install:impact";
+      focusCancel = true;
+      const question = `Restart Daintree on ${hostLabel}?`;
+      announce = question;
+      body = (
+        <div className="space-y-3" data-testid="host-restart-impact">
+          <Verdict title={question} />
+          {/* The dialog's description while it asks: what the restart ends. */}
+          <AppDialog.Description as="div" className="space-y-3">
+            <p>{verbing} restarts it, which ends what&apos;s running there:</p>
+            <ul className="list-disc space-y-1 pl-5 text-text-primary">
+              {restartImpactLines(impact).map((line, index) => (
+                <li key={`${index}:${line}`}>{line}</li>
+              ))}
+            </ul>
+            <p className="text-xs [text-wrap:pretty]">
+              {canWaitForIdle(impact)
+                ? `${restartVerb} when idle waits until no agent is seen working or waiting there, then restarts it and ends these terminals. `
+                : ""}
+              Agent states are observed, so one shown idle may still be busy. Nothing has changed
+              yet.
+            </p>
+          </AppDialog.Description>
+        </div>
+      );
+    } else if (userCommand) {
+      const title = `Finish installing Daintree ${targetVersion} on ${hostLabel}`;
+      screen = "install:command";
+      announce = title;
+      body = (
+        <div className="space-y-4">
+          <Verdict title={title} />
+          <HostCommand label={`Run this on ${hostLabel}`} command={userCommand.command} />
+          <p className="text-xs text-text-secondary">
+            The .deb package is on {hostLabel}, and installing it needs sudo, which Daintree never
+            runs for you. Check again once the command has finished.
+          </p>
+        </div>
+      );
+    } else if (installResult?.status === "host-newer" || plan?.kind === "host-newer") {
+      body = (
+        <div>
+          <Verdict title={`${hostLabel} is ahead of this machine`}>
+            {installResult?.status === "host-newer"
+              ? "It moved to a newer build while this was being prepared, so nothing was installed. Check again to see it."
+              : (plan?.reason ?? "It runs a newer build than this machine.")}
+          </Verdict>
+          {localUpdate && <LocalUpdateStatus update={localUpdate} />}
+        </div>
+      );
+    } else if (plan?.kind === "unsupported") {
+      body = (
+        <Verdict title={`Can't ${probe?.install ? "update" : "install on"} ${hostLabel} from here`}>
+          {plan.reason}
+        </Verdict>
+      );
+    } else if (plan?.kind === "up-to-date") {
+      body = (
+        <Verdict title={`${hostLabel} already runs this build`}>
+          {hostBuild ? `It runs Daintree ${hostBuild}, the same as this machine.` : null}
+        </Verdict>
+      );
+    } else if (plan) {
+      const verbed = plan.downgrade ? "Downgrading" : probe?.install ? "Updating" : "Installing";
+      const from = probe?.install && hostBuild ? ` from Daintree ${hostBuild}` : "";
+      const title = plan.downgrade
+        ? `Downgrade ${hostLabel}${from} to ${from ? "" : "Daintree "}${plan.version}`
+        : probe?.install
+          ? `Update ${hostLabel}${from} to ${from ? "" : "Daintree "}${plan.version}`
+          : `Install Daintree ${plan.version} on ${hostLabel}`;
+      const commit = shortCommit(plan.commit);
+      screen = `install:plan:${plan.downgrade ? "downgrade" : "install"}`;
+      announce = title;
+      // Its primary is the downgrade itself, which goes ahead when nothing is running there.
+      focusCancel = plan.downgrade;
+      body = (
+        <div className="space-y-4">
+          <Verdict title={title}>
+            This puts this machine&apos;s exact build there: Daintree {plan.version}
+            {commit ? ` (${commit})` : ""}.
+          </Verdict>
+          {plan.downgrade && (
+            <Callout severity="danger" title="This is a downgrade" data-testid="add-host-downgrade">
+              Settings and data that {hostBuild ? `Daintree ${hostBuild}` : "the newer build"} saved
+              on {hostLabel} may not open in {plan.version}.
+            </Callout>
+          )}
+          {probe?.platform === "linux" && (
+            <div ref={packageGroup} className="flex items-center justify-between gap-4">
               <span className="text-sm text-text-secondary">Package</span>
               <SegmentedRadioGroup<LinuxPackagePreference>
                 aria-label="Package"
@@ -1042,167 +1738,165 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
                 disabled={busy}
                 onChange={(value) => {
                   setLinuxPackage(value);
-                  loadPlan(value);
+                  loadPlan(value, downgrading, () => setRefocusPackage(true));
                 }}
               />
             </div>
           )}
-          {applying ? (
-            <p className="text-sm text-text-primary">
-              Installs Daintree {applying.version}, which {hostLabel} already downloaded, by
-              restarting Daintree there.
-            </p>
-          ) : !plan ? null : plan.kind === "host-newer" ? (
-            <div className="space-y-2">
-              <p className="text-sm text-text-secondary">{plan.reason}</p>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={busy}
-                onClick={() => {
-                  setDowngrading(true);
-                  loadPlan(linuxPackage, true);
-                }}
-              >
-                Downgrade {hostLabel}…
-              </Button>
-            </div>
-          ) : plan.kind === "unsupported" ? (
-            <p className="text-sm text-text-secondary">{plan.reason}</p>
-          ) : plan.kind === "up-to-date" ? (
-            <p className="text-sm text-text-secondary">The host already runs this build.</p>
-          ) : (
-            <>
-              {plan.downgrade ? (
-                <div className="space-y-1" data-testid="add-host-downgrade">
-                  <p className="text-sm text-text-primary">
-                    Installs Daintree {plan.version}, the build running here, over the newer{" "}
-                    {probe?.hostBuild?.version ?? "build"} on {hostLabel}: a downgrade.
-                  </p>
-                  <p className="text-xs text-text-secondary">
-                    Settings and data the newer build saved may not open in this one.
-                  </p>
-                </div>
-              ) : (
-                <p className="text-sm text-text-primary">
-                  Installs Daintree {plan.version} — the exact build running here.
-                </p>
-              )}
-              <p className="text-sm text-text-secondary">{deliveryLabel(plan)}.</p>
-              {plan.packaging === "deb" && (
-                <p className="text-xs text-text-secondary">
-                  The package needs sudo, so the last step is one command you run on the host.{" "}
-                  {probe?.advice.fuse === false
-                    ? "The AppImage installs without root; with no FUSE on the host, it runs unpacked."
-                    : "The AppImage installs without root but needs FUSE."}
-                </p>
-              )}
-              {plan.packaging === "appimage" && probe?.advice.fuse === false && (
-                <p className="text-xs text-text-secondary">
-                  No FUSE was found on {hostLabel}, so the AppImage runs unpacked each time it
-                  starts, which makes starting slower.
-                </p>
-              )}
-              {plan.restartsHost && (
-                <p className="text-xs text-text-secondary">
-                  Daintree is running there. Updating restarts it, which ends its terminals.
-                </p>
-              )}
-            </>
-          )}
-          {installResult?.status === "host-newer" && (
-            <p className="text-sm text-text-secondary">
-              {hostLabel} now has a newer build than this machine, so nothing was installed. Check
-              again to see it.
-            </p>
-          )}
-          {progress && installResult === null && (
-            <div className="flex items-center gap-2 text-sm text-text-secondary" aria-live="polite">
-              <Spinner size="sm" />
-              {progress.message ?? progress.stage}
-            </div>
-          )}
-          {installResult?.status === "needs-confirmation" && (
-            <div className="space-y-2" data-testid="host-restart-impact">
-              <p className="text-sm text-text-primary">
-                {restartVerb === "Downgrade" ? "Downgrading" : "Updating"} restarts Daintree on{" "}
-                {hostLabel}, which ends:
-              </p>
-              <ul className="list-disc space-y-1 pl-5 text-sm text-text-secondary">
-                {restartImpactLines(installResult.impact).map((line, index) => (
-                  <li key={`${index}:${line}`}>{line}</li>
-                ))}
-              </ul>
-              <p className="text-xs text-text-secondary">
-                Nothing was changed. Agent states are observed, so one shown idle may still be busy.
-              </p>
-              <div className="flex gap-2">
-                {canWaitForIdle(installResult.impact) && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => startInstall("wait-for-idle", installResult.impact)}
-                  >
-                    {restartVerb} when idle
-                  </Button>
-                )}
-                <Button variant="outline" size="sm" onClick={() => setConfirmProceed(true)}>
-                  {restartVerb} now…
-                </Button>
-              </div>
-            </div>
-          )}
-          {installResult?.status === "needs-user-command" && (
-            <div className="space-y-2">
-              <HostCommand
-                label="Run this on the host to install the package, then check again"
-                command={installResult.command.command}
-              />
-            </div>
-          )}
+          <ul className="space-y-1.5 text-sm text-text-secondary">
+            {plan.restartsHost && plan.packaging !== "deb" && (
+              <li className="text-text-primary">
+                Daintree is running there. {verbed} restarts it, which ends its terminals; if any
+                are running, you&apos;ll see them before anything stops.
+              </li>
+            )}
+            <li>{deliveryLabel(plan, hostLabel)}.</li>
+            {plan.packaging === "deb" && (
+              <li>
+                The package needs sudo, so the last step is one command you run on {hostLabel}.{" "}
+                {probe?.advice.fuse === false
+                  ? "The AppImage installs without root; with no FUSE there, it runs unpacked."
+                  : "The AppImage installs without root but needs FUSE."}
+              </li>
+            )}
+            {plan.packaging === "appimage" && probe?.advice.fuse === false && (
+              <li>
+                No FUSE was found on {hostLabel}, so the AppImage runs unpacked each time it starts,
+                which makes starting slower.
+              </li>
+            )}
+          </ul>
         </div>
-      ) : null;
+      );
+    } else {
+      body = null;
+    }
+
+    const checkAgain: DialogAction = {
+      label: "Check again",
+      onClick: () => check(),
+      disabled: busy,
+      loading: busy && !installRunning,
+    };
     if (installRunning) {
-      primary = { label: "Installing", onClick: () => {}, disabled: true, loading: true };
       // The one way out while it runs: the dialog stays until the stop settles.
-      secondary = { label: "Stop", onClick: cancelInstall };
-    } else if (
-      installResult?.status === "needs-user-command" ||
-      installResult?.status === "host-newer" ||
-      // An install of what the host downloaded that stopped: what is there now decides what's next.
-      (applying && installResult?.status !== "needs-confirmation")
-    ) {
-      primary = { label: "Check again", onClick: () => check(), disabled: busy, loading: busy };
-    } else if (plan?.kind === "up-to-date") {
-      primary = { label: "Continue", onClick: () => toEnable(probe), disabled: busy };
-    } else if (plan?.kind === "unsupported") {
-      // What stopped it (a download waiting there, AppImages to sort out) is fixed at the host.
-      primary = { label: "Check again", onClick: () => check(), disabled: busy, loading: busy };
-    } else if (plan?.kind === "host-newer") {
-      primary = {
-        label: "Update this machine",
-        onClick: updateThisMachine,
+      // Past the point of no return (the restart, and a downloaded update's
+      // whole stop-install-start), the installer finishes whatever a stop says.
+      const stage = install?.progress?.stage ?? null;
+      const settling =
+        stage !== null &&
+        (applying
+          ? ["stopping", "installing", "restarting", "reconnecting"]
+          : ["restarting", "reconnecting"]
+        ).includes(stage);
+      primary = undefined;
+      secondary = { label: "Stop", onClick: cancelInstall, disabled: settling };
+      if (settling) hint = `Daintree is restarting on ${hostLabel}. This finishes on its own.`;
+    } else if (runShown) {
+      // Ended. A stop the user chose, or a download the host may have swapped
+      // under it, is looked at again; this machine's build is retried as it
+      // was, behind the same checks.
+      primary =
+        applying || installStopped
+          ? checkAgain
+          : { label: "Retry", onClick: () => startInstall("refuse"), disabled: busy };
+      if (!applying && !installStopped) {
+        leading = { label: "Check again", onClick: () => check(), disabled: busy };
+      }
+      secondary = { label: "Close", onClick: onClose, disabled: busy };
+    } else if (impact) {
+      const endNow: DialogAction = {
+        label: restartConfirmLabel(impact, restartVerb),
+        intent: "destructive",
+        onClick: () => startInstall("proceed", impact),
         disabled: busy,
       };
-      leading = { label: "Check again", onClick: () => check(), disabled: busy };
-    } else if (plan?.kind === "install" && installResult?.status !== "needs-confirmation") {
+      if (canWaitForIdle(impact)) {
+        primary = {
+          label: `${restartVerb} when idle`,
+          onClick: () => startInstall("wait-for-idle", impact),
+          disabled: busy,
+        };
+        leading = endNow;
+      } else {
+        primary = endNow;
+      }
+    } else if (
+      userCommand ||
+      installResult?.status === "host-newer" ||
+      plan?.kind === "unsupported" ||
+      // An install of what the host downloaded that stopped: what is there now decides what's next.
+      applying
+    ) {
+      primary = checkAgain;
+    } else if (plan?.kind === "up-to-date") {
+      primary = { label: existing ? "Done" : "Continue", onClick: () => toEnable(probe) };
+    } else if (plan?.kind === "host-newer") {
+      const local = localFooter();
+      primary = local.primary;
+      secondary = local.secondary;
+      if (local.offerDowngrade)
+        leading = {
+          label: `Downgrade ${buttonHost}…`,
+          intent: "destructive",
+          onClick: () => {
+            setDowngrading(true);
+            loadPlan(linuxPackage, true);
+          },
+          disabled: busy,
+        };
+    } else if (plan?.kind === "install") {
       // An attempt that failed may have failed on what changed at the host.
       if (error) leading = { label: "Check again", onClick: () => check(), disabled: busy };
-      primary = plan.downgrade
-        ? {
-            label: `Downgrade ${hostLabel}…`,
-            onClick: () => setConfirmDowngrade(true),
-            disabled: busy,
-          }
-        : {
-            label: probe?.install ? "Update host" : "Install on host",
-            onClick: () => startInstall("refuse"),
-            disabled: busy,
-          };
+      primary = {
+        label: plan.downgrade
+          ? `Downgrade ${buttonHost}`
+          : probe?.install
+            ? `Update ${buttonHost}`
+            : `Install on ${buttonHost}`,
+        intent: plan.downgrade ? "destructive" : undefined,
+        onClick: () => startInstall("refuse"),
+        disabled: busy,
+        loading: busy,
+      };
     }
+  } else if (step === "done") {
+    const result =
+      installResult?.status === "installed" || installResult?.status === "staged-applied"
+        ? installResult
+        : null;
+    const runs = probe?.hostBuild?.version ?? probe?.install?.version ?? targetVersion;
+    const title = applying
+      ? `${hostLabel} restarted into Daintree ${applying.version}`
+      : result === null
+        ? `${hostLabel} is up to date`
+        : plan?.downgrade
+          ? `Downgraded ${hostLabel} to Daintree ${runs}`
+          : `Updated ${hostLabel} to Daintree ${runs}`;
+    body = (
+      <div>
+        <Verdict title={title}>
+          {result === null
+            ? "It already ran this build, so nothing was changed."
+            : result.reconnected === true
+              ? "Daintree is running there again, and this machine has reconnected to it."
+              : result.reconnected === false
+                ? "Daintree is running there again. This machine reconnected, and it reports a different build from this one."
+                : `Daintree is running there again. This machine hasn't reconnected yet; ${hostLabel}'s status shows in Settings → Hosts.`}
+        </Verdict>
+        {probe?.reachable && (
+          <ProbeSummary probe={probe} via={viaWsl ? "WSL" : "SSH"} local={localVersion} />
+        )}
+      </div>
+    );
+    primary = { label: "Done", onClick: onClose };
+    secondary = undefined;
+    announce = title;
   } else if (step === "enable") {
     const switchedOn = hostModeSwitchedOn(probe);
-    body = switchedOn ? (
+    const installed =
+      installResult?.status === "installed" || installResult?.status === "staged-applied";
+    const enableBody = switchedOn ? (
       <p className="text-sm text-text-primary">
         Host mode is on at {hostLabel} and starts {viaWsl ? "with it" : "at login there"}. This
         machine can connect.
@@ -1222,6 +1916,16 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
               : "Daintree installs its Host mode service there (a systemd user unit), starts it, and turns on Host mode with start at login. It also asks the host to let the service run after you log out."}
         </p>
       </div>
+    );
+    body = installed ? (
+      <div className="space-y-4">
+        <Callout severity="success" role="status">
+          Daintree {probe?.install?.version ?? targetVersion} is installed on {hostLabel}.
+        </Callout>
+        {enableBody}
+      </div>
+    ) : (
+      enableBody
     );
     primary = switchedOn
       ? { label: "Continue", onClick: () => setStep("advise") }
@@ -1332,24 +2036,27 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     };
   }
 
-  const confirmImpact =
-    installResult?.status === "needs-confirmation" ? installResult.impact : null;
-  const confirmTerminals = confirmImpact ? restartTerminalCount(confirmImpact) : null;
-
   return (
     <AppDialog
       isOpen={isOpen}
       onClose={onClose}
       dismissible={!locked}
       size="md"
+      initialFocus={step === "discover" ? undefined : focusCancel ? "cancel" : "confirm"}
+      focusResetKey={screen}
       data-testid="add-host-dialog"
     >
       <AppDialog.Header>
-        <AppDialog.Title>{existing ? `Update ${existing.name}` : "Add host"}</AppDialog.Title>
+        <AppDialog.Title>
+          {existing
+            ? `${existing.intent === "setup" ? "Set up" : "Update"} ${existing.name}`
+            : "Add host"}
+        </AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>
       <AppDialog.Body>
-        <StepBar current={step} />
+        {/* An existing host's flow branches on what the check finds: no fixed steps to show. */}
+        {!existing && step !== "done" && <StepBar current={step} />}
         {body}
         {saved && !existing && !outcome && (
           <p className="mt-3 text-xs text-text-secondary">
@@ -1357,47 +2064,16 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
           </p>
         )}
         {error && <ErrorLine message={error} />}
+        {/* No role: the discovery list's own status line stays the dialog's one status. */}
+        <p aria-live="polite" aria-atomic="true" className="sr-only">
+          {announce}
+        </p>
       </AppDialog.Body>
       <AppDialog.Footer
         primaryAction={primary}
         secondaryAction={secondary}
         leadingAction={leading}
-      />
-      <ConfirmDialog
-        isOpen={confirmProceed && confirmImpact !== null}
-        onClose={() => setConfirmProceed(false)}
-        zIndex="nested"
-        variant="destructive"
-        title={`${restartVerb} '${hostLabel}' now?`}
-        description={
-          confirmTerminals === null
-            ? `Daintree on ${hostLabel} restarts to ${restartVerb.toLowerCase()}. Every terminal there ends, and any agent in one stops mid-task.`
-            : confirmTerminals === 0
-              ? `Daintree on ${hostLabel} restarts to ${restartVerb.toLowerCase()}, which ends everything listed. If anything new starts before the restart, the ${restartVerb.toLowerCase()} stops and asks again.`
-              : `Daintree on ${hostLabel} restarts to ${restartVerb.toLowerCase()}. ${pluralize(confirmTerminals, "terminal")} there ${confirmTerminals === 1 ? "ends" : "end"}, and any agent in one stops mid-task. If anything new starts before the restart, the ${restartVerb.toLowerCase()} stops and asks again.`
-        }
-        confirmLabel={
-          confirmImpact
-            ? restartConfirmLabel(confirmImpact, restartVerb)
-            : `${restartVerb} and end terminals`
-        }
-        onConfirm={() => {
-          setConfirmProceed(false);
-          if (confirmImpact) startInstall("proceed", confirmImpact);
-        }}
-      />
-      <ConfirmDialog
-        isOpen={confirmDowngrade && plan?.downgrade === true}
-        onClose={() => setConfirmDowngrade(false)}
-        zIndex="nested"
-        variant="destructive"
-        title={`Downgrade '${hostLabel}'?`}
-        description={`Daintree on ${hostLabel} goes back from ${probe?.hostBuild?.version ?? "its newer build"} to ${plan?.version ?? "this machine's build"}. Settings and data the newer build saved may not open in the older one.`}
-        confirmLabel="Downgrade host"
-        onConfirm={() => {
-          setConfirmDowngrade(false);
-          startInstall("refuse");
-        }}
+        hint={hint}
       />
     </AppDialog>
   );

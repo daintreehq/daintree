@@ -122,7 +122,10 @@ export function HostDetail({
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
-  const [updateOpen, setUpdateOpen] = useState(openUpdate);
+  // Why the update dialog is open, which names it: "Set up…" or "Check for update".
+  const [updateOpen, setUpdateOpen] = useState<"update" | "setup" | null>(
+    openUpdate ? "update" : null
+  );
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
   const name = useCommittedField(descriptor.name, (value) =>
@@ -317,7 +320,7 @@ export function HostDetail({
               <div className="flex gap-2">
                 {hostModeOff && (
                   // Setting up turns Host mode on there; Retry checks again as it is.
-                  <Button variant="outline" size="sm" onClick={() => setUpdateOpen(true)}>
+                  <Button variant="outline" size="sm" onClick={() => setUpdateOpen("setup")}>
                     Set up…
                   </Button>
                 )}
@@ -359,7 +362,7 @@ export function HostDetail({
               </>
             }
             control={
-              <Button variant="outline" size="sm" onClick={() => setUpdateOpen(true)}>
+              <Button variant="outline" size="sm" onClick={() => setUpdateOpen("update")}>
                 Check for update
               </Button>
             }
@@ -541,11 +544,12 @@ export function HostDetail({
       {updateOpen && (
         <AddHostDialog
           isOpen
-          onClose={() => setUpdateOpen(false)}
+          onClose={() => setUpdateOpen(null)}
           existing={{
             hostId: descriptor.id,
             name: descriptor.name,
             connection: descriptor.connection,
+            intent: updateOpen,
           }}
         />
       )}

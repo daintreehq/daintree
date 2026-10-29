@@ -124,7 +124,7 @@ export function connectionLabel(state: HostConnectionState, now: number = Date.n
   }
 }
 
-export function deliveryLabel(plan: HostInstallPlan): string {
+export function deliveryLabel(plan: HostInstallPlan, host = "the host"): string {
   const what =
     plan.packaging === "app-bundle"
       ? "the macOS app"
@@ -133,13 +133,138 @@ export function deliveryLabel(plan: HostInstallPlan): string {
         : "the AppImage";
   switch (plan.delivery) {
     case "push-bundle":
-      return `Copies this machine's own build (${what}) to the host`;
+      return `Copies ${what} from this machine to ${host}`;
     case "host-fetch":
-      return `The host downloads ${what} for Daintree ${plan.version} from the ${plan.channel} release feed; if it can't reach the feed, this machine downloads it and copies it over`;
+      return `${capitalize(host)} downloads ${what} from the ${plan.channel} release feed; if it can't reach the feed, this machine downloads it and copies it over`;
     case "client-download-push":
-      return `Downloads ${what} for Daintree ${plan.version} here and copies it to the host`;
+      return `Downloads ${what} here and copies it to ${host}`;
     default:
       return "";
+  }
+}
+
+function capitalize(text: string): string {
+  // Only the generic phrase: a machine's own name keeps its case.
+  return text === "the host" ? "The host" : text;
+}
+
+/** An installer progress message naming the machine, where main can only say "the host". */
+export function namedProgressMessage(message: string, host: string): string {
+  return message.replace(/\b[Tt]he host\b/g, host);
+}
+
+/**
+ * What a check found, as the one thing to act on first. A newer host comes
+ * before anything it downloaded: restarting it into its own update would only
+ * move it further ahead.
+ */
+export type CheckVerdict =
+  | "unreachable"
+  | "not-installed"
+  | "newer"
+  | "staged-preparing"
+  | "staged-ready"
+  | "update"
+  | "host-mode-off"
+  | "host-mode-temporary"
+  | "up-to-date";
+
+export function checkVerdict(probe: HostProbeResult): CheckVerdict {
+  if (!probe.reachable) return "unreachable";
+  if (!probe.install) return "not-installed";
+  if (probe.hostBuild?.order === "newer") return "newer";
+  // Quitting installs it, so Daintree can restart the host into it from here.
+  const staged =
+    probe.hostModeListening && probe.stagedUpdate?.installsOnQuit ? probe.stagedUpdate : null;
+  if (staged && probe.matchesClient !== true) {
+    return staged.ready ? "staged-ready" : "staged-preparing";
+  }
+  if (probe.matchesClient !== true) return "update";
+  if (!probe.hostModeListening) return "host-mode-off";
+  if (!hostModeSwitchedOn(probe)) return "host-mode-temporary";
+  return "up-to-date";
+}
+
+/**
+ * What to do about an install failure whose cause the installer's words name
+ * outright; null when they don't, and the words stand on their own.
+ */
+export function installFailureLead(message: string, host: string): string | null {
+  if (/No space left on device/i.test(message)) {
+    return `${host} ran out of disk space. Free some there, then retry.`;
+  }
+  return null;
+}
+
+/** "Daintree 0.48.0", or what the probe could read of it. */
+function hostVersion(probe: HostProbeResult): string {
+  const version = probe.hostBuild?.version ?? probe.install?.version;
+  return version ? `Daintree ${version}` : "a build that couldn't be read";
+}
+
+/**
+ * The verdict in words: a headline naming the machine and one sentence on
+ * what it means. `local` is this machine's version, when it has been read.
+ */
+export function verdictCopy(
+  verdict: CheckVerdict,
+  probe: HostProbeResult,
+  host: string,
+  local: string | null,
+  /** This machine is already updating to catch up: no instruction to start it. */
+  updatingHere = false
+): { title: string; detail: string } {
+  const here = local ? `this machine runs ${local}` : null;
+  const staged = probe.stagedUpdate?.version ?? "";
+  switch (verdict) {
+    case "unreachable":
+      return { title: `Couldn't reach ${host}`, detail: "" };
+    case "not-installed":
+      return {
+        title: `Daintree isn't installed on ${host}`,
+        detail: `Install ${local ? `Daintree ${local}, ` : ""}this machine's exact build${local ? "," : ""} there to use it as a host.`,
+      };
+    case "newer":
+      return {
+        title: `${host} is ahead of this machine`,
+        detail: `It runs ${hostVersion(probe)}${here ? `; ${here}` : ""}.${updatingHere ? "" : " Update this machine to match it."}`,
+      };
+    case "staged-preparing":
+      return {
+        title: `${host} is still preparing an update`,
+        detail: `It downloaded Daintree ${staged}, which isn't ready to install yet. Check again in a minute.`,
+      };
+    case "staged-ready":
+      return {
+        title: `${host} has downloaded Daintree ${staged}`,
+        detail: `It runs ${hostVersion(probe)} and installs the download when Daintree restarts there.`,
+      };
+    case "update":
+      if (probe.hostBuild?.order === "older") {
+        return {
+          title: `${host} is behind this machine`,
+          detail: `It runs ${hostVersion(probe)}${here ? `; ${here}` : ""}. Updating installs this machine's exact build there.`,
+        };
+      }
+      return {
+        title: `${host} runs a different build`,
+        detail: `It runs ${installLabel(probe.install)}${here ? `; ${here}` : ""}. Updating installs this machine's exact build there.`,
+      };
+    case "host-mode-off":
+      return {
+        title: `Host mode is off on ${host}`,
+        detail: `It runs ${hostVersion(probe)}, the same build as this machine. Turn on Host mode so this machine can connect.`,
+      };
+    case "host-mode-temporary":
+      return {
+        title: `Host mode on ${host} stops when Daintree quits there`,
+        detail: `It runs the same build as this machine. Switch Host mode on for good so it starts at login.`,
+      };
+    case "up-to-date":
+      return {
+        title: `${host} is up to date`,
+        detail: `It runs ${hostVersion(probe)}, the same build as this machine.`,
+      };
   }
 }
 
@@ -225,15 +350,17 @@ export function restartImpactLines(impact: HostRestartImpact): string[] {
   const detail = impact.detail;
   if (detail) {
     const lines = detail.projects.map((project) => {
+      // "2 agents working, 1 waiting": the noun once, on the first count.
       const agents = [
-        project.working > 0 ? `${project.working} working` : null,
-        project.waiting > 0 ? `${project.waiting} waiting` : null,
+        project.working > 0 ? `${pluralize(project.working, "agent")} working` : null,
+        project.waiting > 0
+          ? project.working > 0
+            ? `${project.waiting} waiting`
+            : `${pluralize(project.waiting, "agent")} waiting`
+          : null,
       ].filter((part) => part !== null);
       const name = project.projectName ?? "Outside any project";
-      const terminals = pluralize(project.terminals, "terminal");
-      return agents.length > 0
-        ? `${name}: ${terminals} (agents ${agents.join(", ")})`
-        : `${name}: ${terminals}`;
+      return [`${name}: ${pluralize(project.terminals, "terminal")}`, ...agents].join(", ");
     });
     if (!detail.complete) lines.push("Possibly more terminals: the host couldn't list them all");
     if (detail.operations > 0) {
