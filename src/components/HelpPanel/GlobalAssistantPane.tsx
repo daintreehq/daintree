@@ -395,6 +395,8 @@ function GlobalAssistantTerminal({
   const [stream, setStream] = useState<CanopyStreamState>(NO_STREAM);
 
   const runKey = `${subject.terminalId}:${subject.incarnation}`;
+  // What the composer needs to take Enter, so a banner never points at a key it won't take.
+  const canType = stamp !== null && stream.watchId !== null && !stream.secretPrompt;
 
   // The stream to type through, or why there is none: a refusal says which.
   const typingTarget = (): { watchId: number } | { reason: string } => {
@@ -464,9 +466,11 @@ function GlobalAssistantTerminal({
             <p>{sendFailure.reason}</p>
             {sendFailure.kind === "message" && (
               <p>
-                {stamp
-                  ? "Your message is still in the box; press Enter to try again."
-                  : "Your message is still in the box; take input to send it again."}
+                {!stamp
+                  ? "Your message is still in the box; take input to send it again."
+                  : canType
+                    ? "Your message is still in the box; press Enter to try again."
+                    : "Your message is still in the box."}
               </p>
             )}
           </Callout>
@@ -479,7 +483,7 @@ function GlobalAssistantTerminal({
             terminalId={subject.terminalId}
             cwd=""
             agentId={agentId}
-            disabled={!stamp || stream.watchId === null || stream.secretPrompt}
+            disabled={!canType}
             onSend={({ text, imagePaths }) => void submit(text, imagePaths)}
             submitText={submit}
             onSendKey={sendKey}

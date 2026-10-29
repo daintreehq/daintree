@@ -29,16 +29,21 @@ export function refusalReason(error: unknown): string {
  *
  * The latest attempt of each kind decides: a slow refusal can't overwrite what
  * a newer send did, and a newer success can't be undone by an older failure.
- * A sent message clears every failure, since the draft is gone; a sent key
- * clears only a key failure, since an unsent message is still in the box.
+ * Nor does anything an earlier run's send settles with: once an attempt has
+ * gone to a newer run, the older ones are no news. A sent message clears every
+ * failure, since the draft is gone; a sent key clears only a key failure, and
+ * a key refusal never replaces an unsent message's, since the message is the
+ * one still waiting on the person.
  */
 export function useAssistantSendFailure(runKey: string | null) {
   const [failure, setFailure] = useState<AssistantSendFailure | null>(null);
   const latest = useRef<Record<AssistantSendKind, number>>({ message: 0, key: 0 });
+  const newestRun = useRef<string | null>(null);
 
   const start = useCallback((kind: AssistantSendKind, forRun: string): AssistantSendAttempt => {
     const attempt = ++latest.current[kind];
-    const isLatest = () => latest.current[kind] === attempt;
+    newestRun.current = forRun;
+    const isLatest = () => latest.current[kind] === attempt && newestRun.current === forRun;
     // Sending again says nothing until it settles, so a repeat refusal reads as a new one.
     if (kind === "message") setFailure((was) => (was?.kind === "message" ? null : was));
     return {
@@ -48,7 +53,11 @@ export function useAssistantSendFailure(runKey: string | null) {
       },
       failed: (reason) => {
         if (!isLatest()) return;
-        setFailure({ runKey: forRun, kind, reason });
+        setFailure((was) =>
+          kind === "key" && was?.kind === "message" && was.runKey === forRun
+            ? was
+            : { runKey: forRun, kind, reason }
+        );
       },
     };
   }, []);
