@@ -12,6 +12,10 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useUIStore } from "@/store/uiStore";
 import { setWorktreeIdSetAccessor } from "@/store/storeAccessors";
 import {
+  useNotificationHistoryStore,
+  type NotificationHistoryEntry,
+} from "@/store/slices/notificationHistorySlice";
+import {
   goToNotificationSource,
   navigateToNotificationSource,
   resolveLiveNotificationDestination,
@@ -43,6 +47,7 @@ beforeEach(() => {
   } as never);
   setWorktreeIdSetAccessor(() => new Set(["wt-1", "wt-2"]));
   useUIStore.setState({ notificationCenterOpen: true });
+  useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
 });
 
 afterEach(() => {
@@ -167,14 +172,75 @@ describe("navigateToNotificationSource", () => {
 describe("goToNotificationSource", () => {
   it("closes the inbox once navigation lands", async () => {
     seedPanels({ "pane-1": { location: "grid", worktreeId: "wt-1" } });
-    await goToNotificationSource({ panelId: "pane-1" });
+    await goToNotificationSource({ panelId: "pane-1" }, "e1");
     expect(useUIStore.getState().notificationCenterOpen).toBe(false);
   });
 
   it("leaves the inbox open when panel.focus fails", async () => {
     seedPanels({ "pane-1": { location: "grid", worktreeId: "wt-1" } });
     dispatchMock.mockResolvedValueOnce({ ok: false, error: { message: "gone" } });
-    await goToNotificationSource({ panelId: "pane-1" });
+    await goToNotificationSource({ panelId: "pane-1" }, "e1");
     expect(useUIStore.getState().notificationCenterOpen).toBe(true);
+  });
+
+  describe("read state", () => {
+    const entry = (id: string, extra: Partial<NotificationHistoryEntry> = {}) =>
+      ({
+        id,
+        type: "info",
+        message: id,
+        timestamp: 1,
+        seenAsToast: false,
+        summarized: false,
+        countable: true,
+        ...extra,
+      }) as NotificationHistoryEntry;
+    const seed = (entries: NotificationHistoryEntry[]) =>
+      useNotificationHistoryStore.setState({ entries, unreadCount: entries.length });
+    const readIds = () =>
+      useNotificationHistoryStore
+        .getState()
+        .entries.filter((e) => e.seenAsToast)
+        .map((e) => e.id);
+
+    it("marks the entry read on arrival and leaves it unarchived", async () => {
+      seedPanels({ "pane-1": { location: "grid", worktreeId: "wt-1" } });
+      seed([entry("e1"), entry("e2")]);
+      await goToNotificationSource({ panelId: "pane-1" }, "e1");
+      expect(readIds()).toEqual(["e1"]);
+      expect(useNotificationHistoryStore.getState().entries.some((e) => e.archivedAt)).toBe(false);
+      expect(useNotificationHistoryStore.getState().unreadCount).toBe(1);
+    });
+
+    it("marks a thread's unarchived entries read but not its archived ones", async () => {
+      seedPanels({ "pane-1": { location: "grid", worktreeId: "wt-1" } });
+      seed([
+        entry("e1", { correlationId: "c1" }),
+        entry("e2", { correlationId: "c1" }),
+        entry("e3", { correlationId: "c1", archivedAt: 5 }),
+        entry("e4", { correlationId: "c2" }),
+      ]);
+      await goToNotificationSource({ panelId: "pane-1" }, "e1");
+      expect(readIds().sort()).toEqual(["e1", "e2"]);
+    });
+
+    it("leaves the entry unread when navigation fails", async () => {
+      seedPanels({ "pane-1": { location: "grid", worktreeId: "wt-1" } });
+      seed([entry("e1")]);
+      dispatchMock.mockResolvedValueOnce({ ok: false, error: { message: "gone" } });
+      await goToNotificationSource({ panelId: "pane-1" }, "e1");
+      expect(readIds()).toEqual([]);
+    });
+
+    it("leaves the entry unread when the source is gone", async () => {
+      seed([entry("e1")]);
+      await goToNotificationSource({ panelId: "missing" }, "e1");
+      expect(readIds()).toEqual([]);
+    });
+
+    it("tolerates an entry pruned during navigation", async () => {
+      seedPanels({ "pane-1": { location: "grid", worktreeId: "wt-1" } });
+      await expect(goToNotificationSource({ panelId: "pane-1" }, "gone")).resolves.toBe(true);
+    });
   });
 });

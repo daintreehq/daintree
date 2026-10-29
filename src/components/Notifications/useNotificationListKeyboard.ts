@@ -210,7 +210,7 @@ export function useNotificationListKeyboard({
           }
           if (e.metaKey || e.ctrlKey) return;
           e.preventDefault();
-          void goToNotificationSource(row.context).then((arrived) => {
+          void goToNotificationSource(row.context, row.entryId).then((arrived) => {
             if (!arrived) announceTriage(sourceUnreachableMessage(row.context));
           });
           return;

@@ -263,7 +263,7 @@ export function NotificationCenterEntry({
     ) {
       return;
     }
-    void goToNotificationSource(entry.context);
+    void goToNotificationSource(entry.context, entry.id);
   };
 
   const showChip =
@@ -933,7 +933,7 @@ function RowOptionsMenu({
             openedFromRowRef.current = false;
             event.preventDefault();
             const row = triggerRef.current?.closest('[role="listitem"]');
-            void goToNotificationSource(entry.context).then((arrived) => {
+            void goToNotificationSource(entry.context, entry.id).then((arrived) => {
               // A source gone since the menu opened leaves the inbox open, and
               // the row, which now says why, takes focus back.
               if (!arrived && row instanceof HTMLElement && row.isConnected) {

@@ -5,7 +5,10 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useUIStore } from "@/store/uiStore";
 import { getWorktreeIdSet } from "@/store/storeAccessors";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
-import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
+import {
+  useNotificationHistoryStore,
+  type NotificationHistoryEntry,
+} from "@/store/slices/notificationHistorySlice";
 import {
   resolveNotificationDestination,
   type NotificationDestination,
@@ -93,12 +96,39 @@ export async function navigateToNotificationSource(context: NotificationContext)
 }
 
 /**
+ * Reads the row the way the `u` toggle does: a thread's other unarchived
+ * entries go with its head, since the row is one line to the user. Archive
+ * stays its own step, and an entry pruned meanwhile is simply not found.
+ */
+function markRowRead(entryId: string): void {
+  const { entries, markIdsRead } = useNotificationHistoryStore.getState();
+  const head = entries.find((e) => e.id === entryId);
+  if (!head) return;
+  const ids = entries
+    .filter(
+      (e) =>
+        e.id === head.id ||
+        (!!head.correlationId && e.correlationId === head.correlationId && !e.archivedAt)
+    )
+    .map((e) => e.id);
+  markIdsRead(ids);
+}
+
+/**
  * A row click, Enter on a row, and the row menu's "Go to source" all end here.
  * The inbox closes only after navigation has landed, so focus has already
- * moved to the destination and the bell's close handler leaves it there.
+ * moved to the destination and the bell's close handler leaves it there. The
+ * row is marked read on that same arrival and never on a refusal, so a dead
+ * link leaves it unread.
  */
-export async function goToNotificationSource(context: NotificationContext): Promise<boolean> {
+export async function goToNotificationSource(
+  context: NotificationContext,
+  entryId: string
+): Promise<boolean> {
   const arrived = await navigateToNotificationSource(context);
-  if (arrived) useUIStore.getState().closeNotificationCenter();
+  if (arrived) {
+    markRowRead(entryId);
+    useUIStore.getState().closeNotificationCenter();
+  }
   return arrived;
 }
