@@ -594,6 +594,22 @@ describe("voiceInput — dictating into a host's pane", () => {
     expectNoLocalReads();
   });
 
+  it("sends a spoken reference as a failed lookup when the host doesn't answer", async () => {
+    shared.provider = "openai";
+    shared.detected = [{ description: "voice input handler" }];
+    reader.findFileCandidates.mockResolvedValueOnce(null as never);
+    await start(view);
+    emitComplete("Look at the link to file voice input handler.");
+    await vi.waitFor(() =>
+      expect(
+        view.sent.find((m) => m.channel === CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED)?.payload
+      ).toMatchObject({
+        references: [{ description: "voice input handler", path: null, failed: true }],
+      })
+    );
+    expectNoLocalReads();
+  });
+
   it("names the host's project to a spoken rewrite", async () => {
     await getHandler(CHANNELS.VOICE_INPUT_REWRITE)(
       { sender: view },

@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { DictationRecord, DictationUtterance } from "@/store/dictationRangeStore";
 import { collectHeardAsRules, createHeardAsRewriter } from "@shared/utils/voiceHeardAs";
-import { planFileReferenceEdits, planHeardSwaps } from "../voiceFileReferences";
+import {
+  planFileReferenceEdits,
+  planHeardSwaps,
+  unresolvedFileReferencesCaption,
+  unresolvedFileReferencesStatus,
+} from "../voiceFileReferences";
 
 function utterance(
   draft: string,
@@ -322,5 +327,33 @@ describe("planHeardSwaps", () => {
     ]);
 
     expect(plan(rec, draft, router, rewrite)).toEqual(new Map());
+  });
+});
+
+describe("unresolved file references (#14983)", () => {
+  it("names each description once, grouped by what its lookup found", () => {
+    const references = [
+      { description: "router tests" },
+      { description: "auth service", failed: true as const },
+      { description: "old API" },
+      { description: "router tests" },
+      { description: "settings page" },
+    ];
+
+    expect(unresolvedFileReferencesStatus(references)).toBe(
+      "No files found for “router tests”, “old API”, and “settings page”. File lookup failed for “auth service”."
+    );
+    expect(unresolvedFileReferencesCaption(references)).toBe(
+      "No files found for “router tests”, “old API”, and “settings page” · File lookup failed for “auth service”"
+    );
+  });
+
+  it("says one miss in the singular, and only the outcome it had", () => {
+    expect(unresolvedFileReferencesCaption([{ description: "old API" }])).toBe(
+      "No file found for “old API”"
+    );
+    expect(unresolvedFileReferencesStatus([{ description: "router", failed: true }])).toBe(
+      "File lookup failed for “router”."
+    );
   });
 });

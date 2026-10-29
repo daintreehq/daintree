@@ -2338,7 +2338,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (payload: {
         sessionId: string;
         transcriptId: string;
-        references: Array<{ description: string; path: string | null }>;
+        references: Array<{ description: string; path: string | null; failed?: true }>;
       }) => void
     ): () => void;
   };

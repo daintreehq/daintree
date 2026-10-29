@@ -29,7 +29,17 @@ import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { HybridInputBar } from "../HybridInputBar";
 
 type DeltaPayload = { text: string; itemId?: string };
-type CompletePayload = { text: string; willCorrect: boolean; itemId?: string };
+type CompletePayload = {
+  text: string;
+  willCorrect: boolean;
+  itemId?: string;
+  transcriptId?: string;
+};
+type FileTokenPayload = {
+  sessionId: string;
+  transcriptId: string;
+  references: Array<{ description: string; path: string | null; failed?: true }>;
+};
 type CorrectResult = { action: "no_change" | "replace"; correctedText: string; failed?: true };
 
 const WT_ID = "/repo/wt";
@@ -38,7 +48,8 @@ const PANEL_ID = "term-1";
 const callbacks: {
   delta: ((payload: DeltaPayload) => void) | null;
   complete: ((payload: CompletePayload) => void) | null;
-} = { delta: null, complete: null };
+  fileToken: ((payload: FileTokenPayload) => void) | null;
+} = { delta: null, complete: null, fileToken: null };
 
 const correct = vi.fn<(request: { rawText: string }) => Promise<CorrectResult>>();
 
@@ -132,7 +143,10 @@ beforeEach(async () => {
         }),
         onParagraphBoundary: vi.fn(() => () => {}),
         onCorrectionProgress: vi.fn(() => () => {}),
-        onFileTokenResolved: vi.fn(() => () => {}),
+        onFileTokenResolved: vi.fn((cb: (payload: FileTokenPayload) => void) => {
+          callbacks.fileToken = cb;
+          return () => {};
+        }),
         onError: vi.fn(() => () => {}),
         onStatus: vi.fn(() => () => {}),
         onSessionEnded: vi.fn(() => () => {}),
@@ -412,5 +426,68 @@ describe("HybridInputBar dictated send with the next dictation already started (
 
     expect(onSend.mock.calls.map(([payload]) => payload.text)).toEqual(["Hello world."]);
     expect(draft()).toBe("next");
+  });
+});
+
+describe("HybridInputBar with a missed file reference arriving during a dictated send (#14983)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    useVoiceRecordingStore.setState({ fileReferenceNote: null });
+  });
+
+  it("holds the note while the send waits, then shows it its full time after", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const onSend = vi.fn();
+    act(() => {
+      useVoiceRecordingStore.getState().beginSession({ panelId: PANEL_ID }, "session-links");
+      useVoiceRecordingStore.getState().setStatus("recording");
+      callbacks.delta!({ text: "link to the old API", itemId: "item-links" });
+      callbacks.complete!({
+        text: "link to the old API",
+        willCorrect: false,
+        itemId: "item-links",
+        transcriptId: "t1",
+      });
+    });
+    const view = await mount(onSend);
+    const caption = () => document.querySelector("[data-file-reference-caption]");
+
+    await act(async () => {
+      runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    act(() => {
+      callbacks.fileToken!({
+        sessionId: "session-links",
+        transcriptId: "t1",
+        references: [{ description: "old API", path: null }],
+      });
+    });
+    const note = useVoiceRecordingStore.getState().fileReferenceNote;
+    expect(note).toMatchObject({ panelId: PANEL_ID, references: [{ description: "old API" }] });
+    expect(caption()).toBeNull();
+
+    // A cleanup slower than the note lasts.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(useVoiceRecordingStore.getState().fileReferenceNote).toBe(note);
+
+    await act(async () => {
+      pending.resolve({ action: "no_change", correctedText: "link to the old API" });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onSend.mock.calls[0]![0].text).toBe("link to the old API");
+    expect(caption()).not.toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+    expect(useVoiceRecordingStore.getState().fileReferenceNote).toBeNull();
+    expect(caption()).toBeNull();
   });
 });

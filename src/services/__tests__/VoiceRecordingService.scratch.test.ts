@@ -497,6 +497,46 @@ describe("VoiceRecordingService — a scratch that removes nothing says why (#14
     expect(voiceStore.getState().scratchRefusal?.reason).toBe("nothing");
   });
 
+  it("says a missed file reference the stop's drain brought with the stop", async () => {
+    const { service, voiceStore } = await setup();
+    Reflect.set(service, "sessionId", SESSION_ID);
+    vi.mocked(window.electron.voiceInput.stop).mockImplementationOnce(async () => {
+      complete("Link to the old API.", "a", "t1");
+      callbacks.fileToken!({
+        sessionId: SESSION_ID,
+        transcriptId: "t1",
+        references: [{ description: "old API", path: null }],
+      });
+      return { rawText: null };
+    });
+
+    await service.stop("Dictation stopped.");
+
+    expect(voiceStore.getState().announcement?.text).toBe(
+      "Dictation stopped. No file found for “old API”."
+    );
+  });
+
+  it("shares the border with a missed file reference, the newer of the two standing", async () => {
+    const { setDraft, voiceStore } = await setup();
+
+    complete("Scratch that.", "a");
+    expect(voiceStore.getState().scratchRefusal).not.toBeNull();
+    complete("Link to the old API.", "b", "t1");
+    callbacks.fileToken!({
+      sessionId: SESSION_ID,
+      transcriptId: "t1",
+      references: [{ description: "old API", path: null }],
+    });
+    expect(voiceStore.getState().scratchRefusal).toBeNull();
+    expect(voiceStore.getState().fileReferenceNote).not.toBeNull();
+
+    setDraft("Link to the old APl.");
+    complete("Scratch that.", "c");
+    expect(voiceStore.getState().scratchRefusal?.reason).toBe("edited");
+    expect(voiceStore.getState().fileReferenceNote).toBeNull();
+  });
+
   it("says a refusal heard just before the stop with it too, and only a standing one", async () => {
     const { service, voiceStore, setDraft } = await setup();
 

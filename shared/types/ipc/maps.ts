@@ -2125,8 +2125,11 @@ export interface IpcEventMap {
   "voice-input:file-token-resolved": {
     sessionId: string;
     transcriptId: string;
-    /** Every reference detected, with its worktree-relative path or null for a miss. Sent only when one resolved. */
-    references: Array<{ description: string; path: string | null }>;
+    /**
+     * Every reference detected, with its worktree-relative path or null for a
+     * miss. `failed` marks a lookup that threw, timed out or had nowhere to look.
+     */
+    references: Array<{ description: string; path: string | null; failed?: true }>;
   };
   "voice-input:error": { sessionId: string; error: VoiceInputError };
   "voice-input:status": { sessionId: string; status: VoiceInputStatus };
