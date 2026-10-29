@@ -623,8 +623,9 @@ export function FleetArmingRibbon(): ReactElement | null {
           >
             <div className="flex min-w-0 flex-1 items-center gap-2">
               <AlertTriangle
-                className="h-3.5 w-3.5 shrink-0 text-category-amber-text"
+                className="h-3.5 w-3.5 shrink-0 text-[var(--fleet-ribbon-ink)]"
                 aria-hidden="true"
+                data-severity-glyph=""
               />
               <span className="truncate font-semibold">{message}</span>
             </div>
@@ -925,7 +926,7 @@ export function FleetArmingRibbon(): ReactElement | null {
               <span
                 aria-hidden="true"
                 data-testid="fleet-broadcast-track"
-                className="absolute inset-x-0 bottom-0 h-0.5 bg-category-amber-text transition-[width] duration-150 ease-out motion-reduce:transition-none"
+                className="absolute inset-x-0 bottom-0 h-0.5 bg-[var(--fleet-ribbon-ink)] transition-[width] duration-150 ease-out motion-reduce:transition-none"
                 style={{ width: `${Math.round((progressCompleted / progressTotal) * 100)}%` }}
               />
             )}
