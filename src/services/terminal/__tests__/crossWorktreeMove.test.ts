@@ -52,7 +52,7 @@ vi.mock("@/store/createWorktreeStore", async (importOriginal) => ({
 // Panes whose close is hidden but not yet committed: they still sit in the grid
 // as far as the store knows, and must not be handed focus.
 const pendingCloses = new Set<string>();
-vi.mock("@/services/terminal/optimisticPanelClose", () => ({
+vi.mock("@/services/terminal/optimisticPanelCloseIds", () => ({
   isOptimisticallyClosing: (id: string) => pendingCloses.has(id),
 }));
 

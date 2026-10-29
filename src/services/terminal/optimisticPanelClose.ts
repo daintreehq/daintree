@@ -19,6 +19,11 @@ import { panelStoreApi } from "@/store";
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { consultPanelCloseGuards, hasPanelCloseGuard } from "@/services/panelCloseGuard";
 import { pickGridSuccessorFocusId } from "@/store/panelFocusFallback";
+import {
+  getClosingIds,
+  isOptimisticallyClosing,
+  replaceClosingIds,
+} from "@/services/terminal/optimisticPanelCloseIds";
 import { logError } from "@/utils/logger";
 
 // The canonical teardown runs in idle time — after the optimistic removal has
@@ -56,7 +61,6 @@ export interface PanelCloseRequest {
 }
 
 const EMPTY: ReadonlySet<string> = new Set<string>();
-let closingIds: ReadonlySet<string> = EMPTY;
 let renderClosingIds: ReadonlySet<string> = EMPTY;
 let pending: PanelCloseRequest[] = [];
 let flushTimer: number | undefined;
@@ -85,22 +89,20 @@ export function getClosingIdsSnapshot(): ReadonlySet<string> {
   return renderClosingIds;
 }
 
-export function isOptimisticallyClosing(id: string): boolean {
-  return closingIds.has(id);
-}
+export { isOptimisticallyClosing };
 
 export function hasPendingOptimisticCloses(): boolean {
   return pending.length > 0;
 }
 
 function setClosingIds(next: Set<string>): void {
-  closingIds = next.size === 0 ? EMPTY : next;
+  replaceClosingIds(next);
   renderClosingIds = EMPTY;
   emit();
 }
 
 function setClosingIdsSilently(next: Set<string>): void {
-  closingIds = next.size === 0 ? EMPTY : next;
+  replaceClosingIds(next);
 }
 
 function getPanelElement(id: string): HTMLElement | null {
@@ -150,7 +152,7 @@ function advanceFocusPastClosing(hideIds: string[]): void {
       // Re-check before the deferred focus lands: a rapid close burst or a
       // click elsewhere may have moved focus on, or closed this target too.
       const current = panelStoreApi.getState().focusedId;
-      if (current === focusTarget && !closingIds.has(focusTarget)) {
+      if (current === focusTarget && !isOptimisticallyClosing(focusTarget)) {
         peekTerminalService()?.focus(focusTarget);
       }
     });
@@ -180,8 +182,8 @@ function runFlush(): void {
 
   // The canonical commit moved these panels to trash, so the grid derivations
   // exclude them on their own now — drop them from the lifecycle overlay.
-  if (closingIds.size > 0) {
-    const next = new Set(closingIds);
+  if (getClosingIds().size > 0) {
+    const next = new Set(getClosingIds());
     for (const request of batch) {
       for (const id of request.hideIds) next.delete(id);
     }
@@ -213,7 +215,7 @@ export function flushOptimisticCloses(): void {
  * was, so the common case gains no await.
  */
 export function requestPanelClose(request: PanelCloseRequest): void {
-  const fresh = request.hideIds.filter((id) => !closingIds.has(id));
+  const fresh = request.hideIds.filter((id) => !isOptimisticallyClosing(id));
   if (fresh.length === 0) return; // already closing — ignore the duplicate
 
   if (fresh.some(hasPanelCloseGuard)) {
@@ -227,7 +229,7 @@ export function requestPanelClose(request: PanelCloseRequest): void {
       const state = panelStoreApi.getState();
       const stillOpen = request.hideIds.filter((id) => {
         const panel = state.panelsById[id];
-        return panel !== undefined && panel.location !== "trash" && !closingIds.has(id);
+        return panel !== undefined && panel.location !== "trash" && !isOptimisticallyClosing(id);
       });
       if (stillOpen.length === 0) {
         request.onOutcome?.(false);
@@ -244,7 +246,7 @@ export function requestPanelClose(request: PanelCloseRequest): void {
 }
 
 function hideAndCommit(request: PanelCloseRequest): void {
-  const next = new Set(closingIds);
+  const next = new Set(getClosingIds());
   for (const id of request.hideIds) next.add(id);
   setClosingIdsSilently(next);
   hidePanelsImperatively(request.hideIds);
@@ -260,7 +262,7 @@ export function __resetOptimisticPanelCloseForTests(): void {
     flushTimer = undefined;
   }
   pending = [];
-  closingIds = EMPTY;
+  replaceClosingIds(EMPTY);
   renderClosingIds = EMPTY;
   listeners.clear();
 }

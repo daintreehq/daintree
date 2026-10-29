@@ -1,6 +1,6 @@
 import { usePanelStore } from "@/store/panelStore";
 import { pickGridSuccessorFocusId } from "@/store/panelFocusFallback";
-import { isOptimisticallyClosing } from "@/services/terminal/optimisticPanelClose";
+import { isOptimisticallyClosing } from "@/services/terminal/optimisticPanelCloseIds";
 import { selectWorktreeMovePanelIds } from "@/store/slices/panelRegistry/selectors";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
