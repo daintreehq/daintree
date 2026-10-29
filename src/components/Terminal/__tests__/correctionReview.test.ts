@@ -94,7 +94,9 @@ describe("diffCorrection", () => {
       changed: [],
       removed: [],
     });
-    expect(changedWords("i'll go and i've gone", "I'll go and I've gone")).toEqual([]);
+    expect(
+      changedWords("go and i'll wait and i've gone", "Go and I'll wait and I've gone")
+    ).toEqual([]);
     expect(changedWords("and i'd go", "and I'd go")).toEqual([]);
     // The apostrophe is the word's own: it still marks.
     expect(changedWords("and id go", "and I'd go")).toEqual([["I'd", "id"]]);
