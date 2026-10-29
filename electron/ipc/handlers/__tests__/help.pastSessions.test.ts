@@ -1,6 +1,39 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IpcContext } from "../../types.js";
-import { handleListPastSessions } from "../help.js";
+import type { HelpPastSessionsListing } from "../../../../shared/types/ipc/help.js";
+
+const LISTING: HelpPastSessionsListing = {
+  sessions: [{ agentId: "codex", sessionId: "t1", title: "Earlier question", updatedAt: 1 }],
+  unreadable: ["claude"],
+  truncated: true,
+};
+
+const lister = vi.hoisted(() => ({
+  listHelpPastSessions: vi.fn(),
+  defaultClaudeProjectsRoot: () => "/home/.claude/projects",
+}));
+vi.mock("../../../services/helpPastSessions.js", () => lister);
+vi.mock("../../../services/HelpSessionService.js", () => ({
+  helpSessionService: {
+    getSessionPathForProject: (_p: string, agentId: string) =>
+      agentId === "claude" ? "/sessions/h" : `/sessions/h.${agentId}`,
+    getLegacySessionPathForProject: () => "/sessions/h",
+  },
+}));
+vi.mock("../../../services/claude/ClaudeSessionStore.js", () => ({
+  resolvePaneClaudeProjectsRoot: () => null,
+}));
+vi.mock("../../../services/codex/CodexSubagentService.js", () => ({
+  listCodexSessionsForCwd: vi.fn(),
+}));
+vi.mock("../../../services/ProjectStore.js", () => ({
+  projectStore: { getProjectById: (id: string) => (id === "p1" ? { path: "/repo" } : undefined) },
+}));
+vi.mock("../../../services/ScratchStore.js", () => ({
+  scratchStore: { getScratchById: () => undefined },
+}));
+
+const { handleListPastSessions } = await import("../help.js");
 
 // The guard reads only these two; the refusal must come before anything else is touched.
 const viewOf = (projectId: string | null): IpcContext => ({ projectId, webContentsId: 7 }) as never;
@@ -8,16 +41,33 @@ const viewOf = (projectId: string | null): IpcContext => ({ projectId, webConten
 describe("handleListPastSessions (#14984)", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    lister.listHelpPastSessions.mockReset();
   });
 
   it("refuses another project's history as no history at all, in either answer shape", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
+    lister.listHelpPastSessions.mockResolvedValue(LISTING);
     await expect(handleListPastSessions(viewOf("p1"), "p2")).resolves.toEqual([]);
     await expect(handleListPastSessions(viewOf("p1"), "p2", { listing: true })).resolves.toEqual({
       sessions: [],
       unreadable: [],
       truncated: false,
     });
+    expect(lister.listHelpPastSessions).not.toHaveBeenCalled();
+  });
+
+  it("answers its own project with bare rows by default, and the listing when asked", async () => {
+    lister.listHelpPastSessions.mockResolvedValue(LISTING);
+
+    await expect(handleListPastSessions(viewOf("p1"), "p1")).resolves.toEqual(LISTING.sessions);
+    await expect(handleListPastSessions(viewOf("p1"), "p1", { listing: true })).resolves.toEqual(
+      LISTING
+    );
+    // Paths come from main's record of the project, never the renderer.
+    expect(lister.listHelpPastSessions).toHaveBeenCalledWith(
+      { claude: "/sessions/h", codex: ["/sessions/h.codex", "/sessions/h"] },
+      expect.objectContaining({ claudeProjectsRoot: "/home/.claude/projects" })
+    );
   });
 
   it("answers an unbound view the same way", async () => {

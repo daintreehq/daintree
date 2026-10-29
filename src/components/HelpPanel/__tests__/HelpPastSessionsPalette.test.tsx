@@ -202,6 +202,26 @@ describe("HelpPastSessionsPalette", () => {
     expect(screen.getByText("Still here")).toBeTruthy();
   });
 
+  it("disables Retry beside rows while a reopening's own request is still out", async () => {
+    const reopened = deferred<HelpPastSessionsListing>();
+    listPastSessions
+      .mockResolvedValueOnce(listing({ sessions: [session("a", "Kept")], unreadable: ["codex"] }))
+      .mockReturnValueOnce(reopened.promise);
+    renderPalette();
+    await screen.findByText("Kept");
+    await waitFor(() => expect(retryButton()?.hasAttribute("disabled")).toBe(false));
+
+    act(() => usePaletteStore.getState().closePalette("assistant-sessions"));
+    act(() => usePaletteStore.getState().openPalette("assistant-sessions"));
+    await waitFor(() => expect(listPastSessions).toHaveBeenCalledTimes(2));
+    expect(retryButton()?.hasAttribute("disabled")).toBe(true);
+
+    await act(async () =>
+      reopened.resolve(listing({ sessions: [session("a", "Kept")], unreadable: ["codex"] }))
+    );
+    await waitFor(() => expect(retryButton()?.hasAttribute("disabled")).toBe(false));
+  });
+
   it("holds Retry while a reopening's own request is still out", async () => {
     const reopened = deferred<HelpPastSessionsListing>();
     listPastSessions
@@ -214,6 +234,9 @@ describe("HelpPastSessionsPalette", () => {
     act(() => usePaletteStore.getState().openPalette("assistant-sessions"));
     await waitFor(() => expect(listPastSessions).toHaveBeenCalledTimes(2));
 
+    // Nothing invites a retry Enter would refuse.
+    expect(input().getAttribute("aria-describedby")).toBeNull();
+    expect(screen.queryByText(/to retry/)).toBeNull();
     fireEvent.keyDown(input(), { key: "Enter" });
     expect(listPastSessions).toHaveBeenCalledTimes(2);
 
