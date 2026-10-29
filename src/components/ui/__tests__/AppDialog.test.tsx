@@ -2008,15 +2008,14 @@ describe("AppDialog — shared chrome contract", () => {
 
     // The header and heading centre their children, which parks both on the
     // middle of a two-line title. Layout isn't computed under jsdom, so this
-    // pins the relationship that carries it: each declares one cross-axis
-    // alignment of its own, they agree, and it isn't the centring they inherit.
-    const slotAlign = matching(slot, /^self-/);
-    expect(slotAlign).toHaveLength(1);
-    expect(matching(closeButton, /^self-/)).toEqual(slotAlign);
-    expect(slotAlign).not.toContain("self-center");
-    // One line of the heading's own type, so the glyph centres on line one at
-    // whatever size a caller sets.
-    expect(matching(slot, /^h-/)).toEqual([expect.stringMatching(/lh\]$/)]);
+    // pins what carries the fix: the glyph and the X each declare the same one
+    // cross-axis alignment, and it is the start edge. `end` would pin them to
+    // the last line and `auto` would hand back the inherited centring.
+    expect(matching(slot, /^self-/)).toEqual(["self-start"]);
+    expect(matching(closeButton, /^self-/)).toEqual(["self-start"]);
+    // Exactly one line of the heading's own type, so the glyph centres on line
+    // one at whatever size a caller sets. Two lines would centre it between.
+    expect(matching(slot, /^h-/)).toEqual(["h-[1lh]"]);
   });
 
   it("keeps a leading action apart from Cancel and the primary, and off initial focus", async () => {

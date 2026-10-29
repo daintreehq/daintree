@@ -837,6 +837,10 @@ interface AppDialogTitleProps {
  * with the glyph centred inside it. A title that fits on one line renders as it
  * always did; one that wraps keeps its glyph beside the first line rather than
  * floating between the two (`1lh` follows whatever type size the caller sets).
+ * A glyph taller than a line (a 2xl spinner escapes the 16px rule) overflows the
+ * slot evenly, so it stays level with the title and the X and the header only
+ * loses the extra height; a slot that grew with it would instead push the X off
+ * the title by half the difference.
  */
 const DIALOG_TITLE_ICON_SLOT =
   "inline-flex h-[1lh] shrink-0 items-center self-start text-text-secondary [&>svg]:size-4 [&>svg]:shrink-0";
