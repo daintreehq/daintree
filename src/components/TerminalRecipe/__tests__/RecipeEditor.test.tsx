@@ -57,7 +57,7 @@ function chrome(el: Element): string[] {
     .sort();
 }
 
-const updateRecipe = vi.fn();
+const updateRecipe = vi.fn<ReturnType<typeof useRecipeStore.getState>["updateRecipe"]>();
 const createRecipe = vi.fn();
 
 beforeEach(() => {
@@ -214,13 +214,19 @@ describe("RecipeEditor", () => {
       });
       expect(document.getElementById(`terminal-type-${index}`)?.textContent).toBe(label);
     };
-    const value = (id: string) =>
-      (document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement | null)?.value;
+    const value = (id: string) => {
+      const field = document.getElementById(id);
+      return field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement
+        ? field.value
+        : undefined;
+    };
+    const type = (id: string, text: string) =>
+      fireEvent.change(document.getElementById(id)!, { target: { value: text } });
     const saveTerminals = async () => {
       await act(async () => {
         screen.getByRole("button", { name: "Update recipe" }).click();
       });
-      return updateRecipe.mock.calls.at(-1)?.[1].terminals as TerminalRecipe["terminals"];
+      return updateRecipe.mock.calls.at(-1)?.[1].terminals ?? [];
     };
 
     const AGENT_RECIPE: TerminalRecipe = {
@@ -241,9 +247,7 @@ describe("RecipeEditor", () => {
       await pickType(0, "Terminal");
       expect(value("terminal-initial-prompt-0")).toBeUndefined();
       expect(value("terminal-command-0")).toBe("");
-      fireEvent.change(document.getElementById("terminal-command-0")!, {
-        target: { value: "npm test" },
-      });
+      type("terminal-command-0", "npm test");
 
       await pickType(0, "Claude");
       expect(value("terminal-initial-prompt-0")).toBe("Review the diff");
@@ -251,6 +255,11 @@ describe("RecipeEditor", () => {
 
       await pickType(0, "Terminal");
       expect(value("terminal-command-0")).toBe("npm test");
+
+      type("terminal-command-0", "");
+      await pickType(0, "Claude");
+      await pickType(0, "Terminal");
+      expect(value("terminal-command-0")).toBe("");
     });
 
     it("carries the prompt to another agent and keeps it when the step comes back", async () => {
@@ -269,6 +278,11 @@ describe("RecipeEditor", () => {
       expect(value("terminal-dev-command-0")).toBeUndefined();
       await pickType(0, "Dev server");
       expect(value("terminal-dev-command-0")).toBe("npm run dev");
+
+      type("terminal-dev-command-0", "vite");
+      await pickType(0, "Claude");
+      await pickType(0, "Dev server");
+      expect(value("terminal-dev-command-0")).toBe("vite");
     });
 
     it("still starts each type from its own command", async () => {
@@ -286,22 +300,28 @@ describe("RecipeEditor", () => {
     });
 
     it("saves only the fields of the type the step ends on", async () => {
-      renderEditor(AGENT_RECIPE);
-      await pickType(0, "Terminal");
-      const [saved] = await saveTerminals();
-      expect(saved).toMatchObject({ type: "terminal", initialPrompt: "", args: "" });
+      renderEditor({
+        ...RECIPE,
+        terminals: [AGENT_RECIPE.terminals[0]!, RECIPE.terminals[0]!, RECIPE.terminals[0]!],
+      });
+      await pickType(0, "Dev server");
+      await pickType(1, "Terminal");
+      await pickType(2, "Codex");
+      const saved = await saveTerminals();
+      expect(saved[0]).toMatchObject({ type: "dev-preview", initialPrompt: "", args: "" });
+      expect(saved[1]).toMatchObject({ type: "terminal", devCommand: "" });
+      expect(saved[2]).toMatchObject({ type: "codex", devCommand: "" });
     });
 
     it("brings back the latest prompt, including one edited under another agent", async () => {
       renderEditor(AGENT_RECIPE);
       await pickType(0, "Codex");
-      fireEvent.change(document.getElementById("terminal-initial-prompt-0")!, {
-        target: { value: "" },
-      });
+      type("terminal-initial-prompt-0", "");
+      type("terminal-args-0", "--model sonnet");
       await pickType(0, "Terminal");
       await pickType(0, "Claude");
       expect(value("terminal-initial-prompt-0")).toBe("");
-      expect(value("terminal-args-0")).toBe("--model opus");
+      expect(value("terminal-args-0")).toBe("--model sonnet");
     });
 
     it("keeps offering a captured agent the picker doesn't list, so the step can go back", async () => {
@@ -322,6 +342,7 @@ describe("RecipeEditor", () => {
       });
       await pickType(0, "Terminal");
       await pickType(1, "Claude");
+      expect(value("terminal-initial-prompt-1")).toBe("");
       act(() => {
         screen.getByRole("button", { name: "Remove terminal 1" }).click();
       });
