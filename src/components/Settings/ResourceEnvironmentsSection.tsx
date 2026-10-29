@@ -20,6 +20,9 @@ import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/utils";
 import type { ResourceEnvironment } from "@shared/types/project";
+import type { WorktreeSnapshot } from "@shared/types";
+import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
+import { pluralize } from "@/lib/pluralize";
 import { RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -49,6 +52,8 @@ interface EnvironmentSettingsTabProps {
   onDefaultWorktreeModeChange: (mode: string) => void;
   isOpen: boolean;
 }
+
+const NO_WORKTREES = new Map<string, WorktreeSnapshot>();
 
 const ENVIRONMENT_ICON_OPTIONS = [
   { name: "Server", label: "Server" },
@@ -161,6 +166,29 @@ export function ResourceEnvironmentsSection({
   const [newEnvironmentName, setNewEnvironmentName] = useState("");
   const [addEnvironmentError, setAddEnvironmentError] = useState<string | null>(null);
   const [pendingDeleteEnvironment, setPendingDeleteEnvironment] = useState<string | null>(null);
+  // Watched only while a removal is being confirmed, so the dialog follows a
+  // worktree switching in or out of the environment without the page
+  // re-rendering on every worktree change.
+  const worktreeMap = useWorktreeStoreOptional(
+    (state) => (pendingDeleteEnvironment !== null ? state.worktrees : NO_WORKTREES),
+    NO_WORKTREES
+  );
+  // The removed environment's commands are the only teardown Daintree has for
+  // what these worktrees provisioned, so it can't go while any still use it.
+  const worktreesInPendingEnvironment = useMemo(
+    () =>
+      [...worktreeMap.values()]
+        .filter((worktree) => worktree.worktreeMode === pendingDeleteEnvironment)
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [worktreeMap, pendingDeleteEnvironment]
+  );
+  // The map is empty until the first snapshot lands, which says nothing about
+  // whether worktrees use the environment, so removal waits for it.
+  const worktreesLoaded = useWorktreeStoreOptional(
+    (state) => pendingDeleteEnvironment === null || state.isInitialized,
+    true
+  );
+  const removalBlocked = !worktreesLoaded || worktreesInPendingEnvironment.length > 0;
   // The inline add form unmounts the focused field when it closes, so say where
   // focus goes: the selector showing the new environment, or back to Add.
   const [returnFocus, setReturnFocus] = useState<"selector" | "add" | null>(null);
@@ -199,6 +227,11 @@ export function ResourceEnvironmentsSection({
     [resourceEnvironments, currentEnvName]
   );
 
+  // A default naming an environment that no longer exists is Local in effect:
+  // that is where New Worktree starts.
+  const effectiveDefaultMode =
+    defaultWorktreeMode && envKeys.includes(defaultWorktreeMode) ? defaultWorktreeMode : "local";
+
   const updateEnv = (patch: Partial<ResourceEnvironment>) => {
     const envs = { ...(resourceEnvironments ?? {}) };
     envs[currentEnvName] = { ...env, ...patch };
@@ -232,6 +265,7 @@ export function ResourceEnvironmentsSection({
   };
 
   const handleRemoveEnv = (name: string) => {
+    if (removalBlocked) return;
     const envs = { ...(resourceEnvironments ?? {}) };
     delete envs[name];
     onResourceEnvironmentsChange(envs);
@@ -241,6 +275,7 @@ export function ResourceEnvironmentsSection({
       setSelectedEnvName(next);
       onActiveResourceEnvironmentChange(next);
     }
+    if (defaultWorktreeMode === name) onDefaultWorktreeModeChange("local");
     setPendingDeleteEnvironment(null);
   };
 
@@ -495,7 +530,7 @@ export function ResourceEnvironmentsSection({
                 <RadioChoiceRow
                   name="worktreeMode"
                   value="local"
-                  checked={(defaultWorktreeMode ?? "local") === "local"}
+                  checked={effectiveDefaultMode === "local"}
                   onChange={() => onDefaultWorktreeModeChange("local")}
                   label="Local"
                   description="Run worktrees directly on this machine"
@@ -507,7 +542,7 @@ export function ResourceEnvironmentsSection({
                     key={key}
                     name="worktreeMode"
                     value={key}
-                    checked={defaultWorktreeMode === key}
+                    checked={effectiveDefaultMode === key}
                     onChange={() => onDefaultWorktreeModeChange(key)}
                     label={key}
                     description="Run worktrees in this resource environment"
@@ -525,11 +560,22 @@ export function ResourceEnvironmentsSection({
         isOpen={pendingDeleteEnvironment !== null}
         title={`Remove '${pendingDeleteEnvironment}'?`}
         description={
-          pendingDeleteEnvironment
-            ? `This removes the saved commands for "${pendingDeleteEnvironment}" from project settings.`
-            : undefined
+          pendingDeleteEnvironment === null
+            ? undefined
+            : worktreesInPendingEnvironment.length > 0
+              ? `${pluralize(worktreesInPendingEnvironment.length, "worktree still runs", "worktrees still run")} in "${pendingDeleteEnvironment}". Its teardown commands are the only way Daintree can clean up what they provisioned, so tear them down before switching them to another environment.`
+              : `This removes the saved commands for "${pendingDeleteEnvironment}" from project settings.${defaultWorktreeMode === pendingDeleteEnvironment ? " New worktrees will start on Local." : ""}`
         }
         confirmLabel="Remove environment"
+        confirmDisabled={removalBlocked}
+        hint={
+          !worktreesLoaded
+            ? "Waiting for this project's worktrees to load"
+            : worktreesInPendingEnvironment.length > 0
+              ? "Switch or delete these worktrees first"
+              : undefined
+        }
+        hasPreview={worktreesInPendingEnvironment.length > 0}
         variant="destructive"
         onConfirm={() => {
           if (pendingDeleteEnvironment) {
@@ -537,7 +583,20 @@ export function ResourceEnvironmentsSection({
           }
         }}
         onClose={() => setPendingDeleteEnvironment(null)}
-      />
+      >
+        {worktreesInPendingEnvironment.length > 0 && (
+          <ul
+            aria-label={`Worktrees in ${pendingDeleteEnvironment}`}
+            className="max-h-48 space-y-0.5 overflow-y-auto text-xs text-text-secondary select-text"
+          >
+            {worktreesInPendingEnvironment.map((worktree) => (
+              <li key={worktree.id} className="font-mono">
+                {worktree.name}
+              </li>
+            ))}
+          </ul>
+        )}
+      </ConfirmDialog>
     </SettingsSection>
   );
 }
