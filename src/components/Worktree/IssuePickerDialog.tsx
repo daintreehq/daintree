@@ -2,18 +2,19 @@ import { useState, useCallback, useEffect, useId, useLayoutEffect, useRef } from
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { CircleDot, Link, Link2Off, CircleCheck } from "lucide-react";
+import { CircleDot, Link, Link2Off, CircleCheck, RefreshCw } from "lucide-react";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
+import { Spinner } from "@/components/ui/Spinner";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { SearchField } from "@/components/ui/SearchField";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Kbd } from "@/components/ui/Kbd";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { cn } from "@/lib/utils";
-import { UI_STILL_WORKING_MS } from "@/lib/animationUtils";
-import { useSkeletonDisplayFloor } from "@/hooks/useDeferredLoading";
+import { UI_DOHERTY_THRESHOLD, UI_STILL_WORKING_MS } from "@/lib/animationUtils";
+import { useDeferredLoading, useSkeletonDisplayFloor } from "@/hooks/useDeferredLoading";
 import { forgeClient } from "@/clients";
-import type { Issue } from "@shared/types/forge";
+import type { Issue, Page } from "@shared/types/forge";
 import type { WorktreeState } from "@/types";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
@@ -66,6 +67,40 @@ function scopeNoun(state: StateFilter): string {
 
 function countLabel(count: number, state: StateFilter): string {
   return pluralize(count, state === "all" ? "issue" : `${state} issue`);
+}
+
+/**
+ * What the status says about a result set. A page the forge says has more
+ * behind it is never announced as the whole set: it names the total when the
+ * forge reports one, and says more are available when it doesn't.
+ */
+function resultsLabel(
+  count: number,
+  state: StateFilter,
+  more: boolean,
+  totalCount: number | undefined
+): string {
+  if (!more) return countLabel(count, state);
+  if (totalCount !== undefined && totalCount > count) {
+    return `Showing ${count.toLocaleString()} of ${countLabel(totalCount, state)}`;
+  }
+  return `Showing ${countLabel(count, state)}, more available`;
+}
+
+function issueIdentity(issue: Issue): string | number {
+  return issue.id ?? issue.key ?? issue.number;
+}
+
+/** A later page can repeat a row when issues move between fetches. */
+function appendUnique(existing: Issue[], page: Issue[]): Issue[] {
+  const seen = new Set(existing.map(issueIdentity));
+  const added = page.filter((issue) => {
+    const identity = issueIdentity(issue);
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+  return added.length > 0 ? [...existing, ...added] : existing;
 }
 
 interface IssueOptionRowProps {
@@ -152,6 +187,14 @@ export function IssuePickerDialog({
   const [error, setError] = useState<string | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [reloadToken, setReloadToken] = useState(0);
+  // Where the next page starts, or null once the forge says there is none.
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [totalCount, setTotalCount] = useState<number | undefined>(undefined);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [loadMoreFailed, setLoadMoreFailed] = useState(false);
+  // The result generation a page is in flight for. Read synchronously, so a
+  // second Enter before the next render can't start a second request.
+  const loadMoreIdRef = useRef<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fetchIdRef = useRef(0);
@@ -161,6 +204,7 @@ export function IssuePickerDialog({
   const baseId = useId();
   const listboxId = `${baseId}-listbox`;
   const optionId = (index: number) => `${baseId}-option-${index}`;
+  const loadMoreId = `${baseId}-load-more`;
 
   const fetchIssues = useCallback(
     async (query: string, state: StateFilter) => {
@@ -172,13 +216,21 @@ export function IssuePickerDialog({
           state,
         });
         if (id !== fetchIdRef.current) return;
-        setIssues(result.items);
+        setIssues(appendUnique([], result.items));
+        setNextCursor(result.hasMore ? result.nextCursor : null);
+        setTotalCount(result.totalCount);
         setError(null);
       } catch (e) {
         if (id !== fetchIdRef.current) return;
         setError(formatErrorMessage(e, "Failed to load issues"));
         setIssues([]);
+        setNextCursor(null);
+        setTotalCount(undefined);
       }
+      // A page still in flight belongs to the generation this one replaced and
+      // will drop itself on landing; the new set starts with nothing loading.
+      setIsLoadingMore(false);
+      setLoadMoreFailed(false);
       setResultScope({ query, state });
       setSelectedIndex(0);
       setIsPending(false);
@@ -192,6 +244,10 @@ export function IssuePickerDialog({
       setStateFilter("open");
       setResultScope(null);
       setIssues([]);
+      setNextCursor(null);
+      setTotalCount(undefined);
+      setIsLoadingMore(false);
+      setLoadMoreFailed(false);
       setError(null);
       setIsPending(true);
       setSelectedIndex(0);
@@ -221,7 +277,49 @@ export function IssuePickerDialog({
   // Until then they stay visible (dimmed) but Enter will not act on them.
   const resultsAreCurrent =
     !isPending && resultScope?.query === query && resultScope.state === stateFilter;
-  const activeIssue = resultsAreCurrent ? issues[selectedIndex] : undefined;
+  const hasMore = nextCursor !== null;
+  // Load more is the list's last option, so the cursor reaches it like a row.
+  const optionCount = issues.length + (hasMore ? 1 : 0);
+  // Clamped at read time: an appended page that brought nothing new can take
+  // the Load more row away from under the cursor.
+  const cursor = Math.min(selectedIndex, optionCount - 1);
+  const activeIssue = resultsAreCurrent ? issues[cursor] : undefined;
+  const isLoadMoreActive = hasMore && cursor === issues.length;
+  const showLoadingMore = useDeferredLoading(isLoadingMore, UI_DOHERTY_THRESHOLD);
+  const isSlowLoadingMore = useDeferredLoading(isLoadingMore, UI_STILL_WORKING_MS);
+
+  const loadMore = async () => {
+    if (!resultsAreCurrent || !resultScope || nextCursor === null) return;
+    const id = fetchIdRef.current;
+    if (loadMoreIdRef.current === id) return;
+    loadMoreIdRef.current = id;
+    setIsLoadingMore(true);
+    setLoadMoreFailed(false);
+    let result: Page<Issue> | null;
+    try {
+      result = await forgeClient.listIssues(worktree.path, {
+        search: resultScope.query || undefined,
+        state: resultScope.state,
+        cursor: nextCursor,
+      });
+    } catch {
+      result = null;
+    }
+    if (loadMoreIdRef.current === id) loadMoreIdRef.current = null;
+    // A new query, filter, retry or session has replaced the set this page
+    // continues; splicing it in would mix two result sets.
+    if (id !== fetchIdRef.current) return;
+    setIsLoadingMore(false);
+    if (!result) {
+      setLoadMoreFailed(true);
+      return;
+    }
+    // The result scope is left alone on purpose: changing it rewinds the
+    // scroll, and an appended page continues the list rather than replacing it.
+    setIssues((prev) => appendUnique(prev, result.items));
+    setNextCursor(result.hasMore ? result.nextCursor : null);
+    if (result.totalCount !== undefined) setTotalCount(result.totalCount);
+  };
 
   const retry = useCallback(() => {
     setReloadToken((n) => n + 1);
@@ -239,9 +337,7 @@ export function IssuePickerDialog({
     if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
     // Rows held behind the loading skeleton are not a list to step through yet.
     const next =
-      keyBelongsToField(e) || !hasResults
-        ? null
-        : stepListboxCursor(e.key, selectedIndex, issues.length);
+      keyBelongsToField(e) || !hasResults ? null : stepListboxCursor(e.key, cursor, optionCount);
     if (next !== null) {
       e.preventDefault();
       setSelectedIndex(next);
@@ -254,15 +350,16 @@ export function IssuePickerDialog({
         // on the previous query's results.
         requestedQueryRef.current = query;
         setReloadToken((n) => n + 1);
+      } else if (isLoadMoreActive) {
+        void loadMore();
       }
     }
   };
 
   useEffect(() => {
-    const option =
-      scrollRef.current?.querySelectorAll<HTMLElement>('[role="option"]')[selectedIndex];
+    const option = scrollRef.current?.querySelectorAll<HTMLElement>('[role="option"]')[cursor];
     option?.scrollIntoView({ block: "nearest" });
-  }, [selectedIndex]);
+  }, [cursor]);
 
   // A new result set starts at its top: the cursor resets to the first row, so
   // the viewport must too, or Enter acts on a row scrolled out of sight.
@@ -307,9 +404,26 @@ export function IssuePickerDialog({
         ? shownScope.query
           ? `No ${scopeNoun(shownScope.state)} match "${shownScope.query}"`
           : `No ${scopeNoun(shownScope.state)}`
-        : countLabel(issues.length, shownScope.state);
+        : loadMoreFailed
+          ? "Couldn't load more issues"
+          : resultsLabel(issues.length, shownScope.state, hasMore, totalCount);
 
   const isLinked = currentIssueNumber !== undefined && currentIssueNumber > 0;
+
+  // Only where Enter will do what the hint says: on Load more, a stale list
+  // makes Enter re-run the search and a page in flight makes it do nothing.
+  const enterHint =
+    isLinked || !hasResults
+      ? null
+      : !isLoadMoreActive
+        ? draft
+          ? "to select"
+          : "to link"
+        : !resultsAreCurrent || isLoadingMore
+          ? null
+          : loadMoreFailed
+            ? "to retry"
+            : "to load more";
 
   let body: React.ReactNode;
   if (showSkeleton) {
@@ -406,7 +520,7 @@ export function IssuePickerDialog({
             key={issue.id ?? issue.key ?? issue.number}
             id={optionId(index)}
             issue={issue}
-            isActive={index === selectedIndex}
+            isActive={index === cursor}
             // Same number and same owner (#13744): a tracker's ENG-42 isn't the
             // code forge's #42 the worktree is linked to.
             isCurrentlyAttached={
@@ -415,11 +529,50 @@ export function IssuePickerDialog({
               (worktree.issueKey === undefined || issue.key === worktree.issueKey)
             }
             onPoint={() => {
-              if (index !== selectedIndex) setSelectedIndex(index);
+              if (index !== cursor) setSelectedIndex(index);
             }}
             onClick={() => attach(issue)}
           />
         ))}
+        {hasMore && (
+          <button
+            id={loadMoreId}
+            type="button"
+            role="option"
+            aria-selected={isLoadMoreActive}
+            aria-disabled={isLoadingMore || undefined}
+            tabIndex={-1}
+            onPointerMove={() => {
+              if (!isLoadMoreActive) setSelectedIndex(issues.length);
+            }}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => void loadMore()}
+            className={cn(
+              PALETTE_ROW_CLASS,
+              "w-full px-3 py-1.5 rounded-[var(--radius-md)] flex items-center justify-center gap-2",
+              "text-sm text-text-secondary"
+            )}
+          >
+            {loadMoreFailed ? (
+              // One way on, not two: the row that failed is the row that retries.
+              <>
+                <span>Couldn&apos;t load more issues</span>
+                <span aria-hidden="true">·</span>
+                <span className="flex items-center gap-1.5 text-text-primary">
+                  <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
+                  Retry
+                </span>
+              </>
+            ) : showLoadingMore ? (
+              <>
+                <Spinner size="sm" />
+                {isSlowLoadingMore ? "Still working…" : "Loading…"}
+              </>
+            ) : (
+              "Load more"
+            )}
+          </button>
+        )}
       </div>
     );
   }
@@ -465,7 +618,9 @@ export function IssuePickerDialog({
           aria-autocomplete="list"
           aria-expanded={hasResults}
           aria-controls={hasResults ? listboxId : undefined}
-          aria-activedescendant={hasResults ? optionId(selectedIndex) : undefined}
+          aria-activedescendant={
+            !hasResults ? undefined : isLoadMoreActive ? loadMoreId : optionId(cursor)
+          }
         />
 
         <SegmentedRadioGroup
@@ -489,11 +644,10 @@ export function IssuePickerDialog({
 
       <AppDialog.Footer
         hint={
-          // Only where Enter can actually link something.
-          isLinked || !hasResults ? undefined : (
+          enterHint && (
             <>
               <Kbd>↵</Kbd>
-              <span>{draft ? "to select" : "to link"}</span>
+              <span>{enterHint}</span>
             </>
           )
         }
