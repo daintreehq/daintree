@@ -68,8 +68,10 @@ function declaration(body: string, property: string): string | undefined {
 }
 
 const RADIO = /\[type=["']?radio["']?\]/;
-const DRAWING = /(?:^|;)\s*(?:appearance|width|height|border(?:-[a-z-]+)?|background(?:-[a-z-]+)?)\s*:/;
-const FORCED_COLORS_OFF = /^@media (?:\( ?forced-colors: ?none ?\)|not \( ?forced-colors: ?active ?\))$/;
+const DRAWING =
+  /(?:^|;)\s*(?:appearance|width|height|border(?:-[a-z-]+)?|background(?:-[a-z-]+)?)\s*:/;
+const FORCED_COLORS_OFF =
+  /^@media (?:\( ?forced-colors: ?none ?\)|not \( ?forced-colors: ?active ?\))$/;
 
 const rules = collectRules(readIndexCss());
 const radioRules = rules.filter((rule) => RADIO.test(rule.prelude));
