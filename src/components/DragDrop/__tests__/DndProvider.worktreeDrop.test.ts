@@ -67,19 +67,13 @@ describe("DndProvider card-drop dispatch (#14962)", () => {
   }
 
   /**
-   * The move calls made as statements of `branch`'s own block: unconditional
-   * once the branch is taken, so a nested `if` around one doesn't count.
+   * The statements of `branch`'s own block, exactly: nothing can sit beside the
+   * move to skip it, whether a nested condition or an early return.
    */
-  function directMoveCalls(branch: ts.IfStatement): string[][] {
+  function branchStatements(branch: ts.IfStatement): string[] {
     const block = branch.thenStatement;
-    if (!ts.isBlock(block)) return [];
-    return block.statements.flatMap((statement) => {
-      if (!ts.isExpressionStatement(statement)) return [];
-      const call = statement.expression;
-      if (!ts.isCallExpression(call)) return [];
-      if (call.expression.getText(source) !== "moveDroppedPanelToWorktree") return [];
-      return [call.arguments.map((arg) => arg.getText(source))];
-    });
+    if (!ts.isBlock(block)) return [block.getText(source)];
+    return block.statements.map((statement) => statement.getText(source));
   }
 
   /** `if` statements in handleDragEnd's own body (not its timers) with this condition. */
@@ -114,8 +108,9 @@ describe("DndProvider card-drop dispatch (#14962)", () => {
     expect(branches).toHaveLength(1);
     const branch = branches[0]!;
 
-    expect(directMoveCalls(branch)).toEqual([["draggedId", "dropWorktreeId"]]);
-    expect(collect(ts.isReturnStatement, branch.thenStatement)).toHaveLength(0);
+    expect(branchStatements(branch)).toEqual([
+      "moveDroppedPanelToWorktree(draggedId, dropWorktreeId);",
+    ]);
 
     const declaration = collect(ts.isVariableDeclaration, source).find(
       (node) => node.name.getText(source) === "dropWorktreeId"
@@ -135,7 +130,10 @@ describe("DndProvider card-drop dispatch (#14962)", () => {
       "targetWorktreeId && targetWorktreeId !== (accordionWorktreeId ?? null)"
     );
     expect(branches).toHaveLength(1);
-    expect(directMoveCalls(branches[0]!)).toEqual([["actualDraggedId", "targetWorktreeId"]]);
+    expect(branchStatements(branches[0]!)).toEqual([
+      "moveDroppedPanelToWorktree(actualDraggedId, targetWorktreeId);",
+      "return;",
+    ]);
     const target = collect(ts.isVariableDeclaration, source).find(
       (node) => node.name.getText(source) === "targetWorktreeId"
     );
