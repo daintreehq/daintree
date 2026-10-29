@@ -120,6 +120,22 @@ function idOf(selector: string): string {
   return pick(selector).elementId;
 }
 
+function widen(): void {
+  window.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "ArrowUp", altKey: true, bubbles: true, cancelable: true })
+  );
+}
+
+/** What the last selection the host was told of covers. */
+function selected(): { scope: unknown; elementIds: string[] } | null {
+  const last = events.filter((event) => event.type === "selectionChanged").at(-1);
+  if (last?.type !== "selectionChanged") return null;
+  return {
+    scope: last.scope,
+    elementIds: last.observations.map((observation) => observation.elementId),
+  };
+}
+
 function chainNames(observation: SelectionObservation): Array<string | null> {
   return observation.componentChain.components.map((entry) => entry.name?.value ?? null);
 }
@@ -270,6 +286,26 @@ describe("the Vue extractor against a dev build", () => {
       rootElementIds: [card],
       rootsComplete: true,
     });
+  });
+
+  it("widens to each component out in turn, as that invocation's rendered roots, with Alt+ArrowUp", async () => {
+    await mountVite();
+    const modalRoots = [idOf("div.modal-wrap"), idOf("aside.dialog")];
+    const appRoots = [idOf("main.app"), idOf("aside.dialog")];
+    const picked = pick("p.dialog-text");
+    widen();
+    expect(selected()).toEqual({
+      scope: { kind: "component", componentId: record(picked, "Modal").componentId },
+      elementIds: modalRoots,
+    });
+    widen();
+    expect(selected()).toEqual({
+      scope: { kind: "component", componentId: record(picked, "App").componentId },
+      elementIds: appRoots,
+    });
+    const count = events.length;
+    widen();
+    expect(events).toHaveLength(count);
   });
 
   it("says a component that rendered only a comment has no roots, and one that rendered text is incomplete", async () => {

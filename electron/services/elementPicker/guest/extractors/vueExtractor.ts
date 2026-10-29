@@ -447,6 +447,33 @@ function keepInnermost(records: ComponentRecord[], count: number): ComponentReco
   return kept;
 }
 
+/**
+ * The instance named `componentId` among those `element` renders inside,
+ * found by the walk a selection's render chain takes. An owner outside that
+ * chain has no roots around the element to widen to.
+ */
+function enclosingInstance(
+  element: Element,
+  componentId: string,
+  ids: InstanceIds
+): VueInstance | null {
+  const found = lookUp(element);
+  if (found === null || found.kind !== "instance") return null;
+  const block = found.own
+    ? null
+    : staticBlockOf(found.instance, element, new Budget(STEPS.staticSearch));
+  const ancestry = new Budget(STEPS.ancestry);
+  for (
+    let current: VueInstance | null | undefined = block?.instance ?? found.instance;
+    current !== null && current !== undefined;
+    current = parentOf(current)
+  ) {
+    if (ids.idOf(current) === componentId) return current;
+    if (!ancestry.spend()) return null;
+  }
+  return null;
+}
+
 export function createVueExtractor(): ElementPickerExtractor {
   // Per install, so ids last as long as the bootstrap that shows them.
   const ids = new InstanceIds("vue-");
@@ -458,6 +485,15 @@ export function createVueExtractor(): ElementPickerExtractor {
       return phase === "hover"
         ? hoverOf(found.instance, ids)
         : selectionOf(element, found, ids, refs);
+    },
+    locate(query, anchor) {
+      if (anchor === null || field(query, "kind") !== "roots") return null;
+      const componentId = field(query, "componentId");
+      if (typeof componentId !== "string") return null;
+      const instance = enclosingInstance(anchor, componentId, ids);
+      if (instance === null) return null;
+      const roots = renderedRoots(instance, LIMITS.roots, new Budget(STEPS.rootsPerRecord));
+      return { elements: roots.elements, data: { complete: roots.complete } };
     },
   };
 }
