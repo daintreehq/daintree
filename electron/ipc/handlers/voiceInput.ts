@@ -620,6 +620,14 @@ const SUPERSEDED: VoiceStartOutcome = { status: "superseded" };
 // so the job is raced against its deadline rather than trusted to stop.
 const FILE_LINK_JOB_TIMEOUT_MS = 6000;
 
+/** What a file-link job has found so far, read once when it settles. */
+interface FileLinkLookup {
+  /** Each description detection kept, in spoken order. */
+  descriptions: string[];
+  /** Each description's settled lookup; a gap never settled. */
+  found: Array<{ description: string; path: string | null } | undefined>;
+}
+
 // Deepgram and Grok end an utterance after 300ms of silence (`endpointing=300`),
 // a pause that falls inside sentences, so a completion ending in "send it" is
 // held this much longer: about a second of silence in all, close to what
@@ -1207,10 +1215,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   const findFileLinks = async (
     session: VoiceSession,
     correctionSvc: VoiceCorrectionService,
-    transcriptId: string,
     text: string,
     settings: VoiceInputSettings,
-    signal: AbortSignal
+    signal: AbortSignal,
+    lookup: FileLinkLookup
   ): Promise<void> => {
     const credentials = {
       apiKey: settings.openaiApiKey,
@@ -1223,8 +1231,20 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     const descriptions = detected
       .map(({ description }) => description.trim())
       .filter((description) => spoken.includes(normalizeSpoken(description)));
+    lookup.descriptions = descriptions;
     if (descriptions.length === 0 || signal.aborted) return;
-    let paths: Array<string | null>;
+    // Each lands as it settles, so one still searching at the deadline
+    // doesn't take the others with it.
+    const lookUpEach = (find: (description: string, i: number) => Promise<string | null>) =>
+      Promise.all(
+        descriptions.map(async (description, i) => {
+          try {
+            lookup.found[i] = { description, path: await find(description, i) };
+          } catch (error) {
+            logWarn("[VoiceInput] File link resolution failed", voiceErrorLogFields(error));
+          }
+        })
+      );
     const hostPane = hostPaneFor(session.projectId, session.outsideView);
     if (hostPane) {
       // The host searches its own files; which one was meant is chosen here,
@@ -1236,15 +1256,13 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         { timeoutMs: FILE_LINK_JOB_TIMEOUT_MS, signal }
       );
       if (!candidates || signal.aborted) return;
-      paths = await Promise.all(
-        descriptions.map((description, i) =>
-          voiceFileLinkResolver.pick({
-            description,
-            candidates: candidates[i] ?? [],
-            ...credentials,
-            signal,
-          })
-        )
+      await lookUpEach((description, i) =>
+        voiceFileLinkResolver.pick({
+          description,
+          candidates: candidates[i] ?? [],
+          ...credentials,
+          signal,
+        })
       );
     } else {
       const cwd = session.outsideView
@@ -1256,25 +1274,35 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             deps.ptyClient
           );
       if (!cwd || signal.aborted) return;
-      paths = await Promise.all(
-        descriptions.map((description) =>
-          voiceFileLinkResolver.resolve({ cwd, description, ...credentials, signal })
-        )
+      await lookUpEach((description) =>
+        voiceFileLinkResolver.resolve({ cwd, description, ...credentials, signal })
       );
     }
-    // A local match returns without consulting the signal.
-    if (signal.aborted) return;
-    // Misses go too, so a hit can't claim a missed command's words; their
-    // own words stay as spoken.
-    const references = descriptions.map((description, i) => ({
-      description,
-      path: paths[i] ?? null,
-    }));
-    const resolved = references.filter((reference) => reference.path).length;
-    logDebug("[VoiceInput] File links resolved", { detected: references.length, resolved });
+  };
+
+  // Every reference detected goes, misses and failures too: the composer says
+  // which found nothing (#14983), and a hit can't claim a missed command's
+  // words. Their own words stay as spoken.
+  const reportFileLinks = (
+    session: VoiceSession,
+    transcriptId: string,
+    { descriptions, found }: FileLinkLookup
+  ): void => {
+    // Speech with no reference detected in it stays silent, and so does a
+    // session cancelled or replaced: its references went with it.
+    if (descriptions.length === 0 || session.controller.signal.aborted) return;
+    // One that never settled threw, ran out of time, or had nowhere to look.
+    const references = descriptions.map(
+      (description, i) => found[i] ?? { description, path: null, failed: true as const }
+    );
+    logDebug("[VoiceInput] File links resolved", {
+      detected: references.length,
+      resolved: references.filter((reference) => reference.path).length,
+      failed: references.length - found.filter(Boolean).length,
+    });
     // The view that started the session, wherever it is now; never the app's
     // current view (#14599).
-    if (resolved === 0 || session.sender.isDestroyed()) return;
+    if (session.sender.isDestroyed()) return;
     session.sender.send(CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED, {
       sessionId: session.id,
       transcriptId,
@@ -1284,16 +1312,22 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
   const trackFileLinkJob = (
     session: VoiceSession,
-    run: (signal: AbortSignal) => Promise<void>
+    transcriptId: string,
+    run: (signal: AbortSignal, lookup: FileLinkLookup) => Promise<void>
   ): void => {
     const deadline = createTimeoutSignal(FILE_LINK_JOB_TIMEOUT_MS, session.controller.signal);
-    const work = run(deadline.signal).catch((error: unknown) => {
+    const lookup: FileLinkLookup = { descriptions: [], found: [] };
+    const work = run(deadline.signal, lookup).catch((error: unknown) => {
       logWarn("[VoiceInput] File link resolution failed", voiceErrorLogFields(error));
     });
-    const job: Promise<void> = Promise.race([work, whenAborted(deadline.signal)]).finally(() => {
-      deadline.dispose();
-      session.fileLinkJobs.delete(job);
-    });
+    // Reported once, whichever settles first, and before a stop waiting on
+    // the job ends the session.
+    const job: Promise<void> = Promise.race([work, whenAborted(deadline.signal)])
+      .then(() => reportFileLinks(session, transcriptId, lookup))
+      .finally(() => {
+        deadline.dispose();
+        session.fileLinkJobs.delete(job);
+      });
     session.fileLinkJobs.add(job);
   };
 
@@ -1955,8 +1989,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       if (correctionSvc && transcriptId) {
         // The renderer finds each description in the draft, so detection
         // reads the text the draft got.
-        trackFileLinkJob(session, (signal) =>
-          findFileLinks(session, correctionSvc, transcriptId, writtenText, liveSettings, signal)
+        trackFileLinkJob(session, transcriptId, (signal, lookup) =>
+          findFileLinks(session, correctionSvc, writtenText, liveSettings, signal, lookup)
         );
       }
     };

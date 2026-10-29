@@ -3073,7 +3073,7 @@ function buildElectronApi(): ElectronAPI {
         callback: (payload: {
           sessionId: string;
           transcriptId: string;
-          references: Array<{ description: string; path: string | null }>;
+          references: Array<{ description: string; path: string | null; failed?: true }>;
         }) => void
       ) => _typedOn(CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED, callback),
     },
