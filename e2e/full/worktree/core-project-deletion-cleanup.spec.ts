@@ -42,10 +42,10 @@ async function removeProjectViaSwitcher(
 /**
  * Open the project switcher palette and trigger the stop flow for the
  * currently-active project. Active projects no longer have a "Remove
- * project" menu item — instead they expose "Stop all agents" which fires
+ * project" menu item — instead they expose "Stop project" which fires
  * the Stop project confirm dialog.
  *
- * "Stop all agents" is gated by `processCount > 0` in the renderer. The
+ * "Stop project" is gated by `processCount > 0` in the renderer. The
  * processCount is pushed via `project:stats-updated` IPC, which is debounced
  * (200ms) and otherwise polls every 5s. Right-clicking immediately after
  * spawning terminals can race the broadcast — retry by re-opening the
@@ -62,7 +62,7 @@ async function stopActiveProjectViaSwitcher(
   const option = palette.getByRole("option", { name: new RegExp(projectName) });
   await expect(option).toBeVisible({ timeout: T_SHORT });
 
-  const stopItem = window.getByRole("menuitem", { name: "Stop all agents" });
+  const stopItem = window.getByRole("menuitem", { name: "Stop project" });
 
   await expect
     .poll(
@@ -73,7 +73,7 @@ async function stopActiveProjectViaSwitcher(
           .then(() => true)
           .catch(() => false);
         if (visible) return true;
-        // Menu opened but lacks "Stop all agents" (processCount not yet
+        // Menu opened but lacks "Stop project" (processCount not yet
         // propagated). Dismiss and retry — palette stays open.
         await window.keyboard.press("Escape");
         return false;
@@ -118,7 +118,7 @@ test.describe.serial("Deletion Cleanup: Stopping the active project clears UI", 
     fixtureCleanup?.();
   });
 
-  test("Stop all agents on the active project shows the Stop project dialog", async () => {
+  test("the Stop project menu item on the active project opens the confirm dialog", async () => {
     const { window } = ctx;
 
     await stopActiveProjectViaSwitcher(window, PROJECT_NAME);

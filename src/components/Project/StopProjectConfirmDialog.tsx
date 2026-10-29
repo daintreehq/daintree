@@ -23,13 +23,20 @@ export function StopProjectConfirmDialog({
   const projectName = useProjectStore((state) =>
     projectId ? state.projects.find((project) => project.id === projectId)?.name : undefined
   );
+  const isActiveProject = useProjectStore(
+    (state) => projectId != null && state.currentProject?.id === projectId
+  );
 
   return (
     <ConfirmDialog
       isOpen={projectId != null}
       onClose={onClose}
       title={projectName ? `Stop '${projectName}'?` : "Stop this project?"}
-      description="Every terminal and agent session running in this project is ended, and their scrollback and any in-flight agent work are lost."
+      description={
+        isActiveProject
+          ? "Every terminal in this project is ended, shells and dev servers as well as agent sessions, and their scrollback and any in-flight agent work are lost. This window then leaves the project and returns to the project screen."
+          : "Every terminal in this project is ended, shells and dev servers as well as agent sessions, and their scrollback and any in-flight agent work are lost."
+      }
       confirmLabel="Stop project"
       onConfirm={onConfirm}
       isConfirmLoading={isStopping}
