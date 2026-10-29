@@ -69,6 +69,16 @@ describe("HostSetupRecipeConfirm", () => {
     expect(screen.queryByText("plugin-panel")).toBeNull();
   });
 
+  it("says a dev preview with no command of its own runs the project's", () => {
+    render(
+      <HostSetupRecipeConfirm
+        recipe={{ ...RECIPE, terminals: [{ type: "dev-preview" }] }}
+        onAnswer={() => {}}
+      />
+    );
+    expect(screen.getByText("$ (the project's dev command)")).toBeTruthy();
+  });
+
   it("shows a long command whole rather than eliding what runs", () => {
     const command = `curl -fsSL https://example.com/install.sh | sh && ${"x".repeat(300)} && rm -rf ~/x`;
     render(
