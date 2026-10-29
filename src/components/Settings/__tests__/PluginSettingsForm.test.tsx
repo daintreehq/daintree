@@ -506,6 +506,86 @@ describe("PluginSettingsForm", () => {
     expect(pluginApi.revealSecretSetting).not.toHaveBeenCalled();
   });
 
+  it("reveals a first secret as it is typed, before anything is stored", async () => {
+    render(
+      <PluginSettingsForm plugin={makePlugin([{ id: "token", type: "secret", label: "Token" }])} />
+    );
+    const input = (await screen.findByLabelText("Token")) as HTMLInputElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    // An empty field with nothing stored has nothing to reveal.
+    expect(screen.queryByRole("button", { name: "Show Token" })).toBeNull();
+
+    fireEvent.change(input, { target: { value: "sk-pasted" } });
+    const toggle = screen.getByRole("button", { name: "Show Token" });
+    fireEvent.click(toggle);
+    expect(input.type).toBe("text");
+    expect(input.value).toBe("sk-pasted");
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(toggle);
+    expect(input.type).toBe("password");
+    expect(input.value).toBe("sk-pasted");
+    expect(pluginApi.revealSecretSetting).not.toHaveBeenCalled();
+    expect(pluginApi.setSettingValue).not.toHaveBeenCalled();
+  });
+
+  it("masks the next entry after a revealed secret is cleared", async () => {
+    render(
+      <PluginSettingsForm plugin={makePlugin([{ id: "token", type: "secret", label: "Token" }])} />
+    );
+    const input = (await screen.findByLabelText("Token")) as HTMLInputElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    fireEvent.change(input, { target: { value: "sk-first" } });
+    fireEvent.click(screen.getByRole("button", { name: "Show Token" }));
+    expect(input.type).toBe("text");
+    // Editing what is shown keeps it shown; only emptying the field re-masks.
+    fireEvent.change(input, { target: { value: "sk-firs" } });
+    expect(input.type).toBe("text");
+
+    fireEvent.change(input, { target: { value: "" } });
+    expect(input.type).toBe("password");
+    expect(screen.queryByRole("button", { name: "Show Token" })).toBeNull();
+
+    fireEvent.change(input, { target: { value: "sk-second" } });
+    expect(input.type).toBe("password");
+    expect(screen.getByRole("button", { name: "Show Token" }).getAttribute("aria-pressed")).toBe(
+      "false"
+    );
+  });
+
+  it("lets Tab reach the eye to check a typed secret before it saves", async () => {
+    render(
+      <PluginSettingsForm plugin={makePlugin([{ id: "token", type: "secret", label: "Token" }])} />
+    );
+    const input = (await screen.findByLabelText("Token")) as HTMLInputElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    fireEvent.change(input, { target: { value: "sk-pasted" } });
+    const toggle = screen.getByRole("button", { name: "Show Token" }) as HTMLButtonElement;
+    expect(toggle.tabIndex).toBe(0);
+
+    // Focus moving between the field and its own eye is not leaving the field.
+    fireEvent.blur(input, { relatedTarget: toggle });
+    fireEvent.click(toggle);
+    expect(input.type).toBe("text");
+    expect(input.value).toBe("sk-pasted");
+    fireEvent.blur(toggle, { relatedTarget: input });
+    expect(input.type).toBe("text");
+    expect(pluginApi.setSettingValue).not.toHaveBeenCalled();
+
+    fireEvent.blur(input, { relatedTarget: document.body });
+    await waitFor(() =>
+      expect(pluginApi.setSettingValue).toHaveBeenCalledWith(
+        "acme.test",
+        "token",
+        "sk-pasted",
+        "user",
+        null
+      )
+    );
+    expect(pluginApi.setSettingValue).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(input.value).toBe(""));
+    expect(input.type).toBe("password");
+  });
+
   it("never shows a secret value until revealed, then re-masks on blur", async () => {
     pluginApi.getSettingValues.mockResolvedValue(uiValues({ secretsSet: ["token"] }));
     pluginApi.revealSecretSetting.mockResolvedValue("sekret");
@@ -519,11 +599,16 @@ describe("PluginSettingsForm", () => {
     expect(input.value).toBe("");
     expect(input.type).toBe("password");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Show Token" }));
+    const toggle = await screen.findByRole("button", { name: "Show Token" });
+    fireEvent.click(toggle);
     await waitFor(() => expect(input.value).toBe("sekret"));
     expect(input.type).toBe("text");
+    // Tabbing to the eye stays inside the field: nothing saves yet.
+    fireEvent.blur(input, { relatedTarget: toggle });
+    expect(pluginApi.setSettingValue).not.toHaveBeenCalled();
+    expect(input.value).toBe("sekret");
 
-    fireEvent.blur(input);
+    fireEvent.blur(toggle);
     await waitFor(() =>
       expect(pluginApi.setSettingValue).toHaveBeenCalledWith(
         "acme.test",
@@ -577,6 +662,12 @@ describe("PluginSettingsForm", () => {
     expect(input.value).toBe("sk-typed");
     // With no keychain at all, another try is refused the same way.
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    // Nothing is stored, but the kept value can still be checked.
+    expect(screen.queryByRole("button", { name: "Clear Token" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show Token" }));
+    expect(input.type).toBe("text");
+    expect(input.value).toBe("sk-typed");
+    expect(pluginApi.revealSecretSetting).not.toHaveBeenCalled();
   });
 
   // Electron asks for the keychain once per run: after a dismissed unlock prompt
