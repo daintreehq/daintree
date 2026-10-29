@@ -78,7 +78,8 @@ function resolveDerivation(
   failures: string[]
 ): string {
   const color = { mode: "oklch" as const, l, c, h: hue };
-  if (!displayable(color)) failures.push(`${where}: oklch(${l} ${c} ${hue.toFixed(1)}) is outside sRGB`);
+  if (!displayable(color))
+    failures.push(`${where}: oklch(${l} ${c} ${hue.toFixed(1)}) is outside sRGB`);
   return formatHex(color);
 }
 
@@ -156,5 +157,4 @@ describe("fleet ribbon band (#15334)", () => {
 
     expect(failures).toEqual([]);
   });
-
 });
