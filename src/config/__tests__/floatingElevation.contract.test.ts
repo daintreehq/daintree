@@ -32,6 +32,7 @@ const FLOATING_CARD_HOSTS: Record<string, string> = {
   "src/components/Notifications/NotificationCenter.tsx": "FLOATING_CARD_SURFACE_CLASS",
   "src/components/Terminal/ArtifactOverlay.tsx": "FLOATING_CARD_CLASS",
   "src/components/Onboarding/GettingStartedChecklist.tsx": "FLOATING_CARD_CLASS",
+  "src/components/Fleet/FleetRawInputNotice.tsx": "FLOATING_CARD_CLASS",
 };
 
 const OVERLAY_SHEET_HOSTS = [

@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from "vitest";
 import { act, render, screen } from "@testing-library/react";
-import { FleetRawInputNotice, describeRawInputSkippedTargets } from "../FleetRawInputNotice";
+import {
+  FleetRawInputNotice,
+  describeRawInputSkippedTargets,
+  type FleetRawInputNoticeProps,
+} from "../FleetRawInputNotice";
 import {
   _resetCrossHostFleetForTesting,
   armCrossHostTarget,
@@ -51,23 +55,35 @@ describe("describeRawInputSkippedTargets", () => {
   });
 });
 
+const TYPED_INTO_PANE: FleetRawInputNoticeProps = {
+  isArmed: true,
+  isFocused: true,
+  isInputLocked: false,
+  hasComposer: false,
+  isComposerDisabled: false,
+};
+
+function armRemoteAgent(): void {
+  act(() => {
+    armCrossHostTarget({ hostId: "h1", hostName: "mini", terminalId: "a", title: "Claude" });
+  });
+}
+
 describe("FleetRawInputNotice", () => {
   beforeEach(() => {
     _resetCrossHostFleetForTesting();
   });
 
   it("renders nothing while no agent on another host is armed", () => {
-    const { container } = render(<FleetRawInputNotice composerReachesFleet={true} />);
+    const { container } = render(<FleetRawInputNotice {...TYPED_INTO_PANE} />);
     expect(container.firstChild).toBeNull();
   });
 
   it("follows the fleet as agents on other hosts are armed and disarmed", () => {
-    render(<FleetRawInputNotice composerReachesFleet={false} />);
+    render(<FleetRawInputNotice {...TYPED_INTO_PANE} />);
     expect(screen.queryByRole("note")).toBeNull();
 
-    act(() => {
-      armCrossHostTarget({ hostId: "h1", hostName: "mini", terminalId: "a", title: "Claude" });
-    });
+    armRemoteAgent();
     expect(screen.getByRole("note").textContent).toBe("Typing here skips 1 agent on mini");
 
     act(() => {
@@ -76,14 +92,25 @@ describe("FleetRawInputNotice", () => {
     expect(screen.queryByRole("note")).toBeNull();
   });
 
+  it.each([
+    ["an unarmed pane", { isArmed: false }],
+    ["an armed follower", { isFocused: false }],
+    ["a locked pane", { isInputLocked: true }],
+  ])("says nothing on %s, which nobody is typing into", (_name, pane) => {
+    armRemoteAgent();
+    const { container } = render(<FleetRawInputNotice {...TYPED_INTO_PANE} {...pane} />);
+    expect(container.firstChild).toBeNull();
+  });
+
   it("points at the composer only when the pane has one that can send", () => {
-    act(() => {
-      armCrossHostTarget({ hostId: "h1", hostName: "mini", terminalId: "a", title: "Claude" });
-    });
-    const { rerender } = render(<FleetRawInputNotice composerReachesFleet={false} />);
+    armRemoteAgent();
+    const { rerender } = render(<FleetRawInputNotice {...TYPED_INTO_PANE} />);
     expect(screen.getByRole("note").textContent).not.toContain("composer");
 
-    rerender(<FleetRawInputNotice composerReachesFleet={true} />);
+    rerender(<FleetRawInputNotice {...TYPED_INTO_PANE} hasComposer isComposerDisabled />);
+    expect(screen.getByRole("note").textContent).not.toContain("composer");
+
+    rerender(<FleetRawInputNotice {...TYPED_INTO_PANE} hasComposer />);
     const text = screen.getByRole("note").textContent ?? "";
     expect(text.startsWith("Typing here skips 1 agent on mini")).toBe(true);
     expect(text).toContain("composer");

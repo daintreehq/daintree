@@ -2,7 +2,7 @@
 import { beforeEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { applyFleetBroadcastResult, broadcastFleetRawInput } from "../fleetRawInputBroadcast";
 import { armCrossHostTarget } from "../crossHostFleet";
-import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { selectFleetMemberCount, useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
@@ -213,9 +213,11 @@ describe("broadcastFleetRawInput", () => {
     useFleetArmingStore.getState().armIds(["t1", "t2"]);
     armCrossHostTarget({ hostId: "mini", hostName: "mini", terminalId: "r1", title: "Remote" });
 
+    expect(selectFleetMemberCount(useFleetArmingStore.getState())).toBe(3);
+
     expect(broadcastFleetRawInput("t1", "\r")).toBe(true);
 
-    expect(broadcastMock).toHaveBeenCalledWith(["t1", "t2"], "\r", false);
+    expect(broadcastMock.mock.calls).toEqual([[["t1", "t2"], "\r", false]]);
     expect(notifyUserInputMock.mock.calls.map(([id]) => id)).toEqual(["t2"]);
     expect(notifyEnterPressedMock.mock.calls.map(([id]) => id)).toEqual(["t1", "t2"]);
   });
@@ -225,6 +227,7 @@ describe("broadcastFleetRawInput", () => {
     useFleetArmingStore.getState().armIds(["t1"]);
     armCrossHostTarget({ hostId: "mini", hostName: "mini", terminalId: "r1", title: "Remote" });
     const before = useFleetArmingStore.getState().broadcastSignal;
+    expect(selectFleetMemberCount(useFleetArmingStore.getState())).toBe(2);
 
     expect(broadcastFleetRawInput("t1", "x")).toBe(false);
 

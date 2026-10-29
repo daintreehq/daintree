@@ -1865,11 +1865,13 @@ function TerminalPaneComponent({
                   notice={
                     // Keys typed here never reach agents armed on other hosts,
                     // so the pane they're typed into says so (#14957).
-                    isArmed && isFocused && !isInputLocked ? (
-                      <FleetRawInputNotice
-                        composerReachesFleet={showHybridInputBar && !isHybridInputDisabled}
-                      />
-                    ) : null
+                    <FleetRawInputNotice
+                      isArmed={isArmed}
+                      isFocused={isFocused}
+                      isInputLocked={isInputLocked}
+                      hasComposer={showHybridInputBar}
+                      isComposerDisabled={isHybridInputDisabled}
+                    />
                   }
                 />
 
