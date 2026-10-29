@@ -15,6 +15,10 @@ import { detectUnresolvedVariables, splitByRecipeVariables } from "@/utils/recip
 import { RECIPE_VARIABLE_TOKEN } from "@/components/TerminalRecipe/recipeVariableTokens";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import type { FleetTargetPreview } from "./fleetExecution";
+import {
+  listDraftContextTokens,
+  type DraftContextToken,
+} from "@/components/Terminal/draftContextExpansion";
 import { isPtyPanel } from "@shared/types/panel";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { pluralize } from "@/lib/pluralize";
@@ -49,11 +53,11 @@ export function FleetDraftingPill(): ReactElement | null {
   });
   useEffect(() => {
     const preview = useFleetResolutionPreviewStore.getState();
-    if (preview.hasVariables) preview.setDraft(preview.draft);
+    if (preview.hasVariables || preview.hasContext) preview.setDraft(preview.draft);
   }, [lockedPeers]);
 
   const open = useFleetResolutionPreviewStore((s) => s.open);
-  const hasVariables = useFleetResolutionPreviewStore((s) => s.hasVariables);
+  const previewable = useFleetResolutionPreviewStore((s) => s.hasVariables || s.hasContext);
   const previews = useFleetResolutionPreviewStore((s) => s.previews);
   const setOpen = useFleetResolutionPreviewStore((s) => s.setOpen);
 
@@ -98,7 +102,7 @@ export function FleetDraftingPill(): ReactElement | null {
               "inline-flex min-w-0 max-w-full items-center gap-1 px-2 py-0.5 rounded-full",
               "bg-category-amber-subtle border border-category-amber-border text-category-amber-text shadow-[var(--theme-shadow-floating)]",
               "text-xs font-medium transition-colors",
-              hasVariables && "cursor-pointer hover:bg-category-amber-subtle/80"
+              previewable && "cursor-pointer hover:bg-category-amber-subtle/80"
             )}
           >
             <RadioTower className="h-3 w-3 shrink-0" aria-hidden="true" />
@@ -123,7 +127,7 @@ export function FleetDraftingPill(): ReactElement | null {
                   .join("")}
               </span>
             )}
-            {hasVariables && (
+            {previewable && (
               <ChevronDown
                 data-animated-chevron
                 className={cn(
@@ -189,6 +193,8 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
     excluded,
     exclusionReason,
     inputLocked,
+    contextCwd,
+    crossHost,
   } = preview;
   const draft = useFleetResolutionPreviewStore((s) => s.draft);
   const override = useFleetTargetOverridesStore((s) => s.payloadOverrides[terminalId]);
@@ -255,6 +261,7 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
   const visibleUnresolved = isOverridden
     ? detectUnresolvedVariables(currentValue, {})
     : unresolvedVars;
+  const contextTokens = excluded || isSkipped ? [] : listDraftContextTokens(currentValue);
 
   return (
     <li
@@ -324,6 +331,25 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
           )
         )}
       </div>
+      {contextTokens.length > 0 &&
+        (crossHost ? (
+          <div
+            data-testid="fleet-resolution-row-context-blocked"
+            className="mt-0.5 inline-flex items-center gap-0.5 text-3xs text-category-rose-text"
+          >
+            <AlertTriangle className="h-2.5 w-2.5 shrink-0" aria-hidden="true" />
+            {`${contextTokens.map((token) => token.text).join(", ")} can't reach another host`}
+          </div>
+        ) : (
+          <div
+            data-testid="fleet-resolution-row-context"
+            className="mt-0.5 text-3xs text-text-secondary wrap-anywhere"
+          >
+            {`Expands when sent: ${contextTokens
+              .map((token) => describeContextSource(token, contextCwd))
+              .join(" · ")}`}
+          </div>
+        ))}
       {!excluded && (
         <div className="mt-1 border-t border-border-subtle pt-1">
           <div className={cn(LIST_LABEL_CLASS, "mb-0.5", isSkipped && "opacity-50")}>
@@ -367,4 +393,18 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
       )}
     </li>
   );
+}
+
+/** Whose context a token becomes for this agent. */
+function describeContextSource(token: DraftContextToken, cwd: string | undefined): string {
+  switch (token.kind) {
+    case "diff":
+      return `${token.text} from ${cwd || "its working directory"}`;
+    case "terminal":
+      return `${token.text} from its own output`;
+    case "selection":
+      return `${token.text} from its own selection`;
+    case "plugin":
+      return `${token.text}, the same for every agent`;
+  }
 }

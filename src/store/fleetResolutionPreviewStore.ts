@@ -4,6 +4,7 @@ import {
   buildFleetTargetPreviews,
   type FleetTargetPreview,
 } from "@/components/Fleet/fleetExecution";
+import { listDraftContextTokens } from "@/components/Terminal/draftContextExpansion";
 
 /**
  * Fleet resolution preview state — decouples the input bar (writer) from
@@ -15,6 +16,8 @@ interface FleetResolutionPreviewState {
   draft: string;
   previews: FleetTargetPreview[];
   hasVariables: boolean;
+  /** The draft names context (`@diff`, `@terminal`…) each agent gets its own of. */
+  hasContext: boolean;
   open: boolean;
   userDismissed: boolean;
 
@@ -28,17 +31,21 @@ export const useFleetResolutionPreviewStore = create<FleetResolutionPreviewState
     draft: "",
     previews: [],
     hasVariables: false,
+    hasContext: false,
     open: false,
     userDismissed: false,
 
     setDraft: (draft: string) => {
       const hasVars = hasRecipeVariables(draft);
+      // Context tokens change what each agent is sent as much as variables do.
+      const hasContext = listDraftContextTokens(draft).length > 0;
+      const previewable = hasVars || hasContext;
       const state = getState();
 
       let open = state.open;
       let nextDismissed = state.userDismissed;
 
-      if (!hasVars) {
+      if (!previewable) {
         open = false;
         nextDismissed = false;
       } else if (!state.userDismissed) {
@@ -46,24 +53,27 @@ export const useFleetResolutionPreviewStore = create<FleetResolutionPreviewState
       }
 
       // Skip the per-target preview build when nothing renders it: closed
-      // popover AND no recipe variables. Reuse the existing reference so
+      // popover AND nothing to preview. Reuse the existing reference so
       // we don't allocate a fresh array on every keystroke. The transition
-      // closed+no-vars → open+vars is safe because the keystroke that
-      // introduces `{{` flips both `hasVars` and `open` to true above, so
-      // the guard falls through and previews rebuild on that very stroke.
-      const previews = !open && !hasVars ? state.previews : buildFleetTargetPreviews(draft);
+      // closed+nothing → open+previewable is safe because the keystroke that
+      // introduces `{{` or a context token flips both `previewable` and `open`
+      // to true above, so the guard falls through and previews rebuild on that
+      // very stroke.
+      const previews = !open && !previewable ? state.previews : buildFleetTargetPreviews(draft);
 
       set({
         draft,
         previews,
         hasVariables: hasVars,
+        hasContext,
         open,
         userDismissed: nextDismissed,
       });
     },
 
     setOpen: (open: boolean) => {
-      if (open && !getState().hasVariables) return;
+      const { hasVariables, hasContext } = getState();
+      if (open && !hasVariables && !hasContext) return;
       if (open) {
         set({ open: true, userDismissed: false });
       } else {
@@ -76,6 +86,7 @@ export const useFleetResolutionPreviewStore = create<FleetResolutionPreviewState
         draft: "",
         previews: [],
         hasVariables: false,
+        hasContext: false,
         open: false,
         userDismissed: false,
       });

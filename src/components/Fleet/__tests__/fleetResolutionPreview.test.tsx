@@ -412,3 +412,74 @@ describe("FleetDraftingPill — per-target edit and skip (#8691)", () => {
     expect(screen.getByTestId("fleet-drafting-pill-divergence-dot")).toBeTruthy();
   });
 });
+
+describe("the preview for a draft with context tokens (#14953)", () => {
+  beforeEach(() => {
+    resetStores();
+    useFleetArmingStore.setState({ crossHostTargets: [] });
+    seedPanel(makeAgent("t-1", { cwd: "/wt/one" }));
+    seedPanel(makeAgent("t-2", { cwd: "/wt/two" }));
+    armAgent("t-1", 0);
+    armAgent("t-2", 1);
+    usePanelStore.setState({ focusedId: "t-1" });
+  });
+
+  const rowFor = (id: string) =>
+    screen.getAllByTestId("fleet-resolution-row").find((row) => row.textContent?.includes(id))!;
+
+  it("opens on the keystroke that adds a token and closes when it's gone", () => {
+    useFleetResolutionPreviewStore.getState().setDraft("Review");
+    expect(useFleetResolutionPreviewStore.getState().open).toBe(false);
+    useFleetResolutionPreviewStore.getState().setDraft("Review @diff");
+    const state = useFleetResolutionPreviewStore.getState();
+    expect(state.hasContext).toBe(true);
+    expect(state.open).toBe(true);
+    expect(state.previews).toHaveLength(2);
+    useFleetResolutionPreviewStore.getState().setDraft("Review @dif");
+    expect(useFleetResolutionPreviewStore.getState().open).toBe(false);
+  });
+
+  it("says, row by row, whose context each agent is sent", () => {
+    useFleetResolutionPreviewStore.getState().setDraft("Review @diff and @terminal");
+    render(<FleetDraftingPill />);
+    const one = rowFor("t-1").querySelector("[data-testid='fleet-resolution-row-context']");
+    const two = rowFor("t-2").querySelector("[data-testid='fleet-resolution-row-context']");
+    expect(one?.textContent).toContain("@diff from /wt/one");
+    expect(two?.textContent).toContain("@diff from /wt/two");
+    expect(two?.textContent).toContain("@terminal from its own output");
+  });
+
+  it("follows a per-target edit, and says nothing for a skipped agent", () => {
+    useFleetResolutionPreviewStore.getState().setDraft("Review @diff");
+    render(<FleetDraftingPill />);
+    act(() => {
+      useFleetTargetOverridesStore.getState().setPayloadOverride("t-2", "Review your changes");
+      useFleetTargetOverridesStore.getState().setSkipped("t-1", true);
+    });
+    expect(screen.queryByTestId("fleet-resolution-row-context")).toBeNull();
+  });
+
+  it("flags an agent on another host, which the token can't reach", () => {
+    useFleetArmingStore.setState({
+      crossHostTargets: [
+        {
+          key: "remote-key",
+          hostId: "studio" as never,
+          hostName: "Studio",
+          terminalId: "r-1",
+          title: "remote",
+        },
+      ],
+    });
+    useFleetResolutionPreviewStore.getState().setDraft("Review @diff");
+    render(<FleetDraftingPill />);
+    const remote = rowFor("remote");
+    expect(
+      remote.querySelector("[data-testid='fleet-resolution-row-context-blocked']")?.textContent
+    ).toContain("@diff can't reach another host");
+    expect(remote.querySelector("[data-testid='fleet-resolution-row-context']")).toBeNull();
+    expect(
+      rowFor("t-1").querySelector("[data-testid='fleet-resolution-row-context-blocked']")
+    ).toBeNull();
+  });
+});

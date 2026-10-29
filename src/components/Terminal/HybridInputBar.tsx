@@ -100,7 +100,7 @@ import {
   hasPendingUploads,
   isolatedComposerUploadSurface,
 } from "./uploads/pendingUploads";
-import { tryComposerFleetBroadcast } from "./composerFleetBroadcast";
+import { CROSS_HOST_CONTEXT_REFUSAL, tryComposerFleetBroadcast } from "./composerFleetBroadcast";
 import { PendingUploadChips } from "./uploads/PendingUploadChips";
 import { LazyUploadConfirmHost } from "./uploads/LazyUploadConfirmHost";
 import { registerPaneDropTarget } from "./uploads/paneDropRouting";
@@ -339,6 +339,7 @@ function editorOwnsDomFocus(view: EditorView): boolean {
  */
 const SEND_HELD_STATUS = "Not sent. The draft is still here.";
 const SPOKEN_SEND_TOO_SHORT_CAPTION = "Too short to send by voice · Enter to send";
+const CROSS_HOST_CONTEXT_CAPTION = "Not sent · Context can't reach another host";
 const SPOKEN_SEND_TOO_SHORT_STATUS =
   "Not sent: a voice send needs three or more words. Press Enter to send the reply.";
 const VOICE_SUBMIT_OUTCOME_STATUS: Record<VoiceSubmitOutcome["kind"], string> = {
@@ -1175,6 +1176,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       terminalId: string;
       refused: boolean;
       tooShort?: true;
+      crossHostContext?: true;
       retires?: VoiceScratchRefusal | null;
     } | null>(null);
     const dropSendRefusal = (dictationKeepsReply = false) =>
@@ -1214,6 +1216,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const retires = standing?.panelId === voiceId ? standing : null;
       setSendNote({ terminalId, refused: true, tooShort: true, retires });
     }, [terminalId, voiceId]);
+    const noteCrossHostContextRefusal = () => {
+      ++submitAttemptRef.current;
+      setSendNote({ terminalId, refused: true, crossHostContext: true });
+    };
 
     // Every way this composer sends — Enter, a picked slash command, a prompt
     // from the command picker — goes through `submitText` when it is given, so
@@ -1302,17 +1308,28 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         : unchanged;
 
       // A fleet send settles a batch, or another host, later: what was typed
-      // since stays, as on a single-pane send.
-      const intercepted = tryComposerFleetBroadcast(isFocusedTerminal, terminalId, text, () => {
-        if (!isDraftUnchanged()) return;
-        if (keepDraft) {
-          keepDraft();
-          return;
+      // since stays, as on a single-pane send. One the fleet turned down took
+      // nothing.
+      let refused = false;
+      const intercepted = tryComposerFleetBroadcast(
+        isFocusedTerminal,
+        terminalId,
+        text,
+        () => {
+          if (!isDraftUnchanged()) return;
+          if (keepDraft) {
+            keepDraft();
+            return;
+          }
+          clearDraftInput(terminalId, projectId);
+          resetEditorDoc();
+        },
+        () => {
+          refused = true;
+          noteCrossHostContextRefusal();
         }
-        clearDraftInput(terminalId, projectId);
-        resetEditorDoc();
-      });
-      if (intercepted) return true;
+      );
+      if (intercepted) return !refused;
 
       const imagePaths = readImageChipPaths(view);
       return sendText(text, {
@@ -1400,10 +1417,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // border first, the newer of the two showing.
     const ownSendNote = sendNote?.terminalId === terminalId ? sendNote : null;
     const isSendRefused = ownSendNote?.refused === true;
-    const sendRefusedCaption = ownSendNote?.tooShort ? SPOKEN_SEND_TOO_SHORT_CAPTION : "Not sent";
+    const sendRefusedCaption = ownSendNote?.tooShort
+      ? SPOKEN_SEND_TOO_SHORT_CAPTION
+      : ownSendNote?.crossHostContext
+        ? CROSS_HOST_CONTEXT_CAPTION
+        : "Not sent";
     const sendRefusedStatus = ownSendNote?.tooShort
       ? SPOKEN_SEND_TOO_SHORT_STATUS
-      : SEND_HELD_STATUS;
+      : ownSendNote?.crossHostContext
+        ? CROSS_HOST_CONTEXT_REFUSAL
+        : SEND_HELD_STATUS;
     // A refused send retires the scratch refusal it found on the border, never
     // a newer one. One the send took outlives it: it says what went out.
     const retiredScratch = isSendRefused ? (ownSendNote?.retires ?? null) : null;

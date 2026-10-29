@@ -4,6 +4,7 @@ import {
   buildFleetTargetPreviews,
   executeFleetBroadcast,
   filterEligibleIds,
+  findCrossHostContextTargets,
 } from "../fleetExecution";
 import { crossHostTargetKey } from "../crossHostFleet";
 import { FLEET_LARGE_PASTE_BATCH_SIZE } from "../fleetBroadcast";
@@ -23,6 +24,11 @@ const clearDirectingStateMock = vi.hoisted(() => vi.fn<(id: string) => void>());
 const buildFleetBroadcastRecipeContextMock = vi.hoisted(() =>
   vi.fn<(id: string) => RecipeContext | undefined>()
 );
+// What each pane's screen shows, for `@terminal` and `@selection`.
+const screens = vi.hoisted(() => ({
+  output: new Map<string, string>(),
+  selection: new Map<string, string>(),
+}));
 
 vi.mock("../fleetBroadcast", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../fleetBroadcast")>();
@@ -48,6 +54,22 @@ vi.mock("@/services/TerminalInstanceService", () => {
     notifyUserInput: notifyUserInputMock,
     notifyEnterPressed: notifyEnterPressedMock,
     clearDirectingState: clearDirectingStateMock,
+    get: (id: string) => {
+      const output = screens.output.get(id);
+      if (output === undefined) return undefined;
+      const lines = output.split("\n");
+      return {
+        terminal: {
+          buffer: {
+            active: {
+              length: lines.length,
+              getLine: (i: number) => ({ translateToString: () => lines[i]! }),
+            },
+          },
+        },
+      };
+    },
+    getCachedSelection: (id: string) => screens.selection.get(id) ?? null,
   };
   return {
     createTerminalPaintPlane: () => terminalInstanceService,
@@ -107,6 +129,8 @@ function reset() {
   });
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
   useTerminalInputStore.setState({ sentPrompts: new Map() });
+  screens.output.clear();
+  screens.selection.clear();
 }
 
 const sentTo = (id: string) =>
@@ -567,6 +591,118 @@ describe("executeFleetBroadcast", () => {
       expect(notifyEnterPressedMock).not.toHaveBeenCalled();
       expect(clearDirectingStateMock).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("executeFleetBroadcast — context tokens (#14953)", () => {
+  const readDiff = async (cwd: string, type: string) => `diff ${type} in ${cwd}`;
+  const getWorkingDiff = vi.fn(readDiff);
+  const resolveContextReferences = vi.fn(async (refs: Array<{ prefix: string; id: string }>) =>
+    refs.map((ref) => ({
+      status: "resolved" as const,
+      pluginId: "recs",
+      pluginName: "Recs",
+      text: `record ${ref.id}`,
+    }))
+  );
+
+  beforeEach(() => {
+    reset();
+    getWorkingDiff.mockReset().mockImplementation(readDiff);
+    resolveContextReferences.mockClear();
+    (window as unknown as { electron: unknown }).electron = {
+      git: { getWorkingDiff },
+      plugin: { resolveContextReferences },
+    };
+  });
+
+  const sentBy = () => new Map(submitMock.mock.calls.map(([id, payload]) => [id, payload]));
+
+  it("takes @diff from each agent's own working directory", async () => {
+    seedPanels([makeAgent("a", { cwd: "/wt/a" }), makeAgent("b", { cwd: "/wt/b" })]);
+    await executeFleetBroadcast("Review @diff:staged", ["a", "b"]);
+    expect(sentBy().get("a")).toContain("diff staged in /wt/a");
+    expect(sentBy().get("b")).toContain("diff staged in /wt/b");
+    expect(sentBy().get("a")).not.toContain("@diff");
+  });
+
+  it("takes @terminal and @selection from each agent's own screen", async () => {
+    seedPanels([makeAgent("a"), makeAgent("b")]);
+    screens.output.set("a", "output of a");
+    screens.output.set("b", "output of b");
+    screens.selection.set("a", "picked in a");
+    await executeFleetBroadcast("Explain @terminal and @selection", ["a", "b"]);
+    expect(sentBy().get("a")).toContain("output of a");
+    expect(sentBy().get("a")).toContain("picked in a");
+    expect(sentBy().get("b")).toContain("output of b");
+    expect(sentBy().get("b")).toContain("[No terminal selection]");
+    expect(sentBy().get("b")).not.toContain("output of a");
+  });
+
+  it("asks the plugins once for a reference every agent's text carries", async () => {
+    seedPanels([makeAgent("a"), makeAgent("b"), makeAgent("c")]);
+    await executeFleetBroadcast("Use @rec:142", ["a", "b", "c"], { c: "Also @rec:142 here" });
+    expect(resolveContextReferences).toHaveBeenCalledTimes(1);
+    expect(resolveContextReferences).toHaveBeenCalledWith([{ prefix: "rec", id: "142" }]);
+    for (const payload of sentBy().values()) expect(payload).toContain("record 142");
+  });
+
+  it("expands context in a per-target edit, and records what was written", async () => {
+    seedPanels([makeAgent("a", { cwd: "/wt/a" }), makeAgent("b", { cwd: "/wt/b" })]);
+    await executeFleetBroadcast("hello", ["a", "b"], { b: "Look at @diff" });
+    expect(sentBy().get("a")).toBe("hello");
+    expect(sentBy().get("b")).toContain("diff unstaged in /wt/b");
+    expect(sentTo("b")).toEqual(["Look at @diff"]);
+  });
+
+  it("fills recipe variables first, so a diff's own {{…}} text goes as written", async () => {
+    buildFleetBroadcastRecipeContextMock.mockReturnValue({ branchName: "feature/terra" });
+    getWorkingDiff.mockResolvedValue("+ {{branch_name}}");
+    seedPanels([makeAgent("a"), makeAgent("b")]);
+    await executeFleetBroadcast("On {{branch_name}}: @diff", ["a", "b"]);
+    expect(sentBy().get("a")).toContain("On feature/terra:");
+    expect(sentBy().get("a")).toContain("+ {{branch_name}}");
+  });
+
+  it("sends nothing when cancelled while the context is read", async () => {
+    seedPanels([makeAgent("a"), makeAgent("b")]);
+    const controller = new AbortController();
+    getWorkingDiff.mockImplementation(async (cwd: string) => {
+      controller.abort();
+      return `diff in ${cwd}`;
+    });
+    const result = await executeFleetBroadcast(
+      "Review @diff",
+      ["a", "b"],
+      undefined,
+      controller.signal
+    );
+    expect(submitMock).not.toHaveBeenCalled();
+    expect(notifyUserInputMock).not.toHaveBeenCalled();
+    expect(result.cancelled).toBe(true);
+    expect(result.skippedCount).toBe(2);
+    expect(useFleetBroadcastProgressStore.getState().cancelled).toBe(true);
+  });
+
+  it("leaves a draft with no context to go out without waiting on anything", () => {
+    seedPanels([makeAgent("a"), makeAgent("b")]);
+    void executeFleetBroadcast("plain text", ["a", "b"]);
+    expect(submitMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("findCrossHostContextTargets", () => {
+  const REMOTE = crossHostTargetKey("host-2" as never, "t9");
+
+  it("names the other host's agents whose text still carries context", () => {
+    expect(findCrossHostContextTargets("Review @diff", ["a", REMOTE])).toEqual([REMOTE]);
+    expect(findCrossHostContextTargets("Review", ["a", REMOTE])).toEqual([]);
+    expect(findCrossHostContextTargets("Review @diff", ["a", REMOTE], { [REMOTE]: "Review" })).toEqual(
+      []
+    );
+    expect(findCrossHostContextTargets("Review", ["a", REMOTE], { [REMOTE]: "@terminal" })).toEqual([
+      REMOTE,
+    ]);
   });
 });
 

@@ -12,9 +12,14 @@ import { requestHostsOverview } from "@/components/Hosts/Overview/hostsOverviewR
 import {
   executeFleetBroadcast,
   filterEligibleIds,
+  findCrossHostContextTargets,
   type FleetExecutionResult,
 } from "./fleetExecution";
 import { pluralize } from "@/lib/pluralize";
+
+/** Why a fleet send carrying context to another host's agent didn't go. */
+export const CROSS_HOST_CONTEXT_REFUSAL =
+  "Not sent: context such as @diff can't reach an agent on another host. The draft is still here.";
 
 let activeBroadcastController: AbortController | null = null;
 // The composer send that owns the draft's cleanup. A newer Enter takes it
@@ -293,11 +298,18 @@ export async function sendDraftToFleet(text: string): Promise<boolean> {
  * none — every target excluded or gone, or every write refused — leaves the
  * draft to the user to edit and send again, and so does one a newer Enter
  * pre-empted, whose cleanup is the newer send's.
+ *
+ * Context tokens expand per agent here (`executeFleetBroadcast`), but an
+ * agent on another host can't be given this machine's context: a send that
+ * would hand one a token is consumed without going anywhere, and
+ * `onContextRefused` lets the composer say so. Skipping that agent, or
+ * editing the token out of its text, lets the send go.
  */
 export function tryFleetBroadcastFromEditor(
   terminalId: string,
   text: string,
-  onDelivered: () => void
+  onDelivered: () => void,
+  onContextRefused?: () => void
 ): boolean {
   const arming = useFleetArmingStore.getState();
   if (!arming.armedIds.has(terminalId) || selectFleetMemberCount(arming) < 2) return false;
@@ -321,6 +333,13 @@ export function tryFleetBroadcastFromEditor(
   if (targets.every((id) => initialSkipped.has(id))) {
     useAnnouncerStore.getState().announce("Broadcast skipped — all targets excluded", "polite");
     useFleetTargetOverridesStore.getState().clear();
+    return true;
+  }
+
+  const included = targets.filter((id) => !initialSkipped.has(id));
+  if (findCrossHostContextTargets(text, included, initialOverrides).length > 0) {
+    if (onContextRefused) onContextRefused();
+    else useAnnouncerStore.getState().announce(CROSS_HOST_CONTEXT_REFUSAL, "polite");
     return true;
   }
 

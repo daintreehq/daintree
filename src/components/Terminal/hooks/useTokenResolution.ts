@@ -1,7 +1,6 @@
 import { useCallback, useRef, type Dispatch, type SetStateAction } from "react";
 import { EditorSelection } from "@codemirror/state";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
-import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { buildTerminalSendPayload } from "@/lib/terminalInput";
 import { useCommandHistoryStore } from "@/store/commandHistoryStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
@@ -9,42 +8,8 @@ import { useDictationRangeStore } from "@/store/dictationRangeStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useDictionaryLearnPromptStore } from "@/store/dictionaryLearnPromptStore";
 import { mapSpanKeepingEdits, minimalDocChange } from "@/lib/textRangeMapping";
-import {
-  getAllAtContextReferences,
-  getAllAtTerminalTokens,
-  getAllAtSelectionTokens,
-  getAllAtDiffTokens,
-  fenceTokenExpansion,
-  resolveTokenExpansions,
-  type DiffContextType,
-  type ActiveCompletionContext,
-  type TokenExpansion,
-} from "../hybridInputParsing";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { usePluginContextProvidersStore } from "@/store/pluginContextProvidersStore";
-import type {
-  ContextReference,
-  ContextReferenceResolution,
-} from "@shared/types/pluginContextProvider";
-import { expandContextReferences } from "../contextReferenceExpansion";
-
-/** The plugin this view believes holds `prefix`, for a placeholder when main can't be asked. */
-function activeProviderName(prefix: string): string | undefined {
-  return usePluginContextProvidersStore
-    .getState()
-    .entries.find((entry) => entry.status === "active" && entry.prefix === prefix)?.pluginName;
-}
-
-/** Ask main for a draft's references; a bridge without the method answers that nothing is held. */
-function resolveContextReferences(
-  references: ContextReference[]
-): Promise<ContextReferenceResolution[]> {
-  const bridge = window.electron?.plugin;
-  if (typeof bridge?.resolveContextReferences !== "function") {
-    return Promise.resolve(references.map(() => ({ status: "unknown" })));
-  }
-  return bridge.resolveContextReferences(references);
-}
+import type { ActiveCompletionContext } from "../hybridInputParsing";
+import { expandDraftContext } from "../draftContextExpansion";
 
 /** A dictated passage as it settled, and the same passage as the user is sending it. */
 interface CorrectionSnapshot {
@@ -340,74 +305,9 @@ export function useTokenResolution({
           text,
           options?.dictationSessions
         );
-        const terminalTokens = expandContext ? getAllAtTerminalTokens(text) : [];
-        const selectionTokens = expandContext ? getAllAtSelectionTokens(text) : [];
-        const diffTokens = expandContext ? getAllAtDiffTokens(text) : [];
-        const contextReferences = expandContext ? getAllAtContextReferences(text) : [];
-        // Started first so the plugins answer while the diff is fetched; every
-        // reference resolves in parallel under main's deadline.
-        const contextExpansions =
-          contextReferences.length > 0
-            ? expandContextReferences(
-                contextReferences,
-                resolveContextReferences,
-                activeProviderName
-              )
-            : null;
-
-        const replacements: TokenExpansion[] = [];
-
-        for (const token of terminalTokens) {
-          const managed = peekTerminalService()?.get(terminalId);
-          let replacement: string;
-          if (managed) {
-            const buffer = managed.terminal.buffer.active;
-            const start = Math.max(0, buffer.length - 100);
-            const lines: string[] = [];
-            for (let i = start; i < buffer.length; i++) {
-              const line = buffer.getLine(i);
-              if (line) lines.push(line.translateToString(true));
-            }
-            const content = lines.join("\n").trimEnd();
-            replacement = content ? fenceTokenExpansion(content) : "[No terminal output]";
-          } else {
-            replacement = "[Terminal not available]";
-          }
-          replacements.push({ start: token.start, end: token.end, replacement });
-        }
-
-        for (const token of selectionTokens) {
-          const selection = peekTerminalService()?.getCachedSelection(terminalId);
-          const replacement = selection
-            ? fenceTokenExpansion(selection)
-            : "[No terminal selection]";
-          replacements.push({ start: token.start, end: token.end, replacement });
-        }
-
-        for (const token of diffTokens) {
-          let replacement: string;
-          try {
-            const raw = await window.electron.git.getWorkingDiff(cwd, token.diffType);
-            if (raw) {
-              replacement = fenceTokenExpansion(raw, "diff");
-            } else {
-              const labels: Record<DiffContextType, string> = {
-                unstaged: "working tree",
-                staged: "staged",
-                head: "HEAD",
-              };
-              replacement = `No ${labels[token.diffType]} changes.`;
-            }
-          } catch (err) {
-            const msg = formatErrorMessage(err, "Failed to fetch diff");
-            replacement = `[Error fetching diff: ${msg}]`;
-          }
-          replacements.push({ start: token.start, end: token.end, replacement });
-        }
-
-        if (contextExpansions) replacements.push(...(await contextExpansions));
-
-        const resolvedText = resolveTokenExpansions(text, replacements);
+        const resolvedText = expandContext
+          ? await expandDraftContext(text, { terminalId, cwd })
+          : text;
 
         const outgoing = options?.compose ? options.compose(resolvedText) : resolvedText;
         // Checked on the composed result rather than the raw draft: an empty
