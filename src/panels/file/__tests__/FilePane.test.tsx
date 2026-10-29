@@ -2927,6 +2927,27 @@ describe("FilePane live disk refresh (#11451)", () => {
       expect(readout()).toBe("Fit, 100%");
     });
 
+    it("leaves the temporary viewer dialog fit-only", async () => {
+      panelsById["file-1"] = { id: "file-1", kind: "file", filePath: "/repo/assets/logo.png" };
+      const { container } = render(
+        <TooltipProvider>
+          <FilePane
+            id="file-1"
+            title="logo.png"
+            isFocused={false}
+            location="dialog"
+            onFocus={() => {}}
+            onClose={() => {}}
+          />
+        </TooltipProvider>
+      );
+      await act(async () => {});
+
+      expect(imageSrc(container)).toContain("daintree-file://");
+      expect(screen.queryByRole("button", { name: "Zoom in" })).toBeNull();
+      expect(screen.queryByTestId("zoomable-image-status")).toBeNull();
+    });
+
     it("leaves an SVG fit-only", async () => {
       readMock.mockResolvedValue({
         content: '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>',

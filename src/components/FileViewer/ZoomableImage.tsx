@@ -176,7 +176,8 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
   }, []);
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
+    // Control-click is the context menu on macOS: leave it uncaptured.
+    if (event.button !== 0 || event.ctrlKey) return;
     dragRef.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
@@ -211,6 +212,9 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
   // + and - zoom, 0 fits. Panning is the part the footer buttons can't give,
   // and without it a zoomed image's edges are reachable only by pointer.
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    // Chords belong to the app: Cmd+arrows move between panels and Cmd+/-/0 are
+    // its own zoom. Shift stays ours, since `+` is Shift+= on most layouts.
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
     const pan: Record<string, [number, number]> = {
       ArrowLeft: [KEYBOARD_PAN_STEP, 0],
       ArrowRight: [-KEYBOARD_PAN_STEP, 0],
@@ -220,6 +224,9 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
     const delta = pan[event.key];
     if (delta) {
       event.preventDefault();
+      // Stopped so the grid's arrow-key panel navigation, which doesn't check
+      // `defaultPrevented`, doesn't also move focus away.
+      event.stopPropagation();
       setView((current) => ({
         ...current,
         offset: { x: current.offset.x + delta[0], y: current.offset.y + delta[1] },
@@ -228,12 +235,15 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
     }
     if (event.key === "+" || event.key === "=") {
       event.preventDefault();
+      event.stopPropagation();
       stepZoom(BUTTON_ZOOM_STEP);
     } else if (event.key === "-") {
       event.preventDefault();
+      event.stopPropagation();
       stepZoom(1 / BUTTON_ZOOM_STEP);
     } else if (event.key === "0") {
       event.preventDefault();
+      event.stopPropagation();
       resetView();
     }
   };
@@ -250,6 +260,7 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
         onPointerMove={handlePointerMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
+        onLostPointerCapture={endDrag}
         onDoubleClick={resetView}
         onKeyDown={handleKeyDown}
         tabIndex={0}

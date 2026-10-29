@@ -255,6 +255,86 @@ describe("ZoomableImage keyboard", () => {
     fireEvent.keyDown(stage, { key: "-" });
     expect(image.style.transform).toContain("scale(1)");
   });
+
+  it.each([{ metaKey: true }, { ctrlKey: true }, { altKey: true }])(
+    "leaves a chord to the app (%o)",
+    (modifier) => {
+      const stage = renderImage();
+      const image = screen.getByRole("img", { name: "a.png" });
+      for (const key of ["+", "-", "0", "ArrowLeft"]) {
+        const notCancelled = fireEvent.keyDown(stage, { key, ...modifier });
+        // An uncancelled key is still the app's to act on.
+        expect(notCancelled).toBe(true);
+      }
+      expect(image.style.transform).toBe("translate(0px, 0px) scale(1)");
+    }
+  );
+
+  it("keeps the keys it handles from reaching an ancestor's own key handling", () => {
+    // The content grid pans panel focus on bare arrows and doesn't look at
+    // defaultPrevented, so a handled key has to stop here.
+    const seen: string[] = [];
+    render(
+      <TooltipProvider>
+        <div onKeyDown={(event) => seen.push(event.key)}>
+          <ZoomableImage filePath="/repo/a.png" rootPath="/repo" alt="a.png" />
+        </div>
+      </TooltipProvider>
+    );
+    const stage = screen.getByRole("group", { name: /^a\.png/ });
+    for (const key of ["ArrowLeft", "+", "-", "0"]) fireEvent.keyDown(stage, { key });
+    fireEvent.keyDown(stage, { key: "Enter" });
+    expect(seen).toEqual(["Enter"]);
+  });
+});
+
+describe("ZoomableImage pointer", () => {
+  function renderStage() {
+    render(
+      <TooltipProvider>
+        <ZoomableImage filePath="/repo/a.png" rootPath="/repo" alt="a.png" />
+      </TooltipProvider>
+    );
+    const stage = screen.getByRole("group", { name: /^a\.png/ });
+    const captured: number[] = [];
+    // jsdom has no pointer capture.
+    stage.setPointerCapture = (id) => void captured.push(id);
+    stage.hasPointerCapture = () => false;
+    stage.releasePointerCapture = () => {};
+    const image = screen.getByRole("img", { name: "a.png" });
+    return { stage, image, captured };
+  }
+
+  it("pans on a primary-button drag", () => {
+    const { stage, image, captured } = renderStage();
+    fireEvent.pointerDown(stage, { pointerId: 1, button: 0, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 25, clientY: 30 });
+    expect(captured).toEqual([1]);
+    expect(image.style.transform).toBe("translate(15px, 20px) scale(1)");
+  });
+
+  it.each([
+    { name: "a secondary press", init: { button: 2 } },
+    {
+      name: "a Control-click, which is the context menu on macOS",
+      init: { button: 0, ctrlKey: true },
+    },
+  ])("leaves $name uncaptured and doesn't pan", ({ init }) => {
+    const { stage, image, captured } = renderStage();
+    fireEvent.pointerDown(stage, { pointerId: 1, clientX: 10, clientY: 10, ...init });
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 25, clientY: 30 });
+    expect(captured).toEqual([]);
+    expect(image.style.transform).toBe("translate(0px, 0px) scale(1)");
+  });
+
+  it("stops panning once the browser takes the pointer capture back", () => {
+    const { stage, image } = renderStage();
+    fireEvent.pointerDown(stage, { pointerId: 1, button: 0, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 20, clientY: 10 });
+    fireEvent.lostPointerCapture(stage, { pointerId: 1 });
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 90, clientY: 10 });
+    expect(image.style.transform).toBe("translate(10px, 0px) scale(1)");
+  });
 });
 
 describe("ZoomableImage footer", () => {
