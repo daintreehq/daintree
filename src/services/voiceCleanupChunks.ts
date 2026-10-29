@@ -22,7 +22,7 @@ const COUNTED_ITEM_RE =
 // A last sentence that says how many things are coming, so the first of them
 // follows even without a counting word: "we need three things."
 const ANNOUNCED_COUNT_RE =
-  /\b(?:two|three|four|five|six|seven|eight|nine|ten|[2-9]|[1-9]\d+|a couple of)\b(?: [\p{L}][\p{L}'’-]*){0,2} (?:things|problems|issues|bugs|reasons|steps|options|questions|items|points|tasks|changes|requirements|ways|ideas|goals|topics|concerns|features)\b/u;
+  /\b(?:two|three|four|five|six|seven|eight|nine|ten|[2-9]|[1-9]\d+|a couple(?: of)?)\b(?: [\p{L}][\p{L}'’-]*){0,2} (?:things|problems|issues|bugs|reasons|steps|options|questions|items|points|tasks|changes|requirements|ways|ideas|goals|topics|concerns|features)\b/u;
 
 const SENTENCE_END_RE = /[.!?…]["'”’)\]]*$/u;
 

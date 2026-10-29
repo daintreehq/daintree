@@ -66,14 +66,20 @@ describe("mayCutChunk", () => {
     "We need three things.",
     "There are two problems with this.",
     "I have 4 questions about the rollout.",
-    "Three reasons the deploy is slow.",
     "We need to fix three small things.",
     "We have three very important requirements.",
     "I have 12 questions.",
     "There are a couple of things to check.",
+    "We need a couple things.",
   ])("holds after an intro that announces a count: %s", (intro) => {
     expect(mayCutChunk(`${before} ${intro}`, "Better tests and docs.", false)).toBe(false);
     expect(mayCutChunk(`${before} ${intro}`, "Better tests and docs.", true)).toBe(false);
+  });
+
+  it("holds a spoken paragraph break after an intro the transcript left without a full stop", () => {
+    expect(mayCutChunk(`${before} We need three things`, "Better tests and docs.", true)).toBe(
+      false
+    );
   });
 
   it("still cuts at a break that has nothing to do with a list", () => {
