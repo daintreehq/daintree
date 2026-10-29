@@ -1115,6 +1115,7 @@ function KitOverflowToolbar({
                       disabled={entry.disabled}
                       onCheckedChange={() => entry.onSelect?.()}
                     >
+                      {glyph}
                       {entry.label}
                       <DropdownMenuShortcut shortcut={entry.shortcut} />
                     </DropdownMenuCheckboxItem>

@@ -18,6 +18,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { InlineError } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/Spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
@@ -302,6 +303,7 @@ function KitToolCallCard({
   ...rest
 }: PluginToolCallCardProps) {
   const panelId = useId();
+  const overlayZ = useKitOverlayZClass();
   const controlled = typeof open === "boolean";
   const [own, setOwn] = useState(defaultOpen === true);
   const isOpen = controlled ? open : own;
@@ -333,9 +335,14 @@ function KitToolCallCard({
       )}
       <OperationGlyph state={resolved} />
       <span className="sr-only">{OPERATION_WORD[resolved]}: </span>
-      <span className="shrink-0 font-mono text-xs text-text-primary">{tool}</span>
+      {/* The name gives way before the purpose has gone, and both before the card's edge. */}
+      <TruncatedTooltip content={tool} focusable={!expandable} contentClassName={overlayZ}>
+        <span className="min-w-0 truncate font-mono text-xs text-text-primary">{tool}</span>
+      </TruncatedTooltip>
       {purpose ? (
-        <span className="min-w-0 flex-1 truncate text-xs text-text-secondary">{purpose}</span>
+        <span className="min-w-0 flex-auto shrink-[4] truncate text-xs text-text-secondary">
+          {purpose}
+        </span>
       ) : (
         <span className="flex-1" />
       )}

@@ -10,6 +10,7 @@ import { ProgressBar } from "@/components/ui/ProgressBar";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { Spinner } from "@/components/ui/Spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
@@ -208,6 +209,7 @@ export function KitTaskList({
   className,
   ...rest
 }: PluginTaskListProps) {
+  const overlayZ = useKitOverlayZClass();
   const retry = fn(onRetry);
   const cancel = fn(onCancel);
   const entries = readTasks(tasks, retry !== undefined, cancel !== undefined);
@@ -329,14 +331,18 @@ export function KitTaskList({
                   <TaskGlyph status={entry.status} />
                 </span>
                 <div className="flex min-w-0 flex-1 flex-col gap-0.5 py-1">
-                  <span className="min-w-0 truncate text-xs leading-4 text-text-primary">
-                    <span className="sr-only">{TASK_WORD[entry.status]}: </span>
-                    {entry.title}
-                  </span>
+                  <TruncatedTooltip content={entry.title} contentClassName={overlayZ}>
+                    <span className="min-w-0 truncate text-xs leading-4 text-text-primary">
+                      <span className="sr-only">{TASK_WORD[entry.status]}: </span>
+                      {entry.title}
+                    </span>
+                  </TruncatedTooltip>
                   {hasContent(detail) ? (
-                    <div className="min-w-0 truncate text-2xs text-text-secondary">
-                      {node(detail)}
-                    </div>
+                    <TruncatedTooltip content={node(detail)} contentClassName={overlayZ}>
+                      <div className="min-w-0 truncate text-2xs text-text-secondary">
+                        {node(detail)}
+                      </div>
+                    </TruncatedTooltip>
                   ) : null}
                   {showBar ? (
                     <ProgressBar
