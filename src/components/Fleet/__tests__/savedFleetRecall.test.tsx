@@ -35,6 +35,7 @@ vi.mock("@/utils/logger", () => ({
 
 import { actionService } from "@/services/ActionService";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import type { FleetSavedScope } from "@shared/types";
 import {
   formatSavedFleetCount,
@@ -61,6 +62,7 @@ function setSaved(scopes: FleetSavedScope[]) {
 beforeEach(() => {
   vi.mocked(actionService.dispatch).mockReset();
   setSaved([]);
+  useFleetArmingStore.getState().clear();
 });
 
 describe("saved fleet counts", () => {
@@ -269,5 +271,60 @@ describe("SaveFleetDialog", () => {
     render(<SaveFleetDialog isOpen onClose={vi.fn()} armedCount={2} />);
     await submitNamed("   ");
     expect(actionService.dispatch).not.toHaveBeenCalled();
+  });
+
+  function armRemote(terminalId: string, hostName: string) {
+    useFleetArmingStore.getState().armCrossHostTarget({
+      key: `host-fleet:${hostName}:${terminalId}`,
+      hostId: hostName,
+      hostName,
+      terminalId,
+      title: `Claude ${terminalId}`,
+    });
+  }
+
+  /** What the snapshot option tells the person, as the radio group reads it out. */
+  function typeHint(): string {
+    const group = screen.getByRole("radiogroup", { name: "Fleet type" });
+    const id = group.getAttribute("aria-describedby") ?? "";
+    return document.getElementById(id)?.textContent ?? "";
+  }
+
+  const saveButton = () => screen.getByRole("button", { name: "Save fleet" }) as HTMLButtonElement;
+
+  it("says only the panes armed here when no agent on another host is armed", () => {
+    render(<SaveFleetDialog isOpen onClose={vi.fn()} armedCount={2} />);
+    expect(typeHint()).toBe("The 2 panes armed now. Panes you close drop out of it.");
+  });
+
+  it("names the agents on other hosts a snapshot leaves out", () => {
+    armRemote("t1", "studio-01");
+    render(<SaveFleetDialog isOpen onClose={vi.fn()} armedCount={2} />);
+    const hint = typeHint();
+    expect(hint).toContain("The 2 panes armed now.");
+    expect(hint).toContain("Panes you close drop out of it.");
+    expect(hint).toContain("Claude t1 on studio-01");
+    expect(hint).toMatch(/other host/);
+  });
+
+  it("explains why a fleet of only other hosts' agents has no snapshot to save", async () => {
+    armRemote("t1", "studio-01");
+    armRemote("t2", "studio-02");
+    render(<SaveFleetDialog isOpen onClose={vi.fn()} armedCount={0} />);
+    const hint = typeHint();
+    expect(hint).not.toContain("0 panes");
+    expect(hint).toMatch(/other host/);
+    expect(hint).toContain("Claude t1 on studio-01");
+    expect(hint).toContain("Claude t2 on studio-02");
+    await submitNamed("Remote triage");
+    expect(saveButton().disabled).toBe(true);
+    expect(actionService.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("follows the fleet while open: a host agent armed after opening is named too", () => {
+    render(<SaveFleetDialog isOpen onClose={vi.fn()} armedCount={1} />);
+    expect(typeHint()).not.toContain("studio-01");
+    act(() => armRemote("t1", "studio-01"));
+    expect(typeHint()).toContain("Claude t1 on studio-01");
   });
 });
