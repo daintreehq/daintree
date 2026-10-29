@@ -1786,6 +1786,21 @@ describe("opening the shown file as a panel (#15015)", () => {
     expect(onOpenAsPanel).toHaveBeenCalledExactlyOnceWith("/repo/src/notes.txt");
   });
 
+  it("moves into the folded menu at compact widths, leaving no loose button", async () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, 0, 320, 30)
+    );
+    readMock.mockResolvedValue({ content: "x" });
+    const onOpenAsPanel = vi.fn();
+    renderViewer("/repo/src/notes.txt", { onOpenAsPanel });
+    await screen.findByTestId("code-viewer-mock");
+
+    expect(screen.queryByRole("button", { name: "Open as panel" })).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Open as panel" }));
+
+    expect(onOpenAsPanel).toHaveBeenCalledExactlyOnceWith("/repo/src/notes.txt");
+  });
+
   it("offers nothing when the pane supplies no route", async () => {
     readMock.mockResolvedValue({ content: "x" });
     renderViewer("/repo/src/notes.txt");
