@@ -61,6 +61,8 @@ const snapshot = {
   tierMismatch: null,
   isApprovingTier: false,
   assistantVersionTooOld: null,
+  activeGrants: [],
+  revokingGrantKeys: [],
 };
 
 // Pass-through dropdown mock (same shape as PanelHeader.test.tsx) — keeps the
