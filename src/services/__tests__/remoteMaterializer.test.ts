@@ -316,14 +316,100 @@ describe("remote materialize", () => {
     );
   });
 
-  it("never asks to replace, or replaces, without a token from the host", async () => {
+  // Not a cancellation: the user never backed out, so the clash is reported
+  // rather than swallowed with the silence CANCELLED gets.
+  it("never asks to replace, or replaces, without a token from the host, and says so", async () => {
     const confirmReplace = vi.fn(async () => true);
-    const { materialize, fileTransfer } = setup({ confirmReplace });
+    const reportFailure = vi.fn();
+    const { materialize, fileTransfer } = setup({ confirmReplace, reportFailure });
     fileTransfer.uploadLocalFile.mockResolvedValueOnce({
       hostPath: "/srv/proj/spec.md",
       bytes: 0,
       deduplicated: false,
       conflict: true,
+    });
+    const failure = materialize(
+      { kind: "local-file", path: "/Users/me/spec.md" },
+      { destination: { kind: "worktree", directory: "/srv/proj" } }
+    );
+    await expect(failure).rejects.toMatchObject({ name: "MaterializeError", code: "CONFLICT" });
+    expect(confirmReplace).not.toHaveBeenCalled();
+    expect(fileTransfer.uploadLocalFile).toHaveBeenCalledTimes(1);
+    expect(reportFailure).toHaveBeenCalledTimes(1);
+    const [{ title, message, code }] = reportFailure.mock.calls[0]!;
+    expect(code).toBe("CONFLICT");
+    expect(title).toBe("Couldn't send spec.md");
+    expect(message).toContain("spec.md");
+    expect(message).toContain("studio-01");
+  });
+
+  it("reports a file that changed on the host after the user chose to replace it", async () => {
+    const confirmReplace = vi.fn(async () => true);
+    const reportFailure = vi.fn();
+    const { materialize, fileTransfer } = setup({ confirmReplace, reportFailure });
+    const clash = {
+      hostPath: "/srv/proj/docs/spec.md",
+      bytes: 0,
+      deduplicated: false,
+      conflict: true,
+      replaceToken: REPLACE_TOKEN,
+    };
+    fileTransfer.uploadLocalFile
+      .mockResolvedValueOnce(clash)
+      .mockResolvedValueOnce({ ...clash, replaceToken: "f".repeat(32) });
+
+    const failure = materialize(
+      { kind: "local-file", path: "/Users/me/spec.md" },
+      { destination: { kind: "worktree", directory: "/srv/proj/docs" } }
+    );
+    await expect(failure).rejects.toMatchObject({ name: "MaterializeError", code: "CONFLICT" });
+    expect(confirmReplace).toHaveBeenCalledTimes(1);
+    expect(fileTransfer.uploadLocalFile).toHaveBeenCalledTimes(2);
+    expect(reportFailure).toHaveBeenCalledTimes(1);
+    const [{ title, message, code }] = reportFailure.mock.calls[0]!;
+    expect(code).toBe("CONFLICT");
+    expect(title).toBe("Couldn't send spec.md");
+    expect(message).toContain("spec.md");
+    expect(message).toContain("studio-01");
+  });
+
+  it("reports a clash that comes back after Replace for raw bytes too", async () => {
+    const reportFailure = vi.fn();
+    const { materialize, fileTransfer } = setup({ reportFailure });
+    const clash = {
+      hostPath: "/srv/proj/shot.png",
+      bytes: 0,
+      deduplicated: false,
+      conflict: true,
+      replaceToken: REPLACE_TOKEN,
+    };
+    fileTransfer.uploadBytes.mockResolvedValueOnce(clash).mockResolvedValueOnce(clash);
+    await expect(
+      materialize(
+        { kind: "local-bytes", bytes: new Uint8Array([1, 2, 3]), name: "shot.png", mimeType: null },
+        { destination: { kind: "worktree", directory: "/srv/proj" } }
+      )
+    ).rejects.toMatchObject({ name: "MaterializeError", code: "CONFLICT" });
+    expect(fileTransfer.uploadBytes).toHaveBeenCalledTimes(2);
+    expect(reportFailure).toHaveBeenCalledTimes(1);
+    expect(reportFailure.mock.calls[0]![0]).toMatchObject({
+      title: "Couldn't send shot.png",
+      code: "CONFLICT",
+    });
+  });
+
+  it("says nothing when the user declines to replace", async () => {
+    const reportFailure = vi.fn();
+    const { materialize, fileTransfer } = setup({
+      confirmReplace: vi.fn(async () => false),
+      reportFailure,
+    });
+    fileTransfer.uploadLocalFile.mockResolvedValueOnce({
+      hostPath: "/srv/proj/spec.md",
+      bytes: 0,
+      deduplicated: false,
+      conflict: true,
+      replaceToken: REPLACE_TOKEN,
     });
     await expect(
       materialize(
@@ -331,8 +417,7 @@ describe("remote materialize", () => {
         { destination: { kind: "worktree", directory: "/srv/proj" } }
       )
     ).rejects.toMatchObject({ code: "CANCELLED" });
-    expect(confirmReplace).not.toHaveBeenCalled();
-    expect(fileTransfer.uploadLocalFile).toHaveBeenCalledTimes(1);
+    expect(reportFailure).not.toHaveBeenCalled();
   });
 
   // Fixed values, not the constants: a change to either limit must fail here.

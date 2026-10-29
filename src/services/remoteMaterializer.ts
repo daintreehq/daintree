@@ -169,21 +169,33 @@ export function createRemoteMaterializer(deps: RemoteMaterializerDeps): Material
    * says so, with the token the host issued for exactly that file. If the file
    * changed in the meantime the host reports the clash again, and nothing is
    * replaced.
+   *
+   * Only declining is a cancellation. A clash with no token to replace it
+   * under, or one that comes back after the user chose Replace, is reported:
+   * they asked for something destructive and it didn't happen.
    */
   const resolveConflict = async (
     result: UploadResult,
     retry: (replaceToken: string) => Promise<UploadResult>
   ): Promise<UploadResult> => {
     if (!result.conflict) return result;
-    if (!result.replaceToken) throw cancelled();
-    const replace = await deps.confirmReplace({
-      name: basename(result.hostPath),
-      folder: dirname(result.hostPath),
-      hostLabel: deps.hostLabel(),
-    });
+    const name = basename(result.hostPath);
+    const folder = dirname(result.hostPath);
+    if (!result.replaceToken) {
+      throw new MaterializeError(
+        "CONFLICT",
+        `${name} is already in ${folder} on ${deps.hostLabel()}, and it couldn't be replaced.`
+      );
+    }
+    const replace = await deps.confirmReplace({ name, folder, hostLabel: deps.hostLabel() });
     if (!replace) throw cancelled();
     const replaced = await retry(result.replaceToken);
-    if (replaced.conflict) throw cancelled();
+    if (replaced.conflict) {
+      throw new MaterializeError(
+        "CONFLICT",
+        `${name} couldn't be replaced on ${deps.hostLabel()}: something changed after you chose Replace. Add it again to retry.`
+      );
+    }
     return replaced;
   };
 
