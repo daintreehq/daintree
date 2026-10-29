@@ -35,6 +35,7 @@ vi.mock("@/utils/logger", () => ({
 
 import { actionService } from "@/services/ActionService";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import type { FleetSavedScope } from "@shared/types";
 import {
   formatSavedFleetCount,
@@ -42,7 +43,7 @@ import {
   storedPaneCount,
 } from "../savedFleetMeta";
 import { SavedFleetQuickRecall } from "../SavedFleetQuickRecall";
-import { SaveFleetDialog } from "../SaveFleetDialog";
+import { SaveFleetDialog, describeLeftOut } from "../SaveFleetDialog";
 import type { ReactElement } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -61,6 +62,7 @@ function setSaved(scopes: FleetSavedScope[]) {
 beforeEach(() => {
   vi.mocked(actionService.dispatch).mockReset();
   setSaved([]);
+  useFleetArmingStore.getState().clear();
 });
 
 describe("saved fleet counts", () => {
@@ -269,5 +271,109 @@ describe("SaveFleetDialog", () => {
     render(<SaveFleetDialog isOpen onClose={vi.fn()} armedCount={2} />);
     await submitNamed("   ");
     expect(actionService.dispatch).not.toHaveBeenCalled();
+  });
+
+  function armRemote(terminalId: string, hostName: string) {
+    // Host ids are opaque; only the display name belongs in copy.
+    useFleetArmingStore.getState().armCrossHostTarget({
+      key: `host-fleet:id-${hostName}:${terminalId}`,
+      hostId: `id-${hostName}`,
+      hostName,
+      terminalId,
+      title: `Claude ${terminalId}`,
+    });
+  }
+
+  /** What the snapshot option tells the person, as the radio group reads it out. */
+  function typeHint(): string {
+    const group = screen.getByRole("radiogroup", { name: "Fleet type" });
+    const id = group.getAttribute("aria-describedby") ?? "";
+    return document.getElementById(id)?.textContent ?? "";
+  }
+
+  const saveButton = () => screen.getByRole("button", { name: "Save fleet" });
+
+  /** Why Save is unavailable, as the disabled button reads it out. */
+  function saveBlockedBy(): string | null {
+    const id = saveButton().getAttribute("aria-describedby");
+    return id ? (document.getElementById(id)?.textContent ?? null) : null;
+  }
+
+  it("says only the panes armed here when no agent on another host is armed", () => {
+    render(<SaveFleetDialog isOpen onClose={vi.fn()} armedCount={2} />);
+    expect(typeHint()).toBe("The 2 panes armed now. Panes you close drop out of it.");
+  });
+
+  it("names the agent on another host a snapshot leaves out, beside the panes it keeps", () => {
+    armRemote("t1", "studio-01");
+    render(<SaveFleetDialog isOpen onClose={vi.fn()} armedCount={2} />);
+    expect(typeHint()).toBe(
+      "The 2 panes armed now. Panes you close drop out of it." +
+        "Left out, since a snapshot can't hold agents on other hosts: Claude t1 on studio-01."
+    );
+  });
+
+  it("explains why a fleet of only other hosts' agents has no snapshot to save", async () => {
+    armRemote("t1", "studio-01");
+    armRemote("t2", "studio-02");
+    render(<SaveFleetDialog isOpen onClose={vi.fn()} armedCount={0} />);
+    expect(typeHint()).toBe(
+      "Only panes armed here go in a snapshot. Panes you close drop out of it." +
+        "Left out, since a snapshot can't hold agents on other hosts: " +
+        "Claude t1 on studio-01 and Claude t2 on studio-02."
+    );
+    await submitNamed("Remote triage");
+    expect(saveButton().getAttribute("aria-disabled")).toBe("true");
+    expect(saveBlockedBy()).toBe("Arm panes here to save a snapshot");
+    expect(actionService.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("with nothing armed anywhere, says what a snapshot holds and leaves no one out", () => {
+    render(<SaveFleetDialog isOpen onClose={vi.fn()} armedCount={0} />);
+    expect(typeHint()).toBe(
+      "Only panes armed here go in a snapshot. Panes you close drop out of it."
+    );
+    expect(saveBlockedBy()).toBe("Arm panes here to save a snapshot");
+  });
+
+  it("counts the left-out agents past a few names rather than listing every one", () => {
+    const targets = ["a", "b", "c", "d", "e"].map((id) => ({
+      key: `host-fleet:h:${id}`,
+      hostId: "h",
+      hostName: "studio",
+      terminalId: id,
+      title: id.toUpperCase(),
+    }));
+    expect(describeLeftOut(targets)).toBe(
+      "Left out, since a snapshot can't hold agents on other hosts: " +
+        "A on studio, B on studio, C on studio, and 2 others."
+    );
+    // One more name reads better than "and 1 other".
+    expect(describeLeftOut(targets.slice(0, 4))).toBe(
+      "Left out, since a snapshot can't hold agents on other hosts: " +
+        "A on studio, B on studio, C on studio, and D on studio."
+    );
+  });
+
+  it("drops the snapshot's left-out note for a live rule, which can save with no pane here", async () => {
+    armRemote("t1", "studio-01");
+    render(<SaveFleetDialog isOpen onClose={vi.fn()} armedCount={0} />);
+    fireEvent.click(screen.getByRole("radio", { name: "Live rule" }));
+    expect(typeHint()).not.toContain("studio-01");
+    await submitNamed("Waiting");
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "fleet.saveNamedFleet",
+      expect.objectContaining({ kind: "predicate", name: "Waiting" }),
+      { source: "user" }
+    );
+  });
+
+  it("follows the fleet while open: names a host agent armed after opening, drops one disarmed", () => {
+    render(<SaveFleetDialog isOpen onClose={vi.fn()} armedCount={1} />);
+    expect(typeHint()).not.toContain("studio-01");
+    act(() => armRemote("t1", "studio-01"));
+    expect(typeHint()).toContain("Claude t1 on studio-01");
+    act(() => useFleetArmingStore.getState().disarmCrossHostTarget("host-fleet:id-studio-01:t1"));
+    expect(typeHint()).toBe("The 1 pane armed now. Panes you close drop out of it.");
   });
 });

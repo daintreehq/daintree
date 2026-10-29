@@ -104,6 +104,7 @@ function resetState(): void {
     armOrder: [],
     armOrderById: {},
     lastArmedId: null,
+    crossHostTargets: [],
   });
   usePanelStore.setState({
     panelsById: {},
@@ -160,6 +161,32 @@ describe("fleet.saveNamedFleet", () => {
     expect(saved.kind).toBe("snapshot");
     expect(saved.name).toBe("My Fleet");
     expect(saved.kind === "snapshot" ? saved.terminalIds : []).toEqual(["a", "b"]);
+  });
+
+  it("saves only this view's panes, leaving an armed agent on another host as it was", async () => {
+    // The save dialog names the other hosts' agents as left out; this is the
+    // behaviour that copy describes.
+    seedPanels([makeAgent("a"), makeAgent("b")]);
+    useFleetArmingStore.getState().armIds(["b", "a"]);
+    useFleetArmingStore.getState().armCrossHostTarget({
+      key: "host-fleet:studio-01:t1",
+      hostId: "studio-01",
+      hostName: "studio-01",
+      terminalId: "t1",
+      title: "Claude",
+    });
+    getSettingsMock.mockResolvedValue({ runCommands: [] });
+    saveSettingsMock.mockResolvedValue(undefined);
+
+    const registry = await buildRegistry();
+    await run(registry, "fleet.saveNamedFleet", { kind: "snapshot", name: "Mixed" });
+
+    expect(saveSettingsMock.mock.calls[0]![1].fleetSavedScopes).toMatchObject([
+      { kind: "snapshot", name: "Mixed", terminalIds: ["b", "a"] },
+    ]);
+    expect(useFleetArmingStore.getState().crossHostTargets.map((t) => t.key)).toEqual([
+      "host-fleet:studio-01:t1",
+    ]);
   });
 
   it("trims whitespace from the name and refuses an empty name", async () => {
