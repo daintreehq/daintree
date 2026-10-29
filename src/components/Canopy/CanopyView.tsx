@@ -35,7 +35,6 @@ import { Spinner } from "@/components/ui/Spinner";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useFrozenBackdrop } from "./useFrozenBackdrop";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Callout } from "@/components/ui/Callout";
 import { itemNeedsAttention, repliedAt, type CanopyItem } from "./canopyModel";
@@ -292,7 +291,6 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
     if (!hostListed) setHostId(null);
   }, [hostListed, setHostId]);
   useOverlayClaim("canopy", isOpen);
-  const still = useFrozenBackdrop(isOpen);
   // A view put in the background — another project shown in its place — can
   // be seen by no one: an inbox left open there would acknowledge asks nobody
   // saw, keep its pages held back, and hold an agent's terminal at its size.
@@ -362,17 +360,11 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
     };
   }, [isOpen, showingOwnHost, applySnapshot]);
 
-  const backdrop =
-    still === null ? undefined : (
-      <img src={still} alt="" draggable={false} className="h-screen w-screen max-w-none" />
-    );
-
   // Every host together: each host's own Canopy says whether it is on, inside
   // the inbox, and none is turned on by being listed.
   if (readingAll) {
     return (
       <CanopyInbox
-        backdrop={backdrop}
         restoreOpener={restoreOnReplace}
         hostId={ALL_HOSTS_ID}
         hostRow={null}
@@ -387,7 +379,6 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
     const hostRow = hostRows?.find((row) => row.hostId === hostId) ?? null;
     return (
       <CanopyInbox
-        backdrop={backdrop}
         restoreOpener={restoreOnReplace}
         hostId={hostId}
         hostRow={hostRow}
@@ -404,13 +395,11 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
       <AppDialog
         isOpen={isOpen}
         onClose={close}
-        size="workspace"
-        maxHeight="h-[min(90vh,1100px)]"
+        placement="window"
         // Nothing to land on yet, and Close is no place for a reflexive Enter.
         initialFocus="none"
         restoreFocusTo={restoreOnReplace}
         preferRestoreFocusTo
-        backdrop={backdrop}
         data-testid="canopy-dialog"
       >
         <AppDialog.Header>
@@ -433,11 +422,9 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
       <AppDialog
         isOpen={isOpen}
         onClose={close}
-        size="workspace"
-        maxHeight="h-[min(90vh,1100px)]"
+        placement="window"
         restoreFocusTo={restoreOnReplace}
         preferRestoreFocusTo
-        backdrop={backdrop}
         data-testid="canopy-dialog"
       >
         <AppDialog.Header>
@@ -457,7 +444,6 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
       <CanopyPitch
         isOpen={isOpen}
         onClose={close}
-        backdrop={backdrop}
         onTurnOn={() => window.electron.canopy.setMode("on").then(applySnapshot)}
         onHide={hideCanopy}
         restoreFocusTo={restoreOnReplace}
@@ -467,7 +453,6 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
   }
   return (
     <CanopyInbox
-      backdrop={backdrop}
       restoreOpener={restoreOnReplace}
       hostId={null}
       hostRow={null}
@@ -615,7 +600,6 @@ function CanopyShortcuts() {
 }
 
 function CanopyInbox({
-  backdrop,
   restoreOpener,
   hostId,
   hostRow,
@@ -623,7 +607,6 @@ function CanopyInbox({
   hostPicker,
   onOfferReading = null,
 }: {
-  backdrop: React.ReactNode;
   /** What had the keyboard when the panel opened, while it is still there. */
   restoreOpener: () => HTMLElement | null;
   /** The other host the panel shows, or null for the window's own. */
@@ -1495,15 +1478,13 @@ function CanopyInbox({
     <AppDialog
       isOpen={isOpen}
       onClose={close}
-      size="workspace"
-      maxHeight="h-[min(90vh,1100px)]"
+      placement="window"
       // The panel lands on its first run itself, two frames in; the dialog's own
       // first-control focus would race it. With no rows to land on, the first
       // control takes focus instead of leaving it on whatever opened the panel.
       initialFocus={items.length > 0 && !hostHeld ? "none" : "first"}
       restoreFocusTo={() => focusAfterClose() ?? restoreOpener()}
       preferRestoreFocusTo
-      backdrop={backdrop}
       data-testid="canopy-dialog"
     >
       <AppDialog.Header>
@@ -1555,7 +1536,7 @@ function CanopyInbox({
 
       <div
         ref={bodyRef}
-        className="flex min-h-0 flex-1 flex-col"
+        className="canopy-frame flex min-h-0 flex-1 flex-col"
         onKeyDownCapture={onAgentStepKeyDownCapture}
         onKeyDown={onNavigationKeyDown}
       >

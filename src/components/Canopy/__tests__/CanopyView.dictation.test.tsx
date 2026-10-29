@@ -180,7 +180,6 @@ function installElectron(
       async (_targets: Array<{ runId: string; spawnedAt: number; terms: string[] }>) =>
         [] as string[]
     ),
-    captureBackdrop: vi.fn(async () => null),
     // No assistants: a full, empty directory of this machine.
     readAgentDirectory: vi.fn(async () => ({
       coverage: "ok" as const,
