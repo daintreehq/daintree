@@ -276,9 +276,10 @@ export function registerGitCloneHandlers(): () => void {
   // Track every in-flight clone so cancel aborts each one independently.
   // Electron's ipcMain.handle permits concurrent invocations from multiple
   // senders; sharing a single controller would let a later clone overwrite an
-  // earlier one's cancel target. Keyed to the clone's operation id so a cancel
-  // can name one clone.
-  const activeControllers = new Map<AbortController, string>();
+  // earlier one's cancel target. Each carries the clone's operation id, so a
+  // cancel can name one clone, and the view that started it, so a cancel that
+  // names none stops only that view's own.
+  const activeControllers = new Map<AbortController, { opId: string; ownerId: number }>();
 
   const handleProjectCloneRepo = async (
     ctx: IpcContext,
@@ -360,7 +361,7 @@ export function registerGitCloneHandlers(): () => void {
     // Registered before the first await, so a Stop pressed while the checks
     // below are still running cancels this clone instead of missing it.
     const localController = new AbortController();
-    activeControllers.set(localController, op.opId);
+    activeControllers.set(localController, { opId: op.opId, ownerId: ctx.webContentsId });
     op.onCancel(() => localController.abort());
     try {
       return await runClone(
@@ -461,14 +462,14 @@ export function registerGitCloneHandlers(): () => void {
     const rawOpId = payload?.opId;
     const requested = normalizeOperationId(rawOpId);
     // A malformed id is refused, never read as "no id": that would widen a
-    // cancel meant for one clone into a cancel of every clone.
+    // cancel meant for one clone into a cancel of every clone the view started.
     if (rawOpId !== undefined && requested === null) {
       throw new AppError({ code: "VALIDATION", message: "Invalid operation id" });
     }
     const registry = getOperationRegistry();
     if ((ctx.endpoint as ClientEndpoint | undefined)?.kind === "remote-view") {
       // A remote client may stop only its own project's clone, by id, through
-      // the scoped registry. Cancel-all is this machine's own UI's alone.
+      // the scoped registry. Only this machine's own views cancel unnamed.
       if (requested === null) {
         throw new AppError({
           code: "VALIDATION",
@@ -481,12 +482,18 @@ export function registerGitCloneHandlers(): () => void {
       }
       return;
     }
-    // Without an opId every in-flight clone is cancelled — the historical
-    // behaviour callers that don't name their clone still rely on.
+    // A local clone runs unnamed, so its Stop names none: that stops the
+    // clones this view started, never another window's.
+    if (requested === null) {
+      for (const [controller, owner] of activeControllers) {
+        if (owner.ownerId === ctx.webContentsId) controller.abort();
+      }
+      return;
+    }
     // A caller that joined another's clone names it by its own id.
-    const opId = requested && (registry.canonicalId(requested) ?? requested);
-    for (const [controller, controllerOpId] of activeControllers) {
-      if (opId === null || controllerOpId === opId) controller.abort();
+    const opId = registry.canonicalId(requested) ?? requested;
+    for (const [controller, owner] of activeControllers) {
+      if (owner.opId === opId) controller.abort();
     }
   };
 

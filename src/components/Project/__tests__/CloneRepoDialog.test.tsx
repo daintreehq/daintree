@@ -941,7 +941,8 @@ describe("CloneRepoDialog", () => {
       fireEvent.click(stopBtn);
     });
 
-    // A local Stop is the historical cancel: no id, so every clone stops.
+    // A local clone runs unnamed, so its Stop names none: Main stops the
+    // clones this view started.
     expect(cancelCloneMock).toHaveBeenCalledWith();
   });
 
