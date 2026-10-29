@@ -21,7 +21,7 @@ import { useCanopyStore } from "@/store/canopyStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
-import type { AgentDirectorySubject } from "@shared/types/agentDirectory";
+import { isSameAssistantRun, type AgentDirectorySubject } from "@shared/types/agentDirectory";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { GlobalAssistantInputStamp } from "@shared/types/ipc/help";
 import { useGlobalAssistant } from "./useGlobalAssistant";
@@ -46,12 +46,6 @@ const INPUT_ELSEWHERE_REASON = "Another window has this assistant's input.";
 const NO_INPUT_REASON = "No window has this assistant's input.";
 const ENDED_REASON = "That assistant isn't running any more.";
 const NOT_READY_REASON = "The assistant's terminal isn't ready yet.";
-
-function sameRun(a: AgentDirectorySubject | null, b: AgentDirectorySubject | null): boolean {
-  return (
-    a !== null && b !== null && a.terminalId === b.terminalId && a.incarnation === b.incarnation
-  );
-}
 
 function subscribeViewCache(onChange: () => void): () => void {
   return subscribeProjectViewLifecycle(() => onChange());
@@ -109,7 +103,7 @@ export function GlobalAssistantPane({
   const subject = view?.phase === "running" ? (view.subject ?? null) : null;
   // The run "Open in Assistant" chose, gone by now: said, and its successor
   // never put in its place.
-  const targetEnded = target !== null && view !== null && !sameRun(subject, target);
+  const targetEnded = target !== null && view !== null && !isSameAssistantRun(subject, target);
   const shown = targetEnded ? null : subject;
   const holdsInput = attachmentId !== null && view?.inputOwner === attachmentId;
   const stamp: GlobalAssistantInputStamp | null =
