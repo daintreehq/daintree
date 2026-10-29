@@ -3,12 +3,14 @@ import { fireEvent, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HelpSessionActiveGrant, HelpSessionLiveStatus } from "@shared/types";
 
-const { liveStatus, activeSessionId, revokeGrant, revokeNativeGrant } = vi.hoisted(() => ({
-  liveStatus: { current: null as HelpSessionLiveStatus | null },
-  activeSessionId: { current: "help-1" },
-  revokeGrant: vi.fn(),
-  revokeNativeGrant: vi.fn(),
-}));
+const { liveStatus, activeSessionId, revokeGrant, revokeNativeGrant, issueNativeGrant } =
+  vi.hoisted(() => ({
+    liveStatus: { current: null as HelpSessionLiveStatus | null },
+    activeSessionId: { current: "help-1" },
+    revokeGrant: vi.fn(),
+    revokeNativeGrant: vi.fn(),
+    issueNativeGrant: vi.fn(),
+  }));
 
 vi.mock("@/hooks", () => ({
   useHelpSessionLiveStatus: () => liveStatus.current,
@@ -49,13 +51,14 @@ beforeEach(() => {
   activeSessionId.current = "help-1";
   revokeGrant.mockReset();
   revokeNativeGrant.mockReset();
+  issueNativeGrant.mockReset();
   liveStatus.current = {
     connected: true,
     tier: "core",
     activeGrants: [perTool("terminal.kill"), perTool("project.runCheck"), AUTOMATION],
   };
   Object.defineProperty(window, "electron", {
-    value: { mcpServer: { revokeGrant, revokeNativeGrant, issueNativeGrant: vi.fn() } },
+    value: { mcpServer: { revokeGrant, revokeNativeGrant, issueNativeGrant } },
     writable: true,
     configurable: true,
   });
@@ -127,5 +130,34 @@ describe("SessionLiveStatusCard per-tool revoke (#14975)", () => {
     rejectRevoke?.();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("SessionLiveStatusCard automation grant form (#14982)", () => {
+  it("leaves the next session's form alone when the last session's approval settles", async () => {
+    let rejectIssue: (() => void) | undefined;
+    issueNativeGrant.mockReturnValue(
+      new Promise((_, reject) => {
+        rejectIssue = () => reject(new Error("No live pinned session for this help session"));
+      })
+    );
+    const { getByLabelText, getByRole, queryByRole, rerender } = render(
+      <SessionLiveStatusCard configuredTier="core" />
+    );
+    fireEvent.click(getByLabelText(/recipe\.run/));
+    fireEvent.click(getByRole("button", { name: "Approve grant" }));
+    expect(issueNativeGrant).toHaveBeenCalledTimes(1);
+
+    activeSessionId.current = "help-2";
+    liveStatus.current = { connected: true, tier: "core", activeGrants: [] };
+    rerender(<SessionLiveStatusCard configuredTier="core" />);
+    expect(getByLabelText(/recipe\.run/).dataset.state).toBe("unchecked");
+    fireEvent.click(getByLabelText(/worktree\.deleteOwned/));
+
+    rejectIssue?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(queryByRole("alert")).toBeNull();
+    expect(getByLabelText(/worktree\.deleteOwned/).dataset.state).toBe("checked");
+    expect(getByRole("button", { name: "Approve grant" }).hasAttribute("disabled")).toBe(false);
   });
 });

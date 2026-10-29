@@ -1,20 +1,33 @@
-import { useCallback, useState } from "react";
+import { useCallback, useId, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
+import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { HelpSessionActiveGrant } from "@shared/types";
+import {
+  MCP_NATIVE_GRANT_MAX_MAX_USES,
+  MCP_NATIVE_GRANT_MIN_MAX_USES,
+} from "@shared/config/mcpGrants";
 import { SETTINGS_CONTROL_WIDTH } from "../SettingsGroup";
 import { TabError } from "./AssistantStatus";
 import { GrantCountdown } from "./GrantCountdown";
+import { NativeGrantToolPicker } from "./NativeGrantToolPicker";
+import {
+  describeNativeGrant,
+  listNativeGrantTools,
+  NATIVE_GRANT_MAX_USES_HINT,
+  nativeGrantToolTitle,
+  parseNativeGrantMaxUses,
+} from "./nativeGrantTools";
 
 // Native session-scoped automation grants (#10648): approve a bounded set of
 // tools for a limited number of uses, then inspect and revoke them. Distinct
 // from the per-tool "Approve once" grants above — these authorize follow-up
-// automation across the session without a per-call modal. The grant lifecycle
-// (issue/use/exhaust/expire/revoke) is mirrored in the audit log below.
+// automation across the session without a per-call modal. The form states that
+// consequence before Approve (#14982); main's `issueNativeGrant` still decides.
 export function NativeGrantsSection({
   helpSessionId,
   grants,
@@ -22,32 +35,34 @@ export function NativeGrantsSection({
   helpSessionId: string;
   grants: HelpSessionActiveGrant[];
 }) {
-  const [toolsInput, setToolsInput] = useState("");
+  const tools = useMemo(() => listNativeGrantTools(), []);
+  const [selected, setSelected] = useState<readonly string[]>([]);
   const [usesInput, setUsesInput] = useState("5");
   const [issuing, setIssuing] = useState(false);
   const [issueError, setIssueError] = useState<string | null>(null);
+  const summaryId = useId();
+  const maxUses = parseNativeGrantMaxUses(usesInput);
+  const canApprove = !issuing && selected.length > 0 && maxUses !== null;
+
+  const toggleTool = useCallback((toolId: string, checked: boolean) => {
+    setSelected((current) =>
+      checked
+        ? current.includes(toolId)
+          ? current
+          : [...current, toolId]
+        : current.filter((id) => id !== toolId)
+    );
+  }, []);
 
   const approve = useCallback(() => {
-    const allowedTools = toolsInput
-      .split(/[\s,]+/)
-      .map((t) => t.trim())
-      .filter((t) => t.length > 0);
-    if (allowedTools.length === 0) {
-      setIssueError("Enter at least one tool id");
-      return;
-    }
-    const maxUses = Number.parseInt(usesInput, 10);
+    if (selected.length === 0 || maxUses === null) return;
     setIssuing(true);
     setIssueError(null);
     safeFireAndForget(
       window.electron.mcpServer
-        .issueNativeGrant({
-          helpSessionId,
-          allowedTools,
-          maxUses: Number.isFinite(maxUses) ? maxUses : undefined,
-        })
+        .issueNativeGrant({ helpSessionId, allowedTools: [...selected], maxUses })
         .then(() => {
-          setToolsInput("");
+          setSelected([]);
         })
         .catch((err: unknown) => {
           setIssueError(formatErrorMessage(err, "Couldn't approve grant"));
@@ -57,7 +72,7 @@ export function NativeGrantsSection({
         }),
       { context: "DaintreeAssistant:issueNativeGrant" }
     );
-  }, [helpSessionId, toolsInput, usesInput]);
+  }, [helpSessionId, selected, maxUses]);
 
   const revoke = useCallback((grantId: string) => {
     setIssueError(null);
@@ -86,8 +101,8 @@ export function NativeGrantsSection({
               className="rounded-[var(--radius-sm)] border border-border-default bg-surface-canvas px-2 py-1.5 space-y-1"
             >
               <div className="flex items-center justify-between gap-2 text-2xs">
-                <span className="font-mono text-text-secondary break-all">
-                  {(grant.allowedTools ?? []).join(", ") || "no tools"}
+                <span className="text-text-secondary break-words">
+                  {(grant.allowedTools ?? []).map(nativeGrantToolTitle).join(", ") || "no tools"}
                 </span>
                 <Button
                   variant="ghost-danger"
@@ -111,29 +126,39 @@ export function NativeGrantsSection({
         <div className="text-2xs text-text-secondary">No automation grants active</div>
       )}
 
-      <div className="flex flex-wrap items-end gap-2 pt-0.5">
-        <label className="grid min-w-0 flex-1 basis-56 gap-1 text-xs text-text-secondary">
-          Tools to approve
-          <Input
-            type="text"
-            value={toolsInput}
-            onChange={(e) => setToolsInput(e.target.value)}
-            placeholder="worktree.deleteOwned recipe.run"
-            className="min-w-0 font-mono"
-          />
-        </label>
-        <label className="grid gap-1 text-xs text-text-secondary">
-          Maximum uses
+      <div className="space-y-2 pt-0.5">
+        <NativeGrantToolPicker
+          tools={tools}
+          selected={selected}
+          onToggle={toggleTool}
+          disabled={issuing}
+        />
+        <Field className="gap-1" disabled={issuing}>
+          <FieldLabel className="text-xs font-normal text-text-secondary">Maximum uses</FieldLabel>
           <Input
             type="number"
-            min={1}
-            max={100}
+            min={MCP_NATIVE_GRANT_MIN_MAX_USES}
+            max={MCP_NATIVE_GRANT_MAX_MAX_USES}
             value={usesInput}
             onChange={(e) => setUsesInput(e.target.value)}
+            disabled={issuing}
             className={cn(SETTINGS_CONTROL_WIDTH.number, "tabular-nums")}
           />
-        </label>
-        <Button variant="outline" size="sm" onClick={approve} disabled={issuing}>
+          {maxUses === null && <FieldError>{NATIVE_GRANT_MAX_USES_HINT}</FieldError>}
+        </Field>
+        <p id={summaryId} className="text-xs text-text-secondary select-text">
+          {describeNativeGrant(
+            tools.filter((tool) => selected.includes(tool.id)).map((tool) => tool.title),
+            maxUses
+          )}
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={approve}
+          disabled={!canApprove}
+          aria-describedby={summaryId}
+        >
           Approve grant
         </Button>
       </div>
