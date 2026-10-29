@@ -13,11 +13,7 @@ import { formatErrorMessage } from "../../shared/utils/errorMessage";
 import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders";
 import { getAgentConfig } from "../../shared/config/agentRegistry";
 import { getBuiltinSlashCommands, type SlashCommand } from "../../shared/types/slashCommands";
-import {
-  buildVoiceCommandVocabulary,
-  EMPTY_VOICE_COMMAND_VOCABULARY,
-  type VoiceCommandVocabulary,
-} from "../../shared/utils/voiceAgentCommands";
+import { buildVoiceCommandVocabulary } from "../../shared/utils/voiceAgentCommands";
 import type { VoiceAgentReply } from "../../electron/services/voiceAgentReplyTypes";
 import type { VoiceCommandTarget } from "../../electron/services/voiceCommandTarget";
 import type {
@@ -250,10 +246,6 @@ interface Profile {
   commandTarget?: VoiceCommandTarget;
 }
 
-function vocabularyOf(profile: Profile): VoiceCommandVocabulary {
-  return profile.commandTarget?.vocabulary ?? EMPTY_VOICE_COMMAND_VOCABULARY;
-}
-
 /**
  * The agent with its built-in commands and the ones installed beside them, as
  * production describes a terminal running it; with none installed, Claude
@@ -284,12 +276,6 @@ function agentCommandTarget({ agentId, installed }: CleanupCommandTarget): Voice
 
 function claudeCodeTarget(): VoiceCommandTarget {
   return agentCommandTarget({ agentId: "claude", installed: [] });
-}
-
-/** What a passage's commands land against: its session's target, or the profile's. */
-function vocabularyFor(profile: Profile, entry: CleanupCase): VoiceCommandVocabulary {
-  const target = entry.session?.commandTarget;
-  return target ? agentCommandTarget(target).vocabulary : vocabularyOf(profile);
 }
 
 function profileFor(options: Options): Profile {
@@ -387,7 +373,6 @@ function withoutReply(result: VoiceCorrectionResult): Disposition {
 /** What the service did with a passage, read the way `land` reads a landing. */
 function dispositionOf(result: VoiceCorrectionResult): Disposition {
   if (!result.proposal) return withoutReply(result);
-  if (result.rejected) return "rejected";
   return result.action === "replace" ? "applied" : "declined";
 }
 
@@ -399,24 +384,14 @@ function dispositionOf(result: VoiceCorrectionResult): Disposition {
 function land(
   entry: CleanupCase,
   reply: VoiceCorrectionProposal | undefined,
-  noReply: Disposition,
-  vocabulary: VoiceCommandVocabulary
+  noReply: Disposition
 ): Landing {
   if (!reply) {
     return { disposition: noReply, landed: entry.raw, landedScore: scoreText(entry, entry.raw) };
   }
-  const landing = correctionOutcome(entry.raw, reply, {
-    vocabulary,
-    startsPrompt: requestFor(entry).startsPrompt === true,
-  });
-  const disposition: Disposition = landing.rejected
-    ? "rejected"
-    : landing.action === "replace"
-      ? "applied"
-      : "declined";
+  const landing = correctionOutcome(entry.raw, reply);
   return {
-    disposition,
-    ...(landing.rejected ? { rejectReason: landing.rejected.reason } : {}),
+    disposition: landing.action === "replace" ? "applied" : "declined",
     landed: landing.confirmedText,
     landedScore: scoreText(entry, landing.confirmedText),
   };
@@ -433,7 +408,6 @@ function toTrial(
   variant: Variant,
   repeat: number,
   result: VoiceCorrectionResult,
-  vocabulary: VoiceCommandVocabulary,
   totalMs: number,
   firstTextAt: number | null
 ): Trial {
@@ -447,7 +421,7 @@ function toTrial(
     ...(reply ? { reply } : {}),
     proposal,
     proposalScore: scoreText(entry, proposal),
-    landing: land(entry, reply, withoutReply(result), vocabulary),
+    landing: land(entry, reply, withoutReply(result)),
     roundTripMs: result.roundTrip ? Math.round(result.roundTrip.ms) : null,
     ...(firstTextAt !== null && result.roundTrip
       ? { firstTextMs: Math.round(firstTextAt - result.roundTrip.sentAt) }
@@ -657,32 +631,25 @@ export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): st
   lines.push(
     "## What landed",
     "",
-    "Each reply landed as production lands it, through the agent-command and low-confidence checks, per model:effort/prompt. Ready: the message the speaker would have typed (an accepted reference's words and lines, every misread and form fix and every drop landed, nothing kept lost, any run-on broken up, every sentence break and unbroken span the passage names where it says). Repaired: reference words the raw transcript had wrong that came back right. Misreads: fixes for a word the raw transcript got wrong, one an agent would take for something else, landed exactly; a model or prompt choice rests on these. Forms: fixes that only write the speaker's own words the way they would have typed them, landed exactly; an agent reads those right either way. Drops: filler and retracted words taken out. Splits: run-ons broken into sentences under the passage's cap. Keeps: the case's own, plus every code span, reference, flag, path and number in the raw transcript. Broken: words the raw had right that were lost or changed. Novel: words in neither the raw nor the reference. Added: words inserted beyond any the raw already had extra. Risky trials: any broken, novel or added word, or a keep lost.",
+    "Each reply landed as production lands it, exactly as the model wrote it, per model:effort/prompt. Ready: the message the speaker would have typed (an accepted reference's words and lines, every misread and form fix and every drop landed, nothing kept lost, any run-on broken up, every sentence break and unbroken span the passage names where it says). Repaired: reference words the raw transcript had wrong that came back right. Misreads: fixes for a word the raw transcript got wrong, one an agent would take for something else, landed exactly; a model or prompt choice rests on these. Forms: fixes that only write the speaker's own words the way they would have typed them, landed exactly; an agent reads those right either way. Drops: filler and retracted words taken out. Splits: run-ons broken into sentences under the passage's cap. Keeps: the case's own, plus every code span, reference, flag, path and number in the raw transcript. Broken: words the raw had right that were lost or changed. Novel: words in neither the raw nor the reference. Added: words inserted beyond any the raw already had extra. Risky trials: any broken, novel or added word, or a keep lost.",
     "",
     ...QUALITY_HEADER,
     ...run.summaries.map((summary) => qualityRow(summary.variant, summary.landed)),
     "",
     "## What the model proposed",
     "",
-    "Before any check: every reply scored as if it had landed.",
+    "Every reply as the model proposed it, scored as if it had landed: what landed, unless the run was saved while the agent-command and low-confidence checks stood.",
     "",
     ...QUALITY_HEADER,
     ...run.summaries.map((summary) => qualityRow(summary.variant, summary.proposed)),
     "",
     "## Dispositions",
     "",
-    "Rejected: a reply the agent-command or low-confidence check turned down, so the raw text stayed.",
-    "",
-    "| Variant | Applied | Declined | Rejected | Failed | Skipped | Reject reasons | Clean passages untouched |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    "| Variant | Applied | Declined | Failed | Skipped | Clean passages untouched |",
+    "| --- | --- | --- | --- | --- | --- |",
     ...run.summaries.map((summary) => {
       const d = summary.dispositions;
-      const reasons =
-        Object.entries(summary.rejectReasons)
-          .sort((a, b) => b[1] - a[1])
-          .map(([reason, n]) => `${reason} ${n}`)
-          .join(", ") || "–";
-      return `| ${summary.variant} | ${d.applied} | ${d.declined} | ${d.rejected} | ${d.failed} | ${d.skipped} | ${reasons} | ${summary.cleanUntouched.kept}/${summary.cleanUntouched.of} |`;
+      return `| ${summary.variant} | ${d.applied} | ${d.declined} | ${d.failed} | ${d.skipped} | ${summary.cleanUntouched.kept}/${summary.cleanUntouched.of} |`;
     }),
     "",
     "## Latency (ms)",
@@ -851,24 +818,18 @@ export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): st
       const rows = run.trials.filter(
         (trial) => trial.caseId === entry.id && trial.variant === variant.id
       );
-      const seen = new Map<string, { count: number; landing: Landing; proposal: string }>();
+      const seen = new Map<string, { count: number; landing: Landing }>();
       for (const trial of rows) {
         const { landing } = trial;
         // A declined reply and a failed request both land the raw text; each keeps its own row.
-        const key = `${landing.landed}\u0000${trial.proposal}\u0000${landing.disposition}\u0000${landing.rejectReason ?? ""}`;
+        const key = `${landing.landed}\u0000${landing.disposition}`;
         const known = seen.get(key);
         if (known) known.count++;
-        else seen.set(key, { count: 1, landing, proposal: trial.proposal });
+        else seen.set(key, { count: 1, landing });
       }
-      for (const { count, landing, proposal } of seen.values()) {
-        const disposition =
-          landing.disposition + (landing.rejectReason ? ` (${landing.rejectReason})` : "");
-        const proposed =
-          landing.disposition === "rejected"
-            ? ` — proposed ${JSON.stringify(proposal)} (${notes(entry, scoreText(entry, proposal)).join("; ")})`
-            : "";
+      for (const { count, landing } of seen.values()) {
         lines.push(
-          `- ${variant.id}${count > 1 ? ` ×${count}` : ""}: ${JSON.stringify(landing.landed)} (${[disposition, ...notes(entry, landing.landedScore)].join("; ")})${proposed}`
+          `- ${variant.id}${count > 1 ? ` ×${count}` : ""}: ${JSON.stringify(landing.landed)} (${[landing.disposition, ...notes(entry, landing.landedScore)].join("; ")})`
         );
       }
     }
@@ -956,8 +917,8 @@ export function rescore(
         landing: land(
           entry,
           trial.reply as VoiceCorrectionProposal | undefined,
-          recorded?.disposition ?? "failed",
-          vocabularyFor(saved.profile, entry)
+          // A run saved under the old checks may say "rejected"; with no reply, nothing was.
+          recorded?.disposition === "skipped" ? "skipped" : "failed"
         ),
       };
     });
@@ -1166,23 +1127,14 @@ async function main(): Promise<number> {
           onText
         );
         const totalMs = performance.now() - started;
-        const trial = toTrial(
-          entry,
-          variant,
-          repeat,
-          result,
-          vocabularyFor(profile, entry),
-          totalMs,
-          firstTextAt
-        );
+        const trial = toTrial(entry, variant, repeat, result, totalMs, firstTextAt);
         run.trials.push(trial);
         // The trial lands the reply as a rescore will, which must be exactly
-        // what the service just landed: the same text, disposition and reason.
+        // what the service just landed: the same text and disposition.
         const { landing } = trial;
         if (
           landing.landed !== result.confirmedText ||
-          landing.disposition !== dispositionOf(result) ||
-          (landing.rejectReason ?? null) !== (result.rejected?.reason ?? null)
+          landing.disposition !== dispositionOf(result)
         ) {
           run.parityMisses++;
           console.error(`[voice-cleanup] ${entry.id}: the replay landed it differently`);

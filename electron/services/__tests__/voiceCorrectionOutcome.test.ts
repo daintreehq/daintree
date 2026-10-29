@@ -1,13 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getAgentConfig } from "../../../shared/config/agentRegistry.js";
-import { getBuiltinSlashCommands } from "../../../shared/types/slashCommands.js";
-import {
-  buildVoiceCommandVocabulary,
-  EMPTY_VOICE_COMMAND_VOCABULARY,
-} from "../../../shared/utils/voiceAgentCommands.js";
 import { correctionOutcome, type VoiceCorrectionProposal } from "../voiceCorrectionOutcome.js";
-
-const checks = { vocabulary: EMPTY_VOICE_COMMAND_VOCABULARY, startsPrompt: true };
 
 function replace(
   correctedText: string,
@@ -21,13 +13,13 @@ describe("correctionOutcome", () => {
     const raw = "  commit and push ";
     const unchanged = { action: "no_change", confirmedText: raw, verdict: "unchanged" };
     expect(
-      correctionOutcome(raw, { action: "no_change", correctedText: "x", confidence: "low" }, checks)
+      correctionOutcome(raw, { action: "no_change", correctedText: "x", confidence: "low" })
     ).toEqual(unchanged);
-    expect(correctionOutcome(raw, replace("   ", "low"), checks)).toEqual(unchanged);
+    expect(correctionOutcome(raw, replace("   ", "low"))).toEqual(unchanged);
   });
 
   it("reads a reply that hands the raw text back as no change", () => {
-    expect(correctionOutcome("commit and push", replace(" commit and push "), checks)).toEqual({
+    expect(correctionOutcome("commit and push", replace(" commit and push "))).toEqual({
       action: "no_change",
       confirmedText: "commit and push",
       verdict: "unchanged",
@@ -38,8 +30,7 @@ describe("correctionOutcome", () => {
     expect(
       correctionOutcome(
         "um wire up the racked component",
-        replace(" Wire up the React component. "),
-        checks
+        replace(" Wire up the React component. ")
       )
     ).toEqual({
       action: "replace",
@@ -54,92 +45,49 @@ describe("correctionOutcome", () => {
       "So this is a test of, like what the whole system is. Even kind of, you know. Capable of. So, yeah, you just. Yeah, I mean, I'm, I'm not quite Yeah, I'm not quite sure what I'm actually saying here, but I want you to just Yeah, just go ahead.";
     const cleaned =
       "This is a test of what the whole system is capable of. I'm not quite sure what I'm saying here, but go ahead.";
-    expect(correctionOutcome(raw, replace(cleaned), checks)).toEqual({
+    expect(correctionOutcome(raw, replace(cleaned))).toEqual({
       action: "replace",
       confirmedText: cleaned,
       verdict: "replaced",
     });
   });
 
-  it("refuses a cleanup the model itself marked low-confidence", () => {
-    expect(
-      correctionOutcome("the promise rejects when it times out", replace("Done.", "low"), checks)
-    ).toMatchObject({
-      action: "no_change",
-      confirmedText: "the promise rejects when it times out",
-      verdict: "rejected_low_confidence",
-      rejected: { reason: "low_confidence", candidate: "Done." },
-    });
-  });
-
-  it("checks a command the cleanup wrote before its confidence", () => {
+  it("lands a cleanup the model marked low-confidence", () => {
     expect(
       correctionOutcome(
-        "can you review the auth module",
-        replace("/nonexistent the auth module", "low"),
-        checks
-      )
-    ).toMatchObject({ verdict: "rejected_command", rejected: { reason: "unknown_command" } });
-  });
-
-  it("lands a cleanup with a command nobody named written back as the words said", () => {
-    const vocabulary = buildVoiceCommandVocabulary(
-      getBuiltinSlashCommands("claude"),
-      getAgentConfig("claude")!.completionSources!
-    );
-    expect(
-      correctionOutcome(
-        "so um I'm happy with the model, ship it",
-        replace("I'm happy with the /model. Ship it."),
-        { vocabulary, startsPrompt: true }
+        "wire up the racked component",
+        replace("Wire up the React component.", "low")
       )
     ).toEqual({
       action: "replace",
-      confirmedText: "I'm happy with the model. Ship it.",
+      confirmedText: "Wire up the React component.",
       verdict: "replaced",
-      commandsAsSaid: true,
-    });
-    expect(
-      correctionOutcome("I'm happy with the model", replace("I'm happy with the /model.", "low"), {
-        vocabulary,
-        startsPrompt: true,
-      })
-    ).toEqual({
-      action: "no_change",
-      confirmedText: "I'm happy with the model",
-      verdict: "rejected_low_confidence",
-      rejected: { reason: "low_confidence", candidate: "I'm happy with the model." },
     });
   });
 
-  it("turns the cleanup down when writing a command back leaves another unaccounted for", () => {
-    const vocabulary = buildVoiceCommandVocabulary(
-      getBuiltinSlashCommands("claude"),
-      getAgentConfig("claude")!.completionSources!
-    );
+  it("lands a skill the cleanup moved to the front of the prompt, the lead-in dropped", () => {
+    // Dictated 2026-10-29 and turned down whole while the command checks stood.
     expect(
-      correctionOutcome("Then model command blue.", replace("Then /model /model command blue."), {
-        vocabulary,
-        startsPrompt: true,
-      })
+      correctionOutcome(
+        "Okay, go ahead and use the github create issue skill to create a new issue for this.",
+        replace("/github-create-issue to create a new issue for this.")
+      )
     ).toEqual({
-      action: "no_change",
-      confirmedText: "Then model command blue.",
-      verdict: "rejected_command",
-      rejected: { reason: "unprompted_command", candidate: "Then /model /model command blue." },
+      action: "replace",
+      confirmedText: "/github-create-issue to create a new issue for this.",
+      verdict: "replaced",
     });
   });
 
-  it("measures a command written for its spoken request as that command", () => {
-    const vocabulary = buildVoiceCommandVocabulary(
-      getBuiltinSlashCommands("claude"),
-      getAgentConfig("claude")!.completionSources!
-    );
+  it("lands a command the cleanup wrote in place, however it was named", () => {
     expect(
-      correctionOutcome("can you please run the review skill on auth", replace("/review on auth"), {
-        vocabulary,
-        startsPrompt: true,
-      })
-    ).toMatchObject({ action: "replace", confirmedText: "/review on auth" });
+      correctionOutcome(
+        "From there we should do a full design review workflow",
+        replace("From there, we should do a full /design-review workflow.")
+      )
+    ).toMatchObject({
+      action: "replace",
+      confirmedText: "From there, we should do a full /design-review workflow.",
+    });
   });
 });

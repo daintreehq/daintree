@@ -4,11 +4,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { REPLAY_CLIPS } from "../../../e2e/helpers/voiceReplayFixtures";
-import { getAgentConfig } from "../../../shared/config/agentRegistry";
-import {
-  buildVoiceCommandVocabulary,
-  checkVoiceCommandEdit,
-} from "../../../shared/utils/voiceAgentCommands";
 import {
   buildCorrectionSystemPrompt,
   type CorrectionInstructions,
@@ -208,27 +203,14 @@ describe("cleanup corpus", () => {
     expect(leftAlone.length).toBeGreaterThanOrEqual(5);
     for (const entry of commands) {
       const installed = entry.session!.commandTarget!.installed.map(({ token }) => token);
-      // Each written token is one the target has, never at the start of the prompt.
+      // Each written token is one the target has, at the start of the prompt
+      // only where the passage asks for it there.
       for (const fix of Object.keys(entry.fixes)) {
         expect(installed, entry.id).toContain(fix);
-        expect(entry.reference.startsWith(fix), entry.id).toBe(false);
+        expect(entry.reference.startsWith(fix), entry.id).toBe(
+          entry.id.startsWith("commands-opening-")
+        );
       }
-      // Its reference lands through production's command checks as written.
-      const vocabulary = buildVoiceCommandVocabulary(
-        entry.session!.commandTarget!.installed.map(({ token, description }) => ({
-          id: token,
-          label: token,
-          insertText: token,
-          description,
-          scope: "user" as const,
-          agentId: entry.session!.commandTarget!.agentId,
-          trigger: token.startsWith("$") ? ("$" as const) : ("/" as const),
-        })),
-        getAgentConfig(entry.session!.commandTarget!.agentId)!.completionSources!
-      );
-      expect(checkVoiceCommandEdit(entry.raw, entry.reference, vocabulary, true), entry.id).toBe(
-        null
-      );
       // A lookalike written with the skill it shares a word with fails its kept span.
       if (entry.raw !== entry.reference) continue;
       const shared = installed.flatMap((token) => {
@@ -1298,14 +1280,9 @@ describe("summariseVariant", () => {
   const corpus = [{ ...short, fixes: {}, drops: [] }, long, kept];
 
   type TrialOverrides = Partial<Omit<Trial, "landing">> &
-    Pick<Trial, "caseId"> & { landed: string; disposition?: Disposition; rejectReason?: string };
+    Pick<Trial, "caseId"> & { landed: string; disposition?: Disposition };
 
-  function trial({
-    landed,
-    disposition = "applied",
-    rejectReason,
-    ...rest
-  }: TrialOverrides): Trial {
+  function trial({ landed, disposition = "applied", ...rest }: TrialOverrides): Trial {
     const entry = corpus.find((candidate) => candidate.id === rest.caseId)!;
     const proposal = rest.proposal ?? landed;
     return {
@@ -1315,7 +1292,6 @@ describe("summariseVariant", () => {
       proposalScore: scoreText(entry, proposal),
       landing: {
         disposition,
-        ...(rejectReason ? { rejectReason } : {}),
         landed,
         landedScore: scoreText(entry, landed),
       },
@@ -1345,9 +1321,7 @@ describe("summariseVariant", () => {
       trial({
         caseId: "long",
         landed: long.raw,
-        proposal: "The cache is stale.",
-        disposition: "rejected",
-        rejectReason: "low_confidence",
+        disposition: "declined",
         roundTripMs: 2_500,
         usage: usage(3_000, 2_700, 30),
       }),
@@ -1360,20 +1334,15 @@ describe("summariseVariant", () => {
     expect(summary.trials).toBe(5);
     expect(summary.dispositions).toEqual({
       applied: 1,
-      declined: 2,
-      rejected: 1,
+      declined: 3,
       failed: 1,
       skipped: 0,
     });
-    expect(summary.rejectReasons).toEqual({ low_confidence: 1 });
     expect(summary.cleanUntouched).toEqual({ kept: 2, of: 3 });
     expect(summary.roundTrip).toMatchObject({ count: 4, max: 2_500, overTarget: 0.25 });
     expect(summary.promptLengthRoundTrip).toMatchObject({ count: 1, p50: 2_500 });
     expect(summary.total.count).toBe(5);
     expect(summary.tokens).toMatchObject({ meanInput: 2_000, cachedShare: 0.9, meanOutput: 20 });
-    // The rejected proposal would have repaired the stale passage; nothing landed did.
-    expect(summary.proposed.repairRate).toBeGreaterThan(summary.landed.repairRate);
-    expect(summary.landed.repairRate).toBe(0);
   });
 
   it("times the first streamed text over the replies that showed some", () => {
@@ -1435,7 +1404,7 @@ describe("summariseVariant", () => {
     expect(b!.landed.wer).toBe(0);
   });
 
-  it("pools misread and form fixes apart, for what landed and what was proposed", () => {
+  it("pools misread and form fixes apart, for what landed", () => {
     const mixed = makeCase({
       id: "mixed",
       raw: "ask codecs to check the work tree",
@@ -1451,20 +1420,14 @@ describe("summariseVariant", () => {
       drops: [],
     });
     const entries = [mixed, forms];
-    // A proposal that differs from what landed was turned down.
-    const row = (
-      variant: string,
-      entry: CleanupCase,
-      landed: string,
-      proposal = landed
-    ): Trial => ({
+    const row = (variant: string, entry: CleanupCase, landed: string): Trial => ({
       caseId: entry.id,
       variant,
       repeat: 1,
-      proposal,
-      proposalScore: scoreText(entry, proposal),
+      proposal: landed,
+      proposalScore: scoreText(entry, landed),
       landing: {
-        disposition: proposal === landed ? "applied" : "rejected",
+        disposition: "applied",
         landed,
         landedScore: scoreText(entry, landed),
       },
@@ -1473,21 +1436,14 @@ describe("summariseVariant", () => {
       costUsd: 0.001,
     });
     const trials = [
-      // Turned down whole, so the misread it fixed never landed.
-      row("a", mixed, mixed.raw, mixed.reference),
       row("a", mixed, "Ask codecs to check the worktree."),
       row("a", forms, forms.reference),
       row("b", mixed, mixed.reference),
     ];
     const summary = summariseVariant("a", trials, entries);
     expect(summary.landed).toMatchObject({
-      totals: { misreads: 2, forms: 4 },
+      totals: { misreads: 1, forms: 3 },
       misreadRate: 0,
-      formRate: 0.75,
-    });
-    expect(summary.proposed).toMatchObject({
-      totals: { misreads: 2, forms: 4 },
-      misreadRate: 0.5,
       formRate: 1,
     });
     expect(summariseVariant("b", trials, entries).landed).toMatchObject({
@@ -1626,7 +1582,7 @@ describe("rescore", () => {
         saved(LUNA, "zustand", "The zoo stand selector in the worktree store needs useShallow."),
         saved(LUNA, "gone", "Gone."),
         saved(TERRA, "codex", codex.reference),
-        // Turned down whole: the proposal had every fix, the raw text landed.
+        // Marked low-confidence, and it lands all the same.
         saved(TERRA, "zustand", zustand.reference, "low"),
         saved(LUNA, "symbols", symbols.reference),
         saved(TERRA, "symbols", null),
@@ -1655,11 +1611,9 @@ describe("rescore", () => {
       misreadRate: 0.5,
       formRate: 1,
     });
-    expect(summary(LUNA).rejectReasons).toEqual({});
     expect(summary(LUNA).proposed).toMatchObject({ misreadRate: 0.5, formRate: 1 });
-    expect(summary(TERRA).landed).toMatchObject({ misreadRate: 0.5, formRate: 0 });
-    expect(summary(TERRA).dispositions).toMatchObject({ failed: 1, rejected: 1 });
-    expect(summary(TERRA).rejectReasons).toEqual({ low_confidence: 1 });
+    expect(summary(TERRA).landed).toMatchObject({ misreadRate: 1, formRate: 0.4 });
+    expect(summary(TERRA).dispositions).toMatchObject({ applied: 2, failed: 1 });
     expect(summary(TERRA).proposed).toMatchObject({ misreadRate: 1, formRate: 0.4 });
 
     const report = renderReport(run, corpus);
@@ -1678,24 +1632,19 @@ describe("rescore", () => {
       "| Variant | Ready | Repaired | Misreads | Forms | Drops |"
     );
     expect(fixCells("What landed", LUNA)).toEqual(["50.0%", "100.0%"]);
-    expect(fixCells("What landed", TERRA)).toEqual(["50.0%", "0.0%"]);
+    expect(fixCells("What landed", TERRA)).toEqual(["100.0%", "40.0%"]);
     expect(fixCells("What the model proposed", LUNA)).toEqual(["50.0%", "100.0%"]);
     expect(fixCells("What the model proposed", TERRA)).toEqual(["100.0%", "40.0%"]);
-    // Applied, declined, rejected, failed, skipped, the reasons, clean passages kept.
-    expect(section("Dispositions")).toContain(
-      `| ${TERRA} | 1 | 0 | 1 | 1 | 0 | low_confidence 1 | 0/0 |`
-    );
+    // Applied, declined, failed, skipped, clean passages kept.
+    expect(section("Dispositions")).toContain(`| ${TERRA} | 2 | 0 | 1 | 0 | 0/0 |`);
 
     // Ready · misreads · forms.
     const bySource = section("Ready, misreads and forms landed, by source");
     expect(bySource).toContain("| context | 1 | 1/1 · 1/1 · – | 1/1 · 1/1 · – |");
-    expect(bySource).toContain("| replay | 1 | 0/1 · 0/1 · 2/2 | 0/1 · 0/1 · 0/2 |");
+    expect(bySource).toContain("| replay | 1 | 0/1 · 0/1 · 2/2 | 1/1 · 1/1 · 2/2 |");
     expect(bySource).toContain("| ramble | 1 | 1/1 · – · 3/3 | 0/1 · – · 0/3 |");
     expect(section("Ready, misreads and forms landed, by style")).toContain(
-      "| deepgram | 2 | 1/2 · 1/2 · 2/2 | 1/2 · 1/2 · 0/2 |"
-    );
-    expect(report).toContain(
-      "rejected (low_confidence); missed misreads Zustand; missed forms worktree, useShallow"
+      "| deepgram | 2 | 1/2 · 1/2 · 2/2 | 2/2 · 2/2 · 2/2 |"
     );
     expect(report).toContain(`- ${LUNA}: ${JSON.stringify(symbols.reference)} (applied; ready)`);
   });
@@ -1744,9 +1693,8 @@ describe("rescore", () => {
     expect(legacy.run.summaries).toEqual(current.run.summaries);
     const summary = (variant: string) =>
       legacy.run.summaries.find((entry) => entry.variant === variant)!;
-    expect(summary(LUNA).dispositions).toMatchObject({ applied: 2, rejected: 0 });
-    expect(summary(TERRA).dispositions).toMatchObject({ rejected: 1, failed: 0, skipped: 1 });
-    expect(summary(TERRA).rejectReasons).toEqual({ low_confidence: 1 });
+    expect(summary(LUNA).dispositions).toMatchObject({ applied: 2 });
+    expect(summary(TERRA).dispositions).toMatchObject({ applied: 1, failed: 0, skipped: 1 });
     expect(renderReport(legacy.run, legacy.corpus)).not.toMatch(/guard|edit_size/);
   });
 

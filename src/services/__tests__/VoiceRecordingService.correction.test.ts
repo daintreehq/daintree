@@ -70,7 +70,7 @@ type Span = { from: number; to: number };
 type CorrectResult = {
   action: "no_change" | "replace";
   correctedText: string;
-  verdict?: "replaced" | "unchanged" | "rejected_command" | "rejected_low_confidence";
+  verdict?: "replaced" | "unchanged" | "failed";
 };
 
 type FileTokenPayload = {
@@ -1630,7 +1630,7 @@ describe("VoiceRecordingService — streamed cleanup (#14779)", () => {
     expect(ranges("panel-1")).toEqual([]);
   });
 
-  it("puts a rejected cleanup's passage back exactly as dictated, at once", async () => {
+  it("puts a passage its cleanup left alone back exactly as dictated, at once", async () => {
     const {
       service,
       dictate,
@@ -1650,7 +1650,7 @@ describe("VoiceRecordingService — streamed cleanup (#14779)", () => {
     progress(DICTATED, "So fix the bug in the");
     expect(ranges("panel-1")[0]!.rewrite).toBeDefined();
 
-    // A low-confidence or over-budget reply comes back as no change; the other
+    // A reply that keeps the passage comes back as no change; the other
     // passage is still out, so only this one's own reply can clear it.
     pending.get(DICTATED)!.resolve({ action: "no_change", correctedText: DICTATED });
     await flush();
@@ -1669,7 +1669,7 @@ describe("VoiceRecordingService — streamed cleanup (#14779)", () => {
     expect(ranges("panel-1")).toEqual([]);
   });
 
-  it("shows no command once text typed ahead of the passage means it won't land", async () => {
+  it("lands a command cleanup even once text was typed ahead of the passage", async () => {
     const { service, dictate, say, draft, flush, inputStore, pending, ranges, sessionOf } =
       await streamingSetup();
     dictate("panel-1", "run the review skill on auth");
@@ -1685,15 +1685,17 @@ describe("VoiceRecordingService — streamed cleanup (#14779)", () => {
     await flush();
     const session = sessionOf("run the review skill on auth");
     expect(session).toEqual(expect.any(String));
+    const to = 6 + "run the review skill on auth".length;
     expect(ranges("panel-1")[0]).toEqual({
       from: 6,
-      to: 6 + "run the review skill on auth".length,
+      to,
       session,
+      rewrite: { to, text: "/review on auth" },
     });
 
     pending.get("and the lexr too")!.resolve({ action: "no_change", correctedText: "" });
     await flush();
-    expect(draft("panel-1")).toBe("Note: run the review skill on auth\nand the lexr too");
+    expect(draft("panel-1")).toBe("Note: /review on auth\nand the lexr too");
   });
 
   it("stops the rewrite at an edit mid-stream and leaves the passage as dictated", async () => {
@@ -1779,24 +1781,24 @@ describe("VoiceRecordingService — streamed cleanup (#14779)", () => {
     expect(ranges("panel-1")).toEqual([]);
   });
 
-  // #14901: a reply is judged only once it's whole, so what streams in before
+  // #14901: a reply lands only once it's whole, so what streams in before
   // that is only ever drawn over the passage (tentatively, by the composer),
-  // and one turned down never reaches the draft.
+  // and one that doesn't land never reaches the draft.
   it.each([
     {
-      check: "the low-confidence gate",
+      check: "fails before its end",
       dictated: DICTATED,
       streamed: "So fix the bug in the",
-      verdict: "rejected_low_confidence" as const,
+      verdict: "failed" as const,
     },
     {
-      check: "the command check",
+      check: "keeps the passage after all",
       dictated: "run the review skill on auth and the parser",
       streamed: "/review on auth and the",
-      verdict: "rejected_command" as const,
+      verdict: "unchanged" as const,
     },
   ])(
-    "only ever draws a reply $check turns down, then takes it away",
+    "only ever draws a reply that $check, then takes it away",
     async ({ dictated, streamed, verdict }) => {
       const {
         service,

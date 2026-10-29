@@ -23,25 +23,18 @@ import { pluralize } from "../../shared/utils/pluralize.js";
 import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders.js";
 import { createTimeoutSignal, withTimeoutSignal } from "../../shared/utils/timeoutSignal.js";
 import { validateRewrite } from "./voiceRewriteGuard.js";
-import {
-  correctionOutcome,
-  type VoiceCorrectionProposal,
-  type VoiceCorrectionRejectReason,
-} from "./voiceCorrectionOutcome.js";
+import { correctionOutcome, type VoiceCorrectionProposal } from "./voiceCorrectionOutcome.js";
 import { mayReferenceFile } from "../../shared/utils/voiceFileLinkCommands.js";
 import { sliceSpans, type VoiceTextSpan } from "../../shared/utils/voiceUncertainWords.js";
 import { slicePausePositions } from "../../shared/utils/voicePausePositions.js";
 import type { HeardAsRule } from "../../shared/utils/voiceHeardAs.js";
-import {
-  EMPTY_VOICE_COMMAND_VOCABULARY,
-  type VoiceCommandEntry,
-} from "../../shared/utils/voiceAgentCommands.js";
+import type { VoiceCommandEntry } from "../../shared/utils/voiceAgentCommands.js";
 import type { VoiceAgentReply } from "./voiceAgentReplyTypes.js";
 import type { VoiceCommandTarget } from "./voiceCommandTarget.js";
 import { holdsCredential, isSecretShaped } from "./voiceKeytermSecrets.js";
 
 export { CORE_CORRECTION_PROMPT, buildCorrectionSystemPrompt };
-export type { VoiceCorrectionProposal, VoiceCorrectionRejectReason };
+export type { VoiceCorrectionProposal };
 
 const P = "[VoiceCorrection]";
 const SHORT_CORRECTION_TIMEOUT_MS = 7000;
@@ -246,9 +239,7 @@ export interface VoiceCorrectionResult {
   verdict: VoiceCorrectionVerdict;
   /** The request failed or was cancelled, so the raw text stands untried. */
   failed?: true;
-  /** The cleanup the model proposed and the check that turned it down; transcript content, so never logged. */
-  rejected?: { reason: VoiceCorrectionRejectReason; candidate: string };
-  /** The reply as the model gave it, before any check; absent when none parsed. Transcript content, so never logged. */
+  /** The reply as the model gave it; absent when none parsed. Transcript content, so never logged. */
   proposal?: VoiceCorrectionProposal;
   /**
    * When the OpenAI request went out (performance.now()), how long it took,
@@ -564,32 +555,15 @@ export class VoiceCorrectionService {
         onText
       );
 
-      const outcome = correctionOutcome(request.rawText, proposal, {
-        vocabulary: settings.commandTarget?.vocabulary ?? EMPTY_VOICE_COMMAND_VOCABULARY,
-        startsPrompt: request.startsPrompt === true,
+      const outcome = correctionOutcome(request.rawText, proposal);
+      logDebug(`${P} Correction success`, {
+        rawLen: request.rawText.length,
+        correctedLen: outcome.confirmedText.length,
+        action: outcome.action,
+        confidence: proposal.confidence,
+        contextLen: request.recentContext?.length ?? 0,
+        reason: request.reason ?? "unspecified",
       });
-      if (outcome.rejected) {
-        logInfo(`${P} Correction rejected, keeping raw text`, {
-          reason: outcome.rejected.reason,
-          rawLen: request.rawText.length,
-          correctedLen: outcome.rejected.candidate.length,
-        });
-      } else {
-        if (outcome.commandsAsSaid) {
-          logInfo(`${P} Correction kept, unasked commands written as said`, {
-            rawLen: request.rawText.length,
-            correctedLen: outcome.confirmedText.length,
-          });
-        }
-        logDebug(`${P} Correction success`, {
-          rawLen: request.rawText.length,
-          correctedLen: outcome.confirmedText.length,
-          action: outcome.action,
-          confidence: proposal.confidence,
-          contextLen: request.recentContext?.length ?? 0,
-          reason: request.reason ?? "unspecified",
-        });
-      }
 
       return {
         action: outcome.action,
@@ -597,7 +571,6 @@ export class VoiceCorrectionService {
         confidence: proposal.confidence,
         confirmedText: outcome.confirmedText,
         verdict: outcome.verdict,
-        ...(outcome.rejected ? { rejected: outcome.rejected } : {}),
         proposal,
       };
     } catch (error) {

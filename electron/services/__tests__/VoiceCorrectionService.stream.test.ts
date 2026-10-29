@@ -247,26 +247,7 @@ describe("VoiceCorrectionService streaming", () => {
     expect(result.action).toBe("no_change");
   });
 
-  it("still judges the whole correction: a low-confidence one streams and is rejected", async () => {
-    stubFetch(streamed(replyFrames(reply("Fix the bug in the parser now.", "replace", "low"))));
-    const onText = vi.fn();
-
-    const result = await new VoiceCorrectionService().correct(
-      { rawText: "fix the bug in the parser now" },
-      SETTINGS,
-      undefined,
-      onText
-    );
-
-    expect(onText).toHaveBeenCalled();
-    expect(result).toMatchObject({
-      action: "no_change",
-      correctedText: "fix the bug in the parser now",
-    });
-    expect(result.failed).toBeUndefined();
-  });
-
-  it("still judges the whole correction: a command the speaker didn't say streams and is rejected", async () => {
+  it("lands a streamed command opening the prompt as the model wrote it", async () => {
     stubFetch(streamed(replyFrames(reply("/test the parser before the release now"))));
     const onText = vi.fn();
 
@@ -279,9 +260,9 @@ describe("VoiceCorrectionService streaming", () => {
 
     expect(onText).toHaveBeenCalledWith(expect.stringMatching(/^\/test /));
     expect(result).toMatchObject({
-      action: "no_change",
-      correctedText: "test the parser before the release now",
-      verdict: "rejected_command",
+      action: "replace",
+      correctedText: "/test the parser before the release now",
+      verdict: "replaced",
     });
   });
 
@@ -415,7 +396,7 @@ describe("VoiceCorrectionService streaming", () => {
     // Far enough into the corrected text for some of it to have been reported.
     const partial = () => replyFrames(reply("Fix the bug in the parser now."), null).slice(0, 12);
 
-    it("names a streamed cleanup that lands replaced, and one a guard refuses by its guard", async () => {
+    it("names a streamed cleanup that lands replaced, whatever its confidence", async () => {
       stubFetch(streamed(replyFrames(reply("Fix the parser now."))));
       const replaced = await new VoiceCorrectionService().correct(
         { rawText: "fix the parser now" },
@@ -426,13 +407,21 @@ describe("VoiceCorrectionService streaming", () => {
       expect(replaced.verdict).toBe("replaced");
 
       stubFetch(streamed(replyFrames(reply("Fix the bug in the parser now.", "replace", "low"))));
-      const refused = await new VoiceCorrectionService().correct(
+      const onText = vi.fn();
+      const unsure = await new VoiceCorrectionService().correct(
         { rawText: "fix the bug in the parser now" },
         SETTINGS,
         undefined,
-        vi.fn()
+        onText
       );
-      expect(refused.verdict).toBe("rejected_low_confidence");
+      expect(onText).toHaveBeenCalled();
+      expect(unsure).toMatchObject({
+        action: "replace",
+        correctedText: "Fix the bug in the parser now.",
+        confirmedText: "Fix the bug in the parser now.",
+        verdict: "replaced",
+      });
+      expect(unsure.failed).toBeUndefined();
     });
 
     it("names a stream that errors, or ends or is cut off before its last event, failed", async () => {

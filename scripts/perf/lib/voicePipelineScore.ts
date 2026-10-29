@@ -479,15 +479,12 @@ const statCell = (s: Stat) => `${ms(s.p50)} / ${ms(s.p95)}`;
 /** What reached the draft, raw and after cleanup. */
 export function renderAccuracyTable(summaries: readonly ArmSummary[]): string {
   const lines = [
-    "| Arm | n | Prompts as written, raw → final | Form WER raw → final | Terms verbatim raw → final | WER raw → final | Broken words (sessions) | Cleanup applied | Turned down |",
-    "| --- | --: | --- | --- | --- | --- | --: | --: | --: |",
+    "| Arm | n | Prompts as written, raw → final | Form WER raw → final | Terms verbatim raw → final | WER raw → final | Broken words (sessions) | Cleanup applied |",
+    "| --- | --: | --- | --- | --- | --- | --: | --: |",
   ];
   for (const s of summaries) {
-    const rejected = Object.entries(s.verdicts)
-      .filter(([verdict]) => verdict.startsWith("rejected"))
-      .reduce((total, [, share]) => total + share, 0);
     lines.push(
-      `| ${s.arm} | ${s.sessions} | ${pct(s.rawFormExactRate)} → ${pct(s.finalFormExactRate)} | ${pct(s.rawFormWer)} → ${pct(s.finalFormWer)} | ${pct(s.rawLiteralTermRecall)} → ${pct(s.finalLiteralTermRecall)} | ${pct(s.rawWer)} → ${pct(s.finalWer)} | ${s.brokenWords} (${s.brokenSessions}) | ${pct(s.verdicts.replaced ?? 0)} | ${pct(rejected)} |`
+      `| ${s.arm} | ${s.sessions} | ${pct(s.rawFormExactRate)} → ${pct(s.finalFormExactRate)} | ${pct(s.rawFormWer)} → ${pct(s.finalFormWer)} | ${pct(s.rawLiteralTermRecall)} → ${pct(s.finalLiteralTermRecall)} | ${pct(s.rawWer)} → ${pct(s.finalWer)} | ${s.brokenWords} (${s.brokenSessions}) | ${pct(s.verdicts.replaced ?? 0)} |`
     );
   }
   return lines.join("\n");

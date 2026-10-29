@@ -2068,6 +2068,52 @@ const COMMANDS: readonly AuthoredCase[] = [
     keep: ["scaffold the linter with"],
     session: CODEX_SKILLS_SESSION,
   },
+  // Asked for after a lead-in no list of opening words covers, as Grok wrote it
+  // on 2026-10-29: the skill opens the prompt, or stays where it was said.
+  {
+    id: "commands-opening-github-create-issue:grok",
+    style: "grok",
+    source: "commands",
+    raw: "Okay, go ahead and use the GitHub create issue skill to create a new issue for this.",
+    reference: "/github-create-issue to create a new issue for this.",
+    alsoAccept: [
+      "/github-create-issue Create a new issue for this.",
+      "/github-create-issue create a new issue for this.",
+      "Okay, go ahead and use the /github-create-issue skill to create a new issue for this.",
+      "Go ahead and use the /github-create-issue skill to create a new issue for this.",
+    ],
+    fixes: { "/github-create-issue": "form" },
+    keep: ["a new issue for this"],
+    session: CLAUDE_SKILLS_SESSION,
+  },
+  {
+    id: "commands-opening-github-create-issue-paused:grok",
+    style: "grok",
+    source: "commands",
+    raw: "Okay, go ahead and use the GitHub create issue skill. To create a new issue for this.",
+    reference: "/github-create-issue to create a new issue for this.",
+    alsoAccept: [
+      "/github-create-issue Create a new issue for this.",
+      "/github-create-issue create a new issue for this.",
+      "Okay, go ahead and use the /github-create-issue skill to create a new issue for this.",
+      "Go ahead and use the /github-create-issue skill to create a new issue for this.",
+    ],
+    fixes: { "/github-create-issue": "form" },
+    keep: ["a new issue for this"],
+    pauses: ["create issue skill."],
+    session: CLAUDE_SKILLS_SESSION,
+  },
+  {
+    id: "commands-github-create-issue-partway:grok",
+    style: "grok",
+    source: "commands",
+    raw: "First fix the flaky test, then go ahead and use the GitHub create issue skill to file the rest.",
+    reference:
+      "First fix the flaky test, then go ahead and use the /github-create-issue skill to file the rest.",
+    fixes: { "/github-create-issue": "form" },
+    keep: ["First fix the flaky test"],
+    session: CLAUDE_SKILLS_SESSION,
+  },
   {
     id: "commands-lookalike-review-design:openai",
     style: "openai",
