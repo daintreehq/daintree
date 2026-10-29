@@ -11,6 +11,7 @@ import { getMergedPresets } from "@/config/agents";
 import { GridPanel } from "./GridPanel";
 import type { TabGroup } from "@/types";
 import type { TabInfo } from "@/components/Panel/TabButton";
+import { reorderGroupTabsWithUndo } from "@/services/layout/reorderGroupTabs";
 import { addTabForPanel } from "./useContentGridContext";
 import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
@@ -51,7 +52,6 @@ export const GridTabGroup = React.memo(function GridTabGroup({
   const stampLastActive = usePanelStore((state) => state.stampLastActive);
   const setMaximizedId = usePanelStore((state) => state.setMaximizedId);
   const trashPanel = usePanelStore((state) => state.trashPanel);
-  const reorderPanelsInGroup = usePanelStore((state) => state.reorderPanelsInGroup);
   const updateTitle = usePanelStore((state) => state.updateTitle);
 
   // Subscribe to registry's active tab for reactive updates
@@ -279,9 +279,9 @@ export const GridTabGroup = React.memo(function GridTabGroup({
   // Handle tab reorder - update group panel order
   const handleTabReorder = useCallback(
     (newOrder: string[]) => {
-      reorderPanelsInGroup(group.id, newOrder);
+      reorderGroupTabsWithUndo(group.id, newOrder);
     },
-    [group.id, reorderPanelsInGroup]
+    [group.id]
   );
 
   // Handle add tab - duplicate the current panel as a new tab. Delegates to the

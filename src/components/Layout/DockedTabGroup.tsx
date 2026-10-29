@@ -121,6 +121,7 @@ import {
 } from "@/services/panelCloseGuard";
 import { animatePanelMove } from "@/components/Panel/animatePanelMove";
 import { isScratchpadElement } from "@/lib/terminalScratchpad";
+import { reorderGroupTabsWithUndo } from "@/services/layout/reorderGroupTabs";
 
 interface DockedTabGroupProps {
   group: TabGroup;
@@ -165,7 +166,6 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const trashPanel = usePanelStore((s) => s.trashPanel);
   const updateTitle = usePanelStore((s) => s.updateTitle);
   const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
-  const reorderPanelsInGroup = usePanelStore((s) => s.reorderPanelsInGroup);
   const addPanel = usePanelStore((s) => s.addPanel);
   const addPanelToGroup = usePanelStore((s) => s.addPanelToGroup);
 
@@ -474,10 +474,10 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
           oldIndex,
           newIndex
         );
-        reorderPanelsInGroup(group.id, newOrder);
+        reorderGroupTabsWithUndo(group.id, newOrder);
       }
     },
-    [panels, group.id, reorderPanelsInGroup]
+    [panels, group.id]
   );
 
   // Surface-specific ARIA announcements for the dock tab strip. Without this
