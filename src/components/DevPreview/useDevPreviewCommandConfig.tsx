@@ -215,7 +215,9 @@ export function useDevPreviewCommandConfig({
           </TooltipContent>
         </Tooltip>
         <DropdownMenuContent align="end" sideOffset={4} className="w-72 p-1">
-          <DropdownMenuLabel>{hasOwnCommand ? "This preview only" : "Project default"}</DropdownMenuLabel>
+          <DropdownMenuLabel>
+            {hasOwnCommand ? "This preview only" : "Project default"}
+          </DropdownMenuLabel>
           {candidates.map((c) => {
             const isActive = c.command.trim() === devCommand.trim();
             return (

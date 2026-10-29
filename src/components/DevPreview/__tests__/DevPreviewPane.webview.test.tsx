@@ -2386,8 +2386,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
         "npm start"
       );
       const lastDevServerArgs = (useDevServerMock.mock.lastCall as unknown[] | undefined)?.[0] as
-        | { devCommand?: string }
-        | undefined;
+        { devCommand?: string } | undefined;
       expect(lastDevServerArgs?.devCommand).toBe("npm start");
       expect(saveSettingsMock).not.toHaveBeenCalled();
       expect(devServerStateRef.current.stop).not.toHaveBeenCalled();
