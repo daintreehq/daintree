@@ -206,8 +206,8 @@ export function HostSwitchScreen({ pending }: { pending: PendingHostSwitch }) {
                       // Its glyph sits in the steps' glyph column: padding plus border.
                       className="-mx-3.25 text-sm"
                     >
-                      <p className="text-pretty">{failureMessage}</p>
-                      {recovery?.hint && <p className="mt-1 text-pretty">{recovery.hint}</p>}
+                      <p className="[text-wrap:pretty]">{failureMessage}</p>
+                      {recovery?.hint && <p className="mt-1 [text-wrap:pretty]">{recovery.hint}</p>}
                     </Callout>
                   </li>
                 );
