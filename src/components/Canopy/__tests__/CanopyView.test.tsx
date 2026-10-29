@@ -2376,14 +2376,21 @@ describe("CanopyView", () => {
     expect(body.querySelector("#canopy-card-asking")?.textContent).toContain("Replied");
     // The count is live, and says the band is behind it.
     expect(summaryWords()).toBe("1 agent needs you · Not every agent is sorted yet");
+    // However long the pointer stays.
+    await act(async () => {
+      vi.advanceTimersByTime(20_000);
+    });
+    expect(band()).toEqual(["waiting", "asking"]);
 
     // Left alone, the list re-ranks, though the row is still selected: it
     // moves out of the band under the selection, the pane and the keyboard
     // staying with it, and the list doesn't scroll to follow it.
     const terminal = body.querySelector("[data-canopy-terminal]");
     expect(terminal).not.toBeNull();
+    expect(document.activeElement).toBe(asking);
     const scrolled = vi.mocked(Element.prototype.scrollIntoView);
     scrolled.mockClear();
+    const focused = vi.spyOn(HTMLElement.prototype, "focus");
     fireEvent.pointerLeave(list);
     await act(async () => {
       vi.advanceTimersByTime(10_000);
@@ -2392,9 +2399,31 @@ describe("CanopyView", () => {
     expect(asking.isConnected).toBe(false);
     expect(selectedRun(container)).toBe("asking");
     expect(body.querySelector("[data-canopy-terminal]")).toBe(terminal);
-    expect(document.activeElement?.id).toBe("canopy-card-asking");
+    const moved = body.querySelector<HTMLElement>("#canopy-card-asking")!;
+    expect(document.activeElement).toBe(moved);
+    expect(focused.mock.calls.filter((_, index) => focused.mock.contexts[index] === moved)).toEqual(
+      [[{ preventScroll: true }]]
+    );
     expect(scrolled).not.toHaveBeenCalled();
     expect(summaryWords()).toBe("1 agent needs you");
+  });
+
+  it("brings the selected row into view when the keyboard is lost from anything but its own row", async () => {
+    installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    const body = container.ownerDocument.body;
+    expect(selectedRun(container)).toBe("waiting");
+    // A control beside the list had the keyboard, and went away.
+    const control = document.createElement("button");
+    body.append(control);
+    act(() => control.focus());
+    control.remove();
+    const scrolled = vi.mocked(Element.prototype.scrollIntoView);
+    scrolled.mockClear();
+    act(() => useCanopyStore.setState({ snapshot: { ...canopySnapshot, refreshedAt: NOW + 1 } }));
+    expect(document.activeElement?.id).toBe("canopy-card-waiting");
+    expect(scrolled).toHaveBeenCalled();
   });
 
   it("gives the band as it is now on Refresh, whatever is selected", async () => {
@@ -2409,7 +2438,10 @@ describe("CanopyView", () => {
           "[aria-labelledby=canopy-needs-you-label] [data-canopy-card]"
         ),
       ].map((card) => card.id.replace("canopy-card-", ""));
-    fireEvent.click(cards(container)[1]!);
+    const asking = body.querySelector<HTMLElement>("#canopy-card-asking")!;
+    fireEvent.pointerDown(asking);
+    fireEvent.pointerUp(asking);
+    fireEvent.click(asking);
     expect(selectedRun(container)).toBe("asking");
     // Answered in its terminal: Daintree sees it working again, and nothing
     // records a reply.
@@ -2450,13 +2482,13 @@ describe("CanopyView", () => {
         lastSuccessfulAt: NOW,
       },
     });
-    const read = (priority: number) => ({
+    const read = (priority: number, at: number) => ({
       ...canopySnapshot,
-      refreshedAt: NOW + priority,
+      refreshedAt: at,
       cards: [{ ...stuckCard("working"), priority, attentionScore: priority }],
     });
-    useCanopyStore.setState({ snapshot: read(84) });
-    installElectron(read(84));
+    useCanopyStore.setState({ snapshot: read(84, NOW) });
+    installElectron(read(84, NOW));
     const { container } = render(<CanopyView />);
     await frames();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
@@ -2472,13 +2504,15 @@ describe("CanopyView", () => {
     const list = container.ownerDocument.querySelector<HTMLElement>("[role=listbox]")!;
     fireEvent.pointerEnter(list);
     // Read again as going normally, while the pointer holds the band.
-    act(() => useCanopyStore.setState({ snapshot: read(5) }));
+    act(() => useCanopyStore.setState({ snapshot: read(5, NOW + 10_000) }));
     expect(band()).toEqual(["working"]);
     // The count is live; the line says the band is behind rather than concluding.
     expect(summaryWords()).toBe("Not every agent is sorted yet");
-    act(() => useCanopyStore.setState({ snapshot: { ...read(5), lastError: "Read failed" } }));
+    act(() =>
+      useCanopyStore.setState({ snapshot: { ...read(5, NOW + 10_000), lastError: "Read failed" } })
+    );
     expect(summaryWords()).toBe("Not every agent is sorted yet");
-    act(() => useCanopyStore.setState({ snapshot: read(5) }));
+    act(() => useCanopyStore.setState({ snapshot: read(5, NOW + 10_000) }));
     fireEvent.pointerLeave(list);
     act(() => {
       vi.advanceTimersByTime(10_000);

@@ -310,6 +310,20 @@ export function useCanopyInboxFocus({
   // in elsewhere keeps it.
   const lastIndexRef = useRef(0);
   const refreshRef = useRef<HTMLButtonElement>(null);
+  // What last had the keyboard: a row it was taken from by its own remount,
+  // rather than by anything else leaving, is still in the user's view.
+  const lastFocusedRef = useRef<Element | null>(null);
+  useEffect(() => {
+    if (!isOpen) return;
+    const note = (event: FocusEvent) => {
+      lastFocusedRef.current = event.target instanceof Element ? event.target : null;
+    };
+    document.addEventListener("focusin", note, true);
+    return () => {
+      document.removeEventListener("focusin", note, true);
+      lastFocusedRef.current = null;
+    };
+  }, [isOpen]);
   useEffect(() => {
     if (focusedIndex !== -1) lastIndexRef.current = focusedIndex;
     if (!landedRef.current || focusedId === null) return;
@@ -325,13 +339,20 @@ export function useCanopyInboxFocus({
       refreshRef.current?.focus();
       return;
     }
-    // It moved section and its node was replaced: the keyboard comes back to
-    // it where it now is, with the pane and the list's scroll left as they were.
-    if (focusedIndex !== -1) {
-      document.getElementById(canopyCardDomId(focusedId))?.focus({ preventScroll: true });
+    // Its row moved section and was replaced: the keyboard comes back to it
+    // where it now is, with the pane and the list's scroll left as they were.
+    const lost = lastFocusedRef.current;
+    const domId = canopyCardDomId(focusedId);
+    if (focusedIndex !== -1 && lost !== null && !lost.isConnected && lost.id === domId) {
+      document.getElementById(domId)?.focus({ preventScroll: true });
       return;
     }
-    focusCardNow(visible[Math.min(lastIndexRef.current, visible.length - 1)]!.runId);
+    // Either the card left, or the keyboard was lost from somewhere else.
+    const target =
+      focusedIndex !== -1
+        ? visible[focusedIndex]!
+        : visible[Math.min(lastIndexRef.current, visible.length - 1)]!;
+    focusCardNow(target.runId);
   }, [focusedIndex, focusedId, visible, focusCardNow, paneFocus, replyFocus, items]);
 
   // A new search selects its top match, as opening selects the top run; a
