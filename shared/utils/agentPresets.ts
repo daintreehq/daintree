@@ -322,6 +322,33 @@ export function getMergedPresetIdentities(
   return result;
 }
 
+/** Every CCR route's preset id carries this prefix; `CcrConfigService` mints them. */
+export const CCR_PRESET_ID_PREFIX = "ccr-";
+
+/**
+ * Which of the presets that load after startup have loaded for one scope.
+ * Custom presets ride with agent settings and built-in ones with the
+ * registry, so only these two can be missing while their reader is waiting.
+ */
+export interface PresetInventoryState {
+  /** The CCR routes have been read. */
+  ccr: boolean;
+  /** This project's `.daintree/presets` have been read, or the scope has none. */
+  project: boolean;
+}
+
+/**
+ * Whether a preset id the merged list doesn't contain is really gone, rather
+ * than waiting in an inventory that hasn't loaded (#15025). Only a settled
+ * absence may clear a saved choice or let a launch go ahead without it. A
+ * project preset can carry any id, so an unread project leaves every id open;
+ * CCR only ever holds its own prefix.
+ */
+export function isPresetAbsenceSettled(presetId: string, inventory: PresetInventoryState): boolean {
+  if (!inventory.project) return false;
+  return inventory.ccr || !presetId.startsWith(CCR_PRESET_ID_PREFIX);
+}
+
 export function getMergedPreset(
   agentId: string,
   presetId: string | undefined,

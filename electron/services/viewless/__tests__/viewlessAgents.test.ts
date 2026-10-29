@@ -137,6 +137,75 @@ describe("agent.launch with no frontend", () => {
     });
   });
 
+  it("refuses rather than launch without a saved preset whose project presets failed to read (#15025)", async () => {
+    const settings = {
+      agents: { claude: { presetId: "team", customPresets: [{ id: "zai", name: "Z.ai" }] } },
+    } as unknown as AgentSettings;
+    const { deps, invoke, store } = launchDeps();
+    deps.agents.getSettings = async () => settings;
+    deps.agents.getProjectPresets = async () => {
+      throw new Error("EACCES");
+    };
+
+    const result = await executeViewlessAction(
+      request("agent.launch", { agentId: "claude" }),
+      deps
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      result: { launched: false, spawnStatus: "presets-loading", terminalId: null },
+    });
+    expect(invoke.mock.calls.some(([, channel]) => channel === CHANNELS.TERMINAL_SPAWN)).toBe(
+      false
+    );
+    expect(store.read()?.terminals ?? []).toEqual([]);
+  });
+
+  it("refuses a saved CCR route when the routes failed to read, but not a pick CCR could never hold", async () => {
+    const failCcr = (presetId: string) => {
+      const { deps, invoke } = launchDeps();
+      deps.agents.getSettings = async () =>
+        ({ agents: { claude: { presetId } } }) as unknown as AgentSettings;
+      deps.agents.getCcrPresets = async () => {
+        throw new Error("EACCES");
+      };
+      return { deps, invoke };
+    };
+    const route = failCcr("ccr-opus");
+    const gone = failCcr("user-gone");
+
+    const routeResult = await executeViewlessAction(
+      request("agent.launch", { agentId: "claude" }),
+      route.deps
+    );
+    const goneResult = await executeViewlessAction(
+      request("agent.launch", { agentId: "claude" }),
+      gone.deps
+    );
+
+    expect(routeResult).toMatchObject({
+      result: { launched: false, spawnStatus: "presets-loading" },
+    });
+    expect(goneResult).toMatchObject({ result: { launched: true, spawnStatus: null } });
+    expect(spawned(gone.invoke).title).toBe("Claude");
+  });
+
+  it("launches a custom preset even when the project's presets failed to read", async () => {
+    const { deps, invoke } = launchDeps();
+    deps.agents.getSettings = async () =>
+      ({
+        agents: { claude: { presetId: "zai", customPresets: [{ id: "zai", name: "Z.ai" }] } },
+      }) as unknown as AgentSettings;
+    deps.agents.getProjectPresets = async () => {
+      throw new Error("EACCES");
+    };
+
+    await executeViewlessAction(request("agent.launch", { agentId: "claude" }), deps);
+
+    expect(spawned(invoke)).toMatchObject({ agentPresetId: "zai" });
+  });
+
   it("launches against the bare agent when asked for no preset", async () => {
     const settings = {
       agents: { claude: { presetId: "zai", customPresets: [{ id: "zai", name: "Z.ai" }] } },

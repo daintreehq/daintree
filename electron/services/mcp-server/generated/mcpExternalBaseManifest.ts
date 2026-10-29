@@ -363,6 +363,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 "already-launching",
                 "spawn-failed",
                 "unavailable",
+                "presets-loading",
               ],
             },
             {
@@ -370,7 +371,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             },
           ],
           description:
-            "Null on a launch, else why not: panel-limit (see panelLimit), already-launching (retry), missing-cli (setup panel opened).",
+            "Null if launched. Retry already-launching or presets-loading; missing-cli opened a setup panel.",
         },
         worktreeId: {
           type: ["string", "null"],

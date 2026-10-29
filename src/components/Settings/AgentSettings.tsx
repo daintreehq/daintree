@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useEffectiveCombo, useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { useTabLoad } from "@/hooks";
 import { getAgentIds, getAgentConfig, getMergedPresets, type AgentPreset } from "@/config/agents";
@@ -13,6 +13,10 @@ import { agentToolbarPin } from "@shared/types/ipc/agentToolbarPins";
 import { cliAvailabilityClient } from "@/clients";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
+import { useProjectStore } from "@/store/projectStore";
+import { useScratchStore } from "@/store/scratchStore";
+import { presetInventoryState } from "@/utils/presetInventory";
+import { useStaleAgentPresetCleanup } from "./useStaleAgentPresetCleanup";
 import { logError } from "@/utils/logger";
 
 import { Button } from "@/components/ui/button";
@@ -277,6 +281,14 @@ export function AgentSettings({
 
   const ccrPresetsByAgent = useCcrPresetsStore((s) => s.ccrPresetsByAgent);
   const projectPresetsByAgent = useProjectPresetsStore((s) => s.presetsByAgent);
+  const ccrPresetsInitialized = useCcrPresetsStore((s) => s.isInitialized);
+  const hydratedProjectId = useProjectPresetsStore((s) => s.hydratedProjectId);
+  const currentProjectId = useProjectStore((s) => s.currentProject?.id);
+  const currentScratchId = useScratchStore((s) => s.currentScratch?.id);
+  const presetInventory = presetInventoryState(ccrPresetsInitialized, hydratedProjectId, {
+    projectId: currentProjectId,
+    scratchId: currentScratchId,
+  });
 
   // Rate limiting refs
   const lastAddTimeRef = useRef(0);
@@ -333,36 +345,15 @@ export function AgentSettings({
     setEditName("");
   }, [activeSubtab, activeEntryPresetId]);
 
-  // Stale-preset cleanup in Settings: when a saved presetId no longer resolves
-  // (deleted custom preset, CCR route removed from config), clear it so the
-  // Settings UI and the stored settings agree. useAgentLauncher.ts does this
-  // cleanup on the next launch, but the UI otherwise shows default with a
-  // zombie presetId in storage until the user launches the agent again.
-  // updateAgent/onSettingsChange are stable Zustand actions / prop callbacks;
-  // calling them via useEffectEvent keeps them out of the deps array so the
-  // effect only reruns on activeAgentId/settings/ccrPresetsByAgent changes.
-  const clearStalePreset = useEffectEvent(() => {
-    if (!activeAgentId) return;
-    const entry = settings?.agents?.[activeAgentId];
-    if (!entry?.presetId) return;
-    const ccr = ccrPresetsByAgent[activeAgentId];
-    const project = projectPresetsByAgent[activeAgentId];
-    const merged = getMergedPresets(activeAgentId, entry.customPresets, ccr, project);
-    const stillExists = merged.some((f) => f.id === entry.presetId);
-    if (!stillExists) {
-      void (async () => {
-        await updateAgent(activeAgentId, { presetId: undefined });
-        onSettingsChange?.();
-      })();
-    }
+  useStaleAgentPresetCleanup({
+    agentId: activeAgentId,
+    settings,
+    ccrPresetsByAgent,
+    projectPresetsByAgent,
+    presetInventory,
+    updateAgent,
+    onSettingsChange,
   });
-  useEffect(() => {
-    void activeAgentId;
-    void settings;
-    void ccrPresetsByAgent;
-    void projectPresetsByAgent;
-    clearStalePreset();
-  }, [activeAgentId, settings, ccrPresetsByAgent, projectPresetsByAgent]);
 
   const agentOptions = useMemo(
     () =>
@@ -684,6 +675,7 @@ export function AgentSettings({
             activeEntry={activeEntry}
             ccrPresets={ccrPresetsByAgent[activeAgent.id]}
             projectPresets={projectPresetsByAgent[activeAgent.id]}
+            presetInventory={presetInventory}
             defaultDangerousArg={defaultDangerousArg}
             editingPresetId={editingPresetId}
             setEditingPresetId={setEditingPresetId}

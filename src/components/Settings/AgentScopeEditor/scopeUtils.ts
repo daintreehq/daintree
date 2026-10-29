@@ -1,4 +1,5 @@
 import type { AgentPreset } from "@/config/agents";
+import { isPresetAbsenceSettled, type PresetInventoryState } from "@shared/utils/agentPresets";
 import {
   combineDangerousModes,
   isAgentBypassSupported,
@@ -22,6 +23,21 @@ export function isStringModified(v: string | undefined): boolean {
 
 export function getEffectiveBool(override: boolean | undefined, agentDefault: boolean): boolean {
   return override ?? agentDefault;
+}
+
+/**
+ * Where a saved preset id stands against the presets on hand: there, really
+ * gone (so it can be cleared), or not loaded yet, when it has to be kept and
+ * shown as loading rather than as Default (#15025).
+ */
+export function savedPresetStatus(
+  presetId: string | undefined,
+  allPresets: AgentPreset[],
+  inventory: PresetInventoryState
+): "none" | "found" | "missing" | "loading" {
+  if (!presetId) return "none";
+  if (allPresets.some((preset) => preset.id === presetId)) return "found";
+  return isPresetAbsenceSettled(presetId, inventory) ? "missing" : "loading";
 }
 
 export function resolveScopeKind(
