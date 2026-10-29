@@ -9,6 +9,7 @@ import {
   deliverAgentRequest,
   forceAgentRequest,
   removeAgentRequest,
+  watchPickerPreviews,
 } from "../agentRequest";
 import {
   __resetComposerMemoryForTests,
@@ -109,6 +110,73 @@ describe("deliverAgentRequest", () => {
 
     // Nothing of the picker is mounted to notice the move; the run must.
     previewIn("wt-2");
+    agent.setState("waiting");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+
+    expect(agent.sent).toEqual([]);
+    expect(last()?.state).toEqual({
+      status: "failed",
+      message: "Stopped before the request was sent",
+    });
+  });
+
+  it("still sends a waiting request after the picker is switched off", async () => {
+    const agent = terminal();
+    const run = send();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(last()?.state.status).toBe("queued");
+
+    // Closing the picker is putting it away, not withdrawing what was sent.
+    useDevPreviewToolStore.setState({ activeByPanel: {} });
+    agent.setState("waiting");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+
+    expect(agent.sent).toEqual(["Make it pop"]);
+    expect(last()?.state.status).toBe("sent");
+  });
+
+  it("never sends into a preview that was trashed while it waited", async () => {
+    const agent = terminal();
+    const run = send();
+    await vi.advanceTimersByTimeAsync(1_000);
+    usePanelStore.setState({
+      panelsById: {
+        "preview-1": {
+          id: "preview-1",
+          kind: "dev-preview",
+          location: "trash",
+          worktreeId: "wt-1",
+        },
+      } as never,
+    });
+    agent.setState("waiting");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+    expect(agent.sent).toEqual([]);
+    // The preview is over, and what it held goes with it.
+    expect(readComposerMemory(KEY).deliveries).toEqual([]);
+  });
+
+  it("keeps a draft when the picker is switched off, and drops it with the preview", () => {
+    watchPickerPreviews();
+    updateComposerMemory(KEY, { draft: "Make it pop" });
+    useDevPreviewToolStore.setState({ activeByPanel: {} });
+    expect(readComposerMemory(KEY).draft).toBe("Make it pop");
+
+    usePanelStore.setState({ panelsById: {} as never });
+    expect(readComposerMemory(KEY).draft).toBe("");
+  });
+
+  it("ends a waiting request when the preview moves away and back before its next check", async () => {
+    const agent = terminal();
+    const run = send();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(last()?.state.status).toBe("queued");
+
+    previewIn("wt-2");
+    previewIn("wt-1");
     agent.setState("waiting");
     await vi.advanceTimersByTimeAsync(2_000);
     await run;

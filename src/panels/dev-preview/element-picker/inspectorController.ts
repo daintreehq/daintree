@@ -29,8 +29,8 @@ import type {
   DevPreviewToolSessionContext,
 } from "@/services/devPreviewTools/types";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
-import { cancelAgentRequests } from "./agentRequest.js";
-import { forgetComposerMemories } from "./composerMemory.js";
+import { cancelAgentRequests, watchPickerPreviews } from "./agentRequest.js";
+import { hasRequestsInFlight, subscribeComposerMemory } from "./composerMemory.js";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { mismatchMessage, runtimeIssueMessage, wireFailureMessage } from "./copy.js";
 import { usePanelStore } from "@/store/panelStore";
@@ -489,6 +489,8 @@ export class InspectorController implements DevPreviewToolSession {
   private recoveringWorkspace: string | null = null;
   private held: HeldSelection | null = null;
   private disposed = false;
+  /** Kept apart from the rest: a closed picker still hears edits while its requests are out. */
+  private offSourceChanged: (() => void) | null = null;
   private selectionCount = 0;
   /** The last proven element, for asking the page for it again. */
   private continuity: Continuity | null = null;
@@ -500,9 +502,10 @@ export class InspectorController implements DevPreviewToolSession {
     private readonly deps: InspectorDeps
   ) {
     this.panelId = panelId;
-    this.unsubscribers.push(
-      deps.picker.onEvent((payload) => this.handlePreviewPush(payload)),
-      deps.picker.onSourceChanged((payload) => this.handleSourceChanged(payload))
+    watchPickerPreviews();
+    this.unsubscribers.push(deps.picker.onEvent((payload) => this.handlePreviewPush(payload)));
+    this.offSourceChanged = deps.picker.onSourceChanged((payload) =>
+      this.handleSourceChanged(payload)
     );
   }
 
@@ -740,7 +743,7 @@ export class InspectorController implements DevPreviewToolSession {
    * looped on.
    */
   private recoverClosedWorkspace(workspaceId: string): void {
-    if (this.currentWorkspaceId() !== workspaceId) return;
+    if (this.disposed || this.currentWorkspaceId() !== workspaceId) return;
     if (this.recoveringWorkspace === workspaceId) return;
     this.recoveringWorkspace = workspaceId;
     this.selectionRequest++;
@@ -1816,6 +1819,8 @@ export class InspectorController implements DevPreviewToolSession {
     if (workspaceId === null || push.workspaceId !== workspaceId) return;
     const path = push.file.path;
     this.noteChanged(path);
+    // A closed picker only keeps the record a waiting request is checked against.
+    if (this.disposed) return;
     const selection = this.state.selection;
     if (
       selection.status === "ready" &&
@@ -1879,6 +1884,8 @@ export class InspectorController implements DevPreviewToolSession {
    * made about, and fails honestly if that has changed.
    */
   followSelection(selectionId: string): PickedSelection | "pending" | null {
+    // A closed picker proves nothing again: what was selected may have moved on.
+    if (this.disposed) return null;
     const state = this.state.selection;
     if (state.status !== "ready") return null;
     const stands =
@@ -2001,10 +2008,9 @@ export class InspectorController implements DevPreviewToolSession {
 
   dispose(): void {
     if (this.disposed) return;
-    // The picker is really over for this preview: nothing typed or in flight
-    // for it may outlive it.
-    cancelAgentRequests(this.panelId);
-    forgetComposerMemories(this.panelId);
+    // Switching the picker off puts it away. What was typed stays in the
+    // composer's memory, and a request still on its way keeps going: only the
+    // preview ending, or the user, cancels it.
     this.clearReattach();
     this.clearConnectRetry();
     this.endReprove();
@@ -2015,11 +2021,40 @@ export class InspectorController implements DevPreviewToolSession {
     if (binding.status === "bound") {
       void this.deps.preview.detach({ sessionId: binding.sessionId }).catch(() => undefined);
     }
-    this.closeWorkspace();
+    const workspace = this.state.workspace;
+    const lingering = workspace.status === "ready" && hasRequestsInFlight(this.panelId);
+    if (lingering) {
+      // Requests on their way are checked against this workspace before they
+      // go in, so it stays open, and keeps hearing edits, until they settle.
+      this.workspaceRequest++;
+      this.projectRequest++;
+      this.continuity = null;
+      this.endReprove();
+    } else {
+      this.closeWorkspace();
+    }
     this.disposed = true;
     for (const unsubscribe of this.unsubscribers) unsubscribe();
     this.unsubscribers.length = 0;
     this.listeners.clear();
+    if (lingering) this.lingerFor(workspace.workspaceId);
+    else this.stopHearingSource();
+  }
+
+  private lingerFor(workspaceId: string): void {
+    const settle = () => {
+      if (hasRequestsInFlight(this.panelId)) return;
+      off();
+      this.stopHearingSource();
+      this.releaseWorkspace(workspaceId);
+    };
+    const off = subscribeComposerMemory(settle);
+    settle();
+  }
+
+  private stopHearingSource(): void {
+    this.offSourceChanged?.();
+    this.offSourceChanged = null;
   }
 }
 
@@ -2033,9 +2068,8 @@ export function createElementPickerSession(
   context: DevPreviewToolSessionContext,
   deps: () => InspectorDeps = defaultInspectorDeps
 ): InspectorController {
-  // The chunk can land after the host let this preview go. Disposing what we
-  // would build here cancels agent requests and forgets composer drafts for the
-  // whole panel — which by then may belong to the next session.
+  // The chunk can land after the host let this preview go: nothing is built,
+  // so nothing binds or opens a workspace for a picker nobody switched on.
   if (context.signal.aborted) {
     throw new Error("The Element Picker was switched off while it loaded");
   }

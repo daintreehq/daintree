@@ -2451,10 +2451,10 @@ async function typeAndSend() {
 }
 
 describe("delivery across the picker's lifetime", () => {
-  it("types nothing into the agent when the picker is switched off during the readiness wait", async () => {
-    // The request is waiting on an agent that has shown no sign it can take
-    // input. The picker going away has to stop the run itself — and a session
-    // that reaches its prompt afterwards must not be typed into.
+  it("still delivers a request when its agent becomes ready after the picker is switched off", async () => {
+    // Closing the picker puts it away. A request Send already accepted is still
+    // on its way, and the source it cites stays open to be checked against
+    // until it has gone in.
     panels(true);
     const agent = await agentActions();
     await mountSelected();
@@ -2463,14 +2463,72 @@ describe("delivery across the picker's lifetime", () => {
 
     cleanup();
     await switchOff();
-    const pollsAtSwitchOff = agent.polls();
+    expect(host.calls("closeWorkspace")).toEqual([]);
+    agent.becomeReady();
+
+    await waitFor(() => expect(agent.sent).toHaveLength(1), { timeout: 4_000 });
+    expect(agent.sent[0]).toContain("Say Upgrade");
+    await waitFor(() => expect(host.calls("closeWorkspace")).toEqual([{ workspaceId: "ws-1" }]));
+    expect(readComposerMemory(composerMemoryKey("preview-1", "wt-1")).deliveries).toEqual([
+      expect.objectContaining({ instruction: "Say Upgrade", state: { status: "sent" } }),
+    ]);
+  });
+
+  it("brings back the draft and a waiting request when the picker is opened again", async () => {
+    panels(true);
+    const agent = await agentActions();
+    await mountSelected();
+    await typeAndSend();
+    await waitFor(() => expect(agent.polls()).toBeGreaterThan(1));
+    const request = screen.getByRole("textbox", { name: "Request for the agent" });
+    fireEvent.change(request, { target: { value: "And make it bold" } });
+
+    cleanup();
+    await switchOff();
+    await act(async () => switchOn());
+    mount();
+    await act(async () => host.documentReady(0));
+    await act(async () => host.select(0));
+
+    const reopened = (await screen.findByRole("textbox", {
+      name: "Request for the agent",
+    })) as HTMLTextAreaElement;
+    expect(reopened.value).toBe("And make it bold");
+    expect(readComposerMemory(composerMemoryKey("preview-1", "wt-1")).deliveries).toEqual([
+      expect.objectContaining({ instruction: "Say Upgrade", state: { status: "queued" } }),
+    ]);
+    expect(agent.sent).toEqual([]);
+  });
+
+  it("types nothing into the agent when the preview is trashed during the readiness wait", async () => {
+    // The request is waiting on an agent that has shown no sign it can take
+    // input. The preview going away has to stop the run itself — and a session
+    // that reaches its prompt afterwards must not be typed into.
+    panels(true);
+    const agent = await agentActions();
+    await mountSelected();
+    await typeAndSend();
+    await waitFor(() => expect(agent.polls()).toBeGreaterThan(1));
+
+    cleanup();
+    await act(async () =>
+      usePanelStore.setState((state) => ({
+        panelsById: {
+          ...state.panelsById,
+          "preview-1": { ...state.panelsById["preview-1"]!, location: "trash" },
+        } as never,
+      }))
+    );
+    const pollsAtTrash = agent.polls();
     await pause(QUIET_WINDOW_MS);
     agent.becomeReady();
     await pause(QUIET_WINDOW_MS);
 
     expect(agent.sent).toEqual([]);
     // And the run really stopped, rather than quietly polling on.
-    expect(agent.polls()).toBe(pollsAtSwitchOff);
+    expect(agent.polls()).toBe(pollsAtTrash);
+    expect(readComposerMemory(composerMemoryKey("preview-1", "wt-1")).deliveries).toEqual([]);
+    expect(host.calls("closeWorkspace")).toEqual([{ workspaceId: "ws-1" }]);
   });
 
   it("doesn't retry a request the picker was switched off in the middle of writing", async () => {
