@@ -8,6 +8,8 @@ import {
 } from "@/store/dictionaryLearnPromptStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import type { HeardAsConflict } from "@shared/types";
+import { describeHeardAsConflicts } from "@/lib/heardAsConflictCopy";
 import { logWarn } from "@/utils/logger";
 
 const PROMPT_VISIBLE_MS = 8_000;
@@ -20,6 +22,8 @@ interface LineState {
   /** The answer being saved, or the one that failed to save. */
   answer: Answer | null;
   failed: boolean;
+  /** Heard forms an accepted word was learned without, because another term fires for them. */
+  leftOut: HeardAsConflict[];
   hovered: boolean;
   focused: boolean;
 }
@@ -28,6 +32,7 @@ const idleFor = (offer: LearnOffer | undefined): LineState => ({
   offer,
   answer: null,
   failed: false,
+  leftOut: [],
   hovered: false,
   focused: false,
 });
@@ -106,11 +111,24 @@ export function DictionaryLearnPrompt({
     if (saving) return;
     const offer = prompt;
     adopt({ answer, failed: false });
-    window.electron.voiceDictionary[answer]({
-      word: offer.word,
-      utterance: offer.utterance,
-    }).then(
-      () => dismiss(offer),
+    const request = { word: offer.word, utterance: offer.utterance };
+    const saved: Promise<HeardAsConflict[]> =
+      answer === "acceptSuggestion"
+        ? window.electron.voiceDictionary.acceptSuggestion(request).then((r) => r.conflicts)
+        : window.electron.voiceDictionary.dismissSuggestion(request).then(() => []);
+    saved.then(
+      (leftOut) => {
+        if (leftOut.length === 0) {
+          dismiss(offer);
+          return;
+        }
+        // Learned without a phrase another term fires for: the line says so, then goes as usual.
+        const hadFocus = rootRef.current?.contains(document.activeElement) ?? false;
+        setLine((prev) =>
+          prev.offer === offer ? { ...prev, answer: null, leftOut, focused: false } : prev
+        );
+        if (hadFocus) onReturnFocus?.();
+      },
       (err: unknown) => {
         logWarn("Failed to answer the dictionary prompt", {
           message: formatErrorMessage(err, "Failed to answer the dictionary prompt"),
@@ -147,6 +165,16 @@ export function DictionaryLearnPrompt({
           </Button>
           <DismissButton
             aria-label={`Dismiss the offer to learn \u201c${prompt.word}\u201d`}
+            onClick={() => dismiss(prompt)}
+          />
+        </>
+      ) : current.leftOut.length > 0 ? (
+        <>
+          <span className="min-w-0 flex-1 truncate">
+            Added &ldquo;{prompt.word}&rdquo;, but {describeHeardAsConflicts(current.leftOut)}
+          </span>
+          <DismissButton
+            aria-label={`Dismiss the note about \u201c${prompt.word}\u201d`}
             onClick={() => dismiss(prompt)}
           />
         </>
