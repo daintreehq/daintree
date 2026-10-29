@@ -98,4 +98,52 @@ describe("restartPanesOnPreset", () => {
     expect(toast.title).toBe("Couldn't restart the terminal on Work");
     expect(toast.message).toBe("The terminal didn't restart.");
   });
+
+  it("says a missing preset once, rather than blaming each pane", async () => {
+    dispatchMock.mockResolvedValue(refused('preset "work" not found'));
+
+    await restartPanesOnPreset(
+      [
+        { id: "a", title: "One" },
+        { id: "b", title: "Two" },
+      ],
+      preset,
+      "user",
+      () => "Restarted"
+    );
+
+    const toast = notifyMock.mock.calls[0]![0];
+    expect(toast.message).toBe("The Work preset is no longer available.");
+    expect(toast.message).not.toContain("no longer open");
+  });
+
+  it("points Go to terminal at a refused pane that is still open", async () => {
+    dispatchMock.mockImplementation(async (_id: string, args: { terminalId: string }) =>
+      args.terminalId === "gone" ? refused("terminal not found") : refused("already restarting")
+    );
+
+    await restartPanesOnPreset(
+      [
+        { id: "gone", title: "Closed" },
+        { id: "busy", title: "Busy" },
+      ],
+      preset,
+      "user",
+      () => "Restarted"
+    );
+
+    const toast = notifyMock.mock.calls[0]![0];
+    expect(toast.message).toBe("'Closed' is no longer open. 'Busy' is already restarting.");
+    expect(toast.action.actionArgs).toEqual({ panelId: "busy" });
+  });
+
+  it("offers no way to a pane when every refused one has closed", async () => {
+    dispatchMock.mockResolvedValue(refused("terminal not found"));
+
+    await restartPanesOnPreset([{ id: "gone", title: "Closed" }], preset, "user", () => "x");
+
+    const toast = notifyMock.mock.calls[0]![0];
+    expect(toast.action).toBeUndefined();
+    expect(toast.message).toBe("'Closed' is no longer open.");
+  });
 });

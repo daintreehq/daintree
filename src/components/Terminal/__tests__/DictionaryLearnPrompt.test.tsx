@@ -95,6 +95,44 @@ describe("DictionaryLearnPrompt", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
+  it("keeps a failure that lands after the composer was typed into", async () => {
+    let fail: (error: Error) => void = () => {};
+    acceptSuggestion.mockImplementationOnce(
+      () => new Promise<void>((_resolve, reject) => (fail = reject))
+    );
+    render(<DictionaryLearnPrompt terminalId="t1" />);
+    offer();
+    fireEvent.click(screen.getByText("Add"));
+    act(() => useTerminalInputStore.getState().setDraftInput("t1", "next message"));
+    await act(async () => fail(new Error("disk full")));
+
+    expect(screen.getByRole("status").textContent).toContain("Couldn't add");
+    fireEvent.click(screen.getByRole("button", { name: /Dismiss the offer to learn/ }));
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(acceptSuggestion).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an offer that replaced another while focus stayed on the line", () => {
+    render(<DictionaryLearnPrompt terminalId="t1" />);
+    offer();
+    act(() => screen.getByRole("button", { name: "Add" }).focus());
+    act(() => {
+      useDictionaryLearnPromptStore
+        .getState()
+        .offer("t1", { word: "Vitest", utterance: "vee test" });
+    });
+    act(() => {
+      vi.advanceTimersByTime(30_000);
+    });
+    expect(screen.getByRole("status").textContent).toContain("Vitest");
+
+    act(() => screen.getByRole("button", { name: "Add" }).blur());
+    act(() => {
+      vi.advanceTimersByTime(8_500);
+    });
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
   it("says a failed Dismiss didn't happen", async () => {
     dismissSuggestion.mockRejectedValueOnce(new Error("disk full"));
     render(<DictionaryLearnPrompt terminalId="t1" />);

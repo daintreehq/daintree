@@ -1424,7 +1424,16 @@ export function HelpPanel({
                     type="button"
                     size="sm"
                     variant="outline"
-                    onClick={() => void useCliAvailabilityStore.getState().refresh(true)}
+                    onClick={() =>
+                      // The store keeps the error that drives this line; a
+                      // second failure only needs logging.
+                      void useCliAvailabilityStore
+                        .getState()
+                        .refresh(true)
+                        .catch((error: unknown) =>
+                          logWarn("[HelpPanel] Agent detection retry failed", { error })
+                        )
+                    }
                   >
                     Retry
                   </Button>

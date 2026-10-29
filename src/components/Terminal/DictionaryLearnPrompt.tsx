@@ -1,6 +1,7 @@
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { FocusEvent } from "react";
 import { Button } from "@/components/ui/button";
+import { DismissButton } from "@/components/ui/DismissButton";
 import {
   useDictionaryLearnPromptStore,
   type DictionaryLearnPrompt as LearnOffer,
@@ -69,11 +70,27 @@ export function DictionaryLearnPrompt({
     if (hadFocus) onReturnFocus?.();
   };
   // The timer must not restart whenever the composer hands a new callback down.
-  const expire = useEffectEvent((offer: LearnOffer) => dismiss(offer));
+  // It reads the pointer and focus off the DOM before letting go: an offer
+  // that replaced another starts with neither, though both may still be here.
+  const expire = useEffectEvent((offer: LearnOffer) => {
+    const root = rootRef.current;
+    const hovered = root?.matches(":hover") ?? false;
+    const focused = root?.contains(document.activeElement) ?? false;
+    if (hovered || focused) {
+      adopt({ hovered, focused });
+      return;
+    }
+    dismiss(offer);
+  });
 
+  // Typing moves on from an offer nobody answered. An answer stays: one still
+  // saving, or one that failed, which goes when it is dismissed or retried.
+  const answered = current.answer !== null;
   useEffect(() => {
-    if (prompt && hasDraft && !saving) useDictionaryLearnPromptStore.getState().clear(terminalId);
-  }, [prompt, hasDraft, saving, terminalId]);
+    if (prompt && hasDraft && !answered) {
+      useDictionaryLearnPromptStore.getState().clear(terminalId, prompt);
+    }
+  }, [prompt, hasDraft, answered, terminalId]);
 
   const expires =
     Boolean(prompt) && current.answer === null && !current.hovered && !current.focused;
@@ -128,6 +145,10 @@ export function DictionaryLearnPrompt({
           <Button size="xs" variant="ghost" onClick={() => resolve(failedAnswer)}>
             Retry
           </Button>
+          <DismissButton
+            aria-label={`Dismiss the offer to learn \u201c${prompt.word}\u201d`}
+            onClick={() => dismiss(prompt)}
+          />
         </>
       ) : (
         <>

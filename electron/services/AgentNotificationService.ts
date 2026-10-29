@@ -747,7 +747,7 @@ class AgentNotificationService {
       this.completionTimers.delete(key);
       const settings = this.settingsFor(this.emitOwner(terminalId, ownerWebContentsId));
       if (settings.enabled === false || !settings.completedEnabled) return;
-      const label = this.getLabel(terminalId, agentId);
+      const label = this.getLabel(agentId);
       this.completionBurstBuffer.push({
         title: "Agent finished",
         body: `${label} finished its task`,
@@ -833,7 +833,7 @@ class AgentNotificationService {
     }
 
     if (dedupedItems.length === 1) {
-      const label = this.getLabel(first.terminalId, first.agentId);
+      const label = this.getLabel(first.agentId);
       const context = this.makeContext(first.terminalId, first.agentId, first.worktreeId);
       notificationService.showWatchNotification(
         "Agent waiting",
@@ -974,7 +974,7 @@ class AgentNotificationService {
           }
         );
       } else {
-        const label = this.getLabel(terminalId, agentId, currentTerminal);
+        const label = this.getLabel(agentId, currentTerminal);
         // Reason captured at the waiting transition — repeated waiting events
         // while already waiting don't reschedule this timer, so the closure
         // value is the reason for this wait episode. The duration-flavored
@@ -1075,7 +1075,7 @@ class AgentNotificationService {
     if (asks.length === 1) {
       notificationService.showNativeNotification(
         "Agent waiting",
-        describeWaiting(this.getLabel(first.terminalId, first.agentId), first.kind),
+        describeWaiting(this.getLabel(first.agentId), first.kind),
         options
       );
       return;
@@ -1289,15 +1289,13 @@ class AgentNotificationService {
   }
 
   /**
-   * The subject a banner names (#15233): the pane's title when someone named
-   * it, else the agent's display name, else plain "Agent". Never an id: an
-   * agent id is a slug, and a worktree id is an absolute path.
+   * The subject a banner names (#15233): the agent's display name, else plain
+   * "Agent". Never an id: an agent id is a slug, and a worktree id is an
+   * absolute path. A pane's own title only counts when the caller already
+   * holds its entry and someone named it: the global terminal list is the
+   * legacy record, and the per-project one isn't reachable from here.
    */
-  private getLabel(
-    terminalId: string | undefined,
-    agentId: string | undefined,
-    terminal: TerminalSnapshotEntry | undefined = this.getTerminalSnapshot(terminalId)
-  ): string {
+  private getLabel(agentId: string | undefined, terminal?: TerminalSnapshotEntry): string {
     const title = terminal?.title?.trim();
     if (title && (terminal?.titleMode === "user" || terminal?.titleMode === "custom")) {
       return title;
@@ -1312,7 +1310,7 @@ class AgentNotificationService {
   ): WatchNotificationContext {
     return {
       panelId: terminalId ?? agentId ?? "unknown",
-      panelTitle: this.getLabel(terminalId, agentId),
+      panelTitle: this.getLabel(agentId),
       worktreeId,
     };
   }

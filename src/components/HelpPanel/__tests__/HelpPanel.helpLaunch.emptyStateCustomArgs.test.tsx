@@ -928,17 +928,21 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     }
   });
 
-  it("offers Retry when agent detection failed before it had any answer", () => {
+  it("offers Retry when agent detection failed before it had any answer", async () => {
     helpPanelState.preferredAgentId = null;
     cliAvailabilityState.hasRealData = false;
     cliAvailabilityState.error = "Failed to check CLI availability";
     cliAvailabilityState.availability = {};
+    // The store records the error and rethrows: the click must not leave that unhandled.
+    cliAvailabilityState.refresh = vi.fn().mockRejectedValue(new Error("still failing"));
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
 
     render(<HelpPanel width={380} />);
 
     expect(screen.getByText("Couldn't check which agents are installed.")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
     expect(cliAvailabilityState.refresh).toHaveBeenCalledWith(true);
   });
 

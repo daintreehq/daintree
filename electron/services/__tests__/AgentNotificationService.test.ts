@@ -99,6 +99,16 @@ const DEFAULT_NOTIFICATION_SETTINGS = {
   quietHoursWeekdays: [] as number[],
 };
 
+interface TerminalFixture {
+  id: string;
+  kind: string;
+  agentId: string;
+  title: string;
+  titleMode?: "default" | "custom" | "user";
+  location: string;
+  worktreeId: string;
+}
+
 const DEFAULT_APP_STATE = {
   activeWorktreeId: "wt-1",
   terminals: [
@@ -110,7 +120,7 @@ const DEFAULT_APP_STATE = {
       location: "dock",
       worktreeId: "wt-1",
     },
-  ],
+  ] as TerminalFixture[],
 };
 
 function mockStore(
@@ -504,6 +514,29 @@ describe("AgentNotificationService", () => {
       vi.advanceTimersByTime(300_000);
 
       expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+
+    function escalateWith(terminal: Record<string, unknown>) {
+      mockStore({ waitingEnabled: true }, {
+        terminals: [
+          { id: "term-1", kind: "terminal", location: "dock", worktreeId: "wt-1", ...terminal },
+        ],
+      } as never);
+      events.emit("agent:state-changed", { ...makePayload("waiting"), agentId: "claude" });
+      vi.advanceTimersByTime(180_000);
+      return vi.mocked(notificationServiceMock.showNativeNotification).mock.calls.at(-1)?.[1];
+    }
+
+    it("names an escalation by the agent, not the pane's default title (#15233)", () => {
+      expect(escalateWith({ agentId: "claude", title: "Claude Agent" })).toBe(
+        "Claude has been waiting for input"
+      );
+    });
+
+    it("names an escalation by a title someone gave the pane", () => {
+      expect(escalateWith({ agentId: "claude", title: "Review", titleMode: "custom" })).toBe(
+        "Review has been waiting for input"
+      );
     });
 
     it("uses terminal title in escalation notification", () => {
@@ -1758,25 +1791,13 @@ describe("AgentNotificationService", () => {
       expect(call?.[2]).toMatchObject({ panelTitle: "Agent" });
     });
 
-    it("names a pane by the title someone gave it, and a default title by its agent", () => {
-      const named = completeOn(
-        {
-          id: "term-1",
-          kind: "terminal",
-          title: "Review agent",
-          titleMode: "user",
-          location: "dock",
-        },
-        { agentId: "claude" }
-      );
-      expect(named?.[1]).toBe("Review agent finished its task");
-      expect(named?.[2]).toMatchObject({ panelTitle: "Review agent" });
-
-      const unnamed = completeOn(
+    it("names a completed agent by its display name even when its pane has a default title", () => {
+      const call = completeOn(
         { id: "term-1", kind: "terminal", title: "Terminal", location: "dock" },
         { agentId: "codex" }
       );
-      expect(unnamed?.[1]).toBe("Codex finished its task");
+      expect(call?.[1]).toBe("Codex finished its task");
+      expect(call?.[2]).toMatchObject({ panelTitle: "Codex" });
     });
   });
 

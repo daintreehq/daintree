@@ -604,15 +604,40 @@ class NotificationService {
     if (ownerWindow && !ownerWindow.isDestroyed()) {
       // A cached view: its project switches in rather than being told to focus
       // a panel nobody can see.
-      const showing = getAppWebContents(ownerWindow).id === ownerWebContentsId;
-      const place = showing ? null : this.placeOf(ownerWebContentsId);
-      if (place && this.openProject?.(place, context.panelId)) return true;
+      const place = this.placeOf(ownerWebContentsId);
+      if (
+        place &&
+        !this.isOnScreen(ownerWindow, ownerWebContentsId, place) &&
+        this.openProject?.(place, context.panelId)
+      ) {
+        return true;
+      }
       revealWindow(ownerWindow);
     }
 
     try {
       ownerWebContents.send(navigateChannel, context);
       return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Whether the window is showing the owner: its app view, or the outgoing view
+   * a cold switch still holds over the incoming one. Switching to the project
+   * that bridge already shows would be asked of the bridge itself, which has
+   * nothing to switch to.
+   */
+  private isOnScreen(
+    ownerWindow: import("electron").BrowserWindow,
+    ownerWebContentsId: NotificationOwnerId,
+    place: NotificationPlace
+  ): boolean {
+    if (getAppWebContents(ownerWindow).id === ownerWebContentsId) return true;
+    try {
+      const pvm = this.registry?.getByWindowId(place.windowId)?.services.projectViewManager;
+      return pvm?.getOutgoingBridgeProjectId() === place.workspaceKey;
     } catch {
       return false;
     }

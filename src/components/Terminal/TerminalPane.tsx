@@ -59,6 +59,7 @@ import { ScrollbackRestoreErrorBanner } from "./ScrollbackRestoreErrorBanner";
 import { TerminalSubmitStatusBanner } from "./TerminalSubmitStatusBanner";
 import { useTerminalSubmitStatus } from "./useTerminalSubmitStatus";
 import { TerminalAttachErrorBanner } from "./TerminalAttachErrorBanner";
+import { isAttachedProcessRunning } from "./attachedProcessRunning";
 import { useShouldSuppressLocalError } from "@/components/Recovery/useShouldSuppressLocalError";
 import { UpdateCwdDialog } from "./UpdateCwdDialog";
 import { CompactErrorList } from "../Errors/CompactErrorList";
@@ -1472,18 +1473,15 @@ function TerminalPaneComponent({
   const showScrollbackRestoreError =
     !suppressParseError && Boolean(scrollbackRestoreError) && !restartError;
   const showRestartStatus = restartBannerVariant.type !== "none";
-  // `attachError` outlives an exit and a failed spawn, so the display banner
-  // only vouches for the process while nothing says it has stopped.
-  const attachedProcessRunning =
-    (spawnStatus ?? "ready") === "ready" &&
-    !isExited &&
-    !isRestarting &&
-    !spawnError &&
-    !restartError &&
-    runtimeStatus !== "exited" &&
-    runtimeStatus !== "error" &&
-    !isBackendDisconnected &&
-    !isBackendRecovering;
+  const attachedProcessRunning = isAttachedProcessRunning({
+    spawnStatus,
+    runtimeStatus,
+    isExited,
+    isRestarting,
+    hasSpawnError: Boolean(spawnError),
+    hasRestartError: Boolean(restartError),
+    backendStatus,
+  });
   const offeredSessionId =
     restartBannerVariant.type === "agent-resume-offer" ? restartBannerVariant.sessionId : undefined;
 

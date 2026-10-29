@@ -432,6 +432,7 @@ describe("NotificationService", () => {
           throw new Error("disposing");
         },
         getOutgoingBridgeProjectId: () => null,
+        getAllViews: () => [],
       };
 
       notificationService.initialize(registry as never, rows);
@@ -1079,6 +1080,26 @@ describe("NotificationService", () => {
         electronMock.notificationInstances.at(-1)!.trigger("click");
 
         expect(openProject).toHaveBeenCalledTimes(1);
+        expect(ownerSend(12)).toHaveBeenCalledWith("notification:watch-navigate", context);
+      });
+
+      it("leaves the view a cold switch still shows over the incoming one to its own navigate", () => {
+        const win = cachedOwnerWindow();
+        // Mid switch 12 -> 11: the app view is already 11, but 12 still covers it.
+        win.bridgedProjectId = "project-12";
+        const openProject = vi.fn(() => true);
+        notificationService.initialize(createRegistryMock([win]) as never, undefined, openProject);
+
+        notificationService.showWatchNotification(
+          "Agent waiting",
+          "Needs input",
+          context,
+          "notification:watch-navigate",
+          { ownerWebContentsId: 12 }
+        );
+        electronMock.notificationInstances.at(-1)!.trigger("click");
+
+        expect(openProject).not.toHaveBeenCalled();
         expect(ownerSend(12)).toHaveBeenCalledWith("notification:watch-navigate", context);
       });
 

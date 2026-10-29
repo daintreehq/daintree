@@ -2,7 +2,9 @@ import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 import { pluralize } from "@/lib/pluralize";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { usePanelStore } from "@/store/panelStore";
 import { logWarn } from "@/utils/logger";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { ActionSource } from "@shared/types/actions";
 
 export interface RestartOnPresetPane {
@@ -15,12 +17,30 @@ function paneName(pane: RestartOnPresetPane): string {
   return title ? `'${title}'` : "The terminal";
 }
 
-/** The refusals `restartTerminalOnPreset` names, in words; anything else says only that it didn't. */
-function refusalReason(message: string): string {
-  if (message.includes("already restarting")) return "is already restarting";
-  if (message.includes("held for recovery")) return "is waiting to be restored";
-  if (message.includes("not found")) return "is no longer open";
-  return "didn't restart";
+type Refusal = "restarting" | "recovery" | "closed" | "preset-missing" | "other";
+
+/** The refusals `restartTerminalOnPreset` names; anything else says only that it didn't restart. */
+function classifyRefusal(message: string): Refusal {
+  if (message === "already restarting") return "restarting";
+  if (message === "panel is held for recovery") return "recovery";
+  if (message === "terminal not found") return "closed";
+  if (/^preset ".*" not found$/.test(message)) return "preset-missing";
+  return "other";
+}
+
+function describeRefusal(pane: RestartOnPresetPane, refusal: Refusal, presetName: string): string {
+  switch (refusal) {
+    case "restarting":
+      return `${paneName(pane)} is already restarting.`;
+    case "recovery":
+      return `${paneName(pane)} is waiting to be restored.`;
+    case "closed":
+      return `${paneName(pane)} is no longer open.`;
+    case "preset-missing":
+      return `The ${presetName} preset is no longer available.`;
+    case "other":
+      return `${paneName(pane)} didn't restart.`;
+  }
 }
 
 /**
@@ -36,6 +56,10 @@ export async function restartPanesOnPreset(
   source: ActionSource,
   announceRestarted: (count: number) => string
 ): Promise<void> {
+  // Read before the restarts: a refused pane may be gone by the time they settle.
+  const worktreeIds = new Map(
+    panes.map((pane) => [pane.id, usePanelStore.getState().panelsById[pane.id]?.worktreeId])
+  );
   const outcomes = await Promise.all(
     panes.map(async (pane) => {
       const result = await actionService
@@ -46,7 +70,7 @@ export async function restartPanesOnPreset(
         )
         .catch((error: unknown) => ({
           ok: false as const,
-          error: { message: error instanceof Error ? error.message : String(error) },
+          error: { message: formatErrorMessage(error, "Couldn't restart the terminal") },
         }));
       return result.ok ? { pane, refusal: null } : { pane, refusal: result.error.message };
     })
@@ -58,30 +82,47 @@ export async function restartPanesOnPreset(
   }
 
   const refused = outcomes.flatMap((outcome) =>
-    outcome.refusal === null ? [] : [{ pane: outcome.pane, refusal: outcome.refusal }]
+    outcome.refusal === null
+      ? []
+      : [
+          {
+            pane: outcome.pane,
+            message: outcome.refusal,
+            refusal: classifyRefusal(outcome.refusal),
+          },
+        ]
   );
   const first = refused[0];
   if (!first) return;
-  for (const { pane, refusal } of refused) {
-    logWarn("[RestartOnPreset] Restart refused", { terminalId: pane.id, refusal });
+  for (const { pane, message } of refused) {
+    logWarn("[RestartOnPreset] Restart refused", { terminalId: pane.id, refusal: message });
   }
-  const message = refused
-    .map(({ pane, refusal }) => `${paneName(pane)} ${refusalReason(refusal)}.`)
-    .join(" ");
+  const message = [
+    ...new Set(refused.map(({ pane, refusal }) => describeRefusal(pane, refusal, preset.name))),
+  ].join(" ");
+  const title =
+    refused.length === 1
+      ? `Couldn't restart ${first.pane.title?.trim() ? paneName(first.pane) : "the terminal"} on ${preset.name}`
+      : `Couldn't restart ${pluralize(refused.length, "pane")} on ${preset.name}`;
+  // The way to a pane that is still open; one that closed has nowhere to go.
+  const target = refused.find(({ refusal }) => refusal !== "closed")?.pane;
+  const worktreeId = target ? worktreeIds.get(target.id) : undefined;
+  if (!target) {
+    // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok. Every pane it names has closed, so there is nothing left to go to or retry.
+    notify({ type: "error", title, message, context: { eventKind: "agent" } });
+    return;
+  }
   notify({
     type: "error",
-    title:
-      refused.length === 1
-        ? `Couldn't restart ${first.pane.title?.trim() ? paneName(first.pane) : "the terminal"} on ${preset.name}`
-        : `Couldn't restart ${pluralize(refused.length, "pane")} on ${preset.name}`,
+    title,
     message,
     action: {
       label: "Go to terminal",
       actionId: "panel.focus",
-      actionArgs: { panelId: first.pane.id },
+      actionArgs: { panelId: target.id },
       onClick: () =>
-        void actionService.dispatch("panel.focus", { panelId: first.pane.id }, { source: "user" }),
+        void actionService.dispatch("panel.focus", { panelId: target.id }, { source: "user" }),
     },
-    context: { eventKind: "agent", panelId: first.pane.id },
+    context: { eventKind: "agent", panelId: target.id, ...(worktreeId ? { worktreeId } : {}) },
   });
 }
