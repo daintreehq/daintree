@@ -33,7 +33,9 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
 
   // Mirror the open/close transitions of the two recipe surfaces into the
   // shared activity store so the focus-reload hook can suppress its silent
-  // reload while the user is mid-edit (#9186).
+  // reload while the user is mid-edit (#9186). The editor registers itself as
+  // well, for mounts outside this host; holding it here too covers the lazy
+  // editor chunk's load, after the recipe snapshot is already taken.
   useEffect(() => {
     if (!isRecipeEditorOpen) return;
     useRecipeEditorActivityStore.getState().enter();
