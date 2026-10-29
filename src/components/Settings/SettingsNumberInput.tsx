@@ -13,6 +13,7 @@ interface SettingsNumberInputProps extends Omit<ComponentPropsWithoutRef<"input"
   rowId?: string;
   suffix?: ReactNode;
   disabledReason?: string;
+  status?: ReactNode;
   layout?: ComponentProps<typeof SettingsInput>["layout"];
 }
 

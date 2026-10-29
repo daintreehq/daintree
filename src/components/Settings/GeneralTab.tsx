@@ -15,6 +15,11 @@ import { WindowOpeningSection } from "@/components/Settings/WindowOpeningSection
 import { SettingsSubtabBar, subtabPanelProps } from "./SettingsSubtabBar";
 import { SettingsDependents, SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import { SettingsPresetGroup } from "./SettingsPresetGroup";
+import {
+  IDLE_BACKGROUND_THRESHOLD_PRESETS,
+  IDLE_SHELL_THRESHOLD_PRESETS,
+  IDLE_TERMINAL_THRESHOLD_PRESETS,
+} from "./idleThresholdPresets";
 import { ResumeOnRestartRow } from "./ResumeOnRestartRow";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { getAgentIds } from "@/config/agents";
@@ -87,27 +92,6 @@ const CURATED_SHORTCUTS = [
     actionIds: ["panel.diagnosticsLogs", "panel.diagnosticsEvents"],
   },
 ];
-
-const IDLE_TERMINAL_THRESHOLD_PRESETS = [
-  { value: 30, label: "30m" },
-  { value: 60, label: "1h" },
-  { value: 120, label: "2h" },
-  { value: 240, label: "4h" },
-] as const;
-
-const IDLE_BACKGROUND_THRESHOLD_PRESETS = [
-  { value: 15, label: "15m" },
-  { value: 30, label: "30m" },
-  { value: 60, label: "1h" },
-  { value: 120, label: "2h" },
-] as const;
-
-const IDLE_SHELL_THRESHOLD_PRESETS = [
-  { value: 60, label: "1h" },
-  { value: 120, label: "2h" },
-  { value: 240, label: "4h" },
-  { value: 480, label: "8h" },
-] as const satisfies ReadonlyArray<{ value: IdleShellThresholdMinutes; label: string }>;
 
 // Mirrors the electron-store defaults, so a row can say when it has moved off them.
 const DEFAULT_IDLE_TERMINAL_THRESHOLD_MINUTES = 60;
