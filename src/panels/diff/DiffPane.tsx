@@ -1606,6 +1606,7 @@ export function DiffPane({
             {worktreePath && (
               <DiffNotesSendMenu
                 worktreePath={worktreePath}
+                worktreeId={worktreeId ?? null}
                 filePath={filePath ?? ""}
                 onResult={handleNoteSendResult}
               />

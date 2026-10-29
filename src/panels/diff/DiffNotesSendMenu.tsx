@@ -35,6 +35,8 @@ export interface DiffNoteSendRequest {
 
 interface DiffNotesSendMenuProps {
   worktreePath: string;
+  /** The diff's worktree, whose agents the menu lists first. */
+  worktreeId: string | null;
   /** Worktree-relative path of the file on screen; "" when none is. */
   filePath: string;
   onResult: (request: DiffNoteSendRequest, result: DiffNoteDeliveryResult) => void;
@@ -45,7 +47,12 @@ interface DiffNotesSendMenuProps {
  * the file on screen; "All files" is a deliberate second choice because it
  * reaches notes the reviewer can't see from here.
  */
-export function DiffNotesSendMenu({ worktreePath, filePath, onResult }: DiffNotesSendMenuProps) {
+export function DiffNotesSendMenu({
+  worktreePath,
+  worktreeId,
+  filePath,
+  onResult,
+}: DiffNotesSendMenuProps) {
   const allNotes = useDiffNotesStore(useShallow((state) => selectDiffNotes(state, worktreePath)));
   const fileCount = allNotes.filter((note) => note.filePath === filePath).length;
   const [scope, setScope] = useState<DiffNoteSendScope>("file");
@@ -106,7 +113,7 @@ export function DiffNotesSendMenu({ worktreePath, filePath, onResult }: DiffNote
         <DropdownMenuLabel>
           {count === 0 ? "No notes on this file" : `Paste ${pluralize(count, "note")} into`}
         </DropdownMenuLabel>
-        <DiffNoteTargetItems disabled={count === 0} onSend={send} />
+        <DiffNoteTargetItems worktreeId={worktreeId} disabled={count === 0} onSend={send} />
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -115,13 +122,15 @@ export function DiffNotesSendMenu({ worktreePath, filePath, onResult }: DiffNote
 // Mounted only while the menu is open, so a closed pane holds no subscription
 // to the panel map.
 function DiffNoteTargetItems({
+  worktreeId,
   disabled,
   onSend,
 }: {
+  worktreeId: string | null;
   disabled: boolean;
   onSend: (targetId: string) => void;
 }) {
-  const targets = useDiffNoteTargets();
+  const targets = useDiffNoteTargets(worktreeId);
   if (targets.length === 0) {
     return (
       <DropdownMenuItem inset disabled>
@@ -137,6 +146,7 @@ function DiffNoteTargetItems({
         <DropdownMenuItem
           key={target.id}
           disabled={disabled || target.isInputLocked}
+          aria-label={`${target.title}, ${target.worktreeName ?? "no worktree"}`}
           onSelect={() => onSend(target.id)}
         >
           <span
@@ -147,6 +157,9 @@ function DiffNoteTargetItems({
             <TerminalIcon kind={target.kind} chrome={target.chrome} className="h-3.5 w-3.5" />
           </span>
           <span className="truncate">{target.title}</span>
+          <DropdownMenuMeta className="max-w-[140px] truncate">
+            {target.worktreeName ?? "No worktree"}
+          </DropdownMenuMeta>
         </DropdownMenuItem>
       ))}
     </>
