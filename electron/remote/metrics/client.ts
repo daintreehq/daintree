@@ -291,6 +291,8 @@ export class HostMetricsClient {
       throw new AppError({
         code: "INTERNAL",
         message: `Host ${hostId} sent invalid fleet targets`,
+        // The id is opaque to the person; the overview names hosts by name.
+        userMessage: `${this.options.registry.get(hostId)?.name ?? "The host"} sent an agent list this machine couldn't read`,
       });
     return {
       targets: parsed.data.targets.map((target) => ({ ...target, hostId })),

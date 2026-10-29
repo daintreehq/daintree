@@ -1700,9 +1700,10 @@ describe("fleets with agents on other hosts", () => {
     expect(screen.getByTestId("fleet-armed-count-chip").textContent).toContain("2");
     expect(screen.getByTestId("fleet-host-composer")).toBeTruthy();
     fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
-    expect(screen.getByTestId("fleet-row-host-host-fleet:studio-01:t1").textContent).toContain(
-      "on studio-01"
-    );
+    // Another host's agents are listed under that host's name.
+    const row = screen.getByTestId("fleet-row-host-host-fleet:studio-01:t1");
+    const labelId = row.closest("ul")?.getAttribute("aria-labelledby");
+    expect(labelId ? document.getElementById(labelId)?.textContent : null).toBe("studio-01");
   });
 
   it("counts a pane here and an agent on another host as a fleet of two, with no extra field", () => {

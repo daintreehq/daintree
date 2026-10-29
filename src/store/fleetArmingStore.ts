@@ -40,6 +40,10 @@ export interface CrossHostFleetTarget {
   hostName: string;
   terminalId: string;
   title: string;
+  /** Which agent CLI the host saw, so the fleet's lists can draw its mark. */
+  agentId?: string | null;
+  /** The host's project the agent runs in, to tell same-named agents apart. */
+  projectName?: string | null;
 }
 
 const NO_CROSS_HOST_TARGETS: readonly CrossHostFleetTarget[] = Object.freeze([]);

@@ -177,13 +177,14 @@ describe("Fleet ribbon design invariants", () => {
     render(<FleetArmingRibbon />);
     const confirm = tokens(screen.getByTestId("fleet-arming-ribbon"));
 
-    // The two shells are the same shell. The armed branch may add only the
-    // clipping and focus-suppression it needs for the slide-in; nothing else
-    // may differ in either direction, or the heights drift apart again.
+    // The two shells are the same shell. The armed branch may add only its
+    // sideways clipping (the remote composer's editor grows down past the bar)
+    // and focus suppression; nothing else may differ in either direction, or
+    // the heights drift apart again.
     const armedOnly = armed.filter((cls) => !confirm.includes(cls));
     const confirmOnly = confirm.filter((cls) => !armed.includes(cls));
     expect(confirmOnly).toEqual([]);
-    expect(armedOnly.sort()).toEqual(["outline-hidden", "overflow-hidden"]);
+    expect(armedOnly.sort()).toEqual(["outline-hidden", "overflow-x-clip"]);
     // And the shell is not trivially empty.
     expect(confirm.length).toBeGreaterThan(5);
   });
