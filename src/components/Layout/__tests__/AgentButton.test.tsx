@@ -16,6 +16,7 @@
  *    presets, so one named preset already gives the user two real launch
  *    choices and warrants the picker.
  */
+import { useContext } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, screen, act } from "@testing-library/react";
 import type { AgentSettings, CliAvailability } from "@shared/types";
@@ -299,6 +300,11 @@ vi.mock("@/components/ui/context-menu", () => ({
     </div>
   ),
   ContextMenuSeparator: () => null,
+  ContextMenuMeta: ({ children }: { children: React.ReactNode }) => (
+    <span aria-hidden="true" data-testid="context-menu-meta">
+      {children}
+    </span>
+  ),
   ContextMenuSub: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   ContextMenuSubContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   ContextMenuSubTrigger: ({
@@ -316,7 +322,7 @@ vi.mock("@/components/ui/context-menu", () => ({
       {children}
     </div>
   ),
-  ContextMenuActionItem: ({
+  ContextMenuActionItem: function MockContextMenuActionItem({
     children,
     actionId,
     args,
@@ -334,28 +340,30 @@ vi.mock("@/components/ui/context-menu", () => ({
     disabled?: boolean;
     className?: string;
     "data-testid"?: string;
-  }) => (
-    <div
-      role="menuitem"
-      data-testid={dataTestId ?? "context-menu-item"}
-      data-disabled={disabled ? "true" : undefined}
-      className={className}
-      onClick={(e) => {
-        if (disabled) return;
-        onSelect?.(e as unknown as Event);
-        if (e.defaultPrevented) return;
-        dispatchMock(actionId, args, {
-          ...dispatchOptions,
-          source:
-            dispatchOptions && typeof dispatchOptions === "object" && "source" in dispatchOptions
-              ? dispatchOptions.source
-              : "user",
-        });
-      }}
-    >
-      {children}
-    </div>
-  ),
+  }) {
+    // The real item dispatches with the enclosing menu's source, falling back
+    // to "user" outside a provider.
+    const menuSource = useContext(MenuActionSourceContext);
+    return (
+      <div
+        role="menuitem"
+        data-testid={dataTestId ?? "context-menu-item"}
+        data-disabled={disabled ? "true" : undefined}
+        className={className}
+        onClick={(e) => {
+          if (disabled) return;
+          onSelect?.(e as unknown as Event);
+          if (e.defaultPrevented) return;
+          dispatchMock(actionId, args, {
+            ...dispatchOptions,
+            source: menuSource ?? "user",
+          });
+        }}
+      >
+        {children}
+      </div>
+    );
+  },
 }));
 
 vi.mock("@/components/ui/ConfirmDialog", () => ({
@@ -1168,47 +1176,114 @@ describe("AgentButton preset UX", () => {
       expect(blueRow.querySelector('[data-testid="check-icon"]')).toBeNull();
     });
 
-    it("context-menu radio group reflects the saved preset id", () => {
-      mockSettings = settingsWith({ claude: { presetId: "user-blue" } });
-      mockMergedPresetsFn = () => [
-        { id: "user-blue", name: "Blue" },
-        { id: "user-red", name: "Red" },
-      ];
+    // Exact label, allowing only the screen-reader suffix the default row carries.
+    const contextItem = (items: HTMLElement[], label: string) =>
+      items.find(
+        (el) =>
+          el.textContent === label || el.textContent === `${label}, current defaultCurrent default`
+      )!;
+    const visibleMarkOf = (item: HTMLElement) =>
+      item.querySelector('[data-testid="context-menu-meta"]')?.textContent ?? null;
+    const THREE_PRESETS = [
+      { id: "user-blue", name: "Blue" },
+      { id: "user-red", name: "Red" },
+      { id: "user-green", name: "Green" },
+    ];
 
-      const { getByTestId } = render(
-        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
-      );
-      expect(getByTestId("context-radio-group").getAttribute("data-value")).toBe("user-blue");
-    });
-
-    it("context-menu preset selection persists and launches (source falls back to 'user' without a menu-source provider)", () => {
+    it("context-menu marks the worktree's saved preset as the current default", () => {
       mockActiveWorktreeId = "wt-A";
-      mockSettings = settingsWith({ claude: {} });
-      mockMergedPresetsFn = () => [
-        { id: "user-blue", name: "Blue" },
-        { id: "user-red", name: "Red" },
-      ];
+      mockSettings = settingsWith({
+        claude: { presetId: "user-red", worktreePresets: { "wt-A": "user-blue" } },
+      });
+      mockMergedPresetsFn = () => THREE_PRESETS;
 
       const { getAllByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
-      const items = getAllByTestId("context-radio-item") as HTMLElement[];
-      const blueItem = items.find((el) => el.textContent?.includes("Blue"))!;
-      fireEvent.click(blueItem);
+      const items = getAllByTestId("context-menu-item") as HTMLElement[];
 
-      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", "user-blue");
+      // The worktree slot wins over the agent-level preset, as it does on launch.
+      expect(visibleMarkOf(contextItem(items, "Blue"))).toBe("Current default");
+      expect(contextItem(items, "Blue").textContent).toContain(", current default");
+      for (const label of ["Red", "Green", "Agent default"]) {
+        expect(visibleMarkOf(contextItem(items, label))).toBeNull();
+        expect(contextItem(items, label).textContent).toBe(label);
+      }
+    });
+
+    it.each([
+      ["nothing named is saved", {}],
+      [
+        "this worktree saved the bare agent over an agent-level preset",
+        { presetId: "user-blue", worktreePresets: { "wt-A": null } },
+      ],
+    ])("context-menu marks Agent default when %s", (_name, claude) => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({ claude });
+      mockMergedPresetsFn = () => THREE_PRESETS;
+
+      const { getAllByTestId } = render(
+        <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+      );
+      const items = getAllByTestId("context-menu-item") as HTMLElement[];
+
+      expect(visibleMarkOf(contextItem(items, "Agent default"))).toBe("Current default");
+      for (const label of ["Blue", "Red", "Green"]) {
+        expect(visibleMarkOf(contextItem(items, label))).toBeNull();
+      }
+    });
+
+    it.each([
+      ["Blue", "user-blue"],
+      ["Green", "user-green"],
+    ])(
+      "context-menu %s launches once and leaves the worktree default alone (source falls back to 'user' without a menu-source provider)",
+      (label, presetId) => {
+        mockActiveWorktreeId = "wt-A";
+        mockSettings = settingsWith({
+          claude: { presetId: "user-blue", worktreePresets: { "wt-A": "user-red" } },
+        });
+        mockMergedPresetsFn = () => THREE_PRESETS;
+
+        const { getAllByTestId } = render(
+          <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+        );
+        fireEvent.click(contextItem(getAllByTestId("context-menu-item") as HTMLElement[], label));
+
+        // A preset carries the account and permission mode, so a one-off launch
+        // must not quietly become what the main button starts next (#15051).
+        expect(updateWorktreePresetMock).not.toHaveBeenCalled();
+        expect(updateAgentMock).not.toHaveBeenCalled();
+        expect(dispatchMock).toHaveBeenCalledTimes(1);
+        expect(dispatchMock).toHaveBeenCalledWith(
+          "agent.launch",
+          { agentId: "claude", presetId },
+          { source: "user" }
+        );
+      }
+    );
+
+    it("context-menu preset launch dispatches with the menu's source", () => {
+      mockActiveWorktreeId = "wt-A";
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => THREE_PRESETS;
+
+      const { getAllByTestId } = render(
+        <WithMenuSource>
+          <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
+        </WithMenuSource>
+      );
+      fireEvent.click(contextItem(getAllByTestId("context-menu-item") as HTMLElement[], "Red"));
+
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
       expect(dispatchMock).toHaveBeenCalledWith(
         "agent.launch",
-        { agentId: "claude", presetId: "user-blue" },
-        { source: "user" }
+        { agentId: "claude", presetId: "user-red" },
+        { source: "context-menu" }
       );
     });
 
-    it("context-menu Agent default saves the bare agent to this worktree and launches with null preset", () => {
-      // The context-menu sub is a launcher, but it must also persist the bare
-      // agent — an emptied slot falls back to the agent-level value on the
-      // next plain primary click (#6358), and clearing that value instead
-      // reaches every other worktree (#15054).
+    it("context-menu Agent default launches the bare agent once and leaves the worktree default alone", () => {
       mockActiveWorktreeId = "wt-A";
       mockSettings = settingsWith({
         claude: { presetId: "user-blue", worktreePresets: { "wt-A": "user-blue" } },
@@ -1218,12 +1293,14 @@ describe("AgentButton preset UX", () => {
       const { getAllByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
-      const items = getAllByTestId("context-radio-item") as HTMLElement[];
-      const defaultItem = items.find((el) => el.textContent?.includes("Agent default"))!;
-      fireEvent.click(defaultItem);
+      fireEvent.click(
+        contextItem(getAllByTestId("context-menu-item") as HTMLElement[], "Agent default")
+      );
 
-      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-A", null);
+      expect(updateWorktreePresetMock).not.toHaveBeenCalled();
       expect(updateAgentMock).not.toHaveBeenCalled();
+      // Explicit null, not undefined: undefined would relaunch the saved preset.
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
       expect(dispatchMock).toHaveBeenCalledWith(
         "agent.launch",
         { agentId: "claude", presetId: null },

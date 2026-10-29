@@ -39,15 +39,14 @@ import {
   ContextMenuActionItem,
   ContextMenuContent,
   ContextMenuItem,
-  ContextMenuRadioGroup,
-  ContextMenuRadioItem,
+  ContextMenuMeta,
   ContextMenuSeparator,
   ContextMenuSub,
   ContextMenuSubContent,
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { MenuActionSourceContext, useMenuActionSource } from "@/components/ui/menu-source";
+import { useMenuActionSource } from "@/components/ui/menu-source";
 import {
   Bookmark,
   Check,
@@ -505,6 +504,16 @@ export function AgentButton({
       </span>
     </>
   );
+
+  // ContextMenuMeta is hidden from assistive tech, so the state is spoken
+  // separately as part of the item's name.
+  const renderContextDefaultMark = (isDefault: boolean) =>
+    isDefault ? (
+      <>
+        <span className="sr-only">, current default</span>
+        <ContextMenuMeta>Current default</ContextMenuMeta>
+      </>
+    ) : null;
 
   // Launch from a dropdown row's label zone. Unlike the primary button, the
   // row names an explicit preset, so we forward it directly rather than
@@ -976,47 +985,34 @@ export function AgentButton({
                 data-testid="context-submenu-content"
                 className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
               >
-                <ContextMenuRadioGroup value={savedPresetId ?? ""}>
-                  <MenuActionSourceContext.Consumer>
-                    {(menuSource) => (
-                      <ContextMenuRadioItem
-                        value=""
-                        onSelect={() => {
-                          pickAgentDefault();
-                          void actionService.dispatch(
-                            "agent.launch",
-                            { agentId: type, presetId: null },
-                            { source: menuSource ?? "user" }
-                          );
-                        }}
-                      >
-                        Agent default
-                      </ContextMenuRadioItem>
-                    )}
-                  </MenuActionSourceContext.Consumer>
-                  <MenuActionSourceContext.Consumer>
-                    {(menuSource) => (
-                      <>
-                        {presets.map((preset) => (
-                          <ContextMenuRadioItem
-                            key={preset.id}
-                            value={preset.id}
-                            onSelect={() => {
-                              persistWorktreePick(preset.id);
-                              void actionService.dispatch(
-                                "agent.launch",
-                                { agentId: type, presetId: preset.id },
-                                { source: menuSource ?? "user" }
-                              );
-                            }}
-                          >
-                            {preset.displayTitle ?? preset.name.replace(/^CCR:\s*/, "")}
-                          </ContextMenuRadioItem>
-                        ))}
-                      </>
-                    )}
-                  </MenuActionSourceContext.Consumer>
-                </ContextMenuRadioGroup>
+                {/* Plain items, not radios: picking one launches it once and the
+                    worktree default stays where it was, so a radio mark that
+                    never moved to the picked row would misstate what happened.
+                    The chevron's gutter and D are where the default changes. */}
+                <ContextMenuActionItem
+                  actionId="agent.launch"
+                  args={{ agentId: type, presetId: null }}
+                >
+                  {agentMenuMark}
+                  Agent default
+                  {renderContextDefaultMark(!savedPresetId)}
+                </ContextMenuActionItem>
+                {presets.map((preset) => (
+                  <ContextMenuActionItem
+                    key={preset.id}
+                    actionId="agent.launch"
+                    args={{ agentId: type, presetId: preset.id }}
+                  >
+                    <BrandMark
+                      brandColor={preset.color ?? getBrandColorHex(type)}
+                      className="mr-2 h-3.5 w-3.5 shrink-0"
+                    >
+                      <config.icon />
+                    </BrandMark>
+                    {preset.displayTitle ?? preset.name.replace(/^CCR:\s*/, "")}
+                    {renderContextDefaultMark(savedPresetId === preset.id)}
+                  </ContextMenuActionItem>
+                ))}
               </ContextMenuSubContent>
             </ContextMenuSub>
           )}
