@@ -219,6 +219,8 @@
   --color-diff-delete-edit-background: var(--theme-diff-delete-edit-background);
   --color-diff-gutter-insert: var(--theme-diff-gutter-insert);
   --color-diff-gutter-delete: var(--theme-diff-gutter-delete);
+  --color-diff-text-insert: var(--theme-diff-text-insert);
+  --color-diff-text-delete: var(--theme-diff-text-delete);
   --color-diff-selected-background: var(--theme-diff-selected-background);
   --color-diff-omit-gutter-line: var(--theme-diff-omit-gutter-line);
   --radius: calc(0.625rem * var(--theme-radius-scale, 1));

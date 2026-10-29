@@ -236,6 +236,9 @@ export const APP_THEME_TOKEN_KEYS = [
   "diff-delete-edit-background",
   "diff-gutter-insert",
   "diff-gutter-delete",
+  // DiffStat's churn counts: the status inks lifted until they read as text
+  "diff-text-insert",
+  "diff-text-delete",
   "diff-selected-background",
   "diff-omit-gutter-line",
 ] as const;

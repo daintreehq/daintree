@@ -316,18 +316,22 @@ CSS automatically generates `-subtle`, `-text`, and `-border` composite variants
 
 ## Diff Tokens
 
-Theme-controlled colors for the diff viewer. Derived from `status-success` and `status-danger`.
+Theme-controlled colors for the diff viewer and `DiffStat`. Derived from `status-success` and `status-danger`.
 
-| Token                         | Dark default            | Light default           |
-| ----------------------------- | ----------------------- | ----------------------- |
-| `diff-insert-background`      | `status-success` at 18% | `status-success` at 10% |
+| Token | Dark default | Light default |
+| --- | --- | --- |
+| `diff-insert-background` | `status-success` at 18% | `status-success` at 10% |
 | `diff-insert-edit-background` | `status-success` at 28% | `status-success` at 20% |
-| `diff-delete-background`      | `status-danger` at 18%  | `status-danger` at 10%  |
-| `diff-delete-edit-background` | `status-danger` at 28%  | `status-danger` at 20%  |
-| `diff-gutter-insert`          | `status-success`        | `status-success`        |
-| `diff-gutter-delete`          | `status-danger`         | `status-danger`         |
-| `diff-selected-background`    | `tint` at 6%            | `tint` at 6%            |
-| `diff-omit-gutter-line`       | `activity-idle`         | `activity-idle`         |
+| `diff-delete-background` | `status-danger` at 18% | `status-danger` at 10% |
+| `diff-delete-edit-background` | `status-danger` at 28% | `status-danger` at 20% |
+| `diff-gutter-insert` | `status-success` | `status-success` |
+| `diff-gutter-delete` | `status-danger` | `status-danger` |
+| `diff-text-insert` | `status-success`, lightened to 4.5:1 | `status-success`, darkened to 4.5:1 |
+| `diff-text-delete` | `status-danger`, lightened to 4.5:1 | `status-danger`, darkened to 4.5:1 |
+| `diff-selected-background` | `tint` at 6% | `tint` at 6% |
+| `diff-omit-gutter-line` | `activity-idle` | `activity-idle` |
+
+`diff-text-insert` and `diff-text-delete` are DiffStat's churn counts. The status inks only carry the 3:1 non-text floor, so each is lifted along OKLCH lightness, at the same hue and with as much of its chroma as sRGB can show, until it holds 4.5:1 on every display surface, on the 4% `tint` frame and on the `overlay-subtle`, `overlay-soft`, `overlay-highlight` and `overlay-selected` row fills over each. The derivation reruns on the final tokens of a palette, plugin or imported theme, and a theme that names either token keeps it. `getThemeContrastWarnings` gates both at 4.5:1 against the same backdrops.
 
 ## UI Utility Tokens
 
@@ -465,7 +469,7 @@ Import and add to `shared/theme/builtInThemes/index.ts`.
 | Focus | 1 (`focus-ring`) |
 | Status | 8 (4 colors + 4 `*-surface` washes) |
 | Activity | 5 |
-| Overlay | 11 (base + 5 ladder + hover/active/selected/elevated/raised) |
+| Overlay | 12 (base + 5 ladder + hover/active/selected/elevated/raised/highlight) |
 | Filter-selected | 2 |
 | Wash | 3 |
 | Scrim | 5 (3 colors + 2 blur depths) |
@@ -479,8 +483,8 @@ Import and add to `shared/theme/builtInThemes/index.ts`.
 | Category | 12 |
 | UI Utility | 15 (4 scrollbar + 3 panel-state + 2 state-chip + 2 label-pill + 2 grain + focus-ring-offset + chrome-noise-texture) |
 | Form | 2 (`knob-base` + `state-modified`) |
-| Diff | 8 |
-| **Total** | **156** |
+| Diff | 10 |
+| **Total** | **159** |
 
 This must equal `APP_THEME_TOKEN_KEYS.length` in `shared/theme/types.ts`, which is the contract — if the two disagree, the array wins and this table is stale.
 

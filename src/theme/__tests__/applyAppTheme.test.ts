@@ -3,8 +3,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   APP_THEME_TOKEN_KEYS,
+  DIFF_TEXT_MIN_CONTRAST,
+  contrastRatio,
   getAppThemeById,
   getAppThemeCssVariables,
+  hexToOklch,
+  normalizeAppColorScheme,
+  resolveDiffTextBackdrops,
   type AppColorScheme,
 } from "@shared/theme";
 import { RED_GREEN_OVERRIDES } from "@shared/theme/colorVisionOverrides";
@@ -17,6 +22,8 @@ const DIFF_TOKENS = [
   "--theme-diff-delete-background",
   "--theme-diff-delete-edit-background",
   "--theme-diff-gutter-delete",
+  "--theme-diff-text-insert",
+  "--theme-diff-text-delete",
 ] as const;
 
 function createTestScheme(
@@ -169,6 +176,70 @@ describe("applyColorVisionMode diff token restoration", () => {
     expect(root.style.getPropertyValue("--theme-diff-gutter-insert")).not.toBe(
       base["--theme-diff-gutter-insert"]
     );
+  });
+
+  it("red-green lifts the churn inks from the CVD status inks against this theme's backdrops", () => {
+    const root = document.createElement("div");
+    applyAppThemeToRoot(root, lightScheme);
+    applyColorVisionMode(root, "red-green", lightScheme);
+
+    const backdrops = resolveDiffTextBackdrops(lightScheme.tokens);
+    for (const [token, status] of [
+      ["--theme-diff-text-insert", "--theme-status-success"],
+      ["--theme-diff-text-delete", "--theme-status-danger"],
+    ] as const) {
+      const ink = root.style.getPropertyValue(token);
+      expect(ink).not.toBe(base[token]);
+      const cvdHue = hexToOklch(RED_GREEN_OVERRIDES[status]!)!.h;
+      expect(Math.abs(hexToOklch(ink)!.h - cvdHue)).toBeLessThan(1.5);
+      for (const backdrop of backdrops) {
+        expect(
+          contrastRatio(ink, backdrop.hex),
+          `${token} on ${backdrop.label}`
+        ).toBeGreaterThanOrEqual(DIFF_TEXT_MIN_CONTRAST);
+      }
+    }
+
+    applyColorVisionMode(root, "default", lightScheme);
+    expect(root.style.getPropertyValue("--theme-diff-text-insert")).toBe(
+      base["--theme-diff-text-insert"]
+    );
+  });
+
+  it("lifts the red-green churn inks against a dark theme's own backdrops", () => {
+    const darkScheme = getAppThemeById("daintree")!;
+    const root = document.createElement("div");
+    applyAppThemeToRoot(root, darkScheme);
+    applyColorVisionMode(root, "red-green", darkScheme);
+    const darkInk = root.style.getPropertyValue("--theme-diff-text-insert");
+
+    for (const backdrop of resolveDiffTextBackdrops(darkScheme.tokens)) {
+      expect(contrastRatio(darkInk, backdrop.hex), backdrop.label).toBeGreaterThanOrEqual(
+        DIFF_TEXT_MIN_CONTRAST
+      );
+    }
+    // Lighter than the raw override on dark; Bondi lifts the same hue darker.
+    expect(hexToOklch(darkInk)!.l).toBeGreaterThan(
+      hexToOklch(RED_GREEN_OVERRIDES["--theme-status-success"]!)!.l
+    );
+  });
+
+  it("only replaces a churn ink whose status ink the mode overrides", () => {
+    const named = normalizeAppColorScheme({
+      id: "named-churn",
+      name: "Named churn",
+      type: "dark",
+      tokens: { "diff-text-insert": "#eeeeee", "diff-text-delete": "#dddddd" },
+    });
+    const root = document.createElement("div");
+    applyAppThemeToRoot(root, named);
+
+    applyColorVisionMode(root, "blue-yellow", named);
+    expect(root.style.getPropertyValue("--theme-diff-text-insert")).toBe("#eeeeee");
+    expect(root.style.getPropertyValue("--theme-diff-text-delete")).toBe("#dddddd");
+
+    applyColorVisionMode(root, "red-green", named);
+    expect(root.style.getPropertyValue("--theme-diff-text-insert")).not.toBe("#eeeeee");
   });
 
   it("blue-yellow restores base diff and status tokens instead of stripping them", () => {
