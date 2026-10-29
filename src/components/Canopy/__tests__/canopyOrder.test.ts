@@ -20,7 +20,6 @@ function input(
     priorities: new Map(Object.entries(priorities)),
     urgent: [],
     needsYou: [],
-    selected: null,
     archived: [],
     refreshedAt: 2,
     now: NOW,
@@ -304,34 +303,33 @@ describe("the Needs you band", () => {
     expect(bandOf(step)).toEqual(["a"]);
   });
 
-  it("keeps a handled row in it while it is selected, and lets it go at a rank once it isn't", () => {
-    // a was replied to: it no longer needs the user, and ranks below b now.
+  it("holds a handled row in it only while the list holds, and lets it go at the next rank", () => {
+    // a was replied to, or answered in its terminal: it no longer needs the user.
     const held = order(["a", "b"], { rankedFor: 2, band: ["a", "b"] });
     const replied = { a: 0, b: 70 };
-    const onA = { needsYou: ["b"], selected: "a" };
-    expect(nextCanopyOrder(held, input(replied, onA))).toEqual({ kind: "hold" });
-    expect(canopyReorderWaiting(held, input(replied, onA))).toBe(false);
-    // A scan lands and the list re-ranks: a moves below b, but stays in the band.
-    const ranked = nextCanopyOrder(held, input(replied, { ...onA, refreshedAt: 3 }));
-    expect(idsOf(ranked)).toEqual(["b", "a"]);
-    expect(bandOf(ranked)).toEqual(["a", "b"]);
-
-    // The user moves to b: a is held in the band until the list may re-rank.
-    const settled = ranked.kind === "set" ? ranked.order : held;
-    const onB = { needsYou: ["b"], selected: "b", refreshedAt: 3 };
+    const now = { needsYou: ["b"] };
+    // The user is still working in the list: a reads as replied where it is.
     expect(
-      nextCanopyOrder(settled, input(replied, { ...onB, lastInteractionAt: NOW - 1_000 }))
+      nextCanopyOrder(held, input(replied, { ...now, lastInteractionAt: NOW - 1_000 }))
     ).toEqual({ kind: "wait", ms: CANOPY_RANK_IDLE_MS - 1_000 });
-    expect(canopyReorderWaiting(settled, input(replied, onB))).toBe(true);
-    expect(bandOf(nextCanopyOrder(settled, input(replied, onB)))).toEqual(["b"]);
-  });
-
-  it("never puts a selected run into it that wasn't there", () => {
-    const step = nextCanopyOrder(
-      order(["a", "b"], { band: ["a"] }),
-      input({ a: 90, b: 20 }, { needsYou: ["a"], selected: "b" })
-    );
-    expect(bandOf(step)).toEqual(["a"]);
+    expect(nextCanopyOrder(held, input(replied, { ...now, pointerInList: true }))).toEqual({
+      kind: "hold",
+    });
+    expect(nextCanopyOrder(held, input(replied, { ...now, pressing: true }))).toEqual({
+      kind: "hold",
+    });
+    expect(canopyReorderWaiting(held, input(replied, now))).toBe(true);
+    // Left alone, the list re-ranks with no scan behind it, and a leaves the band.
+    expect(bandOf(nextCanopyOrder(held, input(replied, now)))).toEqual(["b"]);
+    // Refresh gives the band as it is now, whatever holds the list.
+    expect(
+      bandOf(
+        nextCanopyOrder(
+          held,
+          input(replied, { ...now, pointerInList: true, pressing: true, requested: true })
+        )
+      )
+    ).toEqual(["b"]);
   });
 
   it("keeps a replied urgent ask in it when it stops paging the user", () => {
@@ -354,23 +352,17 @@ describe("the Needs you band", () => {
     });
   });
 
-  it("lets an archived run go at once, even while selected, as it leaves the list", () => {
+  it("lets an archived run go at once, as it leaves the list", () => {
     const held = order(["a", "b"], { rankedFor: 2, band: ["a", "b"] });
     const step = nextCanopyOrder(
       held,
-      input(
-        { a: 90, b: 0 },
-        { needsYou: ["a"], archived: ["b"], selected: "b", pointerInList: true }
-      )
+      input({ a: 90, b: 0 }, { needsYou: ["a"], archived: ["b"], pointerInList: true })
     );
     expect(idsOf(step)).toEqual(["a", "b"]);
     expect(bandOf(step)).toEqual(["a"]);
     const settled = step.kind === "set" ? step.order : held;
     expect(
-      canopyReorderWaiting(
-        settled,
-        input({ a: 90, b: 0 }, { needsYou: ["a"], archived: ["b"], selected: "b" })
-      )
+      canopyReorderWaiting(settled, input({ a: 90, b: 0 }, { needsYou: ["a"], archived: ["b"] }))
     ).toBe(false);
   });
 

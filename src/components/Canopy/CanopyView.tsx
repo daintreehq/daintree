@@ -822,9 +822,7 @@ function CanopyInbox({
   useLayoutEffect(() => {
     if (openedRunId !== null) acknowledgeOpened(openedRunId);
   }, [openedRunId, acknowledgeOpened]);
-  // The list is placed once the run this render selects is known: the band
-  // never loses it under the user, even when a rank lands with the selection.
-  useLayoutEffect(() => placeOrder(openedRunId), [placeOrder, openedRunId, orderWake]);
+  useLayoutEffect(() => placeOrder(), [placeOrder, orderWake]);
   const { reserveUndo, undoReads, undoLine } = useCanopyInboxUndo({ hostId, api });
 
   // A held reorder is said once, not row by row as its scores land.
@@ -1115,9 +1113,10 @@ function CanopyInbox({
           : hostOfferShown
             ? `Canopy is off on ${hostName}`
             : null;
-  // A run that needs the user, held out of the band until the list may re-rank:
+  // The band is behind who needs the user until the list may re-rank — a run
+  // that needs them held out of it, or one that no longer does held in it:
   // nothing is concluded meanwhile.
-  const unsorted = inbox.inbox.some((item) => itemNeedsAttention(item) && !band.has(item.runId))
+  const unsorted = inbox.inbox.some((item) => itemNeedsAttention(item) !== band.has(item.runId))
     ? { words: "Not every agent is sorted yet", allClear: false }
     : null;
   // What the line and the empty band both say while no agent needs the user, and
