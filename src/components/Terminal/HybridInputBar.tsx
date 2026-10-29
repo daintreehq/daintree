@@ -2371,7 +2371,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             focusEditor();
           }}
         >
-          <DictionaryLearnPrompt terminalId={voiceId} projectId={voiceProjectId} />
+          <DictionaryLearnPrompt
+            terminalId={voiceId}
+            projectId={voiceProjectId}
+            onReturnFocus={focusEditor}
+          />
           {barContent}
         </div>
         <CommandPickerHost
