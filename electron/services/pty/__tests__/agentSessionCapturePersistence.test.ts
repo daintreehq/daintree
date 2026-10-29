@@ -70,14 +70,17 @@ import { journalAgentSession } from "../agentSessionJournal.js";
 import { disposeLifecycleLedger, getLifecycleLedger } from "../lifecycleLedger.js";
 import {
   acceptCapturedAgentSession,
+  acceptLiveSessionAttribution,
   noteRendererSessionIdentityEdits,
   noteTerminalLaunch,
   persistCapturedAgentSession,
   releaseSupersededCapturedSession,
   resetCapturedSessionPersistenceForTests,
   sealAndDrainCapturedSessionPersistence,
+  sessionIdentityRevision,
   writeBackCapturedSessionId,
   type CapturedAgentSession,
+  type LiveSessionAttribution,
 } from "../agentSessionCapturePersistence.js";
 
 const PROJECT_ID = generateProjectId("/repo/passive-capture");
@@ -913,6 +916,154 @@ describe("captured agent session persistence (#12433)", () => {
       await expect(superseding).resolves.toBe("failed");
       await settle();
       expect((await savedPane())?.agentSessionId).toBeUndefined();
+    });
+  });
+
+  describe("live attribution (#15268)", () => {
+    function live(
+      generation: number,
+      overrides: Partial<LiveSessionAttribution> = {}
+    ): LiveSessionAttribution {
+      return {
+        terminalId: TERMINAL_ID,
+        generation,
+        projectId: PROJECT_ID,
+        agentId: "codex",
+        sessionId: SESSION_ID,
+        identityRevision: sessionIdentityRevision(TERMINAL_ID),
+        ...overrides,
+      };
+    }
+
+    it("fills the saved pane of a run that is still going", async () => {
+      const generation = launch();
+      await seed([pane()]);
+
+      await expect(acceptLiveSessionAttribution(live(generation))).resolves.toBe("filled");
+      expect((await savedPane())?.agentSessionId).toBe(SESSION_ID);
+    });
+
+    it("never replaces an id the pane already holds", async () => {
+      const generation = launch();
+      await seed([pane({ agentSessionId: "captured-at-exit" })]);
+
+      await expect(acceptLiveSessionAttribution(live(generation))).resolves.toBe("conflict");
+      expect((await savedPane())?.agentSessionId).toBe("captured-at-exit");
+    });
+
+    it("never replaces even an older generation's id this module wrote", async () => {
+      // An exit capture would supersede this one; a live attribution only fills.
+      const first = launch();
+      await seed([pane()]);
+      await writeBackCapturedSessionId(capture(first, { record: { sessionId: "first-run" } }));
+
+      const second = launch();
+      await expect(acceptLiveSessionAttribution(live(second))).resolves.toBe("conflict");
+      expect((await savedPane())?.agentSessionId).toBe("first-run");
+    });
+
+    it("leaves an exit capture's id to its own generation", async () => {
+      // The same-generation exception is for live claims only.
+      const generation = launch();
+      await seed([pane()]);
+      await writeBackCapturedSessionId(capture(generation, { record: { sessionId: "at-exit" } }));
+
+      await expect(
+        writeBackCapturedSessionId(capture(generation, { record: { sessionId: "again" } }))
+      ).resolves.toBe("conflict");
+      expect((await savedPane())?.agentSessionId).toBe("at-exit");
+    });
+
+    it("refuses a run the pane has since relaunched past", async () => {
+      const first = launch();
+      launch();
+      await seed([pane()]);
+
+      await expect(acceptLiveSessionAttribution(live(first))).resolves.toBe("stale-generation");
+      expect((await savedPane())?.agentSessionId).toBeUndefined();
+    });
+
+    it("refuses once a renderer identity edit lands after the pane was read", async () => {
+      const generation = launch();
+      await seed([pane()]);
+      const attribution = live(generation);
+
+      noteRendererSessionIdentityEdits([TERMINAL_ID]);
+
+      await expect(acceptLiveSessionAttribution(attribution)).resolves.toBe("identity-edited");
+      expect((await savedPane())?.agentSessionId).toBeUndefined();
+    });
+
+    it("journals nothing: the run hasn't closed", async () => {
+      const generation = launch();
+      await seed([pane()]);
+
+      await acceptLiveSessionAttribution(live(generation));
+
+      expect(persistAgentSession).not.toHaveBeenCalled();
+      // The close still owns the generation's journal slot.
+      await expect(persistCapturedAgentSession(capture(generation))).resolves.toEqual({
+        journal: "written",
+        pane: "unchanged",
+      });
+    });
+
+    it("yields to the same run's exit capture after a /new", async () => {
+      const generation = launch();
+      await seed([pane()]);
+      await acceptLiveSessionAttribution(live(generation));
+
+      await expect(
+        writeBackCapturedSessionId(capture(generation, { record: { sessionId: "after-new" } }))
+      ).resolves.toBe("superseded");
+      expect((await savedPane())?.agentSessionId).toBe("after-new");
+    });
+
+    it("is released by a fresh relaunch like any id this module wrote", async () => {
+      const generation = launch();
+      await seed([pane()]);
+      await acceptLiveSessionAttribution(live(generation));
+
+      const second = launch();
+      noteTerminalLaunch(TERMINAL_ID, { command: "codex" });
+      releaseSupersededCapturedSession(TERMINAL_ID, second);
+      await sealAndDrainCapturedSessionPersistence(5_000);
+
+      expect((await savedPane())?.agentSessionId).toBeUndefined();
+    });
+
+    it("is waited for by the quit drain, and refused once it seals", async () => {
+      const generation = launch();
+      await seed([pane()]);
+      const held = holdQueue();
+      void acceptLiveSessionAttribution(live(generation));
+
+      let drained = false;
+      const drain = sealAndDrainCapturedSessionPersistence(5_000).then((result) => {
+        drained = true;
+        return result;
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(drained).toBe(false);
+
+      held.release();
+      await expect(drain).resolves.toEqual({ drained: true, pending: 0 });
+      expect((await savedPane())?.agentSessionId).toBe(SESSION_ID);
+      await expect(acceptLiveSessionAttribution(live(generation))).resolves.toBe("sealed");
+    });
+
+    it("never logs the session id", async () => {
+      const generation = launch();
+      await seed([pane()]);
+
+      await acceptLiveSessionAttribution(live(generation));
+
+      expect(JSON.stringify(logCalls)).not.toContain(SESSION_ID);
+      expect(logCalls).toContainEqual([
+        "info",
+        "Live agent session attribution outcome",
+        expect.objectContaining({ terminalId: TERMINAL_ID, pane: "filled" }),
+      ]);
     });
   });
 });

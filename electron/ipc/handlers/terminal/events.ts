@@ -30,6 +30,8 @@ import type {
   TerminalResourceBatchPayload,
 } from "../../../../shared/types/pty-host.js";
 import type { PtyDataRouting } from "../../../services/pty/types.js";
+import { CodexLiveSessionAttribution } from "../../../services/codex/CodexLiveSessionAttribution.js";
+import { isCleaningUp } from "../../../lifecycle/shutdownCoordinator.js";
 import {
   setSpawnConfirmationTimeoutHandler,
   settleSpawnConfirmation,
@@ -338,6 +340,15 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
     }
   );
   handlers.push(unsubSessionCaptured);
+
+  // The same saved-pane id, learned while a Codex run is still going rather
+  // than as it ends (#15268), so a quit or crash that skips both captures above
+  // doesn't lose it.
+  const liveCodexAttribution = new CodexLiveSessionAttribution({
+    ptyClient,
+    isQuitting: isCleaningUp,
+  });
+  handlers.push(() => liveCodexAttribution.dispose());
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

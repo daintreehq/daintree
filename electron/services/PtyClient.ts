@@ -203,6 +203,8 @@ interface TerminalInfoResponse {
    * means none was observed. Reset with the record when the PTY is replaced.
    */
   agentIncarnation?: number;
+  /** Lifecycle-ledger generation of the record that answered. */
+  launchGeneration?: number;
   /** Runtime-detected agent identity (cleared when the agent exits). */
   detectedAgentId?: BuiltInAgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
@@ -2761,6 +2763,21 @@ export class PtyClient extends EventEmitter {
 
   updateObservedTitle(id: string, title: string): void {
     this.shardForTerminal(id).send({ type: "update-observed-title", id, title });
+  }
+
+  /**
+   * Hand the host the conversation a live run was attributed to (#15268). The
+   * cached spawn options are deliberately left alone, unlike `updateTitle`:
+   * crash recovery replays them as a fresh launch, and a fresh launch starts a
+   * new conversation that this id doesn't describe.
+   */
+  noteLiveAgentSessionId(id: string, sessionId: string, launchGeneration: number): void {
+    this.shardForTerminal(id).send({
+      type: "note-live-agent-session-id",
+      id,
+      sessionId,
+      launchGeneration,
+    });
   }
 
   updateTitle(id: string, title: string, titleMode: PanelTitleMode): void {

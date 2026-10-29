@@ -31,6 +31,7 @@ import { createHash } from "crypto";
 import {
   listCodexSubagents,
   listCodexSessionsForCwd,
+  listCodexThreadsCreatedSince,
   matchCodexRestoreSessions,
   readCodexSubagentTranscript,
   resolveCodexResumeLatestSession,
@@ -1266,5 +1267,132 @@ describe("matchCodexRestoreSessions", () => {
 
     expect(result.matches).toEqual([]);
     expect(runSession).not.toHaveBeenCalled();
+  });
+});
+
+describe("listCodexThreadsCreatedSince (#15268)", () => {
+  it("reads the folder's root threads created in the window, newest first", async () => {
+    const calls: QueryParams[] = [];
+    scriptSession((method, params) => {
+      if (method !== "thread/list") return {};
+      calls.push(params);
+      return {
+        data: [
+          { id: "new", preview: "triage #2", createdAt: 120 },
+          { id: "child", parentThreadId: "new", preview: "sub", createdAt: 115 },
+          { id: "root", sessionId: "root-session", preview: "triage #1", createdAt: 110 },
+          { id: "old", preview: "triage #0", createdAt: 90 },
+        ],
+        nextCursor: "more",
+      };
+    });
+
+    await expect(listCodexThreadsCreatedSince(["/tmp/repo"], 100)).resolves.toEqual([
+      { sessionId: "new", preview: "triage #2", createdAt: 120 },
+      { sessionId: "root-session", preview: "triage #1", createdAt: 110 },
+    ]);
+    // Passing the window ends the walk even though the server has more.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      // As given: the caller already settled which folder these spell.
+      cwd: ["/tmp/repo"],
+      sortKey: "created_at",
+      sortDirection: "desc",
+      useStateDbOnly: true,
+    });
+    expect(calls[0]).not.toHaveProperty("sourceKinds");
+    expect(calls[0]).not.toHaveProperty("archived");
+    expect(calls[0]).not.toHaveProperty("searchTerm");
+  });
+
+  it("follows the cursor until the window is covered", async () => {
+    const cursors: unknown[] = [];
+    scriptSession((method, params) => {
+      if (method !== "thread/list") return {};
+      cursors.push(params.cursor);
+      return params.cursor === undefined
+        ? { data: [{ id: "a", preview: "a", createdAt: 130 }], nextCursor: "page-2" }
+        : { data: [{ id: "b", preview: "b", createdAt: 120 }], nextCursor: null };
+    });
+
+    const threads = await listCodexThreadsCreatedSince(["/repo"], 100);
+
+    expect(threads?.map((thread) => thread.sessionId)).toEqual(["a", "b"]);
+    expect(cursors).toEqual([undefined, "page-2"]);
+  });
+
+  it("answers null when the window outruns the page budget", async () => {
+    let page = 0;
+    scriptSession((method) => {
+      if (method !== "thread/list") return {};
+      page += 1;
+      return { data: [{ id: `t${page}`, createdAt: 200 - page }], nextCursor: `c${page}` };
+    });
+
+    // A thread left unread could be the rival that makes a match ambiguous.
+    await expect(listCodexThreadsCreatedSince(["/repo"], 100)).resolves.toBeNull();
+    expect(page).toBe(4);
+  });
+
+  it("asks for every spelling of the folder its panes use", async () => {
+    let cwd: unknown;
+    scriptSession((method, params) => {
+      if (method === "thread/list") cwd = params.cwd;
+      return { data: [], nextCursor: null };
+    });
+
+    await listCodexThreadsCreatedSince(["/tmp/repo", "/private/tmp/repo", "/repo"], 100);
+
+    expect(cwd).toEqual(["/tmp/repo", "/private/tmp/repo", "/repo"]);
+  });
+
+  it("answers null when a later page comes back malformed", async () => {
+    scriptSession((method, params) => {
+      if (method !== "thread/list") return {};
+      return params.cursor === undefined
+        ? { data: [{ id: "a", createdAt: 150 }], nextCursor: "page-2" }
+        : { nextCursor: null };
+    });
+
+    // Page one alone would read as the whole window and hide a rival.
+    await expect(listCodexThreadsCreatedSince(["/repo"], 100)).resolves.toBeNull();
+  });
+
+  it("answers null for an undated row or a failed session", async () => {
+    scriptSession((method) =>
+      method === "thread/list" ? { data: [{ id: "x", preview: "x" }], nextCursor: null } : {}
+    );
+    await expect(listCodexThreadsCreatedSince(["/repo"], 100)).resolves.toBeNull();
+
+    runSession.mockRejectedValueOnce(new CodexAppServerError("cli-missing", "no codex"));
+    await expect(listCodexThreadsCreatedSince(["/repo"], 100)).resolves.toBeNull();
+  });
+
+  it("skips an id that could not be handed to `codex resume`", async () => {
+    scriptSession((method) =>
+      method === "thread/list"
+        ? {
+            data: [
+              { id: "ok-id", createdAt: 150 },
+              { id: "bad id; rm -rf", createdAt: 140 },
+            ],
+            nextCursor: null,
+          }
+        : {}
+    );
+
+    const threads = await listCodexThreadsCreatedSince(["/repo"], 100);
+    expect(threads?.map((thread) => thread.sessionId)).toEqual(["ok-id"]);
+  });
+
+  it("runs against the pane's own profile", async () => {
+    scriptSession(() => ({ data: [], nextCursor: null }));
+
+    await listCodexThreadsCreatedSince(["/repo"], 100, "/profiles/work");
+
+    expect(runSession).toHaveBeenLastCalledWith(
+      expect.any(Function),
+      expect.objectContaining({ codexHome: "/profiles/work" })
+    );
   });
 });
