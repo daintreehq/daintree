@@ -291,5 +291,63 @@ describe("RecipeEditor", () => {
       const [saved] = await saveTerminals();
       expect(saved).toMatchObject({ type: "terminal", initialPrompt: "", args: "" });
     });
+
+    it("brings back the latest prompt, including one edited under another agent", async () => {
+      renderEditor(AGENT_RECIPE);
+      await pickType(0, "Codex");
+      fireEvent.change(document.getElementById("terminal-initial-prompt-0")!, {
+        target: { value: "" },
+      });
+      await pickType(0, "Terminal");
+      await pickType(0, "Claude");
+      expect(value("terminal-initial-prompt-0")).toBe("");
+      expect(value("terminal-args-0")).toBe("--model opus");
+    });
+
+    it("keeps offering a captured agent the picker doesn't list, so the step can go back", async () => {
+      renderEditor({
+        ...RECIPE,
+        terminals: [{ type: "cursor", title: "Agent", initialPrompt: "Fix it", env: {} }],
+      });
+      const captured = document.getElementById("terminal-type-0")!.textContent!;
+      await pickType(0, "Terminal");
+      await pickType(0, captured);
+      expect(value("terminal-initial-prompt-0")).toBe("Fix it");
+    });
+
+    it("keeps each step's own fields when an earlier step is removed", async () => {
+      renderEditor({
+        ...RECIPE,
+        terminals: [AGENT_RECIPE.terminals[0]!, RECIPE.terminals[0]!],
+      });
+      await pickType(0, "Terminal");
+      await pickType(1, "Claude");
+      act(() => {
+        screen.getByRole("button", { name: "Remove terminal 1" }).click();
+      });
+      await pickType(0, "Dev server");
+      expect(value("terminal-dev-command-0")).toBe("npm run dev");
+
+      act(() => {
+        screen.getByRole("button", { name: /Add terminal/ }).click();
+      });
+      await pickType(1, "Dev server");
+      expect(value("terminal-dev-command-1")).toBe("");
+    });
+
+    it("forgets what a step held once the editor is closed and opened again", async () => {
+      const view = renderEditor(RECIPE);
+      await pickType(0, "Terminal");
+      view.rerender(<RecipeEditor recipe={RECIPE} isOpen={false} onClose={() => {}} />);
+      view.rerender(
+        <RecipeEditor
+          recipe={{ ...RECIPE, terminals: [{ type: "terminal", title: "Dev", env: {} }] }}
+          isOpen
+          onClose={() => {}}
+        />
+      );
+      await pickType(0, "Dev server");
+      expect(value("terminal-dev-command-0")).toBe("");
+    });
   });
 });

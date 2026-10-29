@@ -101,10 +101,17 @@ const TYPE_LABELS: Partial<Record<RecipeTerminalType, string>> = {
 /**
  * The editable types, plus the terminal's own when a captured recipe carries an
  * agent the editor doesn't offer — a Select shows nothing for a value with no
- * item, so dropping it would blank the field and invite a silent retype.
+ * item, so dropping it would blank the field and invite a silent retype. Such an
+ * agent stays offered after the step leaves it, so it can be switched back to.
  */
-function terminalTypeOptions(current: RecipeTerminalType): RecipeTerminalType[] {
-  return TERMINAL_TYPES.includes(current) ? TERMINAL_TYPES : [...TERMINAL_TYPES, current];
+function terminalTypeOptions(
+  current: RecipeTerminalType,
+  left?: RecipeTerminalType
+): RecipeTerminalType[] {
+  const extra = [current, left].filter(
+    (type): type is RecipeTerminalType => !!type && !TERMINAL_TYPES.includes(type)
+  );
+  return extra.length ? [...TERMINAL_TYPES, ...new Set(extra)] : TERMINAL_TYPES;
 }
 
 function terminalTypeLabel(type: RecipeTerminalType): string {
@@ -191,6 +198,8 @@ export function RecipeEditor({
     Array.from({ length: count }, () => nextCardKeyRef.current++);
   const [cardKeys, setCardKeys] = useState<number[]>(() => freshCardKeys(1));
   const typeStashRef = useRef(new Map<number, TypeStash>());
+  // Per card, an unoffered captured type the step has switched away from.
+  const [leftTypes, setLeftTypes] = useState<Record<number, RecipeTerminalType>>({});
   // Where focus goes once an add or remove has rendered.
   const pendingFocusIdRef = useRef<string | null>(null);
   const initialStateRef = useRef<string>("");
@@ -214,6 +223,7 @@ export function RecipeEditor({
   useEffect(() => {
     if (!isOpen) return;
     typeStashRef.current.clear();
+    setLeftTypes({});
     if (recipe) {
       const nextTerminals = recipe.terminals.map(cloneTerminal);
       const nextShowInEmptyState = recipe.showInEmptyState ?? false;
@@ -322,6 +332,9 @@ export function RecipeEditor({
     }
     if (prevType === "dev-preview") stash.devCommand = current.devCommand;
     typeStashRef.current.set(cardKey, stash);
+    if (!TERMINAL_TYPES.includes(prevType)) {
+      setLeftTypes((prev) => ({ ...prev, [cardKey]: prevType }));
+    }
 
     const toAgent = isAgentStep(newType);
     // The prompt and arguments are shared by every agent, so an agent-to-agent
@@ -605,9 +618,10 @@ export function RecipeEditor({
                 {terminals.map((terminal, index) => {
                   const headingId = `terminal-heading-${index}`;
                   const isAgent = isAgentStep(terminal.type);
+                  const cardKey = cardKeys[index];
                   return (
                     <div
-                      key={cardKeys[index] ?? `index-${index}`}
+                      key={cardKey ?? `index-${index}`}
                       role="group"
                       aria-labelledby={headingId}
                       className="col-span-2 grid grid-cols-subgrid items-center gap-y-3 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas p-3"
@@ -647,7 +661,10 @@ export function RecipeEditor({
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            {terminalTypeOptions(terminal.type).map((type) => (
+                            {terminalTypeOptions(
+                              terminal.type,
+                              cardKey === undefined ? undefined : leftTypes[cardKey]
+                            ).map((type) => (
                               <SelectItem key={type} value={type}>
                                 {terminalTypeLabel(type)}
                               </SelectItem>
