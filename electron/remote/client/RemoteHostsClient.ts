@@ -1085,6 +1085,11 @@ export class RemoteHostsClient {
       if (this.committedSwitches.get(pendingWindowId)?.switchId === ticket.id) {
         this.committedSwitches.delete(pendingWindowId);
       }
+      const reached = this.pendingSwitches.get(pendingWindowId);
+      const stoppedIn =
+        reached?.switchId === ticket.id && reached.phase !== "failed"
+          ? reached.phase
+          : "connecting";
       this.publishPendingSwitch(pendingWindowId, {
         switchId: ticket.id,
         hostId,
@@ -1096,6 +1101,7 @@ export class RemoteHostsClient {
           code: error.code,
           message:
             error.userMessage ?? "Couldn't reach this host. Check that it is on and try again.",
+          phase: stoppedIn,
         },
       });
       return new AppError({
@@ -1253,6 +1259,8 @@ export class RemoteHostsClient {
           projectId = last.projectId;
           projectPath = last.path;
           projectName = last.name;
+          nameProject(projectName);
+          announce("opening");
         }
       } else {
         // Only the host saying it has no such project means it's gone: a link
@@ -1930,7 +1938,7 @@ function versionMismatch(hostId: HostId): AppError {
   return new AppError({
     code: "HOST_VERSION_MISMATCH",
     message: `Host ${hostId} runs a different build`,
-    userMessage: "This host runs a different Daintree build. Update it to connect.",
+    userMessage: "This host and this machine run different Daintree builds.",
   });
 }
 

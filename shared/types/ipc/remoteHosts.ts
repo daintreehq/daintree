@@ -94,8 +94,16 @@ export interface PendingHostSwitch {
   phase: "connecting" | "starting" | "opening" | "failed";
   /** What the switch asked for, so a Retry from its screen asks for the same thing. */
   request?: { projectId?: string; focusIntent?: ProjectFocusOnActivateIntent };
-  /** Set with `phase: "failed"`: the error as the host or link reported it. */
-  failure?: { code: AppErrorCode; message: string };
+  /**
+   * Set with `phase: "failed"`: the error as the host or link reported it, and
+   * the phase the switch had reached when it stopped (`connecting` when it
+   * stopped before saying any).
+   */
+  failure?: {
+    code: AppErrorCode;
+    message: string;
+    phase?: Exclude<PendingHostSwitch["phase"], "failed">;
+  };
   /**
    * Past the point of no return: the window is moving and can no longer be
    * cancelled, but its new view isn't showing yet. Typing stays held until

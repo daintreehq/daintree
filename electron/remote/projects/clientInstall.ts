@@ -37,7 +37,7 @@ function unreachable(
     return new AppError({
       code: "HOST_VERSION_MISMATCH",
       message: `Host ${hostId} runs a different build`,
-      userMessage: "This host runs a different Daintree build. Update it to connect.",
+      userMessage: "This host and this machine run different Daintree builds.",
     });
   }
   return new AppError({

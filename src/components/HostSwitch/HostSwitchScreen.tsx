@@ -1,7 +1,8 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { PendingHostSwitch } from "@shared/types/ipc/remoteHosts";
+import { CircleCheck, CircleDashed } from "@/components/icons";
 import { Button } from "@/components/ui/button";
-import { SkeletonBone } from "@/components/ui/Skeleton";
+import { Callout } from "@/components/ui/Callout";
 import { Spinner } from "@/components/ui/Spinner";
 import { UI_DOHERTY_THRESHOLD, UI_STILL_WORKING_MS } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
@@ -9,9 +10,15 @@ import { registerEscape } from "@/lib/escapeStack";
 import { ClientAppError } from "@/utils/clientAppError";
 import { hostSwitchRecovery, switchToHost } from "@/components/Hosts/hostSwitching";
 import { DaintreeMarkDraw } from "./DaintreeMarkDraw";
-import { pendingHostSwitchHeading, pendingHostSwitchStatus } from "./pendingHostSwitchFeedback";
+import {
+  HOST_SWITCH_STEPS,
+  hostSwitchStepLabel,
+  hostSwitchStoppedIn,
+  pendingHostSwitchHeading,
+  pendingHostSwitchStatus,
+} from "./pendingHostSwitchFeedback";
 
-const SIDEBAR_CARDS = 4;
+const COMMITTED_NOTE = "The window is moving now and can't be cancelled";
 
 function cancel(pending: PendingHostSwitch): void {
   void window.electron?.remoteHosts
@@ -21,10 +28,10 @@ function cancel(pending: PendingHostSwitch): void {
 
 /**
  * The window's switch to another host, from the moment it is asked for: the
- * window is on its way there, so it shows the host's loading screen instead of
- * the project it is leaving. Cancel goes back to exactly where it was (that
- * project was never touched underneath), and a host that can't be reached ends
- * here, saying what was seen, with a way to retry.
+ * window is on its way there, so it shows where it is going and how far it
+ * has got instead of the project it is leaving. Cancel goes back to exactly
+ * where it was (that project was never touched underneath), and a switch that
+ * fails ends here, saying where it stopped and why, with the one way back.
  *
  * Painted below dialogs and palettes, so one opened over it can still take the
  * window somewhere else, which leaves this screen for good.
@@ -68,9 +75,10 @@ export function HostSwitchScreen({ pending }: { pending: PendingHostSwitch }) {
   }, []);
   // Focus moves only while nothing else has taken it since the switch began:
   // a palette opened over the screen (even inside its loading gate) keeps it.
-  // With no control left (the window is moving), the screen itself holds it.
+  // Inside the gate the screen itself takes it, so Tab can't wander the
+  // project behind while nothing shows; once shown it goes to the button. With
+  // no control left (the window is moving), the screen holds it.
   useEffect(() => {
-    if (!shown) return;
     const active = document.activeElement;
     const ownsFocus =
       active === null ||
@@ -78,7 +86,7 @@ export function HostSwitchScreen({ pending }: { pending: PendingHostSwitch }) {
       active === restoreFocusRef.current ||
       screenRef.current?.contains(active) === true;
     if (!ownsFocus) return;
-    if (primaryRef.current) primaryRef.current.focus({ preventScroll: true });
+    if (shown && primaryRef.current) primaryRef.current.focus({ preventScroll: true });
     else screenRef.current?.focus({ preventScroll: true, focusVisible: false });
   }, [shown, pending.switchId, failed, pending.committed]);
 
@@ -114,11 +122,15 @@ export function HostSwitchScreen({ pending }: { pending: PendingHostSwitch }) {
     if (!recovery) return;
     // Retry replaces this screen with the new attempt's; anything else takes
     // the window somewhere else, so it leaves this switch behind first.
-    if (recovery.label !== "Retry") cancel(pending);
+    if (recovery.kind !== "retry") cancel(pending);
     recovery.run();
   };
   const failureMessage =
     pending.failure?.message ?? "Couldn't reach this host. Check that it is on and try again.";
+  // Where the switch is (or stopped): a failure keeps the step it reached.
+  const current =
+    pending.phase === "failed" ? (pending.failure?.phase ?? "connecting") : pending.phase;
+  const currentIndex = HOST_SWITCH_STEPS.indexOf(current);
 
   return (
     <div
@@ -129,110 +141,146 @@ export function HostSwitchScreen({ pending }: { pending: PendingHostSwitch }) {
       data-phase={pending.phase}
       className={cn(
         "fixed inset-0 z-[calc(var(--z-toolbar)+1)] flex flex-col bg-surface-canvas",
-        !shown && "opacity-0",
-        // Nothing is loading any more, so the placeholders hold still.
-        failed && "[&_[data-skeleton-bone]]:animate-none!"
+        !shown && "opacity-0"
       )}
       ref={screenRef}
       tabIndex={-1}
       onKeyDown={(event) => {
         // Tab stays on the screen: the controls behind it are not there.
         if (event.key !== "Tab") return;
-        const buttons = [
-          ...(screenRef.current?.querySelectorAll<HTMLElement>("button, [data-tab-stop]") ?? []),
-        ];
         event.preventDefault();
+        if (!shown) return;
+        const buttons = [...(screenRef.current?.querySelectorAll<HTMLElement>("button") ?? [])];
         if (buttons.length === 0) return;
         const at = buttons.findIndex((button) => button === document.activeElement);
         const step = event.shiftKey ? -1 : 1;
         buttons[(at + step + buttons.length) % buttons.length]?.focus();
       }}
     >
+      {/* The toolbar's band, empty: the window keeps its title bar to drag by
+          and its controls to sit on. Nothing else here stands in for a layout
+          the destination hasn't shown yet. */}
+      <div aria-hidden="true" className="app-drag-region h-12 shrink-0 bg-surface-toolbar" />
+      {/* The canvas covers the window at once when the gate opens, so the project
+          being left never shows through; what it says fades in over it, as the
+          boot screen's does, and a switch landing moments later cuts from a
+          quiet frame rather than a finished one. */}
       <div
-        aria-hidden="true"
-        className="app-drag-region flex h-12 shrink-0 items-center gap-2 bg-surface-toolbar px-4"
+        className={cn(
+          "min-h-0 flex-1 overflow-y-auto px-6",
+          "transition-opacity duration-200 ease-out starting:opacity-0",
+          !shown && "opacity-0"
+        )}
       >
-        <SkeletonBone immediate className="h-4 w-4" />
-        <SkeletonBone immediate className="h-4 w-4" />
-        <div className="flex-1" />
-        <SkeletonBone immediate className="h-4 w-32" />
-        <div className="flex-1" />
-        <SkeletonBone immediate className="h-4 w-4" />
-      </div>
-      <div className="flex min-h-0 flex-1">
-        <div
-          aria-hidden="true"
-          className="flex w-[300px] shrink-0 flex-col gap-4 bg-surface-sidebar p-4"
-        >
-          <SkeletonBone immediate className="h-8 w-full rounded-[var(--radius-md)]" />
-          {Array.from({ length: SIDEBAR_CARDS }, (_, index) => (
-            <div key={index} className="flex flex-col gap-2">
-              <SkeletonBone immediate className="h-3 w-3/4" />
-              <SkeletonBone immediate className="h-3 w-1/2" />
-            </div>
-          ))}
-        </div>
-        {/* Every zone has a fixed height, so the mark, the status and the
-            buttons stay where they are as the phase, "Still working…" and the
-            failure come and go. */}
-        <div className="flex min-w-0 flex-1 flex-col items-center justify-center p-8">
-          <div className="h-24 w-[134px] shrink-0 text-text-secondary">
+        {/* Anchored from the top rather than centred, so a failure's reason
+            grows downward and the mark, names and steps above it stay put. */}
+        <div className="mx-auto flex w-full max-w-sm flex-col items-center pb-12 pt-[clamp(1.5rem,calc(50vh-15rem),18rem)]">
+          <div className="h-16 w-[90px] shrink-0 text-text-secondary">
             {/* Mounted when the screen is first shown and kept for the whole
                 switch, a retry included, so the draw plays once. */}
             {shown && <DaintreeMarkDraw className="size-full" />}
           </div>
-          <div
-            role={failed ? "alert" : "status"}
-            className="mt-6 flex h-28 w-full max-w-md flex-col items-center gap-2 text-center"
+          <h2
+            id={titleId}
+            className="mt-5 w-full text-center text-lg font-semibold text-text-primary [overflow-wrap:anywhere]"
           >
-            <h2
-              id={titleId}
-              className="w-full shrink-0 truncate text-lg font-semibold text-text-primary"
-            >
-              {pendingHostSwitchHeading(pending)}
-            </h2>
-            {pending.phase === "failed" ? (
-              <p
-                // Scrollable, so reachable from the keyboard: Tab cycles through it.
-                tabIndex={0}
-                data-tab-stop=""
-                className="min-h-0 w-full overflow-y-auto break-words text-sm text-text-secondary"
-              >
-                {failureMessage}
-              </p>
+            {pendingHostSwitchHeading(pending)}
+          </h2>
+          <p className="mt-1 w-full text-center text-sm [overflow-wrap:anywhere]">
+            <span className="text-text-secondary">Project</span>{" "}
+            {pending.projectName ? (
+              <span className="font-medium text-text-primary">{pending.projectName}</span>
             ) : (
-              <>
-                <div className="flex h-6 shrink-0 items-center gap-2 text-sm text-text-secondary">
-                  <Spinner size="sm" />
-                  <p>{pendingHostSwitchStatus(pending.phase)}</p>
-                </div>
-                <p className="h-5 shrink-0 text-sm text-text-secondary">
-                  {stillWorking ? "Still working…" : null}
-                </p>
-              </>
+              <span className="text-text-secondary">{failed ? "not known" : "not known yet"}</span>
             )}
-          </div>
-          <div className="mt-5 h-8 shrink-0">
-            {(recovery || cancellable) && (
-              <div className="flex items-center gap-2">
-                {recovery && (
-                  <Button ref={primaryRef} variant="contrast" onClick={runRecovery}>
-                    {recovery.label}
-                  </Button>
-                )}
-                {cancellable && (
-                  <Button
-                    ref={recovery ? undefined : primaryRef}
-                    variant="secondary"
-                    onClick={() => cancel(pending)}
-                  >
-                    Cancel
-                  </Button>
-                )}
-              </div>
+          </p>
+          <ol aria-label="Progress" className="mt-6 flex w-full flex-col gap-1">
+            {HOST_SWITCH_STEPS.map((step, index) => {
+              if (failed && index === currentIndex) {
+                return (
+                  <li key={step} className="py-1">
+                    <Callout
+                      severity="error"
+                      role="alert"
+                      title={hostSwitchStoppedIn(step)}
+                      // Its glyph sits in the steps' glyph column: padding plus border.
+                      className="-mx-3.25 text-sm"
+                    >
+                      <p className="text-pretty">{failureMessage}</p>
+                      {recovery?.hint && <p className="mt-1 text-pretty">{recovery.hint}</p>}
+                    </Callout>
+                  </li>
+                );
+              }
+              const state =
+                index < currentIndex ? "done" : index === currentIndex ? "active" : "pending";
+              return (
+                <li
+                  key={step}
+                  aria-current={state === "active" ? "step" : undefined}
+                  className={cn(
+                    "flex min-h-7 items-center gap-2 text-sm",
+                    state === "active" ? "font-medium text-text-primary" : "text-text-secondary"
+                  )}
+                >
+                  <span className="flex size-4 shrink-0 items-center justify-center">
+                    {state === "done" ? (
+                      <CircleCheck className="size-4" aria-hidden="true" />
+                    ) : state === "active" ? (
+                      <Spinner size="md" />
+                    ) : (
+                      <CircleDashed className="size-4" aria-hidden="true" />
+                    )}
+                  </span>
+                  <span className="min-w-0">
+                    {hostSwitchStepLabel(step, state)}
+                    <span className="sr-only">
+                      {state === "done" ? ", done" : state === "pending" ? ", not started" : ""}
+                    </span>
+                    {/* On the step it is about, in the line it already has, so
+                        nothing below moves when it appears. */}
+                    {state === "active" && stillWorking && (
+                      <span className="ml-2 font-normal text-text-secondary">Still working…</span>
+                    )}
+                  </span>
+                </li>
+              );
+            })}
+          </ol>
+          <div className="mt-7 flex min-h-8 w-full flex-wrap items-center justify-center gap-x-2 gap-y-3">
+            {recovery && (
+              <Button
+                ref={primaryRef}
+                variant="contrast"
+                onClick={runRecovery}
+                // An update names its host, which can be longer than the column.
+                className="h-auto min-h-8 max-w-full whitespace-normal text-center [overflow-wrap:anywhere]"
+              >
+                {recovery.label}
+              </Button>
+            )}
+            {cancellable ? (
+              <Button
+                ref={recovery ? undefined : primaryRef}
+                variant="secondary"
+                onClick={() => cancel(pending)}
+              >
+                Cancel
+              </Button>
+            ) : (
+              <p className="text-center text-sm text-text-secondary">{COMMITTED_NOTE}</p>
             )}
           </div>
         </div>
+      </div>
+      {/* What changed, said once per step and once at the point of no return:
+          the visible list, the project name and "Still working…" stay quiet. */}
+      <div role="status" className="sr-only">
+        {pending.phase === "failed"
+          ? null
+          : pending.committed
+            ? `${pendingHostSwitchStatus(pending.phase)} ${COMMITTED_NOTE}`
+            : pendingHostSwitchStatus(pending.phase)}
       </div>
     </div>
   );
