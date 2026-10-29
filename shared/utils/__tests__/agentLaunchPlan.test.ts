@@ -109,12 +109,11 @@ describe("buildAgentLaunchPlan", () => {
       expect(getCliDetail).not.toHaveBeenCalled();
     });
 
-    it("resolves a project pick that is on hand even before the load is marked done", async () => {
+    it("resolves the same pick once the project's presets have loaded", async () => {
       const plan = await buildAgentLaunchPlan(
         input({
           settings: settingsWith({ worktreePresets: { "/repo-wt/a": "team" } }),
           projectPresets: [TEAM],
-          presetInventory: { ccr: true, project: false },
         })
       );
 
@@ -182,6 +181,21 @@ describe("buildAgentLaunchPlan", () => {
 
       expect(unread.unloadedPresetId).toBe("ccr-opus");
       expect(loaded.preset?.id).toBe("ccr-opus");
+    });
+
+    it("judges a custom entry by the merge, so an invalid one can't vouch for a CCR match", async () => {
+      const plan = await buildAgentLaunchPlan(
+        input({
+          settings: settingsWith({
+            presetId: "ccr-opus",
+            customPresets: [{ id: "ccr-opus", name: "" }],
+          }),
+          ccrPresets: [{ id: "ccr-opus", name: "CCR: Opus" }],
+          presetInventory: { ccr: true, project: false },
+        })
+      );
+
+      expect(plan.unloadedPresetId).toBe("ccr-opus");
     });
 
     it("never holds a custom match, which nothing unread can outrank", async () => {

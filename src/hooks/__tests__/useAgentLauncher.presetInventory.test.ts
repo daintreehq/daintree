@@ -14,8 +14,7 @@ interface PanelOptions {
   agentPresetId?: string;
   env?: Record<string, string>;
   worktreeId?: string;
-  requestedId?: string;
-  launchPrompt?: unknown;
+  cwd?: string;
 }
 interface NotifyPayload {
   type?: string;
@@ -192,7 +191,7 @@ describe("useAgentLauncher — a saved preset whose inventory hasn't loaded (#15
     });
   });
 
-  it("starts the agent afresh from the refusal's Try again, where the first launch was headed", async () => {
+  it("runs the same launch again from the refusal's Try again, where it was headed", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const onDecline = vi.fn();
     const { result } = renderHook(() => useAgentLauncher());
@@ -200,8 +199,9 @@ describe("useAgentLauncher — a saved preset whose inventory hasn't loaded (#15
       const launch = result.current.launchAgent("claude", {
         force: true,
         onDecline,
-        prompt: "fix the build",
-        requestedId: "job-1",
+        cwd: "/repo/packages/app",
+        location: "dock",
+        activateDockOnCreate: true,
       });
       await vi.advanceTimersByTimeAsync(3_000);
       await launch;
@@ -216,12 +216,38 @@ describe("useAgentLauncher — a saved preset whose inventory hasn't loaded (#15
     });
 
     expect(launchedPresetIds()).toEqual(["team"]);
-    // A caller's prompt and requested id belong to the dispatch that was
-    // already answered, so the retry carries neither.
-    expect(addPanel.mock.calls[0]?.[0]).toMatchObject({ worktreeId: "wt-1" });
-    expect(addPanel.mock.calls[0]?.[0]).not.toHaveProperty("requestedId", "job-1");
-    expect(addPanel.mock.calls[0]?.[0]?.launchPrompt).toBeUndefined();
+    expect(addPanel.mock.calls[0]?.[0]).toMatchObject({
+      worktreeId: "wt-1",
+      cwd: "/repo/packages/app",
+      location: "dock",
+      activateDockOnCreate: true,
+    });
+    // The first launch's caller already heard its answer.
     expect(onDecline).toHaveBeenCalledOnce();
+  });
+
+  it("leaves a refused launch carrying a caller's work to that caller, with no toast to replay it", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const onDecline = vi.fn();
+    const { result } = renderHook(() => useAgentLauncher());
+
+    await act(async () => {
+      const launch = result.current.launchAgent("claude", {
+        force: true,
+        onDecline,
+        prompt: "fix the build",
+        requestedId: "job-1",
+      });
+      await vi.advanceTimersByTimeAsync(3_000);
+      await launch;
+    });
+
+    expect(onDecline).toHaveBeenCalledExactlyOnceWith({
+      reason: "presets-loading",
+      panelLimit: null,
+    });
+    expect(notify).not.toHaveBeenCalled();
+    expect(addPanel).not.toHaveBeenCalled();
   });
 
   it("waits for the CCR routes and launches a saved route once they arrive", async () => {

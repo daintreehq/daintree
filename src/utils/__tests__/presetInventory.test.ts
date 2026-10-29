@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
-import { presetInventoryState, waitForLaunchPresets } from "../presetInventory";
+import {
+  presetInventoryState,
+  readLaunchPresetSources,
+  waitForLaunchPresets,
+} from "../presetInventory";
 
 const { useAgentSettingsStore } = await import("@/store/agentSettingsStore");
 
@@ -35,6 +39,22 @@ describe("presetInventoryState", () => {
     expect(
       presetInventoryState(true, null, { projectId: undefined, scratchId: undefined }).project
     ).toBe(false);
+  });
+});
+
+describe("readLaunchPresetSources", () => {
+  it("hands over a project snapshot only to the project it belongs to", () => {
+    useProjectPresetsStore.setState({
+      presetsByAgent: { claude: [{ id: "team", name: "Team" }] },
+      hydratedProjectId: "a",
+    });
+
+    expect(
+      readLaunchPresetSources("claude", { projectId: "a", scratchId: undefined }).projectPresets
+    ).toEqual([{ id: "team", name: "Team" }]);
+    expect(
+      readLaunchPresetSources("claude", { projectId: "b", scratchId: undefined })
+    ).toMatchObject({ projectPresets: undefined, presetInventory: { project: false } });
   });
 });
 

@@ -266,6 +266,27 @@ export interface LaunchAgentResult extends LaunchAgentIdentity {
 }
 
 /**
+ * Whether a launch carries work its caller owns: a prompt or a reply to wait
+ * for, a reserved panel id, credentials, lifetime rules or flags. That caller
+ * hears a refusal through its own result and starts again its own way; a toast
+ * replaying its options would run that work outside the flow that owns it.
+ */
+function carriesCallerState(options: LaunchAgentOptions | undefined): boolean {
+  if (!options) return false;
+  return (
+    options.prompt !== undefined ||
+    options.handbackCode !== undefined ||
+    options.requestedId !== undefined ||
+    options.env !== undefined ||
+    options.systemPromptArgs !== undefined ||
+    options.agentLaunchFlags !== undefined ||
+    options.launchedByPluginId !== undefined ||
+    options.excludeFromPersistence === true ||
+    options.removeOnExit === true
+  );
+}
+
+/**
  * Why a launch that would have run without its saved preset didn't start at
  * all: running a different setup than the one chosen is worse than not
  * running, and nothing else on screen would say so.
@@ -511,35 +532,33 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         });
         const declinePresetsLoading = (): null => {
           logWarn(`Declined a launch of ${agentId}: its preset's inventory hasn't loaded`);
-          // A fresh start of the same agent where this one was headed, never
-          // a replay: a caller's prompt, handback and requested id belong to a
-          // dispatch that has already been answered.
-          const retryOptions: LaunchAgentOptions = {
-            worktreeId: effectiveWorktreeId ?? undefined,
-            location: launchOptions?.location,
-            presetId: launchOptions?.presetId,
-            modelId: launchOptions?.modelId,
-          };
-          notifyPresetsLoading(agentConfig?.name ?? agentId, effectiveWorktreeId, () => {
-            if (!isMounted.current) return;
-            launchAgentRef.current?.(agentId, retryOptions).catch((error: unknown) => {
-              logError(`Failed to retry a launch of ${agentId}`, error);
+          if (!carriesCallerState(launchOptions)) {
+            // The same launch again, to where this one was headed: an empty id
+            // keeps a worktree-less launch from following a later selection.
+            const retryOptions: LaunchAgentOptions = {
+              ...launchOptions,
+              worktreeId: effectiveWorktreeId ?? "",
+              onDecline: undefined,
+            };
+            notifyPresetsLoading(agentConfig?.name ?? agentId, effectiveWorktreeId, () => {
+              if (!isMounted.current) return;
+              launchAgentRef.current?.(agentId, retryOptions).catch((error: unknown) => {
+                logError(`Failed to retry a launch of ${agentId}`, error);
+              });
             });
-          });
+          }
           return decline("presets-loading");
         };
         // A preset that isn't found while its inventory is still loading is
         // waited for, never cleared or launched without (#15025). The wait
         // costs nothing when the preset resolves, which is nearly every launch.
-        if (
-          agentConfig &&
-          !(await waitForLaunchPresets(
+        const presetsSettled =
+          !agentConfig ||
+          (await waitForLaunchPresets(
             () => findUnloadedLaunchPreset(presetSources()) === undefined
-          ))
-        ) {
-          return declinePresetsLoading();
-        }
+          ));
         if (!isMounted.current) return decline("unavailable");
+        if (!presetsSettled) return declinePresetsLoading();
         const plan = await buildAgentLaunchPlan({
           ...presetSources(),
           agentConfig,

@@ -15,6 +15,7 @@ import { appendCallerLaunchFlagsToCommand } from "./callerLaunchFlags.js";
 import {
   applyPresetBehaviorOverrides,
   getMergedPreset,
+  getMergedPresetIdentities,
   isPresetAbsenceSettled,
   sanitizeAgentEnv,
   type PresetInventoryState,
@@ -123,23 +124,28 @@ export function findUnloadedLaunchPreset(
   const { agentId, worktreeId, options, presetInventory } = input;
   if (!input.isAgent || options?.presetId === null) return undefined;
   const entry = input.settings?.agents?.[agentId] ?? {};
-  const resolves = (id: string) =>
-    getMergedPreset(agentId, id, entry.customPresets, input.ccrPresets, input.projectPresets) !==
-    undefined;
-  const holds = (bucket: AgentPreset[] | undefined, id: string) =>
-    Array.isArray(bucket) && bucket.some((preset) => preset.id === id);
+  // The same merge a launch resolves against, with the source that won each id.
+  const winners = new Map(
+    getMergedPresetIdentities(
+      agentId,
+      entry.customPresets,
+      input.ccrPresets,
+      input.projectPresets
+    ).map((preset) => [preset.id, preset.source])
+  );
   // Custom presets outrank every source and project presets outrank CCR and
   // the registry, so a CCR or built-in match can still lose to a project
   // preset of the same id that hasn't arrived.
-  const settled = (id: string) =>
-    resolves(id)
-      ? presetInventory.project || holds(entry.customPresets, id) || holds(input.projectPresets, id)
-      : isPresetAbsenceSettled(id, presetInventory);
+  const settled = (id: string) => {
+    const source = winners.get(id);
+    if (source === undefined) return isPresetAbsenceSettled(id, presetInventory);
+    return source === "custom" || source === "project" || presetInventory.project;
+  };
 
   const requestedId = options?.presetId ?? resolveEffectivePresetId(entry, worktreeId);
   if (!requestedId) return undefined;
   if (!settled(requestedId)) return requestedId;
-  if (resolves(requestedId)) return undefined;
+  if (winners.has(requestedId)) return undefined;
 
   const scopedId =
     worktreeId && entry.worktreePresets ? entry.worktreePresets[worktreeId] : undefined;

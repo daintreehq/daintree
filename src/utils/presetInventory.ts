@@ -32,7 +32,11 @@ export function presetInventoryState(
   };
 }
 
-/** One agent's CCR and project presets as this view holds them, with whether each has loaded. */
+/**
+ * One agent's CCR and project presets as this view holds them, with whether
+ * each has loaded. A project snapshot is handed over only when it is this
+ * project's, so another project's preset can never settle a launch here.
+ */
 export function readLaunchPresetSources(
   agentId: string,
   scope: PresetInventoryScope
@@ -43,9 +47,11 @@ export function readLaunchPresetSources(
 } {
   const ccr = useCcrPresetsStore.getState();
   const project = useProjectPresetsStore.getState();
+  const ownsSnapshot =
+    scope.projectId !== undefined && project.hydratedProjectId === scope.projectId;
   return {
     ccrPresets: ccr.ccrPresetsByAgent[agentId],
-    projectPresets: project.presetsByAgent[agentId],
+    projectPresets: ownsSnapshot ? project.presetsByAgent[agentId] : undefined,
     presetInventory: presetInventoryState(ccr.isInitialized, project.hydratedProjectId, scope),
   };
 }
