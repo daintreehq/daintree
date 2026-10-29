@@ -462,6 +462,7 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
 
   const terminalApi: CanopyTerminalApi = {
     holdsSize: false,
+    hostOf: (key) => parseAllHostsKey(key)?.hostId ?? ownHostId,
     ownSizedId: (key) => {
       const parsed = parseAllHostsKey(key);
       return parsed && parsed.hostId === ownHostId && known.has(ownHostId) ? parsed.id : null;

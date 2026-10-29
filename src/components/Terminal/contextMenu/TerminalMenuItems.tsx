@@ -67,6 +67,8 @@ export function TerminalSelectionMenuItems({
   hoveredFileKind,
   hoveredFileScope,
   selectionFilePath,
+  onViewSelectedFile,
+  separatorAfter = true,
   onSendToAgent,
   onOpenInFileBrowser,
   onAction,
@@ -78,7 +80,12 @@ export function TerminalSelectionMenuItems({
   hoveredFileKind: "file" | "directory" | null;
   hoveredFileScope: WorktreeScope | null;
   selectionFilePath: string | null;
-  onSendToAgent: () => void;
+  /** Opens a selected file instead of the grid panel View file opens by default. */
+  onViewSelectedFile?: (absolutePath: string) => void;
+  /** False when nothing follows the group in the menu. */
+  separatorAfter?: boolean;
+  /** Absent where there is no agent picker to send to. */
+  onSendToAgent?: () => void;
   onOpenInFileBrowser: (
     scope: WorktreeScope,
     path: string,
@@ -107,14 +114,16 @@ export function TerminalSelectionMenuItems({
         Paste
         <ContextMenuShortcut shortcut={clipboardCombos.paste} />
       </ContextMenuItem>
-      <ContextMenuItem
-        disabled={!hasSelection}
-        onSelect={onSendToAgent}
-        keybinding="terminal.sendToAgent"
-      >
-        <Send className={ICON_CLASS} aria-hidden="true" />
-        Send to agent
-      </ContextMenuItem>
+      {onSendToAgent && (
+        <ContextMenuItem
+          disabled={!hasSelection}
+          onSelect={onSendToAgent}
+          keybinding="terminal.sendToAgent"
+        >
+          <Send className={ICON_CLASS} aria-hidden="true" />
+          Send to agent
+        </ContextMenuItem>
+      )}
       {hoveredUrl && (
         <>
           <ContextMenuSeparator />
@@ -158,7 +167,11 @@ export function TerminalSelectionMenuItems({
           {/* Right-clicking a selected path usually hovers the same path,
                 so its View file joins this group and one reveal serves both. */}
           {selectionFilePath === hoveredFilePath && (
-            <SelectedFileMenuItems absolutePath={selectionFilePath} reveal={false} />
+            <SelectedFileMenuItems
+              absolutePath={selectionFilePath}
+              reveal={false}
+              onView={onViewSelectedFile}
+            />
           )}
           <ContextMenuItem onSelect={() => onAction(`reveal-in-finder:${hoveredFilePath}`)}>
             <FolderOpen className={ICON_CLASS} aria-hidden="true" />
@@ -169,10 +182,10 @@ export function TerminalSelectionMenuItems({
       {selectionFilePath && selectionFilePath !== hoveredFilePath && (
         <>
           <ContextMenuSeparator />
-          <SelectedFileMenuItems absolutePath={selectionFilePath} />
+          <SelectedFileMenuItems absolutePath={selectionFilePath} onView={onViewSelectedFile} />
         </>
       )}
-      <ContextMenuSeparator />
+      {separatorAfter && <ContextMenuSeparator />}
     </>
   );
 }

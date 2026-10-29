@@ -6,7 +6,7 @@ import type { SearchAddon } from "@xterm/addon-search";
 import type { WebLinksAddon } from "@xterm/addon-web-links";
 import { getLoadedXtermCore, loadXtermCore } from "./xtermCore";
 import { systemClient } from "@/clients/systemClient";
-import { FileLinksAddon, HoverCallback } from "./FileLinksAddon";
+import { FileLinksAddon, HoverCallback, type FileLinkRoute } from "./FileLinksAddon";
 import { ImageLinksAddon, OnActivateFigure } from "./ImageLinksAddon";
 import { SuggestedCommandLinksAddon, OnRunSuggestedCommand } from "./SuggestedCommandLinksAddon";
 import {
@@ -121,25 +121,9 @@ export async function setupTerminalAddons(terminal: Terminal): Promise<TerminalA
   terminal.loadAddon(fitAddon);
   terminal.loadAddon(serializeAddon);
 
-  // xterm 6.0 ships with Unicode 6 width tables, so modern emoji and many CJK
-  // glyphs render at 1 cell instead of 2. Activate Unicode 11 widths before any
-  // data is written so the buffer records correct cell widths from the start.
-  // The addon module is lazy-loaded (#10840), so this is awaited here — and the
-  // single caller, getOrCreate(), awaits setupTerminalAddons before wiring the
-  // PTY data listener, keeping the activation strictly before any write. A load
-  // failure degrades gracefully to Unicode 6 widths rather than failing terminal
-  // creation: a terminal with mis-measured emoji is far better than no terminal.
-  try {
-    const Unicode11AddonCtor = await loadUnicode11Addon();
-    const unicode11Addon = new Unicode11AddonCtor();
-    terminal.loadAddon(unicode11Addon);
-    terminal.unicode.activeVersion = "11";
-  } catch (err) {
-    console.warn(
-      "[TerminalAddonManager] Failed to load Unicode11 addon — falling back to Unicode 6 widths",
-      err
-    );
-  }
+  // The single caller, getOrCreate(), awaits setupTerminalAddons before wiring
+  // the PTY data listener, keeping the activation strictly before any write.
+  await activateUnicode11(terminal);
 
   return {
     fitAddon,
@@ -152,6 +136,28 @@ export async function setupTerminalAddons(terminal: Terminal): Promise<TerminalA
     pluginLinksDisposable: null,
     webLinksAddon: null,
   };
+}
+
+/**
+ * xterm 6.0 ships with Unicode 6 width tables, so modern emoji and many CJK
+ * glyphs render at 1 cell instead of 2. Await this before any data is written,
+ * so the buffer records correct cell widths from the start; the addon module
+ * is lazy-loaded (#10840). A load failure degrades to Unicode 6 widths rather
+ * than failing terminal creation: a terminal with mis-measured emoji is far
+ * better than no terminal.
+ */
+export async function activateUnicode11(terminal: Terminal): Promise<void> {
+  try {
+    const Unicode11AddonCtor = await loadUnicode11Addon();
+    const unicode11Addon = new Unicode11AddonCtor();
+    terminal.loadAddon(unicode11Addon);
+    terminal.unicode.activeVersion = "11";
+  } catch (err) {
+    console.warn(
+      "[TerminalAddonManager] Failed to load Unicode11 addon — falling back to Unicode 6 widths",
+      err
+    );
+  }
 }
 
 export async function createSearchAddon(terminal: Terminal): Promise<SearchAddon> {
@@ -171,10 +177,15 @@ export async function createImageAddon(terminal: Terminal): Promise<ImageAddon> 
 export function createFileLinksAddon(
   terminal: Terminal,
   getCwd: () => string,
-  onHover?: HoverCallback
+  onHover?: HoverCallback,
+  route?: FileLinkRoute
 ): IDisposable {
-  const addon = new FileLinksAddon(terminal, getCwd, onHover, () =>
-    systemClient.getCachedHomeDir()
+  const addon = new FileLinksAddon(
+    terminal,
+    getCwd,
+    onHover,
+    () => systemClient.getCachedHomeDir(),
+    route
   );
   const registration = terminal.registerLinkProvider(addon);
   // Composed, not just the registration: the addon defers link replies across

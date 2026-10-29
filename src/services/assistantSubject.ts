@@ -63,6 +63,7 @@ export function assistantTerminalApi(
     const canopy = window.electron.canopy;
     return {
       holdsSize: true,
+      hostOf: () => subject.hostId,
       watchTerminal: () =>
         inputStamp
           ? canopy.watchAssistantTerminal(subject, inputStamp)
@@ -82,6 +83,7 @@ export function assistantTerminalApi(
   const host = canopyHostClient;
   return {
     holdsSize: false,
+    hostOf: () => subject.hostId,
     watchTerminal: () => host.watchAssistant(consumer, subject),
     unwatchTerminal: (...args) =>
       host.assistantInvoke(consumer, "canopy:unwatch-terminal", ...args),

@@ -171,8 +171,18 @@ export function needsHostForward(text: string): boolean {
  * forward can't be made: opening the link anyway would reach this machine's
  * localhost instead of the host's.
  */
-export async function resolveTerminalLinkForView(text: string): Promise<string> {
-  const hostId = remoteHostOfView();
+export function resolveTerminalLinkForView(text: string): Promise<string> {
+  return resolveTerminalLinkForHost(text, remoteHostOfView());
+}
+
+/**
+ * The same, for a terminal on `hostId` whichever host this view runs on (null:
+ * this machine, whose links need no forward). Canopy shows other hosts' runs.
+ */
+export async function resolveTerminalLinkForHost(
+  text: string,
+  hostId: string | null
+): Promise<string> {
   if (!hostId) return text;
   const loopback = parseLoopbackLink(text);
   if (loopback) {

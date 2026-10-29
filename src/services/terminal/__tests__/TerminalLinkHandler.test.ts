@@ -316,3 +316,59 @@ describe("a URL a plugin claims (#13798)", () => {
     );
   });
 });
+
+describe("a link from a terminal on a host other than the view's (#15332)", () => {
+  it("means that host's localhost, forwarded here, in a view on this machine", async () => {
+    new TerminalLinkHandler().openLink("http://localhost:5173/", null, undefined, {
+      hostId: "studio-01",
+    });
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalled());
+    expect(forward).toHaveBeenCalledWith(expect.objectContaining({ hostId: "studio-01" }));
+    expect(dispatch).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: "http://localhost:15173/" },
+      { source: "user" }
+    );
+  });
+
+  it("means this machine's localhost for a local run, in a view bound to a host", () => {
+    bindView("studio-01");
+    new TerminalLinkHandler().openLink("http://localhost:5173/", null, undefined, {
+      hostId: "local",
+    });
+    expect(forward).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: "http://localhost:5173/" },
+      { source: "user" }
+    );
+  });
+
+  it("opens a modifier-clicked localhost link externally, with no pane of this view's to reuse", async () => {
+    new TerminalLinkHandler().openLink("http://localhost:5173/", null, cmdClick, {
+      hostId: "studio-01",
+    });
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalled());
+    expect(addPanel).not.toHaveBeenCalled();
+    expect(setBrowserUrl).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: "http://localhost:15173/" },
+      { source: "user" }
+    );
+  });
+
+  it("hands nothing to a plugin, which has no subject for it here", async () => {
+    activatePluginUrlLink.mockReturnValue(true);
+    new TerminalLinkHandler().openLink("https://records.example.com/1", null, undefined, {
+      hostId: "studio-01",
+    });
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalled());
+    expect(activatePluginUrlLink).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: "https://records.example.com/1" },
+      { source: "user" }
+    );
+  });
+});

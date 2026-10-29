@@ -67,6 +67,7 @@ import { CanopyTerminal, type CanopyStreamState } from "./CanopyTerminal";
 import { CanopyTitle } from "./CanopyTitle";
 import type { CanopyAsideActions } from "./CanopyRowMenu";
 import { ownCanopyTerminalApi, type CanopyTerminalApi } from "./canopyHostSource";
+import { parseAllHostsKey } from "./canopyAllHosts";
 import {
   DICTATION_OWNER_ATTR,
   canopyReplyVoiceId,
@@ -1004,6 +1005,9 @@ export function CanopyCard({
           runId={item.runId}
           spawnedAt={run.spawnedAt}
           api={terminalApi}
+          cwd={run.cwd}
+          // The All hosts list names a workspace by its host too.
+          projectId={parseAllHostsKey(run.workspaceId)?.id ?? run.workspaceId}
           reconnecting={reconnecting}
           onStreamChange={setStream}
           onSubmitted={() => onSent(item)}
