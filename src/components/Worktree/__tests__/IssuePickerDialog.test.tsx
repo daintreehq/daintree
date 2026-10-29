@@ -883,6 +883,28 @@ describe("IssuePickerDialog paging", () => {
     expect(scroller.scrollTop).toBe(120);
   });
 
+  it("stops promising Load more once a new query makes the rows stale", async () => {
+    vi.useFakeTimers();
+    try {
+      listIssuesMock.mockResolvedValue({
+        items: pageOf(1, 2),
+        hasMore: true,
+        nextCursor: "page-2",
+      });
+      renderDialog();
+      await flush(FIRST_PAINT_MS);
+
+      fireEvent.keyDown(input(), { key: "End" });
+      expect(screen.getByTestId("footer").textContent).toContain("to load more");
+
+      // Enter now re-runs the search rather than loading the old set's next page.
+      fireEvent.change(input(), { target: { value: "crash" } });
+      expect(screen.getByTestId("footer").textContent).not.toContain("to load more");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("drops a page that lands while a new query is still debouncing", async () => {
     vi.useFakeTimers();
     try {
