@@ -444,11 +444,7 @@ export function HelpPanel({
   // (#13205). The peek is non-consuming, like the launch flow's claim via
   // takePendingHibernation. We stamp the entry with its workspace id so
   // a mid-flight A→B switch can't show workspace A's Resume CTA over workspace B.
-  const [resumablePending, setResumablePending] = useState<{
-    workspaceId: string;
-    agentId: string;
-    live: boolean;
-  } | null>(null);
+  const [resumablePending, setResumablePending] = useState<PausedLane | null>(null);
   useEffect(() => {
     if (!isOpen || terminalId || !activeWorkspaceId) {
       setResumablePending(null);
@@ -482,6 +478,7 @@ export function HelpPanel({
           canResume
             ? {
                 workspaceId: activeWorkspaceId,
+                slot: activeSlot,
                 agentId: pendingAgentId,
                 live: pending?.live === true,
               }
@@ -504,25 +501,23 @@ export function HelpPanel({
     supportedInstalledAgentIds,
   ]);
 
-  // Cross-workspace bleed guard: an A→B switch re-runs the peek effect, but B's
-  // peek resolves asynchronously, so only trust a pending entry whose workspace
-  // id matches the workspace currently in view.
-  const resumableAgentId =
-    resumablePending && resumablePending.workspaceId === activeWorkspaceId
-      ? resumablePending.agentId
+  // Cross-workspace and cross-lane bleed guard: an A→B switch (of workspace or
+  // of tab) re-runs the peek effect, but B's peek resolves asynchronously, so
+  // only trust a pending entry stamped with the workspace and lane in view.
+  const pendingInView =
+    resumablePending &&
+    resumablePending.workspaceId === activeWorkspaceId &&
+    resumablePending.slot === activeSlot
+      ? resumablePending
       : null;
+  const resumableAgentId = pendingInView?.agentId ?? null;
   // The same pause, offered as a fresh start too (#14981). A fresh start launches
   // the captured agent anew, so it needs that agent installed, which a Resume of
   // one still running on the host does not.
-  const pausedLane = useMemo<PausedLane | null>(
-    () =>
-      resumablePending &&
-      resumablePending.workspaceId === activeWorkspaceId &&
-      supportedInstalledAgentIds.includes(resumablePending.agentId)
-        ? resumablePending
-        : null,
-    [resumablePending, activeWorkspaceId, supportedInstalledAgentIds]
-  );
+  const pausedLane =
+    pendingInView && supportedInstalledAgentIds.includes(pendingInView.agentId)
+      ? pendingInView
+      : null;
 
   // #10815: report this workspace's panel open-state to main on every change so
   // an LRU eviction / crash capture can stamp `panelWasOpen` onto the resume

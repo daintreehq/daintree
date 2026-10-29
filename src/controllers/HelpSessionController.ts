@@ -743,7 +743,9 @@ export class HelpSessionController {
       requestedId: reservedId,
       replaceExisting: true,
       activateDock: true,
-      checkVersion: !terminalId,
+      // Only a committed terminal vouches for the version: a reservation left by
+      // a cancelled launch may never have reached the gate.
+      checkVersion: !terminalId || terminalId === this._pendingNewTerminalId,
     });
   }
 

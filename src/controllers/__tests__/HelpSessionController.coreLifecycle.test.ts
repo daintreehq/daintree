@@ -782,6 +782,27 @@ describe("HelpSessionController — newSession on a paused lane (#14981)", () =>
     ctrl.stop();
   });
 
+  it("still checks the version over a reservation a cancelled launch left behind", async () => {
+    // The probe never answers, so the user cancels while the reservation still
+    // holds the lane; restarting again must not take that for a vetted terminal.
+    vi.mocked(window.electron.system.getAgentVersion).mockReturnValue(
+      new Promise(() => {}) as never
+    );
+    const ctrl = new HelpSessionController();
+    syncPausedLane(ctrl);
+    ctrl.newSession("claude");
+    helpPanelState.terminalId = vi.mocked(helpPanelState.setTerminal).mock.calls[0]?.[1] ?? null;
+    helpPanelState.agentId = "claude";
+    await flushLaunch();
+    ctrl.cancelLaunch();
+
+    ctrl.newSession();
+    await flushLaunch();
+
+    expect(window.electron.system.getAgentVersion).toHaveBeenCalledTimes(2);
+    ctrl.stop();
+  });
+
   it("skips the version check when restarting a running lane", async () => {
     const ctrl = new HelpSessionController();
     helpPanelState.terminalId = "term-1";

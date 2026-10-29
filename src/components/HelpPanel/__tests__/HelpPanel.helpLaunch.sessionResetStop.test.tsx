@@ -508,6 +508,7 @@ import {
   __resetHelpSessionControllersForTests,
   acquireHelpSessionController,
 } from "@/controllers/helpSessionControllerRegistry";
+import { assistantSlotKey } from "@shared/config/assistantSlots";
 
 // The real `app:view-revealed` bridge fans out to every registered listener;
 // HelpPanel registers the switch-back recovery effect against it (#10739).
@@ -1122,7 +1123,15 @@ describe("HelpPanel — restarting a paused lane (#14981)", () => {
   });
 
   it("discards the paused conversation and starts the captured agent fresh once confirmed", async () => {
-    setupPausedLane();
+    // Captured on Codex while the default is Claude, with the renderer still holding
+    // the capture: a resume, or a launch of the default, would both show up here.
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    helpPanelState.preferredAgentId = "claude";
+    setupPausedLane({ agentId: "codex" });
+    helpPanelState.hibernateSessions = {
+      [assistantSlotKey("proj-1", 0)]: { sessionId: "abc-123", cwd: "/help", agentId: "codex" },
+    };
     mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "terminal-fresh" } });
     mockProvisionSession.mockResolvedValue({
       sessionId: "sess-fresh",
@@ -1145,13 +1154,20 @@ describe("HelpPanel — restarting a paused lane (#14981)", () => {
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
       expect.objectContaining({
-        agentId: "claude",
+        agentId: "codex",
         requestedId: expect.stringMatching(/^terminal-/),
       }),
       { source: "user" }
     );
-    // A fresh start: the captured conversation is never claimed for a resume.
+    expect(helpPanelState.setTerminal).toHaveBeenLastCalledWith(
+      0,
+      "terminal-fresh",
+      "codex",
+      "sess-fresh"
+    );
+    // A fresh start: the captured conversation is neither claimed nor respawned.
     expect(mockTakePendingHibernation).not.toHaveBeenCalled();
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
     // Restarting is not consent to start on every open (#10699).
     expect(helpPanelState.setAutoLaunchEnabled).not.toHaveBeenCalled();
   });
@@ -1172,9 +1188,41 @@ describe("HelpPanel — restarting a paused lane (#14981)", () => {
     expect(mockDiscardConversation).not.toHaveBeenCalled();
   });
 
+  it("drops the previous lane's pause the moment another lane is selected", async () => {
+    setupPausedLane();
+    const unbound = {
+      terminalId: null,
+      agentId: null,
+      sessionId: null,
+      conversationTouched: false,
+      figures: [],
+      activeFigureNumber: null,
+    };
+    helpPanelState.openSlots = [0, 1];
+    helpPanelState.sessions = { 0: { ...unbound }, 1: { ...unbound } };
+    const lane0Capture = await mockPeekPendingHibernation();
+    // Lane 1's own peek hasn't answered yet.
+    mockPeekPendingHibernation.mockImplementation((_workspaceId: string, slot: number) =>
+      slot === 0 ? Promise.resolve(lane0Capture) : new Promise(() => {})
+    );
+
+    const { container, queryByTestId, rerender } = await renderPaused();
+    helpPanelState.activeSlot = 1;
+    rerender(<HelpPanel width={380} />);
+    await flushLaunch();
+
+    expect(queryByTestId("help-resume-assistant")).toBeNull();
+    expect(queryByTestId("help-restart-paused-conversation")).toBeNull();
+    expect(restartConversationButton(container)).toBeNull();
+    expect(tabMenuItem(container, 0, "Restart conversation")).toBeNull();
+    expect(tabMenuItem(container, 1, "Restart conversation")).toBeNull();
+  });
+
   it("offers no restart when the captured agent is no longer installed", async () => {
     // Resume can still take a running process over; a fresh start would launch an
     // agent that isn't there.
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    cliAvailabilityState.availability = { claude: "ready", codex: "missing" };
     setupPausedLane({ agentId: "codex", live: true });
 
     const { container, queryByTestId } = await renderPaused();
