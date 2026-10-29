@@ -86,6 +86,7 @@ export function sendToPinnedView(
       endpoint.send({ type: "event", channel, args: [buildPayload()] });
     } catch (err) {
       console.error(`[MCP] ${label} send failed:`, err);
+      return false;
     }
     return true;
   }
@@ -95,6 +96,7 @@ export function sendToPinnedView(
     wc.send(channel, buildPayload());
   } catch (err) {
     console.error(`[MCP] ${label} send failed:`, err);
+    return false;
   }
   return true;
 }

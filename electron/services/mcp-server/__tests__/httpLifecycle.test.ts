@@ -4084,6 +4084,19 @@ describe("sendToPinnedView", () => {
     expect(sendToPinnedView(8, "mcp:x", () => ({}), "x")).toBe(false);
   });
 
+  // A refusal points at the banner only when it was sent (#14995).
+  it("reports a send that threw as not sent", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockWebContentsById.set(7, {
+      isDestroyed: () => false,
+      send: vi.fn(() => {
+        throw new Error("render frame disposed");
+      }),
+    });
+    expect(sendToPinnedView(7, "mcp:x", () => ({}), "x")).toBe(false);
+    errorSpy.mockRestore();
+  });
+
   it("reaches a view attached over a link through its endpoint", () => {
     const send = vi.fn();
     getEndpointRegistry().add({

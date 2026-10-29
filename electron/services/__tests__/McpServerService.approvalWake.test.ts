@@ -62,10 +62,12 @@ describe("McpServerService approval line (#14995)", () => {
       sessionProject: (id) => (id === LANE.helpSessionId ? LANE.projectId : null),
     });
     queued = vi.spyOn(service, "queueLaneWake").mockImplementation(() => {});
+    // Grants and elevations write audit records on a debounce timer that
+    // would outlive this suite.
+    vi.spyOn(service._auditService, "appendGrantRecord").mockImplementation(() => {});
   });
 
   afterEach(() => {
-    queued.mockRestore();
     store.grantCache.revokeSession(SESSION);
     clearTimeout(store.httpSessions.get(SESSION)?.idleTimer);
     store.httpSessions.delete(SESSION);
@@ -76,6 +78,8 @@ describe("McpServerService approval line (#14995)", () => {
     store.clearElevationTimer(SESSION);
     service.setHelpSessionTerminalResolver(null);
     service.setAssistantControl(null);
+    // Last, so the revocations above still land on the stubbed audit writer.
+    vi.restoreAllMocks();
   });
 
   afterAll(() => {

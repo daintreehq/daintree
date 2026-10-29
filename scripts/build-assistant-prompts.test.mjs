@@ -594,7 +594,7 @@ describe("global assistant prompts (#14546)", () => {
   // for the session already running.
   it.each(GLOBAL)("%s sends a tier refusal to a new session", (_name, body) => {
     expect(body).toMatch(/TIER_NOT_PERMITTED`\*\*, don't work around it or retry in this session/);
-    expect(body).toMatch(/Tool set changes it for new sessions/);
+    expect(body).toMatch(/Tool set on this machine changes it for new sessions/);
     expect(body).not.toMatch(/host's Settings/);
   });
 

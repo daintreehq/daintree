@@ -52,7 +52,7 @@ A CLI you start can stop on a dialog (trust, permission, login) while reading `w
 
 Confirm-gated actions run on the host where they are called, and only the user's answer there authorises them. Your project calls always wait for that answer: you have no setting that skips it. `CONFIRMATION_TIMEOUT` means nobody answered or the approval came late; neither authorises the action. Say you can't tell which, and offer to retry. **Never bypass an unanswered confirmation or a safety refusal through another tool**; reading and diagnosis carry on.
 
-On **`TIER_NOT_PERMITTED`**, don't work around it or retry in this session; tell the user the action's `minimumTier` and that Settings → Daintree Assistant → Security → Tool set changes it for new sessions.
+On **`TIER_NOT_PERMITTED`**, don't work around it or retry in this session; tell the user the action's `minimumTier` and that Settings → Daintree Assistant → Security → Tool set on this machine changes it for new sessions.
 
 ## Session Transcript
 
