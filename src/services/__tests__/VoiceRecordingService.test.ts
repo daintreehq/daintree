@@ -1696,6 +1696,92 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
   });
 });
 
+describe("VoiceRecordingService — a lock on a pane with no composer (#14955)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    suspendCallbacks.length = 0;
+  });
+
+  afterEach(async () => {
+    const voice = (await import("@/store/voiceRecordingStore")) as unknown as {
+      __state: { lockedTarget: object | null };
+    };
+    voice.__state.lockedTarget = null;
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  async function arrange(locked: Record<string, unknown>) {
+    setupGlobals();
+    const panel = (await import("@/store/panelStore")) as unknown as {
+      __state: { focusedId: string | null; panelsById: Record<string, unknown> };
+    };
+    // The focused pane can take dictation, so a press that fell through to
+    // focus routing would start there.
+    panel.__state.focusedId = "agent-1";
+    panel.__state.panelsById = {
+      "locked-1": { id: "locked-1", title: "Locked", location: "grid", ...locked },
+      "agent-1": { id: "agent-1", title: "Agent", location: "grid", launchAgentId: "claude" },
+    };
+    const voice = (await import("@/store/voiceRecordingStore")) as unknown as {
+      __state: { status: string; activeTarget: object | null; lockedTarget: object | null };
+      useVoiceRecordingStore: {
+        getState: () => {
+          setLastError: Mock;
+          announce: Mock;
+          clearLockedTarget: Mock;
+          unlockTarget: Mock;
+        };
+      };
+    };
+    voice.__state.status = "idle";
+    voice.__state.activeTarget = null;
+    voice.__state.lockedTarget = { panelId: "locked-1", panelTitle: "Locked" };
+    const store = voice.useVoiceRecordingStore.getState();
+    store.setLastError.mockClear();
+    store.announce.mockClear();
+    store.clearLockedTarget.mockClear();
+    store.unlockTarget.mockClear();
+    const { notify } = await import("@/lib/notify");
+    vi.mocked(notify).mockClear();
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+    return { voiceRecordingService, toggleSpy, voice, store, notify: vi.mocked(notify) };
+  }
+
+  it.each([
+    ["a plain shell", { kind: "terminal" }],
+    ["a pane held for recovery", { kind: "terminal", launchAgentId: "claude", restoreRecovery: {} }],
+  ])(
+    "starts nothing in %s it is locked to, and doesn't move to the focused pane",
+    async (_n, locked) => {
+      const { voiceRecordingService, toggleSpy, voice, store, notify } = await arrange(locked);
+
+      await voiceRecordingService.toggleFocusedPanel();
+
+      expect(toggleSpy).not.toHaveBeenCalled();
+      expect(notify).toHaveBeenCalledTimes(1);
+      expect(notify.mock.calls[0]![0]).toMatchObject({ type: "error" });
+      expect(store.announce).toHaveBeenCalledTimes(1);
+      expect(store.clearLockedTarget).not.toHaveBeenCalled();
+      expect(voice.__state.lockedTarget).toEqual({ panelId: "locked-1", panelTitle: "Locked" });
+    }
+  );
+
+  it("still starts in a locked agent pane", async () => {
+    const { voiceRecordingService, toggleSpy, notify } = await arrange({
+      kind: "terminal",
+      launchAgentId: "claude",
+    });
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(toggleSpy).toHaveBeenCalledTimes(1);
+    expect(toggleSpy).toHaveBeenCalledWith(expect.objectContaining({ panelId: "locked-1" }));
+    expect(notify).not.toHaveBeenCalled();
+  });
+});
+
 describe("VoiceRecordingService — Canopy's reply box (#14777)", () => {
   beforeEach(() => {
     vi.resetModules();
