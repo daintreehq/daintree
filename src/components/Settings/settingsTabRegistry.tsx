@@ -34,6 +34,7 @@ import {
 } from "@/components/icons";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
+import { CANOPY_LOCAL } from "@shared/config/canopyTerms";
 import { GeneralTab } from "./GeneralTab";
 import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { SECTION_SETTINGS } from "./settingsSectionOwners";
@@ -1969,8 +1970,8 @@ export const SETTINGS_REGISTRY = [
     importer: LazyCanopySettingsTab.preload,
     LazyComponent: LazyCanopySettingsTab,
     searchNavDescription:
-      "Show or hide Canopy, turn it on or off, and how its screens are processed",
-    searchNavKeywords: ["canopy", "inbox", "agents", "summary", "priority", "privacy", "servers"],
+      "Show or hide Canopy, turn its reading on or off, and the model it reads with",
+    searchNavKeywords: ["canopy", "inbox", "agents", "summary", "priority", "privacy", "local"],
     sections: [
       {
         id: "canopy-show",
@@ -1983,15 +1984,23 @@ export const SETTINGS_REGISTRY = [
         id: "canopy-read-terminals",
         section: "Reading",
         title: "Read agent terminals",
-        description: "Send agents' terminal output to Daintree's servers to be read",
-        keywords: ["canopy", "privacy", "consent", "activate", "turn on", "servers"],
+        // The page and the turn-on offer say it with the same words, so search can't drift.
+        description: CANOPY_LOCAL,
+        keywords: ["canopy", "privacy", "consent", "activate", "turn on", "local", "offline"],
       },
       {
-        id: "canopy-plan",
-        section: "Reading",
-        title: "Plan",
-        description: "Free and unlimited during the beta",
-        keywords: ["beta", "free", "paid", "subscription", "plan", "pricing"],
+        id: "canopy-model-status",
+        section: "Model",
+        title: "Model download",
+        description: "How far the model's download has got, or retry one that failed",
+        keywords: ["canopy", "model", "download", "retry", "failed", "progress"],
+      },
+      {
+        id: "canopy-delete-model",
+        section: "Downloaded model",
+        title: "Delete model",
+        description: "Free the disk space the downloaded model takes up",
+        keywords: ["canopy", "model", "delete", "remove", "disk", "space", "storage"],
       },
     ],
   } satisfies LazySettingsTabEntry,

@@ -5,6 +5,7 @@ import { fireEvent, render, waitFor, within } from "@testing-library/react";
 import type { CanopyMode, CanopyModelInfo, CanopySnapshot } from "@shared/types/ipc/canopy";
 import { useCanopyStore } from "@/store/canopyStore";
 import { CanopySettingsTab } from "../CanopySettingsTab";
+import { getSettingsTabEntry } from "../settingsTabRegistry";
 
 // The real dialog pulls in the app's icons and portals; what matters here is what it is given.
 vi.mock("@/components/ui/ConfirmDialog", () => ({
@@ -218,5 +219,34 @@ describe("CanopySettingsTab", () => {
       expect(useCanopyStore.getState().mode).toBe("unset");
       unmount();
     }
+  });
+
+  it("is searched for by what the page says and shows, not by the hosted reader it replaced", async () => {
+    const sections = getSettingsTabEntry("canopy")?.sections ?? [];
+    expect(sections.length).toBeGreaterThan(0);
+    const reading = sections.find((s) => s.id === "canopy-read-terminals");
+    expect(reading?.description).toBe(CANOPY_LOCAL);
+    for (const section of sections) {
+      expect(`${section.description} ${section.keywords?.join(" ")}`).not.toMatch(
+        /servers?\b|paid|beta|plan\b|pricing|subscription/i
+      );
+    }
+
+    // Each result lands on a row the page renders in some state: off with a model on
+    // disk, then on while the model downloads.
+    const rendered = new Set<string>();
+    install("unset");
+    const off = render(<CanopySettingsTab />);
+    await off.findByRole("button", { name: "Delete model" });
+    for (const el of off.container.querySelectorAll("[id]")) rendered.add(el.id);
+    off.unmount();
+    install("on", {
+      model: { id: LIGHT.id, status: "downloading", received: 1, total: 2 },
+    });
+    const downloading = render(<CanopySettingsTab />);
+    await downloading.findByText("Downloading…");
+    for (const el of downloading.container.querySelectorAll("[id]")) rendered.add(el.id);
+
+    expect(sections.map((s) => s.id).filter((id) => !rendered.has(id))).toEqual([]);
   });
 });
