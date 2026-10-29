@@ -8,7 +8,7 @@ import {
   resolveDiffTextBackdrops,
   resolveStatusTextBackdrops,
 } from "../contrast.js";
-import { hexToOklch } from "../oklch.js";
+import { hexToOklch, type OklchColor } from "../oklch.js";
 import {
   BUILT_IN_APP_SCHEMES,
   deriveStatusTextInks,
@@ -23,6 +23,15 @@ const { minimum, washOpacity } = STATUS_TEXT_CONTRAST;
 function hueDistance(a: number, b: number): number {
   const d = Math.abs(a - b) % 360;
   return d > 180 ? 360 - d : d;
+}
+
+/**
+ * Perceptual hue difference (ΔH in OKLCH), which scales with chroma. The angle
+ * alone is unstable on a near-grey ink: 8-bit rounding turns highlands' grey-blue
+ * info ink by 3° without any visible change. 0.003 is 1.5° at a chroma of 0.1.
+ */
+function hueDifference(a: OklchColor, b: OklchColor): number {
+  return 2 * Math.sqrt(a.c * b.c) * Math.sin((hueDistance(a.h, b.h) * Math.PI) / 360);
 }
 
 describe("git status letter inks (#15424)", () => {
@@ -53,7 +62,7 @@ describe("git status letter inks (#15424)", () => {
       for (const [source, key] of INKS) {
         const ink = hexToOklch(scheme.tokens[key])!;
         const status = hexToOklch(scheme.tokens[source])!;
-        expect(hueDistance(ink.h, status.h), `${key} hue`).toBeLessThan(1.5);
+        expect(hueDifference(ink, status), `${key} hue`).toBeLessThan(0.003);
         if (scheme.type === "dark") expect(ink.l).toBeGreaterThanOrEqual(status.l - 1e-6);
         else expect(ink.l).toBeLessThanOrEqual(status.l + 1e-6);
       }
