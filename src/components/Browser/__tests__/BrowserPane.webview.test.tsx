@@ -946,6 +946,7 @@ describe("BrowserPane webview lifecycle regression", () => {
       // Unapproved host: surface the approval prompt, do not navigate yet.
       expect(container.textContent).toContain("example.com");
       expect(container.textContent).toContain("Allow browser panel to load");
+      expect(container.textContent).toContain("Applies to every Browser panel in this project");
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const goToHistoryIndex = (window as any).electron.webview.goToHistoryIndex;
       expect(goToHistoryIndex).not.toHaveBeenCalled();
