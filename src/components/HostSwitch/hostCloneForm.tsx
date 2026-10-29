@@ -239,9 +239,9 @@ export function DestinationField({
 }
 
 /**
- * A callout's way forward, under its words: a label like "Use suggested
- * folder" beside the message would squeeze a long path into a thin column.
- * Only a one-word Retry rides the callout's trailing action slot.
+ * A callout's way forward, always under its words and ahead of anything
+ * diagnostic after them, such as git's output, where the trailing action slot
+ * would put it beside the message or after the disclosure.
  */
 export function CalloutControl({ children }: { children: React.ReactNode }) {
   return <div className="mt-2 flex flex-wrap gap-2">{children}</div>;

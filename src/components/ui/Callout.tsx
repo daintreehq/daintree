@@ -87,8 +87,13 @@ export interface CalloutProps extends Omit<React.HTMLAttributes<HTMLDivElement>,
   size?: "default" | "compact";
   /** A short headline. The body under it steps down to secondary text. */
   title?: React.ReactNode;
-  /** One trailing control beside the message — a Retry. Anything more goes in the body. */
+  /**
+   * One trailing control beside the message — a Retry. It drops under the
+   * message when the box is too narrow for both. Anything more goes in the body.
+   */
   action?: React.ReactNode;
+  /** A dismiss X, held at the trailing edge: unlike `action`, it never wraps under the message. */
+  dismiss?: React.ReactNode;
   /** A domain glyph in place of `Info`, for `neutral` only: every other tone's glyph is its severity. */
   icon?: LucideIcon;
 }
@@ -98,6 +103,7 @@ export function Callout({
   size = "default",
   title,
   action,
+  dismiss,
   icon,
   className,
   children,
@@ -120,18 +126,25 @@ export function Callout({
         aria-hidden="true"
         data-severity-glyph=""
       />
-      <div
-        className={cn(
-          "min-w-0 flex-1 break-words",
-          title ? "text-text-secondary" : "text-text-primary"
-        )}
-      >
-        {title && (
-          <p className={cn("mb-0.5 font-medium text-text-primary", TITLE_SIZE[size])}>{title}</p>
-        )}
-        {children}
+      {/* One wrapping row with or without an action, so an action coming or going
+          never remounts the message. With one, the message holds a readable
+          measure and the action wraps under it rather than squeezing it. */}
+      <div className="flex min-w-0 flex-1 flex-wrap items-start gap-2">
+        <div
+          className={cn(
+            "min-w-0 break-words",
+            action ? "grow basis-[16em]" : "flex-1",
+            title ? "text-text-secondary" : "text-text-primary"
+          )}
+        >
+          {title && (
+            <p className={cn("mb-0.5 font-medium text-text-primary", TITLE_SIZE[size])}>{title}</p>
+          )}
+          {children}
+        </div>
+        {action && <div className="shrink-0 self-center">{action}</div>}
       </div>
-      {action && <div className="shrink-0 self-center">{action}</div>}
+      {dismiss && <div className="shrink-0 self-center">{dismiss}</div>}
     </div>
   );
 }
