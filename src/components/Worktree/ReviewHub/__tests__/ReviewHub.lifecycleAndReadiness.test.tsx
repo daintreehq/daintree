@@ -752,6 +752,28 @@ describe("ReviewHub", () => {
       await waitFor(() => expect(hub.textarea.value).toBe(""));
     });
 
+    it("drops the committed draft before the status read that follows the commit", async () => {
+      const hub = await openHub();
+      fireEvent.change(hub.textarea, { target: { value: "feat: landed" } });
+      let finishRead: () => void = () => {};
+      getStagingStatusMock.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishRead = () => resolve(makeStatus());
+          })
+      );
+      const readsBefore = getStagingStatusMock.mock.calls.length;
+      fireEvent.click(screen.getByTestId("review-hub-commit-primary"));
+      await waitFor(() =>
+        expect(getStagingStatusMock.mock.calls.length).toBeGreaterThan(readsBefore)
+      );
+
+      expect(useReviewCommitDraftStore.getState().draftsByWorktree).toEqual({});
+      await act(async () => {
+        finishRead();
+      });
+    });
+
     it("drops the committed draft as soon as the commit lands, before its push finishes", async () => {
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
       usePreferencesStore.getState().setSkipPushConfirmForWorktree(WORKTREE_PATH, true);

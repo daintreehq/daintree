@@ -165,6 +165,9 @@ export function CommitPanel({
   // drops the live count to what is left, often zero, before the push begins.
   const [pendingCount, setPendingCount] = useState(0);
   const [pushConfirmOpen, setPushConfirmOpen] = useState(false);
+  // The preview's own copy: the composer clears the moment the commit lands,
+  // which can be before the closing dialog has finished fading out.
+  const [pushConfirmMessage, setPushConfirmMessage] = useState("");
   const destinationLabel = pushDestination
     ? `${pushDestination.remote}/${pushDestination.branch}`
     : null;
@@ -363,6 +366,7 @@ export function CommitPanel({
       // push will be refused by the handler, and silently attempting it would
       // leave the user with a failed write and no explanation.
       if (!skipPushConfirm || pushDestination === null) {
+        setPushConfirmMessage(commitMessage);
         setPushConfirmOpen(true);
         return;
       }
@@ -376,6 +380,7 @@ export function CommitPanel({
     hasRemote,
     pushDestination,
     skipPushConfirm,
+    commitMessage,
     focusBlocker,
     handleCommitAndPush,
     handleCommit,
@@ -765,7 +770,7 @@ export function CommitPanel({
               "bg-surface-inset px-3 py-2 text-xs font-mono whitespace-pre-wrap break-words text-text-primary"
             )}
           >
-            {commitMessage}
+            {pushConfirmMessage}
           </pre>
           {stagedPaths.length > 0 && (
             <div className="flex flex-col gap-1">

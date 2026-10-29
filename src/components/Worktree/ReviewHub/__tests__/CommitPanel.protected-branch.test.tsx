@@ -100,7 +100,7 @@ function renderPanel(overrides: RenderProps = {}) {
   // missing-branch path — `??` would coalesce null to the default.
   const currentBranch =
     "currentBranch" in overrides ? (overrides.currentBranch ?? null) : "feature/x";
-  render(
+  const panel = (commitMessage: string) => (
     <CommitPanel
       stagedCount={1}
       isDetachedHead={false}
@@ -115,7 +115,7 @@ function renderPanel(overrides: RenderProps = {}) {
       }
       worktreePath="/repo"
       currentBranch={currentBranch}
-      commitMessage={overrides.commitMessage ?? "fix: bug"}
+      commitMessage={commitMessage}
       onCommitMessageChange={vi.fn()}
       onCommit={vi.fn().mockResolvedValue(undefined)}
       onCommitAndPush={onCommitAndPush}
@@ -126,7 +126,12 @@ function renderPanel(overrides: RenderProps = {}) {
       onSetSkipPushConfirm={onSetSkipPushConfirm}
     />
   );
-  return { onCommitAndPush, onSetSkipPushConfirm };
+  const { rerender } = render(panel(overrides.commitMessage ?? "fix: bug"));
+  return {
+    onCommitAndPush,
+    onSetSkipPushConfirm,
+    setCommitMessage: (message: string) => rerender(panel(message)),
+  };
 }
 
 describe("CommitPanel — push confirm", () => {
@@ -173,6 +178,15 @@ describe("CommitPanel — push confirm", () => {
     const message = screen.getByTestId("commit-panel-push-confirm-message");
     expect(message.textContent).toContain("chore: bump deps");
     expect(message.textContent).toContain("Body line");
+  });
+
+  // The parent clears the composer the moment the commit lands, which can be
+  // while the closing dialog is still fading out over it (#15007).
+  it("keeps its preview when the composer behind it clears", () => {
+    const { setCommitMessage } = renderPanel({ currentBranch: "main", commitMessage: "feat: x" });
+    fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
+    setCommitMessage("");
+    expect(screen.getByTestId("commit-panel-push-confirm-message").textContent).toBe("feat: x");
   });
 
   it("warns about protected branches in the description copy", () => {
