@@ -297,5 +297,51 @@ describe("VoiceFileLinkResolver", () => {
       await expect(resolver.pick({ ...request, candidates: [] })).resolves.toBeNull();
       expect(fetchMock).not.toHaveBeenCalled();
     });
+
+    const AMBIGUOUS = {
+      ...request,
+      description: "input component",
+      candidates: ["src/components/Bar.tsx", "src/components/Input.tsx"],
+    };
+
+    it("finds nothing once its caller has aborted the rerank", async () => {
+      const controller = new AbortController();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          controller.abort();
+          throw new DOMException("aborted", "AbortError");
+        })
+      );
+
+      const resolver = new VoiceFileLinkResolver();
+      await expect(resolver.pick({ ...AMBIGUOUS, signal: controller.signal })).resolves.toBeNull();
+    });
+
+    it("rejects when the rerank runs out its own time, though its caller still waits", async () => {
+      const controller = new AbortController();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockRejectedValue(new DOMException("timed out", "TimeoutError"))
+      );
+
+      const resolver = new VoiceFileLinkResolver();
+      await expect(resolver.pick({ ...AMBIGUOUS, signal: controller.signal })).rejects.toThrow(
+        "timed out"
+      );
+    });
+
+    it("rejects on a rerank reply that isn't the JSON it asked for", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({
+          ok: true,
+          json: async () => ({ output_text: "not json" }),
+        } as unknown as Response)
+      );
+
+      const resolver = new VoiceFileLinkResolver();
+      await expect(resolver.pick(AMBIGUOUS)).rejects.toThrow(SyntaxError);
+    });
   });
 });

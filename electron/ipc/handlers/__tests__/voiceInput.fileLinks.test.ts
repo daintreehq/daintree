@@ -516,6 +516,35 @@ describe("voiceInput — spoken file references", () => {
     ]);
   });
 
+  it("doesn't take a lookup cut short at the deadline for a miss", async () => {
+    vi.useFakeTimers();
+    await start(owner, "a");
+    shared.detect.mockResolvedValueOnce([{ description: "router" }, { description: "store" }]);
+    // A search that answers its abort with nothing found.
+    shared.resolve
+      .mockResolvedValueOnce("src/router.ts")
+      .mockImplementationOnce(
+        ({ signal }: { signal?: AbortSignal }) =>
+          new Promise<string | null>((resolve) =>
+            signal?.addEventListener("abort", () => resolve(null), { once: true })
+          )
+      );
+
+    emitComplete("Link to the router and link to the store.");
+    const stopping = stop(owner, "a");
+    await vi.advanceTimersByTimeAsync(6_100);
+    await stopping;
+
+    expect(fileReferences()).toEqual([
+      expect.objectContaining({
+        references: [
+          { description: "router", path: "src/router.ts" },
+          { description: "store", path: null, failed: true },
+        ],
+      }),
+    ]);
+  });
+
   it("says nothing of a reference whose session was cancelled while it was looked up", async () => {
     await start(owner, "a");
     shared.detect.mockResolvedValueOnce([{ description: "router" }]);
