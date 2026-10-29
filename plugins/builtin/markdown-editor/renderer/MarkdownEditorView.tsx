@@ -14,6 +14,7 @@ import {
   Button,
   Callout,
   ConfirmDialog,
+  CopyButton,
   EmptyState,
   Icon,
   Input,
@@ -22,7 +23,6 @@ import {
   SkeletonText,
   useDaintreeTheme,
 } from "@daintreehq/plugin-ui";
-import { CopyButton } from "@/components/ui/CopyButton";
 import { cn } from "@/lib/utils";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
 import { MarkdownEditorStatusBar } from "./MarkdownEditorStatusBar.js";
@@ -467,14 +467,17 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
           aria-live="polite"
           actionPlacement="below"
           action={
-            <CopyButton
-              label="Copy draft"
-              text={text}
-              variant="outline"
-              size="sm"
-              data-notification-action="primary"
-              data-testid="markdown-editor-copy-draft"
-            />
+            // The copy announces itself; keep its label swap out of the warning's live region.
+            <span aria-live="off" className="inline-flex">
+              <CopyButton
+                label="Copy draft"
+                text={text}
+                variant="outline"
+                size="sm"
+                data-notification-action="primary"
+                data-testid="markdown-editor-copy-draft"
+              />
+            </span>
           }
         >
           {record.storageWarning}
