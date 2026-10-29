@@ -192,7 +192,9 @@ const CRUMB_FOCUS_WAIT_MS = 3000;
  * roving keys keep working from there.
  */
 function stripLanding(root: HTMLElement): HTMLElement | null {
-  const crumbs = root.querySelectorAll<HTMLElement>('nav[aria-label="Breadcrumb"] button');
+  const crumbs = root.querySelectorAll<HTMLElement>(
+    'nav[aria-label="Breadcrumb"] button:not([aria-disabled="true"])'
+  );
   return crumbs[crumbs.length - 1] ?? root.querySelector<HTMLElement>("button");
 }
 
@@ -499,7 +501,7 @@ function StripNoticeRow({
           <button
             type="button"
             aria-disabled="true"
-            className="min-w-0 cursor-default truncate rounded-[var(--radius-sm)] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary"
+            className="min-w-0 cursor-default truncate rounded-[var(--radius-sm)] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
           >
             {notice.text}
           </button>
@@ -535,7 +537,7 @@ function DetailsButton({ detail }: { detail: string }) {
           <Info aria-hidden="true" />
         </Button>
       </TooltipTrigger>
-      <TooltipContent side="bottom" align="start" className="max-w-[28rem]">
+      <TooltipContent side="bottom" align="start">
         <span className="font-mono text-3xs wrap-anywhere">{detail}</span>
       </TooltipContent>
     </Tooltip>
@@ -604,7 +606,7 @@ function StripStatus({
                 <button
                   type="button"
                   aria-disabled="true"
-                  className="min-w-0 cursor-default truncate rounded-[var(--radius-sm)] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary"
+                  className="min-w-0 cursor-default truncate rounded-[var(--radius-sm)] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
                 >
                   {STALE_COPY[selection.stale].title}
                 </button>
@@ -1010,7 +1012,7 @@ function SiteSourceBody({
             {appPaths.map((appPath) => {
               const busy = appPath === opening;
               return (
-                <li key={appPath}>
+                <li key={appPath} className="relative">
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
@@ -1029,20 +1031,29 @@ function SiteSourceBody({
                         }}
                       >
                         <AppPath appPath={appPath} />
-                        {busy ? (
-                          <Spinner size="xs" />
-                        ) : (
-                          <ChevronRight
-                            className="h-3.5 w-3.5 shrink-0 text-text-secondary"
-                            aria-hidden="true"
-                          />
-                        )}
+                        {/* Held in place while busy, so the row keeps its width; the
+                            wait itself is drawn beside the button, never inside it. */}
+                        <ChevronRight
+                          className={cn(
+                            "h-3.5 w-3.5 shrink-0 text-text-secondary",
+                            busy && "invisible"
+                          )}
+                          aria-hidden="true"
+                        />
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent side="bottom" align="start">
                       {absoluteIn(worktreePath, appPath)}
                     </TooltipContent>
                   </Tooltip>
+                  {busy ? (
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute inset-y-0 right-2 flex items-center"
+                    >
+                      <Spinner size="xs" />
+                    </span>
+                  ) : null}
                 </li>
               );
             })}

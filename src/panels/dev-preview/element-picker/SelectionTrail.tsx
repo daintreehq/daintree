@@ -201,6 +201,11 @@ export function SelectionTrail({
     if (!nav || !measure) return;
     const fit = () => {
       const available = nav.clientWidth;
+      // Not laid out yet (or never: a test DOM): nothing to fold against.
+      if (available <= 0) {
+        setHidden(0);
+        return;
+      }
       const widths = Array.from(measure.children, (child) =>
         child instanceof HTMLElement ? child.offsetWidth : 0
       );
@@ -385,7 +390,7 @@ export function SelectionTrail({
 /** Horizontal padding every crumb carries, chip or not, so the measured width is the rendered one. */
 const CRUMB_PAD = "px-1";
 const CRUMB_FOCUS =
-  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary";
+  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary";
 
 /**
  * The outer crumbs the trail had no room for, as a menu: outermost first, the
@@ -421,7 +426,7 @@ function TrailOverflow({
               type="button"
               aria-label={label}
               className={cn(
-                "inline-flex shrink-0 cursor-pointer items-center justify-center rounded-[var(--radius-sm)] text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-medium hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary data-[state=open]:bg-overlay-medium data-[state=open]:text-text-primary",
+                "inline-flex shrink-0 cursor-pointer items-center justify-center rounded-[var(--radius-sm)] text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-medium hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary data-[state=open]:bg-overlay-medium data-[state=open]:text-text-primary",
                 strip ? "h-6 w-6" : "h-5 w-5"
               )}
             >
