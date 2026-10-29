@@ -651,7 +651,7 @@ describe("CrashRecoveryDialog", () => {
     expect(window.electron.system.openPath).toHaveBeenCalledWith(mockCrash.logPath);
   });
 
-  it("shows soft notification when openPath fails", async () => {
+  it("shows the failure inline with a copyable path when openPath fails", async () => {
     (window.electron.system.openPath as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new Error("ENOENT")
     );
@@ -659,13 +659,14 @@ describe("CrashRecoveryDialog", () => {
     fireEvent.click(screen.getByTestId("details-toggle"));
     fireEvent.click(screen.getByTestId("open-log-button"));
 
+    const err = await screen.findByTestId("log-open-error");
+    expect(err.textContent).toContain("ENOENT");
+    expect(screen.getByTestId("log-open-error-path").textContent).toBe(mockCrash.logPath);
+    expect(notifyMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("copy-log-path-button"));
     await waitFor(() => {
-      expect(notifyMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: "error",
-          title: "Log file isn't available",
-        })
-      );
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith(mockCrash.logPath);
     });
   });
 
