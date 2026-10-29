@@ -231,7 +231,7 @@ test.describe.serial("Core: Portal", () => {
   test.describe("Settings Overlay Interaction", () => {
     test.beforeEach(skipTabsOnWindowsCI);
 
-    test("opening Settings closes portal, reopening works after", async () => {
+    test("Settings hides the portal while it is open and brings it back on close", async () => {
       const { window } = app();
 
       await dispatchAction(window, "portal.openUrl", {
@@ -241,17 +241,21 @@ test.describe.serial("Core: Portal", () => {
 
       const portalContainer = window.locator(SEL.portal.container);
       await expect(portalContainer).toBeVisible({ timeout: T_LONG });
+      const toggle = window.locator(SEL.toolbar.portalToggle).first();
 
       await openSettings(window);
       await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
-      await expect(portalContainer).not.toBeVisible({ timeout: T_MEDIUM });
+      // Settings hides the native view through its overlay claim; the Portal itself stays open.
+      await expect
+        .poll(() => window.evaluate(() => document.documentElement.dataset.overlayClaims ?? "0"))
+        .not.toBe("0");
+      await expect(toggle).toHaveAttribute("aria-pressed", "true", { timeout: T_SHORT });
 
       await window.locator(SEL.settings.closeButton).click();
       await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
 
-      await window.locator(SEL.toolbar.portalToggle).first().click();
-
+      await expect(toggle).toHaveAttribute("aria-pressed", "true", { timeout: T_SHORT });
       await expect(portalContainer).toBeVisible({ timeout: T_LONG });
       await expect(portalContainer.locator('[role="tab"][aria-label="Page A"]')).toBeVisible({
         timeout: T_MEDIUM,
