@@ -4,9 +4,10 @@ import { useBuiltinView } from "@/registry/builtinRendererRegistry";
 import type { ForgeIssueSelectorProps } from "@/types/forgeSlotProps";
 import { useProjectStore } from "@/store/projectStore";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
-import { ChevronsUpDown, CircleDot, UserPlus, X } from "lucide-react";
+import { CircleDot, UserPlus, X } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Avatar, avatarUrlAtSize } from "@/components/ui/Avatar";
+import { PickerChevron } from "@/components/ui/PickerChevron";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { FIELD_SURFACE } from "./WorktreeFormLayout";
@@ -128,7 +129,7 @@ function HostIssueSelector({
           ) : (
             <span className="text-text-secondary">Select an issue (optional)</span>
           )}
-          <ChevronsUpDown className="h-4 w-4 text-text-secondary shrink-0" aria-hidden="true" />
+          <PickerChevron />
         </button>
         {selectedIssue && !disabled && (
           <Tooltip>

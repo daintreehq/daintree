@@ -20,6 +20,7 @@ import type { ForgeIssueSelectorProps } from "@/types/forgeSlotProps";
 // The host popover: the panel anchors to the whole compound field (trigger and
 // clear), not the trigger alone, and it owns its open focus and Escape. The kit
 // Popover has no anchor and neither handler.
+import { PICKER_TRIGGER_GROUP, PickerChevron } from "@/components/ui/PickerChevron";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { FIELD_SURFACE } from "@/components/Worktree/views/WorktreeFormLayout";
@@ -294,6 +295,7 @@ export function IssueSelector({
                 }
               }}
               className={cn(
+                PICKER_TRIGGER_GROUP,
                 "flex h-full min-w-0 flex-1 items-center justify-between gap-2 px-2.5",
                 "text-sm text-text-primary transition-colors duration-150 ease-out",
                 "hover:bg-surface-hover",
@@ -312,7 +314,7 @@ export function IssueSelector({
               ) : (
                 <span className="text-text-secondary">Select an issue (optional)</span>
               )}
-              <Icon name="chevrons-up-down" className="h-4 w-4 text-text-secondary shrink-0" />
+              <PickerChevron />
             </button>
           </PopoverTrigger>
           {selectedIssue && !disabled && (

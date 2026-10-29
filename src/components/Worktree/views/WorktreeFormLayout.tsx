@@ -1,5 +1,6 @@
 import { useId } from "react";
 import { cn } from "@/lib/utils";
+import { PICKER_TRIGGER_GROUP } from "@/components/ui/PickerChevron";
 
 /**
  * Field chrome for the create-worktree form. Deliberately the same language as
@@ -30,9 +31,11 @@ export const FIELD_CONTROL_SIZE = "h-8 px-2.5 py-0";
 /**
  * Combobox triggers are `Button`s. `ghost` is the base because it carries no
  * ring/shadow of its own to fight — the field chrome below is the whole look.
+ * They end in a `PickerChevron`, the same one the Host row's `Select` draws.
  */
 export const FIELD_TRIGGER = cn(
   FIELD_SURFACE,
+  PICKER_TRIGGER_GROUP,
   "w-full h-8 justify-between px-2.5 font-normal text-text-primary",
   "hover:bg-surface-hover hover:text-text-primary"
 );

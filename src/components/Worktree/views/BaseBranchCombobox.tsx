@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
+import { PickerChevron } from "@/components/ui/PickerChevron";
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
-import { ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BranchPickerPanel } from "./BranchPickerPanel";
 import { FIELD_TRIGGER } from "./WorktreeFormLayout";
@@ -71,7 +71,7 @@ export function BaseBranchCombobox({
             <span className="truncate text-text-secondary">Select a base branch</span>
           )}
           {/* A pinned field offers nothing to open. */}
-          {!disabled && <ChevronsUpDown className="text-text-secondary shrink-0" />}
+          {!disabled && <PickerChevron />}
         </Button>
       </PopoverTrigger>
       <BranchPickerPanel

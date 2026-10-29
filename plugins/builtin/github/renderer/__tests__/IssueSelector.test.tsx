@@ -6,6 +6,7 @@ import { whenPluginUiReady } from "@daintreehq/plugin-ui";
 import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { IssueSelector } from "../components/IssueSelector";
+import { PickerChevron } from "@/components/ui/PickerChevron";
 import { FORGE_OPTION_ROW } from "../components/GitHubDropdownSkeletons";
 import type { Issue } from "@shared/types/forge";
 
@@ -462,6 +463,28 @@ describe("IssueSelector", () => {
     fireEvent.click(clear);
     expect(defaultProps.onSelect).toHaveBeenCalledWith(null);
   });
+  it("ends in the chevron the New worktree form's other pickers draw, turning with it", () => {
+    const shared = render(<PickerChevron />);
+    const expected = shared.container.querySelector("svg")!.getAttribute("class")!;
+    shared.unmount();
+    const group = /group-data-\[state=open\]\/([\w-]+):rotate-180/.exec(expected)?.[1];
+    expect(group).toBeDefined();
+
+    render(<IssueSelector {...defaultProps} />);
+    const trigger = screen.getByRole("combobox");
+    const svgs = trigger.querySelectorAll("svg");
+    expect(svgs[svgs.length - 1]!.getAttribute("class")).toBe(expected);
+    expect(trigger.classList.contains(`group/${group}`)).toBe(true);
+    expect(trigger.getAttribute("data-state")).toBe("closed");
+
+    mockListIssues.mockReturnValue(new Promise(() => {}));
+    fireEvent.click(trigger);
+    expect(trigger.getAttribute("data-state")).toBe("open");
+    expect(trigger.classList.contains(`group/${group}`)).toBe(true);
+    const openSvgs = trigger.querySelectorAll("svg");
+    expect(openSvgs[openSvgs.length - 1]!.getAttribute("class")).toBe(expected);
+  });
+
   it("says the load failed instead of claiming the repo has no open issues", async () => {
     let rejectFirst!: (reason: Error) => void;
     mockListIssues.mockReturnValueOnce(

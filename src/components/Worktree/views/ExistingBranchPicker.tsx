@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
+import { PickerChevron } from "@/components/ui/PickerChevron";
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
-import { ChevronsUpDown, GitBranch } from "lucide-react";
+import { GitBranch } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BranchPickerPanel } from "./BranchPickerPanel";
 import { FIELD_TRIGGER } from "./WorktreeFormLayout";
@@ -58,7 +59,7 @@ export function ExistingBranchPicker({
               <span className="text-text-secondary">Select a local branch</span>
             )}
           </span>
-          <ChevronsUpDown className="text-text-secondary shrink-0" />
+          <PickerChevron />
         </Button>
       </PopoverTrigger>
       <BranchPickerPanel

@@ -2,12 +2,13 @@ import { useMemo } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Button } from "@/components/ui/button";
+import { PickerChevron } from "@/components/ui/PickerChevron";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { BrandMark } from "@/components/icons";
 import { useListboxCursor } from "@/hooks/useListboxCursor";
 import { resolveAgentIcon } from "@/config/agentIcons";
 import { getBrandColorHex } from "@/lib/colorUtils";
-import { Check, ChevronsUpDown } from "lucide-react";
+import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FIELD_TRIGGER } from "./WorktreeFormLayout";
 import type { FirstAgentOption } from "../hooks/useFirstAgentOptions";
@@ -102,7 +103,7 @@ export function AgentPickerPopover({
               <span className="text-text-secondary">No agent</span>
             )}
           </span>
-          <ChevronsUpDown className="text-text-secondary shrink-0" />
+          <PickerChevron />
         </Button>
       </PopoverTrigger>
       <PopoverContent

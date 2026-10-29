@@ -14,6 +14,7 @@ import { useIsDockPopoverChild } from "./DockPopoverChildContext";
 import { menuRowPointerMove } from "./menu-row-hover-focus";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { LIST_LABEL_CLASS } from "@/components/ui/sectionLabel";
+import { PICKER_TRIGGER_GROUP, PickerChevron } from "./PickerChevron";
 
 const SelectIntentContext = React.createContext<((next: boolean) => void) | null>(null);
 /**
@@ -147,14 +148,14 @@ const SelectTrigger = React.forwardRef<
       <button
         type="button"
         ref={ref as React.Ref<HTMLButtonElement>}
-        className={cn(selectTriggerVariants({ density }), className)}
+        className={cn(selectTriggerVariants({ density }), PICKER_TRIGGER_GROUP, className)}
         {...(props as React.ButtonHTMLAttributes<HTMLButtonElement>)}
         {...primingHandlers}
         disabled={props.disabled === true || rootDisabled}
         onClick={intentClick}
       >
         {children}
-        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
+        <PickerChevron />
       </button>
     );
   }
@@ -166,6 +167,7 @@ const SelectTrigger = React.forwardRef<
       ref={ref}
       className={cn(
         selectTriggerVariants({ density }),
+        PICKER_TRIGGER_GROUP,
         // `text-text-secondary`, not `text-muted`: a placeholder is the only
         // thing naming an unset control, and `text-muted` has no dark-theme
         // contrast floor (2.22:1 on namib, 2.50:1 on redwoods).
@@ -178,11 +180,7 @@ const SelectTrigger = React.forwardRef<
     >
       {children}
       <Icon asChild>
-        <ChevronDown
-          data-animated-chevron
-          className="h-3.5 w-3.5 shrink-0 text-text-secondary transition-transform duration-150 ease-out in-data-[state=open]:rotate-180"
-          aria-hidden="true"
-        />
+        <PickerChevron />
       </Icon>
     </Trigger>
   );
