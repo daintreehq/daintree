@@ -3,8 +3,8 @@
  * while the speaker goes on (#14772). A cut sits at a natural break, a spoken
  * paragraph break or a pause, and is only taken once what was said after it
  * shows the speaker isn't reaching back over it: a self-correction ("no wait,
- * the other one") or a counted list carried on across the break has to reach
- * cleanup in one piece.
+ * the other one"), a counted list carried on across the break, and a list's
+ * introduction with its first item have to reach cleanup in one piece.
  */
 
 // Openings that take back what came before the break.
@@ -13,11 +13,16 @@ const RETRACTION_OPENING_RE =
 
 // Openings that carry on a list, or a thought the break cut in two.
 const CONTINUATION_OPENING_RE =
-  /^(?:and|also|then|next|plus|another|second(?:ly)?|third(?:ly)?|fourth|fifth|sixth|seventh|eighth|ninth|tenth|finally|lastly|last|two|three|four|five|six|seven|eight|nine|ten|number|step|item|point|bullet|\d+)\b/u;
+  /^(?:and|also|then|next|plus|another|first(?:ly)?|second(?:ly)?|third(?:ly)?|fourth|fifth|sixth|seventh|eighth|ninth|tenth|finally|lastly|last|two|three|four|five|six|seven|eight|nine|ten|number|step|item|point|bullet|\d+)\b/u;
 
 // A last sentence that counts out an item: the list may still go on.
 const COUNTED_ITEM_RE =
   /^(?:first(?:ly)?|second(?:ly)?|third(?:ly)?|fourth|fifth|sixth|seventh|eighth|ninth|tenth|next|then|one|two|three|four|five|six|seven|eight|nine|ten|step|number|item|point|bullet|\d+)\b/u;
+
+// A last sentence that says how many things are coming, so the first of them
+// follows even without a counting word: "we need three things."
+const ANNOUNCED_COUNT_RE =
+  /\b(?:two|three|four|five|six|seven|eight|nine|ten|[2-9]|[1-9]\d+|a couple(?: of)?)\b(?: [\p{L}][\p{L}'’-]*){0,2} (?:things|problems|issues|bugs|reasons|steps|options|questions|items|points|tasks|changes|requirements|ways|ideas|goals|topics|concerns|features)\b/u;
 
 const SENTENCE_END_RE = /[.!?…]["'”’)\]]*$/u;
 
@@ -54,7 +59,8 @@ export function mayCutChunk(before: string, after: string, paragraph: boolean): 
   const text = before.trim();
   if (!text || text.endsWith(":")) return false;
   if (!paragraph && !SENTENCE_END_RE.test(text)) return false;
-  if (COUNTED_ITEM_RE.test(opening(lastSentence(text)))) return false;
+  const last = opening(lastSentence(text));
+  if (COUNTED_ITEM_RE.test(last) || ANNOUNCED_COUNT_RE.test(last)) return false;
   const next = opening(after);
   if (!next) return false;
   return !RETRACTION_OPENING_RE.test(next) && !CONTINUATION_OPENING_RE.test(next);

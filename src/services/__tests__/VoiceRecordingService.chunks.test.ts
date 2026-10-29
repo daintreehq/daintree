@@ -288,12 +288,33 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     ["a self-correction", "No wait, it's the reporting database that's busy."],
     ["a correction of what was meant", "I meant the reporting database."],
     ["a list going on", "Second, the retries need a cap."],
+    ["a list starting", "First, the retries need a cap."],
   ])("doesn't cut where %s reaches back over the pause", async (_case, after) => {
     const { say, pause } = await setup();
     for (const sentence of OPENING) say(sentence);
     pause();
     say(after);
     expect(correct).not.toHaveBeenCalled();
+  });
+
+  it("keeps a list's introduction with its first item when the introduction announces a count", async () => {
+    const { say, pause } = await setup();
+    correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+    const intro = "We need three things.";
+    const first = "Better retries and a dashboard.";
+
+    for (const sentence of OPENING) say(sentence);
+    say(intro);
+    pause();
+    say(first);
+    expect(correct).not.toHaveBeenCalled();
+
+    pause();
+    say(NEXT);
+    expect(correct).toHaveBeenCalledTimes(1);
+    expect(correct).toHaveBeenLastCalledWith(
+      expect.objectContaining({ rawText: [OPENING_TEXT, intro, first].join(" ") })
+    );
   });
 
   it("doesn't cut on too little said after a break, even once a newer pause replaces it", async () => {
