@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { useWorktreeDevServerSession } from "../useWorktreeDevServerSession";
 import { useWorktreeDevServerStore } from "@/store/worktreeDevServerStore";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
@@ -72,5 +72,21 @@ describe("useWorktreeDevServerSession", () => {
       expect(getByWorktree).toHaveBeenCalled();
     });
     expect(useWorktreeDevServerStore.getState().sessionsByWorktreeId.w1).toBeUndefined();
+  });
+
+  it("re-hydrates when a preview moving away takes the worktree's entry (#14958)", async () => {
+    useWorktreeDevServerStore.getState().setSession("w1", makeSession("w1"));
+    getByWorktree.mockResolvedValue({ ...makeSession("w1"), panelId: "p2", updatedAt: 3 });
+    const { result } = renderHook(() => useWorktreeDevServerSession("w1"));
+    expect(getByWorktree).not.toHaveBeenCalled();
+
+    act(() => {
+      useWorktreeDevServerStore.getState().setSession("w2", { ...makeSession("w2"), updatedAt: 2 });
+    });
+
+    await waitFor(() => {
+      expect(result.current?.panelId).toBe("p2");
+    });
+    expect(getByWorktree).toHaveBeenCalledWith({ worktreeId: "w1" });
   });
 });
