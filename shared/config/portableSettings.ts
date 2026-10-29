@@ -95,7 +95,7 @@ export const PORTABLE_SETTINGS_CATEGORIES: readonly PortableSettingsCategory[] =
   {
     id: "notifications",
     label: "Notifications",
-    description: "Alerts, sounds and quiet hours. Windows here keep this machine's",
+    description: "Alerts, sounds and quiet hours. Windows here keep their own",
     sections: ["notificationSettings"],
     selectedByDefault: false,
     device: true,
@@ -167,7 +167,8 @@ export const PORTABLE_SETTINGS_CATEGORIES: readonly PortableSettingsCategory[] =
   {
     id: "device",
     label: "Theme and keyboard shortcuts",
-    description: "For using that machine directly. Windows here keep this machine's",
+    description:
+      "How Daintree looks there and the shortcuts it answers to. Windows here keep their own",
     sections: ["appTheme", "keybindingOverrides"],
     selectedByDefault: false,
     device: true,
