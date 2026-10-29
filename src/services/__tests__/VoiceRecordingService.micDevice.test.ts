@@ -149,6 +149,7 @@ interface Harness {
     setSettings: ReturnType<typeof vi.fn>;
     getSettings: ReturnType<typeof vi.fn>;
     sendAudioChunk: ReturnType<typeof vi.fn>;
+    isAppReplaced: ReturnType<typeof vi.fn>;
   };
   status: { emit: (status: string) => void };
   delta: { emit: (text: string) => void };
@@ -208,6 +209,7 @@ function setupGlobals(options: {
     checkMicPermission: vi.fn().mockResolvedValue("granted"),
     requestMicPermission: vi.fn().mockResolvedValue(true),
     openMicSettings: vi.fn().mockResolvedValue(undefined),
+    isAppReplaced: vi.fn().mockResolvedValue(false),
     sendAudioChunk: vi.fn(),
     start: vi.fn().mockResolvedValue({ status: "started" }),
     stop: vi.fn().mockResolvedValue(undefined),
@@ -903,6 +905,76 @@ describe("VoiceRecordingService — silent mic (#14606)", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(store.getState().micNotice).toBeNull();
+  });
+
+  describe("after the app bundle was replaced under it (#14937)", () => {
+    async function startSilentInReplacedApp(appReplaced: () => Promise<boolean>) {
+      const yeti = { label: "Blue Yeti", deviceId: "yeti" };
+      const harness = setupGlobals({ tracks: [yeti], devices: [yeti, BUILT_IN] });
+      harness.voiceInput.isAppReplaced.mockImplementation(appReplaced);
+      const loaded = await load();
+      await loaded.service.start(TARGET);
+      harness.status.emit("recording");
+      sendChunk(harness.workletNodes[0]!, 0);
+      await vi.advanceTimersByTimeAsync(3_000);
+      return { harness, ...loaded };
+    }
+
+    it("offers a restart instead of another mic, which would be just as silent", async () => {
+      const { store } = await startSilentInReplacedApp(async () => true);
+
+      expect(store.getState().micSignal).toBe("silent");
+      expect(store.getState().micNotice).toEqual({
+        kind: "silent",
+        target: expect.objectContaining({ panelId: PANEL_ID }),
+        deviceLabel: "Blue Yeti",
+        bluetooth: false,
+        builtIn: null,
+        appReplaced: true,
+      });
+      expect(store.getState().announcement?.text).toBe(
+        "Daintree was updated while running and needs a restart."
+      );
+    });
+
+    it("keeps the mic advice when the bundle can't be checked", async () => {
+      const { store } = await startSilentInReplacedApp(() =>
+        Promise.reject(new Error("no handler"))
+      );
+
+      expect(store.getState().micNotice).toMatchObject({ kind: "silent", builtIn: BUILT_IN });
+      expect(store.getState().micNotice).not.toHaveProperty("appReplaced");
+      expect(store.getState().announcement?.text).toBe("No audio from Blue Yeti yet.");
+    });
+
+    it("asks only once the mic has been silent for the whole grace window", async () => {
+      const harness = setupGlobals({ tracks: [AIRPODS] });
+      const { service } = await load();
+      await service.start(TARGET);
+      harness.status.emit("recording");
+      sendChunk(harness.workletNodes[0]!, 3000);
+      await vi.advanceTimersByTimeAsync(3_000);
+
+      expect(harness.voiceInput.isAppReplaced).not.toHaveBeenCalled();
+    });
+
+    it("drops the answer when the mic came alive while it was asked", async () => {
+      let answer: (replaced: boolean) => void = () => {};
+      const { store, harness } = await startSilentInReplacedApp(
+        () =>
+          new Promise<boolean>((resolve) => {
+            answer = resolve;
+          })
+      );
+      expect(store.getState().micSignal).toBe("silent");
+
+      sendChunk(harness.workletNodes[0]!, 3000);
+      answer(true);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(store.getState().micSignal).toBe("live");
+      expect(store.getState().micNotice).toBeNull();
+    });
   });
 
   it("switches to the built-in mic: saves it and restarts the session on it", async () => {

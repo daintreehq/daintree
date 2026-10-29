@@ -4064,6 +4064,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../voice.js").VoiceLiveSessionUpdate;
   };
+  "voice-input:is-app-replaced": {
+    args: [];
+    result: boolean;
+  };
   "voice-input:prefetch-corrections": {
     args: [
       payload: {
@@ -4086,6 +4090,10 @@ export interface GeneratedIpcInvokeMap {
   };
   "voice-input:publish-details": {
     args: [request: import("../voice.js").VoicePublishDetailsRequest];
+    result: boolean;
+  };
+  "voice-input:restart-replaced-app": {
+    args: [];
     result: boolean;
   };
   "voice-input:reveal-live": {

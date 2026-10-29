@@ -50,6 +50,7 @@ import {
   shouldUseHeadlessOzone,
 } from "../boot/hostModeLaunch.js";
 import { installHeadlessDialogGuards } from "./headlessDialogs.js";
+import { captureAppBundleIdentity } from "../lifecycle/appBundleIdentity.js";
 import {
   e2eCrashDumpsDir,
   isDemoMode,
@@ -70,6 +71,18 @@ try {
 } catch {
   // GC exposure not available — non-critical
 }
+
+// First, so a bundle replaced later in this run is measured against the one
+// that launched it (#14937).
+captureAppBundleIdentity({
+  platform: process.platform,
+  isPackaged: app.isPackaged,
+  execPath: process.execPath,
+  resourcesPath: process.resourcesPath,
+  // `require` exists in the bundled main via esbuild's createRequire banner.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  loadStatSync: () => (require("original-fs") as typeof fs).statSync,
+});
 
 // In development, use a separate userData directory so the dev instance
 // doesn't conflict with the production app's single-instance lock or storage.

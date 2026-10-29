@@ -292,6 +292,8 @@ export type VoiceMicSignal = "pending" | "live" | "silent";
  * - lost: the input device went away; the session was ended and its text kept.
  * - silent: the mic is still delivering silence after the grace window.
  *   `builtIn` is the mic to switch to, when one other than this one is found.
+ *   `appReplaced` marks a silence heard after the app's bundle was replaced
+ *   under it (#14937), which no other mic fixes and a restart does.
  */
 export type VoiceMicNotice =
   | { kind: "lost"; target: VoiceRecordingTarget; deviceLabel: string | null }
@@ -301,6 +303,7 @@ export type VoiceMicNotice =
       deviceLabel: string | null;
       bluetooth: boolean;
       builtIn: VoiceMicDevice | null;
+      appReplaced?: true;
     };
 
 interface VoiceAnnouncement {

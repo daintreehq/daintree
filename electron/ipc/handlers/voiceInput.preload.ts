@@ -16,6 +16,8 @@ export const VOICE_INPUT_METHOD_CHANNELS = {
   prefetchCorrections: "voice-input:prefetch-corrections",
   rewrite: "voice-input:rewrite",
   getLastTerms: "voice-input:get-last-terms",
+  isAppReplaced: "voice-input:is-app-replaced",
+  restartReplacedApp: "voice-input:restart-replaced-app",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof VOICE_INPUT_METHOD_CHANNELS;

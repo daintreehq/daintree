@@ -106,7 +106,13 @@ export function buildOwnVoiceSessionDetails({
     .join(" ");
   const notice =
     micNotice && micNotice.target.panelId === target.panelId
-      ? { kind: micNotice.kind, bluetooth: micNotice.kind === "silent" && micNotice.bluetooth }
+      ? {
+          kind: micNotice.kind,
+          bluetooth: micNotice.kind === "silent" && micNotice.bluetooth,
+          ...(micNotice.kind === "silent" && micNotice.appReplaced
+            ? { appReplaced: true as const }
+            : {}),
+        }
       : null;
 
   return {

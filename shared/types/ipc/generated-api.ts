@@ -1773,12 +1773,18 @@ export interface GeneratedElectronAPI {
     getLiveSession(
       ...args: IpcInvokeMap["voice-input:get-live-session"]["args"]
     ): Promise<IpcInvokeMap["voice-input:get-live-session"]["result"]>;
+    isAppReplaced(
+      ...args: IpcInvokeMap["voice-input:is-app-replaced"]["args"]
+    ): Promise<IpcInvokeMap["voice-input:is-app-replaced"]["result"]>;
     prefetchCorrections(
       ...args: IpcInvokeMap["voice-input:prefetch-corrections"]["args"]
     ): Promise<IpcInvokeMap["voice-input:prefetch-corrections"]["result"]>;
     publishDetails(
       ...args: IpcInvokeMap["voice-input:publish-details"]["args"]
     ): Promise<IpcInvokeMap["voice-input:publish-details"]["result"]>;
+    restartReplacedApp(
+      ...args: IpcInvokeMap["voice-input:restart-replaced-app"]["args"]
+    ): Promise<IpcInvokeMap["voice-input:restart-replaced-app"]["result"]>;
     revealLive(
       ...args: IpcInvokeMap["voice-input:reveal-live"]["args"]
     ): Promise<IpcInvokeMap["voice-input:reveal-live"]["result"]>;

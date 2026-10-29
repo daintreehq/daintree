@@ -1,13 +1,21 @@
 // @vitest-environment jsdom
 import React from "react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { WindowControlsInsetProvider } from "@/components/ui/WindowControlsInset";
 import { useVoiceRecordingStore, type VoiceMicNotice } from "@/store/voiceRecordingStore";
 
 const mocks = vi.hoisted(() => ({
   dispatch: vi.fn(),
   switchToMicFromNotice: vi.fn<(notice: unknown) => Promise<void>>(),
+  restartReplacedApp: vi.fn<() => Promise<boolean>>(),
+}));
+
+vi.mock("@/utils/logger", () => ({
+  logDebug: vi.fn(),
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+  logError: vi.fn(),
 }));
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -61,6 +69,12 @@ describe("VoiceMicNoticeBanner", () => {
   beforeEach(() => {
     mocks.dispatch.mockReset();
     mocks.switchToMicFromNotice.mockReset().mockResolvedValue(undefined);
+    mocks.restartReplacedApp.mockReset().mockResolvedValue(true);
+    Object.defineProperty(window, "electron", {
+      value: { voiceInput: { restartReplacedApp: mocks.restartReplacedApp } },
+      writable: true,
+      configurable: true,
+    });
     useVoiceRecordingStore.setState({ micNotice: null });
   });
 
@@ -120,6 +134,67 @@ describe("VoiceMicNoticeBanner", () => {
       { source: "user" }
     );
     expect(mocks.switchToMicFromNotice).not.toHaveBeenCalled();
+  });
+
+  describe("after Daintree was updated under it (#14937)", () => {
+    const REPLACED: VoiceMicNotice = {
+      kind: "silent",
+      target: TARGET,
+      deviceLabel: "RØDE NT-USB Mini",
+      bluetooth: false,
+      builtIn: null,
+      appReplaced: true,
+    };
+
+    // The dialog portals out of the render container; the banner's button stays in it.
+    function bannerRestart(container: HTMLElement): HTMLButtonElement {
+      return within(container).getByRole("button", { name: "Restart Daintree" });
+    }
+
+    async function confirmRestart(container: HTMLElement) {
+      fireEvent.click(bannerRestart(container));
+      const dialog = screen.getByRole("alertdialog");
+      expect(dialog.textContent).toContain("Restart Daintree now?");
+      await act(async () => {
+        fireEvent.click(within(dialog).getByRole("button", { name: "Restart Daintree" }));
+      });
+    }
+
+    it("says a restart is needed rather than blaming the mic", () => {
+      renderNotice(REPLACED);
+
+      expect(text()).toContain("No audio from RØDE NT-USB Mini");
+      expect(text()).toContain("Daintree was updated while running and needs a restart");
+      expect(text()).not.toContain("Check that it's connected");
+      expect(screen.queryByRole("button", { name: "Open Voice settings" })).toBeNull();
+    });
+
+    it("restarts only once the restart is confirmed", async () => {
+      const { container } = renderNotice(REPLACED);
+      fireEvent.click(bannerRestart(container));
+      fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+      expect(mocks.restartReplacedApp).not.toHaveBeenCalled();
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+
+      await confirmRestart(container);
+
+      expect(mocks.restartReplacedApp).toHaveBeenCalledTimes(1);
+      expect(mocks.dispatch).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["refuses it", () => mocks.restartReplacedApp.mockResolvedValue(false)],
+      ["fails", () => mocks.restartReplacedApp.mockRejectedValue(new Error("ipc down"))],
+    ])("says how to restart by hand when main %s", async (_case, arrange) => {
+      arrange();
+      const { container } = renderNotice(REPLACED);
+
+      await confirmRestart(container);
+
+      expect(text()).toContain("Couldn't restart from here. Quit and reopen Daintree");
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      expect(bannerRestart(container).disabled).toBe(false);
+    });
   });
 
   it.each<VoiceMicNotice>([

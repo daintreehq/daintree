@@ -187,6 +187,18 @@ describe("VoiceSessionPanel (#14920)", () => {
     expect(getByTestId("voice-session-detail").className).toContain("text-text-primary");
   });
 
+  it("says a restart is due, not a mic check, when the app was updated under it (#14937)", () => {
+    const { text } = renderPanel({
+      micSignal: "silent",
+      micLabel: "RØDE NT-USB Mini",
+      micNotice: { kind: "silent", bluetooth: false, appReplaced: true },
+    });
+    expect(text("voice-session-state")).toBe("No audio");
+    expect(text("voice-session-problem")).toBe(
+      "Nothing heard from RØDE NT-USB Mini. Daintree was updated while running and needs a restart."
+    );
+  });
+
   it("says the mic is paused or stopped rather than what it last delivered", () => {
     expect(renderPanel({ phase: "paused" }).text("voice-session-mic")).toBe("Paused");
     cleanup();

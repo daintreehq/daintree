@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { actionService } from "@/services/ActionService";
 import { useVoiceRecordingStore, type VoiceMicNotice } from "@/store/voiceRecordingStore";
+import { logError } from "@/utils/logger";
 import { InlineStatusBanner, type BannerAction } from "./InlineStatusBanner";
 
 export interface VoiceMicNoticeBannerProps {
@@ -18,6 +20,84 @@ async function switchToMicFromNotice(notice: VoiceMicNotice): Promise<void> {
   await voiceRecordingService.switchToMicFromNotice(notice);
 }
 
+type SharedBannerProps = {
+  layout: "inline";
+  role: "status";
+  ariaLive: "off";
+  onClose: () => void;
+  closeAriaLabel: string;
+};
+
+/**
+ * A silent mic in an app whose bundle was replaced while it ran (#14937):
+ * macOS feeds the old process zeros, so no mic or setting helps and a restart
+ * does. The restart keeps the session, but closes terminals and interrupts
+ * agents mid-task, so it is confirmed first.
+ */
+function AppReplacedMicNotice({
+  deviceLabel,
+  shared,
+}: {
+  deviceLabel: string | null;
+  shared: SharedBannerProps;
+}) {
+  const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+  const [isRestarting, setIsRestarting] = useState(false);
+  const [restartFailed, setRestartFailed] = useState(false);
+  const restartingRef = useRef(false);
+
+  const restart = async () => {
+    if (restartingRef.current) return;
+    restartingRef.current = true;
+    setIsRestarting(true);
+    let restarted = false;
+    try {
+      restarted = await window.electron.voiceInput.restartReplacedApp();
+    } catch (err) {
+      logError("Failed to restart Daintree after it was updated", err);
+    }
+    // Daintree is on its way down; the banner goes with it.
+    if (restarted) return;
+    restartingRef.current = false;
+    setIsRestarting(false);
+    setIsConfirmOpen(false);
+    setRestartFailed(true);
+  };
+
+  return (
+    <>
+      <InlineStatusBanner
+        {...shared}
+        severity="warning"
+        title={`No audio from ${deviceLabel ?? "the microphone"}`}
+        description={
+          restartFailed
+            ? "Couldn't restart from here. Quit and reopen Daintree"
+            : "Daintree was updated while running and needs a restart"
+        }
+        action={{
+          id: "restart-daintree",
+          label: "Restart Daintree",
+          variant: "primary",
+          loading: isRestarting,
+          onClick: () => setIsConfirmOpen(true),
+        }}
+      />
+      <ConfirmDialog
+        isOpen={isConfirmOpen}
+        onClose={() => setIsConfirmOpen(false)}
+        title="Restart Daintree now?"
+        description="Terminals close and agents resume after the restart. Work an agent is in the middle of is interrupted."
+        confirmLabel="Restart Daintree"
+        cancelLabel="Not now"
+        variant="destructive"
+        onConfirm={() => void restart()}
+        isConfirmLoading={isRestarting}
+      />
+    </>
+  );
+}
+
 /**
  * What the microphone did to this pane's dictation (#14606): it went away
  * mid-session, or it is delivering silence. Only a mic that isn't working
@@ -32,10 +112,10 @@ async function switchToMicFromNotice(notice: VoiceMicNotice): Promise<void> {
 export function VoiceMicNoticeBanner({ notice }: VoiceMicNoticeBannerProps) {
   const [isSwitching, setIsSwitching] = useState(false);
   const dismiss = () => useVoiceRecordingStore.getState().dismissMicNotice(notice);
-  const shared = {
-    layout: "inline" as const,
-    role: "status" as const,
-    ariaLive: "off" as const,
+  const shared: SharedBannerProps = {
+    layout: "inline",
+    role: "status",
+    ariaLive: "off",
     onClose: dismiss,
     closeAriaLabel: "Dismiss microphone notice",
   };
@@ -49,6 +129,10 @@ export function VoiceMicNoticeBanner({ notice }: VoiceMicNoticeBannerProps) {
         description={`${notice.deviceLabel ?? "The microphone"} disconnected, so dictation stopped`}
       />
     );
+  }
+
+  if (notice.appReplaced) {
+    return <AppReplacedMicNotice deviceLabel={notice.deviceLabel} shared={shared} />;
   }
 
   const { builtIn } = notice;
