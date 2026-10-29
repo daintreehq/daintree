@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { pluralize } from "@/lib/pluralize";
+import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
@@ -137,8 +138,13 @@ export function PresetSwitchRestartDialog({
     onClose();
     void restartPanesOnPreset(
       request.panes,
-      { id: request.toPresetId, name: request.toName },
-      "user",
+      request.toName,
+      (pane) =>
+        actionService.dispatch(
+          "terminal.restartOnPreset",
+          { terminalId: pane.id, presetId: request.toPresetId, confirmed: true },
+          { source: "user" }
+        ),
       (count) => `Restarting ${pluralize(count, "pane")} on ${request.toName}`
     );
   }, [request, onClose]);

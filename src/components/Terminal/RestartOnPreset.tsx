@@ -11,6 +11,7 @@ import {
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { getAgentConfig } from "@/config/agents";
 import { getBrandColorHex } from "@/lib/colorUtils";
+import { actionService } from "@/services/ActionService";
 import type { ActionSource } from "@shared/types/actions";
 import {
   DestructiveConsequence,
@@ -138,8 +139,13 @@ export function RestartOnPresetConfirmDialog({
     onClose();
     void restartPanesOnPreset(
       [{ id: request.terminalId, title: request.terminalTitle }],
-      request.preset,
-      source,
+      request.preset.name,
+      (pane) =>
+        actionService.dispatch(
+          "terminal.restartOnPreset",
+          { terminalId: pane.id, presetId: request.preset.id, confirmed: true },
+          { source }
+        ),
       () => `Restarting on ${request.preset.name}`
     );
   }, [request, onClose, sourceRef]);

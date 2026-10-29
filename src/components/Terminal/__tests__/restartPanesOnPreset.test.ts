@@ -17,7 +17,13 @@ import { restartPanesOnPreset } from "../restartPanesOnPreset";
 import { usePanelStore } from "@/store/panelStore";
 import type { PtyPanelData } from "@shared/types/panel";
 
-const preset = { id: "work", name: "Work" };
+// What the confirm hands the helper: its own dispatch of the restart.
+const restart = (pane: { id: string }) =>
+  dispatchMock(
+    "terminal.restartOnPreset",
+    { terminalId: pane.id, presetId: "work", confirmed: true },
+    { source: "user" }
+  );
 const refused = (message: string) => ({
   ok: false,
   error: { code: "EXECUTION_ERROR", message },
@@ -52,7 +58,7 @@ describe("restartPanesOnPreset", () => {
   it("announces a restart that started and raises nothing else", async () => {
     dispatchMock.mockResolvedValue({ ok: true, result: {} });
 
-    await restartPanesOnPreset([{ id: "t1", title: "Review" }], preset, "user", () => "Restarted");
+    await restartPanesOnPreset([{ id: "t1", title: "Review" }], "Work", restart, () => "Restarted");
 
     expect(dispatchMock).toHaveBeenCalledWith(
       "terminal.restartOnPreset",
@@ -66,7 +72,7 @@ describe("restartPanesOnPreset", () => {
   it("names a refused pane and announces nothing for it (#15233)", async () => {
     dispatchMock.mockResolvedValue(refused("already restarting"));
 
-    await restartPanesOnPreset([{ id: "t1", title: "Review" }], preset, "user", () => "Restarted");
+    await restartPanesOnPreset([{ id: "t1", title: "Review" }], "Work", restart, () => "Restarted");
 
     expect(announceMock).not.toHaveBeenCalled();
     expect(notifyMock).toHaveBeenCalledTimes(1);
@@ -97,8 +103,8 @@ describe("restartPanesOnPreset", () => {
         { id: "c", title: "Three" },
         { id: "d", title: "Four" },
       ],
-      preset,
-      "user",
+      "Work",
+      restart,
       (count) => `Restarting ${count} panes`
     );
 
@@ -112,7 +118,12 @@ describe("restartPanesOnPreset", () => {
   it("treats a rejected dispatch as a refusal rather than losing it", async () => {
     dispatchMock.mockRejectedValue(new Error("boom"));
 
-    await restartPanesOnPreset([{ id: "t1", title: undefined }], preset, "user", () => "Restarted");
+    await restartPanesOnPreset(
+      [{ id: "t1", title: undefined }],
+      "Work",
+      restart,
+      () => "Restarted"
+    );
 
     expect(announceMock).not.toHaveBeenCalled();
     const toast = notifyMock.mock.calls[0]![0];
@@ -128,8 +139,8 @@ describe("restartPanesOnPreset", () => {
         { id: "a", title: "One" },
         { id: "b", title: "Two" },
       ],
-      preset,
-      "user",
+      "Work",
+      restart,
       () => "Restarted"
     );
 
@@ -148,8 +159,8 @@ describe("restartPanesOnPreset", () => {
         { id: "gone", title: "Closed" },
         { id: "busy", title: "Busy" },
       ],
-      preset,
-      "user",
+      "Work",
+      restart,
       () => "Restarted"
     );
 
@@ -166,7 +177,7 @@ describe("restartPanesOnPreset", () => {
       return refused("terminal not found");
     });
 
-    await restartPanesOnPreset([{ id: "gone", title: "Closed" }], preset, "user", () => "x");
+    await restartPanesOnPreset([{ id: "gone", title: "Closed" }], "Work", restart, () => "x");
 
     const toast = notifyMock.mock.calls[0]![0];
     expect(toast.action).toBeUndefined();
@@ -186,8 +197,8 @@ describe("restartPanesOnPreset", () => {
         { id: "a", title: "One" },
         { id: "b", title: "Two" },
       ],
-      preset,
-      "user",
+      "Work",
+      restart,
       () => "x"
     );
     openPanes("b");
