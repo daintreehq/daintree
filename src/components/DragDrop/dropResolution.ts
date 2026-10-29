@@ -144,6 +144,19 @@ export function dragCarriesNonDockableIntoDock(
   return isNonDockableDockDrop(targetContainer, representativeKind);
 }
 
+/**
+ * The member ids a drag's dockability check covers. A grid or dock group drag
+ * commits every member into the dock, so all of them count (#11375). A sidebar
+ * row carries its group only to show what a worktree move takes (#14962); that
+ * move keeps the group's own location, so the row is checked on its own kind.
+ */
+export function dockCheckedGroupPanelIds(
+  dragData: { groupId?: unknown; groupPanelIds?: unknown; origin?: unknown } | null | undefined
+): unknown {
+  if (!dragData?.groupId || dragData.origin === "accordion") return undefined;
+  return dragData.groupPanelIds;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -179,10 +192,6 @@ export function shouldCancelDrop(params: CancelDropParams): boolean {
     const { id, kind } = activeData.terminal;
     if (typeof id !== "string") return true;
 
-    const groupPanelIds = activeData.groupPanelIds;
-    const isGroupDrag =
-      !!activeData.groupId && Array.isArray(groupPanelIds) && groupPanelIds.length > 1;
-
     // A panel whose kind the dock can't render must never commit into the
     // dock — it would strand invisibly (#11054). For a group drag EVERY member
     // is checked, not just the dragged representative (#11375). `cursor-no-drop`
@@ -194,7 +203,7 @@ export function shouldCancelDrop(params: CancelDropParams): boolean {
     return dragCarriesNonDockableIntoDock(
       targetContainer,
       typeof kind === "string" ? (kind as PanelKind) : undefined,
-      isGroupDrag ? groupPanelIds : undefined,
+      dockCheckedGroupPanelIds(activeData),
       panelsById
     );
   } catch {

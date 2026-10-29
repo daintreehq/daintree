@@ -92,7 +92,7 @@ import {
   peek as peekTerminalService,
   with as withTerminalService,
 } from "@/services/terminal/terminalInstanceServiceAccessor";
-import { moveTerminalToWorktreeAndFollowRescue } from "@/services/terminal/crossWorktreeMove";
+import { moveDroppedPanelToWorktree } from "@/services/terminal/crossWorktreeMove";
 import { parseAccordionDragId } from "./SortableWorktreeTerminal";
 import { isWorktreeSortDragData, parseWorktreeSortDragId } from "./SortableWorktreeCard";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
@@ -113,6 +113,7 @@ import {
   filterOutDockDroppables,
   shouldCancelDrop,
   dragCarriesNonDockableIntoDock,
+  dockCheckedGroupPanelIds,
   type OverDropData,
 } from "./dropResolution";
 import { useDragRecovery } from "./useDragRecovery";
@@ -272,7 +273,7 @@ export function resolveCardDropWorktreeId(
   overId: string
 ): string | null {
   if (overData?.type === "worktree" && overData.worktreeId) return overData.worktreeId;
-  return parseWorktreeSortDragId(overId);
+  return parseWorktreeSortDragId(overId) || null;
 }
 
 /**
@@ -987,11 +988,7 @@ export function DndProvider({ children }: DndProviderProps) {
         const targetWorktreeId =
           resolveCardDropWorktreeId(overData, overId) ?? overTerminal?.worktreeId ?? null;
         if (targetWorktreeId && targetWorktreeId !== (accordionWorktreeId ?? null)) {
-          const draggedTerminal = freshTerminalsById[actualDraggedId];
-          const isLiveTarget = getCurrentViewStore().getState().worktrees.has(targetWorktreeId);
-          if (isLiveTarget && draggedTerminal && draggedTerminal.worktreeId !== targetWorktreeId) {
-            moveTerminalToWorktreeAndFollowRescue(actualDraggedId, targetWorktreeId);
-          }
+          moveDroppedPanelToWorktree(actualDraggedId, targetWorktreeId);
           return;
         }
 
@@ -1025,14 +1022,9 @@ export function DndProvider({ children }: DndProviderProps) {
       const dropWorktreeId = resolveCardDropWorktreeId(overData, overId);
       const isWorktreeDrop = dropWorktreeId !== null;
       if (isWorktreeDrop) {
-        // A grouped panel takes its whole tab group with it (#14962): the move
-        // resolves the group itself, so a group drag and a single-tab drag
-        // share this path.
-        const currentTerminal = freshTerminalsById[draggedId];
-        const isLiveTarget = getCurrentViewStore().getState().worktrees.has(dropWorktreeId);
-        if (isLiveTarget && currentTerminal && currentTerminal.worktreeId !== dropWorktreeId) {
-          moveTerminalToWorktreeAndFollowRescue(draggedId, dropWorktreeId);
-        }
+        // The move resolves a grouped panel's tab group itself, so a group drag
+        // and a single-tab drag share this path (#14962).
+        moveDroppedPanelToWorktree(draggedId, dropWorktreeId);
         // Don't return - fall through to stabilization
       }
 
@@ -1386,7 +1378,7 @@ export function DndProvider({ children }: DndProviderProps) {
       const rejectsDock = dragCarriesNonDockableIntoDock(
         "dock",
         activeDragData?.terminal?.kind,
-        activeDragData?.groupId ? activeDragData?.groupPanelIds : undefined,
+        dockCheckedGroupPanelIds(activeDragData),
         usePanelStore.getState().panelsById
       );
       const effectiveArgs = rejectsDock
@@ -1430,7 +1422,7 @@ export function DndProvider({ children }: DndProviderProps) {
         dragCarriesNonDockableIntoDock(
           "dock",
           activeTerminal.kind,
-          activeData?.groupId ? activeData?.groupPanelIds : undefined,
+          dockCheckedGroupPanelIds(activeData),
           usePanelStore.getState().panelsById
         ),
     }),

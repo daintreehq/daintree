@@ -384,22 +384,24 @@ describe("getOverDragLabel — synthetic droppables", () => {
 });
 
 describe("getDragLabel — tab group drags (#14962)", () => {
-  const group = (ids: string[]) => ({
-    terminal: { id: ids[0], title: "Build agent" },
+  const group = (ids: string[], title = "Build agent") => ({
+    terminal: { id: ids[0], title },
     groupId: "group-1",
     groupPanelIds: ids,
   });
 
   it("states how many tabs a group drag carries", () => {
     expect(getDragLabel(group(["a", "b", "c"]))).toBe("Build agent (3 tabs)");
+    expect(getDragLabel(group(["a", "b"], "Review"))).toBe("Review (2 tabs)");
   });
 
   it("keeps the plain title for a single panel, a one-member group, or ids without a group", () => {
-    expect(getDragLabel({ terminal: { id: "a", title: "Build agent" } })).toBe("Build agent");
+    const terminal = { id: "a", title: "Build agent" };
+    expect(getDragLabel({ terminal })).toBe("Build agent");
     expect(getDragLabel(group(["a"]))).toBe("Build agent");
-    expect(
-      getDragLabel({ terminal: { id: "a", title: "Build agent" }, groupPanelIds: ["a", "b"] })
-    ).toBe("Build agent");
+    expect(getDragLabel({ terminal, groupId: "group-1" })).toBe("Build agent");
+    expect(getDragLabel({ terminal, groupId: "group-1", groupPanelIds: [] })).toBe("Build agent");
+    expect(getDragLabel({ terminal, groupPanelIds: ["a", "b"] })).toBe("Build agent");
   });
 
   it("carries the count into the pickup and keyboard hover announcements", () => {
@@ -409,7 +411,9 @@ describe("getDragLabel — tab group drags (#14962)", () => {
       getOverDragLabel
     );
     const active = makeActive(group(["a", "b"]));
-    expect(announcements.onDragStart({ active })).toContain("Build agent (2 tabs)");
+    expect(announcements.onDragStart({ active })).toBe(
+      "Picked up Build agent (2 tabs). Press arrow keys to move, Space to drop, Escape to cancel."
+    );
     expect(
       announcements.onDragOver!({
         active,

@@ -206,3 +206,14 @@ export function moveTerminalToWorktreeAndFollowRescue(
   after.selectWorktree(targetWorktreeId);
   after.retargetParkedFleetSelection(targetWorktreeId);
 }
+
+/**
+ * A panel drag released on a worktree: the drop paths' one way into the move. A
+ * grouped panel takes its whole tab group with it (#14962). A destination that
+ * isn't a live worktree (a deleted row's id, or no view store registered yet)
+ * moves nothing; filing panels under it would strand them on another ghost.
+ */
+export function moveDroppedPanelToWorktree(panelId: string, worktreeId: string): void {
+  if (!getCurrentViewStoreOrNull()?.getState().worktrees.has(worktreeId)) return;
+  moveTerminalToWorktreeAndFollowRescue(panelId, worktreeId);
+}

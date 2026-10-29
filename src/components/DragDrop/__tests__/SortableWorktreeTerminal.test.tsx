@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import type { ReactNode } from "react";
 import { beforeEach, describe, it, expect, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { act, render } from "@testing-library/react";
 import { SidebarViewSwitcherContext } from "@/components/Sidebar/sidebarViewContext";
 import { SortableWorktreeTerminal } from "../SortableWorktreeTerminal";
 import { useDragHandle } from "../DragHandleContext";
+import { usePanelStore } from "@/store/panelStore";
 import type { PanelInstance } from "@shared/types/panel";
 
 let mockIsDragging = false;
@@ -13,20 +14,38 @@ const sortableArgs = vi.hoisted(() => ({
   last: null as { disabled?: unknown; data?: Record<string, unknown> } | null,
 }));
 
-const panelState = vi.hoisted(() => ({
-  panelsById: {} as Record<string, unknown>,
-  trashedTerminals: new Map<string, unknown>(),
-  groups: [] as { id: string; panelIds: string[] }[],
-}));
-
-vi.mock("@/store/panelStore", () => ({
-  usePanelStore: (selector: (state: unknown) => unknown) =>
-    selector({
-      panelsById: panelState.panelsById,
-      trashedTerminals: panelState.trashedTerminals,
-      getPanelGroup: (id: string) => panelState.groups.find((g) => g.panelIds.includes(id)),
-    }),
-}));
+// A real zustand store, so the row's selectors run under real subscriptions:
+// an unstable selector result would loop here the way it would in the app.
+// `getPanelGroup` keeps the real one's location rule (tabGroups.ts): a group is
+// only the panel's when it lives where the panel does.
+vi.mock("@/store/panelStore", async () => {
+  const { create } = await import("zustand");
+  type Panel = { id: string; location?: string };
+  type Group = { id: string; location: "grid" | "dock"; panelIds: string[] };
+  const groupLocation = (panel: Panel | undefined) => {
+    if (!panel) return null;
+    if (panel.location === "grid" || panel.location === undefined) return "grid";
+    return panel.location === "dock" ? "dock" : null;
+  };
+  const usePanelStore = create<{
+    panelsById: Record<string, Panel>;
+    trashedTerminals: Map<string, unknown>;
+    tabGroups: Group[];
+    getPanelGroup: (id: string) => Group | undefined;
+  }>()((_set, get) => ({
+    panelsById: {},
+    trashedTerminals: new Map(),
+    tabGroups: [],
+    getPanelGroup: (id) => {
+      const { panelsById, tabGroups } = get();
+      const location = groupLocation(panelsById[id]);
+      return tabGroups.find(
+        (g) => g.panelIds.includes(id) && (location === null || location === g.location)
+      );
+    },
+  }));
+  return { usePanelStore };
+});
 
 vi.mock("@dnd-kit/sortable", () => ({
   useSortable: (args: { disabled?: unknown; data?: Record<string, unknown> }) => {
@@ -81,44 +100,81 @@ function underPluginView(children: ReactNode) {
 }
 
 describe("SortableWorktreeTerminal", () => {
-  beforeEach(() => {
-    panelState.panelsById = { t3: terminal };
-    panelState.trashedTerminals = new Map();
-    panelState.groups = [];
+  const sibling = (id: string, location = "grid") => ({ ...terminal, id, location });
+  const group = (id: string, panelIds: string[], location: "grid" | "dock" = "grid") => ({
+    id,
+    location,
+    panelIds,
   });
 
+  function seed(
+    panels: { id: string; location?: string }[],
+    tabGroups: ReturnType<typeof group>[],
+    trashed: string[] = []
+  ) {
+    usePanelStore.setState({
+      panelsById: Object.fromEntries(panels.map((p) => [p.id, p])),
+      tabGroups,
+      trashedTerminals: new Map(trashed.map((id) => [id, {}])),
+    } as never);
+  }
+
+  /** The payload of the render this call makes, never a stale earlier one. */
   function renderRow() {
-    render(
+    sortableArgs.last = null;
+    const view = render(
       <SortableWorktreeTerminal terminal={terminal} worktreeId="wt1" sourceIndex={0}>
         <span />
       </SortableWorktreeTerminal>
     );
-    return sortableArgs.last?.data;
+    expect(sortableArgs.last).not.toBeNull();
+    return { data: sortableArgs.last?.data, ...view };
   }
+
+  beforeEach(() => {
+    seed([terminal], []);
+  });
 
   // The worktree move takes a grouped row's whole tab group (#14962), so the
   // drag has to say so before release, the same way a grid or dock group drag does.
   it("carries its tab group's live members so the drag shows the whole group goes", () => {
-    panelState.panelsById = {
-      t3: terminal,
-      t4: { ...terminal, id: "t4" },
-      t5: { ...terminal, id: "t5" },
-    };
-    panelState.trashedTerminals = new Map([["t5", {}]]);
-    panelState.groups = [{ id: "g1", panelIds: ["t4", "t3", "t5"] }];
+    seed(
+      [terminal, sibling("t4"), sibling("t5"), sibling("t6"), sibling("t7"), sibling("o1")],
+      [group("other", ["o1", "t7"]), group("g-build", ["t4", "t3", "t5", "t6"])],
+      ["t5"]
+    );
 
-    const data = renderRow();
-    expect(data?.groupId).toBe("g1");
-    expect(data?.groupPanelIds).toEqual(["t4", "t3"]);
+    const { data } = renderRow();
+    expect(data?.groupId).toBe("g-build");
+    expect(data?.groupPanelIds).toEqual(["t4", "t3", "t6"]);
   });
 
   it("drags as a single panel when ungrouped or the only live member left", () => {
-    expect(renderRow()).not.toHaveProperty("groupId");
+    const ungrouped = renderRow();
+    expect(ungrouped.data).not.toHaveProperty("groupId");
+    expect(ungrouped.data).not.toHaveProperty("groupPanelIds");
+    ungrouped.unmount();
 
-    panelState.groups = [{ id: "g1", panelIds: ["t3", "gone"] }];
-    const data = renderRow();
-    expect(data).not.toHaveProperty("groupId");
-    expect(data).not.toHaveProperty("groupPanelIds");
+    seed([terminal, sibling("t4", "trash")], [group("g1", ["t3", "t4", "gone"])]);
+    const lastLive = renderRow();
+    expect(lastLive.data).not.toHaveProperty("groupId");
+    expect(lastLive.data).not.toHaveProperty("groupPanelIds");
+  });
+
+  it("ignores a group that lives somewhere other than the row's panel", () => {
+    seed([terminal, sibling("t4", "dock")], [group("g-dock", ["t3", "t4"], "dock")]);
+    expect(renderRow().data).not.toHaveProperty("groupId");
+  });
+
+  it("follows membership changes while mounted", () => {
+    seed([terminal, sibling("t4")], [group("g1", ["t3", "t4"])]);
+    renderRow();
+    expect(sortableArgs.last?.data?.groupPanelIds).toEqual(["t3", "t4"]);
+
+    act(() => {
+      seed([terminal, sibling("t4"), sibling("t5")], [group("g1", ["t3", "t4", "t5"])]);
+    });
+    expect(sortableArgs.last?.data?.groupPanelIds).toEqual(["t3", "t4", "t5"]);
   });
 
   it("stops taking drops while the worktree list is hidden behind a plugin's sidebar view", () => {

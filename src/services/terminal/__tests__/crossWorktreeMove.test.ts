@@ -55,7 +55,7 @@ const terminalInstanceService = (
 const { terminalClient } = await import("@/clients");
 const { usePanelStore } = await import("@/store/panelStore");
 const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
-const { moveTerminalToWorktreeAndFollowRescue, isPanelProcessLive } =
+const { moveTerminalToWorktreeAndFollowRescue, moveDroppedPanelToWorktree, isPanelProcessLive } =
   await import("../crossWorktreeMove");
 
 /**
@@ -389,6 +389,53 @@ describe("moveTerminalToWorktreeAndFollowRescue", () => {
     moveTerminalToWorktreeAndFollowRescue("ghost", "wt-b");
 
     expect(usePanelStore.getState().focusedId).toBe("t1");
+  });
+});
+
+describe("moveDroppedPanelToWorktree", () => {
+  function seedGroup(worktreeId: string): void {
+    seedPanels([panel("t1", worktreeId), panel("t2", worktreeId), panel("solo", worktreeId)]);
+    usePanelStore.setState({
+      tabGroups: new Map([
+        [
+          "g1",
+          {
+            id: "g1",
+            location: "grid" as const,
+            worktreeId,
+            activeTabId: "t1",
+            panelIds: ["t1", "t2"],
+          },
+        ],
+      ]),
+    });
+  }
+
+  // A group dragged onto a card arrives as its representative; the drop must
+  // carry every tab, never split the group (#14962).
+  it("moves a dropped group's every member to a live worktree", () => {
+    seedGroup("wt-a");
+    setLiveWorktrees(["wt-a", "wt-b"]);
+
+    moveDroppedPanelToWorktree("t2", "wt-b");
+
+    const panels = usePanelStore.getState().panelsById;
+    expect(panels["t1"]?.worktreeId).toBe("wt-b");
+    expect(panels["t2"]?.worktreeId).toBe("wt-b");
+    expect(panels["solo"]?.worktreeId).toBe("wt-a");
+    expect(usePanelStore.getState().tabGroups.get("g1")?.worktreeId).toBe("wt-b");
+  });
+
+  it("moves nothing onto a worktree that isn't live", () => {
+    seedGroup("wt-a");
+    setLiveWorktrees(["wt-a"]);
+
+    moveDroppedPanelToWorktree("t1", "wt-gone");
+
+    const panels = usePanelStore.getState().panelsById;
+    expect(panels["t1"]?.worktreeId).toBe("wt-a");
+    expect(panels["t2"]?.worktreeId).toBe("wt-a");
+    expect(usePanelStore.getState().tabGroups.get("g1")?.worktreeId).toBe("wt-a");
   });
 });
 

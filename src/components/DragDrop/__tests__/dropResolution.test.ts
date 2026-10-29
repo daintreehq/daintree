@@ -12,6 +12,7 @@ import {
   filterOutDockDroppables,
   shouldCancelDrop,
   isPanelDragMovableToWorktree,
+  dockCheckedGroupPanelIds,
   type ClientRectLike,
   type OverDropData,
 } from "../dropResolution";
@@ -834,6 +835,22 @@ describe("shouldCancelDrop", () => {
       ).toBe(true);
     });
 
+    // A sidebar row's worktree move keeps its group's location; it never
+    // commits the group into the dock, so only the row's own kind counts.
+    it("lets a sidebar row with a non-dockable sibling over a dock chip through", () => {
+      expect(
+        run({
+          overData: { sortable: { containerId: "dock-container", index: 0 } },
+          activeData: {
+            ...groupDrag(["panel-1", "panel-2"]),
+            origin: "accordion",
+            worktreeId: "wt-a",
+          },
+          panelsById,
+        })
+      ).toBe(false);
+    });
+
     it("allows a group where every member is dockable", () => {
       expect(
         run({
@@ -910,21 +927,50 @@ describe("shouldCancelDrop", () => {
 // ---------------------------------------------------------------------------
 describe("isPanelDragMovableToWorktree", () => {
   const terminal = makeTerminal("panel-1", "grid", "wt-a");
+  const group = { groupId: "group-1", groupPanelIds: ["panel-1", "panel-2"] };
 
   it("lights the card for a tab group drag as well as a single panel (#14962)", () => {
     expect(isPanelDragMovableToWorktree({ terminal }, "wt-b")).toBe(true);
-    const group = { terminal, groupId: "group-1", groupPanelIds: ["panel-1", "panel-2"] };
-    expect(isPanelDragMovableToWorktree(group, "wt-b")).toBe(true);
+    expect(isPanelDragMovableToWorktree({ terminal, ...group }, "wt-b")).toBe(true);
   });
 
-  it("lights the card for a sidebar row from another worktree, not its own", () => {
+  it("lights the card for a sidebar row from another worktree, grouped or not, never its own", () => {
     const row = { terminal, origin: "accordion", worktreeId: "wt-a" };
     expect(isPanelDragMovableToWorktree(row, "wt-b")).toBe(true);
     expect(isPanelDragMovableToWorktree(row, "wt-a")).toBe(false);
+    expect(isPanelDragMovableToWorktree({ ...row, ...group }, "wt-b")).toBe(true);
+    expect(isPanelDragMovableToWorktree({ ...row, ...group }, "wt-a")).toBe(false);
+  });
+
+  it("treats only a sidebar row's own worktree as a reorder", () => {
+    expect(isPanelDragMovableToWorktree({ terminal, worktreeId: "wt-a" }, "wt-a")).toBe(true);
   });
 
   it("ignores drags that carry no panel, like a worktree-sort drag", () => {
     expect(isPanelDragMovableToWorktree(undefined, "wt-b")).toBe(false);
-    expect(isPanelDragMovableToWorktree({ worktreeId: "wt-a" }, "wt-b")).toBe(false);
+    const sortDrag = { type: "worktree-sort", worktreeId: "wt-a", dragStartOrder: ["wt-a"] };
+    expect(isPanelDragMovableToWorktree(sortDrag, "wt-b")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// dockCheckedGroupPanelIds
+// ---------------------------------------------------------------------------
+describe("dockCheckedGroupPanelIds", () => {
+  const ids = ["panel-1", "panel-2"];
+
+  it("checks every member of a grid or dock group drag (#11375)", () => {
+    expect(dockCheckedGroupPanelIds({ groupId: "group-1", groupPanelIds: ids })).toBe(ids);
+  });
+
+  it("checks a sidebar row on its own kind, though it carries its group (#14962)", () => {
+    expect(
+      dockCheckedGroupPanelIds({ groupId: "group-1", groupPanelIds: ids, origin: "accordion" })
+    ).toBeUndefined();
+  });
+
+  it("has nothing to check without a group", () => {
+    expect(dockCheckedGroupPanelIds({ groupPanelIds: ids })).toBeUndefined();
+    expect(dockCheckedGroupPanelIds(null)).toBeUndefined();
   });
 });
