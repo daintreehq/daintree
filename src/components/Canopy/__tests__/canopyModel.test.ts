@@ -738,6 +738,7 @@ describe("the row's name", () => {
     ["the agent's own name", "Claude"],
     ["a launch's preset stamp", "Claude [Z.ai]"],
     ["a model and preset stamp", "Claude (Opus) [Z.ai]"],
+    ["a stamped title with trailing space", "Claude [Z.ai] "],
   ])("names a custom-titled pane by its worktree when the title is only %s", (_, title) => {
     const [item] = inbox([
       run("a", {
@@ -747,6 +748,19 @@ describe("the row's name", () => {
         titleMode: "custom",
       }),
     ]);
+    expect(itemSubject(item!)).toBe("fix-rounding");
+  });
+
+  it("names a custom-titled pane by its worktree after its agent has exited", () => {
+    const exited = run("a", {
+      cwd: "/Users/dev/app-worktrees/fix-rounding",
+      title: "Claude [Z.ai]",
+      titleMode: "custom",
+      launchAgentId: "claude",
+      agentState: "exited",
+    });
+    delete exited.agentId;
+    const [item] = inbox([exited]);
     expect(itemSubject(item!)).toBe("fix-rounding");
   });
 

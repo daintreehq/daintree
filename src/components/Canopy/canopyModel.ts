@@ -13,6 +13,7 @@ import {
   isCanopyUnread,
 } from "@shared/types/ipc/canopy";
 import type { PilotAgentRow, PilotProjectGroup } from "@/components/Pilot/pilotRows";
+import { getAgentConfig } from "@/config/agents";
 import { getTerminalTaskTitle } from "@/utils/terminalTitleDisplay";
 
 export interface CanopyItem {
@@ -301,14 +302,20 @@ const MODEL_STAMP = /\s*\([^)]*\)$/;
  * model and preset stamps a launch adds ("Claude (Opus) [Z.ai]") — and so can't
  * tell two of them apart.
  */
-function namesOnlyItsAgent(title: string, agentLabel: string): boolean {
-  const bare = title.replace(PRESET_STAMP, "").replace(MODEL_STAMP, "").trim();
-  return bare.toLowerCase() === agentLabel.toLowerCase();
+function namesOnlyItsAgent(title: string, agentName: string): boolean {
+  const bare = title.trim().replace(PRESET_STAMP, "").replace(MODEL_STAMP, "").trim();
+  return bare.toLowerCase() === agentName.toLowerCase();
 }
 
 /** {@link itemSubject} for a row alone, with the name of the project it runs in. */
 export function rowSubject(row: PilotAgentRow, workspaceName: string | undefined): string {
   const run = row.run;
+  // Not the chrome's label: an agent that has exited reads as a plain terminal
+  // there, while its launch title still carries the agent's name.
+  const launchedAgentId = run.agentId ?? run.launchAgentId;
+  const agentName =
+    (launchedAgentId !== undefined ? getAgentConfig(launchedAgentId)?.name : undefined) ??
+    row.chrome.label;
   // "custom" is a name automation gave the pane (an MCP launch title or rename,
   // a plugin's), which the header shows as it is; a launch's preset stamp is
   // "custom" too, and that one is only the agent's name again.
@@ -316,7 +323,7 @@ export function rowSubject(row: PilotAgentRow, workspaceName: string | undefined
     run.titleMode === "user" ||
     (run.titleMode === "custom" &&
       run.title !== undefined &&
-      !namesOnlyItsAgent(run.title, row.chrome.label)) ||
+      !namesOnlyItsAgent(run.title, agentName)) ||
     getTerminalTaskTitle({
       title: run.title ?? row.chrome.label,
       ...(run.titleMode !== undefined ? { titleMode: run.titleMode } : {}),
