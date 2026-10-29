@@ -915,17 +915,18 @@ A `when` turns one entry on or off. It never gates the action behind it, which s
 
 Keybindings also see the focus and UI keys:
 
-| Key                | Type    | Meaning                                                        |
-| ------------------ | ------- | -------------------------------------------------------------- |
-| `terminalFocused`  | boolean | Keyboard focus is inside an xterm terminal.                    |
-| `textInputFocused` | boolean | Keyboard focus is in a text field or editor (not a terminal).  |
-| `modalOpen`        | boolean | A modal dialog (`aria-modal`) is open.                         |
-| `paletteOpen`      | boolean | Any palette (command palette, quick switcher, …) is open.      |
-| `paletteId`        | string  | Identifier of the open palette, or `""` when none.             |
-| `fleetArmed`       | boolean | At least one terminal is armed for fleet broadcast.            |
-| `fleetWaiting`     | boolean | At least one armed terminal's agent is in the `waiting` state. |
-| `sidebarVisible`   | boolean | The worktree sidebar is currently visible.                     |
-| `canopyHidden`     | boolean | The user hid Canopy; its panel cannot open.                    |
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `terminalFocused` | boolean | Keyboard focus is inside an xterm terminal. |
+| `textInputFocused` | boolean | Keyboard focus is in a text field or editor (not a terminal). |
+| `modalOpen` | boolean | A modal dialog (`aria-modal`) is open. |
+| `paletteOpen` | boolean | Any palette (command palette, quick switcher, …) is open. |
+| `paletteId` | string | Identifier of the open palette, or `""` when none. |
+| `fleetArmed` | boolean | At least one terminal is armed for fleet broadcast. |
+| `fleetWaiting` | boolean | At least one armed terminal's agent is in the `waiting` state. |
+| `sidebarVisible` | boolean | The worktree sidebar is currently visible. |
+| `canopyHidden` | boolean | The user hid Canopy; its panel cannot open. |
+| `dictationActive` | boolean | Voice dictation is starting, running, paused or finishing, in this view or another. |
 
 The `presentation*` keys come from the project's presentation profile, which the user sets in Project settings → General → Features, and → Launcher for the two launcher keys. A repository can suggest one by committing `.daintree/presentation.json` — `{ "features": { "forgeStats": "hidden", "gitDetail": "demoted" } }` — and the suggestion applies only once the user accepts it when the project opens. Daintree reads that file and never writes it, unknown features and levels are ignored, and no plugin API changes a level.
 

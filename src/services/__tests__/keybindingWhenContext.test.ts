@@ -6,6 +6,9 @@ import { usePaletteStore, usePanelStore } from "@/store";
 import type { PaletteId } from "@/store/paletteStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useCanopyStore } from "@/store/canopyStore";
+import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import type { VoiceInputStatus } from "@shared/types/voice";
+import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import { usePluginContextKeyStore } from "@/store/pluginContextKeyStore";
 import { buildPluginWhenContext } from "@shared/utils/pluginContextKeys";
 import { evaluate, parse } from "@shared/utils/whenClause";
@@ -40,6 +43,7 @@ function eventFrom(target: Element | null): KeyboardEvent {
 
 afterEach(() => {
   useCanopyStore.setState({ mode: "unset" });
+  useVoiceRecordingStore.setState({ status: "idle", pendingTarget: null, sessionElsewhere: null });
   usePaletteStore.setState({ activePaletteId: null });
   useFleetArmingStore.setState({ armedIds: new Set<string>() });
   usePanelStore.setState({ panelsById: {} });
@@ -71,6 +75,38 @@ describe("buildKeybindingWhenContext", () => {
       useCanopyStore.setState({ mode });
       expect(buildKeybindingWhenContext(eventFrom(null)).canopyHidden).toBe(hidden);
     }
+  });
+
+  it("reports dictationActive from arming until the session is over, here or in another view", () => {
+    const statuses: [VoiceInputStatus, boolean][] = [
+      ["idle", false],
+      ["arming", true],
+      ["connecting", true],
+      ["recording", true],
+      ["paused", true],
+      ["reconnecting", true],
+      ["finishing", true],
+      ["error", false],
+    ];
+    for (const [status, active] of statuses) {
+      useVoiceRecordingStore.setState({ status });
+      expect(buildKeybindingWhenContext(eventFrom(null)).dictationActive).toBe(active);
+    }
+
+    useVoiceRecordingStore.setState({ status: "idle", pendingTarget: { panelId: "p1" } });
+    expect(buildKeybindingWhenContext(eventFrom(null)).dictationActive).toBe(true);
+
+    useVoiceRecordingStore.setState({
+      pendingTarget: null,
+      sessionElsewhere: {
+        sessionId: "s1",
+        hostId: LOCAL_HOST_ID,
+        projectId: "proj-2",
+        projectName: "Other",
+        details: null,
+      },
+    });
+    expect(buildKeybindingWhenContext(eventFrom(null)).dictationActive).toBe(true);
   });
 
   it("reports terminalFocused only for targets inside an xterm host", () => {

@@ -4,6 +4,7 @@ import { usePaletteStore, usePanelStore } from "@/store";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useCanopyStore } from "@/store/canopyStore";
+import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { getChromeWhenContext } from "@/services/chromeWhenContext";
 
 /**
@@ -44,6 +45,8 @@ export function buildKeybindingWhenContext(event: KeyboardEvent): WhenClauseCont
       target.tagName === "TEXTAREA" ||
       target.isContentEditable === true);
 
+  const voice = useVoiceRecordingStore.getState();
+
   return {
     ...getChromeWhenContext(),
     terminalFocused: inTerminal,
@@ -56,5 +59,10 @@ export function buildKeybindingWhenContext(event: KeyboardEvent): WhenClauseCont
     fleetWaiting,
     sidebarVisible: useMacroFocusStore.getState().visibility.sidebar,
     canopyHidden: useCanopyStore.getState().mode === "hidden",
+    // Starting, running or finishing here, or running in another view.
+    dictationActive:
+      (voice.status !== "idle" && voice.status !== "error") ||
+      voice.pendingTarget !== null ||
+      voice.sessionElsewhere !== null,
   };
 }
