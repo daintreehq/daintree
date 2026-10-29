@@ -325,12 +325,13 @@ export function useCanopyInboxFocus({
       refreshRef.current?.focus();
       return;
     }
-    // Either the card left, or it moved section and its node was replaced.
-    const target =
-      focusedIndex !== -1
-        ? visible[focusedIndex]!
-        : visible[Math.min(lastIndexRef.current, visible.length - 1)]!;
-    focusCardNow(target.runId);
+    // It moved section and its node was replaced: the keyboard comes back to
+    // it where it now is, with the pane and the list's scroll left as they were.
+    if (focusedIndex !== -1) {
+      document.getElementById(canopyCardDomId(focusedId))?.focus({ preventScroll: true });
+      return;
+    }
+    focusCardNow(visible[Math.min(lastIndexRef.current, visible.length - 1)]!.runId);
   }, [focusedIndex, focusedId, visible, focusCardNow, paneFocus, replyFocus, items]);
 
   // A new search selects its top match, as opening selects the top run; a

@@ -2374,11 +2374,14 @@ describe("CanopyView", () => {
     );
     expect(band()).toEqual(["waiting", "asking"]);
     expect(body.querySelector("#canopy-card-asking")?.textContent).toContain("Replied");
-    expect(summaryWords()).toContain("1 agent needs you");
+    // The count is live, and says the band is behind it.
+    expect(summaryWords()).toBe("1 agent needs you · Not every agent is sorted yet");
 
     // Left alone, the list re-ranks, though the row is still selected: it
     // moves out of the band under the selection, the pane and the keyboard
     // staying with it, and the list doesn't scroll to follow it.
+    const terminal = body.querySelector("[data-canopy-terminal]");
+    expect(terminal).not.toBeNull();
     const scrolled = vi.mocked(Element.prototype.scrollIntoView);
     scrolled.mockClear();
     fireEvent.pointerLeave(list);
@@ -2386,11 +2389,12 @@ describe("CanopyView", () => {
       vi.advanceTimersByTime(10_000);
     });
     expect(band()).toEqual(["waiting"]);
+    expect(asking.isConnected).toBe(false);
     expect(selectedRun(container)).toBe("asking");
-    expect(liveRun(container)).toBe("asking");
+    expect(body.querySelector("[data-canopy-terminal]")).toBe(terminal);
     expect(document.activeElement?.id).toBe("canopy-card-asking");
     expect(scrolled).not.toHaveBeenCalled();
-    expect(summaryWords()).toContain("1 agent needs you");
+    expect(summaryWords()).toBe("1 agent needs you");
   });
 
   it("gives the band as it is now on Refresh, whatever is selected", async () => {
@@ -2514,14 +2518,14 @@ describe("CanopyView", () => {
       })
     );
     expect(band()).toEqual(["waiting", "asking"]);
-    expect(doc.body.textContent).toContain("2 agents need you");
+    expect(summaryWords()).toBe("2 agents need you · Not every agent is sorted yet");
     expect(sortNow()).toBeDefined();
     fireEvent.pointerLeave(list);
     act(() => {
       vi.advanceTimersByTime(10_000);
     });
     expect(band()).toEqual(["waiting", "asking", "working"]);
-    expect(doc.body.textContent).toContain("3 agents need you");
+    expect(summaryWords()).toBe("3 agents need you");
   });
 
   it("takes an ask that turns urgent into the band at once, while a crossing still waits", async () => {

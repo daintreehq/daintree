@@ -1160,9 +1160,10 @@ function CanopyInbox({
             ? "No agents in this project"
             : "No agents are running"
           : // What needs you leads; what is new follows. The list's own heading
-            // counts the agents.
+            // counts the agents. A count the band is behind says so too.
             [
               needsYou > 0 ? needsYouLead : nothingWaiting.words,
+              needsYou > 0 ? unsorted?.words : null,
               unreadCount > 0 ? `${unreadCount.toLocaleString()} unread` : null,
             ]
               .filter(Boolean)
