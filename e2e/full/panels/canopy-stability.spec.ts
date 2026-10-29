@@ -341,7 +341,7 @@ async function sampleInbox(page: Page): Promise<void> {
           id: row.id,
           priority: row.dataset.priority ?? null,
           text,
-          // Layout height, not the box on screen: the dialog scales in as it opens.
+          // Layout height, not the box on screen, so no transform can skew it.
           height: row.offsetHeight,
           due: row.querySelector("[data-canopy-detail-due]") !== null,
           unread: row.dataset.unread === "true",

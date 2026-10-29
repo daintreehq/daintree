@@ -167,11 +167,12 @@ describe("no ui/ surface portals over the toolbar without opting out", () => {
     "fixed-dropdown.tsx": ["FixedDropdown panel"],
     "toaster.tsx": ["Toast", "OverflowPill"],
     "ReEntrySummary.tsx": ["summary card"],
-    // The side sheets, which run up to the toolbar band. The centred panel is
+    // The side sheets, which run up to the toolbar band, and the window surface,
+    // which covers it and hands the drag to its own header. The centred panel is
     // deliberately unstamped: it only reaches the band on a short window with a
     // global banner up, and whether a window should drag at all behind an open
     // modal is a separate call.
-    "AppDialog.tsx": ["right sheet surface", "left sheet surface"],
+    "AppDialog.tsx": ["right sheet surface", "left sheet surface", "window surface"],
   };
 
   function readModule(file: string): string {
