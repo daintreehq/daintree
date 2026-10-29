@@ -35,6 +35,18 @@ export function isTerminalFleetEligible(
 }
 
 /**
+ * Fleet recipient predicate: an eligible member whose input isn't locked. A
+ * locked pane stays armed — unlocking it makes it a recipient again without
+ * re-arming — but nothing a fleet broadcast sends may reach it, structured or
+ * raw, the same as its own keyboard and composer.
+ */
+export function isTerminalFleetBroadcastTarget(
+  t: PanelInstance | CarrierPanel | undefined
+): t is PtyPanelData {
+  return isTerminalFleetEligible(t) && t.isInputLocked !== true;
+}
+
+/**
  * Cluster-error predicate: the terminal is in a valid location and not
  * snapshot-stale, but post-exit `runtimeStatus` is *expected* — these are the
  * terminals the error cluster is meant to surface. Used by the agent-cluster

@@ -152,6 +152,13 @@ describe("resolveFleetBroadcastTargetIds", () => {
     expect(resolveFleetBroadcastTargetIds()).toEqual(["ok"]);
   });
 
+  it("leaves out an armed pane whose input is locked (#14964)", () => {
+    seedPanels([makeAgent("a"), makeAgent("locked", { isInputLocked: true }), makeAgent("b")]);
+    useFleetArmingStore.getState().armIds(["a", "locked", "b"]);
+    expect(resolveFleetBroadcastTargetIds()).toEqual(["a", "b"]);
+    expect(useFleetArmingStore.getState().armedIds.has("locked")).toBe(true);
+  });
+
   it("preserves armOrder ordering", () => {
     seedPanels([makeAgent("a"), makeAgent("b"), makeAgent("c")]);
     useFleetArmingStore.getState().armIds(["c", "a", "b"]);

@@ -7,7 +7,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
-import { isTerminalFleetEligible } from "@/store/fleetEligibility";
+import { isTerminalFleetBroadcastTarget } from "@/store/fleetEligibility";
 import { useFleetResolutionPreviewStore } from "@/store/fleetResolutionPreviewStore";
 import { useFleetTargetOverridesStore } from "@/store/fleetTargetOverridesStore";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
@@ -23,13 +23,13 @@ export function FleetDraftingPill(): ReactElement | null {
   // What Enter will actually reach: the armed panes that pass the same
   // eligibility gate the broadcast applies at dispatch, minus this pane. A
   // membership count here overstated the fan-out whenever an armed pane had
-  // lost its PTY.
+  // lost its PTY or had its input locked.
   const skippedIds = useFleetTargetOverridesStore((s) => s.skippedIds);
   const peerCount = usePanelStore((state) => {
     let n = 0;
     for (const id of armOrder) {
       if (id === state.focusedId) continue;
-      if (!isTerminalFleetEligible(state.panelsById[id])) continue;
+      if (!isTerminalFleetBroadcastTarget(state.panelsById[id])) continue;
       if (skippedIds.has(id)) continue;
       n += 1;
     }

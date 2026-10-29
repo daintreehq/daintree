@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { beforeEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { buildFleetTargetPreviews, executeFleetBroadcast } from "../fleetExecution";
+import {
+  buildFleetTargetPreviews,
+  executeFleetBroadcast,
+  filterEligibleIds,
+} from "../fleetExecution";
 import { crossHostTargetKey } from "../crossHostFleet";
 import { FLEET_LARGE_PASTE_BATCH_SIZE } from "../fleetBroadcast";
 import { terminalClient } from "@/clients";
@@ -596,6 +600,16 @@ describe("buildFleetTargetPreviews", () => {
     expect(browser?.exclusionReason).toBe("Panel no longer eligible");
   });
 
+  it("shows an armed pane with locked input as left out for that reason (#14964)", () => {
+    seedPanels([makeAgent("open"), makeAgent("locked", { isInputLocked: true })]);
+    useFleetArmingStore.getState().armIds(["open", "locked"]);
+    const previews = buildFleetTargetPreviews("hi");
+    const locked = previews.find((p) => p.terminalId === "locked");
+    expect(locked?.excluded).toBe(true);
+    expect(locked?.exclusionReason).toBe("Input locked");
+    expect(previews.find((p) => p.terminalId === "open")?.excluded).toBe(false);
+  });
+
   it("falls back to 'Unknown' title when an armed id is no longer in the carrier", () => {
     // Mirrors the user opening the broadcast preview after a terminal has
     // been torn down — `panelsById[id]` is undefined, so getNarrowPanel
@@ -683,5 +697,19 @@ describe("buildFleetTargetPreviews", () => {
       expect(buildFleetBroadcastRecipeContextMock).toHaveBeenCalledWith("t1");
       expect(buildFleetBroadcastRecipeContextMock).toHaveBeenCalledWith("t2");
     });
+  });
+});
+
+describe("filterEligibleIds", () => {
+  beforeEach(() => {
+    reset();
+  });
+
+  it("drops a pane whose input is locked and keeps it once unlocked (#14964)", () => {
+    seedPanels([makeAgent("a"), makeAgent("b", { isInputLocked: true })]);
+    expect(filterEligibleIds(["a", "b"])).toEqual(["a"]);
+
+    seedPanels([makeAgent("a"), makeAgent("b", { isInputLocked: false })]);
+    expect(filterEligibleIds(["a", "b"])).toEqual(["a", "b"]);
   });
 });

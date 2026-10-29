@@ -8,7 +8,7 @@ import {
   peek as peekTerminalService,
   with as withTerminalService,
 } from "@/services/terminal/terminalInstanceServiceAccessor";
-import { isTerminalFleetEligible } from "@/store/fleetEligibility";
+import { isTerminalFleetBroadcastTarget, isTerminalFleetEligible } from "@/store/fleetEligibility";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { replaceRecipeVariables, detectUnresolvedVariables } from "@/utils/recipeVariables";
 import {
@@ -71,7 +71,7 @@ export function buildFleetTargetPreviews(draft: string): FleetTargetPreview[] {
     if (!armedIds.has(id)) continue;
     const panel = getNarrowPanel(panelsById, id);
 
-    if (isTerminalFleetEligible(panel)) {
+    if (isTerminalFleetBroadcastTarget(panel)) {
       const ctx = buildFleetBroadcastRecipeContext(id) ?? {};
       const resolved = replaceRecipeVariables(draft, ctx);
       const unresolvedVars = detectUnresolvedVariables(draft, ctx);
@@ -90,7 +90,9 @@ export function buildFleetTargetPreviews(draft: string): FleetTargetPreview[] {
         resolvedPayload: draft,
         unresolvedVars: [],
         excluded: true,
-        exclusionReason: "Panel no longer eligible",
+        exclusionReason: isTerminalFleetEligible(panel)
+          ? "Input locked"
+          : "Panel no longer eligible",
       });
     }
   }
@@ -112,7 +114,7 @@ export function buildFleetTargetPreviews(draft: string): FleetTargetPreview[] {
 
 /**
  * Drop ids whose backing panel is no longer fleet-eligible (trashed,
- * backgrounded, no PTY, etc.). Exported so the Enter-broadcast confirm
+ * backgrounded, no PTY, etc.) or whose input is locked. Exported so the Enter-broadcast confirm
  * path can re-check eligibility at dispatch time — a pane that went
  * away while the confirm dialog was open must not still receive bytes.
  */
@@ -120,7 +122,8 @@ export function filterEligibleIds(ids: string[]): string[] {
   const { panelsById } = usePanelStore.getState();
   // Another host's agent stays eligible while it is armed; the host refuses a dead one.
   return ids.filter(
-    (id) => isCrossHostTargetId(id) || isTerminalFleetEligible(getNarrowPanel(panelsById, id))
+    (id) =>
+      isCrossHostTargetId(id) || isTerminalFleetBroadcastTarget(getNarrowPanel(panelsById, id))
   );
 }
 

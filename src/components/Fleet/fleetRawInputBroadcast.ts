@@ -4,7 +4,8 @@ import {
   peek as peekTerminalService,
   with as withTerminalService,
 } from "@/services/terminal/terminalInstanceServiceAccessor";
-import { isFleetArmEligible, useFleetArmingStore } from "@/store/fleetArmingStore";
+import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { isTerminalFleetBroadcastTarget } from "@/store/fleetEligibility";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -21,7 +22,7 @@ function resolveLiveFleetTargetIds(): string[] {
   const targets: string[] = [];
   for (const id of armOrder) {
     if (!armedIds.has(id)) continue;
-    if (isFleetArmEligible(getNarrowPanel(panelsById, id))) targets.push(id);
+    if (isTerminalFleetBroadcastTarget(getNarrowPanel(panelsById, id))) targets.push(id);
   }
   return targets;
 }
