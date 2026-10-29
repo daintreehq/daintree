@@ -558,6 +558,11 @@ describe("project vocabulary operations", () => {
       expect(moved.conflicts).toEqual([]);
       expect(moved.dictionary.map(({ heardAs }) => heardAs)).toEqual([["Zoo Stand"], []]);
     }
+    expect(projects.local.get("local")?.map(({ heardAs }) => heardAs)).toEqual([["Zoo Stand"], []]);
+    expect(projects.repo.get("/repos/shared")?.map(({ heardAs }) => heardAs)).toEqual([
+      ["Zoo Stand"],
+      [],
+    ]);
   });
 
   it("removes a term from a project that keeps its vocabulary locally", async () => {

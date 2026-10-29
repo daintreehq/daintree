@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { useState } from "react";
+import { useState, type ComponentProps } from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { VoiceDictionaryPage } from "../VoiceDictionaryPage";
@@ -81,7 +81,8 @@ function mainLike(
 const mainLikeAdd = (initial: VoiceDictionaryEntry[] = []) => mainLike(initial).add;
 
 // Stands in for the voice tab: shows whatever dictionary main returned.
-// With `retry`, a change that fails runs once more, as the tab's Retry button would.
+// With `retry`, a failed change resolves false and leaves a Retry button that runs it
+// again later, as the voice tab's failure banner does.
 function PageWith({
   initial,
   suggestions = [],
@@ -92,21 +93,31 @@ function PageWith({
   retry?: boolean;
 }) {
   const [entries, setEntries] = useState<VoiceDictionaryEntry[]>(initial);
+  const [failed, setFailed] = useState<(() => void) | null>(null);
+  const change: ComponentProps<typeof VoiceDictionaryPage>["onChange"] = async (
+    label,
+    run,
+    onSaved
+  ) => {
+    try {
+      const next = await run();
+      setEntries(next.dictionary);
+      setFailed(null);
+      onSaved?.();
+      return true;
+    } catch (error) {
+      if (!retry) throw error;
+      setFailed(() => () => void change(label, run, onSaved));
+      return false;
+    }
+  };
   return (
     <VoiceDictionaryPage
       entries={entries}
       suggestions={suggestions}
-      failure={null}
+      failure={failed && <button onClick={failed}>Retry</button>}
       onBack={() => {}}
-      onChange={async (_label, run, onSaved) => {
-        const next = await run().catch((error: unknown) => {
-          if (!retry) throw error;
-          return run();
-        });
-        setEntries(next.dictionary);
-        onSaved?.();
-        return true;
-      }}
+      onChange={change}
     />
   );
 }
@@ -304,14 +315,16 @@ describe("VoiceDictionaryPage", () => {
       fireEvent.change(screen.getByLabelText("Heard-as phrases for Zoostand"), {
         target: { value: "zoo stand" },
       });
-      const save = screen.getByRole("button", { name: "Save" });
-      act(() => save.focus());
-      fireEvent.click(save);
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
       expect(update).toHaveBeenCalledTimes(1);
+      const retryButton = await screen.findByRole("button", { name: "Retry" });
       expect(screen.queryByRole("button", { name: "Move phrase" })).toBeNull();
 
+      act(() => retryButton.focus());
+      fireEvent.click(retryButton);
       await waitFor(() => expect(screen.getByRole("button", { name: "Move phrase" })).toBeTruthy());
       expect(update).toHaveBeenCalledTimes(2);
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
       expect(screen.getByLabelText("Heard-as phrases for Zoostand")).toBeTruthy();
       expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
     });
@@ -353,6 +366,7 @@ describe("VoiceDictionaryPage", () => {
         target: { value: "zoo stand -> Zoostand\nzoo stand -> Zoo\nVite" },
       });
       fireEvent.click(screen.getByRole("button", { name: "Add" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
 
       await waitFor(() => expect(container.textContent).toContain("Left out"));
       expect(container.textContent).toContain(
@@ -390,7 +404,7 @@ describe("VoiceDictionaryPage", () => {
 
       fireEvent.click(screen.getByRole("button", { name: "Add Vite to dictionary" }));
       await waitFor(() => expect(container.textContent).toContain('Heard as "veet"'));
-      expect(container.textContent).not.toContain("already belongs");
+      expect(screen.getByRole("status").textContent).toBe("");
     });
 
     it("restores a removed term without a phrase another term took meanwhile", async () => {

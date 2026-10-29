@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
-import { HeardAsMovePrompt } from "@/components/Settings/HeardAsMovePrompt";
+import { HeardAsMovePrompt, heardAsMoveQuestion } from "@/components/Settings/HeardAsMovePrompt";
 import {
   MAX_DICTIONARY_TERM_LENGTH,
   findHeardAsConflicts,
@@ -237,6 +237,10 @@ export function DictationVocabularySection({ projectId }: { projectId: string })
           layout="stacked"
           control={({ labelId, descriptionId }) => (
             <div className="space-y-2">
+              {/* Always in the tree, so the question or notice is announced when it appears. */}
+              <p role="status" className="sr-only">
+                {pendingMove ? heardAsMoveQuestion(term.trim(), pendingMove.conflicts) : notice}
+              </p>
               <div className="flex flex-wrap gap-2">
                 <Input
                   ref={termInputRef}
@@ -264,18 +268,16 @@ export function DictationVocabularySection({ projectId }: { projectId: string })
                   Add
                 </Button>
               </div>
-              <div role="status" className="empty:hidden">
-                {pendingMove ? (
-                  <HeardAsMovePrompt
-                    term={term.trim()}
-                    conflicts={pendingMove.conflicts}
-                    onMove={() => add(true)}
-                    onCancel={cancelMove}
-                  />
-                ) : (
-                  notice && <p className="text-sm text-text-secondary">{notice}</p>
-                )}
-              </div>
+              {pendingMove ? (
+                <HeardAsMovePrompt
+                  term={term.trim()}
+                  conflicts={pendingMove.conflicts}
+                  onMove={() => add(true)}
+                  onCancel={cancelMove}
+                />
+              ) : (
+                notice && <p className="text-sm text-text-secondary">{notice}</p>
+              )}
             </div>
           )}
         />

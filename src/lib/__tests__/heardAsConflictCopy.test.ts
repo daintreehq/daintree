@@ -19,12 +19,19 @@ describe("describeHeardAsConflicts", () => {
     );
   });
 
-  it("names a phrase two terms asked for once", () => {
+  it("names a phrase two terms asked for once per term that has it", () => {
     expect(
       describeHeardAsConflicts([
         { phrase: "zoo stand", owner: "Zustand" },
         { phrase: "Zoo  Stand", owner: "Zustand" },
+        { phrase: "zoo stand", owner: "Zoo" },
       ])
+    ).toBe("“zoo stand” already belongs to Zustand; “zoo stand” to Zoo");
+    expect(
+      describeHeardAsConflicts(
+        Array.from({ length: 4 }, () => ({ phrase: "zoo stand", owner: "Zustand" })),
+        3
+      )
     ).toBe("“zoo stand” already belongs to Zustand");
   });
 

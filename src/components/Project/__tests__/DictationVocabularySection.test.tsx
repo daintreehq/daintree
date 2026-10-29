@@ -169,9 +169,9 @@ describe("DictationVocabularySection", () => {
       fireEvent.change(heardAsInput(), { target: { value: "Zoo Stand" } });
       fireEvent.keyDown(heardAsInput(), { key: "Enter" });
 
-      expect(
-        screen.getByText("“Zoo Stand” already belongs to Zustand. Move it to Zoostand?")
-      ).toBeTruthy();
+      const question = "“Zoo Stand” already belongs to Zustand. Move it to Zoostand?";
+      expect(screen.getByRole("status").textContent).toBe(question);
+      expect(screen.getAllByText(question)).toHaveLength(2);
       expect(api.addToProject).not.toHaveBeenCalled();
 
       fireEvent.click(screen.getByRole("button", { name: "Move phrase" }));
@@ -235,9 +235,9 @@ describe("DictationVocabularySection", () => {
           changed([entry("Zustand", ["zoo stand"])], [{ phrase: "zoo stand", owner: "Zustand" }])
         )
       );
-      expect(
-        screen.getByText("Didn't add Zoostand: “zoo stand” already belongs to Zustand")
-      ).toBeTruthy();
+      const notice = "Didn't add Zoostand: “zoo stand” already belongs to Zustand";
+      expect(screen.getByRole("status").textContent).toBe(notice);
+      expect(screen.getAllByText(notice)).toHaveLength(2);
       expect(termInput().value).toBe("Vite");
       expect(screen.queryByRole("button", { name: "Move phrase" })).toBeNull();
     });

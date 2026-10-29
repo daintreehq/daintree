@@ -10,7 +10,7 @@ import { TimeAgo } from "@/components/ui/TimeAgo";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow, SettingsRowActions } from "./SettingsGroup";
 import { useSettingsSubpage } from "./SettingsSubpage";
-import { HeardAsMovePrompt } from "./HeardAsMovePrompt";
+import { HeardAsMovePrompt, heardAsMoveQuestion } from "./HeardAsMovePrompt";
 import {
   MAX_DICTIONARY_IMPORT_TERMS,
   parseDictionaryInput,
@@ -631,6 +631,10 @@ function EntryEditor({
       error={error}
       control={({ labelId, descriptionId }) => (
         <div className="space-y-2">
+          {/* Always in the tree, so the question is announced when it appears. */}
+          <p role="status" className="sr-only">
+            {pendingMove ? heardAsMoveQuestion(trimmed, pendingMove.conflicts) : ""}
+          </p>
           <Input
             autoFocus
             value={term}
@@ -649,21 +653,18 @@ function EntryEditor({
             onChange={(e) => setHeard(e.target.value)}
             onKeyDown={onKeyDown}
           />
-          <div role="status" className="empty:hidden">
-            {pendingMove && (
-              <HeardAsMovePrompt
-                term={trimmed}
-                conflicts={pendingMove.conflicts}
-                takesFocus={pendingMove.takesFocus}
-                onMove={() => save("move")}
-                onCancel={() => {
-                  setMoving(null);
-                  heardRef.current?.focus();
-                }}
-              />
-            )}
-          </div>
-          {!pendingMove && (
+          {pendingMove ? (
+            <HeardAsMovePrompt
+              term={trimmed}
+              conflicts={pendingMove.conflicts}
+              takesFocus={pendingMove.takesFocus}
+              onMove={() => save("move")}
+              onCancel={() => {
+                setMoving(null);
+                heardRef.current?.focus();
+              }}
+            />
+          ) : (
             <div ref={actionsRef}>
               <SettingsRowActions>
                 <Button size="sm" variant="outline" onClick={onCancel}>

@@ -160,6 +160,24 @@ describe("addDictionaryEntry", () => {
       expect(conflicts).toEqual([]);
     });
 
+    it("measures whether a copy can fire on its collapsed spacing and written case", () => {
+      const legacy = [
+        entry("Zoo", { heardAs: [`zoo${" ".repeat(120)}stand`] }),
+        entry("Dotted", { heardAs: ["İ".repeat(100)] }),
+      ];
+      const conflicts: HeardAsConflict[] = [];
+      addDictionaryEntry(
+        legacy,
+        { term: "New", heardAs: ["zoo stand", "İ".repeat(100)] },
+        T1,
+        conflicts
+      );
+      expect(conflicts).toEqual([
+        { phrase: "zoo stand", owner: "Zoo" },
+        { phrase: "İ".repeat(100), owner: "Dotted" },
+      ]);
+    });
+
     it("reports a phrase asked for twice in different spacing once", () => {
       const conflicts: HeardAsConflict[] = [];
       addDictionaryEntry(
