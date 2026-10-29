@@ -531,6 +531,8 @@ describe("TerminalContextMenu — Open link after the hover ends (#14960)", () =
 
   afterEach(() => {
     hover(null);
+    hoveredFilePath.current = null;
+    hoveredFileKind.current = "file";
     reportFileLinkFailure.mockReset();
   });
 
@@ -593,21 +595,54 @@ describe("TerminalContextMenu — Open link after the hover ends (#14960)", () =
     expect(first.activate).not.toHaveBeenCalled();
   });
 
-  it("reports a link that fails to open instead of dropping it", async () => {
+  it.each([
+    [
+      "rejects",
+      (activate: ReturnType<typeof link>["activate"], failure: Error) =>
+        activate.mockRejectedValue(failure),
+    ],
+    [
+      "throws",
+      (activate: ReturnType<typeof link>["activate"], failure: Error) =>
+        activate.mockImplementation(() => {
+          throw failure;
+        }),
+    ],
+  ])("reports a link whose activation %s instead of dropping it", async (_how, fail) => {
     const failure = new Error("no handler");
     const opened = link(URL_TEXT);
-    opened.activate.mockRejectedValue(failure);
+    fail(opened.activate, failure);
     hover(opened);
     openMenu({ hovered: null });
     hover(null);
 
     await act(async () => screen.getByText("Open link").click());
 
-    expect(reportFileLinkFailure).toHaveBeenCalledWith(
-      "Failed to activate hovered link",
-      failure,
-      URL_TEXT
-    );
+    expect(reportFileLinkFailure).toHaveBeenCalledWith(expect.any(String), failure, URL_TEXT);
+  });
+
+  it("does nothing for a menu that was opened without a link behind its URL", async () => {
+    hoveredUrl.current = URL_TEXT;
+    openMenu({ hovered: null });
+
+    await act(async () => screen.getByText("Open link").click());
+
+    expect(reportFileLinkFailure).not.toHaveBeenCalled();
+  });
+
+  it("does not carry a link into a touch or pen opening, which captures no hover", () => {
+    const earlier = link(URL_TEXT);
+    hover(earlier);
+    const { container } = openMenu({ hovered: null });
+    expect(screen.getByText("Open link")).toBeTruthy();
+
+    act(() => {
+      container
+        .querySelector('[data-context-trigger="panel-1"]')!
+        .dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" }));
+    });
+
+    expect(screen.queryByText("Open link")).toBeNull();
   });
 });
 

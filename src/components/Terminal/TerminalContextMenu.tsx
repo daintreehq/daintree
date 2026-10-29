@@ -379,15 +379,6 @@ function TerminalContextMenuBody({
     [proxy, captureMovePickerAnchor]
   );
 
-  // Radix also opens the menu from a touch or pen long-press, which never
-  // raises the contextmenu event the capture above hangs off.
-  const captureMovePickerAnchorOnPress = useCallback(
-    (event: React.PointerEvent<HTMLElement>) => {
-      if (event.pointerType !== "mouse") captureMovePickerAnchor(event);
-    },
-    [captureMovePickerAnchor]
-  );
-
   const isWatched = usePanelStore((state) => state.watchedPanels.has(terminalId));
   const isArmed = useFleetArmingStore((s) => s.armedIds.has(terminalId));
   const fleetSize = useFleetArmingStore((s) => s.armedIds.size);
@@ -434,6 +425,13 @@ function TerminalContextMenuBody({
   const hoveredLinkRef = useRef<TerminalLink | null>(null);
   const [hoveredFilePath, setHoveredFilePath] = useState<string | null>(null);
   const [hoveredFileKind, setHoveredFileKind] = useState<"file" | "directory" | null>(null);
+  const clearHoveredLink = useCallback(() => {
+    hoveredLinkRef.current = null;
+    setHoveredUrl(null);
+    setHoveredUrlPluginName(null);
+    setHoveredFilePath(null);
+    setHoveredFileKind(null);
+  }, []);
   const [selectedText, setSelectedText] = useState<string | null>(null);
   const suppressNextCloseAutoFocusRef = useRef(false);
   const [restartOnPresetRequest, setRestartOnPresetRequest] =
@@ -493,12 +491,8 @@ function TerminalContextMenuBody({
 
       const managed = peekTerminalService()?.get(terminalId) ?? null;
       if (!managed?.terminal) {
-        hoveredLinkRef.current = null;
+        clearHoveredLink();
         setHasSelection(false);
-        setHoveredUrl(null);
-        setHoveredUrlPluginName(null);
-        setHoveredFilePath(null);
-        setHoveredFileKind(null);
         setSelectedText(null);
         return;
       }
@@ -514,7 +508,19 @@ function TerminalContextMenuBody({
       setHoveredFilePath(peekTerminalService()?.getHoveredFilePath(terminalId) ?? null);
       setHoveredFileKind(peekTerminalService()?.getHoveredFileKind(terminalId) ?? null);
     },
-    [handleTriggerContextMenu, terminalId, recentVoiceTargets]
+    [handleTriggerContextMenu, terminalId, recentVoiceTargets, clearHoveredLink]
+  );
+
+  // Radix also opens the menu from a touch or pen long-press, which never
+  // raises the contextmenu event the hover capture above hangs off, so the
+  // previous opening's link must not survive into this one.
+  const captureMovePickerAnchorOnPress = useCallback(
+    (event: React.PointerEvent<HTMLElement>) => {
+      if (event.pointerType === "mouse") return;
+      clearHoveredLink();
+      captureMovePickerAnchor(event);
+    },
+    [captureMovePickerAnchor, clearHoveredLink]
   );
 
   const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
