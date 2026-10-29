@@ -353,7 +353,7 @@ describe("ResourceEnvironmentsSection — removing an environment", () => {
     });
 
     it("lists only the worktrees in the environment being removed", () => {
-      renderWithWorktrees(
+      const { onResourceEnvironmentsChange } = renderWithWorktrees(
         [
           worktree("/repo/a", "feature-a", "cloud"),
           worktree("/repo/c", "feature-c", "docker-local"),
@@ -367,6 +367,13 @@ describe("ResourceEnvironmentsSection — removing an environment", () => {
       expect(confirmDialog.textContent).toContain('1 worktree still runs in "docker-local"');
       const listed = within(within(confirmDialog).getByRole("list")).getAllByRole("listitem");
       expect(listed.map((item) => item.textContent)).toEqual(["feature-c"]);
+      expect(
+        within(confirmDialog)
+          .getByRole("button", { name: "Remove environment" })
+          .hasAttribute("disabled")
+      ).toBe(true);
+      act(() => dialog.onConfirm?.());
+      expect(onResourceEnvironmentsChange).not.toHaveBeenCalled();
     });
 
     it("allows the removal once the last of them leaves the environment", () => {
@@ -406,15 +413,13 @@ describe("ResourceEnvironmentsSection — removing an environment", () => {
       act(() => dialog.onConfirm?.());
       expect(onResourceEnvironmentsChange).not.toHaveBeenCalled();
 
-      act(() => {
-        store.setState({
-          worktrees: new Map([["/repo/a", worktree("/repo/a", "feature-a", "cloud")]]),
-          isInitialized: true,
-        });
-      });
+      // The first snapshot is what unlocks it, even when it holds no worktrees.
+      act(() => store.setState({ isInitialized: true }));
 
-      expect(confirmDialog.textContent).toContain('1 worktree still runs in "cloud"');
-      expect(confirm.hasAttribute("disabled")).toBe(true);
+      expect(confirmDialog.textContent).not.toContain("Waiting for this project's worktrees");
+      expect(confirm.hasAttribute("disabled")).toBe(false);
+      fireEvent.click(confirm);
+      expect(Object.keys(onResourceEnvironmentsChange.mock.calls[0]![0])).toEqual(["docker-local"]);
     });
   });
 });
