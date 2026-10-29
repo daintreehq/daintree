@@ -1,6 +1,6 @@
 import { useId, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { TAKING_CONTROL, takeControlConsequence, type ControlFacts } from "./recoveryCopy";
+import { takeControlConsequence, type ControlFacts } from "./recoveryCopy";
 import { useTakeControlBusy } from "./takeControlPending";
 
 /**
@@ -33,6 +33,7 @@ export function TakeControlButton({
       variant="outline"
       size="sm"
       loading={busy}
+      loadingPresentation="labelled"
       aria-describedby={describedBy}
       onClick={() => requestTakeControl(projectId, panelId)}
     >
@@ -60,16 +61,14 @@ export function TakeControlOffer({
   children?: ReactNode;
 }) {
   const consequenceId = useId();
-  const busy = useTakeControlBusy(projectId);
   return (
     <div className="flex flex-col items-center gap-2">
       <div className="flex flex-wrap items-center justify-center gap-2">
         <TakeControlButton projectId={projectId} panelId={panelId} describedBy={consequenceId} />
         {children}
       </div>
-      {/* While the request is out, this says so in words beside the spinner. */}
       <p id={consequenceId} className="text-xs text-text-secondary">
-        {busy ? TAKING_CONTROL : takeControlConsequence(facts)}
+        {takeControlConsequence(facts)}
       </p>
     </div>
   );

@@ -1235,6 +1235,60 @@ describe("InlineStatusBanner focus handoff on any removal", () => {
     expect(onPaneClick).not.toHaveBeenCalled();
   });
 
+  it("hands a labelled action's loading presentation to its Button, and keeps the overlay for icon-only ones", () => {
+    const actions = (loading: boolean): BannerAction[] => [
+      {
+        id: "take",
+        label: "Take control",
+        loading,
+        loadingPresentation: "labelled",
+        onClick: () => {},
+      },
+      {
+        id: "refresh",
+        label: "Refresh",
+        icon: Info,
+        iconOnly: true,
+        ariaLabel: "Refresh",
+        loading,
+        loadingPresentation: "labelled",
+        onClick: () => {},
+      },
+    ];
+    for (const layout of ["inline", "stacked"] as const) {
+      const { rerender, unmount } = render(
+        <InlineStatusBanner
+          title="t"
+          severity="neutral"
+          layout={layout}
+          animated={false}
+          actions={actions(false)}
+        />
+      );
+      const take = screen.getByRole("button", { name: "Take control" });
+      take.focus();
+      rerender(
+        <InlineStatusBanner
+          title="t"
+          severity="neutral"
+          layout={layout}
+          animated={false}
+          actions={actions(true)}
+        />
+      );
+      expect(screen.getByRole("button", { name: "Take control" })).toBe(take);
+      expect(document.activeElement).toBe(take);
+      expect(take.getAttribute("aria-busy")).toBe("true");
+      expect(take.querySelector('[data-slot="button-spinner-slot"] svg')).toBeTruthy();
+      expect(take.querySelector('[data-slot="button-spinner"]')).toBeNull();
+
+      const refresh = screen.getByRole("button", { name: "Refresh" });
+      expect(refresh.querySelector('[data-slot="button-spinner"]')).toBeTruthy();
+      expect(refresh.querySelector('[data-slot="button-spinner-slot"]')).toBeNull();
+      unmount();
+    }
+  });
+
   it("leaves focus alone when the banner unmounts without holding it", () => {
     vi.useFakeTimers();
     const raf = vi

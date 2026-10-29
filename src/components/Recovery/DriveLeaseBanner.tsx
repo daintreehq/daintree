@@ -21,7 +21,7 @@ export function DriveLeaseBanner() {
 
   if (state === null || facts === null) return null;
 
-  const copy = getDriveLeaseBannerCopy(facts, awaySeconds, busy);
+  const copy = getDriveLeaseBannerCopy(facts, awaySeconds);
   const projectId = state.projectId;
 
   return (
@@ -43,6 +43,9 @@ export function DriveLeaseBanner() {
         ariaLabel: takeControlAriaLabel(facts),
         variant: "primary",
         loading: busy,
+        // Busy, the button still says what it's doing, so the consequence
+        // beneath it stays put rather than standing in for the label.
+        loadingPresentation: "labelled",
         onClick: () => void takeControl(projectId),
       }}
     />

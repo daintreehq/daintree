@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { DriveLeaseView } from "@shared/types/ipc/driveLease";
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -23,6 +23,8 @@ import {
   getTerminalInputBlock,
   setLeaseInputBlock,
 } from "@/services/terminal/inputGate";
+import { setTakeControlPending } from "@/components/Recovery/takeControlPending";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 
 const takeOver = vi.fn<(payload: { projectId: string }) => Promise<DriveLeaseView>>();
 
@@ -146,6 +148,33 @@ describe("TerminalInputBlockBanner", () => {
       />
     );
     expect(screen.getByRole("button", { name: "Take control" })).toBeTruthy();
+  });
+
+  it("keeps Take control readable beside its spinner while a take-over is in flight (#15304)", () => {
+    vi.useFakeTimers();
+    try {
+      render(
+        <TerminalInputBlockBanner
+          block={{ kind: "driven-elsewhere", driverName: "greg-mbp", projectId: "proj-1" }}
+        />
+      );
+      const button = screen.getByRole("button", { name: "Take control" });
+      act(() => setTakeControlPending("proj-1", true));
+      act(() => {
+        vi.advanceTimersByTime(UI_DOHERTY_THRESHOLD);
+      });
+      expect(screen.getByRole("button", { name: "Take control" })).toBe(button);
+      expect(button.getAttribute("aria-busy")).toBe("true");
+      expect(button.getAttribute("aria-disabled")).toBe("true");
+      const content = button.querySelector('[data-slot="button-content"]')!;
+      expect(content.className).not.toContain("opacity-0");
+      expect(content.textContent).toBe("Take control");
+      expect(button.querySelector('[data-slot="button-spinner-slot"] svg')).toBeTruthy();
+    } finally {
+      cleanup();
+      setTakeControlPending("proj-1", false);
+      vi.useRealTimers();
+    }
   });
 
   it("keeps the block when the host refuses the takeover", async () => {

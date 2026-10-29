@@ -35,6 +35,8 @@ export interface BannerAction {
   title?: string;
   iconOnly?: boolean;
   loading?: boolean;
+  /** How the action looks while `loading`; see `Button`. Icon-only actions keep the overlay. */
+  loadingPresentation?: ButtonProps["loadingPresentation"];
   disabled?: boolean;
 }
 
@@ -650,6 +652,7 @@ export function InlineStatusBanner({
             // button drops the keyboard user's focus to <body> as it does.
             aria-disabled={action.disabled || undefined}
             loading={action.loading}
+            loadingPresentation={action.loadingPresentation}
             onClick={(e) => {
               e.stopPropagation();
               if (action.disabled) return;
