@@ -10,9 +10,21 @@ import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import type { HelpSessionSnapshot, GrantEndReason } from "./HelpSessionController";
+import type {
+  ActiveGrantState,
+  HelpSessionSnapshot,
+  GrantEndReason,
+} from "./HelpSessionController";
+import type { McpGrantLifecyclePayload } from "@shared/types/ipc/mcpServer";
 
 const GRANT_ENDED_BANNER_AUTO_DISMISS_MS = 15_000;
+
+// Native grants are told apart by `grantId` (their lazy expiry names the tool
+// that tripped it, not "*"); per-tool grants, which carry none, by tool.
+function isSameGrant(active: ActiveGrantState, payload: McpGrantLifecyclePayload): boolean {
+  if (active.sessionId !== payload.sessionId || active.grantId !== payload.grantId) return false;
+  return active.grantId !== undefined || active.toolId === payload.toolId;
+}
 
 export interface McpActivityTrackerHost {
   getSnapshot(): HelpSessionSnapshot;
@@ -426,13 +438,17 @@ export class McpActivityTracker {
   /**
    * Consume a live grant lifecycle push (#10042). `grant.issued` arms the
    * countdown banner and dismisses the mismatch that prompted it;
+   * `grant.refreshed` moves its deadline after a use slides it (#14998);
    * `grant.expired`/`grant.revoked` retire the banner and, for the two
    * user-actionable reasons, surface a brief "approval ended" notice. The
-   * `expired`/`revoked` cases are scoped to the grant currently on screen so a
-   * stale lapse for a different tool can't wipe the active countdown.
+   * `refreshed`/`expired`/`revoked` cases are scoped to the grant currently on
+   * screen, so a push for a different tool can't move or wipe the countdown,
+   * and a refresh never re-arms a banner that's already gone.
    * `tier.elevated`/`tier.decayed` are session-tier transitions, not per-tool
    * grants — they leave the countdown untouched (the audit viewer records
-   * them).
+   * them). Native automation grants (#10648) all share `toolId: "*"`, so the
+   * on-screen grant is matched by `grantId` when it has one, or one native
+   * grant's use would move another's countdown.
    */
   private _onGrantLifecycle(
     payload: import("@shared/types/ipc/mcpServer").McpGrantLifecyclePayload
@@ -447,7 +463,9 @@ export class McpActivityTracker {
           sessionId: payload.sessionId,
           toolId: payload.toolId,
           expiresAt: payload.expiresAt,
+          maxExpiresAt: payload.maxExpiresAt,
           ttlMs: payload.ttlMs,
+          grantId: payload.grantId,
         },
         grantEnded: null,
       });
@@ -456,16 +474,25 @@ export class McpActivityTracker {
       this._clearTierMismatchIfStillCurrent(payload.sessionId, payload.toolId);
       return;
     }
+    const active = this.host.getSnapshot().activeGrant;
+    if (!active || !isSameGrant(active, payload)) return;
+    if (payload.type === "grant.refreshed") {
+      if (payload.expiresAt === undefined) return;
+      this.host.patch({
+        activeGrant: {
+          ...active,
+          expiresAt: payload.expiresAt,
+          maxExpiresAt: payload.maxExpiresAt ?? active.maxExpiresAt,
+        },
+      });
+      return;
+    }
     if (payload.type === "grant.expired" || payload.type === "grant.revoked") {
-      const active = this.host.getSnapshot().activeGrant;
-      if (!active || active.sessionId !== payload.sessionId || active.toolId !== payload.toolId) {
-        return;
-      }
       const reason = this._grantEndReason(payload);
       this._clearGrantEndedTimer();
       this.host.patch({
         activeGrant: null,
-        grantEnded: reason ? { toolId: payload.toolId, reason } : null,
+        grantEnded: reason ? { toolId: active.toolId, reason } : null,
       });
       if (reason) this._armGrantEndedAutoDismiss();
     }

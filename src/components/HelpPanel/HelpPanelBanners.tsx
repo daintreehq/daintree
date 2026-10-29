@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { formatCountdown } from "@/utils/formatCountdown";
+import { grantDeadline } from "@/utils/grantDeadline";
 import { Clock, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
@@ -42,7 +43,9 @@ function ToolId({ id }: { id: string }) {
  * source of truth, so a missed tick can't drift the displayed value (and the
  * interval is keyed on `expiresAt`, restarting cleanly under StrictMode's
  * double-mount). The grant is sliding-TTL: the countdown is "time left if the
- * tool isn't used again," matching the issue's "countdown without polling".
+ * tool isn't used again," and each use's `grant.refreshed` push moves it
+ * (#14998). Once the 30-minute ceiling ends the grant first, no use can, so the
+ * countdown says so.
  */
 function GrantActiveBanner({
   grant,
@@ -53,16 +56,15 @@ function GrantActiveBanner({
   isRevoking: boolean;
   onRevoke: () => void;
 }) {
-  const [remainingSeconds, setRemainingSeconds] = useState(() =>
-    computeRemainingSeconds(grant.expiresAt)
-  );
+  const { endsAt, atCeiling } = grantDeadline(grant.expiresAt, grant.maxExpiresAt);
+  const [remainingSeconds, setRemainingSeconds] = useState(() => computeRemainingSeconds(endsAt));
   useEffect(() => {
-    setRemainingSeconds(computeRemainingSeconds(grant.expiresAt));
+    setRemainingSeconds(computeRemainingSeconds(endsAt));
     const id = setInterval(() => {
-      setRemainingSeconds(computeRemainingSeconds(grant.expiresAt));
+      setRemainingSeconds(computeRemainingSeconds(endsAt));
     }, COUNTDOWN_TICK_MS);
     return () => clearInterval(id);
-  }, [grant.expiresAt]);
+  }, [endsAt]);
 
   return (
     <InlineStatusBanner
@@ -84,6 +86,7 @@ function GrantActiveBanner({
         // the "<tool> approved" message once instead of the ticking time.
         <span aria-live="off">
           <span className="tabular-nums">{formatCountdown(remainingSeconds)}</span> left
+          {atCeiling && " · 30-minute limit"}
         </span>
       }
       action={{

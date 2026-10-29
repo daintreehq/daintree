@@ -1398,23 +1398,26 @@ export class McpServerService {
    * to every WebContents would leak security state to other windows.
    */
   private emitGrantLifecycle(sessionId: string, payload: McpGrantLifecyclePayload): void {
-    try {
-      this.auditService.appendGrantRecord({
-        type: payload.type,
-        sessionId: payload.sessionId,
-        toolId: payload.toolId,
-        ttlMs: payload.ttlMs,
-        expiresAt: payload.expiresAt,
-        revokedReason: payload.revokedReason,
-        grantId: payload.grantId,
-        maxUses: payload.maxUses,
-        remainingUses: payload.remainingUses,
-        actorId: payload.actorId,
-        actorType: payload.actorType,
-        allowedTools: payload.allowedTools,
-      });
-    } catch (err) {
-      console.error("[MCP] Failed to append grant audit record:", err);
+    // A refresh is live-only: the dispatch record that caused it is the audit.
+    if (payload.type !== "grant.refreshed") {
+      try {
+        this.auditService.appendGrantRecord({
+          type: payload.type,
+          sessionId: payload.sessionId,
+          toolId: payload.toolId,
+          ttlMs: payload.ttlMs,
+          expiresAt: payload.expiresAt,
+          revokedReason: payload.revokedReason,
+          grantId: payload.grantId,
+          maxUses: payload.maxUses,
+          remainingUses: payload.remainingUses,
+          actorId: payload.actorId,
+          actorType: payload.actorType,
+          allowedTools: payload.allowedTools,
+        });
+      } catch (err) {
+        console.error("[MCP] Failed to append grant audit record:", err);
+      }
     }
 
     // Origin-gated like every other renderer push (#11789). Unreachable in

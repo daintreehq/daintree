@@ -17,6 +17,7 @@ import type {
   ActionDanger,
 } from "../../../shared/types/actions.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import type { McpGrantLifecyclePayload } from "../../../shared/types/ipc/mcpServer.js";
 import { ACTIONS_LIST_TOOL } from "../mcp-server/shared.js";
 
 const testHomeDir = vi.hoisted(
@@ -481,6 +482,34 @@ describe("McpServerService", () => {
     function getAuditRecords(svc: McpServerService): AuditRecord[] {
       return (svc as unknown as { getAuditRecords: () => AuditRecord[] }).getAuditRecords();
     }
+
+    it("pushes a grant refresh to the pinned renderer without an audit row (#14998)", () => {
+      const { webContents } = createMockWindow();
+      const store = service._sessionStore;
+      store.sessionOriginMap.set("help-transport", "help");
+      store.sessionWebContentsMap.set("help-transport", webContents.id);
+      const appendGrantRecord = vi.spyOn(service._auditService, "appendGrantRecord");
+      const emit = (
+        service as unknown as {
+          emitGrantLifecycle: (sessionId: string, payload: McpGrantLifecyclePayload) => void;
+        }
+      ).emitGrantLifecycle.bind(service);
+      const grant = {
+        sessionId: "help-transport",
+        toolId: "project.runCheck",
+        ttlMs: 900_000,
+        maxExpiresAt: 1_800_000,
+      };
+
+      emit("help-transport", { ...grant, type: "grant.issued", expiresAt: 900_000 });
+      emit("help-transport", { ...grant, type: "grant.refreshed", expiresAt: 1_500_000 });
+
+      expect(appendGrantRecord.mock.calls.map(([record]) => record.type)).toEqual(["grant.issued"]);
+      const pushed = webContents.send.mock.calls
+        .filter(([channel]) => channel === CHANNELS.MCP_GRANT_LIFECYCLE)
+        .map(([, payload]) => (payload as McpGrantLifecyclePayload).type);
+      expect(pushed).toEqual(["grant.issued", "grant.refreshed"]);
+    });
 
     it("pruneAuditByRetention delegates to both audit and turn-outcome services (#10776)", () => {
       const auditSpy = vi.spyOn(service._auditService, "pruneByAge");
