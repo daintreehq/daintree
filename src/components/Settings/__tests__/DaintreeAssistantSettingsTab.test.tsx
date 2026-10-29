@@ -80,6 +80,8 @@ vi.mock("../SettingsSelect", () => ({
     onValueChange,
     options,
     placeholder,
+    isModified,
+    onReset,
   }: {
     label: string;
     description?: React.ReactNode;
@@ -87,6 +89,8 @@ vi.mock("../SettingsSelect", () => ({
     onValueChange: (v: string) => void;
     options: SettingsSelectStubOption[];
     placeholder?: string;
+    isModified?: boolean;
+    onReset?: () => void;
   }) => (
     <label>
       {label}
@@ -99,6 +103,9 @@ vi.mock("../SettingsSelect", () => ({
           </option>
         ))}
       </select>
+      {isModified && onReset && (
+        <button type="button" aria-label={`Reset ${label} to default`} onClick={onReset} />
+      )}
     </label>
   ),
 }));
@@ -882,29 +889,121 @@ describe("DaintreeAssistantSettingsTab", () => {
       await waitForContent(container, "Bypass Claude permission prompts");
     });
 
+    function mockClaudeAndCodexCatalogs() {
+      window.electron.agentCapabilities.getResolvedModelList = vi
+        .fn()
+        .mockImplementation((agentId: string) =>
+          Promise.resolve({
+            agentId,
+            models:
+              agentId === "codex"
+                ? [
+                    { id: "gpt-6-astra", name: "GPT-6 Astra", shortLabel: "Astra" },
+                    { id: "gpt-6-luna", name: "GPT-6 Luna", shortLabel: "Luna" },
+                  ]
+                : [
+                    { id: "opus", name: "Opus", shortLabel: "Opus" },
+                    { id: "sonnet", name: "Sonnet", shortLabel: "Sonnet" },
+                  ],
+            contextWindow: null,
+            source: "merged",
+          })
+        );
+    }
+
+    it("names whichever agent is the only one installed", async () => {
+      mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+      setCliAvailability({ claude: "missing", codex: "ready" });
+
+      const { container } = renderTab();
+      await waitForContent(container, "Bypass Codex approvals and sandbox");
+
+      expect(container.textContent).toContain(
+        "Using Codex, the only installed agent the assistant supports"
+      );
+      expect(container.textContent).not.toContain("Bypass Claude");
+      expect(container.textContent).toContain("Codex's skip permission prompts setting");
+    });
+
     it("writes a model change to that agent's entry without saving it as the agent", async () => {
-      window.electron.agentCapabilities.getResolvedModelList = vi.fn().mockResolvedValue({
-        agentId: "claude",
-        models: [
-          { id: "opus", name: "Opus", shortLabel: "Opus" },
-          { id: "sonnet", name: "Sonnet", shortLabel: "Sonnet" },
-        ],
-        contextWindow: 200_000,
-        source: "merged",
-      });
-      setCliAvailability({ claude: "ready" });
+      mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+      mockClaudeAndCodexCatalogs();
+      setCliAvailability({ claude: "missing", codex: "ready" });
 
       renderTab();
       const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
       await waitFor(() => expect(select.value).toBe("__default__"));
-      fireEvent.change(select, { target: { value: "sonnet" } });
+      fireEvent.change(select, { target: { value: "gpt-6-astra" } });
 
       await waitFor(() =>
         expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
-          modelIds: { claude: "sonnet" },
+          modelIds: { codex: "gpt-6-astra" },
         })
       );
       expect(helpPanelState.setPreferredAgent).not.toHaveBeenCalled();
+    });
+
+    it("resets that agent's saved model without saving it as the agent", async () => {
+      installApi({
+        getSettings: vi.fn().mockResolvedValue({
+          docSearch: true,
+          daintreeControl: true,
+          tier: "core" as const,
+          bypassPermissions: false,
+          auditRetention: 7,
+          modelIds: { claude: "sonnet" },
+          customArgs: "",
+        }),
+      });
+      mockClaudeAndCodexCatalogs();
+      setCliAvailability({ claude: "ready" });
+
+      renderTab();
+      fireEvent.click(await screen.findByLabelText("Reset Model to default"));
+
+      await waitFor(() =>
+        expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+          modelIds: { claude: null },
+        })
+      );
+      expect(helpPanelState.setPreferredAgent).not.toHaveBeenCalled();
+    });
+
+    describe("Daintree confirmations", () => {
+      afterEach(() => {
+        useAgentSettingsStore.setState({ settings: null });
+      });
+
+      it("follows the only installed agent's own skip setting and links to its settings", async () => {
+        useAgentSettingsStore.setState({
+          settings: {
+            ...DEFAULT_AGENT_SETTINGS,
+            agents: { ...DEFAULT_AGENT_SETTINGS.agents, claude: { dangerousMode: "on" } },
+            globalSkipPermissions: false,
+          },
+        });
+        setCliAvailability({ claude: "ready" });
+        const dispatch = vi.spyOn(actionService, "dispatch");
+
+        const { container } = renderTab();
+        await waitForContent(container, "Daintree confirmations");
+
+        expect(container.textContent).toContain(
+          "By default it follows Claude Code's skip permission prompts setting, which is on, set on Claude Code."
+        );
+        expect(container.textContent).not.toContain("With no agent chosen");
+        const link = Array.from(container.querySelectorAll("button")).find(
+          (button) => button.textContent === "Claude Code's skip permission prompts setting"
+        );
+        if (!link) throw new Error("expected the agent settings link");
+        fireEvent.click(link);
+        expect(dispatch).toHaveBeenCalledWith(
+          "app.settings.openTab",
+          { tab: "agents", subtab: "claude" },
+          { source: "user" }
+        );
+        dispatch.mockRestore();
+      });
     });
 
     it("probes the version of the agent a new session starts on", async () => {

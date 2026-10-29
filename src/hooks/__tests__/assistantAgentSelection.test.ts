@@ -44,6 +44,7 @@ describe("resolveLaunchableAssistantAgentId", () => {
 
   it("falls back to the only installed agent when nothing is saved", () => {
     expect(resolveLaunchableAssistantAgentId(null, ["claude"])).toBe("claude");
+    expect(resolveLaunchableAssistantAgentId(null, ["codex"])).toBe("codex");
   });
 
   it("has no target with none or several installed and nothing saved", () => {

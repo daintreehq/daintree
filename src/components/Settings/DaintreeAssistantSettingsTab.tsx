@@ -217,11 +217,17 @@ export function DaintreeAssistantSettingsTab() {
 
   const cliAvailability = useCliAvailabilityStore((s) => s.availability);
   const cliAvailabilityKnown = useCliAvailabilityStore((s) => s.hasRealData);
-  const supportedAgentIds = useMemo(() => getAssistantSupportedAgentIds(), []);
+  // The registry is read again whenever availability changes, as the dock's
+  // choices hook does: Reload configuration can add or drop a user-defined
+  // backend, and both sides must keep agreeing on which agent is the only one.
   const installedAgentIds = useMemo(
     () =>
-      selectInstalledAssistantAgentIds(supportedAgentIds, cliAvailability, cliAvailabilityKnown),
-    [supportedAgentIds, cliAvailability, cliAvailabilityKnown]
+      selectInstalledAssistantAgentIds(
+        getAssistantSupportedAgentIds(),
+        cliAvailability,
+        cliAvailabilityKnown
+      ),
+    [cliAvailability, cliAvailabilityKnown]
   );
   // The agent a new session starts on: the saved choice, or the only installed
   // agent the dock launches without asking. Everything that belongs to "the
@@ -232,11 +238,11 @@ export function DaintreeAssistantSettingsTab() {
   const versionWarning = useAssistantVersionWarning(effectiveAgentId);
 
   const agentOptions = useMemo(() => {
-    return supportedAgentIds.map((id) => ({
+    return getAssistantSupportedAgentIds().map((id) => ({
       value: id,
       label: getAgentConfig(id)?.name ?? id,
     }));
-  }, [supportedAgentIds]);
+  }, []);
   // The select tracks the persisted choice exactly. Showing the only installed
   // agent as selected would read as saved, and picking a value the select
   // already shows never fires onChange, so the user couldn't save it. The
