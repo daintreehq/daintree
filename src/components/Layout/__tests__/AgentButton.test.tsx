@@ -21,6 +21,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent, screen, act } from "@testing-library/react";
 import type { AgentSettings, CliAvailability } from "@shared/types";
 import { MenuActionSourceContext } from "@/components/ui/menu-source";
+import {
+  OverlayFocusRestoreContext,
+  type OverlayFocusRestore,
+} from "@/components/ui/overlay-focus-restore";
 
 const dispatchMock = vi.fn();
 const updateWorktreePresetMock = vi.fn().mockResolvedValue(undefined);
@@ -1849,12 +1853,14 @@ describe("AgentButton preset UX", () => {
     });
 
     describe("keyboard route to a worktree's dock", () => {
-      const launchCalls = (location: string) =>
-        dispatchMock.mock.calls.filter(
-          (c) => c[0] === "agent.launch" && (c[1] as { location?: string }).location === location
-        );
+      const launches = () => dispatchMock.mock.calls.filter((c) => c[0] === "agent.launch");
+      const launchIn = (worktreeId: string, location: "grid" | "dock") => [
+        "agent.launch",
+        { agentId: "claude", worktreeId, location },
+        { source: "context-menu" },
+      ];
 
-      const renderRows = () => {
+      const renderRows = (wrap: (children: React.ReactNode) => React.ReactNode = (c) => c) => {
         mockSettings = settingsWith({ claude: {} });
         mockMergedPresetsFn = () => [];
         mockWorktrees = [
@@ -1863,10 +1869,7 @@ describe("AgentButton preset UX", () => {
         ];
         return render(
           <WithMenuSource>
-            <AgentButton
-              type="claude"
-              availability={"ready" as unknown as CliAvailability[string]}
-            />
+            {wrap(<AgentButton type="claude" availability="ready" />)}
           </WithMenuSource>
         );
       };
@@ -1880,14 +1883,7 @@ describe("AgentButton preset UX", () => {
           false
         );
 
-        expect(launchCalls("grid")).toHaveLength(0);
-        expect(launchCalls("dock")).toEqual([
-          [
-            "agent.launch",
-            { agentId: "claude", worktreeId: "wt-2", location: "dock" },
-            { source: "context-menu" },
-          ],
-        ]);
+        expect(launches()).toEqual([launchIn("wt-2", "dock")]);
       });
 
       it("the dock destination resets after the selection it launched", () => {
@@ -1897,19 +1893,50 @@ describe("AgentButton preset UX", () => {
         fireEvent.keyDown(row, { key: "d" });
         fireEvent.click(row);
 
-        expect(launchCalls("dock")).toHaveLength(1);
-        expect(launchCalls("grid")).toEqual([
-          [
-            "agent.launch",
-            { agentId: "claude", worktreeId: "wt-2", location: "grid" },
-            { source: "context-menu" },
-          ],
-        ]);
+        expect(launches()).toEqual([launchIn("wt-2", "dock"), launchIn("wt-2", "grid")]);
       });
 
-      it("leaves other keys and modified D presses to their own handlers", () => {
-        const { getByTestId } = renderRows();
+      it("D resets the menu's pointer-gesture state before it selects", () => {
+        // stopPropagation keeps the key from the content's own keydown handler,
+        // which is what normally disarms a stale pointer gesture.
+        const onContentKeyDown = vi.fn();
+        const focusRestore = {
+          setRestoreTarget: () => {},
+          resetForOpen: () => {},
+          deferToRadix: () => {},
+          onContentPointerDown: () => {},
+          onContentPointerDownOutside: () => {},
+          onContentInteractOutside: () => {},
+          onContentKeyDown,
+          onContentClick: () => {},
+          onContentCloseAutoFocus: () => {},
+        } satisfies OverlayFocusRestore;
+        const { getByTestId } = renderRows((children) => (
+          <OverlayFocusRestoreContext.Provider value={focusRestore}>
+            {children}
+          </OverlayFocusRestoreContext.Provider>
+        ));
+
+        fireEvent.keyDown(getByTestId("agent-context-worktree-wt-2"), { key: "d" });
+
+        expect(onContentKeyDown).toHaveBeenCalledTimes(1);
+        expect(launches()).toEqual([launchIn("wt-2", "dock")]);
+        expect(onContentKeyDown.mock.invocationCallOrder[0]).toBeLessThan(
+          dispatchMock.mock.invocationCallOrder[0]!
+        );
+      });
+
+      it("keeps D from reaching ancestor key handlers and lets every other key through", () => {
+        const onAncestorKeyDown = vi.fn();
+        const { getByTestId } = renderRows((children) => (
+          <div onKeyDown={(e) => onAncestorKeyDown(e.key)}>{children}</div>
+        ));
         const row = getByTestId("agent-context-worktree-wt-1");
+
+        fireEvent.keyDown(row, { key: "d" });
+        expect(onAncestorKeyDown).not.toHaveBeenCalled();
+        dispatchMock.mockClear();
+
         for (const init of [
           { key: "Enter" },
           { key: " " },
@@ -1920,17 +1947,34 @@ describe("AgentButton preset UX", () => {
         ]) {
           expect(fireEvent.keyDown(row, init), JSON.stringify(init)).toBe(true);
         }
+        expect(onAncestorKeyDown.mock.calls.map((c) => c[0])).toEqual([
+          "Enter",
+          " ",
+          "f",
+          "d",
+          "d",
+          "d",
+        ]);
         expect(dispatchMock).not.toHaveBeenCalled();
       });
 
-      it("names the D route in every row's accessible text, since the dock icon is aria-hidden", () => {
+      it("names the D route to assistive tech while the icon and key cap stay hidden", () => {
         const { getByTestId } = renderRows();
         for (const id of ["wt-1", "wt-2"]) {
           const row = getByTestId(`agent-context-worktree-${id}`);
-          expect(row.textContent).toContain("press D to launch in dock");
+          const instruction = row.querySelector(".sr-only");
+          expect(instruction?.textContent).toBe(", press D to launch in dock");
+          expect(instruction?.closest('[aria-hidden="true"]')).toBeNull();
+
           expect(getByTestId(`agent-context-worktree-dock-${id}`).getAttribute("aria-hidden")).toBe(
             "true"
           );
+          // The visible key cap is decoration for sighted keyboard users; the
+          // instruction above already speaks it, so announcing it twice is noise.
+          const keyCap = Array.from(row.querySelectorAll('[aria-hidden="true"]')).find(
+            (el) => el.textContent?.trim() === "D"
+          );
+          expect(keyCap).toBeDefined();
         }
       });
     });
