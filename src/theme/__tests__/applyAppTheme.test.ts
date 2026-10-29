@@ -356,6 +356,16 @@ describe("applyColorVisionMode status text inks", () => {
   // A git status letter paints the text-grade twin of its status hue, lifted
   // against the theme's own backdrops, so a mode that swaps the hue has to lift
   // it again or the letter keeps the very red or green the mode replaces.
+
+  /** Perceptual hue difference, which scales with chroma so a grey's angle can't trip it. */
+  function hueDifference(a: string, b: string): number {
+    const x = hexToOklch(a)!;
+    const y = hexToOklch(b)!;
+    const angle = Math.abs(x.h - y.h) % 360;
+    const d = angle > 180 ? 360 - angle : angle;
+    return 2 * Math.sqrt(x.c * y.c) * Math.sin((d * Math.PI) / 360);
+  }
+
   it.each([
     ["red-green", RED_GREEN_OVERRIDES, "daintree"],
     ["red-green", RED_GREEN_OVERRIDES, "bondi"],
@@ -375,6 +385,8 @@ describe("applyColorVisionMode status text inks", () => {
         return false;
       }
       expect(ink, text).not.toBe(scheme.tokens[text]);
+      // On the mode's hue, not lifted all the way to a neutral.
+      expect(hueDifference(ink, hue), `${text} hue`).toBeLessThan(0.003);
       for (const backdrop of resolveStatusTextBackdrops(hue, scheme.tokens)) {
         expect(
           contrastRatio(ink, backdrop.hex),

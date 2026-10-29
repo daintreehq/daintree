@@ -97,6 +97,13 @@ describe("git status letter inks (#15424)", () => {
     }
   });
 
+  it("composites an rgba() status ink's wash like its hex twin", () => {
+    const daintree = getAppThemeById("daintree")!;
+    expect(resolveStatusTextBackdrops("rgba(34, 180, 90, 1)", daintree.tokens)).toEqual(
+      resolveStatusTextBackdrops("#22b45a", daintree.tokens)
+    );
+  });
+
   it("reports a status ink whose wash it can't composite instead of passing it", () => {
     const daintree = getAppThemeById("daintree")!;
     const warnings = getThemeContrastWarnings({

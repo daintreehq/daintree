@@ -26,7 +26,8 @@ import type { BuiltInThemeSource } from "../../../shared/theme/builtInThemeSourc
 import {
   applyAppThemeToRoot,
   applyColorVisionMode,
-  getColorVisionWrites,
+  RED_GREEN_OVERRIDES,
+  BLUE_YELLOW_OVERRIDES,
   ALL_CVD_TOKENS,
 } from "../../../src/theme/applyAppTheme";
 import { parseAppThemeContent } from "../../../electron/utils/appThemeImporter";
@@ -795,6 +796,8 @@ function expectedVariableKeys(scheme: AppColorScheme): Set<string> {
  * each step, and the scenario times the switches only — `runThemeSwitchChain`
  * is called once outside the bracket to grade, and again inside it to measure.
  */
+const LIFTED_TEXT_INK = /^--theme-(?:diff-text-[a-z]+|status-[a-z]+-text)$/;
+
 export function runThemeSwitchChain(stand: RootStandIn, grade: boolean): SwitchPass {
   let keySetMisses = 0;
   let cvdMisses = 0;
@@ -812,14 +815,23 @@ export function runThemeSwitchChain(stand: RootStandIn, grade: boolean): SwitchP
 
   const last = BUILT_IN_APP_SCHEMES[BUILT_IN_APP_SCHEMES.length - 1]!;
   const base = getAppThemeCssVariables(last);
-  for (const mode of ["red-green", "blue-yellow"] as const) {
-    // The static map plus the text inks the mode lifts against this theme.
-    const overrides = getColorVisionWrites(mode, last);
+  for (const [mode, overrides] of [
+    ["red-green", RED_GREEN_OVERRIDES],
+    ["blue-yellow", BLUE_YELLOW_OVERRIDES],
+  ] as const) {
     applyColorVisionMode(stand.root, mode, last);
     cvdOverridden += Object.keys(overrides).length;
     if (!grade) continue;
     for (const [token, value] of Object.entries(overrides)) {
-      if (stand.declared.get(token) !== value) cvdMisses += 1;
+      const declared = stand.declared.get(token);
+      // A text ink's map entry is the raw override standing in for the ink the
+      // mode lifts against this theme, so all it owes here is to have replaced
+      // the theme's own.
+      if (LIFTED_TEXT_INK.test(token)) {
+        if (declared === undefined || declared === base[token]) cvdMisses += 1;
+      } else if (declared !== value) {
+        cvdMisses += 1;
+      }
     }
     // Tokens this mode does not itself override must be restored, not erased.
     for (const token of ALL_CVD_TOKENS) {

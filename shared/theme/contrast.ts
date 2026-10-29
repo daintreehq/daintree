@@ -1114,7 +1114,7 @@ export function resolveStatusTextBackdrops(
   tokens: Partial<Record<AppThemeTokenKey, string>>
 ): Array<{ label: string; hex: string }> {
   const rows = resolveDiffTextBackdrops(tokens);
-  const wash = isHexColor(graphical) ? parseTranslucent(graphical) : null;
+  const wash = parseTranslucent(graphical);
   if (!wash) return rows;
   const opacity = STATUS_TEXT_CONTRAST.washOpacity * wash.opacity;
   return rows.flatMap((row) => [
@@ -1138,12 +1138,12 @@ function getStatusTextWarnings(scheme: AppColorScheme): AppThemeValidationWarnin
   >) {
     const graphical = scheme.tokens[graphicalKey];
     const ink = scheme.tokens[textKey];
-    if (!isHexColor(graphical)) {
+    // The bare rows are still measured; only the wash is left out.
+    if (!parseTranslucent(graphical)) {
       warnings.push({
         kind: "unevaluable",
-        message: `Cannot evaluate ${textKey} contrast on its wash: ${graphicalKey}="${graphical}" is not a hex color`,
+        message: `Cannot evaluate ${textKey} contrast on its wash: ${graphicalKey}="${graphical}" is neither hex nor rgba()`,
       });
-      continue;
     }
     let worst: { label: string; ratio: number } | null = null;
     for (const backdrop of resolveStatusTextBackdrops(graphical, scheme.tokens)) {

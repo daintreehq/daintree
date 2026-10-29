@@ -39,7 +39,7 @@ const LIFTED_TEXT_INKS: ReadonlyArray<readonly [AppThemeTokenKey, AppThemeTokenK
  * mode leaves alone keeps the theme's. Without a scheme the map's raw stand-ins
  * are all there is.
  */
-export function getColorVisionWrites(
+function getColorVisionWrites(
   mode: ColorVisionMode,
   scheme?: AppColorScheme
 ): Record<string, string> {
