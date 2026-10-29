@@ -72,6 +72,7 @@ afterEach(() => {
   cleanup();
   stopHoldRelease();
   useFleetArmingStore.getState().clear();
+  useTerminalInputStore.setState({ draftInputs: new Map(), fleetDraftHolds: new Map() });
 });
 
 function bars(ids: string[]) {
@@ -91,7 +92,7 @@ function bars(ids: string[]) {
 /** The document's text, without the placeholder an empty editor shows. */
 function editorText(container: HTMLElement, id: string): string {
   const content = container.querySelector(`[data-pane="${id}"] .cm-content`)?.cloneNode(true);
-  if (!(content instanceof HTMLElement)) return "";
+  if (!(content instanceof HTMLElement)) throw new Error(`no composer mounted for ${id}`);
   for (const placeholder of content.querySelectorAll(".cm-placeholder")) placeholder.remove();
   return content.textContent ?? "";
 }
@@ -117,6 +118,13 @@ async function type(container: HTMLElement, id: string, text: string): Promise<v
       changes: { from: view.state.doc.length, insert: text },
       userEvent: "input.type",
     });
+  });
+}
+
+async function deleteRange(container: HTMLElement, id: string, from: number, to: number) {
+  const view = editorOf(container, id);
+  await act(async () => {
+    view.dispatch({ changes: { from, to }, userEvent: "delete" });
   });
 }
 
@@ -238,7 +246,9 @@ describe("HybridInputBar keeps a pane's own draft through a fleet", () => {
       useFleetArmingStore.getState().armIds(["pane-a", "pane-b"]);
     });
     await focus("pane-b");
-    await type(container, "pane-b", ", edited");
+    // Deleted from the fleet's draft: undone, it would come back into B's own.
+    await deleteRange(container, "pane-b", 0, "shared ".length);
+    expect(draftOf("pane-a")).toBe("instruction");
 
     await act(async () => {
       useFleetArmingStore.getState().clear();
@@ -274,5 +284,23 @@ describe("HybridInputBar keeps a pane's own draft through a fleet", () => {
       useFleetArmingStore.getState().clear();
     });
     expect(editorText(container, "pane-b")).toBe("half-written for b");
+  });
+
+  it("gives a pane that had no draft an empty composer back", async () => {
+    seedDraft("pane-a", "shared instruction");
+    const { container } = render(bars(["pane-a", "pane-b"]));
+    await act(async () => {});
+    await act(async () => {
+      useFleetArmingStore.getState().armIds(["pane-a", "pane-b"]);
+    });
+    expect(editorText(container, "pane-b")).toBe("shared instruction");
+    expect(useTerminalInputStore.getState().fleetDraftHolds.get("pane-b")?.draft).toBe("");
+
+    await act(async () => {
+      useFleetArmingStore.getState().disarmId("pane-b");
+    });
+
+    expect(editorText(container, "pane-b")).toBe("");
+    expect(useTerminalInputStore.getState().draftInputs.has("pane-b")).toBe(false);
   });
 });

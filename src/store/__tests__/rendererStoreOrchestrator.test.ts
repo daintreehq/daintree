@@ -1973,14 +1973,23 @@ describe("rendererStoreOrchestrator", () => {
       expect(useTerminalInputStore.getState().fleetDraftHolds.size).toBe(0);
     });
 
-    it("releases holds left behind while it was torn down", async () => {
+    it("releases holds left behind while it was torn down, once registered again", async () => {
       const useFleetArmingStore = await armWithHeldDraft();
       destroyStoreOrchestrator();
       useFleetArmingStore.getState().clear();
+      expect(useTerminalInputStore.getState().getDraftInput("agent-b")).toBe("shared");
+      expect(useTerminalInputStore.getState().fleetDraftHolds.get("agent-b")?.draft).toBe(
+        "b's own"
+      );
 
       initStoreOrchestrator();
 
       expect(useTerminalInputStore.getState().getDraftInput("agent-b")).toBe("b's own");
+      expect(useTerminalInputStore.getState().fleetDraftHolds.size).toBe(0);
+      const releaseSpy = vi.spyOn(useTerminalInputStore.getState(), "releaseFleetDraftHolds");
+      useFleetArmingStore.getState().armIds(["agent-a", "agent-b"]);
+      expect(releaseSpy).toHaveBeenCalledTimes(1);
+      releaseSpy.mockRestore();
     });
   });
 
