@@ -151,26 +151,29 @@
      In the base layer, unlike everything else in this block: a control that
      colours its own border says so with a utility (an invalid field's status
      edge, a selected tab's underline), and that utility has to keep winning.
-     Only the fall-through changes. */
+     Only the fall-through changes.
+
+     Text entry is left out. A bare `input` or `textarea` is usually the inner
+     half of a compound field whose shell draws the edge (date pickers, the
+     mention composer, the search fields), and inking its border would draw a
+     second box inside the first. Text fields take their frame from
+     `border-input` below. */
   @layer base {
     button,
     [role="button"],
     [type="button"],
     [type="submit"],
     [type="reset"],
-    input,
-    select,
-    textarea {
+    select {
       border-color: var(--color-text-secondary);
     }
   }
 
   /* The text-entry edge takes the same ink. `border-input` is the field
-     boundary's own token, but most themes leave it following `border-strong`
-     (1.2-1.5:1), and every `Input`, `Textarea` and `SelectTrigger` names it, so
-     the fallback above never reaches them. Rebound on `body` because theme
-     tokens are inline styles on the root element, which no `:root` rule can
-     outrank. */
+     boundary's own token, named by every `Input`, `Textarea`, `SelectTrigger`
+     and field shell, but most themes leave it following `border-strong`
+     (1.2-1.5:1). Rebound on `body` because theme tokens are inline styles on the
+     root element, which no `:root` rule can outrank. */
   body {
     --theme-border-input: var(--theme-text-secondary);
   }
