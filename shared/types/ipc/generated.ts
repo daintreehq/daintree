@@ -519,7 +519,7 @@ export interface GeneratedIpcInvokeMap {
     result: { filePath: string; thumbnailDataUrl: string };
   };
   "clipboard:thumbnail-from-path": {
-    args: [filePath: string];
+    args: [filePath: string, options?: { height?: number | undefined } | undefined];
     result: { filePath: string; thumbnailDataUrl: string };
   };
   "clipboard:write-image": {
