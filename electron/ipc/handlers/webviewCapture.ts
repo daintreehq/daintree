@@ -11,8 +11,12 @@ import type { HandlerDependencies, IpcContext } from "../types.js";
 import { WEBVIEW_CAPTURE_METHOD_CHANNELS } from "./webviewCapture.preload.js";
 import { saveElementCapture } from "./clipboard.js";
 
-/** Context kept around an element crop, in the page's CSS pixels. */
-const ELEMENT_CROP_MARGIN = 8;
+/**
+ * Context kept around an element crop, in the page's CSS pixels: enough for
+ * the picker's chips on a selection's outline, its tag above and its key
+ * hints below, to come out whole, never as a sliver along the picture's edge.
+ */
+const ELEMENT_CROP_MARGIN = 32;
 /** Larger than any real viewport or element; anything past it was not measured. */
 const MAX_CSS_EXTENT = 100_000;
 

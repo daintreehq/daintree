@@ -535,7 +535,7 @@ export function buildAgentTaskPrompt(input: AgentPromptInput): string {
 
   if (screenshot.status === "attached") {
     lines.push(
-      `- Screenshot of the selection, cropped from the preview: ${hostPath(screenshot.path)} (the outline around it is Daintree's selection highlight, not part of the page)`
+      `- Screenshot of the selection, cropped from the preview: ${hostPath(screenshot.path)} (the outline around it and the labels on that outline are Daintree's selection highlight, not part of the page)`
     );
   } else {
     lines.push(`- Screenshot: not attached — ${screenshot.reason}`);

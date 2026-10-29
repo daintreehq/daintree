@@ -301,13 +301,13 @@ describe("webviewCapture element crop", () => {
       viewportHeight: 600,
     });
 
-    expect(bitmap.crops).toEqual([{ x: 64, y: 144, width: 272, height: 112 }]);
+    expect(bitmap.crops).toEqual([{ x: 16, y: 96, width: 368, height: 208 }]);
     expect(saved.calls).toEqual([Buffer.from("CROPPED")]);
     expect(result).toEqual({
       status: "saved",
       filePath: "/tmp/daintree-clipboard/element-1.png",
-      width: 272,
-      height: 112,
+      width: 368,
+      height: 208,
     });
   });
 
@@ -321,7 +321,7 @@ describe("webviewCapture element crop", () => {
       viewportWidth: 800,
       viewportHeight: 600,
     });
-    expect(bitmap.crops).toEqual([{ x: 0, y: 1104, width: 316, height: 96 }]);
+    expect(bitmap.crops).toEqual([{ x: 0, y: 1056, width: 364, height: 144 }]);
   });
 
   it("has no picture of an element scrolled out of view, rather than an empty one", async () => {
