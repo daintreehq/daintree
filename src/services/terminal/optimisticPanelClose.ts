@@ -18,6 +18,7 @@
 import { panelStoreApi } from "@/store";
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { consultPanelCloseGuards, hasPanelCloseGuard } from "@/services/panelCloseGuard";
+import { pickGridSuccessorFocusId } from "@/store/panelFocusFallback";
 import { logError } from "@/utils/logger";
 
 // The canonical teardown runs in idle time — after the optimistic removal has
@@ -126,67 +127,6 @@ function hidePanelsImperatively(ids: string[]): void {
   }
 }
 
-function firstFocusablePanelInGroup(
-  panelIds: string[],
-  activeTabId: string | undefined,
-  closing: ReadonlySet<string>
-): string | null {
-  if (activeTabId && panelIds.includes(activeTabId) && !closing.has(activeTabId)) {
-    return activeTabId;
-  }
-  return panelIds.find((id) => !closing.has(id)) ?? null;
-}
-
-function findNextGridFocusTarget(hideIds: string[]): string | null {
-  const state = panelStoreApi.getState();
-  const closing = new Set(closingIds);
-  const closingWorktreeId = state.panelsById[hideIds[0] ?? ""]?.worktreeId;
-  const groups = state.getTabGroups?.("grid", closingWorktreeId);
-
-  if (groups && groups.length > 0) {
-    const closedGroupIndex = groups.findIndex((group) =>
-      group.panelIds.some((id) => hideIds.includes(id))
-    );
-
-    if (closedGroupIndex >= 0) {
-      for (let i = closedGroupIndex + 1; i < groups.length; i++) {
-        const group = groups[i]!;
-        const candidate = firstFocusablePanelInGroup(group.panelIds, group.activeTabId, closing);
-        if (candidate) return candidate;
-      }
-      for (let i = closedGroupIndex - 1; i >= 0; i--) {
-        const group = groups[i]!;
-        const candidate = firstFocusablePanelInGroup(group.panelIds, group.activeTabId, closing);
-        if (candidate) return candidate;
-      }
-      return null;
-    }
-  }
-
-  const closedIndexes = hideIds
-    .map((id) => state.panelIds.indexOf(id))
-    .filter((index) => index >= 0);
-  const startIndex = closedIndexes.length > 0 ? Math.max(...closedIndexes) + 1 : 0;
-
-  const isGridSurvivor = (id: string): boolean => {
-    if (closing.has(id)) return false;
-    const terminal = state.panelsById[id];
-    if (!terminal) return false;
-    if (terminal.location !== "grid" && terminal.location !== undefined) return false;
-    return terminal.worktreeId === closingWorktreeId;
-  };
-
-  for (let i = startIndex; i < state.panelIds.length; i++) {
-    const id = state.panelIds[i]!;
-    if (isGridSurvivor(id)) return id;
-  }
-  for (let i = startIndex - 2; i >= 0; i--) {
-    const id = state.panelIds[i]!;
-    if (isGridSurvivor(id)) return id;
-  }
-  return null;
-}
-
 // Closing the focused panel must advance `focusedId` synchronously: keybinding
 // closes (Cmd+W) resolve their target from `focusedId`, so without this a rapid
 // Cmd+W stream would keep re-targeting the same already-closing panel. The
@@ -197,7 +137,7 @@ function advanceFocusPastClosing(hideIds: string[]): void {
   const focusedId = state.focusedId;
   if (!focusedId || !hideIds.includes(focusedId)) return;
 
-  const next = findNextGridFocusTarget(hideIds);
+  const next = pickGridSuccessorFocusId(state, hideIds, closingIds);
   state.setFocused(next);
   if (next) {
     // Move DOM focus too — the closed pane's xterm textarea is unmounting, so

@@ -1,4 +1,5 @@
 import { usePanelStore } from "@/store/panelStore";
+import { pickGridSuccessorFocusId } from "@/store/panelFocusFallback";
 import { selectWorktreeMovePanelIds } from "@/store/slices/panelRegistry/selectors";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
@@ -177,8 +178,24 @@ export function moveTerminalToWorktreeAndFollowRescue(
   // the panels have already been filed under.
   const movedPanelIds = collectMovedPanelIds(terminalId);
 
+  // Focus leaves only if it was inside what moved, and goes where a close would
+  // send it (#14974). Its successor is picked before the move for the same
+  // reason as the membership above. A source the user isn't standing in hands
+  // focus to nobody: focusing a pane there would switch worktrees under them.
+  const { focusedId } = usePanelStore.getState();
+  const movesFocus = focusedId !== null && movedPanelIds.includes(focusedId);
+  const focusSuccessor =
+    movesFocus && sourceWorktreeId === before.activeWorktreeId
+      ? pickGridSuccessorFocusId(usePanelStore.getState(), movedPanelIds)
+      : null;
+
   usePanelStore.getState().moveTerminalToWorktree(terminalId, targetWorktreeId);
-  usePanelStore.getState().setFocused(null);
+  if (
+    movesFocus &&
+    usePanelStore.getState().panelsById[focusedId]?.worktreeId === targetWorktreeId
+  ) {
+    usePanelStore.getState().setFocused(focusSuccessor);
+  }
 
   // Per panel, not per group. A dragged tab group gives each member its own bar
   // when the user switches to it — no one click that messages four agents.
