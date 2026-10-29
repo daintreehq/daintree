@@ -829,3 +829,79 @@ describe("HostSwitchDialog placed worktree", () => {
     expect(switchToHost).not.toHaveBeenCalled();
   });
 });
+
+describe("HostSwitchDialog when looking at the project fails", () => {
+  const dropped = new Error("The link to studio-01 dropped.");
+  const worktreeRequest = { ...request, worktreePath: "/Users/greg/Projects/daintree" };
+
+  it("offers Retry beside Switch host only and looks again at the same project and worktree", async () => {
+    prepare.mockRejectedValueOnce(dropped).mockResolvedValueOnce(preparation());
+    render(<HostSwitchDialog request={worktreeRequest} onClose={() => {}} />);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("The link to studio-01 dropped.");
+    expect(screen.getByRole("button", { name: "Switch host only" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("daintree isn't on studio-01 yet")).toBeTruthy();
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(prepare.mock.calls[1]![0]).toEqual(prepare.mock.calls[0]![0]);
+    expect(prepare.mock.calls[1]![0]).toMatchObject({
+      toHostId: "studio-01",
+      projectId: "p1",
+      worktreePath: "/Users/greg/Projects/daintree",
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(switchToHost).not.toHaveBeenCalled();
+  });
+
+  it("keeps Retry and the way out while the host stays unreachable", async () => {
+    prepare.mockRejectedValue(dropped);
+    const onClose = vi.fn();
+    render(<HostSwitchDialog request={request} onClose={onClose} />);
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(prepare).toHaveBeenCalledTimes(2));
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "The link to studio-01 dropped."
+    );
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Switch host only" }));
+    expect(onClose).toHaveBeenCalled();
+    expect(switchToHost).toHaveBeenCalledWith("studio-01", false);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("retries the look a moved branch asked for without opening by itself afterwards", async () => {
+    const ahead = preparation({
+      branchCheck: { kind: "ahead", remote: "origin", ahead: 1 },
+      unpushedCommitCount: 1,
+      hasUncommittedChanges: false,
+      candidates: [CANDIDATE],
+    });
+    prepare
+      .mockResolvedValueOnce(ahead)
+      .mockRejectedValueOnce(dropped)
+      .mockResolvedValueOnce({
+        ...ahead,
+        branchCheck: { kind: "same-tip", remote: "origin", sha: "a" },
+      });
+    execute.mockResolvedValue({
+      kind: "git-failed",
+      step: "push",
+      hostId: "local",
+      reason: "branch-moved",
+      message: "feature/host-chip moved since its commits were shown. Nothing was pushed.",
+    });
+    render(<HostSwitchDialog request={request} onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole("radio", { name: PUSH_CHOICE }));
+    fireEvent.click(screen.getByRole("button", { name: "Push, then open" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("button", { name: "Open on studio-01" })).toBeTruthy();
+    expect(prepare).toHaveBeenCalledTimes(3);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(switchToHost).not.toHaveBeenCalled();
+  });
+});

@@ -669,6 +669,13 @@ export function HostSwitchDialog({
     void switchToHost(request.toHostId, newWindow);
   };
 
+  /** Looks at the same project and worktree again, as the first look did. */
+  const retryPrepare = () => {
+    setLoadError(null);
+    setPrep(null);
+    setPrepareAttempt((n) => n + 1);
+  };
+
   const cancelRunning = () => {
     if (!running) return;
     flowOf(request.id).stopped = true;
@@ -1078,7 +1085,12 @@ export function HostSwitchDialog({
   let steps: string[] = [];
 
   if (loadError) {
-    body = <Callout severity="error">{loadError}</Callout>;
+    body = (
+      <Callout severity="error" role="alert">
+        {loadError}
+      </Callout>
+    );
+    primary = { label: "Retry", onClick: retryPrepare };
   } else if (!prep) {
     body = showLoading ? (
       <div className="flex items-center gap-2 text-sm text-text-secondary">
@@ -1233,7 +1245,7 @@ export function HostSwitchDialog({
   }
 
   // After a failure the primary repeats what failed, and says so.
-  if (primary && failure && failure.retryable !== false && retry) {
+  if (primary && !loadError && failure && failure.retryable !== false && retry) {
     const again = retry;
     primary = {
       label: retryLabel(again),
