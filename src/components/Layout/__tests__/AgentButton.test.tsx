@@ -1178,7 +1178,10 @@ describe("AgentButton preset UX", () => {
 
     // Exact label, allowing only the screen-reader suffix the default row carries.
     const contextItem = (items: HTMLElement[], label: string) =>
-      items.find((el) => el.textContent === label || el.textContent?.startsWith(`${label},`))!;
+      items.find(
+        (el) =>
+          el.textContent === label || el.textContent === `${label}, current defaultCurrent default`
+      )!;
     const visibleMarkOf = (item: HTMLElement) =>
       item.querySelector('[data-testid="context-menu-meta"]')?.textContent ?? null;
     const THREE_PRESETS = [

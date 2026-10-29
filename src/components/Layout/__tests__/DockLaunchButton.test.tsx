@@ -3094,6 +3094,7 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       const input = searchInput(container);
       fireEvent.keyDown(input, { key: "ArrowRight" });
       fireEvent.keyDown(input, { key: "ArrowDown" });
+      expect(presetRows(container)[1]!.getAttribute("aria-selected")).toBe("true");
 
       const event = new KeyboardEvent("keydown", {
         key: "d",
