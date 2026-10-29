@@ -1098,7 +1098,18 @@ describe("matchCodexRestoreSessions", () => {
 
   it.each([
     ["a malformed row", [top, null, row("t-old", "Old", AT_S - 900, { recencyAt: AT_S - 900 })]],
-    ["a row with no recency", [top, row("t-x", "X", AT_S, { recencyAt: null })]],
+    [
+      "a row with no recency",
+      [top, row("t-x", "X", AT_S, { recencyAt: null }), row("t-old", "Old", AT_S - 900)],
+    ],
+    [
+      "a child with no recency",
+      [
+        top,
+        row("t-kid", "Kid", AT_S, { recencyAt: null, parentThreadId: "t-b" }),
+        row("t-old", "Old", AT_S - 900),
+      ],
+    ],
     ["only children", [row("t-kid", "Kid", AT_S + 3, { parentThreadId: "t-b" })]],
     ["an empty page", []],
   ])("answers nothing when the `--last` read holds %s with more to come", async (_l, recency) => {
