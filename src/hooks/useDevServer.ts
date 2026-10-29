@@ -95,9 +95,13 @@ export function _resetPersistedEnsureCacheForTests(): void {
 // Module scope, not the hook: a panel in a worktree that isn't on screen has no
 // mounted hook to hear the resume, and its cached key would otherwise skip the
 // ensure on its next mount even though Main dropped the session (#15002).
-onDevPreviewResume(({ panelIds }) => {
+const offDevPreviewResume = onDevPreviewResume(({ panelIds }) => {
   for (const panelId of panelIds) persistedEnsureCache.delete(panelId);
 });
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(offDevPreviewResume);
+}
 
 function serializeEnv(env?: Record<string, string>): string {
   if (!env) return "";
@@ -205,6 +209,8 @@ export function useDevServer({
   const resyncAskRef = useRef(0);
   const lastEnsureConfigRef = useRef<string>("");
   const pendingEnsureRef = useRef<{ resume: boolean; force: boolean } | null>(null);
+  /** Callers of forced ensures queued behind the one in flight, settled once theirs has gone out or been called off. */
+  const queuedForceWaitersRef = useRef<Array<() => void>>([]);
   const userStoppedRef = useRef(false);
   // Bumped by every endpoint restart and every Stop. A restart whose resource
   // cycle finishes after its number moved on was superseded and must not connect.
@@ -312,15 +318,20 @@ export function useDevServer({
   // stopped, so a queued Start keeps its resume through later config changes
   // and always drains; only a Stop cancels it. `force` re-sends an unchanged
   // config without lifting a user Stop, for a server Main dropped behind the
-  // panel's back (#15002).
+  // panel's back (#15002). A forced call that queues still resolves only once
+  // its ensure has gone out, so a worktree delete retried meanwhile can't stop
+  // the server before the restart reaches Main.
   const ensureLatestConfig = useCallback(
-    async (resume = false, force = false) => {
+    async (resume = false, force = false): Promise<void> => {
       if (isEnsuringRef.current) {
         pendingEnsureRef.current = {
           resume: resume || (pendingEnsureRef.current?.resume ?? false),
           force: force || (pendingEnsureRef.current?.force ?? false),
         };
-        return;
+        if (!force) return;
+        return new Promise<void>((resolve) => {
+          queuedForceWaitersRef.current.push(resolve);
+        });
       }
 
       const latest = latestContextRef.current;
@@ -365,6 +376,11 @@ export function useDevServer({
         isEnsuringRef.current = false;
         const pending = pendingEnsureRef.current;
         pendingEnsureRef.current = null;
+        const forceWaiters = queuedForceWaitersRef.current;
+        queuedForceWaitersRef.current = [];
+        const settleForceWaiters = () => {
+          for (const settle of forceWaiters) settle();
+        };
         // Drain against the config as it is now, not as it was when queued: a
         // switch away and back mid-ensure leaves nothing new to send. An
         // unmounted hook leaves config catch-up to whichever mount replaced it,
@@ -372,9 +388,12 @@ export function useDevServer({
         const drains = pending !== null && (isMountedRef.current || pending.resume);
         const nextKey = drains ? ensureKeyFor(latestContextRef.current) : null;
         if (pending && nextKey && (nextKey !== sentKey || pending.resume || pending.force)) {
-          safeFireAndForget(ensureLatestConfig(pending.resume, pending.force), {
-            context: "Re-running queued dev preview ensure",
-          });
+          safeFireAndForget(
+            ensureLatestConfig(pending.resume, pending.force).finally(settleForceWaiters),
+            { context: "Re-running queued dev preview ensure" }
+          );
+        } else {
+          settleForceWaiters();
         }
       }
     },

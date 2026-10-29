@@ -43,8 +43,68 @@ describe("devPreviewResumeSignal", () => {
     expect(settled).toBe(true);
   });
 
+  it("waits for every listener's work, whichever settles last", async () => {
+    for (const order of [
+      [0, 1],
+      [1, 0],
+    ]) {
+      const finishers: Array<() => void> = [];
+      const listeners = [0, 1].map(() =>
+        vi.fn(
+          () =>
+            new Promise<void>((resolve) => {
+              finishers.push(resolve);
+            })
+        )
+      );
+      const offsForOrder = listeners.map((listener) => onDevPreviewResume(listener));
+
+      let settled = false;
+      const done = resumeDevPreviews("wt-1", ["panel-1"]).then(() => {
+        settled = true;
+      });
+      expect(listeners[0]).toHaveBeenCalledTimes(1);
+      expect(listeners[1]).toHaveBeenCalledTimes(1);
+
+      finishers[order[0]!]!();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(settled).toBe(false);
+
+      finishers[order[1]!]!();
+      await done;
+      expect(settled).toBe(true);
+      for (const off of offsForOrder) off();
+    }
+  });
+
+  it("a rejecting listener doesn't settle it early while another is still working", async () => {
+    let finish: () => void = () => {};
+    offs.push(onDevPreviewResume(() => Promise.reject(new Error("async"))));
+    offs.push(
+      onDevPreviewResume(
+        () =>
+          new Promise<void>((resolve) => {
+            finish = resolve;
+          })
+      )
+    );
+
+    let settled = false;
+    const done = resumeDevPreviews("wt-1", ["panel-1"]).then(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+
+    finish();
+    await done;
+    expect(settled).toBe(true);
+  });
+
   it("keeps going past a listener that throws or rejects, and never rejects itself", async () => {
+    const before = vi.fn();
     const after = vi.fn();
+    offs.push(onDevPreviewResume(before));
     offs.push(
       onDevPreviewResume(() => {
         throw new Error("sync");
@@ -54,6 +114,7 @@ describe("devPreviewResumeSignal", () => {
     offs.push(onDevPreviewResume(after));
 
     await expect(resumeDevPreviews("wt-1", ["panel-1"])).resolves.toBeUndefined();
+    expect(before).toHaveBeenCalledTimes(1);
     expect(after).toHaveBeenCalledTimes(1);
   });
 

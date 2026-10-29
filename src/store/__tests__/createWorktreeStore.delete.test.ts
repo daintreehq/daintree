@@ -905,7 +905,14 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
     function session(
       panelId: string,
       worktreeId: string,
-      status: "running" | "starting" | "installing" | "stopped" | "error" | "restored-stopped"
+      status:
+        | "running"
+        | "starting"
+        | "installing"
+        | "stopping"
+        | "stopped"
+        | "error"
+        | "restored-stopped"
     ) {
       return {
         panelId,
@@ -927,9 +934,12 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
         session("panel-running", "wt-1", "running"),
         session("panel-starting", "wt-1", "starting"),
         session("panel-installing", "wt-1", "installing"),
+        { ...session("panel-not-user-stopped", "wt-1", "running"), userStopped: false },
         session("panel-user-stopped", "wt-1", "stopped"),
         { ...session("panel-stopping-for-user", "wt-1", "running"), userStopped: true },
         session("panel-crashed", "wt-1", "error"),
+        session("panel-already-stopping", "wt-1", "stopping"),
+        session("panel-from-last-launch", "wt-1", "restored-stopped"),
         session("panel-other-worktree", "wt-2", "running"),
       ]);
       worktreeClientDeleteMock.mockRejectedValueOnce(new Error("worktree has uncommitted changes"));
@@ -947,7 +957,13 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
         "panel-running",
         "panel-starting",
         "panel-installing",
+        "panel-not-user-stopped",
       ]);
+
+      // Consumed: dismissing the failed entry afterwards brings nothing back twice.
+      store.getState().clearDeleteError("wt-1");
+      await flushPromises();
+      expect(resumeDevPreviewsMock).toHaveBeenCalledTimes(1);
     });
 
     it("restarts them when the user dismisses a retryable failure, and only once", async () => {
@@ -977,9 +993,10 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
 
     it("restarts the first attempt's servers once the retry cap is hit", async () => {
       worktreeClientDeleteMock.mockRejectedValue(new Error("git error: ref already exists"));
-      // A retry finds nothing live: the first attempt already stopped it.
+      // A later capture (a server started mid-retry) must not replace the first.
       devPreviewGetAllSessionsMock
         .mockResolvedValueOnce([session("panel-1", "wt-1", "running")])
+        .mockResolvedValueOnce([session("panel-started-mid-retry", "wt-1", "running")])
         .mockResolvedValue([]);
 
       const store = createWorktreeStore();
@@ -1012,6 +1029,8 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
       await flushPromises();
       await flushPromises();
 
+      expect(worktreeClientDeleteMock).toHaveBeenCalledTimes(1);
+      expect([...store.getState().mutationOutbox.values()][0]!.status).toBe("pending");
       expect(resumeDevPreviewsMock).not.toHaveBeenCalled();
     });
 
@@ -1070,7 +1089,9 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
     });
 
     it("a rapid retry waits for the restart to reach Main before stopping the servers again", async () => {
-      devPreviewGetAllSessionsMock.mockResolvedValue([session("panel-1", "wt-1", "running")]);
+      devPreviewGetAllSessionsMock
+        .mockResolvedValueOnce([session("panel-1", "wt-1", "running")])
+        .mockResolvedValue([session("panel-opened-since", "wt-1", "running")]);
       worktreeClientDeleteMock.mockRejectedValueOnce(new Error("worktree has uncommitted changes"));
       let resolveResume: () => void = () => {};
       resumeDevPreviewsMock.mockImplementationOnce(
@@ -1099,10 +1120,10 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
       await flushPromises();
       await flushPromises();
       expect(devPreviewStopByWorktreeMock).toHaveBeenCalledTimes(2);
-      // The retry captured the restarted server afresh, so its own failure
-      // brings it back again.
+      // The first restore was consumed, so the retry's own capture is what its
+      // failure brings back.
       expect(resumeDevPreviewsMock).toHaveBeenCalledTimes(2);
-      expect(resumeDevPreviewsMock).toHaveBeenLastCalledWith("wt-1", ["panel-1"]);
+      expect(resumeDevPreviewsMock).toHaveBeenLastCalledWith("wt-1", ["panel-opened-since"]);
     });
 
     it("still deletes when the session list can't be read", async () => {
