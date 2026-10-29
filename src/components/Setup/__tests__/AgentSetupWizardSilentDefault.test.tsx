@@ -106,8 +106,16 @@ vi.mock("@/services/KeybindingService", () => ({
   keybindingService: { getDisplayCombo: () => "", getEffectiveCombo: () => undefined },
 }));
 
+// The wizard hands its availability reducer to the poll; keeping the latest one lets a
+// test move availability after the wizard has mounted, the way a real poll does.
+const poll = vi.hoisted(() => ({
+  emit: undefined as undefined | import("../useAgentSetupPoll").SetAvailability,
+}));
+
 vi.mock("../useAgentSetupPoll", () => ({
-  useAgentSetupPoll: () => undefined,
+  useAgentSetupPoll: (_isOpen: boolean, setAvailability: (typeof poll)["emit"]) => {
+    poll.emit = setAvailability;
+  },
 }));
 
 const systemState = vi.hoisted(() => ({ fatal: false }));
@@ -1188,6 +1196,37 @@ describe("AgentSetupWizard completion action", () => {
     // both just close; Escape and the header dismiss remain the way out.
     // (CompleteStep's own suite asserts the summary body renders no buttons.)
     expect(buttonLabels().filter((l) => l !== "Close dialog")).toEqual(["Launch an agent"]);
+  });
+
+  // The summary's counts come from the wizard's live availability, which a
+  // CompleteStep-only render can't prove: Settings → General files an agent with
+  // no credentials detected under needs attention, so the wizard must not call it ready.
+  it("does not call an agent with no credentials detected ready", async () => {
+    await openAt({ claude: "ready", gemini: "unauthenticated" });
+    await clickButton("Continue"); // agents -> complete
+
+    expect(document.body.textContent).toContain(
+      "You have 1 agent ready to use. 1 other agent may ask you to sign in."
+    );
+    expect(document.querySelector('[data-testid="agent-card-gemini"]')?.textContent).toContain(
+      "No credentials detected"
+    );
+    expect(buttonLabels().filter((l) => l !== "Close dialog")).toEqual(["Launch an agent"]);
+  });
+
+  it("follows availability as it moves while the summary is showing", async () => {
+    await openAt({ claude: "ready", gemini: "unauthenticated" });
+    await clickButton("Continue"); // agents -> complete
+
+    await act(async () => {
+      poll.emit?.({ claude: "ready", gemini: "ready" });
+    });
+
+    expect(document.body.textContent).toContain("You have 2 agents ready to use.");
+    expect(document.body.textContent).not.toContain("sign in");
+    expect(document.querySelector('[data-testid="agent-card-gemini"]')?.textContent).not.toContain(
+      "No credentials detected"
+    );
   });
 
   it("starts the work and closes when the forward action is taken", async () => {
