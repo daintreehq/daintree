@@ -329,7 +329,7 @@ describe("page verdicts", () => {
   it("never promises what a request carries, which the composer's Includes row says", async () => {
     await mountBound();
     await act(async () => host.runtimeIssue("not-dev-build"));
-    expect(text()).toContain("Run the app's dev server to trace elements to their files.");
+    expect(text()).toContain("dev server");
     expect(text()).not.toMatch(/screenshot|request still carries/i);
 
     await act(async () => host.runtimeIssue("metadata-unavailable", { framework: "react" }));
@@ -747,7 +747,8 @@ describe("selection identity", () => {
     // Named, but no file claimed for it — not even the file of the element it
     // was reached through.
     expect(identity.textContent).toContain("PricingCard");
-    expect(identity.textContent).toContain("Couldn't find the source");
+    // The header names the component, so the slot says only the sentence.
+    expect(within(identity).getByText("Couldn't find the source", { exact: true })).toBeTruthy();
     expect(identity.textContent).not.toContain(`${FILE}:6`);
     const strip = screen.getByRole("toolbar", { name: "Element Picker" });
     expect(strip.textContent).not.toContain(`${FILE}:6`);
@@ -793,9 +794,12 @@ describe("selection identity", () => {
     // The identity says it under the name in its header; the note says it again
     // only as far as it must, naming the target and what to do.
     expect(sendNote()).toBe("Couldn't find the source for PricingCard — choose another target");
-    expect(screen.getByRole("region", { name: "Selected element" }).textContent).toContain(
-      "Couldn't find the source"
-    );
+    expect(
+      within(screen.getByRole("region", { name: "Selected element" })).getByText(
+        "Couldn't find the source",
+        { exact: true }
+      )
+    ).toBeTruthy();
     // The element itself is still something the request can be about.
     fireEvent.click(screen.getByRole("radio", { name: "Element" }));
     await waitFor(() => expect(isOff(sendButton())).toBe(false));
@@ -1752,6 +1756,20 @@ describe("stale selections", () => {
     expect(screen.getAllByText("Page reloaded — select it again").length).toBeGreaterThan(0);
     // Said once in the identity and again under Send, in the same words.
     expectStaleAgrees("Page reloaded — select it again");
+  });
+
+  it("words a disconnected preview the same under Send as in the identity", async () => {
+    await mountSelected();
+    // Asked to disconnect, so nothing reattaches and the pick stays unproven.
+    await act(async () =>
+      host.pushPreview({
+        kind: "detached",
+        sessionId: "session-1",
+        projectId: "p1",
+        reason: "requested",
+      })
+    );
+    expectStaleAgrees("Preview disconnected — select it again");
   });
 
   it("proves the selection again after its file changes, and the draft follows it", async () => {

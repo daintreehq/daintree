@@ -227,7 +227,7 @@ export function runtimeIssueMessage(
       return detail.includes("markup and styles")
         ? {
             title: "Part of this selection was left out",
-            body: "Its outer components, markup and styles were too large to keep. A request still names the element and its source.",
+            body: "Its outer components, markup and styles were too large to keep.",
           }
         : {
             title: "Outer components were left out",
