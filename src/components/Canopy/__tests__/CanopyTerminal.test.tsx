@@ -1,5 +1,14 @@
 // @vitest-environment jsdom
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ILinkHandler } from "@xterm/xterm";
 import type { CanopyTerminalData, CanopyTerminalView } from "@shared/types/ipc/canopy";
@@ -49,14 +58,15 @@ vi.mock("@xterm/xterm", () => ({
       this.element = host;
       const link = document.createElement("a");
       link.dataset.oscLink = "";
+      const range = { start: { x: 1, y: 1 }, end: { x: 40, y: 1 } };
       link.addEventListener("click", (event) => {
         const handler = this.options.linkHandler as ILinkHandler | undefined;
-        if (handler) handler.activate(event, OSC_URL);
+        if (handler) handler.activate(event, OSC_URL, range);
         else window.confirm(`Do you want to navigate to ${OSC_URL}?`);
       });
       link.addEventListener("mouseover", (event) => {
         const handler = this.options.linkHandler as ILinkHandler | undefined;
-        handler?.hover?.(event, OSC_URL, { start: { x: 1, y: 1 }, end: { x: 40, y: 1 } });
+        handler?.hover?.(event, OSC_URL, range);
       });
       host.appendChild(link);
     }
@@ -123,6 +133,18 @@ vi.mock("@/services/terminal/TerminalAddonManager", async (importOriginal) => {
     },
   };
 });
+
+const search = vi.hoisted(() => ({ findNext: vi.fn(() => true) }));
+vi.mock("@xterm/addon-search", () => ({
+  SearchAddon: class {
+    findNext = search.findNext;
+    findPrevious = vi.fn(() => true);
+    clearDecorations = vi.fn();
+    onDidChangeResults = () => ({ dispose() {} });
+    activate() {}
+    dispose() {}
+  },
+}));
 
 vi.mock("@xterm/addon-unicode11", () => ({
   Unicode11Addon: class {
@@ -249,6 +271,8 @@ describe("CanopyTerminal", () => {
     expect(xterm.current!.resizes).toEqual([[100, 30]]);
     // 0–8 is covered; of 8–13 only what lies past 10 is new.
     expect(xterm.current!.writes).toEqual(["SCREEN", "fgh"]);
+    // Laid out at the widths the grid records, from the snapshot's first write.
+    expect(xterm.current!.widths).toEqual(["11", "11"]);
   });
 
   it("drops early output it cannot fence rather than risk drawing it twice", async () => {
@@ -756,8 +780,8 @@ describe("CanopyTerminal", () => {
 });
 
 describe("CanopyTerminal links, as the run's grid pane opens them (#15332)", () => {
-  let openLink: ReturnType<typeof vi.spyOn<TerminalLinkHandler, "openLink">>;
-  let confirm: ReturnType<typeof vi.spyOn<Window, "confirm">>;
+  let openLink: MockInstance<TerminalLinkHandler["openLink"]>;
+  let confirm: MockInstance<typeof window.confirm>;
 
   beforeEach(() => {
     fileRoutes.length = 0;
@@ -818,6 +842,7 @@ describe("CanopyTerminal links, as the run's grid pane opens them (#15332)", () 
     openMenu(frame);
     expect(screen.getByText("Copy link address")).toBeTruthy();
     await act(async () => screen.getByText("Open link").click());
+    await vi.waitFor(() => expect(openLink).toHaveBeenCalled());
     expect(openLink).toHaveBeenCalledWith(OSC_URL, "run-1", expect.any(MouseEvent), {
       hostId: "local",
     });
@@ -831,6 +856,8 @@ describe("CanopyTerminal links, as the run's grid pane opens them (#15332)", () 
     xterm.current!.selection = "/repo/src/app.ts";
     openMenu(frame);
     await act(async () => screen.getByText("View file").click());
+    // Once the menu has closed and handed the keyboard back to the terminal.
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalled());
     expect(dispatch).toHaveBeenCalledWith(
       "file.view",
       { path: "/repo/src/app.ts" },
@@ -875,6 +902,10 @@ describe("CanopyTerminal links, as the run's grid pane opens them (#15332)", () 
     expect(reachedTerminal).not.toHaveBeenCalled();
     const input = container.querySelector<HTMLInputElement>("[data-terminal-search-input]");
     expect(input).not.toBeNull();
+    fireEvent.change(input!, { target: { value: "needle" } });
+    await vi.waitFor(() =>
+      expect(search.findNext).toHaveBeenCalledWith("needle", expect.anything())
+    );
     fireEvent.keyDown(input!, { key: "Escape" });
     expect(container.querySelector("[data-terminal-search-input]")).toBeNull();
     expect(terminalInput).not.toHaveBeenCalled();

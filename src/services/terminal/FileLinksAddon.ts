@@ -156,6 +156,11 @@ export interface FileLinkRoute {
   refusal(): string | null;
   /** Files open in the viewer dialog, never in a grid panel the caller sits over. */
   dialogOnly: boolean;
+  /**
+   * The project whose editor preference a modified click opens files with:
+   * the run's own, which needn't be this window's. The window's when absent.
+   */
+  projectId?: string;
 }
 
 interface DirCandidate {
@@ -1325,7 +1330,18 @@ class FileLink implements ILink {
       return;
     }
 
-    if (isModified) {
+    if (isModified && this._route?.projectId !== undefined) {
+      systemClient
+        .openInEditor({
+          path: this._absolutePath,
+          line: this._line,
+          col: this._col,
+          projectId: this._route.projectId,
+        })
+        .catch((error) => {
+          reportFileLinkFailure("Failed to open in editor", error, this._absolutePath);
+        });
+    } else if (isModified) {
       actionService
         .dispatch(
           "file.openInEditor",

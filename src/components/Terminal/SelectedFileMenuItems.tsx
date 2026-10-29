@@ -13,8 +13,8 @@ interface SelectedFileMenuItemsProps {
   absolutePath: string;
   /** False when the menu already reveals this same path, so it isn't offered twice. */
   reveal?: boolean;
-  /** A grid panel, or the viewer dialog for a menu on a surface over the grid. */
-  viewIn?: "panel" | "dialog";
+  /** Opens the file instead of the grid panel, for a menu on a surface over the grid. */
+  onView?: (absolutePath: string) => void;
 }
 
 /**
@@ -29,25 +29,25 @@ interface SelectedFileMenuItemsProps {
 export function SelectedFileMenuItems({
   absolutePath,
   reveal = true,
-  viewIn = "panel",
+  onView,
 }: SelectedFileMenuItemsProps) {
   const source = useMenuActionSource();
   return (
     <>
       <ContextMenuItem
         onSelect={() => {
+          if (onView) {
+            onView(absolutePath);
+            return;
+          }
           void grantClickedHostFile(absolutePath)
             .then(() =>
-              actionService.dispatch(
-                viewIn === "dialog" ? "file.view" : "file.openPanel",
-                { path: absolutePath },
-                { source }
-              )
+              actionService.dispatch("file.openPanel", { path: absolutePath }, { source })
             )
             .then((result) => {
               if (!result.ok) {
                 reportFileLinkFailure(
-                  viewIn === "dialog" ? "Failed to view file" : "Failed to open file panel",
+                  "Failed to open file panel",
                   result.error.details,
                   absolutePath
                 );

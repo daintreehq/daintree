@@ -48,9 +48,11 @@ vi.mock("@/store/helpPanelStore", () => ({
   selectSlotForTerminal: vi.fn(() => helpLane.current),
   selectSlot: vi.fn(() => ({ figures: [] })),
 }));
+const showTooltip = vi.hoisted(() => vi.fn<(t: unknown, e: unknown, text: string) => void>());
+const hideTooltip = vi.hoisted(() => vi.fn<(t: unknown) => void>());
 vi.mock("../terminalLinkTooltip", () => ({
-  showTerminalLinkTooltip: vi.fn(),
-  hideTerminalLinkTooltip: vi.fn(),
+  showTerminalLinkTooltip: showTooltip,
+  hideTerminalLinkTooltip: hideTooltip,
 }));
 
 import {
@@ -103,6 +105,8 @@ beforeEach(() => {
   claim.current = null;
   helpLane.current = null;
   findPluginPatternLinks.mockClear();
+  showTooltip.mockClear();
+  hideTooltip.mockClear();
 });
 
 describe("installTerminalLinkProviders", () => {
@@ -129,6 +133,19 @@ describe("installTerminalLinkProviders", () => {
     expect(disposed).toEqual(["plugin"]);
   });
 
+  it("offers suggested commands and plugin matches for a terminal this view holds", async () => {
+    installTerminalLinkProviders(terminal, emptySlots(), target("t1"));
+    expect(commandArgs.isEnabled?.()).toBe(true);
+    expect(await pluginArgs.find?.("TKT-1")).toEqual([{ match: "TKT-1" }]);
+  });
+
+  it("finds no plugin matches for a held terminal no plugin can be handed", async () => {
+    subject.current = null;
+    installTerminalLinkProviders(terminal, emptySlots(), target("t1"));
+    expect(await pluginArgs.find?.("TKT-1")).toEqual([]);
+    expect(findPluginPatternLinks).not.toHaveBeenCalled();
+  });
+
   it("leaves a terminal this view doesn't hold no suggested commands, figures or plugin matches", async () => {
     helpLane.current = "lane-1";
     installTerminalLinkProviders(terminal, emptySlots(), target(null));
@@ -139,10 +156,11 @@ describe("installTerminalLinkProviders", () => {
   });
 
   it("disposes every provider and leaves the slots to build again", () => {
+    helpLane.current = "lane-1";
     const slots = emptySlots();
     installTerminalLinkProviders(terminal, slots, target("t1"));
     disposeTerminalLinkProviders(slots);
-    expect(disposed.sort()).toEqual(["command", "file", "plugin", "web"]);
+    expect(disposed.sort()).toEqual(["command", "figures", "file", "plugin", "web"]);
     expect(Object.values(slots).every((slot) => slot === null)).toBe(true);
   });
 });
@@ -168,6 +186,18 @@ describe("sharedTerminalOptions", () => {
 
     linkHandler.leave?.({ type: "mouseout" } as MouseEvent, url, range);
     expect(t.hovered).toBeNull();
+    expect(hideTooltip).toHaveBeenCalledWith(terminal);
+  });
+
+  it("names the plugin a hovered URL goes to, only for a terminal it can be handed from", () => {
+    claim.current = { pluginName: "Acme Records" };
+    const hover = { type: "mouseover" } as MouseEvent;
+    sharedTerminalOptions(target("t1")).linkHandler.hover?.(hover, url, range);
+    expect(showTooltip).toHaveBeenCalledWith(terminal, hover, "Open with Acme Records");
+
+    showTooltip.mockClear();
+    sharedTerminalOptions(target(null)).linkHandler.hover?.(hover, url, range);
+    expect(showTooltip).not.toHaveBeenCalled();
   });
 });
 

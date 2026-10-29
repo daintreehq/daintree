@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render, screen, fireEvent, act, cleanup } from "@testing-library/react";
 
 vi.mock("@/services/TerminalInstanceService", () => {
   const terminalInstanceService = {
@@ -812,5 +812,13 @@ describe("TerminalSearchBar", () => {
     expect(mock.searchAddon.findNext).toHaveBeenCalledWith("hello", expect.anything());
     expect(terminalInstanceService.ensureSearchAddon).not.toHaveBeenCalled();
     expect(terminalInstanceService.pinHistory).not.toHaveBeenCalled();
+
+    await act(() => {
+      fireEvent.change(input, { target: { value: "" } });
+    });
+    expect(mock.searchAddon.clearDecorations).toHaveBeenCalled();
+    expect(mock._resultsListeners).toHaveLength(1);
+    cleanup();
+    expect(mock._resultsListeners).toHaveLength(0);
   });
 });

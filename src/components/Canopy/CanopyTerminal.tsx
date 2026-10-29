@@ -134,6 +134,8 @@ interface CanopyTerminalProps {
   api?: CanopyTerminalApi;
   /** The run's working directory: relative paths in its output resolve against it. */
   cwd?: string;
+  /** The run's project, whose editor preference its files open in; the window's when absent. */
+  projectId?: string;
   /**
    * The link to the run's host is down: the stream is gone with it, so input
    * stops and the pane says so until the link's return opens it again.
@@ -176,6 +178,7 @@ export function CanopyTerminal({
   spawnedAt,
   api = ownCanopyTerminalApi,
   cwd,
+  projectId,
   reconnecting = false,
   onStreamChange,
   onSubmitted,
@@ -187,19 +190,19 @@ export function CanopyTerminal({
   const onStreamChangeRef = useRef(onStreamChange);
   const onSubmittedRef = useRef(onSubmitted);
   const cwdRef = useRef(cwd);
+  const projectIdRef = useRef(projectId);
   useEffect(() => {
     onStreamChangeRef.current = onStreamChange;
     onSubmittedRef.current = onSubmitted;
     cwdRef.current = cwd;
+    projectIdRef.current = projectId;
   });
   const rootRef = useRef<HTMLDivElement>(null);
-  // The current xterm's menu and search, for handlers that outlive one generation.
+  // The current xterm's menu, for handlers that outlive one generation.
   const menuRef = useRef<CanopyTerminalMenuHandle | null>(null);
-  const searchRef = useRef<TerminalSearchTarget | null>(null);
-  const [search] = useState<TerminalSearchTarget>(() => ({
-    ensureSearchAddon: () => searchRef.current?.ensureSearchAddon() ?? Promise.resolve(null),
-    getSearchAddon: () => searchRef.current?.getSearchAddon() ?? null,
-  }));
+  // The current xterm's search: a search bar open across a reopen searches,
+  // and counts the results of, the terminal that replaced it.
+  const [search, setSearch] = useState<TerminalSearchTarget | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   // The grid's own resolved setting, so a screen reader meets this terminal
   // exactly as it meets the same terminal in its pane.
@@ -261,7 +264,13 @@ export function CanopyTerminal({
       },
       openLink: (url, event, options) =>
         linkHandler.openLink(url, localId, event, { ...options, hostId }),
-      fileRoute: { dialogOnly: true, refusal: () => (filesHere ? null : OTHER_HOST_PATH) },
+      fileRoute: {
+        dialogOnly: true,
+        refusal: () => (filesHere ? null : OTHER_HOST_PATH),
+        get projectId() {
+          return projectIdRef.current;
+        },
+      },
     };
 
     const { fontSize, fontFamily } = useTerminalFontStore.getState();
@@ -347,7 +356,7 @@ export function CanopyTerminal({
       },
       getSearchAddon: () => searchAddon,
     };
-    searchRef.current = searchTarget;
+    setSearch(searchTarget);
 
     let webgl: WebglAddon | undefined;
     void import("@xterm/addon-webgl").then(
@@ -618,6 +627,13 @@ export function CanopyTerminal({
       const mine = ++attempt;
       api.watchTerminal(runId, { spawnedAt }).then(
         (opened) => {
+          if (mine !== attempt) return;
+          // A pane already gone lets its stream go now; a live one paints
+          // once the widths are set.
+          if (disposed) {
+            onOpened(opened);
+            return;
+          }
           void unicodeReady.then(() => {
             if (mine === attempt) onOpened(opened);
           });
@@ -750,7 +766,6 @@ export function CanopyTerminal({
       offData();
       input.dispose();
       if (menuRef.current === menu) menuRef.current = null;
-      if (searchRef.current === searchTarget) searchRef.current = null;
       disposeTerminalLinkProviders(linkSlots);
       hideTerminalLinkTooltip(terminal);
       image?.dispose();
@@ -887,10 +902,10 @@ export function CanopyTerminal({
           )}
         </div>
       </CanopyTerminalMenu>
-      {searchOpen && (
+      {searchOpen && search && (
         // Typed into here, not the terminal: still none of the grid's shortcuts.
         <div data-keybindings-isolated="" className="contents">
-          <TerminalSearchBar key={generation} search={search} onClose={closeSearch} />
+          <TerminalSearchBar search={search} onClose={closeSearch} />
         </div>
       )}
     </div>

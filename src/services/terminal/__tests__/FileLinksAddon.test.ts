@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Terminal, IBufferLine, ILink } from "@xterm/xterm";
-import { FileLinksAddon, reportFileLinkFailure } from "../FileLinksAddon";
+import { FileLinksAddon, reportFileLinkFailure, type FileLinkRoute } from "../FileLinksAddon";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 import { systemClient } from "@/clients";
@@ -2306,7 +2306,7 @@ describe("FileLinksAddon routed for a surface over the grid (#15332)", () => {
     vi.mocked(fileBrowserClient.statPaths).mockReset();
   });
 
-  const fileLink = async (route: typeof otherHost | typeof thisHost) => {
+  const fileLink = async (route: FileLinkRoute) => {
     const addon = new FileLinksAddon(
       makeTerminal(["Error at /repo/src/App.tsx:45"]),
       () => "/repo",
@@ -2354,6 +2354,20 @@ describe("FileLinksAddon routed for a surface over the grid (#15332)", () => {
       expect.anything()
     );
     fileEditorDefaultMock.mockReturnValue(null);
+  });
+
+  it("opens a modified click in the run's own project's editor, not the window's", async () => {
+    vi.mocked(systemClient.openInEditor).mockResolvedValue(undefined);
+    const link = await fileLink({ ...thisHost, projectId: "proj-run-b" });
+    link.activate({ metaKey: true, ctrlKey: false } as MouseEvent, link.text);
+    await vi.waitFor(() => expect(systemClient.openInEditor).toHaveBeenCalled());
+    expect(systemClient.openInEditor).toHaveBeenCalledWith({
+      path: "/repo/src/App.tsx",
+      line: 45,
+      col: undefined,
+      projectId: "proj-run-b",
+    });
+    expect(actionService.dispatch).not.toHaveBeenCalled();
   });
 
   it("links none of another host's folders, which would resolve to this view's", async () => {

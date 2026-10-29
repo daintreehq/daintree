@@ -67,7 +67,7 @@ export function TerminalSelectionMenuItems({
   hoveredFileKind,
   hoveredFileScope,
   selectionFilePath,
-  fileView = "panel",
+  onViewSelectedFile,
   separatorAfter = true,
   onSendToAgent,
   onOpenInFileBrowser,
@@ -80,8 +80,8 @@ export function TerminalSelectionMenuItems({
   hoveredFileKind: "file" | "directory" | null;
   hoveredFileScope: WorktreeScope | null;
   selectionFilePath: string | null;
-  /** Where View file opens: a grid panel, or the viewer dialog over a surface that hides the grid. */
-  fileView?: "panel" | "dialog";
+  /** Opens a selected file instead of the grid panel View file opens by default. */
+  onViewSelectedFile?: (absolutePath: string) => void;
   /** False when nothing follows the group in the menu. */
   separatorAfter?: boolean;
   /** Absent where there is no agent picker to send to. */
@@ -170,7 +170,7 @@ export function TerminalSelectionMenuItems({
             <SelectedFileMenuItems
               absolutePath={selectionFilePath}
               reveal={false}
-              viewIn={fileView}
+              onView={onViewSelectedFile}
             />
           )}
           <ContextMenuItem onSelect={() => onAction(`reveal-in-finder:${hoveredFilePath}`)}>
@@ -182,7 +182,7 @@ export function TerminalSelectionMenuItems({
       {selectionFilePath && selectionFilePath !== hoveredFilePath && (
         <>
           <ContextMenuSeparator />
-          <SelectedFileMenuItems absolutePath={selectionFilePath} viewIn={fileView} />
+          <SelectedFileMenuItems absolutePath={selectionFilePath} onView={onViewSelectedFile} />
         </>
       )}
       {separatorAfter && <ContextMenuSeparator />}
