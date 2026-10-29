@@ -197,6 +197,8 @@ type TerminalRecord = Awaited<
 
 const PROJECT_ID = "project-1";
 const DELAYS = [10, 20, 40];
+/** A pass starts a timer tick after its attempt comes due, so same-tick attempts can join it. */
+const PASS_YIELD_MS = 1;
 
 function terminal(id: string, overrides: Partial<TerminalRecord> = {}): TerminalRecord {
   return {
@@ -249,12 +251,8 @@ function harness(
     generations: new Map<string, number>(),
   };
   const ptyClient = {
-    // Each row answers for the generation the host is on when it is read.
     getAllTerminalsWithCompletenessAsync: vi.fn(async () => ({
-      terminals: world.terminals.map((row) => ({
-        ...row,
-        launchGeneration: world.generations.get(row.id) ?? row.launchGeneration,
-      })),
+      terminals: world.terminals,
       degraded: world.degraded,
       shardsTotal: 1,
       shardsFailed: world.degraded ? 1 : 0,
@@ -273,16 +271,31 @@ function harness(
   const persist = vi.fn(
     async (_attribution: LiveSessionAttribution): Promise<PaneWritebackOutcome> => "filled"
   );
+  const canonicalFolder = vi.fn(async (cwd: string) => options.folders?.[cwd] ?? cwd);
   const service = new CodexLiveSessionAttribution({
     ptyClient,
     isQuitting: () => world.quitting,
     getProjectState,
     listThreads,
     persist,
-    canonicalFolder: async (cwd) => options.folders?.[cwd] ?? cwd,
+    canonicalFolder,
     attemptDelaysMs: DELAYS,
   });
-  return { world, ptyClient, getProjectState, listThreads, persist, service };
+  return { world, ptyClient, getProjectState, listThreads, persist, canonicalFolder, service };
+}
+
+/** The pane relaunched: Main and, once `hostCaughtUp`, its host record are on `generation`. */
+function relaunch(
+  h: ReturnType<typeof harness>,
+  terminalId: string,
+  generation: number,
+  hostCaughtUp = true
+): void {
+  h.world.generations.set(terminalId, generation);
+  if (!hostCaughtUp) return;
+  h.world.terminals = h.world.terminals.map((row) =>
+    row.id === terminalId ? { ...row, launchGeneration: generation } : row
+  );
 }
 
 function working(terminalId: string, agentId = "codex"): void {
@@ -322,7 +335,7 @@ describe("CodexLiveSessionAttribution", () => {
     sessionIdentityRevision.mockReturnValue(3);
 
     working("pane-1");
-    await vi.advanceTimersByTimeAsync(DELAYS[0]);
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
 
     expect(h.listThreads).toHaveBeenCalledWith(["/repo"], SPAWN_S, undefined);
     expect(h.persist).toHaveBeenCalledWith({
@@ -352,7 +365,7 @@ describe("CodexLiveSessionAttribution", () => {
     );
 
     for (const id of ids) working(id);
-    await vi.advanceTimersByTimeAsync(DELAYS[0]);
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
 
     expect(h.listThreads).toHaveBeenCalledTimes(1);
     expect(h.persist.mock.calls.map(([call]) => call.sessionId)).toEqual([
@@ -360,6 +373,23 @@ describe("CodexLiveSessionAttribution", () => {
       "session-1",
       "session-2",
     ]);
+  });
+
+  it("weighs panes that come due together in one pass", async () => {
+    const h = track(
+      harness({
+        terminals: [terminal("pane-1"), terminal("pane-2")],
+        panes: [saved("pane-1", "Fix the tests"), saved("pane-2", "Fix the tests")],
+        threads: [thread("session-1", "Fix the tests")],
+      })
+    );
+
+    working("pane-1");
+    working("pane-2");
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
+
+    expect(h.listThreads).toHaveBeenCalledTimes(1);
+    expect(h.persist).not.toHaveBeenCalled();
   });
 
   it("retries while the prompt isn't saved yet, then stops for good", async () => {
@@ -383,11 +413,11 @@ describe("CodexLiveSessionAttribution", () => {
     const h = track(harness({ threads: [] }));
 
     working("pane-1");
-    await vi.advanceTimersByTimeAsync(DELAYS[0]);
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
     expect(h.persist).not.toHaveBeenCalled();
 
     h.world.threads = [thread("session-1", "Triage issue #1")];
-    await vi.advanceTimersByTimeAsync(DELAYS[1]);
+    await vi.advanceTimersByTimeAsync(DELAYS[1] + PASS_YIELD_MS);
     expect(h.persist).toHaveBeenCalledTimes(1);
   });
 
@@ -395,17 +425,17 @@ describe("CodexLiveSessionAttribution", () => {
     const h = track(harness({ degraded: true }));
 
     working("pane-1");
-    await vi.advanceTimersByTimeAsync(DELAYS[0]);
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
     expect(h.listThreads).not.toHaveBeenCalled();
 
     h.world.degraded = false;
     h.world.threads = null;
-    await vi.advanceTimersByTimeAsync(DELAYS[1]);
+    await vi.advanceTimersByTimeAsync(DELAYS[1] + PASS_YIELD_MS);
     expect(h.listThreads).toHaveBeenCalledTimes(1);
     expect(h.persist).not.toHaveBeenCalled();
 
     h.world.threads = [thread("session-1", "Triage issue #1")];
-    await vi.advanceTimersByTimeAsync(DELAYS[2]);
+    await vi.advanceTimersByTimeAsync(DELAYS[2] + PASS_YIELD_MS);
     expect(h.persist).toHaveBeenCalledTimes(1);
   });
 
@@ -419,7 +449,7 @@ describe("CodexLiveSessionAttribution", () => {
     );
 
     working("pane-1");
-    await vi.advanceTimersByTimeAsync(DELAYS[0]);
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
 
     expect(h.listThreads).toHaveBeenCalledTimes(1);
     expect(h.persist).not.toHaveBeenCalled();
@@ -437,7 +467,7 @@ describe("CodexLiveSessionAttribution", () => {
     );
 
     working("pane-new");
-    await vi.advanceTimersByTimeAsync(DELAYS[0]);
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
 
     expect(h.listThreads).toHaveBeenCalledWith(["/repo"], SPAWN_S, undefined);
     expect(h.persist).toHaveBeenCalledTimes(1);
@@ -461,7 +491,7 @@ describe("CodexLiveSessionAttribution", () => {
     );
 
     working("pane-1");
-    await vi.advanceTimersByTimeAsync(DELAYS[0]);
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
 
     expect(h.persist).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "session-1" }));
   });
@@ -508,12 +538,12 @@ describe("CodexLiveSessionAttribution", () => {
     const h = track(harness({ threads: [] }));
 
     working("pane-1");
-    await vi.advanceTimersByTimeAsync(DELAYS[0]);
-    h.world.generations.set("pane-1", 2);
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
+    relaunch(h, "pane-1", 2);
     h.world.threads = [thread("session-2", "Triage issue #1")];
 
     working("pane-1");
-    await vi.advanceTimersByTimeAsync(DELAYS[0]);
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
 
     expect(h.persist).toHaveBeenCalledTimes(1);
     expect(h.persist).toHaveBeenCalledWith(expect.objectContaining({ generation: 2 }));
@@ -560,7 +590,7 @@ describe("CodexLiveSessionAttribution", () => {
     );
 
     working("pane-1");
-    await vi.advanceTimersByTimeAsync(DELAYS[0]);
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
 
     expect(h.listThreads).toHaveBeenCalledWith(["/repo"], SPAWN_S, "/profiles/work");
   });
@@ -576,7 +606,7 @@ describe("CodexLiveSessionAttribution", () => {
       );
 
       working("pane-1");
-      await vi.advanceTimersByTimeAsync(DELAYS[0]);
+      await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
 
       expect(h.listThreads).toHaveBeenCalledWith(["/repo"], SPAWN_S, undefined);
     }
@@ -605,9 +635,9 @@ describe("CodexLiveSessionAttribution", () => {
     });
 
     working("pane-1");
-    await vi.advanceTimersByTimeAsync(DELAYS[0]);
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
     // The old run's prompt and spawn time are what the query is matching.
-    h.world.generations.set("pane-1", 2);
+    relaunch(h, "pane-1", 2);
     release();
     await vi.advanceTimersByTimeAsync(0);
 
@@ -627,7 +657,7 @@ describe("CodexLiveSessionAttribution", () => {
     sessionIdentityRevision.mockReturnValue(4);
 
     working("pane-1");
-    await vi.advanceTimersByTimeAsync(DELAYS[0]);
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
     sessionIdentityRevision.mockReturnValue(5);
     release();
     await vi.advanceTimersByTimeAsync(0);
@@ -656,7 +686,7 @@ describe("CodexLiveSessionAttribution", () => {
     }
 
     working("pane-1");
-    await vi.advanceTimersByTimeAsync(DELAYS[0]);
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
 
     // The sibling's own thread could be the only one indexed so far.
     expect(h.listThreads).not.toHaveBeenCalled();
@@ -677,7 +707,7 @@ describe("CodexLiveSessionAttribution", () => {
     );
 
     working("pane-1");
-    await vi.advanceTimersByTimeAsync(DELAYS[0]);
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
 
     expect(h.listThreads).toHaveBeenCalledTimes(1);
     expect(h.listThreads).toHaveBeenCalledWith(
@@ -687,6 +717,66 @@ describe("CodexLiveSessionAttribution", () => {
     );
     // The other spelling's pane was sent the same prompt, so it is a rival.
     expect(h.persist).not.toHaveBeenCalled();
+  });
+
+  it("still counts a pane whose observed run was replaced, as the run it is now", async () => {
+    const h = track(
+      harness({
+        terminals: [terminal("pane-1"), terminal("pane-2")],
+        panes: [saved("pane-1", "Fix the tests"), saved("pane-2", "Fix the tests")],
+        // Only pane-2's relaunch has a thread so far.
+        threads: [thread("session-2", "Fix the tests")],
+      })
+    );
+
+    working("pane-1");
+    working("pane-2");
+    // Main has moved pane-2 on, but its host record hasn't caught up.
+    relaunch(h, "pane-2", 2, false);
+    await vi.advanceTimersByTimeAsync(DELAYS.reduce((a, b) => a + b, 0) + 100);
+
+    expect(h.persist).not.toHaveBeenCalled();
+  });
+
+  it("skips the folder while a sibling's host record is a generation behind", async () => {
+    const h = track(
+      harness({
+        terminals: [terminal("pane-1"), terminal("pane-2")],
+        panes: [saved("pane-1", "Fix the tests"), saved("pane-2", "Fix the tests")],
+        threads: [thread("session-2", "Fix the tests")],
+      })
+    );
+    relaunch(h, "pane-2", 2, false);
+
+    working("pane-1");
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
+
+    expect(h.listThreads).not.toHaveBeenCalled();
+    expect(h.persist).not.toHaveBeenCalled();
+  });
+
+  it("skips the pass while a folder won't resolve, and asks it only once", async () => {
+    const h = track(
+      harness({
+        terminals: [terminal("pane-1"), terminal("pane-2", { cwd: "/mnt/gone/repo" })],
+        panes: [saved("pane-1", "Fix the tests"), saved("pane-2", "Fix the tests")],
+        threads: [thread("session-2", "Fix the tests")],
+      })
+    );
+    h.canonicalFolder.mockImplementation(async (cwd: string) =>
+      cwd === "/mnt/gone/repo" ? new Promise<string>(() => {}) : cwd
+    );
+
+    working("pane-1");
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + 1_000);
+    await vi.advanceTimersByTimeAsync(DELAYS[1] + 1_000);
+
+    // The hung folder could be this one under another name.
+    expect(h.ptyClient.getAllTerminalsWithCompletenessAsync).toHaveBeenCalledTimes(2);
+    expect(h.listThreads).not.toHaveBeenCalled();
+    expect(h.canonicalFolder.mock.calls.filter(([cwd]) => cwd === "/mnt/gone/repo")).toHaveLength(
+      1
+    );
   });
 
   it("stops writing once disposed mid-pass", async () => {
@@ -705,10 +795,31 @@ describe("CodexLiveSessionAttribution", () => {
 
     working("pane-1");
     working("pane-2");
-    await vi.advanceTimersByTimeAsync(DELAYS[0]);
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
 
     expect(h.persist).toHaveBeenCalledTimes(1);
     expect(h.ptyClient.noteLiveAgentSessionId).not.toHaveBeenCalled();
+  });
+
+  it("stops writing once disposed while a refused write was pending", async () => {
+    const ids = ["pane-1", "pane-2"];
+    const h = track(
+      harness({
+        terminals: ids.map((id) => terminal(id)),
+        panes: ids.map((id) => saved(id, `Triage ${id}`)),
+        threads: ids.map((id, i) => thread(`session-${i}`, `Triage ${id}`)),
+      })
+    );
+    h.persist.mockImplementationOnce(async () => {
+      h.service.dispose();
+      return "conflict";
+    });
+
+    working("pane-1");
+    working("pane-2");
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
+
+    expect(h.persist).toHaveBeenCalledTimes(1);
   });
 
   it("writes nothing once the app starts quitting mid-query", async () => {
@@ -719,7 +830,7 @@ describe("CodexLiveSessionAttribution", () => {
     });
 
     working("pane-1");
-    await vi.advanceTimersByTimeAsync(DELAYS[0]);
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
 
     expect(h.persist).not.toHaveBeenCalled();
   });
@@ -729,7 +840,7 @@ describe("CodexLiveSessionAttribution", () => {
     h.persist.mockResolvedValue("conflict");
 
     working("pane-1");
-    await vi.advanceTimersByTimeAsync(DELAYS[0]);
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
 
     expect(h.ptyClient.noteLiveAgentSessionId).not.toHaveBeenCalled();
   });
@@ -738,7 +849,7 @@ describe("CodexLiveSessionAttribution", () => {
     track(harness());
 
     working("pane-1");
-    await vi.advanceTimersByTimeAsync(DELAYS[0]);
+    await vi.advanceTimersByTimeAsync(DELAYS[0] + PASS_YIELD_MS);
 
     const logged = JSON.stringify(logCalls);
     expect(logCalls.length).toBeGreaterThan(0);

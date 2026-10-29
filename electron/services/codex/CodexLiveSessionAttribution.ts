@@ -54,8 +54,11 @@ const ATTEMPT_DELAYS_MS: readonly number[] = [2_000, 5_000, 15_000, 45_000];
 /** Bound on remembered finished runs; one entry per pane. */
 const MAX_SETTLED_RUNS = 1_000;
 
-/** A folder that won't resolve in this long is grouped by the path as written. */
+/** A folder that won't resolve in this long can't be grouped, so the pass is skipped. */
 const REALPATH_TIMEOUT_MS = 1_000;
+
+/** Bound on remembered folder resolutions; one entry per distinct pane cwd. */
+const MAX_RESOLVED_FOLDERS = 256;
 
 /** Outcomes after which the pane holds the attributed id. */
 const HOLDS_ID: ReadonlySet<PaneWritebackOutcome> = new Set(["filled", "unchanged"]);
@@ -197,22 +200,16 @@ function codexProfileOf(saved: TerminalSnapshot): { codexHome: string | undefine
   return codexHome ? { codexHome } : null;
 }
 
-/**
- * One folder under one key whatever spelling a pane uses (`/tmp` against
- * `/private/tmp`), so panes reaching it through different paths still compete.
- * Bounded: `realpath` hangs on a dead network mount.
- */
-async function canonicalFolder(cwd: string): Promise<string> {
+/** `promise`'s value, or null once `ms` passes first. */
+async function withinMs<T>(promise: Promise<T>, ms: number): Promise<T | null> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      realpath(cwd),
-      new Promise<string>((resolve) => {
-        timer = setTimeout(() => resolve(cwd), REALPATH_TIMEOUT_MS);
+      promise,
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), ms);
       }),
     ]);
-  } catch {
-    return cwd;
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -272,6 +269,12 @@ export class CodexLiveSessionAttribution {
   /** The generation each pane finished with, so its later turns don't start it over. */
   private readonly settled = new Map<string, number>();
   private readonly due = new Set<string>();
+  /**
+   * Each cwd's resolution, kept across passes. `realpath` can hang on a dead
+   * network mount and hold a threadpool thread while it does, so one stuck
+   * folder is asked once rather than on every attempt of every pane in it.
+   */
+  private readonly folders = new Map<string, Promise<string>>();
   private draining = false;
   private disposed = false;
   private readonly unsubscribe: () => void;
@@ -287,7 +290,7 @@ export class CodexLiveSessionAttribution {
         (async (id) => (await import("../ProjectStore.js")).projectStore.getProjectState(id)),
       listThreads: deps.listThreads ?? listCodexThreadsCreatedSince,
       persist: deps.persist ?? ((attribution) => acceptLiveSessionAttribution(attribution)),
-      canonicalFolder: deps.canonicalFolder ?? canonicalFolder,
+      canonicalFolder: deps.canonicalFolder ?? ((cwd) => realpath(cwd)),
       attemptDelaysMs: deps.attemptDelaysMs ?? ATTEMPT_DELAYS_MS,
     };
     this.unsubscribe = events.on("agent:state-changed", (payload) => {
@@ -354,6 +357,9 @@ export class CodexLiveSessionAttribution {
     if (this.draining) return;
     this.draining = true;
     try {
+      // Attempts that come due in the same turn share the pass, so their panes
+      // are weighed against each other rather than one pass apiece.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
       while (this.due.size > 0 && !this.disposed) {
         const due = new Map<string, number>();
         for (const terminalId of this.due) {
@@ -420,14 +426,18 @@ export class CodexLiveSessionAttribution {
       }
       return state;
     };
-    const folders = new Map<string, Promise<string>>();
-    const folderOf = (cwd: string): Promise<string> => {
-      let folder = folders.get(cwd);
+    const folderOf = (cwd: string): Promise<string | null> => {
+      let folder = this.folders.get(cwd);
       if (!folder) {
+        // A folder that can't be resolved at all has no other spelling to find.
         folder = this.deps.canonicalFolder(cwd).catch(() => cwd);
-        folders.set(cwd, folder);
+        this.folders.set(cwd, folder);
+        if (this.folders.size > MAX_RESOLVED_FOLDERS) {
+          const oldest = this.folders.keys().next().value;
+          if (oldest !== undefined) this.folders.delete(oldest);
+        }
       }
-      return folder;
+      return withinMs(folder, REALPATH_TIMEOUT_MS);
     };
 
     const claimed = new Set<string>();
@@ -443,12 +453,17 @@ export class CodexLiveSessionAttribution {
         continue;
       }
       // The run the working observation was about has been replaced; its
-      // successor gets an observation of its own.
-      if (dueGeneration !== undefined && ptyClient.getLiveGeneration(info.id) !== dueGeneration) {
+      // successor gets an observation of its own. The pane still competes
+      // below, as whatever run its row turns out to describe.
+      let observed = dueGeneration;
+      if (observed !== undefined && ptyClient.getLiveGeneration(info.id) !== observed) {
         finished.add(info.id);
-        continue;
+        observed = undefined;
       }
       const folder = await folderOf(info.cwd);
+      // Unresolved, this pane could be any folder's rival; nothing here can be
+      // shown unique this pass.
+      if (folder === null) return finished;
       let group = groups.get(folder);
       if (!group) {
         group = { cwds: new Set(), panes: [], profiles: new Map(), unavailable: false };
@@ -474,7 +489,7 @@ export class CodexLiveSessionAttribution {
         if (pane.agentSessionId) claimed.add(pane.agentSessionId);
       }
       if (saved.agentSessionId) {
-        if (dueGeneration !== undefined) finished.add(info.id);
+        if (observed !== undefined) finished.add(info.id);
         continue;
       }
       const prompt = sanitizeFirstPrompt(saved.firstPrompt);
@@ -493,8 +508,8 @@ export class CodexLiveSessionAttribution {
         generation,
         profileKey,
       });
-      if (dueGeneration !== undefined && profileKey === null) finished.add(info.id);
-      if (dueGeneration !== undefined && profileKey !== null) {
+      if (observed !== undefined && profileKey === null) finished.add(info.id);
+      if (observed !== undefined && profileKey !== null) {
         const spawnedAt = Math.floor(info.spawnedAt / 1000);
         const existing = group.profiles.get(profileKey);
         group.profiles.set(profileKey, {
@@ -532,6 +547,7 @@ export class CodexLiveSessionAttribution {
           if (sessionId === undefined || claimed.has(sessionId)) continue;
           if (Math.floor(pane.spawnedAtMs / 1000) < since) continue;
           if (ptyClient.getLiveGeneration(pane.terminalId) !== pane.generation) continue;
+          if (this.disposed || this.deps.isQuitting()) return finished;
           const outcome = await this.deps.persist({
             terminalId: pane.terminalId,
             generation: pane.generation,
@@ -540,16 +556,15 @@ export class CodexLiveSessionAttribution {
             sessionId,
             identityRevision: pane.identityRevision,
           });
+          // Whatever the saved pane did, the host mirror and the next write
+          // are this service's to stop.
+          if (this.disposed || this.deps.isQuitting()) return finished;
           if (!HOLDS_ID.has(outcome)) continue;
           claimed.add(sessionId);
-          // The saved pane holds the id either way; only the host mirror and
-          // the next write are this service's to stop.
-          if (this.disposed) return finished;
           ptyClient.noteLiveAgentSessionId(pane.terminalId, sessionId, pane.generation);
           finished.add(pane.terminalId);
           // A pane matched before its own first turn was seen needs no attempts of its own.
           if (!due.has(pane.terminalId)) this.settle(pane.terminalId, pane.generation);
-          if (this.deps.isQuitting()) return finished;
         }
       }
     }
