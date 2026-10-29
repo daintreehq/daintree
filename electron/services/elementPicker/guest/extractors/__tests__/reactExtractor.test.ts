@@ -410,12 +410,14 @@ describe.each(["plain", "compiled"] as const)("the React extractor, compiler %s"
       elementIds: roots,
     });
 
-    const badge = record(pick("span.badge"), "Badge").componentId;
+    // Badge's own element would find Badge, but Badge is not on the chain the
+    // selection was read with, so the page is not asked for it.
+    const held = pick("span.badge");
+    const badge = record(held, "Badge").componentId;
     pick("li.item");
     const count = events.length;
-    // Badge is a real component, but not one this selection sits inside.
     expect(
-      picker!.reselect({ elementId: picked.elementId, framework: "react", componentId: badge })
+      picker!.reselect({ elementId: held.elementId, framework: "react", componentId: badge })
     ).toBe(false);
     expect(
       picker!.reselect({ elementId: picked.elementId, framework: "vue", componentId: app })

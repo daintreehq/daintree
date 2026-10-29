@@ -1796,6 +1796,32 @@ describe("stale selections", () => {
     );
   });
 
+  it("proves a React component selection again by the id it was selected by", async () => {
+    host.template = () => reactObservation();
+    await mountBound();
+    await act(async () =>
+      host.select(0, undefined, "user", { kind: "component", componentId: "r-save" })
+    );
+    await screen.findByRole("textbox", { name: "Request for the agent" });
+
+    await act(async () => host.sourceChanged("src/Dashboard.tsx"));
+    await waitFor(() => expect(host.picker.reselect).toHaveBeenCalled(), { timeout: 4000 });
+    // SaveButton has no call site to aim at, so its id is what keeps it a component.
+    expect(host.picker.reselect).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      elementId: "el-r",
+      framework: "react",
+      componentId: "r-save",
+    });
+    await waitFor(() => {
+      const state = session().getSnapshot().selection;
+      expect(state.status === "ready" && state.stale === null && state.selection.scope).toEqual({
+        kind: "component",
+        componentId: "r-save",
+      });
+    });
+  });
+
   it("asks again by element id for a React pick made while its file was still settling", async () => {
     host.template = () => reactObservation();
     await mountBound();

@@ -247,6 +247,20 @@ describe("elementPicker handlers", () => {
     expect(bridge.reselectElementPicker).toHaveBeenCalledWith("project-a", "s1", request);
   });
 
+  it("passes a crumb's component id through to the bridge", async () => {
+    const all = await ops();
+    const request = {
+      sessionId: "s1",
+      elementId: "el-1",
+      framework: "react" as const,
+      componentId: "react-3",
+      reveal: true,
+    };
+    expect(all.reselect.schema.safeParse(request)).toMatchObject({ success: true, data: request });
+    await expect(all.reselect.handler(ctx("project-a"), request)).resolves.toBe(true);
+    expect(bridge.reselectElementPicker).toHaveBeenCalledWith("project-a", "s1", request);
+  });
+
   it("serves a workspace's source only to the view that opened it", async () => {
     const all = await ops();
     const opener = ctx("project-a", 1);
