@@ -8,6 +8,7 @@ import {
   useId,
   createContext,
   useContext,
+  useSyncExternalStore,
   type CSSProperties,
 } from "react";
 import { InsetSurface } from "@/components/ui/insetSurface";
@@ -40,6 +41,7 @@ import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import { DialogDismissSurface } from "./DialogDismissSurface";
 import { DialogLayerContext } from "./dialogLayer";
+import { useWindowControlsReservation } from "./WindowControlsInset";
 import {
   UI_ENTER_DURATION,
   UI_EXIT_DURATION,
@@ -68,9 +70,12 @@ type DialogInitialFocus = "first" | "cancel" | "confirm" | "surface" | "none";
 /**
  * Where the surface sits. `center` is the dialog card; `right` and `left` are a
  * full-height sheet against that edge of the window, for a record's detail or
- * edit form beside the list it came from.
+ * edit form beside the list it came from. `window` covers the whole window
+ * opaquely, for a surface that is a place of its own rather than a step over
+ * the app: nothing of the app shows through, so there is no scrim to tint or
+ * blur, and its header stands in for the toolbar it covers as window chrome.
  */
-type DialogPlacement = "center" | "right" | "left";
+type DialogPlacement = "center" | "right" | "left" | "window";
 
 /**
  * A caller-supplied "logical successor" to receive focus when the dialog's
@@ -121,6 +126,7 @@ interface AppDialogContextValue {
   dismissible: boolean;
   /** `AppDialog.Description` announces itself, so the dialog never points at a missing id. */
   registerDescription: () => () => void;
+  placement: DialogPlacement;
 }
 
 const AppDialogContext = createContext<AppDialogContextValue | null>(null);
@@ -167,12 +173,6 @@ export interface AppDialogProps {
    * when the dialog unmounts or reopens before its exit finishes.
    */
   onCloseComplete?: () => void;
-  /**
-   * Painted under the scrim, over the app — for a dialog that holds a still of
-   * the app behind itself. The scrim's tint and blur stay live on top of it, and
-   * it fades with the scrim. Takes no pointer events.
-   */
-  backdrop?: React.ReactNode;
   "data-testid"?: string;
 }
 
@@ -201,6 +201,7 @@ const PLACEMENT_BACKDROP_CLASSES: Record<DialogPlacement, string> = {
   center: "items-center justify-center",
   right: "items-stretch justify-end",
   left: "items-stretch justify-start",
+  window: "items-stretch justify-stretch",
 };
 
 // A sheet runs from under the toolbar's 48px band (h-12) to the window's foot
@@ -209,9 +210,15 @@ const PLACEMENT_BACKDROP_CLASSES: Record<DialogPlacement, string> = {
 // Windows caption buttons; `app-no-drag` claims whatever of a taller title
 // surface (a global banner) it still overlaps. Only the edges facing the app
 // keep a border, and nothing is rounded.
+//
+// A window surface is the whole window, toolbar band included, so it claims
+// no-drag over all of it (a global banner's taller title band too) and hands
+// the drag back to its own header, which `.dialog-window-header` makes the
+// window's title bar (window-modes.css).
 const PLACEMENT_SURFACE_CLASSES: Record<Exclude<DialogPlacement, "center">, string> = {
   right: "app-no-drag mt-12 h-[calc(100%-3rem)] border-l border-t",
   left: "app-no-drag mt-12 h-[calc(100%-3rem)] border-r border-t",
+  window: "app-no-drag h-full",
 };
 
 // A card rises a step and settles; a sheet slides a step in from its edge.
@@ -235,7 +242,31 @@ const PLACEMENT_MOTION: Record<
     shown: "opacity-100 translate-x-0",
     hidden: "opacity-0 -translate-x-4",
   },
+  // A window never moves; it fades in and out with the layer under it.
+  window: { starting: "", shown: "", hidden: "" },
 };
+
+// Window dialogs up right now. A dialog opened over one covers the whole window
+// too: the strip it would leave for the Portal holds the window dialog by then,
+// and left unscrimmed there, a click would reach it from behind a modal.
+let windowDialogsUp = 0;
+const windowDialogListeners = new Set<() => void>();
+
+function subscribeWindowDialogs(listener: () => void): () => void {
+  windowDialogListeners.add(listener);
+  return () => {
+    windowDialogListeners.delete(listener);
+  };
+}
+
+function isWindowDialogUp(): boolean {
+  return windowDialogsUp > 0;
+}
+
+function noteWindowDialog(delta: 1 | -1): void {
+  windowDialogsUp += delta;
+  for (const listener of windowDialogListeners) listener();
+}
 
 export function AppDialog({
   isOpen,
@@ -255,7 +286,6 @@ export function AppDialog({
   restoreFocusTo,
   preferRestoreFocusTo = false,
   onCloseComplete,
-  backdrop,
   "data-testid": dataTestId,
 }: AppDialogProps) {
   // A dock popover renders above the standard modal tier, so a dialog opened
@@ -292,7 +322,14 @@ export function AppDialog({
   const { isOpen: portalOpen, width: portalWidth } = usePortalStore(
     useShallow((s) => ({ isOpen: s.isOpen, width: s.width }))
   );
-  const portalOffset = portalOpen ? portalWidth : 0;
+  // A window covers the Portal's strip with the rest: the Portal is hidden
+  // while any overlay is up, so there is nothing there to keep in reach.
+  const overWindowDialog = useSyncExternalStore(
+    subscribeWindowDialogs,
+    isWindowDialogUp,
+    isWindowDialogUp
+  );
+  const portalOffset = portalOpen && placement !== "window" && !overWindowDialog ? portalWidth : 0;
 
   // Hold the latest `restoreFocusTo` in a ref so `restoreFocus` stays
   // identity-stable. It feeds the unmount-cleanup effect's dep array; if it
@@ -360,6 +397,13 @@ export function AppDialog({
   });
 
   useOverlayState(isOpen || shouldRender);
+
+  const coversWindow = placement === "window" && shouldRender;
+  useEffect(() => {
+    if (!coversWindow) return;
+    noteWindowDialog(1);
+    return () => noteWindowDialog(-1);
+  }, [coversWindow]);
 
   // Re-measure the platform's reserved scrollbar gutter as the dialog opens.
   // It is a UA/OS property, not a stylesheet value — and one the user can
@@ -660,29 +704,14 @@ export function AppDialog({
         variant,
         dismissible,
         registerDescription,
+        placement,
       }}
     >
-      {backdrop !== undefined && (
-        // Same layer as the scrim, and first, so the scrim paints over it.
-        <div
-          aria-hidden="true"
-          className={cn(
-            "pointer-events-none fixed inset-0 overflow-hidden transition-opacity",
-            effectiveZIndex === "nested" ? "z-[var(--z-nested-dialog)]" : "z-[var(--z-modal)]",
-            isVisible ? "opacity-100" : "opacity-0"
-          )}
-          style={{
-            right: portalOffset,
-            transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
-            transitionTimingFunction: UI_SCRIM_EASING,
-          }}
-        >
-          {backdrop}
-        </div>
-      )}
       <div
         className={cn(
-          "fixed inset-0 flex bg-scrim-medium backdrop-blur-[var(--theme-scrim-blur)] backdrop-saturate-[var(--theme-material-saturation)]",
+          "fixed inset-0 flex",
+          placement !== "window" &&
+            "bg-scrim-medium backdrop-blur-[var(--theme-scrim-blur)] backdrop-saturate-[var(--theme-material-saturation)]",
           PLACEMENT_BACKDROP_CLASSES[placement],
           effectiveZIndex === "nested" ? "z-[var(--z-nested-dialog)]" : "z-[var(--z-modal)]",
           // Opacity-only, so reduced motion leaves it alone: a scrim fade is not
@@ -693,7 +722,16 @@ export function AppDialog({
         style={{
           right: portalOffset,
           transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
-          transitionTimingFunction: UI_SCRIM_EASING,
+          // A window's layer is the view itself, so it fades on the view's
+          // curves (as the plugin manager does) rather than a scrim's linear
+          // one: opaque early on the way in and late on the way out, which
+          // keeps a terminal Canopy holds at its own size out of sight behind.
+          transitionTimingFunction:
+            placement === "window"
+              ? isVisible
+                ? UI_ENTER_EASING
+                : UI_EXIT_EASING
+              : UI_SCRIM_EASING,
         }}
         ref={setBackdropNode}
         onPointerDown={handleBackdropPointerDown}
@@ -721,11 +759,12 @@ export function AppDialog({
           ref={dialogRef}
           tabIndex={-1}
           className={cn(
-            "bg-surface-dialog border-border-default shadow-[var(--theme-shadow-dialog)] flex flex-col overflow-hidden",
+            "bg-surface-dialog border-border-default flex flex-col overflow-hidden",
+            placement !== "window" && "shadow-[var(--theme-shadow-dialog)]",
             placement === "center"
               ? ["border rounded-[var(--radius-xl)] mx-4", maxHeight]
               : PLACEMENT_SURFACE_CLASSES[placement],
-            sizeClasses[size],
+            placement !== "window" && sizeClasses[size],
             "w-full",
             // Tailwind v4 translate-*/scale-* emit the individual `translate`
             // and `scale` properties, which `transform` in a transition list
@@ -814,10 +853,31 @@ const DIALOG_CLOSE_ATTR = "data-dialog-close";
 // focus outside the dialog. Each action vetoes its own activation in JS.
 
 AppDialog.Header = function AppDialogHeader({ children, className }: AppDialogHeaderProps) {
+  const context = useContext(AppDialogContext);
+  if (context?.placement === "window") {
+    return <AppDialogWindowHeader className={className}>{children}</AppDialogWindowHeader>;
+  }
   // `density` is deliberately not forwarded: every dialog header is comfortable,
   // and exposing it would widen AppDialog's public surface for no caller.
   return <SurfaceHeader className={cn(DIALOG_INSET, className)}>{children}</SurfaceHeader>;
 };
+
+/**
+ * A window dialog covers the toolbar, so its header is the window's title bar:
+ * the toolbar's 48px band and 16px inset, clear of the traffic lights or the
+ * caption buttons, and a handle that drags the window.
+ */
+function AppDialogWindowHeader({ children, className }: AppDialogHeaderProps) {
+  const reservation = useWindowControlsReservation();
+  return (
+    <SurfaceHeader
+      className={cn("dialog-window-header h-12 px-4 py-0", className)}
+      style={reservation}
+    >
+      {children}
+    </SurfaceHeader>
+  );
+}
 
 interface AppDialogTitleProps {
   children: React.ReactNode;
@@ -879,8 +939,9 @@ AppDialog.CloseButton = function AppDialogCloseButton({
       // Pinned to the top of the header so a title that wraps leaves the X
       // beside its first line. Every sibling in a dialog header is at most as
       // tall as this button, so on one line the row is the button's own height
-      // and nothing moves.
-      className={cn("self-start", className)}
+      // and nothing moves. A window's header is a fixed band the title can't
+      // wrap in, so there the X sits in its middle like the toolbar's buttons.
+      className={cn(context?.placement === "window" ? "self-center" : "self-start", className)}
       aria-label={ariaLabel}
     />
   );

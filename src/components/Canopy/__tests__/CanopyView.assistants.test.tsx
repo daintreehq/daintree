@@ -152,7 +152,6 @@ function installElectron() {
     reread: vi.fn(async () => {}),
     runBranch: vi.fn(async () => "main"),
     searchScreens: vi.fn(async (_targets: Array<{ runId: string }>) => [] as string[]),
-    captureBackdrop: vi.fn(async () => null),
     watchTerminal: vi.fn(),
     watchAssistantTerminal: vi.fn(),
     readAgentDirectory: vi.fn(async () => directory),

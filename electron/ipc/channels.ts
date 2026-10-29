@@ -303,7 +303,6 @@ export const CHANNELS = {
   CANOPY_READ_AGENT_DIRECTORY: "canopy:read-agent-directory",
   CANOPY_READ_ASSISTANT_WORK: "canopy:read-assistant-work",
   CANOPY_UNWATCH_TERMINAL: "canopy:unwatch-terminal",
-  CANOPY_CAPTURE_BACKDROP: "canopy:capture-backdrop",
   CANOPY_SET_MODE: "canopy:set-mode",
   CANOPY_GET_MODEL: "canopy:get-model",
   CANOPY_GET_SIZE_HOLDS: "canopy:get-size-holds",

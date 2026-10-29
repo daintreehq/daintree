@@ -145,6 +145,47 @@ describe("the opt-out stays wired to a real rule", () => {
   });
 });
 
+describe("a window dialog's header is the title bar", () => {
+  // A window-placement AppDialog stamps the opt-out on its whole surface, which
+  // `.app-no-drag *` carries into its header too. These rules hand the header
+  // back to the window drag and keep its controls clickable; they must outrank
+  // the blanket rule, so both are scoped under `.app-no-drag`.
+  const css = readIndexCss().replace(/\s+/g, " ");
+
+  function declarationsFor(selectorPattern: string): string | null {
+    return new RegExp(`(?:^|\\}|\\*/) ?${selectorPattern} ?\\{([^}]*)\\}`).exec(css)?.[1] ?? null;
+  }
+
+  it("drags the window from the header and everything in it", () => {
+    const declarations = declarationsFor(
+      `\\.${NO_DRAG} \\.dialog-window-header, \\.${NO_DRAG} \\.dialog-window-header \\*`
+    );
+    expect(declarations, "header drag rule missing").not.toBeNull();
+    expect(declarations).toMatch(/-webkit-app-region:\s*drag/);
+    expect(declarations).toMatch(/(?<!-)\bapp-region:\s*drag/);
+  });
+
+  it("keeps every control in the header, and what is inside it, clickable", () => {
+    const controls = /:is\(([^)]*)\)/;
+    const rule = new RegExp(
+      `\\.${NO_DRAG} \\.dialog-window-header (:is\\([^)]*\\)), \\.${NO_DRAG} \\.dialog-window-header \\1 \\* ?\\{([^}]*)\\}`
+    ).exec(css);
+    expect(rule, "header controls rule missing").not.toBeNull();
+    const list = controls.exec(rule?.[1] ?? "")?.[1] ?? "";
+    for (const control of [
+      "button",
+      '[role="button"]',
+      '[role="combobox"]',
+      "input",
+      "[tabindex]",
+    ]) {
+      expect(list).toContain(control);
+    }
+    expect(rule?.[2]).toMatch(/-webkit-app-region:\s*no-drag/);
+    expect(rule?.[2]).toMatch(/(?<!-)\bapp-region:\s*no-drag/);
+  });
+});
+
 describe("no ui/ surface portals over the toolbar without opting out", () => {
   // Every exemption is a geometry claim, and each one is why this list is
   // spelled out rather than inferred.
@@ -167,11 +208,12 @@ describe("no ui/ surface portals over the toolbar without opting out", () => {
     "fixed-dropdown.tsx": ["FixedDropdown panel"],
     "toaster.tsx": ["Toast", "OverflowPill"],
     "ReEntrySummary.tsx": ["summary card"],
-    // The side sheets, which run up to the toolbar band. The centred panel is
+    // The side sheets, which run up to the toolbar band, and the window surface,
+    // which covers it and hands the drag to its own header. The centred panel is
     // deliberately unstamped: it only reaches the band on a short window with a
     // global banner up, and whether a window should drag at all behind an open
     // modal is a separate call.
-    "AppDialog.tsx": ["right sheet surface", "left sheet surface"],
+    "AppDialog.tsx": ["right sheet surface", "left sheet surface", "window surface"],
   };
 
   function readModule(file: string): string {

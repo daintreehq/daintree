@@ -64,9 +64,6 @@ export interface GeneratedElectronAPI {
     archive(
       ...args: IpcInvokeMap["canopy:archive"]["args"]
     ): Promise<IpcInvokeMap["canopy:archive"]["result"]>;
-    captureBackdrop(
-      ...args: IpcInvokeMap["canopy:capture-backdrop"]["args"]
-    ): Promise<IpcInvokeMap["canopy:capture-backdrop"]["result"]>;
     emptyTrash(
       ...args: IpcInvokeMap["canopy:empty-trash"]["args"]
     ): Promise<IpcInvokeMap["canopy:empty-trash"]["result"]>;

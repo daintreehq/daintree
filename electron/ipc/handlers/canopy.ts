@@ -117,7 +117,6 @@ const MAX_SUBMIT_LENGTH = 100_000;
 const MAX_SUBMIT_IMAGES = 10;
 const MAX_KEY_LENGTH = 32;
 const MAX_LABEL_LENGTH = 200;
-const BACKDROP_JPEG_QUALITY = 85;
 /**
  * Reading runs only once the user has turned it on, and so does acting on what
  * was read. Checked here as well as in the panel, so no other caller can reach
@@ -1776,25 +1775,6 @@ export const canopyNamespace = defineIpcNamespace({
       await getModels().remove(false);
       return service ? service.getSnapshot() : hiddenOrIdleSnapshot();
     }),
-
-    /**
-     * A still of the view as it stands, for the panel to hold behind itself so
-     * the app under it stops moving while it is open — the grid pane of the
-     * terminal the panel streams included, frozen at its own size. JPEG: a
-     * full-window PNG takes longer to encode than the panel takes to open.
-     */
-    captureBackdrop: op(
-      CANOPY_METHOD_CHANNELS.captureBackdrop,
-      async (ctx): Promise<Uint8Array | null> => {
-        checkRateLimit(CANOPY_METHOD_CHANNELS.captureBackdrop, 10, 10_000);
-        // A Shell channel: only a view on this machine asks, for its own pixels.
-        if (!ctx.event) return null;
-        const image = await ctx.event.sender.capturePage();
-        if (image.isEmpty()) return null;
-        return new Uint8Array(image.toJPEG(BACKDROP_JPEG_QUALITY));
-      },
-      { withContext: true }
-    ),
 
     /** Raw keystrokes from the live view, for the terminal it is streaming. */
     terminalInput: op(

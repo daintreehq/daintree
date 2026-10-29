@@ -134,7 +134,6 @@ function installElectron(snapshot: CanopySnapshot) {
     restoreReads: vi.fn(async () => {}),
     runBranch: vi.fn(async () => null),
     searchScreens: vi.fn(async () => [] as string[]),
-    captureBackdrop: vi.fn(async () => null),
     readAgentDirectory: vi.fn(async () => ({
       coverage: "ok" as const,
       observedAt: 1,

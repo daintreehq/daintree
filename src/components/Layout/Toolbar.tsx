@@ -68,6 +68,7 @@ import {
 import { useToolbarOverflow, withDemotedOverflow } from "@/hooks/useToolbarOverflow";
 import { useProjectToolbarOverlay, useResolvedPresentation } from "@/hooks/useResolvedPresentation";
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
+import { useWindowFullscreen } from "@/hooks/useWindowFullscreen";
 import {
   useAriaKeyshortcuts,
   useDohertyGate,
@@ -303,7 +304,7 @@ export function Toolbar({
   // view shows here at once.
   const agentPins = useAgentToolbarPinsStore((s) => s.pins);
 
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const isFullscreen = useWindowFullscreen();
   // Store-derived rather than local click state so every clipboard copy spins
   // the button — an MCP or assistant dispatch runs the same bracketed actions
   // a click does, and this button is the one place that work is visible.
@@ -479,10 +480,6 @@ export function Toolbar({
     branchName,
     branchChipDemoted,
   });
-
-  useEffect(() => {
-    return window.electron.window.onFullscreenChange(setIsFullscreen);
-  }, []);
 
   // Feedback is owned by the action layer, not inline state here: the
   // `worktree.copyTree` action brackets the shared run store (which drives the

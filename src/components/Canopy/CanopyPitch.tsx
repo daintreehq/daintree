@@ -36,7 +36,6 @@ const POINTS = [
 interface CanopyPitchProps {
   isOpen: boolean;
   onClose: () => void;
-  backdrop?: React.ReactNode;
   /** The user turned Canopy on: its model downloads and screens are read on this computer. */
   onTurnOn: () => Promise<void>;
   /** The user doesn't want Canopy: its ways in go, all but Settings. */
@@ -60,7 +59,6 @@ const FAILED: Record<"on" | "hide", string> = {
 export function CanopyPitch({
   isOpen,
   onClose,
-  backdrop,
   onTurnOn,
   onHide,
   restoreFocusTo,
@@ -95,11 +93,9 @@ export function CanopyPitch({
     <AppDialog
       isOpen={isOpen}
       onClose={onClose}
-      size="workspace"
-      maxHeight="h-[min(90vh,1100px)]"
+      placement="window"
       initialFocus="none"
       {...(restoreFocusTo ? { restoreFocusTo, preferRestoreFocusTo: true } : {})}
-      backdrop={backdrop}
       data-testid="canopy-dialog"
     >
       <AppDialog.Header>
@@ -107,7 +103,7 @@ export function CanopyPitch({
         <CanopyHeaderCenter>{hostPicker}</CanopyHeaderCenter>
         <AppDialog.CloseButton />
       </AppDialog.Header>
-      <div className="flex min-h-0 flex-1">
+      <div className="canopy-frame flex min-h-0 flex-1">
         <DemoInbox paused={!isOpen} />
         <section
           aria-labelledby="canopy-pitch-title"

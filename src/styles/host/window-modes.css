@@ -25,6 +25,30 @@
   app-region: no-drag;
 }
 
+/* A full-window dialog (`AppDialog placement="window"`) covers the toolbar, so
+   its header takes over as the title bar. The dialog's surface claims no-drag
+   over the whole window, which is what masks the toolbar and any global banner
+   beneath it, and `.app-no-drag *` reaches every element in the header too.
+   These rules outrank it: the header and everything in it drag the window, and
+   only its controls (and anything else focusable) stay clickable. */
+.app-no-drag .dialog-window-header,
+.app-no-drag .dialog-window-header * {
+  -webkit-app-region: drag;
+  app-region: drag;
+  user-select: none;
+}
+
+.app-no-drag
+  .dialog-window-header
+  :is(button, a[href], input, select, textarea, [role="button"], [role="combobox"], [tabindex]),
+.app-no-drag
+  .dialog-window-header
+  :is(button, a[href], input, select, textarea, [role="button"], [role="combobox"], [tabindex])
+  * {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
 /* Safety strip for resizing on Windows frameless windows.
    This reserves the top 3px for the OS resize cursor so the drag
    handler doesn't steal the mouse event at the very edge.

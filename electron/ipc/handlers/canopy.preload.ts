@@ -31,7 +31,6 @@ export const CANOPY_METHOD_CHANNELS = {
   readAgentDirectory: "canopy:read-agent-directory",
   readAssistantWork: "canopy:read-assistant-work",
   unwatchTerminal: "canopy:unwatch-terminal",
-  captureBackdrop: "canopy:capture-backdrop",
   setMode: "canopy:set-mode",
   getModel: "canopy:get-model",
   getSizeHolds: "canopy:get-size-holds",

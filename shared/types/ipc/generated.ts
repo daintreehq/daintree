@@ -259,10 +259,6 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: import("./canopy.js").CanopyReadMark | null;
   };
-  "canopy:capture-backdrop": {
-    args: [];
-    result: Uint8Array<ArrayBufferLike> | null;
-  };
   "canopy:empty-trash": {
     args: [targets: (import("./canopy.js").CanopyTrashTarget & { runId: string })[]];
     result: number;
