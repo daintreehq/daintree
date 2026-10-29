@@ -5,11 +5,7 @@ import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import type { AgentState } from "@/types";
 import type { HostId } from "@shared/types/remoteHosts";
-import {
-  isAgentFleetActionEligible,
-  isAgentTerminalFleetEligible,
-  isTerminalFleetEligible,
-} from "./fleetEligibility";
+import { isAgentTerminalFleetEligible, isTerminalFleetEligible } from "./fleetEligibility";
 
 // Carrier shape sourced from `getNarrowPanel`'s parameter so this file doesn't
 // have to name the legacy carrier type directly — auto-tracks the carrier flip
@@ -18,6 +14,7 @@ type PanelCarrierMap = Parameters<typeof getNarrowPanel>[0];
 
 export {
   isAgentFleetActionEligible,
+  isAgentTerminalFleetEligible,
   isFleetInterruptAgentEligible,
   isFleetRestartAgentEligible,
   isFleetWaitingAgentEligible,
@@ -147,7 +144,9 @@ export function collectEligibleIds(
 /**
  * Pure dry-run of `armByState` — returns the ids that would be armed without
  * mutating the store. Used by the selection menu's hover/focus preview so the
- * panes that *would* be selected glow ahead of the click.
+ * panes that *would* be selected glow ahead of the click. Agent-scoped like the
+ * sidebar's filtered arm, so plugin- and user-contributed agents in the observed
+ * state are included (#14961).
  */
 export function computeArmByStateIds(
   preset: FleetArmStatePreset,
@@ -158,7 +157,7 @@ export function computeArmByStateIds(
   const ids: string[] = [];
   for (const id of state.panelIds) {
     const t = getNarrowPanel(state.panelsById, id);
-    if (!isAgentFleetActionEligible(t)) continue;
+    if (!isAgentTerminalFleetEligible(t)) continue;
     if (scope === "current") {
       if (!activeWorktreeId || t.worktreeId !== activeWorktreeId) continue;
     }
