@@ -487,8 +487,7 @@ interface DictationCleanup {
 }
 
 type ScratchOutcome =
-  | { kind: "removed"; sources: number }
-  | { kind: "refused"; reason: VoiceScratchRefusal["reason"] };
+  { kind: "removed"; sources: number } | { kind: "refused"; reason: VoiceScratchRefusal["reason"] };
 
 /** Where the live session may cut its next chunk, waiting on what's said after it. */
 interface ChunkBreak {

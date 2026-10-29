@@ -11,10 +11,7 @@ import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
-import {
-  SCRATCH_REFUSAL_CAPTION,
-  SCRATCH_REFUSAL_STATUS,
-} from "@/services/voiceScratchCommand";
+import { SCRATCH_REFUSAL_CAPTION, SCRATCH_REFUSAL_STATUS } from "@/services/voiceScratchCommand";
 import {
   useVoiceRecordingStore,
   type VoiceRecordingTarget,
