@@ -86,7 +86,7 @@ function renderWithPortal(isOpen: boolean) {
   );
 }
 
-describe("SettingsDialog and an open Portal (#15029)", () => {
+describe("SettingsDialog and the Portal (#15029)", () => {
   it("hides the Portal while Settings is open and shows the same tab again once it closes", async () => {
     const { rerender } = render(renderWithPortal(true));
 
@@ -105,6 +105,21 @@ describe("SettingsDialog and an open Portal (#15029)", () => {
     );
     expect(useUIStore.getState().overlayStack).toEqual([]);
     expect(usePortalStore.getState().isOpen).toBe(true);
+    expect(portal.create).not.toHaveBeenCalled();
+  });
+
+  it("leaves a collapsed Portal collapsed through Settings opening and closing", async () => {
+    usePortalStore.setState({ isOpen: false });
+    const { rerender } = render(renderWithPortal(true));
+
+    await waitFor(() => expect(useUIStore.getState().overlayStack.length).toBeGreaterThan(0));
+    expect(usePortalStore.getState().isOpen).toBe(false);
+
+    rerender(renderWithPortal(false));
+
+    await waitFor(() => expect(useUIStore.getState().overlayStack).toEqual([]));
+    expect(usePortalStore.getState().isOpen).toBe(false);
+    expect(portal.show).not.toHaveBeenCalled();
     expect(portal.create).not.toHaveBeenCalled();
   });
 });
