@@ -107,7 +107,11 @@ describe("prepareSwitchScreenHandoff", () => {
     const outgoing = makeOutgoing();
     const incoming = makeIncoming();
     let prepared = false;
-    const handoff = prepareSwitchScreenHandoff(outgoing as never, incoming.wc as never, win as never);
+    const handoff = prepareSwitchScreenHandoff(
+      outgoing as never,
+      incoming.wc as never,
+      win as never
+    );
     void handoff.then(() => (prepared = true));
     await flush();
 
