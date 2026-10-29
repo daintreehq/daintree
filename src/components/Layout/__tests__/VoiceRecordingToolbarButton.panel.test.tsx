@@ -1,7 +1,15 @@
 // @vitest-environment jsdom
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
+import path from "path";
+import type { ComponentType } from "react";
 import { VoiceRecordingToolbarButton } from "../VoiceRecordingToolbarButton";
+import {
+  compiledFunctionNames,
+  importCompiled,
+  isComponent,
+  removeCompiledModules,
+} from "../../Worktree/__tests__/compileWithReactCompiler";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { primeRadix } from "@/components/ui/radix-loader";
@@ -417,5 +425,66 @@ describe("VoiceRecordingToolbarButton — the session panel (#14920)", () => {
     fireEvent.click(container.querySelector("button")!);
     expect(service.focusActiveTarget).toHaveBeenCalledTimes(1);
     expect(panel()).toBeNull();
+  });
+});
+
+// vitest runs the source uncompiled, so the tests above pass even when the
+// dev server's React Compiler refuses the module and the toolbar can't load
+// it (#15391). These compile it the way the dev server does and drive that.
+describe("VoiceRecordingToolbarButton — the session panel as the app compiles it", () => {
+  const source = path.resolve(__dirname, "../VoiceRecordingToolbarButton.tsx");
+  let Compiled: ComponentType;
+
+  beforeAll(async () => {
+    const value = (await importCompiled(source)).VoiceRecordingToolbarButton;
+    if (!isComponent(value)) throw new Error("VoiceRecordingToolbarButton is not a component");
+    Compiled = value;
+  });
+
+  afterAll(() => {
+    removeCompiledModules();
+  });
+
+  it("compiles the session button rather than bailing out of it", () => {
+    expect(compiledFunctionNames(source)).toContain("VoiceSessionButton");
+  });
+
+  // The go-to moves the keyboard only once it lands, after the close: a focus
+  // it took synchronously would count as an outside interaction, and Radix
+  // would skip the restore with or without the leave.
+  it("goes to the terminal and keeps the keyboard there", async () => {
+    startSession();
+    render(<Compiled />);
+    openPanel();
+
+    fireEvent.click(document.querySelector('[data-testid="voice-session-target"]')!);
+    expect(service.goToActiveTarget).toHaveBeenCalledTimes(1);
+    expect(panel()).toBeNull();
+    await act(() => new Promise((resolve) => setTimeout(resolve, AFTER_FOCUS_RESTORE_MS)));
+    expect(document.activeElement).not.toBe(mic());
+  });
+
+  it("stops and sends, handing the keyboard back to the mic", async () => {
+    startSession();
+    render(<Compiled />);
+    openPanel();
+
+    fireEvent.click(byTestId("voice-session-send"));
+    expect(service.stopAndSend).toHaveBeenCalledTimes(1);
+    expect(panel()).toBeNull();
+    await vi.waitFor(() => expect(document.activeElement).toBe(mic()));
+  });
+
+  it("hands the keyboard back on Escape in the opening after a leave", async () => {
+    startSession();
+    render(<Compiled />);
+    openPanel();
+    fireEvent.click(document.querySelector('[data-testid="voice-session-target"]')!);
+    await act(() => new Promise((resolve) => setTimeout(resolve, AFTER_FOCUS_RESTORE_MS)));
+
+    openPanel();
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(panel()).toBeNull();
+    await vi.waitFor(() => expect(document.activeElement).toBe(mic()));
   });
 });

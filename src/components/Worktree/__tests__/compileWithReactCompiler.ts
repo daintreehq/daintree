@@ -17,18 +17,21 @@ export function isComponent<P>(value: unknown): value is ComponentType<P> {
   return typeof value === "function";
 }
 
-/**
- * Compile a source file the way the app does and import the result. The
- * preset comes from the same `reactCompilerPreset` call `vite.config.ts` makes
- * (and `scripts/lib/compiler-scan.mjs` mirrors). vitest runs uncompiled TSX,
- * so a component whose memoization only goes wrong once compiled passes every
- * ordinary test.
- *
- * The output goes outside `src`, which the contract tests walk while this
- * runs, with relative imports made absolute; `removeCompiledModules` deletes it.
- */
-export async function importCompiled(absoluteSource: string): Promise<Record<string, unknown>> {
-  const { preset } = reactCompilerPreset({ compilationMode: "infer", target: "19" });
+// The panic threshold is the dev server's: a component the compiler rejects
+// fails the whole module there, while the build's "none" would quietly leave
+// it uncompiled and a test would drive code the app never runs.
+function compile(absoluteSource: string): { code: string; compiledFunctions: string[] } {
+  const compiledFunctions: string[] = [];
+  const { preset } = reactCompilerPreset({
+    compilationMode: "infer",
+    panicThreshold: "critical_errors",
+    target: "19",
+    logger: {
+      logEvent: (_filename, event) => {
+        if (event.kind === "CompileSuccess" && event.fnName) compiledFunctions.push(event.fnName);
+      },
+    },
+  });
   const result = transformSync(readFileSync(absoluteSource, "utf8"), {
     filename: absoluteSource,
     babelrc: false,
@@ -42,8 +45,31 @@ export async function importCompiled(absoluteSource: string): Promise<Record<str
   if (!result?.code?.includes("react/compiler-runtime")) {
     throw new Error(`${absoluteSource} was not compiled; a test on it would prove nothing`);
   }
+  return { code: result.code, compiledFunctions };
+}
+
+/**
+ * The functions in a source file the compiler memoizes. One it bailed out of
+ * below the panic threshold, or never took for a component or hook, is absent.
+ */
+export function compiledFunctionNames(absoluteSource: string): string[] {
+  return compile(absoluteSource).compiledFunctions;
+}
+
+/**
+ * Compile a source file the way the app does and import the result. The
+ * preset comes from the same `reactCompilerPreset` call `vite.config.ts` makes
+ * (and `scripts/lib/compiler-scan.mjs` mirrors). vitest runs uncompiled TSX,
+ * so a component whose memoization only goes wrong once compiled passes every
+ * ordinary test.
+ *
+ * The output goes outside `src`, which the contract tests walk while this
+ * runs, with relative imports made absolute; `removeCompiledModules` deletes it.
+ */
+export async function importCompiled(absoluteSource: string): Promise<Record<string, unknown>> {
+  const { code: compiledCode } = compile(absoluteSource);
   const sourceDir = path.dirname(absoluteSource);
-  const code = result.code.replace(
+  const code = compiledCode.replace(
     RELATIVE_SPECIFIER,
     (_, lead: string, quote: string, spec: string) =>
       `${lead}${quote}${path.resolve(sourceDir, spec)}${quote}`
