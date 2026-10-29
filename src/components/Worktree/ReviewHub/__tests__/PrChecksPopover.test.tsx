@@ -70,7 +70,7 @@ function renderPopover(props: Partial<React.ComponentProps<typeof PrChecksPopove
       worktreePath="/tmp/wt"
       prNumber={42}
       prUrl="https://github.com/o/r/pull/42"
-      triggerLabel="Pull request #42 open — CI failing. Show CI checks"
+      triggerDescription="Pull request #42 open — CI failing"
       onOpenExternal={onOpenExternal}
       {...props}
     >

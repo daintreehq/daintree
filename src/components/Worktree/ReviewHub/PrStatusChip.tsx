@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 import { PrChecksPopover } from "./PrChecksPopover";
 import {
@@ -105,17 +106,17 @@ export function PrStatusChip({
           : "open";
     const PrStateGlyph = getPrStateGlyph(shown.prState);
     const prStateColor = getPrStateColor(shown.prState);
-    // The badge is no longer the accessible element — the disclosure button
-    // wrapping it is — so the name lives on the trigger. Two elements carrying
-    // it would make "CI failing" match twice and name neither one usefully.
+    // The disclosure button is named by the words the badge shows, so a speech
+    // user can say what they see at every width; the sentence spelling out
+    // each state is its description.
     const mergeIntent = shown.prState === "open" ? shown.mergeIntent : null;
     const headMoved = mergeIntent !== null && worktreePR.headMovedWhileArmed === true;
     const mergeIntentText = mergeIntent
       ? ` — ${describeMergeIntent(mergeIntent)}${headMoved ? `. ${HEAD_MOVED_WHILE_ARMED_TEXT}` : ""}`
       : "";
-    const triggerLabel = ciVisual
-      ? `Pull request #${worktreePR.prNumber} ${prStateLabel} — CI ${ciVisual.shortLabel}${mergeIntentText}. Show CI checks`
-      : `Pull request #${worktreePR.prNumber} ${prStateLabel}${mergeIntentText}. Show CI checks`;
+    const triggerDescription = ciVisual
+      ? `Pull request #${worktreePR.prNumber} ${prStateLabel} — CI ${ciVisual.shortLabel}${mergeIntentText}`
+      : `Pull request #${worktreePR.prNumber} ${prStateLabel}${mergeIntentText}`;
     return (
       <>
         {/* Available whatever the roll-up says, including when it says nothing:
@@ -129,7 +130,7 @@ export function PrStatusChip({
           worktreePath={worktreePath}
           prNumber={worktreePR.prNumber}
           prUrl={worktreePR.prUrl}
-          triggerLabel={triggerLabel}
+          triggerDescription={triggerDescription}
           onOpenExternal={onOpenExternal}
           onMergeOutcome={handleMergeOutcome}
         >
@@ -143,18 +144,30 @@ export function PrStatusChip({
             {/* Shape AND colour — see `getPrStateGlyph`. This chip does carry the
               state word beside it, but the glyph is what the eye reaches
               first, and it is shared with the card badge, which does not. */}
-            <PrStateGlyph className={cn("w-3 h-3 shrink-0", prStateColor)} />
+            <PrStateGlyph className={cn("w-3 h-3 shrink-0", prStateColor)} aria-hidden="true" />
+            <span className="sr-only">Pull request</span>
             {/* Words and the number stay neutral; the glyphs carry the state
                 colour. Elsewhere a PR number wears its `pr-*` token, but that
                 token is only contrast-gated on bare panels — on this chip's
                 tinted fill a closed PR's red drops under 4.5:1 for small text,
                 and status tokens only promise the 3:1 non-text floor. */}
             <span className="text-text-primary">#{worktreePR.prNumber}</span>
-            <span className="text-text-muted">·</span>
-            <span className="text-text-secondary">{prStateLabel}</span>
+            {/* In a narrow review header the words step down before the branch
+                beside the chip has to: the merge words first, then the state
+                word the glyph already shows, then the CI word beside its
+                glyph. Every one stays in the trigger's description and the
+                checks popover. */}
+            <span className="inline-flex items-center gap-1 @max-[640px]/header:hidden">
+              <span className="text-text-muted" aria-hidden="true">
+                ·
+              </span>
+              <span className="text-text-secondary">{prStateLabel}</span>
+            </span>
             {ciVisual && (
               <>
-                <span className="text-text-muted">·</span>
+                <span className="text-text-muted" aria-hidden="true">
+                  ·
+                </span>
                 <span className="inline-flex items-center gap-1">
                   <span
                     className="inline-flex items-center justify-center w-3 h-3 shrink-0"
@@ -171,13 +184,17 @@ export function PrStatusChip({
                       />
                     )}
                   </span>
-                  <span className="text-text-secondary">{ciVisual.shortLabel}</span>
+                  <span className="text-text-secondary @max-[520px]/header:hidden">
+                    {ciVisual.shortLabel}
+                  </span>
                 </span>
               </>
             )}
             {mergeIntent && (
               <>
-                <span className="text-text-muted">·</span>
+                <span className="text-text-muted" aria-hidden="true">
+                  ·
+                </span>
                 <span className="inline-flex items-center gap-1" data-testid="pr-merge-intent">
                   {headMoved ? (
                     <AlertTriangle
@@ -189,20 +206,23 @@ export function PrStatusChip({
                   )}
                   {/* The method is its own segment, behind the chip's own separator,
                       rather than a dot typed inside one label. */}
-                  <span className="text-text-secondary">
+                  <span className="text-text-secondary @max-[1100px]/header:hidden">
                     {mergeIntent.kind === "queued" ? mergeIntentLabel(mergeIntent) : "auto-merge"}
                   </span>
                 </span>
                 {mergeIntent.kind === "auto-merge" && mergeIntent.method && (
-                  <>
-                    <span className="text-text-muted">·</span>
+                  <span className="inline-flex items-center gap-1 @max-[1100px]/header:hidden">
+                    <span className="text-text-muted" aria-hidden="true">
+                      ·
+                    </span>
                     <span className="text-text-secondary" data-testid="pr-merge-intent-method">
                       {mergeMethodLabel(mergeIntent.method)}
                     </span>
-                  </>
+                  </span>
                 )}
               </>
             )}
+            <span className="sr-only">show CI checks</span>
             <ChevronDown
               data-animated-chevron
               className="w-3 h-3 shrink-0 -mr-0.5 text-text-secondary transition-transform duration-150 ease-out group-data-[state=open]/pr-checks:rotate-180"
@@ -210,17 +230,23 @@ export function PrStatusChip({
             />
           </Badge>
         </PrChecksPopover>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-xs"
-          onClick={() => onOpenExternal(worktreePR.prUrl)}
-          // 24px target without growing the header row the chip sits in.
-          className="-my-1 transition-colors"
-          aria-label={`View pull request #${worktreePR.prNumber}`}
-        >
-          <ExternalLink aria-hidden="true" />
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              onClick={() => onOpenExternal(worktreePR.prUrl)}
+              // 24px target without growing the header row the chip sits in,
+              // and never narrower: the branch beside it is what gives way.
+              className="-my-1 shrink-0 transition-colors"
+              aria-label={`View pull request #${worktreePR.prNumber}`}
+            >
+              <ExternalLink aria-hidden="true" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">View pull request #{worktreePR.prNumber}</TooltipContent>
+        </Tooltip>
         {ackVisible && outcome && <MergeAck outcome={outcome} prNumber={worktreePR.prNumber} />}
       </>
     );

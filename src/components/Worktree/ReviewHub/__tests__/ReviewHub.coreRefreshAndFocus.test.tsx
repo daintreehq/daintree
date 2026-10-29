@@ -1581,7 +1581,8 @@ describe("ReviewHub", () => {
 
       await waitFor(() => {
         screen.getByText("failing");
-        screen.getByLabelText(/ci failing/i);
+        // Named by the words it shows; the state in full is its description.
+        screen.getByRole("button", { name: /#42.*failing/i, description: /ci failing/i });
       });
     });
 

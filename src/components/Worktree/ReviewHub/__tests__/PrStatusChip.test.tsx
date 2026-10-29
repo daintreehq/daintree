@@ -17,6 +17,11 @@ import { PrStatusChip } from "../PrStatusChip";
 
 afterEach(cleanup);
 
+function triggerDescription(trigger: HTMLElement): string {
+  const id = trigger.getAttribute("aria-describedby");
+  return (id && document.getElementById(id)?.textContent) || "";
+}
+
 const PR_STATES: NormalizedPRState[] = ["open", "merged", "closed", "declined"];
 const CI_STATES: Array<CIStatusState | undefined> = [
   "success",
@@ -66,6 +71,29 @@ describe("PrStatusChip", () => {
     }
   });
 
+  it("names the trigger by the words it shows and describes it in full", () => {
+    const { getByRole } = render(
+      <PrStatusChip
+        hasRemote
+        worktreePath="/tmp/wt"
+        onOpenExternal={() => undefined}
+        worktreePR={{
+          prNumber: 42,
+          prUrl: "https://github.com/o/r/pull/42",
+          prState: "open",
+          prCiStatus: { state: "success", total: 1, passed: 1, failed: 0, pending: 0, rawData: {} },
+          mergeIntent: { kind: "auto-merge", method: "squash", enabledAt: 1, enabledBy: "octocat" },
+        }}
+      />
+    );
+    // jsdom applies no stylesheet, so the spans join without the spaces a
+    // browser puts between flex items; the order of the words is the contract.
+    const trigger = getByRole("button", {
+      name: /^Pull request\s*#42\s*open\s*passing\s*auto-merge\s*squash\s*show CI checks$/,
+    });
+    expect(triggerDescription(trigger)).toMatch(/^Pull request #42 open — CI passing — /);
+  });
+
   it("shows a pending merge GitHub reports, whoever armed it (#13747)", () => {
     const { getByTestId } = render(
       <PrStatusChip
@@ -83,7 +111,7 @@ describe("PrStatusChip", () => {
     // The method is its own chip segment, behind the chip's separator.
     expect(getByTestId("pr-merge-intent").textContent).toBe("auto-merge");
     expect(getByTestId("pr-merge-intent-method").textContent).toBe("squash");
-    expect(getByTestId("pr-checks-trigger").getAttribute("aria-label")).toMatch(/armed by octocat/);
+    expect(triggerDescription(getByTestId("pr-checks-trigger"))).toMatch(/armed by octocat/);
   });
 
   it("flags a head that moved while armed", () => {
@@ -102,9 +130,7 @@ describe("PrStatusChip", () => {
       />
     );
     expect(getByTestId("pr-merge-intent").textContent).toBe("queued");
-    expect(getByTestId("pr-checks-trigger").getAttribute("aria-label")).toMatch(
-      /without another review/
-    );
+    expect(triggerDescription(getByTestId("pr-checks-trigger"))).toMatch(/without another review/);
   });
 
   it("drops a stale intent once the PR has merged", () => {

@@ -54,8 +54,11 @@ interface PrChecksPopoverProps {
   worktreePath: string;
   prNumber: number;
   prUrl: string;
-  /** Accessible name for the trigger; the badge inside it carries none of its own. */
-  triggerLabel: string;
+  /**
+   * The trigger's state in full sentences, as its accessible description. Its
+   * name is the badge's own text, so the name always holds the words on screen.
+   */
+  triggerDescription: string;
   onOpenExternal: (url: string) => void;
   /** What GitHub reported after a merge, arm or cancel confirmed from here. */
   onMergeOutcome?: (outcome: PrMergeOutcome) => void;
@@ -81,7 +84,7 @@ export function PrChecksPopover({
   worktreePath,
   prNumber,
   prUrl,
-  triggerLabel,
+  triggerDescription,
   onOpenExternal,
   onMergeOutcome,
   children,
@@ -100,6 +103,7 @@ export function PrChecksPopover({
   // Said once the confirm has closed, when there is no popover to speak for.
   const [outcomeAnnouncement, setOutcomeAnnouncement] = useState("");
   const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const triggerDescriptionId = useId();
 
   // Monotonic, not a cancelled flag: the popover can be closed and reopened, and
   // the reload re-fired, while an earlier read is still in flight. Only the
@@ -226,6 +230,9 @@ export function PrChecksPopover({
 
   return (
     <>
+      <span id={triggerDescriptionId} hidden>
+        {triggerDescription}
+      </span>
       {/* Outside `PopoverContent` on purpose: that subtree is lazily mounted, so
           a region living inside it would first appear already carrying its
           message — which is the announcement that does not land. Here it is
@@ -242,7 +249,7 @@ export function PrChecksPopover({
           ref={triggerRef}
           type="button"
           data-testid="pr-checks-trigger"
-          aria-label={triggerLabel}
+          aria-describedby={triggerDescriptionId}
           // Also held while the merge confirm is up: the hub's Escape would
           // otherwise close the whole hub out from under the dialog.
           {...{ [PR_CHECKS_OPEN_ATTR]: open || mergeRequest !== null ? "true" : undefined }}

@@ -101,6 +101,8 @@ import {
   DEFAULT_SECTION_STATE,
   matchesFilter,
   REVIEW_HUB_COUNT_CHIP,
+  REVIEW_HUB_HEADER_ROWS,
+  REVIEW_HUB_HEADER_TOOLBAR,
   REVIEW_HUB_SECTION_BAND,
   REVIEW_HUB_STICKY_BAND,
   resolveBulkScope,
@@ -1432,6 +1434,16 @@ export function ReviewHubContent({
     repoState === "REBASING" ||
     repoState === "CHERRY_PICKING" ||
     repoState === "REVERTING";
+  // The main worktree can sit on any branch, so nothing bounds the name: past
+  // 20 characters the label ends early so the mode switch keeps its size in
+  // the one-row header, and the full name becomes its accessible name. Cut at
+  // the end so the visible text stays a prefix of that name. Past 11 the strip
+  // of a 380px pane can ellipsize it too, so from there it also gets a tooltip.
+  const baseModeLabel = `vs ${mainBranch}`;
+  const mainBranchChars = Array.from(mainBranch);
+  const baseModeShortLabel =
+    mainBranchChars.length > 20 ? `vs ${mainBranchChars.slice(0, 19).join("")}…` : null;
+  const baseModeTooltip = mainBranchChars.length > 11 ? baseModeLabel : undefined;
 
   return (
     <>
@@ -1445,120 +1457,149 @@ export function ReviewHubContent({
         data-testid="review-hub-content"
       >
         {/* The pane's own title bar: review renders no PanelHeader, so this is
-            the compact SurfaceHeader a grid pane would otherwise get. */}
-        <SurfaceHeader
-          density="compact"
-          data-testid="review-hub-header"
-          className={cn(
-            "gap-2 transition-colors",
-            location === "grid" && isFocused && [SURFACE_HEADER_FOCUS_LIFT_CLASS, "border-overlay"]
-          )}
-        >
-          <div className="flex items-center gap-2 min-w-0">
-            {/* The dialog host already draws the title in AppDialog.Header —
-                drawing it again would stack two "Review & Commit" headings. */}
-            {!isDialog && (
-              <h2 id="review-hub-title" className="text-xs font-medium text-text-primary shrink-0">
-                Review & commit
-              </h2>
+            the compact SurfaceHeader a grid pane would otherwise get. It also
+            carries the pane's toolbar, which drops to a strip of its own when
+            the pane is too narrow for both (REVIEW_HUB_HEADER_ROWS). The
+            wrapper is the container because a container cannot query itself. */}
+        <div className="@container/header shrink-0">
+          <SurfaceHeader
+            density="compact"
+            data-testid="review-hub-header"
+            className={cn(
+              REVIEW_HUB_HEADER_ROWS,
+              "transition-colors",
+              isDialog
+                ? "grid-cols-[minmax(0,1fr)_auto] @max-[960px]/header:grid-cols-[minmax(0,1fr)]"
+                : "grid-cols-[minmax(0,1fr)_auto_auto] @max-[960px]/header:grid-cols-[minmax(0,1fr)_auto]",
+              location === "grid" &&
+                isFocused && [SURFACE_HEADER_FOCUS_LIFT_CLASS, "border-overlay"]
             )}
-            {status?.currentBranch && <BranchBadge branch={status.currentBranch} />}
-            {status?.currentBranch && isProtectedBranch(status.currentBranch.toLowerCase()) && (
-              <Badge size="sm" tone="warning" data-testid="review-hub-protected-branch-chip">
-                <AlertTriangle aria-hidden="true" />
-                <span>Protected</span>
-              </Badge>
-            )}
-            <PrStatusChip
-              hasRemote={status?.hasRemote}
-              worktreePR={worktreePR}
-              worktreePath={worktreePath}
-              onOpenExternal={(url) => void systemClient.openExternal(url)}
-            />
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {/* Diff mode switch: the shared segmented control, so it looks,
-                answers the keyboard and slides like every other mode switch. */}
-            <SegmentedRadioGroup
-              density="compact"
-              aria-label="Diff mode"
-              testId="review-hub-diff-mode"
-              value={diffMode}
-              onChange={handleDiffModeChange}
-              options={[
-                { value: "working-tree" as const, label: "Working tree" },
-                {
-                  value: "base-branch" as const,
-                  label: `vs ${mainBranch}`,
-                  disabled: !status?.currentBranch || status.currentBranch === mainBranch,
-                },
-                {
-                  value: "since-review" as const,
-                  label: "Since review",
-                  disabled: sinceReviewUnavailable !== null,
-                  tooltip: sinceReviewUnavailable ?? undefined,
-                },
-              ]}
-            />
-
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!markBlockedReason) void markReviewed();
-                  }}
-                  // Not `disabled`, as for Refresh: focus stays on the control.
-                  aria-disabled={markBlockedReason !== null || undefined}
-                  aria-busy={isMarking || undefined}
-                  className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
-                  aria-label="Mark reviewed"
-                  data-testid="review-hub-mark-reviewed"
+          >
+            {/* The branch is the one piece that gives way: the title goes to
+                screen readers only and the chips step down before it has to. */}
+            <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-2">
+              {/* The dialog host already draws the title in AppDialog.Header —
+                  drawing it again would stack two "Review & Commit" headings. */}
+              {!isDialog && (
+                <h2
+                  id="review-hub-title"
+                  className="shrink-0 text-xs font-medium text-text-primary @max-[520px]/header:sr-only"
                 >
-                  <BookmarkCheck className={PANE_TOOLBAR_ICON_CLASS} aria-hidden="true" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {markBlockedReason && !isMarking
-                  ? `Mark reviewed (${markBlockedReason})`
-                  : "Mark reviewed"}
-              </TooltipContent>
-            </Tooltip>
+                  Review & commit
+                </h2>
+              )}
+              {status?.currentBranch && (
+                <BranchBadge branch={status.currentBranch} className="max-w-none" />
+              )}
+              {status?.currentBranch && isProtectedBranch(status.currentBranch.toLowerCase()) && (
+                <Badge size="sm" tone="warning" data-testid="review-hub-protected-branch-chip">
+                  <AlertTriangle aria-hidden="true" />
+                  {/* The protected-branch line under the header says it in full. */}
+                  <span className="@max-[520px]/header:sr-only">Protected</span>
+                </Badge>
+              )}
+              <PrStatusChip
+                hasRemote={status?.hasRemote}
+                worktreePR={worktreePR}
+                worktreePath={worktreePath}
+                onOpenExternal={(url) => void systemClient.openExternal(url)}
+              />
+            </div>
+            <div className={REVIEW_HUB_HEADER_TOOLBAR}>
+              {/* Diff mode switch: the shared segmented control, so it looks,
+                  answers the keyboard and slides like every other mode switch. */}
+              <SegmentedRadioGroup
+                density="compact"
+                aria-label="Diff mode"
+                testId="review-hub-diff-mode"
+                // In the strip only the base segment gives way to a long main
+                // branch name; Working tree and Since review stay whole. A
+                // disabled segment sits in its tooltip's wrapper, hence :has.
+                className={cn(
+                  "@max-[960px]/header:min-w-0 @max-[960px]/header:shrink [&>*]:shrink-0",
+                  "[&>[data-testid=review-hub-diff-mode-base-branch]]:shrink [&>:has(>[data-testid=review-hub-diff-mode-base-branch])]:shrink"
+                )}
+                value={diffMode}
+                onChange={handleDiffModeChange}
+                options={[
+                  { value: "working-tree" as const, label: "Working tree" },
+                  {
+                    value: "base-branch" as const,
+                    label: baseModeShortLabel ?? baseModeLabel,
+                    ...(baseModeShortLabel === null ? {} : { ariaLabel: baseModeLabel }),
+                    ...(baseModeTooltip === undefined ? {} : { tooltip: baseModeTooltip }),
+                    disabled: !status?.currentBranch || status.currentBranch === mainBranch,
+                  },
+                  {
+                    value: "since-review" as const,
+                    label: "Since review",
+                    disabled: sinceReviewUnavailable !== null,
+                    tooltip: sinceReviewUnavailable ?? undefined,
+                  },
+                ]}
+              />
 
-            {/* In both modes: hiding it in base-branch mode slid the mode
-                switch sideways on every toggle, and that comparison goes stale
-                as much as the working tree does. */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={() => {
-                    if (diffMode === "base-branch") {
-                      if (!baseBranchLoading) void fetchBaseBranch();
-                    } else if (diffMode === "since-review") {
-                      if (!refreshBusy) reviewMark.retryCompare();
-                    } else if (!loading) {
-                      void refresh();
-                      // A fresh capture too, so a mark covers what this read shows.
-                      readWithCapture(true);
-                    }
-                  }}
-                  // Not `disabled`: pressing it would drop keyboard focus to the page.
-                  aria-disabled={refreshBusy || undefined}
-                  aria-busy={refreshBusy || refreshSpinning || undefined}
-                  className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
-                  aria-label="Refresh"
-                >
-                  <SpinningIcon
-                    icon={RefreshCw}
-                    active={refreshBusy || refreshSpinning}
-                    className={PANE_TOOLBAR_ICON_CLASS}
-                  />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Refresh</TooltipContent>
-            </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!markBlockedReason) void markReviewed();
+                    }}
+                    // Not `disabled`, as for Refresh: focus stays on the control.
+                    aria-disabled={markBlockedReason !== null || undefined}
+                    aria-busy={isMarking || undefined}
+                    // In the strip the two actions sit at its far end, under Close.
+                    className={cn(PANE_TOOLBAR_ICON_BUTTON_CLASS, "@max-[960px]/header:ml-auto")}
+                    aria-label="Mark reviewed"
+                    data-testid="review-hub-mark-reviewed"
+                  >
+                    <BookmarkCheck className={PANE_TOOLBAR_ICON_CLASS} aria-hidden="true" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {markBlockedReason && !isMarking
+                    ? `Mark reviewed (${markBlockedReason})`
+                    : "Mark reviewed"}
+                </TooltipContent>
+              </Tooltip>
+
+              {/* In both modes: hiding it in base-branch mode slid the mode
+                  switch sideways on every toggle, and that comparison goes stale
+                  as much as the working tree does. */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => {
+                      if (diffMode === "base-branch") {
+                        if (!baseBranchLoading) void fetchBaseBranch();
+                      } else if (diffMode === "since-review") {
+                        if (!refreshBusy) reviewMark.retryCompare();
+                      } else if (!loading) {
+                        void refresh();
+                        // A fresh capture too, so a mark covers what this read shows.
+                        readWithCapture(true);
+                      }
+                    }}
+                    // Not `disabled`: pressing it would drop keyboard focus to the page.
+                    aria-disabled={refreshBusy || undefined}
+                    aria-busy={refreshBusy || refreshSpinning || undefined}
+                    className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
+                    aria-label="Refresh"
+                  >
+                    <SpinningIcon
+                      icon={RefreshCw}
+                      active={refreshBusy || refreshSpinning}
+                      className={PANE_TOOLBAR_ICON_CLASS}
+                    />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Refresh</TooltipContent>
+              </Tooltip>
+            </div>
             {/* Same reason as the title: AppDialog.Header supplies the close
-                control at this location. */}
+                control at this location. Last in the DOM so it is the last tab
+                stop in both layouts; its grid position puts it in the title row. */}
             {!isDialog && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -1566,13 +1607,14 @@ export function ReviewHubContent({
                     onClick={onClose}
                     aria-label="Close review & commit"
                     data-testid="review-hub-close"
+                    className="col-start-3 row-start-1 @max-[960px]/header:col-start-2"
                   />
                 </TooltipTrigger>
                 <TooltipContent side="bottom">Close review & commit</TooltipContent>
               </Tooltip>
             )}
-          </div>
-        </SurfaceHeader>
+          </SurfaceHeader>
+        </div>
 
         <ReviewMarkLine
           reviewMark={currentReviewMark}
