@@ -17,9 +17,20 @@ vi.mock("@/clients/forgeClient", () => ({
   },
 }));
 
-vi.mock("@/hooks/useDebounce", () => ({
-  useDebounce: (value: string) => value,
-}));
+// Instant by default, so typing starts its fetch in the same act. A test that
+// needs the 300 ms window between a keystroke and its search turns `real` on.
+const debounceMode = vi.hoisted(() => ({ real: false }));
+
+vi.mock("@/hooks/useDebounce", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/hooks/useDebounce")>();
+  return {
+    ...actual,
+    useDebounce: <T,>(value: T, delay: number): T => {
+      const debounced = actual.useDebounce(value, delay);
+      return debounceMode.real ? debounced : value;
+    },
+  };
+});
 
 const mockIssue = (overrides: Partial<Issue> = {}): Issue => ({
   number: 1,
@@ -61,6 +72,7 @@ beforeAll(() => whenPluginUiReady(), 30_000);
 describe("IssueSelector", () => {
   beforeEach(() => {
     mockListIssues.mockReset();
+    debounceMode.real = false;
   });
 
   afterEach(() => {
@@ -233,16 +245,24 @@ describe("IssueSelector", () => {
     const input = screen.getByPlaceholderText("Search issues");
     fireEvent.change(input, { target: { value: "bug" } });
 
+    expect(mockListIssues).toHaveBeenCalledTimes(2);
     await act(async () => rejectSecond(new Error("Network error")));
 
-    // Existing rows preserved, loading ended, stale attributes removed
+    // Existing rows preserved and loading ended, but they still answer the
+    // earlier search, so they stay marked stale under the error.
     await waitFor(() => {
-      const listbox = screen.getByRole("listbox");
-      expect(listbox.getAttribute("aria-busy")).toBeNull();
-      expect(listbox.className).not.toContain("palette-results-stale");
-      expect(listbox.getAttribute("data-stale")).toBeNull();
+      expect(screen.getByRole("listbox").getAttribute("aria-busy")).toBeNull();
     });
+    const listbox = screen.getByRole("listbox");
+    expect(listbox.className).toContain("palette-results-stale");
+    expect(listbox.getAttribute("data-stale")).toBe("true");
     expect(screen.getByRole("option", { name: /Survives/i })).toBeDefined();
+
+    mockListIssues.mockResolvedValueOnce({ items: [mockIssue({ number: 2, title: "Recovered" })] });
+    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+    await screen.findByRole("option", { name: /Recovered/i });
+    expect(listbox.className).not.toContain("palette-results-stale");
+    expect(listbox.getAttribute("data-stale")).toBeNull();
   });
 
   it("clears issues on close and does not restore stale results on reopen", async () => {
@@ -553,6 +573,255 @@ describe("IssueSelector", () => {
     });
 
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  describe("Enter against rows from an earlier search", () => {
+    const deferred = () => {
+      let resolve!: (value: unknown) => void;
+      let reject!: (reason: Error) => void;
+      const promise = new Promise((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    };
+
+    async function openWithRows(onSelect = vi.fn()) {
+      const dialogKeyDown = vi.fn();
+      mockListIssues.mockResolvedValueOnce({
+        items: [mockIssue({ number: 1, title: "Old top hit" })],
+      });
+      render(
+        // The popover portals out of this subtree, but React still bubbles its
+        // keys here, the way they reach the create-worktree dialog.
+        <div onKeyDown={dialogKeyDown}>
+          <IssueSelector {...defaultProps} onSelect={onSelect} />
+        </div>
+      );
+      const trigger = screen.getByRole("combobox");
+      fireEvent.click(trigger);
+      await screen.findByRole("option", { name: /Old top hit/ });
+      return {
+        onSelect,
+        dialogKeyDown,
+        trigger,
+        input: screen.getByPlaceholderText("Search issues"),
+      };
+    }
+
+    it("runs the typed query at once instead of picking the old top hit", async () => {
+      debounceMode.real = true;
+      const { onSelect, input } = await openWithRows();
+      const sharper = deferred();
+      mockListIssues.mockReturnValueOnce(sharper.promise);
+
+      fireEvent.change(input, { target: { value: "sharper" } });
+      // Consumed, so it can't fall through to the dialog's submit either.
+      expect(fireEvent.keyDown(input, { key: "Enter" })).toBe(false);
+
+      expect(onSelect).not.toHaveBeenCalled();
+      // Run now, not 300 ms from now.
+      expect(mockListIssues).toHaveBeenCalledTimes(2);
+      expect(mockListIssues).toHaveBeenLastCalledWith(
+        expect.objectContaining({ search: "sharper" })
+      );
+
+      await act(async () => sharper.resolve({ items: [mockIssue({ number: 2, title: "Sharp" })] }));
+      await screen.findByRole("option", { name: /Sharp/ });
+
+      // The debounce settling on the query Enter already ran starts nothing new.
+      await act(() => new Promise((r) => setTimeout(r, 350)));
+      expect(mockListIssues).toHaveBeenCalledTimes(2);
+
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onSelect).toHaveBeenCalledTimes(1);
+      expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ number: 2 }));
+    });
+
+    it("waits for a refresh of the typed query rather than picking the rows it will replace", async () => {
+      const { onSelect, input } = await openWithRows();
+      mockListIssues.mockReturnValue(new Promise(() => {}));
+
+      fireEvent.change(input, { target: { value: "bug" } });
+      fireEvent.change(input, { target: { value: "" } });
+      expect(mockListIssues).toHaveBeenCalledTimes(3);
+      expect(screen.getByRole("listbox").getAttribute("aria-busy")).toBe("true");
+
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onSelect).not.toHaveBeenCalled();
+      expect(mockListIssues).toHaveBeenCalledTimes(3);
+    });
+
+    it("leaves a modified Enter to the dialog while the rows are stale", async () => {
+      debounceMode.real = true;
+      const { onSelect, dialogKeyDown, input } = await openWithRows();
+
+      fireEvent.change(input, { target: { value: "sharper" } });
+      expect(fireEvent.keyDown(input, { key: "Enter", metaKey: true })).toBe(true);
+
+      expect(dialogKeyDown).toHaveBeenCalledTimes(1);
+      expect(onSelect).not.toHaveBeenCalled();
+      expect(mockListIssues).toHaveBeenCalledTimes(1);
+    });
+
+    it("waits for the typed query's request rather than picking a row from the last one", async () => {
+      const { onSelect, input } = await openWithRows();
+      const pending = deferred();
+      mockListIssues.mockReturnValueOnce(pending.promise);
+
+      fireEvent.change(input, { target: { value: "bug" } });
+      expect(mockListIssues).toHaveBeenCalledTimes(2);
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(onSelect).not.toHaveBeenCalled();
+      // The request for "bug" is already on its way; Enter doesn't start another.
+      expect(mockListIssues).toHaveBeenCalledTimes(2);
+
+      await act(async () => pending.resolve({ items: [mockIssue({ number: 3, title: "Bug" })] }));
+      await screen.findByRole("option", { name: /Bug/ });
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ number: 3 }));
+    });
+
+    it("retries a failed search rather than picking the rows left under the error strip", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const { onSelect, input } = await openWithRows();
+      mockListIssues.mockRejectedValueOnce(new Error("boom"));
+
+      fireEvent.change(input, { target: { value: "bug" } });
+      await screen.findByText("Couldn't load issues");
+      expect(screen.getByRole("option", { name: /Old top hit/ })).toBeDefined();
+
+      mockListIssues.mockResolvedValueOnce({ items: [mockIssue({ number: 4, title: "Found" })] });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(onSelect).not.toHaveBeenCalled();
+      await screen.findByRole("option", { name: /Found/ });
+      expect(mockListIssues).toHaveBeenCalledTimes(3);
+      expect(mockListIssues).toHaveBeenLastCalledWith(expect.objectContaining({ search: "bug" }));
+    });
+
+    it("never falls back to the older debounced query after an early Enter", async () => {
+      debounceMode.real = true;
+      const { input } = await openWithRows();
+      mockListIssues.mockReturnValue(new Promise(() => {}));
+
+      fireEvent.change(input, { target: { value: "ab" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      fireEvent.change(input, { target: { value: "abc" } });
+
+      await waitFor(() => expect(mockListIssues).toHaveBeenCalledTimes(3), { timeout: 2000 });
+      expect(mockListIssues.mock.calls.map((call) => call[0]?.search)).toEqual([
+        undefined,
+        "ab",
+        "abc",
+      ]);
+    });
+
+    it("runs an early search from an empty list instead of letting Enter reach the dialog", async () => {
+      debounceMode.real = true;
+      const dialogKeyDown = vi.fn();
+      mockListIssues.mockResolvedValueOnce({ items: [] });
+      render(
+        // The popover portals out of this subtree, but React still bubbles its
+        // keys here, the way they reach the create-worktree dialog.
+        <div onKeyDown={dialogKeyDown}>
+          <IssueSelector {...defaultProps} />
+        </div>
+      );
+      fireEvent.click(screen.getByRole("combobox"));
+      await screen.findByText("No open issues");
+      const input = screen.getByPlaceholderText("Search issues");
+      mockListIssues.mockReturnValueOnce(new Promise(() => {}));
+
+      fireEvent.change(input, { target: { value: "bug" } });
+      expect(fireEvent.keyDown(input, { key: "Enter" })).toBe(false);
+      expect(dialogKeyDown).not.toHaveBeenCalled();
+      expect(mockListIssues).toHaveBeenLastCalledWith(expect.objectContaining({ search: "bug" }));
+    });
+
+    it("rewinds the cursor when the new rows land, not when their request starts", async () => {
+      const rows = (from: number) =>
+        [0, 1, 2].map((i) => mockIssue({ number: from + i, title: `Issue ${from + i}` }));
+      mockListIssues.mockResolvedValueOnce({ items: rows(1) });
+      render(<IssueSelector {...defaultProps} />);
+      fireEvent.click(screen.getByRole("combobox"));
+      await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(3));
+      const input = screen.getByPlaceholderText("Search issues");
+      fireEvent.keyDown(input, { key: "End" });
+      await waitFor(() =>
+        expect(input.getAttribute("aria-activedescendant")).toBe("issue-option-2")
+      );
+      const pending = deferred();
+      mockListIssues.mockReturnValueOnce(pending.promise);
+
+      fireEvent.change(input, { target: { value: "x" } });
+      expect(mockListIssues).toHaveBeenCalledTimes(2);
+      expect(input.getAttribute("aria-activedescendant")).toBe("issue-option-2");
+
+      await act(async () => pending.resolve({ items: rows(11) }));
+      await screen.findByRole("option", { name: /Issue 11/ });
+      await waitFor(() =>
+        expect(input.getAttribute("aria-activedescendant")).toBe("issue-option-0")
+      );
+    });
+
+    it("reopens on a fresh search rather than the one the last session ran", async () => {
+      const { trigger, input } = await openWithRows();
+      mockListIssues.mockResolvedValueOnce({ items: [mockIssue({ number: 5, title: "Bug" })] });
+      fireEvent.change(input, { target: { value: "bug" } });
+      await screen.findByRole("option", { name: /Bug/ });
+
+      fireEvent.click(trigger);
+      const before = mockListIssues.mock.calls.length;
+      mockListIssues.mockReturnValue(new Promise(() => {}));
+      fireEvent.click(trigger);
+
+      await waitFor(() =>
+        expect(screen.getByRole("listbox").getAttribute("aria-busy")).toBe("true")
+      );
+      expect(mockListIssues.mock.calls.slice(before).map((call) => call[0]?.search)).toEqual([
+        undefined,
+      ]);
+    });
+
+    it("still picks an old row that is clicked", async () => {
+      debounceMode.real = true;
+      const { onSelect, input } = await openWithRows();
+
+      fireEvent.change(input, { target: { value: "sharper" } });
+      fireEvent.click(screen.getByRole("option", { name: /Old top hit/ }));
+
+      expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ number: 1 }));
+    });
+
+    it("runs the typed query instead of loading more of the old one", async () => {
+      debounceMode.real = true;
+      mockListIssues.mockResolvedValueOnce({
+        items: [mockIssue({ number: 1, title: "Old top hit" })],
+        hasMore: true,
+        nextCursor: "page-2",
+      });
+      render(<IssueSelector {...defaultProps} />);
+      fireEvent.click(screen.getByRole("combobox"));
+      await screen.findByRole("option", { name: "Load more" });
+      const input = screen.getByPlaceholderText("Search issues");
+      fireEvent.keyDown(input, { key: "End" });
+      await waitFor(() =>
+        expect(input.getAttribute("aria-activedescendant")).toBe("issue-option-1")
+      );
+
+      mockListIssues.mockReturnValueOnce(new Promise(() => {}));
+      fireEvent.change(input, { target: { value: "sharper" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(mockListIssues).toHaveBeenCalledTimes(2);
+      expect(mockListIssues.mock.calls[1]?.[0]).toEqual({
+        cwd: "/test/project",
+        state: "open",
+        search: "sharper",
+      });
+    });
   });
 
   describe("paging", () => {
