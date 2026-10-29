@@ -5,9 +5,14 @@ import {
   AUTO_MERGE_OFF_REASON,
   CANNOT_CANCEL_REASON,
   MERGE_SETTINGS_UNREAD_REASON,
+  MERGE_STATUS_UNREPORTED_REASON,
+  applyMergeOutcome,
   confirmBlockReason,
   derivePrMergeControl,
+  describeMergeRejection,
   effectiveMergeMode,
+  isMergeOutcomeReflected,
+  mergeActionLabel,
 } from "../prMergeModel";
 
 function pr(overrides: Partial<PR> = {}): PR {
@@ -51,12 +56,14 @@ function meta(overrides: Partial<ForgeRepoMetadataPayload> = {}): ForgeRepoMetad
 }
 
 describe("derivePrMergeControl", () => {
-  it.each(["blocked", "behind", "unknown"] as const)("offers Merge when ready for %s", (status) => {
+  it.each(["blocked", "behind", "unknown"] as const)("offers auto-merge for %s", (status) => {
     expect(derivePrMergeControl(pr({ mergeStatus: status }), meta())).toEqual({
       kind: "arm",
       queue: false,
       methods: ["merge", "squash"],
       defaultMethod: "squash",
+      baseRef: "develop",
+      mergeStatus: status,
       disabledReason: null,
     });
   });
@@ -68,7 +75,15 @@ describe("derivePrMergeControl", () => {
   it("always arms on a queue branch, with no method choice", () => {
     expect(
       derivePrMergeControl(pr({ mergeStatus: "clean", mergeQueueRequired: true }), meta())
-    ).toEqual({ kind: "arm", queue: true, methods: [], defaultMethod: null, disabledReason: null });
+    ).toEqual({
+      kind: "arm",
+      queue: true,
+      methods: [],
+      defaultMethod: null,
+      baseRef: "develop",
+      mergeStatus: "clean",
+      disabledReason: null,
+    });
   });
 
   it("explains rather than hides when the repository has auto-merge off", () => {
@@ -91,13 +106,29 @@ describe("derivePrMergeControl", () => {
   });
 
   it.each([
-    ["draft", { isDraft: true }],
-    ["closed", { state: "closed" as const }],
-    ["merged", { state: "merged" as const, merged: true }],
-    ["conflicting", { mergeStatus: "dirty" as const }],
-    ["unreported", { mergeStatus: undefined }],
-  ])("hides the control for a %s PR", (_name, overrides) => {
-    expect(derivePrMergeControl(pr(overrides), meta()).kind).toBe("hidden");
+    ["draft", { isDraft: true }, "draft"],
+    ["closed", { state: "closed" as const }, "closed"],
+    ["merged", { state: "merged" as const, merged: true }, "merged"],
+    ["conflicting", { mergeStatus: "dirty" as const }, "conflicts"],
+    ["unreported", { mergeStatus: undefined }, "unreported"],
+  ])("says why a %s PR can't merge rather than hiding the row", (_name, overrides, reason) => {
+    expect(derivePrMergeControl(pr(overrides), meta())).toMatchObject({
+      kind: "unavailable",
+      reason,
+    });
+  });
+
+  it("hides the row only when there is no PR to describe", () => {
+    expect(derivePrMergeControl(null, meta()).kind).toBe("hidden");
+  });
+
+  it("keeps the row when the repository's settings couldn't be read", () => {
+    expect(derivePrMergeControl(pr(), null)).toMatchObject({
+      kind: "unavailable",
+      reason: "settings-unread",
+    });
+    // What the PR alone decides still wins.
+    expect(derivePrMergeControl(pr({ isDraft: true }), null)).toMatchObject({ reason: "draft" });
   });
 
   it("offers cancel for a pending merge, gated on GitHub's own cancel permission", () => {
@@ -105,6 +136,7 @@ describe("derivePrMergeControl", () => {
     expect(derivePrMergeControl(pr({ mergeIntent: intent }), meta())).toEqual({
       kind: "cancel",
       intent,
+      baseRef: "develop",
       disabledReason: null,
     });
     expect(
@@ -114,7 +146,10 @@ describe("derivePrMergeControl", () => {
 
   it("offers only the immediate merge when the provider can't arm", () => {
     const noAutoMerge = meta({ autoMergeSupported: false });
-    expect(derivePrMergeControl(pr(), noAutoMerge).kind).toBe("hidden");
+    expect(derivePrMergeControl(pr(), noAutoMerge)).toMatchObject({
+      kind: "unavailable",
+      reason: "no-auto-merge",
+    });
     expect(derivePrMergeControl(pr({ mergeStatus: "clean" }), noAutoMerge).kind).toBe("merge");
   });
 
@@ -122,6 +157,11 @@ describe("derivePrMergeControl", () => {
     expect(effectiveMergeMode(pr({ mergeStatus: "clean" }), "arm")).toBe("merge");
     expect(effectiveMergeMode(pr({ mergeStatus: "blocked" }), "merge")).toBe("arm");
     expect(effectiveMergeMode(pr({ mergeStatus: "clean" }), "cancel")).toBe("cancel");
+  });
+
+  it("keeps the request when the read reports no merge status", () => {
+    expect(effectiveMergeMode(pr({ mergeStatus: undefined }), "merge")).toBe("merge");
+    expect(effectiveMergeMode(pr({ mergeStatus: undefined }), "arm")).toBe("arm");
   });
 
   it("never guesses a method when the repository's list wasn't read", () => {
@@ -150,8 +190,80 @@ describe("confirmBlockReason", () => {
     expect(confirmBlockReason(pr({ ...withCommits, state: "closed" }), "merge", ok)).toMatch(
       /no longer open/
     );
-    expect(confirmBlockReason(pr({ viewerCanDisableAutoMerge: false }), "cancel", ok)).toBe(
-      CANNOT_CANCEL_REASON
+    expect(
+      confirmBlockReason(
+        pr({ viewerCanDisableAutoMerge: false, mergeIntent: { kind: "queued", position: 1 } }),
+        "cancel",
+        ok
+      )
+    ).toBe(CANNOT_CANCEL_REASON);
+  });
+
+  it("won't cancel what GitHub no longer reports as pending", () => {
+    expect(confirmBlockReason(pr({ mergeIntent: null }), "cancel", ok)).toMatch(/nothing pending/);
+  });
+
+  it("blocks a write when the read carries no merge status", () => {
+    const withCommits = { commits: { totalCount: 0, items: [] } };
+    expect(confirmBlockReason(pr({ ...withCommits, mergeStatus: undefined }), "arm", ok)).toBe(
+      MERGE_STATUS_UNREPORTED_REASON
+    );
+  });
+});
+
+describe("mergeActionLabel", () => {
+  it("keeps auto-merge and the merge queue in GitHub's own words", () => {
+    expect(mergeActionLabel("arm")).toBe("Enable auto-merge");
+    expect(mergeActionLabel("arm", { queue: true })).toBe("Merge when ready");
+    expect(mergeActionLabel("cancel", { intent: { kind: "queued", position: 2 } })).toBe(
+      "Remove from queue"
+    );
+  });
+});
+
+describe("merge outcomes", () => {
+  const open = { prState: "open" as const, mergeIntent: null };
+
+  it("shows a reported merge until detection catches up", () => {
+    const outcome = { kind: "merged" as const, baseRef: "develop" };
+    expect(applyMergeOutcome(outcome, open).prState).toBe("merged");
+    expect(isMergeOutcomeReflected(outcome, open)).toBe(false);
+    expect(isMergeOutcomeReflected(outcome, { prState: "merged", mergeIntent: null })).toBe(true);
+  });
+
+  it("changes nothing for a request GitHub didn't describe", () => {
+    const outcome = { kind: "arm-requested" as const, queue: true };
+    expect(applyMergeOutcome(outcome, open)).toEqual(open);
+    expect(isMergeOutcomeReflected(outcome, open)).toBe(true);
+  });
+});
+
+describe("describeMergeRejection", () => {
+  const context = { baseRef: "develop", queue: false };
+
+  it("names a moved head rather than repeating the CLI", () => {
+    expect(
+      describeMergeRejection(
+        "GraphQL: Head branch was modified. (mergePullRequest)",
+        "merge",
+        context
+      ).title
+    ).toBe("New commits landed first");
+  });
+
+  it("names branch rules and what to wait for", () => {
+    const rejected = describeMergeRejection(
+      "Pull Request is not mergeable: the base branch policy prohibits the merge",
+      "merge",
+      context
+    );
+    expect(rejected.title).toBe("Branch rules blocked it");
+    expect(rejected.summary).toMatch(/develop/);
+  });
+
+  it("falls back to what didn't happen", () => {
+    expect(describeMergeRejection("something unexpected", "arm", context).title).toBe(
+      "GitHub didn't enable auto-merge"
     );
   });
 });
