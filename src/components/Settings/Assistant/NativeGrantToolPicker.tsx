@@ -20,6 +20,7 @@ export function NativeGrantToolPicker({
 }) {
   const [query, setQuery] = useState("");
   const labelId = useId();
+  const countId = useId();
   const needle = query.trim().toLowerCase();
   const visible =
     needle === ""
@@ -34,8 +35,9 @@ export function NativeGrantToolPicker({
     <div className="grid gap-1.5">
       <div className="flex items-baseline justify-between gap-2 text-xs text-text-secondary">
         <span id={labelId}>Tools to approve</span>
-        <span className="tabular-nums">
+        <span id={countId} className="tabular-nums">
           {selected.length} of {MCP_NATIVE_GRANT_MAX_ALLOWED_TOOLS} chosen
+          {atLimit && ". Uncheck one to choose another"}
         </span>
       </div>
       <SettingsSearchField
@@ -48,6 +50,7 @@ export function NativeGrantToolPicker({
       <div
         role="group"
         aria-labelledby={labelId}
+        aria-describedby={countId}
         className="max-h-48 overflow-y-auto rounded-[var(--radius-sm)] border border-border-default bg-surface-canvas py-1"
       >
         {visible.map((tool) => {

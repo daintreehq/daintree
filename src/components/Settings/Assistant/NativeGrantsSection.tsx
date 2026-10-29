@@ -1,6 +1,7 @@
 import { useCallback, useId, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
+import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
@@ -17,6 +18,7 @@ import { NativeGrantToolPicker } from "./NativeGrantToolPicker";
 import {
   describeNativeGrant,
   listNativeGrantTools,
+  NATIVE_GRANT_MAX_USES_HINT,
   nativeGrantToolTitle,
   parseNativeGrantMaxUses,
 } from "./nativeGrantTools";
@@ -131,8 +133,8 @@ export function NativeGrantsSection({
           onToggle={toggleTool}
           disabled={issuing}
         />
-        <label className="grid w-fit gap-1 text-xs text-text-secondary">
-          Maximum uses
+        <Field className="gap-1" disabled={issuing}>
+          <FieldLabel className="text-xs font-normal text-text-secondary">Maximum uses</FieldLabel>
           <Input
             type="number"
             min={MCP_NATIVE_GRANT_MIN_MAX_USES}
@@ -140,10 +142,10 @@ export function NativeGrantsSection({
             value={usesInput}
             onChange={(e) => setUsesInput(e.target.value)}
             disabled={issuing}
-            aria-invalid={maxUses === null}
             className={cn(SETTINGS_CONTROL_WIDTH.number, "tabular-nums")}
           />
-        </label>
+          {maxUses === null && <FieldError>{NATIVE_GRANT_MAX_USES_HINT}</FieldError>}
+        </Field>
         <p id={summaryId} className="text-xs text-text-secondary select-text">
           {describeNativeGrant(
             tools.filter((tool) => selected.includes(tool.id)).map((tool) => tool.title),

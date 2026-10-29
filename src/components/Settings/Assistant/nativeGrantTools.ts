@@ -43,22 +43,26 @@ function minutes(ms: number): string {
 
 /**
  * What approving does, in the order the user weighs it: which calls stop
- * asking, how many of them, and for how long. The use count is shared across
- * every tool in the grant and is charged before the call runs, so a call that
- * fails still spends one; only a successful call restarts the window.
+ * asking, how many uses, and for how long. Hedged where main is: the target
+ * checks (a busy agent's terminal, a force delete's typed name) still ask, the
+ * use is charged before the call runs, and the main-only tools return before
+ * the refresh that renews the window.
  */
 export function describeNativeGrant(titles: readonly string[], maxUses: number | null): string {
-  const scope =
-    titles.length === 0
-      ? "The assistant can run the tools you choose without asking you"
-      : `The assistant can run ${listFormat.format(titles)} without asking you`;
-  const uses =
-    maxUses === null
-      ? `Set maximum uses to a whole number from ${MCP_NATIVE_GRANT_MIN_MAX_USES} to ${MCP_NATIVE_GRANT_MAX_MAX_USES}.`
-      : `Up to ${pluralize(maxUses, "call")} across these tools, including any that fail.`;
-  return [
-    `${scope}, even outside this session's tool set. Daintree skips its usual confirmation for them.`,
-    uses,
-    `Lasts ${minutes(MCP_GRANT_TTL_MS)}, restarting with each successful call, and ends ${minutes(MCP_GRANT_MAX_LIFETIME_MS)} after approval at the latest.`,
-  ].join(" ");
+  const tools = titles.length === 0 ? "the tools you choose" : listFormat.format(titles);
+  const sentences = [
+    `The assistant can run ${tools} without Daintree's usual confirmation, even outside this session's tool set.`,
+    "A few checks still ask, such as closing a busy agent's terminal or force-deleting a worktree.",
+  ];
+  if (maxUses !== null) {
+    sentences.push(
+      `Allows ${pluralize(maxUses, "use")} in total across these tools, and a call that fails still spends one.`
+    );
+  }
+  sentences.push(
+    `Lasts ${minutes(MCP_GRANT_TTL_MS)}, which most successful calls renew, and ends ${minutes(MCP_GRANT_MAX_LIFETIME_MS)} after approval at the latest.`
+  );
+  return sentences.join(" ");
 }
+
+export const NATIVE_GRANT_MAX_USES_HINT = `Enter a whole number from ${MCP_NATIVE_GRANT_MIN_MAX_USES} to ${MCP_NATIVE_GRANT_MAX_MAX_USES}`;

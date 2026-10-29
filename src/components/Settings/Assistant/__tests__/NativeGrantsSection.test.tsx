@@ -32,64 +32,106 @@ beforeEach(() => {
   });
 });
 
+function asButton(el: HTMLElement): HTMLButtonElement {
+  if (!(el instanceof HTMLButtonElement)) throw new Error(`expected a button, got <${el.tagName}>`);
+  return el;
+}
+
+function asInput(el: HTMLElement): HTMLInputElement {
+  if (!(el instanceof HTMLInputElement)) throw new Error(`expected an input, got <${el.tagName}>`);
+  return el;
+}
+
+function describedText(el: HTMLElement): string {
+  return (el.getAttribute("aria-describedby") ?? "")
+    .split(" ")
+    .map((id) => document.getElementById(id)?.textContent ?? "")
+    .join(" ");
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (err: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 function renderSection(grants: HelpSessionActiveGrant[] = []) {
   const view = render(<NativeGrantsSection helpSessionId="help-1" grants={grants} />);
-  const approveButton = () =>
-    view.getByRole("button", { name: "Approve grant" }) as HTMLButtonElement;
-  const summary = () =>
-    document.getElementById(approveButton().getAttribute("aria-describedby") ?? "")?.textContent ??
-    "";
+  const approveButton = () => asButton(view.getByRole("button", { name: "Approve grant" }));
   const toolList = () => view.getByRole("group", { name: "Tools to approve" });
-  return { ...view, approveButton, summary, toolList };
+  const boxes = () => within(toolList()).getAllByRole("checkbox").map(asButton);
+  const toolIdOf = (box: HTMLElement) =>
+    box.parentElement?.querySelector("label > span:last-child")?.textContent ?? "";
+  const usesInput = () => asInput(view.getByLabelText("Maximum uses"));
+  return {
+    ...view,
+    approveButton,
+    summary: () => describedText(approveButton()),
+    toolList,
+    boxes,
+    toolIdOf,
+    usesInput,
+  };
 }
 
 describe("NativeGrantsSection (#14982)", () => {
-  it("offers every grantable tool by name and nothing main would refuse", () => {
-    const { getByLabelText, queryByText, toolList } = renderSection();
+  it("offers exactly the tools main accepts, labelled by name", () => {
+    const { getByLabelText, boxes, toolIdOf } = renderSection();
 
-    expect(within(toolList()).getAllByRole("checkbox")).toHaveLength(NATIVE_GRANT_TOOL_IDS.length);
+    expect(boxes().map(toolIdOf).sort()).toEqual([...NATIVE_GRANT_TOOL_IDS].sort());
     expect(getByLabelText(/Run recipe/)).toBeTruthy();
-    expect(queryByText("terminal.closeAll")).toBeNull();
   });
 
   it("says what approving does before anything is sent", () => {
-    const { getByLabelText, approveButton, summary } = renderSection();
+    const { getByLabelText, approveButton, summary, usesInput } = renderSection();
     expect(approveButton().disabled).toBe(true);
 
     fireEvent.click(getByLabelText(/Delete owned worktree/));
     fireEvent.click(getByLabelText(/Run recipe/));
-    fireEvent.change(getByLabelText("Maximum uses"), { target: { value: "3" } });
+    fireEvent.change(usesInput(), { target: { value: "3" } });
 
-    expect(summary()).toContain("Delete owned worktree and Run recipe without asking you");
-    expect(summary()).toContain("skips its usual confirmation");
-    expect(summary()).toContain("Up to 3 calls");
-    expect(summary()).toMatch(/Lasts \d+ minutes, restarting with each successful call/);
+    expect(summary()).toContain(
+      "run Delete owned worktree and Run recipe without Daintree's usual confirmation"
+    );
+    expect(summary()).toContain("A few checks still ask");
+    expect(summary()).toContain("Allows 3 uses in total");
+    expect(summary()).toMatch(/Lasts \d+ minutes, which most successful calls renew/);
     expect(approveButton().disabled).toBe(false);
     expect(issueNativeGrant).not.toHaveBeenCalled();
   });
 
-  it("refuses a use count main would reject instead of sending a fallback", () => {
-    const { getByLabelText, approveButton, summary } = renderSection();
+  it("flags a use count main would reject on the field instead of sending a fallback", () => {
+    const { getByLabelText, approveButton, summary, usesInput } = renderSection();
     fireEvent.click(getByLabelText(/Run recipe/));
 
     for (const value of ["", "0", "2.5", "101"]) {
-      fireEvent.change(getByLabelText("Maximum uses"), { target: { value } });
+      fireEvent.change(usesInput(), { target: { value } });
       expect(approveButton().disabled).toBe(true);
-      expect(summary()).toContain("Set maximum uses to a whole number");
+      expect(usesInput().getAttribute("aria-invalid")).toBe("true");
+      expect(describedText(usesInput())).toContain("Enter a whole number");
+      expect(summary()).not.toContain("Allows");
     }
     fireEvent.click(approveButton());
     expect(issueNativeGrant).not.toHaveBeenCalled();
+
+    fireEvent.change(usesInput(), { target: { value: "4" } });
+    expect(usesInput().getAttribute("aria-invalid")).toBeNull();
+    expect(approveButton().disabled).toBe(false);
   });
 
   it("keeps a choice the search hides and sends exactly what was chosen", async () => {
     issueNativeGrant.mockResolvedValue({ grantId: "g1" });
-    const { getByLabelText, approveButton, toolList } = renderSection();
+    const { getByLabelText, approveButton, toolList, usesInput } = renderSection();
 
     fireEvent.click(getByLabelText(/Run recipe/));
     fireEvent.change(getByLabelText("Search tools"), { target: { value: "owned worktree" } });
     expect(within(toolList()).queryByText("Run recipe")).toBeNull();
     fireEvent.click(getByLabelText(/Delete owned worktree/));
-    fireEvent.change(getByLabelText("Maximum uses"), { target: { value: "7" } });
+    fireEvent.change(usesInput(), { target: { value: "7" } });
     fireEvent.click(approveButton());
 
     expect(issueNativeGrant).toHaveBeenCalledWith({
@@ -98,13 +140,33 @@ describe("NativeGrantsSection (#14982)", () => {
       maxUses: 7,
     });
     await waitFor(() =>
-      expect((getByLabelText(/Delete owned worktree/) as HTMLElement).dataset.state).toBe(
-        "unchecked"
-      )
+      expect(getByLabelText(/Delete owned worktree/).dataset.state).toBe("unchecked")
     );
   });
 
-  it("keeps the choice and shows main's refusal when approval fails", async () => {
+  it("locks the form while an approval is in flight and sends it once", async () => {
+    const pending = deferred<{ grantId: string }>();
+    issueNativeGrant.mockReturnValue(pending.promise);
+    const { getByLabelText, approveButton, boxes, usesInput } = renderSection();
+
+    fireEvent.click(getByLabelText(/Run recipe/));
+    fireEvent.click(approveButton());
+    fireEvent.click(approveButton());
+
+    expect(issueNativeGrant).toHaveBeenCalledTimes(1);
+    expect(approveButton().disabled).toBe(true);
+    expect(usesInput().disabled).toBe(true);
+    expect(asInput(getByLabelText("Search tools")).disabled).toBe(true);
+    expect(boxes().every((box) => box.disabled)).toBe(true);
+
+    pending.resolve({ grantId: "g1" });
+    await waitFor(() => expect(usesInput().disabled).toBe(false));
+    expect(boxes().every((box) => !box.disabled)).toBe(true);
+    expect(getByLabelText(/Run recipe/).dataset.state).toBe("unchecked");
+    expect(approveButton().disabled).toBe(true);
+  });
+
+  it("keeps the choice, unlocks, and shows main's refusal when approval fails", async () => {
     issueNativeGrant.mockRejectedValue(new Error("No live pinned session for this help session"));
     const { getByLabelText, approveButton, findByRole } = renderSection();
 
@@ -112,24 +174,41 @@ describe("NativeGrantsSection (#14982)", () => {
     fireEvent.click(approveButton());
 
     expect((await findByRole("alert")).textContent).toContain("No live pinned session");
-    expect((getByLabelText(/Run recipe/) as HTMLElement).dataset.state).toBe("checked");
+    expect(getByLabelText(/Run recipe/).dataset.state).toBe("checked");
+    expect(approveButton().disabled).toBe(false);
   });
 
-  it("locks only unchosen tools once the grant's tool limit is reached", () => {
-    const { toolList } = renderSection();
-    const boxes = () => within(toolList()).getAllByRole("checkbox") as HTMLButtonElement[];
+  it("locks only unchosen tools at the limit and lets one be swapped for another", () => {
+    issueNativeGrant.mockReturnValue(new Promise(() => {}));
+    const { approveButton, boxes, toolIdOf, getByText } = renderSection();
     for (const box of boxes().slice(0, MCP_NATIVE_GRANT_MAX_ALLOWED_TOOLS)) {
       fireEvent.click(box);
     }
 
-    const chosen = boxes().slice(0, MCP_NATIVE_GRANT_MAX_ALLOWED_TOOLS);
-    const rest = boxes().slice(MCP_NATIVE_GRANT_MAX_ALLOWED_TOOLS);
-    expect(chosen.every((box) => !box.disabled)).toBe(true);
-    expect(rest.length).toBeGreaterThan(0);
-    expect(rest.every((box) => box.disabled)).toBe(true);
+    const [dropped, ...kept] = boxes().slice(0, MCP_NATIVE_GRANT_MAX_ALLOWED_TOOLS);
+    const [replacement, ...rest] = boxes().slice(MCP_NATIVE_GRANT_MAX_ALLOWED_TOOLS);
+    expect(replacement).toBeDefined();
+    expect([dropped!, ...kept].every((box) => !box.disabled)).toBe(true);
+    expect([replacement!, ...rest].every((box) => box.disabled)).toBe(true);
+    expect(getByText(/Uncheck one to choose another/)).toBeTruthy();
 
-    fireEvent.click(chosen[0]!);
-    expect(boxes().every((box) => !box.disabled)).toBe(true);
+    fireEvent.click(dropped!);
+    expect(dropped!.dataset.state).toBe("unchecked");
+    expect(kept.every((box) => box.dataset.state === "checked")).toBe(true);
+    expect(
+      getByText(
+        `${MCP_NATIVE_GRANT_MAX_ALLOWED_TOOLS - 1} of ${MCP_NATIVE_GRANT_MAX_ALLOWED_TOOLS} chosen`
+      )
+    ).toBeTruthy();
+    expect(replacement!.disabled).toBe(false);
+
+    fireEvent.click(replacement!);
+    fireEvent.click(approveButton());
+    expect(issueNativeGrant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedTools: [...kept.map(toolIdOf), toolIdOf(replacement!)],
+      })
+    );
   });
 
   it("names an active grant's tools instead of listing their ids", () => {

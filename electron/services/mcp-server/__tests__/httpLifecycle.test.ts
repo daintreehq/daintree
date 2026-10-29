@@ -56,7 +56,7 @@ import {
 import type { HttpLifecycleDeps } from "../httpLifecycle.js";
 import { MCP_SSE_HEARTBEAT_INTERVAL_MS, minimumPermittingTier } from "../shared.js";
 import { NATIVE_GRANT_TOOL_IDS } from "../../../../shared/config/mcpGrants.js";
-import { HELP_TIER_CUMULATIVE } from "../../../../shared/config/helpAssistantTierAllowlists.js";
+import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
 import { NATIVE_GRANT_USE_POLICY_OVERRIDES } from "../../../../shared/config/nativeGrantUsePolicies.js";
 import type { SessionServerDeps } from "../sessionServer.js";
 import { ResourceOwnershipLedger, helpOwnershipPrincipal } from "../resourceOwnership.js";
@@ -951,17 +951,22 @@ describe("HttpLifecycle", () => {
       expect(NATIVE_GRANT_TOOL_IDS.length).toBeGreaterThan(0);
 
       for (const toolId of NATIVE_GRANT_TOOL_IDS) {
-        expect(() =>
-          lc.issueNativeGrant("help-1", { allowedTools: [toolId], maxUses: 1 }, 42)
-        ).not.toThrow();
+        const result = lc.issueNativeGrant("help-1", { allowedTools: [toolId], maxUses: 1 }, 42);
+        expect(grantCacheOf(deps).issueNativeGrant).toHaveBeenLastCalledWith(
+          expect.objectContaining({ allowedTools: [toolId] })
+        );
+        expect(result.allowedTools).toEqual([toolId]);
       }
 
+      // Every built-in action, not just the help tiers, so a future widening of
+      // what main accepts fails here instead of going missing from the picker.
       const offered = new Set(NATIVE_GRANT_TOOL_IDS);
       const leftOut = [
-        ...HELP_TIER_CUMULATIVE.full,
+        ...BUILT_IN_ACTION_IDS,
         ...Object.keys(NATIVE_GRANT_USE_POLICY_OVERRIDES),
+        "totally.notatool",
       ].filter((toolId) => !offered.has(toolId));
-      expect(leftOut.length).toBeGreaterThan(0);
+      expect(leftOut).toContain("terminal.closeAll");
       for (const toolId of leftOut) {
         expect(() =>
           lc.issueNativeGrant("help-1", { allowedTools: [toolId], maxUses: 1 }, 42)
