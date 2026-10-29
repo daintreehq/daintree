@@ -63,10 +63,7 @@ export function TerminalSearchBar({
   onClose,
   className,
 }: TerminalSearchBarProps) {
-  const target = useMemo(
-    () => search ?? gridSearchTarget(terminalId ?? ""),
-    [search, terminalId]
-  );
+  const target = useMemo(() => search ?? gridSearchTarget(terminalId ?? ""), [search, terminalId]);
   const addSearch = useTerminalSearchHistoryStore((s) => s.addSearch);
   const setToggles = useTerminalSearchHistoryStore((s) => s.setToggles);
 

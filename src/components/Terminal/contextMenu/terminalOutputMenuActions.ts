@@ -59,13 +59,11 @@ export function runTerminalOutputMenuAction(
     // file (NOT_FOUND) are real, expected failure modes here — surface them
     // rather than fire-and-forget. dispatch wraps the thrown error as
     // EXECUTION_ERROR, so the original coded error lives on `.details`.
-    void actionService
-      .dispatch("file.showItemInFolder", { path }, { source })
-      .then((result) => {
-        if (!result.ok) {
-          reportFileLinkFailure("Failed to reveal in file manager", result.error.details, path);
-        }
-      });
+    void actionService.dispatch("file.showItemInFolder", { path }, { source }).then((result) => {
+      if (!result.ok) {
+        reportFileLinkFailure("Failed to reveal in file manager", result.error.details, path);
+      }
+    });
     return true;
   }
 
