@@ -181,8 +181,9 @@ describe("fleet.saveNamedFleet", () => {
     const registry = await buildRegistry();
     await run(registry, "fleet.saveNamedFleet", { kind: "snapshot", name: "Mixed" });
 
-    const saved = saveSettingsMock.mock.calls[0]![1].fleetSavedScopes[0] as FleetSavedScope;
-    expect(saved.kind === "snapshot" ? saved.terminalIds : []).toEqual(["b", "a"]);
+    expect(saveSettingsMock.mock.calls[0]![1].fleetSavedScopes).toMatchObject([
+      { kind: "snapshot", name: "Mixed", terminalIds: ["b", "a"] },
+    ]);
     expect(useFleetArmingStore.getState().crossHostTargets.map((t) => t.key)).toEqual([
       "host-fleet:studio-01:t1",
     ]);

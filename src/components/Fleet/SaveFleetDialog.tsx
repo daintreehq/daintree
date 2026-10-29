@@ -34,12 +34,22 @@ interface SaveFleetDialogProps {
 
 // Pinned to English, like the sentence around it.
 const listFormat = new Intl.ListFormat("en", { style: "long", type: "conjunction" });
+// A host can contribute hundreds of agents, and the hint is the type group's
+// accessible description: past a few names, the rest are counted.
+const MAX_NAMED_LEFT_OUT = 3;
 
 /** The other hosts' agents a snapshot can't hold, named the way the fleet list names them. */
-function describeLeftOut(targets: readonly CrossHostFleetTarget[]): string {
-  return `Left out, since a snapshot can't hold agents on other hosts: ${listFormat.format(
-    targets.map((t) => `${t.title} on ${t.hostName}`)
-  )}.`;
+export function describeLeftOut(targets: readonly CrossHostFleetTarget[]): string {
+  const names = targets.map((t) => `${t.title} on ${t.hostName}`);
+  // Never "and 1 other": one more name costs no more than the count would.
+  const listed =
+    names.length > MAX_NAMED_LEFT_OUT + 1
+      ? [
+          ...names.slice(0, MAX_NAMED_LEFT_OUT),
+          pluralize(names.length - MAX_NAMED_LEFT_OUT, "other"),
+        ]
+      : names;
+  return `Left out, since a snapshot can't hold agents on other hosts: ${listFormat.format(listed)}.`;
 }
 
 function savedIds(): Set<string> {

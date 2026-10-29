@@ -1759,7 +1759,8 @@ describe("fleets with agents on other hosts", () => {
     });
 
     expect(useFleetArmingStore.getState().crossHostTargets).toHaveLength(1);
-    expect(typeHint()).not.toContain("0 panes");
+    expect(typeHint()).toContain("Only panes armed here go in a snapshot.");
+    expect(typeHint()).toContain("Left out, since a snapshot can't hold agents on other hosts");
     expect(typeHint()).toContain("Claude t1 on studio-01");
     expect(save().getAttribute("aria-disabled")).toBe("true");
     expect(screen.getByDisplayValue("Mixed")).toBe(screen.getByTestId("fleet-save-form-name"));
