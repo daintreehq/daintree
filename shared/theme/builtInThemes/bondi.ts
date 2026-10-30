@@ -305,7 +305,6 @@ export const theme: BuiltInThemeSource = {
     "pulse-range-bg": "#F6F0E6",
     "pulse-ring-offset": "#FFFFFF",
     "pulse-skeleton-gradient": "linear-gradient(90deg, #E1D7C5 25%, #F6F1E8 50%, #E1D7C5 75%)",
-    "dialog-header-bg": "#FCF9F5",
     "review-commit-input-bg": "#FDFBF7",
     // The open page is the highlight fill and nothing else (settings.css) — no
     // accent rail; the focus ring is this region's one accent. So the fill has

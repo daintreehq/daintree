@@ -140,8 +140,6 @@ type ConfirmDialogBaseProps = {
    * previous item's scroll offset.
    */
   bodyResetKey?: string | number;
-  /** Forwarded to {@link AppDialog.Body.compactShadow}. */
-  compactBodyShadow?: boolean;
 };
 
 export type ConfirmDialogProps =
@@ -189,7 +187,6 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     hintPlacement,
     leadingAction,
     bodyResetKey,
-    compactBodyShadow,
   } = props;
   const rawTypedNameTarget = (props as { typedNameTarget?: string }).typedNameTarget;
   const typedNameTarget = variant === "destructive" ? rawTypedNameTarget : undefined;
@@ -320,11 +317,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
         <AppDialog.CloseButton />
       </AppDialog.Header>
 
-      <AppDialog.Body
-        className="space-y-3"
-        resetScrollKey={bodyResetKey}
-        compactShadow={compactBodyShadow}
-      >
+      <AppDialog.Body className="space-y-3" resetScrollKey={bodyResetKey}>
         {description && <AppDialog.Description>{description}</AppDialog.Description>}
         {children}
         {hasTypedNameGate && (

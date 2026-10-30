@@ -217,8 +217,6 @@ export const theme: BuiltInThemeSource = {
     "settings-dialog-bg": "#201f1f",
     "settings-card-bg": "#252424",
     "settings-list-item-bg": "#252424",
-    // rgb(21,18,17) = the sidebar surface; keep in lockstep with surfaces.sidebar.
-    "dialog-header-bg": "rgba(21,18,17,0.60)",
     "settings-search-bg": "#1A1918",
     "settings-search-muted": "#a1a1aa",
     "settings-sidebar-bg": "rgba(21,18,17,0.50)",

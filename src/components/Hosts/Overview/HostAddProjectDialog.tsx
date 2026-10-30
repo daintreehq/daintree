@@ -454,7 +454,7 @@ export function HostAddProjectDialog({
 
   return (
     <AppDialog isOpen onClose={closeDialog} size="md" initialFocus="surface">
-      <AppDialog.Header className="py-3">
+      <AppDialog.Header>
         <AppDialog.Title icon={<FolderPlus className="h-4 w-4 text-text-secondary" />}>
           Add a project on {hostName}
         </AppDialog.Title>

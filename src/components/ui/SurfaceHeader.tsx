@@ -7,15 +7,16 @@ import { Button } from "@/components/ui/button";
 import { BrandSurface } from "@/components/icons";
 import type { BrandMarkSurface } from "@/lib/brandIcon";
 
-// Full literal strings per density rather than a shared base: the comfortable
-// output stays byte-identical to the markup the 35 AppDialog consumers render
-// today, and compact stays free of a `py-*` utility that would fight `h-8`.
+// Full literal strings per density rather than a shared base: compact stays free
+// of a `py-*` utility that would fight `h-8`. Comfortable is the dialog header:
+// a 44px row on the dialog's own surface, its divider a hairline that
+// `AppDialog.Header` hides while the body is scrolled to the top.
 const surfaceHeaderVariants = cva("", {
   variants: {
     density: {
       compact: "h-8 px-3 border-b border-divider flex items-center justify-between shrink-0",
       comfortable:
-        "px-6 py-4 border-b border-border-strong dialog-header flex items-center justify-between shrink-0",
+        "min-h-11 px-6 py-2 border-b border-border-divider dialog-header flex items-center justify-between shrink-0",
     },
   },
   defaultVariants: {
@@ -86,7 +87,7 @@ const SurfaceHeaderTitle = React.forwardRef<HTMLHeadingElement, SurfaceHeaderTit
       // name never leaves one word alone on the last line. A title that fits on
       // one line has nothing to balance and renders as before.
       className={cn(
-        "text-lg font-semibold text-text-primary flex items-center gap-2 min-w-0 break-words text-balance [&>svg]:shrink-0",
+        "text-sm leading-5 font-semibold text-text-primary flex items-center gap-2 min-w-0 break-words text-balance [&>svg]:shrink-0",
         className
       )}
       {...props}

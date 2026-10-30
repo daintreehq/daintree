@@ -493,13 +493,10 @@ In Bondi: `#FCFCFD` — very close to white, making the settings feel open and a
 **Header bar** (`dialog-header`):
 
 ```css
-background: var(
-  --dialog-header-bg,
-  color-mix(in oklch, var(--theme-surface-sidebar) 50%, transparent)
-);
+background: var(--dialog-header-bg, transparent);
 ```
 
-A semi-transparent tinted bar showing the current section title and close button.
+The section title and close button on the dialog's own surface. No built-in theme tints it; a theme that wants a title band authors `dialog-header-bg`.
 
 ### Settings Navigation Items
 

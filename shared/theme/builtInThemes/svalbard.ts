@@ -181,7 +181,6 @@ export const theme: BuiltInThemeSource = {
     "pulse-range-bg": "#E9F0F5",
     "pulse-ring-offset": "#FFFFFF",
     "pulse-skeleton-gradient": "linear-gradient(90deg, #C2D9E6 25%, #E9F0F5 50%, #C2D9E6 75%)",
-    "dialog-header-bg": "#F5FAFD",
     "review-commit-input-bg": "#FAFCFE",
     // Small-chrome gradient between two audited near-white stops; label ink
     // holds 7.3:1 on the darker stop.

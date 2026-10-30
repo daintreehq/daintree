@@ -178,7 +178,6 @@ export const theme: BuiltInThemeSource = {
     "pulse-range-bg": "#F5EFE5",
     "pulse-ring-offset": "#FFFFFF",
     "pulse-skeleton-gradient": "linear-gradient(90deg, #DFCFB8 25%, #F4EEE3 50%, #DFCFB8 75%)",
-    "dialog-header-bg": "#FCF9F4",
     "review-commit-input-bg": "#FFFCF8",
     // Nav selection elevates to white + the 2px accent marker.
     "settings-nav-active-bg": "#FFFFFF",

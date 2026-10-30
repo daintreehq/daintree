@@ -1072,7 +1072,9 @@ function SettingsDialogInner({
 
         <SettingsSubpageProvider value={setTabSubpage}>
           <div className="settings-shell flex-1 flex flex-col min-w-0">
-            <AppDialog.Header>
+            {/* 56px, so the page title and the X centre on the sidebar's first
+                row (12px padding + a 32px row) rather than 6px above it. */}
+            <AppDialog.Header className="py-3.5">
               <div className="@container/title flex min-w-0 flex-1 items-center">
                 {shownSubpage && (
                   <Tooltip>
