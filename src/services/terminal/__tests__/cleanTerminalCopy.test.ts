@@ -207,6 +207,7 @@ describe("cleanTerminalSelection", () => {
       ["  description: Read the terminal output", "  summary: Ships the clean copy."],
       ["  Component | Changes in this release", "  Terminal | Adds clean copy."],
       ["  git fetch origin feature/clean-copy", "  git diff ."],
+      ["  git checkout feature/clean-copy-copy", "  cd src/."],
       ["  The implementation is complete now.", "  Documentation remains unchanged."],
     ];
     for (const pair of pairs) {

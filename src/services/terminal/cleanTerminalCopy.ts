@@ -73,8 +73,9 @@ const KEY_VALUE = /^[\w.-]+:(?:\s|$)/;
 // A break after a sentence may be one sentence per line, so it's kept.
 const SENTENCE_END = /[.!?…。！？]["'”’)\]]*$/;
 // How a paragraph's last row ends: punctuation straight after a word or a URL.
-// Code, commands and config rarely end that way (`git add .` doesn't).
-const PROSE_END = /[\p{L}\p{N}"'”’)\]`/][.!?:…。！？]["'”’)\]]*$/u;
+// Code, commands and config rarely end that way (`git add .` and `cd src/.` don't).
+const PROSE_END =
+  /(?:[\p{L}\p{N}"'”’)\]`]|(?:^|\s)[a-z][\w+.-]*:\/\/\S*\/)[.!?:…。！？]["'”’)\]]*$/iu;
 
 function normalize(text: string): string {
   return text.replace(/\r\n/g, "\n").replace(/\u00a0/g, " ");
