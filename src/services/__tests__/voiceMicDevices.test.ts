@@ -128,7 +128,7 @@ describe("openChosenMic (#14850)", () => {
     return getUserMedia;
   }
 
-  const CHOSEN = { audio: { deviceId: { ideal: "usb-mic" } }, video: false };
+  const CHOSEN = { audio: { deviceId: { exact: "usb-mic" } }, video: false };
   const SYSTEM_DEFAULT = { audio: true, video: false };
   const DEFAULT_MIC = micStream("Default - MacBook Pro Microphone", "default");
   const error = (name: string) => new DOMException(name, name);
@@ -148,7 +148,8 @@ describe("openChosenMic (#14850)", () => {
   });
 
   it("names the system default that opened in place of a missing mic", async () => {
-    stubGetUserMedia(DEFAULT_MIC);
+    const missing = error("OverconstrainedError");
+    stubGetUserMedia(missing, DEFAULT_MIC);
 
     const mic = await openChosenMic("usb-mic");
 
@@ -156,7 +157,7 @@ describe("openChosenMic (#14850)", () => {
       deviceId: "default",
       label: "MacBook Pro Microphone",
       substituted: true,
-      chosenFailure: null,
+      chosenFailure: missing,
     });
   });
 
@@ -308,7 +309,7 @@ describe("openChosenMic (#14850)", () => {
       const mic = await openChosenMic("rode-old", { chosenLabel: RODE });
 
       expect(getUserMedia.mock.calls).toEqual([
-        [{ audio: { deviceId: { ideal: "rode-new" } }, video: false }],
+        [{ audio: { deviceId: { exact: "rode-new" } }, video: false }],
       ]);
       expect(mic).toMatchObject({ substituted: false, relocatedId: "rode-new" });
     });
@@ -324,9 +325,7 @@ describe("openChosenMic (#14850)", () => {
 
       const mic = await openChosenMic("usb-old", { chosenLabel: "USB Mic" });
 
-      expect(getUserMedia.mock.calls).toEqual([
-        [{ audio: { deviceId: { ideal: "usb-old" } }, video: false }],
-      ]);
+      expect(getUserMedia.mock.calls).toEqual([[SYSTEM_DEFAULT]]);
       expect(mic).toMatchObject({ substituted: true, relocatedId: null });
     });
 
@@ -377,6 +376,90 @@ describe("openChosenMic (#14850)", () => {
       );
 
       expect((await openChosenMic("usb-mic", { chosenLabel: "USB Mic" })).substituted).toBe(false);
+    });
+  });
+
+  describe("a chosen mic that is connected while the system default is another (#15512)", () => {
+    const RODE = "RØDE NT-USB Mini (19f7:0015)";
+    const AIRPODS = "Greg's AirPods Pro";
+
+    function track(label: string, deviceId: string, groupId: string) {
+      return { label, stop: vi.fn(), getSettings: () => ({ deviceId, groupId }) };
+    }
+
+    // Chromium's own choice: a soft deviceId can still bind the "default"
+    // alias, which follows the system input to the AirPods; only `exact`
+    // opens the device asked for, and an unknown exact id is overconstrained.
+    function stubChromium(inputs: Array<{ deviceId: string; groupId: string; label: string }>) {
+      const opened: string[] = [];
+      const getUserMedia = vi.fn(async (constraints: MediaStreamConstraints) => {
+        const audio = constraints.audio;
+        const exact =
+          typeof audio === "object" && typeof audio.deviceId === "object"
+            ? (audio.deviceId as ConstrainDOMStringParameters).exact
+            : undefined;
+        const device = exact
+          ? inputs.find((input) => input.deviceId === exact)
+          : inputs.find((input) => input.deviceId === "default");
+        if (!device) throw new DOMException("deviceId", "OverconstrainedError");
+        opened.push(device.groupId);
+        const t = track(device.label, device.deviceId, device.groupId);
+        return { getAudioTracks: () => [t], getTracks: () => [t] };
+      });
+      const enumerateDevices = vi
+        .fn()
+        .mockResolvedValue(inputs.map((input) => ({ kind: "audioinput", ...input })));
+      vi.stubGlobal("navigator", { mediaDevices: { getUserMedia, enumerateDevices } });
+      return { getUserMedia, opened };
+    }
+
+    const DEFAULT_AIRPODS = {
+      deviceId: "default",
+      groupId: "g-airpods",
+      label: `Default - ${AIRPODS}`,
+    };
+    const AIRPODS_MIC = { deviceId: "airpods", groupId: "g-airpods", label: AIRPODS };
+    const RODE_MIC = { deviceId: "rode", groupId: "g-rode", label: RODE };
+
+    it("records from the chosen mic, never the AirPods the system switched to", async () => {
+      const { opened } = stubChromium([DEFAULT_AIRPODS, AIRPODS_MIC, RODE_MIC]);
+
+      const mic = await openChosenMic("rode", { chosenLabel: RODE });
+
+      expect(opened).toEqual(["g-rode"]);
+      expect(mic).toMatchObject({
+        deviceId: "rode",
+        label: RODE,
+        substituted: false,
+        chosenFailure: null,
+      });
+    });
+
+    it("opens the chosen mic again under the id it has after being plugged back in", async () => {
+      const { opened } = stubChromium([
+        DEFAULT_AIRPODS,
+        AIRPODS_MIC,
+        { ...RODE_MIC, deviceId: "rode-new" },
+      ]);
+
+      const mic = await openChosenMic("rode", { chosenLabel: RODE });
+
+      expect(opened).toEqual(["g-rode"]);
+      expect(mic).toMatchObject({
+        deviceId: "rode-new",
+        substituted: false,
+        relocatedId: "rode-new",
+      });
+    });
+
+    it("opens the system default straight away when the chosen mic isn't connected", async () => {
+      const { getUserMedia, opened } = stubChromium([DEFAULT_AIRPODS, AIRPODS_MIC]);
+
+      const mic = await openChosenMic("rode", { chosenLabel: RODE });
+
+      expect(getUserMedia).toHaveBeenCalledTimes(1);
+      expect(opened).toEqual(["g-airpods"]);
+      expect(mic).toMatchObject({ label: AIRPODS, substituted: true, chosenFailure: null });
     });
   });
 

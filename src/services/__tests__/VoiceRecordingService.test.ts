@@ -1400,7 +1400,7 @@ describe("VoiceRecordingService — microphone device selection", () => {
     await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Test" });
 
     expect(getUserMediaSpy).toHaveBeenCalledWith({
-      audio: { deviceId: { ideal: "preferred-mic-id" } },
+      audio: { deviceId: { exact: "preferred-mic-id" } },
       video: false,
     });
   });

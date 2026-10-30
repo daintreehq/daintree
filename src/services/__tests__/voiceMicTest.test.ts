@@ -68,7 +68,7 @@ describe("startMicTest", () => {
   it("asks for the selected device as an ideal constraint and no video", async () => {
     const gum = installMedia();
     const h = await startMicTest({ deviceId: "mic-1", onSample: vi.fn(), onEnded: vi.fn() });
-    expect(gum).toHaveBeenCalledWith({ audio: { deviceId: { ideal: "mic-1" } }, video: false });
+    expect(gum).toHaveBeenCalledWith({ audio: { deviceId: { exact: "mic-1" } }, video: false });
     h.stop();
   });
 

@@ -522,9 +522,8 @@ describe("VoiceRecordingService — chosen mic not available (#14606)", () => {
 
     await service.start(TARGET);
 
-    // Still asked for as a preference, never forced.
     expect(harness.getUserMedia).toHaveBeenCalledWith({
-      audio: { deviceId: { ideal: "usb-mic" } },
+      audio: { deviceId: { exact: "usb-mic" } },
       video: false,
     });
     // A working stand-in is named, never raised as a notice.
@@ -554,7 +553,7 @@ describe("VoiceRecordingService — chosen mic not available (#14606)", () => {
     // An alias follows the system input, so it opens as the system default.
     expect(harness.getUserMedia).toHaveBeenCalledWith(
       chosen === "usb-mic"
-        ? { audio: { deviceId: { ideal: chosen } }, video: false }
+        ? { audio: { deviceId: { exact: chosen } }, video: false }
         : { audio: true, video: false }
     );
     expect(store.getState().micNotice).toBeNull();
@@ -581,12 +580,13 @@ describe("VoiceRecordingService — chosen mic that won't open (#14850)", () => 
 
   it("records from the chosen mic whatever the system default is", async () => {
     const harness = setupGlobals({ deviceId: "usb-mic", tracks: [] });
-    // AirPods hold the system input; only a request for the chosen mic opens it.
+    // AirPods hold the system input. As in Chromium, only an exact request
+    // opens the chosen mic; a softer one binds the default alias (#15512).
     harness.getUserMedia.mockImplementation(async (...args: unknown[]) => {
       const asked = (args[0] as MediaStreamConstraints).audio as
-        { deviceId?: { ideal?: string } } | boolean;
+        { deviceId?: { exact?: string } } | boolean;
       const track =
-        typeof asked === "object" && asked.deviceId?.ideal === "usb-mic"
+        typeof asked === "object" && asked.deviceId?.exact === "usb-mic"
           ? createTrack("USB Mic", "usb-mic")
           : createTrack("Default - Greg's AirPods Pro", "default");
       harness.tracks.push(track);
@@ -598,7 +598,7 @@ describe("VoiceRecordingService — chosen mic that won't open (#14850)", () => 
 
     expect(harness.getUserMedia).toHaveBeenCalledTimes(1);
     expect(harness.getUserMedia).toHaveBeenCalledWith({
-      audio: { deviceId: { ideal: "usb-mic" } },
+      audio: { deviceId: { exact: "usb-mic" } },
       video: false,
     });
     expect(store.getState().micDeviceLabel).toBe("USB Mic");
@@ -613,7 +613,7 @@ describe("VoiceRecordingService — chosen mic that won't open (#14850)", () => 
     await service.start(TARGET);
 
     expect(harness.getUserMedia).toHaveBeenNthCalledWith(1, {
-      audio: { deviceId: { ideal: "usb-mic" } },
+      audio: { deviceId: { exact: "usb-mic" } },
       video: false,
     });
     expect(harness.getUserMedia).toHaveBeenNthCalledWith(2, { audio: true, video: false });
@@ -638,7 +638,7 @@ describe("VoiceRecordingService — chosen mic that won't open (#14850)", () => 
     await service.start(TARGET);
 
     expect(harness.getUserMedia).toHaveBeenCalledWith({
-      audio: { deviceId: { ideal: "usb-new" } },
+      audio: { deviceId: { exact: "usb-new" } },
       video: false,
     });
     expect(store.getState().micNotice).toBeNull();
@@ -682,7 +682,7 @@ describe("VoiceRecordingService — chosen mic that won't open (#14850)", () => 
     await service.start(TARGET);
 
     expect(harness.getUserMedia).toHaveBeenLastCalledWith({
-      audio: { deviceId: { ideal: "usb-mic" } },
+      audio: { deviceId: { exact: "usb-mic" } },
       video: false,
     });
     expect(store.getState().micDeviceLabel).toBe("USB Mic");
@@ -1038,7 +1038,7 @@ describe("VoiceRecordingService — silent mic (#14606)", () => {
       deviceLabel: "MacBook Pro Microphone",
     });
     expect(harness.getUserMedia).toHaveBeenLastCalledWith({
-      audio: { deviceId: { ideal: "builtin" } },
+      audio: { deviceId: { exact: "builtin" } },
       video: false,
     });
     // The silent session drained; the new one runs on the same pane.
