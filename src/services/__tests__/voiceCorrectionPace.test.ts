@@ -88,7 +88,7 @@ describe("voiceCorrectionPace", () => {
   });
 
   it("lands a long run of equal lengths where they took, at that length", () => {
-    teach((chars) => haiku(1_000, 500), 151, [600]);
+    teach(() => haiku(1_000, 500), 151, [600]);
     expect(pace.estimateCorrectionMs("claude-haiku-5-5", "medium", 600)).toBeCloseTo(1_500, 0);
   });
 
