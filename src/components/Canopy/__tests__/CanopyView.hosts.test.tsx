@@ -738,10 +738,9 @@ describe("the Canopy host picker", () => {
       expect(useCanopyStore.getState().hostId).toBe("studio");
       expect(document.getElementById("canopy-card-shared")).not.toBeNull();
       expect(
-        document.querySelector('[data-canopy-card][aria-selected="true"]')?.id.replace(
-          /^canopy-card-/,
-          ""
-        )
+        document
+          .querySelector('[data-canopy-card][aria-selected="true"]')
+          ?.id.replace(/^canopy-card-/, "")
       ).toBe("remote-first");
     } finally {
       usePanelStore.setState({ panelsById: {} as never, focusedId: null });
