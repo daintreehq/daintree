@@ -166,6 +166,7 @@ import type { CanopyTerminalApi } from "../canopyHostSource";
 import { ownCanopyTerminalApi } from "../canopyHostSource";
 import { TerminalLinkHandler } from "@/services/terminal/TerminalLinkHandler";
 import { actionService } from "@/services/ActionService";
+import { useCanopyStore } from "@/store/canopyStore";
 
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
@@ -214,6 +215,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cell.current = null;
+  useCanopyStore.setState({ listDrag: null });
   terminalResize.mockClear();
   xterm.current = null;
 });
@@ -444,6 +446,38 @@ describe("CanopyTerminal", () => {
       await settle();
       expect(terminalResize).toHaveBeenCalledTimes(2);
       expect(terminalResize).toHaveBeenLastCalledWith(7, 99, 30);
+    });
+
+    it("holds the PTY while the list's edge is dragged, and asks once the edge lands", async () => {
+      const view = await openSized();
+      await act(async () =>
+        pushChunk({ kind: "resize", watchId: 7, runId: "run-1", cols: 99, rows: 30 })
+      );
+      act(() => useCanopyStore.getState().setListDrag(600));
+      // The pane narrows under the drag, and the PTY moves out from under it.
+      view.frame.getBoundingClientRect = () =>
+        ({ width: 638.6, height: 504.6, top: 0, left: 0, right: 638.6, bottom: 504.6 }) as DOMRect;
+      await act(async () =>
+        pushChunk({ kind: "resize", watchId: 7, runId: "run-1", cols: 140, rows: 40 })
+      );
+      await settle();
+      expect(terminalResize).toHaveBeenCalledTimes(1);
+
+      act(() => useCanopyStore.getState().setListDrag(null));
+      await settle();
+      // (638 − 24 inset − 15 scrollbar) / 8 = 74 columns, at the width the drag left.
+      expect(terminalResize).toHaveBeenCalledTimes(2);
+      expect(terminalResize).toHaveBeenLastCalledWith(7, 74, 30);
+    });
+
+    it("opened mid-drag, waits for the edge to land before asking for its grid", async () => {
+      act(() => useCanopyStore.getState().setListDrag(600));
+      await openSized();
+      expect(terminalResize).not.toHaveBeenCalled();
+      act(() => useCanopyStore.getState().setListDrag(null));
+      await settle();
+      expect(terminalResize).toHaveBeenCalledTimes(1);
+      expect(terminalResize).toHaveBeenCalledWith(7, 99, 30);
     });
 
     it("puts its grid back to the PTY's when the size is refused", async () => {
