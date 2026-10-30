@@ -23,9 +23,7 @@ beforeAll(() => {
 beforeEach(() => {
   layout.column = 448;
   layout.split = 1400;
-  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
-    this: Element
-  ) {
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
     const width = this.classList.contains("canopy-list-column")
       ? layout.column
       : this.hasAttribute("data-split")

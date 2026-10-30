@@ -342,6 +342,8 @@ afterEach(() => {
     orders: {},
     unreadOnly: false,
     readingOfferDismissed: false,
+    listWidth: null,
+    listDrag: null,
   });
   window.localStorage.removeItem("daintree-canopy-order");
   window.localStorage.removeItem("daintree-canopy-reading-offer-dismissed");
@@ -642,6 +644,23 @@ describe("CanopyView", () => {
       if (original) Object.defineProperty(URL, "createObjectURL", original);
       else Reflect.deleteProperty(URL, "createObjectURL");
     }
+  });
+
+  it("keeps the list at the width the user chose, under the offer as in the inbox", async () => {
+    const off = { ...canopySnapshot, activated: false };
+    installElectron(off);
+    useCanopyStore.setState({ snapshot: off, listWidth: 600 });
+    render(<CanopyView />);
+    await frames();
+    const listWidth = () =>
+      document
+        .querySelector<HTMLElement>("[data-testid=canopy-dialog] .canopy-list-column")!
+        .style.getPropertyValue("--canopy-list-width");
+    expect(document.querySelector("[data-testid=canopy-list-resize]")).not.toBeNull();
+    expect(listWidth()).toBe("600px");
+    await openOffer();
+    expect(document.getElementById("canopy-pitch-title")).not.toBeNull();
+    expect(listWidth()).toBe("600px");
   });
 
   it("offers reading above a listed inbox with the reader off, opening the pitch from it", async () => {
@@ -3277,9 +3296,13 @@ describe("CanopyView", () => {
     expect(heading.textContent).not.toMatch(/Updating|Starting|retry/);
     const footer = container.ownerDocument.querySelector("[data-canopy-status]")!;
     expect(footer.textContent).toBe("Light model, on this computer9 ms a screen");
-    // Under the list, in the same column, not over the pane beside it.
+    // Under the list, in the same column, not over the pane beside it. The
+    // column's edge handle sits out of flow, after it.
     const column = container.ownerDocument.querySelector("[data-canopy-list]")!.parentElement!;
-    expect(column.lastElementChild).toBe(footer);
+    const inFlow = [...column.children].filter(
+      (child) => child.getAttribute("role") !== "separator"
+    );
+    expect(inFlow.at(-1)).toBe(footer);
   });
 
   it("opens in the order it was left, or ranked before it shows when something was read meanwhile", async () => {

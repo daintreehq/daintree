@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isCanopyUnread, type CanopySnapshot } from "@shared/types/ipc/canopy";
 import { ALL_HOSTS_ID, useCanopyStore } from "../canopyStore";
+import { CANOPY_LIST_MAX_WIDTH, CANOPY_LIST_MIN_WIDTH } from "@/components/Canopy/canopyListWidth";
 
 const SPAWNED = 1_000;
 
@@ -471,14 +472,18 @@ describe("the list's width", () => {
   });
 
   it("holds a width inside its bounds, whether set here or read back", async () => {
-    const { CANOPY_LIST_MIN_WIDTH, CANOPY_LIST_MAX_WIDTH } = await import("../canopyStore");
     const store = await reload();
     store.getState().setListWidth(CANOPY_LIST_MIN_WIDTH - 100);
     expect(store.getState().listWidth).toBe(CANOPY_LIST_MIN_WIDTH);
+    store.getState().setListWidth(Number.NaN);
+    expect(store.getState().listWidth).toBe(CANOPY_LIST_MIN_WIDTH);
     window.localStorage.setItem(KEY, String(CANOPY_LIST_MAX_WIDTH * 4));
     expect((await reload()).getState().listWidth).toBe(CANOPY_LIST_MAX_WIDTH);
-    window.localStorage.setItem(KEY, "wide");
-    expect((await reload()).getState().listWidth).toBeNull();
+    // Not a width at all, rather than one read off its leading digits.
+    for (const stored of ["wide", "", "600px"]) {
+      window.localStorage.setItem(KEY, stored);
+      expect((await reload()).getState().listWidth).toBeNull();
+    }
   });
 
   it("follows a sibling view's width as soon as that view sets it", async () => {
