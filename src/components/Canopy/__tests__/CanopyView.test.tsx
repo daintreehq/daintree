@@ -103,6 +103,7 @@ import { CANOPY_TITLE } from "../canopyTerms";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { __resetCanopySeenForTests } from "@/lib/canopySeen";
 import { __resetCanopyPlaceForTests } from "../CanopyPlace";
@@ -1640,6 +1641,175 @@ describe("CanopyView", () => {
       await frames();
       expect(selectedRun(container)).toBe(cards(container)[0]!.id.replace(/^canopy-card-/, ""));
       expect(useCanopyStore.getState().resume).toBeNull();
+    });
+  });
+
+  describe("opening on the agent focused in the main view", () => {
+    function focusInMainView(id: string | null, panel: Record<string, unknown> = {}) {
+      usePanelStore.setState({
+        panelsById: (id === null
+          ? {}
+          : {
+              [id]: { id, kind: "terminal", location: "grid", detectedAgentId: "claude", ...panel },
+            }) as never,
+        focusedId: id,
+      });
+    }
+
+    afterEach(() => {
+      usePanelStore.setState({ panelsById: {} as never, focusedId: null });
+    });
+
+    it("selects the focused agent's row, brings it into view and shows its terminal, moving nothing", async () => {
+      installElectron();
+      const { container } = render(<CanopyView />);
+      await frames();
+      const order = cards(container).map((card) => card.id);
+      expect(order.at(-1)).toBe("canopy-card-working");
+      act(() => useCanopyStore.getState().close());
+      focusInMainView("working");
+      const scrolled = vi.mocked(Element.prototype.scrollIntoView);
+      scrolled.mockClear();
+
+      act(() => useCanopyStore.getState().open());
+      await frames();
+      expect(selectedRun(container)).toBe("working");
+      expect(liveRun(container)).toBe("working");
+      expect(document.activeElement).toBe(searchInput());
+      expect(scrolled.mock.contexts).toContain(document.getElementById("canopy-card-working"));
+      expect(cards(container).map((card) => card.id)).toEqual(order);
+    });
+
+    it("lands on it on the panel's first opening too, and stays there as focus moves on", async () => {
+      installElectron();
+      useCanopyStore.setState({ isOpen: false });
+      focusInMainView("asking");
+      act(() => useCanopyStore.getState().toggle());
+      const { container } = render(<CanopyView />);
+      focusInMainView("working");
+      await frames();
+      expect(selectedRun(container)).toBe("asking");
+      expect(liveRun(container)).toBe("asking");
+      act(() => useCanopyStore.setState({ snapshot: { ...canopySnapshot, refreshedAt: NOW + 1 } }));
+      await frames();
+      expect(selectedRun(container)).toBe("asking");
+    });
+
+    it("opens as before on a pane that isn't an agent, or an agent Canopy doesn't list", async () => {
+      installElectron();
+      const { container } = render(<CanopyView />);
+      await frames();
+      const reopen = async () => {
+        act(() => useCanopyStore.getState().close());
+        act(() => useCanopyStore.getState().open());
+        await frames();
+        return selectedRun(container);
+      };
+      focusInMainView("working", { detectedAgentId: undefined });
+      expect(await reopen()).toBe("waiting");
+      focusInMainView("working", { kind: "browser" });
+      expect(await reopen()).toBe("waiting");
+      focusInMainView("elsewhere");
+      expect(await reopen()).toBe("waiting");
+      focusInMainView(null);
+      expect(await reopen()).toBe("waiting");
+    });
+
+    it("leaves the filters as they are when they hide it", async () => {
+      installElectron({
+        ...canopySnapshot,
+        reads: [unreadMark("waiting", 2), unreadMark("asking", 1)],
+      });
+      useCanopyStore.setState({ unreadOnly: true });
+      const { container } = render(<CanopyView />);
+      await frames();
+      act(() => useCanopyStore.getState().close());
+      focusInMainView("working");
+      act(() => useCanopyStore.getState().open());
+      await frames();
+      expect(useCanopyStore.getState().unreadOnly).toBe(true);
+      expect(cards(container).some((card) => card.id === "canopy-card-working")).toBe(false);
+      expect(selectedRun(container)).toBe("waiting");
+    });
+
+    describe("after Go to terminal", () => {
+      beforeEach(() => {
+        (window as { __DAINTREE_INITIAL_PROJECT__?: unknown }).__DAINTREE_INITIAL_PROJECT__ = {
+          id: "p1",
+        };
+        useFleetSnapshotStore.setState({
+          snapshot: {
+            ...useFleetSnapshotStore.getState().snapshot!,
+            runs: [
+              run("waiting", {
+                agentState: "waiting",
+                waitingReason: "approval",
+                since: NOW - 60_000,
+                title: "Port the auth flow",
+              }),
+              run("asking", {
+                agentState: "waiting",
+                waitingReason: "question",
+                since: NOW - 40_000,
+                title: "Port the billing page",
+              }),
+              run("working", { agentState: "working", since: NOW - 30_000, title: "Tidy docs" }),
+            ],
+          },
+        });
+      });
+      afterEach(() => {
+        delete (window as { __DAINTREE_INITIAL_PROJECT__?: unknown }).__DAINTREE_INITIAL_PROJECT__;
+      });
+
+      /** Leaves the panel through Go to terminal on "asking", under the search given. */
+      async function leaveOnAsking(container: HTMLElement, query: string) {
+        if (query !== "") {
+          fireEvent.change(searchInput(), { target: { value: query } });
+          await frames();
+        }
+        const card = cards(container).find((c) => c.id === "canopy-card-asking")!;
+        act(() => card.focus());
+        fireEvent.keyDown(card, { key: "Enter" });
+        await act(async () => {});
+        expect(useCanopyStore.getState().resume).toMatchObject({ runId: "asking", query });
+      }
+
+      it("wins over the run it left the panel on", async () => {
+        installElectron();
+        const { container } = render(<CanopyView />);
+        await frames();
+        await leaveOnAsking(container, "");
+        focusInMainView("working");
+
+        act(() => useCanopyStore.getState().open());
+        await frames();
+        expect(selectedRun(container)).toBe("working");
+        expect(liveRun(container)).toBe("working");
+      });
+
+      it("wins under the search it put back, and gives way when that search hides it", async () => {
+        installElectron();
+        const { container } = render(<CanopyView />);
+        await frames();
+        await leaveOnAsking(container, "port");
+        const resume = useCanopyStore.getState().resume!;
+        focusInMainView("waiting");
+
+        act(() => useCanopyStore.getState().open());
+        await frames();
+        expect(searchInput().value).toBe("port");
+        expect(selectedRun(container)).toBe("waiting");
+
+        act(() => useCanopyStore.getState().close());
+        act(() => useCanopyStore.setState({ resume: { ...resume, at: Date.now() } }));
+        focusInMainView("working");
+        act(() => useCanopyStore.getState().open());
+        await frames();
+        expect(searchInput().value).toBe("port");
+        expect(cards(container).some((card) => card.id === "canopy-card-working")).toBe(false);
+        expect(selectedRun(container)).toBe("asking");
+      });
     });
   });
 

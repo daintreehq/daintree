@@ -72,6 +72,7 @@ vi.mock("@/services/assistantSubject", () => ({
 import { CanopyView } from "../CanopyView";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { __resetCanopySeenForTests } from "@/lib/canopySeen";
 import { __resetCanopyPlaceForTests } from "../CanopyPlace";
@@ -519,6 +520,56 @@ describe("CanopyView role filter", () => {
       document.getElementById("canopy-assistants")!.querySelectorAll("[data-ask]")
     ).toHaveLength(1);
     expect(document.querySelector("[data-testid=canopy-needs-you]")).toBeNull();
+  });
+
+  it("opens on the worker the main view has focused over an asking assistant, unless workers are hidden", async () => {
+    directory.entries = [assistant(0, { waitingReason: "question" })];
+    const runs = [run("working", { agentState: "working", since: NOW - 30_000 })];
+    const assistantPane = () => document.querySelector("[data-testid=canopy-assistant-pane]");
+    const selectedWorker = () =>
+      document.querySelector('[data-canopy-card][aria-selected="true"]')?.id ?? null;
+    const focusWorking = (focused: boolean) =>
+      usePanelStore.setState({
+        panelsById: {
+          working: { id: "working", kind: "terminal", location: "grid", detectedAgentId: "claude" },
+        } as never,
+        focusedId: focused ? "working" : null,
+      });
+    // Mounted only while open, as the app hosts it, with the assistants listed
+    // before the workers arrive: only then does an assistant lead the landing.
+    const openCanopy = async () => {
+      const snapshot = useFleetSnapshotStore.getState().snapshot!;
+      useFleetSnapshotStore.setState({ snapshot: { ...snapshot, runs: [] } });
+      useCanopyStore.setState({ isOpen: false });
+      act(() => useCanopyStore.getState().open());
+      const view = render(<CanopyView />);
+      await settle();
+      act(() => useFleetSnapshotStore.setState({ snapshot: { ...snapshot, runs } }));
+      await settle();
+      return view;
+    };
+    try {
+      focusWorking(false);
+      const plain = await openCanopy();
+      expect(assistantPane()).not.toBeNull();
+      expect(selectedWorker()).toBeNull();
+      plain.unmount();
+
+      focusWorking(true);
+      const focused = await openCanopy();
+      expect(selectedWorker()).toBe("canopy-card-working");
+      expect(assistantPane()).toBeNull();
+      expect(assistantRows()[0]!.getAttribute("aria-selected")).not.toBe("true");
+      focused.unmount();
+
+      // Workers hidden by the filter: the focused one is nowhere to land.
+      useCanopyStore.setState({ roleFilter: "assistants" });
+      await openCanopy();
+      expect(useCanopyStore.getState().roleFilter).toBe("assistants");
+      expect(assistantPane()).not.toBeNull();
+    } finally {
+      usePanelStore.setState({ panelsById: {} as never, focusedId: null });
+    }
   });
 
   it("never hands an assistant to the reader: not shown, searched or seen as a worker", async () => {

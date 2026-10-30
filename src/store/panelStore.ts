@@ -40,6 +40,7 @@ import { peek as peekTerminalService } from "@/services/terminal/terminalInstanc
 import { useWorktreeSelectionStore } from "./worktreeStore";
 import { isAssistantFocused } from "./macroFocusStore";
 import { isMcpSpawnFocusSuppressed } from "./mcpSpawnFocusGuard";
+import { resolvePanelGroupInfo } from "./panelFocusFallback";
 import { exitProjectHome } from "./storeAccessors";
 import type { CrashType } from "@shared/types/pty-host";
 import type { TabGroup } from "@shared/types/panel";
@@ -359,19 +360,8 @@ export const usePanelStore = create<PanelGridState>()(
 
     const getActiveWorktreeId = () => useWorktreeSelectionStore.getState().activeWorktreeId;
     // Which tab of a panel's group is on screen — the focus fallback needs it to
-    // avoid handing the keyboard to a background tab (#11133). The stored id is
-    // resolved the same way GridTabGroup resolves it for rendering: a stale one
-    // (member removed or moved) yields to the first member, so the fallback and
-    // the renderer never disagree about which tab is visible.
-    const getPanelGroupInfo = (panelId: string) => {
-      const state = get();
-      const group = state.getPanelGroup(panelId);
-      if (!group) return undefined;
-      const stored = state.tabGroups.get(group.id)?.activeTabId ?? null;
-      const activeTabId =
-        stored && group.panelIds.includes(stored) ? stored : (group.panelIds[0] ?? null);
-      return { groupId: group.id, activeTabId };
-    };
+    // avoid handing the keyboard to a background tab (#11133).
+    const getPanelGroupInfo = (panelId: string) => resolvePanelGroupInfo(get(), panelId);
     const focusSlice = createTerminalFocusSlice(
       getTerminals,
       getActiveWorktreeId,

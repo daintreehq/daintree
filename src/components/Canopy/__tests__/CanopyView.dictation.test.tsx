@@ -82,6 +82,7 @@ vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 import { CanopyView } from "../CanopyView";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
@@ -344,6 +345,29 @@ describe("CanopyView — a reply's dictation outlives its screen (#14778)", () =
     );
     await vi.waitFor(() => expect(dictationFocus).toHaveBeenCalledWith("asking"));
     expect(useCanopyStore.getState().replyReveal).toBeNull();
+  });
+
+  it("goes back to the reply's row over the agent the main view has focused", async () => {
+    render(<CanopyView />);
+    await frames();
+    await select("asking");
+    const target = await replyTarget("asking");
+    startDictation(target);
+    act(() => useCanopyStore.getState().close());
+    await settle();
+    usePanelStore.setState({
+      panelsById: {
+        working: { id: "working", kind: "terminal", location: "grid", detectedAgentId: "claude" },
+      } as never,
+      focusedId: "working",
+    });
+    try {
+      await goBackTo(target);
+      expect(selectedRun()).toBe("asking");
+      await vi.waitFor(() => expect(dictationFocus).toHaveBeenCalledWith("asking"));
+    } finally {
+      usePanelStore.setState({ panelsById: {} as never, focusedId: null });
+    }
   });
 
   it("hands the keyboard back to the row the panel opens on by itself", async () => {
