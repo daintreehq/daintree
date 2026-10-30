@@ -203,7 +203,7 @@ function DemoInbox({ paused }: { paused: boolean }) {
 
   return (
     <div
-      className="flex min-h-0 w-[28rem] shrink-0 flex-col self-stretch overflow-hidden border-r border-border-default select-none"
+      className="flex min-h-0 w-[var(--canopy-list-width)] shrink-0 flex-col self-stretch overflow-hidden border-r border-border-default select-none"
       onPointerEnter={() => setHovered(true)}
       onPointerLeave={() => setHovered(false)}
     >

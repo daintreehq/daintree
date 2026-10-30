@@ -788,7 +788,12 @@ async function shoot(page: Page, name: string): Promise<void> {
   const box = await dialog.boundingBox();
   if (!box) throw new Error(`${name}: the Canopy panel has no box`);
   const file = path.join(OUT, `${name}.png`);
-  const viewport = page.viewportSize() ?? { width: 1680, height: 1050 };
+  // The window is resized during the run and Electron pages report no viewport,
+  // so the clip is bounded by the window as it is now.
+  const viewport = await page.evaluate(() => ({
+    width: window.innerWidth,
+    height: window.innerHeight,
+  }));
   const pad = 24;
   const x = Math.max(0, box.x - pad);
   const y = Math.max(0, box.y - pad);
@@ -1003,6 +1008,31 @@ test("canopy review — the inbox with a fleet", async () => {
     await page.mouse.move(2, 2);
     await shoot(page, "11-narrow");
     await closeCanopy(page);
+
+    // 12..14 — larger windows, up to the whole of a big display, with a live
+    // terminal selected so the pane's fill shows.
+    const large: { name: string; size: [number, number] | "maximized" }[] = [
+      { name: "12-desktop-1920", size: [1920, 1080] },
+      { name: "13-desktop-2560", size: [2560, 1440] },
+      { name: "14-maximized", size: "maximized" },
+    ];
+    for (const { name, size } of large) {
+      await app.evaluate(({ BrowserWindow }, want) => {
+        const win = BrowserWindow.getAllWindows()[0];
+        if (!win) return;
+        if (want === "maximized") win.maximize();
+        else win.setSize(want[0], want[1]);
+      }, size);
+      await settle(page, 800);
+      await openCanopy(page);
+      await inject();
+      await selectRow(page, real.question);
+      await page.mouse.move(2, 2);
+      await shoot(page, name);
+      await closeCanopy(page);
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.unmaximize());
+    }
+
     await app.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0]?.setSize(1680, 1050);
     });
@@ -1038,9 +1068,9 @@ test("canopy review — the inbox with a fleet", async () => {
 
     const written = readdirSync(OUT).filter((f) => f.endsWith(".png")).length;
     const themed = readdirSync(themeDir).filter((f) => f.endsWith(".png")).length;
-    if (written < 11 || themed < THEMES.length) {
+    if (written < 14 || themed < THEMES.length) {
       throw new Error(
-        `expected 11 states and ${THEMES.length} themes, got ${written} and ${themed}`
+        `expected 14 states and ${THEMES.length} themes, got ${written} and ${themed}`
       );
     }
   } finally {

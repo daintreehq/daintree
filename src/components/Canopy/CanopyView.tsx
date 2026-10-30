@@ -1691,7 +1691,7 @@ function CanopyInbox({
           // folded away beneath it, and the selected agent's own terminal beside
           // it, drawn as its pane.
           <div className="flex min-h-0 flex-1">
-            <div className="canopy-inbox-column flex min-h-0 w-[28rem] shrink-0 flex-col self-stretch border-r border-border-default">
+            <div className="canopy-inbox-column flex min-h-0 w-[var(--canopy-list-width)] shrink-0 flex-col self-stretch border-r border-border-default">
               <div className="shrink-0 px-3 pt-3 pb-1">
                 <SearchField
                   size="compact"
@@ -2142,6 +2142,7 @@ function CanopyInbox({
                       terminalApi={terminalApi}
                       workLabel={workLabelOf(focusedItem)}
                       moveOnTo={moveOnTo}
+                      reading={!readerOff}
                       reconnecting={
                         everyHost
                           ? focusedLinkStatus !== undefined && focusedLinkStatus !== "connected"
