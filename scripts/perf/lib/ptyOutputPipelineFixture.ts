@@ -382,6 +382,7 @@ export function createPipelineHarness(terminalId = TERMINAL_ID): PipelineHarness
     getRecentOutput: (): string => forensicsBuffer.getRecentOutput(),
     getLastCommand: (): string | undefined => semanticBufferManager.getLastCommand(),
     getPtyDescendantCount: (): number | undefined => 0,
+    hasAgentProcess: (): boolean | undefined => undefined,
     readForegroundProcessGroupSnapshot: (): null => null,
     handleAgentDetection: (): void => {},
   });

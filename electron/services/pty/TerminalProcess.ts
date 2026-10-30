@@ -49,6 +49,7 @@ import {
   SURVIVOR_CHECK_DELAY_MS,
 } from "./terminalKillAudit.js";
 import { IdentityWatcher, type IdentityWatcherDelegate } from "./IdentityWatcher.js";
+import { hasAgentProcess } from "./agentProcessTree.js";
 import type { SpawnContext } from "./terminalSpawn.js";
 import { getLiveAgentId } from "./terminalTitle.js";
 import { serializeTerminal, serializeForPersistence } from "./terminalSerialization.js";
@@ -1505,6 +1506,7 @@ export class TerminalProcess {
       getRecentOutput: () => tp.forensicsBuffer.getRecentOutput(),
       getLastCommand: () => tp.semanticBufferManager.getLastCommand(),
       getPtyDescendantCount: () => tp.getPtyDescendantCount(),
+      hasAgentProcess: (agentId) => tp.hasAgentProcess(agentId),
       readForegroundProcessGroupSnapshot: () => tp.readForegroundProcessGroupSnapshot(),
       handleAgentDetection: (result, cbSpawnedAt) => tp.handleAgentDetection(result, cbSpawnedAt),
     };
@@ -1516,6 +1518,14 @@ export class TerminalProcess {
       return undefined;
     }
     return this.deps.processTreeCache.getDescendantPids(ptyPid).length;
+  }
+
+  private hasAgentProcess(agentId: string): boolean | undefined {
+    const ptyPid = this.terminalInfo.ptyProcess.pid;
+    if (!Number.isInteger(ptyPid) || ptyPid <= 0 || !this.deps.processTreeCache) {
+      return undefined;
+    }
+    return hasAgentProcess(this.deps.processTreeCache, ptyPid, agentId);
   }
 
   // Thin wrapper around ForegroundProcessGroupProbe.readSnapshot(). Kept as

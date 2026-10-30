@@ -112,3 +112,29 @@ export function classifyAgentTree(
   }
   return "runtime-and-servers";
 }
+
+/**
+ * Whether the agent's own process is still somewhere under the PTY root, or
+ * `undefined` when the census holds no row for the root itself and so says
+ * nothing about this terminal (an empty or not-yet-run sweep). Any depth: the
+ * agent sits right under PowerShell, but one level down behind the `cmd.exe`
+ * an npm `.cmd` shim runs in.
+ */
+export function hasAgentProcess(
+  census: AgentTreeCensus,
+  rootPid: number,
+  agentId: string
+): boolean | undefined {
+  if (!census.getProcess(rootPid)) return undefined;
+  const pending = [...census.getChildPids(rootPid)];
+  const seen = new Set<number>([rootPid]);
+  while (pending.length > 0) {
+    const pid = pending.pop()!;
+    if (seen.has(pid)) continue;
+    seen.add(pid);
+    const proc = census.getProcess(pid);
+    if (proc?.comm && runsAgent(proc, agentId)) return true;
+    pending.push(...census.getChildPids(pid));
+  }
+  return false;
+}

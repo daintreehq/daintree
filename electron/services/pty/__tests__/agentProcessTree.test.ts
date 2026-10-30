@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { classifyAgentTree, isPlainShellName, type AgentTreeCensus } from "../agentProcessTree.js";
+import {
+  classifyAgentTree,
+  hasAgentProcess,
+  isPlainShellName,
+  type AgentTreeCensus,
+} from "../agentProcessTree.js";
 
 interface Proc {
   pid: number;
@@ -174,5 +179,62 @@ describe("classifyAgentTree (#13854)", () => {
     ],
   ])("reads %s as unknown", (_case, procs, agentId) => {
     expect(classify(procs, agentId)).toBe("unknown");
+  });
+});
+
+describe("hasAgentProcess", () => {
+  // Windows census rows: `comm` is the image name without `.exe`.
+  const PWSH: Proc = { pid: 20, ppid: 1, comm: "pwsh", command: "pwsh.exe -NoLogo" };
+  const CLAUDE_EXE: Proc = {
+    pid: 21,
+    ppid: 20,
+    comm: "claude",
+    command:
+      '"C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe" --session-id abc',
+  };
+  const TOOL_SHELL: Proc = {
+    pid: 22,
+    ppid: 21,
+    comm: "bash",
+    command: "bash -c ping -n 20 127.0.0.1",
+  };
+
+  it("finds the agent running alone under the shell", () => {
+    expect(hasAgentProcess(census([PWSH, CLAUDE_EXE]), PWSH.pid, "claude")).toBe(true);
+  });
+
+  it("finds the agent while a tool call runs under it", () => {
+    expect(hasAgentProcess(census([PWSH, CLAUDE_EXE, TOOL_SHELL]), PWSH.pid, "claude")).toBe(true);
+  });
+
+  it("finds the agent behind a cmd.exe shim", () => {
+    const cmd: Proc = { pid: 23, ppid: 20, comm: "cmd", command: 'cmd.exe /c "claude.cmd"' };
+    const exe: Proc = { ...CLAUDE_EXE, pid: 24, ppid: 23 };
+    expect(hasAgentProcess(census([PWSH, cmd, exe]), PWSH.pid, "claude")).toBe(true);
+  });
+
+  it("reports the agent gone once only the shell is left", () => {
+    expect(hasAgentProcess(census([PWSH]), PWSH.pid, "claude")).toBe(false);
+  });
+
+  it("does not take a different agent for this one", () => {
+    const codex: Proc = { pid: 25, ppid: 20, comm: "codex", command: "codex.exe" };
+    expect(hasAgentProcess(census([PWSH, codex]), PWSH.pid, "claude")).toBe(false);
+  });
+
+  it("does not take a shell whose command line launches the agent for the agent", () => {
+    // The parser reads this wrapper as Claude; only the shell rule keeps it out.
+    const wrapper: Proc = { pid: 26, ppid: 20, comm: "pwsh", command: "pwsh.exe -Command claude" };
+    expect(hasAgentProcess(census([PWSH, wrapper]), PWSH.pid, "claude")).toBe(false);
+  });
+
+  it("finds a different agent by its own id", () => {
+    const codex: Proc = { pid: 27, ppid: 20, comm: "codex", command: "codex.exe" };
+    expect(hasAgentProcess(census([PWSH, codex]), PWSH.pid, "codex")).toBe(true);
+  });
+
+  it("cannot say when the census has no row for the terminal's root", () => {
+    expect(hasAgentProcess(census([CLAUDE_EXE]), PWSH.pid, "claude")).toBeUndefined();
+    expect(hasAgentProcess(census([]), PWSH.pid, "claude")).toBeUndefined();
   });
 });
