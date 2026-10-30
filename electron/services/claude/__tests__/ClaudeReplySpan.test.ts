@@ -143,6 +143,10 @@ describe("findReplySpan", () => {
     );
   });
 
+  it("reads the message marker on a code line as two columns of its indent", () => {
+    expect(findReplySpan("⏺ a\n  b", ["```text\na\nb\n```"])).toBe("a\nb");
+  });
+
   it("matches a tab in code however many spaces the TUI drew it as", () => {
     expect(findReplySpan("  a     *\n  b", ["```text\na\t*\nb\n```"])).toBe("a\t*\nb");
   });
@@ -257,6 +261,22 @@ describe("findReplySpan", () => {
     it("on a code line skipped going into or out of a block", () => {
       expect(findReplySpan("Intro\n  after", ["Intro\n```text\n-\nafter\n```"])).toBeNull();
       expect(findReplySpan("  before\n  Outro", ["```text\nbefore\n-\n```\nOutro"])).toBeNull();
+    });
+
+    it("on spacing in code that only a tab elsewhere on the row could excuse", () => {
+      expect(findReplySpan("  a     *   *\n  b", ["```text\na\t* *\nb\n```"])).toBeNull();
+    });
+
+    it("on a whole code block the selection skipped between two lines of prose", () => {
+      expect(findReplySpan("Intro\n  Outro", ["Intro\n```text\n-\n```\nOutro"])).toBeNull();
+    });
+
+    it("on box drawing selected at the end of a code row", () => {
+      expect(findReplySpan("  before│", ["```text\nbefore│\n```"])).toBeNull();
+    });
+
+    it("on a drawn mark that sits the other side of a space in the reply", () => {
+      expect(findReplySpan("Use a *b now.", ["Use a* b now."])).toBeNull();
     });
 
     it("on code wrapped at the margin with its whitespace moved", () => {

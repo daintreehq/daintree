@@ -82,9 +82,23 @@ interface Gap {
   /** A list marker or quote marks open the line it ends on. */
   marker: boolean;
   quote: boolean;
+  /** Its whitespace (one space a run) and the marks the TUI draws, in order. */
+  layout: string;
 }
 
-const NO_GAP: Gap = { newlines: 0, space: "", marks: "", shown: "", marker: false, quote: false };
+const NO_GAP: Gap = {
+  newlines: 0,
+  space: "",
+  marks: "",
+  shown: "",
+  marker: false,
+  quote: false,
+  layout: "",
+};
+
+function spaced(layout: string): string {
+  return layout.endsWith(" ") ? layout : `${layout} `;
+}
 
 interface Skeleton {
   source: string;
@@ -353,6 +367,7 @@ function skeletonOf(text: string, reply: boolean): Skeleton {
       const next = pending();
       next.newlines++;
       next.space = "";
+      next.layout = spaced(next.layout);
       next.marker = false;
       next.quote = false;
     }
@@ -363,6 +378,7 @@ function skeletonOf(text: string, reply: boolean): Skeleton {
         const next = pending();
         next.marks += text[i];
         next.shown += String(shown[i] ?? 0);
+        if (!reply || shown[i] === 1) next.layout += text[i];
       }
       return;
     }
@@ -370,11 +386,14 @@ function skeletonOf(text: string, reply: boolean): Skeleton {
     for (let i = line.contentStart; i < line.end;) {
       const ch = charAt(text, i);
       if (isWhitespace(ch)) {
-        pending().space += ch;
+        const next = pending();
+        next.space += ch;
+        next.layout = spaced(next.layout);
       } else if (isDropped(ch)) {
         const next = pending();
         next.marks += ch;
         next.shown += String(shown[i] ?? 0);
+        if (!reply || shown[i] === 1) next.layout += ch;
       } else {
         chars += ch;
         for (let unit = 0; unit < ch.length; unit++) {
@@ -417,7 +436,16 @@ function gapsAgree(reply: Gap | null, selected: Gap | null): boolean {
   for (; j < s.marks.length; j++) {
     if (!isChrome(s.marks[j]!)) return false;
   }
-  return true;
+  // And in the same order around the whitespace, leaving out what the TUI may
+  // redraw and its own chrome. A wrap the reply hasn't got moves only space.
+  const redrawn = new Set([...r.marks].filter((_, i) => r.shown[i] === "2"));
+  const layout = [...s.layout]
+    .filter((ch) => !redrawn.has(ch) && !(isChrome(ch) && !r.layout.includes(ch)))
+    .join("")
+    .replace(/ {2,}/g, " ");
+  return s.newlines > r.newlines
+    ? layout.replace(/ /g, "") === r.layout.replace(/ /g, "")
+    : layout === r.layout;
 }
 
 /**
@@ -446,11 +474,18 @@ function shiftedAlike(
   return shift.value === delta;
 }
 
-/** The same text, a tab drawn as however many spaces it took. */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** The same text, a run holding a tab drawn as however many spaces it took. */
 function sameRun(reply: string, selected: string): boolean {
-  return reply.includes("\t")
-    ? reply.replace(/\s+/gu, " ") === selected.replace(/\s+/gu, " ")
-    : reply === selected;
+  if (!reply.includes("\t")) return reply === selected;
+  const pattern = reply
+    .split(/([ \t]*\t[ \t]*)/u)
+    .map((part, i) => (i % 2 ? " +" : escapeRegExp(part)))
+    .join("");
+  return new RegExp(`^${pattern}$`, "u").test(selected);
 }
 
 /**
@@ -463,8 +498,7 @@ function wrappedAlike(reply: string, selected: string): boolean {
     const trimmed = i === 0 ? piece : piece.trimStart();
     return i === all.length - 1 ? trimmed : trimmed.trimEnd();
   });
-  const escape = (piece: string) => piece.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^${pieces.map(escape).join("\\s*")}$`, "u").test(reply);
+  return new RegExp(`^${pieces.map(escapeRegExp).join("\\s*")}$`, "u").test(reply);
 }
 
 /**
@@ -539,6 +573,8 @@ interface SelectionEdges {
   /** It took chrome on rows before its first kept character, or after its last. */
   linesBefore: boolean;
   linesAfter: boolean;
+  /** It took chrome after its last kept character on that character's row. */
+  chromeAfter: boolean;
 }
 
 function selectedMarks(text: string): string {
@@ -581,6 +617,7 @@ function selectionEdges(selection: string): SelectionEdges | null {
     trail: selectedMarks(selection.slice(lastEnd, last.end)),
     linesBefore,
     linesAfter,
+    chromeAfter: [...selection.slice(lastEnd, last.end)].some(isChrome),
   };
 }
 
@@ -733,6 +770,11 @@ function gapsMatch(
     const previous = lines[from]!;
     while (line + 1 < lines.length && lines[line + 1]!.start <= after) line++;
     const next = lines[line]!;
+    // Code the gap crosses whole is code the selection would have drawn.
+    for (let m = from + 1; m < line; m++) {
+      const block = lines[m]!.block;
+      if (block !== null && block !== previous.block && block !== next.block) return false;
+    }
     if (previous.block !== null || next.block !== null) {
       const within = previous.block !== null && previous.block === next.block;
       const closing = previous.block === null ? null : blocks[previous.block]!.close;
@@ -771,14 +813,15 @@ function spanText(
   // selected beside the span have nothing to answer for them.
   if (
     (edges.linesBefore && startLine.block !== null) ||
-    (edges.linesAfter && endLine.block !== null)
+    ((edges.linesAfter || edges.chromeAfter) && endLine.block !== null)
   ) {
     return null;
   }
   const shift = { value: null as number | null };
   // Code the selection picks up from the start of its row sets the indent
   // shift, and code taken with its line's prefix must match all of its head.
-  const head = edges.source.slice(edges.firstLineStart, edges.at[0]!);
+  // The message marker stands in the first columns of the indent.
+  const head = edges.source.slice(edges.firstLineStart, edges.at[0]!).replace(/^[⏺⎿] /u, "  ");
   const codeHead = source.slice(startLine.start, from);
   if (startLine.block !== null && floor <= startLine.start) {
     if (
