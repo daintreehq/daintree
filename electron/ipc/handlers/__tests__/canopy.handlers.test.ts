@@ -1885,6 +1885,56 @@ describe("canopy IPC", () => {
     });
   });
 
+  describe("a reply that outlived its card (#15510)", () => {
+    const reply = (text: string, imagePaths?: string[], sender: unknown = fakeSender(4)) =>
+      outcome(
+        invoke(
+          CANOPY_METHOD_CHANNELS.submitReply,
+          sender,
+          "run-1",
+          { spawnedAt: 100 },
+          text,
+          ...(imagePaths ? [imagePaths] : [])
+        )
+      );
+
+    it("submits to the run with no stream open for it, while the view watches another", async () => {
+      state.runs = [...state.runs, { runId: "run-2", spawnedAt: 100, workspaceId: "project-1" }];
+      const sender = fakeSender(4);
+      await invoke(CANOPY_METHOD_CHANNELS.watchTerminal, sender, "run-2", { spawnedAt: 100 });
+
+      expect((await reply("navy", undefined, sender)).ok).toBe(true);
+      expect(ptyClient.submit).toHaveBeenCalledWith("run-1", "navy");
+    });
+
+    it("hands its image chips over with the text", async () => {
+      expect((await reply("look", ["/tmp/shot.png"])).ok).toBe(true);
+      expect(ptyClient.submit).toHaveBeenCalledWith(
+        "run-1",
+        "look",
+        undefined,
+        undefined,
+        undefined,
+        ["/tmp/shot.png"]
+      );
+    });
+
+    it("never reaches a terminal respawned under the run's id, or one that exited", async () => {
+      state.record = { spawnedAt: 200 };
+      expect((await reply("navy")).ok).toBe(false);
+      state.record = { spawnedAt: 100, isExited: true };
+      expect((await reply("navy")).ok).toBe(false);
+      expect(state.submits).toEqual([]);
+    });
+
+    it("refuses a screen that doesn't drive the run, and attachments that aren't images", async () => {
+      expect((await reply("navy", ["/etc/passwd"])).ok).toBe(false);
+      lease.holder = "other";
+      expect((await reply("navy")).ok).toBe(false);
+      expect(state.submits).toEqual([]);
+    });
+  });
+
   describe("a Daintree Assistant a person chose (#14162)", () => {
     const subject = {
       hostId: "local",

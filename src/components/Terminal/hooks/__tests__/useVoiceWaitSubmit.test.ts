@@ -789,6 +789,62 @@ describe("useVoiceWaitSubmit", () => {
     expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
   });
 
+  it("sends each of several replies whose composers left mid-wait to its own draft, once (#15510)", async () => {
+    const pending = new Set<string>();
+    const land = new Map<string, (landed: boolean) => void>();
+    hasPendingMock.mockImplementation((panelId: string) => pending.has(panelId));
+    waitMock.mockImplementation(
+      (panelId: string) =>
+        new Promise<boolean>((resolve) => {
+          land.set(panelId, (landed) => {
+            pending.delete(panelId);
+            resolve(landed);
+          });
+        })
+    );
+    const replies = ["run-1", "run-2", "run-3"].map((runId) => ({
+      runId,
+      voiceId: `canopy-reply:${runId}`,
+      send: vi.fn<() => void>(),
+    }));
+
+    for (const reply of replies) {
+      // Its composer's own scope, as an isolated reply keeps it.
+      useTerminalInputStore
+        .getState()
+        .setDraftInput(reply.runId, `reply to ${reply.runId}`, "canopy-reply");
+      pending.add(reply.voiceId);
+      const { result, unmount } = renderHook(() =>
+        useVoiceWaitSubmit({
+          terminalId: reply.runId,
+          projectId: "canopy-reply",
+          voice: { panelId: reply.voiceId, projectId: undefined },
+          editorViewRef: { current: null },
+          editableCompartmentRef: { current: new Compartment() },
+          sendFromEditor: reply.send,
+        })
+      );
+      await act(async () => {
+        result.current.startVoiceWaitSubmit();
+      });
+      unmount();
+    }
+
+    for (const voiceId of ["canopy-reply:run-3", "canopy-reply:run-1", "canopy-reply:run-2"]) {
+      await act(async () => {
+        land.get(voiceId)!(true);
+      });
+    }
+
+    for (const reply of replies) {
+      expect(reply.send).toHaveBeenCalledTimes(1);
+      expect((reply.send.mock.calls[0] as unknown[])[1]).toMatchObject({
+        text: `reply to ${reply.runId}`,
+      });
+      expect(useTerminalInputStore.getState().isVoiceSubmitting(reply.voiceId)).toBe(false);
+    }
+  });
+
   it("keeps a send Escape called off unsent after the composer unmounts", async () => {
     let finishCorrection!: (landed: boolean) => void;
     hasPendingMock.mockReturnValue(true);
