@@ -91,16 +91,17 @@ function decay(sums: PaceSums): void {
 /**
  * The fitted line at `chars`, drawn through the weighted mean of what was
  * seen, so a run of equal lengths still lands where they did, on the prior's
- * slope.
+ * slope. No slope so steep that a shorter passage would take no time at all.
  */
 function fitAt(s: PaceSums, prior: Line, chars: number): number {
   const meanX = s.x / s.w;
   const meanY = s.y / s.w;
   const variance = s.xx / s.w - meanX * meanX;
-  const slope =
+  const fitted =
     variance >= MIN_LENGTH_VARIANCE
-      ? Math.min(MAX_MS_PER_CHAR, Math.max(0, (s.xy / s.w - meanX * meanY) / variance))
+      ? Math.max(0, (s.xy / s.w - meanX * meanY) / variance)
       : prior.msPerChar;
+  const slope = Math.min(MAX_MS_PER_CHAR, fitted, meanX > 0 ? meanY / meanX : fitted);
   return Math.max(0, meanY + slope * (Math.max(0, chars) - meanX));
 }
 

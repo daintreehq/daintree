@@ -87,9 +87,14 @@ describe("voiceCorrectionPace", () => {
     expect(at("gpt-6.1-terra", "low")).toBeLessThan(terraBefore);
   });
 
-  it("lands a long run of equal lengths where they took, at that length", () => {
+  it("lands a long run of equal lengths where they took, and still gives a shorter one time", () => {
     teach(() => haiku(1_000, 500), 151, [600]);
-    expect(pace.estimateCorrectionMs("claude-haiku-5-5", "medium", 600)).toBeCloseTo(1_500, 0);
+    const at = (chars: number) => pace.estimateCorrectionMs("claude-haiku-5-5", "medium", chars);
+    expect(at(600)).toBeCloseTo(1_500, 0);
+    // Neither part starts below nothing: a shorter passage takes at least its share by length.
+    expect(at(100)).toBeGreaterThanOrEqual((at(600) * 100) / 600);
+    expect(at(100)).toBeLessThan(at(600));
+    expect(at(1_200)).toBeGreaterThan(at(600));
   });
 
   it("starts a cleanup without reasoning with no thinking time", () => {
@@ -143,10 +148,15 @@ describe("voiceCorrectionPace", () => {
     const key = "daintree-voice-cleanup-pace:claude-haiku-5-5:medium";
     storage.setItem(key, "{not json");
     expect(pace.estimateCorrectionMs("claude-haiku-5-5", "medium", 200)).toBe(prior);
-    // Finite sums no cleanup could have left behind.
+    // Finite sums no cleanup could have left behind: too light to be a fit,
+    // or so large that the two parts overflow when added.
     const vanishing = { w: 1e-320, x: 0, y: 1, xx: 0, xy: 0 };
-    storage.setItem(key, JSON.stringify({ firstText: vanishing, output: vanishing }));
-    expect(pace.estimateCorrectionMs("claude-haiku-5-5", "medium", 200)).toBe(prior);
+    const light = { w: 0.1, x: 0, y: 100, xx: 0, xy: 0 };
+    const huge = { w: 1, x: 0, y: 1e308, xx: 0, xy: 0 };
+    for (const sums of [vanishing, light, huge]) {
+      storage.setItem(key, JSON.stringify({ firstText: sums, output: sums }));
+      expect(pace.estimateCorrectionMs("claude-haiku-5-5", "medium", 200)).toBe(prior);
+    }
 
     const blocked = () => {
       throw new Error("blocked");

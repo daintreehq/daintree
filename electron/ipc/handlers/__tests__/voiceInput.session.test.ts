@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from "vitest";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -1373,7 +1373,8 @@ describe("voiceInput — session identity", () => {
 
     it("keeps a taken prefetch's own pace, and leaves a failed one's wait out of the stop's", async () => {
       let clock = 1_000;
-      vi.spyOn(performance, "now").mockImplementation(() => clock);
+      const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
+      onTestFinished(() => now.mockRestore());
       await start(ownerA, "a");
       await prefetch(ownerA, "a", "run the tests");
       const prefetched = await requestFor("run the tests");
