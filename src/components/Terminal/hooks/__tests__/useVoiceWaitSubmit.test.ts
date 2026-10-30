@@ -1285,6 +1285,27 @@ describe("useVoiceWaitSubmit keys during the wait (#14780)", () => {
     expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(true);
   });
 
+  it("keeps the first departed composer's send when the one that took the wait over leaves too", async () => {
+    const sendFirst = vi.fn<() => void>();
+    const first = renderWaitSubmit(PANEL_ID, sendFirst);
+    await act(async () => {
+      first.result.current.startVoiceWaitSubmit();
+    });
+    first.unmount();
+    // A composer for a later incarnation of the same run takes the wait over, and leaves.
+    const sendLater = vi.fn<() => void>();
+    renderWaitSubmit(PANEL_ID, sendLater).unmount();
+
+    const third = renderWaitSubmit(PANEL_ID, vi.fn<() => void>());
+    await act(async () => {
+      pressKey("Enter");
+    });
+
+    expect(sendLater).not.toHaveBeenCalled();
+    expect(sendFirst).toHaveBeenCalledTimes(1);
+    expect(third.result.current.voiceSubmitOutcome?.kind).toBe("sent");
+  });
+
   it("hands a wait to the composer that mounts for its draft, whose Escape calls it off", async () => {
     const first = renderWaitSubmit();
     await act(async () => {

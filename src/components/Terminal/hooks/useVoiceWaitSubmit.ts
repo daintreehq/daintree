@@ -418,9 +418,11 @@ export function useVoiceWaitSubmit({
       live.seat = null;
       setVoiceSubmitWait(null);
       if (unmountedRef.current) {
-        // Its hand-back is this composer's, which is gone.
+        // Its hand-back is this composer's, which is gone. Its send stays the
+        // first composer's to leave: one that took the wait over since may
+        // be for a later incarnation of the same run.
         live.handBack = STAY_PUT;
-        live.departed = sendFromEditorRef.current;
+        live.departed ??= sendFromEditorRef.current;
         unseatedWaits.set(voiceId, live);
         return;
       }

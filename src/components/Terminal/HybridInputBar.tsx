@@ -1386,12 +1386,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         text,
         () => {
           if (!isDraftUnchanged()) return;
-          if (keepDraft) {
-            keepDraft();
-            return;
+          if (keepDraft) keepDraft();
+          else {
+            clearDraftInput(terminalId, projectId);
+            resetEditorDoc();
           }
-          clearDraftInput(terminalId, projectId);
-          resetEditorDoc();
+          // Delivered after the departed send settled: a composer showing the
+          // draft since takes the store's word for what is left.
+          if (departed) useTerminalInputStore.getState().bumpExternalDraftRevision();
         },
         () => {
           refused = true;

@@ -608,3 +608,49 @@ describe("HybridInputBar dictated send whose composer unmounts mid-wait (#15510)
     expect(onSend).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("HybridInputBar dictated send whose composer went disabled before it unmounted (#15510)", () => {
+  it("still sends through its submit, which checks the destination itself", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const submitText = vi.fn(async (_text: string, _imagePaths: readonly string[]) => true);
+    const bar = (disabled: boolean) => (
+      <TooltipProvider>
+        <WorktreeStoreContext.Provider value={createWorktreeStore()}>
+          <HybridInputBar
+            terminalId={PANEL_ID}
+            cwd={WT_ID}
+            agentId="claude"
+            disabled={disabled}
+            onSend={vi.fn()}
+            submitText={submitText}
+          />
+        </WorktreeStoreContext.Provider>
+      </TooltipProvider>
+    );
+    act(() => {
+      dictate("hello wrld");
+    });
+    const result = render(bar(false));
+    await act(async () => {});
+    const view = EditorView.findFromDOM(
+      result.container.querySelector<HTMLElement>(".cm-editor")!
+    )!;
+    await act(async () => {
+      runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+    });
+    // A Canopy reply's stream dropping mid-wait disables its composer.
+    result.rerender(bar(true));
+    await act(async () => {});
+    act(() => {
+      result.unmount();
+    });
+
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+
+    expect(submitText.mock.calls.map(([text]) => text)).toEqual(["Hello world."]);
+    expect(draft()).toBe("");
+  });
+});
