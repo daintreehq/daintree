@@ -254,6 +254,7 @@ export const SETTING_CATALOG = {
       "daintree-notification-history": device,
       "daintree-voice-recording": device,
       "daintree-voice-correction-pace": device,
+      "daintree-voice-cleanup-pace:*": device,
       "daintree-forge-token-callout": device,
       "daintree-plugin-terminal-links": device,
       "help-panel-storage": device,
