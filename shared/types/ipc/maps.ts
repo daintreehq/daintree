@@ -1319,6 +1319,8 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
         terminalId?: string;
         /** Nothing but whitespace comes before the passage in the draft. */
         startsPrompt?: boolean;
+        /** The command or skill the whole draft opens with, as typed: cleanup is told what it takes as arguments. */
+        openingCommandToken?: string;
         /** The dictation the passage came from: its context was read while it ran. */
         sessionId?: string;
         /** Spans of `rawText` the recogniser was unsure of. */

@@ -2319,6 +2319,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       terminalId?: string;
       /** Nothing but whitespace comes before the passage in the draft. */
       startsPrompt?: boolean;
+      /** The command or skill the whole draft opens with, as typed: cleanup is told what it takes as arguments. */
+      openingCommandToken?: string;
       /** The dictation the passage came from: its context was read while it ran. */
       sessionId?: string;
       /** Dictated into a terminal outside the asking view: cleaned up without its project's vocabulary. */

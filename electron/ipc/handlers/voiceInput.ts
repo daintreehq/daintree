@@ -118,6 +118,7 @@ import {
   resolveVoiceCommandTarget,
   type VoiceCommandTarget,
 } from "../../services/voiceCommandTarget.js";
+import { readVoiceOpeningCommand } from "../../services/voiceOpeningCommand.js";
 import {
   planSpokenCommand,
   voiceCommandKeyterms,
@@ -2838,6 +2839,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         outsideView
       ));
     }
+    // Only a command the target lists now, so the renderer names a token, never a file.
+    const openingCommandRead = readVoiceOpeningCommand(
+      commandTarget?.vocabulary.entries ?? [],
+      request.openingCommandToken
+    );
     const context = sessionContext ? await sessionContext : NO_SESSION_CONTEXT;
     const { terminalOutput, agentReply } = terminalContext;
     const recentPrompts = ownRecentPrompts(ctx.projectId, request);
@@ -2852,6 +2858,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             request.rawText
           )
         : [];
+    const openingCommand = await openingCommandRead;
     return {
       request: {
         rawText: request.rawText,
@@ -2863,6 +2870,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         ...(codeNames.length > 0 ? { codeNames } : {}),
         reason: "stop",
         startsPrompt: request.startsPrompt === true,
+        ...(openingCommand ? { openingCommand } : {}),
         ...(request.uncertain ? { uncertain: request.uncertain } : {}),
         ...(request.pauses ? { pauses: request.pauses } : {}),
       },

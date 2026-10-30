@@ -39,6 +39,7 @@ import type { HeardAsRule } from "../../shared/utils/voiceHeardAs.js";
 import type { VoiceCommandEntry } from "../../shared/utils/voiceAgentCommands.js";
 import type { VoiceAgentReply } from "./voiceAgentReplyTypes.js";
 import type { VoiceCommandTarget } from "./voiceCommandTarget.js";
+import type { VoiceOpeningCommand } from "./voiceOpeningCommand.js";
 import { holdsCredential, isSecretShaped } from "./voiceKeytermSecrets.js";
 import {
   CLAUDE_MESSAGES_URL,
@@ -83,7 +84,7 @@ const REWRITE_CACHE_PREFIX = "voice-rewrite-v1";
 const MIN_REWRITE_TIMEOUT_MS = 10000;
 const FILE_LINK_CACHE_PREFIX = "voice-file-link-v2";
 const PROMPT_TAG_OPEN_RE =
-  /<(?=\/?(?:recent_prompts|terminal_output|agent_last_reply|code_names|target|following_text|job|confirmed_history|uncertain|pause)\b)/gi;
+  /<(?=\/?(?:recent_prompts|terminal_output|agent_last_reply|code_names|opening_command|target|following_text|job|confirmed_history|uncertain|pause)\b)/gi;
 const OPENAI_ORIGIN = "https://api.openai.com/";
 const RESPONSES_URL = "https://api.openai.com/v1/responses";
 const ORIGINS: Record<VoiceCorrectionProvider, string> = {
@@ -266,6 +267,12 @@ export interface VoiceCorrectionRequest {
   pauses?: readonly number[];
   /** Nothing comes before the passage in the draft, so it may open with a command. */
   startsPrompt?: boolean;
+  /**
+   * What the command the draft opens with says about itself, already screened
+   * (`readVoiceOpeningCommand`): the passage may be its arguments. File
+   * content, so never logged.
+   */
+  openingCommand?: VoiceOpeningCommand;
 }
 
 export interface VoiceCorrectionResult {
@@ -677,6 +684,21 @@ function agentReplyBlock(reply: VoiceAgentReply, now: number): string {
   return `<agent_last_reply>\n${lines.join("\n")}\n</agent_last_reply>`;
 }
 
+function openingCommandBlock(command: VoiceOpeningCommand): string {
+  const fields: [string, string | undefined][] = [
+    ["command", command.token],
+    ["description", command.description],
+    ["argument_hint", command.argumentHint],
+    ["excerpt", command.excerpt],
+  ];
+  // Each one quoted line, so the skill's own text can't pass for a label,
+  // close its block or open a <target> of its own.
+  const lines = fields.flatMap(([label, value]) =>
+    value ? [`${label}=${JSON.stringify(value).replace(PROMPT_TAG_OPEN_RE, "‹")}`] : []
+  );
+  return `<opening_command>\n${lines.join("\n")}\n</opening_command>`;
+}
+
 export class VoiceCorrectionService {
   // When each correction prompt last reached OpenAI, by account and content.
   private readonly promptUsedAt = new Map<string, number>();
@@ -951,6 +973,10 @@ export class VoiceCorrectionService {
       // its line, so it stays.
       const following = request.followingText.trimEnd().replace(PROMPT_TAG_OPEN_RE, "‹");
       parts.push(`<following_text>\n${following}\n</following_text>`);
+    }
+
+    if (request.openingCommand) {
+      parts.push(openingCommandBlock(request.openingCommand));
     }
 
     if (request.codeNames && request.codeNames.length > 0) {
@@ -1263,10 +1289,10 @@ export class VoiceCorrectionService {
     onText: ((text: string) => void) | undefined
   ): Promise<VoiceCorrectionProposal> {
     const systemPrompt = this.buildSystemPrompt(settings);
-    // Code names, the agent's reply and pause marks go only to rules that say
-    // what they are: Luna's never learned of code names or pauses, and the
-    // cleanup benchmark's frozen rules of any. Read from the rules alone, so
-    // custom instructions can't switch them on.
+    // Code names, the agent's reply, the opening command and pause marks go
+    // only to rules that say what they are: Luna's never learned of code names
+    // or pauses, and the cleanup benchmark's frozen rules of any. Read from the
+    // rules alone, so custom instructions can't switch them on.
     const rules = settings.instructions ?? correctionInstructionsFor(settings.model);
     const pauses =
       rules.core.includes(PAUSE_MARK) && canMarkPauses(request.rawText)
@@ -1277,6 +1303,7 @@ export class VoiceCorrectionService {
       ...(rules.core.includes("<code_names>") ? {} : { codeNames: undefined }),
       ...(rules.core.includes("<agent_last_reply>") ? {} : { agentReply: undefined }),
       ...(rules.core.includes("<following_text>") ? {} : { followingText: undefined }),
+      ...(rules.core.includes("<opening_command>") ? {} : { openingCommand: undefined }),
       pauses,
     });
     const recentPromptsLen = totalLength(request.recentPrompts);

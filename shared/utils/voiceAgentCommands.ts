@@ -23,6 +23,8 @@ export interface VoiceCommandEntry {
   scope: SlashCommandScope;
   kind?: CompletionKind;
   description: string;
+  /** The file discovery read it from; absent for a built-in. */
+  sourcePath?: string;
 }
 
 interface VoiceCommandPrefix {
@@ -138,6 +140,7 @@ export function buildVoiceCommandVocabulary(
       scope: command.scope,
       ...(command.kind ? { kind: command.kind } : {}),
       description: command.description,
+      ...(command.sourcePath ? { sourcePath: command.sourcePath } : {}),
     });
   }
   // Array.prototype.sort is stable, so discovery's own order holds within a scope.
@@ -384,4 +387,14 @@ function commandShape(word: string): string | null {
 /** Whether `text` opens with something shaped like a command or skill: `/compact`, `$github`. */
 export function opensWithVoiceCommand(text: string): boolean {
   return commandShape(leadingWord(text)) !== null;
+}
+
+/**
+ * The command or skill `text` opens with, exactly as typed, or null when its
+ * first word isn't shaped like one. Prose punctuation after it counts against
+ * it, since the agent would read that as part of the name.
+ */
+export function openingVoiceCommandToken(text: string): string | null {
+  const word = leadingWord(text);
+  return word && commandShape(word) === word ? word : null;
 }
