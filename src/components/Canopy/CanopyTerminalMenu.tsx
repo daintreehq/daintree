@@ -28,6 +28,8 @@ export interface CanopyTerminalMenuHandle extends TerminalOutputMenuTarget {
   /** Read as the menu opens: the hover ends once the pointer reaches the menu. */
   read(): CanopyTerminalMenuState;
   copy(text: string): void;
+  /** Copies the selection cleaned, or `captured` cleaned when the selection has changed since. */
+  copyClean(captured: string): void;
   paste(): void;
   /**
    * Back to the terminal once the menu has closed, unless the keyboard went to
@@ -109,6 +111,10 @@ function CanopyTerminalMenuItems({
     if (!current) return;
     if (actionId === "copy") {
       if (state?.selection) current.copy(state.selection);
+      return;
+    }
+    if (actionId === "copy-clean") {
+      if (state?.selection) current.copyClean(state.selection);
       return;
     }
     if (actionId === "paste") {

@@ -13,8 +13,18 @@ import type React from "react";
 
 vi.mock("@/components/ui/context-menu", () => {
   const Passthrough = ({ children }: { children?: React.ReactNode }) => <div>{children}</div>;
-  const Item = ({ children, onSelect }: { children?: React.ReactNode; onSelect?: () => void }) => (
-    <button onClick={() => onSelect?.()}>{children}</button>
+  const Item = ({
+    children,
+    onSelect,
+    disabled,
+  }: {
+    children?: React.ReactNode;
+    onSelect?: () => void;
+    disabled?: boolean;
+  }) => (
+    <button aria-disabled={disabled || undefined} onClick={() => onSelect?.()}>
+      {children}
+    </button>
   );
   return {
     ContextMenu: Passthrough,
@@ -47,6 +57,7 @@ const {
   hoveredUrl,
   hoveredUrlPlugin,
   liveHoveredLink,
+  liveSelection,
   openLink,
   hoveredFilePath,
   hoveredFileKind,
@@ -71,6 +82,7 @@ const {
   hoveredUrl: { current: null as string | null },
   hoveredUrlPlugin: { current: null as string | null },
   liveHoveredLink: { current: null as Record<string, unknown> | null },
+  liveSelection: { current: "" },
   openLink: vi.fn(),
   hoveredFilePath: { current: null as string | null },
   hoveredFileKind: { current: "file" as "file" | "directory" | null },
@@ -114,7 +126,10 @@ vi.mock("@/services/TerminalInstanceService", () => {
   const terminalInstanceService = {
     // A live xterm is what unlocks the hovered-path branch; without it
     // `handleContextMenu` bails and clears every hover field.
-    get: () => ({ terminal: { getSelection: () => "" }, hoveredLink: liveHoveredLink.current }),
+    get: () => ({
+      terminal: { getSelection: () => liveSelection.current },
+      hoveredLink: liveHoveredLink.current,
+    }),
     getTerminal: () => undefined,
     getSelection: () => "",
     getHoveredLinkText: () => hoveredUrl.current,
@@ -548,6 +563,55 @@ describe("TerminalContextMenu — open in file browser (#11483)", () => {
  * the terminal for the menu, so the item has to open the link the menu was
  * opened on, not whatever is under the pointer when it is chosen.
  */
+describe("TerminalContextMenu — clean copy (#15525)", () => {
+  const writeText = vi.fn<(text: string) => Promise<void>>();
+
+  beforeEach(() => {
+    writeText.mockReset().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+  });
+
+  afterEach(() => {
+    liveSelection.current = "";
+  });
+
+  function rowAfterCopy(): HTMLElement {
+    const copy = screen.getByText("Copy").closest("button")!;
+    return copy.nextElementSibling as HTMLElement;
+  }
+
+  it("sits right after Copy and copies the selection cleaned", async () => {
+    liveSelection.current = "⏺ Release notes:   \n  - Added a clean copy\n    - next to Copy";
+    openMenu({ hovered: null });
+    const row = rowAfterCopy();
+    expect(row.textContent).toBe("Copy clean text");
+    expect(row.getAttribute("aria-disabled")).toBeNull();
+
+    await act(async () => row.click());
+
+    expect(writeText).toHaveBeenCalledWith("Release notes:\n- Added a clean copy\n  - next to Copy");
+    expect(dispatch).not.toHaveBeenCalledWith("terminal.copy", expect.anything(), expect.anything());
+  });
+
+  it("leaves Copy verbatim", async () => {
+    liveSelection.current = "  - Added a clean copy   ";
+    openMenu({ hovered: null });
+    await act(async () => screen.getByText("Copy").click());
+    expect(dispatch).toHaveBeenCalledWith(
+      "terminal.copy",
+      { terminalId: "panel-1" },
+      expect.anything()
+    );
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("is disabled with Copy when nothing is selected", () => {
+    openMenu({ hovered: null });
+    expect(screen.getByText("Copy").closest("button")!.getAttribute("aria-disabled")).toBe("true");
+    expect(rowAfterCopy().getAttribute("aria-disabled")).toBe("true");
+  });
+});
+
 describe("TerminalContextMenu — Open link after the hover ends (#14960)", () => {
   const URL_TEXT = "https://example.com/docs";
 

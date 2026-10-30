@@ -307,8 +307,9 @@ export function cleanTerminalSelection(
   }
   if (!text) return "";
   const range = terminal.getSelectionPosition?.();
+  if (!range) return cleanCopyText(text);
   const buffer = terminal.buffer.active;
-  const lines = range ? readSelectedLines(buffer, terminal.cols, range, text) : null;
+  const lines = readSelectedLines(buffer, terminal.cols, range, text);
   if (!lines) return cleanCopyText(text);
   const knownFrom = layout ? layout.widthKnownFrom(buffer) : null;
   return withLineEnding(text, cleanLines(lines, terminal.cols, knownFrom));

@@ -343,6 +343,22 @@ describe("SuggestedCommandLinksAddon", () => {
     expect(provide(addon, head)).toHaveLength(1);
   });
 
+  it("tells a clean copy which rows were laid out at the width it has now, links or not", async () => {
+    const terminal = await render(70, ["  laid out before it started", "  and this one"]);
+    const addon = new SuggestedCommandLinksAddon(terminal, () => false, vi.fn());
+    const buffer = terminal.buffer.active;
+    expect(addon.widthKnownFrom(buffer)).toBe(2);
+
+    await write(terminal, "\r\n  written since");
+    expect(addon.widthKnownFrom(buffer)).toBe(2);
+
+    terminal.resize(100, 30);
+    expect(addon.widthKnownFrom(buffer)).toBe(3);
+
+    addon.dispose();
+    expect(addon.widthKnownFrom(buffer)).toBe(buffer.length);
+  });
+
   it("runs nothing after it is disposed", async () => {
     const terminal = await render(70, ["  ! npm test", ""]);
     const onRun = vi.fn();
