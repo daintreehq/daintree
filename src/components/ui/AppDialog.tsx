@@ -872,7 +872,14 @@ function AppDialogWindowHeader({ children, className }: AppDialogHeaderProps) {
   return (
     <SurfaceHeader
       className={cn("dialog-window-header h-12 px-4 py-0", className)}
-      style={reservation}
+      // The toolbar's first control is a button whose glyph sits inside its own
+      // padding; a title's glyph starts at the reservation's edge, where the
+      // larger traffic lights of current macOS end only 8px short of it.
+      style={
+        reservation.paddingLeft !== undefined
+          ? { ...reservation, paddingLeft: "5.5rem" }
+          : reservation
+      }
     >
       {children}
     </SurfaceHeader>
@@ -913,7 +920,17 @@ AppDialog.Title = function AppDialogTitle({ children, icon, className, as }: App
     </span>
   ) : undefined;
   return (
-    <SurfaceHeaderTitle as={as} id={context?.titleId} icon={slot} className={className}>
+    <SurfaceHeaderTitle
+      as={as}
+      id={context?.titleId}
+      icon={slot}
+      // A window's title is its title bar's, set at the toolbar's scale rather
+      // than as a heading over the content.
+      className={cn(
+        context?.placement === "window" && "shrink-0 text-sm leading-5 whitespace-nowrap",
+        className
+      )}
+    >
       {children}
     </SurfaceHeaderTitle>
   );

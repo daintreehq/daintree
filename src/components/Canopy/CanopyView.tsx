@@ -475,6 +475,15 @@ interface ShortcutRow {
  * Every key the panel answers to, one press away instead of always on screen,
  * grouped by where the keyboard is: the pane's keys are the agent's.
  */
+/** Sets the title bar's status apart from the title, as the status's own parts are. */
+function TitleDot() {
+  return (
+    <span aria-hidden="true" className="mx-2 shrink-0 text-sm text-text-secondary">
+      ·
+    </span>
+  );
+}
+
 function CanopyShortcuts() {
   const step = isMac() ? "Cmd" : "Alt";
   // How to get here again: the user's own binding, and double-Shift while on.
@@ -556,7 +565,7 @@ function CanopyShortcuts() {
       <Tooltip>
         <TooltipTrigger asChild>
           <PopoverTrigger asChild>
-            <Button variant="ghost" size="icon-xs" aria-label="Keyboard shortcuts">
+            <Button variant="ghost" size="icon-sm" aria-label="Keyboard shortcuts">
               <Keyboard />
             </Button>
           </PopoverTrigger>
@@ -1351,7 +1360,7 @@ function CanopyInbox({
           type="button"
           data-testid="canopy-needs-you-count"
           onClick={showNeedsYou}
-          className="rounded-sm text-text-primary outline-hidden hover:underline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-selection-outline"
+          className="rounded-sm font-medium text-text-primary tabular-nums outline-hidden hover:underline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-selection-outline"
         >
           {needsYouLead}
         </button>
@@ -1424,7 +1433,6 @@ function CanopyInbox({
     <>
       <SegmentedRadioGroup<CanopyRoleFilter>
         aria-label="Roles to show"
-        density="compact"
         className="mr-3"
         value={roleFilter}
         onChange={setRoleFilter}
@@ -1443,7 +1451,6 @@ function CanopyInbox({
       {!otherHost && (
         <SegmentedRadioGroup<"all" | "project">
           aria-label="Agents to show"
-          density="compact"
           className="mr-3"
           value={scope}
           onChange={setScope}
@@ -1454,25 +1461,28 @@ function CanopyInbox({
         />
       )}
       <CanopyShortcuts />
-      {/* Nothing is read while the reader is off, so there is nothing to refresh. */}
-      {!readerOff && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              ref={refreshRef}
-              variant="ghost"
-              size="icon-xs"
-              aria-label="Refresh"
-              aria-busy={refreshes > 0 || undefined}
-              disabled={canopy === null}
-              onClick={refresh}
-            >
-              <SpinningIcon icon={RefreshCw} active={refreshes > 0} />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Refresh</TooltipContent>
-        </Tooltip>
-      )}
+      {/* Nothing is read while the reader is off, so there is nothing to refresh;
+          its slot stays, so the filters don't move when reading turns on or off. */}
+      <span className="flex size-7 shrink-0 items-center justify-center">
+        {!readerOff && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                ref={refreshRef}
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Refresh"
+                aria-busy={refreshes > 0 || undefined}
+                disabled={canopy === null}
+                onClick={refresh}
+              >
+                <SpinningIcon icon={RefreshCw} active={refreshes > 0} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Refresh</TooltipContent>
+          </Tooltip>
+        )}
+      </span>
       <AppDialog.CloseButton />
     </>
   );
@@ -1493,12 +1503,15 @@ function CanopyInbox({
       <AppDialog.Header>
         {hostPicker ? (
           // Three parts, the outer two sharing what is left, so the picker
-          // stands in the middle of the header.
+          // stands in the middle of the header. The controls' part never
+          // goes below their own width: in a narrow window the words give way
+          // and the picker leaves the middle rather than run under them.
           <>
             <span className="flex min-w-0 flex-1 basis-0 items-center">
               <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
+              <TitleDot />
               <span
-                className="mx-3 min-w-0 flex-1 truncate text-sm text-text-secondary"
+                className="mr-3 min-w-0 flex-1 truncate text-sm text-text-secondary"
                 data-testid="canopy-summary"
               >
                 {headerWords}
@@ -1519,15 +1532,16 @@ function CanopyInbox({
                 </span>
               )}
             </span>
-            <span className="ml-3 flex min-w-0 flex-1 basis-0 items-center justify-end">
+            <span className="ml-3 flex flex-1 basis-0 items-center justify-end">
               {headerControls}
             </span>
           </>
         ) : (
           <>
             <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
+            <TitleDot />
             <span
-              className="mr-3 ml-3 min-w-0 flex-1 truncate text-sm text-text-secondary"
+              className="mr-3 min-w-0 flex-1 truncate text-sm text-text-secondary"
               data-testid="canopy-summary"
             >
               {headerWords}
@@ -1691,7 +1705,7 @@ function CanopyInbox({
           // folded away beneath it, and the selected agent's own terminal beside
           // it, drawn as its pane.
           <div className="flex min-h-0 flex-1">
-            <div className="canopy-inbox-column flex min-h-0 w-[28rem] shrink-0 flex-col self-stretch border-r border-border-default">
+            <div className="canopy-inbox-column flex min-h-0 w-[var(--canopy-list-width)] shrink-0 flex-col self-stretch border-r border-border-default">
               <div className="shrink-0 px-3 pt-3 pb-1">
                 <SearchField
                   size="compact"
@@ -2142,6 +2156,7 @@ function CanopyInbox({
                       terminalApi={terminalApi}
                       workLabel={workLabelOf(focusedItem)}
                       moveOnTo={moveOnTo}
+                      reading={!readerOff}
                       reconnecting={
                         everyHost
                           ? focusedLinkStatus !== undefined && focusedLinkStatus !== "connected"

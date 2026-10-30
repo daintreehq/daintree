@@ -376,6 +376,9 @@ describe("CanopyCard", () => {
       );
       await composer();
       const line = () => view.container.querySelector<HTMLElement>("[data-canopy-move-on]");
+      // Nothing to send through until the stream opens: the line is held, blank.
+      expect(line()!.textContent).toBe("");
+      await streamOpens({ watchId: 7 });
       expect(line()?.textContent).toContain("Send and go to");
       expect(line()?.textContent).toContain("Pick a port");
 

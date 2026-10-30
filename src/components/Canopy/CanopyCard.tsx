@@ -174,6 +174,8 @@ interface CanopyCardProps extends CanopyCardHandlers {
   workLabel?: string | null;
   /** Where ⌘↩ from the reply goes on to once it sends, named in the reply; null for nowhere. */
   moveOnTo?: CanopyItem | null;
+  /** The reader is on, so a reading may land while the card is open. */
+  reading?: boolean;
 }
 
 /**
@@ -275,6 +277,7 @@ export function CanopyCard({
   reconnecting = false,
   workLabel = null,
   moveOnTo = null,
+  reading = false,
 }: CanopyCardProps) {
   const otherHost = otherHostId !== undefined;
   const [stream, setStream] = useState<CanopyStreamState>({
@@ -488,7 +491,13 @@ export function CanopyCard({
         return true;
       }
     }
-    if ((event.key === "r" || event.key === "R") && canReply && !event.metaKey && !event.ctrlKey) {
+    if (
+      (event.key === "r" || event.key === "R") &&
+      canReply &&
+      stream.watchId !== null &&
+      !event.metaKey &&
+      !event.ctrlKey
+    ) {
       event.preventDefault();
       composerRef.current?.focus();
       return true;
@@ -911,8 +920,10 @@ export function CanopyCard({
           far through its task the run is, and what the agent reported. One
           line, so the terminal keeps the height: what the reader said reads
           from the left, and whose words they are and how old sits at the
-          right. Truncated words are whole on hover, and on the screen below. */}
-      {hasSummary && (
+          right. Truncated words are whole on hover, and on the screen below.
+          Held while the reader is on, so a reading landing never resizes the
+          agent, which redraws its scrollback on every resize. */}
+      {(hasSummary || reading) && (
         <div
           data-canopy-summary=""
           className="flex h-7 shrink-0 items-center gap-3 border-b border-overlay px-3 text-xs leading-4 text-text-secondary"
@@ -1013,63 +1024,66 @@ export function CanopyCard({
           onSubmitted={() => onSent(item)}
           onGoTo={(event) => onOpen(item, isNewWindowClick(event))}
         />
-        {(answerChoices.length > 0 || (question !== null && canReply)) && (
-          <div
-            role="group"
-            aria-label="Answer"
-            data-canopy-choices=""
-            className="flex shrink-0 flex-wrap items-center gap-1.5 border-t border-overlay px-3 py-2"
-          >
-            {answerChoices.map((choice, index) => {
-              const armed = armedAnswer?.digit === index + 1;
-              return (
-                <Button
-                  key={`${index}:${choice}`}
-                  variant={armed ? "ghost-danger" : "subtle"}
-                  size="xs"
-                  disabled={reconnecting}
-                  data-canopy-choice=""
-                  data-armed={armed || undefined}
-                  aria-keyshortcuts={String(index + 1)}
-                  className={cn("max-w-full", armed && "bg-status-error/10")}
-                  onClick={() => pressAnswer(choice, index + 1)}
-                >
-                  <Kbd className="shrink-0">{index + 1}</Kbd>
-                  <span className="min-w-0 truncate">
-                    {armed ? `Press again: ${choice}` : choice}
-                  </span>
-                </Button>
-              );
-            })}
-            <span className="ml-auto flex shrink-0 items-center gap-1.5">
-              {canReply && (
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  aria-keyshortcuts="R"
-                  onClick={() => composerRef.current?.focus()}
-                >
-                  <MessageSquare aria-hidden="true" />
-                  Reply
-                  <Kbd className="shrink-0">R</Kbd>
-                </Button>
-              )}
+        {/* Always one line, choices or none, so an ask arriving or answered
+            never moves the terminal's foot: choices shrink and truncate rather
+            than wrap. */}
+        <div
+          role="group"
+          aria-label="Answer"
+          data-canopy-choices=""
+          className="flex h-10 shrink-0 items-center gap-1.5 overflow-hidden border-t border-overlay px-3"
+        >
+          {answerChoices.map((choice, index) => {
+            const armed = armedAnswer?.digit === index + 1;
+            return (
+              <Button
+                key={`${index}:${choice}`}
+                variant={armed ? "ghost-danger" : "subtle"}
+                size="xs"
+                disabled={reconnecting}
+                data-canopy-choice=""
+                data-armed={armed || undefined}
+                aria-keyshortcuts={String(index + 1)}
+                className={cn("min-w-0 shrink", armed && "bg-status-error/10")}
+                onClick={() => pressAnswer(choice, index + 1)}
+              >
+                <Kbd className="shrink-0">{index + 1}</Kbd>
+                <span className="min-w-0 truncate">
+                  {armed ? `Press again: ${choice}` : choice}
+                </span>
+              </Button>
+            );
+          })}
+          <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-1.5">
+            {canReply && (
               <Button
                 variant="ghost"
                 size="xs"
-                aria-keyshortcuts="Enter"
-                onClick={(event) => onOpen(item, isNewWindowClick(event))}
+                aria-keyshortcuts="R"
+                // As the composer it focuses is: shut while the stream is.
+                disabled={stream.watchId === null}
+                onClick={() => composerRef.current?.focus()}
               >
-                <SquareArrowOutUpRight aria-hidden="true" />
-                Go to terminal
-                <Kbd className="shrink-0">↵</Kbd>
+                <MessageSquare aria-hidden="true" />
+                Reply
+                <Kbd className="shrink-0">R</Kbd>
               </Button>
-            </span>
-          </div>
-        )}
+            )}
+            <Button
+              variant="ghost"
+              size="xs"
+              aria-keyshortcuts="Enter"
+              onClick={(event) => onOpen(item, isNewWindowClick(event))}
+            >
+              <SquareArrowOutUpRight aria-hidden="true" />
+              Go to terminal
+              <Kbd className="shrink-0">↵</Kbd>
+            </Button>
+          </span>
+        </div>
         {canReply && voiceMicNotice && <VoiceMicNoticeBanner notice={voiceMicNotice} />}
         {canReply ? (
-          <div ref={replyHostRef} data-keybindings-isolated="" className="contents">
+          <div key="reply" ref={replyHostRef} data-keybindings-isolated="" className="contents">
             <Suspense fallback={null}>
               <LazyHybridInputBar
                 ref={composerRef}
@@ -1093,7 +1107,8 @@ export function CanopyCard({
               data-canopy-move-on=""
               className="flex h-6 shrink-0 items-center gap-1.5 px-3.5 pb-1.5 text-xs text-text-secondary"
             >
-              {moveOnTo !== null && (
+              {/* Only while the reply can send: a closed stream leaves it disabled. */}
+              {moveOnTo !== null && stream.watchId !== null && (
                 <>
                   <KbdChord shortcut="Cmd+Enter" density="compact" />
                   <span className="shrink-0">Send and go to</span>
@@ -1105,10 +1120,17 @@ export function CanopyCard({
             </p>
           </div>
         ) : (
-          <p className="flex shrink-0 items-center gap-1.5 px-3.5 py-3 text-xs text-text-secondary">
-            <KeyRound className="size-3.5 shrink-0" aria-hidden="true" />
-            It's asking for a secret: type it straight into the terminal above
-          </p>
+          // Keyed apart from the reply's host, so the reply unmounts whole and
+          // its ref still sees whether its editor held the keyboard.
+          <div key="secret" className="flex shrink-0 flex-col">
+            {/* The composer's footprint and the line under it, so a reading that
+                finds a secret prompt doesn't resize the agent either. */}
+            <p className="flex h-15 items-center gap-1.5 px-3.5 text-xs text-text-secondary">
+              <KeyRound className="size-3.5 shrink-0" aria-hidden="true" />
+              It's asking for a secret: type it straight into the terminal above
+            </p>
+            <div aria-hidden="true" className="h-6" />
+          </div>
         )}
       </div>
     </section>

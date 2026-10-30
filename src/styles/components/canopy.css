@@ -10,21 +10,13 @@
    only non-fill cue still clears WCAG 1.4.11's 3:1 on every theme (a faded
    accent fell to 2.7:1 on namib; the lift alone measures about 1.03:1). The
    selected row is the focused row and draws no ring on top (#8094). */
-/* Canopy covers the window, but the agent it streams is resized to Canopy's
-   pane and back, and Claude Code and Codex redraw their scrollback on every
-   resize. So its body stops growing at the width Canopy had as a dialog
-   (110rem) and centres, and a wide window streams at the width it always did. */
+/* Canopy fills the window edge to edge, as a split view does: the list holds
+   its laptop width until a wide window gives it a little more room, and the
+   pane beside it takes the rest. The agent is resized to that pane once, on
+   open, whatever its width, so a capped body only cost dead bars either side.
+   The pitch's demo list shares the width, so turning reading on moves nothing. */
 .canopy-frame {
-  width: 100%;
-  max-width: 110rem;
-  margin-inline: auto;
-}
-
-/* Edged once the window is wider than the frame, so it doesn't float. */
-@media (width >= 110rem) {
-  .canopy-frame {
-    border-inline: 1px solid var(--color-border-default);
-  }
+  --canopy-list-width: clamp(28rem, 20vw, 32rem);
 }
 
 /* The list and the status bar under it, on one surface. */
