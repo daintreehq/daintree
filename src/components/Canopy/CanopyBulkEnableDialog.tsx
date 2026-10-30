@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import type { CanopyMode } from "@shared/types/ipc/canopy";
 import { pluralize } from "@/lib/pluralize";
@@ -60,8 +60,8 @@ export function CanopyBulkEnableDialog({
   const [results, setResults] = useState<Map<string, BulkResult>>(new Map());
   const [modes, setModes] = useState<ReadonlyMap<string, CanopyMode | null> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const depsRef = useRef(deps);
-  depsRef.current = deps;
+  // Read when the effect runs, so a new `deps` alone never restarts the preview.
+  const readDeps = useEffectEvent(() => deps);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -70,13 +70,11 @@ export function CanopyBulkEnableDialog({
     setModes(null);
     const controller = new AbortController();
     abortRef.current = controller;
-    void previewCanopyModes(targets, { ...depsRef.current, signal: controller.signal }).then(
-      (rows) => {
-        if (!controller.signal.aborted) {
-          setModes(new Map(rows.map((row) => [row.hostId, row.mode] as const)));
-        }
+    void previewCanopyModes(targets, { ...readDeps(), signal: controller.signal }).then((rows) => {
+      if (!controller.signal.aborted) {
+        setModes(new Map(rows.map((row) => [row.hostId, row.mode] as const)));
       }
-    );
+    });
     return () => controller.abort();
   }, [isOpen, targets]);
 
@@ -85,16 +83,11 @@ export function CanopyBulkEnableDialog({
     abortRef.current?.abort();
     abortRef.current = controller;
     setPhase("running");
-    void enableCanopyOnHosts(
-      subset,
-      { ...depsRef.current, signal: controller.signal },
-      before,
-      (result) => {
-        if (abortRef.current === controller) {
-          setResults((prev) => new Map(prev).set(result.hostId, result));
-        }
+    void enableCanopyOnHosts(subset, { ...deps, signal: controller.signal }, before, (result) => {
+      if (abortRef.current === controller) {
+        setResults((prev) => new Map(prev).set(result.hostId, result));
       }
-    ).then(() => {
+    }).then(() => {
       if (abortRef.current === controller && !controller.signal.aborted) setPhase("done");
     });
   };

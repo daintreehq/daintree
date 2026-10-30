@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Callout } from "@/components/ui/Callout";
 import { Button } from "@/components/ui/button";
@@ -201,15 +201,18 @@ export function PluginRunRecipeDialog() {
     pluginId: string;
     request: PluginRunRecipeRequest;
     waited: PluginUiPromptWaited | undefined;
-  } | null =
-    current && current.params.kind === "runRecipe"
-      ? {
-          promptId: current.promptId,
-          pluginId: current.pluginId,
-          request: current.params.request,
-          waited: current.params.waited,
-        }
-      : null;
+  } | null = useMemo(
+    () =>
+      current && current.params.kind === "runRecipe"
+        ? {
+            promptId: current.promptId,
+            pluginId: current.pluginId,
+            request: current.params.request,
+            waited: current.params.waited,
+          }
+        : null,
+    [current]
+  );
   const promptId = prompt?.promptId ?? null;
   const attribution = usePluginAttribution(prompt?.pluginId ?? "");
 

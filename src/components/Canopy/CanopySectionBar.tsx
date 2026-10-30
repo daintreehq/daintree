@@ -55,24 +55,26 @@ export function SectionBar({
       </div>
     );
   }
+  // Split off: the compiler otherwise reads every field of `fold` as a ref read.
+  const { buttonRef, ...foldState } = fold;
   const bar = (
     <button
-      ref={fold.buttonRef}
+      ref={buttonRef}
       type="button"
-      aria-expanded={fold.expanded}
-      aria-controls={fold.controls}
-      onClick={fold.onToggle}
+      aria-expanded={foldState.expanded}
+      aria-controls={foldState.controls}
+      onClick={foldState.onToggle}
       onKeyDown={(event) => {
-        if (event.key === "ArrowUp" && fold.onLeaveUp) {
+        if (event.key === "ArrowUp" && foldState.onLeaveUp) {
           event.preventDefault();
           event.stopPropagation();
-          fold.onLeaveUp();
+          foldState.onLeaveUp();
           return;
         }
-        if (event.key !== "ArrowDown" || !fold.expanded) return;
+        if (event.key !== "ArrowDown" || !foldState.expanded) return;
         event.preventDefault();
         event.stopPropagation();
-        fold.onEnter();
+        foldState.onEnter();
       }}
       className={cn(
         SECTION_BAR_CLASS,
@@ -85,7 +87,7 @@ export function SectionBar({
         aria-hidden="true"
         className={cn(
           "size-3.5 shrink-0 text-text-secondary transition-transform duration-150 motion-reduce:transition-none",
-          fold.expanded && "rotate-90"
+          foldState.expanded && "rotate-90"
         )}
       />
     </button>

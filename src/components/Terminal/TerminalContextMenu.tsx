@@ -726,10 +726,9 @@ function TerminalContextMenuBody({
   );
 
   // Every branch draws the same menu around its own items.
-  const renderMenu = (
-    items: React.ReactNode,
-    onContextMenu: (event: React.MouseEvent<HTMLElement>) => void
-  ) => (
+  // Takes a flag, not the handler: the compiler reads a ref-writing callback
+  // passed as an argument to a function called during render as a ref read.
+  const renderMenu = (items: React.ReactNode, capturesTerminalState = false) => (
     <ContextMenu onOpenChange={handleMenuOpenChange}>
       <MenuActionSourceContext.Consumer>
         {(value) => {
@@ -741,7 +740,7 @@ function TerminalContextMenuBody({
         terminalId={terminalId}
         proxy={proxy}
         scope={triggerScope}
-        onContextMenu={onContextMenu}
+        onContextMenu={capturesTerminalState ? handleContextMenu : handleTriggerContextMenu}
         onPointerDown={captureMovePickerAnchorOnPress}
       >
         {children}
@@ -782,8 +781,7 @@ function TerminalContextMenuBody({
           hasUrl={hasUrl}
           onAction={handleAction}
         />
-      </>,
-      handleTriggerContextMenu
+      </>
     );
   }
 
@@ -797,8 +795,7 @@ function TerminalContextMenuBody({
           isBackgrounded={isBackgrounded}
           onAction={handleAction}
         />
-      </>,
-      handleTriggerContextMenu
+      </>
     );
   }
 
@@ -821,8 +818,7 @@ function TerminalContextMenuBody({
         }}
         renderMoveToWorktreeSubmenu={renderMoveToWorktreeSubmenu}
         onAction={handleAction}
-      />,
-      handleTriggerContextMenu
+      />
     );
   }
 
@@ -912,7 +908,7 @@ function TerminalContextMenuBody({
             onAction={handleAction}
           />
         </>,
-        handleContextMenu
+        true
       )}
     </>
   );
