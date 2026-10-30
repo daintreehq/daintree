@@ -1,4 +1,5 @@
 import { normalizeBrowserUrl as normalizeUrl } from "../../../shared/utils/urlUtils.js";
+import { focusPaneDialog } from "@/lib/paneDialog";
 export {
   normalizeBrowserUrl,
   isLocalhostUrl,
@@ -62,9 +63,15 @@ export type LoadError = {
   message: string;
 };
 
-/** Hands keyboard focus to a webview's page; false when the element could not take it. */
+/**
+ * Hands keyboard focus to a webview's page; false when the element could not take
+ * it. A page waiting on its own `alert()`, `confirm()` or `prompt()` can't take a
+ * key, so its dialog takes the focus instead.
+ */
 export function focusWebviewPage(webview: HTMLElement | null): boolean {
   if (!webview?.isConnected) return false;
+  const pane = webview.closest("[data-panel-id]");
+  if (pane && focusPaneDialog(pane)) return true;
   webview.focus();
   return document.activeElement === webview;
 }

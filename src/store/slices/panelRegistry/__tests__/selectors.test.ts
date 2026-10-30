@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { PanelInstance } from "@shared/types/panel";
+import type { PanelInstance, TabGroup } from "@shared/types/panel";
 import {
   _resetSelectorCacheForTests,
   getNarrowPanel,
@@ -7,7 +7,9 @@ import {
   getRenderablePanel,
   isPanelRenderEligible,
   selectHasMultipleSessionLost,
+  selectWorktreeMovePanelIds,
 } from "../selectors";
+import type { TrashedTerminal } from "../types";
 
 // Adapter selectors that narrow the legacy `TerminalInstance` carrier to the
 // `PanelInstance` union via the kind type guards (#8957). A missing `kind`
@@ -182,5 +184,61 @@ describe("selectHasMultipleSessionLost", () => {
     expect(selectHasMultipleSessionLost({ a: lost("a"), b: lost("b") })).toBe(true);
     expect(selectHasMultipleSessionLost({ a: lost("a") })).toBe(false);
     expect(selectHasMultipleSessionLost({ a: lost("a"), b: lost("b"), c: lost("c") })).toBe(true);
+  });
+});
+
+describe("selectWorktreeMovePanelIds", () => {
+  const makeGroup = (id: string, panelIds: string[]): TabGroup => ({
+    id,
+    location: "grid",
+    worktreeId: "wt-a",
+    activeTabId: panelIds[0]!,
+    panelIds,
+  });
+  const groups = [makeGroup("g1", ["a", "b", "c"]), makeGroup("g2", ["d", "e"])];
+
+  function state(
+    panels: PanelInstance[],
+    trashed: string[] = []
+  ): Parameters<typeof selectWorktreeMovePanelIds>[0] {
+    return {
+      panelsById: Object.fromEntries(panels.map((p) => [p.id, p])),
+      trashedTerminals: new Map(
+        trashed.map((id): [string, TrashedTerminal] => [
+          id,
+          { id, expiresAt: 0, originalLocation: "grid" },
+        ])
+      ),
+      getPanelGroup: (id) => groups.find((g) => g.panelIds.includes(id)),
+    };
+  }
+  const everyPanel = ["a", "b", "c", "d", "e", "x"].map((id) => panel(id));
+
+  it("moves an ungrouped panel alone", () => {
+    expect(selectWorktreeMovePanelIds(state(everyPanel), "x")).toEqual(["x"]);
+  });
+
+  it("moves every live member of the panel's own group, in group order", () => {
+    expect(selectWorktreeMovePanelIds(state([...everyPanel].reverse()), "b")).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+    expect(selectWorktreeMovePanelIds(state(everyPanel), "e")).toEqual(["d", "e"]);
+  });
+
+  it("leaves trashed and missing members out of the move", () => {
+    expect(
+      selectWorktreeMovePanelIds(state([panel("a"), panel("b", { location: "trash" })]), "a")
+    ).toEqual(["a"]);
+    expect(
+      selectWorktreeMovePanelIds(state([panel("a"), panel("b"), panel("c")], ["c"]), "a")
+    ).toEqual(["a", "b"]);
+  });
+
+  it("falls back to the panel itself when no member is live", () => {
+    expect(selectWorktreeMovePanelIds(state([panel("a"), panel("b")], ["a", "b"]), "b")).toEqual([
+      "b",
+    ]);
   });
 });

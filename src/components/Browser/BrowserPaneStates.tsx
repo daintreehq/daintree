@@ -32,6 +32,7 @@ export function BrowserHostApprovalBar({
             Allow browser panel to load <span className="font-mono">{hostname}</span>?
           </>
         }
+        description="Applies to every Browser panel in this project, and stays allowed"
         action={{ id: "allow-host", label: "Allow", variant: "primary", onClick: onAllow }}
         onClose={onDismiss}
         closeAriaLabel="Dismiss host approval"

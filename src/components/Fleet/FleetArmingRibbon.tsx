@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactElement,
+  type RefObject,
+} from "react";
 import {
   XCircle,
   AlertTriangle,
@@ -76,6 +84,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { pluralize } from "@/lib/pluralize";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { isInPaneDialog } from "@/lib/paneDialog";
+import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 
 interface RunCountSegment {
   label: string;
@@ -99,15 +110,48 @@ function deriveRunStatus(run: FleetRun | null, progressActive: boolean): RunStat
         dismissible: true,
         failed: false,
       };
-    case "failed":
+    case "failed": {
+      // Other hosts' failures keep their host, which is the one thing a
+      // person can act on when nothing went out.
+      const remote = buildRemoteFailureSegments(run);
       return {
-        segments: [{ label: "Run failed · nothing sent", tone: "error" }],
+        segments:
+          remote.length > 0
+            ? [...remote, { label: "nothing sent", tone: "neutral" }]
+            : [{ label: "Run failed · nothing sent", tone: "error" }],
         dismissible: true,
         failed: true,
       };
+    }
     default:
       return null;
   }
+}
+
+/**
+ * A failed agent on another host may already be gone from the fleet, so the
+ * line is the one place left that says which machine it was on. Failures
+ * lead: when the line is cut short, the counts that went fine give way first.
+ */
+function buildRemoteFailureSegments(run: FleetRun): RunCountSegment[] {
+  const segments: RunCountSegment[] = [];
+  const failedByHost = new Map<string, { gone: number; failed: number }>();
+  for (const t of run.targets) {
+    if (!t.host || t.submission !== "failed") continue;
+    const tally = failedByHost.get(t.host.hostName) ?? { gone: 0, failed: 0 };
+    if (t.failureKind === "permanent") tally.gone += 1;
+    else tally.failed += 1;
+    failedByHost.set(t.host.hostName, tally);
+  }
+  for (const [hostName, tally] of failedByHost) {
+    if (tally.gone > 0) {
+      segments.push({ label: `${tally.gone} unreachable on ${hostName}`, tone: "error" });
+    }
+    if (tally.failed > 0) {
+      segments.push({ label: `${tally.failed} failed on ${hostName}`, tone: "error" });
+    }
+  }
+  return segments;
 }
 
 function buildRunCountSegments(run: FleetRun): RunCountSegment[] {
@@ -120,13 +164,17 @@ function buildRunCountSegments(run: FleetRun): RunCountSegment[] {
     if (!t.host || !isAwaitingHost(t)) continue;
     sentByHost.set(t.host.hostName, (sentByHost.get(t.host.hostName) ?? 0) + 1);
   }
+  const remoteSegments = buildRemoteFailureSegments(run);
+  segments.push(...remoteSegments);
+  const remoteFailed = run.targets.filter((t) => t.host && t.submission === "failed").length;
+  const localFailed = counts.sendFailed - remoteFailed;
+  if (localFailed > 0) segments.push({ label: `${localFailed} failed`, tone: "error" });
   for (const [hostName, count] of sentByHost) {
     segments.push({ label: `${count} sent to ${hostName}`, tone: "neutral" });
   }
   if (counts.working > 0) segments.push({ label: `${counts.working} working`, tone: "neutral" });
   if (counts.waiting > 0) segments.push({ label: `${counts.waiting} waiting`, tone: "neutral" });
   if (counts.done > 0) segments.push({ label: `${counts.done} finished`, tone: "neutral" });
-  if (counts.sendFailed > 0) segments.push({ label: `${counts.sendFailed} failed`, tone: "error" });
   return segments;
 }
 
@@ -147,26 +195,29 @@ function FleetRunStatusLine({
       className="flex min-w-0 items-center gap-1 text-2xs tabular-nums text-text-secondary"
       data-testid="fleet-run-status"
     >
-      <span className="truncate">
-        {status.segments.map((segment, index) => (
-          <span
-            key={segment.label}
-            className={segment.tone === "error" ? "font-medium text-text-primary" : undefined}
-          >
-            {index > 0 ? " · " : ""}
-            {/* The glyph carries the tone and sits with the clause it is
+      {/* A tab stop only while cut short, so the whole outcome is a key away. */}
+      <TruncatedTooltip content={status.segments.map((segment) => segment.label).join(" · ")}>
+        <span className="truncate">
+          {status.segments.map((segment, index) => (
+            <span
+              key={segment.label}
+              className={segment.tone === "error" ? "font-medium text-text-primary" : undefined}
+            >
+              {index > 0 ? " · " : ""}
+              {/* The glyph carries the tone and sits with the clause it is
                 about; the words stay on a text token because the danger
                 colour sits under 4.5:1 on the amber fill. */}
-            {segment.tone === "error" && (
-              <XCircle
-                className="mr-1 inline-block h-3 w-3 align-[-2px] text-status-error"
-                aria-hidden="true"
-              />
-            )}
-            {segment.label}
-          </span>
-        ))}
-      </span>
+              {segment.tone === "error" && (
+                <XCircle
+                  className="mr-1 inline-block h-3 w-3 align-[-2px] text-status-error"
+                  aria-hidden="true"
+                />
+              )}
+              {segment.label}
+            </span>
+          ))}
+        </span>
+      </TruncatedTooltip>
       {status.dismissible && (
         <button
           type="button"
@@ -180,6 +231,39 @@ function FleetRunStatusLine({
       )}
     </span>
   );
+}
+
+/** Where focus was before it entered the ribbon: one ribbon per view, so one slot. */
+let focusBeforeRibbon: HTMLElement | null = null;
+
+/**
+ * A fleet of other hosts' agents has no pane of its own to hand focus back to
+ * when it ends, so whatever in the ribbon held focus (the composer, Exit) would
+ * leave it on <body>. Mounted inside the ribbon: its cleanup runs while the
+ * ribbon is still in the document, so it can tell whether the ribbon owned it.
+ */
+function ReturnFocusOnRemoval({
+  containerRef,
+}: {
+  containerRef: RefObject<HTMLDivElement | null>;
+}): null {
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    return () => {
+      if (!container?.contains(document.activeElement)) return;
+      const back = focusBeforeRibbon;
+      queueMicrotask(() => {
+        // Focus that already landed somewhere is left where it is.
+        if (document.activeElement !== document.body && document.activeElement !== null) return;
+        if (back?.isConnected) back.focus({ preventScroll: true });
+        else {
+          const pane = usePanelStore.getState().focusedId;
+          if (pane) focusPanelInput(pane);
+        }
+      });
+    };
+  }, [containerRef]);
+  return null;
 }
 
 interface PresetCounts {
@@ -203,6 +287,10 @@ export function FleetArmingRibbon(): ReactElement | null {
   // hosts, or both. Only saving a snapshot is about this view's panes alone.
   const armedCount = useFleetArmingStore(selectFleetMemberCount);
   const localArmedCount = useFleetArmingStore((s) => s.armedIds.size);
+  // A fleet of other hosts' agents has no pane here to type in, so the ribbon
+  // and its composer are the only sign of it and the only way to message it,
+  // even with one member. A fleet with a pane here still needs two.
+  const ribbonVisible = armedCount >= 2 || (localArmedCount === 0 && armedCount >= 1);
   const clear = useFleetArmingStore((s) => s.clear);
   const armByState = useFleetArmingStore((s) => s.armByState);
   const armAll = useFleetArmingStore((s) => s.armAll);
@@ -246,10 +334,10 @@ export function FleetArmingRibbon(): ReactElement | null {
   const reduceMotion = useShouldSkipMotion();
 
   useEffect(() => {
-    if (armedCount < 2 && popoverOpen) {
+    if (!ribbonVisible && popoverOpen) {
       setPopoverOpen(false);
     }
-  }, [armedCount, popoverOpen]);
+  }, [ribbonVisible, popoverOpen]);
 
   // Escape stack: confirmation cancel is owned here so a pending confirm
   // absorbs bare Escape before it reaches the targets. The armed-list
@@ -313,11 +401,14 @@ export function FleetArmingRibbon(): ReactElement | null {
       // content can be portaled outside the dialog's subtree (Radix menus and
       // selects mount under <body>). The fleet's own confirmation is an inline
       // role="status" banner, not a modal, so its Enter stays reachable. A
-      // destructive AppDialog without a preview is an alertdialog.
+      // destructive AppDialog without a preview is an alertdialog. A page's
+      // dialog blocks only its own pane, so it holds Enter only while focus is
+      // inside it (#15037).
       if (
         document.querySelector(
           '[role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"]'
-        ) !== null
+        ) !== null ||
+        isInPaneDialog(e.target)
       ) {
         return;
       }
@@ -371,10 +462,10 @@ export function FleetArmingRibbon(): ReactElement | null {
   // this watcher the surviving pane keeps its preview tint indefinitely.
   // Also covers the full-unmount case for parent-driven removals.
   useEffect(() => {
-    if (armedCount < 2) {
+    if (!ribbonVisible) {
       useFleetArmingStore.getState().clearPreviewArmedIds();
     }
-  }, [armedCount]);
+  }, [ribbonVisible]);
   useEffect(() => {
     return () => {
       useFleetArmingStore.getState().clearPreviewArmedIds();
@@ -448,7 +539,7 @@ export function FleetArmingRibbon(): ReactElement | null {
   // re-renders only when a count changes rather than on every panel-map
   // write (status flushes land up to once per frame). Gated on visibility so
   // the five O(panels) scans don't run for a hidden ribbon.
-  const ribbonActive = armedCount >= 2;
+  const ribbonActive = ribbonVisible;
   const presetCounts = usePanelStore(
     useShallow((s): PresetCounts =>
       ribbonActive
@@ -532,8 +623,9 @@ export function FleetArmingRibbon(): ReactElement | null {
           >
             <div className="flex min-w-0 flex-1 items-center gap-2">
               <AlertTriangle
-                className="h-3.5 w-3.5 shrink-0 text-category-amber-text"
+                className="h-3.5 w-3.5 shrink-0 text-[var(--fleet-ribbon-ink)]"
                 aria-hidden="true"
+                data-severity-glyph=""
               />
               <span className="truncate font-semibold">{message}</span>
             </div>
@@ -551,7 +643,7 @@ export function FleetArmingRibbon(): ReactElement | null {
     );
   }
 
-  if (armedCount < 2) {
+  if (!ribbonVisible) {
     return <>{fleetDialogs}</>;
   }
 
@@ -680,10 +772,19 @@ export function FleetArmingRibbon(): ReactElement | null {
             aria-live="off"
             tabIndex={-1}
             onKeyDown={handleRibbonKeyDown}
-            className={cn(FLEET_RIBBON_SHELL_CLASS, "overflow-hidden outline-hidden")}
+            onFocus={(e) => {
+              const from = e.relatedTarget;
+              if (from instanceof HTMLElement && !e.currentTarget.contains(from)) {
+                focusBeforeRibbon = from;
+              }
+            }}
+            // Clipped across only: the composer's editor grows down over the grid
+            // as a draft wraps, and the bar itself never changes height.
+            className={cn(FLEET_RIBBON_SHELL_CLASS, "overflow-x-clip outline-hidden")}
             data-testid="fleet-arming-ribbon"
             {...ribbonMotionProps}
           >
+            {localArmedCount === 0 && <ReturnFocusOnRemoval containerRef={ribbonRef} />}
             {/* Three areas — a fixed membership anchor, a flexible status slot,
              * and the trailing controls — so the transient centre content can
              * come and go without moving the menu or Exit. */}
@@ -704,56 +805,71 @@ export function FleetArmingRibbon(): ReactElement | null {
               />
             </div>
             <div className="flex min-w-0 flex-1 items-center gap-2">
-              {showProgress && (
-                <span
-                  role="progressbar"
-                  aria-label="Broadcast progress"
-                  aria-valuemin={0}
-                  aria-valuemax={progressTotal}
-                  aria-valuenow={progressCompleted}
-                  aria-valuetext={
-                    progressFailed > 0
-                      ? `${progressCompleted - progressFailed} of ${progressTotal} sent, ${progressFailed} failed`
-                      : `${progressCompleted} of ${progressTotal} sent`
-                  }
-                  className="shrink-0 text-2xs tabular-nums text-text-secondary"
-                  data-testid="fleet-broadcast-progress"
-                >
-                  Sending {progressCompleted}/{progressTotal}
-                  {progressFailed > 0 && (
-                    <span className="font-medium text-text-primary">
-                      {" · "}
-                      <XCircle
-                        className="mr-1 inline-block h-3 w-3 align-[-2px] text-status-error"
-                        aria-hidden="true"
-                      />
-                      {progressFailed} failed
-                    </span>
-                  )}
-                </span>
-              )}
-              {/* Cancel surface is gated on batching, not on the counter threshold:
-               * cooperative cancellation can only interrupt batched fan-out
-               * (resolved.length > FLEET_LARGE_PASTE_BATCH_SIZE), so showing
-               * Cancel for sub-threshold but batching-eligible fleets keeps the
-               * affordance reachable for 6–9 target large-paste broadcasts. */}
-              {progressActive && progressTotal > FLEET_LARGE_PASTE_BATCH_SIZE && (
-                <button
-                  type="button"
-                  onClick={cancelActiveBroadcast}
-                  aria-label="Cancel broadcast"
-                  data-testid="fleet-broadcast-cancel"
-                  className={FLEET_RIBBON_TEXT_BUTTON_CLASS}
-                >
-                  Cancel
-                </button>
-              )}
-              {runStatus !== null && (
-                <FleetRunStatusLine status={runStatus} onDismiss={dismissRun} />
-              )}
-              {localArmedCount === 0 && !progressActive && (
-                <FleetHostComposer memberCount={armedCount} />
-              )}
+              {/* The composer leads and keeps its width; the outcome of what it
+               * sent sits after it and gives way first. It stays mounted while a
+               * send runs, so focus and a half-typed next message survive it. */}
+              {localArmedCount === 0 && <FleetHostComposer />}
+              {/* Beside the composer the slot holds one width from the first send on,
+               * so "Sending 1/3" turning into a summary never resizes the field
+               * someone is typing the next message into. */}
+              <div
+                className={cn(
+                  "flex min-w-0 items-center gap-2",
+                  localArmedCount > 0
+                    ? "flex-1"
+                    : progressActive || runStatus !== null
+                      ? "w-[38%] shrink-0"
+                      : "hidden"
+                )}
+              >
+                {showProgress && (
+                  <span
+                    role="progressbar"
+                    aria-label="Broadcast progress"
+                    aria-valuemin={0}
+                    aria-valuemax={progressTotal}
+                    aria-valuenow={progressCompleted}
+                    aria-valuetext={
+                      progressFailed > 0
+                        ? `${progressCompleted - progressFailed} of ${progressTotal} sent, ${progressFailed} failed`
+                        : `${progressCompleted} of ${progressTotal} sent`
+                    }
+                    className="shrink-0 text-2xs tabular-nums text-text-secondary"
+                    data-testid="fleet-broadcast-progress"
+                  >
+                    Sending {progressCompleted}/{progressTotal}
+                    {progressFailed > 0 && (
+                      <span className="font-medium text-text-primary">
+                        {" · "}
+                        <XCircle
+                          className="mr-1 inline-block h-3 w-3 align-[-2px] text-status-error"
+                          aria-hidden="true"
+                        />
+                        {progressFailed} failed
+                      </span>
+                    )}
+                  </span>
+                )}
+                {/* Cancel surface is gated on batching, not on the counter threshold:
+                 * cooperative cancellation can only interrupt batched fan-out
+                 * (resolved.length > FLEET_LARGE_PASTE_BATCH_SIZE), so showing
+                 * Cancel for sub-threshold but batching-eligible fleets keeps the
+                 * affordance reachable for 6–9 target large-paste broadcasts. */}
+                {progressActive && progressTotal > FLEET_LARGE_PASTE_BATCH_SIZE && (
+                  <button
+                    type="button"
+                    onClick={cancelActiveBroadcast}
+                    aria-label="Cancel broadcast"
+                    data-testid="fleet-broadcast-cancel"
+                    className={FLEET_RIBBON_TEXT_BUTTON_CLASS}
+                  >
+                    Cancel
+                  </button>
+                )}
+                {runStatus !== null && (
+                  <FleetRunStatusLine status={runStatus} onDismiss={dismissRun} />
+                )}
+              </div>
             </div>
             <div className="ml-auto flex shrink-0 items-center gap-1.5">
               <DropdownMenu
@@ -810,7 +926,7 @@ export function FleetArmingRibbon(): ReactElement | null {
               <span
                 aria-hidden="true"
                 data-testid="fleet-broadcast-track"
-                className="absolute inset-x-0 bottom-0 h-0.5 bg-category-amber-text transition-[width] duration-150 ease-out motion-reduce:transition-none"
+                className="absolute inset-x-0 bottom-0 h-0.5 bg-[var(--fleet-ribbon-ink)] transition-[width] duration-150 ease-out motion-reduce:transition-none"
                 style={{ width: `${Math.round((progressCompleted / progressTotal) * 100)}%` }}
               />
             )}

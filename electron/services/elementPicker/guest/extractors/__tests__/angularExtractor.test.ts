@@ -153,6 +153,22 @@ function idOf(selector: string): string {
   return pick(selector).elementId;
 }
 
+function widen(): void {
+  window.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "ArrowUp", altKey: true, bubbles: true, cancelable: true })
+  );
+}
+
+/** What the last selection the host was told of covers. */
+function selected(): { scope: unknown; elementIds: string[] } | null {
+  const last = events.filter((event) => event.type === "selectionChanged").at(-1);
+  if (last?.type !== "selectionChanged") return null;
+  return {
+    scope: last.scope,
+    elementIds: last.observations.map((observation) => observation.elementId),
+  };
+}
+
 function hover(selector: string): HoverObservation {
   query(selector).dispatchEvent(new MouseEvent("pointermove", { bubbles: true, composed: true }));
   for (const callback of frames.splice(0)) callback(0);
@@ -252,6 +268,22 @@ describe("the Angular extractor", () => {
     expect(roots.CardComponent!.rootElementIds).toEqual([idOf("app-card")]);
     expect(roots.AppComponent!.rootElementIds).toEqual([idOf("app-root")]);
     expect(observation.capabilities.componentSelection).toEqual({ state: "available" });
+  });
+
+  it("widens to each component out in turn, as its host element, with Alt+ArrowUp", () => {
+    mount(App);
+    const hosts = ["app-button", "app-card", "app-root"].map(idOf);
+    const picked = pick("button.go");
+    for (const [index, name] of ["ButtonComponent", "CardComponent", "AppComponent"].entries()) {
+      widen();
+      expect(selected()).toEqual({
+        scope: { kind: "component", componentId: record(picked, name).componentId },
+        elementIds: [hosts[index]],
+      });
+    }
+    const count = events.length;
+    widen();
+    expect(events).toHaveLength(count);
   });
 
   it("reports each class's file as a hint and its line beside it, never as a position", () => {

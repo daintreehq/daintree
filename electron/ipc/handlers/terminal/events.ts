@@ -30,6 +30,10 @@ import type {
   TerminalResourceBatchPayload,
 } from "../../../../shared/types/pty-host.js";
 import type { PtyDataRouting } from "../../../services/pty/types.js";
+import { CodexLiveSessionAttribution } from "../../../services/codex/CodexLiveSessionAttribution.js";
+import { deliverFirstPrompt } from "../../../services/pty/firstPromptDelivery.js";
+import type { TerminalFirstPrompt } from "../../../../shared/types/panel.js";
+import { isCleaningUp } from "../../../lifecycle/shutdownCoordinator.js";
 import {
   setSpawnConfirmationTimeoutHandler,
   settleSpawnConfirmation,
@@ -139,6 +143,18 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   };
   ptyClient.on("submit-status", handleSubmitStatus);
   handlers.push(() => ptyClient.off("submit-status", handleSubmitStatus));
+
+  // The first send written to a run with no first prompt (#15521), with the
+  // project of the run that took it.
+  const handleFirstPrompt = (
+    id: string,
+    firstPrompt: TerminalFirstPrompt,
+    projectId: string | undefined
+  ) => {
+    if (projectId) deliverFirstPrompt(projectId, id, firstPrompt);
+  };
+  ptyClient.on("first-prompt", handleFirstPrompt);
+  handlers.push(() => ptyClient.off("first-prompt", handleFirstPrompt));
 
   // Spawn result events (success or failure)
   const handleSpawnResult = (id: string, result: SpawnResult) => {
@@ -338,6 +354,15 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
     }
   );
   handlers.push(unsubSessionCaptured);
+
+  // The same saved-pane id, learned while a Codex run is still going rather
+  // than as it ends (#15268), so a quit or crash that skips both captures above
+  // doesn't lose it.
+  const liveCodexAttribution = new CodexLiveSessionAttribution({
+    ptyClient,
+    isQuitting: isCleaningUp,
+  });
+  handlers.push(() => liveCodexAttribution.dispose());
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

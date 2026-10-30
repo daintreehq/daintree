@@ -11,6 +11,8 @@ interface WorktreePathPickerProps {
   isPending?: boolean;
   isGeneratingPath: boolean;
   errorField?: ErrorField | null;
+  /** The path was renamed to dodge an existing directory — see `PathResolvedHint`. */
+  pathWasAutoResolved?: boolean;
   onBrowseClick: () => void;
   disabled?: boolean;
 }
@@ -29,6 +31,7 @@ export function WorktreePathPicker({
   isPending,
   isGeneratingPath,
   errorField,
+  pathWasAutoResolved,
   onBrowseClick,
   disabled,
 }: WorktreePathPickerProps) {
@@ -41,7 +44,9 @@ export function WorktreePathPicker({
 
   // A generated path differs from its siblings only in the last segment, which
   // is exactly what a left-anchored input clips. While the field isn't being
-  // edited, show the tail; the user's own caret wins once they're in it.
+  // edited, `elideStart` paints the tail; the user's own caret wins once they're
+  // in it. The input is kept scrolled to its end beneath that, so a click lands
+  // on the character the tail showed there.
   const inputRef = useRef<HTMLInputElement>(null);
   useLayoutEffect(() => {
     const input = inputRef.current;
@@ -65,9 +70,14 @@ export function WorktreePathPicker({
       autoCorrect="off"
       autoCapitalize="off"
       className="font-mono text-xs"
+      elideStart
       disabled={isPending}
       invalid={hasError}
-      aria-describedby={hasError ? "validation-error" : undefined}
+      aria-describedby={
+        [hasError ? "validation-error" : null, pathWasAutoResolved ? "path-resolved-hint" : null]
+          .filter(Boolean)
+          .join(" ") || undefined
+      }
       trailing={
         <>
           {showGeneratingSpinner && (
@@ -84,10 +94,18 @@ export function WorktreePathPicker({
   );
 }
 
-/** Rides the row's hint rail — see `BranchResolvedHint`. */
+/**
+ * Rides the row's hint rail — see `BranchResolvedHint`. Keeps the id the
+ * input's `aria-describedby` points at.
+ */
 export function PathResolvedHint() {
   return (
-    <p className="text-xs text-text-secondary" role="status" aria-live="polite">
+    <p
+      id="path-resolved-hint"
+      className="text-xs text-text-secondary"
+      role="status"
+      aria-live="polite"
+    >
       Renamed to avoid a conflict with an existing directory
     </p>
   );

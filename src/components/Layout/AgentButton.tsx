@@ -39,15 +39,15 @@ import {
   ContextMenuActionItem,
   ContextMenuContent,
   ContextMenuItem,
-  ContextMenuRadioGroup,
-  ContextMenuRadioItem,
+  ContextMenuMeta,
   ContextMenuSeparator,
   ContextMenuSub,
   ContextMenuSubContent,
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { MenuActionSourceContext, useMenuActionSource } from "@/components/ui/menu-source";
+import { useMenuActionSource } from "@/components/ui/menu-source";
+import { useOverlayFocusRestore } from "@/components/ui/overlay-focus-restore";
 import {
   Bookmark,
   Check,
@@ -137,21 +137,23 @@ interface WorktreeMenuItemsProps {
 // Grid/Dock) into one row per worktree. Row click (and keyboard Enter)
 // launches in grid; the inline Dock affordance gives mouse users the
 // secondary location without a second submenu hop, mirroring the pin
-// button pattern in DockLaunchButton.
+// button pattern in DockLaunchButton. D on a highlighted row is its keyboard
+// twin, since the aria-hidden span has no focus of its own; the row names it
+// to assistive tech.
 //
 // Closing-the-menu mechanics: Radix ContextMenu Root has no `open` prop,
-// so we can't use a controlled-state shortcut. Instead, the inline Dock
-// click is allowed to bubble to the parent ContextMenuItem so Radix's
-// normal handleSelect → onClose chain still fires (which is what closes
-// the menu). To avoid double-firing the row's grid dispatch on top of
-// the dock dispatch, the inline button sets a ref before bubbling; the
-// row's onSelect honors the ref and skips the grid dispatch when set.
-// pointerDown/pointerUp still stopPropagation to keep Radix from
-// treating the icon press as the row's primary selection event.
+// so we can't use a controlled-state shortcut. Instead, the Dock click (or
+// D, via a synthetic click on the row, as Radix does for Enter) reaches the
+// ContextMenuItem so Radix's normal handleSelect → onClose chain still fires
+// (which is what closes the menu). Both set a ref first, and the row's
+// onSelect is the only dispatch site: it launches where the ref says and
+// resets it to grid. pointerDown/pointerUp still stopPropagation to keep
+// Radix from treating the icon press as the row's primary selection event.
 function WorktreeMenuItems({ agentType }: WorktreeMenuItemsProps) {
   const { worktrees } = useWorktrees();
-  const dockClickedRef = useRef(false);
+  const locationRef = useRef<"grid" | "dock">("grid");
   const source = useMenuActionSource();
+  const focusRestore = useOverlayFocusRestore();
   return (
     <>
       {worktrees.map((wt) => {
@@ -161,21 +163,40 @@ function WorktreeMenuItems({ agentType }: WorktreeMenuItemsProps) {
             key={wt.id}
             className="group/wt-row pr-1"
             data-testid={`agent-context-worktree-${wt.id}`}
+            textValue={label}
             onSelect={() => {
-              if (dockClickedRef.current) {
-                dockClickedRef.current = false;
-                return;
-              }
+              const location = locationRef.current;
+              locationRef.current = "grid";
               void actionService.dispatch(
                 "agent.launch",
-                { agentId: agentType, worktreeId: wt.id, location: "grid" },
+                { agentId: agentType, worktreeId: wt.id, location },
                 { source }
               );
+            }}
+            onKeyDown={(e) => {
+              if (e.key !== "d" && e.key !== "D") return;
+              if (e.metaKey || e.ctrlKey || e.altKey) return;
+              e.preventDefault();
+              e.stopPropagation();
+              // The menu content resets its pointer-gesture flags on keydown, but
+              // stopPropagation keeps this key from reaching it.
+              focusRestore?.onContentKeyDown();
+              locationRef.current = "dock";
+              e.currentTarget.click();
             }}
           >
             <FolderGit2 data-menu-icon className="mr-2 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
             <span className="flex-1 truncate">{label}</span>
-            <RowControlTooltip label="Launch in dock">
+            <span className="sr-only">, press D to launch in dock</span>
+            {/* Shown on :focus-visible only, so a hover never suggests D; always
+                laid out so moving focus never resizes the menu. */}
+            <span
+              aria-hidden="true"
+              className="ml-2 shrink-0 opacity-0 group-focus-visible/wt-row:opacity-100"
+            >
+              <KbdChord shortcut="D" density="compact" />
+            </span>
+            <RowControlTooltip label="Launch in dock" shortcut="D">
               <span
                 role="presentation"
                 aria-hidden="true"
@@ -183,12 +204,7 @@ function WorktreeMenuItems({ agentType }: WorktreeMenuItemsProps) {
                 onPointerDown={stopPointer}
                 onPointerUp={stopPointer}
                 onClick={() => {
-                  dockClickedRef.current = true;
-                  void actionService.dispatch(
-                    "agent.launch",
-                    { agentId: agentType, worktreeId: wt.id, location: "dock" },
-                    { source }
-                  );
+                  locationRef.current = "dock";
                 }}
                 className={cn(
                   ROW_CONTROL_CLASS,
@@ -433,16 +449,15 @@ export function AgentButton({
 
   // Persist the toolbar pick to the worktree-scoped slot so repeated launches
   // on the same worktree stay stable, while other worktrees keep their own
-  // defaults. Pass `undefined` to clear the worktree override (returning the
-  // button to the agent-level default). Guard on activeWorktreeId — when no
-  // worktree is active we skip persistence entirely rather than polluting the
-  // global scope.
+  // defaults. Pass `null` to pin the bare agent to this worktree. Guard on
+  // activeWorktreeId — when no worktree is active we skip persistence entirely
+  // rather than polluting the global scope.
   const dismissPresetNotice = () => {
     setPresetNotice(null);
     return ++presetNoticeGenerationRef.current;
   };
 
-  const persistWorktreePick = (presetId: string | undefined) => {
+  const persistWorktreePick = (presetId: string | null) => {
     if (!activeWorktreeId) return;
     const worktreeId = activeWorktreeId;
     const previous = savedPresetId ? activePreset : undefined;
@@ -469,13 +484,11 @@ export function AgentButton({
       .catch(() => {});
   };
 
-  // The agent-default row clears BOTH scopes: the worktree override and the
-  // stale agent-level pick that resolveEffectivePresetId would otherwise fall
-  // back to (issue #6358).
-  const clearDefaultPick = () => {
-    void useAgentSettingsStore.getState().updateAgent(type, { presetId: undefined });
-    persistWorktreePick(undefined);
-  };
+  // The agent-default row saves the bare agent to this worktree's slot rather
+  // than clearing it: an empty slot falls through to the agent-level preset
+  // (#6358), and clearing that instead would take it from every other
+  // worktree inheriting it (#15054). Settings owns the agent-level preset.
+  const pickAgentDefault = () => persistWorktreePick(null);
 
   // D on a highlighted row is the keyboard twin of a gutter click, mirroring the
   // plugin tray's P-to-pin: Enter and Space stay on launch, the menu stays open.
@@ -508,6 +521,16 @@ export function AgentButton({
       </span>
     </>
   );
+
+  // ContextMenuMeta is hidden from assistive tech, so the state is spoken
+  // separately as part of the item's name.
+  const renderContextDefaultMark = (isDefault: boolean) =>
+    isDefault ? (
+      <>
+        <span className="sr-only">, current default</span>
+        <ContextMenuMeta>Current default</ContextMenuMeta>
+      </>
+    ) : null;
 
   // Launch from a dropdown row's label zone. Unlike the primary button, the
   // row names an explicit preset, so we forward it directly rather than
@@ -841,12 +864,12 @@ export function AgentButton({
                 <DropdownMenuItem
                   className="group/preset-row items-stretch py-0 pr-2.5 pl-0"
                   onSelect={(e) => e.preventDefault()}
-                  onKeyDown={(e) => setDefaultOnKey(e, clearDefaultPick)}
+                  onKeyDown={(e) => setDefaultOnKey(e, pickAgentDefault)}
                   onClick={(e) => {
                     // Element (not HTMLElement) so a gutter SVG-icon click still
                     // resolves; closest() lives on Element.
                     if (e.target instanceof Element && e.target.closest('[data-zone="gutter"]')) {
-                      clearDefaultPick();
+                      pickAgentDefault();
                       return;
                     }
                     launchWithPreset(null);
@@ -979,47 +1002,34 @@ export function AgentButton({
                 data-testid="context-submenu-content"
                 className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
               >
-                <ContextMenuRadioGroup value={savedPresetId ?? ""}>
-                  <MenuActionSourceContext.Consumer>
-                    {(menuSource) => (
-                      <ContextMenuRadioItem
-                        value=""
-                        onSelect={() => {
-                          clearDefaultPick();
-                          void actionService.dispatch(
-                            "agent.launch",
-                            { agentId: type, presetId: null },
-                            { source: menuSource ?? "user" }
-                          );
-                        }}
-                      >
-                        Agent default
-                      </ContextMenuRadioItem>
-                    )}
-                  </MenuActionSourceContext.Consumer>
-                  <MenuActionSourceContext.Consumer>
-                    {(menuSource) => (
-                      <>
-                        {presets.map((preset) => (
-                          <ContextMenuRadioItem
-                            key={preset.id}
-                            value={preset.id}
-                            onSelect={() => {
-                              persistWorktreePick(preset.id);
-                              void actionService.dispatch(
-                                "agent.launch",
-                                { agentId: type, presetId: preset.id },
-                                { source: menuSource ?? "user" }
-                              );
-                            }}
-                          >
-                            {preset.displayTitle ?? preset.name.replace(/^CCR:\s*/, "")}
-                          </ContextMenuRadioItem>
-                        ))}
-                      </>
-                    )}
-                  </MenuActionSourceContext.Consumer>
-                </ContextMenuRadioGroup>
+                {/* Plain items, not radios: picking one launches it once and the
+                    worktree default stays where it was, so a radio mark that
+                    never moved to the picked row would misstate what happened.
+                    The chevron's gutter and D are where the default changes. */}
+                <ContextMenuActionItem
+                  actionId="agent.launch"
+                  args={{ agentId: type, presetId: null }}
+                >
+                  {agentMenuMark}
+                  Agent default
+                  {renderContextDefaultMark(!savedPresetId)}
+                </ContextMenuActionItem>
+                {presets.map((preset) => (
+                  <ContextMenuActionItem
+                    key={preset.id}
+                    actionId="agent.launch"
+                    args={{ agentId: type, presetId: preset.id }}
+                  >
+                    <BrandMark
+                      brandColor={preset.color ?? getBrandColorHex(type)}
+                      className="mr-2 h-3.5 w-3.5 shrink-0"
+                    >
+                      <config.icon />
+                    </BrandMark>
+                    {preset.displayTitle ?? preset.name.replace(/^CCR:\s*/, "")}
+                    {renderContextDefaultMark(savedPresetId === preset.id)}
+                  </ContextMenuActionItem>
+                ))}
               </ContextMenuSubContent>
             </ContextMenuSub>
           )}

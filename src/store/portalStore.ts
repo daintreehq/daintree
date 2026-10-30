@@ -1,6 +1,6 @@
 import { create, type StateCreator } from "zustand";
 import { persist } from "zustand/middleware";
-import type { PortalTab, PortalLink } from "@shared/types";
+import type { PortalTab, PortalLink, PortalTabHistory } from "@shared/types";
 import { reinsert, type RemovedPosition } from "@/lib/undoToast";
 import { getPortalPlaceholderBounds } from "@/lib/portalBounds";
 import {
@@ -14,6 +14,7 @@ import { useUIStore } from "./uiStore";
 import { createDebouncedSafeJSONStorage } from "./persistence/safeStorage";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import { isProjectViewCached } from "@/lib/viewCacheState";
 
 interface PortalState {
   isOpen: boolean;
@@ -21,6 +22,13 @@ interface PortalState {
   activeTabId: string | null;
   tabs: PortalTab[];
   createdTabs: Set<string>;
+  // Tabs whose restore gave up, so the dock stops showing a load that will never
+  // finish. Cleared by a successful create or the user's Retry; eviction notices
+  // leave it alone, since the tab is already uncreated.
+  restoreFailedTabs: Set<string>;
+  // Last history main reported for each live tab. A tab without an entry has
+  // nowhere to go as far as the toolbar knows.
+  tabHistory: Record<string, PortalTabHistory>;
   links: PortalLink[];
   defaultNewTabUrl: string | null;
   // Opt-in cross-worktree dev-server dashboard, rendered below the active tab
@@ -47,9 +55,12 @@ interface PortalActions {
   updateTabTitle: (id: string, title: string) => void;
   updateTabUrl: (id: string, url: string) => void;
   updateTabIcon: (id: string, icon: string | undefined) => void;
+  updateTabHistory: (id: string, history: PortalTabHistory) => void;
   markTabCreated: (id: string) => void;
   unmarkTabCreated: (id: string) => void;
   markTabsUncreated: (tabIds: string[]) => void;
+  markTabRestoreFailed: (id: string) => void;
+  clearTabRestoreFailed: (id: string) => void;
   isTabCreated: (id: string) => boolean;
   reset: () => void;
   addLink: (link: Omit<PortalLink, "id" | "order">) => void;
@@ -70,10 +81,47 @@ const initialState: PortalState = {
   activeTabId: null,
   tabs: DEFAULT_PORTAL_TABS,
   createdTabs: new Set<string>(),
+  restoreFailedTabs: new Set<string>(),
+  tabHistory: {},
   links: [...DEFAULT_SYSTEM_LINKS],
   defaultNewTabUrl: null,
   showDevDashboard: false,
 };
+
+function withoutTab(tabIds: Set<string>, id: string): Set<string> {
+  if (!tabIds.has(id)) return tabIds;
+  const next = new Set(tabIds);
+  next.delete(id);
+  return next;
+}
+
+function keepTabs(tabIds: Set<string>, tabs: PortalTab[]): Set<string> {
+  if (tabIds.size === 0) return tabIds;
+  return new Set([...tabIds].filter((id) => tabs.some((t) => t.id === id)));
+}
+
+function withoutHistory(
+  history: Record<string, PortalTabHistory>,
+  tabIds: Iterable<string>
+): Record<string, PortalTabHistory> {
+  let next = history;
+  for (const id of tabIds) {
+    if (!(id in next)) continue;
+    if (next === history) next = { ...history };
+    delete next[id];
+  }
+  return next;
+}
+
+function keepHistory(
+  history: Record<string, PortalTabHistory>,
+  tabs: PortalTab[]
+): Record<string, PortalTabHistory> {
+  return withoutHistory(
+    history,
+    Object.keys(history).filter((id) => !tabs.some((t) => t.id === id))
+  );
+}
 
 function isPersistedTab(value: unknown): value is PortalTab {
   if (!value || typeof value !== "object") return false;
@@ -193,7 +241,13 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
       }
       const nextCreatedTabs = new Set(state.createdTabs);
       nextCreatedTabs.delete(id);
-      set({ tabs: newTabs, activeTabId: newActiveId, createdTabs: nextCreatedTabs });
+      set({
+        tabs: newTabs,
+        activeTabId: newActiveId,
+        createdTabs: nextCreatedTabs,
+        restoreFailedTabs: withoutTab(state.restoreFailedTabs, id),
+        tabHistory: withoutHistory(state.tabHistory, [id]),
+      });
       window.electron.portal.closeTab({ tabId: id });
 
       if (!wasActive) return;
@@ -240,7 +294,13 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
       for (const tabId of state.createdTabs) {
         window.electron.portal.closeTab({ tabId });
       }
-      set({ tabs: [], activeTabId: null, createdTabs: new Set<string>() });
+      set({
+        tabs: [],
+        activeTabId: null,
+        createdTabs: new Set<string>(),
+        restoreFailedTabs: new Set<string>(),
+        tabHistory: {},
+      });
     },
 
     duplicateTab: (id) => {
@@ -275,7 +335,13 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
       }
       const nextCreatedTabs = new Set<string>();
       if (state.createdTabs.has(id)) nextCreatedTabs.add(id);
-      set({ tabs: [keptTab], activeTabId: id, createdTabs: nextCreatedTabs });
+      set({
+        tabs: [keptTab],
+        activeTabId: id,
+        createdTabs: nextCreatedTabs,
+        restoreFailedTabs: keepTabs(state.restoreFailedTabs, [keptTab]),
+        tabHistory: keepHistory(state.tabHistory, [keptTab]),
+      });
     },
 
     closeTabsAfter: (id) => {
@@ -297,7 +363,13 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
       const nextCreatedTabs = new Set(
         [...state.createdTabs].filter((tabId) => remainingTabs.some((t) => t.id === tabId))
       );
-      set({ tabs: remainingTabs, activeTabId: newActiveId, createdTabs: nextCreatedTabs });
+      set({
+        tabs: remainingTabs,
+        activeTabId: newActiveId,
+        createdTabs: nextCreatedTabs,
+        restoreFailedTabs: keepTabs(state.restoreFailedTabs, remainingTabs),
+        tabHistory: keepHistory(state.tabHistory, remainingTabs),
+      });
     },
 
     updateTabTitle: (id, title) =>
@@ -315,25 +387,71 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
         tabs: s.tabs.map((t) => (t.id === id ? { ...t, icon } : t)),
       })),
 
+    updateTabHistory: (id, history) =>
+      set((s) => {
+        if (!s.tabs.some((t) => t.id === id)) return s;
+        const current = s.tabHistory[id];
+        if (
+          current?.canGoBack === history.canGoBack &&
+          current.canGoForward === history.canGoForward
+        ) {
+          return s;
+        }
+        return {
+          tabHistory: {
+            ...s.tabHistory,
+            [id]: { canGoBack: history.canGoBack, canGoForward: history.canGoForward },
+          },
+        };
+      }),
+
     markTabCreated: (id) =>
       set((s) => {
         const newSet = new Set(s.createdTabs);
         newSet.add(id);
-        return { createdTabs: newSet };
+        return { createdTabs: newSet, restoreFailedTabs: withoutTab(s.restoreFailedTabs, id) };
       }),
 
+    // A view main let go takes its history with it; the tab's next view
+    // starts from its URL alone.
     unmarkTabCreated: (id) =>
       set((s) => {
         const newSet = new Set(s.createdTabs);
         newSet.delete(id);
-        return { createdTabs: newSet };
+        return { createdTabs: newSet, tabHistory: withoutHistory(s.tabHistory, [id]) };
       }),
 
     markTabsUncreated: (tabIds) =>
       set((s) => {
         const newSet = new Set(s.createdTabs);
         for (const id of tabIds) newSet.delete(id);
-        return { createdTabs: newSet };
+        return { createdTabs: newSet, tabHistory: withoutHistory(s.tabHistory, tabIds) };
+      }),
+
+    // Only the selected tab of an open Portal is waiting on a restore. A tab
+    // anywhere else comes back through whatever puts it on screen again.
+    markTabRestoreFailed: (id) => {
+      const state = get();
+      const tab = state.tabs.find((t) => t.id === id);
+      if (!tab?.url || !state.isOpen || state.activeTabId !== id) return;
+      if (state.createdTabs.has(id)) return;
+      if (!state.restoreFailedTabs.has(id)) {
+        set({ restoreFailedTabs: new Set(state.restoreFailedTabs).add(id) });
+      }
+      // Main parks the previous tab's view only when a show succeeds, so that
+      // page would still cover the failure. A cached view must not hide the
+      // front project's tab.
+      if (!isProjectViewCached()) {
+        safeFireAndForget(Promise.resolve(window.electron.portal.hide()), {
+          context: "Hide portal after a failed restore",
+        });
+      }
+    },
+
+    clearTabRestoreFailed: (id) =>
+      set((s) => {
+        if (!s.restoreFailedTabs.has(id)) return s;
+        return { restoreFailedTabs: withoutTab(s.restoreFailedTabs, id) };
       }),
 
     isTabCreated: (id) => get().createdTabs.has(id),
@@ -342,6 +460,8 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
       set({
         ...initialState,
         createdTabs: new Set<string>(),
+        restoreFailedTabs: new Set<string>(),
+        tabHistory: {},
       }),
 
     addLink: (link) =>

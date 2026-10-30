@@ -5,6 +5,7 @@ import type {
   AgentSubagentsResult,
   AgentSubagentTranscriptResult,
   CodexFolderSessionsResult,
+  CodexRestoreMatchResult,
 } from "../../../shared/types/ipc/agentSubagents.js";
 import type { CodexQuotaProfile } from "../../../shared/types/ipc/agentQuota.js";
 
@@ -59,6 +60,38 @@ const findSessionsSchema = z.object({
   codexHome: absolutePath("codexHome").optional(),
 });
 
+/**
+ * Restore's prompt match for held same-folder panes (#15269). Like the
+ * resume-latest lookup it runs before any PTY exists, so it names folders, and
+ * it answers with pane keys and session ids only. It sends no conversation
+ * text either way: each pane's launch prompt arrives as a SHA-256 digest, which
+ * also keeps a validation failure from having any prompt to report. The bounds
+ * sit well above a real restore and well below the IPC envelope.
+ */
+const matchRestoreSessionsSchema = z.object({
+  scopes: z
+    .array(
+      z.object({
+        cwd: absolutePath("cwd"),
+        codexHome: absolutePath("codexHome").optional(),
+        reserveLatest: z.boolean().optional(),
+        panes: z
+          .array(
+            z.object({
+              key: id,
+              promptHash: z.string().regex(/^[0-9a-f]{64}$/),
+              at: z.number().finite().positive(),
+              resolve: z.boolean(),
+            })
+          )
+          .min(1)
+          .max(256),
+      })
+    )
+    .max(64),
+  exclude: z.array(id).max(1024),
+});
+
 export const codexNamespace = defineIpcNamespace({
   name: "codex",
   ops: {
@@ -97,6 +130,15 @@ export const codexNamespace = defineIpcNamespace({
         const { listCodexSessionsForCwd } =
           await import("../../services/codex/CodexSubagentService.js");
         return listCodexSessionsForCwd(cwd, codexHome);
+      }
+    ),
+    matchRestoreSessions: opValidated(
+      CODEX_METHOD_CHANNELS.matchRestoreSessions,
+      matchRestoreSessionsSchema,
+      async (request): Promise<CodexRestoreMatchResult> => {
+        const { matchCodexRestoreSessions } =
+          await import("../../services/codex/CodexSubagentService.js");
+        return matchCodexRestoreSessions(request);
       }
     ),
     // Argument-free: main enumerates the profiles from its own copy of the

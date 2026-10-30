@@ -35,7 +35,7 @@ export const theme: BuiltInThemeSource = {
     status: {
       success: "#1E7A5C",
       warning: "#8A661A",
-      danger: "#C0413E",
+      danger: "#BC3D3A",
       info: "#2E6E96",
     },
     activity: {
@@ -97,6 +97,10 @@ export const theme: BuiltInThemeSource = {
   tokens: {
     "accent-muted": "rgba(0,119,163,0.30)",
     "accent-soft": "rgba(0,119,163,0.18)",
+    // Solid so the field edge clears 3:1 on every surface a field sits on
+    // (3.09–3.78:1); the alpha `border-strong` it used to follow measured
+    // 1.33–1.35:1.
+    "border-input": "#79858D",
     "focus-ring": "rgba(0,119,163,0.35)",
     "grain-opacity": "0.016",
     "overlay-hover": "rgba(39,48,55,0.08)",
@@ -177,7 +181,6 @@ export const theme: BuiltInThemeSource = {
     "pulse-range-bg": "#E9F0F5",
     "pulse-ring-offset": "#FFFFFF",
     "pulse-skeleton-gradient": "linear-gradient(90deg, #C2D9E6 25%, #E9F0F5 50%, #C2D9E6 75%)",
-    "dialog-header-bg": "#F5FAFD",
     "review-commit-input-bg": "#FAFCFE",
     // Small-chrome gradient between two audited near-white stops; label ink
     // holds 7.3:1 on the darker stop.

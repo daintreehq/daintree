@@ -7,7 +7,11 @@ import {
   UI_INLINE_LOADING_GATE_MS,
 } from "@/lib/animationUtils";
 import type { VoiceCorrectionRange } from "@/store/voiceRecordingStore";
-import type { VoiceSubmitOutcome, VoiceSubmitWait } from "./hooks/useVoiceWaitSubmit";
+import type {
+  VoiceSendCleanup,
+  VoiceSubmitOutcome,
+  VoiceSubmitWait,
+} from "./hooks/useVoiceWaitSubmit";
 
 /** How far the drain's creep reaches: the correction after it owns the rest of the bar. */
 const FINISHING_CEILING = 0.3;
@@ -86,10 +90,20 @@ export function polishingShareAt(wait: VoiceSubmitWait, now: number): number {
   return EXPECTED_SHARE * Math.min(1, Math.max(0, (now - wait.beganAt) / span));
 }
 
-/** The wait's caption: what it waits on, and the way out. */
+/**
+ * The wait's caption: what it waits on, and the ways out. Only the cleanup's
+ * wait is one Enter cuts short; the transcript still finishes first.
+ */
 export function voiceSubmitWaitCaption(wait: VoiceSubmitWait): string {
-  return `${wait.phase === "polishing" ? "Polishing…" : "Finishing…"} · Esc to cancel`;
+  return wait.phase === "polishing"
+    ? "Polishing… · Enter to send as dictated · Esc to cancel"
+    : "Finishing… · Esc to cancel";
 }
+
+const UNCLEANED_RECEIPT: Record<VoiceSendCleanup, string> = {
+  skipped: "Sent · cleanup skipped",
+  failed: "Sent · cleanup failed",
+};
 
 interface VoiceSubmitProgressProps {
   wait: VoiceSubmitWait | null;
@@ -117,7 +131,8 @@ interface VoiceSubmitProgressProps {
  * turning to a receipt as it fades; one still being handed over holds where it
  * stands, saying so. Escape, or a send held back, lets it fade where it
  * stands, caption and all. A wait that ends inside the gate leaves nothing to
- * take down; a handover that outlasts it still shows. Mount one per attempt
+ * take down, unless its send went without the cleanup; a handover that
+ * outlasts it still shows. Mount one per attempt
  * (keyed), so each attempt gets its own gate and no bar carries over from the
  * last.
  */
@@ -136,6 +151,8 @@ export function VoiceSubmitProgress({
   const [exiting, setExiting] = useState(false);
   const [wasShown, setWasShown] = useState(false);
   const [lastWaitCaption, setLastWaitCaption] = useState("");
+  // A send that went without its cleanup is told once, shown wait or not.
+  const [uncleanedDue, setUncleanedDue] = useState(true);
   const reduced = prefersReducedMotion();
   const handingOver = outcome?.kind === "sending";
   const active = wait !== null || handingOver;
@@ -147,7 +164,9 @@ export function VoiceSubmitProgress({
   const caption = wait
     ? voiceSubmitWaitCaption(wait)
     : outcome?.kind === "sent"
-      ? "Sent"
+      ? outcome.cleanup
+        ? UNCLEANED_RECEIPT[outcome.cleanup]
+        : "Sent"
       : outcome?.kind === "sending"
         ? "Sending…"
         : lastWaitCaption;
@@ -156,6 +175,12 @@ export function VoiceSubmitProgress({
   if (visible !== wasShown) {
     setWasShown(visible);
     setExiting(!visible && !active);
+  }
+  // One whose wait ended inside the gate still gets its receipt: nothing else
+  // says the prompt went out as dictated.
+  if (uncleanedDue && outcome?.kind === "sent" && outcome.cleanup && !active) {
+    setUncleanedDue(false);
+    if (!wasShown && !exiting) setExiting(true);
   }
 
   useLayoutEffect(() => {

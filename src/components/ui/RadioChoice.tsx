@@ -6,10 +6,11 @@ import { cn } from "@/lib/utils";
  *
  * Deliberately not `SettingsChoicebox`: that one is `role="radio"` buttons with
  * a roving tabindex, so its arrow keys move focus without moving the selection.
- * A native radio group moves both together, is one tab stop, and has its checked
- * state painted by the user agent — which is the only thing that still reads as
- * "chosen" once `forced-colors: active` has flattened every author fill and
- * border. Anything mutually exclusive and keyboard-driven should use this;
+ * A native radio group moves both together, is one tab stop, and under
+ * `forced-colors: active` has its checked state painted by the user agent —
+ * the only thing that still reads as "chosen" once every author fill and border
+ * is flattened. (Otherwise the host draws it; see the radio rule in `base.css`.)
+ * Anything mutually exclusive and keyboard-driven should use this;
  * `SettingsChoicebox` remains for the settings-form grid it is built into.
  *
  * The row is the click target, so the whole card is the `<label>`. That would
@@ -23,7 +24,7 @@ import { cn } from "@/lib/utils";
  * tailwind-merge resolves same-property utilities by order, so a `block` in this
  * string silently wins and drops the control onto its own line.
  *
- * The focus ring sits on the row rather than the ~13px control — the row is what
+ * The focus ring sits on the row rather than the 16px control — the row is what
  * the pointer targets and it encloses the control. Scoped to `input` so focusing
  * a nested dependent control does not also light up the card.
  */
@@ -47,8 +48,11 @@ export const CHOICE_SELECTED =
 export const CHOICE_UNSELECTED =
   "border-border-default hover:bg-overlay-soft hover:border-border-strong";
 
-/** Control (~13px) + `gap-3`, so a nested control lines up with the label column. */
-export const CHOICE_LABEL_INSET = "ml-[25px]";
+/**
+ * Control + `gap-3`, so a nested control lines up with the label column: the
+ * drawn 16px radio normally, the native ~13px one under forced colours.
+ */
+export const CHOICE_LABEL_INSET = "ml-7 forced-colors:ml-[25px]";
 
 interface RadioChoiceGroupProps {
   /** Names the group. Visible unless `legendHidden`. */
@@ -156,17 +160,19 @@ export function RadioChoiceRow({
         data-testid={testId}
         aria-labelledby={labelId}
         aria-describedby={description ? descriptionId : undefined}
-        // The accent tint comes from the global `accent-color` base rule. The
-        // visible focus indicator is the row's, so the control's own ring is
-        // neutralised with a transparent outline rather than one of the
+        // The ring and dot are drawn by the radio base rule; under forced
+        // colours the native control comes back. The visible focus indicator
+        // is the row's, so the control's own ring is neutralised with a
+        // transparent outline rather than one of the
         // outline-suppressing utilities, which the repo's focus-ring contract
         // treats as removing the indicator outright. Left bare it would fall
         // through to Chromium's cobalt, the one hue the app never renders.
         // Under forced-colors the UA repaints this outline, so the control
         // keeps a system ring there as well.
         //
-        // mt-1 centres the ~13px control in the label's 20px line box.
-        className="mt-1 shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-transparent"
+        // Centred in the label's 20px line box: mt-0.5 for the drawn 16px
+        // control, mt-1 for the native ~13px one under forced colours.
+        className="mt-0.5 forced-colors:mt-1 shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-transparent"
       />
       <span className="min-w-0 flex-1">
         <span id={labelId} className="block text-sm font-medium text-text-primary">

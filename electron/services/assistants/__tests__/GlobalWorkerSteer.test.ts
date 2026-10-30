@@ -24,7 +24,7 @@ interface Fake {
 describe("GlobalWorkerSteer (#14551)", () => {
   let fake: Fake;
   let writes: string[];
-  let submits: Array<{ text: string; token: string; handback?: string }>;
+  let submits: Array<{ text: string; token: string; handback?: string; promptAsWritten: string }>;
   let escapes: number;
   /** Runs before each pause between keys, standing in for whatever happens meanwhile. */
   let duringGap: () => void;
@@ -82,8 +82,8 @@ describe("GlobalWorkerSteer (#14551)", () => {
         duringRead();
         return { data: fake.screen };
       },
-      submit: (_id, text, token, handback) =>
-        submits.push({ text, token, ...(handback ? { handback } : {}) }),
+      submit: (_id, text, token, handback, promptAsWritten) =>
+        submits.push({ text, token, ...(handback ? { handback } : {}), promptAsWritten }),
       write: (_id, data) => {
         writes.push(data);
         // The host stamps every raw key as typed input, ours included.
@@ -100,6 +100,18 @@ describe("GlobalWorkerSteer (#14551)", () => {
   });
 
   describe("an agent worker it didn't launch", () => {
+    it("offers the brief alone as the run's first prompt when it asks for a handback (#15521)", async () => {
+      await steer.prompt(target(), {
+        command: "Rebase onto develop",
+        handback: true,
+        machineName: "studio-01",
+      });
+
+      expect(submits[0]!.handback).toBeDefined();
+      expect(submits[0]!.text).toContain(`DAINTREE-DONE-${submits[0]!.handback}`);
+      expect(submits[0]!.promptAsWritten).toBe("Rebase onto develop");
+    });
+
     it("is prompted under the strict guard, stamped with where it came from", async () => {
       const receipt = await steer.prompt(target(), {
         command: "Rebase onto develop",
@@ -110,6 +122,8 @@ describe("GlobalWorkerSteer (#14551)", () => {
       expect(submits).toHaveLength(1);
       expect(submits[0]!.text).toContain("From the Daintree Assistant on studio-01");
       expect(submits[0]!.text.endsWith("Rebase onto develop")).toBe(true);
+      // The run's first prompt is the brief, not the stamp (#15521).
+      expect(submits[0]!.promptAsWritten).toBe("Rebase onto develop");
       expect(receipt).toMatchObject({
         sent: true,
         terminalId: WORKER,
@@ -385,7 +399,9 @@ describe("liveGlobalWorkerSteer (#14551)", () => {
       expect.stringContaining("go"),
       expect.any(String),
       undefined,
-      "settled-prompt-strict"
+      "settled-prompt-strict",
+      undefined,
+      "go"
     );
   });
 });

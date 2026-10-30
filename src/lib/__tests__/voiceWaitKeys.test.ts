@@ -140,6 +140,19 @@ describe("voiceWaitKeys", () => {
     }
   );
 
+  // A page's dialog blocks only its own pane (#15037), so it doesn't own a key
+  // that landed on the page.
+  it("still routes a page key to the waiting composer while a page dialog is open", () => {
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("data-pane-dialog", "");
+    document.body.appendChild(dialog);
+    const owner = claim();
+
+    expect(press("Escape").defaultPrevented).toBe(true);
+    expect(owner.cancel).toHaveBeenCalledTimes(1);
+  });
+
   it("takes a page key for the composer a modal holds", () => {
     const modal = document.createElement("div");
     modal.setAttribute("role", "dialog");

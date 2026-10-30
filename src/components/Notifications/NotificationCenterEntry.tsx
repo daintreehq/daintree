@@ -237,10 +237,13 @@ export function NotificationCenterEntry({
   const showMessage = !compact || !entry.title;
   const destination = useNotificationDestination(entry.context);
   const navigable = destination.kind !== "none";
-  // Another project's rows already name that project, so saying it again in
-  // the status would be noise; the menu still gives it as the reason.
+  // Rows from another project or machine already name it, so saying it again
+  // in the status would be noise; the menu still gives it as the reason.
   const unavailableLabel =
-    destination.kind === "none" && destination.reason && destination.reason !== "other-project"
+    destination.kind === "none" &&
+    destination.reason &&
+    destination.reason !== "other-project" &&
+    destination.reason !== "other-host"
       ? NOTIFICATION_UNAVAILABLE_LABEL[destination.reason]
       : null;
 
@@ -263,7 +266,7 @@ export function NotificationCenterEntry({
     ) {
       return;
     }
-    void goToNotificationSource(entry.context);
+    void goToNotificationSource(entry.context, entry.id);
   };
 
   const showChip =
@@ -933,7 +936,7 @@ function RowOptionsMenu({
             openedFromRowRef.current = false;
             event.preventDefault();
             const row = triggerRef.current?.closest('[role="listitem"]');
-            void goToNotificationSource(entry.context).then((arrived) => {
+            void goToNotificationSource(entry.context, entry.id).then((arrived) => {
               // A source gone since the menu opened leaves the inbox open, and
               // the row, which now says why, takes focus back.
               if (!arrived && row instanceof HTMLElement && row.isConnected) {

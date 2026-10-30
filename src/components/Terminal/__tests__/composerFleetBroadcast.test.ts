@@ -3,7 +3,10 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
-import { __resetFleetTargetOverridesStoreForTesting } from "@/store/fleetTargetOverridesStore";
+import {
+  __resetFleetTargetOverridesStoreForTesting,
+  useFleetTargetOverridesStore,
+} from "@/store/fleetTargetOverridesStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useFleetRunStore } from "@/store/fleetRunStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -108,6 +111,71 @@ describe("Enter in an armed composer", () => {
     expect(submitCrossHostMock.mock.calls[0]![1]).toContain("hello");
   });
 
+  it("sends nothing, and says why, when context would reach an agent on another host", async () => {
+    armLocal("t-1");
+    armCrossHostTarget({
+      hostId: "studio-01",
+      hostName: "studio-01",
+      terminalId: "remote-1",
+      title: "remote agent",
+    });
+    useFleetTargetOverridesStore.getState().setPayloadOverride("t-1", "Review @diff here");
+    const onSent = vi.fn();
+    const onRefused = vi.fn();
+    expect(tryComposerFleetBroadcast(true, "t-1", "Review @diff", onSent, onRefused)).toBe(true);
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onRefused).toHaveBeenCalledTimes(1);
+    expect(onSent).not.toHaveBeenCalled();
+    expect(submitMock).not.toHaveBeenCalled();
+    expect(submitCrossHostMock).not.toHaveBeenCalled();
+    // What was set up for this send waits for the next one.
+    expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({
+      "t-1": "Review @diff here",
+    });
+  });
+
+  it("lets the send go once the agent on another host is skipped", async () => {
+    armLocal("t-1");
+    armCrossHostTarget({
+      hostId: "studio-01",
+      hostName: "studio-01",
+      terminalId: "remote-1",
+      title: "remote agent",
+    });
+    const remote = useFleetArmingStore.getState().crossHostTargets[0]!.key;
+    useFleetTargetOverridesStore.getState().setSkipped(remote, true);
+    Object.assign(window.electron, {
+      git: { getWorkingDiff: vi.fn().mockResolvedValue("diff --git a/x b/x") },
+    });
+    const onRefused = vi.fn();
+    expect(tryComposerFleetBroadcast(true, "t-1", "Review @diff", vi.fn(), onRefused)).toBe(true);
+    await vi.waitFor(() => expect(submitMock).toHaveBeenCalled());
+    expect(onRefused).not.toHaveBeenCalled();
+    expect(submitMock.mock.calls[0]![1]).toContain("diff --git a/x b/x");
+    expect(submitCrossHostMock).not.toHaveBeenCalled();
+  });
+
+  it("lets the send go when the other host's agent gets text without context", async () => {
+    armLocal("t-1");
+    armCrossHostTarget({
+      hostId: "studio-01",
+      hostName: "studio-01",
+      terminalId: "remote-1",
+      title: "remote agent",
+    });
+    const remote = useFleetArmingStore.getState().crossHostTargets[0]!.key;
+    useFleetTargetOverridesStore.getState().setPayloadOverride(remote, "Review your changes");
+    Object.assign(window.electron, {
+      git: { getWorkingDiff: vi.fn().mockResolvedValue("diff --git a/x b/x") },
+    });
+    const onRefused = vi.fn();
+    expect(tryComposerFleetBroadcast(true, "t-1", "Review @diff", vi.fn(), onRefused)).toBe(true);
+    await vi.waitFor(() => expect(submitCrossHostMock).toHaveBeenCalled());
+    expect(onRefused).not.toHaveBeenCalled();
+    expect(submitCrossHostMock.mock.calls[0]![1]).toBe("Review your changes");
+  });
+
   it("leaves a pane that isn't focused, or isn't armed, alone", () => {
     armLocal("t-1");
     armCrossHostTarget({
@@ -132,7 +200,10 @@ describe("the composer's send", () => {
     // outside the send path.
     expect(end).toBeGreaterThan(start);
     const body = source.slice(start, end);
-    expect(body).toContain("tryComposerFleetBroadcast(isFocusedTerminal, terminalId, text,");
+    // A send whose composer unmounted mid-wait goes by the fan-out it had at Enter (#15510).
+    expect(body).toMatch(
+      /tryComposerFleetBroadcast\(\s*departed \? departed\.fanOut : isFocusedTerminal,\s*terminalId,\s*text,/
+    );
     expect(body).not.toMatch(/armedIds\.size/);
   });
 });

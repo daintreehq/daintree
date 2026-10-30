@@ -210,20 +210,30 @@ export class ClientSettingsCopy {
         userMessage: `Couldn't read ${host}'s settings status.`,
       });
     }
-    const changed = new Set(
+    const counts = new Map(
       parsed.data.sections
         .filter((section) => section.add + section.update > 0)
-        .map((section) => section.section)
+        .map((section) => [section.section, section] as const)
     );
+    const changeCounts: NonNullable<SettingsCopyStatus["changeCounts"]> = {};
+    for (const category of PORTABLE_SETTINGS_CATEGORIES) {
+      const own = category.sections.flatMap((section) => counts.get(section) ?? []);
+      if (own.length === 0) continue;
+      changeCounts[category.id] = {
+        add: own.reduce((sum, section) => sum + section.add, 0),
+        update: own.reduce((sum, section) => sum + section.update, 0),
+      };
+    }
     const lastCopy = parsed.data.lastCopy;
+    if (sections === null) {
+      return { supported: true, changes: null, lastCopy: lastCopy && lastCopyOf(lastCopy) };
+    }
     return {
       supported: true,
-      changes:
-        sections === null
-          ? null
-          : PORTABLE_SETTINGS_CATEGORIES.filter((category) =>
-              category.sections.some((section) => changed.has(section))
-            ).map((category) => category.id),
+      changes: PORTABLE_SETTINGS_CATEGORIES.filter((category) => category.id in changeCounts).map(
+        (category) => category.id
+      ),
+      changeCounts,
       lastCopy: lastCopy && lastCopyOf(lastCopy),
     };
   }

@@ -236,12 +236,12 @@ export function getPushBannerConfig(
 }
 
 const BASE_BRANCH_STATUS_CONFIG: Record<string, { label: string; bg: string; text: string }> = {
-  A: { label: "A", bg: "bg-status-success/15", text: "text-status-success" },
-  D: { label: "D", bg: "bg-status-error/15", text: "text-status-error" },
-  M: { label: "M", bg: "bg-status-warning/15", text: "text-status-warning" },
-  R: { label: "R", bg: "bg-status-info/15", text: "text-status-info" },
-  C: { label: "C", bg: "bg-status-info/15", text: "text-status-info" },
-  U: { label: "U", bg: "bg-status-error/15", text: "text-status-error" },
+  A: { label: "A", bg: "bg-status-success/15", text: "text-status-success-text" },
+  D: { label: "D", bg: "bg-status-error/15", text: "text-status-danger-text" },
+  M: { label: "M", bg: "bg-status-warning/15", text: "text-status-warning-text" },
+  R: { label: "R", bg: "bg-status-info/15", text: "text-status-info-text" },
+  C: { label: "C", bg: "bg-status-info/15", text: "text-status-info-text" },
+  U: { label: "U", bg: "bg-status-error/15", text: "text-status-danger-text" },
 };
 
 export function getBaseBranchStatusConfig(status: string): {
@@ -253,7 +253,7 @@ export function getBaseBranchStatusConfig(status: string): {
     BASE_BRANCH_STATUS_CONFIG[status] ?? {
       label: status,
       bg: "bg-tint/[0.06]",
-      text: "text-text-secondary",
+      text: "text-text-primary",
     }
   );
 }
@@ -387,6 +387,25 @@ export function sortFiles(
  * looks exactly like an unpinned one.
  */
 export const REVIEW_HUB_STICKY_BAND = "sticky top-0 z-10 bg-surface-canvas";
+
+/**
+ * The header's rows, queried against the pane's width (an `@container/header`
+ * around it). From 960px the title bar carries the toolbar in its one 32px row.
+ * Below that the toolbar drops to a 32px strip under a 31px title row, which
+ * puts the strip's divider exactly where a neighbouring pane's header draws
+ * its bottom border.
+ */
+export const REVIEW_HUB_HEADER_ROWS =
+  "grid grid-rows-1 gap-x-2 @max-[960px]/header:h-16 @max-[960px]/header:grid-rows-[minmax(0,1fr)_2rem]";
+
+/**
+ * The toolbar's cell: beside the title bar's content when there is room, a
+ * full-bleed strip on the second row when there is not. The strip repaints the
+ * canvas so a focused pane's lift stays on its title row, as it does above
+ * every other pane's toolbar, and its divider takes the header's border colour.
+ */
+export const REVIEW_HUB_HEADER_TOOLBAR =
+  "col-start-2 row-start-1 flex items-center gap-2 @max-[960px]/header:col-span-full @max-[960px]/header:row-start-2 @max-[960px]/header:-mx-3 @max-[960px]/header:min-w-0 @max-[960px]/header:self-stretch @max-[960px]/header:border-t @max-[960px]/header:border-inherit @max-[960px]/header:bg-surface-canvas @max-[960px]/header:px-3";
 
 /**
  * The band itself: every section heading in the hub ("Staged", "Changed vs

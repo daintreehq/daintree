@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fstatSync, mkdtempSync, mkdirSync, rmSync, statSync } from "fs";
+import { fstatSync, mkdtempSync, mkdirSync, readdirSync, rmSync, statSync } from "fs";
 import { tmpdir } from "os";
 import { join, normalize } from "path";
 
@@ -180,6 +180,30 @@ describe("TopologyWatcher metadata sentinel", () => {
 
     afterEach(() => {
       Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    });
+
+    it("discovers worktrees created while the first recursive subscription is arming", async () => {
+      let discovered: string[] = [];
+      host.discoverAndSyncWorktrees.mockImplementation(async () => {
+        discovered = readdirSync(metadataDir);
+      });
+      const pending = deferSubscribe();
+      await watcher.startWatcher();
+
+      mkdirSync(join(metadataDir, "first"), { recursive: true });
+      metadataWatchCallbacks[0]!("rename", "worktrees");
+      await vi.waitFor(() => {
+        expect(parcelSubscriptions).toHaveLength(1);
+        expect(discovered).toEqual(["first"]);
+      });
+
+      // inotify does not replay changes made before its recursive watch is ready.
+      mkdirSync(join(metadataDir, "second"));
+      pending.resolve();
+
+      await vi.waitFor(() => expect(discovered).toEqual(["first", "second"]), {
+        timeout: 2_000,
+      });
     });
 
     it("holds the subscribed root open so a recreated root can't reuse its inode", async () => {

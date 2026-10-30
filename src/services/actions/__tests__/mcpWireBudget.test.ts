@@ -910,7 +910,17 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 153_342): `host.switch` takes `projectId` and `terminalId`, so another
   // host's waiting notice lands on the agent's terminal. In-app only, so the
   // external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 153_540;
+  // 153_540 → 154_070 for #15270, measured at 154_060 B: `terminal.startHeld`
+  // joins the full tier beside `terminal.restart`, so an assistant that finds a
+  // held pane starts it in place instead of launching a replacement. In-app
+  // only, so the external ceiling does not move.
+  // 154_070 → 160_850 for #15399, measured at 160_846 B (+6_786):
+  // `forge.listIssueComments` (1_145 B), `forge.getPRs` (3_816 B) and
+  // `forge.getChecks` (1_825 B) join core with the five forge reads that moved
+  // down from full, so the default assistant reads a whole issue thread,
+  // several agents' PRs in one call, and which check failed. In-app only, so
+  // the external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 160_850;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

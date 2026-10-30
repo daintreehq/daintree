@@ -174,4 +174,13 @@ describe("plugin panel steps and system prompts in the preview (#13797)", () => 
     expect(lines).toContain("1. opens Plugin panel");
     expect(lines).toContain("   system prompt: Use the ledger tools.");
   });
+
+  it("says a dev preview with no command of its own runs the project's", () => {
+    const lines = formatRecipePreviewLines(
+      recipe({ terminals: [{ type: "dev-preview" }, { type: "dev-preview", devCommand: "vite" }] }),
+      { spawns: true }
+    );
+    expect(lines).toContain("1. $ (the project's dev command)");
+    expect(lines).toContain("2. $ vite");
+  });
 });

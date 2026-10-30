@@ -67,6 +67,12 @@ export class TerminalSettleWaiterRegistry {
 
     return new Promise<void>((resolve, reject) => {
       const timeout = window.setTimeout(() => {
+        // An attach that settled without announcing it is still settled:
+        // settle it now rather than report a timeout that never happened (#15271).
+        if (this.isAttachSettled(id)) {
+          this.notifyAttachSettledWaiters(id);
+          return;
+        }
         this.removeAttachSettledWaiter(id, resolve);
         reject(new Error(`Terminal ${id} attach settle timeout after ${timeoutMs}ms`));
       }, timeoutMs);

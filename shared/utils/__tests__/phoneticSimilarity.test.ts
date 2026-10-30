@@ -4,6 +4,7 @@ import {
   levenshtein,
   levenshteinRatio,
   isLearnableTerm,
+  isEverydayPhrase,
   findCorrectionCandidates,
 } from "../phoneticSimilarity.js";
 import { isCommonEnglishWord } from "../commonEnglishWords.js";
@@ -69,6 +70,20 @@ describe("isLearnableTerm", () => {
     expect(isLearnableTerm("number")).toBe(false);
     expect(isLearnableTerm("interface")).toBe(false);
     expect(isLearnableTerm("there")).toBe(false);
+  });
+});
+
+describe("isEverydayPhrase", () => {
+  it("holds when every word of the phrase is ordinary English", () => {
+    for (const phrase of ["just", "Next.", "use  state", "in it", "players", "curl"]) {
+      expect(isEverydayPhrase(phrase), phrase).toBe(true);
+    }
+  });
+
+  it("fails on a phrase with any word that isn't, or with no words at all", () => {
+    for (const phrase of ["zoo stand", "stand zoo", "dock or compose", "jest", "", " -- "]) {
+      expect(isEverydayPhrase(phrase), phrase).toBe(false);
+    }
   });
 });
 

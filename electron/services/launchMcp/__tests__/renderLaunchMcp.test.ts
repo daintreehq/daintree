@@ -63,6 +63,17 @@ describe("renderLaunchMcp", () => {
     });
   });
 
+  it("gives Codex a call timeout only for a server that asks for one (#14989)", () => {
+    const rendered = renderLaunchMcp({ format: "codex-config-overrides" }, [
+      { ...DAINTREE, toolTimeoutSec: 290 },
+      LEDGER,
+    ]);
+
+    expect(rendered.args.filter((arg) => arg.includes("tool_timeout_sec"))).toEqual([
+      "mcp_servers.daintree.tool_timeout_sec=290",
+    ]);
+  });
+
   it("refuses a key that is not a bare TOML key, or a duplicate", () => {
     expect(() =>
       renderLaunchMcp({ format: "codex-config-overrides" }, [{ ...LEDGER, key: "a.b" }])

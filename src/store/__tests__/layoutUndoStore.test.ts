@@ -200,7 +200,9 @@ describe("layoutUndoStore", () => {
     expect(useLayoutUndoStore.getState().undoStack).toHaveLength(10);
   });
 
-  it("skips snapshot when terminals have been removed and preserves history state", () => {
+  // #14969: one panel gone since the snapshot must not turn the entry into a
+  // dead end that keeps Undo enabled while doing nothing.
+  it("undo restores the panels that survive when one snapshot panel is gone", () => {
     const t1 = makeTerminal({ id: "t1", location: "grid" });
     const t2 = makeTerminal({ id: "t2", location: "grid" });
     seedTerminals([t1, t2]);
@@ -211,13 +213,206 @@ describe("layoutUndoStore", () => {
 
     useLayoutUndoStore.getState().undo();
 
-    expect(firstTerminal().location).toBe("dock");
+    const state = usePanelStore.getState();
+    expect(state.panelIds).toEqual(["t1"]);
+    expect(state.panelsById["t1"]!.location).toBe("grid");
+    expect(state.panelsById["t2"]).toBeUndefined();
 
     const undoState = useLayoutUndoStore.getState();
-    expect(undoState.undoStack).toHaveLength(1);
+    expect(undoState.undoStack).toHaveLength(0);
+    expect(undoState.canUndo).toBe(false);
+    expect(undoState.canRedo).toBe(true);
+
+    useLayoutUndoStore.getState().redo();
+    expect(usePanelStore.getState().panelsById["t1"]!.location).toBe("dock");
+  });
+
+  it("undo skips an entry with nothing left to restore and applies the next one", () => {
+    const a = makeTerminal({ id: "a", location: "grid" });
+    const b = makeTerminal({ id: "b", location: "grid" });
+    seedTerminals([a, b]);
+
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    setTerminals([a, { ...b, location: "trash" }]);
+    // Captures only `a`: `b` sits in the trash, outside layout history.
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    setTerminals([{ ...b, location: "dock" }]);
+
+    useLayoutUndoStore.getState().undo();
+
+    const state = usePanelStore.getState();
+    expect(state.panelIds).toEqual(["b"]);
+    expect(state.panelsById["b"]!.location).toBe("grid");
+    const undoState = useLayoutUndoStore.getState();
+    expect(undoState.undoStack).toHaveLength(0);
+    expect(undoState.canUndo).toBe(false);
+    expect(undoState.redoStack).toHaveLength(1);
+  });
+
+  it("redo skips an entry with nothing left to restore and applies the next one", () => {
+    const a = makeTerminal({ id: "a", location: "grid" });
+    const b = makeTerminal({ id: "b", location: "grid" });
+    seedTerminals([a, b]);
+
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    setTerminals([{ ...a, location: "dock" }, b]);
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    setTerminals([a, { ...b, location: "dock" }]);
+
+    // Records a redo entry holding `a` and `b`.
+    useLayoutUndoStore.getState().undo();
+    setTerminals([
+      { ...a, location: "dock" },
+      { ...b, location: "trash" },
+    ]);
+    // Records a redo entry holding only `a`: `b` sits in the trash.
+    useLayoutUndoStore.getState().undo();
+    setTerminals([{ ...b, location: "grid" }]);
+
+    useLayoutUndoStore.getState().redo();
+
+    const state = usePanelStore.getState();
+    expect(state.panelIds).toEqual(["b"]);
+    expect(state.panelsById["b"]!.location).toBe("dock");
+    const undoState = useLayoutUndoStore.getState();
     expect(undoState.redoStack).toHaveLength(0);
-    expect(undoState.canUndo).toBe(true);
     expect(undoState.canRedo).toBe(false);
+    expect(undoState.undoStack).toHaveLength(1);
+    expect(undoState.canUndo).toBe(true);
+  });
+
+  it("disables undo without touching the layout when no entry has a panel left", () => {
+    const a = makeTerminal({ id: "a", location: "grid" });
+    seedTerminals([a]);
+
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    const c = makeTerminal({ id: "c", location: "dock" });
+    setTerminals([c]);
+    usePanelStore.setState({ focusedId: "c" });
+
+    useLayoutUndoStore.getState().undo();
+
+    const state = usePanelStore.getState();
+    expect(state.panelIds).toEqual(["c"]);
+    expect(state.panelsById["c"]!.location).toBe("dock");
+    expect(state.focusedId).toBe("c");
+    const undoState = useLayoutUndoStore.getState();
+    expect(undoState.undoStack).toHaveLength(0);
+    expect(undoState.canUndo).toBe(false);
+    expect(undoState.redoStack).toHaveLength(0);
+    expect(undoState.canRedo).toBe(false);
+  });
+
+  it("disables redo without touching the layout when no entry has a panel left", () => {
+    const a = makeTerminal({ id: "a", location: "grid" });
+    seedTerminals([a]);
+
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    setTerminals([{ ...a, location: "dock" }]);
+    useLayoutUndoStore.getState().undo();
+    const c = makeTerminal({ id: "c", location: "dock" });
+    setTerminals([c]);
+    usePanelStore.setState({ focusedId: "c" });
+
+    useLayoutUndoStore.getState().redo();
+
+    const state = usePanelStore.getState();
+    expect(state.panelIds).toEqual(["c"]);
+    expect(state.panelsById["c"]!.location).toBe("dock");
+    expect(state.focusedId).toBe("c");
+    const undoState = useLayoutUndoStore.getState();
+    expect(undoState.redoStack).toHaveLength(0);
+    expect(undoState.canRedo).toBe(false);
+    expect(undoState.undoStack).toHaveLength(0);
+    expect(undoState.canUndo).toBe(false);
+  });
+
+  it("keeps a panel still inside a spawn batch through undo", () => {
+    const a = makeTerminal({ id: "a", location: "grid", worktreeId: "w1" });
+    seedTerminals([a]);
+
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    // A batched spawn registers the panel and files it in its worktree bucket,
+    // but only appends it to `panelIds` at the flush.
+    const pending = makeTerminal({ id: "pending", location: "grid", worktreeId: "w1" });
+    usePanelStore.setState({
+      panelsById: { a: { ...a, location: "dock" }, pending },
+      panelIds: ["a"],
+      panelIdsByWorktreeId: { w1: ["a", "pending"] },
+    });
+
+    useLayoutUndoStore.getState().undo();
+
+    const state = usePanelStore.getState();
+    expect(state.panelsById["a"]!.location).toBe("grid");
+    expect(state.panelsById["pending"]).toBe(pending);
+    expect(state.panelIds).toEqual(["a"]);
+    expect(state.panelIdsByWorktreeId["w1"]).toEqual(["a", "pending"]);
+  });
+
+  it("drops a capture with no layout panels and still ends the redo branch", () => {
+    const a = makeTerminal({ id: "a", location: "grid" });
+    seedTerminals([a]);
+
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    setTerminals([{ ...a, location: "dock" }]);
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    setTerminals([a]);
+    useLayoutUndoStore.getState().undo();
+    expect(useLayoutUndoStore.getState().undoStack).toHaveLength(1);
+    expect(useLayoutUndoStore.getState().redoStack).toHaveLength(1);
+
+    setTerminals([{ ...a, location: "trash" }]);
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+
+    const undoState = useLayoutUndoStore.getState();
+    expect(undoState.undoStack).toHaveLength(0);
+    expect(undoState.redoStack).toHaveLength(0);
+    expect(undoState.canUndo).toBe(false);
+    expect(undoState.canRedo).toBe(false);
+  });
+
+  it("pruneHistory drops only the entries with nothing left to restore", () => {
+    const a = makeTerminal({ id: "a", location: "grid" });
+    const b = makeTerminal({ id: "b", location: "grid" });
+    seedTerminals([a, b]);
+
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    setTerminals([a, { ...b, location: "trash" }]);
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    const [mixed] = useLayoutUndoStore.getState().undoStack;
+
+    setTerminals([{ ...b, location: "grid" }]);
+    useLayoutUndoStore.getState().pruneHistory();
+
+    let undoState = useLayoutUndoStore.getState();
+    expect(undoState.undoStack).toEqual([mixed]);
+    expect(undoState.canUndo).toBe(true);
+
+    setTerminals([]);
+    useLayoutUndoStore.getState().pruneHistory();
+
+    undoState = useLayoutUndoStore.getState();
+    expect(undoState.undoStack).toHaveLength(0);
+    expect(undoState.canUndo).toBe(false);
+  });
+
+  it("pruneHistory writes nothing when every entry can still restore", () => {
+    const a = makeTerminal({ id: "a", location: "grid" });
+    seedTerminals([a]);
+    const writes = vi.fn();
+    const unsubscribe = useLayoutUndoStore.subscribe(writes);
+
+    useLayoutUndoStore.getState().pruneHistory();
+    expect(writes).not.toHaveBeenCalled();
+
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    writes.mockClear();
+    useLayoutUndoStore.getState().pruneHistory();
+
+    unsubscribe();
+    expect(writes).not.toHaveBeenCalled();
+    expect(useLayoutUndoStore.getState().undoStack).toHaveLength(1);
   });
 
   it("clearHistory empties both stacks", () => {

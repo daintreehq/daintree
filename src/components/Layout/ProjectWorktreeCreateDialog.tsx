@@ -21,11 +21,18 @@ import { Button } from "@/components/ui/button";
 export function ProjectWorktreeCreateDialog({
   config,
   isOpen,
+  leavingForStock = false,
   onClose,
   onUseStock,
 }: {
   config: PanelKindConfig;
   isOpen: boolean;
+  /**
+   * The slot was switched to stock while this dialog was up — from the frame's
+   * switch, the consent notice or anywhere else the answer is saved. It leaves
+   * the way "Standard dialog…" does.
+   */
+  leavingForStock?: boolean;
   onClose: () => void;
   onUseStock: () => void;
 }) {
@@ -35,12 +42,13 @@ export function ProjectWorktreeCreateDialog({
   // back: opened in the same commit, it would capture the control that is
   // unmounting as its opener, and closing it would land focus nowhere.
   const [leaving, setLeaving] = useState(false);
+  const handingOff = leaving || leavingForStock;
 
   return (
     <AppDialog
-      isOpen={isOpen && !leaving}
+      isOpen={isOpen && !handingOff}
       onClose={onClose}
-      onCloseComplete={leaving ? onUseStock : undefined}
+      onCloseComplete={handingOff ? onUseStock : undefined}
       size="4xl"
       data-testid="plugin-worktree-create-dialog"
     >

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render, screen, fireEvent, act, cleanup } from "@testing-library/react";
 
 vi.mock("@/services/TerminalInstanceService", () => {
   const terminalInstanceService = {
@@ -792,5 +792,48 @@ describe("TerminalSearchBar", () => {
       });
       expect(input.value).toBe("draft");
     });
+  });
+
+  it("searches the terminal it is given rather than one the grid holds (#15332)", async () => {
+    const mock = createMockManaged(true);
+    const target = {
+      ensureSearchAddon: vi.fn(async () => mock.searchAddon as never),
+      getSearchAddon: vi.fn(() => mock.searchAddon as never),
+    };
+    vi.mocked(terminalInstanceService.ensureSearchAddon).mockClear();
+    const view = render(<TerminalSearchBar search={target} onClose={vi.fn()} />);
+    const input = screen.getByPlaceholderText("Find in terminal");
+    await act(() => {
+      fireEvent.change(input, { target: { value: "hello" } });
+    });
+    await act(() => {
+      vi.advanceTimersByTime(150);
+    });
+    expect(mock.searchAddon.findNext).toHaveBeenCalledWith("hello", expect.anything());
+    expect(terminalInstanceService.ensureSearchAddon).not.toHaveBeenCalled();
+    expect(terminalInstanceService.pinHistory).not.toHaveBeenCalled();
+
+    const next = createMockManaged(true);
+    const { rerender } = view;
+    rerender(
+      <TerminalSearchBar
+        search={{
+          ensureSearchAddon: async () => next.searchAddon as never,
+          getSearchAddon: () => next.searchAddon as never,
+        }}
+        onClose={vi.fn()}
+      />
+    );
+    await act(async () => {});
+    expect(next.searchAddon.findNext).toHaveBeenCalledWith("hello", expect.anything());
+
+    rerender(<TerminalSearchBar search={target} onClose={vi.fn()} />);
+    await act(() => {
+      fireEvent.change(input, { target: { value: "" } });
+    });
+    expect(mock.searchAddon.clearDecorations).toHaveBeenCalled();
+    expect(mock._resultsListeners).toHaveLength(1);
+    cleanup();
+    expect(mock._resultsListeners).toHaveLength(0);
   });
 });

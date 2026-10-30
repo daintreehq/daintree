@@ -1,0 +1,43 @@
+/* ── Fleet ribbon ──
+ * The band under the toolbar that says fleet mode is on. It used to take the
+ * category pill tint, which is the wrong strength for a full-width band: on
+ * the warm light palettes 20% amber over white lands on the beige the toolbar
+ * and sidebar already wear, and on dark 12% amber is a brown of chroma 0.02 or
+ * so that never reads as amber.
+ *
+ * Dark keeps the tint's lightness, the 12% step up from the canvas, so the
+ * bar's text and controls keep their contrast on every theme. The step is
+ * mixed in oklab into a neutral copy of the canvas, which leaves the hue
+ * exactly amber's whatever tint the canvas has, and the chroma is then set
+ * from the lightness, just inside
+ * what sRGB holds there for every amber, the colour-vision ones included. Light
+ * holds one lightness and chroma instead, the way the remote-window light is
+ * (toolbar/surface.css), because the blue-yellow amber is pale enough that a
+ * mix toward it never leaves white. Its chroma is red-green's sRGB limit at
+ * that lightness, and its lightness sits just above the point where the
+ * controls' hover wash would take their secondary text under 4.5:1.
+ *
+ * The ink is for the marks that carry the mode without colour: the left
+ * stripe, the delivery track and the confirm glyph. The category text token
+ * falls to about 2:1 on a light band under the blue-yellow palette.
+ *
+ * shared/theme/__tests__/fleetRibbonContrast.test.ts reads these values and
+ * holds them against every built-in theme and colour-vision palette. */
+.fleet-ribbon-surface {
+  --fleet-ribbon-fill: oklch(
+    from
+      color-mix(
+        in oklab,
+        var(--color-category-amber) 12%,
+        oklch(from var(--color-surface-canvas) l 0 0)
+      )
+      l calc(l * 0.2) h
+  );
+  --fleet-ribbon-ink: oklch(from var(--color-category-amber) 0.76 0.13 h);
+  background-color: var(--fleet-ribbon-fill);
+}
+
+:where(.light, [data-color-mode="light"]) .fleet-ribbon-surface {
+  --fleet-ribbon-fill: oklch(from var(--color-category-amber) 0.9 0.056 h);
+  --fleet-ribbon-ink: oklch(from var(--color-category-amber) 0.5 0.1 h);
+}

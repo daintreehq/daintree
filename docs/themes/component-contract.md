@@ -44,7 +44,7 @@ A pane's title bar and status strip are one frame, and every pane, side panel an
 
 Three families sit outside this on purpose:
 
-- **Dialog headers** use the comfortable density (`px-6 py-4 border-border-strong`), and a toolbar row directly under one keeps the dialog's `px-6` inset with a `border-divider` separator (Compare worktrees).
+- **Dialog headers** use the comfortable density: a 44px row (`min-h-11 px-6 py-2`) on the dialog's own surface with a `text-sm font-semibold` title. Its `border-divider` rule, and the footer's, show only while `AppDialog.Body` reports content running past that edge; a dialog that lays out its own scroller keeps both rules. A toolbar row directly under the header keeps the dialog's `px-6` inset with a `border-divider` separator (Compare worktrees).
 - **Full-window views** that cover the main toolbar (the plugin manager) take the toolbar's own chrome: `h-12 px-4 border-b border-divider`, with room for the traffic lights.
 - **Bottom drawers** (the Dev Preview output drawer and the Diagnostics dock, #12948) keep their 32px strips on `border-overlay`, including the session-diagnostics strip inside the drawer.
 
@@ -259,7 +259,7 @@ Numbers, ages and paths go through one formatter each, so the same value never r
 | Time remaining | `formatCountdown` + " left" | "4m 59s left" — not a clock face |
 | Size | `formatBytes` (`src/lib/formatBytes.ts`) | "512 B", "1.5 KB", "3 MB" |
 | Tokens | `formatTokenCount` | "842", "4.2k", "45k", "1.2M" — never "1000k", never a lower-case m |
-| Line churn | `DiffStat` | "+12 -3": success and error inks, space-separated, ASCII minus, nothing when both are zero |
+| Line churn | `DiffStat` | "+12 -3": the `diff-text-insert` and `diff-text-delete` inks (the success and error inks lifted to 4.5:1), space-separated, ASCII minus, nothing when both are zero |
 | Task progress | `ProgressBar` | One track, one fill, `size="thin"` under a line of text; indeterminate pulses the empty track |
 | Path | `formatPath` then `middleTruncatePath`, in `font-mono` | "~/Projects/app/…/index.ts" |
 | Branch | `truncateBranchName` when it must be cut, in `font-mono` | "feature/125-…dock-drop" |

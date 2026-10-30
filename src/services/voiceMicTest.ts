@@ -30,6 +30,9 @@ export interface MicTestHandle {
   stop: () => void;
 }
 
+/** Why a test stopped on its own: its time limit, or the device stopped sending. */
+export type MicTestEndReason = "time-limit" | "device-ended";
+
 export interface MicTestOptions {
   /** Empty for the system default. */
   deviceId: string;
@@ -37,7 +40,7 @@ export interface MicTestOptions {
   deviceLabel?: string;
   onSample: (sample: MicTestSample) => void;
   /** Called once if the stream ends or the test hits its time limit, after release. */
-  onEnded: () => void;
+  onEnded: (reason: MicTestEndReason) => void;
   /**
    * False once the caller has moved on (stopped, hidden, or picked another mic),
    * so no second mic is opened and a late one is let go before it is measured.
@@ -102,7 +105,7 @@ export async function startMicTest(options: MicTestOptions): Promise<MicTestHand
     return true;
   };
   const onTrackEnded = () => {
-    if (release()) onEnded();
+    if (release()) onEnded("device-ended");
   };
 
   try {
@@ -131,7 +134,7 @@ export async function startMicTest(options: MicTestOptions): Promise<MicTestHand
       });
     }, TICK_MS);
     limit = setTimeout(() => {
-      if (release()) onEnded();
+      if (release()) onEnded("time-limit");
     }, MAX_TEST_MS);
     track?.addEventListener?.("ended", onTrackEnded);
   } catch {

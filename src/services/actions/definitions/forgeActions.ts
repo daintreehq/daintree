@@ -4,11 +4,14 @@ import { defineAction } from "../defineAction";
 import { z } from "zod";
 import {
   ForgeCIStatusActionResultSchema,
+  ForgeChecksActionResultSchema,
+  ForgeCommentPageResultSchema,
+  ForgeCommentResultSchema,
   ForgeIssueResultSchema,
   ForgeLabelResultSchema,
   ForgePRActionResultSchema,
   ForgePRResultSchema,
-  ForgeUserResultSchema,
+  ForgePRsActionResultSchema,
 } from "@shared/types/forgeActionResults";
 import {
   ForgeIssuePageResultSchema,
@@ -59,7 +62,6 @@ import {
 } from "./forgeActionArgs";
 import {
   ForgeAssigneesResultSchema,
-  ForgeCommentResultSchema,
   ForgeDisableAutoMergeResultSchema,
   ForgeEnableAutoMergeResultSchema,
   ForgeMergePRResultSchema,
@@ -69,89 +71,8 @@ import {
 } from "./forgeActionResultSchemas";
 import type { ForgeActionRunId } from "./forgeActions.impl";
 
-/**
- * One requested number's outcome, discriminated by `status`.
- *
- * A union rather than one object with three independently optional fields,
- * because an advertised output schema is enforced: the SDK compiles it and
- * validates `structuredContent` against it with AJV. Flat optionals advertised
- * `{status:"found"}` with no `pr`, and `{status:"not_found", pr}`, as valid —
- * contradictions a strict client would have accepted and a model could have
- * expected. Discriminating makes `pr` required exactly where it exists and
- * `reason` required exactly where it means something.
- */
-const ForgePRLookupResultSchema = z.discriminatedUnion("status", [
-  z.object({
-    number: z.number().int().positive(),
-    status: z.literal("found").describe("The forge returned this pull request."),
-    pr: ForgePRResultSchema,
-  }),
-  z.object({
-    number: z.number().int().positive(),
-    status: z
-      .literal("not_found")
-      .describe("The forge was asked and has no such pull request. This is an answer."),
-  }),
-  z.object({
-    number: z.number().int().positive(),
-    status: z
-      .literal("unresolved")
-      .describe(
-        "Nothing was learned about this number — the request failed or was rate-limited. Retriable, and NOT evidence the pull request is missing."
-      ),
-    reason: z
-      .enum(["provider_unsupported", "provider_error"])
-      .describe(
-        "Why nothing was learned. `provider_error` is a failed or rate-limited request; `provider_unsupported` adds that the provider has no batch lookup at all. Both are retriable."
-      ),
-  }),
-]);
-
-const ForgePRsActionResultSchema = z.object({
-  results: z
-    .array(ForgePRLookupResultSchema)
-    .describe(
-      "One entry per requested number, in the order requested. Duplicate numbers collapse to their first occurrence, so this can be shorter than the input."
-    ),
-});
-
-// One CI check, mirroring `CheckRun` minus `rawData` — which dispatch strips,
-// and which the IPC layer already dropped. `conclusion` is absent while a check
-// is unfinished AND when the provider reported an outcome this vocabulary
-// doesn't model, so its absence never means "passed".
-const ForgeCheckRunSchema = z.object({
-  name: z.string().describe("Check name as the forge reports it; matrix jobs repeat names"),
-  status: z.enum(["queued", "in_progress", "completed"]),
-  conclusion: z
-    .enum(["success", "failure", "neutral", "cancelled", "timed_out", "action_required", "skipped"])
-    .optional()
-    .describe("Outcome once completed; absent while running or when the forge reported no verdict"),
-  required: z
-    .boolean()
-    .optional()
-    .describe("Whether this check gates merging, when the provider reports required checks"),
-  detailsUrl: z.string().optional().describe("Link to this check's output or job log"),
-});
-
-// Wrapped for the same reason as `ForgeCIStatusActionResultSchema` — a bare
-// nullable array would emit a top-level `anyOf` that `buildToolOutputSchema`
-// drops, advertising no schema at all.
-const ForgeChecksActionResultSchema = z.object({
-  checks: z.array(ForgeCheckRunSchema).nullable(),
-});
-
 // Label set returned by the add/remove-label write actions.
 const ForgeLabelArrayResultSchema = z.array(ForgeLabelResultSchema);
-
-// One page of an issue's comment thread, from the read action. Reuses the
-// single-comment shape so the read and write halves describe a comment
-// identically, plus the author the write action doesn't echo back.
-const ForgeCommentPageResultSchema = z.object({
-  items: z.array(ForgeCommentResultSchema.extend({ author: ForgeUserResultSchema.optional() })),
-  nextCursor: z.string().nullable(),
-  hasMore: z.boolean(),
-  totalCount: z.number().optional(),
-});
 
 /**
  * Run bodies load on first dispatch (#14270). Every view registers the forge
@@ -525,6 +446,12 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       danger: "safe",
       scope: "renderer",
       argsSchema: getPRArgsSchema,
+      examples: [
+        {
+          args: { prNumber: 42 },
+          description: "Fetch PR #42 from the active worktree's repo",
+        },
+      ],
       resultSchema: ForgePRActionResultSchema,
       mcpOutputSchema: true,
       run: (args, ctx) => runForgeAction("forge.getPR", args, ctx),

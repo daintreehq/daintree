@@ -169,6 +169,7 @@ vi.mock("@/clients", () => ({
     onBackendRecovering: onBackendRecoveringMock,
     onBackendReady: onBackendReadyMock,
     onSpawnResult: onSpawnResultMock,
+    onFirstPrompt: vi.fn(() => vi.fn()),
     onReduceScrollback: vi.fn(() => vi.fn()),
     onRestoreScrollback: vi.fn(() => vi.fn()),
   },

@@ -307,6 +307,26 @@ describe("fleetArmingStore", () => {
       expect([...useFleetArmingStore.getState().armedIds]).toEqual(["t1"]);
     });
 
+    it("arms plugin-contributed agents in the observed state (#14961)", () => {
+      seedPanels([
+        makeAgentTerminal("a1", { agentState: "waiting" }),
+        makeAgentTerminal("plugin", {
+          agentState: "waiting",
+          detectedAgentId: undefined,
+          launchAgentId: "acme-plugin-agent",
+          everDetectedAgent: false,
+        }),
+        makeAgentTerminal("pluginWorking", {
+          agentState: "working",
+          detectedAgentId: undefined,
+          launchAgentId: "acme-plugin-agent",
+          everDetectedAgent: false,
+        }),
+      ]);
+      useFleetArmingStore.getState().armByState("waiting", "current", false);
+      expect([...useFleetArmingStore.getState().armedIds].sort()).toEqual(["a1", "plugin"]);
+    });
+
     it("excludes plain terminals whose agentState matches the preset", () => {
       // Fleet is detection-based. A plain shell with no detectedAgentId must not
       // enter the fleet even if its agentState matches the preset.
@@ -897,6 +917,19 @@ describe("fleetArmingStore", () => {
       expect(ids.sort()).toEqual(["t1", "t3"]);
     });
 
+    it("counts plugin-contributed agents the same as built-ins (#14961)", () => {
+      seedPanels([
+        makeAgentTerminal("t1", { agentState: "waiting" }),
+        makeAgentTerminal("plugin", {
+          agentState: "waiting",
+          detectedAgentId: undefined,
+          launchAgentId: "acme-plugin-agent",
+          everDetectedAgent: false,
+        }),
+      ]);
+      expect(computeArmByStateIds("waiting", "current", "wt-1").sort()).toEqual(["plugin", "t1"]);
+    });
+
     it("returns empty when no panels match the preset", () => {
       const ids = computeArmByStateIds("finished", "current", "wt-1");
       expect(ids).toEqual([]);
@@ -933,6 +966,23 @@ describe("fleetArmingStore", () => {
       seedPanels([makeAgentTerminal("a"), makeAgentTerminal("b", { location: "trash" })]);
 
       expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a"]);
+    });
+
+    it("keeps a pane armed in place across lock and unlock (#14964)", () => {
+      seedPanels([makeAgentTerminal("a"), makeAgentTerminal("b"), makeAgentTerminal("c")]);
+      useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+
+      seedPanels([
+        makeAgentTerminal("a"),
+        makeAgentTerminal("b", { isInputLocked: true }),
+        makeAgentTerminal("c"),
+      ]);
+      expect(useFleetArmingStore.getState().armOrder).toEqual(["a", "b", "c"]);
+      expect(useFleetArmingStore.getState().armedIds.has("b")).toBe(true);
+
+      seedPanels([makeAgentTerminal("a"), makeAgentTerminal("b"), makeAgentTerminal("c")]);
+      expect(useFleetArmingStore.getState().armOrder).toEqual(["a", "b", "c"]);
+      expect(useFleetArmingStore.getState().armedIds.has("b")).toBe(true);
     });
 
     it("drops armed ids when a panel mutates into a non-PTY kind (#8957 batch B)", () => {

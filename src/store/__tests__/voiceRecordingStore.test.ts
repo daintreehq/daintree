@@ -251,10 +251,17 @@ describe("voiceRecordingStore — micNotice (#14606)", () => {
     }
   });
 
-  it("keeps a lost notice past the session's end, but not a silent one", () => {
+  it("keeps a lost notice past the session's end, but not a silent or stand-in one", () => {
+    const fallback = {
+      kind: "fallback" as const,
+      target: TARGET,
+      deviceLabel: "AirPods Pro",
+      chosenLabel: "USB Mic",
+    };
     for (const [notice, kept] of [
       [lost, true],
       [silent, false],
+      [fallback, false],
     ] as const) {
       useVoiceRecordingStore.getState().beginSession(TARGET);
       useVoiceRecordingStore.setState({ micNotice: notice, micDeviceLabel: "AirPods Pro" });

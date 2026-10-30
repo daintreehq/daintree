@@ -388,6 +388,192 @@ describe("VoiceRecordingService — scratch that (#14636)", () => {
   });
 });
 
+describe("VoiceRecordingService — a scratch that removes nothing says why (#14973)", () => {
+  it("says an edited passage was kept", async () => {
+    const { draft, setDraft, voiceStore } = await setup();
+
+    complete("One.", "a");
+    complete("Two.", "b");
+    setDraft("One. Tw0.");
+    complete("Scratch that.", "c");
+
+    expect(draft()).toBe("One. Tw0.");
+    expect(voiceStore.getState().announcement?.text).toMatch(/edited by hand/);
+    expect(voiceStore.getState().scratchRefusal).toMatchObject({
+      panelId: PANEL,
+      reason: "edited",
+    });
+  });
+
+  it("says there was nothing left once the session's words are all gone", async () => {
+    const { draft, voiceStore } = await setup("Typed before.");
+
+    complete("One.", "a");
+    complete("Scratch that.", "b");
+    expect(voiceStore.getState().scratchRefusal).toBeNull();
+    complete("Scratch that.", "c");
+
+    expect(draft()).toBe("Typed before.");
+    expect(voiceStore.getState().announcement?.text).toMatch(/nothing/i);
+    const first = voiceStore.getState().scratchRefusal;
+    expect(first).toMatchObject({ panelId: PANEL, reason: "nothing" });
+
+    // The same refusal again is a new one for the composer to read out.
+    complete("Scratch that.", "d");
+    expect(voiceStore.getState().scratchRefusal?.reason).toBe("nothing");
+    expect(voiceStore.getState().scratchRefusal?.id).not.toBe(first?.id);
+  });
+
+  it("says nothing for a scratch that removed words, and drops an earlier refusal", async () => {
+    const { voiceStore } = await setup();
+
+    complete("Scratch that.", "a");
+    expect(voiceStore.getState().scratchRefusal).not.toBeNull();
+    voiceStore.getState().clearAnnouncement();
+    complete("One.", "b");
+    complete("Scratch that.", "c");
+
+    expect(voiceStore.getState().scratchRefusal).toBeNull();
+    expect(voiceStore.getState().announcement).toBeNull();
+  });
+
+  it("keeps the note through the replacement words, then lets it go", async () => {
+    const { draft, setDraft, voiceStore } = await setup();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      complete("One.", "a");
+      setDraft("0ne.");
+      complete("Scratch that.", "b");
+      complete("Two.", "c");
+      vi.advanceTimersByTime(5_000);
+
+      expect(draft()).toBe("0ne. Two.");
+      expect(voiceStore.getState().scratchRefusal?.reason).toBe("edited");
+
+      complete("Scratch that.", "d");
+      expect(draft()).toBe("0ne.");
+      expect(voiceStore.getState().scratchRefusal).toBeNull();
+
+      // A second refusal starts the time again.
+      complete("Scratch that.", "e");
+      vi.advanceTimersByTime(5_000);
+      complete("Scratch that.", "f");
+      vi.advanceTimersByTime(5_000);
+      expect(voiceStore.getState().scratchRefusal?.reason).toBe("edited");
+      vi.advanceTimersByTime(1_000);
+      expect(voiceStore.getState().scratchRefusal).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops the note when the next session begins, or its panel's buffer is cleared", async () => {
+    const { begin, voiceStore } = await setup();
+
+    complete("Scratch that.", "a");
+    begin("session-2");
+    expect(voiceStore.getState().scratchRefusal).toBeNull();
+
+    begin(SESSION_ID);
+    complete("Scratch that.", "b");
+    voiceStore.getState().clearPanelBuffer("other-panel");
+    expect(voiceStore.getState().scratchRefusal).not.toBeNull();
+    voiceStore.getState().clearPanelBuffer(PANEL);
+    expect(voiceStore.getState().scratchRefusal).toBeNull();
+  });
+
+  it("says a refusal the stop's drain brought with the stop, which would cut it off", async () => {
+    const { service, voiceStore } = await setup();
+    Reflect.set(service, "sessionId", SESSION_ID);
+    vi.mocked(window.electron.voiceInput.stop).mockImplementationOnce(async () => {
+      complete("Scratch that.", "a");
+      return { rawText: null };
+    });
+
+    await service.stop("Dictation stopped.");
+
+    expect(voiceStore.getState().announcement?.text).toMatch(/^Dictation stopped\. .*nothing/i);
+    // The note outlives the session it was heard in.
+    expect(voiceStore.getState().scratchRefusal?.reason).toBe("nothing");
+  });
+
+  it("says a missed file reference the stop's drain brought with the stop", async () => {
+    const { service, voiceStore } = await setup();
+    Reflect.set(service, "sessionId", SESSION_ID);
+    vi.mocked(window.electron.voiceInput.stop).mockImplementationOnce(async () => {
+      complete("Link to the old API.", "a", "t1");
+      callbacks.fileToken!({
+        sessionId: SESSION_ID,
+        transcriptId: "t1",
+        references: [{ description: "old API", path: null }],
+      });
+      return { rawText: null };
+    });
+
+    await service.stop("Dictation stopped.");
+
+    expect(voiceStore.getState().announcement?.text).toBe(
+      "Dictation stopped. No file found for “old API”."
+    );
+  });
+
+  it("shares the border with a missed file reference, the newer of the two standing", async () => {
+    const { setDraft, voiceStore } = await setup();
+
+    complete("Scratch that.", "a");
+    expect(voiceStore.getState().scratchRefusal).not.toBeNull();
+    complete("Link to the old API.", "b", "t1");
+    callbacks.fileToken!({
+      sessionId: SESSION_ID,
+      transcriptId: "t1",
+      references: [{ description: "old API", path: null }],
+    });
+    expect(voiceStore.getState().scratchRefusal).toBeNull();
+    expect(voiceStore.getState().fileReferenceNote).not.toBeNull();
+
+    setDraft("Link to the old APl.");
+    complete("Scratch that.", "c");
+    expect(voiceStore.getState().scratchRefusal?.reason).toBe("edited");
+    expect(voiceStore.getState().fileReferenceNote).toBeNull();
+  });
+
+  it("says a refusal heard just before the stop with it too, and only a standing one", async () => {
+    const { service, voiceStore, setDraft } = await setup();
+
+    complete("One.", "a");
+    setDraft("0ne.");
+    complete("Scratch that.", "b");
+    await service.stop("Dictation stopped.");
+    expect(voiceStore.getState().announcement?.text).toMatch(/^Dictation stopped\. .*edited/);
+
+    voiceStore.getState().beginSession({ panelId: PANEL, projectId: PROJECT }, "session-2");
+    await service.stop("Dictation stopped.");
+    expect(voiceStore.getState().announcement?.text).toBe("Dictation stopped.");
+
+    // Nor one from a session before the one a stop catches still arming.
+    voiceStore.getState().beginSession({ panelId: PANEL, projectId: PROJECT }, "session-3");
+    complete("Scratch that.", "c");
+    expect(voiceStore.getState().scratchRefusal).not.toBeNull();
+    voiceStore.setState({ status: "arming", activeTarget: { panelId: "panel-2" } });
+    await service.stop("Dictation stopped.");
+    expect(voiceStore.getState().announcement?.text).toBe("Dictation stopped.");
+  });
+
+  it("leaves an open Canopy reply's refusal to its own composer", async () => {
+    const { voiceStore } = await setup();
+    const { useCanopyStore } = await import("@/store/canopyStore");
+    useCanopyStore.setState({ isOpen: true });
+    voiceStore
+      .getState()
+      .beginSession({ panelId: PANEL, projectId: PROJECT, surface: "canopy-reply" }, SESSION_ID);
+
+    complete("Scratch that.", "a");
+
+    expect(voiceStore.getState().scratchRefusal?.reason).toBe("nothing");
+    expect(voiceStore.getState().announcement).toBeNull();
+  });
+});
+
 describe("VoiceRecordingService — scratch that at the caret (#14634)", () => {
   const draftKey = `${PROJECT}:${PANEL}`;
 

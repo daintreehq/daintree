@@ -8,6 +8,7 @@ import type {
 } from "@shared/types/plugin-sdk-react";
 import { Button } from "@/components/ui/button";
 import { DismissButton } from "@/components/ui/DismissButton";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
 import { pluginKitLayoutCore } from "./PluginKitLayoutCore";
@@ -19,6 +20,7 @@ import {
   wholeCount,
 } from "./kitPaneShared";
 import { fn, hasContent, node, nonEmpty, oneOf, pickRootProps, str } from "./kitProps";
+import { useKitOverlayZClass } from "./kitScope";
 
 const ErrorGlyph = SEVERITY_GLYPH.error;
 
@@ -142,6 +144,7 @@ export function KitLoadMoreFooter({
   const total = wholeCount(totalCount);
   const auto = autoLoad === true;
   const rootRef = useRef<HTMLDivElement>(null);
+  const overlayZ = useKitOverlayZClass();
   const loadRef = useRef(load);
   const focusWasInside = useRef(false);
 
@@ -199,7 +202,9 @@ export function KitLoadMoreFooter({
     body = (
       <>
         <ErrorGlyph aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-status-error" />
-        <span className="min-w-0 truncate">{message}</span>
+        <TruncatedTooltip content={message} contentClassName={overlayZ}>
+          <span className="min-w-0 truncate">{message}</span>
+        </TruncatedTooltip>
         <Button
           variant="ghost"
           size="xs"

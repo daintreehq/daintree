@@ -90,7 +90,12 @@ export interface ProjectSwitchOutgoingState {
  */
 export type ProjectFocusOnActivateIntent =
   | { intent: "focus-next-waiting" }
-  | { intent: "focus-panel"; panelId: string }
+  | {
+      intent: "focus-panel";
+      panelId: string;
+      /** Where to land instead when the panel is gone by the time the view opens. */
+      worktreeId?: string;
+    }
   /**
    * Land with this worktree selected instead of the one the project last had.
    * One that's gone by then leaves the project as it opens, and says so.
@@ -107,6 +112,12 @@ export type ProjectFocusOnActivateIntent =
    * pane it comes back in.
    */
   | { intent: "restore-trashed"; runId: string; spawnedAt: number; expiresAt: number }
+  /**
+   * A worktree another host's new-worktree dialog placed here: what this host
+   * reported it didn't apply (a setup recipe its copy lacks), said once the
+   * project is showing rather than dropped with the dialog (#14991).
+   */
+  | { intent: "placement-note"; note: string }
   | {
       /**
        * A plugin's OS banner was clicked (#13505): run its first action, which

@@ -26,3 +26,20 @@ export function machineDisplayName(
   }
   return hostname.replace(/\.local\.?$/i, "").slice(0, 256) || hostname;
 }
+
+/**
+ * This machine as ssh from another one would name it: the login, at the
+ * hostname. A user with no passwd entry has no login to give, so the hostname
+ * alone, which ssh logs into as the caller's own user.
+ */
+export function sshLoginTarget(
+  hostname: string = os.hostname(),
+  user: () => string = () => os.userInfo().username
+): string {
+  try {
+    const name = user();
+    return name ? `${name}@${hostname}` : hostname;
+  } catch {
+    return hostname;
+  }
+}

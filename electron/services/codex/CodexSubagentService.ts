@@ -8,16 +8,20 @@
  * --last` open in this folder" for a pane being restored cold (#12178), where
  * there is no terminal to ask and the answer is a fact about the CLI's own
  * selection rule rather than an attribution. They share the protocol plumbing
- * below and nothing else.
+ * below and nothing else. `matchCodexRestoreSessions` reads a folder's threads
+ * for a third, restore's launch-prompt match (#15269), which is decided in
+ * `codexRestoreMatch`.
  *
  * Everything leaves here in the provider-neutral shape from
  * `shared/types/ipc/agentSubagents`, so the renderer's list and transcript are
  * the same code that renders Claude's children. The protocol below is the only
  * Codex-specific part, which is the whole point of the split.
  *
- * Attribution is the hard part. Daintree only learns a Codex session id from
- * the `codex resume` footer during post-quit teardown, so a *running* terminal
- * has no id to key off. The fallback is the terminal's own cwd plus recency,
+ * Attribution is the hard part. A running terminal has an id to key off only
+ * once something learned it: a resume, the teardown scrape of the `codex
+ * resume` footer, or live attribution matching the prompt Daintree sent
+ * (`CodexLiveSessionAttribution`), which declines whenever its match isn't
+ * unique. Without one the fallback is the terminal's own cwd plus recency,
  * which is exact per worktree and ambiguous when two Codex sessions share one.
  * When it is ambiguous the caller is told so rather than silently shown some
  * other session's children.
@@ -46,7 +50,17 @@ import {
   type AgentSubagentTranscriptResult,
   type CodexFolderSession,
   type CodexFolderSessionsResult,
+  type CodexRestoreMatchRequest,
+  type CodexRestoreMatchResult,
+  type CodexRestoreMatchScope,
 } from "../../../shared/types/ipc/agentSubagents.js";
+import {
+  RESTORE_MATCH_EARLY_SLACK_MS,
+  matchRestorePanes,
+  promptHashesForFirstMessage,
+  type RestoreMatchScope,
+  type RestoreMatchThread,
+} from "./codexRestoreMatch.js";
 
 /**
  * Turns fetched per transcript read. A turn carries a prompt and an answer, so
@@ -93,6 +107,8 @@ interface RawThread {
   preview?: unknown;
   /** The user's own name for the thread, when they gave it one. */
   name?: unknown;
+  /** Where the session came from: `"cli"` for the TUI, `"exec"` for `codex exec`. */
+  source?: unknown;
   cwd?: unknown;
   status?: unknown;
   createdAt?: unknown;
@@ -334,17 +350,31 @@ async function resolveCwdSpellings(cwd: string): Promise<string[]> {
   return cwds;
 }
 
-async function listThreadsInCwd(call: CodexAppServerCall, cwds: string[]): Promise<RawThread[]> {
-  const response = await call<{ data?: unknown }>("thread/list", {
+async function listThreadPageInCwd(
+  call: CodexAppServerCall,
+  cwds: string[],
+  limit: number
+): Promise<{ threads: RawThread[]; more: boolean }> {
+  const response = await call<{ data?: unknown; nextCursor?: unknown }>("thread/list", {
     cwd: cwds,
     sortKey: "recency_at",
     sortDirection: "desc",
-    limit: PARENT_CANDIDATE_LIMIT,
+    limit,
     // Reads the state-DB index instead of rescanning JSONL rollouts to repair
     // metadata: ~3ms against ~900ms, for data this feature only displays.
     useStateDbOnly: true,
   });
-  return Array.isArray(response?.data) ? (response.data as RawThread[]) : [];
+  const threads = Array.isArray(response?.data) ? (response.data as RawThread[]) : [];
+  // `nextCursor` is null exactly when the page reached the end. A server that
+  // omits it can only be read by whether the page came back full.
+  const more =
+    typeof response?.nextCursor === "string" ||
+    (response?.nextCursor === undefined && threads.length >= limit);
+  return { threads, more };
+}
+
+async function listThreadsInCwd(call: CodexAppServerCall, cwds: string[]): Promise<RawThread[]> {
+  return (await listThreadPageInCwd(call, cwds, PARENT_CANDIDATE_LIMIT)).threads;
 }
 
 async function listChildren(
@@ -586,6 +616,91 @@ export async function resolveCodexResumeLatestSession(cwd: string): Promise<stri
   }
 }
 
+/** A root thread as live attribution reads it. `preview` is conversation text: never log it. */
+export interface CodexCreatedThread {
+  sessionId: string;
+  preview: string;
+  /** Unix seconds, as the protocol reports it. */
+  createdAt: number;
+}
+
+const CREATED_SINCE_PAGE_SIZE = 50;
+const CREATED_SINCE_MAX_PAGES = 4;
+const CREATED_SINCE_LOOKUP_TIMEOUT_MS = 5_000;
+
+/**
+ * Every root thread in one folder created at or after `sinceSeconds`, newest
+ * first, for attributing a live pane to its conversation. `cwds` is every
+ * spelling the folder's panes use. Null when the answer can't be complete — a
+ * failed query, a malformed page, or more threads in the window than the page
+ * budget reaches — because attribution is a uniqueness claim, and a thread left
+ * unread could be the rival that makes a match ambiguous.
+ *
+ * Same request boundaries as the folder picker (default interactive sources,
+ * unarchived, state DB only), sorted by creation so the walk can stop as soon
+ * as it passes the window.
+ */
+export async function listCodexThreadsCreatedSince(
+  cwds: readonly string[],
+  sinceSeconds: number,
+  codexHome?: string
+): Promise<CodexCreatedThread[] | null> {
+  try {
+    return await runCodexAppServerSession(
+      async (call) => {
+        // As given: the caller grouped panes by these, and resolving them again
+        // here could reach a folder a retargeted link now points at.
+        const spellings = [...new Set(cwds)];
+        const found: CodexCreatedThread[] = [];
+        let cursor: string | undefined;
+        for (let page = 0; page < CREATED_SINCE_MAX_PAGES; page++) {
+          const response = await call<{ data?: unknown; nextCursor?: unknown }>("thread/list", {
+            cwd: spellings,
+            sortKey: "created_at",
+            sortDirection: "desc",
+            limit: CREATED_SINCE_PAGE_SIZE,
+            useStateDbOnly: true,
+            ...(cursor !== undefined && { cursor }),
+          });
+          if (!Array.isArray(response?.data)) return null;
+          const threads = response.data as RawThread[];
+          let passedWindow = false;
+          for (const thread of threads) {
+            const createdAt = numberOf(thread.createdAt);
+            // An undated row can't be placed inside or outside the window.
+            if (createdAt === null) return null;
+            if (createdAt < sinceSeconds) {
+              passedWindow = true;
+              continue;
+            }
+            if (asString(thread.parentThreadId) !== null) continue;
+            const threadId = asString(thread.id);
+            if (threadId === null) continue;
+            const sessionId = asString(thread.sessionId) ?? threadId;
+            if (!CODEX_SESSION_ID_PATTERN.test(sessionId)) continue;
+            found.push({
+              sessionId,
+              preview: typeof thread.preview === "string" ? thread.preview : "",
+              createdAt,
+            });
+          }
+          if (passedWindow) return found;
+          const next = response?.nextCursor;
+          if (next === null) return found;
+          // A server that omits the cursor can only be read by the page size.
+          if (next === undefined && threads.length < CREATED_SINCE_PAGE_SIZE) return found;
+          if (typeof next !== "string") return null;
+          cursor = next;
+        }
+        return null;
+      },
+      { timeoutMs: CREATED_SINCE_LOOKUP_TIMEOUT_MS, codexHome }
+    );
+  } catch {
+    return null;
+  }
+}
+
 function toFolderSession(thread: RawThread): CodexFolderSession | null {
   // `codex resume` takes `sessionId`; for a root thread it equals `id`, and an
   // older server that omits the field falls back to that (matches
@@ -622,25 +737,248 @@ function toFolderSession(thread: RawThread): CodexFolderSession | null {
  * client has no way to learn a pane's redirected profile on its own, and
  * querying main's default one would silently show the wrong folder's history
  * or nothing at all.
+ *
+ * One page of `limit` threads, newest first; `more` says older ones were left
+ * out, so a caller showing the page never presents it as the whole history.
  */
 export async function listCodexSessionsForCwd(
   cwd: string,
-  codexHome?: string
+  codexHome?: string,
+  limit = PARENT_CANDIDATE_LIMIT
 ): Promise<CodexFolderSessionsResult> {
   try {
     return await runCodexAppServerSession(
       async (call) => {
-        const threads = await listThreadsInCwd(call, await resolveCwdSpellings(cwd));
+        const { threads, more } = await listThreadPageInCwd(
+          call,
+          await resolveCwdSpellings(cwd),
+          limit
+        );
         const sessions = threads
           .filter((thread) => asString(thread.parentThreadId) === null)
           .map(toFolderSession)
           .filter((session): session is CodexFolderSession => session !== null)
           .sort((a, b) => b.updatedAt - a.updatedAt);
-        return { status: "ok" as const, sessions };
+        return { status: "ok" as const, sessions, ...(more && { more }) };
       },
       { codexHome }
     );
   } catch (error) {
     return toUnavailable(error);
   }
+}
+
+/** Rows per page when restore reads a folder's threads by creation time (#15269). */
+const RESTORE_MATCH_PAGE_LIMIT = 50;
+/** Pages restore reads before it gives up proving it has seen every recent thread. */
+const RESTORE_MATCH_MAX_PAGES = 10;
+
+/** Thrown inside a session to abandon the whole match: uniqueness is all or nothing. */
+class RestoreMatchIncomplete extends Error {}
+
+/**
+ * Every source a thread can be filed under. The listing default is interactive
+ * sources only, which would leave out the thread of a pane launched with
+ * `codex exec` — and a thread nobody could see can't make a prompt ambiguous.
+ */
+const ALL_THREAD_SOURCE_KINDS = [
+  "cli",
+  "vscode",
+  "exec",
+  "appServer",
+  "subAgent",
+  "subAgentReview",
+  "subAgentCompact",
+  "subAgentThreadSpawn",
+  "subAgentOther",
+  "unknown",
+];
+
+/**
+ * Every root thread in `cwds` created at or after `sinceMs`, newest first.
+ *
+ * A thread no listed pane could have opened is left unread, so the walk stops
+ * after the first page that reaches back past the earliest launch — which is
+ * only proof of having seen the rest when the rows really arrive newest first.
+ * So every row on every page read is checked: one out of order, one with no
+ * creation time, a server that doesn't say whether more follow, or a folder
+ * deeper than the page cap ends the match instead.
+ */
+async function listRootThreadsCreatedSince(
+  call: CodexAppServerCall,
+  cwds: string[],
+  sinceMs: number
+): Promise<RawThread[]> {
+  const roots: RawThread[] = [];
+  let cursor: string | undefined;
+  let previousCreatedAt = Number.POSITIVE_INFINITY;
+  for (let page = 0; page < RESTORE_MATCH_MAX_PAGES; page++) {
+    const response = await call<{ data?: unknown; nextCursor?: unknown }>("thread/list", {
+      cwd: cwds,
+      sortKey: "created_at",
+      sortDirection: "desc",
+      limit: RESTORE_MATCH_PAGE_LIMIT,
+      sourceKinds: ALL_THREAD_SOURCE_KINDS,
+      useStateDbOnly: true,
+      ...(cursor !== undefined && { cursor }),
+    });
+    if (!Array.isArray(response?.data)) throw new RestoreMatchIncomplete();
+    let reachedCutoff = false;
+    for (const thread of response.data as Array<RawThread | null | undefined>) {
+      const createdAt = numberOf(thread?.createdAt);
+      if (!thread || createdAt === null || createdAt > previousCreatedAt) {
+        throw new RestoreMatchIncomplete();
+      }
+      previousCreatedAt = createdAt;
+      if (createdAt * 1000 < sinceMs) {
+        reachedCutoff = true;
+      } else if (asString(thread.parentThreadId) === null) {
+        roots.push(thread);
+      }
+    }
+    if (reachedCutoff || response.nextCursor === null) return roots;
+    if (typeof response.nextCursor !== "string") throw new RestoreMatchIncomplete();
+    cursor = response.nextCursor;
+  }
+  throw new RestoreMatchIncomplete();
+}
+
+/**
+ * Every root `codex resume --last` could open in `cwds`: the most recent one,
+ * and any tied with it, since the CLI breaks that tie itself. Asked the way
+ * `--last` selects (see {@link resolveCodexResumeLatestSession}); a tie that
+ * may run on past the page ends the match rather than leave one out.
+ */
+async function listResumeLatestIds(call: CodexAppServerCall, cwds: string[]): Promise<string[]> {
+  const response = await call<{ data?: unknown; nextCursor?: unknown }>("thread/list", {
+    cwd: cwds,
+    sortKey: "recency_at",
+    sortDirection: "desc",
+    limit: PARENT_CANDIDATE_LIMIT,
+    useStateDbOnly: true,
+  });
+  if (!Array.isArray(response?.data)) throw new RestoreMatchIncomplete();
+  const threads = response.data as Array<RawThread | null | undefined>;
+  let top = Number.NEGATIVE_INFINITY;
+  let ids: string[] = [];
+  let lastActivity: number | null = null;
+  for (const thread of threads) {
+    // The listing is ordered by this key, so the proof below reads only it.
+    const activity = numberOf(thread?.recencyAt);
+    if (!thread || activity === null) throw new RestoreMatchIncomplete();
+    lastActivity = activity;
+    if (asString(thread.parentThreadId) !== null) continue;
+    const id = asString(thread.sessionId) ?? asString(thread.id);
+    if (id === null) throw new RestoreMatchIncomplete();
+    if (activity > top) {
+      top = activity;
+      ids = [id];
+    } else if (activity === top) {
+      ids.push(id);
+    }
+  }
+  // Settled only by the end of the listing, or by a row already below the top.
+  const settled =
+    response.nextCursor === null || (ids.length > 0 && lastActivity !== null && lastActivity < top);
+  if (!settled) throw new RestoreMatchIncomplete();
+  return ids;
+}
+
+/**
+ * Name the conversation of each restored Codex pane whose launch prompt points
+ * at exactly one thread in its folder (#15269), for panes restore would
+ * otherwise hold because several began there without a saved id.
+ *
+ * The comparison is in `codexRestoreMatch`. This reads, for each folder, every
+ * root thread created since that folder's earliest launch, plus the threads a
+ * sibling's `--last` could open when the caller says one will run, and turns
+ * them into the matcher's input. Anything short of a complete read — a missing
+ * CLI, a timeout, an unreadable page — answers no matches at all, which leaves
+ * every pane held exactly as it would have been. The reply carries ids only.
+ */
+export async function matchCodexRestoreSessions(
+  request: CodexRestoreMatchRequest
+): Promise<CodexRestoreMatchResult> {
+  const none: CodexRestoreMatchResult = { matches: [] };
+  const keys = request.scopes.flatMap((scope) => scope.panes.map((pane) => pane.key));
+  if (new Set(keys).size !== keys.length) return none;
+  if (!request.scopes.some((scope) => scope.panes.some((pane) => pane.resolve))) return none;
+
+  const scopesByProfile = new Map<string | undefined, CodexRestoreMatchScope[]>();
+  for (const scope of request.scopes) {
+    if (scope.panes.length === 0) continue;
+    const group = scopesByProfile.get(scope.codexHome);
+    if (group) group.push(scope);
+    else scopesByProfile.set(scope.codexHome, [scope]);
+  }
+
+  const unavailable = new Set(request.exclude);
+  let scopes: RestoreMatchScope[];
+  try {
+    const perProfile = await Promise.all(
+      [...scopesByProfile].map(([codexHome, group]) =>
+        runCodexAppServerSession(
+          async (call) => {
+            const read: Array<{ scope: CodexRestoreMatchScope; threads: RawThread[] }> = [];
+            for (const scope of group) {
+              const cwds = await resolveCwdSpellings(scope.cwd);
+              const sinceMs =
+                Math.min(...scope.panes.map((pane) => pane.at)) - RESTORE_MATCH_EARLY_SLACK_MS;
+              const threads = await listRootThreadsCreatedSince(call, cwds, sinceMs);
+              if (scope.reserveLatest) {
+                for (const id of await listResumeLatestIds(call, cwds)) unavailable.add(id);
+              }
+              read.push({ scope, threads });
+            }
+            return read;
+          },
+          { codexHome, timeoutMs: RESUME_LATEST_LOOKUP_TIMEOUT_MS }
+        )
+      )
+    );
+    scopes = perProfile.flat().map(({ scope, threads }) => ({
+      panes: scope.panes,
+      threads: toRestoreMatchThreads(threads, unavailable),
+    }));
+  } catch {
+    return none;
+  }
+  return { matches: matchRestorePanes(scopes, unavailable) };
+}
+
+/**
+ * One entry per session. A thread a pane's `codex resume` couldn't reopen — one
+ * filed under another source, or whose id isn't safe to put on a command line
+ * — stays a candidate, so it still makes a pane ambiguous, but is never handed
+ * out. A root that can't be read, or one listed twice with different details,
+ * ends the match: dropping it could leave a rival out of the count.
+ */
+function toRestoreMatchThreads(
+  threads: RawThread[],
+  unavailable: Set<string>
+): RestoreMatchThread[] {
+  const byId = new Map<string, { thread: RestoreMatchThread; preview: string }>();
+  for (const thread of threads) {
+    const id = asString(thread.sessionId) ?? asString(thread.id);
+    if (id === null || typeof thread.preview !== "string") throw new RestoreMatchIncomplete();
+    const createdAtMs = secondsToMs(thread.createdAt);
+    const existing = byId.get(id);
+    if (existing) {
+      if (existing.thread.createdAtMs !== createdAtMs || existing.preview !== thread.preview) {
+        throw new RestoreMatchIncomplete();
+      }
+      continue;
+    }
+    if (!CODEX_SESSION_ID_PATTERN.test(id) || thread.source !== "cli") unavailable.add(id);
+    byId.set(id, {
+      preview: thread.preview,
+      thread: {
+        sessionId: id,
+        createdAtMs,
+        // The session's own first message, compared as a digest and never kept.
+        promptHashes: promptHashesForFirstMessage(thread.preview),
+      },
+    });
+  }
+  return [...byId.values()].map((entry) => entry.thread);
 }

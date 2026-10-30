@@ -13,6 +13,8 @@ interface SelectedFileMenuItemsProps {
   absolutePath: string;
   /** False when the menu already reveals this same path, so it isn't offered twice. */
   reveal?: boolean;
+  /** Opens the file instead of the grid panel, for a menu on a surface over the grid. */
+  onView?: (absolutePath: string) => void;
 }
 
 /**
@@ -24,12 +26,20 @@ interface SelectedFileMenuItemsProps {
  * failures (a path outside project roots, a since-deleted file) surface through
  * the same coalesced toast as terminal file links rather than failing silently.
  */
-export function SelectedFileMenuItems({ absolutePath, reveal = true }: SelectedFileMenuItemsProps) {
+export function SelectedFileMenuItems({
+  absolutePath,
+  reveal = true,
+  onView,
+}: SelectedFileMenuItemsProps) {
   const source = useMenuActionSource();
   return (
     <>
       <ContextMenuItem
         onSelect={() => {
+          if (onView) {
+            onView(absolutePath);
+            return;
+          }
           void grantClickedHostFile(absolutePath)
             .then(() =>
               actionService.dispatch("file.openPanel", { path: absolutePath }, { source })

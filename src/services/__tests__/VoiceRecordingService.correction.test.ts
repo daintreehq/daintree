@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { VoiceCleanupFailure, VoiceDictionaryEntry } from "@shared/types";
+import { acceptSuggestion } from "@shared/utils/voiceDictionary";
 
 // Drives the real voice and draft stores through stop() to prove a post-stop
 // correction belongs to its own session and panel (#14611): another session
@@ -43,6 +45,18 @@ vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
 }));
 
+const notify = vi.hoisted(() =>
+  vi.fn<
+    (payload: {
+      type: string;
+      title: string;
+      message: string;
+      action?: { actionId?: string; actionArgs?: unknown };
+    }) => void
+  >()
+);
+vi.mock("@/lib/notify", () => ({ notify }));
+
 vi.mock("@/services/KeybindingService", () => ({
   keybindingService: {
     getEffectiveCombo: vi.fn(),
@@ -70,7 +84,9 @@ type Span = { from: number; to: number };
 type CorrectResult = {
   action: "no_change" | "replace";
   correctedText: string;
-  verdict?: "replaced" | "unchanged" | "failed";
+  failed?: true;
+  verdict?: "replaced" | "unchanged" | "failed" | "timed_out";
+  cleanupFailure?: VoiceCleanupFailure;
 };
 
 type FileTokenPayload = {
@@ -101,7 +117,7 @@ const correct =
     }) => Promise<CorrectResult>
   >();
 
-let dictionary: Array<{ term: string; heardAs: string[]; source: "manual"; addedAt: number }> = [];
+let dictionary: VoiceDictionaryEntry[] = [];
 
 function stubElectron() {
   const electron = {
@@ -834,6 +850,81 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     await expect(waited).resolves.toBe(true);
   });
 
+  it("tells a send its own cleanup failed, and nothing of another panel's, a newer session's, or after it lets go", async () => {
+    const { service, voiceStore, dictate, flush } = await setup();
+    const own = deferred<CorrectResult>();
+    const elsewhere = deferred<CorrectResult>();
+    const newer = deferred<CorrectResult>();
+    correct
+      .mockReturnValueOnce(own.promise)
+      .mockReturnValueOnce(elsewhere.promise)
+      .mockReturnValueOnce(newer.promise);
+
+    dictate("panel-1", "hello wrld");
+    const session = voiceStore.getState().panelBuffers["panel-1"]!.dictationSessionId!;
+    const sessions = new Set([session]);
+    const observed = service.observeSendCorrections("panel-1", sessions);
+    // Let go before the stop registers the pass: it never hears of it.
+    const released = service.observeSendCorrections("panel-1", new Set([session]));
+    released.release();
+    await service.stop();
+    dictate("panel-2", "elsewhere");
+    // Named among the send's sessions, so only the panel keeps it out.
+    sessions.add(voiceStore.getState().panelBuffers["panel-2"]!.dictationSessionId!);
+    await service.stop();
+    dictate("panel-1", "and more");
+    await service.stop();
+
+    elsewhere.resolve({ action: "no_change", correctedText: "elsewhere", failed: true });
+    newer.resolve({ action: "no_change", correctedText: "and more", failed: true });
+    await flush();
+    expect(observed.failed()).toBe(false);
+
+    own.resolve({
+      action: "no_change",
+      correctedText: "hello wrld",
+      failed: true,
+      verdict: "timed_out",
+    });
+    await flush();
+    expect(observed.failed()).toBe(true);
+    expect(released.failed()).toBe(false);
+
+    observed.release();
+    expect(observed.failed()).toBe(false);
+  });
+
+  it("tells a send of a pass already on its way when it started", async () => {
+    const { service, voiceStore, dictate, flush } = await setup();
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+
+    dictate("panel-1", "hello wrld");
+    const session = voiceStore.getState().panelBuffers["panel-1"]!.dictationSessionId!;
+    await service.stop();
+    const observed = service.observeSendCorrections("panel-1", new Set([session]));
+    pending.resolve({ action: "no_change", correctedText: "hello wrld", failed: true });
+    await flush();
+
+    expect(observed.failed()).toBe(true);
+  });
+
+  it("doesn't tell a send a passage an edit reached failed its cleanup", async () => {
+    const { service, voiceStore, inputStore, dictate, flush } = await setup();
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+
+    dictate("panel-1", "hello wrld");
+    const session = voiceStore.getState().panelBuffers["panel-1"]!.dictationSessionId!;
+    await service.stop();
+    const observed = service.observeSendCorrections("panel-1", new Set([session]));
+    inputStore.getState().setDraftInput("panel-1", "hello world, edited");
+    pending.resolve({ action: "no_change", correctedText: "hello wrld", failed: true });
+    await flush();
+
+    expect(observed.failed()).toBe(false);
+  });
+
   it("keeps the learning baseline with its own passage when two say the same words", async () => {
     const { service, dictate, flush, baseline } = await setup();
     const first = deferred<CorrectResult>();
@@ -1175,6 +1266,41 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
       expect(baseline("panel-1")).toBe("add Zustand");
       expect(correct).not.toHaveBeenCalled();
     });
+
+    it.each([
+      { cleanup: "on", correctionEnabled: true },
+      { cleanup: "off", correctionEnabled: false },
+    ])(
+      "leaves an everyday word a correction taught as it was said, cleanup $cleanup",
+      async ({ correctionEnabled }) => {
+        ({ dictionary } = acceptSuggestion(
+          {
+            dictionary: [{ ...rule("Zustand", "zoo stand"), source: "learned" }],
+            suggestedDictionary: [
+              { word: "Jest", utterance: "just", suggestedAt: 0, frequency: 1 },
+            ],
+          },
+          "Jest",
+          0
+        ));
+        const { service, dictate, say, draft, voiceStore } = await setup();
+        voiceStore.getState().setCorrectionEnabled(correctionEnabled);
+        correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+        dictate("panel-1", "I just want to check zoo");
+        say("stand");
+        await service.stop();
+
+        expect(draft("panel-1")).toBe("I just want to check Zustand");
+        if (correctionEnabled) {
+          expect(correct.mock.lastCall?.[0]).toMatchObject({
+            rawText: "I just want to check Zustand",
+          });
+        } else {
+          expect(correct).not.toHaveBeenCalled();
+        }
+      }
+    );
 
     it("applies them on a stop that skips correction", async () => {
       dictionary = [rule("Zustand", "zoo stand")];
@@ -1843,4 +1969,126 @@ describe("VoiceRecordingService — streamed cleanup (#14779)", () => {
       expect(drafts.filter((text) => text.includes(shown))).toEqual([]);
     }
   );
+});
+
+describe("VoiceRecordingService — a cleanup failure that will recur (#14963)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    callbacks.delta = null;
+    callbacks.complete = null;
+    correct.mockReset();
+    notify.mockReset();
+    dictionary = [];
+  });
+
+  afterEach(() => {
+    unsubscribeRanges?.();
+    unsubscribeRanges = null;
+    vi.unstubAllGlobals();
+  });
+
+  // Any error toast at all: a failure that may pass shows none.
+  const told = () => notify.mock.calls.map(([toast]) => toast).filter((t) => t.type === "error");
+
+  it("says so once, naming the account's provider, and keeps the words as dictated", async () => {
+    const { service, dictate, draft, flush, voiceStore } = await setup();
+    correct.mockResolvedValueOnce({
+      action: "no_change",
+      correctedText: "fix the parsr",
+      failed: true,
+      verdict: "failed",
+      cleanupFailure: { reason: "billing_required", provider: "anthropic" },
+    });
+
+    dictate("panel-1", "fix the parsr");
+    await service.stop();
+    await flush();
+
+    expect(draft("panel-1")).toBe("fix the parsr");
+    expect(told()).toHaveLength(1);
+    const [toast] = told();
+    expect(toast).toMatchObject({
+      type: "error",
+      action: { actionId: "app.settings.openTab", actionArgs: { tab: "voice" } },
+    });
+    // The account that failed, not the provider the settings default to.
+    expect(toast!.message).toContain("Anthropic");
+    expect(voiceStore.getState().announcement?.text).toBe(toast!.message);
+  });
+
+  it("gives each reason its own fix", async () => {
+    const { service, dictate, flush } = await setup();
+    const reasons = [
+      "key_rejected",
+      "billing_required",
+      "region_refused",
+      "access_denied",
+    ] as const;
+    for (const reason of reasons) {
+      correct.mockResolvedValueOnce({
+        action: "no_change",
+        correctedText: reason,
+        failed: true,
+        verdict: "failed",
+        cleanupFailure: { reason, provider: "openai" },
+      });
+      dictate(`panel-${reason}`, reason);
+      await service.stop();
+      await flush();
+    }
+
+    const messages = told().map((toast) => toast.message);
+    expect(messages).toHaveLength(reasons.length);
+    expect(new Set(messages).size).toBe(reasons.length);
+  });
+
+  it("stays quiet for a failure main didn't hand the notice", async () => {
+    const { service, dictate, draft, flush } = await setup();
+    const untold: Array<() => Promise<CorrectResult>> = [
+      async () => ({
+        action: "no_change",
+        correctedText: "timed out",
+        failed: true,
+        verdict: "timed_out",
+      }),
+      // The same outage, already told on an earlier reply.
+      async () => ({
+        action: "no_change",
+        correctedText: "told before",
+        failed: true,
+        verdict: "failed",
+      }),
+      () => Promise.reject(new Error("IPC gone")),
+    ];
+    for (const [index, reply] of untold.entries()) {
+      correct.mockImplementationOnce(reply);
+      dictate(`panel-${index}`, `passage ${index}`);
+      await service.stop();
+      await flush();
+      expect(draft(`panel-${index}`)).toBe(`passage ${index}`);
+    }
+
+    expect(told()).toEqual([]);
+  });
+
+  it("tells every reply main hands the notice, keeping no count of its own", async () => {
+    const { service, dictate, flush } = await setup();
+    const refused: CorrectResult = {
+      action: "no_change",
+      correctedText: "",
+      failed: true,
+      verdict: "failed",
+      cleanupFailure: { reason: "key_rejected", provider: "openai" },
+    };
+    correct.mockResolvedValue(refused);
+
+    dictate("panel-1", "first outage");
+    await service.stop();
+    await flush();
+    dictate("panel-1", "second outage");
+    await service.stop();
+    await flush();
+
+    expect(told()).toHaveLength(2);
+  });
 });

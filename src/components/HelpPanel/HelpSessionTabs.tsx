@@ -143,7 +143,10 @@ export interface HelpSessionTab {
   agentState: AgentState | null | undefined;
   /** The agent the lane runs or will resume with; absent while nothing says. */
   agentId?: string | null;
-  /** The lane has a live terminal and agent — the header's own gate for "Restart conversation". */
+  /**
+   * The lane has a live terminal and agent, or is the paused lane on screen — the
+   * header's own gate for "Restart conversation".
+   */
   canRestart?: boolean;
 }
 
@@ -448,10 +451,10 @@ export function HelpSessionTabs({
   const slots = useMemo(() => tabs.map((t) => t.slot), [tabs]);
 
   /**
-   * Closing a lane with a live agent raises a confirm dialog first, and `tabs` is rebuilt
-   * on every `agentState` transition, so the handoff waits for THAT lane to be gone.
-   * Closing the active lane makes the store pick a new active lane — the lowest remaining
-   * slot, not the neighbour — and focus follows the selection there.
+   * Closing a lane with a working agent raises a confirm dialog first, and `tabs` is
+   * rebuilt on every `agentState` transition, so the handoff waits for THAT lane to be
+   * gone. Closing the active lane makes the store select its neighbour, the following
+   * one first, and focus follows the selection there.
    */
   const { armKeyboardClose, disarmKeyboardClose } = useKeyboardTabClose({
     ids: slots,

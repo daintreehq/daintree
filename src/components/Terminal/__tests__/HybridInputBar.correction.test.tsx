@@ -154,7 +154,7 @@ describe("HybridInputBar after an AI correction lands", () => {
 
     expect(view.state.doc.toString()).toBe(CORRECTED);
     const marks = [...view.contentDOM.querySelectorAll(".cm-voice-corrected")];
-    expect(marks.map((el) => el.textContent)).toEqual(["Open", "Zustand store."]);
+    expect(marks.map((el) => el.textContent)).toEqual(["Zustand"]);
   });
 
   it("puts the raw transcription back with one Cmd+Z, in the draft and the learning baseline", async () => {

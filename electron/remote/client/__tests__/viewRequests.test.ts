@@ -91,11 +91,13 @@ describe("view reverse requests", () => {
       callerInfo: { name: "ignored" },
       sessionOrigin: "help",
       offerSessionApproval: true,
+      // The host's own pane (#14992): no terminal of this Shell's to name.
+      requester: { kind: "pane", terminalId: "host-pane" },
     });
 
-    // Never pre-confirmed, never the host's context or origin: the view's own
-    // binding decides the project, and a confirm-gated action raises this
-    // Shell's dialog naming the host that asked.
+    // Never pre-confirmed, never the host's context, origin or requester: the
+    // view's own binding decides the project, and a confirm-gated action raises
+    // this Shell's dialog naming the host that asked.
     expect(m.dispatchActionForHost).toHaveBeenCalledWith(
       11,
       "worktree.delete",
@@ -103,7 +105,7 @@ describe("view reverse requests", () => {
       false,
       undefined,
       "external",
-      undefined,
+      { fixedDeadline: true },
       { userAgent: 'Agent on host "Studio Mac"', token4LastChars: "" }
     );
     // No reusable approval goes back to the host.
@@ -162,7 +164,7 @@ describe("view reverse requests", () => {
       true,
       undefined,
       "external",
-      { authorization: "skip-preference" },
+      { authorization: "skip-preference", fixedDeadline: true },
       { userAgent: 'Agent on host "Studio Mac"', token4LastChars: "" }
     );
     expect(answer).toEqual({ result: { ok: true, result: 1 } });
@@ -189,7 +191,7 @@ describe("view reverse requests", () => {
       ...fields,
     });
     expect(m.dispatchActionForHost.mock.calls[0]?.[3]).toBe(false);
-    expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toBeUndefined();
+    expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({ fixedDeadline: true });
   });
 
   it.each(["host.switch", "project.openOnHost"])(
@@ -205,7 +207,7 @@ describe("view reverse requests", () => {
         authorization: "skip-preference",
       });
       expect(m.dispatchActionForHost.mock.calls[0]?.[3]).toBe(false);
-      expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toBeUndefined();
+      expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({ fixedDeadline: true });
     }
   );
 
@@ -221,7 +223,10 @@ describe("view reverse requests", () => {
       approvalOnly: true,
     });
     expect(m.dispatchActionForHost.mock.calls[0]?.[3]).toBe(false);
-    expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({ approvalOnly: true });
+    expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({
+      approvalOnly: true,
+      fixedDeadline: true,
+    });
   });
 
   it("passes an approval-only request through, still unconfirmed", async () => {
@@ -235,7 +240,10 @@ describe("view reverse requests", () => {
       approvalOnly: true,
     });
     expect(m.dispatchActionForHost.mock.calls[0]?.[3]).toBe(false);
-    expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({ approvalOnly: true });
+    expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({
+      approvalOnly: true,
+      fixedDeadline: true,
+    });
   });
 
   it("carries an approval-only request's reason, so a protected close lists its panels", async () => {
@@ -259,9 +267,10 @@ describe("view reverse requests", () => {
     expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({
       approvalOnly: true,
       approvalReason: "protected-close",
+      fixedDeadline: true,
     });
     // A reason without approval-only changes nothing about the dispatch.
-    expect(m.dispatchActionForHost.mock.calls[1]?.[6]).toBeUndefined();
+    expect(m.dispatchActionForHost.mock.calls[1]?.[6]).toEqual({ fixedDeadline: true });
   });
 
   // Only the retired assistant CLI's pane ever authenticated this way, so a
@@ -348,7 +357,7 @@ describe("view reverse requests", () => {
         false,
         undefined,
         "external",
-        undefined,
+        { fixedDeadline: true },
         { userAgent: 'Agent on host "Studio Mac"', token4LastChars: "" }
       );
     }
@@ -568,6 +577,8 @@ describe("askHostApprovalInWindow (#13501)", () => {
       {
         approvalOnly: true,
         hostPreview: { lines: ["No uncommitted changes."], subject: "feature/thing" },
+        // The host's own approval window governs a call it runs itself (#14989).
+        fixedDeadline: true,
       },
       { userAgent: 'Your assistant, through host "Studio Mac"', token4LastChars: "" }
     );

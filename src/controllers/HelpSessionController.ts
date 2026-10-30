@@ -148,18 +148,26 @@ export interface McpToolActivityState {
 }
 
 /**
- * The live per-`(sessionId, toolId)` grant minted by "Approve once" (#10042).
- * Drives the ambient countdown banner in the Help Panel. `expiresAt` is the
- * absolute epoch-ms the grant would lapse without further use — the renderer
- * counts down against it without polling (the `issueGrant` result and the
- * `grant.issued` lifecycle event both carry it). Single-slot: the most
- * recently issued grant is the one shown.
+ * One live grant the session holds (#10042): a per-`(sessionId, toolId)` grant
+ * minted by "Approve once", or a native automation grant. Drives the ambient
+ * countdown banner in the Help Panel. `expiresAt` is the absolute epoch-ms the
+ * grant would lapse without further use — the renderer counts down against it
+ * without polling (the `grant.issued` lifecycle event carries it). A session
+ * can hold several at once, so the snapshot keeps every one (#14975).
  */
 export interface ActiveGrantState {
+  /** Identity within the list: the tool for a per-tool grant, the id for a native one. */
+  key: string;
   sessionId: string;
   toolId: string;
   expiresAt: number;
+  /** The hard ceiling no use can extend past; the grant ends at the earlier. */
+  maxExpiresAt?: number;
   ttlMs: number;
+  /** Set for a native automation grant, whose `toolId` is always `"*"`. */
+  grantId?: string;
+  /** The tools a native automation grant covers. */
+  allowedTools?: string[];
 }
 
 /**
@@ -194,12 +202,12 @@ export interface HelpSessionSnapshot {
   mcpActivity: McpToolActivityState | null;
   /** Set when the abuse policy revoked the active session (#10017); null otherwise. */
   sessionRevoked: SessionRevokedState | null;
-  /** The live "Approve once" grant being counted down (#10042); null when none. */
-  activeGrant: ActiveGrantState | null;
-  /** Brief notice that the watched grant lapsed (#10042); null when none. */
+  /** Every live grant being counted down (#10042, #14975), oldest first. */
+  activeGrants: readonly ActiveGrantState[];
+  /** Brief notice that a watched grant lapsed (#10042); null when none. */
   grantEnded: GrantEndedState | null;
-  /** True while a user-initiated grant revoke is in flight (#10042). */
-  isRevokingGrant: boolean;
+  /** Keys of the grants whose user-initiated revoke is in flight (#10042). */
+  revokingGrantKeys: readonly string[];
   /**
    * Most recent alertable turn outcome (`agent-stuck` / `reasoning-loop`) for
    * the bound help session (#10018); null when none is pending. Drives the
@@ -235,8 +243,9 @@ export interface HelpSessionInputs {
   supportedInstalledAgentIds: readonly string[];
   /**
    * User consent to auto-launch a billed session when the panel opens (#10699).
-   * False until the user explicitly starts the assistant once; auto-launch is
-   * fully suppressed while false, so revealing the panel never bills a session.
+   * False until the user turns on "Start when the panel opens" (#14976);
+   * auto-launch is fully suppressed while false, so revealing the panel never
+   * bills a session.
    */
   autoLaunchEnabled: boolean;
   /** Bumped each time the panel becomes visible — re-evaluates auto-launch. */
@@ -254,6 +263,13 @@ export interface HelpLaunchOptions {
    * Pass for "+ New session" and "Run anyway" paths.
    */
   requestedId?: string;
+  /**
+   * Run the version gate even though `requestedId` is set. A reserved launch
+   * normally skips it because the terminal it replaces already passed it; a
+   * paused lane has no such terminal, and may have been captured before an
+   * app update raised the minimum (#14981).
+   */
+  checkVersion?: boolean;
   /** For run-anyway: bypass missing-CLI guard. */
   force?: boolean;
   /** For new-session / run-anyway: ask the dispatcher to activate the dock. */
@@ -337,9 +353,9 @@ const INITIAL_SNAPSHOT: HelpSessionSnapshot = Object.freeze({
   launchError: null,
   mcpActivity: null,
   sessionRevoked: null,
-  activeGrant: null,
+  activeGrants: [],
   grantEnded: null,
-  isRevokingGrant: false,
+  revokingGrantKeys: [],
   outcomeAlert: null,
 });
 
@@ -390,6 +406,11 @@ export class HelpSessionController {
   // auto-launch path bumping the gen) still lets the owner release.
   private _isLaunchingGen = -1;
   private _hasAutoLaunched = false;
+  // Consent turned on while this lane was already open. The setting is about
+  // opening the panel, so it waits for the next open instead of starting a
+  // session the moment it's ticked (#14976). Separate from `_hasAutoLaunched`,
+  // which also marks a launch as automatic for reveal recovery.
+  private _autoLaunchDeferredToNextOpen = false;
   // Host terminal id → launches still committing a pane for it (#13360).
   private readonly _adoptingTerminals = new Map<string, number>();
   private _pendingSessionId: string | null = null;
@@ -533,6 +554,9 @@ export class HelpSessionController {
     // try again from scratch.
     if (!inputs.isOpen) {
       this._hasAutoLaunched = false;
+      this._autoLaunchDeferredToNextOpen = false;
+    } else if (prev?.isOpen && !prev.autoLaunchEnabled && inputs.autoLaunchEnabled) {
+      this._autoLaunchDeferredToNextOpen = true;
     }
 
     this._hibernationManager.maybeArm(inputs);
@@ -703,16 +727,25 @@ export class HelpSessionController {
    * same agent. The reserved id is pre-recorded in the store synchronously
    * so the dock filter sees the new reservation the instant `addPanel`
    * commits (#6951).
+   *
+   * A paused lane has no terminal, so it names the agent its captured
+   * conversation belongs to (#14981). The same discard runs, and the reserved
+   * launch never adopts or resumes: provisioning displaces an assistant still
+   * running on the host for this lane.
    */
-  newSession(): void {
+  newSession(capturedAgentId?: string): void {
     const { terminalId, agentId } = this._slotState();
-    if (!terminalId || !agentId) return;
+    const launchAgentId = terminalId ? agentId : capturedAgentId;
+    if (!launchAgentId) return;
     const reservedId = `terminal-${crypto.randomUUID()}`;
     this.launch({
-      agentId,
+      agentId: launchAgentId,
       requestedId: reservedId,
       replaceExisting: true,
       activateDock: true,
+      // Only a committed terminal vouches for the version: a reservation left by
+      // a cancelled launch may never have reached the gate.
+      checkVersion: !terminalId || terminalId === this._pendingNewTerminalId,
     });
   }
 
@@ -1005,8 +1038,8 @@ export class HelpSessionController {
     this._mcpTracker.dismissGrantEnded();
   }
 
-  revokeGrant(): void {
-    this._mcpTracker.revokeGrant();
+  revokeGrant(key: string): void {
+    this._mcpTracker.revokeGrant(key);
   }
 
   approveTierOnce(): void {
@@ -1151,9 +1184,9 @@ export class HelpSessionController {
       next.launchError === this._snapshot.launchError &&
       next.mcpActivity === this._snapshot.mcpActivity &&
       next.sessionRevoked === this._snapshot.sessionRevoked &&
-      next.activeGrant === this._snapshot.activeGrant &&
+      next.activeGrants === this._snapshot.activeGrants &&
       next.grantEnded === this._snapshot.grantEnded &&
-      next.isRevokingGrant === this._snapshot.isRevokingGrant &&
+      next.revokingGrantKeys === this._snapshot.revokingGrantKeys &&
       next.outcomeAlert === this._snapshot.outcomeAlert
     ) {
       return;
@@ -1215,7 +1248,7 @@ export class HelpSessionController {
     // Consent gate first (#10699): with no explicit opt-in, opening the panel
     // must never start a billed session. Placed ahead of the visibility check
     // so a visibilityEpoch re-arm can't bypass consent on a restore.
-    if (!inputs.autoLaunchEnabled) return;
+    if (!inputs.autoLaunchEnabled || this._autoLaunchDeferredToNextOpen) return;
     // A picked conversation or agent owns this lane — queued, in flight, or
     // failed and waiting on Retry. A blank session must not take its place.
     if (this._queuedLaunch || this._lastResumeTarget || this._lastPinnedAgentId) return;
@@ -1458,9 +1491,10 @@ export class HelpSessionController {
     this._armLaunchWatchdog(gen, launchAgentId);
     try {
       // reservedId paths (newSession/runAnyway) skip the version gate, so they
-      // open straight at "provisioning"; the empty-state flow starts at the
-      // version probe.
-      this._patch({ phase: reservedId ? "provisioning" : "version-checking" });
+      // open straight at "provisioning"; the empty-state flow, and a paused
+      // lane's restart, start at the version probe.
+      const checksVersion = !reservedId || options.checkVersion === true;
+      this._patch({ phase: checksVersion ? "version-checking" : "provisioning" });
       const folderPathRequest = Promise.resolve(window.electron.help.getFolderPath());
       // Settled below unless the take-over binds first; never left unhandled.
       folderPathRequest.catch(() => undefined);
@@ -1510,8 +1544,8 @@ export class HelpSessionController {
       // session token we'd immediately discard. Skipped for the
       // "requestedId" paths (newSession/runAnyway) because those are
       // triggered from a live terminal where the version was already
-      // accepted on the initial launch.
-      if (!reservedId) {
+      // accepted on the initial launch — unless a paused lane asked for it.
+      if (checksVersion) {
         const launchAgentName = getAgentConfig(launchAgentId)?.name ?? launchAgentId;
         const versionBlock = await checkAssistantVersion(
           launchAgentId,
@@ -1536,6 +1570,9 @@ export class HelpSessionController {
           }
           this._hasAutoLaunched = false;
           this._versionGate.setHasBlockedThisSession(true);
+          // A reserved launch already holds the lane's terminal slot; the gate
+          // only shows over a lane that has none.
+          this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch: false });
           this._patch({ assistantVersionTooOld: versionBlock });
           return;
         }
@@ -1705,6 +1742,11 @@ export class HelpSessionController {
             useHelpPanelStore
               .getState()
               .setTerminal(this.slot, resumed.panelId, launchAgentId, session.sessionId);
+            // A resumed conversation has history from its first frame. Left to
+            // the on-screen activity latch, a lane resumed in the background
+            // that settles idle would read as never used, and closing it would
+            // offer no way back.
+            useHelpPanelStore.getState().markConversationStarted(this.slot);
             this._pendingSessionId = null;
             window.electron.help.markTerminal(resumed.panelId).catch((err) => {
               logError("Failed to mark help terminal", err);

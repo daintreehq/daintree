@@ -229,7 +229,8 @@ export function panelKindHasLaunchRoot(kind: PanelKind | undefined): boolean {
  * Working directory for a panel that inherits its worktree rather than choosing
  * one. A duplicate is a brand new process, so it belongs in the worktree it is
  * filed under — not the directory the source process kept after a cross-worktree
- * drag left `cwd` and `worktreeId` pointing at different worktrees (#11854).
+ * drag left `cwd` and `worktreeId` pointing at different worktrees (#11854). A
+ * restart is a new process too, and follows the same rule (#14954).
  *
  * Only a launch root that provably belongs to a DIFFERENT worktree is rerooted,
  * because that is the one state a drag can produce. Everything else is kept:

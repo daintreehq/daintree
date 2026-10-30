@@ -110,8 +110,8 @@ Help sessions run one of two tool sets, selected under Settings → Daintree Ass
 
 | Tool set | Trigger | Capabilities (categories) |
 | --- | --- | --- |
-| `core` | Default for help sessions | Orchestration: create worktrees (`worktree.createWithRecipe`) and wait for setup or a PR, launch agents (`agent.launch`), send prompts (`terminal.sendCommand`), read terminals and wait on them, interrupt, move, rename or close terminals, delete a worktree (`worktree.delete`, confirm-gated — any eligible worktree in the project, including ones an earlier help session made), and search actions. |
-| `full` | User selects "Full" | Adds recipes, starting work on an issue, project checks, review readiness, forge PR, issue and CI reads, git activity, CopyTree context, the worktree resource lifecycle, killing or restarting terminals, skills, and diagnostics. |
+| `core` | Default for help sessions | Orchestration: create worktrees (`worktree.createWithRecipe`) and wait for setup or a PR, launch agents (`agent.launch`), send prompts (`terminal.sendCommand`), read terminals and wait on them, interrupt, move, rename or close terminals, delete a worktree (`worktree.delete`, confirm-gated — any eligible worktree in the project, including ones an earlier help session made), read issues with their comment threads and pull requests with their CI roll-up and individual checks (`forge.listIssues`, `forge.getIssue`, `forge.listIssueComments`, `forge.listPRs`, `forge.getPR`, `forge.getPRs`, `forge.getCIStatus`, `forge.getChecks`), and search actions. |
+| `full` | User selects "Full" | Adds recipes, starting work on an issue, project checks, review readiness, git activity, CopyTree context, the worktree resource lifecycle, killing or restarting terminals, skills, and diagnostics. |
 
 Nothing outside `full` is reachable over MCP: no git or forge writes, no file reads or edits, no UI navigation or settings writes. Settings saved before the core/full split are read in place — `workbench` and `action` as `core`, `system` as `full`.
 
@@ -123,7 +123,7 @@ The authoritative definitions live in `shared/config/helpAssistantTierAllowlists
 
 ## Permissions
 
-The assistant runs a full agent CLI and can do anything a normal agent session can: edit files, run commands, and create issues, PRs and merges with `gh`, `glab` or `tea`. Nothing is denied at the tool layer. The boundaries that remain protect the user's work, not the assistant's scope: the server-side `daintree` tier, and Daintree's confirmation dialogs, which the prompts forbid bypassing through the shell or a forge CLI.
+The assistant runs a full agent CLI and can do anything a normal agent session can: edit files, run commands, and create issues, PRs and merges with `gh`, `glab` or `tea`. Nothing is denied at the tool layer. The boundaries that remain protect the user's work, not the assistant's scope: the server-side `daintree` tier, and Daintree's confirmation dialogs, which the prompts forbid bypassing through the shell or a forge CLI. Forge reads are all on `core`, so no tier stands between the assistant and the project's issues and PRs; the forge CLI is for the forge work MCP doesn't carry, such as filing an issue the user approved or reading another repository.
 
 **Claude** (`.claude/settings.json`):
 

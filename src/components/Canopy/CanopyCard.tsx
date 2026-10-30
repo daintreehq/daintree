@@ -67,6 +67,7 @@ import { CanopyTerminal, type CanopyStreamState } from "./CanopyTerminal";
 import { CanopyTitle } from "./CanopyTitle";
 import type { CanopyAsideActions } from "./CanopyRowMenu";
 import { ownCanopyTerminalApi, type CanopyTerminalApi } from "./canopyHostSource";
+import { parseAllHostsKey } from "./canopyAllHosts";
 import {
   DICTATION_OWNER_ATTR,
   canopyReplyVoiceId,
@@ -173,6 +174,8 @@ interface CanopyCardProps extends CanopyCardHandlers {
   workLabel?: string | null;
   /** Where ⌘↩ from the reply goes on to once it sends, named in the reply; null for nowhere. */
   moveOnTo?: CanopyItem | null;
+  /** The reader is on, so a reading may land while the card is open. */
+  reading?: boolean;
 }
 
 /**
@@ -274,6 +277,7 @@ export function CanopyCard({
   reconnecting = false,
   workLabel = null,
   moveOnTo = null,
+  reading = false,
 }: CanopyCardProps) {
   const otherHost = otherHostId !== undefined;
   const [stream, setStream] = useState<CanopyStreamState>({
@@ -487,7 +491,13 @@ export function CanopyCard({
         return true;
       }
     }
-    if ((event.key === "r" || event.key === "R") && canReply && !event.metaKey && !event.ctrlKey) {
+    if (
+      (event.key === "r" || event.key === "R") &&
+      canReply &&
+      stream.watchId !== null &&
+      !event.metaKey &&
+      !event.ctrlKey
+    ) {
       event.preventDefault();
       composerRef.current?.focus();
       return true;
@@ -693,8 +703,18 @@ export function CanopyCard({
     ? { surface: "surface-panel", extension: "panel-header-focus-bg", lift: "overlay-medium" }
     : { surface: "surface-panel", extension: "panel-header-bg" };
 
-  // Through the open stream only, so main sends to the incarnation on screen
-  // or to nothing.
+  // A dictated reply can go after its card has: the send waits for its
+  // cleanup, and the user may have moved to another run meanwhile (#15510).
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  // Through the open stream, so main sends to the incarnation on screen or to
+  // nothing. A reply that outlived its card goes by the run the card showed,
+  // held to the same incarnation: its stream ended with the card.
   // The draft clears only once main has taken the text: a refused send (the
   // agent exited, the terminal respawned) leaves the reply where it was typed.
   const submit = async (
@@ -703,13 +723,14 @@ export function CanopyCard({
     moveOnTo?: string
   ): Promise<boolean> => {
     const watchId = stream.watchId;
-    if (watchId === null) return false;
+    if (watchId === null && mountedRef.current) return false;
+    const images = imagePaths && imagePaths.length > 0 ? [...imagePaths] : undefined;
     try {
-      await terminalApi.terminalSubmit(
-        watchId,
-        text,
-        imagePaths && imagePaths.length > 0 ? [...imagePaths] : undefined
-      );
+      if (mountedRef.current && watchId !== null) {
+        await terminalApi.terminalSubmit(watchId, text, images);
+      } else {
+        await terminalApi.submitReply(item.runId, { spawnedAt: run.spawnedAt }, text, images);
+      }
     } catch (error) {
       onSendFailed(item, error);
       return false;
@@ -910,8 +931,10 @@ export function CanopyCard({
           far through its task the run is, and what the agent reported. One
           line, so the terminal keeps the height: what the reader said reads
           from the left, and whose words they are and how old sits at the
-          right. Truncated words are whole on hover, and on the screen below. */}
-      {hasSummary && (
+          right. Truncated words are whole on hover, and on the screen below.
+          Held while the reader is on, so a reading landing never resizes the
+          agent, which redraws its scrollback on every resize. */}
+      {(hasSummary || reading) && (
         <div
           data-canopy-summary=""
           className="flex h-7 shrink-0 items-center gap-3 border-b border-overlay px-3 text-xs leading-4 text-text-secondary"
@@ -1004,68 +1027,74 @@ export function CanopyCard({
           runId={item.runId}
           spawnedAt={run.spawnedAt}
           api={terminalApi}
+          cwd={run.cwd}
+          // The All hosts list names a workspace by its host too.
+          projectId={parseAllHostsKey(run.workspaceId)?.id ?? run.workspaceId}
           reconnecting={reconnecting}
           onStreamChange={setStream}
           onSubmitted={() => onSent(item)}
           onGoTo={(event) => onOpen(item, isNewWindowClick(event))}
         />
-        {(answerChoices.length > 0 || (question !== null && canReply)) && (
-          <div
-            role="group"
-            aria-label="Answer"
-            data-canopy-choices=""
-            className="flex shrink-0 flex-wrap items-center gap-1.5 border-t border-overlay px-3 py-2"
-          >
-            {answerChoices.map((choice, index) => {
-              const armed = armedAnswer?.digit === index + 1;
-              return (
-                <Button
-                  key={`${index}:${choice}`}
-                  variant={armed ? "ghost-danger" : "subtle"}
-                  size="xs"
-                  disabled={reconnecting}
-                  data-canopy-choice=""
-                  data-armed={armed || undefined}
-                  aria-keyshortcuts={String(index + 1)}
-                  className={cn("max-w-full", armed && "bg-status-error/10")}
-                  onClick={() => pressAnswer(choice, index + 1)}
-                >
-                  <Kbd className="shrink-0">{index + 1}</Kbd>
-                  <span className="min-w-0 truncate">
-                    {armed ? `Press again: ${choice}` : choice}
-                  </span>
-                </Button>
-              );
-            })}
-            <span className="ml-auto flex shrink-0 items-center gap-1.5">
-              {canReply && (
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  aria-keyshortcuts="R"
-                  onClick={() => composerRef.current?.focus()}
-                >
-                  <MessageSquare aria-hidden="true" />
-                  Reply
-                  <Kbd className="shrink-0">R</Kbd>
-                </Button>
-              )}
+        {/* Always one line, choices or none, so an ask arriving or answered
+            never moves the terminal's foot: choices shrink and truncate rather
+            than wrap. */}
+        <div
+          role="group"
+          aria-label="Answer"
+          data-canopy-choices=""
+          className="flex h-10 shrink-0 items-center gap-1.5 overflow-hidden border-t border-overlay px-3"
+        >
+          {answerChoices.map((choice, index) => {
+            const armed = armedAnswer?.digit === index + 1;
+            return (
+              <Button
+                key={`${index}:${choice}`}
+                variant={armed ? "ghost-danger" : "subtle"}
+                size="xs"
+                disabled={reconnecting}
+                data-canopy-choice=""
+                data-armed={armed || undefined}
+                aria-keyshortcuts={String(index + 1)}
+                className={cn("min-w-0 shrink", armed && "bg-status-error/10")}
+                onClick={() => pressAnswer(choice, index + 1)}
+              >
+                <Kbd className="shrink-0">{index + 1}</Kbd>
+                <span className="min-w-0 truncate">
+                  {armed ? `Press again: ${choice}` : choice}
+                </span>
+              </Button>
+            );
+          })}
+          <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-1.5">
+            {canReply && (
               <Button
                 variant="ghost"
                 size="xs"
-                aria-keyshortcuts="Enter"
-                onClick={(event) => onOpen(item, isNewWindowClick(event))}
+                aria-keyshortcuts="R"
+                // As the composer it focuses is: shut while the stream is.
+                disabled={stream.watchId === null}
+                onClick={() => composerRef.current?.focus()}
               >
-                <SquareArrowOutUpRight aria-hidden="true" />
-                Go to terminal
-                <Kbd className="shrink-0">↵</Kbd>
+                <MessageSquare aria-hidden="true" />
+                Reply
+                <Kbd className="shrink-0">R</Kbd>
               </Button>
-            </span>
-          </div>
-        )}
+            )}
+            <Button
+              variant="ghost"
+              size="xs"
+              aria-keyshortcuts="Enter"
+              onClick={(event) => onOpen(item, isNewWindowClick(event))}
+            >
+              <SquareArrowOutUpRight aria-hidden="true" />
+              Go to terminal
+              <Kbd className="shrink-0">↵</Kbd>
+            </Button>
+          </span>
+        </div>
         {canReply && voiceMicNotice && <VoiceMicNoticeBanner notice={voiceMicNotice} />}
         {canReply ? (
-          <div ref={replyHostRef} data-keybindings-isolated="" className="contents">
+          <div key="reply" ref={replyHostRef} data-keybindings-isolated="" className="contents">
             <Suspense fallback={null}>
               <LazyHybridInputBar
                 ref={composerRef}
@@ -1089,7 +1118,8 @@ export function CanopyCard({
               data-canopy-move-on=""
               className="flex h-6 shrink-0 items-center gap-1.5 px-3.5 pb-1.5 text-xs text-text-secondary"
             >
-              {moveOnTo !== null && (
+              {/* Only while the reply can send: a closed stream leaves it disabled. */}
+              {moveOnTo !== null && stream.watchId !== null && (
                 <>
                   <KbdChord shortcut="Cmd+Enter" density="compact" />
                   <span className="shrink-0">Send and go to</span>
@@ -1101,10 +1131,17 @@ export function CanopyCard({
             </p>
           </div>
         ) : (
-          <p className="flex shrink-0 items-center gap-1.5 px-3.5 py-3 text-xs text-text-secondary">
-            <KeyRound className="size-3.5 shrink-0" aria-hidden="true" />
-            It's asking for a secret: type it straight into the terminal above
-          </p>
+          // Keyed apart from the reply's host, so the reply unmounts whole and
+          // its ref still sees whether its editor held the keyboard.
+          <div key="secret" className="flex shrink-0 flex-col">
+            {/* The composer's footprint and the line under it, so a reading that
+                finds a secret prompt doesn't resize the agent either. */}
+            <p className="flex h-15 items-center gap-1.5 px-3.5 text-xs text-text-secondary">
+              <KeyRound className="size-3.5 shrink-0" aria-hidden="true" />
+              It's asking for a secret: type it straight into the terminal above
+            </p>
+            <div aria-hidden="true" className="h-6" />
+          </div>
         )}
       </div>
     </section>

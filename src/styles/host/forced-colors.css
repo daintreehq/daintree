@@ -494,10 +494,24 @@
   /* The standard dialog primary has the same problem: its high-contrast fill is
    * the only thing separating it from the outline and ghost actions beside it,
    * and the UA flattens all three to one system pill. Same stroke-weight cue,
-   * which reads as the platform's own default-button border. A dialog carries a
-   * destructive or a contrast primary, never both, so the two never compete. */
+   * which reads as the platform's own default-button border. A dialog's primary
+   * is destructive or contrast, never both, so the two never compete. */
   button[data-variant="contrast"] {
     border: 2px solid ButtonText;
+  }
+
+  /* A danger ghost button — the destructive answer on a dialog footer's leading
+   * edge — is marked only by its red label, and the UA repaints every label
+   * ButtonText, so "Overwrite recipe" arrives as the same 1px box as the Cancel
+   * beside it. It cannot borrow the 2px weight above: that footer also carries
+   * the contrast primary, and two heavy buttons would make the destroying one
+   * look like a second default. A double rule is a stroke no other button here
+   * draws (dashed is already the drop frame), and 3px is the least width that
+   * draws two lines. Width and style only, so the colour still comes from the
+   * blanket rule, or from the aria-disabled rule when the action is blocked. */
+  button[data-variant="ghost-danger"] {
+    border-width: 3px;
+    border-style: double;
   }
 
   /* …and the weight has to be re-asserted on everything else, or the signal
@@ -508,6 +522,8 @@
    * Cancel reached 2px, the destructive button was already 2px, and the two
    * rendered identically. The same held for a notification's primary action,
    * whose 2px hook sits at (0,1,0) and lost to this rule until it was exempted.
+   * The danger ghost is exempt too: thinned to 1px, a double rule draws as one
+   * solid line, which is Cancel's frame exactly.
    * Pinning the others back to 1px rather than raising the
    * destructive to 3px: the 1px/2px pair is the distinction that was designed,
    * and the later block's own purpose — a visible border where Preflight left
@@ -529,6 +545,7 @@
     :where(button, [role="button"], [type="button"], [type="submit"], [type="reset"]):not(
       [data-variant="destructive"],
       [data-variant="contrast"],
+      [data-variant="ghost-danger"],
       [data-notification-action="primary"]
     ) {
     border-width: 1px;

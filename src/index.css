@@ -18,7 +18,9 @@
 @import "./styles/components/canopy.css";
 @import "./styles/components/panels.css";
 @import "./styles/components/dock.css";
+@import "./styles/components/fleet-ribbon.css";
 @import "./styles/components/search-field.css";
+@import "./styles/components/path-tail.css";
 
 @font-face {
   font-family: "JetBrains Mono";

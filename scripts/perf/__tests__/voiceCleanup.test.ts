@@ -517,6 +517,14 @@ describe("corpusProblems", () => {
         drops: [],
       }),
       makeCase({ id: "g", style: "grok", uncertain: ["cash"] }),
+      makeCase({
+        id: "h",
+        raw: "rerun --watch",
+        reference: "Rerun --watch.",
+        alsoAccept: ["Rerun."],
+        fixes: {},
+        drops: [],
+      }),
     ]);
     expect(problems).toEqual([
       'a: fix "the cache" is already in the raw transcript',
@@ -526,10 +534,11 @@ describe("corpusProblems", () => {
       "d: duplicate id",
       'd: unsure phrase "cache" is not in the raw transcript',
       'e: keep "the branch" does not survive into "Invalidate the cache on change."',
+      // No "--watch" keep for f: its reference rewrites the span, so it was misheard.
       'f: fix "rebuild" is not in the reference',
-      'f: keep "--watch" does not survive into "Invalidate the cache when the branch changes."',
       // Grok's streamed words carry no confidence, so production never flags one.
       "g: only Deepgram flags unsure words",
+      'h: keep "--watch" does not survive into "Rerun."',
     ]);
   });
 
@@ -1133,7 +1142,11 @@ describe("prompt variants", () => {
     expect(PROMPT_VARIANTS.luna!.instructionsFor("gpt-6-luna")).toEqual(
       withRecentPrompts(PROMPT_VARIANTS.v11!.instructionsFor("gpt-6-luna"))
     );
+    // #15529 told both models about the command the prompt opens with.
     expect(production.instructionsFor("gpt-6-luna")).toEqual(
+      PROMPT_VARIANTS["luna-opening"]!.instructionsFor("gpt-6-luna")
+    );
+    expect(production.instructionsFor("gpt-6-luna")).not.toEqual(
       PROMPT_VARIANTS["luna-following"]!.instructionsFor("gpt-6-luna")
     );
     // What Terra cleaned up with from #14855 until #14873 chose names6 over it.
@@ -1145,6 +1158,9 @@ describe("prompt variants", () => {
     // following told agentreply (#14899); replaying a measured variant must
     // keep its measured rules.
     expect(production.instructionsFor("gpt-6.1-terra")).toEqual(
+      PROMPT_VARIANTS["intent-opening"]!.instructionsFor("gpt-6.1-terra")
+    );
+    expect(production.instructionsFor("gpt-6.1-terra")).not.toEqual(
       PROMPT_VARIANTS["intent-spoken"]!.instructionsFor("gpt-6.1-terra")
     );
     expect(production.instructionsFor("gpt-6.1-terra")).not.toEqual(
@@ -1785,5 +1801,90 @@ describe("rescore", () => {
     ]);
     expect(row(LUNA, "with")?.slice(0, 2)).toEqual(["1", "100.0%"]);
     expect(row(LUNA, "without")?.slice(0, 2)).toEqual(["1", "100.0%"]);
+  });
+
+  it("breaks the run out by passage length and whether it carries on the draft", () => {
+    const tail = makeCase({
+      id: "tail",
+      raw: "only for 2 seconds, after that it sends the raw text.",
+      reference: "only for 2 seconds, after that it sends the raw text.",
+      fixes: {},
+      drops: [],
+      recentContext: ["The send waits for cleanup, but"],
+    });
+    // Just under and at the 60-character bound, the first padded: the band is the trimmed passage's.
+    const under = makeCase({
+      id: "under",
+      raw: "  Ship it to the beta channel first and leave stable as is ok  ",
+      reference: "Ship it to the beta channel first and leave stable as is ok",
+      fixes: {},
+      drops: [],
+    });
+    const at = makeCase({
+      id: "at",
+      raw: "Ship it to the beta channel first and leave stable as is ok.",
+      reference: "Ship it to the beta channel first and leave stable as is ok.",
+      fixes: {},
+      drops: [],
+    });
+    const passages = [codex, tail, symbols, under, at];
+    const file = writeRun("bands.json", passages, [
+      saved(LUNA, "codex", codex.reference),
+      saved(LUNA, "tail", "only for seconds, after that it sends the raw text."),
+      saved(LUNA, "symbols", symbols.reference),
+      saved(LUNA, "under", under.reference),
+      saved(LUNA, "at", at.reference),
+      saved(TERRA, "codex", codex.reference),
+      saved(TERRA, "tail", tail.reference),
+      saved(TERRA, "symbols", null),
+    ]);
+    const { run, corpus } = rescore(file, passages);
+    const section = renderReport(run, corpus)
+      .split("## By passage length and context")[1]!
+      .split("\n## ")[0]!;
+    const row = (variant: string, context: string, chars: string) =>
+      section
+        .split("\n")
+        .find((line) => line.startsWith(`| ${variant} | ${context} | ${chars} |`))
+        ?.split(" | ")
+        .slice(3);
+    expect(
+      section
+        .split("\n")
+        .filter((line) => line.startsWith(`| ${LUNA} |`))
+        .map((line) => line.split(" | ").slice(1, 3).join(" "))
+    ).toEqual([
+      "continuing 30–59",
+      "standalone 0–29",
+      "standalone 30–59",
+      "standalone 60–89",
+      "standalone 90–119",
+    ]);
+    // Passages, trials, ready, words lost, risky, failed, n, p50, p95, mean reasoning.
+    expect(row(LUNA, "standalone", "0–29")).toEqual([
+      "1",
+      "1",
+      "100.0%",
+      "0",
+      "0",
+      "0",
+      "1",
+      "900",
+      "900",
+      "0 |",
+    ]);
+    expect(row(LUNA, "continuing", "30–59")?.slice(0, 5)).toEqual(["1", "1", "0.0%", "1", "1"]);
+    // The failed trial counts in the cohort and its quality, never in its latency.
+    expect(row(TERRA, "standalone", "90–119")?.slice(0, 9)).toEqual([
+      "1",
+      "1",
+      "0.0%",
+      "0",
+      "0",
+      "1",
+      "0",
+      "–",
+      "–",
+    ]);
   });
 });

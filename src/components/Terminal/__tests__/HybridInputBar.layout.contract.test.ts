@@ -16,8 +16,8 @@ import ts from "typescript";
  *    user typed.
  *
  * 2. **Every control in the composer meets the WCAG 2.5.8 24px floor.** The
- *    stash button was 20px and the `❯` 20px tall, both crowded by neighbours
- *    close enough that the spacing exception cannot rescue them.
+ *    stash button was 20px tall, crowded by neighbours close enough that the
+ *    spacing exception cannot rescue it.
  *
  * Source enforcement rather than a rendering assertion, matching the
  * drop-target contract below: standing up the whole bar, CodeMirror and its stores
@@ -89,9 +89,9 @@ describe("HybridInputBar layout contract", () => {
     const FLOOR_STEPS = 6;
     const heights = buttonHeights(declarations());
 
-    // The picker, attach and stash buttons. The mic declares its own size in
+    // The attach and stash buttons. The mic declares its own size in
     // `VoiceInputButton.tsx`.
-    expect(heights.length).toBeGreaterThanOrEqual(3);
+    expect(heights.length).toBeGreaterThanOrEqual(2);
     expect(heights.filter((height) => height < FLOOR_STEPS)).toEqual([]);
   });
 
@@ -128,6 +128,27 @@ describe("HybridInputBar layout contract", () => {
     expect(inner).not.toMatch(/\bw-(full|screen|\[|\d)/);
   });
 
+  it("draws the `❯` as a glyph as wide as itself, with nothing a control has", () => {
+    // #15309: the marker was a 24px button. It keeps the control height, so it
+    // sits centred on the draft's last row, but takes only the glyph's width
+    // and has no hover, focus or tooltip of its own.
+    const text = declarations();
+    const at = text.indexOf("data-composer-marker");
+    expect(at, "the marker element").toBeGreaterThan(-1);
+    const element = text.slice(text.lastIndexOf("<", at), text.indexOf("</span>", at));
+    const classes = element.slice(element.indexOf("className"));
+
+    expect(element).toMatch(/aria-hidden="true"/);
+    expect(element).not.toMatch(/\b(onClick|tabIndex|role)=/);
+    expect(classes).toMatch(/\bh-6\b/);
+    expect(classes).toMatch(/\bshrink-0\b/);
+    expect(classes).not.toMatch(/(^|[\s"])(min-)?w-/);
+    expect(classes).not.toMatch(/\b(hover|focus-visible|group-hover):/);
+    expect(classes).not.toMatch(/COMPOSER_CONTROL_/);
+    const tooltips = text.match(/<Tooltip\b[\s\S]*?<\/Tooltip>/g) ?? [];
+    expect(tooltips.some((block) => block.includes("data-composer-marker"))).toBe(false);
+  });
+
   it("gives the canvas track a zero min-width so it can actually shrink", () => {
     // Flex items default to `min-width: auto`, which stops the canvas
     // shrinking past its longest unbreakable token. Matched on the track's
@@ -149,12 +170,13 @@ describe("HybridInputBar layout contract", () => {
 });
 
 /**
- * The composer's control row — `❯`, attach, stash and mic — is one family, so
- * each rule here is stated over all four rather than per control. They drifted
- * apart one control at a time: the `❯` had no hover wash, stash ignored the
- * composer's `disabled`, attach and mic each dimmed themselves on top of the
- * shell's own dim (to 30% and 24% beside a picker at 60%), and three tooltips
- * opened toward the pane edge while one opened away from it.
+ * The composer's control row — attach, stash and mic — is one family, so each
+ * rule here is stated over all three rather than per control. They drifted
+ * apart one control at a time: stash ignored the composer's `disabled`, attach
+ * and mic each dimmed themselves on top of the shell's own dim (to 30% and 24%
+ * beside a control at 60%), and tooltips opened toward the pane edge while
+ * others opened away from it. The `❯` is not one of them: it is a prompt
+ * marker, not a control (#15309).
  *
  * Source enforcement, like the layout contract above: the classes are where
  * every one of these defects lived.
@@ -196,7 +218,6 @@ const bar = declarationsOf("HybridInputBar.tsx");
 const voice = declarationsOf("VoiceInputButton.tsx");
 
 const CONTROLS = [
-  ["picker", tooltipBlock(bar, "Open command picker")],
   ["attach", tooltipBlock(bar, "Attach files")],
   ["stash", tooltipBlock(bar, "Restore stashed input")],
   ["mic", tooltipBlock(voice)],

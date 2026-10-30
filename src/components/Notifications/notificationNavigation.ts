@@ -1,17 +1,28 @@
 import { actionService } from "@/services/ActionService";
 import { useProjectStore } from "@/store/projectStore";
+import { useScratchStore } from "@/store/scratchStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useUIStore } from "@/store/uiStore";
 import { getWorktreeIdSet } from "@/store/storeAccessors";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
-import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import {
+  useNotificationHistoryStore,
+  type NotificationHistoryEntry,
+} from "@/store/slices/notificationHistorySlice";
+import {
+  isOpenableWorkspace,
   resolveNotificationDestination,
   type NotificationDestination,
 } from "@/lib/notificationDestination";
+import { notify } from "@/lib/notify";
+import { logWarn } from "@/utils/logger";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
+import type { ProjectFocusOnActivateIntent } from "@shared/types/ipc/project";
 
 type NotificationContext = NotificationHistoryEntry["context"];
+type WorkspaceDestination = Extract<NotificationDestination, { kind: "project" }>;
 
 /**
  * The destination read fresh from the stores. Terminals get trashed and
@@ -31,12 +42,18 @@ export function resolveLiveNotificationDestination(
   const panelWorktreeId = panel?.worktreeId;
   const panelWorktreeShown =
     !panelWorktreeId || !!inView?.has(panelWorktreeId) || deletedWorktrees.has(panelWorktreeId);
+  const { currentProject, projects } = useProjectStore.getState();
   return resolveNotificationDestination(context, {
-    currentProjectId: getViewWorkspaceId() ?? useProjectStore.getState().currentProject?.id,
+    currentProjectId: getViewWorkspaceId() ?? currentProject?.id,
     panelLocation: panel?.location,
     panelWorktreeId,
     panelWorktreeShown,
     worktreeLive,
+    otherWorkspaceOpenable: isOpenableWorkspace(
+      context?.projectId,
+      projects,
+      useScratchStore.getState().scratches
+    ),
   });
 }
 
@@ -47,7 +64,9 @@ export function resolveLiveNotificationDestination(
  */
 export async function navigateToNotificationSource(context: NotificationContext): Promise<boolean> {
   const destination = resolveLiveNotificationDestination(context);
-  if (destination.kind === "none") return false;
+  // Another workspace is reached only by switching away from this view, which
+  // is the inbox's decision to make (see goToNotificationSource).
+  if (destination.kind === "none" || destination.kind === "project") return false;
 
   const selection = useWorktreeSelectionStore.getState();
 
@@ -93,12 +112,101 @@ export async function navigateToNotificationSource(context: NotificationContext)
 }
 
 /**
+ * Reads the row the way the `u` toggle does: a thread's other unarchived
+ * entries go with its head, since the row is one line to the user. Archive
+ * stays its own step, and an entry pruned meanwhile is simply not found.
+ */
+function markRowRead(entryId: string): void {
+  const { entries, markIdsRead } = useNotificationHistoryStore.getState();
+  const head = entries.find((e) => e.id === entryId);
+  if (!head) return;
+  const ids = entries
+    .filter(
+      (e) =>
+        e.id === head.id ||
+        (!!head.correlationId && e.correlationId === head.correlationId && !e.archivedAt)
+    )
+    .map((e) => e.id);
+  markIdsRead(ids);
+}
+
+/**
+ * What to do once the other workspace's view is up: its panel, or the worktree
+ * when the panel has gone by then.
+ */
+function landingIntentFor({
+  panelId,
+  worktreeId,
+}: WorkspaceDestination): ProjectFocusOnActivateIntent | undefined {
+  if (panelId) return { intent: "focus-panel", panelId, ...(worktreeId ? { worktreeId } : {}) };
+  if (worktreeId) return { intent: "focus-worktree", worktreeId };
+  return undefined;
+}
+
+/**
+ * Switches to the record's workspace with its address riding along, for the
+ * incoming view to land on. A project switch reports its own failure, with a
+ * Try again that keeps the address; a scratch switch rejects to here.
+ */
+function switchToNotificationWorkspace(destination: WorkspaceDestination): void {
+  const { projectId } = destination;
+  const focusIntent = landingIntentFor(destination);
+  const switching = isScratchWorkspaceId(projectId)
+    ? useScratchStore.getState().switchScratch(projectId, { focusIntent })
+    : useProjectStore.getState().switchProject(projectId, { focusIntent });
+  void switching.catch((error: unknown) => {
+    logWarn("Couldn't switch to a notification's workspace", {
+      error: formatErrorMessage(error, "unknown"),
+    });
+    notify({
+      type: "error",
+      title: "Couldn't open the source",
+      message: formatErrorMessage(error, "Daintree couldn't switch to the workspace it's in."),
+      context: { eventKind: "uiFeedback" },
+      // The inbox has already closed, so a quiet inbox-only record would leave
+      // the click looking ignored; and the history keeps no callback actions.
+      priority: "high",
+      actions: [
+        {
+          label: "Try again",
+          variant: "primary",
+          onClick: () => switchToNotificationWorkspace(destination),
+        },
+      ],
+    });
+  });
+}
+
+/**
  * A row click, Enter on a row, and the row menu's "Go to source" all end here.
  * The inbox closes only after navigation has landed, so focus has already
- * moved to the destination and the bell's close handler leaves it there.
+ * moved to the destination and the bell's close handler leaves it there. The
+ * row is marked read on that same arrival and never on a refusal, so a dead
+ * link leaves it unread.
+ *
+ * Another workspace is the exception: the switch replaces this view, and its
+ * landing happens in a view that can't report back. So the inbox closes as the
+ * switch starts, and the row keeps its read state, unread until the user marks
+ * it, since nothing here learns that the source was reached. A switch that
+ * fails says so, and the row is still in the inbox.
+ *
+ * Resolves false only when the inbox kept the row: nowhere was left to go, or
+ * a step refused.
  */
-export async function goToNotificationSource(context: NotificationContext): Promise<boolean> {
+export async function goToNotificationSource(
+  context: NotificationContext,
+  entryId: string
+): Promise<boolean> {
+  const destination = resolveLiveNotificationDestination(context);
+  if (destination.kind === "project") {
+    useUIStore.getState().closeNotificationCenter();
+    switchToNotificationWorkspace(destination);
+    return true;
+  }
   const arrived = await navigateToNotificationSource(context);
-  if (arrived) useUIStore.getState().closeNotificationCenter();
+  if (arrived) {
+    markRowRead(entryId);
+    useUIStore.getState().closeNotificationCenter();
+  }
   return arrived;
 }

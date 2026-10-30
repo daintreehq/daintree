@@ -801,6 +801,14 @@ describe("ProjectStore.writeInRepoRecipeChecked (in-repo recipe staleness guard,
     });
     // On-disk content must be untouched after a rejected write.
     expect(await fs.readFile(filePath, "utf-8")).toBe(current.replace("Drift", "Drift!!"));
+
+    // A refusal leaves the cached hash alone, so saving the draft a cancelled
+    // conflict kept in the editor is refused again rather than slipping through
+    // (#15035).
+    await expect(store.writeInRepoRecipeChecked(projectPath, updated)).rejects.toMatchObject({
+      code: "RECIPE_STALE_CONFLICT",
+    });
+    expect(await fs.readFile(filePath, "utf-8")).toBe(current.replace("Drift", "Drift!!"));
   });
 
   it("force=true bypasses the staleness check and updates the cached hash", async () => {

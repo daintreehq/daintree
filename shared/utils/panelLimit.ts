@@ -15,6 +15,28 @@ export function evaluatePanelLimit(
   return "ok";
 }
 
+export interface PanelLimitOrderingIssues {
+  /** The soft banner can't show before the hard stop, so it never warns in time. */
+  softAtOrAboveHard: boolean;
+  /** A batch is capped at the hard limit, so it never projects past the confirmation. */
+  confirmationAtOrAboveHard: boolean;
+}
+
+/**
+ * Where the soft warning or the confirmation threshold sits too high to do its job.
+ * Advisory: the limits are independent settings and each is accepted as typed.
+ */
+export function getPanelLimitOrderingIssues(limits: {
+  softWarningLimit: number;
+  confirmationLimit: number;
+  hardLimit: number;
+}): PanelLimitOrderingIssues {
+  return {
+    softAtOrAboveHard: limits.softWarningLimit >= limits.hardLimit,
+    confirmationAtOrAboveHard: limits.confirmationLimit >= limits.hardLimit,
+  };
+}
+
 /** The panel count and the limits in force, as `addPanel` judged them. */
 export interface PanelLimitSnapshot {
   count: number;

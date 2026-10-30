@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Callout } from "@/components/ui/Callout";
 import {
@@ -19,13 +20,14 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { WorktreeDeleteNotes } from "@/components/Worktree/WorktreeDeleteNotes";
 import { isCautionPreviewLine, stripCautionPrefix } from "@/lib/mcpPreviewLines";
 import {
-  MAIN_DISPATCH_DEADLINE_MS,
+  confirmationEndsAt,
   useMcpConfirmStore,
   type McpConfirmSelectableTarget,
   type PendingMcpConfirm,
 } from "@/store/mcpConfirmStore";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { pluralize } from "@/lib/pluralize";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -39,15 +41,8 @@ import { selectActiveSlot, useHelpPanelStore } from "@/store/helpPanelStore";
 import { getAgentConfig } from "@/config/agents";
 import type { HelpAssistantDaintreeConfirmations } from "@shared/types/ipc/api";
 import { logError } from "@/utils/logger";
-
-/**
- * Renderer-side timer that beats main's 30s `pendingDispatches` deadline by
- * a couple seconds, so the user-facing modal closes with a clean
- * `CONFIRMATION_TIMEOUT` outcome before main rejects with a generic
- * "Action dispatch timed out" error. The modal disappears automatically
- * either way; the earlier window just produces nicer audit semantics.
- */
-const CONFIRMATION_TIMEOUT_MS = 28_000;
+import { showMcpRequester, useMcpRequesterLiveState } from "@/lib/mcpConfirmRequester";
+import type { McpRequester } from "@shared/types/ipc/mcpServer";
 
 /**
  * Lower-bound read-time gate for destructive dispatches. `resolveOnce` guards
@@ -93,6 +88,9 @@ const PREVIEW_MAX_BODY_HEIGHT = "max-h-[13rem]";
 
 /** The house's long-wait mark: past it, a loading state says it is still going. */
 const PREVIEW_STILL_WORKING_MS = 5_000;
+
+/** What an expired request says beside its dead button (#14989). */
+const EXPIRED_HINT = "Timed out before an answer, so nothing ran";
 
 function truncateUserAgent(userAgent: string): string {
   return userAgent.length > MAX_USER_AGENT_DISPLAY
@@ -140,6 +138,9 @@ export function McpConfirmDialog() {
   const current = useMcpConfirmStore((state) => state.current);
   const queueDepth = useMcpConfirmStore((state) => state.queue.length);
   const resolveCurrent = useMcpConfirmStore((state) => state.resolveCurrent);
+  const markShown = useMcpConfirmStore((state) => state.markShown);
+  const expire = useMcpConfirmStore((state) => state.expire);
+  const dismiss = useMcpConfirmStore((state) => state.dismiss);
   const resetKey = current?.requestId ?? "null";
 
   // `resolveCurrent` is synchronous: it resolves the promise and advances the
@@ -154,40 +155,30 @@ export function McpConfirmDialog() {
       requestId: string,
       decision: McpConfirmationDecision,
       selectedTargetIds?: readonly string[],
-      scope?: McpApprovalScope,
-      unseen?: boolean
+      scope?: McpApprovalScope
     ) => {
       if (handledRequestIdRef.current === requestId) return;
       handledRequestIdRef.current = requestId;
-      resolveCurrent(decision, selectedTargetIds, scope, unseen);
+      resolveCurrent(decision, selectedTargetIds, scope);
     },
     [resolveCurrent]
   );
 
-  // Whether this view was reported visible at any point while the request
-  // asked. Keyed on the request rather than `current`, which a preview landing
-  // replaces. A view the page reports hidden (a host's project in the
-  // background, a minimised window, on macOS one covered by others) still opens
-  // the dialog, and a timeout there means nobody saw it, not that anyone declined.
-  const seenRef = useRef<{ requestId: string; seen: boolean } | null>(null);
+  // The request is on screen once it is current and its view is visible, and
+  // that is when its decision window starts (#14989): not when it was queued,
+  // and not while a view the page reports hidden (a host's project in the
+  // background, a minimised window, on macOS one covered by others) holds it.
+  // A timeout before then means nobody saw it, not that anyone declined.
   const currentRequestId = current?.requestId ?? null;
   useEffect(() => {
     if (currentRequestId === null) return;
-    if (seenRef.current?.requestId !== currentRequestId) {
-      seenRef.current = { requestId: currentRequestId, seen: false };
-    }
     const observe = () => {
-      if (
-        document.visibilityState === "visible" &&
-        seenRef.current?.requestId === currentRequestId
-      ) {
-        seenRef.current.seen = true;
-      }
+      if (document.visibilityState === "visible") markShown(currentRequestId);
     };
     observe();
     document.addEventListener("visibilitychange", observe);
     return () => document.removeEventListener("visibilitychange", observe);
-  }, [currentRequestId]);
+  }, [currentRequestId, markShown]);
 
   // Which rows of a selectable confirmation are still checked (#12123). Every
   // target starts checked: these are the exact finite ids the caller already
@@ -213,6 +204,46 @@ export function McpConfirmDialog() {
     setAllowForSession(false);
   }, [resetKey]);
 
+  // The request whose requester the user went to look at (#14992). It stays
+  // current, unanswered and on its own clock: the dialog only steps aside, and
+  // a return control brings the same request back. Keyed by id, so a request
+  // that settles meanwhile can't leave the next one hidden.
+  const [inspectingId, setInspectingId] = useState<string | null>(null);
+  const inspecting = inspectingId !== null && inspectingId === currentRequestId;
+  // Where to go once the dialog has finished closing. Not before: the close
+  // hands focus back to wherever it was when the dialog opened, which would
+  // pull it straight out of the pane the user asked to see.
+  const pendingShowRef = useRef<{ requestId: string; identity: McpRequester } | null>(null);
+  const showRequester = useCallback((requestId: string, identity: McpRequester) => {
+    pendingShowRef.current = { requestId, identity };
+    setInspectingId(requestId);
+  }, []);
+  const reviewRequest = useCallback(() => {
+    // Reopened before the exit finished: the close that would have navigated
+    // never completes, and a later one, after an answer, must not go instead.
+    pendingShowRef.current = null;
+    setInspectingId(null);
+  }, []);
+  const handleCloseComplete = useCallback(() => {
+    const pending = pendingShowRef.current;
+    pendingShowRef.current = null;
+    if (pending === null) return;
+    // Settled while the dialog was closing: there is nothing left to come back to.
+    if (useMcpConfirmStore.getState().current?.requestId !== pending.requestId) return;
+    // Nothing left to look at brings the request straight back, rather than
+    // leaving it behind a return control over a pane that isn't there.
+    const comeBack = () => setInspectingId((id) => (id === pending.requestId ? null : id));
+    void showMcpRequester(pending.identity).then(
+      (arrived) => {
+        if (!arrived) comeBack();
+      },
+      (err) => {
+        logError("[McpConfirmDialog] Failed to show requester", err);
+        comeBack();
+      }
+    );
+  }, []);
+
   // A preview still pending after the house's long-wait mark says so, rather
   // than leaving the same line up for the whole wait.
   const previewPending = current?.previewPending === true;
@@ -232,39 +263,17 @@ export function McpConfirmDialog() {
     });
   }, []);
 
+  // One timer, for the moment the request stops offering approval: the end of
+  // its window once shown, or main's deadline while it waits. Both are fixed
+  // points, so a preview landing re-arms the same moment rather than renewing
+  // it, and the cooldown that follows a promotion always fits inside a window
+  // that only starts on screen.
+  const endsAt = current === null || current.expired ? undefined : confirmationEndsAt(current);
   useEffect(() => {
-    if (current === null) return;
-    const { requestId, enqueuedAt } = current;
-    // Subtract time the request already spent queued behind a prior modal so
-    // every dispatch races against the same wall-clock budget; otherwise a
-    // queued item could outlive main's 30s deadline and degrade to a generic
-    // timeout error instead of `CONFIRMATION_TIMEOUT`.
-    const elapsed = Date.now() - enqueuedAt;
-    // Destructive dispatches disable the confirm button for CONFIRM_COOLDOWN_MS
-    // after promotion. A deeply-queued item could otherwise have less budget
-    // left than the cooldown and auto-time-out before the user can ever click —
-    // so floor the window above the cooldown for those. The floor still lands
-    // under main's 30s deadline (28s budget + ~1.5s), preserving the clean
-    // CONFIRMATION_TIMEOUT outcome.
-    const floor = current.danger === "confirm" ? CONFIRM_COOLDOWN_MS + 300 : 500;
-    // The floor keeps a deeply-queued destructive item approvable for at least
-    // as long as its own cooldown. But the floor must never push the modal past
-    // main's deadline: an item promoted at ~29s would otherwise sit open until
-    // 30.5s and re-enable its confirm button at 30.2s — after main had already
-    // failed the dispatch — so a click would run the destructive action while
-    // the agent had been told it timed out. Clamp to whatever budget is
-    // genuinely left; a non-positive clamp fires the timeout immediately, which
-    // is the honest outcome for a request that can no longer be approved.
-    const remaining = Math.min(
-      Math.max(floor, CONFIRMATION_TIMEOUT_MS - elapsed),
-      MAIN_DISPATCH_DEADLINE_MS - elapsed
-    );
-    const timer = setTimeout(() => {
-      const seen = seenRef.current?.requestId === requestId ? seenRef.current.seen : true;
-      resolveOnce(requestId, "timeout", undefined, undefined, !seen);
-    }, remaining);
+    if (currentRequestId === null || endsAt === undefined) return;
+    const timer = setTimeout(() => expire(currentRequestId), Math.max(0, endsAt - Date.now()));
     return () => clearTimeout(timer);
-  }, [current, resolveOnce]);
+  }, [currentRequestId, endsAt, expire]);
 
   if (current === null) {
     return (
@@ -285,6 +294,7 @@ export function McpConfirmDialog() {
   // red. Daintree classifies its own actions, so unlike a remote server's
   // self-reported tool annotations this value is trusted.
   const isDestructive = current.danger === "confirm";
+  const expired = current.expired === true;
   const previewState = derivePreviewState(current);
   const hasArgs = current.argsSummary.trim().length > 0;
 
@@ -321,35 +331,46 @@ export function McpConfirmDialog() {
   const hint = gateHintText(
     previewState,
     previewSlow,
-    current.typedNameTarget ? 0 : queueDepth,
-    selectableTargets !== undefined && selectedCount === 0
+    current.typedNameTarget && !expired ? 0 : queueDepth,
+    selectableTargets !== undefined && selectedCount === 0,
+    expired
   );
 
   const sharedProps = {
-    isOpen: true,
+    isOpen: !inspecting,
+    onCloseComplete: handleCloseComplete,
     // One width for every request, so a promotion never re-centres the buttons
     // sideways; wide enough that a file path or commit subject stays on one line
     // and the scoped session label still leaves the footer hint room to read.
     size: "md" as const,
-    onClose: () => resolveOnce(current.requestId, "rejected"),
+    // An expired request already told its caller it timed out, so closing it
+    // only moves on; it is not a second answer.
+    onClose: expired
+      ? () => dismiss(current.requestId)
+      : () => resolveOnce(current.requestId, "rejected"),
     title: confirmTitle(current),
     confirmLabel: offersSession
       ? sessionConfirmLabel(current.actionTitle, allowForSession)
       : selectionConfirmLabel(current, selectedCount),
-    cancelLabel: "Cancel",
-    onConfirm: () =>
+    cancelLabel: expired ? "Close" : "Cancel",
+    onConfirm: () => {
+      if (expired) return;
       resolveOnce(
         current.requestId,
         "approved",
         approvedTargetIds,
         offersSession && allowForSession ? "session" : undefined
-      ),
+      );
+    },
     hasPreview: hasScrollableContent,
     // An empty selection is the same outcome as Cancel with an extra dispatch in
-    // between, so it is not offered as an approval.
+    // between, so it is not offered as an approval. An expired request keeps
+    // its button where it was, dead, beside the reason.
     confirmDisabled:
-      previewState === "pending" || (selectableTargets !== undefined && selectedCount === 0),
-    confirmCooldownMs: isDestructive ? CONFIRM_COOLDOWN_MS : undefined,
+      expired ||
+      previewState === "pending" ||
+      (selectableTargets !== undefined && selectedCount === 0),
+    confirmCooldownMs: isDestructive && !expired ? CONFIRM_COOLDOWN_MS : undefined,
     cooldownKey: current.requestId,
     // A promoted request is a new question: it opens at the top, with focus back
     // on the safe default rather than on the button that answered the last one.
@@ -358,14 +379,21 @@ export function McpConfirmDialog() {
     // Neither future-requests control may be where focus lands: a Space or an
     // arrow key meant for something else would otherwise widen a grant or change
     // an app-wide setting. A bare request has nothing else focusable before them.
-    initialFocus: showAssistantPreference || offersSession ? ("cancel" as const) : undefined,
+    // Nor may the control that steps away to the requester: a reflexive Enter
+    // there would hide the question instead of answering it.
+    initialFocus:
+      showAssistantPreference || offersSession || current.requester !== undefined
+        ? ("cancel" as const)
+        : undefined,
     // Absent rather than empty when there is nothing to say, so ConfirmDialog's
     // own typed-name hint can take the slot.
     hint: hint ? (
       // Wraps rather than truncating: beside the long session label the reason
       // the button is dead would otherwise shrink to an ellipsis. Two lines of
       // text-xs sit inside the button's height, so the row never moves.
-      <span aria-live="polite" className="line-clamp-2 min-w-0 break-words">
+      // The expiry is announced by the status line in the body, which is
+      // there before it happens; this one would only announce it twice.
+      <span aria-live={expired ? "off" : "polite"} className="line-clamp-2 min-w-0 break-words">
         {hint}
       </span>
     ) : undefined,
@@ -376,7 +404,18 @@ export function McpConfirmDialog() {
   // that the other doesn't repeat (forge.dismissReview's merge-safety note).
   const body = (
     <div className="space-y-4">
-      <RequesterRow current={current} />
+      {/* Mounted for the whole request, so the expiry is a change a screen
+          reader announces rather than a live region that arrived already full. */}
+      <span role="status" className="sr-only">
+        {expired ? EXPIRED_HINT : ""}
+      </span>
+
+      <RequesterRow
+        current={current}
+        onShowRequester={
+          expired ? undefined : (identity) => showRequester(current.requestId, identity)
+        }
+      />
 
       <AppDialog.Description>{current.actionDescription}</AppDialog.Description>
 
@@ -422,6 +461,7 @@ export function McpConfirmDialog() {
         <LaterRequests>
           <SessionApprovalOption
             actionTitle={current.actionTitle}
+            requesterName={current.requester?.name}
             checked={allowForSession}
             onCheckedChange={setAllowForSession}
           />
@@ -461,6 +501,12 @@ export function McpConfirmDialog() {
         <ConfirmDialog {...sharedProps} variant="default">
           {body}
         </ConfirmDialog>
+      )}
+      {/* After the dialog, so the dialog stays the first child in both
+          branches and is reused, not remounted, when a request arrives on an
+          empty queue. A portal, so where it sits here is not where it shows. */}
+      {inspecting && (
+        <ReturnToRequest title={confirmTitle(current)} expired={expired} onReview={reviewRequest} />
       )}
     </ErrorBoundary>
   );
@@ -523,30 +569,51 @@ export function confirmTitle(current: PendingMcpConfirm): string {
  * assistant-owned requests, which moved everything below it by ~52px whenever a
  * queued item promoted across origins, and left the most trusted case looking
  * like a missing section.
+ *
+ * With several agents running, the class of surface is not enough to decide on
+ * (#14992), so a pane or Assistant tab main identified is named the way its own
+ * header or tab names it, and the row offers to go and look at it.
  */
-function RequesterRow({ current }: { current: PendingMcpConfirm }) {
-  const { callerInfo, sessionOrigin } = current;
+function RequesterRow({
+  current,
+  onShowRequester,
+}: {
+  current: PendingMcpConfirm;
+  onShowRequester?: (identity: McpRequester) => void;
+}) {
+  const { callerInfo, sessionOrigin, requester } = current;
   const isAssistant = sessionOrigin === "help";
+  const live = useMcpRequesterLiveState(requester);
 
   let Icon = ShieldAlert;
   let name = "Unidentified client";
   let detail: string | null = null;
+  const qualifiers: string[] = [];
+  let showLabel: string | null = null;
 
-  // Only main sets `offerSessionApproval`, and only for a session it
-  // authenticated with a per-pane bearer — so this is a positive
+  // Only main sets `requester` and `offerSessionApproval`, and only for a
+  // session it authenticated with a per-pane bearer — so this is a positive
   // identification, not an inference from missing fields (#12692).
-  if (current.offerSessionApproval === true) {
+  if (requester?.identity.kind === "pane" || current.offerSessionApproval === true) {
     Icon = SquareTerminal;
-    name = "Agent in a terminal pane";
+    name = requester?.name ?? "Agent in a terminal pane";
+    if (requester?.kindLabel) qualifiers.push(requester.kindLabel);
+    if (live.otherWorktreeName) qualifiers.push(live.otherWorktreeName);
+    showLabel = "Show pane";
   } else if (callerInfo) {
     Icon = Plug;
     name = truncateUserAgent(callerInfo.userAgent);
     // A host's agent has no bearer of this machine's, so nothing to show.
     detail = callerInfo.token4LastChars ? `…${callerInfo.token4LastChars}` : null;
-  } else if (isAssistant) {
+  } else if (requester?.identity.kind === "assistant" || isAssistant) {
     Icon = Sparkles;
     name = "Daintree Assistant";
+    if (requester?.name) qualifiers.push(requester.name);
+    showLabel = "Show tab";
   }
+  // Named when the request arrived and gone since: say so, rather than offer
+  // to show something that isn't there.
+  if (requester?.name !== undefined && !live.present) qualifiers.push("No longer open");
 
   return (
     <div className="space-y-1">
@@ -558,7 +625,24 @@ function RequesterRow({ current }: { current: PendingMcpConfirm }) {
           {detail && (
             <span className="shrink-0 font-mono text-2xs text-text-secondary">{detail}</span>
           )}
+          {qualifiers.length > 0 && (
+            // Gives way before the name does: the name is who is asking.
+            <span className="min-w-0 shrink-[3] truncate text-xs text-text-secondary">
+              · {qualifiers.join(" · ")}
+            </span>
+          )}
         </span>
+        {requester && live.present && onShowRequester && showLabel && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            className="shrink-0"
+            onClick={() => onShowRequester(requester.identity)}
+          >
+            {showLabel}
+          </Button>
+        )}
       </div>
       {/* The question is about reach, not danger: the action may be harmless. */}
       {current.approvalReason === "above-tier" && (
@@ -588,6 +672,40 @@ function LaterRequests({ children }: { children: React.ReactNode }) {
 }
 
 /**
+ * What stays on screen while the user looks at the requester (#14992): the
+ * question is still open and still on its clock, so it says what is waiting and
+ * brings it back. Nonmodal and unfocused, so the pane the user went to see keeps
+ * the keyboard; it never closes on its own, because closing is not an answer.
+ */
+function ReturnToRequest({
+  title,
+  expired,
+  onReview,
+}: {
+  title: string;
+  expired: boolean;
+  onReview: () => void;
+}) {
+  return createPortal(
+    <div
+      role="region"
+      aria-label="Approval request"
+      className="fixed bottom-6 left-1/2 z-[var(--z-modal)] flex w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--border-overlay)] bg-surface-panel-elevated py-2 pr-2 pl-3 shadow-[var(--theme-shadow-floating)]"
+    >
+      <ShieldAlert aria-hidden="true" className="size-4 shrink-0 text-text-secondary" />
+      <span className="min-w-0 truncate text-sm text-text-primary">{title}</span>
+      <span className="shrink-0 text-xs text-text-secondary">
+        {expired ? "Timed out" : "Waiting for your answer"}
+      </span>
+      <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={onReview}>
+        Review request
+      </Button>
+    </div>,
+    document.body
+  );
+}
+
+/**
  * The "keep allowing this" choice offered to an agent pane (#12692).
  *
  * Spells out the reach, because it is wider than the call on screen: later
@@ -598,10 +716,13 @@ function LaterRequests({ children }: { children: React.ReactNode }) {
  */
 function SessionApprovalOption({
   actionTitle,
+  requesterName,
   checked,
   onCheckedChange,
 }: {
   actionTitle: string;
+  /** The pane the grant would cover, so "this agent" is never one of six (#14992). */
+  requesterName?: string;
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
 }) {
@@ -622,7 +743,8 @@ function SessionApprovalOption({
           Allow for this session
         </label>
         <span id={detailId} className="text-2xs text-text-secondary">
-          Later {actionTitle} calls from this agent · any arguments · up to 30 minutes
+          Later {actionTitle} calls from {requesterName ? `'${requesterName}'` : "this agent"} · any
+          arguments · up to 30 minutes
         </span>
       </span>
     </div>
@@ -1084,23 +1206,29 @@ function ArgumentsDisclosure({ argsSummary }: { argsSummary: string }) {
  *
  * Deliberately not a countdown. The request does expire, but a ticking clock on
  * a security decision pushes the reader toward impulsive rather than
- * deliberative processing, so the expiry stays silent and only the conditions
- * the user can act on are named. Nothing here is colour-coded either — it has
- * to survive forced-colors, where a tone would be flattened away.
+ * deliberative processing, so the expiry stays silent until it happens, and
+ * then says so in place of the dead button's other reasons (#14989). Nothing
+ * here is colour-coded either — it has to survive forced-colors, where a tone
+ * would be flattened away.
  */
 function gateHintText(
   previewState: PreviewState,
   previewSlow: boolean,
   queueDepth: number,
-  emptySelection: boolean
+  emptySelection: boolean,
+  expired = false
 ): string | null {
   const parts: string[] = [];
-  if (previewState === "pending") {
+  if (expired) {
+    parts.push(EXPIRED_HINT);
+  } else if (previewState === "pending") {
     parts.push(previewSlow ? "Still working…" : "Checking what this affects…");
   }
   // Says why the button is dead rather than leaving the approver to guess. Same
   // outcome as Cancel, so it is a nudge, not an error.
-  if (emptySelection) parts.push("Nothing selected — cancel, or check something to destroy.");
+  if (emptySelection && !expired) {
+    parts.push("Nothing selected — cancel, or check something to destroy.");
+  }
   if (queueDepth > 0) {
     parts.push(`${pluralize(queueDepth, "more request")} waiting`);
   }

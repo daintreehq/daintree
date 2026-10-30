@@ -76,6 +76,21 @@ function getAttachedGridDims(id: string): { cols: number; rows: number } | null 
   return grid;
 }
 
+/**
+ * Whether the pane's chrome is on the page. The queue holds the next spawn on a
+ * visible attach only to pace xterm realization (#5789), and only a pane on the
+ * page has an attach coming: one that is in another worktree by now, in a
+ * hidden tab, or behind a maximized pane cost every launch behind it the full
+ * timeout (#15271).
+ */
+function isPaneOnPage(id: string): boolean {
+  if (typeof document === "undefined") return false;
+  for (const element of document.querySelectorAll<HTMLElement>("[data-panel-id]")) {
+    if (element.dataset.panelId === id) return true;
+  }
+  return false;
+}
+
 class TerminalStartupQueue {
   private readonly tasks: Array<{ run: () => Promise<void>; concurrency: number }> = [];
   private activeTasks = 0;
@@ -510,7 +525,7 @@ export function enqueuePtyStartup(
             }
           }
 
-          if (mountedPanel && waitForAttach) {
+          if (mountedPanel && waitForAttach && isPaneOnPage(id)) {
             try {
               const terminalService = peekTerminalService() ?? (await loadTerminalService());
               await terminalService.waitForAttachSettled(id, {
@@ -680,6 +695,9 @@ export function enqueuePtyStartup(
             agentPresetColor: options.agentPresetColor,
             originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
             handbackCode: options.handbackCode,
+            // A launch prompt or a carried record is the run's first prompt, so
+            // main never offers a send as one (#15521).
+            ...((options.launchPrompt || _p1.firstPrompt) && { hasFirstPrompt: true }),
             requiredPluginTools: options.requiredPluginTools,
             // Launch-time context the pane's MCP session replays through its
             // workspace binding (#12486): a caller may supply one, and a Claude

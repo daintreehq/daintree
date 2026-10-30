@@ -353,6 +353,7 @@
 .diff-viewer .diff-hunk-header-hidden-count {
   color: var(--color-text-muted, var(--color-text-primary));
   opacity: 0.6;
+  white-space: nowrap;
 }
 
 .diff-viewer .diff-hunk-header-expanders {

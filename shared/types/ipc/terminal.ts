@@ -84,6 +84,12 @@ export interface TerminalSpawnOptions {
    */
   handbackCode?: string;
   /**
+   * The pane already has its first-prompt record, or this launch hands the
+   * agent the prompt that becomes it (#15521). Absent, the first send written
+   * to the run is offered as its record.
+   */
+  hasFirstPrompt?: boolean;
+  /**
    * Launch-time `ActionContext` snapshot, captured synchronously in the
    * renderer when the user launched the agent. An agent pane's workspace
    * binding replays it (#12486) so tool dispatch targets the worktree/terminal

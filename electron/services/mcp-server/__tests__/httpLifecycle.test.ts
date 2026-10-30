@@ -55,6 +55,9 @@ import {
 } from "../../../ipc/endpointRegistry.js";
 import type { HttpLifecycleDeps } from "../httpLifecycle.js";
 import { MCP_SSE_HEARTBEAT_INTERVAL_MS, minimumPermittingTier } from "../shared.js";
+import { NATIVE_GRANT_TOOL_IDS } from "../../../../shared/config/mcpGrants.js";
+import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
+import { NATIVE_GRANT_USE_POLICY_OVERRIDES } from "../../../../shared/config/nativeGrantUsePolicies.js";
 import type { SessionServerDeps } from "../sessionServer.js";
 import { ResourceOwnershipLedger, helpOwnershipPrincipal } from "../resourceOwnership.js";
 import { SessionBindingError, WorkspaceBindingError } from "../rendererBridge.js";
@@ -179,6 +182,7 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
       grantCache: {
         clearDenialCounts: vi.fn(),
         revokeSession: vi.fn(() => 0),
+        revokeGrant: vi.fn(() => false),
         issueGrant: vi.fn(),
         issueNativeGrant: vi.fn(),
         getNativeGrant: vi.fn(() => undefined),
@@ -631,12 +635,127 @@ describe("HttpLifecycle", () => {
     });
   });
 
+  describe("revokeGrant (#14975)", () => {
+    function grantCacheOf(deps: HttpLifecycleDeps) {
+      return (
+        deps.sessionStore as unknown as {
+          grantCache: {
+            revokeGrant: ReturnType<typeof vi.fn>;
+            revokeSession: ReturnType<typeof vi.fn>;
+          };
+        }
+      ).grantCache;
+    }
+
+    it("ends only the named tool's grant, never the whole session", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionWebContentsMap.set("sess-1", 42);
+      grantCacheOf(deps).revokeGrant.mockReturnValue(true);
+      const lc = new HttpLifecycle(deps);
+
+      expect(lc.revokeGrant("sess-1", "terminal.kill", 42)).toEqual({
+        sessionId: "sess-1",
+        toolId: "terminal.kill",
+        revoked: true,
+      });
+      expect(grantCacheOf(deps).revokeGrant).toHaveBeenCalledWith(
+        "sess-1",
+        "terminal.kill",
+        "user"
+      );
+      expect(grantCacheOf(deps).revokeSession).not.toHaveBeenCalled();
+    });
+
+    it("refuses a caller that isn't the session's pinned renderer before touching the cache", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionWebContentsMap.set("sess-pin", 42);
+      const lc = new HttpLifecycle(deps);
+
+      expect(() => lc.revokeGrant("sess-pin", "terminal.kill", 99)).toThrow(
+        /not the pinned renderer/
+      );
+      expect(grantCacheOf(deps).revokeGrant).not.toHaveBeenCalled();
+    });
+
+    it("passes through the cache's revoked: false for a live, correctly pinned session", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionWebContentsMap.set("sess-1", 42);
+      grantCacheOf(deps).revokeGrant.mockReturnValue(false);
+      const lc = new HttpLifecycle(deps);
+
+      expect(lc.revokeGrant("sess-1", "terminal.kill", 42)).toEqual({
+        sessionId: "sess-1",
+        toolId: "terminal.kill",
+        revoked: false,
+      });
+      expect(grantCacheOf(deps).revokeGrant).toHaveBeenCalledWith(
+        "sess-1",
+        "terminal.kill",
+        "user"
+      );
+    });
+
+    it("reports revoked: false for a drained session instead of throwing", () => {
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+
+      expect(lc.revokeGrant("sess-gone", "terminal.kill", 99)).toEqual({
+        sessionId: "sess-gone",
+        toolId: "terminal.kill",
+        revoked: false,
+      });
+    });
+
+    it("throws for blank ids", () => {
+      const lc = new HttpLifecycle(fakeDeps());
+      expect(() => lc.revokeGrant("", "terminal.kill")).toThrow(/Invalid sessionId/);
+      expect(() => lc.revokeGrant("sess-1", "")).toThrow(/Invalid toolId/);
+    });
+  });
+
   // The single-tool "Approve once" path must enforce the same floor as
   // issueNativeGrant: a grant may only name a tool some non-external help tier
   // already permits. The call gate honours a grant OVER failed tier membership,
   // so without this check a pinned renderer could mint a grant for an id in no
   // tier at all and the authorization contract would rest on the UI never
   // offering the button rather than on main refusing it (#11585).
+  describe("helpLaneFor (#14995)", () => {
+    function wired(terminalId: string | null, projectId: string | null) {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionHelpIdMap.set("sess-1", "help-1");
+      const lc = new HttpLifecycle(deps);
+      lc.setHelpSessionTerminalResolver((id) => (id === "help-1" ? terminalId : null));
+      lc.setAssistantControl({
+        control: {} as never,
+        sessionProject: (id) => (id === "help-1" ? projectId : null),
+      });
+      return lc;
+    }
+
+    it("names the help session, its terminal now, and its project", () => {
+      expect(wired("term-1", "proj-1").helpLaneFor("sess-1")).toEqual({
+        helpSessionId: "help-1",
+        terminalId: "term-1",
+        projectId: "proj-1",
+      });
+    });
+
+    it("has no lane for a session no help session is bound to", () => {
+      expect(wired("term-1", "proj-1").helpLaneFor("sess-other")).toBeNull();
+    });
+
+    it("has no lane without a terminal or a project to type into", () => {
+      expect(wired(null, "proj-1").helpLaneFor("sess-1")).toBeNull();
+      expect(wired("term-1", null).helpLaneFor("sess-1")).toBeNull();
+    });
+
+    it("has no lane while the help service isn't wired", () => {
+      const deps = fakeDeps();
+      deps.sessionStore.sessionHelpIdMap.set("sess-1", "help-1");
+      expect(new HttpLifecycle(deps).helpLaneFor("sess-1")).toBeNull();
+    });
+  });
+
   describe("issueGrant tool validation (#11585)", () => {
     function grantCacheOf(deps: HttpLifecycleDeps) {
       return (
@@ -817,6 +936,45 @@ describe("HttpLifecycle", () => {
       expect(attempt).toThrow(/cannot cover terminal\.closeAll:/);
       expect(attempt).toThrow(/Remove it\b/);
       expect(grantCacheOf(deps).issueNativeGrant).not.toHaveBeenCalled();
+    });
+
+    // The Settings form offers exactly `NATIVE_GRANT_TOOL_IDS` (#14982), so the
+    // list has to agree with this method in both directions: every offered tool
+    // mints, and every candidate left off it is one this method refuses.
+    it("accepts every tool the Settings form offers and refuses every one it leaves out", () => {
+      const deps = fakeDeps();
+      resolverOf(deps).mockReturnValue("transport-1");
+      grantCacheOf(deps).issueNativeGrant.mockImplementation((params: { allowedTools: string[] }) =>
+        mintEntry(params.allowedTools, 1)
+      );
+      const lc = new HttpLifecycle(deps);
+      expect(NATIVE_GRANT_TOOL_IDS.length).toBeGreaterThan(0);
+
+      for (const toolId of NATIVE_GRANT_TOOL_IDS) {
+        const result = lc.issueNativeGrant("help-1", { allowedTools: [toolId], maxUses: 1 }, 42);
+        expect(grantCacheOf(deps).issueNativeGrant).toHaveBeenLastCalledWith(
+          expect.objectContaining({ allowedTools: [toolId] })
+        );
+        expect(result.allowedTools).toEqual([toolId]);
+      }
+
+      // Every built-in action, not just the help tiers, so a future widening of
+      // what main accepts fails here instead of going missing from the picker.
+      const offered = new Set(NATIVE_GRANT_TOOL_IDS);
+      const leftOut = [
+        ...BUILT_IN_ACTION_IDS,
+        ...Object.keys(NATIVE_GRANT_USE_POLICY_OVERRIDES),
+        "totally.notatool",
+      ].filter((toolId) => !offered.has(toolId));
+      expect(leftOut).toContain("terminal.closeAll");
+      for (const toolId of leftOut) {
+        expect(() =>
+          lc.issueNativeGrant("help-1", { allowedTools: [toolId], maxUses: 1 }, 42)
+        ).toThrow();
+      }
+      expect(grantCacheOf(deps).issueNativeGrant).toHaveBeenCalledTimes(
+        NATIVE_GRANT_TOOL_IDS.length
+      );
     });
 
     it("rejects an out-of-range maxUses", () => {
@@ -3966,6 +4124,19 @@ describe("sendToPinnedView", () => {
 
     expect(sendToPinnedView(7, "mcp:x", () => ({}), "x")).toBe(false);
     expect(sendToPinnedView(8, "mcp:x", () => ({}), "x")).toBe(false);
+  });
+
+  // A refusal points at the banner only when it was sent (#14995).
+  it("reports a send that threw as not sent", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockWebContentsById.set(7, {
+      isDestroyed: () => false,
+      send: vi.fn(() => {
+        throw new Error("render frame disposed");
+      }),
+    });
+    expect(sendToPinnedView(7, "mcp:x", () => ({}), "x")).toBe(false);
+    errorSpy.mockRestore();
   });
 
   it("reaches a view attached over a link through its endpoint", () => {

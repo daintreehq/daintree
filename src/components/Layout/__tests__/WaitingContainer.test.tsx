@@ -55,6 +55,14 @@ vi.mock("@/store", () => ({
   },
 }));
 
+const readViewingModeMock = vi.fn((): "fullscreen" | "grid" | null => "grid");
+const applyViewingModeMock = vi.fn();
+
+vi.mock("../agentRowViewingMode", () => ({
+  readAgentRowViewingMode: () => readViewingModeMock(),
+  applyAgentRowViewingMode: (mode: unknown, panelId: string) => applyViewingModeMock(mode, panelId),
+}));
+
 vi.mock("@/store/worktreeStore", () => ({
   useWorktreeSelectionStore: (selector: (s: unknown) => unknown) =>
     selector({
@@ -227,6 +235,8 @@ beforeEach(() => {
   setActiveTabMock.mockReset();
   selectWorktreeMock.mockReset();
   trackTerminalFocusMock.mockReset();
+  readViewingModeMock.mockReset().mockReturnValue("grid");
+  applyViewingModeMock.mockReset();
   popoverHandlers.onPointerDownOutside = undefined;
   popoverHandlers.onInteractOutside = undefined;
   popoverHandlers.onEscapeKeyDown = undefined;
@@ -644,15 +654,18 @@ describe("WaitingContainer", () => {
 
       const callOrder: string[] = [];
       setActiveTabMock.mockImplementation(() => callOrder.push("setActiveTab"));
+      applyViewingModeMock.mockImplementation(() => callOrder.push("applyViewingMode"));
       activateTerminalMock.mockImplementation(() => callOrder.push("activateTerminal"));
 
       render(<WaitingContainer />);
       const rows = screen.getAllByTestId("waiting-single-item");
-      fireEvent.click(rows[0]!);
+      fireEvent.click(rows[1]!);
 
-      expect(setActiveTabMock).toHaveBeenCalledWith("g1", "t1");
-      expect(activateTerminalMock).toHaveBeenCalledWith("t1");
-      expect(callOrder).toEqual(["setActiveTab", "activateTerminal"]);
+      expect(setActiveTabMock).toHaveBeenCalledWith("g1", "t2");
+      expect(applyViewingModeMock).toHaveBeenCalledWith("grid", "t2");
+      expect(activateTerminalMock).toHaveBeenCalledWith("t2");
+      // A group maximize resolves against the tab the row just selected.
+      expect(callOrder).toEqual(["setActiveTab", "applyViewingMode", "activateTerminal"]);
     });
 
     it("renders independent collapse state across multiple groups", () => {

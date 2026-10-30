@@ -114,12 +114,11 @@ export function useCanopyInboxFilters({
     : null;
   const assistantItems = useMemo(() => {
     if (!assistantsReadable) return [];
-    const names = new Map(projects.map((project) => [project.id, project.name]));
+    const byId = new Map(projects.map((project) => [project.id, project]));
     return buildAssistantItems(directory, {
-      projectName: (id) => {
-        const name = names.get(id) ?? null;
-        return name !== null && ownHostName !== null ? `${name} · ${ownHostName}` : name;
-      },
+      projectName: (id) => byId.get(id)?.name ?? null,
+      projectEmoji: (id) => byId.get(id)?.emoji || null,
+      hostName: ownHostName,
       seen: handbacksSeen,
       projectId: scope === "project" ? getViewWorkspaceId() : null,
     });

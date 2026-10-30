@@ -204,6 +204,12 @@ export const LazyLayoutApplyConfirmDialog = lazy(() =>
   }))
 );
 
+export const LazyRecipeRunConfirmDialog = lazy(() =>
+  import("./components/TerminalRecipe/RecipeRunConfirmDialog").then((m) => ({
+    default: m.RecipeRunConfirmDialog,
+  }))
+);
+
 export const LazyPluginArchiveInstallConfirmDialog = lazy(() =>
   import("./components/Plugin/PluginArchiveInstallConfirmDialog").then((m) => ({
     default: m.PluginArchiveInstallConfirmDialog,

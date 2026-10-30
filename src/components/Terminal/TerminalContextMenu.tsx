@@ -10,8 +10,10 @@ import {
 } from "react";
 import type React from "react";
 import { type PanelLocation } from "@/types";
+import type { TerminalLink } from "@/services/terminal/types";
 import { usePanelStore } from "@/store";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useSidebarWorktreeOrder } from "@/hooks/useSidebarWorktreeOrder";
@@ -61,6 +63,7 @@ import {
   subscribeToTourRegistry,
 } from "@/components/Tour/tourRegistry";
 import { PanelContextMenuTriggerScope } from "./PanelContextMenuTrigger";
+import { panelHasComposer } from "./terminalComposer";
 import {
   canReloadPanelKind,
   hasGenericPanelMenu,
@@ -79,7 +82,11 @@ import {
   useMovePickerCoordination,
 } from "./contextMenu/useMovePickerCoordination";
 import { useFleetRunMenuState } from "./contextMenu/useFleetRunMenuState";
-import { LayoutMenuItems, MoveToWorktreeSubmenu } from "./contextMenu/LayoutMenuItems";
+import {
+  LayoutMenuItems,
+  MoveToWorktreeSubmenu,
+  TerminalLayoutMenuItems,
+} from "./contextMenu/LayoutMenuItems";
 import {
   GenericPanelMenuItems,
   PluginOwnedMenuItems,
@@ -376,20 +383,12 @@ function TerminalContextMenuBody({
     [proxy, captureMovePickerAnchor]
   );
 
-  // Radix also opens the menu from a touch or pen long-press, which never
-  // raises the contextmenu event the capture above hangs off.
-  const captureMovePickerAnchorOnPress = useCallback(
-    (event: React.PointerEvent<HTMLElement>) => {
-      if (event.pointerType !== "mouse") captureMovePickerAnchor(event);
-    },
-    [captureMovePickerAnchor]
-  );
-
   const isWatched = usePanelStore((state) => state.watchedPanels.has(terminalId));
   const isArmed = useFleetArmingStore((s) => s.armedIds.has(terminalId));
   const fleetSize = useFleetArmingStore((s) => s.armedIds.size);
   const isHibernated = useIsHibernated(terminalId);
   const isVoiceLockedHere = useVoiceRecordingStore((s) => s.lockedTarget?.panelId === terminalId);
+  const hybridInputEnabled = useTerminalInputStore((s) => isMenuLive && s.hybridInputEnabled);
   const recentVoiceTargets = useVoiceRecordingStore((s) => s.recentTargets);
   // Pull the panel directly here (rather than indexing through the shallow
   // selector above) so the eligibility check sees the live record. The
@@ -425,8 +424,18 @@ function TerminalContextMenuBody({
   const [hoveredUrl, setHoveredUrl] = useState<string | null>(null);
   // The plugin that claims the hovered URL (#13798), read with it on open.
   const [hoveredUrlPluginName, setHoveredUrlPluginName] = useState<string | null>(null);
+  // The hovered link itself, for "Open link": the hover ends as the pointer
+  // moves onto the menu, so the item cannot read it when it is chosen (#14960).
+  const hoveredLinkRef = useRef<TerminalLink | null>(null);
   const [hoveredFilePath, setHoveredFilePath] = useState<string | null>(null);
   const [hoveredFileKind, setHoveredFileKind] = useState<"file" | "directory" | null>(null);
+  const clearHoveredLink = useCallback(() => {
+    hoveredLinkRef.current = null;
+    setHoveredUrl(null);
+    setHoveredUrlPluginName(null);
+    setHoveredFilePath(null);
+    setHoveredFileKind(null);
+  }, []);
   const [selectedText, setSelectedText] = useState<string | null>(null);
   const suppressNextCloseAutoFocusRef = useRef(false);
   const [restartOnPresetRequest, setRestartOnPresetRequest] =
@@ -449,19 +458,27 @@ function TerminalContextMenuBody({
     (e: React.MouseEvent<HTMLElement>) => {
       handleTriggerContextMenu(e);
       const { panelsById } = usePanelStore.getState();
+      const { armedIds } = useFleetArmingStore.getState();
+      const composerOptions = {
+        hybridInputEnabled: useTerminalInputStore.getState().hybridInputEnabled,
+        fleetSize: armedIds.size,
+      };
+      // Only a pane whose composer can show the words is offered (#14955).
+      const canDictate = (panel: (typeof panelsById)[string] | undefined) =>
+        panelHasComposer(panel, {
+          ...composerOptions,
+          isFleetArmed: panel !== undefined && armedIds.has(panel.id),
+        });
       const resolved: Array<{ panelId: string; label: string }> = [];
       const seenIds = new Set<string>([terminalId]);
       for (const t of recentVoiceTargets) {
         let livePanelId: string | undefined;
         if (t.panelId) {
-          const panel = panelsById[t.panelId];
-          if (panel && panel.location !== "trash") livePanelId = t.panelId;
+          if (canDictate(panelsById[t.panelId])) livePanelId = t.panelId;
         } else if (t.worktreeId && t.panelTitle) {
           const titleMatch = Object.values(panelsById).find(
             (panel) =>
-              panel.worktreeId === t.worktreeId &&
-              panel.title === t.panelTitle &&
-              panel.location !== "trash"
+              panel.worktreeId === t.worktreeId && panel.title === t.panelTitle && canDictate(panel)
           );
           if (titleMatch) livePanelId = titleMatch.id;
         }
@@ -478,11 +495,8 @@ function TerminalContextMenuBody({
 
       const managed = peekTerminalService()?.get(terminalId) ?? null;
       if (!managed?.terminal) {
+        clearHoveredLink();
         setHasSelection(false);
-        setHoveredUrl(null);
-        setHoveredUrlPluginName(null);
-        setHoveredFilePath(null);
-        setHoveredFileKind(null);
         setSelectedText(null);
         return;
       }
@@ -492,12 +506,25 @@ function TerminalContextMenuBody({
       setHasSelection(!!selection);
       setSelectedText(selection || null);
       setHomeDir(systemClient.getCachedHomeDir());
+      hoveredLinkRef.current = managed.hoveredLink;
       setHoveredUrl(peekTerminalService()?.getHoveredLinkText(terminalId) ?? null);
       setHoveredUrlPluginName(peekTerminalService()?.getHoveredLinkPluginName(terminalId) ?? null);
       setHoveredFilePath(peekTerminalService()?.getHoveredFilePath(terminalId) ?? null);
       setHoveredFileKind(peekTerminalService()?.getHoveredFileKind(terminalId) ?? null);
     },
-    [handleTriggerContextMenu, terminalId, recentVoiceTargets]
+    [handleTriggerContextMenu, terminalId, recentVoiceTargets, clearHoveredLink]
+  );
+
+  // Radix also opens the menu from a touch or pen long-press, which never
+  // raises the contextmenu event the hover capture above hangs off, so the
+  // previous opening's link must not survive into this one.
+  const captureMovePickerAnchorOnPress = useCallback(
+    (event: React.PointerEvent<HTMLElement>) => {
+      if (event.pointerType === "mouse") return;
+      clearHoveredLink();
+      captureMovePickerAnchor(event);
+    },
+    [captureMovePickerAnchor, clearHoveredLink]
   );
 
   const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
@@ -557,6 +584,7 @@ function TerminalContextMenuBody({
     panelKindRegistry,
     registeredTourIds,
     sourceRef,
+    hoveredLinkRef,
     deferMenuDispatch,
     suppressNextCloseAutoFocus,
   });
@@ -687,25 +715,23 @@ function TerminalContextMenuBody({
     />
   );
 
-  const layoutItems = (
-    <LayoutMenuItems
-      moveToWorktreeSubmenu={canMoveToWorktree && renderMoveToWorktreeSubmenu("Move to worktree")}
-      canMoveToNewWorktree={Boolean(terminalPty?.launchAgentId) && !isBackgrounded}
-      isBackgrounded={isBackgrounded}
-      currentLocation={currentLocation}
-      isDockable={structuralCapabilities.isDockable}
-      isInActiveWorktree={isInActiveWorktree}
-      isMaximized={isMaximized}
-      onMoveToNewWorktree={handleMoveToNewWorktree}
-      onAction={handleAction}
-    />
-  );
+  const layoutProps = {
+    moveToWorktreeSubmenu: canMoveToWorktree && renderMoveToWorktreeSubmenu("Move to worktree"),
+    canMoveToNewWorktree: Boolean(terminalPty?.launchAgentId) && !isBackgrounded,
+    isBackgrounded,
+    currentLocation,
+    isDockable: structuralCapabilities.isDockable,
+    isInActiveWorktree,
+    isMaximized,
+    onMoveToNewWorktree: handleMoveToNewWorktree,
+    onAction: handleAction,
+  };
+  const layoutItems = <LayoutMenuItems {...layoutProps} />;
 
   // Every branch draws the same menu around its own items.
-  const renderMenu = (
-    items: React.ReactNode,
-    onContextMenu: (event: React.MouseEvent<HTMLElement>) => void
-  ) => (
+  // Takes a flag, not the handler: the compiler reads a ref-writing callback
+  // passed as an argument to a function called during render as a ref read.
+  const renderMenu = (items: React.ReactNode, capturesTerminalState = false) => (
     <ContextMenu onOpenChange={handleMenuOpenChange}>
       <MenuActionSourceContext.Consumer>
         {(value) => {
@@ -717,7 +743,7 @@ function TerminalContextMenuBody({
         terminalId={terminalId}
         proxy={proxy}
         scope={triggerScope}
-        onContextMenu={onContextMenu}
+        onContextMenu={capturesTerminalState ? handleContextMenu : handleTriggerContextMenu}
         onPointerDown={captureMovePickerAnchorOnPress}
       >
         {children}
@@ -758,8 +784,7 @@ function TerminalContextMenuBody({
           hasUrl={hasUrl}
           onAction={handleAction}
         />
-      </>,
-      handleTriggerContextMenu
+      </>
     );
   }
 
@@ -773,8 +798,7 @@ function TerminalContextMenuBody({
           isBackgrounded={isBackgrounded}
           onAction={handleAction}
         />
-      </>,
-      handleTriggerContextMenu
+      </>
     );
   }
 
@@ -797,8 +821,7 @@ function TerminalContextMenuBody({
         }}
         renderMoveToWorktreeSubmenu={renderMoveToWorktreeSubmenu}
         onAction={handleAction}
-      />,
-      handleTriggerContextMenu
+      />
     );
   }
 
@@ -850,10 +873,12 @@ function TerminalContextMenuBody({
             isArmed={isArmed}
             fleetSize={fleetSize}
             fleetRun={fleetRun}
+            detectedAgentId={terminal.detectedAgentId}
+            isWatched={isWatched}
             onRequestPark={handleRequestPark}
             onAction={handleAction}
           />
-          {layoutItems}
+          <TerminalLayoutMenuItems {...layoutProps} />
           <ContextMenuSeparator />
           <TerminalSessionMenuItems
             terminalId={terminalId}
@@ -863,25 +888,29 @@ function TerminalContextMenuBody({
             isPaused={isPaused}
             isInputLocked={terminal.isInputLocked}
             isVoiceLockedHere={isVoiceLockedHere}
+            canDictateHere={
+              isMenuLive &&
+              panelHasComposer(terminal, { hybridInputEnabled, isFleetArmed: isArmed, fleetSize })
+            }
             liveRecentVoiceTargets={liveRecentVoiceTargets}
-            detectedAgentId={terminal.detectedAgentId}
-            isWatched={isWatched}
             orchestratorCandidateIds={orchestratorCandidateIds}
             onRequestHandOver={handleRequestHandOver}
             onRequestRestartOnPreset={setRestartOnPresetRequest}
             onAction={handleAction}
           />
+          {/* Other plugins' rows sit above the identity group, never after
+              Trash and Kill: destruction ends the menu, as on the worktree
+              menu, so no third-party row is one slip from killing the agent. */}
+          <PluginContextMenuSection items={pluginItems} dispatchArgs={pluginDispatchArgs} />
           <ContextMenuSeparator />
           <TerminalIdentityMenuItems
             canDuplicate={canDuplicatePanelKind(kind)}
             pluginMenuItems={pluginMenuItems}
             kindOwnedItems={kindOwnedItems}
-            isBackgrounded={isBackgrounded}
             onAction={handleAction}
           />
-          <PluginContextMenuSection items={pluginItems} dispatchArgs={pluginDispatchArgs} />
         </>,
-        handleContextMenu
+        true
       )}
     </>
   );

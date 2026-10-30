@@ -7,7 +7,16 @@ import type {
 } from "./types.js";
 import type { ThemePalette, ThemeStrategy } from "./palette.js";
 import type { ExtensionKey } from "./types.js";
-import { getThemeContrastWarnings } from "./contrast.js";
+import {
+  DESTRUCTIVE_BUTTON_CONTRAST,
+  DIFF_TEXT_MIN_CONTRAST,
+  STATUS_TEXT_CONTRAST,
+  STATUS_TEXT_INKS,
+  getThemeContrastWarnings,
+  resolveDiffTextBackdrops,
+  resolveStatusTextBackdrops,
+} from "./contrast.js";
+import { hexToOklch, liftToContrast, oklchToHex } from "./oklch.js";
 import { sanitizeThemeExtensions } from "./extensionKeys.js";
 import { BUILT_IN_THEME_SOURCES, type BuiltInThemeSource } from "./builtInThemeSources.js";
 
@@ -195,7 +204,7 @@ export function createDaintreeTokens(
         "category-slate": "oklch(0.50 0.03 228)",
       };
 
-  return {
+  const resolved: AppColorSchemeTokens = {
     ...prStateDefaults,
     ...categoryDefaults,
     // RC-6: light borders raised and floored by contrast vs the brightest adjacent
@@ -388,6 +397,9 @@ export function createDaintreeTokens(
       withAlpha(tokens["status-danger"], dark ? 0.28 : 0.2),
     "diff-gutter-insert": tokens["diff-gutter-insert"] ?? tokens["status-success"],
     "diff-gutter-delete": tokens["diff-gutter-delete"] ?? tokens["status-danger"],
+    // Lifted below, once the surfaces and row fills they're measured against are final.
+    "diff-text-insert": tokens["status-success"],
+    "diff-text-delete": tokens["status-danger"],
     "diff-selected-background":
       tokens["diff-selected-background"] ?? withAlpha(overlayTone, dark ? 0.06 : 0.06),
     "diff-omit-gutter-line": tokens["diff-omit-gutter-line"] ?? tokens["activity-idle"],
@@ -406,8 +418,22 @@ export function createDaintreeTokens(
     "status-info-surface":
       tokens["status-info-surface"] ??
       withAlpha(tokens["status-info"], statusSurfaceAlpha(dark ? 0.1 : 0.08)),
+    // Lifted below with the churn inks, against the same final backdrops.
+    "status-danger-text": tokens["status-danger"],
+    "status-success-text": tokens["status-success"],
+    "status-warning-text": tokens["status-warning"],
+    "status-info-text": tokens["status-info"],
+    // Derived below, from the final danger ink and text tokens.
+    "destructive-fill": tokens["status-danger"],
+    "destructive-fill-hover": tokens["status-danger"],
+    "destructive-fill-active": tokens["status-danger"],
+    "destructive-foreground": tokens["text-inverse"],
     ...tokens,
   };
+  followStatusForDiffText(resolved, tokens, type);
+  followStatusForText(resolved, tokens, type);
+  followDangerForDestructive(resolved, tokens, type);
+  return resolved;
 }
 
 export interface ShadowProfiles {
@@ -656,6 +682,175 @@ function followRaisedForHighlight(
   }
 }
 
+// Headroom over the gate for the compositor rounding a channel the other way
+// from `blendOverBackground`.
+const DIFF_TEXT_DERIVATION_TARGET = DIFF_TEXT_MIN_CONTRAST + 0.05;
+const STATUS_TEXT_DERIVATION_TARGET = STATUS_TEXT_CONTRAST.minimum + 0.05;
+
+const DIFF_TEXT_SOURCES = [
+  ["diff-text-insert", "status-success"],
+  ["diff-text-delete", "status-danger"],
+] as const;
+
+type StatusTextKey = (typeof STATUS_TEXT_INKS)[keyof typeof STATUS_TEXT_INKS];
+
+/**
+ * DiffStat's churn inks: each status ink lifted to the nearest lightness that
+ * reads as text on every backdrop churn paints on. The status inks only carry
+ * the 3:1 non-text floor, and on a raised panel or a tinted frame most themes'
+ * fall well under 4.5:1 (#15319).
+ */
+export function deriveDiffTextInks(
+  tokens: Partial<Record<AppThemeTokenKey, string>>,
+  type: "dark" | "light"
+): Partial<Pick<AppColorSchemeTokens, "diff-text-insert" | "diff-text-delete">> {
+  const backdrops = resolveDiffTextBackdrops(tokens).map((backdrop) => backdrop.hex);
+  const inks: Partial<Pick<AppColorSchemeTokens, "diff-text-insert" | "diff-text-delete">> = {};
+  for (const [key, source] of DIFF_TEXT_SOURCES) {
+    const ink = tokens[source];
+    if (typeof ink === "string") {
+      inks[key] = liftToContrast(ink, backdrops, DIFF_TEXT_DERIVATION_TARGET, type);
+    }
+  }
+  return inks;
+}
+
+/**
+ * The git status letter inks, lifted the same way: the letters share the churn
+ * counts' rows and also sit on a wash of their own hue (#15424).
+ */
+export function deriveStatusTextInks(
+  tokens: Partial<Record<AppThemeTokenKey, string>>,
+  type: "dark" | "light"
+): Partial<Pick<AppColorSchemeTokens, StatusTextKey>> {
+  const inks: Partial<Pick<AppColorSchemeTokens, StatusTextKey>> = {};
+  for (const [source, key] of Object.entries(STATUS_TEXT_INKS) as Array<
+    [keyof typeof STATUS_TEXT_INKS, StatusTextKey]
+  >) {
+    const ink = tokens[source];
+    if (typeof ink !== "string") continue;
+    const backdrops = resolveStatusTextBackdrops(ink, tokens).map((backdrop) => backdrop.hex);
+    inks[key] = liftToContrast(ink, backdrops, STATUS_TEXT_DERIVATION_TARGET, type);
+  }
+  return inks;
+}
+
+/**
+ * The churn inks follow the status inks unless the theme names them, and are
+ * lifted from the final tokens for the same reason as the two follows above: a
+ * theme that retunes a status ink, a surface or a row fill after the engine ran
+ * would otherwise keep inks measured against another theme's backdrops. Runs
+ * after `followRaisedForHighlight`, since the highlight is one of them.
+ */
+function followStatusForDiffText(
+  tokens: Record<string, unknown>,
+  overrides: Record<string, unknown> | undefined,
+  type: "dark" | "light"
+): void {
+  const inks = deriveDiffTextInks(tokens as Partial<Record<AppThemeTokenKey, string>>, type);
+  for (const [key] of DIFF_TEXT_SOURCES) {
+    if (typeof overrides?.[key] === "string") continue;
+    if (inks[key] !== undefined) tokens[key] = inks[key];
+  }
+}
+
+/** The status letter inks follow their status inks the same way. */
+function followStatusForText(
+  tokens: Record<string, unknown>,
+  overrides: Record<string, unknown> | undefined,
+  type: "dark" | "light"
+): void {
+  const inks = deriveStatusTextInks(tokens as Partial<Record<AppThemeTokenKey, string>>, type);
+  for (const key of Object.values(STATUS_TEXT_INKS)) {
+    if (typeof overrides?.[key] === "string") continue;
+    if (inks[key] !== undefined) tokens[key] = inks[key];
+  }
+}
+
+type DestructiveKey =
+  | "destructive-fill"
+  | "destructive-fill-hover"
+  | "destructive-fill-active"
+  | "destructive-foreground";
+
+/**
+ * The destructive Button's fills and label. The label is the near-white end of
+ * the theme (`text-primary` on dark, `text-inverse` on light), and the fill is
+ * `status-danger` at its own hue, with at least the contract's chroma, moved
+ * along OKLCH lightness, away from the label, until the label holds the gate on
+ * the rest, hover and press fills alike. A light theme's danger ink is usually
+ * deep enough already and keeps its lightness; a dark theme's is a light coral
+ * that only a dark label could read on, which is why the fill is derived rather
+ * than borrowed.
+ */
+export function deriveDestructiveAction(
+  tokens: Partial<Record<AppThemeTokenKey, string>>,
+  type: "dark" | "light"
+): Partial<Pick<AppColorSchemeTokens, DestructiveKey>> {
+  const label = type === "dark" ? tokens["text-primary"] : tokens["text-inverse"];
+  const danger = tokens["status-danger"];
+  if (typeof label !== "string" || typeof danger !== "string") return {};
+  const start = hexToOklch(danger.trim());
+  const ink = hexToOklch(label.trim());
+  if (!start || !ink) {
+    return {
+      "destructive-fill": danger,
+      "destructive-fill-hover": danger,
+      "destructive-fill-active": danger,
+      "destructive-foreground": label,
+    };
+  }
+  const { hover, press } = DESTRUCTIVE_BUTTON_CONTRAST.lightnessStep;
+  const c = Math.max(start.c, DESTRUCTIVE_BUTTON_CONTRAST.minChroma);
+  const at = (l: number) => oklchToHex({ ...start, c, l: Math.min(1, Math.max(0, l)) });
+  const states = (l: number) => [at(l), at(l + hover), at(l + press)] as const;
+  const reads = (l: number) =>
+    states(l).every((fill) => contrastRatio(label, fill) >= DESTRUCTIVE_DERIVATION_TARGET);
+  // Away from the label: down under a light label, up under a dark one.
+  const end = ink.l >= start.l ? 0 : 1;
+  let near = start.l;
+  let found: number | null = reads(start.l) ? start.l : null;
+  for (let step = 1; found === null && step <= DESTRUCTIVE_SCAN_STEPS; step++) {
+    const l = start.l + ((end - start.l) * step) / DESTRUCTIVE_SCAN_STEPS;
+    if (reads(l)) found = l;
+    else near = l;
+  }
+  let pass: number = found ?? end;
+  if (found !== null && found !== start.l) {
+    for (let step = 0; step < 24; step++) {
+      const mid: number = (near + pass) / 2;
+      if (reads(mid)) pass = mid;
+      else near = mid;
+    }
+  }
+  const [fill, fillHover, fillActive] = states(pass);
+  return {
+    "destructive-fill": fill,
+    "destructive-fill-hover": fillHover,
+    "destructive-fill-active": fillActive,
+    "destructive-foreground": label,
+  };
+}
+
+const DESTRUCTIVE_DERIVATION_TARGET = DESTRUCTIVE_BUTTON_CONTRAST.minimum + 0.05;
+const DESTRUCTIVE_SCAN_STEPS = 64;
+
+/** The destructive action follows the danger ink unless the theme names it. */
+function followDangerForDestructive(
+  tokens: Record<string, unknown>,
+  overrides: Record<string, unknown> | undefined,
+  type: "dark" | "light"
+): void {
+  const derived = deriveDestructiveAction(
+    tokens as Partial<Record<AppThemeTokenKey, string>>,
+    type
+  );
+  for (const [key, value] of Object.entries(derived)) {
+    if (typeof overrides?.[key] === "string") continue;
+    if (value !== undefined) tokens[key] = value;
+  }
+}
+
 function createThemeFromSource(source: BuiltInThemeSource): AppColorScheme {
   const compiledTokens = compilePaletteToTokens(source.palette);
   const tokens = source.tokens
@@ -663,6 +858,9 @@ function createThemeFromSource(source: BuiltInThemeSource): AppColorScheme {
     : compiledTokens;
   if (source.tokens) followBorderStrongForInput(tokens, source.tokens);
   if (source.tokens) followRaisedForHighlight(tokens, source.tokens, source.type);
+  if (source.tokens) followStatusForDiffText(tokens, source.tokens, source.type);
+  if (source.tokens) followStatusForText(tokens, source.tokens, source.type);
+  if (source.tokens) followDangerForDestructive(tokens, source.tokens, source.type);
   const extensions = resolveStrategyExtensions(source.palette, source.extensions);
 
   return {
@@ -1107,6 +1305,8 @@ export function normalizeAppColorScheme(
   Object.assign(normalizedTokens, normalizeAppThemeTokens(tokenOverrides, normalizedTokens));
   followBorderStrongForInput(normalizedTokens, tokenOverrides);
   followRaisedForHighlight(normalizedTokens, tokenOverrides, resolvedType);
+  followStatusForDiffText(normalizedTokens, tokenOverrides, resolvedType);
+  followStatusForText(normalizedTokens, tokenOverrides, resolvedType);
   if (
     typeof tokenOverrides["accent-foreground"] !== "string" &&
     typeof normalizedTokens["accent-primary"] === "string"

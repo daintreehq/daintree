@@ -13,7 +13,7 @@ import {
 import { useProjectStore } from "@/store/projectStore";
 import { patchIssueAssigneeCache } from "@/lib/forgeResourceCache";
 import { logError } from "@/utils/logger";
-import { ForgePRResultSchema } from "@shared/types/forgeActionResults";
+import { ForgeCommentResultSchema, ForgePRResultSchema } from "@shared/types/forgeActionResults";
 import {
   projectForgePage,
   projectIssueSummary,
@@ -21,7 +21,6 @@ import {
 } from "@shared/utils/forgeListProjection";
 import {
   ForgeAssigneesResultSchema,
-  ForgeCommentResultSchema,
   ForgeDisableAutoMergeResultSchema,
   ForgeEnableAutoMergeResultSchema,
   ForgeMergePRResultSchema,

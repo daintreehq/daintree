@@ -1,43 +1,51 @@
+import { Lock } from "lucide-react";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
-import { useHostConnectionStore } from "@/store/hostConnectionStore";
-import { useDriveLeaseAwaySeconds, useDriveLeaseBanner } from "./driveLeaseState";
-import { getDriveLeaseBannerCopy } from "./recoveryCopy";
-import { takeControl, useTakeControlPending } from "./takeControl";
+import { useControlFacts, useDriveLeaseAwaySeconds, useDriveLeaseBanner } from "./driveLeaseState";
+import { getDriveLeaseBannerCopy, takeControlAriaLabel } from "./recoveryCopy";
+import { takeControl, useTakeControlBusy } from "./takeControl";
 
 /**
- * Another device controls this view's project: names it and offers control
- * here, on the host's own screen and on a client alike. Neutral: nothing is
- * wrong, the project is simply being used from somewhere else. The change
- * itself is announced once by the lease state, not by this banner.
+ * Another device controls this view's project. This is where the window
+ * decides: it says the window is read-only, what and where the project is,
+ * who has control, and what taking it does to them, and offers it — on the
+ * host's own screen and on a client alike. The panes say it again only where
+ * the user tried to type. Neutral: nothing is wrong, the project is simply in
+ * use somewhere else. The change itself is announced once by the lease state,
+ * not by this banner.
  */
 export function DriveLeaseBanner() {
   const state = useDriveLeaseBanner();
-  const hostName = useHostConnectionStore((s) => s.hostName ?? s.hostId ?? "The host");
-  const busy = useTakeControlPending(state?.projectId);
+  const facts = useControlFacts();
+  const busy = useTakeControlBusy(state?.projectId);
   const awaySeconds = useDriveLeaseAwaySeconds();
 
-  if (state === null) return null;
+  if (state === null || facts === null) return null;
 
-  const copy = getDriveLeaseBannerCopy(state, hostName, awaySeconds);
+  const copy = getDriveLeaseBannerCopy(facts, awaySeconds);
   const projectId = state.projectId;
 
   return (
     <InlineStatusBanner
+      // Read-only is the message itself, in the panes' and the gate's glyph.
+      icon={Lock}
       title={copy.title}
       description={copy.description}
       severity="neutral"
       role="status"
       ariaLive="off"
       animated={false}
-      // One line: who controls is context, not an alarm, and the window's
-      // own sessions are what fill it.
-      layout="inline"
+      // The action sits right under the consequence it carries, not across
+      // the width of the window from it.
+      layout="stacked"
       action={{
         id: "take-control",
-        label: copy.actionLabel,
+        label: "Take control",
+        ariaLabel: takeControlAriaLabel(facts),
         variant: "primary",
         loading: busy,
-        disabled: busy,
+        // Busy, the button still says what it's doing, so the consequence
+        // beneath it stays put rather than standing in for the label.
+        loadingPresentation: "labelled",
         onClick: () => void takeControl(projectId),
       }}
     />

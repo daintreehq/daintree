@@ -8,6 +8,7 @@ import { SECTION_SETTINGS } from "@/components/Settings/settingsSectionOwners";
 import { useSettingsRowOwnerNote } from "@/hooks/useSettingsOwner";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsNumberInput } from "@/components/Settings/SettingsNumberInput";
+import { useCommittedNumberDraft } from "@/components/Settings/useCommittedNumberDraft";
 import { SettingsPresetGroup } from "@/components/Settings/SettingsPresetGroup";
 import type { SettingsPresetOption } from "@/components/Settings/SettingsPresetGroup";
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
@@ -46,6 +47,7 @@ import { actionService } from "@/services/ActionService";
 import { useCachedProjectViewsStore } from "@/store/cachedProjectViewsStore";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { computeHardwareDefaults, usePanelLimitStore } from "@/store/panelLimitStore";
+import { getPanelLimitOrderingIssues } from "@shared/utils/panelLimit";
 import {
   useMemoryLeakConfigStore,
   DEFAULT_AUTO_RESTART_THRESHOLD_MB,
@@ -81,6 +83,8 @@ const STRATEGIES: Array<{
 const DEFAULT_STRATEGY: PanelLayoutStrategy = "automatic";
 const DEFAULT_GRID_VALUE = 3;
 const DEFAULT_SPLIT_RATIO = 0.5;
+// The range panelLimitStore clamps each limit to.
+const PANEL_LIMIT_BOUNDS = { min: 4, max: 100 };
 
 const SCROLLBACK_OPTIONS: readonly SettingsPresetOption<number>[] = [
   { value: 500, label: "500" },
@@ -193,6 +197,25 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
   const setPanelHardLimit = usePanelLimitStore((state) => state.setHardLimit);
   const resetToHardwareDefaults = usePanelLimitStore((state) => state.resetToHardwareDefaults);
   const initializeFromHardware = usePanelLimitStore((state) => state.initializeFromHardware);
+
+  const softDraft = useCommittedNumberDraft(
+    panelLimits.softWarningLimit,
+    PANEL_LIMIT_BOUNDS,
+    setSoftWarningLimit
+  );
+  const confirmationDraft = useCommittedNumberDraft(
+    panelLimits.confirmationLimit,
+    PANEL_LIMIT_BOUNDS,
+    setConfirmationLimit
+  );
+  const hardDraft = useCommittedNumberDraft(
+    panelLimits.hardLimit,
+    PANEL_LIMIT_BOUNDS,
+    setPanelHardLimit
+  );
+  const orderingIssues = panelLimits.warningsDisabled
+    ? null
+    : getPanelLimitOrderingIssues(panelLimits);
 
   const memoryLeakDetectionEnabled = useMemoryLeakConfigStore((s) => s.enabled);
   const autoRestartThresholdMb = useMemoryLeakConfigStore((s) => s.autoRestartThresholdMb);
@@ -487,7 +510,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             title="Panel limits"
             settings={SECTION_SETTINGS.panelLimits}
             id="terminal-panel-limits"
-            description="When warnings appear as you open more panels. Limits are detected from your hardware on first launch."
+            description="When warnings appear as you open more panels. Keep the soft warning and confirmation below the hard limit. Limits are detected from your hardware on first launch."
           >
             <SettingsGroup>
               <SettingsSwitchCard
@@ -507,34 +530,48 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 <SettingsNumberInput
                   label="Soft warning"
                   description="Show a dismissible banner when the panel count reaches this number"
-                  min={4}
-                  max={100}
-                  value={panelLimits.softWarningLimit}
-                  onChange={(e) => {
-                    const val = parseInt(e.target.value, 10);
-                    if (!isNaN(val)) setSoftWarningLimit(val);
-                  }}
+                  min={PANEL_LIMIT_BOUNDS.min}
+                  max={PANEL_LIMIT_BOUNDS.max}
+                  value={softDraft.value}
+                  onChange={softDraft.onChange}
+                  onBlur={softDraft.onBlur}
+                  onKeyDown={softDraft.onKeyDown}
+                  error={
+                    orderingIssues?.softAtOrAboveHard
+                      ? `At or above the hard limit of ${panelLimits.hardLimit}, so this warning never appears before panels stop opening`
+                      : undefined
+                  }
                   isModified={
                     !!hardwareLimits && panelLimits.softWarningLimit !== hardwareLimits.soft
                   }
-                  onReset={() => hardwareLimits && setSoftWarningLimit(hardwareLimits.soft)}
+                  onReset={() => {
+                    softDraft.clear();
+                    if (hardwareLimits) setSoftWarningLimit(hardwareLimits.soft);
+                  }}
                   resetAriaLabel="Reset soft warning to the hardware-recommended value"
                 />
 
                 <SettingsNumberInput
                   label="Confirmation required"
                   description="Confirm before a batch spawn (recipe or worktree spin-up) pushes the panel count past this number"
-                  min={4}
-                  max={100}
-                  value={panelLimits.confirmationLimit}
-                  onChange={(e) => {
-                    const val = parseInt(e.target.value, 10);
-                    if (!isNaN(val)) setConfirmationLimit(val);
-                  }}
+                  min={PANEL_LIMIT_BOUNDS.min}
+                  max={PANEL_LIMIT_BOUNDS.max}
+                  value={confirmationDraft.value}
+                  onChange={confirmationDraft.onChange}
+                  onBlur={confirmationDraft.onBlur}
+                  onKeyDown={confirmationDraft.onKeyDown}
+                  error={
+                    orderingIssues?.confirmationAtOrAboveHard
+                      ? `At or above the hard limit of ${panelLimits.hardLimit}, so batches are never asked to confirm`
+                      : undefined
+                  }
                   isModified={
                     !!hardwareLimits && panelLimits.confirmationLimit !== hardwareLimits.confirm
                   }
-                  onReset={() => hardwareLimits && setConfirmationLimit(hardwareLimits.confirm)}
+                  onReset={() => {
+                    confirmationDraft.clear();
+                    if (hardwareLimits) setConfirmationLimit(hardwareLimits.confirm);
+                  }}
                   resetAriaLabel="Reset confirmation limit to the hardware-recommended value"
                 />
               </SettingsDependents>
@@ -542,15 +579,17 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               <SettingsNumberInput
                 label="Hard limit"
                 description="Absolute maximum number of panels. Can't be bypassed."
-                min={4}
-                max={100}
-                value={panelLimits.hardLimit}
-                onChange={(e) => {
-                  const val = parseInt(e.target.value, 10);
-                  if (!isNaN(val)) setPanelHardLimit(val);
-                }}
+                min={PANEL_LIMIT_BOUNDS.min}
+                max={PANEL_LIMIT_BOUNDS.max}
+                value={hardDraft.value}
+                onChange={hardDraft.onChange}
+                onBlur={hardDraft.onBlur}
+                onKeyDown={hardDraft.onKeyDown}
                 isModified={!!hardwareLimits && panelLimits.hardLimit !== hardwareLimits.hard}
-                onReset={() => hardwareLimits && setPanelHardLimit(hardwareLimits.hard)}
+                onReset={() => {
+                  hardDraft.clear();
+                  if (hardwareLimits) setPanelHardLimit(hardwareLimits.hard);
+                }}
                 resetAriaLabel="Reset hard limit to the hardware-recommended value"
               />
 
@@ -565,7 +604,12 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => void resetToHardwareDefaults()}
+                    onClick={() => {
+                      softDraft.clear();
+                      confirmationDraft.clear();
+                      hardDraft.clear();
+                      void resetToHardwareDefaults();
+                    }}
                     aria-label="Reset to hardware-recommended defaults"
                   >
                     Reset

@@ -221,7 +221,8 @@ function fitCommandTarget(target: VoiceCommandTarget | null): VoiceCommandTarget
       ...target.vocabulary,
       // Most likely first, so the cut drops the least likely. A command whose
       // name runs past the wire's limits is left out, since cutting it would
-      // write a command that doesn't exist; a long description is cut.
+      // write a command that doesn't exist; a long description is cut. The
+      // file a command came from is the host's, so its path stays there.
       entries: target.vocabulary.entries
         .filter((entry) =>
           [entry.token, entry.prefix, entry.spokenName, entry.key].every(
@@ -229,7 +230,7 @@ function fitCommandTarget(target: VoiceCommandTarget | null): VoiceCommandTarget
           )
         )
         .slice(0, MAX_PANE_COMMANDS)
-        .map((entry) =>
+        .map(({ sourcePath: _sourcePath, ...entry }) =>
           entry.description.length > MAX_TEXT_LENGTH
             ? { ...entry, description: entry.description.slice(0, MAX_TEXT_LENGTH) }
             : entry

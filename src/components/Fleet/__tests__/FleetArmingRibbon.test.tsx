@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from "react";
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, fireEvent, screen, act } from "@testing-library/react";
 
 vi.mock("framer-motion", () => {
@@ -90,6 +90,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { dispatchEscape, _resetForTests as resetEscapeStack } from "@/lib/escapeStack";
+import { PANE_DIALOG_ATTR } from "@/lib/paneDialog";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { ReactNode } from "react";
 
@@ -289,6 +290,31 @@ describe("FleetArmingRibbon", () => {
     const list = screen.getByTestId("fleet-armed-list");
     expect(list.textContent).toContain("frontend·main");
     expect(list.textContent).toContain("backend·main");
+  });
+
+  it("marks a locked member as left out in the armed list and clears it on unlock (#14964)", () => {
+    seed([
+      { ...makeAgent("t1"), title: "frontend·main" } as PtyPanelData,
+      { ...makeAgent("t2"), title: "backend·main", isInputLocked: true } as PtyPanelData,
+    ]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    render(<FleetArmingRibbon />);
+    expect(screen.getByTestId("fleet-armed-count-chip").textContent).toContain("2");
+    fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
+    expect(screen.getByTestId("fleet-row-input-locked-t2").textContent).toContain("Input locked");
+    expect(screen.queryByTestId("fleet-row-input-locked-t1")).toBeNull();
+    expect(screen.getByLabelText(/Focus backend·main.*input locked/)).toBeTruthy();
+
+    act(() => {
+      usePanelStore.setState((s) => ({
+        panelsById: {
+          ...s.panelsById,
+          t2: { ...makeAgent("t2"), title: "backend·main", isInputLocked: false } as PtyPanelData,
+        },
+      }));
+    });
+    expect(screen.queryByTestId("fleet-row-input-locked-t2")).toBeNull();
+    expect(screen.getByLabelText("Focus backend·main")).toBeTruthy();
   });
 
   it("per-row disarm button in the popover calls disarmId", () => {
@@ -721,6 +747,28 @@ describe("FleetArmingRibbon", () => {
     dispatchSpy.mockRestore();
   });
 
+  it("bare Escape Escape inside a page dialog leaves the fleet alone", async () => {
+    seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    const actionServiceModule = await import("@/services/ActionService");
+    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+    render(<FleetArmingRibbon />);
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute(PANE_DIALOG_ATTR, "");
+    dialog.innerHTML = "<button>Cancel</button>";
+    document.body.appendChild(dialog);
+    const cancel = dialog.querySelector("button")!;
+    try {
+      fireEvent.keyDown(cancel, { key: "Escape" });
+      fireEvent.keyDown(cancel, { key: "Escape" });
+      expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
+    } finally {
+      dialog.remove();
+    }
+    dispatchSpy.mockRestore();
+  });
+
   it("⌘Esc from a textarea still triggers the exit chord", () => {
     // The composer textarea is the primary input surface when armed —
     // the chord must fire from it, not be swallowed by focus heuristics.
@@ -862,6 +910,67 @@ describe("FleetArmingRibbon", () => {
         dispatchSpy.mockRestore();
       }
     });
+  });
+
+  // A page's dialog blocks only its own pane (#15037): it holds Enter while the
+  // keyboard is on its buttons, the #11106 case, and nowhere else.
+  describe("with a page dialog open over one pane", () => {
+    let dialog: HTMLElement;
+
+    beforeEach(() => {
+      useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+      useFleetPendingActionStore.setState({
+        pending: { kind: "kill", targetCount: 3, sessionLossCount: 0 },
+      });
+      dialog = document.createElement("div");
+      dialog.setAttribute("role", "dialog");
+      dialog.setAttribute(PANE_DIALOG_ATTR, "");
+      dialog.innerHTML = "<button>Cancel</button>";
+      document.body.appendChild(dialog);
+    });
+
+    afterEach(() => {
+      dialog.remove();
+    });
+
+    it("leaves Enter on the dialog's button to that button", async () => {
+      const actionServiceModule = await import("@/services/ActionService");
+      const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+      render(<FleetArmingRibbon />);
+      const cancel = dialog.querySelector("button")!;
+      cancel.focus();
+
+      const notPrevented = fireEvent.keyDown(cancel, { key: "Enter" });
+
+      expect(notPrevented).toBe(true);
+      expect(dispatchSpy.mock.calls.find((c) => c[0] === "fleet.kill")).toBeUndefined();
+      dispatchSpy.mockRestore();
+    });
+
+    it.each([
+      { name: "a button in another pane", target: () => document.body.appendChild(button()) },
+      { name: "the page", target: () => document.body },
+    ])("still confirms the fleet action on Enter from $name", async ({ target }) => {
+      const actionServiceModule = await import("@/services/ActionService");
+      const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+      render(<FleetArmingRibbon />);
+      const el = target();
+      el.focus();
+
+      const notPrevented = fireEvent.keyDown(el, { key: "Enter" });
+
+      expect(notPrevented).toBe(false);
+      const match = dispatchSpy.mock.calls.find((c) => c[0] === "fleet.kill");
+      expect(match?.[1]).toEqual({ confirmed: true });
+      if (el !== document.body) el.remove();
+      dispatchSpy.mockRestore();
+    });
+
+    function button(): HTMLButtonElement {
+      const el = document.createElement("button");
+      el.textContent = "Reload";
+      return el;
+    }
   });
 
   describe("Selection menu", () => {
@@ -1591,9 +1700,10 @@ describe("fleets with agents on other hosts", () => {
     expect(screen.getByTestId("fleet-armed-count-chip").textContent).toContain("2");
     expect(screen.getByTestId("fleet-host-composer")).toBeTruthy();
     fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
-    expect(screen.getByTestId("fleet-row-host-host-fleet:studio-01:t1").textContent).toContain(
-      "on studio-01"
-    );
+    // Another host's agents are listed under that host's name.
+    const row = screen.getByTestId("fleet-row-host-host-fleet:studio-01:t1");
+    const labelId = row.closest("ul")?.getAttribute("aria-labelledby");
+    expect(labelId ? document.getElementById(labelId)?.textContent : null).toBe("studio-01");
   });
 
   it("counts a pane here and an agent on another host as a fleet of two, with no extra field", () => {
@@ -1618,5 +1728,42 @@ describe("fleets with agents on other hosts", () => {
       useFleetArmingStore.getState().armId("b");
     });
     expect(screen.queryByTestId("fleet-arming-ribbon")).toBeNull();
+  });
+
+  it("names the other host's agent a snapshot leaves out, and says why once no pane here is left", async () => {
+    useProjectSettingsStore.setState({
+      settings: { runCommands: [], fleetSavedScopes: [] } as ProjectSettings,
+    });
+    seed([makeAgent("a"), makeAgent("b")]);
+    useFleetArmingStore.getState().armIds(["a", "b"]);
+    armRemote("t1");
+    render(<FleetArmingRibbon />);
+    await act(async () => {
+      fireEvent.click(screen.getByText("Save as fleet…"));
+    });
+    fireEvent.change(screen.getByTestId("fleet-save-form-name"), {
+      target: { value: "Mixed" },
+    });
+    const typeHint = () => {
+      const group = screen.getByRole("radiogroup", { name: "Fleet type" });
+      return document.getElementById(group.getAttribute("aria-describedby") ?? "")?.textContent;
+    };
+    const save = () => screen.getByRole("button", { name: "Save fleet" });
+
+    expect(typeHint()).toContain("The 2 panes armed now.");
+    expect(typeHint()).toContain("Claude t1 on studio-01");
+    expect(save().getAttribute("aria-disabled")).toBeNull();
+
+    act(() => {
+      useFleetArmingStore.getState().disarmId("a");
+      useFleetArmingStore.getState().disarmId("b");
+    });
+
+    expect(useFleetArmingStore.getState().crossHostTargets).toHaveLength(1);
+    expect(typeHint()).toContain("Only panes armed here go in a snapshot.");
+    expect(typeHint()).toContain("Left out, since a snapshot can't hold agents on other hosts");
+    expect(typeHint()).toContain("Claude t1 on studio-01");
+    expect(save().getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getByDisplayValue("Mixed")).toBe(screen.getByTestId("fleet-save-form-name"));
   });
 });

@@ -12,6 +12,7 @@ import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
 import type { WorktreeDragData } from "../DragDrop/DndProvider";
 import { useDndPlaceholder, useIsWorktreeSortDragging } from "../DragDrop/dndPlaceholderContext";
 import { getWorktreeSortDragId } from "../DragDrop/SortableWorktreeCard";
+import { isPanelDragMovableToWorktree } from "../DragDrop/dropResolution";
 import { GripVertical } from "lucide-react";
 import { CheckboxGlyph } from "@/components/ui/checkbox";
 import { useErrorStore, usePanelStore, type RetryAction } from "../../store";
@@ -84,7 +85,7 @@ import {
 import type { MenuActionSourceValue } from "@/components/ui/menu-source";
 import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
 import type { WhenClauseContext } from "@shared/utils/whenClause";
-import { isAgentFleetActionEligible, isFleetArmEligible } from "@/store/fleetArmingStore";
+import { isAgentTerminalFleetEligible, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useWorktreeStatus } from "./WorktreeCard/hooks/useWorktreeStatus";
 import { useWorktreeDevServerSession } from "@/hooks/app/useWorktreeDevServerSession";
 import { computeChipState } from "./utils/computeChipState";
@@ -387,10 +388,10 @@ export function WorktreeCard({
   const eligibleTerminals = worktreeTerminals.filter(isFleetArmEligible);
   const eligibleTerminalCount = eligibleTerminals.length;
   const waitingAgentCount = eligibleTerminals.filter(
-    (t) => isAgentFleetActionEligible(t) && t.agentState === "waiting"
+    (t) => isAgentTerminalFleetEligible(t) && t.agentState === "waiting"
   ).length;
   const workingAgentCount = eligibleTerminals.filter(
-    (t) => isAgentFleetActionEligible(t) && t.agentState === "working"
+    (t) => isAgentTerminalFleetEligible(t) && t.agentState === "working"
   ).length;
 
   const worktreeErrors = useErrorStore(
@@ -848,16 +849,10 @@ export function WorktreeCard({
     cardRootRef.current = node;
   };
 
-  const activeDragData = active?.data.current as Partial<WorktreeDragData> | undefined;
-  // Only drops handleDragEnd will actually accept: a single-panel drag —
-  // group drags are rejected by cancelDrop, and worktree-sort drags carry no
-  // terminal. Accordion drags count only when they come from a *different*
-  // worktree (a cross-worktree move); within their own worktree they are
-  // reorders and the card must not light up as a drop target.
-  const isMovablePanelDrag =
-    activeDragData?.terminal !== undefined &&
-    (activeDragData.origin !== "accordion" || activeDragData.worktreeId !== worktree.id) &&
-    !(activeDragData.groupId && (activeDragData.groupPanelIds?.length ?? 0) > 1);
+  const isMovablePanelDrag = isPanelDragMovableToWorktree(
+    active?.data.current as Partial<WorktreeDragData> | undefined,
+    worktree.id
+  );
   // The sidebar row stacks two same-size droppables (this drop target inside
   // the SortableWorktreeCard sortable), and pointerWithin resolves their tie
   // by registration order — `over` can be either id, so match both. Mirrors

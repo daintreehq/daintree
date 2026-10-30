@@ -27,6 +27,8 @@ interface SettingsInputProps extends Omit<ComponentPropsWithoutRef<"input">, "id
   /** Unit or suffix shown after an inline field ("MB", "px"). */
   suffix?: ReactNode;
   disabledReason?: string;
+  /** Inside a group: a transient state beside the label, such as "Saving…". */
+  status?: ReactNode;
 }
 
 const SCOPE_LABEL = { project: "Project", global: "Global", default: "Default" } as const;
@@ -53,6 +55,7 @@ export function SettingsInput({
   controlWidth,
   suffix,
   disabledReason,
+  status,
   ...props
 }: SettingsInputProps) {
   const group = useSettingsGroup();
@@ -69,7 +72,16 @@ export function SettingsInput({
         id={rowId}
         label={label}
         description={description}
-        accessory={scopeBadge}
+        accessory={
+          status ? (
+            <>
+              {scopeBadge}
+              {status}
+            </>
+          ) : (
+            scopeBadge
+          )
+        }
         layout={rowLayout}
         isModified={isModified}
         onReset={onReset}

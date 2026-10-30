@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from "vitest";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -37,15 +37,27 @@ const shared = vi.hoisted(() => ({
   endDrain: null as null | (() => void),
   /** Cleanup turned on in the voice settings. */
   correctionEnabled: false,
+  /** Dictation turned on in the voice settings; a saved patch writes it. */
+  enabled: true,
   /** Every cleanup request that reached the correction service, still open. */
   cleanups: [] as Array<{
     rawText: string;
     signal: AbortSignal | undefined;
     onText: ((text: string) => void) | undefined;
-    finish: (text: string) => void;
+    /** Settles it as replaced, with the parts of the wait a streamed reply reports. */
+    finish: (
+      text: string,
+      phases?: { untilOutputMs: number; outputMs: number; effort: string }
+    ) => void;
     /** Settles it as a request that failed, without its signal aborting. */
     fail: () => void;
+    /** Settles it as refused by the account, a failure every passage will meet. */
+    refuse: (reason: string) => void;
+    /** Settles it as a cleanup that worked and left the words as they were. */
+    keep: () => void;
   }>,
+  /** The cleanup key in the voice settings. */
+  openaiApiKey: "sk-test",
   /** When set, the project vocabulary read waits on this. */
   vocabulary: null as null | Promise<never[]>,
   assembleKeyterms: null as null | (() => Promise<string[]>),
@@ -125,9 +137,28 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
           rawText: request.rawText,
           signal,
           onText,
-          finish: (text) =>
-            resolve({ action: "replace", confirmedText: text, verdict: "replaced" }),
+          finish: (text, phases) =>
+            resolve({
+              action: "replace",
+              confirmedText: text,
+              verdict: "replaced",
+              ...(phases ? { phases } : {}),
+            }),
           fail,
+          refuse: (reason) =>
+            resolve({
+              action: "no_change",
+              confirmedText: request.rawText,
+              failed: true,
+              verdict: "failed",
+              cleanupFailure: { reason, provider: "openai" },
+            }),
+          keep: () =>
+            resolve({
+              action: "no_change",
+              confirmedText: request.rawText,
+              verdict: "unchanged",
+            }),
         });
       });
     };
@@ -160,15 +191,18 @@ vi.mock("../../../store.js", () => ({
     get: vi.fn((key: string) =>
       key === "voiceInput"
         ? {
-            enabled: true,
-            openaiApiKey: "sk-test",
+            enabled: shared.enabled,
+            openaiApiKey: shared.openaiApiKey,
             deepgramApiKey: "dg-test",
             transcriptionProvider: shared.transcriptionProvider,
             correctionEnabled: shared.correctionEnabled,
           }
         : undefined
     ),
-    set: vi.fn(),
+    set: vi.fn((key: string, value: { enabled?: unknown }) => {
+      if (key === "voiceInput" && typeof value.enabled === "boolean")
+        shared.enabled = value.enabled;
+    }),
   },
 }));
 
@@ -188,6 +222,15 @@ vi.mock("../../../services/menuAccelerators.js", () => ({
   isDictationKey: vi.fn((input: { key: string }) => input.key === "."),
 }));
 
+const bundle = vi.hoisted(() => ({ replaced: false, launchable: false }));
+
+vi.mock("../../../lifecycle/appBundleIdentity.js", () => ({
+  isAppBundleReplaced: vi.fn(() => bundle.replaced),
+  isAppBundleLaunchable: vi.fn(() => bundle.launchable),
+}));
+
+vi.mock("../../../lifecycle/appRelaunch.js", () => ({ relaunchApp: vi.fn() }));
+
 import {
   registerVoiceInputHandlers,
   getLiveVoiceSession,
@@ -201,6 +244,7 @@ import {
   _resetDictationViewHoldsForTests,
   isDictationViewHeld,
 } from "../../../services/voice/dictationViewHold.js";
+import { relaunchApp } from "../../../lifecycle/appRelaunch.js";
 
 type Sent = { channel: string; payload: unknown };
 
@@ -312,6 +356,10 @@ function deferDrain() {
   return () => resolve();
 }
 
+beforeEach(() => {
+  shared.enabled = true;
+});
+
 // What the view received, minus its session-ended notice.
 const received = (sender: FakeSender) =>
   sender.sent.filter((m) => m.channel !== CHANNELS.VOICE_INPUT_SESSION_ENDED);
@@ -342,6 +390,7 @@ describe("voiceInput — session identity", () => {
     shared.endDrain = null;
     shared.correctionEnabled = false;
     shared.cleanups = [];
+    shared.openaiApiKey = "sk-test";
     shared.vocabulary = null;
     shared.assembleKeyterms = null;
     shared.startContext = undefined;
@@ -964,6 +1013,7 @@ describe("voiceInput — session identity", () => {
         correctedText: "fix the bug",
         failed: true,
         verdict: "failed",
+        prefetch: "not_matched",
       });
       expect(shared.cleanups).toEqual([]);
     });
@@ -1280,6 +1330,7 @@ describe("voiceInput — session identity", () => {
       await expect(reply).resolves.toMatchObject({
         action: "replace",
         correctedText: "Run the tests.",
+        prefetch: "adopted",
       });
       expect(progress(ownerA)).toEqual([
         { streamId: "s1", text: "Run the" },
@@ -1297,7 +1348,11 @@ describe("voiceInput — session identity", () => {
       const own = await requestFor("run the tests");
       expect(shared.cleanups).toHaveLength(2);
       own.finish("Run the tests.");
-      await expect(reply).resolves.toMatchObject({ correctedText: "Run the tests." });
+      await expect(reply).resolves.toMatchObject({
+        correctedText: "Run the tests.",
+        prefetch: "not_matched",
+      });
+      expect(endedPayloads(ownerA)[0]?.report).toMatchObject({ prefetchesStarted: 1 });
     });
 
     it("gives a stop whose prefetch failed a try of its own", async () => {
@@ -1310,7 +1365,50 @@ describe("voiceInput — session identity", () => {
       prefetched.fail();
       await vi.waitFor(() => expect(shared.cleanups).toHaveLength(2));
       shared.cleanups[1]!.finish("Run the tests.");
-      await expect(reply).resolves.toMatchObject({ correctedText: "Run the tests." });
+      await expect(reply).resolves.toMatchObject({
+        correctedText: "Run the tests.",
+        prefetch: "prefetch_failed",
+      });
+    });
+
+    it("keeps a taken prefetch's own pace, and leaves a failed one's wait out of the stop's", async () => {
+      let clock = 1_000;
+      const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
+      onTestFinished(() => now.mockRestore());
+      await start(ownerA, "a");
+      await prefetch(ownerA, "a", "run the tests");
+      const prefetched = await requestFor("run the tests");
+      await stop(ownerA, "a");
+      const adopted = ask(ownerA, "a", "run the tests");
+      await settle();
+      clock += 3_000;
+      prefetched.finish("Run the tests.", { untilOutputMs: 700, outputMs: 90, effort: "low" });
+      await expect(adopted).resolves.toMatchObject({
+        prefetch: "adopted",
+        pace: { effort: "low", firstTextMs: 700, outputMs: 90 },
+      });
+
+      await start(ownerA, "b");
+      await prefetch(ownerA, "b", "ship it");
+      const failing = await requestFor("ship it");
+      await stop(ownerA, "b");
+      const fallback = ask(ownerA, "b", "ship it");
+      await settle();
+      // The stop read its context at once, then waited on the pause's run.
+      clock += 9_000;
+      failing.fail();
+      await vi.waitFor(() =>
+        expect(shared.cleanups.filter((c) => c.rawText === "ship it")).toHaveLength(2)
+      );
+      shared.cleanups.at(-1)!.finish("Ship it.", {
+        untilOutputMs: 650,
+        outputMs: 40,
+        effort: "low",
+      });
+      await expect(fallback).resolves.toMatchObject({
+        prefetch: "prefetch_failed",
+        pace: { firstTextMs: 650, outputMs: 40 },
+      });
     });
 
     it("lets a passage be taken once, so a second stop asking for it sends its own", async () => {
@@ -1324,8 +1422,14 @@ describe("voiceInput — session identity", () => {
       await vi.waitFor(() => expect(shared.cleanups).toHaveLength(2));
       prefetched.finish("Run the tests.");
       shared.cleanups[1]!.finish("Run the tests!");
-      await expect(first).resolves.toMatchObject({ correctedText: "Run the tests." });
-      await expect(second).resolves.toMatchObject({ correctedText: "Run the tests!" });
+      await expect(first).resolves.toMatchObject({
+        correctedText: "Run the tests.",
+        prefetch: "adopted",
+      });
+      await expect(second).resolves.toMatchObject({
+        correctedText: "Run the tests!",
+        prefetch: "not_matched",
+      });
     });
 
     it("cancels a prefetch the dictation talked on past", async () => {
@@ -1348,12 +1452,34 @@ describe("voiceInput — session identity", () => {
       expect(shared.cleanups.map((c) => c.rawText)).toEqual(
         Array.from({ length: 8 }, (_, i) => `pause ${i}`)
       );
+      // The newer session's start ends this one, and with it its count.
 
       await start(ownerB, "b");
       await prefetch(ownerB, "b", "x".repeat(2_001));
       await prefetch(ownerB, "b", "x".repeat(2_000));
       await vi.waitFor(() => expect(shared.cleanups).toHaveLength(9));
       expect(shared.cleanups[8]!.rawText).toHaveLength(2_000);
+      await stop(ownerB, "b");
+      expect(endedPayloads(ownerA)[0]?.report).toMatchObject({ prefetchesStarted: 8 });
+      expect(endedPayloads(ownerB)[0]?.report).toMatchObject({ prefetchesStarted: 1 });
+    });
+
+    it("counts each run a pause starts, and none for one it already has", async () => {
+      await start(ownerA, "a");
+      // Each pause's runs reach OpenAI before the next pause replaces them.
+      for (const last of [
+        "then the lint",
+        "then the lint",
+        "then the lint",
+        "then the lint check",
+      ]) {
+        await prefetch(ownerA, "a", "run the tests", last);
+        await settle();
+      }
+      await stop(ownerA, "a");
+
+      expect(shared.cleanups).toHaveLength(3);
+      expect(endedPayloads(ownerA)[0]?.report).toMatchObject({ prefetchesStarted: 3 });
     });
 
     it("cancels a cancelled dictation's prefetch", async () => {
@@ -1379,6 +1505,211 @@ describe("voiceInput — session identity", () => {
       await settle();
 
       expect(shared.cleanups).toEqual([]);
+    });
+  });
+
+  describe("a cleanup failure that will recur (#14963)", () => {
+    beforeEach(() => {
+      shared.correctionEnabled = true;
+    });
+
+    const prefetch = (owner: FakeSender, sessionId: string, rawText: string) =>
+      getHandler(CHANNELS.VOICE_INPUT_PREFETCH_CORRECTIONS)(
+        { sender: owner },
+        { sessionId, requests: [{ rawText, sessionId }] }
+      );
+    // Each passage's request, once it reaches the service, taken in turn.
+    const nextRequest = async (rawText: string) => {
+      const pending = () => shared.cleanups.filter((c) => c.rawText === rawText);
+      await vi.waitFor(() => expect(pending().length).toBeGreaterThan(0));
+      const request = pending()[0]!;
+      shared.cleanups.splice(shared.cleanups.indexOf(request), 1);
+      return request;
+    };
+    const refused = async (owner: FakeSender, rawText: string) => {
+      const reply = correct(owner, "a", rawText);
+      (await nextRequest(rawText)).refuse("key_rejected");
+      return (await reply) as Record<string, unknown>;
+    };
+    const TOLD = { cleanupFailure: { reason: "key_rejected", provider: "openai" } };
+
+    it("tells the first reply of an outage, and no other from any view", async () => {
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+
+      const first = await refused(ownerA, "fix the bug");
+      expect(first).toMatchObject({ correctedText: "fix the bug", failed: true, ...TOLD });
+      const again = await refused(ownerA, "and the lexer");
+      const elsewhere = await refused(ownerB, "in another view");
+
+      for (const reply of [again, elsewhere]) {
+        expect(reply).toMatchObject({ failed: true, verdict: "failed" });
+        expect(reply).not.toHaveProperty("cleanupFailure");
+      }
+    });
+
+    it.each([
+      ["replaced it", (request: { finish: (text: string) => void }) => request.finish("Fixed.")],
+      ["left it as it was", (request: { keep: () => void }) => request.keep()],
+    ])(
+      "tells it again after a cleanup on the account works and %s",
+      async (_label, settleWorking) => {
+        await start(ownerA, "a");
+        await stop(ownerA, "a");
+        await refused(ownerA, "fix the bug");
+
+        const worked = correct(ownerA, "a", "fix the bug");
+        settleWorking(await nextRequest("fix the bug"));
+        expect(await worked).not.toHaveProperty("failed");
+
+        expect(await refused(ownerA, "fix the bug")).toMatchObject(TOLD);
+      }
+    );
+
+    it("keeps an outage told through a failure that may pass", async () => {
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+      await refused(ownerA, "fix the bug");
+
+      const failed = correct(ownerA, "a", "fix the bug");
+      (await nextRequest("fix the bug")).fail();
+      await failed;
+
+      expect(await refused(ownerA, "fix the bug")).not.toHaveProperty("cleanupFailure");
+    });
+
+    it("re-arms only the account whose cleanup worked", async () => {
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+      await refused(ownerA, "fix the bug");
+      shared.openaiApiKey = "sk-replaced";
+      await refused(ownerA, "fix the bug");
+
+      shared.openaiApiKey = "sk-test";
+      const worked = correct(ownerA, "a", "fix the bug");
+      (await nextRequest("fix the bug")).keep();
+      await worked;
+
+      shared.openaiApiKey = "sk-replaced";
+      expect(await refused(ownerA, "fix the bug")).not.toHaveProperty("cleanupFailure");
+      shared.openaiApiKey = "sk-test";
+      expect(await refused(ownerA, "fix the bug")).toMatchObject(TOLD);
+    });
+
+    it("keeps each account's outage apart when their replies cross", async () => {
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+      const oldKey = correct(ownerA, "a", "with the old key");
+      const oldRequest = await nextRequest("with the old key");
+
+      shared.openaiApiKey = "sk-replaced";
+      expect(await refused(ownerA, "fix the bug")).toMatchObject(TOLD);
+      oldRequest.refuse("key_rejected");
+      expect(await oldKey).toMatchObject(TOLD);
+
+      expect(await refused(ownerA, "fix the bug")).not.toHaveProperty("cleanupFailure");
+    });
+
+    it("tells a new key's failure, however recently the old key's was told", async () => {
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+      await refused(ownerA, "fix the bug");
+
+      shared.openaiApiKey = "sk-replaced";
+      expect(await refused(ownerA, "fix the bug")).toMatchObject(TOLD);
+    });
+
+    it("spends nothing on a failure that may pass", async () => {
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+      const failed = correct(ownerA, "a", "fix the bug");
+      (await nextRequest("fix the bug")).fail();
+      expect(await failed).not.toHaveProperty("cleanupFailure");
+
+      expect(await refused(ownerA, "fix the bug")).toMatchObject(TOLD);
+    });
+
+    it("tells nothing to a view that went away", async () => {
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+      const gone = makeSender();
+      const reply = correct(gone, "a", "fix the bug");
+      const request = await nextRequest("fix the bug");
+      gone.destroyed = true;
+      request.refuse("key_rejected");
+      expect(await reply).not.toHaveProperty("cleanupFailure");
+
+      expect(await refused(ownerA, "fix the bug")).toMatchObject(TOLD);
+    });
+
+    // A frame as Electron gives it: its token belongs to one document, and
+    // reading it once the frame is gone throws.
+    const askingFrame = () => {
+      const frame = {
+        token: "t1",
+        destroyed: false,
+        isDestroyed: () => frame.destroyed,
+        get frameToken() {
+          if (frame.destroyed) throw new Error("Render frame was disposed");
+          return frame.token;
+        },
+      };
+      return frame;
+    };
+    type AskingFrame = ReturnType<typeof askingFrame>;
+
+    it("tells a view whose frame is still the one that asked", async () => {
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+      const reply = getHandler(CHANNELS.VOICE_INPUT_CORRECT)(
+        { sender: ownerA, senderFrame: askingFrame() },
+        { rawText: "fix the bug", sessionId: "a" }
+      );
+      (await nextRequest("fix the bug")).refuse("key_rejected");
+      expect(await reply).toMatchObject(TOLD);
+    });
+
+    it.each([
+      // The frame follows the reload to the new document, with a new token.
+      ["reloaded", (frame: AskingFrame) => (frame.token = "t2")],
+      ["lost its frame", (frame: AskingFrame) => (frame.destroyed = true)],
+    ])("tells nothing to a view that %s since it asked", async (_label, leave) => {
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+      const frame = askingFrame();
+      const reply = getHandler(CHANNELS.VOICE_INPUT_CORRECT)(
+        { sender: ownerA, senderFrame: frame },
+        { rawText: "fix the bug", sessionId: "a" }
+      );
+      const request = await nextRequest("fix the bug");
+      leave(frame);
+      request.refuse("key_rejected");
+      expect(await reply).not.toHaveProperty("cleanupFailure");
+
+      expect(await refused(ownerA, "fix the bug")).toMatchObject(TOLD);
+    });
+
+    it("takes a prefetch's refusal as the stop's, without asking the account again", async () => {
+      await start(ownerA, "a");
+      await prefetch(ownerA, "a", "run the tests");
+      (await nextRequest("run the tests")).refuse("key_rejected");
+
+      await stop(ownerA, "a");
+      await expect(correct(ownerA, "a", "run the tests")).resolves.toMatchObject({
+        ...TOLD,
+        prefetch: "prefetch_failed",
+      });
+      await settle();
+      expect(shared.cleanups).toEqual([]);
+    });
+
+    it("tells nothing for a prefetch no stop took", async () => {
+      await start(ownerA, "a");
+      await prefetch(ownerA, "a", "run the");
+      (await nextRequest("run the")).refuse("key_rejected");
+
+      await stop(ownerA, "a");
+      expect(await refused(ownerA, "run the tests")).toMatchObject(TOLD);
     });
   });
 
@@ -1411,6 +1742,7 @@ describe("voiceInput — session identity", () => {
           reconnects: 2,
           completedSegments: 1,
           emptyCompletions: 2,
+          prefetchesStarted: 0,
         },
       });
       expect(JSON.stringify(payload)).not.toMatch(/daintree|canopy|login/);
@@ -1632,6 +1964,40 @@ describe("voiceInput — a session live in another view (#14601)", () => {
 
     expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([]);
     expect(winA.focus).not.toHaveBeenCalled();
+  });
+
+  it("asks the owner to stop when dictation is turned off mid-session (#14947)", async () => {
+    await start(ownerA, "a");
+
+    await invoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, viewB, { language: "de" });
+    expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([]);
+
+    await invoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, viewB, { enabled: false });
+
+    expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([{ sessionId: "a" }]);
+    // The owner drains it, so what was said stays in its draft.
+    expect(shared.calls).not.toContain("hard-stop");
+    expect(winA.focus).not.toHaveBeenCalled();
+  });
+
+  it("stops a start that reaches main after dictation was turned off, keeping its speech", async () => {
+    await invoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, viewB, { enabled: false });
+
+    await start(ownerA, "a");
+
+    // The owner may already hold queued speech, so it drains rather than being refused.
+    expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([{ sessionId: "a" }]);
+    expect(getLiveVoiceSession()?.sessionId).toBe("a");
+    expect(shared.calls).not.toContain("hard-stop");
+  });
+
+  it("asks nothing of a view when dictation is turned off with nothing live", async () => {
+    await start(ownerA, "a");
+    await stop(ownerA, "a");
+
+    await invoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, viewB, { enabled: false });
+
+    expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([]);
   });
 
   describe("taking the person back to the dictation (#14791)", () => {
@@ -2146,6 +2512,17 @@ describe("voiceInput — one dictation across hosts (#14773)", () => {
       ).rejects.toThrow();
     });
 
+    it("passes on that the app was replaced under it, so no view blames the mic (#14937)", async () => {
+      await startIn(local, "a", "Alpha");
+      const micNotice = { kind: "silent", bluetooth: false, appReplaced: true };
+
+      expect(await publish(local, "a", details({ micSignal: "silent", micNotice }))).toBe(true);
+
+      expect(await invoke(CHANNELS.VOICE_INPUT_GET_LIVE_SESSION, studio1)).toMatchObject({
+        session: { details: { micNotice } },
+      });
+    });
+
     it("sends about ten level readings a second however fast chunks arrive", async () => {
       await startIn(local, "a", "Alpha");
 
@@ -2259,5 +2636,58 @@ describe("voiceInput — one dictation across hosts (#14773)", () => {
 
       expect(held(local)).toBe(false);
     });
+  });
+});
+
+describe("voiceInput — an app bundle replaced under it (#14937)", () => {
+  let cleanup: () => void;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    bundle.replaced = false;
+    bundle.launchable = false;
+    cleanup = registerVoiceInputHandlers({
+      mainWindow: { webContents: { send: vi.fn() }, isDestroyed: () => false },
+    } as unknown as Parameters<typeof registerVoiceInputHandlers>[0]);
+  });
+
+  afterEach(() => {
+    cleanup?.();
+  });
+
+  it("answers whether the bundle on disk is still the one running", async () => {
+    const ask = () => getHandler(CHANNELS.VOICE_INPUT_IS_APP_REPLACED)({ sender: makeSender() });
+    expect(await ask()).toBe(false);
+
+    bundle.replaced = true;
+    expect(await ask()).toBe(true);
+  });
+
+  it("restarts into the new bundle, keeping the session", async () => {
+    bundle.replaced = true;
+    bundle.launchable = true;
+
+    expect(
+      await getHandler(CHANNELS.VOICE_INPUT_RESTART_REPLACED_APP)({ sender: makeSender() })
+    ).toBe(true);
+    expect(relaunchApp).toHaveBeenCalledExactlyOnceWith("bundle-replaced");
+  });
+
+  it("restarts into a bundle that was put back as it was, since the user asked", async () => {
+    bundle.launchable = true;
+
+    expect(
+      await getHandler(CHANNELS.VOICE_INPUT_RESTART_REPLACED_APP)({ sender: makeSender() })
+    ).toBe(true);
+    expect(relaunchApp).toHaveBeenCalledExactlyOnceWith("bundle-replaced");
+  });
+
+  it("refuses a restart with no bundle to come back up as", async () => {
+    bundle.replaced = true;
+
+    expect(
+      await getHandler(CHANNELS.VOICE_INPUT_RESTART_REPLACED_APP)({ sender: makeSender() })
+    ).toBe(false);
+    expect(relaunchApp).not.toHaveBeenCalled();
   });
 });

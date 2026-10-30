@@ -371,8 +371,8 @@ describe("runHostInstall", () => {
     expect(result.status).toBe("installed");
     const waits = deps.progress.filter((p) => p.stage === "waiting-for-idle");
     expect(waits.map((p) => p.message)).toEqual([
-      "Waiting for 2 agents working or waiting on the host",
-      "Waiting for 1 agent working or waiting on the host",
+      "2 agents are still working or waiting on the host",
+      "1 agent is still working or waiting on the host",
     ]);
     const stagedAt = deps.progress.findIndex((p) => p.stage === "copying");
     const waitedAt = deps.progress.findIndex((p) => p.stage === "waiting-for-idle");
@@ -663,7 +663,7 @@ describe("runHostInstall", () => {
     expect(result.status).toBe("installed");
     expect(
       deps.progress.filter((p) => p.stage === "waiting-for-idle").map((p) => p.message)
-    ).toEqual(["Waiting for 1 agent working or waiting on the host"]);
+    ).toEqual(["1 agent is still working or waiting on the host"]);
   });
 
   it("keeps waiting for idle through a moment it can't hear from the host", async () => {
@@ -697,7 +697,7 @@ describe("runHostInstall", () => {
     expect(result.status).toBe("installed");
     expect(
       deps.progress.filter((p) => p.stage === "waiting-for-idle").map((p) => p.message)
-    ).toEqual(["Waiting for 1 agent working or waiting on the host"]);
+    ).toEqual(["1 agent is still working or waiting on the host"]);
   });
 
   it("never reads a list the host couldn't complete as idle", () => {

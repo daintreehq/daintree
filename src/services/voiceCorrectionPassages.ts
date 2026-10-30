@@ -3,6 +3,7 @@ import type {
   VoiceCorrectionVerdict,
 } from "@shared/types/voiceSessionSummary";
 import { VOICE_FOLLOWING_TEXT_MAX_CHARS } from "@shared/config/voiceCorrection";
+import { openingVoiceCommandToken } from "@shared/utils/voiceAgentCommands";
 import type {
   DictationRecord,
   DictationTextSpan,
@@ -29,6 +30,11 @@ export interface CorrectionPassage {
   following: string;
   /** Nothing but whitespace comes before the passage, so it may open with a command. */
   startsPrompt: boolean;
+  /**
+   * The command or skill the whole draft opens with, as typed, however far
+   * before the passage: what the passage says may be its arguments.
+   */
+  openingCommand?: string;
   /** The words in `text` the recogniser was unsure of, when there are any. */
   uncertain?: DictationTextSpan[];
   /** Where the speaker paused in `text`, each straight after a word, when they did. */
@@ -101,6 +107,7 @@ export function collectCorrectionPassages(
     }
   }
 
+  const openingCommand = openingVoiceCommandToken(draft);
   return runs.map((utterances) => {
     const from = utterances[0]!.range.from;
     const to = utterances[utterances.length - 1]!.range.to;
@@ -124,6 +131,7 @@ export function collectCorrectionPassages(
       context: leftContext(draft, from),
       following: rightContext(draft, to),
       startsPrompt: draft.slice(0, from).trim() === "",
+      ...(openingCommand ? { openingCommand } : {}),
       ...(uncertain.length > 0 ? { uncertain } : {}),
       ...(pauses.length > 0 ? { pauses } : {}),
     };
@@ -241,20 +249,20 @@ export function joinPassageTexts(texts: string[]): string | null {
 }
 
 /**
- * Every passage's reply, in passage order, and main's timing from the one
- * that came back last: it is the one the draft waited on.
+ * Every passage's reply, in passage order, and the one that came back last:
+ * it is the one the draft waited on, so main's account of it is the pass's.
  */
-export async function settlePassageReplies<T extends { timing: unknown }>(
+export async function settlePassageReplies<T>(
   replies: ReadonlyArray<Promise<T>>
-): Promise<{ results: T[]; lastTiming: unknown }> {
-  let lastTiming: unknown = null;
+): Promise<{ results: T[]; last: T | null }> {
+  let last: T | null = null;
   const results = await Promise.all(
     replies.map((reply) =>
       reply.then((result) => {
-        lastTiming = result.timing;
+        last = result;
         return result;
       })
     )
   );
-  return { results, lastTiming };
+  return { results, last };
 }

@@ -346,6 +346,47 @@ describe("agentSettingsStore adversarial", () => {
       });
     });
 
+    it("saves null as this worktree's bare-agent pick without touching the agent-level preset", async () => {
+      useAgentSettingsStore.setState({
+        settings: {
+          agents: {
+            claude: { presetId: "user-111", worktreePresets: { "wt-B": "user-222" } },
+          },
+        },
+        isInitialized: true,
+        isLoading: false,
+      });
+      let respond!: () => void;
+      clientMock.set.mockImplementation(
+        (_agentId: string, updates: Record<string, unknown>) =>
+          new Promise((resolve) => {
+            respond = () =>
+              resolve({
+                agents: {
+                  claude: { presetId: "user-111", worktreePresets: updates.worktreePresets },
+                },
+              });
+          })
+      );
+      const readEntry = () => useAgentSettingsStore.getState().settings?.agents?.claude;
+
+      const pending = useAgentSettingsStore.getState().updateWorktreePreset("claude", "wt-A", null);
+
+      expect(clientMock.set).toHaveBeenCalledWith("claude", {
+        worktreePresets: { "wt-B": "user-222", "wt-A": null },
+      });
+      // The optimistic state already resolves wt-A to the bare agent, so a
+      // launch while the save is in flight can't pick up the agent-level preset.
+      expect(readEntry()?.presetId).toBe("user-111");
+      expect(readEntry()?.worktreePresets).toEqual({ "wt-B": "user-222", "wt-A": null });
+
+      respond();
+      await pending;
+
+      expect(readEntry()?.presetId).toBe("user-111");
+      expect(readEntry()?.worktreePresets).toEqual({ "wt-B": "user-222", "wt-A": null });
+    });
+
     it("collapses an empty map to undefined when the last key is removed", async () => {
       useAgentSettingsStore.setState({
         settings: {

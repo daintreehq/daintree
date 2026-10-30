@@ -20,7 +20,7 @@ export const MCP_SERVER_METHOD_CHANNELS = {
   exportAuditLog: "mcp-server:export-audit-log",
   setSessionTier: "mcp-server:set-session-tier",
   issueGrant: "mcp-server:issue-grant",
-  revokeSessionGrants: "mcp-server:revoke-session-grants",
+  revokeGrant: "mcp-server:revoke-grant",
   issueNativeGrant: "mcp-server:issue-native-grant",
   revokeNativeGrant: "mcp-server:revoke-native-grant",
   resetDenialCounts: "mcp-server:reset-denial-counts",
@@ -33,6 +33,7 @@ export const MCP_SERVER_METHOD_CHANNELS = {
   listOrchestratorPanes: "mcp-server:list-orchestrator-panes",
   getPaneNotifyState: "mcp-server:get-pane-notify-state",
   stopPaneNotices: "mcp-server:stop-pane-notices",
+  holdDispatch: "mcp-server:hold-dispatch",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof MCP_SERVER_METHOD_CHANNELS;

@@ -1,13 +1,17 @@
 // @vitest-environment jsdom
 import { render as rtlRender, screen, act, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
+import {
+  useNotificationHistoryStore,
+  type NotificationHistoryEntry,
+} from "@/store/slices/notificationHistorySlice";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import { NotificationCenterEntry, formatSnoozeWake } from "../NotificationCenterEntry";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useUIStore } from "@/store/uiStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useScratchStore } from "@/store/scratchStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { APP_SOURCE_LABEL } from "@/lib/notificationSourceLabel";
 
@@ -1123,6 +1127,27 @@ describe("NotificationCenterEntry — go to source", () => {
     expect(focusCalls).toEqual([["panel.focus", { panelId: "pane-42" }]]);
   });
 
+  it("marks the entry read once Go to source arrives", async () => {
+    seedPanel("pane-42", "grid");
+    const entry = makeEntry({
+      id: "unread-1",
+      seenAsToast: false,
+      context: { panelId: "pane-42" },
+    });
+    useNotificationHistoryStore.setState({ entries: [entry], unreadCount: 1 });
+    render(<NotificationCenterEntry entry={entry} />);
+    await openMenu();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Go to source"));
+    });
+    await waitFor(() => {
+      expect(useUIStore.getState().notificationCenterOpen).toBe(false);
+    });
+    const read = useNotificationHistoryStore.getState().entries[0]!.seenAsToast;
+    useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
+    expect(read).toBe(true);
+  });
+
   it("makes a row whose panel is gone inert, readable, and says so", async () => {
     const { container } = render(
       <NotificationCenterEntry
@@ -1211,6 +1236,152 @@ describe("NotificationCenterEntry — go to source", () => {
       container.querySelector('[data-testid="notification-destination-unavailable"]')
     ).toBeNull();
     expect(getRow(container).className).toMatch(/cursor-default/);
+  });
+
+  describe("from another project on this machine", () => {
+    const OTHER = "b".repeat(64);
+    const switchProject = vi.fn();
+    const initial = useProjectStore.getState();
+    beforeEach(() => {
+      switchProject.mockReset().mockResolvedValue(undefined);
+      useProjectStore.setState({
+        projects: [
+          { id: "p1", path: "/repos/helios", name: "Helios", emoji: "🌲", lastOpened: 0 },
+          { id: OTHER, path: "/repos/atlas", name: "Atlas", emoji: "🌲", lastOpened: 0 },
+        ],
+        switchProject,
+      });
+    });
+    afterEach(() => {
+      useProjectStore.setState({
+        projects: initial.projects,
+        switchProject: initial.switchProject,
+      });
+    });
+
+    it("is a link that closes the inbox and switches there, landing on the panel", async () => {
+      const { container } = render(
+        <NotificationCenterEntry
+          entry={makeEntry({
+            context: { projectId: OTHER, worktreeId: "wt-9", panelId: "pane-9" },
+          })}
+        />
+      );
+      expect(getRow(container).getAttribute("data-navigable")).toBe("true");
+      await act(async () => {
+        fireEvent.click(screen.getByText("Hello"));
+      });
+      expect(useUIStore.getState().notificationCenterOpen).toBe(false);
+      expect(switchProject).toHaveBeenCalledWith(OTHER, {
+        focusIntent: { intent: "focus-panel", panelId: "pane-9", worktreeId: "wt-9" },
+      });
+      expect(dispatchMock).not.toHaveBeenCalledWith("panel.focus", expect.anything());
+    });
+
+    it("switches exactly once from Go to source", async () => {
+      render(
+        <NotificationCenterEntry
+          entry={makeEntry({ context: { projectId: OTHER, panelId: "pane-9" } })}
+        />
+      );
+      await openMenu();
+      const item = screen.getByText("Go to source").closest('[role="menuitem"]') as HTMLElement;
+      expect(item.getAttribute("data-disabled")).toBeNull();
+      await act(async () => {
+        fireEvent.click(item);
+      });
+      await waitFor(() => {
+        expect(useUIStore.getState().notificationCenterOpen).toBe(false);
+      });
+      expect(switchProject).toHaveBeenCalledOnce();
+    });
+
+    it("follows the project and scratch lists as they change", () => {
+      const SCRATCH = "0b2d7c4e-1f3a-4b5c-8d9e-0a1b2c3d4e5f";
+      const initialScratches = useScratchStore.getState().scratches;
+      try {
+        const { container } = render(
+          <div>
+            <NotificationCenterEntry
+              entry={makeEntry({ id: "e-project", context: { projectId: OTHER, panelId: "p" } })}
+            />
+            <NotificationCenterEntry
+              entry={makeEntry({ id: "e-scratch", context: { projectId: SCRATCH, panelId: "s" } })}
+            />
+          </div>
+        );
+        const rows = () => Array.from(container.firstElementChild?.children ?? []);
+        const navigable = () => rows().map((row) => row.getAttribute("data-navigable"));
+        expect(navigable()).toEqual(["true", null]);
+        act(() => {
+          useProjectStore.setState({
+            projects: useProjectStore
+              .getState()
+              .projects.map((p) => (p.id === OTHER ? { ...p, status: "missing" as const } : p)),
+          });
+          useScratchStore.setState({ scratches: [{ id: SCRATCH, name: "Scratch" }] as never });
+        });
+        expect(navigable()).toEqual([null, "true"]);
+      } finally {
+        act(() => {
+          useScratchStore.setState({ scratches: initialScratches });
+        });
+      }
+    });
+
+    it.each([
+      ["no longer registered", "c".repeat(64)],
+      ["whose folder is missing", "d".repeat(64)],
+    ])("says a project %s is unavailable, in the menu only", async (_label, projectId) => {
+      useProjectStore.setState({
+        projects: [
+          ...useProjectStore.getState().projects,
+          {
+            id: "d".repeat(64),
+            path: "/repos/gone",
+            emoji: "🌲",
+            name: "Gone",
+            lastOpened: 0,
+            status: "missing",
+          },
+        ],
+      });
+      const { container } = render(
+        <NotificationCenterEntry entry={makeEntry({ context: { projectId, panelId: "pane-9" } })} />
+      );
+      expect(getRow(container).getAttribute("data-navigable")).toBeNull();
+      expect(
+        container.querySelector('[data-testid="notification-destination-unavailable"]')
+      ).toBeNull();
+      await openMenu();
+      const item = screen.getByText("Go to source").closest('[role="menuitem"]') as HTMLElement;
+      expect(item.getAttribute("data-disabled")).not.toBeNull();
+      expect(item.getAttribute("aria-label")).toBe("Go to source, project unavailable");
+      expect(item.textContent).toContain("Project unavailable");
+      expect(switchProject).not.toHaveBeenCalled();
+    });
+
+    it("stays inert when it came from another machine, and the menu says so", async () => {
+      const { container } = render(
+        <NotificationCenterEntry
+          entry={makeEntry({
+            context: { projectId: OTHER, panelId: "pane-9", hostName: "studio-01" },
+          })}
+        />
+      );
+      expect(getRow(container).getAttribute("data-navigable")).toBeNull();
+      expect(
+        container.querySelector('[data-testid="notification-destination-unavailable"]')
+      ).toBeNull();
+      await act(async () => {
+        fireEvent.click(screen.getByText("Hello"));
+      });
+      expect(switchProject).not.toHaveBeenCalled();
+      await openMenu();
+      const item = screen.getByText("Go to source").closest('[role="menuitem"]') as HTMLElement;
+      expect(item.getAttribute("data-disabled")).not.toBeNull();
+      expect(item.textContent).toContain("On another machine");
+    });
   });
 
   it("gives a row with no address no link affordance", () => {

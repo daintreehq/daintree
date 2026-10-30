@@ -13,6 +13,10 @@ import type {
   PluginViewHostContext,
   SettingDefinition,
 } from "@shared/types/plugin";
+import {
+  makeInstalledProjectInstanceKey,
+  makeProjectPluginInstanceKey,
+} from "@shared/types/plugin";
 import { _resetPluginRuntimeStatusStoreForTest } from "@/store/pluginRuntimeStatusStore";
 import {
   _resetPluginHostedViewsStoreForTest,
@@ -502,6 +506,86 @@ describe("PluginSettingsForm", () => {
     expect(pluginApi.revealSecretSetting).not.toHaveBeenCalled();
   });
 
+  it("reveals a first secret as it is typed, before anything is stored", async () => {
+    render(
+      <PluginSettingsForm plugin={makePlugin([{ id: "token", type: "secret", label: "Token" }])} />
+    );
+    const input = (await screen.findByLabelText("Token")) as HTMLInputElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    // An empty field with nothing stored has nothing to reveal.
+    expect(screen.queryByRole("button", { name: "Show Token" })).toBeNull();
+
+    fireEvent.change(input, { target: { value: "sk-pasted" } });
+    const toggle = screen.getByRole("button", { name: "Show Token" });
+    fireEvent.click(toggle);
+    expect(input.type).toBe("text");
+    expect(input.value).toBe("sk-pasted");
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(toggle);
+    expect(input.type).toBe("password");
+    expect(input.value).toBe("sk-pasted");
+    expect(pluginApi.revealSecretSetting).not.toHaveBeenCalled();
+    expect(pluginApi.setSettingValue).not.toHaveBeenCalled();
+  });
+
+  it("masks the next entry after a revealed secret is cleared", async () => {
+    render(
+      <PluginSettingsForm plugin={makePlugin([{ id: "token", type: "secret", label: "Token" }])} />
+    );
+    const input = (await screen.findByLabelText("Token")) as HTMLInputElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    fireEvent.change(input, { target: { value: "sk-first" } });
+    fireEvent.click(screen.getByRole("button", { name: "Show Token" }));
+    expect(input.type).toBe("text");
+    // Editing what is shown keeps it shown; only emptying the field re-masks.
+    fireEvent.change(input, { target: { value: "sk-firs" } });
+    expect(input.type).toBe("text");
+
+    fireEvent.change(input, { target: { value: "" } });
+    expect(input.type).toBe("password");
+    expect(screen.queryByRole("button", { name: "Show Token" })).toBeNull();
+
+    fireEvent.change(input, { target: { value: "sk-second" } });
+    expect(input.type).toBe("password");
+    expect(screen.getByRole("button", { name: "Show Token" }).getAttribute("aria-pressed")).toBe(
+      "false"
+    );
+  });
+
+  it("lets Tab reach the eye to check a typed secret before it saves", async () => {
+    render(
+      <PluginSettingsForm plugin={makePlugin([{ id: "token", type: "secret", label: "Token" }])} />
+    );
+    const input = (await screen.findByLabelText("Token")) as HTMLInputElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    fireEvent.change(input, { target: { value: "sk-pasted" } });
+    const toggle = screen.getByRole("button", { name: "Show Token" }) as HTMLButtonElement;
+    expect(toggle.tabIndex).toBe(0);
+
+    // Focus moving between the field and its own eye is not leaving the field.
+    fireEvent.blur(input, { relatedTarget: toggle });
+    fireEvent.click(toggle);
+    expect(input.type).toBe("text");
+    expect(input.value).toBe("sk-pasted");
+    fireEvent.blur(toggle, { relatedTarget: input });
+    expect(input.type).toBe("text");
+    expect(pluginApi.setSettingValue).not.toHaveBeenCalled();
+
+    fireEvent.blur(input, { relatedTarget: document.body });
+    await waitFor(() =>
+      expect(pluginApi.setSettingValue).toHaveBeenCalledWith(
+        "acme.test",
+        "token",
+        "sk-pasted",
+        "user",
+        null
+      )
+    );
+    expect(pluginApi.setSettingValue).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(input.value).toBe(""));
+    expect(input.type).toBe("password");
+  });
+
   it("never shows a secret value until revealed, then re-masks on blur", async () => {
     pluginApi.getSettingValues.mockResolvedValue(uiValues({ secretsSet: ["token"] }));
     pluginApi.revealSecretSetting.mockResolvedValue("sekret");
@@ -515,11 +599,16 @@ describe("PluginSettingsForm", () => {
     expect(input.value).toBe("");
     expect(input.type).toBe("password");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Show Token" }));
+    const toggle = await screen.findByRole("button", { name: "Show Token" });
+    fireEvent.click(toggle);
     await waitFor(() => expect(input.value).toBe("sekret"));
     expect(input.type).toBe("text");
+    // Tabbing to the eye stays inside the field: nothing saves yet.
+    fireEvent.blur(input, { relatedTarget: toggle });
+    expect(pluginApi.setSettingValue).not.toHaveBeenCalled();
+    expect(input.value).toBe("sekret");
 
-    fireEvent.blur(input);
+    fireEvent.blur(toggle);
     await waitFor(() =>
       expect(pluginApi.setSettingValue).toHaveBeenCalledWith(
         "acme.test",
@@ -573,6 +662,12 @@ describe("PluginSettingsForm", () => {
     expect(input.value).toBe("sk-typed");
     // With no keychain at all, another try is refused the same way.
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    // Nothing is stored, but the kept value can still be checked.
+    expect(screen.queryByRole("button", { name: "Clear Token" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show Token" }));
+    expect(input.type).toBe("text");
+    expect(input.value).toBe("sk-typed");
+    expect(pluginApi.revealSecretSetting).not.toHaveBeenCalled();
   });
 
   // Electron asks for the keychain once per run: after a dismissed unlock prompt
@@ -730,7 +825,9 @@ describe("PluginSettingsForm", () => {
         { id: "u", type: "string", label: "U" },
         { id: "p", type: "string", label: "P", scope: "project" },
       ]),
+      instanceId: makeProjectPluginInstanceKey("proj-1", "acme.test"),
       origin: "project" as const,
+      projectId: "proj-1",
     };
     render(<PluginSettingsForm plugin={plugin} viewScope="project" />);
     expect(await screen.findByLabelText("U")).toBeTruthy();
@@ -738,6 +835,79 @@ describe("PluginSettingsForm", () => {
     expect(screen.queryByRole("button", { name: /Open (plugin manager|project settings)/ })).toBe(
       null
     );
+  });
+
+  it.each([
+    ["a repository plugin", makeProjectPluginInstanceKey("proj-1", "acme.test")],
+    ["an installed per-project instance", makeInstalledProjectInstanceKey("proj-1", "acme.test")],
+  ])("badges %s's user-scope fields for the one project they reach", async (_, instanceId) => {
+    currentProjectId = "proj-1";
+    const plugin: LoadedPluginInfo = {
+      ...makePlugin([
+        { id: "u", type: "string", label: "U" },
+        { id: "u2", type: "string", label: "U2", scope: "user" },
+        { id: "p", type: "string", label: "P", scope: "project" },
+      ]),
+      instanceId,
+      origin: "project",
+      projectId: "proj-1",
+    };
+    render(<PluginSettingsForm plugin={plugin} viewScope="project" />);
+    // Its user-scope file is named by an instance key that carries the project
+    // id, so the value stays with this project on this machine — unlike a
+    // project-scope value, which the repository shares.
+    const rowOf = (label: string) =>
+      screen.getByLabelText(label).closest<HTMLElement>("[data-settings-row]")!;
+    await screen.findByLabelText("U");
+    expect(within(rowOf("U")).getByText("This project, this machine")).toBeTruthy();
+    expect(within(rowOf("U2")).getByText("This project, this machine")).toBeTruthy();
+    expect(within(rowOf("P")).getByText("This project")).toBeTruthy();
+    expect(screen.queryByText("All projects")).toBeNull();
+  });
+
+  it.each([
+    ["an installed plugin", "acme.test", null],
+    ["a repository plugin", makeProjectPluginInstanceKey("proj-1", "acme.test"), "proj-1"],
+  ])("badges %s's project-scope secrets for this machine", async (_, instanceId, owner) => {
+    currentProjectId = "proj-1";
+    const plugin: LoadedPluginInfo = {
+      ...makePlugin([
+        { id: "token", type: "secret", label: "Token", scope: "project" },
+        { id: "legacy", type: "string", secret: true, label: "Legacy", scope: "project" },
+        { id: "p", type: "string", label: "P", scope: "project" },
+      ]),
+      instanceId,
+      origin: owner === null ? "global" : "project",
+      projectId: owner,
+    };
+    render(<PluginSettingsForm plugin={plugin} viewScope="project" />);
+    // A project-scope secret is stored in the local file, never the repository,
+    // so it doesn't wear the badge of a value the repository shares.
+    const rowOf = (label: string) =>
+      screen.getByLabelText(label).closest<HTMLElement>("[data-settings-row]")!;
+    await screen.findByLabelText("Token");
+    expect(within(rowOf("Token")).getByText("This project, this machine")).toBeTruthy();
+    expect(within(rowOf("Legacy")).getByText("This project, this machine")).toBeTruthy();
+    expect(within(rowOf("P")).getByText("This project")).toBeTruthy();
+  });
+
+  it("keeps an installed plugin's user-scope secrets badged for every project", async () => {
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([
+          { id: "token", type: "secret", label: "Token" },
+          { id: "legacy", type: "string", secret: true, label: "Legacy" },
+        ])}
+        viewScope="user"
+      />
+    );
+    // Only a project-scope secret is moved off the repository into the local
+    // file; a user-scope one is the installed plugin's, shared by every project.
+    const rowOf = (label: string) =>
+      screen.getByLabelText(label).closest<HTMLElement>("[data-settings-row]")!;
+    await screen.findByLabelText("Token");
+    expect(within(rowOf("Token")).getByText("All projects")).toBeTruthy();
+    expect(within(rowOf("Legacy")).getByText("All projects")).toBeTruthy();
   });
 
   it("shows an unstored required field as unset, with its default as the way to set it", async () => {

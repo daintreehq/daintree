@@ -87,6 +87,7 @@ export { createCursorBlink } from "./cursorBlink";
 export {
   createComposerHistory,
   clearComposerHistory,
+  dictationWrite,
   outsideDraftWrite,
   selectionAfterOutsideWrite,
 } from "./composerHistory";

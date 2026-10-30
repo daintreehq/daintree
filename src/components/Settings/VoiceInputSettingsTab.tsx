@@ -10,6 +10,7 @@ import { SettingsSection } from "./SettingsSection";
 import { VoiceDictionaryPage } from "./VoiceDictionaryPage";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsSelect } from "./SettingsSelect";
+import { ClaudeIcon } from "@/components/icons/brands/ClaudeIcon";
 import { CodexIcon } from "@/components/icons/brands/CodexIcon";
 import { DeepgramIcon } from "@/components/icons/brands/DeepgramIcon";
 import { GrokIcon } from "@/components/icons/brands/GrokIcon";
@@ -40,20 +41,25 @@ import { VOICE_LANGUAGES } from "@shared/config/voiceLanguages";
 import {
   correctionInstructionsFor,
   VOICE_CLEANUP_AI_MODEL,
-  VOICE_CLEANUP_MODELS,
+  VOICE_CLEANUP_MODELS_BY_PROVIDER,
+  isVoiceCleanupProvider,
 } from "@shared/config/voiceCorrection";
 import {
-  VOICE_CLEANUP_KEY_FIELD,
+  VOICE_CLEANUP_PROVIDER_INFO,
+  cleanupKeyField,
+  cleanupKeyIssuer,
   hasCleanupKey,
   hasTranscriptionKey,
   transcriptionKeyField,
   transcriptionKeyIssuer,
+  type TranscriptionKeyField,
   type VoiceApiKeyField,
 } from "@shared/config/voiceProviders";
 import type {
   VoiceInputSettings,
   VoiceInputSettingsPatch,
   VoiceCorrectionModel,
+  VoiceCorrectionProvider,
   VoiceDictionaryEntry,
   VoiceDictionaryState,
   MicPermissionStatus,
@@ -68,6 +74,11 @@ const PROVIDER_OPTIONS = [
   { value: "grok" as const, label: "Grok", icon: GrokIcon },
 ];
 
+const CLEANUP_PROVIDER_OPTIONS = [
+  { value: "openai" as const, label: "OpenAI", icon: CodexIcon },
+  { value: "anthropic" as const, label: "Anthropic", icon: ClaudeIcon },
+];
+
 const RECOGNITION_HINTS_PRIVACY =
   "Recognition hints go with the audio: your dictionary, project, host and worktree names, the branch, and identifiers from terminal output.";
 
@@ -77,35 +88,57 @@ const PROVIDER_PRIVACY: Record<VoiceTranscriptionProvider, string> = {
   grok: `xAI receives your audio over an encrypted connection, keeps it for up to 30 days for abuse auditing unless your team turns on Zero Data Retention, and doesn't train on it without permission. ${RECOGNITION_HINTS_PRIVACY}`,
 };
 
-// What each model is better at, from the cleanup benchmark (#14793).
+// Completes "...are sent to", for the AI text correction section.
+const CLEANUP_PROVIDER_PRIVACY: Record<VoiceCorrectionProvider, string> = {
+  openai:
+    "OpenAI, which keeps them for up to 30 days for abuse monitoring and doesn't train on them",
+  anthropic: "Anthropic",
+};
+
+const CLEANUP_PROVIDER_NOTE: Record<VoiceCorrectionProvider, string> = {
+  openai: "Cleanup and spoken rewrites run here. Your OpenAI key can cover transcription too.",
+  anthropic: "Cleanup and spoken rewrites run here, with an Anthropic API key.",
+};
+
+// From the cleanup benchmark (#14793), all four on the same passages.
 const CLEANUP_MODEL_COPY: Record<VoiceCorrectionModel, { label: string; description: string }> = {
   "gpt-6.1-terra": {
     label: "GPT-6.1 Terra (default)",
-    description:
-      "Catches more misheard names and words that only make sense in context. Costs about seven times as much, still well under a tenth of a cent a cleanup.",
+    description: "Careful, and catches most misheard names. Under a tenth of a cent a cleanup.",
   },
   "gpt-6-luna": {
     label: "GPT-6 Luna",
-    description:
-      "Cheaper, and better at writing out dictated paths and symbols. Misses more misheard names.",
+    description: "Cheapest, but misses more misheard words.",
+  },
+  "claude-haiku-5-5": {
+    label: "Claude Haiku 5.5 (default)",
+    description: "Fastest, usually about a second. Close to Terra at a fifth of the price.",
+  },
+  "claude-sonnet-5-5": {
+    label: "Claude Sonnet 5.5",
+    description: "Most accurate, and the priciest at about a third of a cent a cleanup.",
   },
 };
 
-const CLEANUP_MODEL_CHOICES = VOICE_CLEANUP_MODELS.map((value) => ({
-  value,
-  ...CLEANUP_MODEL_COPY[value],
-}));
+function cleanupModelChoices(provider: VoiceCorrectionProvider) {
+  return VOICE_CLEANUP_MODELS_BY_PROVIDER[provider].map((value) => ({
+    value,
+    ...CLEANUP_MODEL_COPY[value],
+  }));
+}
 
 const DEFAULT_SETTINGS: VoiceInputSettings = {
   enabled: false,
   openaiApiKey: "",
   deepgramApiKey: "",
   xaiApiKey: "",
+  anthropicApiKey: "",
   language: "en",
   dictionary: [],
   transcriptionProvider: "openai",
   transcriptionModel: "gpt-live-transcribe",
   correctionEnabled: true,
+  correctionProvider: "openai",
   correctionModel: VOICE_CLEANUP_AI_MODEL,
   correctionCustomInstructions: "",
   paragraphingStrategy: "spoken-command",
@@ -129,6 +162,7 @@ const SAVE_GROUP_BY_KEY: Partial<Record<PatchKey, SaveGroup>> = {
   openaiApiKey: "credentials",
   deepgramApiKey: "credentials",
   xaiApiKey: "credentials",
+  anthropicApiKey: "credentials",
   deviceId: "microphone",
   deviceLabel: "microphone",
   language: "behavior",
@@ -136,6 +170,7 @@ const SAVE_GROUP_BY_KEY: Partial<Record<PatchKey, SaveGroup>> = {
   recordingMode: "behavior",
   learnFromCorrections: "dictionary",
   correctionEnabled: "correction",
+  correctionProvider: "correction",
   correctionModel: "correction",
   correctionCustomInstructions: "correction",
   resolveFileLinks: "correction",
@@ -146,10 +181,12 @@ const SETTING_KEYS: readonly PatchKey[] = [
   "openaiApiKey",
   "deepgramApiKey",
   "xaiApiKey",
+  "anthropicApiKey",
   "language",
   "transcriptionProvider",
   "transcriptionModel",
   "correctionEnabled",
+  "correctionProvider",
   "correctionModel",
   "correctionCustomInstructions",
   "paragraphingStrategy",
@@ -193,6 +230,7 @@ const SETTING_LABEL: Partial<Record<PatchKey, string>> = {
   recordingMode: "Recording mode",
   learnFromCorrections: "Learn words from corrections",
   correctionEnabled: "Clean up transcriptions",
+  correctionProvider: "Cleanup provider",
   correctionModel: "Cleanup model",
   correctionCustomInstructions: "Custom instructions",
   resolveFileLinks: "Resolve file references",
@@ -229,7 +267,7 @@ export function maskApiKey(key: string): string {
  * key that is present is not claimed to work.
  */
 export function dictationBlockers(
-  settings: Pick<VoiceInputSettings, "transcriptionProvider" | VoiceApiKeyField>,
+  settings: Pick<VoiceInputSettings, "transcriptionProvider" | TranscriptionKeyField>,
   micPermission: MicPermissionStatus
 ): string[] {
   const blockers: string[] = [];
@@ -506,7 +544,8 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
       ? `Can't start yet: ${blockers.join(" and ")}`
       : "Dictate into terminals and inputs using your microphone";
   const isLegacyKey = !!settings.openaiApiKey && !settings.openaiApiKey.startsWith("sk-proj-");
-  const hasOpenAiKey = hasCleanupKey(settings);
+  const cleanupProvider = settings.correctionProvider;
+  const hasCleanupProviderKey = hasCleanupKey(settings);
   const spokenCommandsAvailable = settings.language === "en";
   const paragraphing = settings.paragraphingStrategy ?? "spoken-command";
   const effectiveParagraphing: VoiceParagraphingStrategy = spokenCommandsAvailable
@@ -517,7 +556,10 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
   const dictationCombo = useEffectiveCombo("voiceInput.toggle");
   const pauseCombo = useEffectiveCombo("voiceInput.togglePause");
 
-  const coversCleanup = provider === "openai" && settings.correctionEnabled;
+  const coversCleanup =
+    provider === "openai" && cleanupProvider === "openai" && settings.correctionEnabled;
+  // Where the OpenAI key row already is: under Speech-to-text or as the cleanup key.
+  const openAiKeyShown = provider === "openai" || cleanupProvider === "openai";
 
   // Exhaustive over the key fields, so a new provider's key can't fall into another's row.
   const keyRows: Record<VoiceApiKeyField, () => ReactNode> = {
@@ -548,6 +590,21 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
           settings.xaiApiKey
             ? "Stored locally in plain text. Set a spending limit on your xAI team to cap exposure."
             : "Create one in the xAI console. Keys are stored locally in plain text."
+        }
+      />
+    ),
+    anthropicApiKey: () => (
+      <ApiKeyRow
+        key="anthropicApiKey"
+        label="Anthropic API key"
+        value={settings.anthropicApiKey}
+        placeholder="Paste an Anthropic API key"
+        onSave={(key) => update({ anthropicApiKey: key })}
+        helpUrl="https://console.anthropic.com/settings/keys"
+        description={
+          settings.anthropicApiKey
+            ? "Stored locally in plain text. Set a spend limit on your Anthropic workspace to cap exposure."
+            : "Create one in the Anthropic Console. Keys are stored locally in plain text."
         }
       />
     ),
@@ -734,6 +791,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
               deviceLabel={settings.deviceLabel}
               active={isActive}
               disabled={micPermission === "denied" || micPermission === "restricted"}
+              disabledReason="Microphone access is blocked. Allow it under Microphone access above, then re-check."
             />
           </SettingsGroup>
         )}
@@ -850,7 +908,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
       {settings.enabled && (
         <SettingsSection
           title="AI text correction"
-          description="When you stop dictating, the whole passage is corrected once by the cleanup model to fix technical terms, punctuation and filler words, resolve self-corrections, and lay out spoken lists. The text, the prompts you recently sent from the same terminal, the terminal's recent output with credential-like lines removed, the repository's package, folder and dependency names, and the worktree's issue or PR title are sent to OpenAI."
+          description={`Short dictations are corrected when you stop; long ones are corrected a stretch at a time as you go. The cleanup model fixes technical terms, punctuation and filler words, resolves self-corrections, and lays out spoken lists. The text, the prompts you recently sent from the same terminal, the terminal's recent output with credential-like lines removed, the repository's package, folder and dependency names, and the worktree's issue or PR title are sent to ${CLEANUP_PROVIDER_PRIVACY[cleanupProvider]}.`}
           id="voice-ai-correction"
         >
           {saveError("correction")}
@@ -858,7 +916,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
             <SettingsSwitchCard
               id="voice-ai-correction-enable"
               title="Clean up transcriptions"
-              subtitle="Correct the passage automatically when you stop dictating"
+              subtitle="Correct dictation automatically, when you stop or a stretch at a time during long dictations"
               isEnabled={settings.correctionEnabled}
               onChange={() => void update({ correctionEnabled: !settings.correctionEnabled })}
               isModified={settings.correctionEnabled !== DEFAULT_SETTINGS.correctionEnabled}
@@ -867,24 +925,46 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
 
             {settings.correctionEnabled && (
               <SettingsDependents>
+                <SettingsSelect
+                  id="voice-cleanup-provider"
+                  label="Cleanup provider"
+                  description={CLEANUP_PROVIDER_NOTE[cleanupProvider]}
+                  options={CLEANUP_PROVIDER_OPTIONS}
+                  value={cleanupProvider}
+                  onValueChange={(next) => {
+                    if (!isVoiceCleanupProvider(next) || next === cleanupProvider) return;
+                    void update({
+                      correctionProvider: next,
+                      correctionModel: VOICE_CLEANUP_MODELS_BY_PROVIDER[next][0],
+                    });
+                  }}
+                  isModified={cleanupProvider !== DEFAULT_SETTINGS.correctionProvider}
+                  onReset={() =>
+                    void update({
+                      correctionProvider: DEFAULT_SETTINGS.correctionProvider,
+                      correctionModel: DEFAULT_SETTINGS.correctionModel,
+                    })
+                  }
+                />
+
                 {coversCleanup ? (
                   <SettingsRow
                     label="OpenAI API key"
                     description="The key under Speech-to-text covers transcription and cleanup. There's nothing more to add."
                   />
                 ) : (
-                  keyRow(VOICE_CLEANUP_KEY_FIELD)
+                  keyRow(cleanupKeyField(cleanupProvider))
                 )}
               </SettingsDependents>
             )}
 
             {settings.correctionEnabled && (
               <SettingsDependents
-                disabled={!hasOpenAiKey}
+                disabled={!hasCleanupProviderKey}
                 reason={
-                  provider === "openai"
+                  cleanupProvider === "openai" && provider === "openai"
                     ? "Cleanup runs on OpenAI. Add the OpenAI API key under Speech-to-text to use it."
-                    : "Cleanup runs on OpenAI. Add an OpenAI API key above to use it."
+                    : `Cleanup runs on ${VOICE_CLEANUP_PROVIDER_INFO[cleanupProvider].name}. Add an ${cleanupKeyIssuer(cleanupProvider)} API key above to use it.`
                 }
               >
                 <SettingsChoicebox
@@ -893,22 +973,15 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
                   description="Spoken rewrites of a selection use it too"
                   value={settings.correctionModel}
                   onChange={(model) => void update({ correctionModel: model })}
-                  options={CLEANUP_MODEL_CHOICES}
-                  isModified={settings.correctionModel !== DEFAULT_SETTINGS.correctionModel}
-                  onReset={() => void update({ correctionModel: DEFAULT_SETTINGS.correctionModel })}
-                />
-
-                <SettingsSwitchCard
-                  id="voice-resolve-file-links"
-                  title="Resolve file references"
-                  subtitle={
-                    'Voice commands like "link to the input component" insert @file references'
+                  options={cleanupModelChoices(cleanupProvider)}
+                  isModified={
+                    settings.correctionModel !==
+                    VOICE_CLEANUP_MODELS_BY_PROVIDER[cleanupProvider][0]
                   }
-                  isEnabled={settings.resolveFileLinks}
-                  onChange={() => void update({ resolveFileLinks: !settings.resolveFileLinks })}
-                  isModified={settings.resolveFileLinks !== DEFAULT_SETTINGS.resolveFileLinks}
                   onReset={() =>
-                    void update({ resolveFileLinks: DEFAULT_SETTINGS.resolveFileLinks })
+                    void update({
+                      correctionModel: VOICE_CLEANUP_MODELS_BY_PROVIDER[cleanupProvider][0],
+                    })
                   }
                 />
 
@@ -918,6 +991,34 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
                 />
 
                 <CorePromptRow model={settings.correctionModel} />
+              </SettingsDependents>
+            )}
+
+            {/* File references are found with OpenAI whichever provider cleans up. */}
+            {settings.correctionEnabled && (
+              <SettingsDependents>
+                {!openAiKeyShown && keyRow("openaiApiKey")}
+                <SettingsSwitchCard
+                  id="voice-resolve-file-links"
+                  title="Resolve file references"
+                  subtitle={
+                    'Voice commands like "link to the input component" insert @file references'
+                  }
+                  isEnabled={settings.resolveFileLinks}
+                  onChange={() => void update({ resolveFileLinks: !settings.resolveFileLinks })}
+                  disabled={!settings.openaiApiKey}
+                  disabledReason={
+                    settings.openaiApiKey
+                      ? undefined
+                      : openAiKeyShown
+                        ? "File references are found with OpenAI. Add the OpenAI API key above to use them."
+                        : "File references are found with OpenAI. Add an OpenAI API key to use them."
+                  }
+                  isModified={settings.resolveFileLinks !== DEFAULT_SETTINGS.resolveFileLinks}
+                  onReset={() =>
+                    void update({ resolveFileLinks: DEFAULT_SETTINGS.resolveFileLinks })
+                  }
+                />
               </SettingsDependents>
             )}
           </SettingsGroup>

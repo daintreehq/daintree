@@ -19,11 +19,14 @@ import {
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { useDeviceAnswer } from "@/hooks/useDeviceAnswer";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
+import { shellWord } from "@/components/Settings/Hosts/hostLabels";
 import type { PairedDevice } from "@shared/types/ipc/deviceAnswer";
 
 const DEFAULT_PORT = 7421;
 const RECENT_ANSWERS_SHOWN = 8;
 const COUNTDOWN_TICK_MS = 1000;
+/** A screen reader hears the code once and this one warning, never the ticking countdown. */
+const EXPIRY_WARNING_SECONDS = 30;
 
 /** Seconds left on the open pairing code, ticking only while one is open. */
 function useSecondsLeft(expiresAt: number | null): number | null {
@@ -31,7 +34,11 @@ function useSecondsLeft(expiresAt: number | null): number | null {
   useEffect(() => {
     if (expiresAt === null) return;
     setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), COUNTDOWN_TICK_MS);
+    const timer = setInterval(() => {
+      const t = Date.now();
+      setNow(t);
+      if (t >= expiresAt) clearInterval(timer);
+    }, COUNTDOWN_TICK_MS);
     return () => clearInterval(timer);
   }, [expiresAt]);
   if (expiresAt === null) return null;
@@ -42,6 +49,18 @@ function formatCountdown(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+/**
+ * Changes only when a code opens and once near expiry, so a live region reads
+ * it twice at most. The warning repeats the code, so a code first shown near
+ * expiry is still read out.
+ */
+function pairingAnnouncement(code: string | null, secondsLeft: number | null): string {
+  if (code === null || secondsLeft === null || secondsLeft <= 0) return "";
+  return secondsLeft <= EXPIRY_WARNING_SECONDS
+    ? `Pairing code ${code}, expires in under ${EXPIRY_WARNING_SECONDS} seconds`
+    : `Pairing code ${code}`;
 }
 
 /**
@@ -57,6 +76,7 @@ export default function DeviceAnswerGroup() {
   const locked = status === null || device.busy;
   const pairing = status?.pairing ?? null;
   const secondsLeft = useSecondsLeft(pairing?.expiresAt ?? null);
+  const announcement = pairingAnnouncement(pairing?.code ?? null, secondsLeft);
   const [portDraft, setPortDraft] = useState<string | null>(null);
   const [hostDraft, setHostDraft] = useState<string | null>(null);
   const [removeTarget, setRemoveTarget] = useState<PairedDevice | null>(null);
@@ -158,12 +178,19 @@ export default function DeviceAnswerGroup() {
                   Over SSH, from the device: forward port {port} to this machine, then open
                   http://localhost:{port}
                 </span>
-                <span className="mt-2 block">
-                  <CopyableCommand
-                    command={`ssh -L ${port}:127.0.0.1:${port} <this machine>`}
-                    wrap
-                  />
-                </span>
+                {status && (
+                  <>
+                    <span className="mt-2 block">
+                      <CopyableCommand
+                        command={`ssh -L ${port}:127.0.0.1:${port} ${shellWord(status.sshTarget)}`}
+                        wrap
+                      />
+                    </span>
+                    <span className="mt-2 block">
+                      {`${status.sshTarget} is this machine's login and hostname; if the device reaches it by another name or address, use that instead`}
+                    </span>
+                  </>
+                )}
               </>
             }
           />
@@ -172,40 +199,45 @@ export default function DeviceAnswerGroup() {
             layout="stacked"
             id="device-answer-pair"
             description="A paired device sees the screens of agents waiting in every project, parked and snoozed ones included, and can pick the options those screens show. It can't type, start agents or read anything else. Each answer is recorded with the device's name"
-            control={({ disabled }) =>
-              pairing && secondsLeft !== null && secondsLeft > 0 ? (
-                <div className="flex flex-wrap items-center gap-3">
-                  <span
-                    className="font-mono text-base tracking-widest text-text-primary select-text"
-                    aria-label={`Pairing code ${pairing.code}`}
-                  >
-                    {pairing.code}
-                  </span>
-                  <span className="text-xs text-text-secondary" aria-live="polite">
-                    Expires in {formatCountdown(secondsLeft)}
-                  </span>
+            control={({ disabled }) => (
+              <>
+                <span className="sr-only" aria-live="polite" aria-atomic="true">
+                  {announcement}
+                </span>
+                {pairing && secondsLeft !== null && secondsLeft > 0 ? (
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span
+                      className="font-mono text-base tracking-widest text-text-primary select-text"
+                      aria-label={`Pairing code ${pairing.code}`}
+                    >
+                      {pairing.code}
+                    </span>
+                    <span className="text-xs text-text-secondary">
+                      Expires in {formatCountdown(secondsLeft)}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={disabled || locked}
+                      onClick={() => void device.cancelPairingCode()}
+                    >
+                      Cancel code
+                    </Button>
+                  </div>
+                ) : (
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
-                    disabled={disabled || locked}
-                    onClick={() => void device.cancelPairingCode()}
+                    disabled={disabled || locked || !status?.listening}
+                    onClick={() => void device.createPairingCode()}
                   >
-                    Cancel code
+                    Show pairing code
                   </Button>
-                </div>
-              ) : (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={disabled || locked || !status?.listening}
-                  onClick={() => void device.createPairingCode()}
-                >
-                  Show pairing code
-                </Button>
-              )
-            }
+                )}
+              </>
+            )}
           />
         </SettingsDependents>
       </SettingsGroup>
@@ -250,11 +282,13 @@ export default function DeviceAnswerGroup() {
           {answers.map((answer) => (
             <SettingsRow
               key={`${answer.at}-${answer.deviceId}-${answer.hostId ?? ""}-${answer.runId}`}
-              label={`${answer.deviceName} picked “${answer.label}”${
+              label={`${answer.deviceName} ${answer.outcome === "refused" ? "tried" : "picked"} “${answer.label}”${
                 answer.hostName ? ` on ${answer.hostName}` : ""
               }`}
               description={`${formatRelativeTime(answer.at)}${
-                answer.outcome === "refused" && answer.reason ? ` · ${answer.reason}` : ""
+                answer.outcome === "refused"
+                  ? ` · Refused${answer.reason ? `: ${answer.reason}` : ""}`
+                  : ""
               }`}
             />
           ))}

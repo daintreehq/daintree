@@ -5,11 +5,15 @@ import type {
   AgentDirectoryLiveEntry,
 } from "@shared/types/agentDirectory";
 import {
+  assistantAgePhrase,
   assistantAsk,
   assistantCoverageNote,
   assistantMatches,
   assistantNoticeSummary,
+  assistantRowNote,
+  assistantStateSince,
   assistantStatus,
+  assistantSupervision,
   buildAssistantItems,
   canopyAssistantId,
   isCanopyRoleFilter,
@@ -132,6 +136,55 @@ describe("buildAssistantItems", () => {
     const [item] = buildAssistantItems(directory([live(undefined, {}, null)]), options);
     expect(item!.scopeLabel).toBe("Global");
     expect(item!.projectId).toBeNull();
+    expect(item!.projectName).toBeNull();
+    expect(item!.session).toBeNull();
+  });
+
+  it("keeps its project, host and session apart for the row, and whole for its label (#15370)", () => {
+    const items = buildAssistantItems(
+      directory([live(0), live(1, {}, "p3"), live(undefined, {}, null)]),
+      {
+        ...options,
+        hostName: "This Mac",
+        projectEmoji: (id) => (id === "p1" ? "🌳" : null),
+      }
+    );
+    expect(
+      items.map(({ projectName, projectEmoji, hostName, session }) => ({
+        projectName,
+        projectEmoji,
+        hostName,
+        session,
+      }))
+    ).toEqual([
+      { projectName: "Alpha", projectEmoji: "🌳", hostName: "This Mac", session: "Session 1" },
+      {
+        projectName: "Unknown project",
+        projectEmoji: null,
+        hostName: "This Mac",
+        session: "Session 2",
+      },
+      { projectName: null, projectEmoji: null, hostName: "This Mac", session: null },
+    ]);
+    // What names it elsewhere ("Started by …") still tells apart hosts and sessions.
+    expect(items.map((item) => item.scopeLabel)).toEqual([
+      "Alpha · This Mac · Session 1",
+      "Unknown project · This Mac · Session 2",
+      "Global",
+    ]);
+    expect(assistantMatches(items[0]!, ["this mac"])).toBe(true);
+    expect(assistantMatches(items[2]!, ["global", "this mac"])).toBe(true);
+  });
+
+  it("keeps the agent it runs on, unnamed when the directory doesn't know it", () => {
+    const items = buildAssistantItems(
+      directory([live(0, { agentId: "codex" }), live(1, { agentId: null })]),
+      options
+    );
+    expect(items.map((item) => [item.agentId, item.agentName])).toEqual([
+      ["codex", "Codex"],
+      [null, null],
+    ]);
   });
 
   it("puts asks first, otherwise keeping the directory's order", () => {
@@ -297,6 +350,148 @@ describe("decisions and supervision (#14165)", () => {
     expect(assistantNoticeSummary({ pending: 1, ready: 0, delivery: "idle" })).toBe(
       "Watching 1 terminal"
     );
+  });
+});
+
+describe("the row's one note, and supervision in full (#15370)", () => {
+  const item = (overrides: Partial<AgentDirectoryLiveEntry>, coverage: "ok" | "stale" = "ok") =>
+    buildAssistantItems(
+      { ...directory([live(0, overrides)]), coverage, complete: coverage === "ok" },
+      options
+    )[0]!;
+
+  it("puts a read that may be out of date before anything it watches", () => {
+    const stale = item(
+      { notices: { pending: 2, ready: 1, delivery: "held" }, attached: false },
+      "stale"
+    );
+    expect(assistantRowNote(stale)).toBe(assistantCoverageNote(stale));
+    expect(assistantSupervision(stale)).toEqual([
+      "Last known; the latest read failed",
+      "Watching 2 terminals, 1 notice not delivered (held for now)",
+      "No window here",
+    ]);
+  });
+
+  it("puts a host that can't be reached before anything it watches", () => {
+    const [unreachable] = buildAssistantItems(
+      {
+        ...directory([
+          live(0, { notices: { pending: 2, ready: 1, delivery: "held" }, attached: false }),
+        ]),
+        coverage: "unreachable",
+        complete: false,
+      },
+      options
+    );
+    expect(assistantRowNote(unreachable!)).toBe("This host can't be reached");
+    expect(assistantSupervision(unreachable!)).toHaveLength(3);
+  });
+
+  it("names notices stuck on their way, then a missing window, before a count of terminals", () => {
+    expect(
+      assistantRowNote(
+        item({ notices: { pending: 2, ready: 1, delivery: "held" }, attached: false })
+      )
+    ).toBe("1 notice not delivered (held for now)");
+    expect(
+      assistantRowNote(
+        item({ notices: { pending: 2, ready: 0, delivery: "idle" }, attached: false })
+      )
+    ).toBe("No window here");
+    expect(assistantRowNote(item({ notices: { pending: 2, ready: 0, delivery: "idle" } }))).toBe(
+      "Watching 2 terminals"
+    );
+  });
+
+  it("has nothing to say for an assistant that watches nothing, in a window here", () => {
+    const resting = item({ notices: null });
+    expect(assistantRowNote(resting)).toBeNull();
+    expect(assistantSupervision(resting)).toEqual([]);
+  });
+});
+
+describe("the row's clock (#15370)", () => {
+  const confirmation = { actionId: "worktree.delete", since: 70, expiresAt: 30_070 };
+
+  it("dates an ask from what it asks about, and the rest from the last change of state", () => {
+    const [confirming, handedBack, resting] = buildAssistantItems(
+      directory([
+        live(0, {
+          agentState: "working",
+          waitingReason: null,
+          confirmations: { waiting: [confirmation], omitted: 0 },
+        }),
+        live(1, { handback: { observedAt: 90 } }),
+        live(2),
+      ]),
+      options
+    );
+    expect(assistantStateSince(confirming!)).toBe(70);
+    expect(assistantStateSince(handedBack!)).toBe(90);
+    expect(assistantStateSince(resting!)).toBe(100);
+  });
+
+  it("dates a handback already seen from its state, not the marker", () => {
+    const entry = live(0, { handback: { observedAt: 90 } });
+    const [seen] = buildAssistantItems(directory([entry]), {
+      ...options,
+      seen: { [buildAssistantItems(directory([entry]), options)[0]!.id]: 90 },
+    });
+    expect(seen!.ask).toBeNull();
+    expect(assistantStateSince(seen!)).toBe(100);
+  });
+
+  it("has no clock when no change of state was observed", () => {
+    const [item] = buildAssistantItems(directory([live(0, { since: null })]), options);
+    expect(assistantStateSince(item!)).toBeNull();
+  });
+
+  it("says what the clock measures, as a worker's row does", () => {
+    const items = buildAssistantItems(
+      directory([
+        live(0, { waitingReason: "question" }),
+        live(1, { agentState: "working", waitingReason: null }),
+        live(2, { handback: { observedAt: 90 } }),
+      ]),
+      options
+    );
+    const [asking, working, handedBack] = [0, 1, 2].map((lane) =>
+      items.find((item) => item.subject.lane === lane)
+    );
+    expect(assistantAgePhrase(asking!, "3m")).toBe("waiting for 3m");
+    expect(assistantAgePhrase(working!, "2h")).toBe("working for 2h");
+    expect(assistantAgePhrase(handedBack!, "just now")).toBe("handed back just now");
+    expect(assistantAgePhrase(handedBack!, "4m")).toBe("handed back 4m ago");
+  });
+
+  it("dates a confirmation, an error, a rest and an end each in its own words", () => {
+    const items = buildAssistantItems(
+      directory([
+        live(0, {
+          agentState: "working",
+          waitingReason: null,
+          confirmations: { waiting: [confirmation], omitted: 0 },
+        }),
+        live(1, { waitingReason: "error" }),
+        live(2),
+        live(3, { agentState: "completed", waitingReason: null }),
+        live(4, { agentState: "exited", waitingReason: null }),
+      ]),
+      { ...options, now: 1 }
+    );
+    const phrase = (lane: number) =>
+      assistantAgePhrase(
+        items.find((item) => item.subject.lane === lane)!,
+        "5m"
+      );
+    expect([0, 1, 2, 3, 4].map(phrase)).toEqual([
+      "waiting for 5m",
+      "blocked for 5m",
+      "at its prompt for 5m",
+      "finished 5m ago",
+      "exited 5m ago",
+    ]);
   });
 });
 

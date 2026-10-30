@@ -4,7 +4,7 @@ import type { ChangeDesc, EditorSelection, Extension, Range } from "@codemirror/
 import { StateField, StateEffect, Prec } from "@codemirror/state";
 import { insertNewline } from "@codemirror/commands";
 import type { ITheme } from "@xterm/xterm";
-import { resolveInputBarColors } from "@/utils/terminalTheme";
+import { CHIP_STAGED_MIX, CHIP_WASH_MIX, resolveInputBarColors } from "@/utils/terminalTheme";
 import {
   DURATION_100,
   UI_ANIMATION_DURATION,
@@ -49,10 +49,14 @@ export const VOICE_CARET_LEVEL_PROPERTY = "--cm-voice-caret-level";
 export function buildInputBarTheme(theme: ITheme): Extension {
   const c = resolveInputBarColors(theme);
 
+  // Neutral, in the draft's own ink, fitted to the pill's wash where a palette
+  // needs it: each pill's glyph and label say what it carries. In the accent,
+  // five pills in one draft outshone the caret and the focus outline the accent
+  // is kept for, and on a light terminal the accent on a cyan wash fell to 2:1.
   const chipStyle = {
     ...INLINE_CHIP_BASE,
-    color: c.accent,
-    background: `color-mix(in oklab, ${c.chipColor} 10%, transparent)`,
+    color: c.chipText,
+    background: `color-mix(in oklab, ${c.foreground} ${CHIP_WASH_MIX}%, transparent)`,
   };
 
   return EditorView.theme(
@@ -99,7 +103,7 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         // applies — non-replaced inline elements aren't transformable.
         display: "inline-block",
         fontWeight: 600,
-        color: c.chipColor,
+        color: c.referenceInk,
         textDecoration: "underline dotted 1px",
         textUnderlineOffset: "2px",
       },
@@ -111,7 +115,7 @@ export function buildInputBarTheme(theme: ITheme): Extension {
       ".cm-file-chip": {
         display: "inline-block",
         fontWeight: 600,
-        color: c.chipColor,
+        color: c.referenceInk,
         textDecoration: "underline dotted 1px",
         textUnderlineOffset: "2px",
         // The full path stays visible and wraps: truncating hid the tail, so two
@@ -164,9 +168,10 @@ export function buildInputBarTheme(theme: ITheme): Extension {
       ".cm-file-drop-chip svg": CHIP_SVG_SIZE,
       // Visible at rest in a quiet ink rather than revealed on hover: the
       // chip pays for the slot either way, and an affordance that appears only
-      // under the pointer is one most people never find. Opaque mixes over the
-      // shell, because the composer keeps a terminal's polarity under a light
-      // app theme and app tokens would land dark-on-dark here.
+      // under the pointer is one most people never find. A control ink fitted
+      // to 3:1 on the pill's own fill, mixed opaque over the shell because the
+      // composer keeps a terminal's polarity under a light app theme and app
+      // tokens would land dark-on-dark here.
       ".cm-chip-remove": {
         position: "relative",
         display: "inline-flex",
@@ -176,7 +181,7 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         height: "16px",
         marginRight: "-3px",
         borderRadius: "var(--radius-xs)",
-        color: `color-mix(in oklab, ${c.foreground} 55%, ${c.shellBg})`,
+        color: `color-mix(in oklab, ${c.chipText} ${c.chipControlMix}, ${c.shellBg})`,
         cursor: "pointer",
         flexShrink: "0",
         transition: `color ${UI_ANIMATION_DURATION}ms ease-out, background-color ${UI_ANIMATION_DURATION}ms ease-out`,
@@ -237,7 +242,7 @@ export function buildInputBarTheme(theme: ITheme): Extension {
       // user has to confirm which chip is about to go; the contour sits inside
       // the box so the staged chip keeps its geometry.
       ".cm-chip-pending-delete": {
-        background: `color-mix(in oklab, ${c.foreground} 16%, ${c.shellBg})`,
+        background: `color-mix(in oklab, ${c.foreground} ${CHIP_STAGED_MIX}%, ${c.shellBg})`,
         outline: `1px solid color-mix(in oklab, ${c.foreground} 55%, ${c.shellBg})`,
         outlineOffset: "-1px",
       },

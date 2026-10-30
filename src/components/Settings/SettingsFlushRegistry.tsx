@@ -11,11 +11,25 @@ import {
 import type { SettingsTab } from "./SettingsDialog";
 import { logError } from "@/utils/logger";
 
-type FlushFn = () => void | Promise<void>;
+/**
+ * A flush that couldn't save — the draft is invalid, or the save failed — names the
+ * element its draft and error sit in, so a close can stay open there instead of
+ * dropping both. Returning nothing means the draft saved, or there was nothing to save.
+ */
+export interface SettingsFlushFailure {
+  landOn: string;
+}
+
+export interface FailedSettingsFlush extends SettingsFlushFailure {
+  tab: SettingsTab;
+}
+
+type FlushFn = () => void | SettingsFlushFailure | Promise<void | SettingsFlushFailure>;
 
 interface FlushRegistryApi {
   register: (tab: SettingsTab, fn: FlushFn) => () => void;
-  flushAll: () => Promise<void>;
+  /** Runs every registered flush and resolves with the ones that kept their draft. */
+  flushAll: () => Promise<FailedSettingsFlush[]>;
 }
 
 const FlushContext = createContext<FlushRegistryApi | null>(null);
@@ -47,16 +61,22 @@ export function SettingsFlushProvider({ children }: ProviderProps) {
   }, []);
 
   const flushAll = useCallback(async () => {
-    const flushers = Array.from(flushersRef.current.values());
-    await Promise.all(
-      flushers.map(async (fn) => {
+    const flushers = Array.from(flushersRef.current.entries());
+    const outcomes = await Promise.all(
+      flushers.map(async ([tab, fn]): Promise<FailedSettingsFlush | null> => {
+        let failure: SettingsFlushFailure | void;
         try {
-          await fn();
+          failure = await fn();
         } catch (err) {
+          // A flush that throws has no message on its page, so holding the dialog
+          // open on it would leave Settings unclosable with nothing saying why.
           logError("Settings flush failed", err);
+          return null;
         }
+        return failure ? { tab, landOn: failure.landOn } : null;
       })
     );
+    return outcomes.filter((outcome): outcome is FailedSettingsFlush => outcome !== null);
   }, []);
 
   const value = useMemo(() => ({ register, flushAll }), [register, flushAll]);

@@ -1014,7 +1014,13 @@ describe("TerminalSnapshot", () => {
     expect(still.querySelector("pre.sr-only")?.textContent).toBe("hello");
     expect(still.getAttribute("aria-label")).toBe("Claude: fix auth, Prompt on screen");
     expect(still.textContent).toContain("hello");
-    fireEvent.click(screen.getByRole("button", { name: "Shell" }));
+    const button = screen.getByRole("button", { name: "Shell" });
+    // A button's own content is only its name, so the transcript describes it from outside.
+    const described = document.getElementById(button.getAttribute("aria-describedby") ?? "");
+    expect(described?.tagName).toBe("PRE");
+    expect(described?.textContent).toBe("hi");
+    expect(button.contains(described)).toBe(false);
+    fireEvent.click(button);
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 });

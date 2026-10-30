@@ -47,7 +47,20 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 vi.mock("@/components/ui/ConfirmDialog", () => ({
-  ConfirmDialog: () => null,
+  ConfirmDialog: ({
+    isOpen,
+    confirmLabel,
+    onConfirm,
+  }: {
+    isOpen: boolean;
+    confirmLabel: string;
+    onConfirm: () => void | Promise<void>;
+  }) =>
+    isOpen ? (
+      <button type="button" data-testid="confirm-dialog-confirm" onClick={() => void onConfirm()}>
+        {confirmLabel}
+      </button>
+    ) : null,
 }));
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -357,7 +370,7 @@ describe("Review Hub review marks (#14585)", () => {
     await waitFor(() => expect(bridge.capture).toHaveBeenCalledTimes(2));
     await waitFor(() =>
       expect(screen.getByTestId("review-hub-review-mark-notice").textContent).toContain(
-        "Not covered: src/app.ts."
+        "1 file changed after Review Hub read the worktree."
       )
     );
 
@@ -372,11 +385,14 @@ describe("Review Hub review marks (#14585)", () => {
     expect(bridge.markCaptured).toHaveBeenCalledTimes(1);
     expect(screen.queryByText(/changed in another window/)).toBeNull();
     expect(screen.getByTestId("review-hub-review-mark-notice").textContent).toContain(
-      "Not covered: src/app.ts."
+      "1 file changed after Review Hub read the worktree."
     );
 
     await act(async () => next.resolve(captured("c2")));
+    // A mark is held now, so the button replaces it, and asks first.
     fireEvent.click(await markButtonReady());
+    expect(bridge.markCaptured).toHaveBeenCalledTimes(1);
+    fireEvent.click(await screen.findByTestId("confirm-dialog-confirm"));
     await waitFor(() => expect(bridge.markCaptured).toHaveBeenLastCalledWith(WT, "c2", 1));
   });
 
@@ -420,7 +436,7 @@ describe("Review Hub review marks (#14585)", () => {
     expect(line.textContent).toContain("Reviewed 2h ago at a1b2c3d");
     await waitFor(() =>
       expect(screen.getByTestId("review-hub-review-mark-since").textContent).toBe(
-        "3 commits, 5 files since"
+        "3 new commits, 5 files since"
       )
     );
   });
@@ -436,7 +452,7 @@ describe("Review Hub review marks (#14585)", () => {
 
     await waitFor(() =>
       expect(screen.getByTestId("review-hub-review-mark-since").textContent).toBe(
-        "Nothing new since review"
+        "No changes since your review"
       )
     );
 
@@ -463,7 +479,7 @@ describe("Review Hub review marks (#14585)", () => {
     );
     await waitFor(() =>
       expect(screen.getByTestId("review-hub-review-mark-since").textContent).toBe(
-        "Comparison incomplete: the worktree couldn't be read in full"
+        "Some changes may not be listed"
       )
     );
   });
@@ -479,7 +495,7 @@ describe("Review Hub review marks (#14585)", () => {
 
     await waitFor(() =>
       expect(screen.getByTestId("review-hub-review-mark-since").textContent).toBe(
-        "Couldn't compare with the review"
+        "Couldn't compare with your review"
       )
     );
     bridge.compare.mockResolvedValueOnce({
@@ -509,8 +525,12 @@ describe("Review Hub review marks (#14585)", () => {
     fireEvent.click(await markButtonReady());
 
     const notice = await screen.findByTestId("review-hub-review-mark-notice");
-    expect(notice.textContent).toContain("Not covered: src/app.ts.");
-    expect(screen.getByTestId("review-hub-review-mark-since").textContent).toBe("1 file since");
+    expect(notice.textContent).toContain("1 file changed after Review Hub read the worktree.");
+    expect(
+      within(notice).getByRole("button", { name: "Open diff since review: src/app.ts" })
+    ).not.toBeNull();
+    // The notice owns the change while it shows, so the line doesn't count it again.
+    expect(screen.queryByTestId("review-hub-review-mark-since")).toBeNull();
   });
 
   it("clears the mark and drops the line once the host says it's gone", async () => {
@@ -519,6 +539,9 @@ describe("Review Hub review marks (#14585)", () => {
     renderHub();
 
     fireEvent.click(await screen.findByTestId("review-hub-review-mark-clear"));
+    // Clearing drops the reviewed state for good, so it asks first.
+    expect(bridge.clear).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByTestId("confirm-dialog-confirm"));
 
     await waitFor(() => expect(bridge.clear).toHaveBeenCalledWith(WT, 2));
     await waitFor(() => expect(screen.queryByTestId("review-hub-review-mark")).toBeNull());
@@ -590,7 +613,7 @@ describe("Review Hub review marks (#14585)", () => {
     );
 
     const notice = await screen.findByTestId("review-hub-review-mark-notice");
-    expect(notice.textContent).toContain("Not covered: src/app.ts.");
+    expect(notice.textContent).toContain("1 file changed after Review Hub read the worktree.");
   });
 
   it("can mark the next worktree when it switches while a mark is still out", async () => {
@@ -668,7 +691,7 @@ describe("Review Hub review marks (#14585)", () => {
     await waitFor(
       () =>
         expect(screen.getByTestId("review-hub-review-mark-since").textContent).toBe(
-          "Couldn't compare with the review"
+          "Couldn't compare with your review"
         ),
       { timeout: 6_000 }
     );
@@ -748,7 +771,8 @@ describe("Review Hub review marks (#14585)", () => {
         result: comparable([], 0),
       });
       renderHub();
-      fireEvent.click(await screen.findByTestId("review-hub-review-mark-open"));
+      await markButtonReady();
+      fireEvent.click(modeOption("Since review"));
       expect((await screen.findByTestId("since-review-empty")).textContent).toContain(
         "No changes since your review"
       );
@@ -771,7 +795,7 @@ describe("Review Hub review marks (#14585)", () => {
       renderHub();
       fireEvent.click(await screen.findByTestId("review-hub-review-mark-open"));
       expect((await screen.findByTestId("since-review-incomplete")).textContent).toContain(
-        "the worktree couldn't be read in full"
+        "Review Hub couldn't read the whole worktree this time."
       );
       expect(screen.queryByTestId("since-review-empty")).toBeNull();
     });
@@ -784,7 +808,8 @@ describe("Review Hub review marks (#14585)", () => {
         result: { state: "failed", reason: "deadline", message: "ran out of time" },
       });
       renderHub();
-      fireEvent.click(await screen.findByTestId("review-hub-review-mark-open"));
+      await markButtonReady();
+      fireEvent.click(modeOption("Since review"));
       await screen.findByTestId("since-review-failed");
       bridge.compare.mockResolvedValue({
         status: "compared",
@@ -810,6 +835,7 @@ describe("Review Hub review marks (#14585)", () => {
       fireEvent.click(modeOption("Since review"));
       const other = await screen.findByTestId("since-review-other-branch");
       fireEvent.click(within(other).getByRole("button", { name: "Clear review mark" }));
+      fireEvent.click(await screen.findByTestId("confirm-dialog-confirm"));
       await waitFor(() => expect(bridge.clear).toHaveBeenCalled());
     });
 

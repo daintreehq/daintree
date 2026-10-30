@@ -150,6 +150,19 @@ function relaunch(argv: readonly string[], takeover: boolean): void {
   app.exit(0);
 }
 
+/** Ends every terminal in the host, so Enter keeps it running, as the quit and update prompts do. */
+export const TAKEOVER_PROMPT: Electron.MessageBoxOptions = {
+  type: "question",
+  title: "Daintree",
+  message: "Restart Daintree with a window?",
+  detail:
+    "Daintree is already running on this machine in Host mode, with no window, for other machines to use. Restarting it closes the terminals and agents running in it, including any that another machine is using.",
+  buttons: ["Restart with a window", "Cancel"],
+  defaultId: 1,
+  cancelId: 1,
+  noLink: true,
+};
+
 /**
  * Ask (unless this launch is the relaunch of a takeover already agreed to),
  * then either restart Daintree with a window (stop the host, relaunch this
@@ -162,17 +175,7 @@ export async function offerHeadlessHostTakeover(
   await app.whenReady();
   const agreed = argv.includes(HOST_TAKEOVER_FLAG);
   if (!agreed) {
-    const { response } = await dialog.showMessageBox({
-      type: "question",
-      title: "Daintree",
-      message: "Restart Daintree with a window?",
-      detail:
-        "Daintree is already running on this machine in Host mode, with no window, for other machines to use. Restarting it closes the terminals and agents running in it, including any another machine is using.",
-      buttons: ["Restart with a window", "Cancel"],
-      defaultId: 0,
-      cancelId: 1,
-      noLink: true,
-    });
+    const { response } = await dialog.showMessageBox(TAKEOVER_PROMPT);
     if (response !== 0) {
       app.exit(0);
       return;

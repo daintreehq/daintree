@@ -63,6 +63,7 @@ export function assistantTerminalApi(
     const canopy = window.electron.canopy;
     return {
       holdsSize: true,
+      hostOf: () => subject.hostId,
       watchTerminal: () =>
         inputStamp
           ? canopy.watchAssistantTerminal(subject, inputStamp)
@@ -72,6 +73,7 @@ export function assistantTerminalApi(
       terminalResize: (...args) => canopy.terminalResize(...args),
       terminalSubmit: (...args) => canopy.terminalSubmit(...args),
       terminalSendKey: (...args) => canopy.terminalSendKey(...args),
+      submitReply: () => Promise.reject(new Error("An assistant has no card replies.")),
       answer: () => Promise.reject(new Error("An assistant has no card answers.")),
       onTerminalData: (callback) => canopy.onTerminalData(callback),
       onResync: () => NO_CLEANUP,
@@ -82,6 +84,7 @@ export function assistantTerminalApi(
   const host = canopyHostClient;
   return {
     holdsSize: false,
+    hostOf: () => subject.hostId,
     watchTerminal: () => host.watchAssistant(consumer, subject),
     unwatchTerminal: (...args) =>
       host.assistantInvoke(consumer, "canopy:unwatch-terminal", ...args),
@@ -91,6 +94,7 @@ export function assistantTerminalApi(
     terminalSubmit: (...args) => host.assistantInvoke(consumer, "canopy:terminal-submit", ...args),
     terminalSendKey: (...args) =>
       host.assistantInvoke(consumer, "canopy:terminal-send-key", ...args),
+    submitReply: () => Promise.reject(new Error("An assistant has no card replies.")),
     answer: () => Promise.reject(new Error("An assistant has no card answers.")),
     onTerminalData: (callback) =>
       host.onEvent((event) => {

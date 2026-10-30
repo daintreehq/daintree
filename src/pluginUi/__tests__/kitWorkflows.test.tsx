@@ -53,11 +53,18 @@ describe("AttachmentList", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Remove logo.png" }));
   });
 
-  it("draws rows with their detail and a failure's cause", () => {
+  it("draws rows with their detail and a failure's cause, still saying it failed", () => {
     render(createElement(kit.AttachmentList, { attachments: files, layout: "rows" }));
     const list = screen.getByRole("list", { name: "Attachments" });
-    expect(within(list).getByText("Too large")).toBeTruthy();
+    expect(within(list).getByText("Failed · Too large")).toBeTruthy();
     expect(within(list).getByText("Uploading")).toBeTruthy();
+  });
+
+  it("says a chip failed even when it carries a detail", () => {
+    render(createElement(kit.AttachmentList, { attachments: files }));
+    const failed = document.querySelector('[data-attachment="c"]')!;
+    expect(failed.querySelector(".sr-only")?.textContent).toBe("Failed");
+    expect(failed.textContent).toContain("Too large");
   });
 
   it("draws the empty state, or nothing", () => {
@@ -80,7 +87,7 @@ describe("EntityChip", () => {
     const onOpen = vi.fn();
     render(createElement(kit.EntityChip, { label: "Old deal", availability: "missing", onOpen }));
     expect(screen.queryByRole("button")).toBeNull();
-    expect(screen.getByRole("img", { name: "Old deal, Deleted" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "Old deal, Not found" })).toBeTruthy();
   });
 });
 
@@ -488,6 +495,37 @@ describe("review regressions", () => {
       el.getAttribute("data-repeater-item")
     );
     expect(new Set(keys).size).toBe(3);
+  });
+
+  it("AttachmentChip: removing a standalone chip hands focus on, never to the page", () => {
+    function Probe() {
+      const [names, setNames] = useState(["a.md", "b.md"]);
+      return createElement(
+        "div",
+        null,
+        ...names.map((name) =>
+          createElement(kit.AttachmentChip, {
+            key: name,
+            name,
+            onRemove: () => setNames((all) => all.filter((other) => other !== name)),
+          })
+        ),
+        // Hidden controls take no focus: the handoff passes over them.
+        createElement(
+          "button",
+          { key: "hidden", type: "button", style: { display: "none" } },
+          "Hidden"
+        ),
+        createElement("button", { key: "send", type: "button" }, "Send")
+      );
+    }
+    render(createElement(Probe));
+    const first = screen.getByRole("button", { name: "Remove a.md" });
+    first.focus();
+    fireEvent.click(first);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Remove b.md" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove b.md" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Send" }));
   });
 
   it("AttachmentList: removing the last one keeps focus in the list", () => {

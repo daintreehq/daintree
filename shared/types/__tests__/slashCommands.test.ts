@@ -63,6 +63,65 @@ const CODEX_0_147_0_POPUP_COMMANDS = [
   "vim",
 ] as const;
 
+/**
+ * The built-in entries agy 1.4.10's own `/` menu lists (#15243): 44 commands
+ * plus the two skills compiled into the binary, with the aliases agy displays
+ * beside each command. Captured from a live session, so it fails when the
+ * catalog drifts from agy in either direction. To refresh after an agy
+ * upgrade, type `/` in agy, scroll the menu, and diff it against this list,
+ * ignoring the user's own skills.
+ */
+const AGY_1_4_10_MENU: Readonly<Record<string, readonly string[]>> = {
+  "add-dir": [],
+  "agy-customizations": [],
+  agents: [],
+  "antigravity-guide": [],
+  artifact: [],
+  boost: [],
+  browser: [],
+  btw: [],
+  changelog: [],
+  clear: ["new"],
+  codesearch: ["cs"],
+  compact: [],
+  config: ["settings"],
+  context: [],
+  copy: [],
+  credits: [],
+  diff: [],
+  effort: [],
+  exit: ["quit"],
+  feedback: [],
+  fork: ["branch"],
+  goal: [],
+  "grill-me": [],
+  help: [],
+  hooks: [],
+  keybindings: [],
+  learn: [],
+  logout: [],
+  mcp: [],
+  model: [],
+  open: [],
+  permissions: [],
+  plan: [],
+  plugin: [],
+  "remote-control": [],
+  rename: [],
+  resume: ["switch"],
+  rewind: ["undo"],
+  schedule: [],
+  skills: [],
+  statusline: [],
+  tasks: [],
+  teamwork: [],
+  title: [],
+  usage: ["quota"],
+  voice: ["record"],
+};
+
+const AGY_BUNDLED_SKILLS = ["agy-customizations", "antigravity-guide"];
+
 /** The `/` sources whose commands come from the shared built-in catalog. */
 function builtinCatalogSources(agentId: BuiltInAgentId): CompletionSourceConfig[] {
   return (AGENT_REGISTRY[agentId].completionSources ?? []).filter(
@@ -108,6 +167,16 @@ describe("BUILTIN_SLASH_COMMANDS registry", () => {
       expect(new Set(entry.supportedAgents).size).toBe(entry.supportedAgents.length);
       for (const agentId of entry.supportedAgents) {
         expect(AGENT_IDS.has(agentId)).toBe(true);
+      }
+    }
+  });
+
+  it("only declares aliases for agents the entry actually supports", () => {
+    for (const entry of BUILTIN_SLASH_COMMANDS) {
+      for (const [agentId, aliases] of Object.entries(entry.aliases ?? {})) {
+        expect(entry.supportedAgents).toContain(agentId);
+        expect(aliases.length).toBeGreaterThan(0);
+        for (const alias of aliases) expect(alias).toMatch(/^[a-z0-9][a-z0-9-]*$/);
       }
     }
   });
@@ -175,13 +244,16 @@ describe("getBuiltinSlashCommands", () => {
         expect(entry, `${agentId} returned an unknown command id ${command.id}`).toBeDefined();
         if (!entry) continue;
         // toStrictEqual (not toEqual) so an explicitly-undefined `kind`,
-        // `sourcePath` or `trigger` still counts as a leaked key.
+        // `aliases`, `sourcePath` or `trigger` still counts as a leaked key.
+        const aliases = entry.aliases?.[agentId];
         expect(command).toStrictEqual({
           id: entry.id,
           label: entry.label,
           description: entry.descriptions?.[agentId] ?? entry.description,
           scope: "built-in",
           agentId,
+          ...(aliases ? { aliases } : {}),
+          ...(entry.kind ? { kind: entry.kind } : {}),
         });
       }
     }
@@ -229,5 +301,48 @@ describe("Codex upstream conformance", () => {
   it("matches the command set Codex 0.147.0 lists in its own popup", () => {
     const actual = getBuiltinSlashCommands("codex").map((c) => c.id);
     expect([...actual].sort()).toEqual([...CODEX_0_147_0_POPUP_COMMANDS].sort());
+  });
+});
+
+describe("Antigravity upstream conformance", () => {
+  const agy = getBuiltinSlashCommands("antigravity");
+
+  it("matches the built-in entries agy 1.4.10 lists in its own menu", () => {
+    expect(agy.map((c) => c.id).sort()).toEqual(Object.keys(AGY_1_4_10_MENU).sort());
+  });
+
+  it("carries exactly the aliases agy displays", () => {
+    for (const command of agy) {
+      expect(command.aliases ?? [], `/${command.id}`).toEqual(AGY_1_4_10_MENU[command.id]);
+    }
+  });
+
+  it("marks only the binary's bundled skills as skills", () => {
+    expect(agy.filter((c) => c.kind === "skill").map((c) => c.id)).toEqual(AGY_BUNDLED_SKILLS);
+  });
+
+  it("gives every command agy's own description, not another agent's", () => {
+    // Shared ids like /clear, /copy and /diff behave differently in agy, so an
+    // entry agy shares must not show any other agent's text.
+    for (const entry of BUILTIN_SLASH_COMMANDS) {
+      if (!entry.supportedAgents.includes("antigravity")) continue;
+      const agyText = agy.find((c) => c.id === entry.id)?.description;
+      for (const agentId of entry.supportedAgents) {
+        if (agentId === "antigravity") continue;
+        const theirs = getBuiltinSlashCommands(agentId).find((c) => c.id === entry.id);
+        expect(agyText, `/${entry.id} shows ${agentId}'s description`).not.toBe(
+          theirs?.description
+        );
+      }
+    }
+  });
+
+  it("keeps agy's aliases away from the agents that share the command", () => {
+    for (const agentId of BUILT_IN_AGENT_IDS) {
+      if (agentId === "antigravity") continue;
+      for (const command of getBuiltinSlashCommands(agentId)) {
+        expect(command.aliases, `${agentId} /${command.id}`).toBeUndefined();
+      }
+    }
   });
 });

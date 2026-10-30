@@ -30,6 +30,7 @@ import type {
   TerminalResourceBatchPayload,
   TerminalStatusPayload,
 } from "../../../shared/types/pty-host.js";
+import type { TerminalFirstPrompt } from "../../../shared/types/panel.js";
 import type { TerminalSnapshot } from "../PtyManager.js";
 import { bridgePtyEvent } from "./PtyEventsBridge.js";
 
@@ -96,6 +97,16 @@ export interface PtyEventRouterCallbacks {
    * every result.
    */
   acceptResizeResult?: (id: string, result: TerminalResizeResult) => boolean;
+  /**
+   * Optional. A submission's Enter was written to an agent while it carried a
+   * first-prompt candidate (#15521). PtyClient decides whether the run still
+   * takes it; the record carries prompt text, so it goes nowhere else.
+   */
+  onFirstPromptWritten?: (
+    id: string,
+    launchGeneration: number | undefined,
+    firstPrompt: TerminalFirstPrompt
+  ) => void;
 }
 
 export interface PtyEventRouterDeps {
@@ -234,6 +245,10 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
 
     case "submit-status":
       emitter.emit("submit-status", { id: event.id, state: event.state });
+      return true;
+
+    case "first-prompt-written":
+      callbacks.onFirstPromptWritten?.(event.id, event.launchGeneration, event.firstPrompt);
       return true;
 
     case "snapshot":

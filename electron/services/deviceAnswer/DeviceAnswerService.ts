@@ -23,6 +23,7 @@ import { DEVICE_PAGE_CSP, DEVICE_PAGE_HTML } from "./deviceAnswerPage.js";
 import { MAX_AUDIT_ENTRIES, MAX_PAIRED_DEVICES, isValidPort } from "./deviceAnswerSettings.js";
 import { LOCAL_HOST_ID, isLocalHostId } from "../../../shared/types/remoteHosts.js";
 import type { DeviceWaitingList } from "./deviceAnswerRuns.js";
+import { sshLoginTarget } from "../../utils/machineName.js";
 
 const MAX_BODY_BYTES = 8 * 1024;
 /** How much of an oversized body is read off the socket before it is cut. */
@@ -127,6 +128,7 @@ export class DeviceAnswerService {
       listening: this.server !== null && this.listeningPort !== null,
       port: settings.port,
       tailnetHost: settings.tailnetHost,
+      sshTarget: sshLoginTarget(),
       error: settings.enabled ? this.startError : null,
       pairing:
         pairingUntil !== null && this.openCode !== null
@@ -339,12 +341,17 @@ export class DeviceAnswerService {
       if (req.method === "GET" && url.pathname === "/api/waiting") {
         // A page from before hosts were listed answers every run as this
         // machine's, so it is shown this machine's alone.
-        const { runs, hosts, hostsUnlisted } = await this.deps.listWaiting({
+        const { computer, runs, hosts, hostsUnlisted } = await this.deps.listWaiting({
           hosts: url.searchParams.get("hosts") === "1",
         });
         // Only a device still paired once the screens are read is shown them.
         this.requireStillPaired(device);
-        this.sendJson(res, 200, { runs, hosts, hostsUnlisted: hostsUnlisted === true });
+        this.sendJson(res, 200, {
+          ...(computer ? { computer } : {}),
+          runs,
+          hosts,
+          hostsUnlisted: hostsUnlisted === true,
+        });
         return;
       }
       if (req.method === "POST" && url.pathname === "/api/answer") {

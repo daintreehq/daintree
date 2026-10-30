@@ -4,7 +4,6 @@ import { getWorktreeSortDragId } from "@/components/DragDrop/SortableWorktreeCar
 import { computeChipState } from "@/components/Worktree/utils/computeChipState";
 import { useWorktreeAgentBucketInputs } from "@/hooks/useWorktreeAgentBucketInputs";
 import { useWorktreeIds } from "@/hooks/useTerminalSelectors";
-import { parseExactNumber } from "@/lib/parseExactNumber";
 import {
   deriveWorktreeAgentBuckets,
   EMPTY_WORKTREE_AGENT_BUCKETS,
@@ -13,7 +12,7 @@ import {
 import {
   matchesFilters,
   matchesQuickStateFilter,
-  scoreWorktree,
+  matchesWorktreeQuery,
   computeChipCounts,
   type DerivedWorktreeMeta,
   type FilterState,
@@ -388,7 +387,13 @@ export function useSidebarWorktreeModel({
     };
   }, [nonMainWorktrees.length, quickStateCounts]);
 
-  const { filteredWorktrees, groupedSections, hasResultsWithoutQuickState, totalCount } = useMemo(
+  const {
+    filteredWorktrees,
+    groupedSections,
+    hasResultsWithoutQuickState,
+    resultsWithoutQuickStateCount,
+    totalCount,
+  } = useMemo(
     () =>
       filterSidebarWorktrees({
         deferredWorktrees,
@@ -471,14 +476,8 @@ export function useSidebarWorktreeModel({
 
   // Main-row visibility. The main worktree is a pinned card rather than a list
   // row, so it takes the query and the facets but never the quick-state filter.
-  const worktreeMatchesQueryPre = (w: WorktreeState) => {
-    if (!deferredQuery) return true;
-    const exactNum = parseExactNumber(deferredQuery);
-    if (exactNum !== null) {
-      return w.issueNumber === exactNum || w.linked?.pr?.ref.number === exactNum;
-    }
-    return scoreWorktree(w, deferredQuery, worktreeCustomTitles[w.id]) > 0;
-  };
+  const worktreeMatchesQueryPre = (w: WorktreeState) =>
+    matchesWorktreeQuery(w, deferredQuery, worktreeCustomTitles[w.id]);
 
   const pinnedFiltersPre: FilterState = {
     query: deferredQuery,
@@ -518,6 +517,15 @@ export function useSidebarWorktreeModel({
         now
       ));
   const mainVisible = mainMatchesQueryPre && mainMatchesFacetsPre;
+  // Main is exempt from the tab, so it can sit on screen in the very state the
+  // tab below it reads as empty. The empty state has to say so rather than
+  // claim nothing is working under a card that visibly is.
+  const mainMeta = mainWorktree ? derivedMetaMap.get(mainWorktree.id) : undefined;
+  const mainInQuickState =
+    quickStateFilter !== "all" &&
+    mainVisible === true &&
+    mainMeta !== undefined &&
+    matchesQuickStateFilter(quickStateFilter, mainMeta);
 
   const mainRowIndex = mainVisible ? 1 : 0;
   const firstScrollableRowIndex = mainRowIndex + 1;
@@ -613,6 +621,7 @@ export function useSidebarWorktreeModel({
     setQuickStateFilter,
     mainWorktree,
     mainVisible,
+    mainInQuickState,
     nonMainWorktrees,
     quickStateCounts,
     chipCounts,
@@ -620,6 +629,7 @@ export function useSidebarWorktreeModel({
     filteredWorktrees,
     groupedSections,
     hasResultsWithoutQuickState,
+    resultsWithoutQuickStateCount,
     totalCount,
     dragStartOrder,
     sortableIds,

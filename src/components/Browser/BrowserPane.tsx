@@ -772,6 +772,17 @@ export function BrowserPane({
     return cleanup;
   }, [id]);
 
+  // Working inside the page never clicks the pane: a guest taking focus reaches
+  // this document only as the non-bubbling `focus` Electron dispatches on the
+  // <webview>. Without the stamp, the pane a localhost link should reuse
+  // (#14965) looks no more recently used than one left untouched.
+  useEffect(() => {
+    if (!webviewElement) return;
+    const handleFocus = () => usePanelStore.getState().stampLastActive(id);
+    webviewElement.addEventListener("focus", handleFocus);
+    return () => webviewElement.removeEventListener("focus", handleFocus);
+  }, [webviewElement, id]);
+
   // Clear crash state when the user navigates to a fresh URL. Depending on
   // crashState here would create an instant-reset loop: the effect would fire
   // the moment crashState transitions from "none" and clear it back. Track the

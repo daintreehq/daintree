@@ -32,7 +32,7 @@ import { stripLaunchTargets } from "./launchIntent.js";
 import { armRelaunch } from "./armRelaunch.js";
 
 /** Why the app is restarting itself. Diagnostic only — no behaviour keys off it. */
-export type AppRelaunchReason = "gpu-toggle" | "gpu-mitigation" | "state-reset";
+export type AppRelaunchReason = "gpu-toggle" | "gpu-mitigation" | "state-reset" | "bundle-replaced";
 
 /**
  * Restart the app, keeping the session.

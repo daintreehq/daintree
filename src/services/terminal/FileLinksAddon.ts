@@ -143,6 +143,26 @@ export function reportFileLinkFailure(
 
 export type HoverCallback = (link: TerminalLink | null) => void;
 
+/**
+ * How a terminal's file and folder links open when they aren't the grid's own:
+ * Canopy shows runs from every project and host over the grid, so a file opens
+ * in the viewer dialog above it, and another host's files don't open at all.
+ */
+export interface FileLinkRoute {
+  /**
+   * Why this terminal's paths can't be opened here (they name another host's
+   * files, and opening them would open this machine's), or null when they can.
+   */
+  refusal(): string | null;
+  /** Files open in the viewer dialog, never in a grid panel the caller sits over. */
+  dialogOnly: boolean;
+  /**
+   * The project whose editor preference a modified click opens files with:
+   * the run's own, which needn't be this window's. The window's when absent.
+   */
+  projectId?: string;
+}
+
 interface DirCandidate {
   text: string;
   startIndex: number;
@@ -555,18 +575,21 @@ export class FileLinksAddon implements ILinkProvider {
   // Read per scan, never captured: the home dir arrives asynchronously and the
   // addon is recreated across terminal tiers, so a snapshot could be stale.
   private _getHomeDir: () => string | undefined;
+  private _route?: FileLinkRoute;
   private _disposed = false;
 
   constructor(
     terminal: Terminal,
     getCwd: () => string,
     onHover?: HoverCallback,
-    getHomeDir: () => string | undefined = () => undefined
+    getHomeDir: () => string | undefined = () => undefined,
+    route?: FileLinkRoute
   ) {
     this._terminal = terminal;
     this._getCwd = getCwd;
     this._onHover = onHover;
     this._getHomeDir = getHomeDir;
+    this._route = route;
   }
 
   provideLinks(bufferLineNumber: number, callback: (links: ILink[] | undefined) => void): void {
@@ -744,7 +767,8 @@ export class FileLinksAddon implements ILinkProvider {
             resolved.line,
             resolved.col,
             this._getCwd(),
-            this._onHover
+            this._onHover,
+            this._route
           )
         );
       });
@@ -764,7 +788,8 @@ export class FileLinksAddon implements ILinkProvider {
             candidate.absolutePath,
             candidate.worktreeId,
             candidate.relativePath,
-            this._onHover
+            this._onHover,
+            this._route
           )
         );
       }
@@ -824,7 +849,8 @@ export class FileLinksAddon implements ILinkProvider {
           undefined,
           undefined,
           this._getCwd(),
-          this._onHover
+          this._onHover,
+          this._route
         )
       );
     }
@@ -894,7 +920,8 @@ export class FileLinksAddon implements ILinkProvider {
         resolved.line,
         resolved.col,
         this._getCwd(),
-        this._onHover
+        this._onHover,
+        this._route
       );
       (spaced ? spaced.fallback : links).push(link);
     }
@@ -958,7 +985,8 @@ export class FileLinksAddon implements ILinkProvider {
           resolved.line,
           resolved.col,
           this._getCwd(),
-          this._onHover
+          this._onHover,
+          this._route
         )
       );
     }
@@ -1188,6 +1216,9 @@ export class FileLinksAddon implements ILinkProvider {
   }
 
   private async _validateDirCandidates(candidates: DirCandidate[]): Promise<ScopedDirCandidate[]> {
+    // Another host's folders would resolve against this view's worktrees, and
+    // open a same-named local folder.
+    if ((this._route?.refusal() ?? null) !== null) return [];
     // Imported here, not at module scope: the worktree store's module graph
     // reaches `@/clients`, and the addon is consumed by tests (and potentially
     // early-boot code) that mock or lack that surface. By the time a link is
@@ -1278,7 +1309,8 @@ class FileLink implements ILink {
     private _line?: number,
     private _col?: number,
     private _rootPath?: string,
-    private _onHover?: HoverCallback
+    private _onHover?: HoverCallback,
+    private _route?: FileLinkRoute
   ) {}
 
   /** Resolved absolute path for this file link (relative paths already joined to cwd). */
@@ -1288,8 +1320,28 @@ class FileLink implements ILink {
 
   activate(event: MouseEvent, _text: string): void {
     const isModified = event.metaKey || event.ctrlKey;
+    const refusal = this._route?.refusal() ?? null;
+    if (refusal !== null) {
+      reportFileLinkFailure(
+        isModified ? "Failed to open in editor" : "Failed to view file",
+        new Error(refusal),
+        this._absolutePath
+      );
+      return;
+    }
 
-    if (isModified) {
+    if (isModified && this._route?.projectId !== undefined) {
+      systemClient
+        .openInEditor({
+          path: this._absolutePath,
+          line: this._line,
+          col: this._col,
+          projectId: this._route.projectId,
+        })
+        .catch((error) => {
+          reportFileLinkFailure("Failed to open in editor", error, this._absolutePath);
+        });
+    } else if (isModified) {
       actionService
         .dispatch(
           "file.openInEditor",
@@ -1329,7 +1381,7 @@ class FileLink implements ILink {
     await grantClickedHostFile(this._absolutePath);
     // Lazy, like the project store import above: the resolver reads that store.
     const { currentFileEditorDefault } = await import("@/registry/fileEditorDefaults");
-    if (currentFileEditorDefault(this._absolutePath) !== null) {
+    if (!this._route?.dialogOnly && currentFileEditorDefault(this._absolutePath) !== null) {
       const opened = await actionService.dispatch(
         "file.openPanel",
         { path: this._absolutePath },
@@ -1371,7 +1423,8 @@ class DirectoryLink implements ILink {
     private _absolutePath: string,
     private _worktreeId: string,
     private _relativePath: string,
-    private _onHover?: HoverCallback
+    private _onHover?: HoverCallback,
+    private _route?: FileLinkRoute
   ) {}
 
   get absolutePath(): string {
@@ -1379,6 +1432,16 @@ class DirectoryLink implements ILink {
   }
 
   activate(_event: MouseEvent, _text: string): void {
+    const refusal = this._route?.refusal() ?? null;
+    if (refusal !== null) {
+      reportFileLinkFailure(
+        "Failed to open folder in file browser",
+        new Error(refusal),
+        this._absolutePath,
+        "folder"
+      );
+      return;
+    }
     actionService
       .dispatch(
         "worktree.openFileBrowser",

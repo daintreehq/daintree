@@ -39,12 +39,14 @@ export type CaseSource =
   | "prompts"
   | "names"
   | "ramble"
+  | "dense"
   | "tics"
   | "lookalike"
   | "codenames"
   | "commands"
   | "pauses"
   | "clean"
+  | "short"
   | "regression";
 
 /**
@@ -799,6 +801,544 @@ const CONTEXT: readonly AuthoredCase[] = [
 
 // The short answer again with only the screen, which has lost the question:
 // the difference is what the reply added.
+// Later sections of a dictation, sent after the ones before them went out
+// (#15504): each reads right only against its confirmed history, across every
+// length a section runs to, with clean controls history mustn't pull.
+const CONTINUING: readonly AuthoredCase[] = [
+  {
+    id: "continuing-cache:deepgram",
+    style: "deepgram",
+    source: "context",
+    raw: "So add a cash in front of it.",
+    reference: "So add a cache in front of it.",
+    fixes: { "a cache in front": "misread" },
+    uncertain: ["cash"],
+    recentContext: ["The price lookup is slow because nothing caches it."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-codex:grok",
+    style: "grok",
+    source: "context",
+    raw: "send it to codecs for a review.",
+    reference: "send it to Codex for a review.",
+    fixes: { Codex: "misread" },
+    recentContext: ["Once the diff is ready,"],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-leave-it:openai",
+    style: "openai",
+    source: "context",
+    raw: "That part is fine, leave it.",
+    reference: "That part is fine, leave it.",
+    keep: ["leave it"],
+    recentContext: ["The send waits for cleanup before it goes out."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-their:deepgram",
+    style: "deepgram",
+    source: "context",
+    raw: "Keep there buffers when the view is evicted.",
+    reference: "Keep their buffers when the view is evicted.",
+    fixes: { "their buffers": "misread" },
+    recentContext: ["Each agent pane has its own scrollback buffer."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-pty-host:deepgram",
+    style: "deepgram",
+    source: "context",
+    raw: "So throttle it in p t y host anyway.",
+    reference: "So throttle it in pty-host anyway.",
+    fixes: { "pty-host": "form" },
+    uncertain: ["p t y"],
+    recentContext: ["The resize storm comes from the pane, not the host."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-not-mac:openai",
+    style: "openai",
+    source: "context",
+    raw: "Um, not the Mac one, that one's fine.",
+    reference: "Not the Mac one, that one's fine.",
+    drops: ["um"],
+    keep: ["the Mac one, that one's fine"],
+    recentContext: ["Bump the timeout on the Windows runner."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-worktree:grok",
+    style: "grok",
+    source: "context",
+    raw: "Put it in its own work tree.",
+    reference: "Put it in its own worktree.",
+    fixes: { worktree: "form" },
+    recentContext: ["Make a new branch for the fix."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-screenshots:grok",
+    style: "grok",
+    source: "context",
+    raw: "Update the screenshots and the copy.",
+    reference: "Update the screenshots and the copy.",
+    keep: ["the screenshots and the copy"],
+    recentContext: ["The onboarding tour still shows the old sidebar."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-cap:deepgram",
+    style: "deepgram",
+    source: "context",
+    raw: "but it should cap out at 60 seconds.",
+    reference: "but it should cap out at 60 seconds.",
+    recentContext: ["The cleanup deadline grows with the passage length,"],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-writes:openai",
+    style: "openai",
+    source: "context",
+    raw: "Make it de bounce the rights.",
+    reference: "Make it debounce the writes.",
+    fixes: { debounce: "form", "the writes": "misread" },
+    recentContext: ["The settings store saves to disk on every keystroke."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-eslint:grok",
+    style: "grok",
+    source: "context",
+    raw: "Run E S Lint on the changed files only.",
+    reference: "Run ESLint on the changed files only.",
+    fixes: { ESLint: "form" },
+    recentContext: ["CI failed on the lint step again."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-update-flag:openai",
+    style: "openai",
+    source: "context",
+    raw: "this time with dash dash update.",
+    reference: "this time with --update.",
+    fixes: { "--update": "form" },
+    recentContext: ["Run the snapshot tests again,"],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-pr:openai",
+    style: "openai",
+    source: "context",
+    raw: "Open a P.R. against develop, not main.",
+    reference: "Open a PR against develop, not main.",
+    fixes: { "a PR against": "form" },
+    keep: ["develop, not main"],
+    recentContext: ["The migration is done and the tests pass."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-vite:deepgram",
+    style: "deepgram",
+    source: "context",
+    raw: "Find what's on port 5173 and kill it, then start veet again.",
+    reference: "Find what's on port 5173 and kill it, then start Vite again.",
+    fixes: { Vite: "misread" },
+    uncertain: ["veet"],
+    recentContext: ["The dev server won't start."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-sentry:deepgram",
+    style: "deepgram",
+    source: "context",
+    raw: "Look them up in century and tell me which build they started on, then check whether the fix is in that release.",
+    reference:
+      "Look them up in Sentry and tell me which build they started on, then check whether the fix is in that release.",
+    fixes: { Sentry: "misread" },
+    uncertain: ["century"],
+    recentContext: ["The crash reports from last night all have the same stack."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-push:openai",
+    style: "openai",
+    source: "context",
+    raw: "Um, now run the targeted tests, and if they're green, uh, push it and open the PR.",
+    reference: "Now run the targeted tests, and if they're green, push it and open the PR.",
+    drops: ["um", "uh"],
+    keep: ["push it and open the PR"],
+    recentContext: ["The rebase onto develop went through cleanly."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-no-exception:grok",
+    style: "grok",
+    source: "context",
+    raw: "That's on purpose, so don't add an exception for it, just move the notes somewhere else.",
+    reference:
+      "That's on purpose, so don't add an exception for it, just move the notes somewhere else.",
+    keep: ["don't add an exception"],
+    recentContext: ["The pre-commit hook rejects anything under the planning folder."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-haiku:openai",
+    style: "openai",
+    source: "context",
+    raw: "Try High Coup 5.5 at medium effort and compare the words it loses against none.",
+    reference: "Try Haiku 5.5 at medium effort and compare the words it loses against none.",
+    fixes: { Haiku: "misread" },
+    recentContext: ["Sonnet is too slow for cleanup."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-raw-goes-out:deepgram",
+    style: "deepgram",
+    source: "context",
+    raw: "After that the raw text goes out and the cleanup lands late, over whatever the user typed since.",
+    reference:
+      "After that the raw text goes out and the cleanup lands late, over whatever the user typed since.",
+    keep: ["the cleanup lands late"],
+    recentContext: ["The send waits for cleanup, but only for two seconds."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-webgl:grok",
+    style: "grok",
+    source: "context",
+    raw: "I think it's the Web GL add on in X term, so try the DOM renderer and see if it goes away.",
+    reference:
+      "I think it's the WebGL addon in xterm, so try the DOM renderer and see if it goes away.",
+    fixes: { WebGL: "form", addon: "form", xterm: "form" },
+    recentContext: ["The terminal flickers after every resize."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-mutex:deepgram",
+    style: "deepgram",
+    source: "context",
+    raw: "Wrap the right in a mute ex so the second one waits for the first to finish.",
+    reference: "Wrap the write in a mutex so the second one waits for the first to finish.",
+    fixes: { "the write": "misread", mutex: "misread" },
+    uncertain: ["right", "mute ex"],
+    recentContext: ["Two writers can hit the session file at once."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-idle-question:openai",
+    style: "openai",
+    source: "context",
+    raw: "Check whether it's waiting on a question or if it just finished, and if it's waiting, read me the question.",
+    reference:
+      "Check whether it's waiting on a question or if it just finished, and if it's waiting, read me the question.",
+    keep: ["read me the question"],
+    recentContext: ["The Claude pane went idle half an hour ago."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-settings-tab:grok",
+    style: "grok",
+    source: "context",
+    raw: "Probably the key isn't set. Check the voice setting stab before you touch the code.",
+    reference:
+      "Probably the key isn't set. Check the voice settings tab before you touch the code.",
+    fixes: { "settings tab": "form" },
+    recentContext: ["Cleanup fails on the new account."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-shim:openai",
+    style: "openai",
+    source: "context",
+    raw: "Tell it to go with the shim, uh, the one that reads both keys, and to write the migration in a follow up once the old key's been gone for two releases.",
+    reference:
+      "Tell it to go with the shim, the one that reads both keys, and to write the migration in a follow-up once the old key's been gone for two releases.",
+    fixes: { "follow-up": "form" },
+    drops: ["uh"],
+    keep: ["two releases"],
+    recentContext: ["The agent asked which way to go on the settings migration."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-anthropic-key:deepgram",
+    style: "deepgram",
+    source: "context",
+    raw: "Ask her whether the model picker was meant to hide Sonnet for people without an anthropic key, because right now it shows it and then fails.",
+    reference:
+      "Ask her whether the model picker was meant to hide Sonnet for people without an Anthropic key, because right now it shows it and then fails.",
+    fixes: { Anthropic: "form" },
+    keep: ["Ask her", "Sonnet"],
+    recentContext: ["Tara wrote the original voice settings panel."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-lazy-transcripts:deepgram",
+    style: "deepgram",
+    source: "context",
+    raw: "I think it's reading every session's transcript on mount. Make it read only the last record for each one and load the rest when the user opens the session, and keep the sort order the same as it is now.",
+    reference:
+      "I think it's reading every session's transcript on mount. Make it read only the last record for each one and load the rest when the user opens the session, and keep the sort order the same as it is now.",
+    keep: ["keep the sort order the same"],
+    recentContext: ["The worktree dashboard is slow to open with a lot of sessions."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-loses-words:openai",
+    style: "openai",
+    source: "context",
+    raw: "Um, so the thing is, it loses words on the long rambles, it'll just drop a clause, and the guard doesn't catch it because the change is under the threshold. Can you, uh, add a check that counts the words the raw had and flags any reply that loses more than two?",
+    reference:
+      "The thing is, it loses words on the long rambles, it'll just drop a clause, and the guard doesn't catch it because the change is under the threshold. Can you add a check that counts the words the raw had and flags any reply that loses more than two?",
+    alsoAccept: [
+      "So the thing is, it loses words on the long rambles, it'll just drop a clause, and the guard doesn't catch it because the change is under the threshold. Can you add a check that counts the words the raw had and flags any reply that loses more than two?",
+    ],
+    drops: ["um", "uh"],
+    keep: ["more than two", "under the threshold"],
+    recentContext: ["I ran the cleanup benchmark on Haiku last night."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-warm-again:grok",
+    style: "grok",
+    source: "context",
+    raw: "The problem is the cache only lasts 5 minutes, so if someone starts dictating and then thinks for a while, the warm up has expired by the time the first passage goes out. Can we warm it again every 4 minutes while the session is still open, and stop when it ends?",
+    reference:
+      "The problem is the cache only lasts 5 minutes, so if someone starts dictating and then thinks for a while, the warm-up has expired by the time the first passage goes out. Can we warm it again every 4 minutes while the session is still open, and stop when it ends?",
+    fixes: { "warm-up has": "form" },
+    recentContext: ["The prompt warm-up runs when dictation starts."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-cold-start:openai",
+    style: "openai",
+    source: "context",
+    raw: "Um, so I looked at the log and it's the same one as last week, the one where the PTY takes too long to print the prompt, and the test gives up after ten seconds. I don't think it's a real bug, I think the runner is just slow on a cold start. Can you, can you make the wait for the prompt use the shared helper instead of the hard-coded timeout, and, uh, don't touch the Mac or Linux jobs, they're fine.",
+    reference:
+      "I looked at the log and it's the same one as last week, the one where the PTY takes too long to print the prompt, and the test gives up after ten seconds. I don't think it's a real bug, I think the runner is just slow on a cold start. Can you make the wait for the prompt use the shared helper instead of the hard-coded timeout, and don't touch the Mac or Linux jobs, they're fine.",
+    alsoAccept: [
+      "So I looked at the log and it's the same one as last week, the one where the PTY takes too long to print the prompt, and the test gives up after ten seconds. I don't think it's a real bug, I think the runner is just slow on a cold start. Can you make the wait for the prompt use the shared helper instead of the hard-coded timeout, and don't touch the Mac or Linux jobs, they're fine.",
+    ],
+    drops: ["um", "uh", "can you, can you"],
+    keep: ["ten seconds", "don't touch the Mac or Linux jobs"],
+    recentContext: ["The Windows E2E job failed again on the terminal spec."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-dictionary:deepgram",
+    style: "deepgram",
+    source: "context",
+    raw: "I think the dictionary only goes to the transcriber and never reaches cleanup, so cleanup sees the right word and then corrects it back to the common one. Can you check whether the system prompt builder actually gets the custom dictionary on every request, and if it doesn't, pass it through the same way the repository names go, and add a test that would have caught it.",
+    reference:
+      "I think the dictionary only goes to the transcriber and never reaches cleanup, so cleanup sees the right word and then corrects it back to the common one. Can you check whether the system prompt builder actually gets the custom dictionary on every request, and if it doesn't, pass it through the same way the repository names go, and add a test that would have caught it.",
+    keep: ["corrects it back to the common one", "on every request"],
+    recentContext: ["People keep asking why their custom words don't stick."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-tour-step:grok",
+    style: "grok",
+    source: "context",
+    raw: "Yeah, so the third step highlights the projects button, but that moved into the top bar 2 releases ago, so the spotlight lands on nothing. Can you update the step to point at the new button, check the other steps while you're in there, and, you know, if any of them reference something that's gone, just drop the step instead of pointing it somewhere else.",
+    reference:
+      "Yeah, so the third step highlights the projects button, but that moved into the top bar 2 releases ago, so the spotlight lands on nothing. Can you update the step to point at the new button, check the other steps while you're in there, and if any of them reference something that's gone, just drop the step instead of pointing it somewhere else.",
+    alsoAccept: [
+      "The third step highlights the projects button, but that moved into the top bar 2 releases ago, so the spotlight lands on nothing. Can you update the step to point at the new button, check the other steps while you're in there, and if any of them reference something that's gone, just drop the step instead of pointing it somewhere else.",
+      "So the third step highlights the projects button, but that moved into the top bar 2 releases ago, so the spotlight lands on nothing. Can you update the step to point at the new button, check the other steps while you're in there, and if any of them reference something that's gone, just drop the step instead of pointing it somewhere else.",
+    ],
+    drops: ["you know"],
+    keep: ["just drop the step"],
+    recentContext: ["The onboarding tour still points at the old sidebar."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-short-ones-fast:openai",
+    style: "openai",
+    source: "context",
+    raw: "Uh, the long passages are fine, nobody minds waiting a couple of seconds after a long ramble, but for a one-liner it feels broken, like I say fix the typo and then I'm sitting there. So, um, whatever you do, make sure the short ones come back fast, and don't make the long ones worse, they're the ones where the words matter most.",
+    reference:
+      "The long passages are fine, nobody minds waiting a couple of seconds after a long ramble, but for a one-liner it feels broken, like I say fix the typo and then I'm sitting there. So whatever you do, make sure the short ones come back fast, and don't make the long ones worse, they're the ones where the words matter most.",
+    alsoAccept: [
+      "The long passages are fine, nobody minds waiting a couple of seconds after a long ramble, but for a one-liner it feels broken, like I say fix the typo and then I'm sitting there. Whatever you do, make sure the short ones come back fast, and don't make the long ones worse, they're the ones where the words matter most.",
+    ],
+    drops: ["uh", "um"],
+    keep: ["don't make the long ones worse"],
+    recentContext: ["One more thing on the cleanup latency."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-retry-backoff:openai",
+    style: "openai",
+    source: "context",
+    raw: "Three attempts is enough, but put a backoff between them so it doesn't hammer the API when it's already down.",
+    reference:
+      "Three attempts is enough, but put a backoff between them so it doesn't hammer the API when it's already down.",
+    keep: ["Three attempts is enough"],
+    recentContext: ["Add a retry to the upload."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-sig-term:deepgram",
+    style: "deepgram",
+    source: "context",
+    raw: "Send it a sig term first, wait 5 seconds, and only then kill it if it's still holding the lock file.",
+    reference:
+      "Send it a SIGTERM first, wait 5 seconds, and only then kill it if it's still holding the lock file.",
+    fixes: { SIGTERM: "form" },
+    uncertain: ["sig term"],
+    recentContext: ["The old pty-host process never exits after a crash."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-zustand:grok",
+    style: "grok",
+    source: "context",
+    raw: "Move the selection into the Zoo Stand store and read it with a selector, so the list stops re-rendering on every scroll.",
+    reference:
+      "Move the selection into the Zustand store and read it with a selector, so the list stops re-rendering on every scroll.",
+    fixes: { Zustand: "misread" },
+    recentContext: ["The worktree list re-renders far too often."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-luna-terra:openai",
+    style: "openai",
+    source: "context",
+    raw: "Um, compare it against Luna and Tara at the same effort, and, uh, put the round trips in the PR description.",
+    reference:
+      "compare it against Luna and Terra at the same effort, and put the round trips in the PR description.",
+    fixes: { Terra: "misread" },
+    drops: ["um", "uh"],
+    keep: ["Luna"],
+    recentContext: ["Once Haiku has its numbers,"],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-changelog:deepgram",
+    style: "deepgram",
+    source: "context",
+    raw: "Leave the change log alone for now, the release script writes it from the PR titles when we cut the build.",
+    reference:
+      "Leave the changelog alone for now, the release script writes it from the PR titles when we cut the build.",
+    fixes: { changelog: "form" },
+    keep: ["from the PR titles"],
+    recentContext: ["Bump the version in the package file."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-hydration:openai",
+    style: "openai",
+    source: "context",
+    raw: "I think the store hydrates after the first render, so the panel reads the default for one frame and then jumps. Can you, uh, gate the panel on hydration so it waits for the persisted value instead of flashing the default?",
+    reference:
+      "I think the store hydrates after the first render, so the panel reads the default for one frame and then jumps. Can you gate the panel on hydration so it waits for the persisted value instead of flashing the default?",
+    drops: ["uh"],
+    keep: ["for one frame"],
+    recentContext: ["The sidebar width resets every time the app starts."],
+    startsPrompt: false,
+  },
+  {
+    id: "continuing-preload:grok",
+    style: "grok",
+    source: "context",
+    raw: "It has to go through the preload bridge like everything else. Add the method to the I P C maps, and don't import anything from electron in the renderer.",
+    reference:
+      "It has to go through the preload bridge like everything else. Add the method to the IPC maps, and don't import anything from electron in the renderer.",
+    fixes: { "IPC maps": "form" },
+    keep: ["don't import anything from electron"],
+    recentContext: ["The renderer needs to read the voice settings directly."],
+    startsPrompt: false,
+  },
+];
+
+// One-liners dictated alone, the passages a reasoning cutoff speeds up (#15504):
+// a word or two to fix, or nothing.
+const SHORT: readonly AuthoredCase[] = [
+  {
+    id: "short-npm-install:grok",
+    style: "grok",
+    source: "short",
+    raw: "Run N P M install again.",
+    reference: "Run npm install again.",
+    fixes: { "npm install": "form" },
+  },
+  {
+    id: "short-codex:deepgram",
+    style: "deepgram",
+    source: "short",
+    raw: "Ask codecs to review it.",
+    reference: "Ask Codex to review it.",
+    fixes: { Codex: "misread" },
+    uncertain: ["codecs"],
+  },
+  {
+    id: "short-yes-merge:openai",
+    style: "openai",
+    source: "short",
+    raw: "Yes, go ahead and merge it.",
+    reference: "Yes, go ahead and merge it.",
+    keep: ["Yes", "merge it"],
+  },
+  {
+    id: "short-push:openai",
+    style: "openai",
+    source: "short",
+    raw: "Um, push it now.",
+    reference: "Push it now.",
+    drops: ["um"],
+  },
+  {
+    id: "short-ci-green:grok",
+    style: "grok",
+    source: "short",
+    raw: "Is C I green yet?",
+    reference: "Is CI green yet?",
+    fixes: { "CI green": "form" },
+  },
+  {
+    id: "short-their-imports:openai",
+    style: "openai",
+    source: "short",
+    raw: "Fix there imports first.",
+    reference: "Fix their imports first.",
+    fixes: { "their imports": "misread" },
+  },
+  {
+    id: "short-keep-old:deepgram",
+    style: "deepgram",
+    source: "short",
+    raw: "No, keep the old one.",
+    reference: "No, keep the old one.",
+    keep: ["No, keep"],
+  },
+  {
+    id: "short-git-status:openai",
+    style: "openai",
+    source: "short",
+    raw: "Run get status for me.",
+    reference: "Run git status for me.",
+    fixes: { "git status": "misread" },
+  },
+  {
+    id: "short-revert:grok",
+    style: "grok",
+    source: "short",
+    raw: "Revert the last commit.",
+    reference: "Revert the last commit.",
+    keep: ["Revert the last commit"],
+  },
+  {
+    id: "short-cash:deepgram",
+    style: "deepgram",
+    source: "short",
+    raw: "Clear the cash and retry.",
+    reference: "Clear the cache and retry.",
+    fixes: { "the cache": "misread" },
+    uncertain: ["cash"],
+  },
+];
+
 const REPLY_BARE: readonly AuthoredCase[] = CONTEXT.filter(
   (entry) => entry.id === "context-reply-answer:deepgram"
 ).map(({ agentReply: _reply, ...entry }) => ({
@@ -1350,6 +1890,242 @@ const RAMBLE: readonly AuthoredCase[] = [
     fixes: { "shared/config/voiceCorrection.ts": "form" },
     drops: ["um", "uh"],
     keep: ["--run", "Don't rename the existing one", "isn't", "don't run the full suite"],
+  },
+];
+
+// What Haiku 5.5 left too light (2026-10-29): a misheard opening the speaker
+// saw and said again later, which the restatement settles and then has no
+// more job to do, trail-off ellipses, hesitations and restarts, and a request
+// said twice. Each beside passages where a repeat or an ellipsis is content.
+const DENSE: readonly AuthoredCase[] = [
+  {
+    id: "dense-heavy-user:grok",
+    style: "grok",
+    source: "dense",
+    raw: "When about heaviest users saw this after he rebooted Daintree into version 0.47.1, I think, or maybe it was just 0.47... So, yeah, he was one of our heaviest users. He's obviously doing a lot here, but can you figure out what happened, and if there's anything that needs fixing? Don't fix anything yet, we're just going to log some issues for this.",
+    reference:
+      "One of our heaviest users saw this after he rebooted Daintree into version 0.47.1, I think, or maybe it was just 0.47. He's obviously doing a lot here, but can you figure out what happened, and if there's anything that needs fixing? Don't fix anything yet, we're just going to log some issues for this.",
+    fixes: { "One of our heaviest users saw this": "misread" },
+    drops: ["...", "yeah", "he was one of our heaviest users"],
+    keep: ["Don't fix anything yet", "I think"],
+  },
+  {
+    id: "dense-heavy-user:openai",
+    style: "openai",
+    source: "dense",
+    raw: "Um, when about heaviest users saw this after he rebooted Daintree into version 0.47.1, I think, or maybe it was just 0.47... So, yeah, he was one of our, you know, heaviest users. He's obviously doing a lot here, but, uh, can you figure out what happened, and if there's anything that needs fixing? Don't fix anything yet, we're just going to log some issues for this.",
+    reference:
+      "One of our heaviest users saw this after he rebooted Daintree into version 0.47.1, I think, or maybe it was just 0.47. He's obviously doing a lot here, but can you figure out what happened, and if there's anything that needs fixing? Don't fix anything yet, we're just going to log some issues for this.",
+    fixes: { "One of our heaviest users saw this": "misread" },
+    drops: ["um", "uh", "...", "yeah", "you know", "he was one of our"],
+    keep: ["Don't fix anything yet", "I think"],
+  },
+  {
+    id: "dense-plugin-lab:grok",
+    style: "grok",
+    source: "dense",
+    raw: "The plug in lap won't load since this morning's build. Yeah, the plugin lab, it just shows a blank panel. Can you check what changed in the loader?",
+    reference:
+      "The plugin lab won't load since this morning's build. It just shows a blank panel. Can you check what changed in the loader?",
+    alsoAccept: [
+      "The plugin lab won't load since this morning's build. The plugin lab just shows a blank panel. Can you check what changed in the loader?",
+      "The plugin lab won't load since this morning's build; it just shows a blank panel. Can you check what changed in the loader?",
+    ],
+    fixes: { "The plugin lab won't load": "misread" },
+    drops: ["yeah"],
+    keep: ["just shows a blank panel"],
+  },
+  {
+    id: "dense-cache-key:grok",
+    style: "grok",
+    source: "dense",
+    raw: "So the cash key for the cleanup prompt changes on every request, the cache key, and that's why we never get a cache hit. Can you find what's changing it?",
+    reference:
+      "The cache key for the cleanup prompt changes on every request, and that's why we never get a cache hit. Can you find what's changing it?",
+    alsoAccept: [
+      "The cache key for the cleanup prompt changes on every request, so we never get a cache hit. Can you find what's changing it?",
+    ],
+    fixes: { "The cache key for the cleanup prompt": "misread" },
+  },
+  {
+    id: "dense-dashboard:grok",
+    style: "grok",
+    source: "dense",
+    raw: "Open the worked reed dashboard when the app starts. The worktree dashboard, that's what I said. And only if there's more than one worktree.",
+    reference:
+      "Open the worktree dashboard when the app starts, and only if there's more than one worktree.",
+    alsoAccept: [
+      "Open the worktree dashboard when the app starts. And only if there's more than one worktree.",
+      "Open the worktree dashboard when the app starts, but only if there's more than one worktree.",
+      "Open the worktree dashboard when the app starts. Only if there's more than one worktree.",
+    ],
+    fixes: { "Open the worktree dashboard": "misread" },
+    drops: ["that's what I said"],
+    keep: ["only if there's more than one worktree"],
+  },
+  {
+    id: "dense-hesitations:grok",
+    style: "grok",
+    source: "dense",
+    raw: "Can you... check the pty host logs for the second project... and see if it restarted after the laptop woke up? I'm not sure it did, but... yeah, just check.",
+    reference:
+      "Can you check the pty host logs for the second project and see if it restarted after the laptop woke up? I'm not sure it did, but just check.",
+    alsoAccept: [
+      "Can you check the pty-host logs for the second project and see if it restarted after the laptop woke up? I'm not sure it did, but just check.",
+      "Can you check the pty host logs for the second project and see if it restarted after the laptop woke up? I'm not sure it did, just check.",
+    ],
+    drops: ["...", "yeah"],
+    keep: ["I'm not sure it did"],
+  },
+  {
+    id: "dense-restart:grok",
+    style: "grok",
+    source: "dense",
+    raw: "The tests... the end-to-end tests for the settings dialog are flaking on Windows. Not the unit tests, those are fine.",
+    reference:
+      "The end-to-end tests for the settings dialog are flaking on Windows. Not the unit tests, those are fine.",
+    drops: ["..."],
+    keep: ["Not the unit tests, those are fine"],
+  },
+  {
+    id: "dense-said-twice:openai",
+    style: "openai",
+    source: "dense",
+    raw: "Can you make the sidebar remember its width? Like, when I drag it wider and restart, it goes back to the default, so, yeah, I want it to remember the width I dragged it to. Store it per project.",
+    reference:
+      "Can you make the sidebar remember its width? When I drag it wider and restart, it goes back to the default. Store it per project.",
+    alsoAccept: [
+      "Can you make the sidebar remember its width? When I drag it wider and restart, it goes back to the default. I want it to remember the width I dragged it to. Store it per project.",
+    ],
+    drops: ["like", "yeah"],
+    keep: ["Store it per project"],
+  },
+  {
+    id: "dense-version-hedge:grok",
+    style: "grok",
+    source: "dense",
+    raw: "This started in 0.46, I think... or maybe 0.45. Not sure. Either way, can you bisect the restore regression between 0.44 and develop?",
+    reference:
+      "This started in 0.46, I think, or maybe 0.45. Not sure. Either way, can you bisect the restore regression between 0.44 and develop?",
+    drops: ["..."],
+    keep: ["or maybe 0.45", "I think", "Not sure"],
+  },
+  {
+    id: "dense-trail-off:grok",
+    style: "grok",
+    source: "dense",
+    raw: "The diff view loses its scroll position when you switch files. Can you keep it per file? That would be... yeah, that would be great.",
+    reference:
+      "The diff view loses its scroll position when you switch files. Can you keep it per file? That would be great.",
+    alsoAccept: [
+      "The diff view loses its scroll position when you switch files. Can you keep it per file?",
+    ],
+    drops: ["...", "yeah"],
+    keep: ["Can you keep it per file?"],
+  },
+  {
+    id: "dense-too-light:grok",
+    style: "grok",
+    source: "dense",
+    raw: "So, the Haiku transcription correction is being a little bit too light. It's not correcting things. It's also leaving in ellipses, which are not important... It should know to remove those. And here it could have made a correction at the beginning of this text, so it was clear that there was a transcription error, and I corrected it later because I saw it, and it didn't know to correct this.",
+    reference:
+      "The Haiku transcription correction is being a little bit too light. It's not correcting things. It's also leaving in ellipses, which are not important. It should know to remove those. And here it could have made a correction at the beginning of this text, so it was clear that there was a transcription error. I corrected it later because I saw it, and it didn't know to correct this.",
+    drops: ["..."],
+    keep: ["a little bit too light", "I corrected it later because I saw it"],
+    maxSentenceWords: 30,
+  },
+  {
+    id: "dense-follow-up:grok",
+    style: "grok",
+    source: "dense",
+    raw: "So as a quick follow-up to that last question, how many... So will we be able to get through the current 148 issues using the current allocation?",
+    reference:
+      "As a quick follow-up to that last question, will we be able to get through the current 148 issues using the current allocation?",
+    drops: ["...", "how many", "so"],
+    keep: ["using the current allocation"],
+  },
+  {
+    id: "dense-at-all:grok",
+    style: "grok",
+    source: "dense",
+    raw: "That seems like it was barely corrected @all. So yeah, include that in your test.",
+    reference: "That seems like it was barely corrected at all. Include that in your test.",
+    fixes: { "at all": "misread" },
+    drops: ["yeah"],
+  },
+  {
+    id: "dense-at-ref:grok",
+    style: "grok",
+    source: "dense",
+    raw: "Check @docs/voice-input.md and don't change it at all.",
+    reference: "Check @docs/voice-input.md and don't change it at all.",
+    keep: ["don't change it at all"],
+  },
+  {
+    id: "dense-research:grok",
+    style: "grok",
+    source: "dense",
+    raw: "Can you do a little bit of research into... given what we're trying to achieve here, would InWorld's voice be better, or would Gemini 3.8 Flash text-to-speech be better?",
+    reference:
+      "Given what we're trying to achieve here, can you do a little bit of research into whether InWorld's voice would be better, or Gemini 3.8 Flash text-to-speech?",
+    alsoAccept: [
+      "Can you do a little bit of research? Given what we're trying to achieve here, would InWorld's voice be better, or would Gemini 3.8 Flash text-to-speech be better?",
+      "Can you do a little bit of research into whether, given what we're trying to achieve here, InWorld's voice would be better, or Gemini 3.8 Flash text-to-speech?",
+      "Can you do a little bit of research into this: given what we're trying to achieve here, would InWorld's voice be better, or would Gemini 3.8 Flash text-to-speech be better?",
+    ],
+    drops: ["..."],
+    keep: ["Gemini 3.8 Flash"],
+  },
+  {
+    id: "dense-retracted-number:grok",
+    style: "grok",
+    source: "dense",
+    raw: "Set the retry timeout to 3... set the retry timeout to 5 seconds and log each attempt.",
+    reference:
+      "Set the retry timeout to 3, set the retry timeout to 5 seconds and log each attempt.",
+    alsoAccept: [
+      "Set the retry timeout to 3. Set the retry timeout to 5 seconds and log each attempt.",
+      "Set the retry timeout to 3... set the retry timeout to 5 seconds and log each attempt.",
+    ],
+    keep: ["log each attempt"],
+  },
+  {
+    id: "dense-group-mention:grok",
+    style: "grok",
+    source: "dense",
+    raw: "Post the release notes in the team channel and tag @all so everyone sees them.",
+    reference: "Post the release notes in the team channel and tag @all so everyone sees them.",
+    keep: ["tag @all"],
+  },
+  {
+    id: "dense-two-users:grok",
+    style: "grok",
+    source: "dense",
+    raw: "One of our users saw this on 0.47.1. Another user saw it on 0.46, so it's not new. Can you check both release notes for anything that touched the restore path?",
+    reference:
+      "One of our users saw this on 0.47.1. Another user saw it on 0.46, so it's not new. Can you check both release notes for anything that touched the restore path?",
+    keep: ["Another user saw it on 0.46", "so it's not new"],
+  },
+  {
+    id: "dense-loading-label:grok",
+    style: "grok",
+    source: "dense",
+    raw: "Change the button label to Loading... with the three dots, and keep the spinner beside it.",
+    reference:
+      'Change the button label to "Loading..." with the three dots, and keep the spinner beside it.',
+    alsoAccept: [
+      "Change the button label to Loading... with the three dots, and keep the spinner beside it.",
+    ],
+    keep: ["Loading...", "with the three dots"],
+  },
+  {
+    id: "dense-run-twice:openai",
+    style: "openai",
+    source: "dense",
+    raw: "Run the tests, then run them again with the cache cleared, and compare the timings.",
+    reference:
+      "Run the tests, then run them again with the cache cleared, and compare the timings.",
+    keep: ["run them again with the cache cleared"],
   },
 ];
 
@@ -2175,12 +2951,15 @@ export const CLEANUP_CORPUS: readonly CleanupCase[] = [
   ...[
     ...AFTERNOON,
     ...CONTEXT,
+    ...CONTINUING,
+    ...SHORT,
     ...REPLY_BARE,
     ...WORKSPACE,
     ...RECENT_PROMPTS,
     ...NAMES,
     ...SPELLED_BARE,
     ...RAMBLE,
+    ...DENSE,
     ...TICS,
     ...LOOKALIKE,
     ...CODE_NAMES,

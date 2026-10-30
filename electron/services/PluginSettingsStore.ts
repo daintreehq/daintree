@@ -109,6 +109,15 @@ function queueWrite<T>(file: string, write: (ticket: WriteTicket) => Promise<T>)
 }
 
 /**
+ * Every file with a write still queued, resolved. A first write waiting on the
+ * keychain has no file on disk yet, so a wipe that finds its targets by listing
+ * a directory would miss it.
+ */
+export function queuedSettingsFiles(): string[] {
+  return [...writeQueues.keys()];
+}
+
+/**
  * Delete a plugin's settings file for good, as an uninstall that wipes settings
  * does. Queued behind the file's writes, and every write queued before it is
  * dropped rather than written, even one that lands later because it was waiting

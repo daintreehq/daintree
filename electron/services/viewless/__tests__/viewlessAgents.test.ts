@@ -137,6 +137,75 @@ describe("agent.launch with no frontend", () => {
     });
   });
 
+  it("refuses rather than launch without a saved preset whose project presets failed to read (#15025)", async () => {
+    const settings = {
+      agents: { claude: { presetId: "team", customPresets: [{ id: "zai", name: "Z.ai" }] } },
+    } as unknown as AgentSettings;
+    const { deps, invoke, store } = launchDeps();
+    deps.agents.getSettings = async () => settings;
+    deps.agents.getProjectPresets = async () => {
+      throw new Error("EACCES");
+    };
+
+    const result = await executeViewlessAction(
+      request("agent.launch", { agentId: "claude" }),
+      deps
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      result: { launched: false, spawnStatus: "presets-loading", terminalId: null },
+    });
+    expect(invoke.mock.calls.some(([, channel]) => channel === CHANNELS.TERMINAL_SPAWN)).toBe(
+      false
+    );
+    expect(store.read()?.terminals ?? []).toEqual([]);
+  });
+
+  it("refuses a saved CCR route when the routes failed to read, but not a pick CCR could never hold", async () => {
+    const failCcr = (presetId: string) => {
+      const { deps, invoke } = launchDeps();
+      deps.agents.getSettings = async () =>
+        ({ agents: { claude: { presetId } } }) as unknown as AgentSettings;
+      deps.agents.getCcrPresets = async () => {
+        throw new Error("EACCES");
+      };
+      return { deps, invoke };
+    };
+    const route = failCcr("ccr-opus");
+    const gone = failCcr("user-gone");
+
+    const routeResult = await executeViewlessAction(
+      request("agent.launch", { agentId: "claude" }),
+      route.deps
+    );
+    const goneResult = await executeViewlessAction(
+      request("agent.launch", { agentId: "claude" }),
+      gone.deps
+    );
+
+    expect(routeResult).toMatchObject({
+      result: { launched: false, spawnStatus: "presets-loading" },
+    });
+    expect(goneResult).toMatchObject({ result: { launched: true, spawnStatus: null } });
+    expect(spawned(gone.invoke).title).toBe("Claude");
+  });
+
+  it("launches a custom preset even when the project's presets failed to read", async () => {
+    const { deps, invoke } = launchDeps();
+    deps.agents.getSettings = async () =>
+      ({
+        agents: { claude: { presetId: "zai", customPresets: [{ id: "zai", name: "Z.ai" }] } },
+      }) as unknown as AgentSettings;
+    deps.agents.getProjectPresets = async () => {
+      throw new Error("EACCES");
+    };
+
+    await executeViewlessAction(request("agent.launch", { agentId: "claude" }), deps);
+
+    expect(spawned(invoke)).toMatchObject({ agentPresetId: "zai" });
+  });
+
   it("launches against the bare agent when asked for no preset", async () => {
     const settings = {
       agents: { claude: { presetId: "zai", customPresets: [{ id: "zai", name: "Z.ai" }] } },
@@ -378,6 +447,8 @@ describe("agent.launch with no frontend", () => {
     const terminalId = (result as { result: { terminalId: string } }).result.terminalId;
     // The spawn still carries the instruction; only the record goes without it.
     expect(spawned(invoke).command).toContain("DAINTREE-DONE-");
+    // The prompt is the run's first, so none of its sends is offered (#15521).
+    expect(spawned(invoke).hasFirstPrompt).toBe(true);
     const snapshot = store.read()?.terminals.find((terminal) => terminal.id === terminalId);
     expect(snapshot?.firstPrompt).toEqual({
       text: "Fix the flaky test\nthen push",
@@ -389,7 +460,7 @@ describe("agent.launch with no frontend", () => {
   });
 
   it("writes no record for a launch with no prompt (#14592)", async () => {
-    const { deps, store } = launchDeps();
+    const { deps, invoke, store } = launchDeps();
 
     const result = await executeViewlessAction(
       request("agent.launch", { agentId: "claude", worktreeId: "/repo-wt/feature" }),
@@ -400,6 +471,8 @@ describe("agent.launch with no frontend", () => {
     const snapshot = store.read()?.terminals.find((terminal) => terminal.id === terminalId);
     expect(snapshot).toBeDefined();
     expect(snapshot).not.toHaveProperty("firstPrompt");
+    // Its first send written becomes the record instead (#15521).
+    expect(spawned(invoke)).not.toHaveProperty("hasFirstPrompt");
   });
 
   it("opens a plain shell for the terminal id", async () => {

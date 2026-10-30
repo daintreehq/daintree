@@ -1885,6 +1885,93 @@ describe("canopy IPC", () => {
     });
   });
 
+  describe("a reply that outlived its card (#15510)", () => {
+    const reply = (text: string, imagePaths?: string[], sender: unknown = fakeSender(4)) =>
+      outcome(
+        invoke(
+          CANOPY_METHOD_CHANNELS.submitReply,
+          sender,
+          "run-1",
+          { spawnedAt: 100 },
+          text,
+          ...(imagePaths ? [imagePaths] : [])
+        )
+      );
+
+    it("submits to the run with no stream open for it, while the view watches another", async () => {
+      state.runs = [...state.runs, { runId: "run-2", spawnedAt: 100, workspaceId: "project-1" }];
+      const sender = fakeSender(4);
+      await invoke(CANOPY_METHOD_CHANNELS.watchTerminal, sender, "run-2", { spawnedAt: 100 });
+
+      expect((await reply("navy", undefined, sender)).ok).toBe(true);
+      expect(ptyClient.submit).toHaveBeenCalledWith("run-1", "navy");
+    });
+
+    it("goes with Canopy's reading off, as the pane's own replies do", async () => {
+      state.mode = "unset";
+      expect((await reply("navy")).ok).toBe(true);
+      expect(state.submits).toEqual(["navy"]);
+    });
+
+    it("hands its image chips over with the text", async () => {
+      expect((await reply("look", ["/tmp/shot.png"])).ok).toBe(true);
+      expect(ptyClient.submit).toHaveBeenCalledWith(
+        "run-1",
+        "look",
+        undefined,
+        undefined,
+        undefined,
+        ["/tmp/shot.png"]
+      );
+    });
+
+    it("reaches the run it names, in the incarnation it names, among several", async () => {
+      state.runs = [...state.runs, { runId: "run-2", spawnedAt: 300, workspaceId: "project-1" }];
+      ptyClient.getTerminalAsync.mockImplementation((async (runId: string) => ({
+        spawnedAt: runId === "run-2" ? 300 : 100,
+      })) as unknown as () => Promise<typeof state.record>);
+      const to = (runId: string, spawnedAt: number, text: string) =>
+        outcome(
+          invoke(CANOPY_METHOD_CHANNELS.submitReply, fakeSender(4), runId, { spawnedAt }, text)
+        );
+
+      expect((await to("run-2", 300, "for two")).ok).toBe(true);
+      expect((await to("run-1", 100, "for one")).ok).toBe(true);
+      // The other run's incarnation is not this one's.
+      expect((await to("run-2", 100, "stale")).ok).toBe(false);
+
+      expect(ptyClient.submit.mock.calls.map(([runId, text]) => [runId, text])).toEqual([
+        ["run-2", "for two"],
+        ["run-1", "for one"],
+      ]);
+      ptyClient.getTerminalAsync.mockImplementation(async () => state.record);
+    });
+
+    it("never reaches a terminal respawned while the host was asked", async () => {
+      ptyClient.getTerminalAsync.mockImplementationOnce(async () => {
+        state.generation = 2;
+        return state.record;
+      });
+      expect((await reply("navy")).ok).toBe(false);
+      expect(state.submits).toEqual([]);
+    });
+
+    it("never reaches a terminal respawned under the run's id, or one that exited", async () => {
+      state.record = { spawnedAt: 200 };
+      expect((await reply("navy")).ok).toBe(false);
+      state.record = { spawnedAt: 100, isExited: true };
+      expect((await reply("navy")).ok).toBe(false);
+      expect(state.submits).toEqual([]);
+    });
+
+    it("refuses a screen that doesn't drive the run, and attachments that aren't images", async () => {
+      expect((await reply("navy", ["/etc/passwd"])).ok).toBe(false);
+      lease.holder = "other";
+      expect((await reply("navy")).ok).toBe(false);
+      expect(state.submits).toEqual([]);
+    });
+  });
+
   describe("a Daintree Assistant a person chose (#14162)", () => {
     const subject = {
       hostId: "local",

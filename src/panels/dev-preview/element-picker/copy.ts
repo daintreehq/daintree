@@ -1,33 +1,110 @@
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { SitePreviewDetachReason } from "@shared/types/ipc/sitePreview";
 import type { ElementPickerProviderId } from "@shared/elementPicker";
-import type { StaleReason } from "./inspectorController.js";
+import type { StaleReason, WorkspaceFailure } from "./inspectorController.js";
 
 /**
- * One voice: every reason opens with the action, then says why. Two of these
- * used to lead with the cause and two with the remedy, so the same panel state
- * read as two different conditions depending on how it was reached.
+ * One formula for every pick the user has to make again, wherever it is said
+ * and however it was reached: what happened, then "select it again". The
+ * strip says the headline; the drawer adds the one sentence of why.
  */
+export const SELECT_AGAIN = {
+  pageReloaded: "Page reloaded — select it again",
+  fileChanged: "File changed — select it again",
+  previewDetached: "Preview disconnected — select it again",
+  pageChanged: "Page changed — select it again",
+  pageLoading: "Page still loading — select it again",
+} as const;
+
 export const STALE_COPY: Record<StaleReason, { title: string; detail: string }> = {
   "document-changed": {
-    title: "Select again — the page reloaded",
+    title: SELECT_AGAIN.pageReloaded,
     detail: "This selection no longer points at a live element.",
   },
   "source-changed": {
-    title: "Select again — the file changed",
-    detail: "The source behind this element changed after you selected it.",
+    title: SELECT_AGAIN.fileChanged,
+    detail: "Its source changed after you selected it.",
   },
   "preview-detached": {
-    title: "Select again — the preview disconnected",
-    detail: "This selection came from a preview that's no longer connected.",
+    title: SELECT_AGAIN.previewDetached,
+    detail: "It came from a preview that's no longer connected.",
   },
 };
+
+/**
+ * What Send's note says while the page is being asked for the element again:
+ * the drawer is deliberately silent then, because "select it again" would be
+ * withdrawn a moment later, so the note says what is happening instead.
+ */
+export const REPROVING_NOTE = "Checking this selection again";
+
+/**
+ * A picked component whose file wasn't found, said by the identity's path slot
+ * and by the note under Send in one voice. The slot sits under a header that
+ * names the component; the note names it, because the Target control can
+ * point the composer at a different one than the identity describes.
+ */
+export function missingComponentSource(label?: string): string {
+  return label ? `Couldn't find the source for ${label}` : "Couldn't find the source";
+}
+
+/** The selection outcomes that end without a selection, as headline and reason. */
+export const SELECTION_OUTCOME_COPY = {
+  settled: {
+    title: SELECT_AGAIN.fileChanged,
+    detail:
+      "The preview may still show the old version. Wait for it to update, then click the element.",
+  },
+  lost: {
+    title: SELECT_AGAIN.pageChanged,
+    detail: "It changed while the source was being found.",
+  },
+  loading: { title: SELECT_AGAIN.pageLoading },
+  mismatch: {
+    title: "Reported location doesn't match the file",
+    detail:
+      "Server-rendered pages can do this. In Browse, follow a link inside the preview to this page, then switch to Inspect and select it again.",
+  },
+  host: {
+    title: "Couldn't find this element's source",
+    detail: "Click the element to try again.",
+  },
+} as const;
+
+/**
+ * Why the site source couldn't be opened, as the strip's one line and the
+ * drawer's headline. Each names what happened in the user's terms; the way
+ * forward sits beside it in the drawer, and only a read error is retried.
+ */
+export const WORKSPACE_FAILURE_COPY: Record<WorkspaceFailure, { strip: string; title: string }> = {
+  "read-error": {
+    strip: "Couldn't read the site source",
+    title: "Couldn't read the site source",
+  },
+  "invalid-app": {
+    strip: "The chosen app is gone from this worktree",
+    title: "That app is gone from this worktree",
+  },
+  "unknown-worktree": {
+    strip: "This worktree isn't open in the project",
+    title: "This worktree isn't open in the project",
+  },
+  "other-worktree": {
+    strip: "The dev server runs from another worktree",
+    title: "The dev server runs from another worktree",
+  },
+};
+
+/** The modes, as every surface and message says them: the control's own labels. */
+export { TOOL_NAME } from "./toolId.js";
+export const BROWSE_COPY = "Browsing — switch to Inspect to pick an element";
+export const INSPECT_IDLE_COPY = "Click an element to ask an agent about it";
 
 export const DETACH_COPY: Record<SitePreviewDetachReason, string> = {
   requested: "Disconnected from the dev preview",
   "guest-destroyed": "The dev preview was closed",
-  rebound: "Another inspector connected to this preview",
-  "install-failed": "Couldn't start the inspector inside the preview",
+  rebound: "Another Element Picker took over this preview",
+  "install-failed": "Couldn't start the Element Picker inside the page",
   "debugger-detached": "Disconnected — DevTools may have taken over the preview",
   "guest-flooding": "Disconnected — the page sent too many invalid messages",
   // Unreachable in practice: the view this would be addressed to is the one
@@ -96,14 +173,10 @@ function isSchemaError(error: unknown): boolean {
  * with a neighbour's location when a child component's root precedes it in the
  * same template, and a client-side navigation re-renders the page without that
  * — which needs Browse mode, since Inspect mode keeps the page's links from
- * navigating.
+ * navigating. The way out is `SELECTION_OUTCOME_COPY.mismatch`, beside this.
  */
 export function mismatchMessage(reported: { tagName: string; file: string; line: number }): string {
-  return (
-    `The page places this <${reported.tagName.toLowerCase()}> at ${reported.file}:${reported.line}, but the file doesn't hold it there. ` +
-    "A server-rendered page can report a neighbour's location — switch to Browse, " +
-    "open this page from a link inside the preview, then select the element again."
-  );
+  return `The page places this <${reported.tagName.toLowerCase()}> at ${reported.file}:${reported.line}, but the file doesn't hold it there.`;
 }
 
 const FRAMEWORK_NAMES: Readonly<Record<string, string>> = {
@@ -116,32 +189,71 @@ const FRAMEWORK_NAMES: Readonly<Record<string, string>> = {
   solid: "Solid",
 };
 
-/** The page's own verdict on itself, as the drawer says it; the detail goes under it. */
+/**
+ * The page's own verdict on itself, as the drawer says it. The guest's words
+ * stay out of it: they are written for a log, and "envelope" or a raw
+ * `TypeError` is not a sentence the user can act on. Capacity is two
+ * different outcomes under one code — a pick that was cut down to fit, and one
+ * refused outright — and the guest's (bootstrap-worded, never page-written)
+ * detail is what tells them apart.
+ */
 export function runtimeIssueMessage(
   code: string,
-  framework: ElementPickerProviderId | undefined
-): string | null {
+  framework: ElementPickerProviderId | undefined,
+  detail = ""
+): { title: string; body?: string } | null {
   const name = framework ? FRAMEWORK_NAMES[framework] : null;
   switch (code) {
     case "not-dev-build":
-      return "This preview is a production build, so elements can't be traced to source";
+      return {
+        title: "Production build — elements can't be traced to source",
+        body: "Run the app's dev server to trace elements to their files.",
+      };
     case "metadata-unavailable":
-      return name
-        ? `This page carries no ${name} source locations. Run the app with its dev server to trace elements.`
-        : "This page carries no source locations. Run the app with its dev server to trace elements.";
+      return {
+        title: name
+          ? `No ${name} source locations on this page`
+          : "No source locations on this page",
+      };
     case "overlay-blocked":
-      return "The page blocked the selection overlay";
+      return { title: "The page blocked the selection outline" };
     case "capacity":
-      return "This was past a limit the Element Picker works within, so part of it was left out";
+      if (detail.startsWith("selection left unchanged")) {
+        return {
+          title: "That element is too large to select",
+          body: "The previous selection is still the one a request is about.",
+        };
+      }
+      return detail.includes("markup and styles")
+        ? {
+            title: "Part of this selection was left out",
+            body: "Its outer components, markup and styles were too large to keep.",
+          }
+        : {
+            title: "Outer components were left out",
+            body: "The component chain was too long to keep whole. The element itself is complete.",
+          };
     case "extractor-failed":
-      return name
-        ? `The Element Picker couldn't read this page's ${name} components, so elements can't be traced to source`
-        : "The Element Picker couldn't read this page's components, so elements can't be traced to source";
+      return {
+        title: name
+          ? `Couldn't read this page's ${name} components`
+          : "Couldn't read this page's components",
+      };
     case "internal":
-      return "The inspector hit a problem inside the page";
+      return { title: "The Element Picker hit a problem inside the page" };
     default:
       return null;
   }
+}
+
+/** Page verdicts whose guest detail is a diagnostic worth showing, not a restatement. */
+export function issueDetailIsDiagnostic(code: string | undefined): boolean {
+  return code === "internal" || code === "extractor-failed" || code === undefined;
+}
+
+/** Page verdicts that already say an element can't be traced; the identity doesn't say it again. */
+export function issueSaysUntraced(code: string | undefined): boolean {
+  return code === "not-dev-build" || code === "metadata-unavailable" || code === "extractor-failed";
 }
 
 /**

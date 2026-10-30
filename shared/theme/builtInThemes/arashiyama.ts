@@ -28,7 +28,7 @@ export const theme: BuiltInThemeSource = {
     status: {
       success: "#6A8253",
       warning: "#B88E43",
-      danger: "#B85F56",
+      danger: "#C96E64",
       info: "#7B8591",
     },
     activity: {
@@ -81,6 +81,10 @@ export const theme: BuiltInThemeSource = {
   },
   tokens: {
     "accent-foreground": "#0D0C0B",
+    // Solid so the field edge clears 3:1 on every surface a field sits on
+    // (3.06–4.37:1); the alpha `border-strong` it used to follow measured
+    // 1.42–1.49:1.
+    "border-input": "#7E7872",
     "border-strong": "rgba(241,235,228,0.14)",
     "border-subtle": "rgba(241,235,228,0.07)",
     "focus-ring": "rgba(196,98,64,0.45)",

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { VoiceCorrectionPace } from "@shared/types/ipc/api";
 
 // Drives the real voice, draft and dictation-range stores through the IPC
 // callbacks to prove a long dictation is cleaned up in chunks while it runs
@@ -56,6 +57,7 @@ type CorrectResult = {
   correctedText: string;
   failed?: true;
   verdict?: "unchanged" | "failed" | "timed_out";
+  pace?: VoiceCorrectionPace;
 };
 type CorrectRequest = { rawText: string; recentContext?: string[]; sessionId?: string };
 type Listener = (payload: never) => void;
@@ -115,6 +117,7 @@ function stubElectron() {
           enabled: true,
           openaiApiKey: "sk-key",
           correctionEnabled: true,
+          correctionModel: "claude-haiku-5-5",
           dictionary: [],
         })),
         stop: vi.fn().mockResolvedValue(undefined),
@@ -288,12 +291,33 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     ["a self-correction", "No wait, it's the reporting database that's busy."],
     ["a correction of what was meant", "I meant the reporting database."],
     ["a list going on", "Second, the retries need a cap."],
+    ["a list starting", "First, the retries need a cap."],
   ])("doesn't cut where %s reaches back over the pause", async (_case, after) => {
     const { say, pause } = await setup();
     for (const sentence of OPENING) say(sentence);
     pause();
     say(after);
     expect(correct).not.toHaveBeenCalled();
+  });
+
+  it("keeps a list's introduction with its first item when the introduction announces a count", async () => {
+    const { say, pause } = await setup();
+    correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+    const intro = "We need three things.";
+    const first = "Better retries and a dashboard.";
+
+    for (const sentence of OPENING) say(sentence);
+    say(intro);
+    pause();
+    say(first);
+    expect(correct).not.toHaveBeenCalled();
+
+    pause();
+    say(NEXT);
+    expect(correct).toHaveBeenCalledTimes(1);
+    expect(correct).toHaveBeenLastCalledWith(
+      expect.objectContaining({ rawText: [OPENING_TEXT, intro, first].join(" ") })
+    );
   });
 
   it("doesn't cut on too little said after a break, even once a newer pause replaces it", async () => {
@@ -456,6 +480,50 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     tail.resolve({ action: "no_change", correctedText: NEXT });
     await flush();
     expect(service.expectedCorrectionWindow(PANEL)).toBeNull();
+  });
+
+  it("estimates each pass on the cleanup model, and learns only from a reply that came back", async () => {
+    const estimateCorrectionMs = vi.fn(
+      (_model: string, _effort: string, chars: number) => 3 * chars
+    );
+    const recordCorrectionPace = vi.fn();
+    vi.doMock("../voiceCorrectionPace", () => ({ estimateCorrectionMs, recordCorrectionPace }));
+    try {
+      const { service, say, pause, flush } = await setup();
+      const pace: VoiceCorrectionPace = {
+        model: "claude-haiku-5-5",
+        effort: "medium",
+        firstTextMs: 1_800,
+        outputMs: 300,
+      };
+      correct
+        .mockResolvedValueOnce({ action: "replace", correctedText: CLEANED_OPENING, pace })
+        .mockResolvedValueOnce({ action: "no_change", correctedText: NEXT, failed: true, pace });
+      for (const sentence of OPENING) say(sentence);
+      pause();
+      say(NEXT);
+      const chunk = service.expectedCorrectionWindow(PANEL)!;
+      const chunkChars = correct.mock.calls[0]![0].rawText.length;
+      expect(chunk.landsAt - chunk.startedAt).toBe(3 * chunkChars);
+      await flush();
+      await service.stop();
+      const tail = service.expectedCorrectionWindow(PANEL)!;
+      expect(tail.landsAt - tail.startedAt).toBe(3 * correct.mock.calls[1]![0].rawText.length);
+      await flush();
+
+      expect(estimateCorrectionMs).toHaveBeenCalledWith(
+        "claude-haiku-5-5",
+        "medium",
+        correct.mock.calls[0]![0].rawText.length
+      );
+      expect(recordCorrectionPace).toHaveBeenCalledTimes(1);
+      expect(recordCorrectionPace).toHaveBeenCalledWith(
+        correct.mock.calls[0]![0].rawText.length,
+        pace
+      );
+    } finally {
+      vi.doUnmock("../voiceCorrectionPace");
+    }
   });
 
   it("lets Restore on a chunk that landed while recording move it within the stop's baseline", async () => {
@@ -624,7 +692,10 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
   });
 
   it("gives a chunk whose cleanup failed back to the stop-time pass", async () => {
-    const { service, say, pause, draft, flush, baseline } = await setup();
+    const { service, sessionId, say, pause, draft, flush, baseline } = await setup();
+    // A send following this dictation from its start: the stop's pass cleaned
+    // what the chunk couldn't.
+    const observed = service.observeSendCorrections(PANEL, new Set([sessionId]));
     correct.mockResolvedValueOnce({
       action: "no_change",
       correctedText: OPENING_TEXT,
@@ -654,10 +725,11 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
       id: expect.any(String),
       correctedText: `${CLEANED_OPENING} ${NEXT}`,
     });
+    expect(observed.failed()).toBe(false);
   });
 
   it("cleans a chunk whose cleanup failed after the stop began in a pass of its own, which a send waits for", async () => {
-    const { service, say, pause, draft, flush, baseline } = await setup();
+    const { service, sessionId, say, pause, draft, flush, baseline } = await setup();
     const chunk = deferred<CorrectResult>();
     const tail = deferred<CorrectResult>();
     const retry = deferred<CorrectResult>();
@@ -668,6 +740,7 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     for (const sentence of OPENING) say(sentence);
     pause();
     say(NEXT);
+    const observed = service.observeSendCorrections(PANEL, new Set([sessionId]));
     await service.stop();
     expect(correct).toHaveBeenCalledTimes(2);
 
@@ -688,10 +761,13 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     );
     expect(sent).toBe(false);
     expect(setHistoryCorrection).not.toHaveBeenCalled();
+    // The retry took the failed chunk's words over.
+    expect(observed.failed()).toBe(false);
 
     retry.resolve({ action: "replace", correctedText: CLEANED_OPENING });
     await flush();
     expect(sent).toBe(true);
+    expect(observed.failed()).toBe(false);
     expect(draft()).toBe(`${CLEANED_OPENING} ${cleanedNext}`);
     expect(baseline()).toBe(`${CLEANED_OPENING} ${cleanedNext}`);
     expect(setHistoryCorrection).toHaveBeenCalledWith({
@@ -768,7 +844,7 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
   });
 
   it("cleans a failed chunk once more after the stop, and no more than that", async () => {
-    const { service, say, pause, draft, flush } = await setup();
+    const { service, sessionId, say, pause, draft, flush } = await setup();
     const chunk = deferred<CorrectResult>();
     correct
       .mockReturnValueOnce(chunk.promise)
@@ -780,6 +856,7 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     for (const sentence of OPENING) say(sentence);
     pause();
     say(NEXT);
+    const observed = service.observeSendCorrections(PANEL, new Set([sessionId]));
     await service.stop();
     chunk.resolve({
       action: "no_change",
@@ -798,6 +875,8 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     expect(service.hasPendingCorrection(PANEL)).toBe(false);
     expect(draft()).toBe(`${OPENING_TEXT} ${NEXT}`);
     expect(setHistoryCorrection).not.toHaveBeenCalled();
+    // The retry failed too: those words went uncleaned.
+    expect(observed.failed()).toBe(true);
   });
 
   it("doesn't clean again a chunk a send took the draft from", async () => {

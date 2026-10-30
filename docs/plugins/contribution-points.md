@@ -915,17 +915,18 @@ A `when` turns one entry on or off. It never gates the action behind it, which s
 
 Keybindings also see the focus and UI keys:
 
-| Key                | Type    | Meaning                                                        |
-| ------------------ | ------- | -------------------------------------------------------------- |
-| `terminalFocused`  | boolean | Keyboard focus is inside an xterm terminal.                    |
-| `textInputFocused` | boolean | Keyboard focus is in a text field or editor (not a terminal).  |
-| `modalOpen`        | boolean | A modal dialog (`aria-modal`) is open.                         |
-| `paletteOpen`      | boolean | Any palette (command palette, quick switcher, …) is open.      |
-| `paletteId`        | string  | Identifier of the open palette, or `""` when none.             |
-| `fleetArmed`       | boolean | At least one terminal is armed for fleet broadcast.            |
-| `fleetWaiting`     | boolean | At least one armed terminal's agent is in the `waiting` state. |
-| `sidebarVisible`   | boolean | The worktree sidebar is currently visible.                     |
-| `canopyHidden`     | boolean | The user hid Canopy; its panel cannot open.                    |
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `terminalFocused` | boolean | Keyboard focus is inside an xterm terminal. |
+| `textInputFocused` | boolean | Keyboard focus is in a text field or editor (not a terminal). |
+| `modalOpen` | boolean | A modal dialog (`aria-modal`) is open, or the keyboard is in a page's `alert()`, `confirm()` or `prompt()` dialog, which blocks only its own Browser or dev preview pane. |
+| `paletteOpen` | boolean | Any palette (command palette, quick switcher, …) is open. |
+| `paletteId` | string | Identifier of the open palette, or `""` when none. |
+| `fleetArmed` | boolean | At least one terminal is armed for fleet broadcast. |
+| `fleetWaiting` | boolean | At least one armed terminal's agent is in the `waiting` state. |
+| `sidebarVisible` | boolean | The worktree sidebar is currently visible. |
+| `canopyHidden` | boolean | The user hid Canopy; its panel cannot open. |
+| `dictationActive` | boolean | Voice dictation is starting, running, paused or finishing, in this view or another. |
 
 The `presentation*` keys come from the project's presentation profile, which the user sets in Project settings → General → Features, and → Launcher for the two launcher keys. A repository can suggest one by committing `.daintree/presentation.json` — `{ "features": { "forgeStats": "hidden", "gitDetail": "demoted" } }` — and the suggestion applies only once the user accepts it when the project opens. Daintree reads that file and never writes it, unknown features and levels are ignored, and no plugin API changes a level.
 
@@ -986,7 +987,7 @@ Declares the values your plugin needs from the user. Daintree stores them, rende
 
 **Types.** `string` is a text input, `number` a number input held to `min` / `max`, `boolean` a switch, `enum` a select over `options`, and `json` a text area that must parse as JSON before it is stored (clearing it resets to the default). `path` and `directory` render a read-only input plus a **Browse** button that opens a native folder chooser; `file` opens a single-file chooser narrowed by `extensions`. The stored value is an absolute path. The form applies each change as it is made; there is no Save.
 
-**Scopes.** `user` is one value for the whole app, persisted in `~/.daintree/plugin-settings/`. `project` is per project and persisted in the repository, at `<projectRoot>/.daintree/plugin-settings/`, so a value committed there reaches everyone who clones it. `local` is per project but stays on this machine, under `~/.daintree/plugin-settings/local/<projectId>/`. An installed plugin's `project` and `local` values follow the active project: with none open they read as unset and `host.settings.set` refuses them. A project plugin's always resolve against its own project.
+**Scopes.** `user` is one value per plugin instance on this machine, persisted in `~/.daintree/plugin-settings/`: an installed plugin's is shared by every project, while a project plugin's (or an installed `instanceMode: "project"` package's per-project instance) belongs to that one project. `project` is per project and persisted in the repository, at `<projectRoot>/.daintree/plugin-settings/`, so a value committed there reaches everyone who clones it. `local` is per project but stays on this machine, under `~/.daintree/plugin-settings/local/<projectId>/`. An app-wide installed plugin's `project` and `local` values follow the active project: with none open they read as unset and `host.settings.set` refuses them. A project plugin's, and an installed package's per-project instance's, always resolve against its own project.
 
 **Secrets.** A `secret` is a masked input with a reveal toggle and a Clear that asks first. Its value is encrypted at rest through the OS keychain; where no keychain is available, the form says secrets can't be saved on this device and `host.settings.set` rejects rather than storing plaintext. A secret is never written into the repository: a `project`-scoped secret is stored like a `local` one, so each collaborator enters their own. It can't declare a `default`.
 
@@ -1064,7 +1065,7 @@ An identifier that names no key evaluates false, so `"worktree.hasBranch"` hides
 
 **Targeting rows.** A `file` item can declare which rows it appears on, and the host evaluates it per row, ANDed with `when`: `kind` (`"file"` or `"folder"`), `extensions` (bare lower-case suffixes without the dot, matched case-insensitively against a file's last suffix; a dotfile or bare name has none; not allowed with `kind: "folder"`) and `paths` (globs relative to the worktree root using `**`, `*` and `?`, the same grammar as `fileEditors[].paths`). Omitted fields match everything, and the three fields are rejected on any other location.
 
-**Where the items go.** On a file menu and on the worktree card's menu, contributed items sit in an **Extensions** submenu, one group per plugin (labelled when more than one plugin contributes), after Daintree's own entries and before the destructive ones — Discard changes and Delete file on a file, Delete worktree… on a worktree. The submenu appears only when at least one item passes its `when`, and a `worktree` item is not offered on a bare workspace root. On the toolbar project pill, `project` items sit in the same **Extensions** submenu, after Project settings and before Stop all agents and Close project. A project plugin's items appear only in its own project, and an installed plugin's only in projects where it is visible. On a terminal, contributed items are appended at the end of the right-click menu.
+**Where the items go.** On a file menu and on the worktree card's menu, contributed items sit in an **Extensions** submenu, one group per plugin (labelled when more than one plugin contributes), after Daintree's own entries and before the destructive ones — Discard changes and Delete file on a file, Delete worktree… on a worktree. The submenu appears only when at least one item passes its `when`, and a `worktree` item is not offered on a bare workspace root. On the toolbar project pill, `project` items sit in the same **Extensions** submenu, after Project settings and before Stop project and Close project. A project plugin's items appear only in its own project, and an installed plugin's only in projects where it is visible. On a terminal, contributed items are appended at the end of the right-click menu.
 
 Context menus follow the same `actionId` dispatch pattern as menu items. A `terminal`-location item appears in the right-click menu of terminal-backed panels, not on browser, dev preview or review panels; gate it with `when` (for example `panelKind == 'terminal'`). To put entries on your own panels, use the panel's `menu` or [runtime menu entries](#runtime-menu-entries) instead: those are dispatched with `{ panelId }`. Two built-in actions pair well here: `file.openDiff` opens the side-by-side diff for the dispatched `{ path, worktreePath, status }`, and `panel.openPluginPanel` spawns (or focuses) one of your plugin panels, passing `initialArgs` straight through to the view's `initialArgs` prop — so a context-menu item can open your panel scoped to the file the user clicked.
 
@@ -1313,7 +1314,7 @@ Markdown the Daintree Assistant is given about the plugin's agent tools: short `
 
 ## Prompt templates — _Shipped_
 
-Prompt templates a plugin offers in the composer's ❯ command picker, for the well-worn prompts of its domain. Choosing one asks for its arguments, if it has any, then puts the expanded text in the composer's draft for the user to edit and send. A template **never submits**, and it never appears in the `/` or `$` menus, which belong to the agent CLI's own commands. Each row names the plugin it comes from. Templates are declarative content and require no capability. An installed plugin's templates appear in every project; a [project plugin](./project-local.md)'s appear only in its own project.
+Prompt templates a plugin offers in the composer's `/` menu, for the well-worn prompts of its domain. They are listed under their own "Prompt templates" heading after the agent CLI's own commands, each row naming the plugin it comes from, and what is typed after the `/` narrows them by title, id or plugin name. Choosing one, by Enter, Tab or a click, asks for its arguments if it has any, then puts the expanded text in the composer's draft for the user to edit and send; the `/` token it was chosen with is taken out of the draft. A template **never submits**, and it never appears in the `$` menu. Templates are declarative content and require no capability. An installed plugin's templates appear in every project; a [project plugin](./project-local.md)'s appear only in its own project.
 
 ```json
 {
@@ -1338,13 +1339,13 @@ Prompt templates a plugin offers in the composer's ❯ command picker, for the w
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `id` | yes | Unique within the plugin's `promptTemplates`. |
-| `title` | yes | The row's name in the picker. At most 80 characters. |
+| `id` | yes | Unique within the plugin's `promptTemplates`. Matched, with the title, by what is typed after `/`. |
+| `title` | yes | The row's name in the `/` menu and the title of its form. At most 80 characters. |
 | `description` | yes | The row's summary line. At most 300 characters. |
 | `body` | yes | The prompt. `{{name}}` is replaced by the argument of that name. At most 8192 characters. |
 | `args` | no | Up to 20 single-line text fields, each `{ name, label, required? }`. `name` is lowercase letters, digits and underscores, starting with a letter. A template with no `args` fills the draft as soon as it is chosen. |
 
-Every `{{name}}` in the body must name a declared argument; anything else is a manifest error. Values are inserted exactly as typed, once: a value that itself contains `{{other}}` is not expanded again. An optional argument left blank becomes empty text. Choosing a template replaces the current draft, and the replacement can be undone.
+Every `{{name}}` in the body must name a declared argument; anything else is a manifest error. Values are inserted exactly as typed, once: a value that itself contains `{{other}}` is not expanded again. An optional argument left blank becomes empty text. A template fills an empty draft and goes a blank line after a written one, leaving the words already there as they are; one undo takes the choice back.
 
 ## Terminal links — _Shipped_
 

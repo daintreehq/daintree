@@ -570,6 +570,30 @@ describe("GitInitDialog", () => {
     expect(screen.getByText(/review it for secrets/i)).toBeTruthy();
   });
 
+  it("holds the dialog open on the kept-.gitignore warning until the user opens the project", async () => {
+    initGitGuidedMock.mockImplementationOnce(() => {
+      progressHandler?.({
+        step: "gitignore",
+        status: "success",
+        message: "Existing .gitignore kept — missing 3 template entries; review it for secrets",
+        timestamp: Date.now(),
+      });
+      return Promise.resolve({ outcome: "success", completedSteps: ["init", "gitignore"] });
+    });
+    const onSuccess = vi.fn();
+
+    renderDialog({ onSuccess });
+    fireEvent.click(startButton());
+    await waitFor(() => expect(screen.getByTestId("git-init-success")).toBeTruthy());
+
+    await new Promise((resolve) => setTimeout(resolve, 2600));
+    expect(onSuccess).not.toHaveBeenCalled();
+    expect(screen.getByText(/review it for secrets/i)).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("git-init-open"));
+    expect(onSuccess).toHaveBeenCalledTimes(1);
+  });
+
   it("stays quiet when the existing .gitignore already covers the template", async () => {
     initGitGuidedMock.mockImplementationOnce(() => {
       progressHandler?.({

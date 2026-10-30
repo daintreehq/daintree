@@ -9,17 +9,40 @@ vi.mock("../../../services/globalAssistant.js", () => ({
 const pty = vi.hoisted(() => ({
   generation: 3 as number | null,
   spawnResult: new Set<(id: string) => void>(),
+  read: vi.fn(async (_id: string): Promise<{ agentState?: string } | null> => null),
 }));
 vi.mock("../../../window/serviceRefs.js", () => ({
   getPtyClient: () => ({
     getLiveGeneration: () => pty.generation,
+    getTerminalAsync: (id: string) => pty.read(id),
     on: (event: string, listener: (id: string) => void) => {
       if (event === "spawn-result") pty.spawnResult.add(listener);
     },
   }),
 }));
+const bus = vi.hoisted(() => ({
+  stateChanged: new Set<(payload: { terminalId?: string; state: string }) => void>(),
+}));
+vi.mock("../../../services/events.js", () => ({
+  events: {
+    on: (event: string, listener: (payload: { terminalId?: string; state: string }) => void) => {
+      if (event === "agent:state-changed") bus.stateChanged.add(listener);
+      return () => bus.stateChanged.delete(listener);
+    },
+  },
+}));
 const broadcast = vi.hoisted(() => vi.fn());
 vi.mock("../../utils.js", () => ({ broadcastToRenderer: broadcast }));
+
+function seen(terminalId: string, state: string) {
+  for (const listener of bus.stateChanged) listener({ terminalId, state });
+}
+
+function lastBroadcast(): { agentState: string | null } | undefined {
+  return broadcast.mock.calls.at(-1)?.[1];
+}
+
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 const handlers = await import("../helpGlobalAssistant.js");
 
@@ -47,6 +70,9 @@ describe("global assistant IPC handlers", () => {
     service = makeService();
     pty.generation = 3;
     pty.spawnResult.clear();
+    pty.read.mockReset();
+    pty.read.mockResolvedValue(null);
+    bus.stateChanged.clear();
     broadcast.mockClear();
   });
 
@@ -162,5 +188,88 @@ describe("global assistant IPC handlers", () => {
     expect((await handlers.handleGetGlobalAssistantState()).phase).toBe("running");
     const discarded = await handlers.handleDiscardGlobalAssistant(ctx(10, 1));
     expect(discarded.phase).toBe("absent");
+  });
+  describe("what the run's terminal is seen doing (#14986)", () => {
+    it("tells every window each transition of the run's terminal, and only of that one", async () => {
+      const state = await handlers.handleEnsureGlobalAssistant(ctx(10, 1));
+      expect(state.agentState).toBeNull();
+      broadcast.mockClear();
+      seen("some-other-terminal", "waiting");
+      expect(broadcast).not.toHaveBeenCalled();
+      seen(state.terminalId!, "waiting");
+      expect(lastBroadcast()?.agentState).toBe("waiting");
+      expect((await handlers.handleGetGlobalAssistantState()).agentState).toBe("waiting");
+      const discarded = await handlers.handleDiscardGlobalAssistant(ctx(10, 1));
+      expect(discarded.agentState).toBeNull();
+    });
+
+    it("reads a run already going when it is first looked at, attaching nothing", async () => {
+      // Started by a path no window called, as an MCP call can.
+      const started = await service.ensureSession();
+      const untouched = (
+        ["attach", "detach", "claimInput", "releaseInput", "ensureSession"] as const
+      ).map((method) => vi.spyOn(service, method));
+      pty.read.mockResolvedValue({ agentState: "waiting" });
+      await handlers.handleGetGlobalAssistantState();
+      expect(pty.read).toHaveBeenCalledWith(started.terminalId);
+      await flush();
+      expect(lastBroadcast()?.agentState).toBe("waiting");
+      seen(started.terminalId!, "working");
+      const state = await handlers.handleGetGlobalAssistantState();
+      expect(state.agentState).toBe("working");
+      expect(state.attachments).toEqual(started.attachments);
+      expect(state.inputOwner).toBe(started.inputOwner);
+      expect(state.inputEpoch).toBe(started.inputEpoch);
+      for (const spy of untouched) expect(spy).not.toHaveBeenCalled();
+    });
+
+    it("never lets a read that left before a transition undo it", async () => {
+      let answer!: (info: { agentState: string }) => void;
+      pty.read.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+      const state = await handlers.handleEnsureGlobalAssistant(ctx(10, 1));
+      seen(state.terminalId!, "working");
+      answer({ agentState: "waiting" });
+      await flush();
+      expect((await handlers.handleGetGlobalAssistantState()).agentState).toBe("working");
+    });
+
+    it.each([
+      [
+        "a respawn of the same terminal",
+        (terminalId: string) => {
+          pty.generation = 4;
+          for (const listener of pty.spawnResult) listener(terminalId);
+        },
+      ],
+      [
+        "a restart onto a new terminal",
+        async () => {
+          await handlers.handleRestartGlobalAssistant(ctx(10, 1));
+        },
+      ],
+    ])("drops a read of the run it replaced, landing after %s", async (_, replace) => {
+      const answers: Array<(info: { agentState: string }) => void> = [];
+      pty.read.mockImplementation(() => new Promise((resolve) => answers.push(resolve)));
+      const state = await handlers.handleEnsureGlobalAssistant(ctx(10, 1));
+      expect(answers).toHaveLength(1);
+      await replace(state.terminalId!);
+      expect(answers).toHaveLength(2);
+      answers[1]!({ agentState: "working" });
+      await flush();
+      answers[0]!({ agentState: "waiting" });
+      await flush();
+      expect((await handlers.handleGetGlobalAssistantState()).agentState).toBe("working");
+    });
+
+    it("forgets what was seen on the PTY its terminal was respawned from", async () => {
+      const state = await handlers.handleEnsureGlobalAssistant(ctx(10, 1));
+      seen(state.terminalId!, "waiting");
+      pty.generation = 4;
+      pty.read.mockResolvedValue({ agentState: "idle" });
+      for (const listener of pty.spawnResult) listener(state.terminalId!);
+      expect(lastBroadcast()?.agentState).toBeNull();
+      await flush();
+      expect(lastBroadcast()?.agentState).toBe("idle");
+    });
   });
 });

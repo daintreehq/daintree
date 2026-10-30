@@ -19,7 +19,10 @@ export function CanopySettingsTab() {
   // flipped before the first lands would act on the mode the first replaced.
   // Held in a ref, not shown: a change takes a moment, too short to dim for.
   const pending = useRef(false);
-  const [failure, setFailure] = useState<{ retry: () => void; message: string } | null>(null);
+  const [failure, setFailure] = useState<{
+    run: () => Promise<Parameters<typeof applySnapshot>[0]>;
+    message: string;
+  } | null>(null);
   const [info, setInfo] = useState<CanopyModelInfo | null>(null);
 
   // Only what is on this machine: a failed look leaves the row out, nothing more.
@@ -33,14 +36,16 @@ export function CanopySettingsTab() {
     loadModels();
   }, [loadModels, modelStatus]);
 
+  // A failure keeps the call it ran so Retry can run it again; a callback that
+  // named itself as its own retry would be read before it is declared.
   const act = useCallback(
-    (run: () => Promise<Parameters<typeof applySnapshot>[0]>, retry: () => void) => {
+    (run: () => Promise<Parameters<typeof applySnapshot>[0]>) => {
       if (pending.current) return;
       pending.current = true;
       setFailure(null);
       run()
         .then(applySnapshot, (error: unknown) =>
-          setFailure({ retry, message: formatErrorMessage(error, "Try again in a moment.") })
+          setFailure({ run, message: formatErrorMessage(error, "Try again in a moment.") })
         )
         .finally(() => {
           pending.current = false;
@@ -51,29 +56,11 @@ export function CanopySettingsTab() {
   );
 
   const setMode = useCallback(
-    (next: CanopyMode) =>
-      act(
-        () => window.electron.canopy.setMode(next),
-        () => setMode(next)
-      ),
+    (next: CanopyMode) => act(() => window.electron.canopy.setMode(next)),
     [act]
   );
-  const retryModel = useCallback(
-    () =>
-      act(
-        () => window.electron.canopy.retryModel(),
-        () => retryModel()
-      ),
-    [act]
-  );
-  const removeModels = useCallback(
-    () =>
-      act(
-        () => window.electron.canopy.removeModels(),
-        () => removeModels()
-      ),
-    [act]
-  );
+  const retryModel = useCallback(() => act(() => window.electron.canopy.retryModel()), [act]);
+  const removeModels = useCallback(() => act(() => window.electron.canopy.removeModels()), [act]);
 
   const hidden = mode === "hidden";
   const activated = mode === "on";
@@ -93,7 +80,7 @@ export function CanopySettingsTab() {
           <SettingsLoadErrorBanner
             title="Couldn't change Canopy"
             message={failure.message}
-            onRetry={failure.retry}
+            onRetry={() => act(failure.run)}
           />
         )}
         <SettingsGroup>

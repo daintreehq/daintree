@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  MCP_GRANT_MAX_LIFETIME_MS,
+  MCP_GRANT_TTL_MS,
   MCP_PANE_SESSION_CAP,
   MCP_SSE_IDLE_TIMEOUT_MS,
   MCP_TIER_ELEVATION_TTL_MS,
@@ -1136,7 +1138,7 @@ describe("SessionStore.getLiveStatusForHelpSession (#10032)", () => {
     expect(store.getLiveStatusForHelpSession(HELP_ID, WC)?.tier).toBe("core");
   });
 
-  it("maps active grants to {toolId, expiresAt, ttlMs} for the resolved transport id", () => {
+  it("maps active grants to {sessionId, toolId, expiresAt, ttlMs} for the resolved transport id", () => {
     wireLiveHelpSession({ tier: "core" });
     store.grantCache.issueGrant(TRANSPORT, "terminal.kill");
     store.grantCache.issueGrant(TRANSPORT, "project.runCheck");
@@ -1147,6 +1149,8 @@ describe("SessionStore.getLiveStatusForHelpSession (#10032)", () => {
 
     expect(grants.map((g) => g.toolId).sort()).toEqual(["project.runCheck", "terminal.kill"]);
     for (const grant of grants) {
+      // The transport id, not the public help id, is what a per-tool revoke names.
+      expect(grant.sessionId).toBe(TRANSPORT);
       expect(grant.expiresAt).toBeGreaterThan(Date.now());
       expect(grant.ttlMs).toBeGreaterThan(0);
     }
@@ -1187,6 +1191,45 @@ describe("SessionStore.getLiveStatusForHelpSession (#10032)", () => {
     const grants = store.getLiveStatusForHelpSession(HELP_ID, WC)?.activeGrants ?? [];
 
     expect(grants.map((g) => g.toolId)).toEqual(["terminal.kill"]);
+  });
+
+  it("carries each grant's ceiling and drops one past it whose sliding expiry is still ahead (#14998)", () => {
+    wireLiveHelpSession({ tier: "core" });
+    const grant = store.grantCache.issueGrant(TRANSPORT, "project.runCheck");
+    // A use just before the ceiling slides the expiry well past it.
+    vi.setSystemTime(grant.maxExpiresAt - 1000);
+    store.grantCache.refresh(TRANSPORT, "project.runCheck", grant.issuedAt);
+    expect(store.getLiveStatusForHelpSession(HELP_ID, WC)?.activeGrants).toEqual([
+      expect.objectContaining({
+        toolId: "project.runCheck",
+        expiresAt: grant.expiresAt,
+        maxExpiresAt: grant.maxExpiresAt,
+      }),
+    ]);
+
+    vi.setSystemTime(grant.maxExpiresAt + 1);
+    expect(grant.expiresAt).toBeGreaterThan(Date.now());
+    expect(store.getLiveStatusForHelpSession(HELP_ID, WC)?.activeGrants).toEqual([]);
+  });
+
+  it("carries a native grant's ceiling apart from its sliding expiry (#14998)", () => {
+    wireLiveHelpSession({ tier: "core" });
+    const issuedAt = Date.now();
+    const grant = store.grantCache.issueNativeGrant({
+      sessionId: TRANSPORT,
+      actorId: HELP_ID,
+      actorType: "help-session",
+      allowedTools: ["project.runCheck"],
+    });
+    expect(store.getLiveStatusForHelpSession(HELP_ID, WC)?.activeGrants).toEqual([
+      expect.objectContaining({
+        sessionId: TRANSPORT,
+        kind: "native",
+        expiresAt: issuedAt + MCP_GRANT_TTL_MS,
+        maxExpiresAt: issuedAt + MCP_GRANT_MAX_LIFETIME_MS,
+      }),
+    ]);
+    expect(grant.maxExpiresAt).not.toBe(grant.expiresAt);
   });
 
   it("finds the caller's live transport even when a stale same-help-id mapping is iterated first", () => {

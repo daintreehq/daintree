@@ -348,7 +348,7 @@ describe("helpPanelStore persistence migration", () => {
       const parsed: unknown = JSON.parse(backing.get(STORAGE_KEY)!);
       // The machine's own value, untouched until a local window has moved it.
       expect(parsed).toMatchObject({
-        version: 7,
+        version: 8,
         state: { width: 450, preferredAgentId: "claude" },
       });
 
@@ -416,7 +416,7 @@ describe("helpPanelStore persistence migration", () => {
       expect(written).toBeDefined();
       const parsed: unknown = JSON.parse(written!);
       expect(parsed).toMatchObject({
-        version: 7,
+        version: 8,
         state: { introDismissed: true },
       });
     } finally {
@@ -477,7 +477,7 @@ describe("helpPanelStore persistence migration", () => {
         version: number;
         state: Record<string, unknown>;
       };
-      expect(parsed.version).toBe(7);
+      expect(parsed.version).toBe(8);
       expect(parsed.state).not.toHaveProperty("isOpen");
     } finally {
       vi.useRealTimers();
@@ -669,7 +669,7 @@ describe("helpPanelStore persistence migration", () => {
       expect(store.getState().sessions[1]!.figures).toHaveLength(1);
     });
 
-    it("closeSlot drops the lane and falls back to the lowest remaining one", async () => {
+    it("closeSlot drops the lane and falls back to the one before it when none follows", async () => {
       installLocalStorage({});
       const { useHelpPanelStore: store } = await import("../helpPanelStore");
       store.getState().openSlot();
@@ -681,6 +681,19 @@ describe("helpPanelStore persistence migration", () => {
       expect(store.getState().sessions[1]).toBeUndefined();
       expect(store.getState().activeSlot).toBe(0);
       expect(store.getState().sessions[0]!.terminalId).toBe("term-0");
+    });
+
+    it("closeSlot selects the following lane when the selected one closes between two", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().openSlot();
+      store.getState().openSlot();
+      store.getState().setActiveSlot(1);
+
+      store.getState().closeSlot(1);
+
+      // Its neighbour, as a browser tab strip does, not the lowest remaining slot.
+      expect(store.getState().activeSlot).toBe(2);
     });
 
     it("never leaves the panel lane-less: closing the last lane resets slot 0", async () => {
@@ -834,7 +847,7 @@ describe("helpPanelStore persistence migration", () => {
           version: number;
           state: { hibernateSessions: Record<string, unknown> };
         };
-        expect(parsed.version).toBe(7);
+        expect(parsed.version).toBe(8);
         expect(parsed.state.hibernateSessions).toEqual({
           [slotKey("proj-a", 0)]: { sessionId: "session-a", cwd: "/tmp/a", agentId: "claude" },
         });
@@ -1033,7 +1046,7 @@ describe("helpPanelStore persistence migration", () => {
         backing.set(
           STORAGE_KEY,
           JSON.stringify({
-            version: 6,
+            version: 8,
             state: {
               width: 500,
               preferredAgentId: null,
@@ -1058,6 +1071,29 @@ describe("helpPanelStore persistence migration", () => {
         expect(written.state.introDismissed).toBe(true);
         expect(written.state.hibernateSessions).toEqual({
           [slotKey("proj-b", 0)]: { sessionId: "b1", cwd: "/b", agentId: "claude" },
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a sibling's pre-v8 auto-launch flag is written back as false, never carried as consent (#14976)", async () => {
+      vi.useFakeTimers();
+      try {
+        const backing = installLocalStorage({});
+        const mod = await import("../helpPanelStore");
+        backing.set(
+          STORAGE_KEY,
+          JSON.stringify({ version: 7, state: { width: 500, autoLaunchEnabled: true } })
+        );
+
+        mod.useHelpPanelStore.getState().setWidth(600);
+        vi.advanceTimersByTime(400);
+
+        const written: unknown = JSON.parse(backing.get(STORAGE_KEY)!);
+        expect(written).toMatchObject({
+          version: 8,
+          state: { width: 600, autoLaunchEnabled: false },
         });
       } finally {
         vi.useRealTimers();
@@ -1276,10 +1312,41 @@ describe("helpPanelStore persistence migration", () => {
       expect(store.getState().autoLaunchEnabled).toBe(false);
     });
 
-    it("preserves autoLaunchEnabled: true from a persisted blob across rehydration", async () => {
+    it.each([5, 6, 7])(
+      "drops a v%i autoLaunchEnabled: true, which any Start click recorded (#14976)",
+      async (version) => {
+        vi.useFakeTimers();
+        try {
+          const blob = JSON.stringify({
+            version,
+            state: { width: 400, introDismissed: true, autoLaunchEnabled: true },
+          });
+          const backing = installLocalStorage({ [STORAGE_KEY]: blob });
+
+          const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+          expect(store.getState().autoLaunchEnabled).toBe(false);
+          // Only the recorded consent goes; the rest of the blob survives.
+          expect(store.getState().width).toBe(400);
+          expect(store.getState().introDismissed).toBe(true);
+
+          // And it reaches disk, so the next view to load reads false too.
+          vi.advanceTimersByTime(400);
+          const written: unknown = JSON.parse(backing.get(STORAGE_KEY)!);
+          expect(written).toMatchObject({ version: 8, state: { autoLaunchEnabled: false } });
+          vi.resetModules();
+          const reloaded = await import("../helpPanelStore");
+          expect(reloaded.useHelpPanelStore.getState().autoLaunchEnabled).toBe(false);
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+    );
+
+    it("preserves autoLaunchEnabled: true from a v8 blob across rehydration", async () => {
       const blob = JSON.stringify({
-        version: 6,
-        state: { width: 400, preferredAgentId: "claude", autoLaunchEnabled: true },
+        version: 8,
+        state: { width: 400, autoLaunchEnabled: true },
       });
       installLocalStorage({ [STORAGE_KEY]: blob });
 
@@ -1316,11 +1383,112 @@ describe("helpPanelStore persistence migration", () => {
           version: number;
           state: Record<string, unknown>;
         };
-        expect(parsed.version).toBe(7);
+        expect(parsed.version).toBe(8);
         expect(parsed.state.autoLaunchEnabled).toBe(true);
+
+        // And back off, persisted the same way (#14976).
+        store.getState().setAutoLaunchEnabled(false);
+        vi.advanceTimersByTime(400);
+        const off: unknown = JSON.parse(backing.get(STORAGE_KEY)!);
+        expect(off).toMatchObject({ state: { autoLaunchEnabled: false } });
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    describe("another view's change (#14976)", () => {
+      const blob = (autoLaunchEnabled: unknown, width = 300, version = 8) =>
+        JSON.stringify({ version, state: { autoLaunchEnabled, width } });
+      // A sibling's write as this view hears it: disk already holds `next`.
+      function siblingWrites(backing: Map<string, string>, prev: string | null, next: string) {
+        backing.set(STORAGE_KEY, next);
+        window.dispatchEvent(
+          new StorageEvent("storage", { key: STORAGE_KEY, oldValue: prev, newValue: next })
+        );
+      }
+
+      it("follows it, as the shared storage holds it now", async () => {
+        const backing = installLocalStorage({});
+        const { useHelpPanelStore: store } = await import("../helpPanelStore");
+        store.setState({ autoLaunchEnabled: true, width: 500 });
+
+        siblingWrites(backing, blob(true), blob(false));
+        expect(store.getState().autoLaunchEnabled).toBe(false);
+        // Nothing else is taken from the event.
+        expect(store.getState().width).toBe(500);
+
+        // Off then on again, heard late: the first event can't undo the second.
+        backing.set(STORAGE_KEY, blob(true));
+        window.dispatchEvent(
+          new StorageEvent("storage", {
+            key: STORAGE_KEY,
+            oldValue: blob(true),
+            newValue: blob(false),
+          })
+        );
+        expect(store.getState().autoLaunchEnabled).toBe(true);
+      });
+
+      it("ignores a sibling's write of something else, which still carries the old flag", async () => {
+        const backing = installLocalStorage({ [STORAGE_KEY]: blob(true) });
+        const { useHelpPanelStore: store } = await import("../helpPanelStore");
+        expect(store.getState().autoLaunchEnabled).toBe(true);
+
+        // Turned off here, still inside the write debounce, when a sibling
+        // writes its width with disk's `true` in it.
+        store.getState().setAutoLaunchEnabled(false);
+        siblingWrites(backing, blob(true), blob(true, 640));
+
+        expect(store.getState().autoLaunchEnabled).toBe(false);
+      });
+
+      it("ignores a sibling's first write onto an empty key, which only carries the default", async () => {
+        const backing = installLocalStorage({});
+        const { useHelpPanelStore: store } = await import("../helpPanelStore");
+
+        // Turned on here, still inside the write debounce, when a sibling's
+        // first-ever write lands with the default in it.
+        store.getState().setAutoLaunchEnabled(true);
+        siblingWrites(backing, null, blob(false, 640));
+
+        expect(store.getState().autoLaunchEnabled).toBe(true);
+      });
+
+      it("never turns it on from a pre-v8 blob, a non-boolean, or another key", async () => {
+        const backing = installLocalStorage({});
+        const { useHelpPanelStore: store } = await import("../helpPanelStore");
+        expect(store.getState().autoLaunchEnabled).toBe(false);
+
+        siblingWrites(backing, blob(false), blob(true, 300, 7));
+        expect(store.getState().autoLaunchEnabled).toBe(false);
+        siblingWrites(backing, blob(false), blob("true"));
+        expect(store.getState().autoLaunchEnabled).toBe(false);
+        siblingWrites(backing, blob(false), "{not json");
+        expect(store.getState().autoLaunchEnabled).toBe(false);
+
+        backing.set(STORAGE_KEY, blob(true));
+        window.dispatchEvent(
+          new StorageEvent("storage", {
+            key: "other-key",
+            oldValue: blob(false),
+            newValue: blob(true),
+          })
+        );
+        expect(store.getState().autoLaunchEnabled).toBe(false);
+      });
+
+      it("never leaves it on from a non-boolean either", async () => {
+        const backing = installLocalStorage({});
+        const { useHelpPanelStore: store } = await import("../helpPanelStore");
+        store.setState({ autoLaunchEnabled: true });
+
+        siblingWrites(backing, blob(true), blob("false"));
+        // A malformed value isn't a choice: it changes nothing here.
+        expect(store.getState().autoLaunchEnabled).toBe(true);
+        siblingWrites(backing, blob(true), blob(true, 300, 7));
+        // A pre-v8 blob is never consent, whatever it says.
+        expect(store.getState().autoLaunchEnabled).toBe(false);
+      });
     });
   });
 

@@ -310,14 +310,21 @@ export function hostMenuRowHasTrouble(row: HostMenuRow): boolean {
 
 /** The host's installed agent CLIs, as its own detection reported them. */
 export function describeHostAgentClis(row: HostMenuRow): string | null {
-  const clis = liveSummary(row)?.agentClis ?? [];
-  if (clis.length === 0) return null;
-  return clis
-    .map(({ agentId, version }) => {
-      const name = getAgentConfig(agentId)?.name ?? agentId;
-      return version ? `${name} ${version}` : name;
-    })
-    .join(" · ");
+  const clis = hostAgentCliNames(row);
+  return clis && clis.length > 0 ? clis.join(" · ") : null;
+}
+
+/**
+ * Each installed agent CLI with its version, one per entry. Null when the
+ * host didn't report its CLIs, which is not the same as reporting none.
+ */
+export function hostAgentCliNames(row: HostMenuRow): string[] | null {
+  const clis = liveSummary(row)?.agentClis;
+  if (!clis) return null;
+  return clis.map(({ agentId, version }) => {
+    const name = getAgentConfig(agentId)?.name ?? agentId;
+    return version ? `${name} ${version}` : name;
+  });
 }
 
 export type HostChipStatus =
@@ -390,19 +397,24 @@ export function hostChipStatusText(status: HostChipStatus): string | null {
   }
 }
 
-/**
- * Which side a mismatch asks to update: the one that is behind. Builds that
- * can't be ordered (same version, different commit) update the host, since
- * hosts follow the client.
- */
-export function updateTargetFor(mismatch: HandshakeMismatch): "host" | "local" {
+/** Which side runs the older build; null when the two have no order (a commit apart). */
+export function olderBuildSide(mismatch: HandshakeMismatch): "host" | "local" | null {
   const order =
     mismatch.kind === "protocol"
       ? mismatch.remote - mismatch.local
       : mismatch.kind === "version"
         ? (compareReleaseVersions(mismatch.remote, mismatch.local) ?? 0)
         : 0;
-  return order > 0 ? "local" : "host";
+  return order > 0 ? "local" : order < 0 ? "host" : null;
+}
+
+/**
+ * Which side a mismatch asks to update: the one that is behind. Builds that
+ * can't be ordered (same version, different commit) update the host, since
+ * hosts follow the client.
+ */
+export function updateTargetFor(mismatch: HandshakeMismatch): "host" | "local" {
+  return olderBuildSide(mismatch) === "local" ? "local" : "host";
 }
 
 export function updateActionLabel(mismatch: HandshakeMismatch, hostName: string): string {

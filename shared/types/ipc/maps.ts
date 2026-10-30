@@ -13,6 +13,7 @@ import type {
 import type {
   VoiceCorrectionTiming,
   VoiceCorrectionVerdict,
+  VoicePrefetchMatch,
   VoiceSessionReport,
 } from "../voiceSessionSummary.js";
 import type {
@@ -34,6 +35,8 @@ import type {
   KeybindingImportResult,
   MicPermissionStatus,
   NotificationSettings,
+  VoiceCleanupFailure,
+  VoiceCorrectionPace,
   VoiceInputSettings,
   VoiceInputSettingsPatch,
 } from "./api.js";
@@ -126,6 +129,7 @@ import type {
   TerminalReliabilityMetricPayload,
   TerminalResizeResult,
   TerminalSubmitStatusPayload,
+  TerminalFirstPromptPayload,
   TerminalStatusPayload,
   TerminalResourceBatchPayload,
   BroadcastWriteResultPayload,
@@ -1315,6 +1319,8 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
         terminalId?: string;
         /** Nothing but whitespace comes before the passage in the draft. */
         startsPrompt?: boolean;
+        /** The command or skill the whole draft opens with, as typed: cleanup is told what it takes as arguments. */
+        openingCommandToken?: string;
         /** The dictation the passage came from: its context was read while it ran. */
         sessionId?: string;
         /** Spans of `rawText` the recogniser was unsure of. */
@@ -1336,6 +1342,12 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
       /** Why the passage came back as it did: a code, never text. */
       verdict?: VoiceCorrectionVerdict;
       timing?: VoiceCorrectionTiming;
+      /** A streamed reply that came back whole; a retried request's stall left out. */
+      pace?: VoiceCorrectionPace;
+      /** What became of a pause's prefetch of the passage; only for a passage with a session. */
+      prefetch?: VoicePrefetchMatch;
+      /** A failure that will recur, on the one reply of its outage that should say so. */
+      cleanupFailure?: VoiceCleanupFailure;
     };
   };
 
@@ -1584,6 +1596,9 @@ export interface IpcEventMap {
   };
   "terminal:status": TerminalStatusPayload;
   "terminal:submit-status": TerminalSubmitStatusPayload;
+  // Carries prompt text (#15521): sent only to this machine's views of the
+  // owning project, never relayed off the bus or to a remote view.
+  "terminal:first-prompt": TerminalFirstPromptPayload;
   // Every terminal currently handed to an orchestrating pane (#12490). The
   // whole list on each change: it is small and rarely changes.
   "terminal:adoptions-changed": import("./mcpServer.js").TerminalAdoptionEntry[];
@@ -1743,6 +1758,8 @@ export interface IpcEventMap {
     hostPreview?: import("./mcpServer.js").McpHostPreview;
     /** What pre-authorized a `confirmed` dispatch (#12874); set only by main. */
     authorization?: import("./mcpServer.js").McpDispatchAuthorization;
+    /** The pane or Assistant tab that sent the call (#14992); set only by main. */
+    requester?: import("./mcpServer.js").McpRequester;
   };
 
   /**
@@ -2122,8 +2139,11 @@ export interface IpcEventMap {
   "voice-input:file-token-resolved": {
     sessionId: string;
     transcriptId: string;
-    /** Every reference detected, with its worktree-relative path or null for a miss. Sent only when one resolved. */
-    references: Array<{ description: string; path: string | null }>;
+    /**
+     * Every reference detected, with its worktree-relative path or null for a
+     * miss. `failed` marks a lookup that threw, timed out or had nowhere to look.
+     */
+    references: Array<{ description: string; path: string | null; failed?: true }>;
   };
   "voice-input:error": { sessionId: string; error: VoiceInputError };
   "voice-input:status": { sessionId: string; status: VoiceInputStatus };
@@ -2708,6 +2728,7 @@ export type IpcEventBusMap = Pick<
   | "terminal:reliability-metric"
   | "terminal:status"
   | "terminal:submit-status"
+  | "terminal:first-prompt"
   // Terminals handed to an orchestrating pane (global broadcast)
   | "terminal:adoptions-changed"
   | "terminal:canopy-size-holds-changed"

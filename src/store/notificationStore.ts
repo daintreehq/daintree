@@ -21,6 +21,8 @@ export interface NotificationAction {
   actionArgs?: Record<string, unknown>;
   /** Past-tense label shown during the success-flash confirmation. When absent, the action dismisses the toast immediately on click (current behavior). */
   successLabel?: string;
+  /** `false` keeps the toast up after a click without `successLabel`, for an action whose outcome happens elsewhere and may be declined there. */
+  dismissOnClick?: boolean;
 }
 
 /**

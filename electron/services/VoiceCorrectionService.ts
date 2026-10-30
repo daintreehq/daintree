@@ -7,15 +7,23 @@ import {
   VOICE_DICTATION_REASONING_EFFORT,
   buildCorrectionSystemPrompt,
   buildRewriteSystemPrompt,
+  cleanupReasoningEffortFor,
+  cleanupWarmEffortsFor,
   correctionInstructionsFor,
   isVoiceCleanupModel,
+  voiceCleanupProviderOf,
+  type CleanupPassage,
   type CorrectionInstructions,
   type CorrectionPromptContext,
   type CorrectionTargetContext,
   type CorrectionWorktreeContext,
   type VoiceReasoningEffort,
 } from "../../shared/config/voiceCorrection.js";
-import type { VoiceTranscriptionProvider } from "../../shared/types/ipc/api.js";
+import type {
+  VoiceCleanupFailure,
+  VoiceCorrectionProvider,
+  VoiceTranscriptionProvider,
+} from "../../shared/types/ipc/api.js";
 import type { VoiceRewriteOutcome } from "../../shared/types/voice.js";
 import type { VoiceCorrectionVerdict } from "../../shared/types/voiceSessionSummary.js";
 import { voiceErrorLogFields } from "../../shared/utils/voiceLogFields.js";
@@ -31,7 +39,22 @@ import type { HeardAsRule } from "../../shared/utils/voiceHeardAs.js";
 import type { VoiceCommandEntry } from "../../shared/utils/voiceAgentCommands.js";
 import type { VoiceAgentReply } from "./voiceAgentReplyTypes.js";
 import type { VoiceCommandTarget } from "./voiceCommandTarget.js";
+import type { VoiceOpeningCommand } from "./voiceOpeningCommand.js";
 import { holdsCredential, isSecretShaped } from "./voiceKeytermSecrets.js";
+import {
+  CLAUDE_MESSAGES_URL,
+  CLAUDE_ORIGIN,
+  ClaudeStreamReader,
+  claudeErrorCode,
+  claudeBillingRefused,
+  claudeHeaders,
+  claudeMessageText,
+  claudeRequestBody,
+  readClaudeUsage,
+  THINKING_HEADROOM_TOKENS,
+  type ClaudeMessage,
+  type ClaudeStreamEvent,
+} from "./voiceCleanupClaude.js";
 
 export { CORE_CORRECTION_PROMPT, buildCorrectionSystemPrompt };
 export type { VoiceCorrectionProposal };
@@ -40,6 +63,9 @@ const P = "[VoiceCorrection]";
 const SHORT_CORRECTION_TIMEOUT_MS = 7000;
 const LONG_CORRECTION_TIMEOUT_MS = 15000;
 const LONG_CORRECTION_MIN_CHARS = 140;
+// What a request that reasons gets on top of its deadline: Haiku at medium
+// came back in up to 7 s on short passages, with a stalled first try to fit.
+const REASONING_TIMEOUT_MS = 4000;
 const MAX_CORRECTION_TIMEOUT_MS = 60000;
 const CORRECTION_TIMEOUT_MS_PER_CHAR = 5;
 // Past this a passage stays raw on purpose rather than risk a cut-off reply.
@@ -58,11 +84,16 @@ const REWRITE_CACHE_PREFIX = "voice-rewrite-v1";
 const MIN_REWRITE_TIMEOUT_MS = 10000;
 const FILE_LINK_CACHE_PREFIX = "voice-file-link-v2";
 const PROMPT_TAG_OPEN_RE =
-  /<(?=\/?(?:recent_prompts|terminal_output|agent_last_reply|code_names|target|following_text|job|confirmed_history|uncertain|pause)\b)/gi;
+  /<(?=\/?(?:recent_prompts|terminal_output|agent_last_reply|code_names|opening_command|target|following_text|job|confirmed_history|uncertain|pause)\b)/gi;
 const OPENAI_ORIGIN = "https://api.openai.com/";
 const RESPONSES_URL = "https://api.openai.com/v1/responses";
-// OpenAI keeps an unused prefix cached for five to ten minutes. Checked once a
-// minute, a prompt goes out again within four of its last use.
+const ORIGINS: Record<VoiceCorrectionProvider, string> = {
+  openai: OPENAI_ORIGIN,
+  anthropic: CLAUDE_ORIGIN,
+};
+// OpenAI keeps an unused prefix cached for five to ten minutes, and Anthropic
+// for five from its last read. Checked once a minute, a prompt goes out again
+// within four of its last use.
 const PROMPT_WARM_FOR_MS = 3 * 60_000;
 const PROMPT_USE_MEMORY = 16;
 const WARM_TIMEOUT_MS = 10_000;
@@ -70,6 +101,14 @@ const WARM_TIMEOUT_MS = 10_000;
 const WARM_MAX_OUTPUT_TOKENS = 16;
 const WARM_USER_MESSAGE = "<job>\nreason=warmup\n</job>\n\n<target>\n</target>";
 const PRECONNECT_TIMEOUT_MS = 3000;
+// A streamed cleanup's headers come back within a second; one that hasn't
+// answered by now has stalled rather than slowed, so it goes out once more.
+const STALL_MS = 4000;
+// Busy, failing or rate limiting: worth one more try. 529 is Anthropic's overloaded.
+const RETRY_STATUSES = new Set([408, 429, 500, 502, 503, 504, 529]);
+// Undici's message for a request that never reached the server, as opposed to
+// one fetch refused to build.
+const FETCH_FAILED = "fetch failed";
 const PRECONNECT_WAIT_MS = 250;
 // Fetch keeps an idle socket for four seconds; one this fresh will still be
 // there for a passage sent now.
@@ -180,7 +219,7 @@ export interface VoiceRewriteRequest {
 
 export interface VoiceCorrectionSettings {
   model: string;
-  /** Overrides VOICE_DICTATION_REASONING_EFFORT for cleanup, its warm-up and rewrite. */
+  /** Overrides `cleanupReasoningEffortFor` for every passage, the warm-up and rewrite. */
   reasoningEffort?: VoiceReasoningEffort;
   /** Cleanup rules in place of the model's own (`correctionInstructionsFor`): the cleanup benchmark's prompt variants. */
   instructions?: CorrectionInstructions;
@@ -228,6 +267,12 @@ export interface VoiceCorrectionRequest {
   pauses?: readonly number[];
   /** Nothing comes before the passage in the draft, so it may open with a command. */
   startsPrompt?: boolean;
+  /**
+   * What the command the draft opens with says about itself, already screened
+   * (`readVoiceOpeningCommand`): the passage may be its arguments. File
+   * content, so never logged.
+   */
+  openingCommand?: VoiceOpeningCommand;
 }
 
 export interface VoiceCorrectionResult {
@@ -239,6 +284,8 @@ export interface VoiceCorrectionResult {
   verdict: VoiceCorrectionVerdict;
   /** The request failed or was cancelled, so the raw text stands untried. */
   failed?: true;
+  /** The failure will recur on every passage until the account or settings change. */
+  cleanupFailure?: VoiceCleanupFailure;
   /** The reply as the model gave it; absent when none parsed. Transcript content, so never logged. */
   proposal?: VoiceCorrectionProposal;
   /**
@@ -246,6 +293,12 @@ export interface VoiceCorrectionResult {
    * and the tokens it was billed for when the reply said; absent when none went out.
    */
   roundTrip?: { sentAt: number; ms: number; usage?: VoiceCorrectionUsage };
+  /**
+   * For a streamed reply that came back whole: how long from this call until
+   * its first text, leaving out an attempt given up for a retry, how long the
+   * text then took to finish, and the effort it was asked for.
+   */
+  phases?: { untilOutputMs: number; outputMs: number; effort: VoiceReasoningEffort };
 }
 
 /** Reasoning tokens are part of `outputTokens`, and cached ones part of `inputTokens`. */
@@ -280,8 +333,13 @@ function readUsage(usage: ResponsesUsage | undefined): VoiceCorrectionUsage | un
 /** Filled in as a correction's one request goes out and settles. */
 interface RequestTrace {
   sentAt?: number;
+  /** When the attempt that answered went out, and when its first text came. */
+  attemptSentAt?: number;
+  firstOutputAt?: number;
   settledAt?: number;
   usage?: VoiceCorrectionUsage;
+  /** The effort the passage went out with, which its pace sample is filed under. */
+  effort?: VoiceReasoningEffort;
 }
 
 interface CorrectionApiResult {
@@ -387,46 +445,108 @@ function streamedCorrectionText(reply: string, stripMarks: boolean): string | nu
 }
 
 /** Each complete server-sent event's JSON in `buffer`, and what's left of it. */
-function takeStreamEvents(buffer: string): { events: CorrectionStreamEvent[]; rest: string } {
+function takeStreamEvents(buffer: string): { events: unknown[]; rest: string } {
   const frames = buffer.split(/\r?\n\r?\n/);
   const rest = frames.pop() ?? "";
-  const events: CorrectionStreamEvent[] = [];
+  const events: unknown[] = [];
   for (const frame of frames) {
     const data = frame
       .split(/\r?\n/)
       .filter((line) => line.startsWith("data:"))
       .map((line) => line.slice(5).replace(/^ /, ""))
       .join("\n");
-    if (data) events.push(JSON.parse(data) as CorrectionStreamEvent);
+    if (data) events.push(JSON.parse(data));
   }
   return { events, rest };
 }
 
-// Carries the status and OpenAI error code only; the body's message can echo request content.
-class OpenAIRequestError extends Error {
+// Carries the status and the API's error code only; the body's message can echo request content.
+/** Room in OpenAI's output cap for reasoning, which counts toward it. */
+function reasoningHeadroom(effort: VoiceReasoningEffort): number {
+  return effort === "none" ? 0 : THINKING_HEADROOM_TOKENS;
+}
+
+function cleanupEffortOf(
+  settings: VoiceCorrectionSettings,
+  passage?: CleanupPassage
+): VoiceReasoningEffort {
+  return settings.reasoningEffort ?? cleanupReasoningEffortFor(settings.model, passage);
+}
+
+/**
+ * A rejection no retry or later passage gets past until the key, account or
+ * settings change. Codes come inside a stream's 200 too, so the status only
+ * settles one without a code it knows.
+ */
+function persistentFailureOf(
+  status: number,
+  code: string | undefined
+): VoiceCleanupFailure["reason"] | undefined {
+  switch (code) {
+    case "invalid_api_key":
+    case "authentication_error":
+      return "key_rejected";
+    case "insufficient_quota":
+    case "credit_balance_exhausted":
+    case "organization_spend_limit_exceeded":
+    case "organization_usage_limit_exceeded":
+    case "project_spend_limit_exceeded":
+    case "billing_error":
+      return "billing_required";
+    case "unsupported_country_region_territory":
+      return "region_refused";
+    case "model_not_found":
+    case "permission_error":
+      return "access_denied";
+  }
+  if (status === 401) return "key_rejected";
+  if (status === 402) return "billing_required";
+  if (status === 403) return "access_denied";
+  return undefined;
+}
+
+class CleanupRequestError extends Error {
+  readonly persistent: VoiceCleanupFailure["reason"] | undefined;
+
   constructor(
     readonly status: number,
-    readonly code: string | undefined
+    readonly code: string | undefined,
+    provider: VoiceCorrectionProvider = "openai",
+    billingRefused = false
   ) {
-    super(`OpenAI API error: ${status}${code ? ` (${code})` : ""}`);
+    super(
+      `${provider === "anthropic" ? "Anthropic" : "OpenAI"} API error: ${status}${code ? ` (${code})` : ""}`
+    );
+    this.persistent = billingRefused ? "billing_required" : persistentFailureOf(status, code);
   }
 
-  static async fromResponse(response: Response): Promise<OpenAIRequestError> {
+  static async fromResponse(
+    response: Response,
+    provider: VoiceCorrectionProvider = "openai"
+  ): Promise<CleanupRequestError> {
     let code: string | undefined;
+    let billingRefused = false;
     try {
-      const body = (await response.json()) as { error?: { code?: unknown } };
-      if (typeof body.error?.code === "string") code = body.error.code;
+      const body = (await response.json()) as { error?: { code?: unknown; type?: unknown } };
+      if (provider === "anthropic") {
+        code = claudeErrorCode(body);
+        billingRefused = claudeBillingRefused(body);
+      } else {
+        if (typeof body.error?.code === "string") code = body.error.code;
+        // The type every billing refusal shares, whichever code it names.
+        billingRefused = body.error?.type === "insufficient_quota";
+      }
     } catch {
       // Non-JSON error body: the status alone is enough.
     }
-    return new OpenAIRequestError(response.status, code);
+    return new CleanupRequestError(response.status, code, provider, billingRefused);
   }
 }
 
 // A reply that is discarded whole rather than applied. Its code reaches the
 // logs through voiceErrorLogFields, so a deliberate raw fallback is visible.
 class CorrectionDiscardedError extends Error {
-  constructor(readonly code: "incomplete" | "malformed") {
+  constructor(readonly code: "incomplete" | "malformed" | "refused") {
     super(`Correction reply ${code}`);
     this.name = "CorrectionDiscardedError";
   }
@@ -440,6 +560,89 @@ interface UserTextBlock {
 }
 
 type UserContent = string | UserTextBlock[];
+
+/** The user turn as either API is sent it: one text, or the recent prompts' blocks then the passage. */
+type UserTurn = string | string[];
+
+/** A reply read whole or rebuilt from its stream, whichever API sent it. */
+interface SettledReply {
+  text: string | undefined;
+  /** Why the reply stopped short, or null when it finished. */
+  cutOff: string | null;
+  refused: boolean;
+  usage?: VoiceCorrectionUsage;
+}
+
+/** Reads one API's stream events: the text each adds, and the reply once the stream says it is done. */
+interface StreamReader<Reply> {
+  take(event: unknown): string | null;
+  settled(text: string): Reply | null;
+}
+
+function settleOpenAIReply(reply: CorrectionReply): SettledReply {
+  const text =
+    typeof reply.output_text === "string" && reply.output_text.trim()
+      ? reply.output_text
+      : reply.output?.flatMap((item) => item.content ?? []).find((item) => item.text)?.text;
+  return {
+    text,
+    cutOff: reply.status === "incomplete" ? (reply.incomplete_details?.reason ?? "unknown") : null,
+    refused: false,
+    usage: readUsage(reply.usage),
+  };
+}
+
+function settleClaudeReply(message: ClaudeMessage): SettledReply {
+  return {
+    text: claudeMessageText(message),
+    cutOff: message.stop_reason === "max_tokens" ? "max_output_tokens" : null,
+    refused: message.stop_reason === "refusal",
+    usage: readClaudeUsage(message.usage),
+  };
+}
+
+function openAIStreamReader(status: number): StreamReader<CorrectionReply> {
+  // The first text part only, as a whole reply is read.
+  let part: string | null = null;
+  let reply: CorrectionReply | null = null;
+  return {
+    take(raw) {
+      const event = raw as CorrectionStreamEvent;
+      if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
+        const at = `${event.output_index ?? 0}:${event.content_index ?? 0}`;
+        part ??= at;
+        return at === part ? event.delta : null;
+      }
+      if (event.type === "response.completed" || event.type === "response.incomplete") {
+        reply = event.response ?? {};
+      } else if (event.type === "response.failed" || event.type === "error") {
+        const code = event.response?.error?.code ?? event.error?.code ?? event.code;
+        throw new CleanupRequestError(status, typeof code === "string" ? code : undefined);
+      }
+      return null;
+    },
+    settled: (text) => (reply === null ? null : text ? { ...reply, output_text: text } : reply),
+  };
+}
+
+function claudeStreamReader(status: number): StreamReader<ClaudeMessage> {
+  const reader = new ClaudeStreamReader();
+  return {
+    take(raw) {
+      const event = raw as ClaudeStreamEvent;
+      if (event.type === "error") {
+        throw new CleanupRequestError(
+          status,
+          claudeErrorCode(event),
+          "anthropic",
+          claudeBillingRefused(event)
+        );
+      }
+      return reader.take(event);
+    },
+    settled: (text) => reader.settled(text),
+  };
+}
 
 const EXPLICIT_CACHE_BREAKPOINT = { mode: "explicit" } as const;
 
@@ -481,12 +684,27 @@ function agentReplyBlock(reply: VoiceAgentReply, now: number): string {
   return `<agent_last_reply>\n${lines.join("\n")}\n</agent_last_reply>`;
 }
 
+function openingCommandBlock(command: VoiceOpeningCommand): string {
+  const fields: [string, string | undefined][] = [
+    ["command", command.token],
+    ["description", command.description],
+    ["argument_hint", command.argumentHint],
+    ["excerpt", command.excerpt],
+  ];
+  // Each one quoted line, so the skill's own text can't pass for a label,
+  // close its block or open a <target> of its own.
+  const lines = fields.flatMap(([label, value]) =>
+    value ? [`${label}=${JSON.stringify(value).replace(PROMPT_TAG_OPEN_RE, "‹")}`] : []
+  );
+  return `<opening_command>\n${lines.join("\n")}\n</opening_command>`;
+}
+
 export class VoiceCorrectionService {
   // When each correction prompt last reached OpenAI, by account and content.
   private readonly promptUsedAt = new Map<string, number>();
   private readonly warming = new Set<string>();
-  private preconnecting: Promise<void> | null = null;
-  private preconnectedAt: number | null = null;
+  private readonly preconnecting = new Map<VoiceCorrectionProvider, Promise<void>>();
+  private readonly preconnectedAt = new Map<VoiceCorrectionProvider, number>();
 
   /**
    * Cleans up one passage. `signal` belongs to the request alone: nothing
@@ -500,12 +718,24 @@ export class VoiceCorrectionService {
     signal?: AbortSignal,
     onText?: (text: string) => void
   ): Promise<VoiceCorrectionResult> {
+    const calledAt = performance.now();
     const trace: RequestTrace = {};
     const result = await this.correctPassage(request, settings, trace, signal, onText);
-    if (trace.sentAt === undefined) return result;
-    const ms = (trace.settledAt ?? performance.now()) - trace.sentAt;
+    const { sentAt, attemptSentAt, firstOutputAt } = trace;
+    if (sentAt === undefined) return result;
+    const settledAt = trace.settledAt ?? performance.now();
     const usage = trace.usage ? { usage: trace.usage } : {};
-    return { ...result, roundTrip: { sentAt: trace.sentAt, ms, ...usage } };
+    const phases =
+      !result.failed && attemptSentAt !== undefined && firstOutputAt !== undefined
+        ? {
+            phases: {
+              untilOutputMs: sentAt - calledAt + (firstOutputAt - attemptSentAt),
+              outputMs: settledAt - firstOutputAt,
+              effort: trace.effort ?? cleanupEffortOf(settings),
+            },
+          }
+        : {};
+    return { ...result, roundTrip: { sentAt, ms: settledAt - sentAt, ...usage }, ...phases };
   }
 
   private async correctPassage(
@@ -584,11 +814,13 @@ export class VoiceCorrectionService {
           verdict: "failed",
         };
       }
-      const rejection = error instanceof OpenAIRequestError ? error : undefined;
+      const rejection = error instanceof CleanupRequestError ? error : undefined;
+      const reason = rejection?.persistent;
       logWarn(`${P} Correction failed, using raw text`, {
         ...voiceErrorLogFields(error),
         status: rejection?.status,
         code: rejection?.code,
+        persistent: reason,
       });
       return {
         action: "no_change",
@@ -598,6 +830,9 @@ export class VoiceCorrectionService {
         failed: true,
         verdict:
           error instanceof DOMException && error.name === "TimeoutError" ? "timed_out" : "failed",
+        ...(reason
+          ? { cleanupFailure: { reason, provider: voiceCleanupProviderOf(settings.model) } }
+          : {}),
       };
     }
   }
@@ -653,20 +888,51 @@ export class VoiceCorrectionService {
    * sends reads the prompts the last one wrote from the cache, until the window
    * of prompts moves on.
    */
-  private buildUserMessage(request: VoiceCorrectionRequest, model: string): UserContent {
+  private buildUserMessage(request: VoiceCorrectionRequest): UserTurn {
     const message = this.buildPassageMessage(request);
     const prompts = request.recentPrompts ?? [];
     if (prompts.length === 0) return message;
+    // Each is one quoted line, and can't close its block or open a <target> of its own.
+    const blocks = prompts.map(
+      (prompt, index) =>
+        `${index === 0 ? "<recent_prompts>\n" : ""}${JSON.stringify(prompt).replace(PROMPT_TAG_OPEN_RE, "‹")}\n`
+    );
+    blocks.push(`</recent_prompts>\n\n${message}`);
+    return blocks;
+  }
+
+  /** The user turn as the Responses API takes it, every prompt block a cache breakpoint. */
+  private openAIUserContent(turn: UserTurn, model: string): UserContent {
+    if (typeof turn === "string") return turn;
     // Only models known to take the field: another may refuse the request.
     const marked = isVoiceCleanupModel(model);
-    // Each is one quoted line, and can't close its block or open a <target> of its own.
-    const blocks: UserTextBlock[] = prompts.map((prompt, index) => ({
+    return turn.map((text, index) => ({
       type: "input_text",
-      text: `${index === 0 ? "<recent_prompts>\n" : ""}${JSON.stringify(prompt).replace(PROMPT_TAG_OPEN_RE, "‹")}\n`,
-      ...(marked ? { prompt_cache_breakpoint: EXPLICIT_CACHE_BREAKPOINT } : {}),
+      text,
+      ...(marked && index < turn.length - 1
+        ? { prompt_cache_breakpoint: EXPLICIT_CACHE_BREAKPOINT }
+        : {}),
     }));
-    blocks.push({ type: "input_text", text: `</recent_prompts>\n\n${message}` });
-    return blocks;
+  }
+
+  private endpointFor(
+    settings: Pick<VoiceCorrectionSettings, "model" | "apiKey" | "organizationId" | "projectId">
+  ): {
+    url: string;
+    headers: Record<string, string>;
+  } {
+    const auth =
+      voiceCleanupProviderOf(settings.model) === "anthropic"
+        ? { url: CLAUDE_MESSAGES_URL, headers: claudeHeaders(settings.apiKey) }
+        : {
+            url: RESPONSES_URL,
+            headers: buildOpenAIHeaders(
+              settings.apiKey,
+              settings.organizationId,
+              settings.projectId
+            ),
+          };
+    return { url: auth.url, headers: { "Content-Type": "application/json", ...auth.headers } };
   }
 
   private buildPassageMessage(request: VoiceCorrectionRequest): string {
@@ -707,6 +973,10 @@ export class VoiceCorrectionService {
       // its line, so it stays.
       const following = request.followingText.trimEnd().replace(PROMPT_TAG_OPEN_RE, "‹");
       parts.push(`<following_text>\n${following}\n</following_text>`);
+    }
+
+    if (request.openingCommand) {
+      parts.push(openingCommandBlock(request.openingCommand));
     }
 
     if (request.codeNames && request.codeNames.length > 0) {
@@ -793,55 +1063,65 @@ export class VoiceCorrectionService {
     if (!selectedText.trim() || !instruction) return { status: "no_change" };
 
     const maxOutputTokens = this.getMaxOutputTokens({ rawText: selectedText });
+    const effort = cleanupEffortOf(settings);
     const timeoutMs = Math.max(
       MIN_REWRITE_TIMEOUT_MS,
-      this.getCorrectionTimeoutMs({ rawText: selectedText, segmentCount: 2 })
+      this.getCorrectionTimeoutMs({ rawText: selectedText, segmentCount: 2 }, effort)
     );
     const deadline = createTimeoutSignal(timeoutMs);
     const startedAt = performance.now();
     try {
-      const response = await fetch("https://api.openai.com/v1/responses", {
+      const provider = voiceCleanupProviderOf(settings.model);
+      const system = buildRewriteSystemPrompt({ language: settings.language });
+      const user = `<selection>\n${selectedText}\n</selection>\n\n<instruction>\n${instruction}\n</instruction>`;
+      const { url, headers } = this.endpointFor(settings);
+      const response = await fetch(url, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...buildOpenAIHeaders(settings.apiKey, settings.organizationId, settings.projectId),
-        },
+        headers,
         signal: deadline.signal,
-        body: JSON.stringify({
-          model: settings.model,
-          input: [
-            {
-              role: "developer",
-              content: buildRewriteSystemPrompt({ language: settings.language }),
-            },
-            {
-              role: "user",
-              content: `<selection>\n${selectedText}\n</selection>\n\n<instruction>\n${instruction}\n</instruction>`,
-            },
-          ],
-          prompt_cache_key: REWRITE_CACHE_PREFIX,
-          service_tier: "auto",
-          reasoning: { effort: settings.reasoningEffort ?? VOICE_DICTATION_REASONING_EFFORT },
-          text: {
-            format: {
-              type: "json_schema",
-              name: "voice_rewrite_result",
-              strict: true,
-              schema: REWRITE_RESULT_SCHEMA,
-            },
-          },
-          max_output_tokens: maxOutputTokens,
-        }),
+        body: JSON.stringify(
+          provider === "anthropic"
+            ? claudeRequestBody({
+                model: settings.model,
+                effort,
+                system,
+                user,
+                schema: REWRITE_RESULT_SCHEMA,
+                maxTokens: maxOutputTokens,
+              })
+            : {
+                model: settings.model,
+                input: [
+                  { role: "developer", content: system },
+                  { role: "user", content: user },
+                ],
+                prompt_cache_key: REWRITE_CACHE_PREFIX,
+                service_tier: "auto",
+                store: false,
+                reasoning: { effort },
+                text: {
+                  format: {
+                    type: "json_schema",
+                    name: "voice_rewrite_result",
+                    strict: true,
+                    schema: REWRITE_RESULT_SCHEMA,
+                  },
+                },
+                max_output_tokens: maxOutputTokens + reasoningHeadroom(effort),
+              }
+        ),
       });
-      if (!response.ok) throw await OpenAIRequestError.fromResponse(response);
+      if (!response.ok) throw await CleanupRequestError.fromResponse(response, provider);
 
-      const data = (await response.json()) as {
-        output_text?: string;
-        output?: Array<{ content?: Array<{ text?: string }> }>;
-        status?: string;
-      };
-      if (data.status === "incomplete") throw new CorrectionDiscardedError("incomplete");
-      const parsed = JSON.parse(this.extractResponseText(data)) as {
+      const data: unknown = await response.json();
+      const reply =
+        provider === "anthropic"
+          ? settleClaudeReply(data as ClaudeMessage)
+          : settleOpenAIReply(data as CorrectionReply);
+      if (reply.cutOff !== null) throw new CorrectionDiscardedError("incomplete");
+      if (reply.refused) throw new CorrectionDiscardedError("refused");
+      if (!reply.text) throw new Error("No content in API response");
+      const parsed = JSON.parse(reply.text) as {
         action?: unknown;
         rewritten_text?: unknown;
       };
@@ -874,7 +1154,7 @@ export class VoiceCorrectionService {
       });
       return outcome;
     } catch (error) {
-      const rejection = error instanceof OpenAIRequestError ? error : undefined;
+      const rejection = error instanceof CleanupRequestError ? error : undefined;
       logWarn(`${P} Rewrite failed, keeping the selection`, {
         ...voiceErrorLogFields(error),
         status: rejection?.status,
@@ -911,6 +1191,7 @@ export class VoiceCorrectionService {
           input: trimmed,
           prompt_cache_key: FILE_LINK_CACHE_PREFIX,
           service_tier: "auto",
+          store: false,
           reasoning: { effort: VOICE_DICTATION_REASONING_EFFORT },
           text: {
             format: {
@@ -925,7 +1206,7 @@ export class VoiceCorrectionService {
       });
 
       if (!response.ok) {
-        const failure = await OpenAIRequestError.fromResponse(response);
+        const failure = await CleanupRequestError.fromResponse(response);
         logWarn(`${P} File link detection API error: ${response.status}`, { code: failure.code });
         return [];
       }
@@ -973,16 +1254,18 @@ export class VoiceCorrectionService {
   }
 
   private getCorrectionTimeoutMs(
-    request: Pick<VoiceCorrectionRequest, "rawText" | "segmentCount">
+    request: Pick<VoiceCorrectionRequest, "rawText" | "segmentCount">,
+    effort: VoiceReasoningEffort
   ): number {
+    const reasoning = effort === "none" ? 0 : REASONING_TIMEOUT_MS;
     const length = request.rawText.length;
     if (length < LONG_CORRECTION_MIN_CHARS && (request.segmentCount ?? 0) <= 1) {
-      return SHORT_CORRECTION_TIMEOUT_MS;
+      return SHORT_CORRECTION_TIMEOUT_MS + reasoning;
     }
     const extraChars = Math.max(0, length - 1000);
     return Math.min(
       MAX_CORRECTION_TIMEOUT_MS,
-      LONG_CORRECTION_TIMEOUT_MS + extraChars * CORRECTION_TIMEOUT_MS_PER_CHAR
+      LONG_CORRECTION_TIMEOUT_MS + extraChars * CORRECTION_TIMEOUT_MS_PER_CHAR + reasoning
     );
   }
 
@@ -1006,28 +1289,26 @@ export class VoiceCorrectionService {
     onText: ((text: string) => void) | undefined
   ): Promise<VoiceCorrectionProposal> {
     const systemPrompt = this.buildSystemPrompt(settings);
-    // Code names, the agent's reply and pause marks go only to rules that say
-    // what they are: Luna's never learned of code names or pauses, and the
-    // cleanup benchmark's frozen rules of any. Read from the rules alone, so
-    // custom instructions can't switch them on.
+    // Code names, the agent's reply, the opening command and pause marks go
+    // only to rules that say what they are: Luna's never learned of code names
+    // or pauses, and the cleanup benchmark's frozen rules of any. Read from the
+    // rules alone, so custom instructions can't switch them on.
     const rules = settings.instructions ?? correctionInstructionsFor(settings.model);
     const pauses =
       rules.core.includes(PAUSE_MARK) && canMarkPauses(request.rawText)
         ? markablePauses(request.rawText, request.pauses ?? [])
         : [];
-    const userMessage = this.buildUserMessage(
-      {
-        ...request,
-        ...(rules.core.includes("<code_names>") ? {} : { codeNames: undefined }),
-        ...(rules.core.includes("<agent_last_reply>") ? {} : { agentReply: undefined }),
-        ...(rules.core.includes("<following_text>") ? {} : { followingText: undefined }),
-        pauses,
-      },
-      settings.model
-    );
+    const userMessage = this.buildUserMessage({
+      ...request,
+      ...(rules.core.includes("<code_names>") ? {} : { codeNames: undefined }),
+      ...(rules.core.includes("<agent_last_reply>") ? {} : { agentReply: undefined }),
+      ...(rules.core.includes("<following_text>") ? {} : { followingText: undefined }),
+      ...(rules.core.includes("<opening_command>") ? {} : { openingCommand: undefined }),
+      pauses,
+    });
     const recentPromptsLen = totalLength(request.recentPrompts);
     const agentReplyLen = request.agentReply?.text.length ?? 0;
-    logDebug(`${P} Calling Responses API`, {
+    logDebug(`${P} Calling cleanup API`, {
       model: settings.model,
       contextLen: request.recentContext?.length ?? 0,
       followingTextLen: request.followingText?.length ?? 0,
@@ -1043,12 +1324,18 @@ export class VoiceCorrectionService {
       segmentCount: request.segmentCount ?? 0,
     });
 
+    const effort = cleanupEffortOf(settings, {
+      chars: request.rawText.trim().length,
+      continuing: (request.recentContext?.length ?? 0) > 0,
+    });
+    trace.effort = effort;
     return await withTimeoutSignal(
-      this.getCorrectionTimeoutMs(request),
+      this.getCorrectionTimeoutMs(request, effort),
       (deadline) =>
         this.requestCorrection(
           request,
           settings,
+          effort,
           systemPrompt,
           userMessage,
           deadline,
@@ -1106,10 +1393,21 @@ export class VoiceCorrectionService {
   // the prefix it leaves in the cache is the one the passage arrives with.
   private correctionBody(
     settings: VoiceCorrectionSettings,
+    effort: VoiceReasoningEffort,
     systemPrompt: string,
-    userMessage: UserContent,
+    userMessage: UserTurn,
     maxOutputTokens: number
-  ) {
+  ): object {
+    if (voiceCleanupProviderOf(settings.model) === "anthropic") {
+      return claudeRequestBody({
+        model: settings.model,
+        effort,
+        system: systemPrompt,
+        user: userMessage,
+        schema: CORRECTION_RESULT_SCHEMA,
+        maxTokens: maxOutputTokens,
+      });
+    }
     return {
       model: settings.model,
       // Pass the system prompt as the first developer message in the `input`
@@ -1117,13 +1415,15 @@ export class VoiceCorrectionService {
       // eligible for OpenAI prompt caching. See issue #9746.
       input: [
         { role: "developer", content: systemPrompt },
-        { role: "user", content: userMessage },
+        { role: "user", content: this.openAIUserContent(userMessage, settings.model) },
       ],
       prompt_cache_key: this.buildPromptCacheKey(settings),
       service_tier: "auto",
-      // Explicit low-latency effort: the dictation models default to "medium"
-      // when omitted, so we pin the lowest tier rather than inherit that default.
-      reasoning: { effort: settings.reasoningEffort ?? VOICE_DICTATION_REASONING_EFFORT },
+      // Every request is one-shot: nothing reads a response back or continues
+      // one, so OpenAI has no reason to keep it as application state.
+      store: false,
+      // Explicit effort: the dictation models default to "medium" when omitted.
+      reasoning: { effort },
       text: {
         format: {
           type: "json_schema",
@@ -1132,12 +1432,17 @@ export class VoiceCorrectionService {
           schema: CORRECTION_RESULT_SCHEMA,
         },
       },
-      max_output_tokens: maxOutputTokens,
+      max_output_tokens: maxOutputTokens + reasoningHeadroom(effort),
     };
   }
 
   // Caches are per account, and the cache key leaves out parts of the prompt.
-  private promptIdentity(settings: VoiceCorrectionSettings, systemPrompt: string): string {
+  // Claude caches a prompt once per thinking setting, so there the effort counts too.
+  private promptIdentity(
+    settings: VoiceCorrectionSettings,
+    effort: VoiceReasoningEffort,
+    systemPrompt: string
+  ): string {
     return createHash("sha256")
       .update(
         JSON.stringify([
@@ -1145,6 +1450,7 @@ export class VoiceCorrectionService {
           settings.organizationId ?? null,
           settings.projectId ?? null,
           settings.model,
+          voiceCleanupProviderOf(settings.model) === "anthropic" ? effort : null,
           this.buildPromptCacheKey(settings),
           systemPrompt,
         ])
@@ -1164,13 +1470,25 @@ export class VoiceCorrectionService {
 
   /**
    * Sends the correction's developer message ahead of any passage, so the
-   * prompt cache holds it when one arrives. The user turn is a fixed
-   * placeholder: nothing dictated, drafted or read from a terminal goes with
-   * it. A prompt that went out in the last few minutes is left alone.
+   * prompt cache holds it when one arrives, once for each effort a passage
+   * may go out with. The user turn is a fixed placeholder: nothing dictated,
+   * drafted or read from a terminal goes with it. A prompt that went out in
+   * the last few minutes is left alone.
    */
   async warm(settings: VoiceCorrectionSettings): Promise<void> {
     const systemPrompt = this.buildSystemPrompt(settings);
-    const identity = this.promptIdentity(settings, systemPrompt);
+    const efforts = settings.reasoningEffort
+      ? [settings.reasoningEffort]
+      : cleanupWarmEffortsFor(settings.model);
+    await Promise.all(efforts.map((effort) => this.warmFor(settings, effort, systemPrompt)));
+  }
+
+  private async warmFor(
+    settings: VoiceCorrectionSettings,
+    effort: VoiceReasoningEffort,
+    systemPrompt: string
+  ): Promise<void> {
+    const identity = this.promptIdentity(settings, effort, systemPrompt);
     const usedAt = this.promptUsedAt.get(identity);
     if (usedAt !== undefined && performance.now() - usedAt < PROMPT_WARM_FOR_MS) return;
     if (this.warming.has(identity)) return;
@@ -1179,18 +1497,21 @@ export class VoiceCorrectionService {
     // away the socket it opened.
     const deadline = createTimeoutSignal(WARM_TIMEOUT_MS);
     const sentAt = performance.now();
+    const { url, headers } = this.endpointFor(settings);
     try {
-      const response = await fetch(RESPONSES_URL, {
+      const response = await fetch(url, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...buildOpenAIHeaders(settings.apiKey, settings.organizationId, settings.projectId),
-        },
+        headers,
         signal: deadline.signal,
-        body: JSON.stringify({
-          ...this.correctionBody(settings, systemPrompt, WARM_USER_MESSAGE, WARM_MAX_OUTPUT_TOKENS),
-          store: false,
-        }),
+        body: JSON.stringify(
+          this.correctionBody(
+            settings,
+            effort,
+            systemPrompt,
+            WARM_USER_MESSAGE,
+            WARM_MAX_OUTPUT_TOKENS
+          )
+        ),
       });
       // Read to the end, so the socket goes back to the pool.
       await response.arrayBuffer();
@@ -1205,32 +1526,32 @@ export class VoiceCorrectionService {
   }
 
   /**
-   * Opens a socket to OpenAI while a stop drains, for the correction that
+   * Opens a socket to the cleanup provider while a stop drains, for the correction that
    * follows. Fetch closes an idle socket after a few seconds, so after any
    * real dictation the correction would otherwise start with a handshake.
    * The request carries no credentials and no text; the edge answers it.
    */
-  preconnect(): void {
-    if (this.preconnecting) return;
-    const openedAt = this.preconnectedAt;
-    if (openedAt !== null && performance.now() - openedAt < PRECONNECT_FRESH_MS) return;
+  preconnect(provider: VoiceCorrectionProvider = "openai"): void {
+    if (this.preconnecting.has(provider)) return;
+    const openedAt = this.preconnectedAt.get(provider);
+    if (openedAt !== undefined && performance.now() - openedAt < PRECONNECT_FRESH_MS) return;
     const deadline = createTimeoutSignal(PRECONNECT_TIMEOUT_MS);
-    const probe: Promise<void> = fetch(OPENAI_ORIGIN, {
+    const probe: Promise<void> = fetch(ORIGINS[provider], {
       redirect: "manual",
       signal: deadline.signal,
     })
       .then((response) => response.arrayBuffer())
       .then(
         () => {
-          this.preconnectedAt = performance.now();
+          this.preconnectedAt.set(provider, performance.now());
         },
         () => undefined
       )
       .finally(() => {
         deadline.dispose();
-        if (this.preconnecting === probe) this.preconnecting = null;
+        if (this.preconnecting.get(provider) === probe) this.preconnecting.delete(provider);
       });
-    this.preconnecting = probe;
+    this.preconnecting.set(provider, probe);
   }
 
   // A probe still opening its socket is nearer done than a new handshake, and
@@ -1252,8 +1573,9 @@ export class VoiceCorrectionService {
   private async requestCorrection(
     request: VoiceCorrectionRequest,
     settings: VoiceCorrectionSettings,
+    effort: VoiceReasoningEffort,
     systemPrompt: string,
-    userMessage: UserContent,
+    userMessage: UserTurn,
     signal: AbortSignal,
     trace: RequestTrace,
     onText: ((text: string) => void) | undefined,
@@ -1261,29 +1583,67 @@ export class VoiceCorrectionService {
   ): Promise<VoiceCorrectionProposal> {
     const maxOutputTokens = this.getMaxOutputTokens(request);
     const body = JSON.stringify({
-      ...this.correctionBody(settings, systemPrompt, userMessage, maxOutputTokens),
+      ...this.correctionBody(settings, effort, systemPrompt, userMessage, maxOutputTokens),
       ...(onText ? { stream: true } : {}),
     });
-    if (this.preconnecting) {
-      await this.awaitPreconnect(this.preconnecting);
+    const probe = this.preconnecting.get(voiceCleanupProviderOf(settings.model));
+    if (probe) {
+      await this.awaitPreconnect(probe);
       // Nothing went out, so there is no round trip to report.
       signal.throwIfAborted();
     }
     const sentAt = performance.now();
     trace.sentAt = sentAt;
     try {
-      const result = await this.sendCorrection(
-        request,
-        settings,
-        body,
-        signal,
-        maxOutputTokens,
-        onText,
-        trace,
-        marked
-      );
-      this.notePromptUsed(this.promptIdentity(settings, systemPrompt), sentAt);
-      return result;
+      for (let attempt = 1; ; attempt++) {
+        // A retried request's wait on the one it gave up is no time the model spent.
+        trace.attemptSentAt = attempt === 1 ? sentAt : performance.now();
+        trace.firstOutputAt = undefined;
+        // Only a streamed reply answers before it's written, so only its
+        // silence means a stall; a whole reply's headers wait for all of it.
+        const stall = onText ? createTimeoutSignal(STALL_MS) : null;
+        let answered = false;
+        try {
+          const result = await this.sendCorrection(
+            request,
+            settings,
+            body,
+            stall ? AbortSignal.any([signal, stall.signal]) : signal,
+            maxOutputTokens,
+            onText,
+            trace,
+            marked,
+            () => {
+              answered = true;
+              stall?.dispose();
+            }
+          );
+          this.notePromptUsed(this.promptIdentity(settings, effort, systemPrompt), sentAt);
+          return result;
+        } catch (error) {
+          // A cancel or the deadline ends it, whatever the attempt was doing.
+          signal.throwIfAborted();
+          // Nothing has reached the composer before an answer, so a retry
+          // can't take back text it already showed.
+          const stalled = stall?.signal.aborted === true;
+          const rejection = error instanceof CleanupRequestError ? error : undefined;
+          // An empty account answers 429 too, and a retry only delays the raw text.
+          const busy =
+            rejection !== undefined &&
+            rejection.persistent === undefined &&
+            RETRY_STATUSES.has(rejection.status);
+          const unreached =
+            !answered && error instanceof TypeError && error.message === FETCH_FAILED;
+          if (attempt > 1 || !(stalled || busy || unreached)) throw error;
+          logWarn(`${P} Correction request retried`, {
+            reason: stalled ? "stalled" : busy ? "status" : "network",
+            status: rejection?.status,
+            code: rejection?.code,
+          });
+        } finally {
+          stall?.dispose();
+        }
+      }
     } finally {
       trace.settledAt = performance.now();
     }
@@ -1297,39 +1657,35 @@ export class VoiceCorrectionService {
     maxOutputTokens: number,
     onText: ((text: string) => void) | undefined,
     trace: RequestTrace,
-    marked: boolean
+    marked: boolean,
+    onAnswered: () => void
   ): Promise<VoiceCorrectionProposal> {
-    const response = await fetch(RESPONSES_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...buildOpenAIHeaders(settings.apiKey, settings.organizationId, settings.projectId),
-      },
-      signal,
-      body,
-    });
+    const provider = voiceCleanupProviderOf(settings.model);
+    const { url, headers } = this.endpointFor(settings);
+    const response = await fetch(url, { method: "POST", headers, signal, body });
+    onAnswered();
 
     if (!response.ok) {
-      throw await OpenAIRequestError.fromResponse(response);
+      throw await CleanupRequestError.fromResponse(response, provider);
     }
 
-    const data = onText
-      ? await this.readCorrectionStream(response, onText, marked)
-      : ((await response.json()) as CorrectionReply);
+    const reply = await this.readReply(response, provider, onText, marked, trace);
     // A reply thrown away below was still billed.
-    trace.usage = readUsage(data.usage);
+    trace.usage = reply.usage;
     // A cut-off reply can still parse, so check the status before the body:
     // the passage is corrected whole or not at all.
-    if (data.status === "incomplete") {
+    if (reply.cutOff !== null) {
       logDebug(`${P} Correction reply cut off`, {
-        reason: data.incomplete_details?.reason ?? "unknown",
+        reason: reply.cutOff,
         maxOutputTokens,
         rawLen: request.rawText.length,
       });
       throw new CorrectionDiscardedError("incomplete");
     }
+    if (reply.refused) throw new CorrectionDiscardedError("refused");
+    if (!reply.text) throw new Error("No content in API response");
 
-    const parsed = JSON.parse(this.extractResponseText(data)) as CorrectionApiResult;
+    const parsed = JSON.parse(reply.text) as CorrectionApiResult;
     if (
       (parsed.action !== "no_change" && parsed.action !== "replace") ||
       typeof parsed.corrected_text !== "string" ||
@@ -1339,9 +1695,9 @@ export class VoiceCorrectionService {
     }
 
     logDebug(`${P} Correction API usage`, {
-      cachedTokens: data.usage?.input_tokens_details?.cached_tokens ?? 0,
-      inputTokens: data.usage?.input_tokens,
-      outputTokens: data.usage?.output_tokens,
+      cachedTokens: reply.usage?.cachedTokens ?? 0,
+      inputTokens: reply.usage?.inputTokens,
+      outputTokens: reply.usage?.outputTokens,
     });
 
     return {
@@ -1354,49 +1710,75 @@ export class VoiceCorrectionService {
     };
   }
 
+  private async readReply(
+    response: Response,
+    provider: VoiceCorrectionProvider,
+    onText: ((text: string) => void) | undefined,
+    stripMarks: boolean,
+    trace: RequestTrace
+  ): Promise<SettledReply> {
+    if (provider === "anthropic") {
+      return settleClaudeReply(
+        onText
+          ? await this.readCorrectionStream(
+              response,
+              onText,
+              stripMarks,
+              claudeStreamReader(response.status),
+              trace
+            )
+          : ((await response.json()) as ClaudeMessage)
+      );
+    }
+    return settleOpenAIReply(
+      onText
+        ? await this.readCorrectionStream(
+            response,
+            onText,
+            stripMarks,
+            openAIStreamReader(response.status),
+            trace
+          )
+        : ((await response.json()) as CorrectionReply)
+    );
+  }
+
   /**
    * Reads a streamed reply to its end and rebuilds the reply the request
    * would have returned whole, with the text its deltas wrote. Meanwhile
    * `onText` hears the corrected text so far, once it has grown and at most
    * every STREAM_PROGRESS_INTERVAL_MS. A stream that ends before its last
-   * event is a cut-off reply.
+   * event is a cut-off reply. `trace` notes when its first text came, which
+   * is when the model stopped thinking.
    */
-  private async readCorrectionStream(
+  private async readCorrectionStream<Reply>(
     response: Response,
     onText: (text: string) => void,
-    stripMarks: boolean
-  ): Promise<CorrectionReply> {
+    stripMarks: boolean,
+    events: StreamReader<Reply>,
+    trace: RequestTrace
+  ): Promise<Reply> {
     const reader = response.body?.getReader();
     if (!reader) throw new CorrectionDiscardedError("malformed");
     const decoder = new TextDecoder();
     let buffer = "";
     let text = "";
-    // The first text part only, as a whole reply is read.
-    let part: string | null = null;
-    let reply: CorrectionReply | null = null;
+    let reply: Reply | null;
     let reported = "";
     let reportedAt = -Infinity;
     try {
       for (;;) {
         const { done, value } = await reader.read();
         buffer += decoder.decode(value, { stream: !done });
-        const { events, rest } = takeStreamEvents(done ? `${buffer}\n\n` : buffer);
+        const { events: taken, rest } = takeStreamEvents(done ? `${buffer}\n\n` : buffer);
         buffer = rest;
-        for (const event of events) {
-          if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
-            const at = `${event.output_index ?? 0}:${event.content_index ?? 0}`;
-            part ??= at;
-            if (at === part) text += event.delta;
-          } else if (event.type === "response.completed" || event.type === "response.incomplete") {
-            reply = event.response ?? {};
-          } else if (event.type === "response.failed" || event.type === "error") {
-            const code = event.response?.error?.code ?? event.error?.code ?? event.code;
-            throw new OpenAIRequestError(
-              response.status,
-              typeof code === "string" ? code : undefined
-            );
-          }
+        for (const event of taken) {
+          const delta = events.take(event);
+          if (!delta) continue;
+          trace.firstOutputAt ??= performance.now();
+          text += delta;
         }
+        reply = events.settled(text);
         if (done) break;
         const now = performance.now();
         if (reply === null && now - reportedAt >= STREAM_PROGRESS_INTERVAL_MS) {
@@ -1413,6 +1795,6 @@ export class VoiceCorrectionService {
       throw error;
     }
     if (reply === null) throw new CorrectionDiscardedError("incomplete");
-    return text ? { ...reply, output_text: text } : reply;
+    return reply;
   }
 }

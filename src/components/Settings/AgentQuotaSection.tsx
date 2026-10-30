@@ -1,4 +1,9 @@
+import { useMemo } from "react";
 import { Button } from "@/components/ui/button";
+import { getMergedPresetIdentities, getMergedPresets, type AgentPreset } from "@/config/agents";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useProjectPresetsStore } from "@/store/projectPresetsStore";
+import { pluralNoun } from "@/lib/pluralize";
 import { formatLastChecked } from "@/utils/timeAgo";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsGroup, SettingsRow } from "./SettingsGroup";
@@ -13,19 +18,72 @@ import {
   type CodexQuotaWindow,
 } from "@shared/types/ipc/agentQuota";
 
-const UNAVAILABLE_COPY: Record<CodexQuotaUnavailableReason | CodexQuotaProfileHomeReason, string> =
-  {
-    "cli-missing": "Codex CLI isn't installed, so there's no quota to read",
-    timeout: "Codex didn't answer in time. Daintree will ask again shortly.",
-    "read-failed":
-      "Codex didn't return a quota. It only reports one when signed in with ChatGPT, not an API key.",
-    "unsupported-response": "Codex answered in a format Daintree doesn't read yet",
-    "no-windows": "Codex didn't report any limit windows for this account",
-    "home-missing":
+const UNAVAILABLE_COPY: Record<CodexQuotaUnavailableReason, string> = {
+  "cli-missing": "Codex CLI isn't installed, so there's no quota to read",
+  timeout: "Codex didn't answer in time. Daintree will ask again shortly.",
+  "read-failed":
+    "Codex didn't return a quota. It only reports one when signed in with ChatGPT, not an API key.",
+  "unsupported-response": "Codex answered in a format Daintree doesn't read yet",
+  "no-windows": "Codex didn't report any limit windows for this account",
+};
+
+// The default profile's home comes from Codex's own environment variables
+// (#15047); every other profile's from a preset.
+const HOME_COPY: Record<CodexQuotaProfileHomeReason, { preset: string; default: string }> = {
+  "home-missing": {
+    preset:
       "This preset's CODEX_HOME isn't a folder Daintree can open. Check the path, or launch Codex with the preset once to sign in.",
-    "home-not-absolute":
+    default:
+      "The CODEX_HOME in Codex's environment variables isn't a folder Daintree can open. Check the path, or launch Codex once to sign in.",
+  },
+  "home-not-absolute": {
+    preset:
       "This preset's CODEX_HOME isn't a full path. Codex doesn't expand ~, so write it out in full.",
-  };
+    default:
+      "The CODEX_HOME in Codex's environment variables isn't a full path. Codex doesn't expand ~, so write it out in full.",
+  },
+};
+
+function unavailableCopy(
+  reason: CodexQuotaUnavailableReason | CodexQuotaProfileHomeReason,
+  isDefault: boolean
+): string {
+  if (reason === "home-missing" || reason === "home-not-absolute") {
+    return HOME_COPY[reason][isDefault ? "default" : "preset"];
+  }
+  return UNAVAILABLE_COPY[reason];
+}
+
+const presetList = new Intl.ListFormat("en", { style: "long", type: "conjunction" });
+
+// An empty value counts: it still moves the pane off the default, onto
+// Codex's own `~/.codex`.
+function setsCodexHome(preset: AgentPreset): boolean {
+  return Object.keys(preset.env ?? {}).some((name) => name.toUpperCase() === "CODEX_HOME");
+}
+
+/**
+ * Project-shared presets that would launch into a home of their own. Main
+ * never reads those (#15047): a repository's file naming a home isn't the
+ * user choosing one, so opening Settings doesn't start Codex against it. A
+ * custom preset with the same id is the one that launches, so it hides its
+ * namesake here as it does everywhere else.
+ */
+function useUnreadProjectCodexPresets(): string[] {
+  const customPresets = useAgentSettingsStore((s) => s.settings?.agents?.codex?.customPresets);
+  const projectPresets = useProjectPresetsStore((s) => s.presetsByAgent.codex);
+  return useMemo(() => {
+    if (!projectPresets?.length) return [];
+    const fromProject = new Set(
+      getMergedPresetIdentities("codex", customPresets, undefined, projectPresets)
+        .filter((identity) => identity.source === "project")
+        .map((identity) => identity.id)
+    );
+    return getMergedPresets("codex", customPresets, undefined, projectPresets)
+      .filter((preset) => fromProject.has(preset.id) && setsCodexHome(preset))
+      .map((preset) => preset.name);
+  }, [customPresets, projectPresets]);
+}
 
 /** The group name once a section holds several profiles; a lone one goes unnamed. */
 export function profileLabel(profile: CodexQuotaProfile): string {
@@ -122,7 +180,7 @@ function CodexQuotaGroup({
       <SettingsGroup label={label}>
         <SettingsRow
           label="Quota unavailable"
-          description={UNAVAILABLE_COPY[result.reason]}
+          description={unavailableCopy(result.reason, profile.isDefault)}
           control={
             <Button size="sm" variant="outline" onClick={refresh}>
               Retry
@@ -159,6 +217,7 @@ function CodexQuotaGroup({
 function CodexQuota() {
   const { profiles, refresh } = useCodexQuota(true);
   const now = useGlobalMinuteClock();
+  const unreadProjectPresets = useUnreadProjectCodexPresets();
   const several = profiles !== null && profiles.length > 1;
 
   return (
@@ -186,6 +245,14 @@ function CodexQuota() {
             refresh={refresh}
           />
         ))
+      )}
+      {unreadProjectPresets.length > 0 && (
+        <SettingsGroup>
+          <SettingsRow
+            label="Project presets not included"
+            description={`${presetList.format(unreadProjectPresets)} ${pluralNoun(unreadProjectPresets.length, "sets its", "set their")} own CODEX_HOME in this project's .daintree/presets. Daintree doesn't start Codex against a home a repository names, so ${pluralNoun(unreadProjectPresets.length, "it's", "they're")} left out of the profiles above.`}
+          />
+        </SettingsGroup>
       )}
     </SettingsSection>
   );

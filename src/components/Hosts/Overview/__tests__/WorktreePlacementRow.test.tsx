@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
+import type { ComponentProps } from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { HostListEntry } from "@shared/types/remoteHosts";
 import { HANDSHAKE, makeCapacitySummary } from "./fixtures";
 
@@ -21,6 +22,7 @@ vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 vi.mock("../hostMetricsFeed", () => ({ startHostMetricsFeed: () => () => {} }));
 
 import { useHostMetricsStore } from "@/store/hostMetricsStore";
+import { clientPlatform, localHostLabel } from "../../hostModel";
 import {
   _resetHostSwitchRequestsForTesting,
   completeHostSwitchRequest,
@@ -32,6 +34,7 @@ import {
 import {
   WorktreePlacementRow,
   placedRelativePath,
+  type PlacementCommit,
   type PlacementDraft,
 } from "../WorktreePlacementRow";
 
@@ -116,59 +119,72 @@ beforeEach(() => {
   );
 });
 
+/** The other host the row last handed the dialog, or null for this window's own. */
+function lastCommit(onCommitChange: Mock<CommitListener>): PlacementCommit | null {
+  return onCommitChange.mock.lastCall?.[0] ?? null;
+}
+
+type CommitListener = (commit: PlacementCommit | null) => void;
+
+function renderRow(props: Partial<ComponentProps<typeof WorktreePlacementRow>> = {}) {
+  const onCommitChange = vi.fn<CommitListener>();
+  const onLeave = vi.fn();
+  const view = render(
+    <WorktreePlacementRow
+      projectId="p1"
+      rootPath={ROOT}
+      worktreePath={DRAFT.path}
+      getDraft={getDraft}
+      onLeave={onLeave}
+      onCommitChange={onCommitChange}
+      {...props}
+    />
+  );
+  return { ...view, onCommitChange, onLeave };
+}
+
 describe("WorktreePlacementRow", () => {
-  it("names the host with the most free cores and memory, with the chosen host's facts, keeping this window's host chosen", () => {
-    const onElsewhereChange = vi.fn();
-    render(
-      <WorktreePlacementRow
-        projectId="p1"
-        rootPath={ROOT}
-        getDraft={getDraft}
-        onLeave={() => {}}
-        onElsewhereChange={onElsewhereChange}
-      />
+  it("names the host with the most free cores and memory once, keeping this window's host chosen", () => {
+    const { onCommitChange } = renderRow();
+    expect(screen.getByTestId("worktree-placement-suggestion").textContent).toBe(
+      "studio-02 reports more free cores and memory than the others. Use studio-02"
     );
-    const hint = screen.getByTestId("worktree-placement-suggestion").textContent ?? "";
-    expect(hint.startsWith("studio-02 reports more free cores and memory than the others. ")).toBe(
-      true
+    expect(screen.getByTestId("worktree-placement-facts").textContent).toContain(
+      "CPU 3.2 of 8 cores"
     );
-    expect(hint.endsWith(": CPU 3.2 of 8 cores · Memory 8 / 16 GB · Memory pressure Normal")).toBe(
-      true
+    expect(lastCommit(onCommitChange)).toBeNull();
+  });
+
+  it("names the other host when only two were compared", () => {
+    hostList.hosts = [entry("studio-02", 5, 2)];
+    renderRow();
+    expect(screen.getByTestId("worktree-placement-suggestion").textContent).toBe(
+      `studio-02 reports more free cores and memory than ${localHostLabel(clientPlatform())}. Use studio-02`
     );
-    expect(screen.queryByTestId("worktree-placement-continue")).toBeNull();
-    expect(onElsewhereChange).toHaveBeenLastCalledWith(false);
   });
 
   it("shows the facts without a pick when no host leads on both", () => {
     hostList.hosts = [entry("studio-01", 70, 1), entry("studio-02", 5, 14)];
-    render(
-      <WorktreePlacementRow projectId="p1" rootPath={ROOT} getDraft={getDraft} onLeave={() => {}} />
-    );
-    expect(screen.getByTestId("worktree-placement-suggestion").textContent).toContain(
+    renderRow();
+    expect(screen.getByTestId("worktree-placement-facts").textContent).toContain(
       "CPU 3.2 of 8 cores"
     );
-    expect(screen.getByTestId("worktree-placement-suggestion").textContent).not.toContain(
-      "reports more"
-    );
+    expect(screen.queryByTestId("worktree-placement-suggestion")).toBeNull();
     expect(screen.queryByRole("button", { name: /^Use / })).toBeNull();
   });
 
-  it("creates the form's worktree on the chosen host, closing only once it exists there", async () => {
-    const onLeave = vi.fn();
-    const onElsewhereChange = vi.fn();
-    render(
-      <WorktreePlacementRow
-        projectId="p1"
-        rootPath={ROOT}
-        getDraft={getDraft}
-        onLeave={onLeave}
-        onElsewhereChange={onElsewhereChange}
-      />
-    );
+  it("hands the dialog's primary to the chosen host, closing only once the worktree exists there", async () => {
+    const { onCommitChange, onLeave } = renderRow();
     fireEvent.click(screen.getByRole("button", { name: "Use studio-02" }));
-    expect(onElsewhereChange).toHaveBeenLastCalledWith(true);
+    expect(lastCommit(onCommitChange)).toMatchObject({
+      hostId: "studio-02",
+      hostName: "studio-02",
+      status: "idle",
+      unavailable: null,
+      relativePath: "../daintree-worktrees/feature-placed",
+    });
     await act(async () => {
-      fireEvent.click(screen.getByTestId("worktree-placement-continue"));
+      lastCommit(onCommitChange)!.submit();
     });
     const worktree = {
       newBranch: "feature/placed",
@@ -186,31 +202,17 @@ describe("WorktreePlacementRow", () => {
     expect(currentHostSwitchRequest()).toMatchObject({ toHostId: "studio-02", worktree });
     // The switch dialog is up, but nothing exists on the host yet: this dialog stays.
     expect(onLeave).not.toHaveBeenCalled();
-    expect((screen.getByTestId("worktree-placement-continue") as HTMLButtonElement).disabled).toBe(
-      true
-    );
+    expect(lastCommit(onCommitChange)?.status).toBe("pending");
     act(() => completeHostSwitchRequest(currentHostSwitchRequest()!.id));
     expect(onLeave).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves this window where it is on Cmd/Ctrl-click, opening the host in a new one", async () => {
-    const onLeave = vi.fn();
-    render(
-      <WorktreePlacementRow
-        projectId="p1"
-        rootPath={ROOT}
-        getDraft={getDraft}
-        onLeave={onLeave}
-        onElsewhereChange={vi.fn()}
-      />
-    );
+  it("leaves this window where it is on a Cmd/Ctrl-click, opening the host in a new one", async () => {
+    const { onCommitChange, onLeave } = renderRow();
     fireEvent.click(screen.getByRole("button", { name: "Use studio-02" }));
     await act(async () => {
       // Both modifiers, so the platform's own one is held wherever this runs.
-      fireEvent.click(screen.getByTestId("worktree-placement-continue"), {
-        metaKey: true,
-        ctrlKey: true,
-      });
+      lastCommit(onCommitChange)!.submit({ metaKey: true, ctrlKey: true });
     });
     expect(dispatch).toHaveBeenCalledWith(
       "project.openOnHost",
@@ -225,86 +227,63 @@ describe("WorktreePlacementRow", () => {
   });
 
   it("stops blocking local Create once it leaves the dialog with another host chosen", () => {
-    const onElsewhereChange = vi.fn();
-    const { unmount } = render(
-      <WorktreePlacementRow
-        projectId="p1"
-        rootPath={ROOT}
-        getDraft={getDraft}
-        onLeave={vi.fn()}
-        onElsewhereChange={onElsewhereChange}
-      />
-    );
+    const { onCommitChange, unmount } = renderRow();
     fireEvent.click(screen.getByRole("button", { name: "Use studio-02" }));
-    expect(onElsewhereChange).toHaveBeenLastCalledWith(true);
+    expect(lastCommit(onCommitChange)?.hostName).toBe("studio-02");
     unmount();
-    expect(onElsewhereChange).toHaveBeenLastCalledWith(false);
+    expect(lastCommit(onCommitChange)).toBeNull();
   });
 
-  it("stays open, ready to retry, when the host's dialog is closed without creating it", async () => {
-    const onLeave = vi.fn();
-    render(
-      <WorktreePlacementRow projectId="p1" rootPath={ROOT} getDraft={getDraft} onLeave={onLeave} />
-    );
+  it("says nothing was created, ready to go again, when the host's dialog closes without it", async () => {
+    const { onCommitChange, onLeave } = renderRow();
     fireEvent.click(screen.getByRole("button", { name: "Use studio-02" }));
     await act(async () => {
-      fireEvent.click(screen.getByTestId("worktree-placement-continue"));
+      lastCommit(onCommitChange)!.submit();
     });
     act(() => dismissHostSwitchRequest(currentHostSwitchRequest()!.id));
     expect(onLeave).not.toHaveBeenCalled();
-    expect((screen.getByTestId("worktree-placement-continue") as HTMLButtonElement).disabled).toBe(
-      false
-    );
+    expect(lastCommit(onCommitChange)?.status).toBe("cancelled");
   });
 
   it("sends nothing while the form is invalid", async () => {
-    render(
-      <WorktreePlacementRow
-        projectId="p1"
-        rootPath={ROOT}
-        getDraft={() => null}
-        onLeave={() => {}}
-      />
-    );
+    const { onCommitChange } = renderRow({ getDraft: () => null });
     fireEvent.click(screen.getByRole("button", { name: "Use studio-02" }));
     await act(async () => {
-      fireEvent.click(screen.getByTestId("worktree-placement-continue"));
+      lastCommit(onCommitChange)!.submit();
     });
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it("keeps the dialog open and names the host when the handoff fails", async () => {
+  it("names the host when the handoff fails and retries in the window it asked for", async () => {
     dispatch.mockResolvedValueOnce({
       ok: false,
       error: { code: "EXECUTION_ERROR", message: "No view can show the host switch dialog" },
     });
-    const onLeave = vi.fn();
-    render(
-      <WorktreePlacementRow projectId="p1" rootPath={ROOT} getDraft={getDraft} onLeave={onLeave} />
-    );
+    const { onCommitChange, onLeave } = renderRow();
     fireEvent.click(screen.getByRole("button", { name: "Use studio-02" }));
     await act(async () => {
-      fireEvent.click(screen.getByTestId("worktree-placement-continue"));
+      lastCommit(onCommitChange)!.submit({ metaKey: true, ctrlKey: true });
     });
     expect(onLeave).not.toHaveBeenCalled();
+    expect(lastCommit(onCommitChange)?.status).toBe("failed");
     const error = screen.getByTestId("worktree-placement-error");
     expect(error.getAttribute("role")).toBe("alert");
-    expect(error.textContent).toBe(
-      "Couldn't open this project on studio-02. Check that it's connected and retry."
-    );
-    // Retrying is the same button, and the worktree existing on the host then closes the dialog.
+    expect(error.textContent).toContain("Couldn't open this project on studio-02");
     await act(async () => {
-      fireEvent.click(screen.getByTestId("worktree-placement-continue"));
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     });
+    expect(dispatch).toHaveBeenLastCalledWith(
+      "project.openOnHost",
+      expect.objectContaining({ hostId: "studio-02", newWindow: true }),
+      { source: "user" }
+    );
     act(() => completeHostSwitchRequest(currentHostSwitchRequest()!.id));
     expect(onLeave).toHaveBeenCalledTimes(1);
   });
 
   it("renders nothing until another host exists", () => {
     hostList.hosts = [];
-    const { container } = render(
-      <WorktreePlacementRow projectId="p1" rootPath={ROOT} getDraft={getDraft} onLeave={() => {}} />
-    );
+    const { container } = renderRow();
     expect(container.textContent).toBe("");
   });
 });

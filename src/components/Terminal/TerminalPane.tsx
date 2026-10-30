@@ -25,6 +25,7 @@ import type {
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { reportCanopySent } from "@/lib/canopySeen";
+import { buildTerminalSendPayload } from "@/lib/terminalInput";
 import { BANNER_ENTER_DURATION, BANNER_EXIT_DURATION } from "@/lib/animationUtils";
 import { XtermAdapter } from "./XtermAdapter";
 import { ArtifactOverlay } from "./ArtifactOverlay";
@@ -37,6 +38,7 @@ import { useGridScrollRoot } from "./GridScrollRootContext";
 import { useUnmountVisibilityCleanup } from "./useUnmountVisibilityCleanup";
 import { useTerminalVisibilityObserver } from "./useTerminalVisibilityObserver";
 import { FleetDraftingPill } from "@/components/Fleet/FleetDraftingPill";
+import { FleetRawInputNotice } from "@/components/Fleet/FleetRawInputNotice";
 import { TerminalRestartStatusBanner } from "./TerminalRestartStatusBanner";
 import { FindCodexSessionAction } from "./FindCodexSessionAction";
 import {
@@ -58,6 +60,7 @@ import { ScrollbackRestoreErrorBanner } from "./ScrollbackRestoreErrorBanner";
 import { TerminalSubmitStatusBanner } from "./TerminalSubmitStatusBanner";
 import { useTerminalSubmitStatus } from "./useTerminalSubmitStatus";
 import { TerminalAttachErrorBanner } from "./TerminalAttachErrorBanner";
+import { isAttachedProcessRunning } from "./attachedProcessRunning";
 import { useShouldSuppressLocalError } from "@/components/Recovery/useShouldSuppressLocalError";
 import { UpdateCwdDialog } from "./UpdateCwdDialog";
 import { CompactErrorList } from "../Errors/CompactErrorList";
@@ -109,8 +112,7 @@ import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { terminalClient } from "@/clients";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
-import { openSendToAgentPaletteWithText } from "@/hooks/useSendToAgentPalette";
-import { formatForTerminalPaste } from "@shared/utils/terminalInputProtocol";
+import { sendCompletionToAgent, sendCompletionToAssistant } from "./completionHandoff";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import type { HybridInputBarHandle } from "./HybridInputBar";
 const LazyHybridInputBar = lazy(() =>
@@ -126,7 +128,7 @@ import {
 } from "./terminalFocus";
 import { decideChromeAction } from "./multiSelectGestures";
 import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
-import { submitComposerText } from "./submitComposerText";
+import { submitPaneComposerText } from "./submitComposerText";
 import {
   captureFocusEpoch,
   holdPaneFocus,
@@ -141,8 +143,11 @@ import { isPtyPanel } from "@shared/types/panel";
 import { useSessionLostBanner } from "./useSessionLostBanner";
 import { useWorktreeMoveBanner, resolveWorktreeMoveRoute } from "./useWorktreeMoveBanner";
 import { useTerminalInputBlock } from "@/hooks/useHostConnection";
-import { ControlConfirmedBanner, TerminalInputBlockBanner } from "./TerminalInputBlockBanner";
-import { useControlConfirmed } from "@/components/Recovery/takeControl";
+import {
+  ControlConfirmedBanner,
+  TerminalInputBlockBanner,
+  usePaneInputNotice,
+} from "./TerminalInputBlockBanner";
 import { WorktreeMoveBanner } from "./WorktreeMoveBanner";
 import { VoiceMicNoticeBanner } from "./VoiceMicNoticeBanner";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
@@ -578,6 +583,7 @@ function TerminalPaneComponent({
         sessionPreservingExit: pty?.sessionPreservingExit === true,
         isTrashedOrRemoved: terminal?.location === "trash" || terminal === undefined,
         spawnStatus: pty?.spawnStatus,
+        runtimeStatus: pty?.runtimeStatus,
         eagerAttach: pty?.eagerAttach ?? false,
         isHeldForRecovery: pty?.restoreRecovery !== undefined,
       };
@@ -592,6 +598,7 @@ function TerminalPaneComponent({
     sessionPreservingExit,
     isTrashedOrRemoved,
     spawnStatus,
+    runtimeStatus,
     eagerAttach,
     isHeldForRecovery,
   } = terminalState;
@@ -746,7 +753,7 @@ function TerminalPaneComponent({
   // Single gate across waiting → injecting so the banner doesn't flicker on
   // the phase transition; fast injections (<400ms) show nothing.
   const showInjectionBanner = useDohertyGate(isInjecting || isPendingInjection);
-  const controlConfirmed = useControlConfirmed(id);
+  const paneInputNotice = usePaneInputNotice(id, paneInputBlock);
 
   // Cancel auto-restart if terminal is intentionally trashed/removed
   useEffect(() => {
@@ -889,6 +896,24 @@ function TerminalPaneComponent({
     },
     [id, inputTracker, updateLastCommand]
   );
+
+  // Says whether the terminal took the composer's text: the composer keeps a
+  // refused draft where it was typed (#14945).
+  const submitFromComposer = (text: string, imagePaths: readonly string[] | undefined) =>
+    submitPaneComposerText(id, text, imagePaths, {
+      canTakeInput: () => {
+        const panel = usePanelStore.getState().panelsById[id];
+        const pty = panel && isPtyPanel(panel) ? panel : undefined;
+        return (
+          !(isInputLockedOverride ?? pty?.isInputLocked === true) && pty?.isRestarting !== true
+        );
+      },
+      onSending: () => withTerminalService((service) => service.notifyUserInput(id), id),
+      onAccepted: () => {
+        reportCanopySent(id);
+        handleInput(buildTerminalSendPayload(text).trackerData);
+      },
+    });
 
   useEffect(() => {
     const handleFindInPanel = () => {
@@ -1323,26 +1348,12 @@ function TerminalPaneComponent({
     }
   };
 
-  // "Send to assistant" relays this agent's completion output into the active
-  // assistant session. It's only offered when the assistant terminal exists
-  // and is idle/waiting — writing into a working or directing agent would
-  // corrupt its input mid-stream.
+  // "Send to assistant" drafts this agent's completion output into the active
+  // assistant session's composer. Offered whenever that session exists: a
+  // draft never submits, so a working assistant can take one too, and a
+  // session that can't take one says why when the button is pressed.
   const helpTerminalId = useHelpPanelStore((s) => selectActiveSlot(s).terminalId);
-  const helpAgentState = usePanelStore((s) => {
-    if (!helpTerminalId) return undefined;
-    const p = s.panelsById[helpTerminalId];
-    return p && isPtyPanel(p) ? p.agentState : undefined;
-  });
-  const helpInputLocked = usePanelStore((s) => {
-    if (!helpTerminalId) return false;
-    const p = s.panelsById[helpTerminalId];
-    return p && isPtyPanel(p) ? p.isInputLocked === true : false;
-  });
-  const assistantAvailable =
-    !!helpTerminalId &&
-    helpTerminalId !== id &&
-    !helpInputLocked &&
-    (helpAgentState === "idle" || helpAgentState === "waiting");
+  const assistantAvailable = !!helpTerminalId && helpTerminalId !== id;
 
   // The "Send to agent" palette has nothing to offer when this is the only
   // eligible PTY pane — hide it rather than render a button that no-ops.
@@ -1365,37 +1376,8 @@ function TerminalPaneComponent({
       })
   );
 
-  const handleSendToAssistant = useCallback(() => {
-    const helpTid = selectActiveSlot(useHelpPanelStore.getState()).terminalId;
-    if (!helpTid || helpTid === id) return;
-    const state = peekTerminalService()?.getAgentState(helpTid);
-    if (state !== "idle" && state !== "waiting") return;
-    const _helpPanel = usePanelStore.getState().panelsById[helpTid];
-    if (_helpPanel && isPtyPanel(_helpPanel) && _helpPanel.isInputLocked === true) return;
-    const text = peekTerminalService()?.captureBufferText(id, 20000) ?? "";
-    if (!text) return;
-
-    const managed = peekTerminalService()?.get(helpTid) ?? null;
-    // Buffer text is whatever the agent printed, escape sequences included, so
-    // it can't reach the parser as it stands. No managed instance means no mode
-    // to read, and wrapped is the safe reading of text we cannot ask about.
-    terminalClient.write(
-      helpTid,
-      formatForTerminalPaste(text, {
-        bracketedPasteMode: managed ? managed.terminal.modes.bracketedPasteMode : true,
-      })
-    );
-    withTerminalService((service) => service.notifyUserInput(helpTid), helpTid);
-    const help = useHelpPanelStore.getState();
-    help.setOpen(true);
-    help.requestFocus();
-  }, [id]);
-
-  const handleSendToAgent = useCallback(() => {
-    const text = peekTerminalService()?.captureBufferText(id, 20000) ?? "";
-    if (!text) return;
-    openSendToAgentPaletteWithText(text, id);
-  }, [id]);
+  const handleSendToAssistant = useCallback(() => sendCompletionToAssistant(id), [id]);
+  const handleSendToAgent = useCallback(() => sendCompletionToAgent(id), [id]);
 
   const isWorking = agentState === "working";
   const allowPing = !isMaximized;
@@ -1451,6 +1433,15 @@ function TerminalPaneComponent({
   const showScrollbackRestoreError =
     !suppressParseError && Boolean(scrollbackRestoreError) && !restartError;
   const showRestartStatus = restartBannerVariant.type !== "none";
+  const attachedProcessRunning = isAttachedProcessRunning({
+    spawnStatus,
+    runtimeStatus,
+    isExited,
+    isRestarting,
+    hasSpawnError: Boolean(spawnError),
+    hasRestartError: Boolean(restartError),
+    backendStatus,
+  });
   const offeredSessionId =
     restartBannerVariant.type === "agent-resume-offer" ? restartBannerVariant.sessionId : undefined;
 
@@ -1553,11 +1544,11 @@ function TerminalPaneComponent({
       {/* A PTY-backed plugin kind's "needs setup" strip, in flow above the
           terminal rather than over it. Nothing for a plain terminal. */}
       {storedKind !== undefined && <PluginKindSetupStrip kind={storedKind} />}
-      <BannerSlot visible={paneInputBlock !== null || controlConfirmed}>
-        {paneInputBlock ? (
+      <BannerSlot visible={paneInputNotice !== null}>
+        {paneInputNotice === "blocked" && paneInputBlock ? (
           <TerminalInputBlockBanner block={paneInputBlock} panelId={id} />
         ) : (
-          controlConfirmed && <ControlConfirmedBanner />
+          paneInputNotice === "confirmed" && <ControlConfirmedBanner />
         )}
       </BannerSlot>
 
@@ -1628,6 +1619,7 @@ function TerminalPaneComponent({
           <TerminalAttachErrorBanner
             terminalId={id}
             error={attachError}
+            processRunning={attachedProcessRunning}
             onRetry={handleRetryAttach}
             isRetrying={isRebuildingDisplay}
           />
@@ -1685,6 +1677,7 @@ function TerminalPaneComponent({
       <BannerSlot visible={worktreeMoveBanner.visible}>
         <WorktreeMoveBanner
           destinationPath={worktreeMoveBanner.destinationPath}
+          carriesDraft={worktreeMoveBanner.carriesDraft}
           deliveryFailed={worktreeMoveBanner.deliveryFailed}
           onTell={worktreeMoveBanner.tell}
           onDismiss={worktreeMoveBanner.dismiss}
@@ -1752,10 +1745,10 @@ function TerminalPaneComponent({
               containerRef={recoveryGateRef}
               agentId={agentId}
               onLaunchAnyway={() => launchDespiteMemoryPressure(panelHoldKey(id))}
-              onCancel={() => onClose(true)}
+              onCancel={() => onClose()}
             />
           ) : isWaitingForControl ? (
-            <DriveLeaseGate agentId={agentId} containerRef={recoveryGateRef} />
+            <DriveLeaseGate agentId={agentId} panelId={id} containerRef={recoveryGateRef} />
           ) : spawnStatus === "spawning" && !eagerAttach ? (
             <TerminalStartupPlaceholder agentId={agentId} onCancel={() => onClose()} />
           ) : spawnStatus === "failed" ? (
@@ -1829,6 +1822,17 @@ function TerminalPaneComponent({
                 <TerminalChipRow
                   leading={isFleetPrimary ? <FleetDraftingPill /> : null}
                   trailing={<TerminalScrollIndicator terminalId={id} />}
+                  notice={
+                    // Keys typed here never reach agents armed on other hosts,
+                    // so the pane they're typed into says so (#14957).
+                    <FleetRawInputNotice
+                      isArmed={isArmed}
+                      isFocused={isFocused}
+                      isInputLocked={isInputLocked}
+                      hasComposer={showHybridInputBar}
+                      isComposerDisabled={isHybridInputDisabled}
+                    />
+                  }
                 />
 
                 {(isBackendDisconnected || isBackendRecovering) && (
@@ -1859,14 +1863,8 @@ function TerminalPaneComponent({
                     agentState={agentState}
                     restartKey={restartKey}
                     onActivate={handleClick}
-                    onSend={({ trackerData, text, imagePaths }) => {
-                      if (isInputLocked || isRestarting) return;
-                      withTerminalService((service) => service.notifyUserInput(id), id);
-                      reportCanopySent(id);
-                      const accepted = submitComposerText(id, text, imagePaths);
-                      handleInput(trackerData);
-                      return accepted;
-                    }}
+                    onSend={({ text, imagePaths }) => void submitFromComposer(text, imagePaths)}
+                    submitText={submitFromComposer}
                     onSendKey={(key) => {
                       if (!isInputLocked && !isRestarting) {
                         if (key === "escape") {

@@ -226,6 +226,8 @@ const baseConfig: KnipConfig = {
   //   - conf: imported in electron/__tests__/storeBackupRestore.test.ts;
   //     transitive via electron-store.
   ignoreDependencies: [
+    // Electron provides its unpatched filesystem as a built-in module.
+    "original-fs",
     "wait-on",
     "fast-check",
     "conf",

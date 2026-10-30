@@ -1,0 +1,31 @@
+/* PathTail (src/components/ui/PathTail.tsx) clips a directory from its start.
+   Chromium hides whole glyphs to make room for the ellipsis and sets it against
+   what is left, so in a right-to-left box the leftover fraction of a glyph lands
+   before the ellipsis, at the box's left edge: each cut row started up to a glyph
+   right of its neighbours. While the box is cut, the native ellipsis still makes
+   the room but paints nothing, and one drawn at the left edge takes its place,
+   moving the leftover inside, between the ellipsis and the path.
+   Forced colours repaints the native ellipsis whatever its fill, so there it
+   stays alone: ragged, but never doubled. */
+@media (forced-colors: none) {
+  .path-tail[data-cut] {
+    position: relative;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .path-tail[data-cut] > bdi,
+  .path-tail[data-cut]::before {
+    -webkit-text-fill-color: currentColor;
+  }
+
+  /* Physical `left`: the box runs right-to-left, so its inline start is the
+     right edge. The empty alt text keeps the marker out of the accessible name,
+     which is the whole path. */
+  .path-tail[data-cut]::before {
+    content: "…" / "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    pointer-events: none;
+  }
+}

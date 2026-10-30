@@ -25,6 +25,8 @@ import {
 export interface GrantEntry {
   issuedAt: number;
   expiresAt: number;
+  /** The hard ceiling, `issuedAt + maxLifetimeMs`: no refresh slides past it. */
+  maxExpiresAt: number;
   ttlMs: number;
 }
 
@@ -42,8 +44,8 @@ export type GrantCheckResult =
  * atomically inside {@link GrantCache.checkNativeGrant} — the synchronous
  * decrement-before-return is what makes the use ceiling race-free against two
  * concurrent in-flight tool calls (JS is single-threaded; no `await` sits
- * between the read and the write). `issuedAt` doubles as the hard wall-clock
- * ceiling anchor, exactly like {@link GrantEntry}.
+ * between the read and the write). `maxExpiresAt` is the hard wall-clock
+ * ceiling, fixed at issuance exactly like {@link GrantEntry}'s.
  */
 export interface NativeGrantEntry {
   id: string;
@@ -55,6 +57,7 @@ export interface NativeGrantEntry {
   remainingUses: number;
   issuedAt: number;
   expiresAt: number;
+  maxExpiresAt: number;
   ttlMs: number;
 }
 
@@ -168,6 +171,7 @@ export class GrantCache {
     const entry: GrantEntry = {
       issuedAt,
       expiresAt: issuedAt + this.ttlMs,
+      maxExpiresAt: issuedAt + this.maxLifetimeMs,
       ttlMs: this.ttlMs,
     };
     this.grants.set(key(sessionId, toolId), entry);
@@ -178,6 +182,7 @@ export class GrantCache {
       toolId,
       ttlMs: entry.ttlMs,
       expiresAt: entry.expiresAt,
+      maxExpiresAt: entry.maxExpiresAt,
     });
     return entry;
   }
@@ -199,7 +204,7 @@ export class GrantCache {
     // when the hard cap cut it off. A grant that has already lapsed its TTL is
     // a passive `grant.expired` timeout regardless of whether the ceiling has
     // also passed, so it keeps the truthful "idled out" audit signal.
-    const pastCeiling = now > entry.issuedAt + this.maxLifetimeMs;
+    const pastCeiling = now > entry.maxExpiresAt;
     const pastTtl = now > entry.expiresAt;
     if (pastCeiling || pastTtl) {
       this.grants.delete(k);
@@ -231,7 +236,9 @@ export class GrantCache {
    * re-issue) ran between then and this call, the stored `issuedAt` will
    * have moved on and this refresh is a silent no-op. That's the #2243
    * resurrection-race fix: a winning revoke must not be undone by a
-   * dispatch that started before it.
+   * dispatch that started before it. A refresh that loses that race pushes
+   * nothing either, so a late `grant.refreshed` can't revive a revoked grant
+   * in the renderer.
    */
   refresh(sessionId: string, toolId: string, issuedAt: number): boolean {
     const k = key(sessionId, toolId);
@@ -242,7 +249,7 @@ export class GrantCache {
     // Hard wall-clock ceiling: once the grant's total lifetime is exhausted
     // no amount of recent use can extend it. Revoke and force re-approval
     // rather than sliding the window forward again (#9161).
-    if (now > entry.issuedAt + this.maxLifetimeMs) {
+    if (now > entry.maxExpiresAt) {
       this.grants.delete(k);
       this.emitSafely(sessionId, {
         type: "grant.revoked",
@@ -253,7 +260,41 @@ export class GrantCache {
       });
       return false;
     }
+    const shownDeadline = Math.min(entry.expiresAt, entry.maxExpiresAt);
     entry.expiresAt = now + entry.ttlMs;
+    if (Math.min(entry.expiresAt, entry.maxExpiresAt) !== shownDeadline) {
+      this.emitSafely(sessionId, {
+        type: "grant.refreshed",
+        sessionId,
+        toolId,
+        ttlMs: entry.ttlMs,
+        expiresAt: entry.expiresAt,
+        maxExpiresAt: entry.maxExpiresAt,
+      });
+    }
+    return true;
+  }
+
+  /**
+   * Drop the one per-tool grant for the pair, leaving the session's other
+   * per-tool grants and its native grants alone. Emits `grant.revoked` with
+   * the given reason. Returns false when the pair held no grant, so a revoke
+   * that lost a race to expiry is an idempotent no-op. A dispatch already in
+   * flight through the grant finds no entry to `refresh`, so it can't
+   * resurrect it.
+   */
+  revokeGrant(sessionId: string, toolId: string, reason: McpGrantRevokedReason = "user"): boolean {
+    const k = key(sessionId, toolId);
+    const entry = this.grants.get(k);
+    if (!entry) return false;
+    this.grants.delete(k);
+    this.emitSafely(sessionId, {
+      type: "grant.revoked",
+      sessionId,
+      toolId,
+      ttlMs: entry.ttlMs,
+      revokedReason: reason,
+    });
     return true;
   }
 
@@ -397,7 +438,7 @@ export class GrantCache {
   getLiveGrants(sessionId?: string): Array<{ sessionId: string; toolId: string } & GrantEntry> {
     const now = this.now();
     return this.getActiveGrants(sessionId).filter(
-      (entry) => now <= entry.expiresAt && now <= entry.issuedAt + this.maxLifetimeMs
+      (entry) => now <= entry.expiresAt && now <= entry.maxExpiresAt
     );
   }
 
@@ -429,6 +470,7 @@ export class GrantCache {
       remainingUses: maxUses,
       issuedAt,
       expiresAt: issuedAt + ttlMs,
+      maxExpiresAt: issuedAt + this.maxLifetimeMs,
       ttlMs,
     };
     this.nativeGrants.set(entry.id, entry);
@@ -460,7 +502,7 @@ export class GrantCache {
     for (const entry of this.nativeGrants.values()) {
       if (entry.sessionId !== sessionId) continue;
       if (!entry.allowedTools.has(toolId)) continue;
-      const pastCeiling = now > entry.issuedAt + this.maxLifetimeMs;
+      const pastCeiling = now > entry.maxExpiresAt;
       const pastTtl = now > entry.expiresAt;
       if (pastCeiling || pastTtl) {
         this.nativeGrants.delete(entry.id);
@@ -502,7 +544,7 @@ export class GrantCache {
     const entry = this.nativeGrants.get(grantId);
     if (!entry) return false;
     const now = this.now();
-    const pastCeiling = now > entry.issuedAt + this.maxLifetimeMs;
+    const pastCeiling = now > entry.maxExpiresAt;
     const pastTtl = now > entry.expiresAt;
     if (pastCeiling || pastTtl) {
       this.nativeGrants.delete(grantId);
@@ -540,12 +582,19 @@ export class GrantCache {
     const entry = this.nativeGrants.get(grantId);
     if (!entry) return false;
     const now = this.now();
-    if (now > entry.issuedAt + this.maxLifetimeMs) {
+    if (now > entry.maxExpiresAt) {
       this.nativeGrants.delete(grantId);
       this.emitSafely(entry.sessionId, this.nativeRevokedPayload(entry, "grant-ceiling"));
       return false;
     }
+    const shownDeadline = Math.min(entry.expiresAt, entry.maxExpiresAt);
     entry.expiresAt = now + entry.ttlMs;
+    if (Math.min(entry.expiresAt, entry.maxExpiresAt) !== shownDeadline) {
+      this.emitSafely(entry.sessionId, {
+        ...this.nativeIssuedPayload(entry),
+        type: "grant.refreshed",
+      });
+    }
     return true;
   }
 
@@ -592,7 +641,7 @@ export class GrantCache {
       if (sessionId !== undefined && entry.sessionId !== sessionId) continue;
       if (entry.remainingUses <= 0) continue;
       if (now > entry.expiresAt) continue;
-      if (now > entry.issuedAt + this.maxLifetimeMs) continue;
+      if (now > entry.maxExpiresAt) continue;
       out.push(entry);
     }
     return out;
@@ -614,6 +663,7 @@ export class GrantCache {
       toolId: "*",
       ttlMs: entry.ttlMs,
       expiresAt: entry.expiresAt,
+      maxExpiresAt: entry.maxExpiresAt,
       grantId: entry.id,
       actorId: entry.actorId,
       actorType: entry.actorType,
@@ -685,7 +735,7 @@ export class GrantCache {
     let evicted = 0;
     const now = this.now();
     for (const [id, entry] of [...this.nativeGrants]) {
-      const pastCeiling = now > entry.issuedAt + this.maxLifetimeMs;
+      const pastCeiling = now > entry.maxExpiresAt;
       const pastTtl = now > entry.expiresAt;
       if (!pastCeiling && !pastTtl) continue;
       this.nativeGrants.delete(id);
@@ -703,7 +753,7 @@ export class GrantCache {
       // condition. Mirror `check()`'s audit semantics: `grant-ceiling` only
       // when the sliding TTL was still valid (recently refreshed) at the
       // moment the hard cap hit; an already-lapsed TTL stays `grant.expired`.
-      const pastCeiling = now > entry.issuedAt + this.maxLifetimeMs;
+      const pastCeiling = now > entry.maxExpiresAt;
       const pastTtl = now > entry.expiresAt;
       if (!pastCeiling && !pastTtl) continue;
       this.grants.delete(k);

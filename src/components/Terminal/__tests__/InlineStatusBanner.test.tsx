@@ -1235,6 +1235,72 @@ describe("InlineStatusBanner focus handoff on any removal", () => {
     expect(onPaneClick).not.toHaveBeenCalled();
   });
 
+  // Forwarded on every render, not only while busy: the slot reserved while
+  // idle is what keeps the button's width from moving.
+  it("hands a labelled action's loading presentation to its Button on every render", () => {
+    const actions = (loading: boolean): BannerAction[] => [
+      {
+        id: "take",
+        label: "Take control",
+        loading,
+        loadingPresentation: "labelled",
+        onClick: () => {},
+      },
+      { id: "retry", label: "Retry", loading, onClick: () => {} },
+      {
+        id: "refresh",
+        label: "Refresh",
+        icon: Info,
+        iconOnly: true,
+        ariaLabel: "Refresh",
+        loading,
+        loadingPresentation: "labelled",
+        onClick: () => {},
+      },
+    ];
+    const slotOf = (button: HTMLElement) =>
+      button.querySelector('[data-slot="button-spinner-slot"]');
+    for (const layout of ["inline", "stacked"] as const) {
+      const banner = (loading: boolean) => (
+        <InlineStatusBanner
+          title="t"
+          severity="neutral"
+          layout={layout}
+          animated={false}
+          actions={actions(loading)}
+        />
+      );
+      const { rerender, unmount } = render(banner(false));
+      const take = screen.getByRole("button", { name: "Take control" });
+      const idleSlot = slotOf(take);
+      expect(idleSlot, layout).toBeTruthy();
+      expect(idleSlot!.childElementCount).toBe(0);
+      // An action that doesn't ask keeps the overlay, idle and busy alike.
+      expect(slotOf(screen.getByRole("button", { name: "Retry" }))).toBeNull();
+      take.focus();
+
+      rerender(banner(true));
+      expect(screen.getByRole("button", { name: "Take control" })).toBe(take);
+      expect(document.activeElement).toBe(take);
+      expect(take.getAttribute("aria-busy")).toBe("true");
+      expect(slotOf(take)).toBe(idleSlot);
+      expect(idleSlot!.querySelector("svg")).toBeTruthy();
+      expect(take.querySelector('[data-slot="button-spinner"]')).toBeNull();
+
+      const retry = screen.getByRole("button", { name: "Retry" });
+      expect(retry.querySelector('[data-slot="button-spinner"]')).toBeTruthy();
+      expect(slotOf(retry)).toBeNull();
+      const refresh = screen.getByRole("button", { name: "Refresh" });
+      expect(refresh.querySelector('[data-slot="button-spinner"]')).toBeTruthy();
+      expect(slotOf(refresh)).toBeNull();
+
+      rerender(banner(false));
+      expect(slotOf(take)).toBe(idleSlot);
+      expect(idleSlot!.childElementCount).toBe(0);
+      unmount();
+    }
+  });
+
   it("leaves focus alone when the banner unmounts without holding it", () => {
     vi.useFakeTimers();
     const raf = vi

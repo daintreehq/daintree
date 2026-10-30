@@ -7,6 +7,8 @@ import { isProjectViewCached } from "@/lib/viewCacheState";
 import { useProjectViewRevealed } from "@/hooks/useProjectViewRevealed";
 import { logError } from "@/utils/logger";
 
+const BOUNDS_POLL_ATTEMPTS = 20;
+
 interface PendingRestore {
   tabId: string;
   tabUrl: string;
@@ -26,6 +28,7 @@ export function PortalVisibilityController(): null {
   const activeTabId = usePortalStore((state) => state.activeTabId);
   const tabs = usePortalStore((state) => state.tabs);
   const createdTabs = usePortalStore((state) => state.createdTabs);
+  const restoreFailedTabs = usePortalStore((state) => state.restoreFailedTabs);
   const markTabCreated = usePortalStore((state) => state.markTabCreated);
   const overlayStackLength = useUIStore((state) => state.overlayStack.length);
   const hasOverlays = overlayStackLength > 0;
@@ -37,6 +40,7 @@ export function PortalVisibilityController(): null {
   const prevPortalOpenRef = useRef(portalOpen);
   const prevActiveTabIdRef = useRef(activeTabId);
   const prevCreatedTabsRef = useRef(createdTabs);
+  const prevRestoreFailedTabsRef = useRef(restoreFailedTabs);
 
   const ensureTabAndRestore = useCallback(
     async (tabId: string, tabUrl: string, retried = false) => {
@@ -49,6 +53,13 @@ export function PortalVisibilityController(): null {
       }
       isRestoringRef.current = true;
       pendingRestoreRef.current = null;
+
+      // Gives up on the tab so the dock can offer a retry instead of loading
+      // forever. Queued work gets its own attempt first.
+      const failRestore = () => {
+        if (!isMountedRef.current || pendingRestoreRef.current) return;
+        usePortalStore.getState().markTabRestoreFailed(tabId);
+      };
 
       try {
         const state = usePortalStore.getState();
@@ -74,7 +85,7 @@ export function PortalVisibilityController(): null {
 
         let bounds = getBounds();
         let attempts = 0;
-        while (!bounds && attempts < 20) {
+        while (!bounds && attempts < BOUNDS_POLL_ATTEMPTS) {
           await new Promise((resolve) => setTimeout(resolve, 50));
           if (!isMountedRef.current) break;
           const pending = pendingRestoreRef.current as PendingRestore | null;
@@ -84,6 +95,9 @@ export function PortalVisibilityController(): null {
         }
 
         if (!bounds) {
+          // Only a wait that ran out is a failure; a break means unmount or a
+          // newer tab took over.
+          if (attempts >= BOUNDS_POLL_ATTEMPTS) failRestore();
           isRestoringRef.current = false;
           return;
         }
@@ -113,6 +127,8 @@ export function PortalVisibilityController(): null {
             const latestUrl = usePortalStore.getState().tabs.find((t) => t.id === tabId)?.url;
             if (!retried && latestUrl && !pendingRestoreRef.current) {
               pendingRestoreRef.current = { tabId, tabUrl: latestUrl, retried: true };
+            } else {
+              failRestore();
             }
           } else {
             usePortalStore.getState().unmarkTabCreated(tabId);
@@ -131,6 +147,7 @@ export function PortalVisibilityController(): null {
         }
       } catch (error) {
         logError("Failed to restore tab", error);
+        failRestore();
       } finally {
         isRestoringRef.current = false;
         const pending = pendingRestoreRef.current as PendingRestore | null;
@@ -166,6 +183,16 @@ export function PortalVisibilityController(): null {
     restoreActiveTabIfReleased();
   }, [activeTabId, createdTabs, restoreActiveTabIfReleased]);
 
+  // The dock's Retry clears the selected tab's failure; nothing else does while
+  // the tab is still selected and uncreated.
+  useEffect(() => {
+    const prevRestoreFailedTabs = prevRestoreFailedTabsRef.current;
+    prevRestoreFailedTabsRef.current = restoreFailedTabs;
+    if (!activeTabId || !prevRestoreFailedTabs.has(activeTabId)) return;
+    if (restoreFailedTabs.has(activeTabId)) return;
+    restoreActiveTabIfReleased();
+  }, [activeTabId, restoreFailedTabs, restoreActiveTabIfReleased]);
+
   // Navigation is tracked here rather than in the dock, which unmounts when
   // collapsed, so a released tab comes back at the page's latest URL.
   useEffect(() => {
@@ -175,6 +202,10 @@ export function PortalVisibilityController(): null {
       const agentInfo = getAIAgentInfo(data.url);
       store.updateTabTitle(data.tabId, agentInfo?.title ?? data.title);
       store.updateTabUrl(data.tabId, data.url);
+      store.updateTabHistory(data.tabId, {
+        canGoBack: data.canGoBack,
+        canGoForward: data.canGoForward,
+      });
       if (agentInfo?.icon) {
         store.updateTabIcon(data.tabId, agentInfo.icon);
       }

@@ -175,4 +175,68 @@ export const config: AgentConfig = {
         "https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/",
     },
   ],
+  // Folders probed against a live agy 1.4.10 with throwaway skills (#15243).
+  // agy also reads none of `<project>/.gemini/skills`, `~/.agents/skills`,
+  // legacy `.agents/workflows`, or Gemini-style `.gemini/commands/*.toml`, so
+  // none of those are offered. No config-dir env override exists for agy.
+  completionSources: [
+    {
+      id: "builtin",
+      trigger: "/",
+      sourcePrecedence: 0,
+      discovery: { method: "static", catalog: "builtin-slash-commands" },
+    },
+    {
+      id: "skills",
+      trigger: "/",
+      sourcePrecedence: 20,
+      discovery: {
+        method: "directory",
+        parser: "named-skill-dir",
+        derive: {
+          labelPrefix: "/",
+          kind: "skill",
+          idNamespace: "skill",
+          fallbackDescription: "Skill",
+        },
+        locations: [
+          {
+            id: "user:gemini-skills",
+            scope: "user",
+            base: { type: "homeRelative", segments: [".gemini"] },
+            segments: ["skills"],
+            locationPrecedence: 0,
+          },
+          {
+            id: "user:antigravity-cli-skills",
+            scope: "user",
+            base: { type: "homeRelative", segments: [".gemini", "antigravity-cli"] },
+            segments: ["skills"],
+            locationPrecedence: 1,
+          },
+          {
+            id: "user:gemini-config-skills",
+            scope: "user",
+            base: { type: "homeRelative", segments: [".gemini", "config"] },
+            segments: ["skills"],
+            locationPrecedence: 2,
+          },
+          {
+            id: "project:agent-skills",
+            scope: "project",
+            base: { type: "projectRoot" },
+            segments: [".agent", "skills"],
+            locationPrecedence: 0,
+          },
+          {
+            id: "project:agents-skills",
+            scope: "project",
+            base: { type: "projectRoot" },
+            segments: [".agents", "skills"],
+            locationPrecedence: 1,
+          },
+        ],
+      },
+    },
+  ],
 };

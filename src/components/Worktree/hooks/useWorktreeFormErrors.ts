@@ -11,6 +11,7 @@ export interface WorktreeFormErrors {
     branchInput: boolean;
     worktreePath: boolean;
     recipe: boolean;
+    agent: boolean;
     issue: boolean;
   };
 }
@@ -30,6 +31,7 @@ const initialState: WorktreeFormErrors = {
     branchInput: false,
     worktreePath: false,
     recipe: false,
+    agent: false,
     issue: false,
   },
 };
@@ -98,7 +100,13 @@ export function useWorktreeFormErrors() {
 
   const isFormDirty = (): boolean => {
     const { touchedFields: touched } = state;
-    return touched.branchInput || touched.worktreePath || touched.recipe || touched.issue;
+    return (
+      touched.branchInput ||
+      touched.worktreePath ||
+      touched.recipe ||
+      touched.agent ||
+      touched.issue
+    );
   };
 
   return {

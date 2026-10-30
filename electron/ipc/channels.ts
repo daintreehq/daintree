@@ -303,7 +303,6 @@ export const CHANNELS = {
   CANOPY_READ_AGENT_DIRECTORY: "canopy:read-agent-directory",
   CANOPY_READ_ASSISTANT_WORK: "canopy:read-assistant-work",
   CANOPY_UNWATCH_TERMINAL: "canopy:unwatch-terminal",
-  CANOPY_CAPTURE_BACKDROP: "canopy:capture-backdrop",
   CANOPY_SET_MODE: "canopy:set-mode",
   CANOPY_GET_MODEL: "canopy:get-model",
   CANOPY_GET_SIZE_HOLDS: "canopy:get-size-holds",
@@ -314,6 +313,7 @@ export const CHANNELS = {
   CANOPY_TERMINAL_RESIZE: "canopy:terminal-resize",
   CANOPY_TERMINAL_SEND_KEY: "canopy:terminal-send-key",
   CANOPY_TERMINAL_SUBMIT: "canopy:terminal-submit",
+  CANOPY_SUBMIT_REPLY: "canopy:submit-reply",
   PROJECT_HISTORY_PEEK: "project-history:peek",
   PROJECT_CREATE_FOLDER: "project:create-folder",
   PROJECT_INIT_GIT: "project:init-git",
@@ -415,6 +415,7 @@ export const CHANNELS = {
   GIT_PULL_REBASE: "git:pull-rebase",
   GIT_FETCH: "git:fetch",
   GIT_DISCARD_FILE_CHANGES: "git:discard-file-changes",
+  GIT_PREVIEW_FILE_MUTATION: "git:preview-file-mutation",
   GIT_FORCE_PUSH_WITH_LEASE: "git:force-push-with-lease",
   GIT_LIST_REMOTE_COMMITS: "git:list-remote-commits",
   GIT_LIST_PUSH_COMMITS: "git:list-push-commits",
@@ -581,11 +582,13 @@ export const CHANNELS = {
   CODEX_READ_SUBAGENT_TRANSCRIPT: "codex:read-subagent-transcript",
   CODEX_RESOLVE_RESUME_LATEST_SESSION: "codex:resolve-resume-latest-session",
   CODEX_FIND_SESSIONS: "codex:find-sessions",
+  CODEX_MATCH_RESTORE_SESSIONS: "codex:match-restore-sessions",
   CODEX_READ_QUOTA: "codex:read-quota",
   CODEX_REFRESH_QUOTA: "codex:refresh-quota",
 
   CLAUDE_LIST_SUBAGENTS: "claude:list-subagents",
   CLAUDE_READ_SUBAGENT_TRANSCRIPT: "claude:read-subagent-transcript",
+  CLAUDE_FIND_REPLY_SPAN: "claude:find-reply-span",
 
   DEV_PREVIEW_ENSURE: "dev-preview:ensure",
   DEV_PREVIEW_RESTART: "dev-preview:restart",
@@ -810,11 +813,10 @@ export const CHANNELS = {
    */
   MCP_SERVER_ISSUE_GRANT: "mcp-server:issue-grant",
   /**
-   * Revoke every grant currently held by the named session. Returns the
-   * count of revoked grants for the renderer's confirmation copy. Caller-
-   * pin checked.
+   * Revoke one per-`(sessionId, toolId)` grant, leaving the session's other
+   * grants alone. Idempotent. Caller-pin checked.
    */
-  MCP_SERVER_REVOKE_SESSION_GRANTS: "mcp-server:revoke-session-grants",
+  MCP_SERVER_REVOKE_GRANT: "mcp-server:revoke-grant",
   /**
    * Approve a native session-scoped automation grant (#10648), addressed by
    * the public help-session id. Authorizes a bounded set of tools for a
@@ -856,6 +858,7 @@ export const CHANNELS = {
   MCP_SERVER_GET_PANE_NOTIFY_STATE: "mcp-server:get-pane-notify-state",
   /** The pane chrome's "stop": every notice the pane has pending goes. */
   MCP_SERVER_STOP_PANE_NOTICES: "mcp-server:stop-pane-notices",
+  MCP_SERVER_HOLD_DISPATCH: "mcp-server:hold-dispatch",
   /**
    * Hand a running terminal to an orchestrating agent pane, or take it back
    * (#12490). Renderer-only by construction: no action or MCP tool reaches
@@ -923,6 +926,8 @@ export const CHANNELS = {
   VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",
   VOICE_INPUT_FILE_TOKEN_RESOLVED: "voice-input:file-token-resolved",
   VOICE_INPUT_SESSION_ENDED: "voice-input:session-ended",
+  VOICE_INPUT_IS_APP_REPLACED: "voice-input:is-app-replaced",
+  VOICE_INPUT_RESTART_REPLACED_APP: "voice-input:restart-replaced-app",
   VOICE_DICTIONARY_ADD: "voice-dictionary:add",
   VOICE_DICTIONARY_REMOVE: "voice-dictionary:remove",
   VOICE_DICTIONARY_UPDATE: "voice-dictionary:update",
@@ -1224,6 +1229,10 @@ export const CHANNELS = {
   PLUGIN_REPORT_PANEL_LIFECYCLE: "plugin:report-panel-lifecycle",
   /** Renderer reports its live non-plugin panel ids, so `host.reloadPanel` can refuse them (#12610). */
   PLUGIN_REPORT_PANEL_INVENTORY: "plugin:report-panel-inventory",
+  /** Renderer reports which of its plugin panels say they hold unsaved work (#15031). */
+  PLUGIN_REPORT_UNSAVED_PANELS: "plugin:report-unsaved-panels",
+  /** A plugin's panels, in any view, that say they hold unsaved work (#15031). */
+  PLUGIN_UNSAVED_PANELS_GET: "plugin:unsaved-panels-get",
   /** Renderer → main, fire-and-forget: batched plugin view cost observations. */
   PLUGIN_REPORT_VIEW_METRICS: "plugin:report-view-metrics",
   /** Renderer → main, fire-and-forget: the plugin push channels this renderer has subscribers for. */

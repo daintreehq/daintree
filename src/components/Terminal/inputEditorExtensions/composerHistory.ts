@@ -1,4 +1,5 @@
 import {
+  Annotation,
   Compartment,
   Prec,
   type ChangeDesc,
@@ -62,6 +63,13 @@ export function createComposerHistory(): Extension {
 }
 
 /**
+ * Marks an outside write that leaves the caret to the user: the dictation's
+ * own words, their cleanup, a file link. A recalled prompt, a handoff or a
+ * host's draft moves the caret, and is no part of any dictation.
+ */
+export const dictationWrite = Annotation.define<true>();
+
+/**
  * An outside write to the draft (a dictated utterance, a correction or
  * file-link swap, a handoff) as one undo step of its own: typing next to it
  * within the grouping delay would otherwise merge into it. A correction that
@@ -92,7 +100,11 @@ export function outsideDraftWrite(
     selection,
     scrollIntoView: !keepsCaret,
     effects: landed ? correctionLandingEffects(landed, reviewed) : [],
-    annotations: [isolateHistory.of("full"), outsideWrite.of(true)],
+    annotations: [
+      isolateHistory.of("full"),
+      outsideWrite.of(true),
+      ...(keepsCaret ? [dictationWrite.of(true)] : []),
+    ],
   };
 }
 

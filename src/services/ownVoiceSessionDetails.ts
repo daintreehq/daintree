@@ -104,9 +104,16 @@ export function buildOwnVoiceSessionDetails({
   const transcript = [joinCompletedSegments(buffer?.completedSegments ?? []), buffer?.liveText]
     .filter(Boolean)
     .join(" ");
+  // A stand-in mic is named by micLabel already; only trouble is carried.
   const notice =
-    micNotice && micNotice.target.panelId === target.panelId
-      ? { kind: micNotice.kind, bluetooth: micNotice.kind === "silent" && micNotice.bluetooth }
+    micNotice && micNotice.kind !== "fallback" && micNotice.target.panelId === target.panelId
+      ? {
+          kind: micNotice.kind,
+          bluetooth: micNotice.kind === "silent" && micNotice.bluetooth,
+          ...(micNotice.kind === "silent" && micNotice.appReplaced
+            ? { appReplaced: true as const }
+            : {}),
+        }
       : null;
 
   return {

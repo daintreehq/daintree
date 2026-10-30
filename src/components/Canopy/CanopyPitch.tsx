@@ -4,12 +4,14 @@ import { Telescope } from "@/components/icons";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
+import { useCanopyStore } from "@/store/canopyStore";
 import { CanopyRow } from "./CanopyRow";
 import { SectionBar } from "./CanopySectionBar";
 import { CANOPY_DEMO_FRAME_COUNT, canopyDemoItems } from "./canopyDemo";
 import { itemNeedsAttention } from "./canopyModel";
 import { useListReorderMotion } from "./useListReorderMotion";
 import { CanopyHeaderCenter } from "./CanopyHostPicker";
+import { canopyListStyle } from "./canopyListWidth";
 import { CANOPY_LOCAL, CANOPY_STOP, CANOPY_TITLE } from "./canopyTerms";
 
 /** Long enough to read a row that just rose to the top. */
@@ -36,7 +38,6 @@ const POINTS = [
 interface CanopyPitchProps {
   isOpen: boolean;
   onClose: () => void;
-  backdrop?: React.ReactNode;
   /** The user turned Canopy on: its model downloads and screens are read on this computer. */
   onTurnOn: () => Promise<void>;
   /** The user doesn't want Canopy: its ways in go, all but Settings. */
@@ -60,7 +61,6 @@ const FAILED: Record<"on" | "hide", string> = {
 export function CanopyPitch({
   isOpen,
   onClose,
-  backdrop,
   onTurnOn,
   onHide,
   restoreFocusTo,
@@ -95,11 +95,9 @@ export function CanopyPitch({
     <AppDialog
       isOpen={isOpen}
       onClose={onClose}
-      size="workspace"
-      maxHeight="h-[min(90vh,1100px)]"
+      placement="window"
       initialFocus="none"
       {...(restoreFocusTo ? { restoreFocusTo, preferRestoreFocusTo: true } : {})}
-      backdrop={backdrop}
       data-testid="canopy-dialog"
     >
       <AppDialog.Header>
@@ -107,7 +105,7 @@ export function CanopyPitch({
         <CanopyHeaderCenter>{hostPicker}</CanopyHeaderCenter>
         <AppDialog.CloseButton />
       </AppDialog.Header>
-      <div className="flex min-h-0 flex-1">
+      <div className="canopy-frame flex min-h-0 flex-1">
         <DemoInbox paused={!isOpen} />
         <section
           aria-labelledby="canopy-pitch-title"
@@ -202,12 +200,14 @@ function DemoInbox({ paused }: { paused: boolean }) {
     return () => clearInterval(handle);
   }, [paused, hovered, still]);
 
+  const listWidth = useCanopyStore((state) => state.listWidth);
   const items = canopyDemoItems(frame, nowMs);
   useListReorderMotion(listRef, items.map((item) => item.runId).join(","));
 
   return (
     <div
-      className="flex min-h-0 w-[28rem] shrink-0 flex-col self-stretch overflow-hidden border-r border-border-default select-none"
+      className="canopy-list-column flex min-h-0 shrink-0 flex-col self-stretch overflow-hidden border-r border-border-default select-none"
+      style={canopyListStyle(listWidth)}
       onPointerEnter={() => setHovered(true)}
       onPointerLeave={() => setHovered(false)}
     >

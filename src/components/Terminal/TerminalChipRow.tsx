@@ -15,6 +15,8 @@ export interface TerminalChipRowProps {
   leading?: ReactNode;
   /** Pinned to the trailing edge at its natural width. */
   trailing?: ReactNode;
+  /** A passive line above the chips, given the row's whole width. */
+  notice?: ReactNode;
 }
 
 /**
@@ -23,19 +25,25 @@ export interface TerminalChipRowProps {
  * two stacked overlays, so on a narrow pane the chips share the width budget and
  * keep a gap instead of sliding under each other.
  *
+ * A notice sits on its own line above the chips rather than beside them, so it
+ * never squeezes the fleet chip's count; it takes no pointer events.
+ *
  * `overflow-hidden` keeps the chips' floating shadow inside the viewport.
  * Unclipped, the light themes' deep floating shadow smeared a grey patch across
  * the composer below. Popovers opened from a chip portal out, so nothing is cut.
  */
-export function TerminalChipRow({ leading, trailing }: TerminalChipRowProps) {
+export function TerminalChipRow({ leading, trailing, notice }: TerminalChipRowProps) {
   return (
     <div
-      className="absolute inset-0 z-30 pointer-events-none overflow-hidden flex items-end gap-2 pb-1.5"
+      className="absolute inset-0 z-30 pointer-events-none overflow-hidden flex flex-col justify-end gap-1 pb-1.5"
       style={{ paddingLeft: CHIP_ROW_LEFT_INSET, paddingRight: CHIP_ROW_RIGHT_INSET }}
     >
-      {/* The fleet chip has no hit-target opt-in of its own; ScrollPill bakes one in. */}
-      <div className="pointer-events-auto min-w-0 flex">{leading}</div>
-      <div className="ml-auto shrink-0 flex">{trailing}</div>
+      {notice ? <div className="min-w-0 flex">{notice}</div> : null}
+      <div className="flex items-end gap-2">
+        {/* The fleet chip has no hit-target opt-in of its own; ScrollPill bakes one in. */}
+        <div className="pointer-events-auto min-w-0 flex">{leading}</div>
+        <div className="ml-auto shrink-0 flex">{trailing}</div>
+      </div>
     </div>
   );
 }

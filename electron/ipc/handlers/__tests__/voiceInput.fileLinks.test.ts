@@ -160,7 +160,7 @@ type Sent = { channel: string; payload: unknown };
 type FileReferencesPayload = {
   sessionId: string;
   transcriptId: string;
-  references: Array<{ description: string; path: string | null }>;
+  references: Array<{ description: string; path: string | null; failed?: true }>;
 };
 
 let nextSenderId = 500;
@@ -421,7 +421,12 @@ describe("voiceInput — spoken file references", () => {
 
     expect(shared.detect).toHaveBeenCalledOnce();
     expect(shared.resolve).not.toHaveBeenCalled();
-    expect(fileReferences(unowned)).toEqual([]);
+    // Nowhere to search is a lookup that failed, said to the view that spoke it.
+    expect(fileReferences(unowned)).toEqual([
+      expect.objectContaining({
+        references: [{ description: "router", path: null, failed: true }],
+      }),
+    ]);
     expect(shared.currentView.sent).toEqual([]);
   });
 
@@ -441,7 +446,7 @@ describe("voiceInput — spoken file references", () => {
     expect(completes()[0]!.transcriptId).toBeUndefined();
   });
 
-  it("sends nothing for a reference that didn't resolve", async () => {
+  it("sends a reference that didn't resolve as a miss", async () => {
     await start(owner, "a");
     shared.detect.mockResolvedValueOnce([{ description: "the old API" }]);
     shared.resolve.mockResolvedValueOnce(null);
@@ -450,6 +455,108 @@ describe("voiceInput — spoken file references", () => {
     await stop(owner, "a");
 
     expect(shared.resolve).toHaveBeenCalledOnce();
+    expect(fileReferences()).toEqual([
+      expect.objectContaining({
+        sessionId: "a",
+        references: [{ description: "the old API", path: null }],
+      }),
+    ]);
+  });
+
+  it("sends a lookup that threw as failed, once the slower ones beside it settle", async () => {
+    await start(owner, "a");
+    shared.detect.mockResolvedValueOnce([
+      { description: "router" },
+      { description: "store" },
+      { description: "old API" },
+    ]);
+    const router = deferred<string | null>();
+    shared.resolve
+      .mockReturnValueOnce(router.promise)
+      .mockRejectedValueOnce(new Error("search crashed"))
+      .mockResolvedValueOnce(null);
+
+    emitComplete("Link to the router, link to the store and link to the old API.");
+    const stopping = stop(owner, "a");
+    await vi.waitFor(() => expect(shared.resolve).toHaveBeenCalledTimes(3));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(fileReferences()).toEqual([]);
+    router.resolve("src/router.ts");
+    await stopping;
+
+    expect(fileReferences()).toHaveLength(1);
+    expect(fileReferences()[0]!.references).toEqual([
+      { description: "router", path: "src/router.ts" },
+      { description: "store", path: null, failed: true },
+      { description: "old API", path: null },
+    ]);
+  });
+
+  it("sends the references that settled, and the rest as failed, once the job deadline passes", async () => {
+    vi.useFakeTimers();
+    await start(owner, "a");
+    shared.detect.mockResolvedValueOnce([{ description: "router" }, { description: "store" }]);
+    // A slow local search ignores the abort.
+    shared.resolve
+      .mockResolvedValueOnce("src/router.ts")
+      .mockReturnValueOnce(new Promise<string | null>(() => {}));
+
+    emitComplete("Link to the router and link to the store.");
+    const stopping = stop(owner, "a");
+    await vi.advanceTimersByTimeAsync(6_100);
+    await stopping;
+
+    expect(fileReferences()).toEqual([
+      expect.objectContaining({
+        references: [
+          { description: "router", path: "src/router.ts" },
+          { description: "store", path: null, failed: true },
+        ],
+      }),
+    ]);
+  });
+
+  it("doesn't take a lookup cut short at the deadline for a miss", async () => {
+    vi.useFakeTimers();
+    await start(owner, "a");
+    shared.detect.mockResolvedValueOnce([{ description: "router" }, { description: "store" }]);
+    // A search that answers its abort with nothing found.
+    shared.resolve
+      .mockResolvedValueOnce("src/router.ts")
+      .mockImplementationOnce(
+        ({ signal }: { signal?: AbortSignal }) =>
+          new Promise<string | null>((resolve) =>
+            signal?.addEventListener("abort", () => resolve(null), { once: true })
+          )
+      );
+
+    emitComplete("Link to the router and link to the store.");
+    const stopping = stop(owner, "a");
+    await vi.advanceTimersByTimeAsync(6_100);
+    await stopping;
+
+    expect(fileReferences()).toEqual([
+      expect.objectContaining({
+        references: [
+          { description: "router", path: "src/router.ts" },
+          { description: "store", path: null, failed: true },
+        ],
+      }),
+    ]);
+  });
+
+  it("says nothing of a reference whose session was cancelled while it was looked up", async () => {
+    await start(owner, "a");
+    shared.detect.mockResolvedValueOnce([{ description: "router" }]);
+    const lookup = deferred<string | null>();
+    shared.resolve.mockReturnValueOnce(lookup.promise);
+
+    emitComplete("Link to the router.");
+    await vi.waitFor(() => expect(shared.resolve).toHaveBeenCalledOnce());
+    await start(owner, "b");
+    lookup.resolve(null);
+    await new Promise((r) => setTimeout(r, 0));
+
     expect(fileReferences()).toEqual([]);
   });
 
@@ -547,7 +654,9 @@ describe("voiceInput — spoken file references", () => {
     await stop(owner, "a");
 
     expect(shared.resolve).not.toHaveBeenCalled();
-    expect(fileReferences()).toEqual([]);
+    expect(fileReferences()[0]!.references).toEqual([
+      { description: "router", path: null, failed: true },
+    ]);
   });
 
   it("keeps references in spoken order when they resolve out of order", async () => {

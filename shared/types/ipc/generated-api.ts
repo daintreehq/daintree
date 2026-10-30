@@ -64,9 +64,6 @@ export interface GeneratedElectronAPI {
     archive(
       ...args: IpcInvokeMap["canopy:archive"]["args"]
     ): Promise<IpcInvokeMap["canopy:archive"]["result"]>;
-    captureBackdrop(
-      ...args: IpcInvokeMap["canopy:capture-backdrop"]["args"]
-    ): Promise<IpcInvokeMap["canopy:capture-backdrop"]["result"]>;
     emptyTrash(
       ...args: IpcInvokeMap["canopy:empty-trash"]["args"]
     ): Promise<IpcInvokeMap["canopy:empty-trash"]["result"]>;
@@ -148,6 +145,9 @@ export interface GeneratedElectronAPI {
     setShown(
       ...args: IpcInvokeMap["canopy:set-shown"]["args"]
     ): Promise<IpcInvokeMap["canopy:set-shown"]["result"]>;
+    submitReply(
+      ...args: IpcInvokeMap["canopy:submit-reply"]["args"]
+    ): Promise<IpcInvokeMap["canopy:submit-reply"]["result"]>;
     terminalInput(
       ...args: IpcInvokeMap["canopy:terminal-input"]["args"]
     ): Promise<IpcInvokeMap["canopy:terminal-input"]["result"]>;
@@ -206,6 +206,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["canopy-host:watch-assistant"]["result"]>;
   };
   claude: {
+    findReplySpan(
+      ...args: IpcInvokeMap["claude:find-reply-span"]["args"]
+    ): Promise<IpcInvokeMap["claude:find-reply-span"]["result"]>;
     listSubagents(
       ...args: IpcInvokeMap["claude:list-subagents"]["args"]
     ): Promise<IpcInvokeMap["claude:list-subagents"]["result"]>;
@@ -251,6 +254,9 @@ export interface GeneratedElectronAPI {
     listSubagents(
       ...args: IpcInvokeMap["codex:list-subagents"]["args"]
     ): Promise<IpcInvokeMap["codex:list-subagents"]["result"]>;
+    matchRestoreSessions(
+      ...args: IpcInvokeMap["codex:match-restore-sessions"]["args"]
+    ): Promise<IpcInvokeMap["codex:match-restore-sessions"]["result"]>;
     readQuota(
       ...args: IpcInvokeMap["codex:read-quota"]["args"]
     ): Promise<IpcInvokeMap["codex:read-quota"]["result"]>;
@@ -552,6 +558,9 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["git:discard-file-changes"]["args"]
     ): Promise<IpcInvokeMap["git:discard-file-changes"]["result"]>;
     fetch(...args: IpcInvokeMap["git:fetch"]["args"]): Promise<IpcInvokeMap["git:fetch"]["result"]>;
+    previewFileMutation(
+      ...args: IpcInvokeMap["git:preview-file-mutation"]["args"]
+    ): Promise<IpcInvokeMap["git:preview-file-mutation"]["result"]>;
   };
   help: {
     adoptDetachedSession(
@@ -768,6 +777,9 @@ export interface GeneratedElectronAPI {
     getTurnOutcomeRecords(
       ...args: IpcInvokeMap["mcp-server:get-turn-outcome-records"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:get-turn-outcome-records"]["result"]>;
+    holdDispatch(
+      ...args: IpcInvokeMap["mcp-server:hold-dispatch"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:hold-dispatch"]["result"]>;
     issueGrant(
       ...args: IpcInvokeMap["mcp-server:issue-grant"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:issue-grant"]["result"]>;
@@ -795,12 +807,12 @@ export interface GeneratedElectronAPI {
     resetDenialCounts(
       ...args: IpcInvokeMap["mcp-server:reset-denial-counts"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:reset-denial-counts"]["result"]>;
+    revokeGrant(
+      ...args: IpcInvokeMap["mcp-server:revoke-grant"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:revoke-grant"]["result"]>;
     revokeNativeGrant(
       ...args: IpcInvokeMap["mcp-server:revoke-native-grant"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:revoke-native-grant"]["result"]>;
-    revokeSessionGrants(
-      ...args: IpcInvokeMap["mcp-server:revoke-session-grants"]["args"]
-    ): Promise<IpcInvokeMap["mcp-server:revoke-session-grants"]["result"]>;
     rotateApiKey(
       ...args: IpcInvokeMap["mcp-server:rotate-api-key"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:rotate-api-key"]["result"]>;
@@ -1068,6 +1080,9 @@ export interface GeneratedElectronAPI {
     getTours(
       ...args: IpcInvokeMap["plugin:tours-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:tours-get"]["result"]>;
+    getUnsavedPanels(
+      ...args: IpcInvokeMap["plugin:unsaved-panels-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:unsaved-panels-get"]["result"]>;
     getWorktreeDeleteNotes(
       ...args: IpcInvokeMap["plugin:worktree-delete-notes-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:worktree-delete-notes-get"]["result"]>;
@@ -1137,6 +1152,9 @@ export interface GeneratedElectronAPI {
     reportPanelLifecycle(
       ...args: IpcInvokeMap["plugin:report-panel-lifecycle"]["args"]
     ): Promise<IpcInvokeMap["plugin:report-panel-lifecycle"]["result"]>;
+    reportUnsavedPanels(
+      ...args: IpcInvokeMap["plugin:report-unsaved-panels"]["args"]
+    ): Promise<IpcInvokeMap["plugin:report-unsaved-panels"]["result"]>;
     resolveContextReferences(
       ...args: IpcInvokeMap["plugin:context-references-resolve"]["args"]
     ): Promise<IpcInvokeMap["plugin:context-references-resolve"]["result"]>;
@@ -1767,12 +1785,18 @@ export interface GeneratedElectronAPI {
     getLiveSession(
       ...args: IpcInvokeMap["voice-input:get-live-session"]["args"]
     ): Promise<IpcInvokeMap["voice-input:get-live-session"]["result"]>;
+    isAppReplaced(
+      ...args: IpcInvokeMap["voice-input:is-app-replaced"]["args"]
+    ): Promise<IpcInvokeMap["voice-input:is-app-replaced"]["result"]>;
     prefetchCorrections(
       ...args: IpcInvokeMap["voice-input:prefetch-corrections"]["args"]
     ): Promise<IpcInvokeMap["voice-input:prefetch-corrections"]["result"]>;
     publishDetails(
       ...args: IpcInvokeMap["voice-input:publish-details"]["args"]
     ): Promise<IpcInvokeMap["voice-input:publish-details"]["result"]>;
+    restartReplacedApp(
+      ...args: IpcInvokeMap["voice-input:restart-replaced-app"]["args"]
+    ): Promise<IpcInvokeMap["voice-input:restart-replaced-app"]["result"]>;
     revealLive(
       ...args: IpcInvokeMap["voice-input:reveal-live"]["args"]
     ): Promise<IpcInvokeMap["voice-input:reveal-live"]["result"]>;

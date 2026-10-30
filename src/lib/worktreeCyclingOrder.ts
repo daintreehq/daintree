@@ -19,13 +19,12 @@ import {
   groupByType,
   matchesFilters,
   matchesQuickStateFilter,
-  scoreWorktree,
+  matchesWorktreeQuery,
   sortWorktrees,
   sortWorktreesByRelevance,
   type DerivedWorktreeMeta,
   type FilterState,
 } from "@/lib/worktreeFilters";
-import { parseExactNumber } from "@/lib/parseExactNumber";
 import { isTerminalVisible } from "@/lib/terminalVisibility";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { isValidPastTimestamp } from "@/utils/timestamps";
@@ -92,19 +91,6 @@ function buildDerivedMeta(
     buckets,
     chipState: computeChipState(buckets),
   };
-}
-
-function worktreeMatchesQuery(
-  worktree: WorktreeState,
-  query: string,
-  customTitle: string | undefined
-): boolean {
-  if (!query) return true;
-  const exactNum = parseExactNumber(query);
-  if (exactNum !== null) {
-    return worktree.issueNumber === exactNum || worktree.linked?.pr?.ref.number === exactNum;
-  }
-  return scoreWorktree(worktree, query, customTitle) > 0;
 }
 
 /**
@@ -257,7 +243,7 @@ export function getVisibleWorktreesForCycling(
       : sortedNonMain;
 
   const topPinned: WorktreeState[] = [];
-  if (mainWorktree && worktreeMatchesQuery(mainWorktree, query, customTitles[mainWorktree.id])) {
+  if (mainWorktree && matchesWorktreeQuery(mainWorktree, query, customTitles[mainWorktree.id])) {
     const mainDerived = derivedMetaMap.get(mainWorktree.id) ?? {
       terminalCount: 0,
       hasAgent: false,

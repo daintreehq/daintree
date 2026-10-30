@@ -398,11 +398,17 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
         },
       ],
       run: async ({ worktreeId }) => {
-        const terminals = useRecipeStore.getState().generateRecipeFromActiveTerminals(worktreeId);
+        const { terminals, omitted } = useRecipeStore
+          .getState()
+          .captureRecipeFromLayout(worktreeId);
         if (terminals.length === 0) {
           throw new Error("No active terminals in this worktree to capture");
         }
-        dispatchRecipeEditorOpen({ worktreeId, initialTerminals: terminals });
+        dispatchRecipeEditorOpen({
+          worktreeId,
+          initialTerminals: terminals,
+          layoutOmissions: omitted,
+        });
         return {
           opened: true,
           mode: "fromLayout" as const,

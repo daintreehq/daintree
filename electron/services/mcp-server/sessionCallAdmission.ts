@@ -278,14 +278,15 @@ export function admitToolCall(
     } catch (err) {
       console.error("[MCP] Failed to append audit record:", err);
     }
+    // Whether this refusal reached a banner whose "Allow this tool" the user
+    // can answer (#14995): the notifier says whether it reached a live view,
+    // and the button exists only when some tier would admit the tool.
+    let allowOffered = false;
     if (notifyTierMismatch && !suppressBanner) {
+      const targetTier = minimumPermittingTier(actionId, rendererOwnedOrigin);
       try {
-        notifyTierMismatch({
-          sessionId,
-          toolId: actionId,
-          tier,
-          targetTier: minimumPermittingTier(actionId, rendererOwnedOrigin),
-        });
+        const sent = notifyTierMismatch({ sessionId, toolId: actionId, tier, targetTier });
+        allowOffered = sent && rendererOwnedOrigin && targetTier !== null;
       } catch (err) {
         console.error("[MCP] Failed to notify tier-mismatch:", err);
       }
@@ -293,6 +294,7 @@ export function admitToolCall(
     if (recordDenial) {
       const result = recordDenial(sessionId, "tierMismatch");
       if (result.tripped) {
+        allowOffered = false;
         const pinnedId = sessionStore.sessionWebContentsMap.get(sessionId);
         // Snapshot ownership with the pin, before revocation clears both.
         const rendererOwned = sessionStore.isRendererOwnedOrigin(sessionId);
@@ -325,6 +327,12 @@ export function admitToolCall(
     // A relayed caller is another machine's own assistant, so "reserved for
     // Daintree's own assistant" would tell it it is something it isn't (#13493).
     const relayed = sessionSurface.relay === true;
+    // Without this the assistant only heard a refusal, and its instructions
+    // said a new session was the way past it.
+    const allowHint =
+      allowOffered && !relayed
+        ? " The user can allow it from the Assistant panel; retry once told it's allowed."
+        : "";
     return {
       kind: "return",
       result: buildToolError({
@@ -338,7 +346,7 @@ export function admitToolCall(
               ? relayed
                 ? `action '${actionId}' can reach any terminal on this host, so another machine's assistant may only act on terminals its calls created or started here.`
                 : `action '${actionId}' can reach any terminal, so it is reserved for Daintree's own assistant. This connection may only act on terminals it created.`
-              : `action '${actionId}' is not permitted for the '${tier}' tier.`,
+              : `action '${actionId}' is not permitted for the '${tier}' tier.${allowHint}`,
       }),
     };
   }

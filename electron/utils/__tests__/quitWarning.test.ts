@@ -177,16 +177,90 @@ describe("showQuitWarning with attached Shells", () => {
     expect(showMessageBox).toHaveBeenCalledTimes(1);
     expect(showMessageBox.mock.calls[0]![0].detail).toContain("1 agent is currently working");
   });
+
+  it("counts two unnamed machines instead of merging them into one", async () => {
+    const showMessageBox = box(1);
+    await showQuitWarning(
+      { activeAgents: 0, attachedShells: [{ clientName: "" }, { clientName: " " }] },
+      showMessageBox
+    );
+    const opts = showMessageBox.mock.calls[0]![0];
+    expect(opts.message).toBe("2 machines are attached to this host");
+    expect(opts.detail).toBe(
+      "Quitting disconnects 2 machines and ends the work they have open on this machine."
+    );
+  });
+
+  it("keeps the fallback lowercase mid-sentence", async () => {
+    const showMessageBox = box(1);
+    await showQuitWarning(
+      { activeAgents: 0, attachedShells: [{ clientName: "" }] },
+      showMessageBox
+    );
+    const opts = showMessageBox.mock.calls[0]![0];
+    expect(opts.message).toBe("Another machine is attached to this host");
+    expect(opts.detail).toContain("disconnects another machine and ends the work it has open");
+  });
 });
 
 describe("showUpdateWarning", () => {
   it("names the machines and says the update stays ready", async () => {
     const showMessageBox = vi.fn().mockResolvedValue({ response: 0 });
-    const confirmed = await showUpdateWarning([{ clientName: "MacBook Pro" }], showMessageBox);
+    const confirmed = await showUpdateWarning(
+      { activeAgents: 0, attachedShells: [{ clientName: "MacBook Pro" }] },
+      showMessageBox
+    );
     const opts = showMessageBox.mock.calls[0]![0];
     expect(confirmed).toBe(true);
     expect(opts.detail).toContain("disconnects MacBook Pro");
     expect(opts.detail).toContain("stays ready");
+    expect(opts.detail).not.toContain("agent");
     expect(opts.buttons).toEqual(["Restart and Update", "Cancel"]);
+  });
+
+  it("asks about working agents with the same count Quit shows", async () => {
+    const showMessageBox = vi.fn().mockResolvedValue({ response: 1 });
+    const confirmed = await showUpdateWarning(
+      { activeAgents: 2, attachedShells: [] },
+      showMessageBox
+    );
+    const opts = showMessageBox.mock.calls[0]![0];
+    expect(confirmed).toBe(false);
+    expect(opts.title).toBe("Agents are working");
+    expect(opts.message).toBe("2 agents are currently working");
+    expect(opts.detail).toContain("interrupt active agents");
+    expect(opts.detail).toContain("stays ready");
+    expect(opts.buttons).toEqual(["Restart and Update", "Cancel"]);
+    expect(opts.cancelId).toBe(1);
+    expect(opts.defaultId).toBe(1);
+  });
+
+  it("mentions working agents beside the attached Shells in one dialog", async () => {
+    const showMessageBox = vi.fn().mockResolvedValue({ response: 0 });
+    await showUpdateWarning(
+      { activeAgents: 1, attachedShells: [{ clientName: "MacBook Pro" }] },
+      showMessageBox
+    );
+    const opts = showMessageBox.mock.calls[0]![0];
+    expect(opts.title).toBe("Other machines are attached");
+    expect(opts.detail).toContain("disconnects MacBook Pro");
+    expect(opts.detail).toContain("1 agent is currently working");
+    expect(opts.detail).toContain("stays ready");
+  });
+
+  it("counts machines that share a name", async () => {
+    const showMessageBox = vi.fn().mockResolvedValue({ response: 1 });
+    await showUpdateWarning(
+      {
+        activeAgents: 0,
+        attachedShells: [{ clientName: "MacBook Pro" }, { clientName: "MacBook Pro" }],
+      },
+      showMessageBox
+    );
+    const opts = showMessageBox.mock.calls[0]![0];
+    expect(opts.message).toBe("2 machines named MacBook Pro are attached to this host");
+    expect(opts.detail).toBe(
+      "Restarting to update disconnects 2 machines named MacBook Pro and ends the work they have open on this machine. The update stays ready until you restart."
+    );
   });
 });

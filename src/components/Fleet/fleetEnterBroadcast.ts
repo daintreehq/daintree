@@ -6,14 +6,26 @@ import { useFleetTargetOverridesStore } from "@/store/fleetTargetOverridesStore"
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logWarn } from "@/utils/logger";
 import { resolveFleetBroadcastTargetIds } from "./fleetBroadcast";
+import { getCrossHostTarget, isHostQualifiedTargetId } from "./crossHostFleet";
+import { notify } from "@/lib/notify";
+import { requestHostsOverview } from "@/components/Hosts/Overview/hostsOverviewRequests";
 import {
   executeFleetBroadcast,
   filterEligibleIds,
+  findCrossHostContextTargets,
   type FleetExecutionResult,
 } from "./fleetExecution";
 import { pluralize } from "@/lib/pluralize";
 
+/** Why a fleet send carrying context to another host's agent didn't go. */
+export const CROSS_HOST_CONTEXT_REFUSAL =
+  "Not sent: context such as @diff can't reach an agent on another host. The draft is still here.";
+
 let activeBroadcastController: AbortController | null = null;
+// The composer send that owns the draft's cleanup. A newer Enter takes it
+// over: the older run settling later must not clear a draft that has since
+// been sent, cleared and typed again, or undo the newer send's own cleanup.
+let latestEditorSend: object | null = null;
 
 /**
  * Abort any in-flight fleet broadcast. Already-dispatched IPC writes can't
@@ -106,7 +118,15 @@ function describeFailureSplit(permanent: number, transient: number): string {
   return `${transient} failed`;
 }
 
-function buildBroadcastAnnouncement(result: FleetExecutionResult): string {
+/** The hosts a broadcast's failures were on, for words a screen reader can act on. */
+function failedHostsSuffix(failedHosts: readonly string[]): string {
+  return failedHosts.length === 0 ? "" : ` on ${failedHosts.join(" and ")}`;
+}
+
+function buildBroadcastAnnouncement(
+  result: FleetExecutionResult,
+  failedHosts: readonly string[] = []
+): string {
   const permanent = result.permanentlyFailedIds.length;
   const transient = result.transientlyFailedIds.length;
   const skipped =
@@ -122,12 +142,12 @@ function buildBroadcastAnnouncement(result: FleetExecutionResult): string {
       return "Broadcast cancelled";
     }
     if (result.failureCount > 0) {
-      return `Broadcast cancelled — ${result.successCount} sent, ${describeFailureSplit(permanent, transient)}${skipped}`;
+      return `Broadcast cancelled — ${result.successCount} sent, ${describeFailureSplit(permanent, transient)}${failedHostsSuffix(failedHosts)}${skipped}`;
     }
     return `Broadcast cancelled — ${result.successCount} sent${skipped}`;
   }
   if (result.failureCount > 0) {
-    return `Broadcast sent to ${result.successCount} — ${describeFailureSplit(permanent, transient)}`;
+    return `Broadcast sent to ${result.successCount} — ${describeFailureSplit(permanent, transient)}${failedHostsSuffix(failedHosts)}`;
   }
   return `Broadcast sent to ${pluralize(result.successCount, "terminal", "terminals")}`;
 }
@@ -137,11 +157,15 @@ function buildBroadcastAnnouncement(result: FleetExecutionResult): string {
  * disarmed, retryable ones get the failure chip, delivered ones lose any old
  * failure dot, and the result is announced.
  */
-function applyFleetBroadcastOutcome(
-  text: string,
-  eligibleTargets: string[],
-  result: FleetExecutionResult
-): void {
+function applyFleetBroadcastOutcome(text: string, result: FleetExecutionResult): void {
+  // Read before the dead ones are disarmed: afterwards nothing here knows them.
+  const failedRemote = result.failedIds
+    .map((id) => getCrossHostTarget(id))
+    .filter((target) => target !== null);
+  const failedHosts = [...new Set(failedRemote.map((target) => target.hostName))];
+  const goneRemote = failedRemote.filter((target) =>
+    result.permanentlyFailedIds.includes(target.key)
+  );
   if (result.failureCount > 0) {
     logWarn("[fleetEnterBroadcast] broadcast had rejections", {
       failureCount: result.failureCount,
@@ -181,10 +205,10 @@ function applyFleetBroadcastOutcome(
       }
     }
   } else if (!result.cancelled) {
-    // A successful broadcast clears any stale failure dot on these
-    // targets — the partial-failure state from a prior attempt is
-    // now resolved.
-    for (const id of eligibleTargets) useFleetFailureStore.getState().dismissId(id);
+    // A successful broadcast clears any stale failure dot on the targets it
+    // reached — the partial-failure state from a prior attempt is now
+    // resolved. A pane locked mid-broadcast was skipped, so its dot stays.
+    for (const t of result.perTarget) useFleetFailureStore.getState().dismissId(t.terminalId);
     // Fire the ribbon's one-shot commit flash, matching the raw-input
     // path (`broadcastFleetRawInput`). The structured path's analog of
     // "committed bytes" is a non-cancelled, fully-successful fan-out.
@@ -198,7 +222,10 @@ function applyFleetBroadcastOutcome(
       }
     }
   }
-  useAnnouncerStore.getState().announce(buildBroadcastAnnouncement(result), "polite");
+  useAnnouncerStore.getState().announce(buildBroadcastAnnouncement(result, failedHosts), "polite");
+  if (goneRemote.length > 0 && selectFleetMemberCount(useFleetArmingStore.getState()) === 0) {
+    notifyFleetEmptied(goneRemote);
+  }
   // Subtle audio confirmation that the prompt fanned out. Reuses the
   // existing context-injected sound — semantically a fleet broadcast
   // IS injecting the same context into N agents. SoundService handles
@@ -210,16 +237,35 @@ function applyFleetBroadcastOutcome(
 }
 
 /**
+ * The last members were agents on other hosts that are gone, so the ribbon
+ * that would have said so went with them: nothing else on screen tells the
+ * person why their fleet vanished.
+ */
+function notifyFleetEmptied(gone: ReadonlyArray<{ title: string; hostName: string }>): void {
+  const hosts = [...new Set(gone.map((target) => target.hostName))].join(" and ");
+  const who = gone.length === 1 ? `“${gone[0]!.title}” isn't` : `${gone.length} agents aren't`;
+  notify({
+    type: "error",
+    title: `Couldn't reach ${hosts}`,
+    message: `${who} running there anymore, so the fleet is empty. Your message comes back when you add agents again.`,
+    action: { label: "Hosts overview", onClick: () => void requestHostsOverview() },
+  });
+}
+
+/**
  * Send a draft to the whole fleet from outside any pane's composer — the
  * ribbon's own field, which is the only place to type when every member is
- * an agent on another host. True when something was dispatched.
+ * an agent on another host. True when at least one agent took it.
  */
 export async function sendDraftToFleet(text: string): Promise<boolean> {
   const targets = filterEligibleIds(resolveFleetBroadcastTargetIds());
-  if (text.length === 0 || targets.length < 2) return false;
+  // One agent on another host is still a fleet worth messaging: this field is
+  // the only way to reach it from here. A pane here has its own composer.
+  const minimum = targets.every(isHostQualifiedTargetId) ? 1 : 2;
+  if (text.length === 0 || targets.length < minimum) return false;
   const result = await runManagedFleetBroadcast(text, targets);
-  applyFleetBroadcastOutcome(text, targets, result);
-  return true;
+  applyFleetBroadcastOutcome(text, result);
+  return result.successCount > 0;
 }
 
 /**
@@ -246,17 +292,32 @@ export async function sendDraftToFleet(text: string): Promise<boolean> {
  *
  * Per-target recipe-variable resolution and override application happen in
  * `executeFleetBroadcast`.
+ *
+ * `onDelivered` runs once the broadcast settles having reached at least one
+ * target, so the composer can let go of what it sent. A send that reached
+ * none — every target excluded or gone, or every write refused — leaves the
+ * draft to the user to edit and send again, and so does one a newer Enter
+ * pre-empted, whose cleanup is the newer send's.
+ *
+ * Context tokens expand per agent here (`executeFleetBroadcast`), but an
+ * agent on another host can't be given this machine's context: a send that
+ * would hand one a token is consumed without going anywhere, and
+ * `onContextRefused` lets the composer say so. Skipping that agent, or
+ * editing the token out of its text, lets the send go.
  */
 export function tryFleetBroadcastFromEditor(
   terminalId: string,
   text: string,
-  onSent: () => void
+  onDelivered: () => void,
+  onContextRefused?: () => void
 ): boolean {
   const arming = useFleetArmingStore.getState();
   if (!arming.armedIds.has(terminalId) || selectFleetMemberCount(arming) < 2) return false;
 
   const targets = resolveFleetBroadcastTargetIds();
-  if (targets.length === 0) return false;
+  // A locked origin never fans out, whoever calls in; the pane's own send path
+  // owns refusing it.
+  if (!targets.includes(terminalId)) return false;
 
   // Snapshot the override + skip state at the moment Enter is pressed so
   // the broadcast submits the user's intent as it stood at press time —
@@ -268,13 +329,17 @@ export function tryFleetBroadcastFromEditor(
   const initialSkipped = new Set(overridesState.skippedIds);
 
   // All eligible targets skipped → consume the Enter (so the single-pane
-  // send doesn't also fire) without dispatching anything. Clear the
-  // overrides store and signal the caller so the input bar doesn't stay
-  // in a half-submitted state.
+  // send doesn't also fire) without dispatching anything. The draft stays.
   if (targets.every((id) => initialSkipped.has(id))) {
     useAnnouncerStore.getState().announce("Broadcast skipped — all targets excluded", "polite");
     useFleetTargetOverridesStore.getState().clear();
-    onSent();
+    return true;
+  }
+
+  const included = targets.filter((id) => !initialSkipped.has(id));
+  if (findCrossHostContextTargets(text, included, initialOverrides).length > 0) {
+    if (onContextRefused) onContextRefused();
+    else useAnnouncerStore.getState().announce(CROSS_HOST_CONTEXT_REFUSAL, "polite");
     return true;
   }
 
@@ -295,7 +360,6 @@ export function tryFleetBroadcastFromEditor(
           .announce("Broadcast skipped — no eligible targets remain", "polite");
       } finally {
         useFleetTargetOverridesStore.getState().clear();
-        onSent();
       }
       return;
     }
@@ -316,19 +380,27 @@ export function tryFleetBroadcastFromEditor(
     // `resolveFleetBroadcastTargetIds()`; re-run the panel-eligibility
     // filter so disposed PTYs are dropped too.
     const eligibleTargets = filterEligibleIds(effectiveTargets);
+    const send = {};
+    latestEditorSend = send;
+    let delivered = false;
     try {
       // A second Enter while a broadcast is in-flight pre-empts the first;
       // the shared controller lets the ribbon Cancel button abort it too.
       // Run-history recording now happens when the supervised run finalizes
       // (fleetRunStore), so the record carries watch-phase outcomes too.
       const result = await runManagedFleetBroadcast(text, eligibleTargets, overridesArg);
-      applyFleetBroadcastOutcome(text, eligibleTargets, result);
+      // A cancel can't take back writes that already landed, so a cancelled
+      // run that reached anyone still counts as sent.
+      delivered = result.successCount > 0;
+      applyFleetBroadcastOutcome(text, result);
     } finally {
       // Per-target overrides are ephemeral per-broadcast (#8691 constraint).
       // Clear them so the next broadcast starts from the resolved defaults.
       // Controller teardown is owned by `runManagedFleetBroadcast`.
       useFleetTargetOverridesStore.getState().clear();
-      onSent();
+      const owned = latestEditorSend === send;
+      if (owned) latestEditorSend = null;
+      if (delivered && owned) onDelivered();
     }
   };
 

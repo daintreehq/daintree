@@ -109,7 +109,14 @@ describe("useHelpSessionLiveStatus", () => {
     const withGrant: HelpSessionLiveStatus = {
       connected: true,
       tier: "core",
-      activeGrants: [{ toolId: "project.runCheck", expiresAt: 1_700_000_000_000, ttlMs: 900_000 }],
+      activeGrants: [
+        {
+          sessionId: "transport-1",
+          toolId: "project.runCheck",
+          expiresAt: 1_700_000_000_000,
+          ttlMs: 900_000,
+        },
+      ],
     };
     await act(async () => {
       pulls[1]!.resolve(withGrant);
@@ -180,5 +187,36 @@ describe("useHelpSessionLiveStatus", () => {
     expect(unsubscribe).toHaveBeenCalledTimes(1);
     expect(getLiveSessionStatus).toHaveBeenLastCalledWith({ sessionId: "help-2" });
     expect(onGrantLifecycle).toHaveBeenCalledTimes(2);
+  });
+
+  it("never shows the previous session's snapshot while the new one loads", async () => {
+    const { result, rerender } = renderHook(({ id }) => useHelpSessionLiveStatus(id), {
+      initialProps: { id: "help-1" as string | null },
+    });
+    await act(async () => {
+      pulls[0]!.resolve(CONNECTED);
+    });
+    expect(result.current).toEqual(CONNECTED);
+
+    // help-1's grants carry revoke buttons in Settings; they must not stay
+    // actionable under help-2 for the length of its pull.
+    rerender({ id: "help-2" });
+    expect(result.current).toEqual(DISCONNECTED);
+
+    await act(async () => {
+      pulls[1]!.resolve(CONNECTED);
+    });
+    expect(result.current).toEqual(CONNECTED);
+
+    rerender({ id: null });
+    expect(result.current).toEqual(DISCONNECTED);
+
+    // Coming back to help-2 must wait for a fresh pull, not revive the old one.
+    rerender({ id: "help-2" });
+    expect(result.current).toEqual(DISCONNECTED);
+    await act(async () => {
+      pulls[2]!.resolve(CONNECTED);
+    });
+    expect(result.current).toEqual(CONNECTED);
   });
 });

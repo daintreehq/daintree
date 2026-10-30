@@ -10,6 +10,7 @@ import {
   TerminalNotifyService,
   auditCodeForNotifyRefusal,
   createNoticeHold,
+  formatAssistantApprovalLine,
   formatRetiredExchangesLine,
   LANE_WAKE_MAX_PENDING_MS,
   LANE_WAKE_RECHECK_MS,
@@ -25,6 +26,8 @@ import {
   type OwnPane,
   type TerminalNotifyPtyClient,
 } from "../terminalNotify.js";
+import { createApprovalWake, type ApprovalWakeDeps } from "../approvalWake.js";
+import { GrantCache } from "../grantCache.js";
 import {
   MAX_PENDING_NOTICES_PER_PANE,
   MAX_UNDELIVERED_NOTICES_PER_PANE,
@@ -50,6 +53,7 @@ interface Submitted {
   text: string;
   token?: string;
   guard?: string;
+  promptAsWritten?: string | null;
 }
 
 class FakePtyClient implements TerminalNotifyPtyClient {
@@ -72,8 +76,16 @@ class FakePtyClient implements TerminalNotifyPtyClient {
     return { ...info, submission: { token: submissionToken, ...record } };
   }
 
-  submit(id: string, text: string, token?: string, _handback?: string, guard?: string) {
-    this.submitted.push({ id, text, token, guard });
+  submit(
+    id: string,
+    text: string,
+    token?: string,
+    _handback?: string,
+    guard?: string,
+    _imagePaths?: readonly string[],
+    promptAsWritten?: string | null
+  ) {
+    this.submitted.push({ id, text, token, guard, promptAsWritten });
   }
 
   withdrawGuardedSubmission(id: string, token: string) {
@@ -317,7 +329,12 @@ describe("TerminalNotifyService", () => {
       await flushNotice();
 
       expect(h.client.submitted).toHaveLength(1);
-      expect(h.client.submitted[0]).toMatchObject({ id: OWN, guard: "settled-prompt" });
+      // A notice is nobody's prompt, so it never becomes the pane's first one (#15521).
+      expect(h.client.submitted[0]).toMatchObject({
+        id: OWN,
+        guard: "settled-prompt",
+        promptAsWritten: null,
+      });
       expect(h.client.submitted[0].text).toBe(
         'Daintree: terminal t-a stopped working, now waiting at its prompt. Your note: "run the reviewer next". Check it with terminal.getStatus.'
       );
@@ -2079,6 +2096,58 @@ describe("lane wakes (#13333)", () => {
     ]);
     expect(w.reserved).toEqual(["task-1"]);
     expect(w.outcomes).toEqual([{ kind: "delivered" }]);
+  });
+
+  it("types an approval line once, however many times the user allowed it (#14995)", async () => {
+    const h = setup();
+    const grantCache = new GrantCache({ sweepIntervalMs: 0 });
+    grantCache.issueGrant("s-1", "project.runCheck");
+    const lane = { helpSessionId: "help-1", terminalId: OWN, projectId: PROJECT };
+    const deps: ApprovalWakeDeps = {
+      sessionStore: {
+        getTier: () => "core",
+        grantCache,
+      } as unknown as ApprovalWakeDeps["sessionStore"],
+      helpLaneFor: () => lane,
+    };
+    const approval = { kind: "tool", toolId: "project.runCheck" } as const;
+    h.service.enqueueWake(PANE, PROJECT, createApprovalWake(deps, "s-1", lane, approval));
+    h.service.enqueueWake(PANE, PROJECT, createApprovalWake(deps, "s-1", lane, approval));
+
+    await flushWake();
+    expect(h.client.submitted).toEqual([
+      expect.objectContaining({
+        id: OWN,
+        text: formatAssistantApprovalLine(approval),
+        guard: "settled-prompt",
+      }),
+    ]);
+    grantCache.dispose();
+  });
+
+  it("types no approval line once the grant ended before it went out (#14995)", async () => {
+    const h = setup();
+    const grantCache = new GrantCache({ sweepIntervalMs: 0 });
+    grantCache.issueGrant("s-1", "project.runCheck");
+    const lane = { helpSessionId: "help-1", terminalId: OWN, projectId: PROJECT };
+    const deps: ApprovalWakeDeps = {
+      sessionStore: {
+        getTier: () => "core",
+        grantCache,
+      } as unknown as ApprovalWakeDeps["sessionStore"],
+      helpLaneFor: () => lane,
+    };
+    h.service.enqueueWake(
+      PANE,
+      PROJECT,
+      createApprovalWake(deps, "s-1", lane, { kind: "tool", toolId: "project.runCheck" })
+    );
+    grantCache.revokeGrant("s-1", "project.runCheck");
+
+    await flushWake();
+    expect(h.client.submitted).toEqual([]);
+    expect(h.service.getPaneState(OWN)).toBeNull();
+    grantCache.dispose();
   });
 
   it("names only hosts and counts, in Daintree's own wording on one line (#13496)", () => {

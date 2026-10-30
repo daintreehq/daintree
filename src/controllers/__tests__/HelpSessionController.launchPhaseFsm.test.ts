@@ -12,7 +12,7 @@ const {
   mockMcpSetSessionTier,
   mockMcpIssueGrant,
   mockMcpResetDenialCounts,
-  mockMcpRevokeSessionGrants,
+  mockMcpRevokeGrant,
   mockSystemSleepOnSuspend,
   mockSystemSleepOnWake,
   systemSleepListeners,
@@ -42,7 +42,7 @@ const {
     expiresAt: Date.now() + 900_000,
   }),
   mockMcpResetDenialCounts: vi.fn().mockResolvedValue(undefined),
-  mockMcpRevokeSessionGrants: vi.fn().mockResolvedValue({ sessionId: "", revokedCount: 0 }),
+  mockMcpRevokeGrant: vi.fn().mockResolvedValue({ sessionId: "", toolId: "", revoked: true }),
   mockSystemSleepOnSuspend: vi.fn(),
   mockSystemSleepOnWake: vi.fn(),
   systemSleepListeners: {
@@ -254,8 +254,8 @@ beforeEach(() => {
     ttlMs: 900_000,
     expiresAt: Date.now() + 900_000,
   });
-  mockMcpRevokeSessionGrants.mockReset();
-  mockMcpRevokeSessionGrants.mockResolvedValue({ sessionId: "", revokedCount: 1 });
+  mockMcpRevokeGrant.mockReset();
+  mockMcpRevokeGrant.mockResolvedValue({ sessionId: "", toolId: "", revoked: true });
   mockSystemSleepOnSuspend.mockReset();
   mockSystemSleepOnSuspend.mockImplementation((cb: () => void) => {
     systemSleepListeners.suspend.push(cb);
@@ -308,7 +308,7 @@ beforeEach(() => {
           setSessionTier: mockMcpSetSessionTier,
           issueGrant: mockMcpIssueGrant,
           resetDenialCounts: mockMcpResetDenialCounts,
-          revokeSessionGrants: mockMcpRevokeSessionGrants,
+          revokeGrant: mockMcpRevokeGrant,
         },
         terminal: { gracefulKill: vi.fn().mockResolvedValue(null) },
       },
@@ -602,6 +602,93 @@ describe("HelpSessionController — launch phase FSM", () => {
     expect(ctrl["_hasAutoLaunched"]).toBe(false);
     expect(vi.mocked(actionService.dispatch)).not.toHaveBeenCalled();
     expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("consent turned on while the lane is open waits for the next open (#14976)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "claude";
+    const open = (autoLaunchEnabled: boolean, visibilityEpoch = 0) =>
+      ctrl.syncInputs({
+        isOpen: true,
+        isReadyToLaunch: true,
+        currentProject: { id: "proj", path: "/repo" },
+        terminalId: null,
+        preferredAgentId: "claude",
+        supportedInstalledAgentIds: ["claude"],
+        autoLaunchEnabled,
+        visibilityEpoch,
+      });
+
+    open(false);
+    open(true);
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+
+    // Neither a visibility re-arm, a reveal re-drive, nor toggling off and on
+    // again within the same open starts it.
+    open(true, 1);
+    ctrl.handleViewRevealed();
+    open(false, 1);
+    open(true, 1);
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+
+    ctrl.syncInputs({
+      isOpen: false,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: true,
+      visibilityEpoch: 1,
+    });
+    open(true, 1);
+    expect(ctrl.getSnapshot().phase).toBe("version-checking");
+    ctrl.stop();
+  });
+
+  it("consent turned on while closed applies to the open it arrives with (#14976)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "claude";
+    const inputs = {
+      isOpen: false,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: false,
+      visibilityEpoch: 0,
+    };
+    ctrl.syncInputs(inputs);
+    ctrl.syncInputs({ ...inputs, isOpen: true, autoLaunchEnabled: true });
+    expect(ctrl.getSnapshot().phase).toBe("version-checking");
+    ctrl.stop();
+  });
+
+  it("an explicit start still launches after consent was turned on in the same open (#14976)", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    helpPanelState.preferredAgentId = "claude";
+    const inputs = {
+      isOpen: true,
+      isReadyToLaunch: true,
+      currentProject: { id: "proj", path: "/repo" },
+      terminalId: null,
+      preferredAgentId: "claude",
+      supportedInstalledAgentIds: ["claude"],
+      autoLaunchEnabled: false,
+      visibilityEpoch: 0,
+    };
+    ctrl.syncInputs(inputs);
+    ctrl.syncInputs({ ...inputs, autoLaunchEnabled: true });
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+
+    ctrl.launch({ agentId: "claude", replaceExisting: true });
+    expect(ctrl.getSnapshot().phase).toBe("version-checking");
     ctrl.stop();
   });
 

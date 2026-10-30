@@ -19,13 +19,14 @@ import {
 } from "./CodexAppServerClient.js";
 import {
   canonicalCodexHomeKey,
-  defaultCodexHome,
   resolveCodexQuotaProfiles,
+  resolveDefaultCodexTarget,
   type CodexQuotaProfileTarget,
 } from "./CodexQuotaProfiles.js";
 import type { AgentSettingsEntry } from "../../../shared/types/agentSettings.js";
 import type {
   CodexQuotaProfile,
+  CodexQuotaProfileHomeReason,
   CodexQuotaProfileResult,
   CodexQuotaResult,
   CodexQuotaUnavailableReason,
@@ -227,12 +228,48 @@ function readHome(
   return request;
 }
 
+async function readCodexSettings(): Promise<AgentSettingsEntry | undefined> {
+  try {
+    // Lazy, like the handler's own import of this module: the store isn't needed until asked.
+    const { store } = await import("../../store.js");
+    return store.get("agentSettings")?.agents?.codex;
+  } catch {
+    // Unreadable settings still leave main's own profile to report.
+    return undefined;
+  }
+}
+
+/** Whether `target` can be read at all, and if not, why. Never spawns. */
+async function unreadableReason(
+  target: CodexQuotaProfileTarget
+): Promise<CodexQuotaProfileHomeReason | null> {
+  if (target.invalid) return target.invalid;
+  // Never spawned against, never created: a home Codex hasn't made is not ours to make.
+  if (!target.inheritsMainEnv && !(await isDirectory(target.home))) return "home-missing";
+  return null;
+}
+
+/**
+ * Main's own home keeps inheriting main's env rather than being pinned to the
+ * path computed from it; every other home, the agent-wide one included, is
+ * named the way a pane's env names it.
+ */
+function readTarget(target: CodexQuotaProfileTarget, homeKey: string, force: boolean) {
+  return readHome(homeKey, target.inheritsMainEnv ? undefined : target.home, force);
+}
+
 async function readDefaultHome(force: boolean): Promise<CodexQuotaResult> {
-  const reading = await readHome(await canonicalCodexHomeKey(defaultCodexHome()), undefined, force);
+  const target = resolveDefaultCodexTarget(await readCodexSettings());
+  // The MCP schema carries no home reasons, so a home Codex can't be started
+  // against reads as a failed read, never as the quota of main's home instead.
+  if (await unreadableReason(target)) {
+    return { status: "unavailable", reason: "read-failed", fetchedAt: Date.now() };
+  }
+  const reading = await readTarget(target, await canonicalCodexHomeKey(target.home), force);
   return reading.result;
 }
 
-/** Never rejects: every failure is an `unavailable` result. Main's default profile only. */
+/** Never rejects: every failure is an `unavailable` result. The default profile only. */
 export function readCodexQuota(): Promise<CodexQuotaResult> {
   return readDefaultHome(false);
 }
@@ -302,16 +339,7 @@ function profileKey(home: string, invalid: boolean): string {
 }
 
 async function readProfiles(force: boolean): Promise<CodexQuotaProfile[]> {
-  let codexSettings: AgentSettingsEntry | undefined;
-  try {
-    // Lazy, like the handler's own import of this module: the store isn't needed until asked.
-    const { store } = await import("../../store.js");
-    codexSettings = store.get("agentSettings")?.agents?.codex;
-  } catch {
-    // Unreadable settings still leave main's own profile to report.
-    codexSettings = undefined;
-  }
-  const targets = await foldBySameDirectory(resolveCodexQuotaProfiles(codexSettings));
+  const targets = await foldBySameDirectory(resolveCodexQuotaProfiles(await readCodexSettings()));
   const profiles: CodexQuotaProfile[] = [];
   const byAccount = new Map<string, { profile: CodexQuotaProfile; labels: PresetLabels }>();
   // One after another: each read already waits its turn in the queue, and
@@ -319,19 +347,11 @@ async function readProfiles(force: boolean): Promise<CodexQuotaProfile[]> {
   for (const target of targets) {
     let result: CodexQuotaProfileResult;
     let identity: CodexAccountIdentity | null = null;
-    if (target.invalid) {
-      result = { status: "unavailable", reason: target.invalid, fetchedAt: Date.now() };
-    } else if (!target.isDefault && !(await isDirectory(target.home))) {
-      // Never spawned against, never created: a home Codex hasn't made is not ours to make.
-      result = { status: "unavailable", reason: "home-missing", fetchedAt: Date.now() };
+    const unreadable = await unreadableReason(target);
+    if (unreadable) {
+      result = { status: "unavailable", reason: unreadable, fetchedAt: Date.now() };
     } else {
-      const reading = await readHome(
-        target.homeKey,
-        // The default keeps inheriting main's env rather than being pinned to
-        // the path computed from it, so its reads are unchanged by this.
-        target.isDefault ? undefined : target.home,
-        force
-      );
+      const reading = await readTarget(target, target.homeKey, force);
       result = reading.result;
       identity = reading.identity;
     }
@@ -367,7 +387,7 @@ async function readProfiles(force: boolean): Promise<CodexQuotaProfile[]> {
   return profiles;
 }
 
-/** Main's own profile plus every distinct home a Codex preset sets (#13686). Never rejects. */
+/** The default profile plus every distinct home a Codex preset sets (#13686). Never rejects. */
 export function readCodexQuotaProfiles(): Promise<CodexQuotaProfile[]> {
   return readProfiles(false);
 }

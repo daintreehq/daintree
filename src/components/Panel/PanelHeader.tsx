@@ -51,7 +51,6 @@ import {
   arrayMove,
   sortableKeyboardCoordinates,
 } from "@dnd-kit/sortable";
-import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import {
   MOUSE_SENSOR_OPTIONS,
   PrimaryMouseSensor,
@@ -109,6 +108,7 @@ import { TabButton, type TabInfo } from "./TabButton";
 import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
 import { isAskingWait } from "@/lib/handBackPresentation";
 import { SortableTabButton } from "./SortableTabButton";
+import { TAB_DRAG_MODIFIERS } from "./tabDragModifiers";
 import { MoveToWorktreePicker } from "./MoveToWorktreePicker";
 import {
   getRegisteredTourIdsSnapshot,
@@ -1132,7 +1132,7 @@ function PanelHeaderComponent({
               onDragStart={handleTabDragStart}
               onDragEnd={handleTabDragEnd}
               onDragCancel={handleTabDragCancel}
-              modifiers={[restrictToHorizontalAxis, restrictToParentElement]}
+              modifiers={TAB_DRAG_MODIFIERS}
               autoScroll={tabAutoScroll}
               accessibility={{ announcements: tabAnnouncements }}
             >

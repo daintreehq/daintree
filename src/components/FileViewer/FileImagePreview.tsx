@@ -1,4 +1,5 @@
-import { svgToDataUrl } from "@/lib/svg";
+import { useEffect, useEffectEvent } from "react";
+import { SVG_DRAW_ERROR, SVG_PARSE_ERROR, renderableSvg, svgToDataUrl } from "@/lib/svg";
 import { buildDaintreeFileUrl } from "./filePreviewKinds";
 import { useImageErrorHandler } from "./previewRefusal";
 import type { MediaPreviewError } from "./useMediaSourceUrl";
@@ -24,59 +25,30 @@ interface FileImagePreviewProps {
    * Ignored for SVG markup, which is re-read and re-sanitized upstream.
    */
   cacheBust?: string;
-  /** Called with the host's refusal when a remote window's host refused it; bare for a failed load. */
+  /**
+   * Called with the host's refusal when a remote window's host refused it; bare
+   * for a failed raster load. SVG markup that can't be shown reports why as the
+   * error's title.
+   */
   onError?: (error?: MediaPreviewError) => void;
   /** Height cap for the preview surface — dialogs and panes want different ones. */
   maxHeightClassName?: string;
 }
 
 /**
+ * Renders an image or SVG preview.
+ *
+ * The fit-only preview: SVG in `FilePane` and `FileBrowserViewer`, where the
+ * markup is shown as an image of itself, and any raster surface that
+ * deliberately has no zoom. Raster images in those two panes go through
+ * `ZoomableImage`.
+ *
  * SVG markup is shown as an `<img>` of its own data URL, never inserted into
  * this document. An SVG image fetches nothing but `data:` URLs, runs no script
  * and keeps its styles to itself, so CSS the regex sanitizer misses
  * (`u\72l(…)`, `image-set("…")`) cannot make this machine fetch a
  * `daintree-file://load` URL of its own disk. A remote view's SVG, and the
  * agent asking to show it, come from another machine.
- */
-const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
-
-/**
- * The markup to render and whether it sets its own width, or null if it isn't
- * usable. An SVG without a `width` has no intrinsic size as an image, so it is
- * stretched to the stage as it was when inlined; one with a size keeps it.
- *
- * `image/svg+xml` is namespace-strict: a root `<svg>` that omits `xmlns` (common
- * in hand-written and tool-exported files) renders blank. `sanitizeSvg` only
- * requires the string to contain `<svg`, so declare the namespace when it's
- * absent rather than silently showing nothing.
- */
-function renderableSvg(sanitizedSvg: string): { markup: string; sized: boolean } | null {
-  const parse = (markup: string): { markup: string; sized: boolean } | null => {
-    const parsed = new DOMParser().parseFromString(markup, "image/svg+xml");
-    // A parse failure yields a <parsererror> document rather than throwing.
-    if (parsed.querySelector("parsererror")) return null;
-    const root = parsed.documentElement;
-    if (!root || root.localName !== "svg" || root.namespaceURI !== SVG_NAMESPACE) return null;
-    return { markup, sized: root.hasAttribute("width") };
-  };
-
-  const direct = parse(sanitizedSvg);
-  if (direct) return direct;
-
-  // Retry once with the namespace declared on the root element. Only rewrites
-  // the opening tag, so sanitized content is otherwise untouched.
-  if (!/\sxmlns\s*=/.test(sanitizedSvg)) {
-    return parse(sanitizedSvg.replace(/<svg\b/i, `<svg xmlns="${SVG_NAMESPACE}"`));
-  }
-  return null;
-}
-
-/**
- * Renders an image or SVG preview.
- *
- * Shared by `FilePane` and `FileViewerModal` so both surfaces preview the same
- * files the same way — the file viewer existing twice is exactly what this
- * component set out to stop duplicating.
  */
 export function FileImagePreview({
   filePath,
@@ -88,11 +60,19 @@ export function FileImagePreview({
   maxHeightClassName = "max-h-[70vh]",
 }: FileImagePreviewProps) {
   const svg = sanitizedSvg ? renderableSvg(sanitizedSvg) : null;
+  const unrenderable = Boolean(sanitizedSvg) && svg === null;
   const rasterSrc =
     cacheBust === undefined
       ? buildDaintreeFileUrl(filePath, rootPath)
       : `${buildDaintreeFileUrl(filePath, rootPath)}&v=${encodeURIComponent(cacheBust)}`;
   const handleRasterError = useImageErrorHandler(rasterSrc, onError);
+
+  // The loaders refuse unparseable markup before it gets here; a caller that
+  // doesn't still hears about it instead of showing an empty stage.
+  const reportUnrenderable = useEffectEvent(() => onError?.({ title: SVG_PARSE_ERROR }));
+  useEffect(() => {
+    if (unrenderable) reportUnrenderable();
+  }, [unrenderable, sanitizedSvg]);
 
   return (
     <div className="flex items-center justify-center p-6 min-h-[300px]">
@@ -103,7 +83,7 @@ export function FileImagePreview({
             alt={alt}
             className={`max-w-full ${maxHeightClassName} object-contain${svg.sized ? "" : " w-full h-auto"}`}
             draggable={false}
-            onError={() => onError?.()}
+            onError={() => onError?.({ title: SVG_DRAW_ERROR })}
           />
         )
       ) : (

@@ -1,5 +1,6 @@
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { olderBuildSide } from "@/components/Hosts/hostModel";
 import {
   HOST_LINK_SETTLE_MS,
   selectHostBannerVariant,
@@ -56,13 +57,18 @@ export function hostLinkEpisode(
   }
 }
 
-/** The one sentence a change of episode is said in; null when there's nothing to say. */
+/**
+ * The one sentence a change of episode is said in, in the banner's words;
+ * null when there's nothing to say.
+ */
 export function hostLinkAnnouncement(
   next: HostLinkEpisode,
   previous: HostLinkEpisode,
   hostName: string,
   /** The link was up before the episode being left (or, for a drop, before this one). */
-  wasUp: boolean
+  wasUp: boolean,
+  /** Which side runs the older build, for a refused build; null when they have no order. */
+  olderSide: "host" | "local" | null = null
 ): string | null {
   switch (next) {
     case "up":
@@ -70,16 +76,23 @@ export function hostLinkAnnouncement(
       return isDrop(previous) && wasUp ? `Reconnected to ${hostName}` : `Connected to ${hostName}`;
     case "lost":
       return previous === "up" && wasUp
-        ? `Connection to ${hostName} lost. Terminals are read-only until it reconnects.`
+        ? `Lost connection to ${hostName}. Terminals are read-only until it's back.`
         : `${hostName} is unreachable. Terminals are read-only until it reconnects.`;
     case "restarting":
       return `${hostName} is restarting. Terminals are read-only until it reconnects.`;
     case "host-mode-off":
       return `Daintree isn't listening on ${hostName}.`;
     case "access-denied":
-      return `ssh couldn't log in to ${hostName}.`;
+      return `Couldn't log in to ${hostName} over ssh.`;
     case "version-mismatch":
-      return `${hostName} runs a different build.`;
+      // The banner's diagnosis and its one action, said together.
+      if (olderSide === "local") {
+        return `This machine runs an older version of Daintree than ${hostName}. Update this machine to connect.`;
+      }
+      if (olderSide === "host") {
+        return `${hostName} runs an older version of Daintree. Update ${hostName} to connect.`;
+      }
+      return `${hostName} runs a different build of Daintree. Update ${hostName} to match this machine.`;
     case "disconnected":
       return `Disconnected from ${hostName}.`;
   }
@@ -140,7 +153,10 @@ export function watchHostConnectionAnnouncements(hostId: string): () => void {
         current,
         previous,
         state.hostName ?? state.hostId ?? "The host",
-        wasUp
+        wasUp,
+        state.connection?.status === "version-mismatch"
+          ? olderBuildSide(state.connection.mismatch)
+          : null
       );
       said = {
         hostId,

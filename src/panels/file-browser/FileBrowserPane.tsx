@@ -674,6 +674,33 @@ export function FileBrowserPane({
     [id, stableExpandedPaths, setFileBrowserView]
   );
 
+  // Shared by the tree's activate gesture and the viewer's "Open as panel", so
+  // both reuse an existing panel for the same file through `file.openPanel`.
+  const openFilePanel = useCallback(
+    (absolutePath: string) => {
+      void (async () => {
+        const result = await actionService.dispatch(
+          "file.openPanel",
+          { path: absolutePath },
+          { source: "user" }
+        );
+        if (!result.ok) {
+          // No toast: the realistic failure is the panel ceiling, and `addPanel`
+          // already raises that warning itself — a second one would report the
+          // same gesture twice.
+          logError("[fileBrowser] failed to open file panel", result.error);
+          return;
+        }
+        // As a dialog this browser is modal, so the panel just opened sits behind
+        // it and the gesture would look like it did nothing. `onClose` is the
+        // dialog host's own close for this panel, so this is the same teardown
+        // the close button runs — nothing extra to unwind.
+        if (location === "dialog") onClose?.();
+      })();
+    },
+    [location, onClose]
+  );
+
   // Enter and double-click open the row's file as its own panel (#11496), which
   // is what makes a collapsed viewer usable: the browser stops being a
   // self-contained reader and feeds the grid instead. The action reuses a panel
@@ -700,28 +727,9 @@ export function FileBrowserPane({
       // because joining against "" would silently produce a wrong absolute path.
       if (!basePath || row?.isDirectory !== false) return;
 
-      const absolutePath = join(basePath, path);
-      void (async () => {
-        const result = await actionService.dispatch(
-          "file.openPanel",
-          { path: absolutePath },
-          { source: "user" }
-        );
-        if (!result.ok) {
-          // No toast: the realistic failure is the panel ceiling, and `addPanel`
-          // already raises that warning itself — a second one would report the
-          // same gesture twice.
-          logError("[fileBrowser] failed to open file panel", result.error);
-          return;
-        }
-        // As a dialog this browser is modal, so the panel just opened sits behind
-        // it and the gesture would look like it did nothing. `onClose` is the
-        // dialog host's own close for this panel, so this is the same teardown
-        // the close button runs — nothing extra to unwind.
-        if (location === "dialog") onClose?.();
-      })();
+      openFilePanel(join(basePath, path));
     },
-    [location, onClose, basePath, rows, showFolderContents]
+    [openFilePanel, basePath, rows, showFolderContents]
   );
 
   // The foreground half of the refresh signal, counted apart from the ambient
@@ -1523,6 +1531,7 @@ export function FileBrowserPane({
               }
               onShowFolder={showFolderContents}
               onCloseSelection={handleCloseSelection}
+              onOpenAsPanel={basePath === "" ? undefined : openFilePanel}
             />
           </div>
         )}

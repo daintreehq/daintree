@@ -66,6 +66,7 @@ const shared = vi.hoisted(() => ({
   liveAgent: "claude" as string | null | undefined,
   /** What the fake correction says about its request. */
   roundTrip: undefined as { sentAt: number; ms: number } | undefined,
+  phases: undefined as { untilOutputMs: number; outputMs: number; effort: string } | undefined,
   preconnects: 0,
   /** Stored settings laid over the defaults below. */
   settingsOverride: {} as Record<string, unknown>,
@@ -117,6 +118,7 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
         confidence: "high",
         confirmedText: "hello world",
         ...(shared.roundTrip ? { roundTrip: shared.roundTrip } : {}),
+        ...(shared.phases ? { phases: shared.phases } : {}),
       });
     };
     this.detectFileLinkTokens = function () {
@@ -366,6 +368,7 @@ describe("voiceInput — the target agent's commands", () => {
     shared.settingsOverride = {};
     shared.liveAgent = "claude";
     shared.roundTrip = undefined;
+    shared.phases = undefined;
 
     const win = buildMainWindow();
     cleanup = registerVoiceInputHandlers({
@@ -574,6 +577,45 @@ describe("voiceInput — the target agent's commands", () => {
     expect(shared.correctionCalls[0]?.settings).toMatchObject({
       commandTarget: { agentId: "claude", isAssistant: false },
     });
+  });
+
+  it("hands correction what the command the draft opens with says about itself, when the target lists it", async () => {
+    const handleCorrect = getHandler("voice-input:correct") as (
+      e: unknown,
+      request: unknown
+    ) => Promise<unknown>;
+    const compact = claudeTarget().vocabulary.entries.find((entry) => entry.token === "/compact")!;
+    await handleCorrect(fakeEvent, {
+      rawText: "keep the migration notes",
+      terminalId: TERMINAL,
+      startsPrompt: false,
+      openingCommandToken: "/compact",
+    });
+    await handleCorrect(fakeEvent, {
+      rawText: "keep the migration notes",
+      terminalId: TERMINAL,
+      startsPrompt: false,
+      openingCommandToken: "/not-listed",
+    });
+    shared.commandTarget = null;
+    await handleCorrect(fakeEvent, {
+      rawText: "keep the migration notes",
+      terminalId: TERMINAL,
+      startsPrompt: false,
+      openingCommandToken: "/compact",
+    });
+
+    const [listed, unlisted, noTarget] = shared.correctionCalls.map(
+      (call) => call.request as Record<string, unknown>
+    );
+    expect(listed!.openingCommand).toEqual({
+      token: "/compact",
+      description: compact.description,
+    });
+    // The token only names what to look up; the request carries no path or token of its own.
+    expect(listed).not.toHaveProperty("openingCommandToken");
+    expect(unlisted).not.toHaveProperty("openingCommand");
+    expect(noTarget).not.toHaveProperty("openingCommand");
   });
 
   it("carries the unsure words by position through a stripped send, heard-as rules and pieces", async () => {
@@ -849,6 +891,7 @@ describe("voiceInput — cleanup context read while the dictation runs (#14771)"
     shared.settingsOverride = {};
     shared.liveAgent = "claude";
     shared.roundTrip = undefined;
+    shared.phases = undefined;
     shared.useDeferredDrain = false;
     shared.drainResolve = null;
 
@@ -934,9 +977,35 @@ describe("voiceInput — cleanup context read while the dictation runs (#14771)"
     // With nothing sent, all of main's time was preparation.
     clock = 5_000;
     shared.roundTrip = undefined;
+    shared.phases = undefined;
     const unsent = handleCorrect(fakeEvent, { rawText: "compact it", terminalId: TERMINAL });
     clock = 5_030;
     expect(await unsent).toMatchObject({ timing: { prepMs: 30, requestMs: null } });
+  });
+
+  it("reports the reply's pace: the reads and the wait for its first text, then its text", async () => {
+    let clock = 1_000;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    shared.settingsOverride = {
+      correctionProvider: "anthropic",
+      correctionModel: "claude-haiku-5-5",
+      anthropicApiKey: "sk-ant-test",
+    };
+    shared.phases = { untilOutputMs: 900, outputMs: 120, effort: "medium" };
+    const handleCorrect = getHandler("voice-input:correct") as CorrectHandler;
+    const reply = handleCorrect(fakeEvent, { rawText: "compact it", terminalId: TERMINAL });
+    clock = 1_250;
+    expect(await reply).toMatchObject({
+      pace: { model: "claude-haiku-5-5", effort: "medium", firstTextMs: 1_150, outputMs: 120 },
+    });
+
+    // A reply without its parts, failed or unstreamed, teaches no pace.
+    shared.phases = undefined;
+    const unparted = await handleCorrect(fakeEvent, {
+      rawText: "compact it",
+      terminalId: TERMINAL,
+    });
+    expect(unparted).not.toHaveProperty("pace");
   });
 
   it("reads the context at the passage for one that names no session, or another's", async () => {
@@ -1084,6 +1153,7 @@ describe("voiceInput — hesitations", () => {
     shared.dictionary = [];
     shared.settingsOverride = {};
     shared.roundTrip = undefined;
+    shared.phases = undefined;
 
     const win = buildMainWindow();
     cleanup = registerVoiceInputHandlers({

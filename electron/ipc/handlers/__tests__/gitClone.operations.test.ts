@@ -66,10 +66,10 @@ let pending: PendingClone[];
 let events: OperationsEvent[];
 let registry: OperationRegistry;
 
-function localCtx(projectId = "project-a") {
+function localCtx(projectId = "project-a", webContentsId = 1) {
   return {
-    event: { sender: { id: 1 } },
-    webContentsId: 1,
+    event: { sender: { id: webContentsId } },
+    webContentsId,
     senderWindow: null,
     projectId,
     endpoint: { kind: "local-view", isClosed: () => false },
@@ -251,15 +251,22 @@ describe("clone as an operation", () => {
     expect(registry.status("op-reg").status).toBe("cancelled");
   });
 
-  it("cancels every clone when no opId is named", async () => {
+  it("cancels every clone the caller started when no opId is named", async () => {
     const a = clone(localCtx(), options({ folderName: "a" }));
     await started(1);
     const b = clone(localCtx(), options({ opId: "op-b", folderName: "b" }));
     await started(2);
+    const elsewhere = clone(localCtx("project-a", 2), options({ folderName: "c" }));
+    await started(3);
 
     await cancel(localCtx());
     await expect(a).rejects.toMatchObject({ code: "CANCELLED" });
     await expect(b).rejects.toMatchObject({ code: "CANCELLED" });
+
+    const other = pending.find((p) => p.folder === "c")!;
+    expect(other.signal.aborted).toBe(false);
+    other.resolve();
+    await expect(elsewhere).resolves.toBeDefined();
   });
 
   it("lets a joined caller cancel the shared clone by its own id", async () => {
@@ -373,6 +380,48 @@ describe("clone cancel", () => {
       await finish(runs);
     }
   );
+
+  it("stops only the caller's own clones when no opId is named", async () => {
+    // Two windows, each with an unnamed local clone in flight.
+    const a = clone(localCtx("project-a", 1), options({ folderName: "a" }));
+    await started(1);
+    const b = clone(localCtx("project-b", 2), options({ folderName: "b" }));
+    await started(2);
+
+    await cancel(localCtx("project-a", 1));
+    await expect(a).rejects.toMatchObject({ code: "CANCELLED" });
+
+    const other = pending.find((p) => p.folder === "b")!;
+    expect(other.signal.aborted).toBe(false);
+    other.resolve();
+    await expect(b).resolves.toEqual({ clonedPath: path.join("/abs/parent", "b") });
+  });
+
+  it("scopes an unnamed Stop to the view, not the project", async () => {
+    const a = clone(localCtx("project-a", 1), options({ folderName: "a" }));
+    await started(1);
+    const b = clone(localCtx("project-a", 2), options({ folderName: "b" }));
+    await started(2);
+
+    // A view that started nothing stops nothing.
+    await cancel(localCtx("project-a", 3));
+    expect(pending.some((p) => p.signal.aborted)).toBe(false);
+
+    await cancel(localCtx("project-a", 2));
+    await expect(b).rejects.toMatchObject({ code: "CANCELLED" });
+    const own = pending.find((p) => p.folder === "a")!;
+    expect(own.signal.aborted).toBe(false);
+    own.resolve();
+    await expect(a).resolves.toBeDefined();
+  });
+
+  it("still lets a local view stop another view's clone by naming it", async () => {
+    const a = clone(localCtx("project-a", 1), options({ opId: "op-a", folderName: "a" }));
+    await started(1);
+
+    await cancel(localCtx("project-b", 2), { opId: "op-a" });
+    await expect(a).rejects.toMatchObject({ code: "CANCELLED" });
+  });
 
   it("never lets a remote caller cancel every clone", async () => {
     const runs = await twoClones();

@@ -76,6 +76,19 @@ export const APP_THEME_TOKEN_KEYS = [
   "status-success-surface",
   "status-warning-surface",
   "status-info-surface",
+  // Status text: text-grade twins of the status inks for status-coloured small
+  // text such as git status letters. Derived by deriveStatusTextInk (contrast.ts).
+  "status-danger-text",
+  "status-success-text",
+  "status-warning-text",
+  "status-info-text",
+  // Filled destructive action: the solid fill a destructive Button paints, its
+  // hover and press steps, and the label drawn on all three. Derived by
+  // deriveDestructiveAction (themes.ts) from status-danger.
+  "destructive-fill",
+  "destructive-fill-hover",
+  "destructive-fill-active",
+  "destructive-foreground",
 
   // Activity (real-time agent states)
   "activity-active",
@@ -236,6 +249,9 @@ export const APP_THEME_TOKEN_KEYS = [
   "diff-delete-edit-background",
   "diff-gutter-insert",
   "diff-gutter-delete",
+  // DiffStat's churn counts: the status inks lifted until they read as text
+  "diff-text-insert",
+  "diff-text-delete",
   "diff-selected-background",
   "diff-omit-gutter-line",
 ] as const;

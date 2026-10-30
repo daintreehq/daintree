@@ -41,6 +41,41 @@ export const ACCENT_CONTRAST_PAIR = {
   minimum: 4.5,
 } as const;
 
+// The destructive Button variant (`src/components/ui/button.tsx`) paints
+// `destructive-foreground` on a solid `destructive-fill`: the label read right before
+// pushing, merging or deleting a worktree (#15363). Its hover and press are fills of
+// their own rather than a `brightness()` filter on the whole button, so every state is
+// a hex this gate measures directly. The fills are derived (`deriveDestructiveAction`)
+// from `status-danger` at its own hue, with at least `minChroma`, stepped along OKLCH
+// lightness by `lightnessStep` for hover and press. Exported so the button's own suite
+// holds the variant's classes to the pair and states measured here.
+export const DESTRUCTIVE_BUTTON_CONTRAST = {
+  foreground: "destructive-foreground",
+  fills: {
+    rest: "destructive-fill",
+    hover: "destructive-fill-hover",
+    press: "destructive-fill-active",
+  },
+  minimum: 4.5,
+  lightnessStep: { hover: 0.05, press: -0.03 },
+  // The least OKLCH chroma the fill carries. Dark themes keep a dusty danger ink,
+  // right for a status dot, but darkened for a fill it read as brick or brown.
+  minChroma: 0.15,
+} as const;
+
+// Git status letters (A, M, D…) are small text in a status hue, drawn bare or on a
+// `/15` wash of that same hue. The status inks are graphical colours held to 3:1 for
+// dots, icons and borders, so a letter painted with one fell under AA on most themes
+// (#15424). Each gets a text-grade twin, lifted the way DiffStat's churn inks are.
+export const STATUS_TEXT_INKS = {
+  "status-success": "status-success-text",
+  "status-warning": "status-warning-text",
+  "status-danger": "status-danger-text",
+  "status-info": "status-info-text",
+} as const satisfies Partial<Record<AppThemeTokenKey, AppThemeTokenKey>>;
+
+export const STATUS_TEXT_CONTRAST = { minimum: 4.5, washOpacity: 0.15 } as const;
+
 const CONTRAST_PAIRS: Array<{
   foreground: AppThemeTokenKey;
   background: AppThemeTokenKey;
@@ -608,6 +643,9 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
   // outline) against the highlight fill and the surface around it.
   warnings.push(...getPaletteSelectionWarnings(scheme));
   warnings.push(...getRecentActivityDotWarnings(scheme));
+  warnings.push(...getDestructiveButtonWarnings(scheme));
+  warnings.push(...getDiffTextContrastWarnings(scheme));
+  warnings.push(...getStatusTextWarnings(scheme));
 
   // Terminal ANSI / syntax legibility and distinctness — OKLab-based because
   // the terminal background is always dark and WCAG ratios are unreliable there.
@@ -799,6 +837,121 @@ function getRecentActivityDotWarnings(scheme: AppColorScheme): AppThemeValidatio
   return warnings;
 }
 
+/** AA for normal text: DiffStat's counts are text read beside other text. */
+export const DIFF_TEXT_MIN_CONTRAST = 4.5;
+
+// The fills churn sits on besides the bare surfaces: the git confirm preview
+// frame (`bg-tint/[0.04]`), hovered rows and summary bands (`overlay-subtle`,
+// `overlay-soft`), and selected rows (`overlay-highlight` in list-detail lists,
+// `overlay-selected` elsewhere). Each is composited over every display surface,
+// since a row carries no record of which surface it landed on.
+const DIFF_TEXT_TINT_OPACITY = 0.04;
+const DIFF_TEXT_ROW_FILLS = [
+  "overlay-subtle",
+  "overlay-soft",
+  "overlay-highlight",
+  "overlay-selected",
+] as const satisfies readonly AppThemeTokenKey[];
+
+/** Every backdrop DiffStat's counts can paint on, resolved to an opaque hex. */
+export function resolveDiffTextBackdrops(
+  tokens: Partial<Record<AppThemeTokenKey, string>>
+): Array<{ label: string; hex: string }> {
+  return collectDiffTextBackdrops(tokens).backdrops;
+}
+
+// The backdrops, plus the tint and fill tokens this math can't composite (a
+// `color-mix()` from a partial import). Those are left out of the derivation
+// rather than guessed at, and the gate names them, so a theme can't pass on a
+// backdrop nobody measured.
+function collectDiffTextBackdrops(tokens: Partial<Record<AppThemeTokenKey, string>>): {
+  backdrops: Array<{ label: string; hex: string }>;
+  unresolved: Set<AppThemeTokenKey>;
+} {
+  const backdrops: Array<{ label: string; hex: string }> = [];
+  const unresolved = new Set<AppThemeTokenKey>();
+  const tint = tokens["tint"];
+  for (const surfaceKey of DISPLAY_SURFACES) {
+    const surface = tokens[surfaceKey];
+    if (typeof surface !== "string" || !isHexColor(surface)) continue;
+    backdrops.push({ label: surfaceKey, hex: surface });
+    // `bg-tint/[0.04]` scales whatever alpha the tint already carries.
+    const tintColor = typeof tint === "string" ? parseTranslucent(tint) : null;
+    if (tintColor) {
+      backdrops.push({
+        label: `tint at ${DIFF_TEXT_TINT_OPACITY * 100}% over ${surfaceKey}`,
+        hex: blendOverBackground(
+          tintColor.hex,
+          surface,
+          DIFF_TEXT_TINT_OPACITY * tintColor.opacity
+        ),
+      });
+    } else {
+      unresolved.add("tint");
+    }
+    for (const fillKey of DIFF_TEXT_ROW_FILLS) {
+      const fill = tokens[fillKey];
+      const hex = typeof fill === "string" ? resolveOverBackdrop(fill, surface) : null;
+      if (hex) backdrops.push({ label: `${fillKey} over ${surfaceKey}`, hex });
+      else unresolved.add(fillKey);
+    }
+  }
+  return { backdrops, unresolved };
+}
+
+// A hex (alpha or not) or `rgba()` as an opaque colour plus its alpha.
+function parseTranslucent(value: string): { hex: string; opacity: number } | null {
+  if (isHexColor(value)) return splitHexAlpha(value) ?? { hex: value.trim(), opacity: 1 };
+  return parseRgba(value);
+}
+
+/**
+ * The churn inks hold AA against every backdrop they paint on (#15319). The
+ * status inks they're lifted from only carry the 3:1 non-text floor, which is
+ * why they need tokens of their own.
+ */
+function getDiffTextContrastWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
+  const warnings: AppThemeValidationWarning[] = [];
+  const { backdrops, unresolved } = collectDiffTextBackdrops(scheme.tokens);
+  if (backdrops.length === 0) {
+    warnings.push({
+      kind: "unevaluable",
+      message: "Cannot evaluate diff churn text contrast: no display surface is a hex color",
+    });
+    return warnings;
+  }
+  for (const key of unresolved) {
+    warnings.push({
+      kind: "unevaluable",
+      message: `Cannot evaluate diff churn text contrast on ${key}="${scheme.tokens[key]}": neither hex nor rgba()`,
+    });
+  }
+  for (const key of ["diff-text-insert", "diff-text-delete"] as const) {
+    const ink = scheme.tokens[key];
+    let worst: { label: string; ratio: number } | null = null;
+    for (const backdrop of backdrops) {
+      const painted = resolveOverBackdrop(ink, backdrop.hex);
+      if (painted === null) {
+        warnings.push({
+          kind: "unevaluable",
+          message: `Cannot evaluate diff churn text contrast: ${key}="${ink}" is neither hex nor rgba()`,
+        });
+        worst = null;
+        break;
+      }
+      const ratio = contrastRatio(painted, backdrop.hex);
+      if (worst === null || ratio < worst.ratio) worst = { label: backdrop.label, ratio };
+    }
+    if (worst && worst.ratio < DIFF_TEXT_MIN_CONTRAST) {
+      warnings.push({
+        kind: "low-contrast",
+        message: `${key} on ${worst.label} is ${worst.ratio.toFixed(2)}:1; target is ${DIFF_TEXT_MIN_CONTRAST.toFixed(1)}:1`,
+      });
+    }
+  }
+  return warnings;
+}
+
 function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
   const warnings: AppThemeValidationWarning[] = [];
   const outlineToken = scheme.tokens["selection-outline"];
@@ -897,6 +1050,114 @@ function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidation
     warnings.push({ kind: "unevaluable", message: unevaluableDanger });
   }
 
+  return warnings;
+}
+
+function getDestructiveButtonWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
+  const { foreground, fills, minimum } = DESTRUCTIVE_BUTTON_CONTRAST;
+  const label = scheme.tokens[foreground];
+  // A non-hex label or fill is already reported as unevaluable by the CONTRAST_PAIRS
+  // entries that read the tokens it derives from; a second notice would only repeat it.
+  if (!isHexColor(label)) return [];
+  const warnings: AppThemeValidationWarning[] = [];
+  // A translucent label or fill composites over whatever the button sits on, so
+  // measuring it here as opaque would pass a label that has all but vanished.
+  if ((splitHexAlpha(label)?.opacity ?? 1) < 1) {
+    return [
+      {
+        kind: "unevaluable",
+        message: `Cannot evaluate destructive button contrast: ${foreground}="${label}" is translucent`,
+      },
+    ];
+  }
+  for (const [state, token] of [
+    ["at rest", fills.rest],
+    ["hovered", fills.hover],
+    ["pressed", fills.press],
+  ] as const) {
+    const fill = scheme.tokens[token];
+    if (!isHexColor(fill)) continue;
+    if ((splitHexAlpha(fill)?.opacity ?? 1) < 1) {
+      warnings.push({
+        kind: "unevaluable",
+        message: `Cannot evaluate destructive button contrast: ${token}="${fill}" is translucent`,
+      });
+      continue;
+    }
+    const ratio = contrastRatio(label, fill);
+    if (ratio < minimum) {
+      warnings.push({
+        kind: "low-contrast",
+        message: `${foreground} on ${token} (destructive button, ${state}) is ${ratio.toFixed(2)}:1; target is ${minimum.toFixed(1)}:1`,
+      });
+    }
+  }
+  return warnings;
+}
+
+/**
+ * Every backdrop a status letter can paint on. The letters sit in the same file
+ * rows as DiffStat's counts, so they meet the same surfaces, frame and row fills,
+ * and each of those again under the letter's own wash. A status ink this math
+ * can't composite gets no wash backdrops; the gate reports it.
+ */
+export function resolveStatusTextBackdrops(
+  graphical: string,
+  tokens: Partial<Record<AppThemeTokenKey, string>>
+): Array<{ label: string; hex: string }> {
+  const rows = resolveDiffTextBackdrops(tokens);
+  const wash = parseTranslucent(graphical);
+  if (!wash) return rows;
+  const opacity = STATUS_TEXT_CONTRAST.washOpacity * wash.opacity;
+  return rows.flatMap((row) => [
+    row,
+    {
+      label: `its ${STATUS_TEXT_CONTRAST.washOpacity * 100}% wash over ${row.label}`,
+      hex: blendOverBackground(wash.hex, row.hex, opacity),
+    },
+  ]);
+}
+
+/**
+ * The status letter inks hold AA on every backdrop they paint on. Row fills the
+ * math can't composite are already named by the churn gate, which shares them.
+ */
+function getStatusTextWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
+  const warnings: AppThemeValidationWarning[] = [];
+  const { minimum } = STATUS_TEXT_CONTRAST;
+  for (const [graphicalKey, textKey] of Object.entries(STATUS_TEXT_INKS) as Array<
+    [AppThemeTokenKey, AppThemeTokenKey]
+  >) {
+    const graphical = scheme.tokens[graphicalKey];
+    const ink = scheme.tokens[textKey];
+    // The bare rows are still measured; only the wash is left out.
+    if (!parseTranslucent(graphical)) {
+      warnings.push({
+        kind: "unevaluable",
+        message: `Cannot evaluate ${textKey} contrast on its wash: ${graphicalKey}="${graphical}" is neither hex nor rgba()`,
+      });
+    }
+    let worst: { label: string; ratio: number } | null = null;
+    for (const backdrop of resolveStatusTextBackdrops(graphical, scheme.tokens)) {
+      const painted = resolveOverBackdrop(ink, backdrop.hex);
+      if (painted === null) {
+        warnings.push({
+          kind: "unevaluable",
+          message: `Cannot evaluate ${textKey} contrast: ${textKey}="${ink}" is neither hex nor rgba()`,
+        });
+        worst = null;
+        break;
+      }
+      const ratio = contrastRatio(painted, backdrop.hex);
+      if (worst === null || ratio < worst.ratio) worst = { label: backdrop.label, ratio };
+    }
+    if (worst && worst.ratio < minimum) {
+      warnings.push({
+        kind: "low-contrast",
+        message: `${textKey} on ${worst.label} is ${worst.ratio.toFixed(2)}:1; target is ${minimum.toFixed(1)}:1`,
+      });
+    }
+  }
   return warnings;
 }
 

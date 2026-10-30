@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { act, render, screen, fireEvent } from "@testing-library/react";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { PluginDocumentWarning } from "../PluginDocumentWarning";
 import { pluginDocumentRuntime } from "@/services/plugin/pluginDocumentRuntime";
 import { actionService } from "@/services/ActionService";
+import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import type { ReactNode } from "react";
 
 // The app root supplies the TooltipProvider. Triggers render inline; the
@@ -40,10 +41,23 @@ it("aggregates affected plugins into one banner and routes recovery through the 
   });
   expect(screen.getByText("Editor content")).toBeTruthy();
   expect(screen.getByText("Plugins need a window reload")).toBeTruthy();
-  // The manifest id, not the hashed instance key, is what the user sees.
+  // Until the runtime store can name it: the manifest id, never the hashed
+  // instance key.
   expect(screen.getByText("acme.warning-test")).toBeTruthy();
+  // Then the name the user knows it by (#15236).
+  act(() =>
+    usePluginRuntimeStore.setState({
+      pluginMetaById: new Map([
+        ["project__abc__acme.warning-test", { devMode: false, displayName: "Warning Test" }],
+      ]),
+    })
+  );
+  expect(screen.getByText("Warning Test")).toBeTruthy();
+  expect(screen.queryByText("acme.warning-test")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Reload window" }));
   expect(actionService.dispatch).toHaveBeenCalledWith("plugin.reloadWindow", undefined, {
     source: "user",
   });
 });
+
+afterEach(() => _resetPluginRuntimeStoreForTest());

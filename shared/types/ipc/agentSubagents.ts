@@ -159,9 +159,54 @@ export interface CodexFolderSession {
 export interface CodexFolderSessionsOk {
   status: "ok";
   sessions: CodexFolderSession[];
+  /** The folder holds older sessions than the page returned. */
+  more?: boolean;
 }
 
 export type CodexFolderSessionsResult = CodexFolderSessionsOk | AgentSubagentsUnavailable;
+
+/**
+ * A restored Codex pane's launch prompt, as evidence for which thread is its
+ * conversation (#15269). Carries a digest of the prompt rather than the prompt:
+ * the comparison happens in main, and no conversation text has to cross to it.
+ */
+export interface CodexRestoreMatchPane {
+  /** The saved pane id; echoed back on a match. */
+  key: string;
+  /** SHA-256 hex of the prompt in the form the CLI received it (`launchPromptArgText`). */
+  promptHash: string;
+  /** Epoch ms the prompt was delivered at launch. */
+  at: number;
+  /**
+   * Whether this pane is asking for its conversation. A pane that isn't still
+   * counts as a claimant, so a thread it might own is never handed to another.
+   */
+  resolve: boolean;
+}
+
+export interface CodexRestoreMatchScope {
+  /** The folder the panes' conversations are filed under. */
+  cwd: string;
+  /** The panes' own profile, when they ran against one. */
+  codexHome?: string;
+  /**
+   * A sibling in this folder will launch `codex resume --last`, so whichever
+   * thread that opens is already spoken for.
+   */
+  reserveLatest?: boolean;
+  panes: CodexRestoreMatchPane[];
+}
+
+export interface CodexRestoreMatchRequest {
+  scopes: CodexRestoreMatchScope[];
+  /** Session ids other panes already hold. Never handed out, and still count as candidates. */
+  exclude: string[];
+}
+
+/** Only pane keys and session ids: the reply names no thread a pane didn't uniquely match. */
+export interface CodexRestoreMatchResult {
+  matches: Array<{ key: string; sessionId: string }>;
+}
 
 /**
  * Messages returned per transcript read. Bounded so one long-running child

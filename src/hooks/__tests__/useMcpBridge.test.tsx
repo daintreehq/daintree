@@ -2,6 +2,12 @@
 import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionManifestEntry } from "@shared/types/actions";
+import {
+  MCP_CONFIRM_DECISION_MS,
+  MCP_CONFIRM_HOLD_GRACE_MS,
+  MCP_CONFIRM_QUEUE_HOLD_MS,
+  MCP_DISPATCH_TIMEOUT_MS,
+} from "@shared/config/mcpConfirmWindow";
 import { __resetMcpConfirmStoreForTesting, useMcpConfirmStore } from "@/store/mcpConfirmStore";
 import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { isMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
@@ -97,6 +103,13 @@ import type { SubmoduleDeleteRisk } from "@shared/types/submodule";
 import { MAX_KILL_BATCH_TERMINALS } from "@shared/types/terminalKillBatch";
 
 /** A completed submodule inventory that found nothing — the ordinary case. */
+/** What main grants each confirmation phase of a call it still holds (#14989). */
+const HOLD_GRANTS_MS = {
+  queued: MCP_CONFIRM_QUEUE_HOLD_MS,
+  shown: MCP_CONFIRM_DECISION_MS + MCP_CONFIRM_HOLD_GRACE_MS,
+  approved: MCP_DISPATCH_TIMEOUT_MS,
+} as const;
+
 function emptySubmoduleRisk(over: Partial<SubmoduleDeleteRisk> = {}): SubmoduleDeleteRisk {
   return {
     entries: [],
@@ -155,12 +168,15 @@ describe("useMcpBridge", () => {
         approvalReason?: "above-tier" | "protected-close";
         hostPreview?: { subject?: string; lines: string[] };
         authorization?: "tier" | "user" | "session-grant" | "native-grant" | "skip-preference";
+        requester?:
+          { kind: "pane"; terminalId: string } | { kind: "assistant"; helpSessionId: string };
       }) => void | Promise<void>)
     | undefined;
   let cleanupManifest: ReturnType<typeof vi.fn>;
   let cleanupDispatch: ReturnType<typeof vi.fn>;
   let sendGetManifestResponse: ReturnType<typeof vi.fn>;
   let sendDispatchActionResponse: ReturnType<typeof vi.fn>;
+  let holdDispatch: ReturnType<typeof vi.fn>;
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
@@ -185,6 +201,11 @@ describe("useMcpBridge", () => {
     cleanupDispatch = vi.fn();
     sendGetManifestResponse = vi.fn();
     sendDispatchActionResponse = vi.fn();
+    // Main as it holds a live call: every phase granted its full time.
+    holdDispatch = vi.fn(async ({ phase }: { phase: "queued" | "shown" | "approved" }) => ({
+      held: true,
+      remainingMs: HOLD_GRANTS_MS[phase],
+    }));
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     Object.defineProperty(window, "electron", {
@@ -212,6 +233,7 @@ describe("useMcpBridge", () => {
           },
           sendDispatchActionResponse,
         },
+        mcpServer: { holdDispatch },
       },
     });
   });
@@ -700,12 +722,57 @@ describe("useMcpBridge", () => {
     await dispatched;
 
     expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(sendDispatchActionResponse).toHaveBeenCalledTimes(1);
     expect(sendDispatchActionResponse).toHaveBeenCalledWith({
       requestId: "req-ask",
       result: { ok: true, result: null },
       confirmationDecision: "approved",
       approvalScope: "session",
     });
+    // Main runs this call itself on the answer, so nothing here claims a run (#14989).
+    expect(holdDispatch).not.toHaveBeenCalledWith(expect.objectContaining({ phase: "approved" }));
+  });
+
+  // #14992: the dialog names the pane that asked, as this view names it when
+  // the question arrives, including a pane whose tool can't take a session
+  // grant and so arrives without the session offer.
+  it("names the requesting pane from this view's stores when the question arrives", async () => {
+    mocks.get.mockReturnValue(safeManifestEntry({ id: "git.push", title: "Push" }));
+    mocks.worktrees.set("wt-2", { branch: "feature/auth", name: "auth" });
+    mocks.panelsById = {
+      "t-own": {
+        id: "t-own",
+        title: "Worker",
+        worktreeId: "wt-2",
+        detectedAgentId: "claude",
+        location: "grid",
+      },
+    };
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-named",
+      actionId: "git.push",
+      args: {},
+      sessionOrigin: "external",
+      approvalOnly: true,
+      requester: { kind: "pane", terminalId: "t-own" },
+    });
+
+    await Promise.resolve();
+    // Renamed while queued: the request still says who asked when it asked.
+    mocks.panelsById = { "t-own": { id: "t-own", title: "Renamed", location: "grid" } };
+    expect(useMcpConfirmStore.getState().current?.requester).toEqual({
+      identity: { kind: "pane", terminalId: "t-own" },
+      name: "Worker",
+      kindLabel: "Claude",
+      worktreeId: "wt-2",
+      worktreeName: "feature/auth",
+    });
+
+    useMcpConfirmStore.getState().resolveCurrent("rejected");
+    await dispatched;
   });
 
   it("reports a declined approval-only request as USER_REJECTED", async () => {
@@ -749,10 +816,13 @@ describe("useMcpBridge", () => {
       callerInfo: { token4LastChars: "", userAgent: 'Your assistant, through host "studio-01"' },
       approvalOnly: true,
       hostPreview: { subject: "feature/thing", lines: ["No uncommitted changes."] },
+      // Nothing of that host's is here to name, whatever the payload says.
+      requester: { kind: "pane", terminalId: "t-host" },
     });
 
     await Promise.resolve();
     const pending = useMcpConfirmStore.getState().current;
+    expect(pending?.requester).toBeUndefined();
     expect(pending?.preview).toEqual(["No uncommitted changes."]);
     expect(pending?.subject).toBe("feature/thing");
     expect(pending?.previewPending).toBe(false);
@@ -1686,7 +1756,7 @@ describe("useMcpBridge", () => {
     expect(mocks.dispatch).toHaveBeenCalledTimes(1);
   });
 
-  it("never acts on an approval that outlived main's dispatch deadline (#12115)", async () => {
+  function cleanForceDeleteTarget() {
     mocks.get.mockReturnValue(confirmManifestEntry());
     mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
     mocks.worktrees.set("wt-1", {
@@ -1706,76 +1776,118 @@ describe("useMcpBridge", () => {
       rootPath: "/repo/wt-1",
       submodules: { status: "verified", risk: emptySubmoduleRisk() },
     });
-    // Main dropped this dispatch and told the agent it timed out; a delete
-    // starting now destroys a worktree behind a reported failure.
-    const realNow = Date.now;
-    const start = realNow();
+  }
+
+  it("never acts on an approval main no longer holds the call for (#14989)", async () => {
+    cleanForceDeleteTarget();
+    // Main dropped this dispatch and told the agent it timed out; running it
+    // now would act behind a reported failure.
+    holdDispatch.mockImplementation(async ({ phase }: { phase: keyof typeof HOLD_GRANTS_MS }) =>
+      phase === "approved" ? { held: false } : { held: true, remainingMs: HOLD_GRANTS_MS[phase] }
+    );
+
+    renderHook(() => useMcpBridge());
+    const dispatched = dispatchHandler?.({
+      requestId: "req-late",
+      actionId: "worktree.delete",
+      args: { worktreeId: "wt-1", force: true },
+    });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
+    });
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(holdDispatch).toHaveBeenCalledWith({ requestId: "req-late", phase: "approved" });
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith({
+      requestId: "req-late",
+      result: {
+        ok: false,
+        error: { code: "CONFIRMATION_TIMEOUT", message: expect.stringContaining("nothing ran") },
+      },
+      confirmationDecision: "timeout",
+    });
+  });
+
+  it("refuses a force delete when less run is left than its re-check may take (#12115)", async () => {
+    cleanForceDeleteTarget();
+    // Less run left than the re-check may spend: the delete could start after
+    // main's deadline, so the approval is not acted on.
+    holdDispatch.mockImplementation(async ({ phase }: { phase: keyof typeof HOLD_GRANTS_MS }) => ({
+      held: true,
+      remainingMs: phase === "approved" ? 4_000 : HOLD_GRANTS_MS[phase],
+    }));
+
+    renderHook(() => useMcpBridge());
+    const dispatched = dispatchHandler?.({
+      requestId: "req-short-run",
+      actionId: "worktree.delete",
+      args: { worktreeId: "wt-1", force: true },
+    });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
+    });
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith({
+      requestId: "req-short-run",
+      result: {
+        ok: false,
+        error: {
+          code: "CONFIRMATION_TIMEOUT",
+          message: expect.stringContaining("dispatch deadline"),
+        },
+      },
+      confirmationDecision: "approved",
+    });
+  });
+
+  it("never starts an approved action once the run main granted has passed (#14989)", async () => {
+    mocks.get.mockReturnValue(confirmManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+    const start = Date.now();
     let elapsed = 0;
     vi.spyOn(Date, "now").mockImplementation(() => start + elapsed);
+    // Main accepts the claim, but this view only reads the answer after the
+    // run it granted is over, as a view stalled for that long would.
+    holdDispatch.mockImplementation(async ({ phase }: { phase: keyof typeof HOLD_GRANTS_MS }) => {
+      if (phase === "approved") elapsed += HOLD_GRANTS_MS.approved;
+      return { held: true, remainingMs: HOLD_GRANTS_MS[phase] };
+    });
 
     try {
       renderHook(() => useMcpBridge());
       const dispatched = dispatchHandler?.({
-        requestId: "req-late",
+        requestId: "req-stalled",
         actionId: "worktree.delete",
-        args: { worktreeId: "wt-1", force: true },
+        args: { worktreeId: "wt-1" },
       });
-
-      await vi.waitFor(() => {
-        expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
-      });
-      // Past the bridge's own action deadline (main's 30s less the re-check
-      // budget it may still have to spend), which is the point where it can no
-      // longer prove the call is still live.
-      elapsed = 26_000;
+      await Promise.resolve();
       useMcpConfirmStore.getState().resolveCurrent("approved");
       await dispatched;
 
       expect(mocks.dispatch).not.toHaveBeenCalled();
+      expect(sendDispatchActionResponse).toHaveBeenCalledTimes(1);
       expect(sendDispatchActionResponse).toHaveBeenCalledWith({
-        requestId: "req-late",
-        result: {
+        requestId: "req-stalled",
+        result: expect.objectContaining({
           ok: false,
-          error: {
-            code: "CONFIRMATION_TIMEOUT",
-            message: expect.stringContaining("dispatch deadline"),
-          },
-        },
-        confirmationDecision: "approved",
+          error: expect.objectContaining({ code: "CONFIRMATION_TIMEOUT" }),
+        }),
+        confirmationDecision: "timeout",
       });
     } finally {
       vi.mocked(Date.now).mockRestore();
     }
   });
 
-  it("counts the snapshot wait against main's dispatch deadline (#13348)", async () => {
-    // Main's clock started when it sent the request, so time spent waiting for
-    // the worktree snapshot is time the approval no longer has.
-    mocks.get.mockReturnValue(confirmManifestEntry());
-    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
-    mocks.worktrees.set("wt-1", {
-      id: "wt-1",
-      path: "/repo/wt-1",
-      name: "wt-1",
-      branch: "feature/x",
-      isCurrent: false,
-      isMainWorktree: false,
-    });
-    mocks.buildPreview.mockResolvedValue({
-      trackedChangeCount: 0,
-      untrackedFileCount: 0,
-      hasTrackedChanges: false,
-      hasUntrackedFiles: false,
-      changes: [],
-      rootPath: "/repo/wt-1",
-      submodules: { status: "verified", risk: emptySubmoduleRisk() },
-    });
-    let landSnapshot: () => void = () => {};
-    trackWorktreeSnapshot(
-      new Promise<void>((resolve) => {
-        landSnapshot = resolve;
-      })
-    );
+  it("runs an approval given long after the dispatch arrived, once main accepts it (#14989)", async () => {
+    cleanForceDeleteTarget();
     const start = Date.now();
     let elapsed = 0;
     vi.spyOn(Date, "now").mockImplementation(() => start + elapsed);
@@ -1783,7 +1895,45 @@ describe("useMcpBridge", () => {
     try {
       renderHook(() => useMcpBridge());
       const dispatched = dispatchHandler?.({
-        requestId: "req-late-sync",
+        requestId: "req-slow-read",
+        actionId: "worktree.delete",
+        args: { worktreeId: "wt-1", force: true },
+      });
+
+      await vi.waitFor(() => {
+        expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
+      });
+      // Far past the plain dispatch deadline: the read came out of the decision
+      // window main granted, not out of the run.
+      elapsed = 90_000;
+      useMcpConfirmStore.getState().resolveCurrent("approved");
+      await dispatched;
+
+      expect(mocks.dispatch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.mocked(Date.now).mockRestore();
+    }
+  });
+
+  it("asks main to hold the call while it waits, with a first deadline from receipt (#14989)", async () => {
+    cleanForceDeleteTarget();
+    // Main's clock started when it sent the request, so the snapshot wait is
+    // time the confirmation no longer has until main grants a hold.
+    let landSnapshot: () => void = () => {};
+    trackWorktreeSnapshot(
+      new Promise<void>((resolve) => {
+        landSnapshot = resolve;
+      })
+    );
+    holdDispatch.mockImplementation(() => new Promise(() => {}));
+    const start = Date.now();
+    let elapsed = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => start + elapsed);
+
+    try {
+      renderHook(() => useMcpBridge());
+      void dispatchHandler?.({
+        requestId: "req-wait",
         actionId: "worktree.delete",
         args: { worktreeId: "wt-1", force: true },
       });
@@ -1791,24 +1941,13 @@ describe("useMcpBridge", () => {
       elapsed = 9_000;
       landSnapshot();
       await vi.waitFor(() => {
-        expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
+        expect(useMcpConfirmStore.getState().current?.requestId).toBe("req-wait");
       });
-      // Well inside the deadline measured from the end of the wait, past it
-      // measured from when main sent the request.
-      elapsed = 26_000;
-      useMcpConfirmStore.getState().resolveCurrent("approved");
-      await dispatched;
 
-      expect(mocks.dispatch).not.toHaveBeenCalled();
-      expect(sendDispatchActionResponse).toHaveBeenCalledWith(
-        expect.objectContaining({
-          requestId: "req-late-sync",
-          result: expect.objectContaining({
-            ok: false,
-            error: expect.objectContaining({ code: "CONFIRMATION_TIMEOUT" }),
-          }),
-        })
+      expect(useMcpConfirmStore.getState().current?.deadlineAt).toBe(
+        start + MCP_DISPATCH_TIMEOUT_MS
       );
+      expect(holdDispatch).toHaveBeenCalledWith({ requestId: "req-wait", phase: "queued" });
     } finally {
       vi.mocked(Date.now).mockRestore();
     }
@@ -2917,6 +3056,87 @@ describe("resolveMcpConfirmPreviewTarget (#11538)", () => {
         )
       ).toBeUndefined();
     });
+  });
+});
+
+describe("terminal.startHeld confirm preview (#15270)", () => {
+  beforeEach(() => {
+    mocks.panelsById = {
+      held: {
+        id: "held",
+        kind: "terminal",
+        title: "codex triage",
+        restoreRecovery: { reason: "resume-deferred", sessionId: "sess-1" },
+      },
+      live: { id: "live", kind: "terminal", title: "zsh" },
+    };
+  });
+
+  it("resolves the pane and the start the dispatch names", () => {
+    expect(
+      resolveMcpConfirmPreviewTarget(
+        "terminal.startHeld",
+        { terminalId: "held", start: "resume" },
+        undefined
+      )
+    ).toEqual({ kind: "terminalStartHeld", terminalId: "held", start: "resume" });
+  });
+
+  it.each([
+    ["no start", { terminalId: "held" }],
+    ["an unknown start", { terminalId: "held", start: "latest" }],
+    ["no terminal", { start: "fresh" }],
+  ])("gives a dispatch with %s no preview", (_label, args) => {
+    expect(resolveMcpConfirmPreviewTarget("terminal.startHeld", args, undefined)).toBeUndefined();
+  });
+
+  it("shows the recorded conversation a resume reopens, read from the pane", async () => {
+    const { lines } = await buildMcpConfirmPreview({
+      kind: "terminalStartHeld",
+      terminalId: "held",
+      start: "resume",
+    });
+
+    expect(lines.join("\n")).toContain("sess-1");
+    expect(lines.join("\n")).toContain("resume-deferred");
+    expect(hasCautionLine(lines)).toBe(false);
+  });
+
+  it("warns when the named pane isn't held", async () => {
+    const { lines } = await buildMcpConfirmPreview({
+      kind: "terminalStartHeld",
+      terminalId: "live",
+      start: "fresh",
+    });
+
+    expect(hasCautionLine(lines)).toBe(true);
+  });
+
+  it("titles the dialog with the held pane's name", () => {
+    expect(
+      resolveMcpConfirmSubject({ kind: "terminalStartHeld", terminalId: "held", start: "fresh" })
+    ).toBe("codex triage");
+  });
+
+  it("keeps a long or multi-line pane name to one short heading line", () => {
+    mocks.panelsById = {
+      held: {
+        id: "held",
+        kind: "terminal",
+        title: `first\n${"x".repeat(500)}`,
+        restoreRecovery: { reason: "resume-deferred" },
+      },
+    };
+
+    const subject = resolveMcpConfirmSubject({
+      kind: "terminalStartHeld",
+      terminalId: "held",
+      start: "fresh",
+    })!;
+
+    expect(subject).not.toMatch(/[\r\n]/);
+    expect(Array.from(subject).length).toBeLessThanOrEqual(100);
+    expect(subject.endsWith("…")).toBe(true);
   });
 });
 

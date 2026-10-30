@@ -110,6 +110,7 @@ import {
 } from "../uploads/paneDropRouting";
 import {
   _resetPendingUploadsForTests,
+  getPendingUploads,
   hasPendingUploads,
   terminalUploadSurface,
 } from "../uploads/pendingUploads";
@@ -2254,6 +2255,109 @@ describe("useTerminalFileTransfer hook", () => {
       });
       expect(lastWrittenPayload()).toContain("/tmp/daintree-inbox/clipboard/clipboard-1.png");
     });
+
+    // A clipboard image crosses the same link a drop does, so it gets the same
+    // chip: progress on a slow link, and a way to stop it before a path lands.
+    function holdClipboardUpload() {
+      const seen: MaterializeSource[] = [];
+      let finish!: () => void;
+      let progress!: (fraction: number) => void;
+      setRemoteMaterializer(
+        (source, options) =>
+          new Promise<MaterializeResult>((resolve, reject) => {
+            seen.push(source);
+            options?.signal?.addEventListener("abort", () =>
+              reject(Object.assign(new Error("Upload cancelled"), { code: "CANCELLED" }))
+            );
+            progress = (fraction) => options?.onProgress?.(fraction);
+            finish = () =>
+              resolve({
+                hostPath: "/tmp/daintree-inbox/clipboard/clipboard-1.png",
+                displayName: "clipboard-1.png",
+                bytes: null,
+              });
+          })
+      );
+      return { seen, finish: () => finish(), progress: (fraction: number) => progress(fraction) };
+    }
+
+    it("tracks a Ctrl+V clipboard image under the terminal's chip until it lands", async () => {
+      const { seen, finish, progress } = holdClipboardUpload();
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+      const pasted = getClipboardImagePaster("term-1")!();
+      await act(async () => {
+        await settle();
+      });
+
+      expect(seen).toEqual([{ kind: "clipboard-image" }]);
+      expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(true);
+      expect(terminalClient.write).not.toHaveBeenCalled();
+      act(() => progress(0.5));
+      expect(getPendingUploads(terminalUploadSurface("term-1"))[0]!.fraction).toBe(0.5);
+
+      await act(async () => {
+        finish();
+        await expect(pasted).resolves.toBe("inserted");
+      });
+      expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(false);
+      expect(lastWrittenPayload()).toContain("/tmp/daintree-inbox/clipboard/clipboard-1.png");
+    });
+
+    it("writes nothing when a Ctrl+V clipboard upload is cancelled from its chip", async () => {
+      holdClipboardUpload();
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+      const pasted = getClipboardImagePaster("term-1")!();
+      await act(async () => {
+        await settle();
+      });
+
+      const [chip] = getPendingUploads(terminalUploadSurface("term-1"));
+      expect(chip).toBeDefined();
+      await act(async () => {
+        chip!.cancel();
+        // A cancel is not an empty clipboard: Ctrl+V must not fall through to ^V.
+        await expect(pasted).resolves.toBe("failed");
+      });
+      expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(false);
+      expect(terminalClient.write).not.toHaveBeenCalled();
+    });
+
+    it("types a pasted clipboard image's host path once its tracked upload lands", async () => {
+      const { finish } = holdClipboardUpload();
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+      await act(async () => {
+        container.dispatchEvent(makePasteEvent(true));
+        await settle();
+      });
+      expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(true);
+      expect(terminalClient.write).not.toHaveBeenCalled();
+
+      await act(async () => {
+        finish();
+        await settle();
+      });
+      expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(false);
+      expect(terminalClient.write).toHaveBeenCalledTimes(1);
+      expect(lastWrittenPayload()).toContain("/tmp/daintree-inbox/clipboard/clipboard-1.png");
+    });
+
+    it("tracks a pasted clipboard image under the terminal's chip, and a cancel writes nothing", async () => {
+      holdClipboardUpload();
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+      await act(async () => {
+        container.dispatchEvent(makePasteEvent(true));
+        await settle();
+      });
+
+      const [chip] = getPendingUploads(terminalUploadSurface("term-1"));
+      expect(chip).toBeDefined();
+      await act(async () => {
+        chip!.cancel();
+        await settle();
+      });
+      expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(false);
+      expect(terminalClient.write).not.toHaveBeenCalled();
+    });
   });
 
   // The Windows/Linux paste keys reach the clipboard image through this paster
@@ -2278,6 +2382,29 @@ describe("useTerminalFileTransfer hook", () => {
         "term-1",
         `${quoteLaunchArgOptional("/tmp/daintree-clipboard/clipboard-123-abc.png")} `
       );
+    });
+
+    it("saves without an upload chip: nothing crosses a link here", async () => {
+      let finishSave!: (value: SavedImage) => void;
+      vi.mocked(window.electron.clipboard.saveImage).mockReturnValue(
+        new Promise<SavedImage>((resolve) => {
+          finishSave = resolve;
+        })
+      );
+      renderFileTransferHook();
+      const pasted = getClipboardImagePaster("term-1")!();
+      await act(async () => {
+        await settle();
+      });
+      expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(false);
+
+      await act(async () => {
+        finishSave({
+          filePath: "/tmp/daintree-clipboard/clipboard-123-abc.png",
+          thumbnailDataUrl: "data:image/png;base64,abc",
+        });
+        await expect(pasted).resolves.toBe("inserted");
+      });
     });
 
     it("reports an empty clipboard as empty and writes nothing", async () => {

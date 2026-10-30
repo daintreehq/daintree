@@ -14,6 +14,7 @@ import {
   Button,
   Callout,
   ConfirmDialog,
+  CopyButton,
   EmptyState,
   Icon,
   Input,
@@ -224,8 +225,8 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
     const from = document.activeElement;
     const fromSaveButton =
       from instanceof HTMLElement && from.dataset.testid === "markdown-editor-save";
-    const clean = await controller.save();
-    if (!clean || !fromSaveButton) return;
+    const outcome = await controller.save();
+    if (outcome.status !== "saved" || !fromSaveButton) return;
     const now = document.activeElement;
     if (now === from || now === null || now === document.body) viewRef.current?.focus();
   }, [controller]);
@@ -317,14 +318,13 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
                 Retry
               </Button>
               {orphanDraft !== null && (
-                <Button
+                <CopyButton
+                  label="Copy draft"
+                  text={orphanDraft}
                   variant="outline"
                   size="sm"
-                  onClick={() => void navigator.clipboard.writeText(orphanDraft)}
                   data-testid="markdown-editor-copy-draft"
-                >
-                  Copy draft
-                </Button>
+                />
               )}
             </div>
           }
@@ -467,14 +467,17 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
           aria-live="polite"
           actionPlacement="below"
           action={
-            <Button
-              variant="outline"
-              size="sm"
-              data-notification-action="primary"
-              onClick={() => void navigator.clipboard.writeText(text)}
-            >
-              Copy draft
-            </Button>
+            // The copy announces itself; keep its label swap out of the warning's live region.
+            <span aria-live="off" className="inline-flex">
+              <CopyButton
+                label="Copy draft"
+                text={text}
+                variant="outline"
+                size="sm"
+                data-notification-action="primary"
+                data-testid="markdown-editor-copy-draft"
+              />
+            </span>
           }
         >
           {record.storageWarning}

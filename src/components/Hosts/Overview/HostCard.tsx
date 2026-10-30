@@ -72,6 +72,7 @@ function ProjectList({
   );
   const shown = showAll ? sorted : sorted.slice(0, HOST_CARD_PROJECT_LIMIT);
   const more = projects.length - shown.length;
+  const anyEmoji = shown.some((project) => project.emoji);
   return (
     <section aria-label={`Projects on ${hostName}`} data-testid="host-overview-projects">
       <h4 className="mb-1 text-2xs font-medium text-text-secondary">
@@ -94,8 +95,8 @@ function ProjectList({
                 title={project.path}
                 onClick={(event) => onOpenProject?.(project.id, isNewWindowClick(event))}
               >
-                {project.emoji && (
-                  <span className="shrink-0 leading-none" aria-hidden="true">
+                {anyEmoji && (
+                  <span className="w-4 shrink-0 text-center leading-none" aria-hidden="true">
                     {project.emoji}
                   </span>
                 )}
@@ -319,7 +320,7 @@ export function HostCard({
         {summary && <Fact label="Thermal" value={describeThermal(summary)} />}
         {summary && (
           <Fact
-            label="Driving"
+            label="Control"
             value={describeDriver(summary)}
             detail={describeDriverDetail(summary)}
           />

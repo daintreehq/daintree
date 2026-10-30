@@ -229,17 +229,43 @@ describe("VoiceRecordingService — spoken send (#14633)", () => {
     expect(stop).not.toHaveBeenCalled();
   });
 
-  it.each(["", "fix it"])("only stops dictation when the draft is %j", async (draft) => {
+  it.each(["", "   "])("only stops dictation when the draft is %j", async (empty) => {
     const { voiceRecordingService, stop } = await setup();
-    draftState.draft = draft;
+    draftState.draft = empty;
     const handler = vi.fn();
     voiceRecordingService.onSpokenSend(PANEL_ID, undefined, handler);
 
     complete("", "item-a", true);
 
     expect(handler).not.toHaveBeenCalled();
-    expect(stop).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalledWith("Dictation stopped.", { reason: "send" });
   });
+
+  // #14944: a stop alone looks like any other, so the composer says it wasn't sent.
+  it.each(["yes", "go ahead", "  ok , ! "])(
+    "stops quietly and has the composer say %j was kept, not sent",
+    async (reply) => {
+      const { voiceRecordingService, useVoiceRecordingStore, stop } = await setup();
+      draftState.draft = reply;
+      // The composer hears of it once the stop is under way, never ahead of it.
+      const stopsBeforeHandler: number[] = [];
+      const handler = vi.fn(() => stopsBeforeHandler.push(stop.mock.calls.length));
+      voiceRecordingService.onSpokenSend(PANEL_ID, undefined, handler);
+
+      complete("", "item-a", true);
+
+      expect(stopsBeforeHandler).toEqual([1]);
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler).toHaveBeenCalledWith({ tooShort: true });
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(stop).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ reason: "send", announce: false })
+      );
+      expect(draftState.draft).toBe(reply);
+      expect(useVoiceRecordingStore.getState().announcement).toBeNull();
+    }
+  );
 
   it("only stops dictation when no composer shows the panel", async () => {
     const { stop } = await setup();
@@ -342,17 +368,51 @@ describe("VoiceRecordingService — spoken send (#14633)", () => {
       await finish();
     });
 
-    it("never stops a second time for a draft too short to send", async () => {
-      const { voiceRecordingService, stop, finish } = await stopping("key_release");
+    it.each(["key_release", "user"] as const)(
+      "never stops a second time for a draft too short to send, and leaves the %s stop's word to the composer",
+      async (reason) => {
+        const { voiceRecordingService, useVoiceRecordingStore, stop, finish } =
+          await stopping(reason);
+        draftState.draft = "fix it";
+        const handler = vi.fn();
+        voiceRecordingService.onSpokenSend(PANEL_ID, undefined, handler);
+
+        complete("", "item-a", true);
+
+        expect(handler).toHaveBeenCalledWith({ tooShort: true });
+        expect(stop).not.toHaveBeenCalled();
+        await finish();
+        expect(useVoiceRecordingStore.getState().announcement).toBeNull();
+      }
+    );
+
+    it("lets the next stop say it stopped again", async () => {
+      const { voiceRecordingService, useVoiceRecordingStore, finish } =
+        await stopping("key_release");
       draftState.draft = "fix it";
+      voiceRecordingService.onSpokenSend(PANEL_ID, undefined, vi.fn());
+      complete("", "item-a", true);
+      await finish();
+      expect(useVoiceRecordingStore.getState().announcement).toBeNull();
+
+      useVoiceRecordingStore.getState().beginSession({ panelId: PANEL_ID });
+      useVoiceRecordingStore.getState().setStatus("recording");
+      await voiceRecordingService.stop("Dictation stopped.", { reason: "user" });
+
+      expect(useVoiceRecordingStore.getState().announcement?.text).toBe("Dictation stopped.");
+    });
+
+    it("says it stopped as before when the stop's drain lands a send on an empty draft", async () => {
+      const { voiceRecordingService, useVoiceRecordingStore, finish } =
+        await stopping("key_release");
       const handler = vi.fn();
       voiceRecordingService.onSpokenSend(PANEL_ID, undefined, handler);
 
       complete("", "item-a", true);
+      await finish();
 
       expect(handler).not.toHaveBeenCalled();
-      expect(stop).not.toHaveBeenCalled();
-      await finish();
+      expect(useVoiceRecordingStore.getState().announcement?.text).toBe("Dictation stopped.");
     });
 
     it("ignores a send that lands after the stop is over", async () => {

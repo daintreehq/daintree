@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isCanopyUnread, type CanopySnapshot } from "@shared/types/ipc/canopy";
 import { ALL_HOSTS_ID, useCanopyStore } from "../canopyStore";
+import { CANOPY_LIST_MAX_WIDTH, CANOPY_LIST_MIN_WIDTH } from "@/components/Canopy/canopyListWidth";
 
 const SPAWNED = 1_000;
 
@@ -418,5 +419,101 @@ describe("assistant handbacks seen across views", () => {
     window.localStorage.setItem(KEY, JSON.stringify({ b: 1_000 }));
     window.dispatchEvent(new StorageEvent("storage", { key: KEY }));
     expect(store.getState().assistantHandbacksSeen).toEqual({ a: 2_000, b: 1_000 });
+  });
+});
+
+describe("the reading offer's callout", () => {
+  const KEY = "daintree-canopy-reading-offer-dismissed";
+  afterEach(() => window.localStorage.removeItem(KEY));
+  const reload = async () => {
+    vi.resetModules();
+    return (await import("../canopyStore")).useCanopyStore;
+  };
+
+  it("stays dismissed across launches once put away", async () => {
+    const store = await reload();
+    expect(store.getState().readingOfferDismissed).toBe(false);
+    store.getState().dismissReadingOffer();
+    expect(store.getState().readingOfferDismissed).toBe(true);
+    expect((await reload()).getState().readingOfferDismissed).toBe(true);
+  });
+
+  it("goes from a sibling view as soon as that view dismisses it", async () => {
+    const store = await reload();
+    window.localStorage.setItem(KEY, "1");
+    window.dispatchEvent(new StorageEvent("storage", { key: KEY }));
+    expect(store.getState().readingOfferDismissed).toBe(true);
+  });
+
+  it("isn't brought back by a sibling's storage being cleared", async () => {
+    const store = await reload();
+    store.getState().dismissReadingOffer();
+    window.localStorage.removeItem(KEY);
+    window.dispatchEvent(new StorageEvent("storage", { key: KEY }));
+    expect(store.getState().readingOfferDismissed).toBe(true);
+  });
+});
+
+describe("the list's width", () => {
+  const KEY = "daintree-canopy-list-width";
+  afterEach(() => {
+    window.localStorage.removeItem(KEY);
+    // Every reload's storage listener stays on the window, this file's own store's too.
+    useCanopyStore.setState({ listWidth: null });
+  });
+  const reload = async () => {
+    vi.resetModules();
+    return (await import("../canopyStore")).useCanopyStore;
+  };
+
+  it("keeps the width the user chose across launches, and forgets it on a reset", async () => {
+    const store = await reload();
+    expect(store.getState().listWidth).toBeNull();
+    store.getState().setListWidth(600);
+    expect((await reload()).getState().listWidth).toBe(600);
+    (await reload()).getState().setListWidth(null);
+    expect((await reload()).getState().listWidth).toBeNull();
+  });
+
+  it("holds a width inside its bounds, whether set here or read back", async () => {
+    const store = await reload();
+    store.getState().setListWidth(CANOPY_LIST_MIN_WIDTH - 100);
+    expect(store.getState().listWidth).toBe(CANOPY_LIST_MIN_WIDTH);
+    window.localStorage.setItem(KEY, String(CANOPY_LIST_MAX_WIDTH * 4));
+    expect((await reload()).getState().listWidth).toBe(CANOPY_LIST_MAX_WIDTH);
+    // Not a width at all, rather than one read off its leading digits.
+    for (const stored of ["wide", "", " \t ", "600px"]) {
+      window.localStorage.setItem(KEY, stored);
+      expect((await reload()).getState().listWidth).toBeNull();
+    }
+  });
+
+  it("ignores a width that isn't a number, keeping the one it has", async () => {
+    const store = await reload();
+    store.getState().setListWidth(600);
+    for (const width of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      store.getState().setListWidth(width);
+      expect(store.getState().listWidth).toBe(600);
+      expect(window.localStorage.getItem(KEY)).toBe("600");
+    }
+  });
+
+  it("resets past a sibling's width whose news hasn't reached this view yet", async () => {
+    const store = await reload();
+    window.localStorage.setItem(KEY, "700");
+    store.getState().setListWidth(null);
+    expect(window.localStorage.getItem(KEY)).toBeNull();
+    window.dispatchEvent(new StorageEvent("storage", { key: KEY }));
+    expect(store.getState().listWidth).toBeNull();
+  });
+
+  it("follows a sibling view's width as soon as that view sets it", async () => {
+    const store = await reload();
+    window.localStorage.setItem(KEY, "700");
+    window.dispatchEvent(new StorageEvent("storage", { key: KEY }));
+    expect(store.getState().listWidth).toBe(700);
+    window.localStorage.removeItem(KEY);
+    window.dispatchEvent(new StorageEvent("storage", { key: KEY }));
+    expect(store.getState().listWidth).toBeNull();
   });
 });

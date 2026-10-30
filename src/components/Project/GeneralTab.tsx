@@ -44,13 +44,13 @@ const DAINTREE_MCP_TIER_OPTIONS: readonly ChoiceboxOption<DaintreeMcpTier>[] = [
     value: "core",
     label: "Core",
     description:
-      "Create worktrees, launch agents, read, wait on and move terminals, and prompt or close the ones the agent opened. Deleting a worktree the agent created asks you first.",
+      "Create worktrees, launch agents, read, wait on and move terminals, prompt or close the ones the agent opened, and read issues and PRs. Deleting a worktree the agent created asks you first.",
   },
   {
     value: "full",
     label: "Full",
     description:
-      "Core + recipes, workflows, project checks, forge and git reads, context tools and diagnostics. Deletes and teardowns ask you first unless Skip confirmations is on.",
+      "Core + recipes, workflows, project checks, git activity, context tools and diagnostics. Deletes and teardowns ask you first unless Skip confirmations is on.",
   },
 ];
 

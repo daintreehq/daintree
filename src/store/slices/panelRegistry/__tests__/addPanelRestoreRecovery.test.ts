@@ -4,7 +4,7 @@
  */
 
 import { beforeAll, describe, it, expect, beforeEach, vi } from "vitest";
-import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
+import { isPtyPanel, type PtyPanelData, type TerminalFirstPrompt } from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -433,6 +433,23 @@ describe("addPanel — a launch's prompt is recorded once its process starts (#1
     expect(ptyPanel("p1")?.firstPrompt).toEqual(launchPrompt);
   });
 
+  it("tells main the run has its first prompt, so no send is offered as one (#15521)", async () => {
+    await launch("p1");
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      requestedId: "p2",
+      launchAgentId: "claude",
+      command: "claude",
+      cwd: "/repo",
+      bypassLimits: true,
+    });
+    await drainMicrotasks();
+
+    const byId = new Map(spawn.mock.calls.map(([options]) => [options.id, options]));
+    expect(byId.get("p1")?.hasFirstPrompt).toBe(true);
+    expect(byId.get("p2")).not.toHaveProperty("hasFirstPrompt");
+  });
+
   it("records nothing when a restart has taken the pane over before the spawn resolves", async () => {
     let release: () => void = () => {};
     spawn.mockImplementation(
@@ -491,7 +508,7 @@ describe("addPanel — the run's first prompt on an existing record (#14592)", (
     await drainMicrotasks();
   }
 
-  function startHeld(id: string, record?: typeof firstPrompt) {
+  function startHeld(id: string, record?: TerminalFirstPrompt) {
     return usePanelStore.getState().addPanel({
       kind: "terminal",
       requestedId: id,
@@ -514,6 +531,8 @@ describe("addPanel — the run's first prompt on an existing record (#14592)", (
 
     expect(ptyPanel("held-1")?.restoreRecovery).toBeUndefined();
     expect(ptyPanel("held-1")?.firstPrompt).toBeUndefined();
+    // The fresh run's first send written becomes its record (#15521).
+    expect(spawn.mock.calls.at(-1)?.[0]).not.toHaveProperty("hasFirstPrompt");
   });
 
   it("takes the record the held pane's launch carries over the one it held", async () => {
@@ -524,6 +543,18 @@ describe("addPanel — the run's first prompt on an existing record (#14592)", (
     await drainMicrotasks();
 
     expect(ptyPanel("held-1")?.firstPrompt).toEqual(carried);
+    expect(spawn.mock.calls.at(-1)?.[0].hasFirstPrompt).toBe(true);
+  });
+
+  it("seeds a carried sent record the same as a launch one (#15521)", async () => {
+    await holdWithPrompt("held-1");
+    const carried = { text: "Port the parser", via: "send" as const, at: 2_000 };
+
+    await expect(startHeld("held-1", carried)).resolves.toBe("held-1");
+    await drainMicrotasks();
+
+    expect(ptyPanel("held-1")?.firstPrompt).toEqual(carried);
+    expect(spawn.mock.calls.at(-1)?.[0].hasFirstPrompt).toBe(true);
   });
 
   it.each([

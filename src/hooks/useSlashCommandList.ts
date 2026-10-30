@@ -53,19 +53,29 @@ export function useSlashCommandList({ agentId, projectPath }: UseSlashCommandLis
       });
   }, [agentId, projectPath]);
 
-  const commandMap = useMemo(() => {
-    const map = new Map<string, SlashCommand>();
-    for (const cmd of agentCommands) {
-      // The slash-chip validation only resolves `/` tokens; keep `$`/`@`
-      // completions out of the map so they can't mark a `/token` valid.
-      if ((cmd.trigger ?? "/") !== "/") continue;
-      // Key by the inserted token (what the chip parser resolves), not the
-      // display label — they diverge once a source supplies a distinct
-      // `insertText`, and the label alone would fail the `/token` lookup.
-      map.set(cmd.insertText ?? cmd.label, cmd);
-    }
-    return map;
-  }, [agentCommands]);
+  const commandMap = useMemo(() => buildSlashCommandMap(agentCommands), [agentCommands]);
 
   return { commands: agentCommands, commandMap, isLoading };
+}
+
+export function buildSlashCommandMap(commands: readonly SlashCommand[]): Map<string, SlashCommand> {
+  // The slash-chip validation only resolves `/` tokens; keep `$`/`@`
+  // completions out of the map so they can't mark a `/token` valid.
+  const slashCommands = commands.filter((cmd) => (cmd.trigger ?? "/") === "/");
+  const map = new Map<string, SlashCommand>();
+  for (const cmd of slashCommands) {
+    // Key by the inserted token (what the chip parser resolves), not the
+    // display label — they diverge once a source supplies a distinct
+    // `insertText`, and the label alone would fail the `/token` lookup.
+    map.set(cmd.insertText ?? cmd.label, cmd);
+  }
+  // An agent runs an alias as its command (agy's `/quota` is `/usage`), so a
+  // typed alias is valid too. Second pass so a real command keeps its token.
+  for (const cmd of slashCommands) {
+    for (const alias of cmd.aliases ?? []) {
+      const token = `/${alias}`;
+      if (!map.has(token)) map.set(token, cmd);
+    }
+  }
+  return map;
 }

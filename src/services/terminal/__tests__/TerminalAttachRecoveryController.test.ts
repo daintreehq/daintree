@@ -99,7 +99,10 @@ describe("TerminalAttachRecoveryController", () => {
       getInstance: (id) => instances.get(id),
       hostHasRenderableDims: () => true,
       ensureOpened: vi.fn(),
-      makeLinkHandler: vi.fn(() => ({ activate: vi.fn() })),
+      sharedOptions: vi.fn(() => ({
+        rescaleOverlappingGlyphs: true as const,
+        linkHandler: { activate: vi.fn() },
+      })),
       makeListenerInstallDeps: vi.fn(),
       applyDeferredResize: vi.fn(),
       drawDataLossMarker: vi.fn(),

@@ -261,7 +261,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Shift+Alt+ArrowLeft",
     scope: "global",
     priority: 0,
-    description: "Move terminal left in grid",
+    description: "Move terminal left in grid or dock",
     category: "Terminal",
   },
   {
@@ -269,7 +269,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Shift+Alt+ArrowRight",
     scope: "global",
     priority: 0,
-    description: "Move terminal right in grid",
+    description: "Move terminal right in grid or dock",
     category: "Terminal",
   },
   {
@@ -1076,11 +1076,13 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Voice",
   },
   // Stop and send, staying where you are. Not Cmd+Alt+D: macOS takes that to
-  // hide the Dock before the app sees it, and Cmd+Shift+D opens changes.
+  // hide the Dock before the app sees it, and Cmd+Shift+D opens changes. Only
+  // while dictating, so the Review Hub's commit box keeps the key otherwise.
   {
     actionId: "voiceInput.stopAndSend",
     combo: "Cmd+Shift+Enter",
     scope: "global",
+    when: "dictationActive",
     priority: 0,
     description: "Stop voice dictation and send the prompt",
     category: "Voice",

@@ -322,8 +322,12 @@ export function GitInitDialog({
     }
   }, [directoryPath, gitignoreTemplate, initialCommitMessage, createInitialCommit]);
 
+  const keptGitignore = useMemo(() => keptGitignoreWarning(progressEvents), [progressEvents]);
+
+  // The warning is the one message about secrets, and the project opening
+  // closes the dialog it lives in, so a run that leaves it waits for the user.
   useEffect(() => {
-    if (!isOpen || !isComplete) {
+    if (!isOpen || !isComplete || keptGitignore) {
       return;
     }
 
@@ -332,7 +336,7 @@ export function GitInitDialog({
     }, AUTO_CLOSE_DELAY_MS);
 
     return () => window.clearTimeout(timeoutId);
-  }, [isOpen, isComplete, finalizeSuccess]);
+  }, [isOpen, isComplete, keptGitignore, finalizeSuccess]);
 
   const handleClose = () => {
     if (isInitializing) {
@@ -371,7 +375,6 @@ export function GitInitDialog({
     () => (error && isIdentityFailure ? extractCommands(error) : []),
     [error, isIdentityFailure]
   );
-  const keptGitignore = useMemo(() => keptGitignoreWarning(progressEvents), [progressEvents]);
 
   const configDisabled = isInitializing;
   const canStart = !isNameMissing && !isCommitMessageMissing;
@@ -499,8 +502,10 @@ export function GitInitDialog({
                     this mode opens the project on its own two seconds later, and
                     "is ready to open" read as though it were waiting. */}
                 <p className="text-sm text-text-secondary">
-                  Opening <span aria-hidden="true">{emoji} </span>
-                  {trimmedProjectName}…
+                  {keptGitignore ? "Ready to open " : "Opening "}
+                  <span aria-hidden="true">{emoji} </span>
+                  {trimmedProjectName}
+                  {keptGitignore ? "" : "…"}
                 </p>
               </div>
               <PathCaption path={directoryPath} className="max-w-full" />

@@ -33,7 +33,7 @@ export const theme: BuiltInThemeSource = {
     status: {
       success: "#208042",
       warning: "#946400",
-      danger: "#C0453A",
+      danger: "#BB4036",
       info: "#2C7884",
     },
     activity: {
@@ -90,6 +90,10 @@ export const theme: BuiltInThemeSource = {
   tokens: {
     "accent-muted": "rgba(33,133,70,0.30)",
     "accent-soft": "rgba(33,133,70,0.18)",
+    // Solid so the field edge clears 3:1 on every surface a field sits on
+    // (3.07–3.68:1); the alpha `border-strong` it used to follow measured
+    // 1.46–1.47:1.
+    "border-input": "#828686",
     // Flat chrome: the engine sheen is a screen-scale gradient (banding risk).
     "chrome-noise-texture": "none",
     "focus-ring": "rgba(33,133,70,0.35)",
@@ -167,7 +171,6 @@ export const theme: BuiltInThemeSource = {
     "pulse-range-bg": "#F0F3E4",
     "pulse-ring-offset": "#FFFFFF",
     "pulse-skeleton-gradient": "linear-gradient(90deg, #D2DEB4 25%, #F0F3E4 50%, #D2DEB4 75%)",
-    "dialog-header-bg": "#F8F9F5",
     "review-commit-input-bg": "#FAFCF6",
     // Nav selection elevates to white + the 2px accent marker.
     "settings-nav-active-bg": "#FFFFFF",

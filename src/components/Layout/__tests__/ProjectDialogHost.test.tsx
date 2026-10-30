@@ -9,31 +9,39 @@ interface MockProject {
   path: string;
 }
 
-const { refreshMock, forgeState, BOTH_FORGES, projectState, MANAGER_RECIPE, surfaceState } =
-  vi.hoisted(() => {
-    const MANAGER_RECIPE: TerminalRecipe = {
-      id: "recipe-managed",
-      name: "Managed",
-      projectId: "project-1",
-      worktreeId: "wt-3",
-      terminals: [],
-      createdAt: 0,
-    };
-    const BOTH_FORGES = {
-      entry: { contribution: { slots: { bulkCreateWorktreeDialog: "code-forge.bulk" } } },
-      issues: {
-        entry: { contribution: { slots: { bulkCreateWorktreeDialog: "issue-forge.bulk" } } },
-      },
-    };
-    return {
-      refreshMock: vi.fn(() => Promise.resolve()),
-      forgeState: { current: BOTH_FORGES as unknown },
-      BOTH_FORGES,
-      projectState: { current: null as MockProject | null },
-      MANAGER_RECIPE,
-      surfaceState: { current: null as { config: { id: string } } | null },
-    };
-  });
+const {
+  refreshMock,
+  forgeState,
+  BOTH_FORGES,
+  projectState,
+  MANAGER_RECIPE,
+  surfaceState,
+  switchedState,
+} = vi.hoisted(() => {
+  const MANAGER_RECIPE: TerminalRecipe = {
+    id: "recipe-managed",
+    name: "Managed",
+    projectId: "project-1",
+    worktreeId: "wt-3",
+    terminals: [],
+    createdAt: 0,
+  };
+  const BOTH_FORGES = {
+    entry: { contribution: { slots: { bulkCreateWorktreeDialog: "code-forge.bulk" } } },
+    issues: {
+      entry: { contribution: { slots: { bulkCreateWorktreeDialog: "issue-forge.bulk" } } },
+    },
+  };
+  return {
+    refreshMock: vi.fn(() => Promise.resolve()),
+    forgeState: { current: BOTH_FORGES as unknown },
+    BOTH_FORGES,
+    projectState: { current: null as MockProject | null },
+    MANAGER_RECIPE,
+    surfaceState: { current: null as { config: { id: string } } | null },
+    switchedState: { current: null as { config: { id: string } } | null },
+  };
+});
 
 // Seeded before each render; nothing here changes the project mid-test.
 vi.mock("@/store/projectStore", () => ({
@@ -43,24 +51,41 @@ vi.mock("@/store/projectStore", () => ({
 
 vi.mock("@/components/Plugin/ProjectSurfaceView", () => ({
   useProjectSurface: () => surfaceState.current,
+  useSurfaceSwitchedToStock: () => switchedState.current,
 }));
 
-vi.mock("../ProjectWorktreeCreateDialog", () => ({
-  ProjectWorktreeCreateDialog: ({
-    config,
-    onClose,
-    onUseStock,
-  }: {
-    config: { id: string };
-    onClose: () => void;
-    onUseStock: () => void;
-  }) => (
-    <div data-testid="plugin-create-dialog" data-kind={config.id}>
-      <button onClick={onUseStock}>standard dialog</button>
-      <button onClick={onClose}>close plugin</button>
-    </div>
-  ),
-}));
+// `onUseStock` stands for the dialog's `onCloseComplete`: the real dialog calls
+// it once its exit has finished and focus is back on the opener.
+vi.mock("../ProjectWorktreeCreateDialog", async () => {
+  const { useState } = await import("react");
+  return {
+    ProjectWorktreeCreateDialog: ({
+      config,
+      leavingForStock,
+      onClose,
+      onUseStock,
+    }: {
+      config: { id: string };
+      leavingForStock?: boolean;
+      onClose: () => void;
+      onUseStock: () => void;
+    }) => {
+      // Stands for the real dialog's own "Standard dialog…" latch.
+      const [leaving, setLeaving] = useState(false);
+      return (
+        <div
+          data-testid="plugin-create-dialog"
+          data-kind={config.id}
+          data-leaving={String(leavingForStock === true || leaving)}
+        >
+          <button onClick={onUseStock}>standard dialog</button>
+          <button onClick={() => setLeaving(true)}>start leaving</button>
+          <button onClick={onClose}>close plugin</button>
+        </div>
+      );
+    },
+  };
+});
 
 vi.mock("@/hooks/useWorktrees", () => ({
   useWorktrees: () => ({ refresh: refreshMock }),
@@ -114,13 +139,17 @@ vi.mock("@/components/TerminalRecipe/RecipeEditor", () => ({
     recipe,
     worktreeId,
     initialTerminals,
+    layoutOmissions,
     defaultScope,
+    onClose,
   }: {
     isOpen: boolean;
     recipe?: { id: string };
     worktreeId?: string;
     initialTerminals?: unknown[];
+    layoutOmissions?: unknown;
     defaultScope?: string;
+    onClose: () => void;
   }) => (
     <div
       data-testid="recipe-editor"
@@ -128,8 +157,11 @@ vi.mock("@/components/TerminalRecipe/RecipeEditor", () => ({
       data-recipe={recipe?.id ?? ""}
       data-worktree={worktreeId ?? ""}
       data-terminals={String(initialTerminals?.length ?? 0)}
+      data-omissions={layoutOmissions ? JSON.stringify(layoutOmissions) : ""}
       data-scope={defaultScope ?? ""}
-    />
+    >
+      <button onClick={onClose}>close recipe editor</button>
+    </div>
   ),
 }));
 
@@ -169,6 +201,7 @@ describe("ProjectDialogHost", () => {
     forgeState.current = BOTH_FORGES;
     setProject({ id: "project-1", path: "/repo" });
     surfaceState.current = null;
+    switchedState.current = null;
     useWorktreeSelectionStore.setState(initialSelectionState, true);
     useFleetPickerPaletteStore.setState({ isOpen: false });
     useRecipeEditorActivityStore.setState({ openCount: 0 });
@@ -318,6 +351,104 @@ describe("ProjectDialogHost", () => {
       expect(screen.getByTestId("new-worktree-dialog").dataset.open).toBe("true");
     });
 
+    it("lets the plugin dialog close before stock opens when stock is chosen inside it (#15236)", async () => {
+      surfaceState.current = { config: { id: PLUGIN_KIND } };
+      const onCreated = vi.fn();
+      const { rerender } = render(<ProjectDialogHost />);
+      act(() =>
+        useWorktreeSelectionStore.getState().openCreateDialog(null, {
+          surfacePanelKindId: PLUGIN_KIND,
+          initialBranchInput: "feature/x",
+          onCreated,
+        })
+      );
+      expect((await screen.findByTestId("plugin-create-dialog")).dataset.leaving).toBe("false");
+
+      // The strip's switch or the consent notice saved "stock": the claim
+      // still renders, but the resolver now draws stock.
+      surfaceState.current = null;
+      switchedState.current = { config: { id: PLUGIN_KIND } };
+      rerender(<ProjectDialogHost />);
+
+      // Still mounted, closing, and stock waits for it rather than opening in
+      // the same render with the unmounting control as its opener.
+      expect(screen.getByTestId("plugin-create-dialog").dataset.leaving).toBe("true");
+      expect(screen.queryByTestId("new-worktree-dialog")).toBeNull();
+      expect(useWorktreeSelectionStore.getState().createDialog.surfacePanelKindId).toBe(
+        PLUGIN_KIND
+      );
+
+      fireEvent.click(screen.getByText("standard dialog"));
+
+      expect(screen.queryByTestId("plugin-create-dialog")).toBeNull();
+      expect((await screen.findByTestId("new-worktree-dialog")).dataset.open).toBe("true");
+      const { createDialog } = useWorktreeSelectionStore.getState();
+      expect(createDialog.initialBranchInput).toBe("feature/x");
+      expect(createDialog.onCreated).toBe(onCreated);
+    });
+
+    it("goes straight to stock when stock was chosen before the plugin dialog ever showed", async () => {
+      switchedState.current = { config: { id: PLUGIN_KIND } };
+      render(<ProjectDialogHost />);
+      act(() =>
+        useWorktreeSelectionStore.getState().openCreateDialog(null, {
+          surfacePanelKindId: PLUGIN_KIND,
+        })
+      );
+
+      expect((await screen.findByTestId("new-worktree-dialog")).dataset.open).toBe("true");
+      expect(screen.queryByTestId("plugin-create-dialog")).toBeNull();
+    });
+
+    it("starts the next opening on the plugin dialog after one was handed to stock", async () => {
+      surfaceState.current = { config: { id: PLUGIN_KIND } };
+      const { rerender } = render(<ProjectDialogHost />);
+      act(() =>
+        useWorktreeSelectionStore.getState().openCreateDialog(null, {
+          surfacePanelKindId: PLUGIN_KIND,
+        })
+      );
+      await screen.findByTestId("plugin-create-dialog");
+      surfaceState.current = null;
+      switchedState.current = { config: { id: PLUGIN_KIND } };
+      rerender(<ProjectDialogHost />);
+      // Cancelled mid-exit: nothing is handed over, and the plugin dialog goes.
+      act(() => useWorktreeSelectionStore.getState().closeCreateDialog());
+      expect(screen.queryByTestId("plugin-create-dialog")).toBeNull();
+
+      surfaceState.current = { config: { id: PLUGIN_KIND } };
+      switchedState.current = null;
+      rerender(<ProjectDialogHost />);
+      act(() =>
+        useWorktreeSelectionStore.getState().openCreateDialog(null, {
+          surfacePanelKindId: PLUGIN_KIND,
+        })
+      );
+
+      expect((await screen.findByTestId("plugin-create-dialog")).dataset.leaving).toBe("false");
+    });
+
+    it("never carries one opening's hand-off into the next (#15236)", async () => {
+      surfaceState.current = { config: { id: PLUGIN_KIND } };
+      render(<ProjectDialogHost />);
+      act(() =>
+        useWorktreeSelectionStore.getState().openCreateDialog(null, {
+          surfacePanelKindId: PLUGIN_KIND,
+        })
+      );
+      fireEvent.click(await screen.findByText("start leaving"));
+      expect(screen.getByTestId("plugin-create-dialog").dataset.leaving).toBe("true");
+
+      // A new opening lands before the first one's exit has finished.
+      act(() =>
+        useWorktreeSelectionStore.getState().openCreateDialog(null, {
+          surfacePanelKindId: PLUGIN_KIND,
+        })
+      );
+
+      expect(screen.getByTestId("plugin-create-dialog").dataset.leaving).toBe("false");
+    });
+
     it("ignores a close from a plugin view whose opening has ended", async () => {
       surfaceState.current = { config: { id: PLUGIN_KIND } };
       render(<ProjectDialogHost />);
@@ -414,6 +545,145 @@ describe("ProjectDialogHost", () => {
       expect(editor.dataset.worktree).toBe("wt-1");
       expect(editor.dataset.terminals).toBe("2");
       expect(useRecipeEditorActivityStore.getState().openCount).toBe(1);
+    });
+
+    it("hands a captured draft's omissions to the editor and drops them on close (#14968)", async () => {
+      render(<ProjectDialogHost />);
+      const omitted = { panelKinds: { browser: 2 }, cappedTerminalCount: 1 };
+      const open = (detail: Record<string, unknown>) =>
+        act(() => {
+          window.dispatchEvent(new CustomEvent("daintree:open-recipe-editor", { detail }));
+        });
+
+      open({
+        worktreeId: "wt-1",
+        initialTerminals: [{ type: "terminal" }],
+        layoutOmissions: omitted,
+      });
+      const editor = await screen.findByTestId("recipe-editor");
+      expect(JSON.parse(editor.dataset.omissions ?? "")).toEqual(omitted);
+
+      fireEvent.click(screen.getByText("close recipe editor"));
+      expect(editor.dataset.open).toBe("false");
+      expect(editor.dataset.omissions).toBe("");
+
+      open({
+        worktreeId: "wt-1",
+        initialTerminals: [{ type: "terminal" }],
+        layoutOmissions: omitted,
+      });
+      open({ worktreeId: "wt-1", initialTerminals: [{ type: "terminal" }] });
+      expect(editor.dataset.omissions).toBe("");
+    });
+
+    it.each([
+      ["a negative kind count", { panelKinds: { browser: -1 }, cappedTerminalCount: 0 }],
+      ["a fractional cap count", { panelKinds: {}, cappedTerminalCount: 1.5 }],
+      ["a string count", { panelKinds: { browser: "2" }, cappedTerminalCount: 0 }],
+      ["no cap count", { panelKinds: { browser: 1 } }],
+      ["null kinds", { panelKinds: null, cappedTerminalCount: 0 }],
+      ["array kinds", { panelKinds: [1], cappedTerminalCount: 0 }],
+      ["a null report", null],
+    ])("drops a report with %s rather than show it", async (_label, layoutOmissions) => {
+      render(<ProjectDialogHost />);
+
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:open-recipe-editor", {
+            detail: {
+              worktreeId: "wt-1",
+              initialTerminals: [{ type: "terminal" }],
+              layoutOmissions,
+            },
+          })
+        );
+      });
+
+      const editor = await screen.findByTestId("recipe-editor");
+      expect(editor.dataset.open).toBe("true");
+      expect(editor.dataset.terminals).toBe("1");
+      expect(editor.dataset.omissions).toBe("");
+    });
+
+    it("ignores a report that arrives without a captured draft", async () => {
+      render(<ProjectDialogHost />);
+
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent("daintree:open-recipe-editor", {
+            detail: {
+              worktreeId: "wt-1",
+              layoutOmissions: { panelKinds: { browser: 1 }, cappedTerminalCount: 0 },
+            },
+          })
+        );
+      });
+
+      const editor = await screen.findByTestId("recipe-editor");
+      expect(editor.dataset.open).toBe("true");
+      expect(editor.dataset.omissions).toBe("");
+    });
+
+    it.each(["edit recipe", "new project recipe"])(
+      "drops a captured draft's report when the manager's %s takes over",
+      async (button) => {
+        render(<ProjectDialogHost />);
+        act(() => {
+          window.dispatchEvent(
+            new CustomEvent("daintree:open-recipe-editor", {
+              detail: {
+                worktreeId: "wt-1",
+                initialTerminals: [{ type: "terminal" }],
+                layoutOmissions: { panelKinds: { browser: 1 }, cappedTerminalCount: 0 },
+              },
+            })
+          );
+          window.dispatchEvent(new CustomEvent("daintree:open-recipe-manager"));
+        });
+        const editor = await screen.findByTestId("recipe-editor");
+        expect(editor.dataset.omissions).not.toBe("");
+
+        fireEvent.click(await screen.findByText(button));
+
+        expect(editor.dataset.omissions).toBe("");
+      }
+    );
+
+    it("swaps an open recipe and a captured draft without carrying either over", async () => {
+      const recipe: TerminalRecipe = {
+        id: "recipe-1",
+        name: "Dev",
+        projectId: "proj",
+        worktreeId: "wt-2",
+        terminals: [],
+        createdAt: 0,
+      };
+      useRecipeStore.setState({
+        getRecipeById: (id: string) => (id === recipe.id ? recipe : undefined),
+      });
+      render(<ProjectDialogHost />);
+      const open = (detail: Record<string, unknown>) =>
+        act(() => {
+          window.dispatchEvent(new CustomEvent("daintree:open-recipe-editor", { detail }));
+        });
+      const captured = {
+        worktreeId: "wt-1",
+        initialTerminals: [{ type: "terminal" }],
+        layoutOmissions: { panelKinds: {}, cappedTerminalCount: 1 },
+      };
+
+      open(captured);
+      open({ recipeId: "recipe-1" });
+      const editor = await screen.findByTestId("recipe-editor");
+      expect(editor.dataset.recipe).toBe("recipe-1");
+      expect(editor.dataset.omissions).toBe("");
+
+      // An existing recipe left in place would win over the capture and take its save.
+      open(captured);
+      expect(editor.dataset.recipe).toBe("");
+      expect(editor.dataset.scope).toBe("");
+      expect(editor.dataset.terminals).toBe("1");
+      expect(editor.dataset.omissions).not.toBe("");
     });
 
     it("opens an existing recipe by id in its own scope", async () => {

@@ -17,6 +17,7 @@ import { resolve } from "path";
 
 const CONTEXT_PATH = resolve(__dirname, "../useContentGridContext.tsx");
 const DOCK_PATH = resolve(__dirname, "../../Layout/ContentDock.tsx");
+const DOCK_MEMBERSHIP_PATH = resolve(__dirname, "../../Layout/dockRenderItems.ts");
 
 describe("ContentGrid tabGroups memo includes trashedTerminals dep (trash-visibility regression)", () => {
   it("includes trashedTerminals in the tabGroups memo dependency array", async () => {
@@ -40,7 +41,8 @@ describe("ContentGrid tabGroups memo includes trashedTerminals dep (trash-visibi
  * after a reorder (#11873).
  *
  * The dock now excludes trashed panels in the narrow store selector that feeds
- * the rail, and derives render items from that selector's output — a value the
+ * the rail (through `collectDockPanels`), and derives render items from that
+ * selector's output — a value the
  * compiler cannot drop, because the builder genuinely consumes it. These
  * assertions pin that dataflow rather than a dep-array shape.
  */
@@ -55,7 +57,17 @@ describe("ContentDock excludes trashed panels through a compiler-safe dataflow",
     const end = content.indexOf("\n  );", start);
     expect(end).toBeGreaterThan(start);
 
-    expect(content.slice(start, end)).toContain("state.trashedTerminals.has(");
+    // The selector delegates membership to `collectDockPanels`, which the
+    // keyboard chip move shares (#14972); the trash check must live there.
+    expect(content.slice(start, end)).toContain("collectDockPanels(state,");
+
+    const membership = await readFile(DOCK_MEMBERSHIP_PATH, "utf-8");
+    const helperStart = membership.indexOf("export function collectDockPanels(");
+    expect(helperStart).toBeGreaterThanOrEqual(0);
+    const helperEnd = membership.indexOf("\n}\n", helperStart);
+    expect(helperEnd).toBeGreaterThan(helperStart);
+
+    expect(membership.slice(helperStart, helperEnd)).toContain("state.trashedTerminals.has(");
   });
 
   it("does not call the tab-group store getters during render", async () => {

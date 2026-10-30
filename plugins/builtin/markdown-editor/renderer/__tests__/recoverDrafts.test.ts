@@ -73,7 +73,7 @@ describe("recoverDrafts (#12323)", () => {
       draftText: "draft",
       dirty: true,
       conflict: false,
-      save: async () => true,
+      save: async () => ({ status: "saved" as const }),
       discard: async () => {},
     });
     await flush();
@@ -90,7 +90,7 @@ describe("recoverDrafts (#12323)", () => {
       draftText: null,
       dirty: false,
       conflict: false,
-      save: async () => true,
+      save: async () => ({ status: "saved" as const }),
       discard: async () => {},
     });
     await flush(6000);

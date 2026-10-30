@@ -44,7 +44,7 @@ import {
 } from "@/components/FileViewer/FileUnavailableState";
 import {
   SaveHostFileButton,
-  TakeControlButton,
+  ControlRefusedState,
   useRemoteFileContext,
   useRetryOnControl,
 } from "@/components/FileViewer/hostFileActions";
@@ -73,7 +73,12 @@ import { SinceReviewNotice, describeSinceReviewNotice } from "./SinceReviewNotic
 import type { DiffViewerAnnotations } from "@/components/Worktree/DiffViewer";
 import { useDiffNotesStore } from "@/store/diffNotesStore";
 import type { DiffNoteDeliveryResult } from "@/hooks/useDiffNoteDelivery";
-import { DiffNotesSendMenu, sendDiffNotes, type DiffNoteSendRequest } from "./DiffNotesSendMenu";
+import {
+  DiffNotesSendMenu,
+  offerSentNotesUndo,
+  sendDiffNotes,
+  type DiffNoteSendRequest,
+} from "./DiffNotesSendMenu";
 import { PendingFileNotes } from "@/components/Worktree/DiffNoteWidgets";
 import { PANE_TOOLBAR_TEXT_BUTTON_CLASS } from "@/components/ui/paneToolbarStyles";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
@@ -501,7 +506,8 @@ export function DiffPane({
     )
   );
   // A failed send keeps its notes pending and names what failed, with a retry
-  // aimed at the same agent and scope; a delivered one says where it went.
+  // aimed at the same agent and scope; a delivered one says where it went, and
+  // its Undo rides on a toast so it outlives this pane.
   const [noteSend, setNoteSend] = useState<{
     request: DiffNoteSendRequest;
     result: DiffNoteDeliveryResult;
@@ -509,6 +515,7 @@ export function DiffPane({
   const handleNoteSendResult = useCallback(
     (request: DiffNoteSendRequest, result: DiffNoteDeliveryResult) => {
       setNoteSend({ request, result });
+      if (result.ok) offerSentNotesUndo(result);
     },
     []
   );
@@ -1219,7 +1226,9 @@ export function DiffPane({
         <SinceReviewNotice
           outcome={sinceReview}
           view={sinceReviewNotice}
+          worktreeId={worktreeId}
           onSideChange={(side) => setSinceReviewSideChoice({ file: filePath, side })}
+          onRetry={retry}
         />
       )}
       {externalError ? (
@@ -1604,6 +1613,7 @@ export function DiffPane({
             {worktreePath && (
               <DiffNotesSendMenu
                 worktreePath={worktreePath}
+                worktreeId={worktreeId ?? null}
                 filePath={filePath ?? ""}
                 onResult={handleNoteSendResult}
               />
@@ -1652,6 +1662,15 @@ function DiffPreviewUnavailable({
   onExternal: (target: "reveal" | "default-app") => void;
 }) {
   const refused = refusalReason(error);
+  if (refused === "DRIVEN_ELSEWHERE") {
+    return (
+      <ControlRefusedState
+        icon={getFileTypeIcon(filePath).Icon}
+        what="The preview"
+        data-testid="diff-pane-unavailable"
+      />
+    );
+  }
   const copy =
     refused !== null || remote?.saveTarget != null
       ? unavailableCopy(refused ?? fileReason, error.title, remote)
@@ -1663,9 +1682,7 @@ function DiffPreviewUnavailable({
       description={copy.description}
       data-testid="diff-pane-unavailable"
       action={
-        copy.action === "take-control" ? (
-          <TakeControlButton variant="contrast" />
-        ) : copy.action === "save" ? (
+        copy.action === "save" ? (
           <SaveHostFileButton hostPath={hostPath} variant="contrast" />
         ) : copy.action === "reveal" ? (
           <Button variant="contrast" size="sm" onClick={() => onExternal("reveal")}>

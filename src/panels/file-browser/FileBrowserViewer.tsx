@@ -11,6 +11,7 @@ import {
   Globe,
   PanelLeftClose,
   PanelLeftOpen,
+  PanelTop,
   RefreshCw,
   WrapText,
   X,
@@ -69,13 +70,14 @@ import {
 } from "@/components/FileViewer/FileUnavailableState";
 import {
   SaveHostFileButton,
-  TakeControlButton,
+  ControlRefusedState,
   useRemoteFileContext,
   useRetryOnControl,
 } from "@/components/FileViewer/hostFileActions";
 import { saveHostFile, saveHostFileLabel } from "@/services/hostFileSave";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { copyWithToast } from "@/lib/copyWithToast";
+import { SVG_DRAW_ERROR, sanitizeSvgForPreview } from "@/lib/svg";
 import { Skeleton, SkeletonBone, SkeletonHint, SkeletonText } from "@/components/ui/Skeleton";
 import { isProseFilePath } from "@/components/FileViewer/isProseFile";
 import { useDiffContent } from "@/panels/diff/useDiffContent";
@@ -94,7 +96,6 @@ import type {
 import type { FolderListingStatus } from "./useFileBrowserTree";
 import { filesClient } from "@/clients/filesClient";
 import { isClientAppError } from "@/utils/clientAppError";
-import { sanitizeSvg } from "@shared/utils/svgSanitizer";
 import { useFileEditor } from "@/registry/fileEditorRegistry";
 import { useFileDocumentDraftText } from "@/store/fileDocumentStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
@@ -250,6 +251,13 @@ export interface FileBrowserViewerProps {
    * opened from, or to the idle body (#13194). The pane decides which.
    */
   onCloseSelection: () => void;
+  /**
+   * Opens the file on show as its own persistent grid panel — the viewer's
+   * route to what a tree row's Enter or double-click does, which the folder
+   * listing's single-click contract can't offer. Absent (a workspace with no
+   * resolvable root, a test) hides the control.
+   */
+  onOpenAsPanel?: (absolutePath: string) => void;
 }
 
 /** Toolbar sort menu entries, in menu order. */
@@ -362,6 +370,7 @@ export function FileBrowserViewer({
   missingFilePath,
   onShowFolder,
   onCloseSelection,
+  onOpenAsPanel,
 }: FileBrowserViewerProps) {
   const [state, setState] = useState<ViewerState>({ status: "idle" });
   // The reader's explicit Source/Rendered choice, `null` until they touch the
@@ -685,9 +694,9 @@ export function FileBrowserViewer({
         setCanonicalFilePath(result.pathIsCanonical === true ? filePath : null);
         if (isSvg) {
           // Sanitized here, never handed to the viewer raw: `FileImagePreview`
-          // documents that its input must already be safe. A rejected SVG shows
-          // the sanitizer's reason rather than a blank pane.
-          const outcome = sanitizeSvg(result.content);
+          // documents that its input must already be safe. A rejected or
+          // unparseable SVG shows why rather than a blank pane.
+          const outcome = sanitizeSvgForPreview(result.content);
           if (!outcome.ok) {
             setState({ status: "error", reason: "SVG_REJECTED", message: outcome.error });
             return;
@@ -999,6 +1008,7 @@ export function FileBrowserViewer({
               openLabel={openAction.label}
               openIcon={openAction.icon}
               onOpen={runOpen}
+              onOpenAsPanel={onOpenAsPanel ? () => onOpenAsPanel(filePath) : undefined}
             />
           )}
           {/* Outside `FileActions` so it never folds into "More actions": it
@@ -1328,11 +1338,18 @@ export function FileBrowserViewer({
         );
 
       case "error": {
+        if (state.reason === "DRIVEN_ELSEWHERE") {
+          return (
+            <ControlRefusedState
+              icon={getFileTypeIcon(fileName).Icon}
+              what="The file"
+              data-testid="file-browser-unavailable"
+            />
+          );
+        }
         const copy = unavailableCopy(state.reason, state.message, remoteFile);
-        const action =
-          copy.action === "take-control" ? (
-            <TakeControlButton />
-          ) : copy.action === "save" ? (
+        const wayOut =
+          copy.action === "save" ? (
             <SaveHostFileButton hostPath={filePath} />
           ) : copy.action === "open" ? (
             <Button variant="subtle" size="sm" onClick={runOpen}>
@@ -1350,6 +1367,20 @@ export function FileBrowserViewer({
               Retry
             </Button>
           ) : undefined;
+        // A rejected SVG is often one caught mid-write by an agent, which a
+        // second read fixes once the write lands.
+        const action =
+          state.reason === "SVG_REJECTED" && wayOut !== undefined ? (
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              {wayOut}
+              <Button variant="subtle" size="sm" onClick={onRefresh}>
+                <RefreshCw />
+                Retry
+              </Button>
+            </div>
+          ) : (
+            wayOut
+          );
         return (
           <UnavailableState
             data-testid="file-browser-unavailable"
@@ -1390,6 +1421,13 @@ export function FileBrowserViewer({
               rootPath={rootPath}
               alt={fileName}
               sanitizedSvg={state.markup}
+              onError={(error) =>
+                setState({
+                  status: "error",
+                  reason: "SVG_REJECTED",
+                  message: error?.title ?? SVG_DRAW_ERROR,
+                })
+              }
               maxHeightClassName="max-h-full"
             />
           </div>
@@ -1598,6 +1636,7 @@ function FileActions({
   openLabel,
   openIcon: OpenIcon,
   onOpen,
+  onOpenAsPanel,
 }: {
   filePath: string;
   contents: string | null;
@@ -1608,6 +1647,7 @@ function FileActions({
   openLabel: string;
   openIcon: LucideIcon;
   onOpen: () => void;
+  onOpenAsPanel: (() => void) | undefined;
 }) {
   const compact = useFileViewerToolbarCompact();
 
@@ -1633,6 +1673,12 @@ function FileActions({
             </DropdownMenuCheckboxItem>
             <DropdownMenuSeparator />
           </>
+        )}
+        {onOpenAsPanel && (
+          <DropdownMenuItem onSelect={onOpenAsPanel}>
+            <PanelTop className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+            Open as panel
+          </DropdownMenuItem>
         )}
         {contents !== null && (
           <DropdownMenuItem onSelect={() => copyWithToast("File contents", contents)}>
@@ -1674,6 +1720,14 @@ function FileActions({
           onClick={() => wrap.onValueChange(!wrap.value)}
         >
           <WrapText className={TOOLBAR_ICON_CLASS} />
+        </FileViewerToolbar.IconButton>
+      )}
+      {/* Ahead of the copy/reveal/open suffix, which stays identical to FilePane's;
+          this is the one control here that has no FilePane counterpart, because
+          a panel is already what FilePane is. */}
+      {onOpenAsPanel && (
+        <FileViewerToolbar.IconButton label="Open as panel" onClick={onOpenAsPanel}>
+          <PanelTop className={TOOLBAR_ICON_CLASS} />
         </FileViewerToolbar.IconButton>
       )}
       {/* Same control, same order as FilePane's action group. Raw text only:

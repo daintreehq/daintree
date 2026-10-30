@@ -836,14 +836,31 @@ function VoiceSessionButton({
           event.preventDefault();
         }}
       >
-        {renderPanel({
-          leave: () => {
+        <VoiceSessionPanelSlot
+          renderPanel={renderPanel}
+          leave={() => {
             leavingRef.current = true;
             setOpen(false);
-          },
-          close: () => setOpen(false),
-        })}
+          }}
+          close={() => setOpen(false)}
+        />
       </PopoverContent>
     </Popover>
   );
+}
+
+// Hands `leave` to the panel as a prop. Built inside a `renderPanel` call made
+// during render, its ref write reads to React Compiler as a ref accessed in
+// render, which the dev server's panic threshold turns into a failed module
+// (#15391).
+function VoiceSessionPanelSlot({
+  renderPanel,
+  leave,
+  close,
+}: {
+  renderPanel: VoiceSessionButtonProps["renderPanel"];
+  leave: () => void;
+  close: () => void;
+}) {
+  return renderPanel({ leave, close });
 }

@@ -42,10 +42,10 @@ export const CURSOR: readonly CursorStep[] = [
   { cue: "exit", offset: 0.5, at: titleBar("claude"), click: true },
 ];
 
-/** The fleet ribbon as the app draws it: amber tint, a left stripe, the count, and Exit. */
+/** The fleet ribbon as the app draws it: amber band, a left stripe, the count, and Exit. */
 function FleetRibbon({ count, exitHint }: { count: number; exitHint: string }) {
   return (
-    <div className="relative mb-1.5 flex h-6 shrink-0 items-center gap-2 rounded-sm border-b border-border-default bg-category-amber-subtle px-2 text-3xs text-text-primary before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-category-amber-text">
+    <div className="relative mb-1.5 flex h-6 shrink-0 items-center gap-2 rounded-sm border-b border-border-default px-2 text-3xs text-text-primary fleet-ribbon-surface before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-[var(--fleet-ribbon-ink)]">
       <X className="size-2.5 text-text-secondary" aria-hidden="true" />
       <span className="flex items-center gap-0.5 font-medium tabular-nums">
         {count} in fleet

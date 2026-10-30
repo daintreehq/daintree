@@ -13,12 +13,14 @@ import type {
   McpAuditRecord,
   McpAuditRecordQuery,
   McpAuditStats,
+  McpDispatchHoldPhase,
+  McpDispatchHoldResult,
   McpGrantLifecyclePayload,
   McpIssueGrantResult,
   McpIssueNativeGrantResult,
   McpLogRecord,
   McpRevokeNativeGrantResult,
-  McpRevokeSessionGrantsResult,
+  McpRevokeGrantResult,
   McpRuntimeSnapshot,
   McpRuntimeState,
   TerminalAdoptionEntry,
@@ -63,6 +65,8 @@ import {
   type LaneWake,
 } from "./mcp-server/terminalNotify.js";
 import { ReplyWaiterService } from "./mcp-server/replyWaiter.js";
+import { createApprovalWake } from "./mcp-server/approvalWake.js";
+import type { AssistantApproval } from "./mcp-server/noticeFormat.js";
 import type { PaneNotifyState } from "../../shared/types/terminalNotify.js";
 import { broadcastToProjectRenderers } from "../ipc/utils.js";
 import { cleanupResourceSubscriptions } from "./mcp-server/sessionServer.js";
@@ -1241,7 +1245,11 @@ export class McpServerService {
     tier: HelpAssistantTier,
     callerWcId?: number
   ): { sessionId: string; tier: McpTier } {
-    return this.httpLifecycle.setSessionTier(sessionId, tier, callerWcId);
+    const before = this.sessionStore.getTier(sessionId);
+    const result = this.httpLifecycle.setSessionTier(sessionId, tier, callerWcId);
+    if (result.tier !== before)
+      this.queueApprovalLine(sessionId, { kind: "tier", tier: result.tier });
+    return result;
   }
 
   /**
@@ -1251,16 +1259,42 @@ export class McpServerService {
    * Returns the grant metadata so the renderer can render a countdown.
    */
   issueGrant(sessionId: string, toolId: string, callerWcId?: number): McpIssueGrantResult {
-    return this.httpLifecycle.issueGrant(sessionId, toolId, callerWcId);
+    const result = this.httpLifecycle.issueGrant(sessionId, toolId, callerWcId);
+    this.queueApprovalLine(sessionId, { kind: "tool", toolId });
+    return result;
   }
 
   /**
-   * Revoke every grant for a session in one call. Caller-pin checked
-   * identically to {@link issueGrant}. Returns the count of grants
-   * dropped so the renderer can show a confirmation toast.
+   * Tell the help lane's assistant what the user just approved from the
+   * panel's tier banner (#14995), whose refusal it last heard. Never fails
+   * the approval: the grant stands whether or not the line can be typed.
    */
-  revokeSessionGrants(sessionId: string, callerWcId?: number): McpRevokeSessionGrantsResult {
-    return this.httpLifecycle.revokeSessionGrants(sessionId, callerWcId);
+  private queueApprovalLine(sessionId: string, approval: AssistantApproval): void {
+    try {
+      const lane = this.httpLifecycle.helpLaneFor(sessionId);
+      if (lane === null) return;
+      const wake = createApprovalWake(
+        {
+          sessionStore: this.sessionStore,
+          helpLaneFor: (id) => this.httpLifecycle.helpLaneFor(id),
+        },
+        sessionId,
+        lane,
+        approval
+      );
+      this.queueLaneWake(lane, wake);
+    } catch (err) {
+      console.error("[MCP] Queueing an approval line failed:", err);
+    }
+  }
+
+  /**
+   * End one per-tool grant, leaving the session's other grants alone.
+   * Caller-pin checked identically to {@link issueGrant}. Idempotent — a grant
+   * already gone reports `revoked: false`.
+   */
+  revokeGrant(sessionId: string, toolId: string, callerWcId?: number): McpRevokeGrantResult {
+    return this.httpLifecycle.revokeGrant(sessionId, toolId, callerWcId);
   }
 
   /**
@@ -1398,23 +1432,26 @@ export class McpServerService {
    * to every WebContents would leak security state to other windows.
    */
   private emitGrantLifecycle(sessionId: string, payload: McpGrantLifecyclePayload): void {
-    try {
-      this.auditService.appendGrantRecord({
-        type: payload.type,
-        sessionId: payload.sessionId,
-        toolId: payload.toolId,
-        ttlMs: payload.ttlMs,
-        expiresAt: payload.expiresAt,
-        revokedReason: payload.revokedReason,
-        grantId: payload.grantId,
-        maxUses: payload.maxUses,
-        remainingUses: payload.remainingUses,
-        actorId: payload.actorId,
-        actorType: payload.actorType,
-        allowedTools: payload.allowedTools,
-      });
-    } catch (err) {
-      console.error("[MCP] Failed to append grant audit record:", err);
+    // A refresh is live-only: the dispatch record that caused it is the audit.
+    if (payload.type !== "grant.refreshed") {
+      try {
+        this.auditService.appendGrantRecord({
+          type: payload.type,
+          sessionId: payload.sessionId,
+          toolId: payload.toolId,
+          ttlMs: payload.ttlMs,
+          expiresAt: payload.expiresAt,
+          revokedReason: payload.revokedReason,
+          grantId: payload.grantId,
+          maxUses: payload.maxUses,
+          remainingUses: payload.remainingUses,
+          actorId: payload.actorId,
+          actorType: payload.actorType,
+          allowedTools: payload.allowedTools,
+        });
+      } catch (err) {
+        console.error("[MCP] Failed to append grant audit record:", err);
+      }
     }
 
     // Origin-gated like every other renderer push (#11789). Unreachable in
@@ -1437,6 +1474,19 @@ export class McpServerService {
   ): ReturnType<typeof this.bridge.dispatchActionForWebContents> {
     this.ensureHostBridgeListeners();
     return this.bridge.dispatchActionForWebContents(...args);
+  }
+
+  /**
+   * A view reporting how far a confirm-gated dispatch it was sent has got
+   * (#14989), which moves main's deadline for it. Answered for this machine's
+   * own views only: a host's dispatch is held by the host.
+   */
+  holdDispatch(
+    webContentsId: number,
+    requestId: string,
+    phase: McpDispatchHoldPhase
+  ): McpDispatchHoldResult {
+    return this.bridge.holdDispatch(webContentsId, requestId, phase);
   }
 
   /**

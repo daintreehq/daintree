@@ -55,6 +55,8 @@ vi.mock("../../../../services/pty/agentSessionCapturePersistence.js", () => ({
   acceptCapturedAgentSession,
   releaseSupersededCapturedSession,
 }));
+const deliverFirstPrompt = vi.hoisted(() => vi.fn());
+vi.mock("../../../../services/pty/firstPromptDelivery.js", () => ({ deliverFirstPrompt }));
 const notifyPanelsChanged = vi.hoisted(() => vi.fn());
 vi.mock("../../../../services/DriveLeaseService.js", () => ({
   peekDriveLeaseService: () => ({ notifyPanelsChanged }),
@@ -878,6 +880,28 @@ describe("terminal event handlers — submit-status forwarding (#11875)", () => 
       (call) => call[1] === CHANNELS.EVENTS_PUSH && call[2]?.name === "terminal:submit-status"
     );
   }
+
+  it("hands a run's first prompt to its owning project, never a broadcast (#15521)", () => {
+    const firstPrompt = { text: "Fix the login bug", via: "send" as const, at: 5 };
+    const busEmit = vi.spyOn(events, "emit");
+
+    ptyClient.emit("first-prompt", "t1", firstPrompt, "project-a");
+
+    expect(JSON.stringify(busEmit.mock.calls)).not.toContain("Fix the login bug");
+    busEmit.mockRestore();
+
+    // The run's own project, never whatever a pending duplicate spawn names.
+    expect(ptyClient.getTerminalProjectId).not.toHaveBeenCalled();
+    expect(deliverFirstPrompt).toHaveBeenCalledWith("project-a", "t1", firstPrompt);
+    const leaked = [...broadcastToRenderer.mock.calls, ...broadcastToProjectRenderers.mock.calls];
+    expect(JSON.stringify(leaked)).not.toContain("Fix the login bug");
+  });
+
+  it("drops a first prompt for a terminal no project owns", () => {
+    ptyClient.emit("first-prompt", "t1", { text: "x", via: "send", at: 5 }, undefined);
+
+    expect(deliverFirstPrompt).not.toHaveBeenCalled();
+  });
 
   it("forwards the payload as a single object, not positional args", () => {
     // The router emits one `{ id, state }` object. Both ends of this

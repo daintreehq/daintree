@@ -12,7 +12,10 @@ import {
 } from "@/components/Settings/SettingsGroup";
 import { ENV_ROW_GRID, EnvVarRow, validateEnvRows } from "@/components/Settings/EnvVarRow";
 import { useRowFocus } from "@/components/Settings/useRowFocus";
-import { useSettingsTabFlush } from "@/components/Settings/SettingsFlushRegistry";
+import {
+  useSettingsTabFlush,
+  type SettingsFlushFailure,
+} from "@/components/Settings/SettingsFlushRegistry";
 import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
 import { isSensitiveEnvKey } from "@shared/utils/envVars";
 import { isSecretEnvEntry } from "@/utils/secretDetection";
@@ -33,6 +36,8 @@ interface EnvironmentVariablesEditorProps {
 }
 
 const MASKED_VALUE = "••••••••";
+
+const PROJECT_VARIABLES_SECTION_ID = "project-environment-variables";
 
 function cloneRows(rows: EnvVar[]) {
   return rows.map((row) => ({ ...row }));
@@ -123,11 +128,13 @@ export function EnvironmentVariablesEditor({
     });
   };
 
-  const handleSave = async () => {
+  const handleSave = async (): Promise<SettingsFlushFailure | undefined> => {
     setSaveAttempted(true);
-    if (Object.keys(validateEnvRows(rows)).length > 0) {
+    const errors = validateEnvRows(rows);
+    const firstInvalid = rows.find((row) => errors[row.id]);
+    if (firstInvalid) {
       setSaveError(null);
-      return;
+      return { landOn: firstInvalid.id };
     }
     setIsSaving(true);
     setSaveError(null);
@@ -139,8 +146,10 @@ export function EnvironmentVariablesEditor({
       if (onFlush) {
         await onFlush();
       }
+      return undefined;
     } catch (err) {
       setSaveError(formatErrorMessage(err, "Failed to save environment variables"));
+      return { landOn: PROJECT_VARIABLES_SECTION_ID };
     } finally {
       setIsSaving(false);
     }
@@ -164,7 +173,7 @@ export function EnvironmentVariablesEditor({
     });
 
   // Same contract as the global Environment page: closing Settings saves a valid
-  // draft rather than dropping it, and an invalid one is kept out of storage.
+  // draft rather than dropping it, and an invalid one keeps Settings open on it.
   useSettingsTabFlush("project:variables", handleSave, showSaveControls && isDirty);
   useSettingsTabValidation("project:variables", errorCount > 0);
 
@@ -245,6 +254,7 @@ export function EnvironmentVariablesEditor({
       )}
 
       <SettingsSection
+        id={PROJECT_VARIABLES_SECTION_ID}
         title="Environment variables"
         description={
           <>

@@ -220,6 +220,21 @@ describe("ThemeBrowser", () => {
     expect(useAppThemeStore.getState().previewSchemeId).toBeNull();
   });
 
+  it("filtering away the previewed theme reverts the preview, keeping it when still matched", () => {
+    const target = otherDarkScheme();
+    render(<Harness />);
+    const searchInput = screen.getByLabelText("Filter themes") as HTMLInputElement;
+
+    fireEvent.click(findRowByName(target.name));
+    expect(useAppThemeStore.getState().previewSchemeId).toBe(target.id);
+
+    fireEvent.change(searchInput, { target: { value: target.name.slice(0, 3) } });
+    expect(useAppThemeStore.getState().previewSchemeId).toBe(target.id);
+
+    fireEvent.change(searchInput, { target: { value: "zzz-no-such-theme" } });
+    expect(useAppThemeStore.getState().previewSchemeId).toBeNull();
+  });
+
   it("unmounting while previewing reverts the DOM to the committed scheme", () => {
     const target = otherDarkScheme();
     const { unmount } = render(<Harness />);

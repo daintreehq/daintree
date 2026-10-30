@@ -156,6 +156,7 @@ import { useRecipeStore } from "../recipeStore";
 import { usePanelLimitStore } from "../panelLimitStore";
 import type { RecipeTerminal } from "@shared/types/project";
 import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
+import { RecipeImportDropsTerminalsError } from "@/utils/recipeImport";
 
 /** A host approval that genuinely covers `recipe`, as the bridge would issue it. */
 function approvalFor(recipe: { id: string; terminals: RecipeTerminal[] }, terminalCount?: number) {
@@ -294,6 +295,144 @@ describe("recipeStore", () => {
       expect(devEntry?.devCommand).toBe("npm run dev");
       expect(devEntry?.agentModelId).toBeUndefined();
       expect(devEntry?.agentLaunchFlags).toBeUndefined();
+    });
+
+    it("counts only recipe-capable panels toward the step cap (#14968)", () => {
+      const browserIds = Array.from({ length: 10 }, (_, i) => `browser-${i}`);
+      panelStoreState.panelIds = [...browserIds, "panel-shell"];
+      panelStoreState.panelsById = Object.fromEntries([
+        ...browserIds.map((id) => [
+          id,
+          { id, kind: "browser", title: "Browser", worktreeId: "wt-1", location: "grid" },
+        ]),
+        [
+          "panel-shell",
+          {
+            id: "panel-shell",
+            kind: "terminal",
+            title: "Shell",
+            worktreeId: "wt-1",
+            location: "grid",
+            command: "npm test",
+          },
+        ],
+      ]);
+
+      const terminals = useRecipeStore.getState().generateRecipeFromActiveTerminals("wt-1");
+      expect(terminals.map((t) => t.command)).toEqual(["npm test"]);
+    });
+
+    it("reports panels a recipe can't hold and steps past the cap (#14968)", () => {
+      const shellIds = Array.from({ length: 12 }, (_, i) => `shell-${i}`);
+      const panels: Array<{ id: string } & Record<string, unknown>> = [
+        { id: "browser-a", kind: "browser" },
+        ...shellIds.slice(0, 6).map((id) => ({ id, kind: "terminal", command: id })),
+        { id: "file-a", kind: "file" },
+        { id: "dev-a", kind: "dev-preview", devCommand: "npm run dev" },
+        ...shellIds.slice(6).map((id) => ({ id, kind: "terminal", command: id })),
+        { id: "browser-b", kind: "browser" },
+        { id: "plugin-a", kind: "acme.kanban" },
+        // Outside the capture: trashed, or another worktree's.
+        { id: "trashed", kind: "terminal", location: "trash" },
+        { id: "elsewhere", kind: "browser", worktreeId: "wt-2" },
+      ];
+      panelStoreState.panelIds = panels.map((p) => p.id);
+      panelStoreState.panelsById = Object.fromEntries(
+        panels.map((p) => [p.id, { worktreeId: "wt-1", location: "grid", title: "", ...p }])
+      );
+
+      const { terminals, omitted } = useRecipeStore.getState().captureRecipeFromLayout("wt-1");
+
+      expect(terminals.map((t) => t.command ?? t.devCommand)).toEqual([
+        ...shellIds.slice(0, 6),
+        "npm run dev",
+        ...shellIds.slice(6, 9),
+      ]);
+      expect(omitted.cappedTerminalCount).toBe(3);
+      expect(omitted.panelKinds).toEqual({ browser: 2, file: 1, "acme.kanban": 1 });
+      expect(Object.keys(omitted.panelKinds)).toEqual(["browser", "file", "acme.kanban"]);
+      expect(useRecipeStore.getState().generateRecipeFromActiveTerminals("wt-1")).toEqual(
+        terminals
+      );
+    });
+
+    it("reports nothing omitted for a layout that fits", () => {
+      panelStoreState.panelIds = ["panel-shell"];
+      panelStoreState.panelsById = {
+        "panel-shell": {
+          id: "panel-shell",
+          kind: "terminal",
+          worktreeId: "wt-1",
+          location: "grid",
+          command: "npm run lint",
+        },
+      };
+
+      const { terminals, omitted } = useRecipeStore.getState().captureRecipeFromLayout("wt-1");
+      expect(terminals.map((t) => t.command)).toEqual(["npm run lint"]);
+      expect(omitted).toEqual({ panelKinds: {}, cappedTerminalCount: 0 });
+    });
+
+    it("reports an unsupported panel even when the cap isn't reached", () => {
+      panelStoreState.panelIds = ["panel-shell", "panel-browser"];
+      panelStoreState.panelsById = {
+        "panel-shell": {
+          id: "panel-shell",
+          kind: "terminal",
+          worktreeId: "wt-1",
+          location: "grid",
+        },
+        "panel-browser": {
+          id: "panel-browser",
+          kind: "browser",
+          worktreeId: "wt-1",
+          location: "grid",
+        },
+      };
+
+      const { terminals, omitted } = useRecipeStore.getState().captureRecipeFromLayout("wt-1");
+      expect(terminals).toHaveLength(1);
+      expect(omitted).toEqual({ panelKinds: { browser: 1 }, cappedTerminalCount: 0 });
+    });
+
+    it("counts a dev preview past the cap as a capped step, not an unsupported kind", () => {
+      const shellIds = Array.from({ length: 10 }, (_, i) => `shell-${i}`);
+      panelStoreState.panelIds = [...shellIds, "panel-dev"];
+      panelStoreState.panelsById = Object.fromEntries([
+        ...shellIds.map((id) => [
+          id,
+          { id, kind: "terminal", worktreeId: "wt-1", location: "grid" },
+        ]),
+        [
+          "panel-dev",
+          { id: "panel-dev", kind: "dev-preview", worktreeId: "wt-1", location: "grid" },
+        ],
+      ]);
+
+      const { terminals, omitted } = useRecipeStore.getState().captureRecipeFromLayout("wt-1");
+      expect(terminals.map((t) => t.type)).toEqual(Array(10).fill("terminal"));
+      expect(omitted).toEqual({ panelKinds: {}, cappedTerminalCount: 1 });
+    });
+
+    it("counts a kind named like an Object.prototype key like any other", () => {
+      panelStoreState.panelIds = ["p-proto", "p-ctor", "p-ctor-2", "panel-shell"];
+      panelStoreState.panelsById = {
+        "p-proto": { id: "p-proto", kind: "__proto__", worktreeId: "wt-1", location: "grid" },
+        "p-ctor": { id: "p-ctor", kind: "constructor", worktreeId: "wt-1", location: "grid" },
+        "p-ctor-2": { id: "p-ctor-2", kind: "constructor", worktreeId: "wt-1", location: "grid" },
+        "panel-shell": {
+          id: "panel-shell",
+          kind: "terminal",
+          worktreeId: "wt-1",
+          location: "grid",
+        },
+      };
+
+      const { omitted } = useRecipeStore.getState().captureRecipeFromLayout("wt-1");
+      expect(Object.entries(omitted.panelKinds)).toEqual([
+        ["__proto__", 1],
+        ["constructor", 2],
+      ]);
     });
 
     it("captures owned titles and drops derived ones so the clone can't pin them (#11872)", () => {
@@ -1987,6 +2126,23 @@ describe("recipeStore", () => {
         expect(call.agentLaunchFlags).toEqual(expect.arrayContaining(["--careful"]));
       });
 
+      it("launches the bare agent where the worktree saved Agent default (#15054)", async () => {
+        getAgentSettingsMock.mockResolvedValue({
+          agents: {
+            claude: {
+              presetId: "fast",
+              worktreePresets: { "worktree-1": null },
+              customPresets: [{ id: "fast", name: "Fast", args: ["--fast"] }],
+            },
+          },
+        });
+
+        const call = await runSingleAgentRecipe({ type: "claude", title: "Claude", env: {} });
+
+        expect(call.command).not.toContain("--fast");
+        expect(call.agentPresetId).toBeUndefined();
+      });
+
       it("lets recipe-defined env win over preset env on key conflicts", async () => {
         getAgentSettingsMock.mockResolvedValue({
           agents: {
@@ -2113,7 +2269,100 @@ describe("recipeStore", () => {
     });
   });
 
-  it("keeps importing valid terminals even when others are invalid", async () => {
+  describe("import that would drop terminals (#15044)", () => {
+    const mixed = JSON.stringify({
+      name: "Mixed",
+      terminals: [
+        { type: "terminal", command: "npm test" },
+        { type: "acme-agent", title: "Plugin agent", command: "whoami" },
+        { type: "claude" },
+      ],
+    });
+
+    it.each([
+      ["project", "project-1", undefined],
+      ["global", undefined, undefined],
+      ["project", "project-1", {}],
+      ["global", undefined, { allowDroppedTerminals: false }],
+    ])(
+      "saves nothing to the %s tier and says which terminals would go (options %j)",
+      async (_, projectId, options) => {
+        const error = await useRecipeStore
+          .getState()
+          .importRecipe(projectId, mixed, options)
+          .catch((err: unknown) => err);
+
+        expect(error).toBeInstanceOf(RecipeImportDropsTerminalsError);
+        const refusal = error as RecipeImportDropsTerminalsError;
+        expect(refusal.acceptedCount).toBe(2);
+        expect(refusal.rejected).toEqual([
+          {
+            index: 1,
+            title: "Plugin agent",
+            rejection: { kind: "unsupported-type", type: "acme-agent" },
+          },
+        ]);
+        expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
+        expect(globalAddRecipeMock).not.toHaveBeenCalled();
+        expect(useRecipeStore.getState().recipes).toHaveLength(0);
+      }
+    );
+
+    it("refuses a recipe with no valid terminals even when told to import the rest", async () => {
+      const input = JSON.stringify({
+        name: "Nothing left",
+        terminals: [{ type: "acme-agent" }, { type: "terminal", command: "a\nb" }],
+      });
+
+      const error = await useRecipeStore
+        .getState()
+        .importRecipe("project-1", input, { allowDroppedTerminals: true })
+        .catch((err: unknown) => err);
+
+      expect(error).toBeInstanceOf(RecipeImportDropsTerminalsError);
+      expect((error as RecipeImportDropsTerminalsError).acceptedCount).toBe(0);
+      expect((error as RecipeImportDropsTerminalsError).rejected.map((r) => r.index)).toEqual([
+        0, 1,
+      ]);
+      expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
+    });
+
+    it.each([undefined, { allowDroppedTerminals: true }])(
+      "refuses plugin-only content outright rather than offering the rest (options %j)",
+      async (options) => {
+        const input = JSON.stringify({
+          name: "Plugin copy",
+          terminals: [
+            { type: "terminal", command: "ok" },
+            { type: "plugin-panel", panelKindId: "acme.board" },
+          ],
+        });
+
+        const error = await useRecipeStore
+          .getState()
+          .importRecipe("project-1", input, options)
+          .catch((err: unknown) => err);
+
+        expect(error).not.toBeInstanceOf(RecipeImportDropsTerminalsError);
+        expect((error as Error).message).toMatch(/only work in the plugin's own recipe/);
+        expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
+      }
+    );
+
+    it("imports a recipe whose every terminal is valid without being told to", async () => {
+      const input = JSON.stringify({
+        name: "Clean",
+        terminals: [{ type: "terminal", command: "npm test" }, { type: "claude" }],
+      });
+
+      await useRecipeStore.getState().importRecipe("project-1", input);
+
+      expect(updateInRepoRecipeMock).toHaveBeenCalledTimes(1);
+      expect(useRecipeStore.getState().recipes[0]?.terminals).toHaveLength(2);
+    });
+  });
+
+  it("imports the valid terminals once told to drop the others", async () => {
     const input = JSON.stringify({
       name: "Mixed",
       terminals: [
@@ -2122,7 +2371,9 @@ describe("recipeStore", () => {
       ],
     });
 
-    await useRecipeStore.getState().importRecipe("project-1", input);
+    await useRecipeStore
+      .getState()
+      .importRecipe("project-1", input, { allowDroppedTerminals: true });
 
     const recipe = useRecipeStore.getState().recipes[0];
     expect(recipe?.terminals).toHaveLength(1);
@@ -2154,7 +2405,12 @@ describe("recipeStore", () => {
       ],
     });
 
-    await useRecipeStore.getState().importRecipe("project-1", input);
+    await expect(useRecipeStore.getState().importRecipe("project-1", input)).rejects.toThrow(
+      RecipeImportDropsTerminalsError
+    );
+    await useRecipeStore
+      .getState()
+      .importRecipe("project-1", input, { allowDroppedTerminals: true });
 
     const recipe = useRecipeStore.getState().recipes[0];
     expect(recipe?.terminals).toHaveLength(1);
@@ -2170,7 +2426,12 @@ describe("recipeStore", () => {
       ],
     });
 
-    await useRecipeStore.getState().importRecipe("project-1", input);
+    await expect(useRecipeStore.getState().importRecipe("project-1", input)).rejects.toThrow(
+      RecipeImportDropsTerminalsError
+    );
+    await useRecipeStore
+      .getState()
+      .importRecipe("project-1", input, { allowDroppedTerminals: true });
 
     const recipe = useRecipeStore.getState().recipes[0];
     expect(recipe?.terminals).toHaveLength(1);
@@ -2198,7 +2459,12 @@ describe("recipeStore", () => {
       ],
     });
 
-    await useRecipeStore.getState().importRecipe("project-1", input);
+    await expect(useRecipeStore.getState().importRecipe("project-1", input)).rejects.toThrow(
+      RecipeImportDropsTerminalsError
+    );
+    await useRecipeStore
+      .getState()
+      .importRecipe("project-1", input, { allowDroppedTerminals: true });
 
     const recipe = useRecipeStore.getState().recipes[0];
     expect(recipe?.terminals).toHaveLength(1);
@@ -2870,7 +3136,7 @@ describe("recipeStore", () => {
 
       await expect(
         useRecipeStore.getState().updateRecipe("inrepo-test", { lastUsedAt: 999 })
-      ).resolves.toBeUndefined();
+      ).resolves.toBe("saved");
 
       // The mirror write WAS attempted (and rejected) — not silently skipped.
       expect(updateRecipeMock).toHaveBeenCalledTimes(1);
@@ -3147,7 +3413,10 @@ describe("recipeStore", () => {
         // Loaded lazily to avoid initialization order coupling with the
         // hoisted client mocks above.
         const mod = await import("../recipeConflictStore");
-        mod.useRecipeConflictStore.setState({ pendingConflict: null });
+        // Release rather than drop, so a failed test's awaiter doesn't hang.
+        if (mod.useRecipeConflictStore.getState().pendingConflict) {
+          mod.useRecipeConflictStore.getState().resolveConflict("cancel");
+        }
         return mod.useRecipeConflictStore;
       }
 
@@ -3187,11 +3456,39 @@ describe("recipeStore", () => {
 
         // Resolve as cancel — the updateRecipe call should settle without throwing.
         store.getState().resolveConflict("cancel");
-        await expect(promise).resolves.toBeUndefined();
+        await expect(promise).resolves.toBe("cancelled");
 
         // State rolled back to pre-edit snapshot.
         const state = useRecipeStore.getState();
         expect(state.inRepoRecipes[0]?.name).toBe("Conflict Recipe");
+        expect(state.inRepoRecipes[0]?.lastUsedAt).toBeUndefined();
+      });
+
+      // The caller keeps the draft on "cancelled" (#15035), so the store must
+      // have written nothing and left nothing of the edit behind.
+      it("'cancel' reports the save as cancelled without writing, reloading or keeping the edit", async () => {
+        seedStore();
+        // The reconciled ProjectFileStore mirror carries the same id and must
+        // be restored as well, or it surfaces the rejected edit.
+        useRecipeStore.setState({ projectRecipes: [inRepoRecipe] });
+        const store = await importConflictStore();
+        updateInRepoRecipeMock.mockRejectedValueOnce(makeConflictError("Conflict Recipe"));
+
+        const promise = useRecipeStore.getState().updateRecipe("inrepo-test", {
+          name: "Mine",
+          terminals: [{ type: "terminal", title: "Shell", command: "mine", env: {} }],
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        store.getState().resolveConflict("cancel");
+        await expect(promise).resolves.toBe("cancelled");
+
+        expect(updateInRepoRecipeMock).toHaveBeenCalledTimes(1);
+        expect(getInRepoRecipesMock).not.toHaveBeenCalled();
+        const state = useRecipeStore.getState();
+        for (const slice of [state.inRepoRecipes, state.projectRecipes, state.recipes]) {
+          expect(slice).toEqual([inRepoRecipe]);
+        }
       });
 
       it("'reload' resolution triggers loadRecipes and does not rethrow", async () => {
@@ -3206,10 +3503,14 @@ describe("recipeStore", () => {
         await Promise.resolve();
         await Promise.resolve();
         store.getState().resolveConflict("reload");
-        await expect(promise).resolves.toBeUndefined();
-        // Wait one more tick for the fire-and-forget loadRecipes to settle.
-        await new Promise((r) => setTimeout(r, 0));
-        expect(getInRepoRecipesMock).toHaveBeenCalled();
+        await expect(promise).resolves.toBe("reloaded");
+        // The reload is fire-and-forget; the file's version lands once it settles.
+        await vi.waitFor(() =>
+          expect(useRecipeStore.getState().inRepoRecipes.map((r) => r.name)).toEqual([
+            "Disk Version",
+          ])
+        );
+        expect(useRecipeStore.getState().recipes.map((r) => r.name)).toEqual(["Disk Version"]);
       });
 
       it("'overwrite' resolution retries the IPC call with force:true and re-applies the edit", async () => {
@@ -3224,7 +3525,7 @@ describe("recipeStore", () => {
         await Promise.resolve();
         await Promise.resolve();
         store.getState().resolveConflict("overwrite");
-        await expect(promise).resolves.toBeUndefined();
+        await expect(promise).resolves.toBe("saved");
 
         expect(updateInRepoRecipeMock).toHaveBeenCalledTimes(2);
         // Second call carries force:true and the previous-name (for rename support).
@@ -3295,7 +3596,7 @@ describe("recipeStore", () => {
         expect(pending?.detail).toBe(detail);
 
         store.getState().resolveConflict("cancel");
-        await expect(promise).resolves.toBeUndefined();
+        await expect(promise).resolves.toBe("cancelled");
         // Rolled back — the rejected edit must not linger in memory.
         expect(useRecipeStore.getState().inRepoRecipes[0]?.name).toBe("Future Recipe");
       });
@@ -3310,7 +3611,7 @@ describe("recipeStore", () => {
         await Promise.resolve();
         await Promise.resolve();
         store.getState().resolveConflict("overwrite");
-        await expect(promise).resolves.toBeUndefined();
+        await expect(promise).resolves.toBe("saved");
 
         expect(updateInRepoRecipeMock).toHaveBeenCalledTimes(2);
         expect(updateInRepoRecipeMock.mock.calls[1]?.[3]).toEqual({ force: true });
@@ -3406,7 +3707,9 @@ describe("recipeStore", () => {
         currentProjectId: "project-1",
       });
 
-      await useRecipeStore.getState().updateRecipe("inrepo-old-name", { name: "New Name" });
+      await expect(
+        useRecipeStore.getState().updateRecipe("inrepo-old-name", { name: "New Name" })
+      ).resolves.toBe("saved");
 
       expect(updateInRepoRecipeMock).toHaveBeenCalledTimes(1);
       // The id is stable across the rename; previousName tells the main process
@@ -3720,10 +4023,35 @@ describe("recipeStore", () => {
       expect(json).not.toHaveProperty("projectId");
     });
 
-    it("importRecipeFromFile returns false when cancelled", async () => {
+    it("importRecipeFromFile reports a cancelled pick", async () => {
       importRecipeFromFileMock.mockResolvedValueOnce(null);
       const result = await useRecipeStore.getState().importRecipeFromFile("proj-1");
-      expect(result).toBe(false);
+      expect(result).toEqual({ status: "cancelled" });
+    });
+
+    it("importRecipeFromFile imports a clean file straight away", async () => {
+      importRecipeFromFileMock.mockResolvedValueOnce(
+        JSON.stringify({ name: "From file", terminals: [{ type: "terminal", command: "ls" }] })
+      );
+      const result = await useRecipeStore.getState().importRecipeFromFile("proj-1");
+      expect(result).toEqual({ status: "imported" });
+      expect(updateInRepoRecipeMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("importRecipeFromFile hands back a file that would lose terminals, unsaved (#15044)", async () => {
+      const json = JSON.stringify({
+        name: "From file",
+        terminals: [{ type: "terminal", command: "ls" }, { type: "acme-agent" }],
+      });
+      importRecipeFromFileMock.mockResolvedValueOnce(json);
+
+      const result = await useRecipeStore.getState().importRecipeFromFile("proj-1");
+
+      expect(result.status).toBe("refused");
+      if (result.status !== "refused") return;
+      expect(result.json).toBe(json);
+      expect(result.error).toBeInstanceOf(RecipeImportDropsTerminalsError);
+      expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
     });
   });
 

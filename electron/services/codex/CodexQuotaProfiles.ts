@@ -1,7 +1,7 @@
 /**
- * Which Codex profiles the quota section reads (#13686): main's own home plus
- * every distinct `CODEX_HOME` a Codex preset sets. Pure, so the service owns
- * the store read and the filesystem check.
+ * Which Codex profiles the quota section reads (#13686): the home a preset-free
+ * launch uses plus every distinct `CODEX_HOME` a Codex preset sets. Pure, so
+ * the service owns the store read and the filesystem check.
  */
 
 import { realpath } from "node:fs/promises";
@@ -10,7 +10,7 @@ import path from "node:path";
 import type { AgentPreset } from "../../../shared/config/agentRegistry.js";
 import type { AgentSettingsEntry } from "../../../shared/types/agentSettings.js";
 import type { CodexQuotaProfileHomeReason } from "../../../shared/types/ipc/agentQuota.js";
-import { getMergedPresets } from "../../../shared/utils/agentPresets.js";
+import { getMergedPresets, sanitizeAgentEnv } from "../../../shared/utils/agentPresets.js";
 
 export interface CodexQuotaProfileTarget {
   /** Canonical absolute home, or the raw value when `invalid` is set. */
@@ -20,22 +20,47 @@ export interface CodexQuotaProfileTarget {
   /** Each name's position in the preset list, so a later merge can keep preset order. */
   presetOrder: number[];
   invalid?: CodexQuotaProfileHomeReason;
+  /**
+   * Main's own home, read by inheriting main's env rather than naming it, and
+   * the one home read without checking it exists first: Codex doesn't need
+   * its implicit home to exist, only one it's handed.
+   */
+  inheritsMainEnv?: boolean;
 }
 
-/** The home a Codex launch with no `CODEX_HOME` of its own runs against. */
+/** Where Codex lands when its env has no `CODEX_HOME`, or an empty one. */
+function codexFallbackHome(): string {
+  return path.join(os.homedir(), ".codex");
+}
+
+/** Main's own home: where a Codex launch lands when nothing in its env names one. */
 export function defaultCodexHome(): string {
-  return path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"));
+  return path.resolve(process.env.CODEX_HOME || codexFallbackHome());
 }
 
 // Matched case-insensitively, as the pane-side lookup does: on Windows the
 // launched process sees `codex_home` and `CODEX_HOME` as one variable.
-function presetCodexHome(preset: AgentPreset): string | undefined {
-  const env = preset.env;
+function envCodexHome(env: Record<string, string> | undefined): string | undefined {
   if (!env) return undefined;
   const key = Object.keys(env).find((name) => name.toUpperCase() === "CODEX_HOME");
   // Untrimmed: the pane gets the value verbatim, so `/Users/me/.codex ` is a
   // different folder from the default, not a spelling of it.
-  return key && env[key] ? env[key] : undefined;
+  return key === undefined ? undefined : env[key];
+}
+
+/**
+ * The home a value of `CODEX_HOME` sends a pane to. An empty one still
+ * replaces whatever the layer under it set, and Codex takes it as unset: its
+ * own `~/.codex`, never main's home.
+ */
+function namedHome(raw: string): Pick<CodexQuotaProfileTarget, "home" | "invalid"> {
+  if (raw === "") return { home: path.resolve(codexFallbackHome()) };
+  // Never resolved against main's cwd: that would read a folder no pane uses.
+  if (!isFullyQualified(raw)) return { home: raw, invalid: "home-not-absolute" };
+  // Normalises separators, dot segments and a trailing slash, so
+  // `/Users/me/.codex/` folds into the default row. Symlinks and case on a
+  // case-insensitive volume are folded later, by the service's realpath.
+  return { home: path.resolve(raw) };
 }
 
 /**
@@ -68,30 +93,49 @@ export async function canonicalCodexHomeKey(home: string): Promise<string> {
 }
 
 /**
+ * The home a launch with no preset home runs on (#15047). The agent-wide env
+ * sits under every preset's and over main's, so a `CODEX_HOME` there moves
+ * every such pane; it's sanitized the way the launch sanitizes it, so a value
+ * the launch drops falls through to main's here too.
+ */
+export function resolveDefaultCodexTarget(
+  entry: AgentSettingsEntry | undefined,
+  mainHome: string = defaultCodexHome()
+): CodexQuotaProfileTarget {
+  const base: Omit<CodexQuotaProfileTarget, "home"> = {
+    isDefault: true,
+    presetNames: [],
+    presetOrder: [],
+  };
+  const raw = envCodexHome(sanitizeAgentEnv(entry?.globalEnv as Record<string, unknown>));
+  if (raw === undefined) return { ...base, home: mainHome, inheritsMainEnv: true };
+  return { ...base, ...namedHome(raw) };
+}
+
+/**
  * Only presets that name their own home get a profile. A preset without one
  * runs on the default, and listing every such preset under it would bury the
  * presets that actually switch account.
  */
 export function resolveCodexQuotaProfiles(
   entry: AgentSettingsEntry | undefined,
-  defaultHome: string = defaultCodexHome()
+  mainHome: string = defaultCodexHome()
 ): CodexQuotaProfileTarget[] {
-  const targets: CodexQuotaProfileTarget[] = [
-    { home: defaultHome, isDefault: true, presetNames: [], presetOrder: [] },
-  ];
-  const byHome = new Map<string, CodexQuotaProfileTarget>([
-    [homeIdentity(defaultHome), targets[0]!],
-  ]);
+  const defaultTarget = resolveDefaultCodexTarget(entry, mainHome);
+  const targets: CodexQuotaProfileTarget[] = [defaultTarget];
+  const byHome = new Map<string, CodexQuotaProfileTarget>();
   const invalidByRaw = new Map<string, CodexQuotaProfileTarget>();
+  if (defaultTarget.invalid) invalidByRaw.set(defaultTarget.home, defaultTarget);
+  else byHome.set(homeIdentity(defaultTarget.home), defaultTarget);
 
   for (const [order, preset] of getMergedPresets(
     "codex",
     entry?.customPresets as AgentPreset[]
   ).entries()) {
-    const raw = presetCodexHome(preset);
-    if (!raw) continue;
-    if (!isFullyQualified(raw)) {
-      // Never resolved against main's cwd: that would read a folder no pane uses.
+    const raw = envCodexHome(preset.env);
+    if (raw === undefined) continue;
+    const { home, invalid } = namedHome(raw);
+    if (invalid) {
       const existing = invalidByRaw.get(raw);
       if (existing) {
         existing.presetNames.push(preset.name);
@@ -102,17 +146,13 @@ export function resolveCodexQuotaProfiles(
           isDefault: false,
           presetNames: [preset.name],
           presetOrder: [order],
-          invalid: "home-not-absolute",
+          invalid,
         };
         invalidByRaw.set(raw, target);
         targets.push(target);
       }
       continue;
     }
-    // Normalises separators, dot segments and a trailing slash, so
-    // `/Users/me/.codex/` folds into the default row. Symlinks and case on a
-    // case-insensitive volume are folded later, by the service's realpath.
-    const home = path.resolve(raw);
     const existing = byHome.get(homeIdentity(home));
     if (existing) {
       existing.presetNames.push(preset.name);

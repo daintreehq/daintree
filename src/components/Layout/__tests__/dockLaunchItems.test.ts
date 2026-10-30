@@ -10,6 +10,7 @@ import {
 
 const addPanelMock = vi.fn();
 const runRecipeWithResultsMock = vi.fn();
+const getRecipeByIdMock = vi.fn();
 const recordActionMruMock = vi.fn();
 const actionDispatchMock = vi.fn();
 const notifySpawnFailuresMock = vi.fn();
@@ -48,7 +49,12 @@ vi.mock("@/lib/notify", () => ({
 }));
 
 vi.mock("@/store/recipeStore", () => ({
-  useRecipeStore: { getState: () => ({ runRecipeWithResults: runRecipeWithResultsMock }) },
+  useRecipeStore: {
+    getState: () => ({
+      runRecipeWithResults: runRecipeWithResultsMock,
+      getRecipeById: getRecipeByIdMock,
+    }),
+  },
 }));
 
 vi.mock("@/store/actionMruStore", () => ({
@@ -89,6 +95,12 @@ import {
   type DockLaunchRow,
 } from "../dockLaunchItems";
 import type { TerminalRecipe } from "@shared/types";
+import {
+  cancelRecipeRunConfirmations,
+  resolveRecipeRunConfirmation,
+  useRecipeRunConfirmStore,
+} from "@/store/recipeRunConfirmStore";
+import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { TOOLBAR_CUSTOMIZE_LABEL } from "../toolbarMenuStrings";
 import { PANEL_LIMIT_ERROR_SUFFIX } from "@/services/actions/definitions/panelLimitError";
 
@@ -128,6 +140,8 @@ const PLUGIN_PROJECT_LOCAL = "project:proj-1/test-plugin/local";
 beforeEach(() => {
   addPanelMock.mockReset().mockResolvedValue("panel-1");
   runRecipeWithResultsMock.mockReset().mockResolvedValue({ spawned: [], failed: [] });
+  getRecipeByIdMock.mockReset();
+  cancelRecipeRunConfirmations();
   recordActionMruMock.mockReset();
   actionDispatchMock.mockReset().mockResolvedValue({ ok: true, result: null });
   notifySpawnFailuresMock.mockReset();
@@ -1044,7 +1058,13 @@ describe("activateDockLaunchItem", () => {
 
     activateDockLaunchItem(model.recipes[0]!, ctx);
 
-    expect(runRecipeWithResultsMock).toHaveBeenCalledWith("r1", "/repo", "wt-1", undefined);
+    expect(runRecipeWithResultsMock).toHaveBeenCalledWith(
+      "r1",
+      "/repo",
+      "wt-1",
+      undefined,
+      undefined
+    );
     await vi.waitFor(() =>
       expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, {
         recipeName: "Deploy",
@@ -1063,5 +1083,101 @@ describe("activateDockLaunchItem", () => {
       expect(logErrorMock).toHaveBeenCalledWith("Recipe launch from dock failed", expect.any(Error))
     );
     expect(notifySpawnFailuresMock).not.toHaveBeenCalled();
+  });
+
+  describe("a recipe whose prompts name a variable with no value (#15022)", () => {
+    const fixIssue = () =>
+      recipe({
+        id: "r1",
+        name: "Fix issue",
+        terminals: [{ type: "claude", env: {}, initialPrompt: "Fix {{issue_number}}" }],
+      });
+
+    function pending() {
+      return useRecipeRunConfirmStore.getState().current;
+    }
+
+    it("launches nothing until the user decides", () => {
+      const model = build({ recipes: [fixIssue()] });
+
+      activateDockLaunchItem(model.recipes[0]!, ctx);
+
+      expect(runRecipeWithResultsMock).not.toHaveBeenCalled();
+      expect(pending()).toMatchObject({ recipeName: "Fix issue", missing: ["issue_number"] });
+    });
+
+    it("runs what the user approved once they choose to run it empty", async () => {
+      const model = build({ recipes: [fixIssue()] });
+      activateDockLaunchItem(model.recipes[0]!, ctx);
+
+      resolveRecipeRunConfirmation(pending()!.requestId, true);
+
+      await vi.waitFor(() => expect(runRecipeWithResultsMock).toHaveBeenCalledTimes(1));
+      expect(runRecipeWithResultsMock).toHaveBeenCalledWith("r1", "/repo", "wt-1", undefined, {
+        expectedRecipe: { id: "r1", terminalsDigest: recipeApprovalDigest(fixIssue().terminals) },
+      });
+      await vi.waitFor(() => expect(notifySpawnFailuresMock).toHaveBeenCalledTimes(1));
+    });
+
+    it("launches nothing when the user backs out", async () => {
+      const model = build({ recipes: [fixIssue()] });
+      activateDockLaunchItem(model.recipes[0]!, ctx);
+
+      resolveRecipeRunConfirmation(pending()!.requestId, false);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(pending()).toBeNull();
+      expect(runRecipeWithResultsMock).not.toHaveBeenCalled();
+    });
+
+    it("launches straight away when the worktree has every value", () => {
+      const model = build({ recipes: [fixIssue()] });
+
+      activateDockLaunchItem(model.recipes[0]!, { ...ctx, recipeContext: { issueNumber: 7 } });
+
+      expect(pending()).toBeNull();
+      expect(runRecipeWithResultsMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("counts the launch cwd as worktree_path, as the store does", () => {
+      const model = build({
+        recipes: [
+          recipe({
+            id: "r1",
+            name: "Where",
+            terminals: [{ type: "claude", env: {}, initialPrompt: "Work in {{worktree_path}}" }],
+          }),
+        ],
+      });
+
+      activateDockLaunchItem(model.recipes[0]!, ctx);
+
+      expect(pending()).toBeNull();
+      expect(runRecipeWithResultsMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("asks about, and approves, the team recipe a shadowed row actually runs", async () => {
+      const model = build({
+        recipes: [recipe({ id: "r1", name: "Fix issue", terminals: [{ type: "terminal" }] })],
+      });
+      const team = { ...fixIssue(), id: "team-r1" };
+      getRecipeByIdMock.mockReturnValue(team);
+
+      activateDockLaunchItem(model.recipes[0]!, ctx);
+
+      expect(runRecipeWithResultsMock).not.toHaveBeenCalled();
+      expect(pending()?.missing).toEqual(["issue_number"]);
+
+      resolveRecipeRunConfirmation(pending()!.requestId, true);
+
+      // The row's own id goes through for the store to redirect; the approval
+      // names the recipe the store will resolve it to.
+      await vi.waitFor(() =>
+        expect(runRecipeWithResultsMock).toHaveBeenCalledWith("r1", "/repo", "wt-1", undefined, {
+          expectedRecipe: { id: "team-r1", terminalsDigest: recipeApprovalDigest(team.terminals) },
+        })
+      );
+    });
   });
 });

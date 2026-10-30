@@ -5,6 +5,8 @@ import {
   deriveTriageView,
   filterTriageEntries,
   groupByCorrelationId,
+  msUntilNeedsAttentionExpiry,
+  NEEDS_ATTENTION_MAX_AGE_MS,
   type NotificationFilter,
 } from "../notificationTriageModel";
 
@@ -14,7 +16,7 @@ function entry(overrides: Partial<NotificationHistoryEntry> = {}): NotificationH
     id: `e-${++counter}`,
     type: "info",
     message: "m",
-    timestamp: 1_000,
+    timestamp: Date.now(),
     seenAsToast: true,
     summarized: false,
     countable: true,
@@ -30,6 +32,7 @@ function view(
     groupByContext?: boolean;
     lastClosedAt?: number;
     snoozedThreads?: Record<string, number>;
+    now?: number;
   } = {}
 ) {
   const filter = opts.filter ?? "all";
@@ -42,6 +45,7 @@ function view(
     groupByContext: opts.groupByContext ?? false,
     lastClosedAt: opts.lastClosedAt ?? 0,
     snoozedThreads,
+    now: opts.now ?? Date.now(),
   });
 }
 
@@ -92,6 +96,110 @@ describe("notificationTriageModel", () => {
     });
     expect(result.needsAttentionGroups.map((g) => g.correlationId)).toEqual(["t"]);
     expect(result.needsAttentionOverflow).toBe(0);
+  });
+
+  it("stops pinning an unread error from weeks ago, leaving it in Unread and All", () => {
+    const now = Date.now();
+    const day = 24 * 60 * 60 * 1000;
+    const stale = entry({ type: "error", seenAsToast: false, timestamp: now - 40 * day });
+    const recent = entry({ type: "warning", seenAsToast: false, timestamp: now - 60_000 });
+    const result = view([recent, stale]);
+    expect(result.needsAttentionGroups.map((g) => g.entries[0]!.id)).toEqual([recent.id]);
+    expect(result.needsAttentionOverflow).toBe(0);
+    for (const filter of ["all", "unread"] as const) {
+      const rows = view([recent, stale], { filter }).chronoSections.flatMap((s) => s.groups);
+      expect(rows.map((g) => g.entries[0]!.id)).toEqual([recent.id, stale.id]);
+    }
+  });
+
+  it("pins up to the age horizon inclusive, and not a millisecond past it", () => {
+    const now = 50_000_000_000;
+    const err = entry({ type: "error", seenAsToast: false, timestamp: now });
+    const pinnedAt = (age: number) => view([err], { now: now + age }).needsAttentionGroups.length;
+    expect(pinnedAt(NEEDS_ATTENTION_MAX_AGE_MS)).toBe(1);
+    expect(pinnedAt(NEEDS_ATTENTION_MAX_AGE_MS + 1)).toBe(0);
+  });
+
+  it("ages a thread by its newest unread entry, so a read follow-up neither revives nor re-dates it", () => {
+    const now = Date.now();
+    const stale = now - NEEDS_ATTENTION_MAX_AGE_MS - 60_000;
+    const staleError = entry({
+      type: "error",
+      seenAsToast: false,
+      timestamp: stale,
+      correlationId: "old",
+    });
+    const readFollowUp = entry({
+      type: "info",
+      seenAsToast: true,
+      timestamp: now,
+      correlationId: "old",
+    });
+    expect(view([readFollowUp, staleError]).needsAttentionGroups).toEqual([]);
+
+    // Unread news in the same thread is recent, so the thread is back.
+    const unreadFollowUp = entry({
+      type: "info",
+      seenAsToast: false,
+      timestamp: now,
+      correlationId: "old",
+    });
+    expect(
+      view([unreadFollowUp, staleError]).needsAttentionGroups.map((g) => g.correlationId)
+    ).toEqual(["old"]);
+
+    // Two recent errors: the one whose thread only looks fresh because of a
+    // read entry ranks by its unread error, behind the genuinely newer one.
+    const olderUnread = entry({
+      type: "error",
+      seenAsToast: false,
+      timestamp: now - 120_000,
+      correlationId: "a",
+    });
+    const readTail = entry({ type: "info", seenAsToast: true, timestamp: now, correlationId: "a" });
+    const newerUnread = entry({
+      type: "error",
+      seenAsToast: false,
+      timestamp: now - 60_000,
+      correlationId: "b",
+    });
+    expect(
+      view([readTail, newerUnread, olderUnread]).needsAttentionGroups.map((g) => g.correlationId)
+    ).toEqual(["b", "a"]);
+  });
+
+  it("leaves stale threads out of the overflow count", () => {
+    const now = Date.now();
+    const stale = now - NEEDS_ATTENTION_MAX_AGE_MS - 1;
+    const recent = Array.from({ length: 4 }, (_, i) =>
+      entry({ type: "error", seenAsToast: false, timestamp: now - i })
+    );
+    const old = Array.from({ length: 3 }, (_, i) =>
+      entry({ type: "error", seenAsToast: false, timestamp: stale - i })
+    );
+    const result = view([...recent, ...old]);
+    expect(result.needsAttentionGroups.map((g) => g.entries[0]!.id)).toEqual(
+      ids(recent.slice(0, 3))
+    );
+    expect(result.needsAttentionOverflow).toBe(1);
+  });
+
+  it("wakes the rail just past the soonest candidate's horizon", () => {
+    const now = 50_000_000_000;
+    const ageOutIn = (ms: number) => now + ms - NEEDS_ATTENTION_MAX_AGE_MS;
+    const later = entry({ type: "error", seenAsToast: false, timestamp: ageOutIn(90_000) });
+    const sooner = entry({ type: "warning", seenAsToast: false, timestamp: ageOutIn(30_000) });
+    expect(msUntilNeedsAttentionExpiry([later, sooner], now)).toBe(30_001);
+
+    // Nothing that could ever pin schedules a wake-up.
+    const notCandidates = [
+      entry({ type: "error", seenAsToast: true, timestamp: ageOutIn(10_000) }),
+      entry({ type: "info", seenAsToast: false, timestamp: ageOutIn(10_000) }),
+      entry({ type: "error", seenAsToast: false, timestamp: ageOutIn(10_000), archivedAt: now }),
+      entry({ type: "error", seenAsToast: false, timestamp: ageOutIn(-1) }),
+    ];
+    expect(msUntilNeedsAttentionExpiry(notCandidates, now)).toBeNull();
+    expect(msUntilNeedsAttentionExpiry([...notCandidates, later], now)).toBe(90_001);
   });
 
   it("keeps the pinned rail out of Archived and Snoozed", () => {

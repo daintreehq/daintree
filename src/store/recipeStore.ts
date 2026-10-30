@@ -55,7 +55,8 @@ import {
   recipeTerminalsUsePluginOnlyFeatures,
   recipeUsesPluginOnlyFeatures,
 } from "@/utils/pluginRecipeCopy";
-import { sanitizeRecipeTerminals, MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
+import { inspectRecipeTerminals, MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
+import { RecipeImportDropsTerminalsError, type RecipeFileImportResult } from "@/utils/recipeImport";
 import type { ActionSource, HostApprovedRecipeRun } from "@shared/types/actions";
 import type { AgentCliDetail } from "@shared/types/ipc";
 import type { TerminalSpawnSource, AddPanelFocusPolicy } from "@shared/types/panel";
@@ -79,6 +80,14 @@ import {
 import { isRemoteWindow, resolveHostTmpDir } from "@/hooks/useHostPlatform";
 import { agentClipboardDirectory } from "@shared/types/agentSettings";
 
+/**
+ * How an `updateRecipe` call settled. `"cancelled"` is a refused in-repo write
+ * the user backed out of at the conflict dialog: nothing was written and the
+ * store is rolled back, but the caller's draft is still theirs to keep (#15035).
+ * `"reloaded"` means they dropped it for the file's newer version instead.
+ */
+export type RecipeUpdateResult = "saved" | "reloaded" | "cancelled";
+
 export interface RecipeSpawnResult {
   index: number;
   terminalId: string;
@@ -92,6 +101,22 @@ export interface RecipeSpawnFailure {
 export interface RecipeSpawnResults {
   spawned: RecipeSpawnResult[];
   failed: RecipeSpawnFailure[];
+}
+
+/**
+ * What a layout capture left out of the draft, so the editor can say so before
+ * the person saves (#14968). `panelKinds` counts panels a recipe can't hold, by
+ * kind, in the order they first appear; `cappedTerminalCount` counts the
+ * capturable panels past {@link MAX_TERMINALS_PER_RECIPE}.
+ */
+export interface RecipeLayoutOmissions {
+  panelKinds: Record<string, number>;
+  cappedTerminalCount: number;
+}
+
+export interface RecipeLayoutCapture {
+  terminals: RecipeTerminal[];
+  omitted: RecipeLayoutOmissions;
 }
 
 export interface RecipeRunOptions {
@@ -279,7 +304,7 @@ interface RecipeState {
   /** Replace the plugin tier wholesale from main's authoritative snapshot. */
   setPluginRecipes: (recipes: TerminalRecipe[]) => void;
   exportRecipeToFile: (id: string) => Promise<boolean>;
-  importRecipeFromFile: (projectId: string | undefined) => Promise<boolean>;
+  importRecipeFromFile: (projectId: string | undefined) => Promise<RecipeFileImportResult>;
   createRecipe: (
     projectId: string | undefined,
     name: string,
@@ -291,7 +316,7 @@ interface RecipeState {
   updateRecipe: (
     id: string,
     updates: Partial<Omit<TerminalRecipe, "id" | "projectId" | "createdAt">>
-  ) => Promise<void>;
+  ) => Promise<RecipeUpdateResult>;
   deleteRecipe: (id: string) => Promise<void>;
 
   getRecipesForWorktree: (worktreeId: string | undefined) => TerminalRecipe[];
@@ -316,8 +341,18 @@ interface RecipeState {
   saveToRepo: (recipeId: string, deleteOriginal?: boolean) => Promise<void>;
 
   exportRecipe: (id: string) => string | null;
-  importRecipe: (projectId: string | undefined, json: string) => Promise<void>;
+  /**
+   * Throws {@link RecipeImportDropsTerminalsError} when any terminal fails
+   * validation, unless `allowDroppedTerminals` says the user has seen which
+   * ones and chose to import the rest (#15044).
+   */
+  importRecipe: (
+    projectId: string | undefined,
+    json: string,
+    options?: { allowDroppedTerminals?: boolean }
+  ) => Promise<void>;
 
+  captureRecipeFromLayout: (worktreeId: string) => RecipeLayoutCapture;
   generateRecipeFromActiveTerminals: (worktreeId: string) => RecipeTerminal[];
 
   reset: () => void;
@@ -649,7 +684,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           `"${recipe.name}" is provided by the ${pluginManifestIdFromInstanceKey(recipe.origin.pluginId)} plugin and can't be edited. Save it to the repo to make an editable copy.`
         );
       }
-      if (Object.keys(patch).length === 0) return;
+      if (Object.keys(patch).length === 0) return "saved";
 
       const applyPatch = (target: TerminalRecipe): TerminalRecipe => {
         const next = { ...target };
@@ -692,7 +727,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         logError("Failed to persist plugin recipe preference", error);
         throw error;
       }
-      return;
+      return "saved";
     }
 
     const isInRepo = isInRepoRecipeId(recipe);
@@ -809,7 +844,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         });
         if (resolution === "reload" && projectId) {
           void get().loadRecipes(projectId);
-          return;
+          return "reloaded";
         }
         if (resolution === "overwrite" && projectId) {
           try {
@@ -832,20 +867,21 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
                 get().pluginRecipes
               ),
             });
-            return;
+            return "saved";
           } catch (retryError) {
             logError("Failed to overwrite recipe after conflict", retryError);
             throw retryError;
           }
         }
-        // Cancel / dismissed: leave the rolled-back state in place. The user
-        // can re-attempt the edit; the focus-reload hook (or a manual reload)
-        // brings the in-memory state back in sync with disk.
-        return;
+        // Cancel / dismissed: leave the rolled-back state in place and say so,
+        // so the editor keeps the draft open for another try instead of closing
+        // as if it had saved (#15035).
+        return "cancelled";
       }
       logError("Failed to persist recipe update", error);
       throw error;
     }
+    return "saved";
   },
 
   deleteRecipe: async (id) => {
@@ -1585,12 +1621,16 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
   importRecipeFromFile: async (projectId) => {
     const json = await projectClient.importRecipeFromFile();
-    if (!json) return false;
-    await get().importRecipe(projectId, json);
-    return true;
+    if (!json) return { status: "cancelled" };
+    try {
+      await get().importRecipe(projectId, json);
+    } catch (error) {
+      return { status: "refused", json, error };
+    }
+    return { status: "imported" };
   },
 
-  importRecipe: async (projectId, json) => {
+  importRecipe: async (projectId, json, options) => {
     let recipe: Partial<TerminalRecipe>;
     try {
       recipe = JSON.parse(json);
@@ -1619,11 +1659,16 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     // Content-validate at the import trust boundary. Shared with the in-repo
     // load path (ProjectIdentityFiles.readInRepoRecipesWithHashes) so both
     // entry points apply the same type allowlist, control-char filtering, and
-    // explicit field mapping before a terminal can reach the spawn path.
-    const sanitizedTerminals = sanitizeRecipeTerminals(recipe.terminals);
+    // explicit field mapping before a terminal can reach the spawn path. A
+    // recipe that would lose a terminal is a weaker copy, so it is saved only
+    // once the user has seen what goes (#15044).
+    const { accepted: sanitizedTerminals, rejected } = inspectRecipeTerminals(recipe.terminals);
 
-    if (sanitizedTerminals.length === 0) {
-      throw new Error("No valid terminals found in recipe");
+    if (
+      sanitizedTerminals.length === 0 ||
+      (rejected.length > 0 && options?.allowDroppedTerminals !== true)
+    ) {
+      throw new RecipeImportDropsTerminalsError(sanitizedTerminals.length, rejected);
     }
 
     const isGlobal = projectId === undefined;
@@ -1674,22 +1719,38 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     }
   },
 
-  generateRecipeFromActiveTerminals: (worktreeId) => {
+  captureRecipeFromLayout: (worktreeId) => {
     const terminalStore = usePanelStore.getState();
+    const terminals: RecipeTerminal[] = [];
+    // A Map, so a kind named like an Object.prototype key counts like any other.
+    const panelKinds = new Map<string, number>();
+    let cappedTerminalCount = 0;
 
-    const activeTerminals = terminalStore.panelIds
-      .map((id) => terminalStore.panelsById[id])
-      .filter(
-        (t): t is NonNullable<typeof t> =>
-          Boolean(t) && t!.location !== "trash" && t!.worktreeId === worktreeId
-      );
+    // Only panels a recipe can hold count toward the cap: a browser ahead of a
+    // terminal must not spend the terminal's slot (#14968).
+    for (const id of terminalStore.panelIds) {
+      const panel = terminalStore.panelsById[id];
+      if (!panel || panel.location === "trash" || panel.worktreeId !== worktreeId) continue;
+      if (!isPtyPanel(panel) && !isDevPreviewPanel(panel)) {
+        const kind = panel.kind ?? "terminal";
+        panelKinds.set(kind, (panelKinds.get(kind) ?? 0) + 1);
+        continue;
+      }
+      if (terminals.length >= MAX_TERMINALS_PER_RECIPE) {
+        cappedTerminalCount++;
+        continue;
+      }
+      terminals.push(terminalToRecipeTerminal(panel));
+    }
 
-    const terminalsToCapture = activeTerminals.slice(0, MAX_TERMINALS_PER_RECIPE);
-
-    return terminalsToCapture
-      .filter((t): t is PtyPanelData | DevPreviewPanelData => isPtyPanel(t) || isDevPreviewPanel(t))
-      .map(terminalToRecipeTerminal);
+    return {
+      terminals,
+      omitted: { panelKinds: Object.fromEntries(panelKinds), cappedTerminalCount },
+    };
   },
+
+  generateRecipeFromActiveTerminals: (worktreeId) =>
+    get().captureRecipeFromLayout(worktreeId).terminals,
 
   reset: () => {
     lastCollisionSignatureByProject.clear();

@@ -8,7 +8,9 @@
  * control character in any of those fields, can inject shell commands or
  * manipulate the terminal — so every terminal is validated here before it can
  * reach `addPanel`. Invalid terminals are dropped individually; the caller
- * decides what to do with a recipe left with zero valid terminals.
+ * decides what to do with a recipe left with zero valid terminals, and a
+ * caller with a user to tell can ask `inspectRecipeTerminals` which were
+ * dropped and why.
  */
 import { BUILT_IN_AGENT_IDS } from "../config/agentIds.js";
 import { isAgentRecipeType } from "../types/project.js";
@@ -107,64 +109,99 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** A terminal field the sanitizer can reject a whole terminal over. */
+export type RecipeTerminalField =
+  | "command"
+  | "initialPrompt"
+  | "systemPrompt"
+  | "args"
+  | "devCommand"
+  | "env"
+  | "exitBehavior"
+  | "panelKindId"
+  | "panelArgs";
+
+/**
+ * Why the sanitizer dropped one terminal. Describes shape only (the field and,
+ * for an unknown type, the type string) and never a field's value, which may be
+ * the very control-char payload that got it rejected.
+ */
+export type RecipeTerminalRejection =
+  | { kind: "not-an-object" }
+  | { kind: "missing-type" }
+  | { kind: "unsupported-type"; type: string }
+  /** Not the shape the field holds: text, or for `env` an object of text values. */
+  | { kind: "wrong-shape"; field: RecipeTerminalField }
+  | { kind: "control-char"; field: RecipeTerminalField }
+  | { kind: "unsupported-value"; field: RecipeTerminalField };
+
+type TerminalCheck =
+  | { terminal: RecipeTerminal; rejection?: undefined }
+  | { terminal?: undefined; rejection: RecipeTerminalRejection };
+
+const reject = (rejection: RecipeTerminalRejection): TerminalCheck => ({ rejection });
+
+/** String fields checked in this order, each against the control chars it may not hold. */
+const TEXT_FIELDS: readonly (readonly [RecipeTerminalField, RegExp])[] = [
+  ["command", RECIPE_CONTROL_CHARS],
+  ["initialPrompt", RECIPE_PROMPT_CONTROL_CHARS],
+  ["systemPrompt", RECIPE_PROMPT_CONTROL_CHARS],
+  ["args", RECIPE_CONTROL_CHARS],
+  ["devCommand", RECIPE_CONTROL_CHARS],
+];
+
 /**
  * Validates a single raw terminal and maps it to a clean {@link RecipeTerminal}
- * with only known fields, or returns `null` if it fails any content check.
+ * with only known fields, or says which content check it failed.
  */
-function sanitizeRecipeTerminal(
-  raw: unknown,
-  options?: RecipeSanitizeOptions
-): RecipeTerminal | null {
-  if (!isPlainObject(raw)) return null;
+function checkRecipeTerminal(raw: unknown, options?: RecipeSanitizeOptions): TerminalCheck {
+  if (!isPlainObject(raw)) return reject({ kind: "not-an-object" });
 
   const type = raw.type;
-  if (typeof type !== "string" || !isAllowedRecipeType(type, options)) return null;
+  if (typeof type !== "string") return reject({ kind: "missing-type" });
+  if (!isAllowedRecipeType(type, options)) {
+    return reject(type === "" ? { kind: "missing-type" } : { kind: "unsupported-type", type });
+  }
 
   if (type === "plugin-panel") {
     const kind = raw.panelKindId;
-    if (typeof kind !== "string" || options?.pluginPanelKinds?.has(kind) !== true) return null;
+    if (typeof kind !== "string") return reject({ kind: "wrong-shape", field: "panelKindId" });
+    if (options?.pluginPanelKinds?.has(kind) !== true) {
+      return reject({ kind: "unsupported-value", field: "panelKindId" });
+    }
     let panelArgs: Record<string, unknown> | undefined;
     if (raw.panelArgs !== undefined) {
       const copied = copyPanelArgs(raw.panelArgs);
-      if (copied === null) return null;
+      if (copied === null) return reject({ kind: "unsupported-value", field: "panelArgs" });
       panelArgs = copied;
     }
     return {
-      type: "plugin-panel",
-      title: typeof raw.title === "string" ? raw.title : undefined,
-      panelKindId: kind,
-      ...(panelArgs !== undefined ? { panelArgs } : {}),
+      terminal: {
+        type: "plugin-panel",
+        title: typeof raw.title === "string" ? raw.title : undefined,
+        panelKindId: kind,
+        ...(panelArgs !== undefined ? { panelArgs } : {}),
+      },
     };
   }
 
-  if (raw.command !== undefined) {
-    if (typeof raw.command !== "string") return null;
-    if (RECIPE_CONTROL_CHARS.test(raw.command)) return null;
-  }
-  if (raw.initialPrompt !== undefined) {
-    if (typeof raw.initialPrompt !== "string") return null;
-    if (RECIPE_PROMPT_CONTROL_CHARS.test(raw.initialPrompt)) return null;
-  }
-  if (raw.systemPrompt !== undefined && options?.allowSystemPrompt === true) {
-    if (typeof raw.systemPrompt !== "string") return null;
-    if (RECIPE_PROMPT_CONTROL_CHARS.test(raw.systemPrompt)) return null;
-  }
-  if (raw.args !== undefined) {
-    if (typeof raw.args !== "string") return null;
-    if (RECIPE_CONTROL_CHARS.test(raw.args)) return null;
-  }
-  if (raw.devCommand !== undefined) {
-    if (typeof raw.devCommand !== "string") return null;
-    if (RECIPE_CONTROL_CHARS.test(raw.devCommand)) return null;
+  for (const [field, forbidden] of TEXT_FIELDS) {
+    if (field === "systemPrompt" && options?.allowSystemPrompt !== true) continue;
+    const value = raw[field];
+    if (value === undefined) continue;
+    if (typeof value !== "string") return reject({ kind: "wrong-shape", field });
+    if (forbidden.test(value)) return reject({ kind: "control-char", field });
   }
 
   let env: Record<string, string> | undefined;
   if (raw.env !== undefined) {
-    if (!isPlainObject(raw.env)) return null;
+    if (!isPlainObject(raw.env)) return reject({ kind: "wrong-shape", field: "env" });
     const cleaned: Record<string, string> = {};
     for (const [key, value] of Object.entries(raw.env)) {
-      if (typeof value !== "string") return null;
-      if (RECIPE_CONTROL_CHARS.test(key) || RECIPE_CONTROL_CHARS.test(value)) return null;
+      if (typeof value !== "string") return reject({ kind: "wrong-shape", field: "env" });
+      if (RECIPE_CONTROL_CHARS.test(key) || RECIPE_CONTROL_CHARS.test(value)) {
+        return reject({ kind: "control-char", field: "env" });
+      }
       cleaned[key] = value;
     }
     env = cleaned;
@@ -176,7 +213,7 @@ function sanitizeRecipeTerminal(
     raw.exitBehavior !== "" &&
     !ALLOWED_EXIT_BEHAVIORS.has(raw.exitBehavior)
   ) {
-    return null;
+    return reject({ kind: "unsupported-value", field: "exitBehavior" });
   }
 
   const recipeType = type as RecipeTerminalType;
@@ -187,28 +224,66 @@ function sanitizeRecipeTerminal(
       : undefined;
 
   return {
-    type: recipeType,
-    title: typeof raw.title === "string" ? raw.title : undefined,
-    command:
-      recipeType === "terminal" && typeof raw.command === "string"
-        ? raw.command.trim() || undefined
-        : undefined,
-    env,
-    initialPrompt:
-      isAgent && typeof raw.initialPrompt === "string"
-        ? raw.initialPrompt.replace(/\r\n/g, "\n").trimEnd()
-        : undefined,
-    ...(systemPrompt !== undefined ? { systemPrompt } : {}),
-    devCommand:
-      recipeType === "dev-preview" && typeof raw.devCommand === "string"
-        ? raw.devCommand.trim() || undefined
-        : undefined,
-    args: isAgent && typeof raw.args === "string" ? raw.args.trim() || undefined : undefined,
-    exitBehavior:
-      typeof raw.exitBehavior === "string" && ALLOWED_EXIT_BEHAVIORS.has(raw.exitBehavior)
-        ? (raw.exitBehavior as "keep" | "trash" | "remove")
-        : undefined,
+    terminal: {
+      type: recipeType,
+      title: typeof raw.title === "string" ? raw.title : undefined,
+      command:
+        recipeType === "terminal" && typeof raw.command === "string"
+          ? raw.command.trim() || undefined
+          : undefined,
+      env,
+      initialPrompt:
+        isAgent && typeof raw.initialPrompt === "string"
+          ? raw.initialPrompt.replace(/\r\n/g, "\n").trimEnd()
+          : undefined,
+      ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+      devCommand:
+        recipeType === "dev-preview" && typeof raw.devCommand === "string"
+          ? raw.devCommand.trim() || undefined
+          : undefined,
+      args: isAgent && typeof raw.args === "string" ? raw.args.trim() || undefined : undefined,
+      exitBehavior:
+        typeof raw.exitBehavior === "string" && ALLOWED_EXIT_BEHAVIORS.has(raw.exitBehavior)
+          ? (raw.exitBehavior as "keep" | "trash" | "remove")
+          : undefined,
+    },
   };
+}
+
+/** One terminal the sanitizer dropped, by its position in the input array. */
+export interface RejectedRecipeTerminal {
+  index: number;
+  /** The entry's own `title`, when it had a string one. Unvalidated input. */
+  title?: string;
+  rejection: RecipeTerminalRejection;
+}
+
+export interface RecipeTerminalInspection {
+  accepted: RecipeTerminal[];
+  rejected: RejectedRecipeTerminal[];
+}
+
+/**
+ * The same validation as {@link sanitizeRecipeTerminals}, keeping a record of
+ * every terminal it drops and why, for a boundary that has a user to tell.
+ */
+export function inspectRecipeTerminals(
+  terminals: unknown,
+  options?: RecipeSanitizeOptions
+): RecipeTerminalInspection {
+  const accepted: RecipeTerminal[] = [];
+  const rejected: RejectedRecipeTerminal[] = [];
+  if (!Array.isArray(terminals)) return { accepted, rejected };
+  terminals.forEach((raw, index) => {
+    const check = checkRecipeTerminal(raw, options);
+    if (check.terminal) {
+      accepted.push(check.terminal);
+      return;
+    }
+    const title = isPlainObject(raw) && typeof raw.title === "string" ? raw.title : undefined;
+    rejected.push({ index, ...(title !== undefined ? { title } : {}), rejection: check.rejection });
+  });
+  return { accepted, rejected };
 }
 
 /**
@@ -221,11 +296,5 @@ export function sanitizeRecipeTerminals(
   terminals: unknown,
   options?: RecipeSanitizeOptions
 ): RecipeTerminal[] {
-  if (!Array.isArray(terminals)) return [];
-  const result: RecipeTerminal[] = [];
-  for (const raw of terminals) {
-    const sanitized = sanitizeRecipeTerminal(raw, options);
-    if (sanitized) result.push(sanitized);
-  }
-  return result;
+  return inspectRecipeTerminals(terminals, options).accepted;
 }

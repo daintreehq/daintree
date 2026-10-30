@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 
 // Provide localStorage stub for jsdom
@@ -715,6 +715,120 @@ describe("QuickRun", () => {
       expect.objectContaining({ command: "docker compose up" })
     );
     expect(document.activeElement).toBe(input);
+  });
+
+  describe("when a pin or unpin does not save", () => {
+    const pinKey = { key: "π", code: "KeyP", altKey: true };
+
+    afterEach(() => {
+      settingsMock.runCommands = [];
+      settingsMock.promoteToSaved.mockReset();
+      settingsMock.removeFromSaved.mockReset();
+    });
+
+    it("says the pin did not save, and Retry pins it again from the message", async () => {
+      seedHistory("docker compose up");
+      settingsMock.promoteToSaved.mockRejectedValueOnce(new Error("disk full"));
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      await act(async () => {
+        fireEvent.keyDown(input, pinKey);
+      });
+
+      const alert = screen.getByRole("alert");
+      expect(alert.textContent).toContain("Couldn't pin");
+      expect(alert.textContent).toContain("docker compose up");
+      // The row is still where it was, still lit, and the field still has focus.
+      const [row] = commandOptions();
+      expect(row!.getAttribute("data-command")).toBe("docker compose up");
+      expect(input.getAttribute("aria-activedescendant")).toBe(row!.id);
+      expect(document.activeElement).toBe(input);
+
+      // A keyboard user activating Retry loses it when the message goes, so
+      // focus has to be handed back to the field before that.
+      const retry = screen.getByRole("button", { name: "Retry" });
+      expect(retry.getAttribute("aria-describedby")).toBe(alert.id);
+      retry.focus();
+      await act(async () => {
+        fireEvent.click(retry);
+      });
+      expect(settingsMock.promoteToSaved).toHaveBeenCalledTimes(2);
+      expect(settingsMock.promoteToSaved).toHaveBeenLastCalledWith(
+        expect.objectContaining({ command: "docker compose up" })
+      );
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(document.activeElement).toBe(input);
+    });
+
+    it("says the unpin did not save, and Retry unpins it again", async () => {
+      settingsMock.runCommands = [{ id: "s", name: "Docs", command: "npx serve docs" }];
+      settingsMock.removeFromSaved.mockRejectedValueOnce(new Error("host dropped"));
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      await act(async () => {
+        fireEvent.keyDown(input, pinKey);
+      });
+
+      const alert = screen.getByRole("alert");
+      expect(alert.textContent).toContain("Couldn't unpin");
+      expect(alert.textContent).toContain("npx serve docs");
+      // The row stays lit in the list, ready for another go.
+      const [row] = commandOptions();
+      expect(row!.getAttribute("data-command")).toBe("npx serve docs");
+      expect(input.getAttribute("aria-activedescendant")).toBe(row!.id);
+      expect(input.getAttribute("aria-expanded")).toBe("true");
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      });
+      expect(settingsMock.removeFromSaved).toHaveBeenCalledTimes(2);
+      expect(settingsMock.removeFromSaved).toHaveBeenLastCalledWith("npx serve docs");
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("retries the command that failed, not the row lit since", async () => {
+      seedHistory("docker compose up", "npm test");
+      settingsMock.promoteToSaved.mockRejectedValueOnce(new Error("disk full"));
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("quick-run-pin"));
+      });
+      expect(screen.getByRole("alert").textContent).toContain("docker compose up");
+
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      });
+      expect(settingsMock.promoteToSaved).toHaveBeenCalledTimes(2);
+      expect(settingsMock.promoteToSaved).toHaveBeenLastCalledWith(
+        expect.objectContaining({ command: "docker compose up" })
+      );
+    });
+
+    it("drops the message when the next pin attempt succeeds", async () => {
+      seedHistory("docker compose up", "npm test");
+      settingsMock.promoteToSaved.mockRejectedValueOnce(new Error("disk full"));
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      await act(async () => {
+        fireEvent.keyDown(input, pinKey);
+      });
+      expect(screen.getByRole("alert").textContent).toContain("docker compose up");
+
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      await act(async () => {
+        fireEvent.keyDown(input, pinKey);
+      });
+      expect(settingsMock.promoteToSaved).toHaveBeenLastCalledWith(
+        expect.objectContaining({ command: "npm test" })
+      );
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
   });
 
   it("renders all main buttons with type='button'", () => {

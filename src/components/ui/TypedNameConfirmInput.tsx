@@ -37,6 +37,9 @@ export function TypedNameConfirmInput({
   const instructionsId = useId();
   const preambleId = useId();
   const isMatched = value === target;
+  // A correct prefix is typing in progress, not an error; only a character that
+  // can no longer lead to the target is.
+  const isMistyped = value.length > 0 && !target.startsWith(value);
   const hasPreamble = preamble != null && instructions == null;
 
   const defaultInstructions = (
@@ -53,7 +56,10 @@ export function TypedNameConfirmInput({
   );
 
   return (
-    <div className="space-y-2 p-3 bg-status-danger/10 border border-status-danger/20 rounded-[var(--radius-md)]">
+    // Neutral, like every other field in the dialog: the consequence is stated
+    // in the body and carried by the destructive button, so a red well here was
+    // one more alarm on a surface that already has its signal.
+    <div className="space-y-2 p-3 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)]">
       {hasPreamble && (
         <p id={preambleId} className="text-sm text-text-primary">
           {preamble}
@@ -78,13 +84,12 @@ export function TypedNameConfirmInput({
         aria-describedby={hasPreamble ? `${preambleId} ${instructionsId}` : instructionsId}
         aria-label={`Type ${target} to confirm`}
         aria-required="true"
-        aria-invalid={value.length > 0 && !isMatched}
+        aria-invalid={isMistyped}
         autoComplete="off"
         spellCheck={false}
-        // The field's own chrome, with the ring in danger ink like a
-        // destructive button's. Scroll margin so focusing the field in a
-        // scrolled dialog body brings it clear of the body's bottom fade.
-        className="font-mono focus-visible:outline-status-error read-only:opacity-50 scroll-mb-8"
+        // The field's own chrome and focus ring. Scroll margin so focusing the
+        // field in a scrolled dialog body brings it clear of the body's bottom fade.
+        className="font-mono read-only:opacity-50 scroll-mb-8"
         data-testid={testId}
       />
       <span className="sr-only" aria-live="polite">

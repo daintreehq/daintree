@@ -49,6 +49,14 @@ describe("buildDefaultKeybindings", () => {
     }
   });
 
+  it("holds Cmd+Shift+Enter only while dictating, so the commit box keeps it otherwise", () => {
+    const whenOf = (table: KeybindingConfig[]) =>
+      table.find((b) => b.actionId === "voiceInput.stopAndSend")?.when;
+    expect(whenOf(mac)).toBe("dictationActive");
+    expect(whenOf(windows)).toBeUndefined();
+    expect(whenOf(linux)).toBeUndefined();
+  });
+
   it("replaces the Linux dictation default instead of adding a second one", () => {
     const linuxCombos = globalCombo(linux, "voiceInput.toggle");
     expect(linuxCombos).toHaveLength(1);

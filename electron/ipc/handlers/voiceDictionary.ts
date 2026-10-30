@@ -10,6 +10,9 @@ import {
 } from "../../services/projectVoiceDictionary.js";
 import type {
   DismissedSuggestion,
+  HeardAsConflict,
+  ProjectVoiceDictionaryChange,
+  VoiceDictionaryChange,
   VoiceDictionaryEntry,
   VoiceDictionaryState,
   VoiceInputSettings,
@@ -34,6 +37,9 @@ const LIST_MAX = 200;
 const text = z.string().max(RAW_TEXT_MAX);
 const existing = z.string();
 const heardAs = z.array(text).max(MAX_DICTIONARY_HEARD_AS);
+// What a heard-as phrase another entry has does to the change; refused by default.
+const heardAsConflict = z.enum(["reject", "skip", "move"]).optional();
+const editHeardAsConflict = z.enum(["reject", "move"]).optional();
 
 const addSchema = z.object({
   term: text,
@@ -41,11 +47,16 @@ const addSchema = z.object({
   // Source and time ride along only so an undone removal restores the entry as it was.
   source: z.enum(["manual", "learned", "imported"]).optional(),
   addedAt: z.number().finite().nonnegative().optional(),
+  heardAsConflict,
 });
 const removeSchema = z.object({ term: existing });
 const updateSchema = z.object({
   term: existing,
-  changes: z.object({ term: text.optional(), heardAs: heardAs.optional() }),
+  changes: z.object({
+    term: text.optional(),
+    heardAs: heardAs.optional(),
+    heardAsConflict: editHeardAsConflict,
+  }),
 });
 const suggestionSchema = z.object({ word: existing, utterance: text.optional() });
 const projectId = z.string().min(1).max(RAW_TEXT_MAX);
@@ -65,7 +76,11 @@ const projectAddSchema = addSchema.extend({
 const projectRemoveSchema = removeSchema.extend({ projectId });
 const projectUpdateSchema = updateSchema.extend({
   projectId,
-  changes: z.object({ term: projectText.optional(), heardAs: projectHeardAs.optional() }),
+  changes: z.object({
+    term: projectText.optional(),
+    heardAs: projectHeardAs.optional(),
+    heardAsConflict: editHeardAsConflict,
+  }),
 });
 const recordSchema = z.object({
   candidates: z.array(z.object({ word: text, original: text })).max(LIST_MAX),
@@ -112,16 +127,39 @@ function change(
   return next;
 }
 
+/** `change`, with the heard-as phrases the operation pushed onto its conflict list. */
+function changeReporting(
+  apply: (
+    state: VoiceDictionaryState,
+    conflicts: HeardAsConflict[]
+  ) => VoiceDictionaryState & { dismissedSuggestions?: DismissedSuggestion[] }
+): VoiceDictionaryChange {
+  const conflicts: HeardAsConflict[] = [];
+  return { ...change((state) => apply(state, conflicts)), conflicts };
+}
+
+/** A project's read-modify-write, with the heard-as phrases it pushed onto its conflict list. */
+async function changeProjectReporting(
+  projectId: string,
+  apply: (entries: VoiceDictionaryEntry[], conflicts: HeardAsConflict[]) => VoiceDictionaryEntry[]
+): Promise<ProjectVoiceDictionaryChange> {
+  const conflicts: HeardAsConflict[] = [];
+  const dictionary = await changeProjectVoiceDictionary(projectId, (entries) =>
+    apply(entries, conflicts)
+  );
+  return { dictionary, conflicts };
+}
+
 export const voiceDictionaryNamespace = defineIpcNamespace({
   name: "voiceDictionary",
   ops: {
     add: opValidated(
       VOICE_DICTIONARY_METHOD_CHANNELS.add,
       addSchema,
-      async (input): Promise<VoiceDictionaryState> =>
-        change((state) => ({
+      async (input): Promise<VoiceDictionaryChange> =>
+        changeReporting((state, conflicts) => ({
           ...state,
-          dictionary: addDictionaryEntry(state.dictionary, input, Date.now()),
+          dictionary: addDictionaryEntry(state.dictionary, input, Date.now(), conflicts),
         }))
     ),
     remove: opValidated(
@@ -133,17 +171,19 @@ export const voiceDictionaryNamespace = defineIpcNamespace({
     update: opValidated(
       VOICE_DICTIONARY_METHOD_CHANNELS.update,
       updateSchema,
-      async ({ term, changes }): Promise<VoiceDictionaryState> =>
-        change((state) => ({
+      async ({ term, changes }): Promise<VoiceDictionaryChange> =>
+        changeReporting((state, conflicts) => ({
           ...state,
-          dictionary: updateDictionaryEntry(state.dictionary, term, changes),
+          dictionary: updateDictionaryEntry(state.dictionary, term, changes, conflicts),
         }))
     ),
     acceptSuggestion: opValidated(
       VOICE_DICTIONARY_METHOD_CHANNELS.acceptSuggestion,
       suggestionSchema,
-      async ({ word, utterance }): Promise<VoiceDictionaryState> =>
-        change((state) => acceptSuggestion(state, word, Date.now(), utterance))
+      async ({ word, utterance }): Promise<VoiceDictionaryChange> =>
+        changeReporting((state, conflicts) =>
+          acceptSuggestion(state, word, Date.now(), utterance, conflicts)
+        )
     ),
     dismissSuggestion: opValidated(
       VOICE_DICTIONARY_METHOD_CHANNELS.dismissSuggestion,
@@ -189,9 +229,9 @@ export const voiceDictionaryNamespace = defineIpcNamespace({
     addToProject: opValidated(
       VOICE_DICTIONARY_METHOD_CHANNELS.addToProject,
       projectAddSchema,
-      async ({ projectId, ...input }): Promise<VoiceDictionaryEntry[]> =>
-        changeProjectVoiceDictionary(projectId, (entries) =>
-          addDictionaryEntry(entries, input, Date.now())
+      async ({ projectId, ...input }): Promise<ProjectVoiceDictionaryChange> =>
+        changeProjectReporting(projectId, (entries, conflicts) =>
+          addDictionaryEntry(entries, input, Date.now(), conflicts)
         )
     ),
     removeFromProject: opValidated(
@@ -203,9 +243,9 @@ export const voiceDictionaryNamespace = defineIpcNamespace({
     updateInProject: opValidated(
       VOICE_DICTIONARY_METHOD_CHANNELS.updateInProject,
       projectUpdateSchema,
-      async ({ projectId, term, changes }): Promise<VoiceDictionaryEntry[]> =>
-        changeProjectVoiceDictionary(projectId, (entries) =>
-          updateDictionaryEntry(entries, term, changes)
+      async ({ projectId, term, changes }): Promise<ProjectVoiceDictionaryChange> =>
+        changeProjectReporting(projectId, (entries, conflicts) =>
+          updateDictionaryEntry(entries, term, changes, conflicts)
         )
     ),
   },

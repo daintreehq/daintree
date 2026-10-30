@@ -124,8 +124,8 @@ function ReviewSurface({
               </span>
               {/* DiffStat's spelling, inline: tour scenes can't import host components (#12769). */}
               <span className="inline-flex items-center gap-1 text-3xs tabular-nums">
-                {file.added > 0 && <span className="text-status-success">+{file.added}</span>}
-                {file.removed > 0 && <span className="text-status-error">-{file.removed}</span>}
+                {file.added > 0 && <span className="text-diff-text-insert">+{file.added}</span>}
+                {file.removed > 0 && <span className="text-diff-text-delete">-{file.removed}</span>}
               </span>
             </div>
           ))}

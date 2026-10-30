@@ -1213,6 +1213,144 @@ describe("NotificationCenter — Needs attention pinned section", () => {
     expect(within(screen.getByTestId("chrono-section")).getByText("Failure 6")).toBeTruthy();
   });
 
+  it("stops pinning an unread error from weeks ago but keeps it in All and Unread", async () => {
+    setEntries([
+      makeEntry({ type: "warning", message: "Token expiring", seenAsToast: false }),
+      makeEntry({
+        type: "error",
+        message: "September failure",
+        timestamp: Date.now() - 40 * 24 * 60 * 60 * 1000,
+        seenAsToast: false,
+      }),
+    ]);
+
+    render(<NotificationCenter open onClose={vi.fn()} />);
+
+    const pinned = () => screen.getByTestId("needs-attention-section");
+    expect(within(pinned()).queryByText("September failure")).toBeNull();
+    expect(within(pinned()).getByText("Token expiring")).toBeTruthy();
+    expect(screen.queryByTestId("needs-attention-overflow")).toBeNull();
+    expect(
+      within(screen.getByTestId("chrono-section")).getByText("September failure")
+    ).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Unread"));
+    });
+    expect(within(pinned()).queryByText("September failure")).toBeNull();
+    expect(
+      within(screen.getByTestId("chrono-section")).getByText("September failure")
+    ).toBeTruthy();
+  });
+
+  it("drops a thread from the rail when it ages out while the inbox stays open", () => {
+    vi.useFakeTimers();
+    try {
+      const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+      setEntries([
+        makeEntry({ type: "warning", message: "Token expiring", seenAsToast: false }),
+        makeEntry({
+          type: "error",
+          message: "Yesterday's failure",
+          timestamp: dayAgo + 90_000,
+          seenAsToast: false,
+        }),
+      ]);
+
+      render(<NotificationCenter open onClose={vi.fn()} />);
+      const pinned = () => screen.getByTestId("needs-attention-section");
+      expect(within(pinned()).getByText("Yesterday's failure")).toBeTruthy();
+
+      // Nothing in history changes and no quiet-hours tick is running: the
+      // rail's own wake-up is the only thing that can move it, and switching
+      // tabs on the way must not push that wake-up back.
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      act(() => {
+        fireEvent.click(screen.getByText("Unread"));
+      });
+      act(() => {
+        vi.advanceTimersByTime(31_000);
+      });
+      expect(within(pinned()).queryByText("Yesterday's failure")).toBeNull();
+      expect(within(pinned()).getByText("Token expiring")).toBeTruthy();
+      expect(
+        within(screen.getByTestId("chrono-section")).getByText("Yesterday's failure")
+      ).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a thread off the rail when it wakes from a snooze after aging out", () => {
+    vi.useFakeTimers();
+    try {
+      const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+      setEntries([
+        makeEntry({ type: "warning", message: "Token expiring", seenAsToast: false }),
+        makeEntry({
+          type: "error",
+          message: "Snoozed failure",
+          correlationId: "snoozed-thread",
+          timestamp: dayAgo + 90_000,
+          seenAsToast: false,
+        }),
+      ]);
+      useNotificationHistoryStore.setState({
+        snoozedThreads: { "snoozed-thread": Date.now() + 10 * 60_000 },
+      });
+
+      render(<NotificationCenter open onClose={vi.fn()} />);
+      const pinned = () => screen.getByTestId("needs-attention-section");
+      expect(within(pinned()).queryByText("Snoozed failure")).toBeNull();
+
+      // It ages out while snoozed; waking it is not new history, so only the
+      // clock having moved at its horizon keeps it off the rail.
+      act(() => {
+        vi.advanceTimersByTime(120_000);
+      });
+      act(() => {
+        useNotificationHistoryStore.setState({ snoozedThreads: {} });
+      });
+      expect(within(pinned()).queryByText("Snoozed failure")).toBeNull();
+      expect(
+        within(screen.getByTestId("chrono-section")).getByText("Snoozed failure")
+      ).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("judges an entry marked unread against the time it was marked, not when the inbox opened", () => {
+    vi.useFakeTimers();
+    try {
+      const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+      const failure = makeEntry({
+        type: "error",
+        message: "Yesterday's failure",
+        timestamp: dayAgo + 30_000,
+        seenAsToast: true,
+      });
+      setEntries([failure]);
+
+      render(<NotificationCenter open onClose={vi.fn()} />);
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      act(() => {
+        setEntries([{ ...failure, seenAsToast: false }]);
+      });
+
+      expect(screen.queryByTestId("needs-attention-section")).toBeNull();
+      expect(
+        within(screen.getByTestId("chrono-section")).getByText("Yesterday's failure")
+      ).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("omits the overflow note when severe unread threads fit within the cap", () => {
     setEntries([makeEntry({ type: "error", message: "Build failed", seenAsToast: false })]);
 
@@ -2413,6 +2551,68 @@ describe("NotificationCenter — keyboard navigation", () => {
     expect(useUIStore.getState().notificationCenterOpen).toBe(false);
   });
 
+  describe("Enter on a row from another workspace", () => {
+    const OTHER = "b".repeat(64);
+    const switchProject = vi.fn();
+    const initialSwitchProject = useProjectStore.getState().switchProject;
+
+    beforeEach(() => {
+      switchProject.mockReset().mockResolvedValue(undefined);
+      useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
+      useUIStore.setState({ notificationCenterOpen: true });
+      useProjectStore.setState({
+        currentProject: {
+          id: "p1",
+          path: "/repos/helios",
+          name: "Helios",
+          emoji: "🌲",
+          lastOpened: 0,
+        },
+        projects: [{ id: OTHER, path: "/repos/atlas", name: "Atlas", emoji: "🌲", lastOpened: 0 }],
+        switchProject,
+      });
+    });
+    afterEach(() => {
+      useProjectStore.setState({ switchProject: initialSwitchProject });
+    });
+
+    async function pressEnterOn(context: NotificationHistoryEntry["context"]) {
+      setEntries([makeEntry({ id: "a", seenAsToast: false, context })]);
+      const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+      const row = getRows(container)[0]!;
+      act(() => {
+        row.focus();
+      });
+      await act(async () => {
+        fireEvent.keyDown(row, { key: "Enter" });
+      });
+    }
+
+    it("switches there, leaving the row unread and announcing nothing", async () => {
+      await pressEnterOn({ projectId: OTHER, worktreeId: "wt-9", panelId: "pane-9" });
+      expect(switchProject).toHaveBeenCalledWith(OTHER, {
+        focusIntent: { intent: "focus-panel", panelId: "pane-9", worktreeId: "wt-9" },
+      });
+      expect(useUIStore.getState().notificationCenterOpen).toBe(false);
+      expect(useNotificationHistoryStore.getState().entries[0]?.seenAsToast).toBe(false);
+      expect(useAnnouncerStore.getState().polite).toBeNull();
+    });
+
+    it("says a row from another machine can't be followed", async () => {
+      await pressEnterOn({ projectId: OTHER, panelId: "pane-9", hostName: "studio-01" });
+      expect(switchProject).not.toHaveBeenCalled();
+      expect(useUIStore.getState().notificationCenterOpen).toBe(true);
+      expect(useAnnouncerStore.getState().polite?.msg).toBe("It came from another machine");
+    });
+
+    it("says a row whose project is gone can't be followed", async () => {
+      await pressEnterOn({ projectId: "c".repeat(64), panelId: "pane-9" });
+      expect(switchProject).not.toHaveBeenCalled();
+      expect(useUIStore.getState().notificationCenterOpen).toBe(true);
+      expect(useAnnouncerStore.getState().polite?.msg).toBe("Its project is no longer available");
+    });
+  });
+
   it("goes to a live worktree when a worktree-only row is clicked", async () => {
     worktreeStoreMock.worktrees.set("wt-live", { worktreeId: "wt-live", name: "feature-live" });
     setWorktreeIdSetAccessor(() => new Set(["wt-live"]));
@@ -2466,6 +2666,46 @@ describe("NotificationCenter — keyboard navigation", () => {
 
     const focusCalls = dispatchMock.mock.calls.filter(([id]) => id === "panel.focus");
     expect(focusCalls).toEqual([["panel.focus", { panelId: "pane-new" }]]);
+  });
+
+  it("marks an unread row read when a click, Enter or Go to source arrives, never on a dead link", async () => {
+    usePanelStore.setState({
+      panelsById: { "pane-1": { id: "pane-1", kind: "terminal", location: "grid" } },
+      focusedId: null,
+    } as never);
+    const unread = (id: string, panelId: string) =>
+      makeEntry({ id, message: `Row ${id}`, seenAsToast: false, context: { panelId } });
+    const isRead = (id: string) =>
+      useNotificationHistoryStore.getState().entries.find((e) => e.id === id)?.seenAsToast;
+
+    setEntries([unread("clicked", "pane-1"), unread("dead", "gone")]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Row dead"));
+    });
+    expect(isRead("dead")).toBe(false);
+    expect(useNotificationHistoryStore.getState().unreadCount).toBe(2);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Row clicked"));
+    });
+    expect(isRead("clicked")).toBe(true);
+    expect(isRead("dead")).toBe(false);
+    expect(useNotificationHistoryStore.getState().unreadCount).toBe(1);
+
+    useUIStore.setState({ notificationCenterOpen: true });
+    act(() => {
+      useNotificationHistoryStore.getState().markUnseenAsToast("clicked", { silent: true });
+    });
+    const row = getRows(container).find((r) => r.textContent?.includes("Row clicked"))!;
+    act(() => {
+      row.focus();
+    });
+    await act(async () => {
+      fireEvent.keyDown(row, { key: "Enter" });
+    });
+    expect(isRead("clicked")).toBe(true);
   });
 
   it("does nothing on Enter when the row's source is gone", async () => {

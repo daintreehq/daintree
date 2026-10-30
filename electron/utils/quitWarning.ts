@@ -1,6 +1,10 @@
 import type { BrowserWindow } from "electron";
 import type { AgentAvailabilityStore } from "../services/AgentAvailabilityStore.js";
-import { describeShellNames, type AttachedShell } from "../lifecycle/attachedShells.js";
+import type { AttachedShell } from "../lifecycle/attachedShells.js";
+import {
+  describeAttachedMachines,
+  type AttachedMachinesCopy,
+} from "../../shared/utils/attachedMachines.js";
 
 type Dialog = typeof import("electron").dialog;
 
@@ -15,14 +19,27 @@ export interface QuitImpact {
   attachedShells: AttachedShell[];
 }
 
+function agentsWorkingLine(activeAgents: number): string {
+  return `${activeAgents} agent${activeAgents > 1 ? "s are" : " is"} currently working`;
+}
+
+function attachedMachines(attachedShells: AttachedShell[]): AttachedMachinesCopy {
+  return describeAttachedMachines(attachedShells.map((s) => s.clientName));
+}
+
+function attachedMachinesMessage(machines: AttachedMachinesCopy): string {
+  return `${machines.subject} ${machines.verb} attached to this host`;
+}
+
 export async function showQuitWarning(
   impact: QuitImpact,
   showMessageBox: Dialog["showMessageBox"],
   win?: BrowserWindow | null
 ): Promise<boolean> {
   const { activeAgents, attachedShells } = impact;
-  const agentsLine = `${activeAgents} agent${activeAgents > 1 ? "s are" : " is"} currently working`;
-  const shellsLine = `Quitting disconnects ${describeShellNames(attachedShells)} and ends the work it has open on this machine.`;
+  const agentsLine = agentsWorkingLine(activeAgents);
+  const machines = attachedMachines(attachedShells);
+  const shellsLine = `Quitting disconnects ${machines.object} and ends ${machines.openWork} on this machine.`;
 
   const opts: Electron.MessageBoxOptions =
     attachedShells.length === 0
@@ -41,7 +58,7 @@ export async function showQuitWarning(
           defaultId: 1,
           cancelId: 1,
           title: "Other machines are attached",
-          message: `${describeShellNames(attachedShells)} ${attachedShells.length > 1 ? "are" : "is"} attached to this host`,
+          message: attachedMachinesMessage(machines),
           detail:
             activeAgents > 0
               ? `${shellsLine} ${agentsLine}, and quitting will interrupt them too.`
@@ -54,20 +71,39 @@ export async function showQuitWarning(
 }
 
 export async function showUpdateWarning(
-  attachedShells: AttachedShell[],
+  impact: QuitImpact,
   showMessageBox: Dialog["showMessageBox"],
   win?: BrowserWindow | null
 ): Promise<boolean> {
-  const names = describeShellNames(attachedShells);
-  const opts: Electron.MessageBoxOptions = {
-    type: "warning",
-    buttons: ["Restart and Update", "Cancel"],
-    defaultId: 1,
-    cancelId: 1,
-    title: "Other machines are attached",
-    message: `${names} ${attachedShells.length > 1 ? "are" : "is"} attached to this host`,
-    detail: `Restarting to update disconnects ${names} and ends the work it has open on this machine. The update stays ready until you restart.`,
-  };
+  const { activeAgents, attachedShells } = impact;
+  const agentsLine = agentsWorkingLine(activeAgents);
+  const staysReady = "The update stays ready until you restart.";
+  const machines = attachedMachines(attachedShells);
+  const shellsLine = `Restarting to update disconnects ${machines.object} and ends ${machines.openWork} on this machine.`;
+
+  const opts: Electron.MessageBoxOptions =
+    attachedShells.length === 0
+      ? {
+          type: "warning",
+          buttons: ["Restart and Update", "Cancel"],
+          defaultId: 1,
+          cancelId: 1,
+          title: "Agents are working",
+          message: agentsLine,
+          detail: `Restarting to update now will interrupt active agents. ${staysReady}`,
+        }
+      : {
+          type: "warning",
+          buttons: ["Restart and Update", "Cancel"],
+          defaultId: 1,
+          cancelId: 1,
+          title: "Other machines are attached",
+          message: attachedMachinesMessage(machines),
+          detail:
+            activeAgents > 0
+              ? `${shellsLine} ${agentsLine}, and restarting will interrupt them too. ${staysReady}`
+              : `${shellsLine} ${staysReady}`,
+        };
 
   const { response } = win ? await showMessageBox(win, opts) : await showMessageBox(opts);
 

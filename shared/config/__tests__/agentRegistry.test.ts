@@ -867,6 +867,22 @@ describe("resume configuration", () => {
     }
   });
 
+  it("no gated escalation declares a blank gate or quit marker", () => {
+    // Any string includes "", so a blank gate would release every press the cap
+    // allows without the TUI acknowledging a single one.
+    for (const id of getAgentIds()) {
+      const resume = getAgentConfig(id)?.resume;
+      if (resume?.kind !== "session-id" || !resume.shutdownSignal) continue;
+      for (const gate of resume.shutdownSignal.gateTexts) {
+        expect(gate.trim(), `${id} declares a blank gate`).not.toBe("");
+      }
+      // A blank quit marker would veto every press after the first.
+      for (const text of resume.shutdownSignal.quittingTexts ?? []) {
+        expect(text.trim(), `${id} declares a blank quit marker`).not.toBe("");
+      }
+    }
+  });
+
   it("no session-id agent ships an empty or uncompilable sessionIdPattern", () => {
     // The field is optional now — an agent whose id was never observable omits
     // it rather than carrying a pattern that matches nothing (#11851). What is
@@ -909,8 +925,32 @@ describe("resume configuration", () => {
     const signal = resume.shutdownSignal;
     expect(signal?.kind).toBe("gated-key-escalation");
     expect(signal?.keySequence).toBe(String.fromCharCode(3));
-    // A gate the TUI never prints would silently degrade to a single press.
-    expect("  Ctrl+C again to quit  ").toContain(signal?.gateText);
+    // A gate the TUI never prints would silently degrade to a single press,
+    // which is how every mid-turn pane lost its session (#15267). Recorded from
+    // `codex-cli 0.165.0`: a press that interrupts a running turn is
+    // acknowledged by this notice alone, so it has to open a gate...
+    const gates = signal?.gateTexts ?? [];
+    const interrupted = "■ Conversation interrupted - use /feedback if something went wrong";
+    expect(gates.some((gate) => interrupted.includes(gate))).toBe(true);
+    // 0.147.0 worded the same notice differently (from its source), behind the
+    // same prefix.
+    const interruptedBefore =
+      "■ Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.";
+    expect(gates.some((gate) => interruptedBefore.includes(gate))).toBe(true);
+    // ...while a press that quits prints this, and must never open one: the
+    // next press would land after raw mode is gone and kill the process before
+    // its hint.
+    const quitting =
+      "› Shutting down... Token usage: total=5,308 input=5,213 (+ 24,064 cached) output=95\r\n" +
+      "To continue this session, run:\r\n  codex resume 01a1867b-a012-7320-a3a8-c6adc343eb4e\r\n" +
+      "Or run codex resume and select Run sleep command.\r\n";
+    expect(gates.some((gate) => quitting.includes(gate))).toBe(false);
+    // The same two outputs the other way round for the quit veto: it has to
+    // recognise the quit, and must never fire on the interrupt notice or it
+    // would end every mid-turn escalation at one press.
+    const quitMarkers = signal?.quittingTexts ?? [];
+    expect(quitMarkers.some((text) => quitting.includes(text))).toBe(true);
+    expect(quitMarkers.some((text) => interrupted.includes(text))).toBe(false);
     // Budget fit lives in the pty suite, which owns GRACEFUL_SHUTDOWN_TIMEOUT_MS —
     // importing it here would drag electron into a shared/ test.
     expect(signal?.maxPresses).toBeGreaterThan(1);

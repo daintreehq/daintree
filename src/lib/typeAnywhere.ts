@@ -1,5 +1,6 @@
 import type { PanelInstance } from "@shared/types/panel";
 import { isAgentFleetActionEligible } from "@/store/fleetEligibility";
+import { isInPaneDialog } from "@/lib/paneDialog";
 
 /**
  * Pure decision logic for the type-anywhere rescue and the off-screen focus
@@ -119,14 +120,35 @@ export function hasUsefulFocus(el: Element | null): boolean {
 }
 
 /**
+ * Attribute a surface sets to name the bare printable keys it acts on, as one
+ * string of characters (an image stage zooms on `+`, `=`, `-` and `0`).
+ */
+export const OWNED_KEYS_ATTRIBUTE = "data-owned-keys";
+
+/**
+ * Does the focused surface act on this key itself? The rescue leaves such a
+ * key where it landed instead of typing it into an agent's draft. Only the
+ * named keys: any other key on the same surface would be swallowed silently,
+ * which is still what the rescue is for.
+ */
+export function focusOwnsKey(el: Element | null, key: string): boolean {
+  if (key === "") return false;
+  const owned = el?.closest(`[${OWNED_KEYS_ATTRIBUTE}]`)?.getAttribute(OWNED_KEYS_ATTRIBUTE);
+  return owned?.includes(key) ?? false;
+}
+
+/**
  * Modal surfaces own every key while open.
  *
  * Existence, not ancestry: Radix portals dialog content outside the dialog's
  * DOM subtree, so `closest()` from the focused element misses it and the
- * listener would steal keys from an open modal.
+ * listener would steal keys from an open modal. A page's dialog blocks only its
+ * own pane, so it owns the key only when `focus` is inside it (#15037).
  */
-export function hasBlockingOverlay(): boolean {
-  return document.querySelector('[role="dialog"][aria-modal="true"]') !== null;
+export function hasBlockingOverlay(focus: Element | null = document.activeElement): boolean {
+  return (
+    document.querySelector('[role="dialog"][aria-modal="true"]') !== null || isInPaneDialog(focus)
+  );
 }
 
 /** The panel that owns the currently focused DOM node, if any. */

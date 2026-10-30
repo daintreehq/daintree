@@ -17,6 +17,7 @@ import { injectSchemeToDOM, resolveCommittedScheme, useAppThemeStore } from "@/s
 import { selectSelectableSchemes } from "@/theme/selectableSchemes";
 import { useThemeBrowserStore } from "@/store/themeBrowserStore";
 import { logError } from "@/utils/logger";
+import { notify } from "@/lib/notify";
 import { appThemeClient } from "@/clients/appThemeClient";
 import { runThemeReveal } from "@/lib/appThemeViewTransition";
 import {
@@ -213,6 +214,111 @@ const APPEARANCE_OPTIONS: SegmentedRadioOption<"dark" | "light">[] = [
   { value: "light", label: "Light" },
 ];
 
+let browserCommitEpoch = 0;
+
+/**
+ * Apply a theme picked in the browser, then save it. The browser has already
+ * closed by the time a write settles, so this lives outside the component and a
+ * failure reports through a toast whose Retry outlives it.
+ *
+ * Turning system matching off and saving the scheme are separate durable writes:
+ * if either fails, every field goes back to what is on disk, so the theme on
+ * screen is the one the app boots with. The recent-themes list only feeds the
+ * browser's ordering, so failing to save it stays out of the user's way.
+ */
+async function commitBrowserTheme(
+  targetId: string,
+  origin: { x: number; y: number } | null
+): Promise<void> {
+  const epoch = ++browserCommitEpoch;
+  const before = useAppThemeStore.getState();
+  const previous = {
+    selectedSchemeId: before.selectedSchemeId,
+    recentSchemeIds: before.recentSchemeIds,
+    followSystem: before.followSystem,
+  };
+  let followSystemOffOnDisk = false;
+
+  // Clear preview state BEFORE the View Transition fires. Otherwise the
+  // mutation callback would still see `previewSchemeId` in the store and
+  // `injectSchemeToDOM` could be undone (see PR #5087).
+  before.setPreviewSchemeId(null);
+  if (previous.followSystem) before.setFollowSystem(false);
+  before.commitSchemeSelection(targetId);
+  const targetRecents = useAppThemeStore.getState().recentSchemeIds;
+
+  // A project with its own theme keeps showing it; the pick is the global theme.
+  // Resolved when the reveal paints, so a project theme pushed meanwhile wins.
+  runThemeReveal(origin, () =>
+    injectSchemeToDOM(resolveCommittedScheme(useAppThemeStore.getState()), { immediate: true })
+  );
+
+  // Another pick (a newer browser commit, the Appearance picker, the palette)
+  // owns the selection now, and a late failure here must not drag it back.
+  const ownsSelection = () =>
+    epoch === browserCommitEpoch && useAppThemeStore.getState().selectedSchemeId === targetId;
+
+  try {
+    if (previous.followSystem) {
+      await appThemeClient.setFollowSystem(false);
+      followSystemOffOnDisk = true;
+    }
+    if (!ownsSelection()) return;
+    await appThemeClient.setColorScheme(targetId);
+  } catch (error) {
+    logError("Failed to persist app theme", error);
+    if (!ownsSelection()) return;
+
+    const state = useAppThemeStore.getState();
+    // Only put system matching back if this commit is what turned it off, and
+    // only as far as disk agrees: once the turn-off landed it stays off.
+    if (previous.followSystem && !state.followSystem) {
+      state.setFollowSystem(!followSystemOffOnDisk);
+    }
+    // commitSchemeSelection re-seeds the MRU as a side effect, so the recents
+    // list has to be put back after it, not before.
+    state.commitSchemeSelection(previous.selectedSchemeId);
+    state.setRecentSchemeIds(previous.recentSchemeIds);
+    const restored = useAppThemeStore.getState();
+    // A preview in a reopened browser owns the DOM until it ends.
+    if (restored.previewSchemeId === null) {
+      injectSchemeToDOM(resolveCommittedScheme(restored), { immediate: true });
+    }
+
+    const restoredSchemeId = restored.selectedSchemeId;
+    notify({
+      type: "error",
+      title: "Couldn't save theme",
+      message: "The previous theme was restored, so it won't change on restart.",
+      // `settings` is passive; without this the failure would be an inbox row.
+      priority: "high",
+      urgent: true,
+      replaceKey: "theme-browser-save-failed",
+      context: { eventKind: "settings" },
+      action: {
+        label: "Retry",
+        onClick: () => {
+          // A theme picked since this failure is the user's newer intent.
+          const current = useAppThemeStore.getState();
+          if (epoch !== browserCommitEpoch || current.selectedSchemeId !== restoredSchemeId) return;
+          return commitBrowserTheme(targetId, null);
+        },
+      },
+    });
+    return;
+  }
+
+  if (!ownsSelection()) return;
+  try {
+    await appThemeClient.setRecentSchemeIds(targetRecents);
+  } catch (error) {
+    logError("Failed to persist recent app themes", error);
+    if (ownsSelection() && useAppThemeStore.getState().recentSchemeIds === targetRecents) {
+      useAppThemeStore.getState().setRecentSchemeIds(previous.recentSchemeIds);
+    }
+  }
+}
+
 export function ThemeBrowser() {
   useOverlayClaim("theme-browser", true);
 
@@ -221,10 +327,7 @@ export function ThemeBrowser() {
   const selectableSchemes = useAppThemeStore(selectSelectableSchemes);
   const previewSchemeId = useAppThemeStore((s) => s.previewSchemeId);
   const setPreviewSchemeId = useAppThemeStore((s) => s.setPreviewSchemeId);
-  const commitSchemeSelection = useAppThemeStore((s) => s.commitSchemeSelection);
   const accentColorOverride = useAppThemeStore((s) => s.accentColorOverride);
-  const followSystem = useAppThemeStore((s) => s.followSystem);
-  const setFollowSystem = useAppThemeStore((s) => s.setFollowSystem);
 
   const [query, setQuery] = useState("");
   const [previewAnnouncement, setPreviewAnnouncement] = useState("");
@@ -319,6 +422,21 @@ export function ThemeBrowser() {
     clearPendingAnnouncement();
   }, [setPreviewSchemeId, clearPendingAnnouncement]);
 
+  // A text filter can hide the previewed row just like the appearance switch
+  // does; revert so Enter and Set theme never commit a theme the list no longer shows.
+  const handleQueryChange = useCallback(
+    (next: string) => {
+      setQuery(next);
+      const previewId = useAppThemeStore.getState().previewSchemeId;
+      if (previewId === null) return;
+      const needle = next.toLowerCase();
+      if (!needle) return;
+      const previewed = allSchemes.find((s) => s.id === previewId);
+      if (!previewed || !previewed.name.toLowerCase().includes(needle)) revertPreview();
+    },
+    [allSchemes, revertPreview]
+  );
+
   const handlePreview = useCallback(
     (id: string, debounceAnnounce?: boolean) => {
       const state = useAppThemeStore.getState();
@@ -352,54 +470,22 @@ export function ThemeBrowser() {
     clearPendingAnnouncement();
   }, [query, clearPendingAnnouncement]);
 
-  const handleCommit = useCallback(async () => {
+  const handleCommit = useCallback(() => {
     const targetId = previewSchemeId ?? selectedSchemeId;
     const originRect = commitButtonRef.current?.getBoundingClientRect();
     const origin = originRect
       ? { x: originRect.left + originRect.width / 2, y: originRect.top + originRect.height / 2 }
       : null;
 
-    if (followSystem) {
-      setFollowSystem(false);
-      appThemeClient
-        .setFollowSystem(false)
-        .catch((err) => logError("Failed to clear follow system", err));
-    }
-
-    // Clear preview state BEFORE the View Transition fires. Otherwise the
-    // mutation callback would still see `previewSchemeId` in the store and
-    // `injectSchemeToDOM` could be undone (see PR #5087).
-    setPreviewSchemeId(null);
     clearPendingAnnouncement();
-
-    commitSchemeSelection(targetId);
-    // A project with its own theme keeps showing it; the pick is the global theme.
-    // Resolved when the reveal paints, so a project theme pushed meanwhile wins.
-    runThemeReveal(origin, () =>
-      injectSchemeToDOM(resolveCommittedScheme(useAppThemeStore.getState()), { immediate: true })
-    );
+    // Everything up to the reveal runs before the first await inside.
+    void commitBrowserTheme(targetId, origin);
 
     // Close the browser synchronously after the reveal fires — the Settings
     // reopen effect keys on this store transition, so deferring it until after
     // persistence would delay the user's return to Settings needlessly.
     close();
-
-    try {
-      await appThemeClient.setColorScheme(targetId);
-      await appThemeClient.setRecentSchemeIds(useAppThemeStore.getState().recentSchemeIds);
-    } catch (error) {
-      logError("Failed to persist app theme", error);
-    }
-  }, [
-    close,
-    commitSchemeSelection,
-    followSystem,
-    previewSchemeId,
-    selectedSchemeId,
-    setFollowSystem,
-    setPreviewSchemeId,
-    clearPendingAnnouncement,
-  ]);
+  }, [close, previewSchemeId, selectedSchemeId, clearPendingAnnouncement]);
 
   const handleCancel = useCallback(() => {
     revertPreview();
@@ -528,7 +614,7 @@ export function ThemeBrowser() {
         }
       } else if (e.key === "Enter") {
         e.preventDefault();
-        void handleCommit();
+        handleCommit();
       }
     },
     [filteredThemes, revealRow, handleCommit, handlePreview, keyboardIndex, activeSchemeId]
@@ -647,7 +733,7 @@ export function ThemeBrowser() {
           aria-activedescendant={activeRowId}
           aria-autocomplete="list"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => handleQueryChange(e.target.value)}
           onClear={() => setQuery("")}
           clearLabel="Clear filter"
           onKeyDown={handleSearchKeyDown}
@@ -743,12 +829,7 @@ export function ThemeBrowser() {
         <Button variant="ghost" size="sm" onClick={handleCancel}>
           Cancel
         </Button>
-        <Button
-          ref={commitButtonRef}
-          variant="contrast"
-          size="sm"
-          onClick={() => void handleCommit()}
-        >
+        <Button ref={commitButtonRef} variant="contrast" size="sm" onClick={handleCommit}>
           Set theme
         </Button>
       </div>

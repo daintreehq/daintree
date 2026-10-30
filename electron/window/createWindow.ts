@@ -1,5 +1,5 @@
 // eager-import-allow: reads persisted window state via store.get synchronously when creating the window
-import { app, BrowserWindow, WebContentsView, dialog, ipcMain, session } from "electron";
+import { app, BrowserWindow, WebContentsView, ipcMain, session } from "electron";
 import {
   getAppView,
   getWindowForWebContents,
@@ -7,9 +7,11 @@ import {
   registerAppView,
 } from "./webContentsRegistry.js";
 import { attachActiveViewFocus } from "./activeViewFocus.js";
+import { attachUnresponsiveDialog } from "./unresponsiveDialog.js";
 import { getWindowRegistry } from "./windowRef.js";
 import { routeNewWindowRequest } from "./windowHost.js";
 import { toggleWindowFullscreen } from "./fullscreen.js";
+import { sendFullscreenChange } from "./fullscreenBroadcast.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import path from "path";
 import { createWindowWithState, disposeWindowStateTracking } from "../windowState.js";
@@ -58,7 +60,6 @@ import { isDemoMode, isSmokeTest } from "../setup/environment.js";
 import { isE2EDeferRendererLoad, isE2EMode } from "../setup/runtimeFlags.js";
 import { SMOKE_BOOT_TIMEOUT_MS } from "../services/smokeTest.js";
 import { attachAppViewRendererGoneHandler } from "./appViewRendererGone.js";
-import { noteTerminationIntent } from "../services/processTerminationIntent.js";
 
 /**
  * This window's own ProjectViewManager. Resolve it at call time and never
@@ -339,55 +340,18 @@ export function setupBrowserWindow(
     isSwitchBridged: () => getProjectViewManagerFor(win)?.isSwitchBridged() ?? false,
   });
 
+  let disposeUnresponsiveDialog: (() => void) | null = null;
   if (isSmokeTest) {
     win.on("unresponsive", () => {
       _smokeRendererUnresponsive = true;
       console.error("[SMOKE] FAILED — main window became unresponsive");
     });
   } else {
-    let unresponsiveDialogId = 0;
-    let unresponsiveDialogOpen = false;
-
-    win.on("unresponsive", () => {
-      if (unresponsiveDialogOpen || win.isDestroyed()) return;
-      unresponsiveDialogOpen = true;
-      const dialogId = ++unresponsiveDialogId;
-      console.warn("[MAIN] Window became unresponsive");
-
-      dialog
-        .showMessageBox(win, {
-          type: "warning",
-          buttons: ["Wait", "Restart view"],
-          defaultId: 0,
-          title: "Window Not Responding",
-          message: "The window is not responding.",
-          detail:
-            "You can wait for it to recover, or force-restart the view. Force-restarting will immediately terminate and recover the view.",
-        })
-        .then(({ response }) => {
-          if (dialogId !== unresponsiveDialogId) return;
-          unresponsiveDialogOpen = false;
-          if (response === 1 && !win.isDestroyed()) {
-            console.warn("[MAIN] User triggered force-restart of unresponsive renderer");
-            const activeWc = getProjectViewManagerFor(win)?.getActiveView()?.webContents;
-            const target = activeWc && !activeWc.isDestroyed() ? activeWc : appWebContents;
-            if (!target.isDestroyed()) {
-              noteTerminationIntent({ webContentsId: target.id }, "user force-restarted view");
-              target.forcefullyCrashRenderer();
-            }
-          }
-        })
-        .catch(() => {
-          unresponsiveDialogOpen = false;
-        });
-    });
-
-    win.on("responsive", () => {
-      if (unresponsiveDialogOpen) {
-        unresponsiveDialogId++;
-        unresponsiveDialogOpen = false;
-        console.log("[MAIN] Window became responsive again");
-      }
+    disposeUnresponsiveDialog = attachUnresponsiveDialog(win, {
+      getRestartTarget: () => {
+        const activeWc = getProjectViewManagerFor(win)?.getActiveView()?.webContents;
+        return activeWc && !activeWc.isDestroyed() ? activeWc : appWebContents;
+      },
     });
   }
 
@@ -603,16 +567,10 @@ export function setupBrowserWindow(
   });
 
   // Fullscreen events
-  const sendFullscreen = (isFullscreen: boolean) => {
-    sendToRenderer(win, CHANNELS.EVENTS_PUSH, {
-      name: "window:fullscreen-change",
-      payload: isFullscreen,
-    });
-  };
-  win.on("enter-full-screen", () => sendFullscreen(true));
-  win.on("leave-full-screen", () => sendFullscreen(false));
-  win.on("enter-html-full-screen", () => sendFullscreen(true));
-  win.on("leave-html-full-screen", () => sendFullscreen(false));
+  win.on("enter-full-screen", () => sendFullscreenChange(win, true));
+  win.on("leave-full-screen", () => sendFullscreenChange(win, false));
+  win.on("enter-html-full-screen", () => sendFullscreenChange(win, true));
+  win.on("leave-html-full-screen", () => sendFullscreenChange(win, false));
 
   // Memory reclamation: clear renderer caches after sustained minimize
   const RECLAIM_DELAY_MS = 5_000;
@@ -640,6 +598,7 @@ export function setupBrowserWindow(
 
   win.once("closed", () => {
     activeViewFocus.dispose();
+    disposeUnresponsiveDialog?.();
     disposeWindowStateTracking(win);
     if (reclaimTimer) {
       clearTimeout(reclaimTimer);

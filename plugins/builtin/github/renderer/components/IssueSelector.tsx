@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { useListboxCursor } from "@/hooks/useListboxCursor";
+import { UI_DOHERTY_THRESHOLD, UI_STILL_WORKING_MS } from "@/lib/animationUtils";
 import {
   Button,
   Callout,
@@ -8,6 +10,7 @@ import {
   Icon,
   PopoverSearchField,
   ScrollShadow,
+  Spinner,
   Tooltip,
 } from "@daintreehq/plugin-ui";
 import { cn } from "@/lib/utils";
@@ -17,6 +20,7 @@ import type { ForgeIssueSelectorProps } from "@/types/forgeSlotProps";
 // The host popover: the panel anchors to the whole compound field (trigger and
 // clear), not the trigger alone, and it owns its open focus and Escape. The kit
 // Popover has no anchor and neither handler.
+import { PICKER_TRIGGER_GROUP, PickerChevron } from "@/components/ui/PickerChevron";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { FIELD_SURFACE } from "@/components/Worktree/views/WorktreeFormLayout";
@@ -28,6 +32,17 @@ export type IssueSelectorProps = ForgeIssueSelectorProps;
 
 const LIST_ID = "issue-list";
 const OPTION_ID_PREFIX = "issue-option-";
+
+/** A later page can repeat a row when issues move between fetches. */
+function appendUnique(existing: Issue[], page: Issue[]): Issue[] {
+  const seen = new Set(existing.map((issue) => issue.number));
+  const added = page.filter((issue) => {
+    if (seen.has(issue.number)) return false;
+    seen.add(issue.number);
+    return true;
+  });
+  return added.length > 0 ? [...existing, ...added] : existing;
+}
 
 /**
  * The forge's contribution to the create-worktree form's "Issue" row.
@@ -55,36 +70,72 @@ export function IssueSelector({
   // looking current.
   const [loadFailed, setLoadFailed] = useState(false);
   const [retryTick, setRetryTick] = useState(0);
+  // Where the next page starts, or null once the forge says there is none. The
+  // provider hands back one page at a time, so without this a long backlog
+  // read as if its first page were all of it (#15014).
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreFailed, setLoadMoreFailed] = useState(false);
+  // The fetch run that produced the rows on screen. A close, a new query, a
+  // new project or a retry aborts it, and with it any page continuing its set.
+  const runRef = useRef<AbortController | null>(null);
+  // The run a page is in flight for, read synchronously so a second Enter
+  // before the next render can't start a second request.
+  const loadMoreRunRef = useRef<AbortController | null>(null);
   const debouncedQuery = useDebounce(query, 300);
+  // The query the fetch runs for. It follows the debounce once that settles on
+  // what is typed, and an early Enter sets it at once. It never steps back to
+  // an older debounced value, so a flushed "ab" stays put while "abc" is typed.
+  const [requestedQuery, setRequestedQuery] = useState("");
+  // The query and project the rows on screen were fetched for, set only when a
+  // first page lands. Enter acts on the rows only while this matches what is
+  // typed: until then they answer an earlier search.
+  const [resultScope, setResultScope] = useState<{ query: string; projectPath: string } | null>(
+    null
+  );
   const requestGenRef = useRef(0);
   const prevProjectPathRef = useRef(projectPath);
   const inputRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
+    if (open && debouncedQuery === query) setRequestedQuery(query);
+  }, [open, query, debouncedQuery]);
+
+  useEffect(() => {
     if (prevProjectPathRef.current !== projectPath) {
       prevProjectPathRef.current = projectPath;
       setIssues([]);
+      setNextCursor(null);
+      setResultScope(null);
     }
     if (!open) return;
 
     const abortController = new AbortController();
+    runRef.current = abortController;
     const gen = ++requestGenRef.current;
     setLoading(true);
     setLoadFailed(false);
+    setLoadingMore(false);
+    setLoadMoreFailed(false);
     forgeClient
       .listIssues(projectPath, {
         state: "open",
-        search: debouncedQuery || undefined,
+        search: requestedQuery || undefined,
       })
       .then((res) => {
         if (!abortController.signal.aborted && requestGenRef.current === gen) {
-          setIssues(res.items);
+          setIssues(appendUnique([], res.items));
+          setNextCursor(res.hasMore ? res.nextCursor : null);
+          setResultScope({ query: requestedQuery, projectPath });
         }
       })
       .catch((err) => {
         if (!abortController.signal.aborted && requestGenRef.current === gen) {
           setLoadFailed(true);
+          // The rows left on screen answer an earlier query; their next page
+          // would continue a set this request was meant to replace.
+          setNextCursor(null);
           logError("Failed to fetch issues", err);
         }
       })
@@ -95,14 +146,62 @@ export function IssueSelector({
       });
 
     return () => abortController.abort();
-  }, [open, debouncedQuery, projectPath, retryTick]);
+  }, [open, requestedQuery, projectPath, retryTick]);
+
+  const resultsAreCurrent =
+    !loading && resultScope?.query === query && resultScope.projectPath === projectPath;
+
+  // Enter typed faster than the search: run the query on screen now, or let the
+  // request already scheduled or running for it land, rather than act on older
+  // rows. Only a search that failed is run again.
+  const runTypedQuery = () => {
+    if (requestedQuery !== query) setRequestedQuery(query);
+    else if (loadFailed) setRetryTick((tick) => tick + 1);
+  };
+
+  const loadMore = () => {
+    const run = runRef.current;
+    if (loading || nextCursor === null || !resultScope || !run || run.signal.aborted) return;
+    if (loadMoreRunRef.current === run) return;
+    loadMoreRunRef.current = run;
+    setLoadingMore(true);
+    setLoadMoreFailed(false);
+    forgeClient
+      .listIssues(projectPath, {
+        state: "open",
+        search: resultScope.query || undefined,
+        cursor: nextCursor,
+      })
+      .then((res) => {
+        if (run.signal.aborted) return;
+        setIssues((prev) => appendUnique(prev, res.items));
+        setNextCursor(res.hasMore ? res.nextCursor : null);
+      })
+      .catch((err) => {
+        if (run.signal.aborted) return;
+        setLoadMoreFailed(true);
+        logError("Failed to fetch more issues", err);
+      })
+      .finally(() => {
+        if (loadMoreRunRef.current === run) loadMoreRunRef.current = null;
+        if (!run.signal.aborted) setLoadingMore(false);
+      });
+  };
+
+  const showLoadingMore = useDeferredLoading(loadingMore, UI_DOHERTY_THRESHOLD);
+  const isSlowLoadingMore = useDeferredLoading(loadingMore, UI_STILL_WORKING_MS);
 
   const handleOpenChange = (nextOpen: boolean) => {
     setOpen(nextOpen);
     if (!nextOpen) {
       setQuery("");
+      setRequestedQuery("");
+      setResultScope(null);
       setIssues([]);
       setLoadFailed(false);
+      setNextCursor(null);
+      setLoadingMore(false);
+      setLoadMoreFailed(false);
     }
   };
 
@@ -111,19 +210,41 @@ export function IssueSelector({
     handleOpenChange(false);
   };
 
+  const hasMore = nextCursor !== null && issues.length > 0;
   const { activeIndex, setActiveIndex, listRef, handleKeyDown } = useListboxCursor({
-    itemCount: issues.length,
+    // Load more is the list's last option, so the cursor reaches it like a row.
+    itemCount: issues.length + (hasMore ? 1 : 0),
     open,
-    // The rows are fetched, not filtered locally, so a new query replaces the
-    // whole set — the cursor rewinds with it rather than keeping a raw index
-    // that would resurface on an unrelated issue once the list widens again.
-    resetKey: debouncedQuery,
+    // The rows are fetched, not filtered locally, so a new set replaces the
+    // whole list — the cursor rewinds when it lands rather than keeping a raw
+    // index that would resurface on an unrelated issue once the list widens.
+    resetKey: resultScope,
     onSelect: (index) => {
       const issue = issues[index];
       if (issue) handleSelect(issue);
+      else if (hasMore && index === issues.length) loadMore();
     },
     onClose: () => handleOpenChange(false),
   });
+
+  const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+    // Consumed with no rows too: the popover portals out of the dialog, and an
+    // early Enter must not submit it before the search has answered.
+    if (
+      event.key === "Enter" &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !resultsAreCurrent
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      runTypedQuery();
+      return;
+    }
+    handleKeyDown(event);
+  };
 
   // Focus the search field on open. Paired with the panel's `onOpenAutoFocus`:
   // this covers the warm path, that one a cold mount where the lazy Radix chunk
@@ -134,7 +255,8 @@ export function IssueSelector({
     return () => cancelAnimationFrame(frame);
   }, [open]);
 
-  const trimmedQuery = debouncedQuery.trim();
+  const trimmedQuery = (resultScope?.query ?? "").trim();
+  const showStale = issues.length > 0 && !resultsAreCurrent;
 
   return (
     // Trigger and clear are siblings in one compound control, the same shape
@@ -173,6 +295,7 @@ export function IssueSelector({
                 }
               }}
               className={cn(
+                PICKER_TRIGGER_GROUP,
                 "flex h-full min-w-0 flex-1 items-center justify-between gap-2 px-2.5",
                 "text-sm text-text-primary transition-colors duration-150 ease-out",
                 "hover:bg-surface-hover",
@@ -191,7 +314,7 @@ export function IssueSelector({
               ) : (
                 <span className="text-text-secondary">Select an issue (optional)</span>
               )}
-              <Icon name="chevrons-up-down" className="h-4 w-4 text-text-secondary shrink-0" />
+              <PickerChevron />
             </button>
           </PopoverTrigger>
           {selectedIssue && !disabled && (
@@ -235,7 +358,7 @@ export function IssueSelector({
           placeholder="Search issues"
           value={query}
           onValueChange={setQuery}
-          onKeyDown={handleKeyDown}
+          onKeyDown={handleSearchKeyDown}
           role="combobox"
           aria-label="Search issues"
           aria-autocomplete="list"
@@ -276,8 +399,8 @@ export function IssueSelector({
           id={LIST_ID}
           role="listbox"
           className="max-h-[300px]"
-          scrollClassName={cn("p-1", loading && issues.length > 0 && "palette-results-stale")}
-          data-stale={loading && issues.length > 0 ? "true" : undefined}
+          scrollClassName={cn("p-1", showStale && "palette-results-stale")}
+          data-stale={showStale ? "true" : undefined}
           aria-busy={loading || undefined}
         >
           {loading && issues.length === 0 ? (
@@ -331,6 +454,44 @@ export function IssueSelector({
                 )}
               </div>
             ))
+          )}
+          {hasMore && (
+            <div
+              id={`${OPTION_ID_PREFIX}${issues.length}`}
+              data-option-index={issues.length}
+              role="option"
+              aria-selected={activeIndex === issues.length}
+              aria-disabled={loadingMore || undefined}
+              onPointerMove={() => setActiveIndex(issues.length)}
+              // The popover stays open, so the search keeps focus and the
+              // arrow keys keep working after a click.
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={loadMore}
+              className={cn(
+                PALETTE_ROW_CLASS,
+                FORGE_OPTION_ROW,
+                "cursor-pointer justify-center text-text-secondary"
+              )}
+            >
+              {loadMoreFailed ? (
+                // One way on, not two: the row that failed is the row that retries.
+                <>
+                  <span>Couldn&apos;t load more issues</span>
+                  <span aria-hidden="true">·</span>
+                  <span className="flex items-center gap-1.5 text-text-primary">
+                    <Icon name="refresh" className="h-3.5 w-3.5" />
+                    Retry
+                  </span>
+                </>
+              ) : showLoadingMore ? (
+                <>
+                  <Spinner />
+                  {isSlowLoadingMore ? "Still working…" : "Loading…"}
+                </>
+              ) : (
+                "Load more"
+              )}
+            </div>
           )}
         </ScrollShadow>
       </PopoverContent>

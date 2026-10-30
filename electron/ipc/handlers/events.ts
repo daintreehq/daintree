@@ -70,6 +70,9 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   // loop — it has no EVENTS_PUSH producer, so no renderer delivery at all.
   "terminal:status": "external",
   "terminal:submit-status": "external",
+  // Sent by the terminal event handlers to the owning project's local views
+  // only: it carries prompt text, which the bus relay would hand to every window.
+  "terminal:first-prompt": "external",
   // Broadcast by the MCP server handlers whenever a hand-over starts or ends.
   "terminal:adoptions-changed": "external",
   // Broadcast by the Canopy handlers whenever a panel on another machine takes or lets go of a terminal's size.

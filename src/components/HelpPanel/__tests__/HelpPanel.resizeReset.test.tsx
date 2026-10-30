@@ -59,6 +59,8 @@ const snapshot = {
   tierMismatch: null,
   isApprovingTier: false,
   assistantVersionTooOld: null,
+  activeGrants: [],
+  revokingGrantKeys: [],
 };
 
 // Pass-through dropdown mock (same shape as PanelHeader.test.tsx) — keeps the
@@ -92,6 +94,7 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     </button>
   ),
   DropdownMenuSeparator: () => <hr />,
+  DropdownMenuCheckboxItem: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
 }));
 
 // The session tabs' per-lane menu is incidental here, and the real primitive
@@ -289,7 +292,11 @@ beforeEach(() => {
   // real window's event listeners.
   Object.defineProperty(window, "electron", {
     value: {
-      help: { getPinnedActionContext: vi.fn().mockResolvedValue({}) },
+      help: {
+        getPinnedActionContext: vi.fn().mockResolvedValue({}),
+        getGlobalAssistantState: () => new Promise(() => {}),
+        onGlobalAssistantChanged: () => () => {},
+      },
       app: { onViewRevealed: () => () => {} },
     },
     writable: true,

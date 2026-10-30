@@ -93,6 +93,10 @@ export const theme: BuiltInThemeSource = {
   tokens: {
     "accent-muted": "rgba(110,87,219,0.30)",
     "accent-soft": "rgba(110,87,219,0.18)",
+    // Solid so the field edge clears 3:1 on every surface a field sits on
+    // (3.06–3.74:1); the alpha `border-strong` it used to follow measured
+    // 1.46–1.48:1.
+    "border-input": "#82848A",
     // Curated ramp: the engine light defaults collide with this status set
     // under CVD.
     "category-amber": "oklch(0.60 0.11 72)",
@@ -188,7 +192,6 @@ export const theme: BuiltInThemeSource = {
     "pulse-range-bg": "#F1F0F7",
     "pulse-ring-offset": "#FFFFFF",
     "pulse-skeleton-gradient": "linear-gradient(90deg, #D5D3F2 25%, #F1F0F7 50%, #D5D3F2 75%)",
-    "dialog-header-bg": "#F9F8FD",
     "review-commit-input-bg": "#FCFBFF",
     // Nav selection elevates to white + the 2px accent marker.
     "settings-nav-active-bg": "#FFFFFF",

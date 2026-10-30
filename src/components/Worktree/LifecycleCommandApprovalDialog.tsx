@@ -234,8 +234,6 @@ export function LifecycleCommandApprovalDialog({
       cooldownKey={review?.fingerprint}
       hasPreview
       bodyResetKey={review?.fingerprint}
-      // Short rows overflow routinely; the full fade would wash out a whole command.
-      compactBodyShadow
     >
       <div className="min-h-[5.5rem] space-y-5">
         {/* Above the refreshed commands, since the body scrolls back to the top. */}

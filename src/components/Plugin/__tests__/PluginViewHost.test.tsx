@@ -1048,5 +1048,31 @@ describe("PluginViewHost panel integration (#11228)", () => {
       expect(screen.queryByTestId("builtin-view")).toBeNull();
       expect(seen).toEqual([]);
     });
+
+    it("tells the user to update the plugin that owns the panel, not one named after the panel (#15236)", async () => {
+      // Modules reset between tests: the host must see this same store.
+      const { usePluginRuntimeStore } = await import("@/store/pluginRuntimeStore");
+      usePluginRuntimeStore.setState({
+        pluginMetaById: new Map([
+          ["daintree.sveltekit-builder", { devMode: false, displayName: "SvelteKit Tools" }],
+        ]),
+      });
+      const { Host } = await loadBuiltinHost();
+
+      render(
+        <Host
+          {...hostProps}
+          id="panel-newer-named"
+          onFocus={() => {}}
+          extensionState={{ previewId: "p-1" }}
+          extensionStateVersion={3}
+        />
+      );
+
+      const region = screen.getByRole("region", { name: "Plugin view unavailable" });
+      expect(region.textContent).toContain("newer version of the SvelteKit Tools plugin");
+      expect(region.textContent).not.toContain("Site Inspector plugin");
+      expect(region.textContent).not.toContain("state format");
+    });
   });
 });

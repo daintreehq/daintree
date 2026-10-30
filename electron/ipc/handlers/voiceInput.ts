@@ -1,5 +1,5 @@
 // eager-import-allow: reads voice-input settings via store.get synchronously in the IPC handler
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { ipcMain, systemPreferences } from "electron";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
@@ -14,6 +14,8 @@ import {
 } from "../../services/VoiceCorrectionService.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import type {
+  VoiceCleanupFailure,
+  VoiceCorrectionPace,
   VoiceDictionaryEntry,
   VoiceInputSettings,
   VoiceInputSettingsPatch,
@@ -37,6 +39,7 @@ import {
 import type {
   VoiceCorrectionTiming,
   VoiceCorrectionVerdict,
+  VoicePrefetchMatch,
   VoiceSessionReport,
 } from "../../../shared/types/voiceSessionSummary.js";
 import { logDebug, logInfo, logWarn } from "../../utils/logger.js";
@@ -50,9 +53,12 @@ import {
 import {
   correctionInstructionsFor,
   isVoiceCleanupModel,
+  isVoiceCleanupProvider,
   VOICE_CLEANUP_AI_MODEL,
+  VOICE_CLEANUP_MODELS_BY_PROVIDER,
   type CorrectionWorktreeContext,
 } from "../../../shared/config/voiceCorrection.js";
+import { cleanupApiKey, hasCleanupKey } from "../../../shared/config/voiceProviders.js";
 import { normalizeVoiceLanguage } from "../../../shared/config/voiceLanguages.js";
 import {
   assembleTaggedKeyterms,
@@ -112,6 +118,7 @@ import {
   resolveVoiceCommandTarget,
   type VoiceCommandTarget,
 } from "../../services/voiceCommandTarget.js";
+import { readVoiceOpeningCommand } from "../../services/voiceOpeningCommand.js";
 import {
   planSpokenCommand,
   voiceCommandKeyterms,
@@ -145,6 +152,8 @@ import { defineIpcNamespace, op, opValidated } from "../define.js";
 import { ValidationError } from "../validationError.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { VOICE_INPUT_METHOD_CHANNELS } from "./voiceInput.preload.js";
+import { isAppBundleLaunchable, isAppBundleReplaced } from "../../lifecycle/appBundleIdentity.js";
+import { relaunchApp } from "../../lifecycle/appRelaunch.js";
 import { openExternalUrl } from "../../utils/openExternal.js";
 import { openLinuxSoundSettings } from "../../services/voice/linuxSoundSettings.js";
 import {
@@ -285,15 +294,18 @@ interface VoiceSession {
   flushUtterance: ((mode: "stop" | "literal") => void) | null;
   // Rechecks that the cleanup prompt is cached while the session runs.
   warmTimer: ReturnType<typeof setInterval> | null;
-  // Cleanup runs its pauses started ahead of the stop, against a budget.
-  prefetchesStarted: number;
   // Its cleanup context, when cleanup was on at its start.
   correctionPrep: CorrectionPrep | null;
   // Main's share of the session summary, sent with its ended notice. Kept
   // apart from the buffers above, which are released as the session goes.
   readonly stats: Pick<
     VoiceSessionReport,
-    "provider" | "biasTermCount" | "droppedPreStart" | "completedSegments" | "emptyCompletions"
+    | "provider"
+    | "biasTermCount"
+    | "droppedPreStart"
+    | "completedSegments"
+    | "emptyCompletions"
+    | "prefetchesStarted"
   >;
 }
 
@@ -536,12 +548,44 @@ interface CorrectReply {
   failed?: true;
   verdict?: VoiceCorrectionVerdict;
   timing?: VoiceCorrectionTiming;
+  pace?: VoiceCorrectionPace;
+  prefetch?: VoicePrefetchMatch;
+  cleanupFailure?: VoiceCleanupFailure;
+}
+
+// The account a cleanup runs on, as far as its failures go: the key, what it
+// bills and the model it asks for. Hashed, so the latch holds no key.
+function cleanupAccountOf(settings: VoiceInputSettings): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        settings.correctionModel,
+        cleanupApiKey(settings),
+        settings.organizationId ?? null,
+        settings.projectId ?? null,
+      ])
+    )
+    .digest("hex");
+}
+
+// Whether the document that sent an invoke is still there for its answer. A
+// reload brings a document with a token of its own, whose frame the old one's
+// may follow, and the old one's pending invoke reaches no one. Read as the
+// invoke arrives, while the event's frame is still current.
+function askerStillThere(ctx: IpcContext): () => boolean {
+  const sender = ctx.event?.sender;
+  const frame = ctx.event?.senderFrame;
+  const token = frame?.frameToken;
+  return () =>
+    !sender?.isDestroyed() && (!frame || (!frame.isDestroyed() && frame.frameToken === token));
 }
 
 /** What a cleanup sends OpenAI, once its context is read. */
 interface PreparedCleanup {
   request: VoiceCorrectionRequest;
   settings: VoiceCorrectionSettings;
+  /** How long the reads took, timed alone: a stop waiting on a pause's run meanwhile adds nothing. */
+  prepMs: number;
 }
 
 /** A cleanup a pause started: what it sent, once read, and its reply. */
@@ -586,6 +630,14 @@ const SUPERSEDED: VoiceStartOutcome = { status: "superseded" };
 // so the job is raced against its deadline rather than trusted to stop.
 const FILE_LINK_JOB_TIMEOUT_MS = 6000;
 
+/** What a file-link job has found so far, read once when it settles. */
+interface FileLinkLookup {
+  /** Each description detection kept, in spoken order. */
+  descriptions: string[];
+  /** Each description's settled lookup; a gap never settled. */
+  found: Array<{ description: string; path: string | null } | undefined>;
+}
+
 // Deepgram and Grok end an utterance after 300ms of silence (`endpointing=300`),
 // a pause that falls inside sentences, so a completion ending in "send it" is
 // held this much longer: about a second of silence in all, close to what
@@ -628,10 +680,12 @@ const WRITABLE_VOICE_FIELDS: Record<keyof VoiceInputSettingsPatch, true> = {
   openaiApiKey: true,
   deepgramApiKey: true,
   xaiApiKey: true,
+  anthropicApiKey: true,
   language: true,
   transcriptionProvider: true,
   transcriptionModel: true,
   correctionEnabled: true,
+  correctionProvider: true,
   correctionModel: true,
   correctionCustomInstructions: true,
   paragraphingStrategy: true,
@@ -649,11 +703,13 @@ const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   openaiApiKey: "",
   deepgramApiKey: "",
   xaiApiKey: "",
+  anthropicApiKey: "",
   language: "en",
   dictionary: [],
   transcriptionProvider: "openai",
   transcriptionModel: "gpt-live-transcribe",
   correctionEnabled: true,
+  correctionProvider: "openai",
   correctionModel: VOICE_CLEANUP_AI_MODEL,
   correctionCustomInstructions: "",
   paragraphingStrategy: "spoken-command",
@@ -740,8 +796,17 @@ export function getVoiceSettings(): VoiceInputSettings {
   // valid one stays. Anything else (a retired model, a downgrade, a hand edit)
   // goes back to the default and is written through. migration040 moved every
   // existing install to gpt-6.1-terra once, before there was a choice to keep.
-  const staleCorrectionModel = !isVoiceCleanupModel(merged.correctionModel);
-  if (staleCorrectionModel) merged.correctionModel = VOICE_CLEANUP_AI_MODEL;
+  // A model belongs to one provider, so one that isn't the chosen provider's
+  // (a provider changed without its model, a hand edit) becomes that
+  // provider's default. A store from before the provider existed reads as
+  // OpenAI, whose models it already holds.
+  const staleCorrectionProvider = !isVoiceCleanupProvider(merged.correctionProvider);
+  if (staleCorrectionProvider) merged.correctionProvider = "openai";
+  const providerModels = VOICE_CLEANUP_MODELS_BY_PROVIDER[merged.correctionProvider];
+  const staleCorrectionModel =
+    !isVoiceCleanupModel(merged.correctionModel) ||
+    !providerModels.includes(merged.correctionModel);
+  if (staleCorrectionModel) merged.correctionModel = providerModels[0]!;
 
   // Normalize malformed recordingMode values in memory only (no write-back).
   if (
@@ -761,6 +826,7 @@ export function getVoiceSettings(): VoiceInputSettings {
     dictionaryRepaired ||
     providerNeedsDefault ||
     staleTranscriptionModel ||
+    staleCorrectionProvider ||
     staleCorrectionModel
   ) {
     store.set("voiceInput", merged);
@@ -1070,7 +1136,7 @@ function correctionSettingsFor(
 ): VoiceCorrectionSettings {
   return {
     model: settings.correctionModel,
-    apiKey: settings.openaiApiKey,
+    apiKey: cleanupApiKey(settings),
     customDictionary: dictionaryTerms(sessionDictionary(settings.dictionary, vocabulary)),
     knownNames: names,
     ...(repositoryNames.length > 0 ? { repositoryNames } : {}),
@@ -1090,7 +1156,7 @@ function correctionSettingsFor(
 }
 
 function mayCorrect(settings: VoiceInputSettings): boolean {
-  return settings.correctionEnabled && Boolean(settings.openaiApiKey);
+  return settings.correctionEnabled && hasCleanupKey(settings);
 }
 
 export function registerVoiceInputHandlers(deps: HandlerDependencies): () => void {
@@ -1126,6 +1192,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // One write, so fields saved together (a mic's id and its name) land
     // together or not at all.
     store.set("voiceInput", { ...store.get("voiceInput"), ...updates });
+    // Off means the microphone is off (#14947): a running session ends the way
+    // a stop would, in whichever view owns it, so its text stays in the draft.
+    if (updates.enabled === false) requestLiveSessionStop();
   };
 
   const reportAudioOverflow = (session: VoiceSession) => {
@@ -1156,10 +1225,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   const findFileLinks = async (
     session: VoiceSession,
     correctionSvc: VoiceCorrectionService,
-    transcriptId: string,
     text: string,
     settings: VoiceInputSettings,
-    signal: AbortSignal
+    signal: AbortSignal,
+    lookup: FileLinkLookup
   ): Promise<void> => {
     const credentials = {
       apiKey: settings.openaiApiKey,
@@ -1172,8 +1241,22 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     const descriptions = detected
       .map(({ description }) => description.trim())
       .filter((description) => spoken.includes(normalizeSpoken(description)));
+    lookup.descriptions = descriptions;
     if (descriptions.length === 0 || signal.aborted) return;
-    let paths: Array<string | null>;
+    // Each lands as it settles, so one still searching at the deadline
+    // doesn't take the others with it. One settling after the job gave up
+    // was cut short, not a miss.
+    const lookUpEach = (find: (description: string, i: number) => Promise<string | null>) =>
+      Promise.all(
+        descriptions.map(async (description, i) => {
+          try {
+            const path = await find(description, i);
+            if (!signal.aborted) lookup.found[i] = { description, path };
+          } catch (error) {
+            logWarn("[VoiceInput] File link resolution failed", voiceErrorLogFields(error));
+          }
+        })
+      );
     const hostPane = hostPaneFor(session.projectId, session.outsideView);
     if (hostPane) {
       // The host searches its own files; which one was meant is chosen here,
@@ -1185,15 +1268,13 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         { timeoutMs: FILE_LINK_JOB_TIMEOUT_MS, signal }
       );
       if (!candidates || signal.aborted) return;
-      paths = await Promise.all(
-        descriptions.map((description, i) =>
-          voiceFileLinkResolver.pick({
-            description,
-            candidates: candidates[i] ?? [],
-            ...credentials,
-            signal,
-          })
-        )
+      await lookUpEach((description, i) =>
+        voiceFileLinkResolver.pick({
+          description,
+          candidates: candidates[i] ?? [],
+          ...credentials,
+          signal,
+        })
       );
     } else {
       const cwd = session.outsideView
@@ -1205,25 +1286,37 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             deps.ptyClient
           );
       if (!cwd || signal.aborted) return;
-      paths = await Promise.all(
-        descriptions.map((description) =>
-          voiceFileLinkResolver.resolve({ cwd, description, ...credentials, signal })
-        )
+      await lookUpEach((description) =>
+        voiceFileLinkResolver.resolve({ cwd, description, ...credentials, signal })
       );
     }
-    // A local match returns without consulting the signal.
-    if (signal.aborted) return;
-    // Misses go too, so a hit can't claim a missed command's words; their
-    // own words stay as spoken.
-    const references = descriptions.map((description, i) => ({
-      description,
-      path: paths[i] ?? null,
-    }));
-    const resolved = references.filter((reference) => reference.path).length;
-    logDebug("[VoiceInput] File links resolved", { detected: references.length, resolved });
+  };
+
+  // Every reference detected goes, misses and failures too: the composer says
+  // which found nothing (#14983), and a hit can't claim a missed command's
+  // words. Their own words stay as spoken.
+  const reportFileLinks = (
+    session: VoiceSession,
+    transcriptId: string,
+    { descriptions, found }: FileLinkLookup
+  ): void => {
+    // Speech with no reference detected in it stays silent, and so does a
+    // session cancelled or replaced: its references went with it.
+    if (descriptions.length === 0 || session.controller.signal.aborted) return;
+    // One that never settled threw, ran out of time, or had nowhere to look.
+    const references = descriptions.map(
+      (description, i) => found[i] ?? { description, path: null, failed: true as const }
+    );
+    const settled = found.filter((reference) => reference !== undefined);
+    const resolved = settled.filter((reference) => reference.path !== null).length;
+    logDebug("[VoiceInput] File links resolved", {
+      detected: references.length,
+      resolved,
+      failed: references.length - settled.length,
+    });
     // The view that started the session, wherever it is now; never the app's
     // current view (#14599).
-    if (resolved === 0 || session.sender.isDestroyed()) return;
+    if (session.sender.isDestroyed()) return;
     session.sender.send(CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED, {
       sessionId: session.id,
       transcriptId,
@@ -1233,16 +1326,22 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
   const trackFileLinkJob = (
     session: VoiceSession,
-    run: (signal: AbortSignal) => Promise<void>
+    transcriptId: string,
+    run: (signal: AbortSignal, lookup: FileLinkLookup) => Promise<void>
   ): void => {
     const deadline = createTimeoutSignal(FILE_LINK_JOB_TIMEOUT_MS, session.controller.signal);
-    const work = run(deadline.signal).catch((error: unknown) => {
+    const lookup: FileLinkLookup = { descriptions: [], found: [] };
+    const work = run(deadline.signal, lookup).catch((error: unknown) => {
       logWarn("[VoiceInput] File link resolution failed", voiceErrorLogFields(error));
     });
-    const job: Promise<void> = Promise.race([work, whenAborted(deadline.signal)]).finally(() => {
-      deadline.dispose();
-      session.fileLinkJobs.delete(job);
-    });
+    // Reported once, whichever settles first, and before a stop waiting on
+    // the job ends the session.
+    const job: Promise<void> = Promise.race([work, whenAborted(deadline.signal)])
+      .then(() => reportFileLinks(session, transcriptId, lookup))
+      .finally(() => {
+        deadline.dispose();
+        session.fileLinkJobs.delete(job);
+      });
     session.fileLinkJobs.add(job);
   };
 
@@ -1266,9 +1365,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // socket and the terminal's context are got ready while the drain runs.
     const readyCorrection = (): boolean => {
       if (reason !== "stopped" || session.intent !== "dictation" || session.ended) return false;
-      if (!mayCorrect(getVoiceSettings())) return false;
+      const settings = getVoiceSettings();
+      if (!mayCorrect(settings)) return false;
       correctionService ??= new VoiceCorrectionService();
-      correctionService.preconnect();
+      correctionService.preconnect(settings.correctionProvider);
       return true;
     };
     const prep = session.correctionPrep;
@@ -1419,7 +1519,6 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       utterance: new UtteranceCommands(),
       flushUtterance: null,
       warmTimer: null,
-      prefetchesStarted: 0,
       correctionPrep: null,
       stats: {
         provider: null,
@@ -1427,6 +1526,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         droppedPreStart: 0,
         completedSegments: 0,
         emptyCompletions: 0,
+        prefetchesStarted: 0,
       },
     };
     const previous = liveSession;
@@ -1441,6 +1541,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       endSession(session, "cancelled");
       if (ownsProvider) service?.stop();
     });
+    // Dictation turned off after this view read the settings, or while it
+    // waited behind the session turning it off stopped (#14947). It may already
+    // hold speech, so it stops as a stop would rather than being refused.
+    if (!getVoiceSettings().enabled) requestLiveSessionStop(session.id);
     // Main-process clock only; correlate with renderer start steps by session id.
     const startedAt = performance.now();
     // Whatever already ended it (a stop, a newer start, its view going away)
@@ -1899,8 +2003,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       if (correctionSvc && transcriptId) {
         // The renderer finds each description in the draft, so detection
         // reads the text the draft got.
-        trackFileLinkJob(session, (signal) =>
-          findFileLinks(session, correctionSvc, transcriptId, writtenText, liveSettings, signal)
+        trackFileLinkJob(session, transcriptId, (signal, lookup) =>
+          findFileLinks(session, correctionSvc, writtenText, liveSettings, signal, lookup)
         );
       }
     };
@@ -2376,6 +2480,18 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
   const handleOpenMicSettings = () => openMicSettings();
 
+  // A silent mic in an app whose bundle was replaced under it (#14937): macOS
+  // feeds this process zeros until it restarts as the new bundle.
+  const handleIsAppReplaced = async (): Promise<boolean> => isAppBundleReplaced();
+
+  // False when there is no whole bundle to come back up as, so the pane can
+  // say so rather than quit Daintree into nothing.
+  const handleRestartReplacedApp = async (): Promise<boolean> => {
+    if (!isAppBundleLaunchable()) return false;
+    relaunchApp("bundle-replaced");
+    return true;
+  };
+
   const handleValidateApiKey = async (apiKey: string) => {
     const settings = getVoiceSettings();
     return validateOpenAIKey(apiKey, settings.organizationId, settings.projectId);
@@ -2474,6 +2590,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
   // Cleanup requests still out, cancelled when the handlers go.
   const openCorrections = new Set<AbortController>();
+  // Accounts whose cleanup failure has been told, each until a cleanup on it works.
+  const toldCleanupFailures = new Set<string>();
   // Cleanup started at a pause while a dictation runs, for its stop to take.
   const prefetcher = new CorrectionPrefetcher<PrefetchRun>();
   const prefetchOwner = (webContentsId: number, sessionId: string) =>
@@ -2486,7 +2604,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       instructions: settings.correctionCustomInstructions,
       dictionary: settings.dictionary,
       language: settings.language,
-      account: [settings.openaiApiKey, settings.organizationId, settings.projectId],
+      account: [cleanupApiKey(settings), settings.organizationId, settings.projectId],
     });
 
   // Whole-passage cleanup pass. The renderer calls this once after recording
@@ -2502,14 +2620,15 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       return { action: "no_change", correctedText: request.rawText, verdict: "skipped" };
     }
     const answered = holdForCleanup(ctx.webContentsId);
+    const asker = askerStillThere(ctx);
     try {
-      const prefetched = request.sessionId
-        ? prefetcher.take(
-            prefetchOwner(ctx.webContentsId, request.sessionId),
-            correctionKey(request, settings)
-          )
-        : null;
-      if (!prefetched) return await correctPassage(ctx, request, settings, startedAt);
+      const owner = request.sessionId ? prefetchOwner(ctx.webContentsId, request.sessionId) : null;
+      const prefetched = owner ? prefetcher.take(owner, correctionKey(request, settings)) : null;
+      if (!prefetched) {
+        const reply = await correctPassage(ctx, request, settings, startedAt);
+        // A passage without a session never had a prefetch to find.
+        return settleReply(asker, settings, owner ? { ...reply, prefetch: "not_matched" } : reply);
+      }
       // The stop reads its own context, as it always would, and takes the run
       // only if the pause sent OpenAI exactly what it would: a terminal that
       // printed more or an agent that changed since makes it start its own.
@@ -2528,17 +2647,46 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           verdict: "failed",
         };
       }
+      // A pause whose context couldn't be read sent nothing the stop could take.
+      let prefetch: VoicePrefetchMatch = theirs === null ? "prefetch_failed" : "inputs_changed";
       if (mine !== null && mine === theirs) {
         const reply = await adoptPrefetch(ctx, request, prefetched);
-        // One that failed gets the stop's own try, as if it had never started.
-        if (!reply.failed) return reply;
+        if (!reply.failed) return settleReply(asker, settings, { ...reply, prefetch: "adopted" });
+        prefetch = "prefetch_failed";
+        // One that failed gets the stop's own try, as if it had never started,
+        // unless the account refused it: the same account would again.
+        if (reply.cleanupFailure) return settleReply(asker, settings, { ...reply, prefetch });
       } else {
         prefetched.cancel();
       }
-      return await correctPassage(ctx, request, settings, startedAt, { prepared });
+      const reply = await correctPassage(ctx, request, settings, startedAt, { prepared });
+      return settleReply(asker, settings, { ...reply, prefetch });
     } finally {
       answered();
     }
+  };
+
+  // A failure that will recur is told once per outage, on the first reply that
+  // meets it from any view, until a cleanup on that account works again or the
+  // account changes (#14963). A prefetch reaches here only once a stop takes it.
+  const settleReply = (
+    askerThere: () => boolean,
+    settings: VoiceInputSettings,
+    reply: CorrectReply
+  ): CorrectReply => {
+    const account = cleanupAccountOf(settings);
+    const { cleanupFailure, ...rest } = reply;
+    if (!cleanupFailure) {
+      if (reply.verdict === "replaced" || reply.verdict === "unchanged") {
+        toldCleanupFailures.delete(account);
+      }
+      return reply;
+    }
+    // A view that went or reloaded since it asked has no one to tell; the
+    // next passage tells it instead.
+    if (toldCleanupFailures.has(account) || disposed || !askerThere()) return rest;
+    toldCleanupFailures.add(account);
+    return reply;
   };
 
   // The stop's passage is the one a pause already sent: its text so far goes
@@ -2607,9 +2755,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             return { inputs, reply };
           },
         })),
-      Math.max(0, PREFETCHES_PER_SESSION - session.prefetchesStarted)
+      Math.max(0, PREFETCHES_PER_SESSION - session.stats.prefetchesStarted)
     );
-    session.prefetchesStarted += started;
+    session.stats.prefetchesStarted += started;
   };
 
   // Each listing's code names, held only as long as FileSearchService holds the
@@ -2654,6 +2802,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     request: VoiceInputCorrectPayload,
     settings: VoiceInputSettings
   ): Promise<PreparedCleanup> => {
+    const readStartedAt = performance.now();
     const outsideView = request.outsideView === true;
     // Read while the dictation ran, for a passage that names its session. One
     // that doesn't, or a session cleanup was off for at its start, reads now.
@@ -2690,6 +2839,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         outsideView
       ));
     }
+    // Only a command the target lists now, so the renderer names a token, never a file.
+    const openingCommandRead = readVoiceOpeningCommand(
+      commandTarget?.vocabulary.entries ?? [],
+      request.openingCommandToken
+    );
     const context = sessionContext ? await sessionContext : NO_SESSION_CONTEXT;
     const { terminalOutput, agentReply } = terminalContext;
     const recentPrompts = ownRecentPrompts(ctx.projectId, request);
@@ -2704,6 +2858,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             request.rawText
           )
         : [];
+    const openingCommand = await openingCommandRead;
     return {
       request: {
         rawText: request.rawText,
@@ -2715,6 +2870,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         ...(codeNames.length > 0 ? { codeNames } : {}),
         reason: "stop",
         startsPrompt: request.startsPrompt === true,
+        ...(openingCommand ? { openingCommand } : {}),
         ...(request.uncertain ? { uncertain: request.uncertain } : {}),
         ...(request.pauses ? { pauses: request.pauses } : {}),
       },
@@ -2726,6 +2882,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         context,
         prep?.transcriber ?? sessionRecord?.transcriber
       ),
+      prepMs: performance.now() - readStartedAt,
     };
   };
 
@@ -2791,10 +2948,21 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         correctedText: result.confirmedText,
         ...(result.failed ? { failed: true as const } : {}),
         verdict: result.verdict,
+        ...(result.cleanupFailure ? { cleanupFailure: result.cleanupFailure } : {}),
         timing: {
           prepMs: Math.max(0, sentAt - startedAt),
           requestMs: result.roundTrip ? result.roundTrip.ms : null,
         },
+        ...(result.phases
+          ? {
+              pace: {
+                model: settings.correctionModel,
+                effort: result.phases.effort,
+                firstTextMs: prepared.prepMs + result.phases.untilOutputMs,
+                outputMs: result.phases.outputMs,
+              },
+            }
+          : {}),
       };
     } finally {
       unwatchSender?.();
@@ -2810,7 +2978,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     request: VoiceInputRewritePayload
   ): Promise<VoiceRewriteOutcome> => {
     const settings = getVoiceSettings();
-    if (!settings.openaiApiKey) return { status: "unavailable" };
+    if (!hasCleanupKey(settings)) return { status: "unavailable" };
     const answered = holdForCleanup(ctx.webContentsId);
     try {
       return await rewriteSelection(ctx, request, settings);
@@ -2835,7 +3003,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       : getProjectInfo(ctx.projectId);
     return correctionService.rewrite(request, {
       model: settings.correctionModel,
-      apiKey: settings.openaiApiKey,
+      apiKey: cleanupApiKey(settings),
       customDictionary: dictionaryTerms(settings.dictionary),
       language: normalizeVoiceLanguage(settings.language),
       projectName: projectInfo.name,
@@ -2894,6 +3062,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         { withContext: true }
       ),
       getLastTerms: op(VOICE_INPUT_METHOD_CHANNELS.getLastTerms, handleGetLastTerms),
+      isAppReplaced: op(VOICE_INPUT_METHOD_CHANNELS.isAppReplaced, handleIsAppReplaced),
+      restartReplacedApp: op(
+        VOICE_INPUT_METHOD_CHANNELS.restartReplacedApp,
+        handleRestartReplacedApp
+      ),
       prefetchCorrections: opValidated(
         VOICE_INPUT_METHOD_CHANNELS.prefetchCorrections,
         VoiceInputPrefetchCorrectionsSchema,

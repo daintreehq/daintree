@@ -9,12 +9,24 @@ interface PluginViewLoadErrorProps {
   pluginId: string;
   displayName: string;
   message: string;
+  /** Detail for the log only: internal facts the message leaves out. */
+  diagnostic?: string;
 }
 
-export function PluginViewLoadError({ pluginId, displayName, message }: PluginViewLoadErrorProps) {
+export function PluginViewLoadError({
+  pluginId,
+  displayName,
+  message,
+  diagnostic,
+}: PluginViewLoadErrorProps) {
   useEffect(() => {
-    logWarn("[PluginViewHost] view configuration error", { pluginId, displayName, message });
-  }, [pluginId, displayName, message]);
+    logWarn("[PluginViewHost] view configuration error", {
+      pluginId,
+      displayName,
+      message,
+      ...(diagnostic !== undefined ? { diagnostic } : {}),
+    });
+  }, [pluginId, displayName, message, diagnostic]);
 
   return (
     <div role="region" aria-label="Plugin view unavailable" className="flex flex-1 flex-col">

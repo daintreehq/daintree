@@ -454,10 +454,31 @@ describe("@daintreehq/plugin-ui avatars, popovers and hints", () => {
     expect(root.getAttribute("aria-label")).toBe("Sync warning");
     // Below: the action sits in the text column, not the trailing slot.
     const retry = screen.getByRole("button", { name: "Retry" });
-    expect(retry.closest(".min-w-0")).not.toBeNull();
+    expect(screen.getByText("Sync paused.").contains(retry)).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Dismiss warning" }));
     expect(onDismiss).toHaveBeenCalledTimes(1);
     expect(container.querySelector("[data-severity-glyph]")).not.toBeNull();
+  });
+
+  it("trails an inline Callout action beside the message, and the dismiss X outside both", () => {
+    render(
+      withTooltips(
+        createElement(kit.Callout, {
+          severity: "warning",
+          onDismiss: vi.fn(),
+          dismissLabel: "Dismiss warning",
+          action: createElement(kit.Button, { children: "Retry" }),
+          children: "Sync paused.",
+        })
+      )
+    );
+    const message = screen.getByText("Sync paused.");
+    const retry = screen.getByRole("button", { name: "Retry" });
+    const dismiss = screen.getByRole("button", { name: "Dismiss warning" });
+    expect(message.contains(retry)).toBe(false);
+    // The action wraps with the message when narrow; the X must not go with it.
+    expect(message.parentElement?.contains(retry)).toBe(true);
+    expect(message.parentElement?.contains(dismiss)).toBe(false);
   });
 
   it("draws a Callout strip as the pane banner", () => {

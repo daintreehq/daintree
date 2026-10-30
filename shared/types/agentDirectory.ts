@@ -59,6 +59,16 @@ export const AgentDirectorySubjectSchema = z.object({
 });
 export type AgentDirectorySubject = z.infer<typeof AgentDirectorySubjectSchema>;
 
+/** Whether two subjects name the same run: one terminal, one PTY launch. A successor never matches. */
+export function isSameAssistantRun(
+  a: AgentDirectorySubject | null,
+  b: AgentDirectorySubject | null
+): boolean {
+  return (
+    a !== null && b !== null && a.terminalId === b.terminalId && a.incarnation === b.incarnation
+  );
+}
+
 const agentStateSchema = z.enum(["idle", "working", "waiting", "directing", "completed", "exited"]);
 const waitingReasonSchema = z.enum(["prompt", "question", "approval", "error"]);
 
@@ -76,7 +86,7 @@ export const AgentDirectoryConfirmationSchema = z.object({
   actionId: z.string().min(1).max(128),
   /** Epoch ms the call started waiting on the person. */
   since: z.number(),
-  /** Epoch ms past which the call fails unanswered and the dialog stops offering approval. */
+  /** Epoch ms by which the call has failed if still unanswered; it can end sooner. */
   expiresAt: z.number(),
 });
 export type AgentDirectoryConfirmation = z.infer<typeof AgentDirectoryConfirmationSchema>;

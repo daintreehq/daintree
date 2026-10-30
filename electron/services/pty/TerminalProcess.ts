@@ -2,11 +2,12 @@ import { createHash } from "node:crypto";
 import { z } from "zod/mini";
 import type * as pty from "node-pty";
 import type {
+  FirstPromptCandidate,
   TerminalResizeResult,
   TerminalSubmitGuard,
   TerminalSubmitStatusState,
 } from "../../../shared/types/pty-host.js";
-import type { PanelTitleMode } from "../../../shared/types/panel.js";
+import type { PanelTitleMode, TerminalFirstPrompt } from "../../../shared/types/panel.js";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { PLAIN_SHELL_SCROLLBACK_MAX } from "../../../shared/config/scrollback.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -49,6 +50,7 @@ import {
   SURVIVOR_CHECK_DELAY_MS,
 } from "./terminalKillAudit.js";
 import { IdentityWatcher, type IdentityWatcherDelegate } from "./IdentityWatcher.js";
+import { hasAgentProcess } from "./agentProcessTree.js";
 import type { SpawnContext } from "./terminalSpawn.js";
 import { getLiveAgentId } from "./terminalTitle.js";
 import { serializeTerminal, serializeForPersistence } from "./terminalSerialization.js";
@@ -116,6 +118,12 @@ export interface TerminalProcessCallbacks {
    * submits, which complete well inside the threshold and report nothing.
    */
   onSubmitStatus?: (id: string, state: TerminalSubmitStatusState) => void;
+  /**
+   * A submission carrying a first-prompt candidate had its Enter written while
+   * an agent ran here (#15521). The record holds prompt text: it goes to Main
+   * and nowhere else.
+   */
+  onFirstPromptWritten?: (id: string, firstPrompt: TerminalFirstPrompt) => void;
   /**
    * Opens this terminal's graceful-shutdown capture window (#12432), at most
    * once per teardown. The owner keeps the PTY's reads flowing past its memory
@@ -1021,6 +1029,22 @@ export class TerminalProcess {
   }
 
   /**
+   * Adopt the conversation Main attributed this run to while it is live
+   * (#15268), so the subagent lookup and the exit backstop key off it. Fills
+   * only, and only for the incarnation Main matched: a respawn, an id already
+   * held, or another agent now running in the pane each mean the answer
+   * describes a run this record no longer is. Not marked as a teardown capture,
+   * so a quit that never prints its hint still reaches the exit backstop.
+   */
+  noteLiveAgentSessionId(sessionId: string, launchGeneration: number): void {
+    const info = this.terminalInfo;
+    if (info.launchGeneration !== launchGeneration || info.agentSessionId) return;
+    if (info.agentIncarnation !== 0) return;
+    if ((info.detectedAgentId ?? info.launchAgentId) !== info.launchAgentId) return;
+    info.agentSessionId = sessionId;
+  }
+
+  /**
    * Mirror a renderer-side rename onto the authoritative record. `title` and
    * `titleMode` move together: a title without its mode would still read as
    * `"default"` and be overwritten by the next agent-detection sweep (#10794).
@@ -1078,13 +1102,18 @@ export class TerminalProcess {
    * A submission that reaches the pty drops the last handback: it answered an
    * earlier prompt, and the assistant's close reads its presence as the agent
    * having finished the latest one (#13128).
+   *
+   * `firstPrompt` is offered as the run's first-prompt record (#15521) once
+   * the Enter is written, and only to an agent: a send to the shell an agent
+   * left behind was never its prompt.
    */
   submit(
     text: string,
     token?: string,
     handbackCode?: string,
     guard?: TerminalSubmitGuard,
-    imagePaths?: readonly string[]
+    imagePaths?: readonly string[],
+    firstPrompt?: FirstPromptCandidate
   ): void {
     const tracker =
       handbackCode !== undefined ? this.ensureHandbackTracker() : this.terminalInfo.handbackTracker;
@@ -1093,6 +1122,13 @@ export class TerminalProcess {
       this.terminalInfo.lastHandback = undefined;
       this.terminalInfo.lastHandbackUnpublished = false;
       onTrackerWritten?.();
+      if (firstPrompt !== undefined && this.isAgentLive) {
+        this.callbacks.onFirstPromptWritten?.(this.id, {
+          ...firstPrompt,
+          via: "send",
+          at: Date.now(),
+        });
+      }
     };
     this.inputController.submit(text, token, onPtyWritten, guard, imagePaths);
   }
@@ -1489,6 +1525,7 @@ export class TerminalProcess {
       getRecentOutput: () => tp.forensicsBuffer.getRecentOutput(),
       getLastCommand: () => tp.semanticBufferManager.getLastCommand(),
       getPtyDescendantCount: () => tp.getPtyDescendantCount(),
+      hasAgentProcess: (agentId) => tp.hasAgentProcess(agentId),
       readForegroundProcessGroupSnapshot: () => tp.readForegroundProcessGroupSnapshot(),
       handleAgentDetection: (result, cbSpawnedAt) => tp.handleAgentDetection(result, cbSpawnedAt),
     };
@@ -1500,6 +1537,14 @@ export class TerminalProcess {
       return undefined;
     }
     return this.deps.processTreeCache.getDescendantPids(ptyPid).length;
+  }
+
+  private hasAgentProcess(agentId: string): boolean | undefined {
+    const ptyPid = this.terminalInfo.ptyProcess.pid;
+    if (!Number.isInteger(ptyPid) || ptyPid <= 0 || !this.deps.processTreeCache) {
+      return undefined;
+    }
+    return hasAgentProcess(this.deps.processTreeCache, ptyPid, agentId);
   }
 
   // Thin wrapper around ForegroundProcessGroupProbe.readSnapshot(). Kept as

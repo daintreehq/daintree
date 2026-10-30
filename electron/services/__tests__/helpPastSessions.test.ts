@@ -1,9 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, rm, symlink, utimes, writeFile } from "fs/promises";
+import { chmod, mkdir, mkdtemp, rm, symlink, utimes, writeFile } from "fs/promises";
 import os from "os";
 import path from "path";
 import {
-  HELP_PAST_SESSIONS_LIMIT,
   claudeProjectSlug,
   codexHelpSessionsFrom,
   listClaudeHelpSessions,
@@ -15,6 +14,7 @@ import {
   HELP_ASSISTANT_GREETING,
   HUB_STARTED_ASSISTANT_GREETING,
 } from "../../../shared/config/helpAssistantGreeting.js";
+import { HELP_PAST_SESSIONS_LIMIT } from "../../../shared/types/ipc/help.js";
 
 const A = "006fdfc0-67bf-4df0-ad82-48ebfe4df184";
 const B = "1ad2578c-b710-4302-90c1-b222c4c29aa2";
@@ -169,17 +169,22 @@ describe("listClaudeHelpSessions", () => {
     const when = new Date("2026-01-02T03:04:05Z");
     await utimes(path.join(slugDir, `${A}.jsonl`), when, when);
 
-    const sessions = await listClaudeHelpSessions(sessionPath, projectsRoot);
-    expect(sessions).toEqual([
-      { agentId: "claude", sessionId: A, title: "Real question", updatedAt: when.getTime() },
-    ]);
+    expect(await listClaudeHelpSessions(sessionPath, projectsRoot)).toEqual({
+      sessions: [
+        { agentId: "claude", sessionId: A, title: "Real question", updatedAt: when.getTime() },
+      ],
+      complete: true,
+    });
   });
 
   it("does not follow a symlinked transcript", async () => {
     const outside = path.join(root, "outside.jsonl");
     await writeFile(outside, transcript(prompt("Planted")));
     await symlink(outside, path.join(slugDir, `${A}.jsonl`));
-    expect(await listClaudeHelpSessions(sessionPath, projectsRoot)).toEqual([]);
+    expect(await listClaudeHelpSessions(sessionPath, projectsRoot)).toEqual({
+      sessions: [],
+      complete: true,
+    });
   });
 
   it("does not follow a symlinked project folder", async () => {
@@ -188,11 +193,42 @@ describe("listClaudeHelpSessions", () => {
     await writeFile(path.join(elsewhere, `${A}.jsonl`), transcript(prompt("Foreign")));
     await rm(slugDir, { recursive: true });
     await symlink(elsewhere, slugDir);
-    expect(await listClaudeHelpSessions(sessionPath, projectsRoot)).toEqual([]);
+    expect(await listClaudeHelpSessions(sessionPath, projectsRoot)).toEqual({
+      sessions: [],
+      complete: true,
+    });
   });
 
-  it("returns nothing when the project folder does not exist", async () => {
-    expect(await listClaudeHelpSessions(path.join(root, "missing"), projectsRoot)).toEqual([]);
+  it("returns nothing, and calls that the whole history, when the project folder does not exist", async () => {
+    expect(await listClaudeHelpSessions(path.join(root, "missing"), projectsRoot)).toEqual({
+      sessions: [],
+      complete: true,
+    });
+  });
+
+  describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)("permissions", () => {
+    afterEach(async () => {
+      await chmod(slugDir, 0o755).catch(() => {});
+      await chmod(path.join(slugDir, `${B}.jsonl`), 0o644).catch(() => {});
+    });
+
+    it("reports a project folder it can't read as incomplete rather than empty", async () => {
+      await writeFile(path.join(slugDir, `${A}.jsonl`), transcript(prompt("Hidden")));
+      await chmod(slugDir, 0o000);
+      expect(await listClaudeHelpSessions(sessionPath, projectsRoot)).toEqual({
+        sessions: [],
+        complete: false,
+      });
+    });
+
+    it("keeps the transcripts it could read when one can't be opened", async () => {
+      await writeFile(path.join(slugDir, `${A}.jsonl`), transcript(prompt("Readable")));
+      await writeFile(path.join(slugDir, `${B}.jsonl`), transcript(prompt("Locked")));
+      await chmod(path.join(slugDir, `${B}.jsonl`), 0o000);
+      const read = await listClaudeHelpSessions(sessionPath, projectsRoot);
+      expect(read.sessions.map((s) => s.title)).toEqual(["Readable"]);
+      expect(read.complete).toBe(false);
+    });
   });
 
   it("reads only the edges of a large transcript", async () => {
@@ -206,7 +242,9 @@ describe("listClaudeHelpSessions", () => {
         line({ type: "ai-title", aiTitle: "Final title" })
       )
     );
-    const [session] = await listClaudeHelpSessions(sessionPath, projectsRoot);
+    const {
+      sessions: [session],
+    } = await listClaudeHelpSessions(sessionPath, projectsRoot);
     expect(session?.title).toBe("Final title");
   });
 });
@@ -269,7 +307,7 @@ describe("listHelpPastSessions", () => {
       "/sessions/h.codex",
       "/sessions/h",
     ]);
-    expect(merged.map((s) => [s.sessionId, s.updatedAt])).toEqual([
+    expect(merged.sessions.map((s) => [s.sessionId, s.updatedAt])).toEqual([
       ["resumed", 40],
       ["fresh", 30],
       ["legacy", 20],
@@ -296,9 +334,10 @@ describe("listHelpPastSessions", () => {
         },
       }
     );
-    expect(merged.map((s) => [s.sessionId, s.title, s.updatedAt])).toEqual([
+    expect(merged.sessions.map((s) => [s.sessionId, s.title, s.updatedAt])).toEqual([
       ["resumed", "Newer copy", 50],
     ]);
+    expect(merged.unreadable).toEqual(["codex"]);
   });
 
   it("caps after merging the directories, so duplicates never cost a row", async () => {
@@ -320,8 +359,9 @@ describe("listHelpPastSessions", () => {
         }),
       }
     );
-    expect(merged).toHaveLength(HELP_PAST_SESSIONS_LIMIT);
-    expect(new Set(merged.map((s) => s.sessionId)).size).toBe(HELP_PAST_SESSIONS_LIMIT);
+    expect(merged.sessions).toHaveLength(HELP_PAST_SESSIONS_LIMIT);
+    expect(new Set(merged.sessions.map((s) => s.sessionId)).size).toBe(HELP_PAST_SESSIONS_LIMIT);
+    expect(merged.truncated).toBe(true);
   });
 
   it("merges both stores newest first and survives one failing", async () => {
@@ -348,7 +388,12 @@ describe("listHelpPastSessions", () => {
           }),
         }
       );
-      expect(merged.map((s) => s.sessionId)).toEqual(["newer", A, "older"]);
+      expect(merged).toEqual({
+        sessions: expect.any(Array),
+        unreadable: [],
+        truncated: false,
+      });
+      expect(merged.sessions.map((s) => s.sessionId)).toEqual(["newer", A, "older"]);
 
       const claudeOnly = await listHelpPastSessions(
         { claude: sessionPath, codex: [sessionPath] },
@@ -357,7 +402,8 @@ describe("listHelpPastSessions", () => {
           listCodexSessions: () => Promise.reject(new Error("boom")),
         }
       );
-      expect(claudeOnly.map((s) => s.sessionId)).toEqual([A]);
+      expect(claudeOnly.sessions.map((s) => s.sessionId)).toEqual([A]);
+      expect(claudeOnly.unreadable).toEqual(["codex"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -374,7 +420,7 @@ describe("listHelpPastSessions", () => {
         ],
       }),
     });
-    expect(merged.map((s) => s.sessionId)).toEqual(["a", "b"]);
+    expect(merged.sessions.map((s) => s.sessionId)).toEqual(["a", "b"]);
   });
 
   it("caps the merged list", async () => {
@@ -387,7 +433,177 @@ describe("listHelpPastSessions", () => {
       claudeProjectsRoot: "/nonexistent/projects",
       listCodexSessions: async () => ({ status: "ok", sessions }),
     });
-    expect(merged).toHaveLength(HELP_PAST_SESSIONS_LIMIT);
-    expect(merged[0]?.sessionId).toBe(`t${HELP_PAST_SESSIONS_LIMIT + 4}`);
+    expect(merged.sessions).toHaveLength(HELP_PAST_SESSIONS_LIMIT);
+    expect(merged.sessions[0]?.sessionId).toBe(`t${HELP_PAST_SESSIONS_LIMIT + 4}`);
+    expect(merged.truncated).toBe(true);
+  });
+
+  it("calls a list that fits under the cap whole", async () => {
+    const sessions = Array.from({ length: HELP_PAST_SESSIONS_LIMIT }, (_, i) => ({
+      id: `t${i}`,
+      preview: `Question ${i}`,
+      updatedAt: i,
+    }));
+    const merged = await listHelpPastSessions(NO_PATHS, {
+      claudeProjectsRoot: "/nonexistent/projects",
+      listCodexSessions: async () => ({ status: "ok", sessions }),
+    });
+    expect(merged.sessions).toHaveLength(HELP_PAST_SESSIONS_LIMIT);
+    expect(merged.truncated).toBe(false);
+  });
+
+  it("calls the list cut when Codex left older threads off its page, however few came back", async () => {
+    const merged = await listHelpPastSessions(NO_PATHS, {
+      claudeProjectsRoot: "/nonexistent/projects",
+      listCodexSessions: async () => ({
+        status: "ok",
+        sessions: [{ id: "t1", preview: "Question", updatedAt: 1 }],
+        more: true,
+      }),
+    });
+    expect(merged.sessions).toHaveLength(1);
+    expect(merged.truncated).toBe(true);
+  });
+
+  it("names Codex unreadable when its app server fails, and keeps Claude's rows", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "help-past-codex-down-"));
+    try {
+      const sessionPath = path.join(root, "s");
+      await mkdir(sessionPath);
+      const slugDir = path.join(root, "projects", claudeProjectSlug(sessionPath));
+      await mkdir(slugDir, { recursive: true });
+      await writeFile(path.join(slugDir, `${A}.jsonl`), transcript(prompt("Claude one")));
+      for (const reason of ["timeout", "protocol-error"] as const) {
+        const merged = await listHelpPastSessions(
+          { claude: sessionPath, codex: [`${sessionPath}.codex`, sessionPath] },
+          {
+            claudeProjectsRoot: path.join(root, "projects"),
+            listCodexSessions: async () => ({ status: "unavailable", reason }),
+          }
+        );
+        expect(merged.sessions.map((s) => s.sessionId)).toEqual([A]);
+        expect(merged.unreadable).toEqual(["codex"]);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("treats a missing Codex CLI as no history unless Codex's own directory shows it ran", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "help-past-cli-missing-"));
+    try {
+      const claudePath = path.join(root, "h");
+      const codexPath = path.join(root, "h.codex");
+      // The shared pre-split directory is Claude's, so it exists for every Claude user.
+      await mkdir(claudePath);
+      const deps = {
+        claudeProjectsRoot: path.join(root, "projects"),
+        listCodexSessions: async () => ({
+          status: "unavailable" as const,
+          reason: "cli-missing" as const,
+        }),
+      };
+      const paths = { claude: claudePath, codex: [codexPath, claudePath] };
+
+      expect(await listHelpPastSessions(paths, deps)).toEqual({
+        sessions: [],
+        unreadable: [],
+        truncated: false,
+      });
+
+      await mkdir(codexPath);
+      expect((await listHelpPastSessions(paths, deps)).unreadable).toEqual(["codex"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "counts a missing Codex CLI when Codex's own directory can't be inspected",
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "help-past-cli-locked-"));
+      const locked = path.join(root, "help-sessions");
+      try {
+        await mkdir(path.join(locked, "h.codex"), { recursive: true });
+        await chmod(locked, 0o000);
+        const merged = await listHelpPastSessions(
+          { claude: path.join(locked, "h"), codex: [path.join(locked, "h.codex")] },
+          {
+            claudeProjectsRoot: path.join(root, "projects"),
+            listCodexSessions: async () => ({ status: "unavailable", reason: "cli-missing" }),
+          }
+        );
+        expect(merged.unreadable).toContain("codex");
+      } finally {
+        await chmod(locked, 0o755);
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  );
+
+  it("names Claude unreadable when its session path can't be resolved, and keeps Codex's rows", async () => {
+    const merged = await listHelpPastSessions(
+      // A NUL byte fails `realpath` with something other than "not there".
+      { claude: "/bad\0path", codex: ["/sessions/h.codex"] },
+      {
+        claudeProjectsRoot: "/nonexistent/projects",
+        listCodexSessions: async () => ({
+          status: "ok",
+          sessions: [{ id: "t1", preview: "Codex one", updatedAt: 1 }],
+        }),
+      }
+    );
+    expect(merged.sessions.map((s) => s.sessionId)).toEqual(["t1"]);
+    expect(merged.unreadable).toEqual(["claude"]);
+  });
+
+  it("names both stores when both fail", async () => {
+    const merged = await listHelpPastSessions(
+      { claude: "/bad\0path", codex: ["/sessions/h.codex"] },
+      {
+        claudeProjectsRoot: "/nonexistent/projects",
+        listCodexSessions: async () => ({ status: "unavailable", reason: "timeout" }),
+      }
+    );
+    expect(merged).toEqual({ sessions: [], unreadable: ["claude", "codex"], truncated: false });
+  });
+
+  it("counts after merging the directories, so one conversation seen twice never cuts the list", async () => {
+    const page = Array.from({ length: HELP_PAST_SESSIONS_LIMIT }, (_, i) => ({
+      id: `t${i}`,
+      preview: `Question ${i}`,
+      updatedAt: i,
+    }));
+    const merged = await listHelpPastSessions(
+      { claude: "/nonexistent/help-sessions/h", codex: ["/sessions/h.codex", "/sessions/h"] },
+      {
+        claudeProjectsRoot: "/nonexistent/projects",
+        listCodexSessions: async () => ({ status: "ok", sessions: page }),
+      }
+    );
+    expect(merged.sessions).toHaveLength(HELP_PAST_SESSIONS_LIMIT);
+    expect(merged.truncated).toBe(false);
+  });
+
+  it("keeps a cut legacy page's news when Codex's own directory failed", async () => {
+    const merged = await listHelpPastSessions(
+      { claude: "/nonexistent/help-sessions/h", codex: ["/sessions/h.codex", "/sessions/h"] },
+      {
+        claudeProjectsRoot: "/nonexistent/projects",
+        listCodexSessions: async (cwd) =>
+          cwd === "/sessions/h.codex"
+            ? { status: "unavailable", reason: "timeout" }
+            : {
+                status: "ok",
+                sessions: [{ id: "legacy", preview: "Older", updatedAt: 1 }],
+                more: true,
+              },
+      }
+    );
+    expect(merged).toEqual({
+      sessions: [expect.objectContaining({ sessionId: "legacy" })],
+      unreadable: ["codex"],
+      truncated: true,
+    });
   });
 });

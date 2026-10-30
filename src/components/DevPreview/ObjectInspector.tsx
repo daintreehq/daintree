@@ -64,6 +64,39 @@ function PrimitiveValue({ arg }: { arg: CdpRemoteArg & { type: "primitive" } }) 
   }
 }
 
+/**
+ * A property whose value was never read. The tooltip opens on hover only: an
+ * expanded object can hold many of these, and opening one each with the row's
+ * keyboard focus would stack them, so assistive tech gets the explanation as
+ * text instead.
+ */
+function UnreadValue({ label, explanation }: { label: string; explanation: string }) {
+  return (
+    <span className="text-text-secondary">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span aria-hidden="true">{label}</span>
+        </TooltipTrigger>
+        <TooltipContent side="top">{explanation}</TooltipContent>
+      </Tooltip>
+      <span className="sr-only">{explanation}</span>
+    </span>
+  );
+}
+
+function unreadValueText(prop: CdpPropertyDescriptor): { label: string; explanation: string } {
+  // Reading a getter runs page code, so it is shown as an accessor rather than
+  // as the value it might return.
+  if (prop.accessor?.getter) return { label: "(…)", explanation: "Getter not run" };
+  if (prop.accessor) {
+    return {
+      label: "(no getter)",
+      explanation: "Accessor without a getter, so it reads as undefined",
+    };
+  }
+  return { label: "(no value)", explanation: "No value was reported for this property" };
+}
+
 function PropertyTree({
   id,
   path,
@@ -104,7 +137,7 @@ function PropertyTree({
               path={`${path}.${prop.name}`}
             />
           ) : (
-            <span className="text-text-secondary">undefined</span>
+            <UnreadValue {...unreadValueText(prop)} />
           )}
         </div>
       ))}

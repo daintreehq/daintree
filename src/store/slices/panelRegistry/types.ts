@@ -48,6 +48,13 @@ export interface RestartTerminalOptions {
    * (#14096). The user's explicit choice from the refusal banner; never stored.
    */
   allowMissingPluginTools?: boolean;
+  /**
+   * Start in the pane's `cwd` as it stands, even when it lies in a worktree
+   * other than the one the pane is filed under (#14954). For `UpdateCwdDialog`,
+   * where the user has just picked that folder; an ordinary restart moves the
+   * pane into its own worktree.
+   */
+  keepCwd?: boolean;
 }
 
 export interface TrashedTerminalGroupMetadata {
@@ -320,6 +327,8 @@ export interface PanelRegistrySlice {
   setViewportRotated: (id: string, rotated: boolean) => void;
   setViewportDpr: (id: string, dpr: 1 | 2 | 3) => void;
   setViewportFit: (id: string, fit: boolean) => void;
+  /** Give a dev preview its own command, which wins over the project default. */
+  setDevPreviewCommand: (id: string, command: string) => void;
   setDevPreviewScrollPosition: (
     id: string,
     position: { url: string; scrollY: number } | undefined

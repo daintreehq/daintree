@@ -1067,6 +1067,15 @@ describe("DonutChart", () => {
     expect(tooltip()?.textContent).toBe("300TypeScript · 75%");
     fireEvent.pointerLeave(plot());
     expect(tooltip()).toBeNull();
+    // Moving over the slice keeps it up; into the hole, still inside the ring's
+    // box, the slice lowers and its tooltip goes.
+    fireEvent.pointerEnter(parts[0]!);
+    fireEvent.pointerMove(parts[0]!);
+    expect(tooltip()?.textContent).toBe("300TypeScript · 75%");
+    expect(container.querySelector("li[data-active]")?.textContent).toContain("TypeScript");
+    fireEvent.pointerMove(plot().querySelector("svg")!);
+    expect(tooltip()).toBeNull();
+    expect(container.querySelector("li[data-active]")).toBeNull();
   });
 
   it("draws one whole ring for a single part and survives bad props", () => {

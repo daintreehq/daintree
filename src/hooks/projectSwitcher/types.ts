@@ -108,6 +108,17 @@ export type DeleteAllScratchesSnapshot = ReadonlyArray<
 export type DeleteScratchTarget = Readonly<Pick<SearchableScratch, "id" | "name" | "path">>;
 
 /**
+ * What a successful Save-as-Project hands its follow-up: the scratch it copied,
+ * by name only, and the project the copy became. No live counts — the scratch
+ * keeps running after the copy, so a snapshot of it would go stale under the
+ * dialog.
+ */
+export interface SaveAsProjectFollowUp {
+  scratch: Readonly<Pick<SearchableScratch, "id" | "name">>;
+  project: Project;
+}
+
+/**
  * Band a project renders under in browse. Ordered exactly as the sections
  * appear, so the flat `results` array can be sorted by section index and the
  * component can emit a header wherever the key changes — sections stay a *view*
@@ -455,17 +466,21 @@ export interface UseProjectSwitcherPaletteReturn {
   renameScratch: (scratchId: string, name: string) => Promise<void>;
   /**
    * Open the directory picker and save the scratch as a project. On success
-   * exposes a follow-up confirmation via {@link saveAsProjectConfirm} so the
-   * user can optionally delete the original scratch.
+   * exposes a follow-up via {@link saveAsProjectConfirm} offering to open the
+   * saved project.
    */
   saveAsProject: (scratchId: string) => Promise<void>;
   /**
-   * Pending "Delete original?" confirmation surfaced after a successful
-   * Save-as-Project copy. Cleared by `confirmDeleteOriginalScratch` or
+   * Pending "Open project?" follow-up surfaced after a successful
+   * Save-as-Project copy. Cleared by `openSavedProject` or
    * `dismissSaveAsProjectConfirm`.
+   *
+   * It never offers to delete the scratch: the project is a copy, and whatever
+   * the scratch's terminals and agents change after it exists only in the
+   * scratch (#15004).
    */
-  saveAsProjectConfirm: { scratch: SearchableScratch; project: Project } | null;
+  saveAsProjectConfirm: SaveAsProjectFollowUp | null;
   dismissSaveAsProjectConfirm: () => void;
-  confirmDeleteOriginalScratch: () => Promise<void>;
-  isDeletingOriginalScratch: boolean;
+  /** Close the follow-up and switch to the saved project. */
+  openSavedProject: () => void;
 }

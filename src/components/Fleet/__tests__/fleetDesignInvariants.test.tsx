@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import React from "react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, act } from "@testing-library/react";
@@ -97,6 +99,7 @@ import { useFleetTargetOverridesStore } from "@/store/fleetTargetOverridesStore"
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { _resetForTests as resetEscapeStack } from "@/lib/escapeStack";
+import { FLEET_RIBBON_INK, fleetRibbonSheet } from "@shared/theme/__tests__/fleetRibbonSheet";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { ReactNode } from "react";
 
@@ -177,13 +180,14 @@ describe("Fleet ribbon design invariants", () => {
     render(<FleetArmingRibbon />);
     const confirm = tokens(screen.getByTestId("fleet-arming-ribbon"));
 
-    // The two shells are the same shell. The armed branch may add only the
-    // clipping and focus-suppression it needs for the slide-in; nothing else
-    // may differ in either direction, or the heights drift apart again.
+    // The two shells are the same shell. The armed branch may add only its
+    // sideways clipping (the remote composer's editor grows down past the bar)
+    // and focus suppression; nothing else may differ in either direction, or
+    // the heights drift apart again.
     const armedOnly = armed.filter((cls) => !confirm.includes(cls));
     const confirmOnly = confirm.filter((cls) => !armed.includes(cls));
     expect(confirmOnly).toEqual([]);
-    expect(armedOnly.sort()).toEqual(["outline-hidden", "overflow-hidden"]);
+    expect(armedOnly.sort()).toEqual(["outline-hidden", "overflow-x-clip"]);
     // And the shell is not trivially empty.
     expect(confirm.length).toBeGreaterThan(5);
   });
@@ -384,6 +388,89 @@ describe("Fleet ribbon design invariants", () => {
     const clear = items.find((i) => /Clear selection/.test(i.textContent ?? ""));
     expect(clear).toBeTruthy();
     expect(clear!.getAttribute("data-destructive")).toBeNull();
+  });
+
+  it("paints the band and its amber marks from the colours the contrast gate measures", () => {
+    // fleetRibbonContrast.test.ts holds the sheet's fill and ink to their
+    // contrast floors; this holds the ribbon to drawing with them, so a mark
+    // that drifts back to a shared token leaves the gate measuring nothing.
+    // The two variable names are the contract between the suites, not a style.
+
+    // An SVG keeps a colour set on itself under forced colours, so an inked
+    // glyph has to be one the forced-colours sheet sends to CanvasText.
+    const forcedColors = readFileSync(
+      resolve(__dirname, "../../../styles/host/forced-colors.css"),
+      "utf-8"
+    ).replace(/\/\*[\s\S]*?\*\//g, "");
+    const forcedGlyph = Array.from(
+      forcedColors.matchAll(/([^{}]+)\{\s*color:\s*CanvasText\s*!important;\s*\}/g),
+      (m) => m[1]?.trim() ?? ""
+    ).find((selector) => selector.includes("[data-severity-glyph]"));
+    expect(forcedGlyph).toBeDefined();
+
+    const classes = (el: Element) => (el.getAttribute("class") ?? "").split(/\s+/).filter(Boolean);
+    const readsVariable = (el: Element, utility: string) =>
+      classes(el)
+        .map((cls) => cls.match(new RegExp(`^${utility}-\\[var\\((--[\\w-]+)\\)\\]$`))?.[1])
+        .find(Boolean);
+    const failures: string[] = [];
+
+    const check = (state: string, shell: HTMLElement, track: HTMLElement | null) => {
+      if (!classes(shell).includes(fleetRibbonSheet.surfaceClass)) {
+        failures.push(`${state}: the shell does not take the band the contrast gate measures`);
+      }
+
+      const marks: [string, string | undefined][] = [["stripe", readsVariable(shell, "before:bg")]];
+      if (track) marks.push(["delivery track", readsVariable(track, "bg")]);
+      // An amber glyph is one coloured from the ribbon's sheet or from a category
+      // hue, by utility or by variable.
+      const glyphs = Array.from(shell.querySelectorAll("svg")).filter((svg) => {
+        const variable = readsVariable(svg, "text");
+        return (
+          (variable !== undefined && fleetRibbonSheet.variables.has(variable)) ||
+          classes(svg).some((cls) => cls.startsWith("text-") && cls.includes("category-"))
+        );
+      });
+      for (const glyph of glyphs) {
+        marks.push(["glyph", readsVariable(glyph, "text")]);
+        if (forcedGlyph && !glyph.matches(forcedGlyph)) {
+          failures.push(`${state}: an inked glyph escapes the forced-colours override`);
+        }
+      }
+      if (state === "confirm" && glyphs.length === 0)
+        failures.push("confirm: no amber glyph found");
+
+      for (const [mark, variable] of marks) {
+        if (variable !== FLEET_RIBBON_INK) {
+          failures.push(`${state}: the ${mark} does not draw with the ribbon's ink`);
+        }
+      }
+    };
+
+    useFleetBroadcastProgressStore.getState().init(8);
+    useFleetBroadcastProgressStore.getState().advance(3, 0);
+    vi.useFakeTimers();
+    try {
+      const { unmount } = render(<FleetArmingRibbon />);
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      const shell = screen.getByTestId("fleet-arming-ribbon");
+      const track = screen.getByTestId("fleet-broadcast-track");
+      expect(shell.contains(track)).toBe(true);
+      check("armed", shell, track);
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    useFleetPendingActionStore
+      .getState()
+      .request({ kind: "kill", targetCount: 3, sessionLossCount: 0 });
+    render(<FleetArmingRibbon />);
+    check("confirm", screen.getByTestId("fleet-arming-ribbon"), null);
+
+    expect(failures).toEqual([]);
   });
 });
 

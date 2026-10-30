@@ -150,6 +150,32 @@ export class PortalManager {
     }
   }
 
+  // History is only readable here, so every report carries it: the toolbar's
+  // Back and Forward follow these, as the page's context menu follows main.
+  private sendNavEvent(
+    tabId: string,
+    view: WebContentsView,
+    page: { url?: string; title?: string } = {}
+  ): void {
+    // A released view still loading through its storage flush must not
+    // overwrite the URL of the tab recreated under its id.
+    if (this.viewMap.get(tabId) !== view) return;
+    const wc = view.webContents;
+    if (wc.isDestroyed()) return;
+    const url = page.url ?? wc.getURL();
+    // A view shown before its first commit has no page yet, and reporting one
+    // would replace the URL the tab is restored from.
+    if (!isSafeNavigationUrl(url)) return;
+    const navEvent: PortalNavEvent = {
+      tabId,
+      title: page.title ?? wc.getTitle(),
+      url,
+      canGoBack: wc.canGoBack(),
+      canGoForward: wc.canGoForward(),
+    };
+    this.sendToWindowViews(CHANNELS.PORTAL_NAV_EVENT, navEvent);
+  }
+
   private touchLru(tabId: string): void {
     this.lruOrder.delete(tabId);
     this.lruOrder.set(tabId, true);
@@ -472,35 +498,27 @@ export class PortalManager {
         return { action: "deny" };
       });
 
-      const sendNavEvent = (navEvent: PortalNavEvent) => {
-        // A released view still loading through its storage flush must not
-        // overwrite the URL of the tab recreated under its id.
-        if (this.viewMap.get(tabId) !== view) return;
-        this.sendToWindowViews(CHANNELS.PORTAL_NAV_EVENT, navEvent);
-      };
-
       view.webContents.on("page-title-updated", (_, title) => {
-        sendNavEvent({
-          tabId,
-          title,
-          url: view.webContents.getURL(),
-        });
+        this.sendNavEvent(tabId, view, { title });
       });
 
       view.webContents.on("did-navigate", (_, url) => {
-        sendNavEvent({
-          tabId,
-          title: view.webContents.getTitle(),
-          url,
-        });
+        this.sendNavEvent(tabId, view, { url });
       });
 
-      view.webContents.on("did-navigate-in-page", (_, url) => {
-        sendNavEvent({
-          tabId,
-          title: view.webContents.getTitle(),
-          url,
-        });
+      // A subframe's commit adds to the tab's history without moving the page,
+      // so it reports the top-level URL. Main-frame commits arrive as did-navigate.
+      view.webContents.on("did-frame-navigate", (_, _url, _code, _status, isMainFrame) => {
+        if (!isMainFrame) this.sendNavEvent(tabId, view);
+      });
+
+      view.webContents.on("did-navigate-in-page", (_, url, isMainFrame) => {
+        this.sendNavEvent(tabId, view, isMainFrame ? { url } : {});
+      });
+
+      // An error page commits a history entry without any of the events above.
+      view.webContents.on("did-stop-loading", () => {
+        this.sendNavEvent(tabId, view);
       });
 
       view.webContents.once("destroyed", () => {
@@ -563,6 +581,10 @@ export class PortalManager {
       view.webContents.on("blur", () => {
         this.setTabFocused(tabId, false);
         this.sendToApp(CHANNELS.PORTAL_BLUR);
+        // A click or key in the page can make entries it pushed on its own
+        // reachable again without navigating, and leaving the page is when the
+        // toolbar comes back into play.
+        this.sendNavEvent(tabId, view);
       });
 
       view.webContents.on("context-menu", (_event, params) => {
@@ -767,6 +789,9 @@ export class PortalManager {
     this.touchLru(tabId);
     this.evictIfNeeded();
     this.lastShownTabId = tabId;
+    // A project view that mounted after the page navigated has no history for
+    // it until now.
+    this.sendNavEvent(tabId, view);
     return true;
   }
 

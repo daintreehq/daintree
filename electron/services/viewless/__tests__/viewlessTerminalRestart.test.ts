@@ -88,6 +88,83 @@ describe("restartTerminalWithoutView", () => {
     expect(spawned(invoke).command).toBe("claude --model opus");
   });
 
+  it("keeps the run's first prompt across a resume (#15521)", async () => {
+    const firstPrompt = { text: "Fix the login bug", via: "send" as const, at: 5 };
+    const { deps, invoke, store } = setup(
+      { id: "t1", launchAgentId: "claude", command: "claude", firstPrompt },
+      { agentState: "working" },
+      "sess-123"
+    );
+
+    await restartTerminalWithoutView(PROJECT.id, "t1", deps);
+
+    expect(spawned(invoke).hasFirstPrompt).toBe(true);
+    expect(store.read()?.terminals[0]?.firstPrompt).toEqual(firstPrompt);
+  });
+
+  it("drops a sent first prompt when the restart starts a new conversation (#15521)", async () => {
+    const { deps, invoke, store } = setup(
+      {
+        id: "t1",
+        launchAgentId: "claude",
+        command: "claude",
+        firstPrompt: { text: "Fix the login bug", via: "send", at: 5 },
+      },
+      { agentState: "working" }
+    );
+
+    await restartTerminalWithoutView(PROJECT.id, "t1", deps);
+
+    // The new run offers its own first send instead.
+    expect(spawned(invoke)).not.toHaveProperty("hasFirstPrompt");
+    expect(store.read()?.terminals[0]).not.toHaveProperty("firstPrompt");
+  });
+
+  it.each([
+    ["keeps it when the restart resumes that run", "sess-123", true],
+    ["drops it when the restart starts a new conversation", null, false],
+  ])(
+    "for a first prompt the old run took while being stopped, %s (#15521)",
+    async (_when, captured, kept) => {
+      const firstPrompt = { text: "Fix the login bug", via: "send" as const, at: 5 };
+      const { deps, invoke, store } = setup(
+        { id: "t1", launchAgentId: "claude", command: "claude" },
+        { agentState: "working" },
+        captured
+      );
+      // Its Enter lands, and main saves the record, while the quit is under way.
+      const quit = invoke.getMockImplementation()!;
+      invoke.mockImplementation(async (projectId, channel, args) => {
+        if (channel === CHANNELS.TERMINAL_GRACEFUL_KILL) {
+          await store.enqueueProjectStateUpdate(projectId, (state) => ({
+            ...state!,
+            terminals: state!.terminals.map((t) => ({ ...t, firstPrompt })),
+          }));
+        }
+        return quit(projectId, channel, args);
+      });
+
+      await restartTerminalWithoutView(PROJECT.id, "t1", deps);
+
+      expect(store.read()?.terminals[0]?.firstPrompt).toEqual(kept ? firstPrompt : undefined);
+      // A kept record is the resumed run's, so none of its sends is offered.
+      expect(spawned(invoke).hasFirstPrompt).toBe(kept ? true : undefined);
+    }
+  );
+
+  it("keeps a launch prompt when the restart replays the command that carries it", async () => {
+    const firstPrompt = { text: "Fix the login bug", via: "launch" as const, at: 5 };
+    const { deps, invoke, store } = setup(
+      { id: "t1", launchAgentId: "claude", command: "claude 'Fix the login bug'", firstPrompt },
+      { agentState: "working" }
+    );
+
+    await restartTerminalWithoutView(PROJECT.id, "t1", deps);
+
+    expect(spawned(invoke).hasFirstPrompt).toBe(true);
+    expect(store.read()?.terminals[0]?.firstPrompt).toEqual(firstPrompt);
+  });
+
   it("kills and respawns a plain terminal with its command", async () => {
     const { deps, invoke } = setup({ id: "t2", title: "Dev", command: "npm run dev" }, {});
 

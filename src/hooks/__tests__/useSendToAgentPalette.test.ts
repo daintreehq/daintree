@@ -36,6 +36,15 @@ vi.mock("@/clients", () => ({ terminalClient: { write: vi.fn() } }));
 vi.mock("@shared/config/panelKindRegistry", () => ({ panelKindHasPty: () => true }));
 vi.mock("@/utils/terminalChrome", () => ({ deriveTerminalChrome: () => ({ label: "" }) }));
 vi.mock("./useSearchablePalette", () => ({ useSearchablePalette: () => ({}) }));
+// The draft service, the pane focus request and the worktree selection pull the
+// real store graph into this node-environment suite; the openers only need the
+// heading.
+vi.mock("@/services/agentHandoff/agentDraft", () => ({
+  draftAgentContext: vi.fn(),
+  paneHandoffHeading: (_id: string, title: string) => ({ title }),
+}));
+vi.mock("@/components/Terminal/paneFocusRequest", () => ({ requestPaneFocus: vi.fn() }));
+vi.mock("@/store/worktreeStore", () => ({ useWorktreeSelectionStore: { getState: () => ({}) } }));
 
 import { openSendToAgentPalette, openSendToAgentPaletteWithText } from "../useSendToAgentPalette";
 import {
@@ -63,19 +72,19 @@ beforeEach(() => {
 
 describe("openSendToAgentPaletteWithText", () => {
   it("returns false for whitespace-only text", () => {
-    expect(openSendToAgentPaletteWithText("   \n\t ", "a")).toBe(false);
+    expect(openSendToAgentPaletteWithText({ text: "   \n\t " }, "a")).toBe(false);
     expect(openPalette).not.toHaveBeenCalled();
   });
 
   it("returns false when there are no eligible targets", () => {
     panelState = { panelIds: ["a"], panelsById: { a: { id: "a" } } };
-    expect(openSendToAgentPaletteWithText("hello", "a")).toBe(false);
+    expect(openSendToAgentPaletteWithText({ text: "hello" }, "a")).toBe(false);
     expect(openPalette).not.toHaveBeenCalled();
   });
 
   it("does not require a cached terminal selection", () => {
     getCachedSelection.mockReturnValue("");
-    expect(openSendToAgentPaletteWithText("from-banner")).toBe(true);
+    expect(openSendToAgentPaletteWithText({ text: "from-banner" })).toBe(true);
     expect(getCachedSelection).not.toHaveBeenCalled();
     expect(openPalette).toHaveBeenCalledWith("send-to-agent");
   });

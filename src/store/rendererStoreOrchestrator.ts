@@ -7,6 +7,7 @@ import {
 } from "./worktreeStore";
 import { useFleetArmingStore, subscribeFleetArmingPanelPruning } from "./fleetArmingStore";
 import { subscribeFleetTargetOverridesPruning } from "./fleetTargetOverridesStore";
+import { subscribeFleetDraftHoldRelease } from "./fleetDraftHoldRelease";
 import { subscribeFleetFailureAutoClear } from "./fleetFailureStore";
 import { subscribeFleetRunWatcher } from "./fleetRunStore";
 import { useTerminalInputStore, unregisterInputController } from "./terminalInputStore";
@@ -24,7 +25,7 @@ import { usePluginPanelAttentionStore } from "./pluginPanelAttentionStore";
 import { usePluginPanelToolbarStore } from "./pluginPanelToolbarStore";
 import { usePluginPanelMenuStore } from "./pluginPanelMenuStore";
 import { usePluginPanelOpenRequestStore } from "./pluginPanelOpenRequestStore";
-import { useLayoutUndoStore } from "./layoutUndoStore";
+import { sameLayoutPanelIds, selectLayoutPanelIds, useLayoutUndoStore } from "./layoutUndoStore";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { useAgentSettingsStore } from "./agentSettingsStore";
 import { useHelpPanelStore } from "./helpPanelStore";
@@ -526,19 +527,17 @@ export function initStoreOrchestrator(): () => void {
     )
   );
 
-  // 4. Layout undo history invalidation: when terminal set changes
-  //    (add/remove), clear the undo stack since snapshots reference a
-  //    different terminal universe.
+  // 4. Layout undo history pruning: when a panel leaves layout history
+  //    (removed, trashed, moved into a dialog), drop the entries with nothing
+  //    left to restore so Undo/Redo stay enabled only when they can act. One
+  //    gone panel must not cost the rest of the history (#14969), and a panel
+  //    added since a snapshot is simply carried through its restore.
   disposables.add(
     toDisposable(
       usePanelStore.subscribe(
-        (state) => state.panelIds,
-        (panelIds, prevPanelIds) => {
-          const prevIdSet = new Set(prevPanelIds);
-          if (panelIds.length !== prevIdSet.size || panelIds.some((id) => !prevIdSet.has(id))) {
-            useLayoutUndoStore.getState().clearHistory();
-          }
-        }
+        selectLayoutPanelIds,
+        () => useLayoutUndoStore.getState().pruneHistory(),
+        { equalityFn: sameLayoutPanelIds, fireImmediately: true }
       )
     )
   );
@@ -663,6 +662,11 @@ export function initStoreOrchestrator(): () => void {
   //     view keeps a copy current for the voice menu and palette.
   disposables.add(toDisposable(subscribeRecentDictationsSync()));
   disposables.add(toDisposable(trackComposerSurface()));
+
+  // 5h. Fleet draft holds (#14949): a pane leaving the fleet gets back the
+  //     draft it had before the fleet's was mirrored over it. Same
+  //     orchestrator-scoped lifecycle as 5a–5d.
+  disposables.add(toDisposable(subscribeFleetDraftHoldRelease()));
 
   // 5. Availability → agent-settings re-normalization: real availability data
   //    is the input to `normalizeAgentSelection`, so re-run normalization any

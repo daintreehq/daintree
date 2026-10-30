@@ -377,14 +377,22 @@ export const gitActionRuns = {
     // Same split as `git.pullRebase`: an agent dispatch was already cleared
     // against the MCP bridge's own confirm, and this deferred store can only
     // be resolved by a renderer dialog a headless caller cannot reach.
+    let expectedToken: string | undefined;
     if (ctx.dispatchSource !== "agent") {
-      const confirmed = await useFileMutationConfirmStore
+      const approval = await useFileMutationConfirmStore
         .getState()
-        .requestConfirmation({ kind: "discard", relativePath: filePath });
-      if (!confirmed) return;
+        .requestConfirmation({ kind: "discard", relativePath: filePath, worktreePath });
+      if (!approval) return;
+      // The discard refuses if the file moved after the preview was read, so
+      // what goes is what the user saw.
+      expectedToken = approval.token ?? undefined;
     }
     try {
-      await window.electron.git.discardFileChanges({ worktreePath, relativePath: filePath });
+      await window.electron.git.discardFileChanges({
+        worktreePath,
+        relativePath: filePath,
+        ...(expectedToken !== undefined && { expectedToken }),
+      });
     } finally {
       await refreshWorktree(location, ctx);
     }

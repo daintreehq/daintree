@@ -95,18 +95,4 @@ describe("PanelTabList", () => {
     // is never parked or the strip would blink.
     expect(parked("tab-2")).toBeNull();
   });
-
-  it("wraps no tab in an extra box in performance mode — a sortable drag is clamped to its parent", () => {
-    document.body.dataset.performanceMode = "true";
-    try {
-      render(<PanelTabList {...baseProps} />);
-      const tab = screen.getByTestId("tab-tab-1");
-      // The tab's parent is the strip's own row, not a per-tab wrapper.
-      expect(tab.parentElement?.children.length).toBeGreaterThanOrEqual(1);
-      expect(tab.parentElement?.getAttribute("data-tab-parked")).toBeNull();
-      expect(tab.parentElement?.className).toContain("flex");
-    } finally {
-      delete document.body.dataset.performanceMode;
-    }
-  });
 });

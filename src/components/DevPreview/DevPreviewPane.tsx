@@ -119,6 +119,7 @@ export function DevPreviewPane({
   const setViewportDpr = usePanelStore((state) => state.setViewportDpr);
   const setViewportFit = usePanelStore((state) => state.setViewportFit);
   const setDevPreviewScrollPosition = usePanelStore((state) => state.setDevPreviewScrollPosition);
+  const setDevPreviewCommand = usePanelStore((state) => state.setDevPreviewCommand);
   const currentProjectId = useProjectStore((state) => state.currentProject?.id);
   const projectSettings = useProjectSettingsStore((state) => state.settings);
   const projectEnv = projectSettings?.environmentVariables;
@@ -131,8 +132,8 @@ export function DevPreviewPane({
     const p = state.getTerminal(id);
     return p && isDevPreviewPanel(p) ? p : undefined;
   });
-  const devCommand =
-    terminal?.devCommand?.trim() || projectSettings?.devServerCommand?.trim() || "";
+  const ownDevCommand = terminal?.devCommand?.trim() ?? "";
+  const devCommand = ownDevCommand || projectSettings?.devServerCommand?.trim() || "";
   const {
     endpoint,
     refreshEndpoint,
@@ -298,6 +299,11 @@ export function DevPreviewPane({
     !devCommand &&
     endpoint === undefined;
 
+  const setOwnDevCommand = useCallback(
+    (command: string) => setDevPreviewCommand(id, command),
+    [setDevPreviewCommand, id]
+  );
+
   const {
     headerContent,
     candidates,
@@ -317,9 +323,10 @@ export function DevPreviewPane({
   } = useDevPreviewCommandConfig({
     currentProjectId,
     devCommand,
+    hasOwnCommand: ownDevCommand !== "",
+    setOwnCommand: setOwnDevCommand,
     isUnconfigured,
     projectSettings,
-    stop,
     isMountedRef,
   });
 
@@ -923,7 +930,8 @@ export function DevPreviewPane({
       showRestoreControl={showRestoreControl}
       isMultiPanelGrid={isMultiPanelGrid}
       kind="dev-preview"
-      headerContent={headerContent}
+      // An endpoint preview runs no dev command, so a script pick couldn't change it.
+      headerContent={endpoint === undefined ? headerContent : null}
       className={
         phaseLabel === "Compiling"
           ? "panel-state-compiling"

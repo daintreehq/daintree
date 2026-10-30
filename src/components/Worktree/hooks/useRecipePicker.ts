@@ -4,6 +4,16 @@ import type { TerminalRecipe } from "@/types";
 export const CLONE_LAYOUT_ID = "__clone_layout__";
 
 /**
+ * Whether the New Worktree dialog's picker offers a recipe. A worktree recipe
+ * belongs to the worktree it was saved against, so the dialog leaves it out,
+ * and anything handing the dialog an `initialRecipeId` must leave it out too
+ * or the pick is silently swapped for another recipe (#14994).
+ */
+export function isStartingLayoutRecipe(recipe: TerminalRecipe): boolean {
+  return !recipe.worktreeId;
+}
+
+/**
  * A shadowed recipe never runs its own terminals, so it stays ineligible as an
  * implicit default even though it is still listed and explicitly selectable.
  * Mirrors the eligibility rule RecipesTab pins its default against.
@@ -94,16 +104,21 @@ export function useRecipePicker({
     setLastSelectedWorktreeRecipeIdByProject,
   ]);
 
-  // Invalidate stale recipe (skip sentinel IDs)
+  // Invalidate stale recipe (skip sentinel IDs). The remembered recipe goes
+  // with it only when it is the one that vanished: a pick not yet saved
+  // disappearing says nothing about the remembered one.
   useEffect(() => {
     if (!selectedRecipeId) return;
     if (selectedRecipeId === CLONE_LAYOUT_ID) return;
     if (startingLayoutRecipes.some((recipe) => recipe.id === selectedRecipeId)) return;
     setSelectedRecipeId(null);
-    if (projectId) setLastSelectedWorktreeRecipeIdByProject(projectId, undefined);
+    if (projectId && selectedRecipeId === lastSelectedWorktreeRecipeId) {
+      setLastSelectedWorktreeRecipeIdByProject(projectId, undefined);
+    }
   }, [
     startingLayoutRecipes,
     selectedRecipeId,
+    lastSelectedWorktreeRecipeId,
     projectId,
     setLastSelectedWorktreeRecipeIdByProject,
   ]);

@@ -67,6 +67,7 @@ function item(id: string, overrides: Partial<SendToAgentItem> = {}): SendToAgent
     subtitle: CHROME.label,
     terminalKind: "terminal",
     chrome: CHROME,
+    delivery: "draft",
     ...overrides,
   };
 }
@@ -183,26 +184,43 @@ describe("SendToAgentPalette locked rows", () => {
 });
 
 describe("SendToAgentPalette footer", () => {
-  it("names the pane Enter will paste into", () => {
+  // The footer is the last look before Enter, so it says what happens to the
+  // text, not just where it goes.
+  it("names the agent whose draft Enter will add to", () => {
     renderPalette([item("a", { title: "Codex: write the migration" }), item("b")]);
 
-    expect(document.body.textContent).toMatch(/into Codex: write the migration/);
+    expect(document.body.textContent).toMatch(/add to draft in Codex: write the migration/i);
+    expect(document.body.textContent).not.toMatch(/paste into/i);
   });
 
-  it("offers no Enter hint for a locked selection", () => {
-    renderPalette(
-      [
-        item("a", {
-          title: "Codex: write the migration",
-          isInputLocked: true,
-          subtitle: "Input locked",
-        }),
-      ],
-      { selectedIndex: 0 }
-    );
+  it("names the shell Enter will paste into", () => {
+    renderPalette([item("a", { title: "zsh", delivery: "paste" }), item("b")]);
 
-    expect(document.body.textContent).not.toMatch(/into /);
+    expect(document.body.textContent).toMatch(/paste into zsh/i);
+    expect(document.body.textContent).not.toMatch(/add to draft/i);
   });
+
+  // Beside an unlocked row, so the palette keeps the locked one selected and the
+  // label is actually asked for; a list of only locked rows selects nothing.
+  it.each(["draft", "paste"] as const)(
+    "offers no Enter hint for a locked %s selection",
+    (delivery) => {
+      renderPalette(
+        [
+          item("a", {
+            title: "Codex: write the migration",
+            isInputLocked: true,
+            subtitle: "Input locked",
+            delivery,
+          }),
+          item("b", { title: "Claude", delivery }),
+        ],
+        { selectedIndex: 0 }
+      );
+
+      expect(document.body.textContent).not.toMatch(/(?:draft in|paste into) /i);
+    }
+  );
 });
 
 describe("SendToAgentPalette pointer and Home/End", () => {

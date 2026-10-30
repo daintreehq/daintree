@@ -5,6 +5,8 @@ import { InlineStatusBanner } from "./InlineStatusBanner";
 export interface WorktreeMoveBannerProps {
   /** Destination path, or `undefined` when the worktree has since gone. */
   destinationPath: string | undefined;
+  /** The click will send the composer's draft ahead of the sentence (#11867). */
+  carriesDraft?: boolean;
   /** A tell was tried and the terminal did not take it (#11867). */
   deliveryFailed?: boolean;
   onTell: () => void;
@@ -28,7 +30,10 @@ export interface WorktreeMoveBannerProps {
  * sentence rather than across the pane, and no amber band. The action says
  * "here" rather than printing the destination — the pane already lives in that
  * worktree — and the tooltip carries the exact sentence it will type, path
- * included, for anyone who wants to check before sending.
+ * included, for anyone who wants to check before sending. When the click will
+ * carry the composer's draft as well, the tooltip says so: it is the only place
+ * the button describes what it sends, and a draft going out unannounced is the
+ * surprise (#14950).
  *
  * With no destination there is nothing to tell, so the control is absent rather
  * than present-but-disabled: the sentence explains why, and the X still works.
@@ -41,6 +46,7 @@ export interface WorktreeMoveBannerProps {
  */
 export function WorktreeMoveBanner({
   destinationPath,
+  carriesDraft = false,
   deliveryFailed = false,
   onTell,
   onDismiss,
@@ -67,7 +73,7 @@ export function WorktreeMoveBanner({
               ariaLabel: deliveryFailed
                 ? "Retry telling the agent to continue in this worktree"
                 : undefined,
-              title: `Sends “${buildWorktreeMoveInstruction(destinationPath)}”`,
+              title: `${carriesDraft ? "Sends your draft, then" : "Sends"} “${buildWorktreeMoveInstruction(destinationPath)}”`,
               variant: "primary",
               onClick: onTell,
             }

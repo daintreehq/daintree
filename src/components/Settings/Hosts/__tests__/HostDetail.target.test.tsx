@@ -131,6 +131,80 @@ describe("HostDetail SSH target", () => {
     expect(screen.queryByRole("button", { name: "Change target" })).toBeNull();
     expect(screen.getByRole("button", { name: "Check target" })).toBeTruthy();
   });
+
+  it("keeps checking as the default when the new target didn't connect", async () => {
+    client.probe.mockImplementation(async () =>
+      probe({
+        reachable: false,
+        sshError: "greg@newbox: Permission denied (publickey).",
+        platform: null,
+        arch: null,
+      })
+    );
+    render(<HostDetail entry={entry()} onBack={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Change target…" }));
+    fireEvent.change(screen.getByDisplayValue("greg@studio"), {
+      target: { value: "greg@newbox" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Check target" }));
+    });
+
+    expect(screen.queryByRole("button", { name: "Change target" })).toBeNull();
+    const advice = screen.getByTestId("change-host-target-ssh-refusal").textContent ?? "";
+    expect(advice).toContain("ssh-copy-id greg@newbox");
+    expect(screen.getByTestId("change-host-target-dialog").textContent).toContain(
+      "studio-01 can't connect until ssh reaches greg@newbox"
+    );
+
+    // Check again is the confirm slot, the rebind only the leading one.
+    expect(screen.getByRole("button", { name: "Check again" }).dataset.confirmRole).toBe("confirm");
+    expect(screen.getByRole("button", { name: "Change target anyway" }).dataset.confirmRole).toBe(
+      "leading"
+    );
+    await act(async () => {
+      fireEvent.keyDown(screen.getByDisplayValue("greg@newbox"), { key: "Enter" });
+    });
+    expect(client.probe).toHaveBeenCalledTimes(2);
+    expect(client.update).not.toHaveBeenCalled();
+
+    client.probe.mockImplementation(async () => probe());
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    });
+    expect(client.probe).toHaveBeenCalledTimes(3);
+    expect(client.probe).toHaveBeenLastCalledWith({ kind: "ssh", target: "greg@newbox" });
+    expect(screen.getByRole("button", { name: "Change target" })).toBeTruthy();
+    expect(client.update).not.toHaveBeenCalled();
+  });
+
+  it("still rebinds to a target that didn't connect, but only when asked outright", async () => {
+    client.probe.mockImplementation(async () =>
+      probe({
+        reachable: false,
+        sshError: "ssh: connect to host newbox port 22: Connection refused",
+      })
+    );
+    render(<HostDetail entry={entry()} onBack={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Change target…" }));
+    fireEvent.change(screen.getByDisplayValue("greg@studio"), {
+      target: { value: "greg@newbox" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Check target" }));
+    });
+    expect(screen.getByTestId("change-host-target-dialog").textContent).toContain(
+      "turn on Remote Login"
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Change target anyway" }));
+    });
+    expect(client.update).toHaveBeenCalledWith({
+      hostId: "studio-01",
+      connection: { kind: "ssh", target: "greg@newbox" },
+    });
+  });
 });
 
 describe("HostDetail name", () => {

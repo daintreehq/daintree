@@ -4,7 +4,9 @@ import { usePaletteStore, usePanelStore } from "@/store";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useCanopyStore } from "@/store/canopyStore";
+import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { getChromeWhenContext } from "@/services/chromeWhenContext";
+import { isInPaneDialog } from "@/lib/paneDialog";
 
 /**
  * Live `when`-clause context for keybinding resolution — the documented
@@ -44,17 +46,28 @@ export function buildKeybindingWhenContext(event: KeyboardEvent): WhenClauseCont
       target.tagName === "TEXTAREA" ||
       target.isContentEditable === true);
 
+  const voice = useVoiceRecordingStore.getState();
+
   return {
     ...getChromeWhenContext(),
     terminalFocused: inTerminal,
     // xterm's own input is a textarea; it doesn't count as a text field.
     textInputFocused: editable && !inTerminal,
-    modalOpen: document.querySelector('[role="dialog"][aria-modal="true"]') !== null,
+    // A page's dialog blocks only its own pane: open as far as the keys typed
+    // into it are concerned, and nowhere else (#15037).
+    modalOpen:
+      document.querySelector('[role="dialog"][aria-modal="true"]') !== null ||
+      isInPaneDialog(target),
     paletteOpen: paletteId !== null,
     paletteId: paletteId ?? "",
     fleetArmed: armedIds.size > 0,
     fleetWaiting,
     sidebarVisible: useMacroFocusStore.getState().visibility.sidebar,
     canopyHidden: useCanopyStore.getState().mode === "hidden",
+    // Starting, running or finishing here, or running in another view.
+    dictationActive:
+      (voice.status !== "idle" && voice.status !== "error") ||
+      voice.pendingTarget !== null ||
+      voice.sessionElsewhere !== null,
   };
 }

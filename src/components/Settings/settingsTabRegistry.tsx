@@ -34,6 +34,7 @@ import {
 } from "@/components/icons";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
+import { CANOPY_LOCAL } from "@shared/config/canopyTerms";
 import { GeneralTab } from "./GeneralTab";
 import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { SECTION_SETTINGS } from "./settingsSectionOwners";
@@ -1749,7 +1750,8 @@ export const SETTINGS_REGISTRY = [
         id: "voice-ai-correction-enable",
         section: "AI text correction",
         title: "AI text correction",
-        description: "Correct the whole passage once when you stop dictating",
+        description:
+          "Correct dictation when you stop, or a stretch at a time during long dictations",
         keywords: ["correction", "ai", "cleanup", "post-process", "filler"],
         requiresEnabled: VOICE_REQUIRES_ENABLED,
       },
@@ -1762,11 +1764,30 @@ export const SETTINGS_REGISTRY = [
         requiresEnabled: VOICE_AI_REQUIRES_ENABLED,
       },
       {
+        id: "voice-cleanup-provider",
+        section: "AI text correction",
+        title: "Cleanup provider",
+        description: "OpenAI or Anthropic for cleanup and spoken rewrites",
+        keywords: ["provider", "openai", "claude", "anthropic", "cleanup", "correction"],
+        requiresEnabled: VOICE_AI_REQUIRES_ENABLED,
+      },
+      {
         id: "voice-cleanup-model",
         section: "AI text correction",
         title: "Cleanup model",
-        description: "GPT-6.1 Terra or GPT-6 Luna for cleanup and spoken rewrites",
-        keywords: ["model", "terra", "luna", "gpt", "openai", "rewrite", "cleanup"],
+        description: "The provider's model for cleanup and spoken rewrites",
+        keywords: [
+          "model",
+          "terra",
+          "luna",
+          "gpt",
+          "openai",
+          "claude",
+          "haiku",
+          "sonnet",
+          "rewrite",
+          "cleanup",
+        ],
         requiresEnabled: VOICE_AI_REQUIRES_ENABLED,
       },
       {
@@ -1969,8 +1990,22 @@ export const SETTINGS_REGISTRY = [
     importer: LazyCanopySettingsTab.preload,
     LazyComponent: LazyCanopySettingsTab,
     searchNavDescription:
-      "Show or hide Canopy, turn it on or off, and how its screens are processed",
-    searchNavKeywords: ["canopy", "inbox", "agents", "summary", "priority", "privacy", "servers"],
+      "Show or hide Canopy, turn its reading on or off, and the model it reads with",
+    // The model's own rows only render while there is a download or a model on disk, so
+    // model searches land on rows that are always there and describe it.
+    searchNavKeywords: [
+      "canopy",
+      "inbox",
+      "agents",
+      "summary",
+      "priority",
+      "privacy",
+      "local",
+      "model",
+      "download",
+      "delete",
+      "disk",
+    ],
     sections: [
       {
         id: "canopy-show",
@@ -1983,15 +2018,19 @@ export const SETTINGS_REGISTRY = [
         id: "canopy-read-terminals",
         section: "Reading",
         title: "Read agent terminals",
-        description: "Send agents' terminal output to Daintree's servers to be read",
-        keywords: ["canopy", "privacy", "consent", "activate", "turn on", "servers"],
-      },
-      {
-        id: "canopy-plan",
-        section: "Reading",
-        title: "Plan",
-        description: "Free and unlimited during the beta",
-        keywords: ["beta", "free", "paid", "subscription", "plan", "pricing"],
+        // The page and the turn-on offer say it with the same words, so search can't drift.
+        description: CANOPY_LOCAL,
+        keywords: [
+          "canopy",
+          "privacy",
+          "consent",
+          "activate",
+          "turn on",
+          "local",
+          "offline",
+          "model",
+          "download",
+        ],
       },
     ],
   } satisfies LazySettingsTabEntry,

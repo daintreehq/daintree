@@ -1,6 +1,5 @@
 import { logDebug, logWarn } from "../utils/logger.js";
 import { fileSearchService } from "./FileSearchService.js";
-import { voiceErrorLogFields } from "../../shared/utils/voiceLogFields.js";
 import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders.js";
 import {
   VOICE_DICTATION_AI_MODEL,
@@ -32,6 +31,13 @@ const AI_RERANK_SCHEMA = {
   required: ["matched_file"],
 } as const;
 
+/**
+ * Resolves to null only when the search or reranker found no match. A lookup
+ * that couldn't finish (a failed search, an API error, the rerank's own
+ * timeout, an unreadable reply) rejects instead, so it isn't reported as a
+ * miss (#14983). One its caller aborted resolves to null: the caller has
+ * stopped listening.
+ */
 export class VoiceFileLinkResolver {
   async resolve(payload: {
     cwd: string;
@@ -52,9 +58,8 @@ export class VoiceFileLinkResolver {
       });
       return await this.pick({ ...payload, candidates });
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return null;
-      logWarn(`${P} Resolution failed`, voiceErrorLogFields(error));
-      return null;
+      if (payload.signal?.aborted) return null;
+      throw error;
     }
   }
 
@@ -183,6 +188,7 @@ export class VoiceFileLinkResolver {
           input: `Description: ${description}\n\nCandidates:\n${candidates.map((c, i) => `${i + 1}. ${c}`).join("\n")}`,
           prompt_cache_key: AI_RERANK_CACHE_PREFIX,
           service_tier: "auto",
+          store: false,
           reasoning: { effort: VOICE_DICTATION_REASONING_EFFORT },
           text: {
             format: {
@@ -198,7 +204,7 @@ export class VoiceFileLinkResolver {
 
       if (!response.ok) {
         logWarn(`${P} AI rerank API error: ${response.status}`);
-        return null;
+        throw new Error("AI rerank API error");
       }
 
       const data = (await response.json()) as {
@@ -213,7 +219,7 @@ export class VoiceFileLinkResolver {
 
       if (!text) {
         logWarn(`${P} AI rerank returned empty text`);
-        return null;
+        throw new Error("AI rerank returned empty text");
       }
 
       const parsed = JSON.parse(text) as { matched_file: string | null };
@@ -225,9 +231,8 @@ export class VoiceFileLinkResolver {
 
       return null;
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return null;
-      logWarn(`${P} AI rerank failed`, voiceErrorLogFields(error));
-      return null;
+      if (signal?.aborted) return null;
+      throw error;
     }
   }
 }

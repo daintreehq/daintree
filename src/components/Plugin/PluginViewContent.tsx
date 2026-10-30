@@ -870,7 +870,10 @@ export function makePluginViewContent(
     const setHasUnsavedChangesFor = useCallback(
       (attempt: number, hasUnsavedChanges: boolean): void => {
         if (attempt !== attemptRef.current) return;
-        setViewUnsavedChanges(panelId, unsavedOwnerRef.current, hasUnsavedChanges === true);
+        setViewUnsavedChanges(panelId, unsavedOwnerRef.current, hasUnsavedChanges === true, {
+          pluginId,
+          displayName,
+        });
       },
       [panelId]
     );

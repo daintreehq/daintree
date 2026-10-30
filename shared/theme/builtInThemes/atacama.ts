@@ -97,6 +97,10 @@ export const theme: BuiltInThemeSource = {
   tokens: {
     "accent-muted": "rgba(178,80,36,0.30)",
     "accent-soft": "rgba(178,80,36,0.18)",
+    // Solid so the field edge clears 3:1 on every surface a field sits on
+    // (3.08–3.72:1); the alpha `border-strong` it used to follow measured
+    // 1.42–1.44:1.
+    "border-input": "#88847E",
     "focus-ring": "rgba(178,80,36,0.35)",
     "grain-opacity": "0.03",
     "overlay-hover": "rgba(51,43,35,0.08)",
@@ -172,7 +176,6 @@ export const theme: BuiltInThemeSource = {
     "pulse-range-bg": "#F6F0E5",
     "pulse-ring-offset": "#FFFFFF",
     "pulse-skeleton-gradient": "linear-gradient(90deg, #E8D5B9 25%, #F6F0E5 50%, #E8D5B9 75%)",
-    "dialog-header-bg": "#FBF9F4",
     "review-commit-input-bg": "#FDFBF7",
     // Nav selection elevates to white + the 2px accent marker.
     "settings-nav-active-bg": "#FFFFFF",

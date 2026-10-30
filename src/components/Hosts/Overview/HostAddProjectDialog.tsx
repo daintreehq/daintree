@@ -1,39 +1,43 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { FolderPlus } from "lucide-react";
+import { FolderPlus, RefreshCw } from "lucide-react";
 import type { HostSwitchExecuteResult, HostSwitchStatus } from "@shared/types/ipc/hostSwitch";
 import type { DestinationCheck, HostCloneDepth } from "@shared/types/ipc/projectMatch";
 import type { HostId } from "@shared/types/remoteHosts";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
-import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Callout } from "@/components/ui/Callout";
 import { Input } from "@/components/ui/input";
-import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { Spinner } from "@/components/ui/Spinner";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { UI_DOHERTY_THRESHOLD, UI_STILL_WORKING_MS } from "@/lib/animationUtils";
 import { mintOperationId } from "@/clients/operationsClient";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { pickHostPaths } from "@/components/HostFilePicker/hostFilePickerQueue";
-import { describeCloneFailure, destinationInFolder } from "@/components/HostSwitch/hostSwitchModel";
-import { GitFailureCallout } from "@/components/HostSwitch/GitFailureCallout";
+import {
+  describeAddSteps,
+  describeCloneFailure,
+  describeStepFailure,
+  destinationInFolder,
+} from "@/components/HostSwitch/hostSwitchModel";
+import { GitFailureCallout, type HostGitFailure } from "@/components/HostSwitch/GitFailureCallout";
+import {
+  CloneOptions,
+  DestinationField,
+  folderHint,
+  folderStateOf,
+  FormRow,
+  OperationSteps,
+  type FolderState,
+} from "@/components/HostSwitch/hostCloneForm";
 
 const STATUS_POLL_MS = 300;
 const CHECK_DELAY_MS = 300;
 
-interface Failure {
-  title: string;
-  gitText: string;
-  fix: string | null;
-}
-
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] items-baseline gap-3">
-      <span className="text-xs text-text-secondary">{label}</span>
-      <div className="min-w-0 text-sm text-text-primary">{children}</div>
-    </div>
-  );
+interface Failure extends HostGitFailure {
+  /** Atop the form (opening a folder), or under the folder the clone went for. */
+  near: "top" | "destination";
+  action?: { label: string; run: () => void } | null;
 }
 
 /** The folder name a clone of `url` gets, as git would name it. */
@@ -78,43 +82,70 @@ export function HostAddProjectDialog({
   // The URL the check was made for: a folder vetted for one repository never clones another.
   const [checkedUrl, setCheckedUrl] = useState<string | null>(null);
   const [checkError, setCheckError] = useState<string | null>(null);
+  const [checkAttempt, setCheckAttempt] = useState(0);
+  // Why the host couldn't suggest a folder for this URL: it can't clone it (`rejected`),
+  // or it didn't answer, which a Retry asks again.
+  const [urlError, setUrlError] = useState<{
+    url: string;
+    message: string;
+    rejected: boolean;
+  } | null>(null);
+  // A Retry for this URL's suggestion: asked again even once the folder was edited, and
+  // then it only vouches for the URL, never moves the folder.
+  const [retryFor, setRetryFor] = useState<{ url: string; attempt: number } | null>(null);
+  const urlStatusId = useId();
   const [depth, setDepth] = useState<HostCloneDepth>("full");
   const [submodules, setSubmodules] = useState(false);
   const [running, setRunning] = useState<string | null>(null);
   /** An open of a folder already on the host, which Cancel stops waiting for (it can't be undone there). */
   const openingOp = useRef<string | null>(null);
-  const [opening, setOpening] = useState(false);
+  const [opening, setOpening] = useState<string | null>(null);
   const [status, setStatus] = useState<HostSwitchStatus | null>(null);
+  const [stillWorkingOp, setStillWorkingOp] = useState<string | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
-  const submodulesId = useId();
-  const urlId = useId();
+  /** The dialog went away: whatever the host answers now opens nothing. */
+  const closed = useRef(false);
+  /** The clone Cancel stopped: a success that arrives anyway opens nothing. */
+  const stoppedOp = useRef<string | null>(null);
+  const failureRef = useRef<HTMLDivElement>(null);
 
   const trimmedUrl = url.trim();
 
   // The host suggests where a clone of this URL goes, until the person picks a folder.
   useEffect(() => {
-    if (destinationTouched || trimmedUrl.length === 0) return;
+    if (trimmedUrl.length === 0) return;
+    if (destinationTouched && retryFor?.url !== trimmedUrl) return;
     let cancelled = false;
     const timer = setTimeout(() => {
       window.electron.hostSwitch
         .suggestCloneDestination({ toHostId: hostId, url: trimmedUrl })
         .then((suggested) => {
           if (cancelled) return;
+          setUrlError(null);
+          setRetryFor(null);
+          if (destinationTouched) return;
           setDestination(suggested.path);
           setCheck(suggested);
           setCheckedInput(suggested.path);
           setCheckedUrl(trimmedUrl);
           setCheckError(null);
         })
-        .catch(() => {
-          // Not a URL the host can clone (yet); the folder waits.
+        .catch((error: unknown) => {
+          // Said at the URL, and the folder waits: a URL the host refused, or a host that didn't answer.
+          if (!cancelled) {
+            setUrlError({
+              url: trimmedUrl,
+              message: clientErrorText(error, "It isn't a git URL."),
+              rejected: clientErrorCode(error) === "VALIDATION",
+            });
+          }
         });
     }, CHECK_DELAY_MS);
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [trimmedUrl, destinationTouched, hostId]);
+  }, [trimmedUrl, destinationTouched, hostId, retryFor]);
 
   // A folder the person typed or picked is checked on the host.
   useEffect(() => {
@@ -138,6 +169,9 @@ export function HostAddProjectDialog({
           setCheck(result);
           setCheckedInput(target);
           setCheckedUrl(trimmedUrl);
+          // The host answered, so a suggestion it didn't answer no longer stands in the way;
+          // a URL it refused still does.
+          setUrlError((error) => (error && !error.rejected ? null : error));
         })
         .catch((error: unknown) => {
           if (cancelled) return;
@@ -150,7 +184,7 @@ export function HostAddProjectDialog({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [destination, destinationTouched, hostId, trimmedUrl]);
+  }, [destination, destinationTouched, hostId, trimmedUrl, checkAttempt]);
 
   useEffect(() => {
     if (!running) return;
@@ -160,15 +194,34 @@ export function HostAddProjectDialog({
         .then(setStatus)
         .catch(() => {});
     }, STATUS_POLL_MS);
-    return () => clearInterval(timer);
+    const slow = setTimeout(() => setStillWorkingOp(running), UI_STILL_WORKING_MS);
+    return () => {
+      clearInterval(timer);
+      clearTimeout(slow);
+    };
   }, [running]);
 
+  // A failure lands beside its field, which may be scrolled away.
+  useEffect(() => {
+    if (failure) failureRef.current?.scrollIntoView({ block: "nearest" });
+  }, [failure]);
+
   const busy = running !== null;
-  const ready =
-    trimmedUrl.length > 0 &&
-    check?.status === "free" &&
-    checkedInput === destination.trim() &&
-    checkedUrl === trimmedUrl;
+  const showProgress = useDeferredLoading(busy, UI_DOHERTY_THRESHOLD);
+  const urlProblem = urlError !== null && urlError.url === trimmedUrl ? urlError : null;
+  const urlRejected = urlProblem?.rejected === true;
+  // The host is still answering for this URL: its suggestion, then the folder it names.
+  const suggesting =
+    trimmedUrl.length > 0 && !destinationTouched && checkedUrl !== trimmedUrl && !urlProblem;
+  const folder: FolderState = suggesting
+    ? { kind: "checking" }
+    : folderStateOf({
+        value: destination,
+        check: checkedUrl === trimmedUrl ? check : null,
+        checkedInput,
+        checkError,
+      });
+  const ready = trimmedUrl.length > 0 && !urlProblem && folder.kind === "free";
 
   const pickFolder = async () => {
     const picked = await pickHostPaths({
@@ -177,15 +230,15 @@ export function HostAddProjectDialog({
       buttonLabel: "Clone here",
       hostId,
     });
-    const folder = picked?.[0];
-    if (!folder) return;
+    const chosen = picked?.[0];
+    if (!chosen) return;
     setDestinationTouched(true);
     // A name the person typed stays; any other is the URL's, and follows it.
-    setPickedFolder(nameTyped ? null : folder);
+    setPickedFolder(nameTyped ? null : chosen);
     setDestination(
       nameTyped
-        ? destinationInFolder(folder, destination, repoName(trimmedUrl))
-        : destinationInFolder(folder, "", repoName(trimmedUrl))
+        ? destinationInFolder(chosen, destination, repoName(trimmedUrl))
+        : destinationInFolder(chosen, "", repoName(trimmedUrl))
     );
     setCheck(null);
     setCheckedInput(null);
@@ -202,10 +255,31 @@ export function HostAddProjectDialog({
     }
   };
 
+  const changeFolder = (next: string) => {
+    setDestinationTouched(true);
+    setPickedFolder(null);
+    setNameTyped(true);
+    setDestination(next);
+    setCheck(null);
+    setCheckedInput(null);
+    setFailure(null);
+  };
+
+  const useSuggestion = (path: string) => {
+    setDestinationTouched(true);
+    setPickedFolder(null);
+    setNameTyped(false);
+    setDestination(path);
+    setCheck(null);
+    setCheckedInput(null);
+    setFailure(null);
+  };
+
   const clone = async () => {
     if (!ready || !check) return;
     setFailure(null);
     const opId = mintOperationId();
+    stoppedOp.current = null;
     setRunning(opId);
     setStatus(null);
     const result = await window.electron.hostSwitch
@@ -218,30 +292,34 @@ export function HostAddProjectDialog({
         options: { submodules, depth },
       })
       .catch((error: unknown) => {
-        const code = clientErrorCode(error);
-        if (code !== "CANCELLED") {
+        const code = clientErrorCode(error) ?? null;
+        if (code !== "CANCELLED" && !closed.current && stoppedOp.current !== opId) {
           setFailure({
-            // A request the host turned down never started.
-            title:
-              code === "VALIDATION"
-                ? `${hostName} can't clone this`
-                : `Cloning on ${hostName} didn't finish`,
-            gitText: clientErrorText(error, "Something went wrong."),
-            fix: null,
+            ...describeStepFailure({
+              label: "Cloning",
+              code,
+              message: clientErrorText(error, "Something went wrong."),
+              hostName,
+            }),
+            gitText: null,
+            near: "destination",
           });
         }
         return null;
       });
+    if (closed.current) return;
     setRunning(null);
+    if (stoppedOp.current === opId) return;
     if (result?.kind === "git-failed") {
-      setFailure(
-        describeCloneFailure({
+      setFailure({
+        ...describeCloneFailure({
           reason: result.reason,
           message: result.message,
           hostName,
           url: trimmedUrl,
-        })
-      );
+        }),
+        near: "destination",
+      });
       return;
     }
     if (result?.kind === "opened") onOpened(result);
@@ -255,30 +333,46 @@ export function HostAddProjectDialog({
       buttonLabel: "Open",
       hostId,
     });
-    const folder = picked?.[0];
-    if (!folder) return;
+    const chosen = picked?.[0];
+    if (!chosen || closed.current) return;
+    await openFolderAt(chosen);
+  };
+
+  const openFolderAt = async (chosen: string) => {
     setFailure(null);
     const opId = mintOperationId();
     openingOp.current = opId;
-    setOpening(true);
+    setOpening(chosen);
     setRunning(opId);
     setStatus(null);
     const result = await window.electron.hostSwitch
-      .execute({ kind: "open-folder", opId, toHostId: hostId, path: folder })
+      .execute({ kind: "open-folder", opId, toHostId: hostId, path: chosen })
       .catch((error: unknown) => {
-        if (openingOp.current === opId && clientErrorCode(error) !== "CANCELLED") {
+        const code = clientErrorCode(error) ?? null;
+        if (openingOp.current === opId && code !== "CANCELLED") {
+          // The host looked and said no, or the request never got an answer.
+          const refused = code === "VALIDATION" || code === "NOT_FOUND";
           setFailure({
-            title: `${hostName} can't open this folder`,
-            gitText: clientErrorText(error, "Something went wrong."),
-            fix: null,
+            title: refused
+              ? `${hostName} can't open this folder`
+              : `Opening the folder on ${hostName} didn't finish`,
+            fix: refused
+              ? "Choose a folder that holds a git repository."
+              : `Check that ${hostName} is still connected, then retry.`,
+            detail: clientErrorText(error, "Something went wrong."),
+            gitText: null,
+            near: "top",
+            action: refused
+              ? { label: "Choose another folder…", run: () => void openFolder() }
+              : { label: "Retry", run: () => void openFolderAt(chosen) },
           });
         }
         return null;
       });
-    // Cancelled meanwhile: whatever the host answers now, nothing opens.
+    // Stopped waiting meanwhile: whatever the host answers now, nothing opens.
     if (openingOp.current !== opId) return;
     openingOp.current = null;
-    setOpening(false);
+    setOpening(null);
     setRunning(null);
     if (result?.kind === "opened") onOpened(result);
   };
@@ -287,184 +381,198 @@ export function HostAddProjectDialog({
     if (!running) return;
     if (openingOp.current !== null) {
       openingOp.current = null;
-      setOpening(false);
+      setOpening(null);
       setRunning(null);
       return;
     }
+    stoppedOp.current = running;
     safeFireAndForget(window.electron.hostSwitch.cancel({ opId: running }), {
       context: "Cancelling a clone on a host",
     });
   };
 
-  const hint = running ? (
-    <span className="flex items-center gap-2 text-xs text-text-secondary" aria-live="polite">
-      <Spinner size="xs" />
-      {status?.message ?? (opening ? "Opening" : "Cloning")}
-      {status?.fraction != null && ` · ${Math.round(status.fraction * 100)}%`}
-    </span>
-  ) : undefined;
+  /** Closing mid-step stops the clone (or the wait for an open) first, and nothing opens after. */
+  const closeDialog = () => {
+    if (busy) cancel();
+    closed.current = true;
+    onClose();
+  };
+
+  const failureFor = (slot: Failure["near"]) => {
+    if (failure?.near !== slot) return null;
+    const action = failure.action;
+    return (
+      <div ref={failureRef}>
+        <GitFailureCallout
+          failure={failure}
+          action={
+            action && (
+              <Button variant="outline" size="xs" disabled={busy} onClick={action.run}>
+                {action.label}
+              </Button>
+            )
+          }
+        />
+      </div>
+    );
+  };
+
+  const steps = describeAddSteps({
+    hostName,
+    destination:
+      folder.kind === "free" || folder.kind === "checking" || folder.kind === "failed"
+        ? destination.trim()
+        : "",
+    depth,
+    submodules,
+    opening,
+    // No suggestion is coming for a URL the host couldn't answer for.
+    chosen: destinationTouched || urlProblem !== null,
+  });
+
+  const fraction = status?.fraction != null ? ` · ${Math.round(status.fraction * 100)}%` : "";
+  const stillWorking = stillWorkingOp !== null && stillWorkingOp === running;
+  const progress = opening
+    ? `Opening the folder on ${hostName}${stillWorking ? " · Still working…" : ""}. Stopping only stops waiting: ${hostName} may still add it.`
+    : `${status?.message ?? "Cloning"} on ${hostName}${fraction}${stillWorking ? " · Still working…" : ""}`;
+  const hint = busy ? (
+    showProgress ? (
+      <span className="flex min-w-0 items-center gap-2" aria-live="polite">
+        <Spinner size="xs" />
+        <span className="min-w-0 [text-wrap:pretty]">{progress}</span>
+      </span>
+    ) : undefined
+  ) : ready ? undefined : trimmedUrl.length === 0 ? (
+    "Enter a repository URL"
+  ) : urlRejected ? (
+    `${hostName} can't clone this URL`
+  ) : urlProblem ? (
+    `Couldn't ask ${hostName} where to clone it`
+  ) : (
+    (folderHint(folder, hostName) ?? undefined)
+  );
 
   return (
-    <AppDialog isOpen onClose={busy ? () => {} : onClose} size="md" initialFocus="none">
-      <AppDialog.Header className="py-3">
+    <AppDialog isOpen onClose={closeDialog} size="md" initialFocus="surface">
+      <AppDialog.Header>
         <AppDialog.Title icon={<FolderPlus className="h-4 w-4 text-text-secondary" />}>
           Add a project on {hostName}
         </AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>
-      <div className="flex flex-col gap-3 px-6 py-4">
-        <Row label="Clone">
-          <Input
-            id={urlId}
-            density="compact"
-            aria-label={`Repository URL to clone on ${hostName}`}
-            placeholder="git@github.com:owner/repo.git"
-            value={url}
-            spellCheck={false}
-            autoComplete="off"
-            disabled={busy}
-            onChange={(event) => changeUrl(event.target.value)}
-          />
-        </Row>
-        <Row label="Into">
-          <div className="flex min-w-0 items-center gap-2">
+      <AppDialog.Body>
+        <div className="flex flex-col gap-4">
+          <p className="text-sm text-text-secondary [text-wrap:pretty]">
+            Clone a repository onto {hostName}, or open a folder that's already there.
+          </p>
+          {failureFor("top")}
+          <FormRow label="Repository">
             <Input
               density="compact"
-              aria-label={`Folder on ${hostName}`}
-              value={destination}
+              className="h-7 font-mono"
+              aria-describedby={urlStatusId}
+              aria-label={`Repository URL to clone on ${hostName}`}
+              placeholder="git@github.com:owner/repo.git"
+              value={url}
               spellCheck={false}
               autoComplete="off"
               disabled={busy}
-              invalid={check !== null && check.status !== "free"}
-              onChange={(event) => {
-                setDestinationTouched(true);
-                setPickedFolder(null);
-                setNameTyped(true);
-                setDestination(event.target.value);
-                setCheck(null);
-                setCheckedInput(null);
-                setFailure(null);
-              }}
+              invalid={urlRejected}
+              onChange={(event) => changeUrl(event.target.value)}
             />
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={busy}
-              onClick={() => void pickFolder()}
-              aria-label={`Choose a folder on ${hostName}`}
-            >
-              Change…
-            </Button>
-          </div>
-          {checkError && (
-            <p role="alert" className="mt-1 text-xs text-status-error">
-              Couldn't check this folder on {hostName}: {checkError}
-            </p>
-          )}
-          {check && check.status !== "free" && (
-            <p className="mt-1 text-xs text-status-warning">
-              {check.detail}
-              {check.suggestion && (
-                <>
-                  {" "}
-                  <button
-                    type="button"
-                    className="underline underline-offset-2 text-text-primary"
-                    onClick={() => {
-                      setDestinationTouched(true);
-                      setPickedFolder(null);
-                      setNameTyped(false);
-                      setDestination(check.suggestion!);
-                      setCheck(null);
-                      setCheckedInput(null);
-                    }}
-                  >
-                    Use {check.suggestion}
-                  </button>
-                </>
+            <div id={urlStatusId} aria-live="polite" className="empty:hidden">
+              {urlProblem?.rejected && (
+                <Callout severity="error">
+                  {hostName} can't clone this URL. {urlProblem.message}
+                </Callout>
               )}
-            </p>
-          )}
-        </Row>
-        <label htmlFor={submodulesId} className="flex items-center gap-2 text-sm text-text-primary">
-          <Checkbox
-            id={submodulesId}
-            size="sm"
-            checked={submodules}
-            disabled={busy}
-            onCheckedChange={(checked) => setSubmodules(checked === true)}
-          />
-          Initialise submodules
-        </label>
-        <RadioChoiceGroup legend="How much history to clone">
-          <RadioChoiceRow
-            name="host-add-depth"
-            value="full"
-            checked={depth === "full"}
-            onChange={() => setDepth("full")}
-            label="Full clone"
-            disabled={busy}
-          />
-          <RadioChoiceRow
-            name="host-add-depth"
-            value="shallow"
-            checked={depth === "shallow"}
-            onChange={() => setDepth("shallow")}
-            label="Shallow clone"
-            description="Only the latest commit."
-            disabled={busy}
-          />
-          <RadioChoiceRow
-            name="host-add-depth"
-            value="partial"
-            checked={depth === "partial"}
-            onChange={() => setDepth("partial")}
-            label="Partial clone"
-            description="All history; file contents are fetched when needed."
-            disabled={busy}
-          />
-        </RadioChoiceGroup>
-        <p className="text-xs text-text-secondary">
-          {hostName} clones with its own git credentials; nothing from this machine is sent.
-        </p>
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-sm text-text-secondary">Already on {hostName}?</p>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={busy}
-            onClick={() => void openFolder()}
-            aria-label={`Open a folder on ${hostName}`}
-          >
-            Open a folder…
-          </Button>
+              {urlProblem && !urlProblem.rejected && (
+                <Callout
+                  severity="error"
+                  action={
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      disabled={busy}
+                      onClick={() =>
+                        setRetryFor((last) => ({
+                          url: trimmedUrl,
+                          attempt: (last?.attempt ?? 0) + 1,
+                        }))
+                      }
+                    >
+                      <RefreshCw aria-hidden="true" />
+                      Retry
+                    </Button>
+                  }
+                >
+                  Couldn't ask {hostName} where to clone it: {urlProblem.message}
+                </Callout>
+              )}
+            </div>
+          </FormRow>
+          <FormRow label="Into">
+            <DestinationField
+              hostName={hostName}
+              value={destination}
+              state={folder}
+              disabled={busy}
+              placeholder={
+                trimmedUrl.length > 0
+                  ? `Choose a folder on ${hostName}`
+                  : `Suggested by ${hostName} once there's a URL`
+              }
+              onChange={changeFolder}
+              onPick={() => void pickFolder()}
+              onUseSuggestion={useSuggestion}
+              sameRepository={{
+                label: "Open this folder",
+                onUse: () => void openFolderAt(check?.path ?? destination.trim()),
+              }}
+              onRetry={() => setCheckAttempt((n) => n + 1)}
+            />
+            {failureFor("destination")}
+          </FormRow>
+          <FormRow label="Options">
+            <CloneOptions
+              name="host-add-depth"
+              hostName={hostName}
+              depth={depth}
+              onDepth={setDepth}
+              submodules={{
+                checked: submodules,
+                label: "Initialise submodules, if it has any",
+                onChange: setSubmodules,
+              }}
+              disabled={busy}
+            />
+          </FormRow>
+          <OperationSteps label="What happens" steps={steps} placement="inline" />
         </div>
-        {failure && <GitFailureCallout failure={failure} />}
-      </div>
-      <AppDialog.Footer hint={hint}>
-        <div className="flex shrink-0 items-center gap-3">
-          {busy ? (
-            <Button variant="ghost" onClick={cancel}>
-              Cancel
-            </Button>
-          ) : (
-            <Button variant="ghost" onClick={onClose}>
-              Close
-            </Button>
-          )}
-          <Button
-            variant="contrast"
-            onClick={() => {
-              if (busy || !ready) return;
-              void clone();
-            }}
-            aria-disabled={busy || !ready || undefined}
-            className={cn((busy || !ready) && ARIA_DISABLED_CLASSES)}
-          >
-            Clone and open
-          </Button>
-        </div>
-      </AppDialog.Footer>
+      </AppDialog.Body>
+      <OperationSteps label="What happens" steps={steps} placement="band" />
+      <AppDialog.Footer
+        hint={hint}
+        hintPlacement="above"
+        className="flex-wrap"
+        leadingAction={
+          busy ? undefined : { label: "Open a folder…", onClick: () => void openFolder() }
+        }
+        secondaryAction={{
+          label: opening ? "Stop waiting" : "Cancel",
+          onClick: busy ? cancel : closeDialog,
+        }}
+        primaryAction={
+          // Opening a folder that's there isn't a clone: the only answer is to stop waiting.
+          opening
+            ? undefined
+            : {
+                label: failure?.near === "destination" ? "Retry clone" : "Clone and open",
+                onClick: () => void clone(),
+                disabled: busy || !ready,
+              }
+        }
+      />
     </AppDialog>
   );
 }

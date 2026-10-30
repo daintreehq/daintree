@@ -112,13 +112,20 @@ export function decodePanelExtensionState(
 
 /**
  * What to tell the user when a panel's saved state is newer than the plugin
- * that owns it. Names both versions, because the action ("get the newer plugin
- * back") is only obvious once you can see which direction the mismatch runs in.
+ * that owns it. Names the owning plugin, never the panel kind — "the Pull
+ * Requests plugin" sends the user after an update that doesn't exist — and
+ * `null` while its name isn't known. The state format numbers say nothing a
+ * person can act on, so they belong in the log, not here.
  */
-export function panelExtensionStateVersionMessage(
-  pluginDisplayName: string,
+export function panelExtensionStateVersionMessage(pluginDisplayName: string | null): string {
+  const owner = pluginDisplayName ? `the ${pluginDisplayName} plugin` : "its plugin";
+  return `This panel's saved state was written by a newer version of ${owner}. Update the plugin to open it. The saved state is kept until then.`;
+}
+
+/** The detail behind {@link panelExtensionStateVersionMessage}, for logs and diagnostics. */
+export function panelExtensionStateVersionDiagnostic(
   persistedVersion: number,
   declaredVersion: number
 ): string {
-  return `This panel's saved state was written by a newer version of the ${pluginDisplayName} plugin (state format ${persistedVersion}; this version reads ${declaredVersion}). Update the plugin to open it. The saved state is kept until then.`;
+  return `state format ${persistedVersion}; this version reads ${declaredVersion}`;
 }

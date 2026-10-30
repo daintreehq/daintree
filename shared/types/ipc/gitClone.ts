@@ -12,7 +12,10 @@ export interface CloneRepoOptions {
 }
 
 export interface CloneCancelPayload {
-  /** Cancel only this clone. Absent cancels every in-flight clone. */
+  /**
+   * Cancel only this clone. Absent cancels the clones the calling view
+   * started; a remote caller must name one.
+   */
   opId?: string;
 }
 

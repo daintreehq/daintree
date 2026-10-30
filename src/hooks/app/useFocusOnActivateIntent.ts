@@ -46,7 +46,8 @@ export function useFocusOnActivateIntent(isStateLoaded: boolean): void {
         payload?.intent !== "focus-worktree" &&
         payload?.intent !== "run-plugin-action" &&
         payload?.intent !== "open-assistant" &&
-        payload?.intent !== "restore-trashed"
+        payload?.intent !== "restore-trashed" &&
+        payload?.intent !== "placement-note"
       ) {
         return;
       }
@@ -116,14 +117,38 @@ export function useFocusOnActivateIntent(isStateLoaded: boolean): void {
       );
       return;
     }
+    if (pending.intent === "placement-note") {
+      // Grid-bar: it comes from the host this view now shows, after the dialog
+      // that asked for the worktree has closed in another view.
+      notify({
+        type: "warning",
+        title: "Part of the setup didn't run",
+        message: pending.note,
+        context: { eventKind: "agent" },
+        placement: "grid-bar",
+        duration: 0,
+        replaceKey: "focus-on-activate:placement-note",
+      });
+      return;
+    }
     if (pending.intent === "focus-worktree") {
       cancelLanding.current = landOnWorktree(pending.worktreeId, worktreeStore);
       return;
     }
     if (pending.intent === "focus-panel") {
-      // The terminal can exit or be trashed while the project switch is in flight.
-      void actionService.dispatch("panel.focus", { panelId: pending.panelId }).then((result) => {
-        if (result.ok) return;
+      // The terminal can exit or be trashed while the project switch is in
+      // flight. A sender that named its worktree lands there instead.
+      const { panelId, worktreeId } = pending;
+      let superseded = false;
+      cancelLanding.current = () => {
+        superseded = true;
+      };
+      void actionService.dispatch("panel.focus", { panelId }).then((result) => {
+        if (result.ok || superseded) return;
+        if (worktreeId) {
+          cancelLanding.current = landOnWorktree(worktreeId, worktreeStore);
+          return;
+        }
         notify({
           type: "warning",
           title: "Terminal is gone",

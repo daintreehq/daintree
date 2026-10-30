@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { canopyHostClient } from "@/clients/canopyHostClient";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
+import { remoteHostOfView } from "@/services/terminal/remoteLoopbackLinks";
 import type { BulkTransport } from "@shared/utils/canopyBulkEnable";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { clientErrorCode } from "@/utils/clientAppError";
@@ -164,6 +165,8 @@ export function canopyBulkTransport(
  */
 export interface CanopyTerminalApi {
   holdsSize: boolean;
+  /** The host the run is on: its links and files are that host's. */
+  hostOf: (runId: string) => HostId;
   /**
    * For an API that routes by run: the local terminal's own id when this run is
    * on the window's own host and so sized from here, otherwise null.
@@ -175,6 +178,8 @@ export interface CanopyTerminalApi {
   terminalResize: ElectronCanopy["terminalResize"];
   terminalSubmit: ElectronCanopy["terminalSubmit"];
   terminalSendKey: ElectronCanopy["terminalSendKey"];
+  /** A reply by run, for one whose card and stream are gone by the time it goes. */
+  submitReply: ElectronCanopy["submitReply"];
   answer: ElectronCanopy["answer"];
   onTerminalData: ElectronCanopy["onTerminalData"];
   /** The link to the host came back: what the pane showed was dropped there, so it opens again. */
@@ -185,12 +190,14 @@ const NO_RESYNC = () => () => {};
 
 export const ownCanopyTerminalApi: CanopyTerminalApi = {
   holdsSize: true,
+  hostOf: () => remoteHostOfView() ?? LOCAL_HOST_ID,
   watchTerminal: (...args) => window.electron.canopy.watchTerminal(...args),
   unwatchTerminal: (...args) => window.electron.canopy.unwatchTerminal(...args),
   terminalInput: (...args) => window.electron.canopy.terminalInput(...args),
   terminalResize: (...args) => window.electron.canopy.terminalResize(...args),
   terminalSubmit: (...args) => window.electron.canopy.terminalSubmit(...args),
   terminalSendKey: (...args) => window.electron.canopy.terminalSendKey(...args),
+  submitReply: (...args) => window.electron.canopy.submitReply(...args),
   answer: (...args) => window.electron.canopy.answer(...args),
   onTerminalData: (callback) => window.electron.canopy.onTerminalData(callback),
   onResync: NO_RESYNC,
@@ -204,12 +211,14 @@ export function remoteCanopyTerminalApi(hostId: HostId): CanopyTerminalApi {
       canopyHostClient.invoke(hostId, channel, ...args);
   return {
     holdsSize: false,
+    hostOf: () => hostId,
     watchTerminal: on("canopy:watch-terminal"),
     unwatchTerminal: on("canopy:unwatch-terminal"),
     terminalInput: on("canopy:terminal-input"),
     terminalResize: on("canopy:terminal-resize"),
     terminalSubmit: on("canopy:terminal-submit"),
     terminalSendKey: on("canopy:terminal-send-key"),
+    submitReply: on("canopy:submit-reply"),
     answer: on("canopy:answer"),
     onTerminalData: (callback) =>
       canopyHostClient.onEvent((event) => {

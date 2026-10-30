@@ -13,7 +13,7 @@ export type TerminalInputBlock =
       driverName: string;
       /** The project whose lease is held, so the pane can ask for it back. */
       projectId?: string;
-      /** This view is on the host's own screen, where taking over reads as taking back. */
+      /** This view is on the host's own screen. */
       hostLocal?: boolean;
       /** A window on the host's own screen drives, and `driverName` is the host's. */
       driverIsHostScreen?: boolean;
@@ -39,6 +39,7 @@ const unblockListeners = new Set<() => void>();
 function emit(wasBlocked: boolean): void {
   for (const listener of [...listeners]) listener();
   if (!wasBlocked || isTerminalInputBlocked()) return;
+  clearRefusedInput();
   for (const listener of [...unblockListeners]) {
     try {
       listener();
@@ -176,6 +177,41 @@ export function onTerminalInputUnblocked(listener: () => void): () => void {
   return () => unblockListeners.delete(listener);
 }
 
+/**
+ * The pane something was last typed or sent into while input was held back.
+ * The window's banner says why for every pane at once; a pane says it again
+ * only where the user just tried to use it, and only the latest such pane,
+ * so trying one pane after another moves the notice rather than filling the
+ * grid with copies of it. Cleared once input opens again.
+ */
+let refusedPanel: string | null = null;
+const refusedListeners = new Set<() => void>();
+
+function setRefusedPanel(next: string | null): void {
+  if (refusedPanel === next) return;
+  refusedPanel = next;
+  for (const listener of [...refusedListeners]) listener();
+}
+
+function clearRefusedInput(): void {
+  setRefusedPanel(null);
+}
+
+/** Input meant for this terminal was dropped by the gate. */
+export function noteRefusedInput(terminalId: string): void {
+  if (!isTerminalInputBlocked()) return;
+  setRefusedPanel(terminalId);
+}
+
+export function wasInputRefused(terminalId: string): boolean {
+  return refusedPanel === terminalId;
+}
+
+export function subscribeRefusedInput(listener: () => void): () => void {
+  refusedListeners.add(listener);
+  return () => refusedListeners.delete(listener);
+}
+
 export function getTerminalInputBlockMessage(block: TerminalInputBlock): string {
   switch (block.kind) {
     case "disconnected":
@@ -217,4 +253,6 @@ export function _resetTerminalInputGateForTesting(): void {
   listeners.clear();
   unblockListeners.clear();
   leaseSnapshotListeners.clear();
+  refusedPanel = null;
+  refusedListeners.clear();
 }

@@ -39,7 +39,7 @@ export function SidebarViewHost({ children }: { children: ReactNode }) {
   const setActiveSidebarView = useSidebarViewStore((s) => s.setActiveSidebarView);
   const defaultAnswers = useSidebarViewStore((s) => s.defaultAnswers);
   const answerDefaultView = useSidebarViewStore((s) => s.answerDefaultView);
-  const active = resolveActiveSidebarView(options, chosen);
+  const active = useMemo(() => resolveActiveSidebarView(options, chosen), [options, chosen]);
   const activeView = active.view;
   const workspace = useWorkspaceRoot();
 

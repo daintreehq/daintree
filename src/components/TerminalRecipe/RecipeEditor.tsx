@@ -4,6 +4,7 @@ import type { TerminalRecipe, RecipeTerminal, RecipeTerminalType } from "@/types
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Callout } from "@/components/ui/Callout";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -19,7 +20,12 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
-import { useRecipeStore, MAX_TERMINALS_PER_RECIPE } from "@/store/recipeStore";
+import {
+  useRecipeStore,
+  MAX_TERMINALS_PER_RECIPE,
+  type RecipeLayoutOmissions,
+} from "@/store/recipeStore";
+import { useRecipeEditorActivityStore } from "@/store/recipeEditorActivityStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
@@ -33,7 +39,10 @@ import {
 } from "@/components/Worktree/views";
 import { RecipeVariablePreview } from "@/components/TerminalRecipe/RecipeVariablePreview";
 import { getAgentConfig } from "@/config/agents";
+import { GLOBAL_SCOPE_LABEL, PROJECT_SCOPE_LABEL, newRecipeScopeDetail } from "./recipeScopeCopy";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { getRecipeScope } from "@/utils/recipeScope";
+import { pluralize } from "@/lib/pluralize";
 
 function cloneTerminal(t: RecipeTerminal): RecipeTerminal {
   return { ...t, env: t.env ? { ...t.env } : {} };
@@ -73,6 +82,8 @@ function serializeEditorState(
 interface RecipeEditorProps {
   recipe?: TerminalRecipe;
   initialTerminals?: RecipeTerminal[];
+  /** What the layout capture behind `initialTerminals` left out (#14968). */
+  layoutOmissions?: RecipeLayoutOmissions;
   worktreeId?: string;
   defaultScope?: "global" | "project";
   isOpen: boolean;
@@ -80,38 +91,95 @@ interface RecipeEditorProps {
   onSave?: (recipe: TerminalRecipe) => void;
 }
 
-const TERMINAL_TYPES: RecipeTerminalType[] = [
-  "terminal",
-  "claude",
-  "gemini",
-  "codex",
-  "opencode",
-  "dev-preview",
-];
+// Agents follow the registry's own order, which is what the launcher and
+// settings show; the sanitizer admits exactly these ids.
+const TERMINAL_TYPES: RecipeTerminalType[] = ["terminal", ...BUILT_IN_AGENT_IDS, "dev-preview"];
 
 const TYPE_LABELS: Partial<Record<RecipeTerminalType, string>> = {
   terminal: "Terminal",
-  claude: "Claude",
-  gemini: "Gemini",
-  codex: "Codex",
-  opencode: "OpenCode",
   "dev-preview": "Dev server",
 };
 
 /**
  * The editable types, plus the terminal's own when a captured recipe carries an
  * agent the editor doesn't offer — a Select shows nothing for a value with no
- * item, so dropping it would blank the field and invite a silent retype.
+ * item, so dropping it would blank the field and invite a silent retype. Such an
+ * agent stays offered after the step leaves it, so it can be switched back to.
  */
-function terminalTypeOptions(current: RecipeTerminalType): RecipeTerminalType[] {
-  return TERMINAL_TYPES.includes(current) ? TERMINAL_TYPES : [...TERMINAL_TYPES, current];
+function terminalTypeOptions(
+  current: RecipeTerminalType,
+  left?: RecipeTerminalType
+): RecipeTerminalType[] {
+  const extra = [current, left].filter(
+    (type): type is RecipeTerminalType => !!type && !TERMINAL_TYPES.includes(type)
+  );
+  return extra.length ? [...TERMINAL_TYPES, ...new Set(extra)] : TERMINAL_TYPES;
 }
 
 function terminalTypeLabel(type: RecipeTerminalType): string {
   return TYPE_LABELS[type] ?? getAgentConfig(type)?.name ?? type;
 }
 
+function isAgentStep(type: RecipeTerminalType): boolean {
+  return type !== "terminal" && type !== "dev-preview";
+}
+
+/**
+ * What a step held for the types it has left, so switching back while the
+ * editor is open restores it. Never saved: a step only carries its current
+ * type's fields.
+ */
+interface TypeStash {
+  commands: Partial<Record<RecipeTerminalType, string | undefined>>;
+  agent?: Pick<RecipeTerminal, "initialPrompt" | "args">;
+  devCommand?: string;
+}
+
 const FAILURE_PRESERVE_CAPTION = "Failures always preserve terminal for debugging";
+
+const OMITTED_PANEL_NOUNS = new Map<string, string>([
+  ["browser", "browser"],
+  ["review", "review panel"],
+  ["file", "file viewer"],
+  ["file-browser", "file browser"],
+  ["diff", "diff viewer"],
+]);
+
+const englishList = new Intl.ListFormat("en", { style: "long", type: "conjunction" });
+
+/**
+ * One sentence per reason a captured panel is missing from the draft. Plugin
+ * panel kinds are counted together rather than named, so a plugin's own kind
+ * string never lands in this copy.
+ */
+function describeLayoutOmissions(omitted: RecipeLayoutOmissions): string[] {
+  const nounCounts = new Map<string, number>();
+  let otherCount = 0;
+  let unsupportedCount = 0;
+  for (const [kind, count] of Object.entries(omitted.panelKinds)) {
+    if (count <= 0) continue;
+    unsupportedCount += count;
+    const noun = OMITTED_PANEL_NOUNS.get(kind);
+    if (noun) nounCounts.set(noun, (nounCounts.get(noun) ?? 0) + count);
+    else otherCount += count;
+  }
+  const parts = [...nounCounts].map(([noun, count]) => pluralize(count, noun));
+  if (otherCount > 0) parts.push(pluralize(otherCount, "other panel"));
+
+  const sentences: string[] = [];
+  if (unsupportedCount > 0) {
+    sentences.push(
+      `Recipes can't hold ${englishList.format(parts)}, so ${unsupportedCount === 1 ? "it was" : "they were"} left out.`
+    );
+  }
+  // "Panel", not "terminal": a dev preview past the cap is counted here too.
+  if (omitted.cappedTerminalCount > 0) {
+    sentences.push(
+      `${pluralize(omitted.cappedTerminalCount, "more panel")} ${omitted.cappedTerminalCount === 1 ? "was" : "were"} left out: a recipe holds at most ${MAX_TERMINALS_PER_RECIPE} terminals.`
+    );
+  }
+  return sentences;
+}
 
 /**
  * Where an existing recipe is saved, in the manager's words and with its
@@ -141,6 +209,7 @@ function savedScope(recipe: TerminalRecipe): {
 export function RecipeEditor({
   recipe,
   initialTerminals,
+  layoutOmissions,
   worktreeId,
   defaultScope,
   isOpen,
@@ -175,6 +244,9 @@ export function RecipeEditor({
   const freshCardKeys = (count: number) =>
     Array.from({ length: count }, () => nextCardKeyRef.current++);
   const [cardKeys, setCardKeys] = useState<number[]>(() => freshCardKeys(1));
+  const typeStashRef = useRef(new Map<number, TypeStash>());
+  // Per card, an unoffered captured type the step has switched away from.
+  const [leftTypes, setLeftTypes] = useState<Record<number, RecipeTerminalType>>({});
   // Where focus goes once an add or remove has rendered.
   const pendingFocusIdRef = useRef<string | null>(null);
   const initialStateRef = useRef<string>("");
@@ -189,6 +261,15 @@ export function RecipeEditor({
     target?.scrollIntoView({ block: "nearest" });
   }, [terminals.length]);
 
+  // Holds off the focus reload while the editor is open, wherever it is mounted
+  // (#9186). A reload refreshes main's hash cache, so a draft kept here after a
+  // cancelled conflict would then save over the newer file without the dialog.
+  useEffect(() => {
+    if (!isOpen) return;
+    useRecipeEditorActivityStore.getState().enter();
+    return () => useRecipeEditorActivityStore.getState().leave();
+  }, [isOpen]);
+
   // The banner sits below every card, and the body may be scrolled anywhere
   // when Save is pressed from the footer.
   useEffect(() => {
@@ -197,6 +278,8 @@ export function RecipeEditor({
 
   useEffect(() => {
     if (!isOpen) return;
+    typeStashRef.current.clear();
+    setLeftTypes({});
     if (recipe) {
       const nextTerminals = recipe.terminals.map(cloneTerminal);
       const nextShowInEmptyState = recipe.showInEmptyState ?? false;
@@ -273,6 +356,8 @@ export function RecipeEditor({
       return;
     }
     setTerminals(terminals.filter((_, i) => i !== index));
+    const removedKey = cardKeys[index];
+    if (removedKey !== undefined) typeStashRef.current.delete(removedKey);
     setCardKeys(cardKeys.filter((_, i) => i !== index));
     // The card that slid into this slot, or the new last one.
     pendingFocusIdRef.current = `terminal-type-${Math.min(index, terminals.length - 2)}`;
@@ -292,25 +377,38 @@ export function RecipeEditor({
   };
 
   const handleTypeChange = (index: number, newType: RecipeTerminalType) => {
-    setTerminals((prev) => {
-      const updated = [...prev];
-      const current = updated[index];
-      if (!current) return prev;
-      const prevType = current.type;
-      updated[index] = {
-        ...current,
-        type: newType,
-        // Clear command when switching between types so the new type uses its default
-        command: newType === prevType ? current.command : "",
-        // Clear initialPrompt and args when switching to terminal or dev-preview
-        initialPrompt:
-          newType === "terminal" || newType === "dev-preview" ? "" : current.initialPrompt,
-        args: newType === "terminal" || newType === "dev-preview" ? "" : current.args,
-        // Clear devCommand when switching away from dev-preview
-        devCommand: newType !== "dev-preview" ? "" : current.devCommand,
-      };
-      return updated;
-    });
+    const current = terminals[index];
+    const cardKey = cardKeys[index];
+    if (!current || cardKey === undefined || current.type === newType) return;
+    const prevType = current.type;
+    const stash = typeStashRef.current.get(cardKey) ?? { commands: {} };
+    stash.commands[prevType] = current.command;
+    if (isAgentStep(prevType)) {
+      stash.agent = { initialPrompt: current.initialPrompt, args: current.args };
+    }
+    if (prevType === "dev-preview") stash.devCommand = current.devCommand;
+    typeStashRef.current.set(cardKey, stash);
+    if (!TERMINAL_TYPES.includes(prevType)) {
+      setLeftTypes((prev) => ({ ...prev, [cardKey]: prevType }));
+    }
+
+    const toAgent = isAgentStep(newType);
+    // The prompt and arguments are shared by every agent, so an agent-to-agent
+    // switch carries the live ones across rather than the stashed ones.
+    const agentFields = isAgentStep(prevType)
+      ? { initialPrompt: current.initialPrompt, args: current.args }
+      : (stash.agent ?? { initialPrompt: current.initialPrompt, args: current.args });
+    const newTerminals = [...terminals];
+    newTerminals[index] = {
+      ...current,
+      type: newType,
+      // Each type starts from its own command (#2254), never one meant for another CLI.
+      command: stash.commands[newType] ?? "",
+      initialPrompt: toAgent ? agentFields.initialPrompt : "",
+      args: toAgent ? agentFields.args : "",
+      devCommand: newType === "dev-preview" ? (stash.devCommand ?? current.devCommand) : "",
+    };
+    setTerminals(newTerminals);
   };
 
   const handleSave = async () => {
@@ -334,12 +432,21 @@ export function RecipeEditor({
 
     try {
       if (recipe) {
-        await updateRecipe(recipe.id, {
+        const result = await updateRecipe(recipe.id, {
           name: recipeName,
           terminals,
           showInEmptyState,
           autoAssign,
         });
+        // Cancel on a conflict backs out of the save, not the edit: the draft
+        // stays here to copy, save again or discard (#15035).
+        if (result === "cancelled") return;
+        // Reload dropped the draft for the file's newer version, so nothing
+        // was saved to report.
+        if (result === "reloaded") {
+          onClose();
+          return;
+        }
       } else {
         const isGlobal = scope === "global";
         if (!isGlobal && !currentProject?.id) {
@@ -379,6 +486,13 @@ export function RecipeEditor({
   };
 
   const recipeDisplayName = (recipe?.name ?? recipeName).trim();
+
+  // Describes the capture the draft started from, so it stays put while steps
+  // are edited or removed.
+  const omissionSentences =
+    !recipe && initialTerminals?.length && layoutOmissions
+      ? describeLayoutOmissions(layoutOmissions)
+      : [];
 
   const submitOnEnter = (event: React.KeyboardEvent) => {
     if (!isEnterToSubmit(event)) return;
@@ -476,7 +590,10 @@ export function RecipeEditor({
             <FormRow
               label="Scope"
               htmlFor={recipe ? undefined : "recipe-scope"}
-              hint={recipe ? hint("recipe-scope-help", savedScope(recipe).detail) : undefined}
+              hint={hint(
+                "recipe-scope-help",
+                recipe ? savedScope(recipe).detail : newRecipeScopeDetail(scope)
+              )}
             >
               {recipe ? (
                 (() => {
@@ -497,14 +614,18 @@ export function RecipeEditor({
                   onValueChange={(value) => setScope(value as "global" | "project")}
                   disabled={isSaving}
                 >
-                  <SelectTrigger id="recipe-scope" className={FIELD_CONTROL_SIZE}>
+                  <SelectTrigger
+                    id="recipe-scope"
+                    className={FIELD_CONTROL_SIZE}
+                    aria-describedby="recipe-scope-help"
+                  >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="project" disabled={!hasProject}>
-                      Project (current project only)
+                      {PROJECT_SCOPE_LABEL}
                     </SelectItem>
-                    <SelectItem value="global">Global (all projects)</SelectItem>
+                    <SelectItem value="global">{GLOBAL_SCOPE_LABEL}</SelectItem>
                   </SelectContent>
                 </Select>
               )}
@@ -569,16 +690,29 @@ export function RecipeEditor({
                 </Button>
               }
             >
+              {omissionSentences.length > 0 && (
+                <Callout
+                  severity={layoutOmissions?.cappedTerminalCount ? "warning" : "info"}
+                  title="Some panels weren't captured"
+                  className="col-span-2"
+                  data-testid="recipe-layout-omissions"
+                >
+                  {omissionSentences.map((sentence) => (
+                    <p key={sentence}>{sentence}</p>
+                  ))}
+                </Callout>
+              )}
               {/* Each card is a subgrid of the form, so its fields sit on the
                   same label rail as the recipe's own rows rather than a second
                   layout of stacked labels. */}
               <div className="col-span-2 grid grid-cols-subgrid gap-y-3">
                 {terminals.map((terminal, index) => {
                   const headingId = `terminal-heading-${index}`;
-                  const isAgent = terminal.type !== "terminal" && terminal.type !== "dev-preview";
+                  const isAgent = isAgentStep(terminal.type);
+                  const cardKey = cardKeys[index];
                   return (
                     <div
-                      key={cardKeys[index] ?? `index-${index}`}
+                      key={cardKey ?? `index-${index}`}
                       role="group"
                       aria-labelledby={headingId}
                       className="col-span-2 grid grid-cols-subgrid items-center gap-y-3 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas p-3"
@@ -618,7 +752,10 @@ export function RecipeEditor({
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            {terminalTypeOptions(terminal.type).map((type) => (
+                            {terminalTypeOptions(
+                              terminal.type,
+                              cardKey === undefined ? undefined : leftTypes[cardKey]
+                            ).map((type) => (
                               <SelectItem key={type} value={type}>
                                 {terminalTypeLabel(type)}
                               </SelectItem>

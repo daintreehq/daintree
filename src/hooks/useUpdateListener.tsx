@@ -31,9 +31,12 @@ function findLiveUpdateToastId(): string | null {
   return match?.id ?? null;
 }
 
-function restartAction() {
+function restartAction(): NotificationAction {
   return {
     label: "Restart to update",
+    // Main may ask first (working agents, attached Shells), and Cancel there
+    // leaves the update staged, so the toast has to stay to act on later.
+    dismissOnClick: false,
     onClick: () => {
       const promise = window.electron?.update?.quitAndInstall();
       if (promise) {

@@ -1,9 +1,13 @@
 import { SquareDashedMousePointer } from "lucide-react";
 import type { DevPreviewToolButtonProps } from "@/services/devPreviewTools/types";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
+import { TOOL_NAME } from "./toolId.js";
 
-/** The dev preview toolbar toggle; every dev preview has it. */
+/**
+ * The dev preview toolbar toggle; every dev preview has it. Its name is the
+ * tool's and holds still — whether it is on travels on `aria-pressed` and the
+ * toolbar's shared armed treatment, as every other toggle in the row does.
+ */
 export function ElementPickerButton({ active, onToggle }: DevPreviewToolButtonProps) {
   return (
     <Tooltip>
@@ -11,19 +15,14 @@ export function ElementPickerButton({ active, onToggle }: DevPreviewToolButtonPr
         <button
           type="button"
           onClick={onToggle}
-          aria-label="Element Picker"
+          aria-label={TOOL_NAME}
           aria-pressed={active}
-          className={cn(
-            "toolbar-icon-button rounded-[var(--radius-md)] p-1.5",
-            active && "bg-overlay-soft text-text-primary"
-          )}
+          className="toolbar-icon-button rounded-[var(--radius-md)] p-1.5"
         >
           <SquareDashedMousePointer className="h-4 w-4" aria-hidden="true" />
         </button>
       </TooltipTrigger>
-      <TooltipContent side="bottom">
-        {active ? "Close Element Picker" : "Pick an element and ask an agent to change it"}
-      </TooltipContent>
+      <TooltipContent side="bottom">{TOOL_NAME}</TooltipContent>
     </Tooltip>
   );
 }

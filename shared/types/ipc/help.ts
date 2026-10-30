@@ -1,3 +1,4 @@
+import type { AgentState } from "../agent.js";
 import type { AgentDirectorySubject } from "../agentDirectory.js";
 
 /**
@@ -27,6 +28,23 @@ export interface HelpPastSession {
   title: string;
   /** Epoch ms of the last activity the store recorded. */
   updatedAt: number;
+}
+
+/** Rows a past-sessions listing holds at most. Older conversations stay resumable through `/resume`. */
+export const HELP_PAST_SESSIONS_LIMIT = 50;
+
+/**
+ * The answer to `help:list-past-sessions` when asked with `{ listing: true }`
+ * (#14984). The rows alone can't say whether they are the whole history, so
+ * the listing carries what it left out.
+ */
+export interface HelpPastSessionsListing {
+  /** Newest first, at most `HELP_PAST_SESSIONS_LIMIT`. */
+  sessions: HelpPastSession[];
+  /** Stores that hold this project's history but couldn't be read: their rows may be missing. */
+  unreadable: HelpPastSession["agentId"][];
+  /** More conversations exist than `sessions` holds; the oldest were left out. */
+  truncated: boolean;
 }
 
 /**
@@ -86,6 +104,12 @@ export interface GlobalAssistantState {
  */
 export interface GlobalAssistantView extends GlobalAssistantState {
   subject: AgentDirectorySubject | null;
+  /**
+   * What was last seen on that subject's terminal, observed without attaching,
+   * so a window can mark the run while it shows something else. Null while
+   * nothing has been seen on this exact subject.
+   */
+  agentState: AgentState | null;
 }
 
 /**

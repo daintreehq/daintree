@@ -196,9 +196,12 @@ describe("SidebarContent screen-reader announcements — issue #9665", () => {
     expect(source).toContain('import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils"');
     // The count announcement is scheduled on a timer cleared on re-run, so
     // rapid keystrokes coalesce into a single late announcement.
-    // The template is what gets spoken: `message` is built from the count,
-    // copied to `spoken` for the closure, and that is what the timer announces.
-    expect(source).toMatch(/message = `\$\{filteredCount\} of \$\{scopeTotal\} worktrees`/);
+    // The template is what gets spoken: `message` is the empty list's reason
+    // when there is one and the count otherwise, copied to `spoken` for the
+    // closure, and that is what the timer announces.
+    expect(source).toMatch(
+      /message = listEmptyTitle \?\? `\$\{filteredCount\} of \$\{scopeTotal\} worktrees`/
+    );
     expect(source).toMatch(/const spoken = message;/);
     expect(source).toMatch(
       /setTimeout\([\s\S]*?announce\(spoken\)[\s\S]*?\},\s*UI_DOHERTY_THRESHOLD\)/
@@ -220,7 +223,7 @@ describe("SidebarContent screen-reader announcements — issue #9665", () => {
     // The gate is the narrowed -> not-narrowed edge, and only once the deferred
     // rows have caught up with the instant query.
     expect(source).not.toMatch(/hasMountedScope/);
-    expect(source).toMatch(/if \(showScope\) \{[\s\S]{0,120}?wasNarrowedRef\.current = true/);
+    expect(source).toMatch(/if \(showScope\) \{[\s\S]{0,400}?wasNarrowedRef\.current = true/);
     expect(source).toMatch(
       /else if \(wasNarrowedRef\.current && filteredCount === scopeTotal\) \{[\s\S]{0,120}?All \$\{scopeTotal\} worktrees shown/
     );
@@ -488,7 +491,7 @@ describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed 
   describe("filteredWorktrees memo", () => {
     it("computes the counterfactual only when quickStateFilter is non-'all'", () => {
       expect(rowModelSource).toMatch(
-        /if \(!withoutQuickStateMatch && quickStateFilter !== "all"\)/
+        /if \(quickStateFilter !== "all"\) \{\s*if \(alwaysShowActive/
       );
     });
 
@@ -502,166 +505,33 @@ describe("SidebarContent quick-state empty state — issue #6333 (CTA collapsed 
         /alwaysShowWaiting[\s\S]*?derived\.hasWaitingAgent[\s\S]*?!hasActiveQuery/
       );
       expect(rowModelSource).toMatch(
-        /else if \(matchesFilters\(worktree, filters, derived, isActive, devServerSessions\)\) \{\s*withoutQuickStateMatch = true;/
+        /else if \(matchesFilters\(worktree, filters, derived, isActive, devServerSessions\)\) \{\s*withoutQuickStateCount\+\+;/
       );
     });
   });
 
-  describe("showQuickStateEmptyState gate", () => {
-    it("requires zero results, non-'all' filter, would-match-without, and non-main worktrees", () => {
-      const block = source.match(/const showQuickStateEmptyState =\s*[\s\S]*?hasNonMainWorktrees;/);
-      expect(block).not.toBeNull();
-      expect(block![0]).toContain("filteredWorktrees.length === 0");
-      expect(block![0]).toContain('quickStateFilter !== "all"');
-      expect(block![0]).toContain("hasResultsWithoutQuickState");
-      expect(block![0]).toContain("hasNonMainWorktrees");
-    });
-  });
-
-  describe("empty-state branch ordering and copy", () => {
-    it("renders the quick-state empty state before the generic filter-mismatch branch", () => {
-      const quickStateIdx = source.indexOf(
-        "showQuickStateEmptyState && !hasFacetFiltersActive && !hasQuery ?"
-      );
-      const genericIdx = source.indexOf(") : filteredWorktrees.length === 0 &&");
-      expect(quickStateIdx).toBeGreaterThan(0);
-      expect(genericIdx).toBeGreaterThan(0);
-      expect(quickStateIdx).toBeLessThan(genericIdx);
+  describe("list empty state wiring", () => {
+    it("renders one SidebarListEmptyState for every empty branch, resolved before the list", () => {
+      expect(source).toContain("resolveSidebarListEmpty({");
+      const emptyIdx = source.indexOf("{listEmpty !== null ? (");
+      const listIdx = source.indexOf(") : groupedSections ? (");
+      expect(emptyIdx).toBeGreaterThan(0);
+      expect(emptyIdx).toBeLessThan(listIdx);
+      expect(source.match(/<SidebarListEmptyState\b/g) ?? []).toHaveLength(1);
     });
 
-    it("splits the no-facet-filter quick-state branch by filter: waiting gets user-cleared, others get filtered-empty", () => {
-      // When the quick-state filter is the only active filter (no facet
-      // filters), zero results for "waiting" means nothing needs attention —
-      // a genuine completion state using user-cleared. Zero results for
-      // "working" or "finished" is a filter mismatch — those use
-      // filtered-empty with recovery actions.
-      const branchStart = source.indexOf(
-        "showQuickStateEmptyState && !hasFacetFiltersActive && !hasQuery ?"
-      );
-      const branchEnd = source.indexOf(
-        ") : showQuickStateEmptyState && hasFacetFiltersActive ?",
-        branchStart
-      );
-      const branch = source.slice(branchStart, branchEnd);
-      expect(branch).toContain("<EmptyState");
-      expect(branch).toContain('variant="user-cleared"');
-      expect(branch).toContain('variant="filtered-empty"');
-      expect(branch).toContain('title="All caught up"');
-      expect(branch).toContain('quickStateFilter === "waiting"');
-      expect(branch).toContain(
-        `No \${QUICK_STATE_LABELS[quickStateFilter].toLowerCase()} worktrees`
-      );
-      expect(branch).toContain("setQuickStateFilter");
-      expect(branch).not.toContain("clearAllFilters");
-    });
-
-    it("uses sentence-case copy in the facet-filtered quick-state branch — issue #9664", () => {
-      // When the quick-state filter and one or more facet filters are active
-      // together and produce zero results, the title must stay sentence-case
-      // per the CLAUDE.md microcopy rule — no title-cased filter label or
-      // "N filters" suffix interpolated mid-sentence. The branch reuses the
-      // generic filtered-empty copy: a search-aware "No matches for ..." when a
-      // query is present, "No matching worktrees" otherwise.
-      const branchStart = source.indexOf("showQuickStateEmptyState && hasFacetFiltersActive ?");
-      const branchEnd = source.indexOf(") : filteredWorktrees.length === 0 &&", branchStart);
-      const branch = source.slice(branchStart, branchEnd);
-      expect(branch).toContain('"No matching worktrees"');
-      expect(branch).toContain('No matches for "${truncateSearchQuery(deferredQuery.trim())}"');
-      // The title gates on the deferred query — same source the filtered list is
-      // computed from — not the instant hasQuery flag, which could diverge for a
-      // render and render `No matches for ""` (issue #10314). The search-aware
-      // copy is the gate's truthy arm, the plain copy the fallback — guard
-      // against an inverted ternary by checking the query arm comes first.
-      const gateIdx = branch.indexOf("deferredQuery.trim()");
-      const queryIdx = branch.indexOf(
-        'No matches for "${truncateSearchQuery(deferredQuery.trim())}"'
-      );
-      const fallbackIdx = branch.indexOf('"No matching worktrees"');
-      expect(gateIdx).toBeLessThan(queryIdx);
-      expect(queryIdx).toBeLessThan(fallbackIdx);
-      expect(branch).not.toContain("hasQuery");
-      // The old title-cased, count-suffixed copy is gone.
-      expect(branch).not.toContain("QUICK_STATE_LABELS[quickStateFilter]");
-      expect(branch).not.toContain("activeFacetFilterCount");
-      expect(branch).toContain('variant="filtered-empty"');
-    });
-
-    it("renders dual recovery actions in the facet-filtered branch: clear filters and open overview — issues #7971, #8383", () => {
-      // The user-cleared variant (only quick-state, no facets) forbids actions
-      // by design — completed-result states stay quiet per CLAUDE.md. The
-      // facet-filtered branch carries both recovery paths: "Show all
-      // worktrees" clears filters; "Open overview" gives an alternative
-      // escape to the full worktrees overview modal (#8383).
-      const branchStart = source.indexOf("showQuickStateEmptyState && hasFacetFiltersActive ?");
-      const branchEnd = source.indexOf(") : filteredWorktrees.length === 0 &&", branchStart);
-      const branch = source.slice(branchStart, branchEnd);
-      expect(branch).toMatch(/onClick=\{clearAllFilters\}[\s\S]*?>\s*Show all worktrees\s*</);
-      expect(branch).toMatch(/onClick=\{onOpenOverview\}[\s\S]*?>\s*Open overview\s*</);
-      // Two Button primitives — "Show all worktrees" and "Open overview" — and
-      // no hand-rolled <button> beside them.
-      const buttonMatches = branch.match(/<Button\b/g) ?? [];
-      expect(buttonMatches).toHaveLength(2);
-      expect(branch).not.toMatch(/<button\b/);
-    });
-
-    it("renders the dual recovery actions in the quick-state branch with the overview shortcut in a tooltip — issue #8383", () => {
-      // The "Open overview" buttons surface the keyboard shortcut in a Tooltip
-      // (label + chord), matching the toolbar pattern, never a native title.
-      // The old "Show all states" / "Clear all filters" strings from the
-      // pre-#6934 dual-CTA shape must not reappear.
-      expect(source).not.toContain("Show all states");
-      expect(source).not.toContain("Clear all filters");
-      expect(source).not.toContain('title={formatButtonTitle("Open overview"');
-      const overviewTooltips = [
-        ...source.matchAll(
-          /<Tooltip>\s*<TooltipTrigger asChild>\s*<Button\b[^>]*onClick=\{onOpenOverview\}[^>]*aria-keyshortcuts=\{overviewAriaShortcut\}[^>]*>\s*Open overview\s*<\/Button>\s*<\/TooltipTrigger>\s*<TooltipContent[^>]*>\s*\{createTooltipContent\("Open overview", overviewShortcut\)\}/g
-        ),
-      ];
-      expect(overviewTooltips).toHaveLength(3);
-    });
-
-    it("does not render a description in the quick-state branch", () => {
-      // The user-cleared variant forbids description by design; the
-      // filtered-empty sidebar variant omits description per CLAUDE.md
-      // empty-state rules.
-      const branchStart = source.indexOf(
-        "showQuickStateEmptyState && !hasFacetFiltersActive && !hasQuery ?"
-      );
-      const branchEnd = source.indexOf(") : filteredWorktrees.length === 0 &&", branchStart);
-      const branch = source.slice(branchStart, branchEnd);
-      expect(branch).not.toMatch(/description=/);
-    });
-
-    it("renders Show all worktrees and Open overview buttons in the non-waiting filtered-empty branch — issue #8650", () => {
-      // The working/finished filtered-empty branch must include both recovery
-      // buttons, consistent with all other filtered-empty branches (#8383).
-      const branchStart = source.indexOf(
-        "showQuickStateEmptyState && !hasFacetFiltersActive && !hasQuery ?"
-      );
-      const branchEnd = source.indexOf(
-        ") : showQuickStateEmptyState && hasFacetFiltersActive ?",
-        branchStart
-      );
-      const branch = source.slice(branchStart, branchEnd);
-      expect(branch).toMatch(
-        /onClick=\{\(\) => setQuickStateFilter\("all"\)\}[\s\S]*?>\s*Show all worktrees\s*</
-      );
-      expect(branch).toMatch(/onClick=\{onOpenOverview\}[\s\S]*?>\s*Open overview\s*</);
-    });
-
-    it("renders the popover-filtered empty state via the EmptyState primitive with a noun-phrase title", () => {
-      const branchStart = source.indexOf(") : filteredWorktrees.length === 0 &&");
-      const branchEnd = source.indexOf("groupedSections ?", branchStart);
-      const branch = source.slice(branchStart, branchEnd);
-      expect(branch).toContain("<EmptyState");
-      expect(branch).toContain('variant="filtered-empty"');
-      expect(branch).toContain('"No matching worktrees"');
-      // The title gates on the deferred query (consistent with the filtered
-      // list) rather than the instant hasQuery flag.
-      expect(branch).toMatch(/deferredQuery\.trim\(\)/);
-      expect(branch).toMatch(/truncateSearchQuery/);
-      expect(branch).toMatch(/onClick=\{clearAllFilters\}[\s\S]*?>\s*Show all worktrees\s*</);
-      expect(branch).toMatch(/onClick=\{onOpenOverview\}[\s\S]*?>\s*Open overview\s*</);
+    it("hands focus to the search field before each recovery action unmounts its button", () => {
+      for (const handler of [
+        "handleShowAllMatches",
+        "handleClearSearch",
+        "handleClearAllFilters",
+      ]) {
+        const body = source.match(
+          new RegExp(`const ${handler} = \\(\\) => \\{([\\s\\S]*?)\\n  \\};`)
+        );
+        expect(body, handler).not.toBeNull();
+        expect(body?.[1]?.trim().startsWith("searchInputRef.current?.focus();")).toBe(true);
+      }
     });
   });
 });
@@ -1864,18 +1734,17 @@ describe("SidebarContent reconnecting indicator — issue #8074", () => {
   it("keeps the reconnecting badge on one line and moves the relative time into a tooltip — issue #10727", () => {
     // The escalated string "Reconnecting… last updated X ago" used to render
     // inline with no width constraint, wrapping and breaking the header layout.
-    // Both badge branches must now stay single-line (whitespace-nowrap) and the
-    // text size must match across them (text-xs parity), scoped to the badge so
-    // an unrelated element keeping these classes can't mask a regression.
-    // Asserted as a rule over both matched badges rather than as two literal
-    // class strings: the muted branch's colour token is free to change, the
-    // single-line + shared-text-size contract is not.
-    const badges = [
+    // The mark (one shape for both states, drawn beside the title or on its
+    // own row) must stay single-line (whitespace-nowrap) at text-xs, scoped to
+    // the badge so an unrelated element keeping these classes can't mask a
+    // regression. Escalation steps the words up a text tier rather than into a
+    // status colour, which has no contrast floor across the themes (#15105).
+    const marks = [
       ...badge.matchAll(/inline-flex items-center gap-1 whitespace-nowrap shrink-0 ([^"]*)"/g),
     ].map((m) => m[1] ?? "");
-    expect(badges).toHaveLength(2);
-    for (const cls of badges) expect(cls).toContain("text-xs");
-    expect(badges.filter((cls) => cls.includes("text-status-warning"))).toHaveLength(1);
+    expect(marks).toHaveLength(1);
+    expect(marks[0]).toContain("text-xs");
+    expect(badge).not.toMatch(/text-status-warning/);
     // The relative-time detail moved off the visible badge into hover tooltip
     // content; the old inline combined template literal must be gone (the
     // explanatory comment at the tick may still mention the phrasing).

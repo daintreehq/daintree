@@ -5,6 +5,7 @@ export const CODEX_METHOD_CHANNELS = {
   readSubagentTranscript: "codex:read-subagent-transcript",
   resolveResumeLatestSession: "codex:resolve-resume-latest-session",
   findSessions: "codex:find-sessions",
+  matchRestoreSessions: "codex:match-restore-sessions",
   readQuota: "codex:read-quota",
   refreshQuota: "codex:refresh-quota",
 } as const satisfies Record<string, keyof IpcInvokeMap>;

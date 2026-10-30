@@ -16,17 +16,62 @@ import {
 import { usePanelStore } from "@/store";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { actionService } from "@/services/ActionService";
+import { notify } from "@/lib/notify";
+import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { MAX_ASSISTANT_SLOTS, assistantSlotKey } from "@shared/config/assistantSlots";
 import { CLOSE_CONFIRM_AGENT_STATES } from "@shared/types/agent";
 import { isPtyPanel } from "@shared/types/panel";
+import type { HelpPastSession } from "@shared/types/ipc/help";
+import type { HelpPastSessionPickOutcome } from "@/services/actions/definitions/helpActions";
 import type { HelpSessionTab } from "./HelpSessionTabs";
-import { trimSessionTabTitle } from "./sessionTabTitle";
+import { sessionSlotLabel, trimSessionTabTitle } from "./sessionTabTitle";
+import { isListedAssistantAgent, type PendingCloseCost } from "./pastSessionsNote";
+
+/** How a closed lane's conversation comes back (#15385). */
+export type ClosedSessionRecovery =
+  | { kind: "reopen"; agentId: HelpPastSession["agentId"]; sessionId: string }
+  // A listed agent whose conversation id this lane never learned (a fresh Codex
+  // lane): the conversation is in past sessions, but not addressable from here.
+  | { kind: "past-sessions" };
+
+export const CLOSED_SESSION_REOPEN_LABEL = "Reopen";
+export const CLOSED_SESSION_FIND_LABEL = "Past sessions…";
+
+/**
+ * A lane named the way a confirm or notice names it. A task title is free text, so
+ * it is quoted the way every confirm quotes the entity it names, and given whole:
+ * two tasks that share an opening would otherwise read the same. `Session N` is
+ * already a name and reads wrong in quotes.
+ */
+function spokenLaneLabel(tab: HelpSessionTab | undefined): string {
+  if (!tab) return "this session";
+  return tab.fullTitle !== undefined ? `'${tab.fullTitle}'` : tab.label;
+}
+
+/**
+ * The lane on screen, paused on a conversation main captured for it (#14981): no
+ * terminal, and the agent a fresh start runs on, the one the conversation had.
+ */
+export interface PausedLane {
+  workspaceId: string;
+  slot: number;
+  agentId: string;
+  /** Its assistant is still running on the host, so a restart stops it. */
+  live: boolean;
+}
+
+interface PendingRestart {
+  slot: number;
+  /** Set when the request was for a paused lane rather than a running one. */
+  paused: PausedLane | null;
+}
 
 interface UseHelpSessionLanesOptions {
   panelRef: RefObject<HTMLElement | null>;
   activeSlot: number;
   activeWorkspaceId: string | null;
   terminalId: string | null;
+  pausedLane: PausedLane | null;
 }
 
 // The session-lane tab strip: its tab model, the select/close/restart handlers,
@@ -37,24 +82,31 @@ export function useHelpSessionLanes({
   activeSlot,
   activeWorkspaceId,
   terminalId,
+  pausedLane,
 }: UseHelpSessionLanesOptions) {
-  // The lane a restart is waiting on confirmation for. The header's overflow item
-  // and every tab's own menu share it, so the lane that restarts is the one the
-  // request named rather than whichever is in front when the user confirms.
-  const [pendingRestartSlot, setPendingRestartSlot] = useState<number | null>(null);
+  // The lane a restart is waiting on confirmation for. The header's overflow item,
+  // every tab's own menu and the paused lane's own button share it, so the lane
+  // that restarts is the one the request named rather than whichever is in front
+  // when the user confirms.
+  const [pendingRestart, setPendingRestart] = useState<PendingRestart | null>(null);
   // Where the restart confirm hands focus back: a tab menu's item is gone by the
   // time the dialog closes, but the lane's tab survives a restart. A ref because
   // the dialog resolves it after its exit animation, once the pending slot is
   // already cleared.
   const restartFocusSlotRef = useRef<number | null>(null);
-  // The lane a tab's close button is waiting on confirmation for (#12108).
-  // Null means no close is pending — closing is destructive (the conversation
-  // is discarded, not paused), so it takes the same gate the Stop control uses.
+  // The lane a tab's close is waiting on confirmation for (#12108). Only a
+  // conversation the app can't bring back asks (#15385); every other close acts
+  // at once and offers the way back instead.
   const [pendingCloseSlot, setPendingCloseSlot] = useState<number | null>(null);
+  const [pendingCloseCost, setPendingCloseCost] = useState<PendingCloseCost | null>(null);
   // The lane focus should land on once a confirmed close removes a background
   // lane: its neighbour, the following one first. Null when the lane being
   // closed is the selected one — focus then follows the store's new selection.
   const [pendingCloseSuccessor, setPendingCloseSuccessor] = useState<number | null>(null);
+  // The lane the confirm was asked about, kept past its answer: the dialog
+  // resolves its focus target after the exit animation, by when the pending slot
+  // is cleared, and a cancelled close has to land back on this lane's tab.
+  const closeFocusSlotRef = useRef<number | null>(null);
 
   // --- Parallel lanes (#12108) -------------------------------------------
   // One base for the whole tablist/tabpanel relationship. Both ends have to name
@@ -93,8 +145,10 @@ export function useHelpSessionLanes({
   );
 
   // The header's "Restart conversation" gate, per lane, so each tab's menu offers
-  // the same item exactly where the overflow menu would for that lane.
-  const laneCanRestart = useHelpPanelStore(
+  // the same item exactly where the overflow menu would for that lane. A paused
+  // lane joins it below: only the lane on screen is peeked, so a background tab
+  // offers it once it is selected.
+  const laneIsLive = useHelpPanelStore(
     useShallow((s) =>
       openSlots.map((slot) => {
         const lane = selectSlot(s, slot);
@@ -145,14 +199,14 @@ export function useHelpSessionLanes({
           //
           // A task title replaces the number rather than joining it: the strip is
           // narrow, and the number was only ever standing in for a name.
-          label: task?.label ?? `Session ${slot + 1}`,
+          label: task?.label ?? sessionSlotLabel(slot),
           fullTitle: task?.fullTitle,
           agentState: laneAgentStates[index],
           agentId: laneAgentIds[index] ?? null,
-          canRestart: laneCanRestart[index],
+          canRestart: laneIsLive[index] || pausedLane?.slot === slot,
         };
       }),
-    [openSlots, laneAgentStates, laneTaskTitles, laneAgentIds, laneCanRestart]
+    [openSlots, laneAgentStates, laneTaskTitles, laneAgentIds, laneIsLive, pausedLane]
   );
 
   // Bring back the tabs for lanes whose conversations an eviction or crash
@@ -190,11 +244,12 @@ export function useHelpSessionLanes({
     };
   }, [activeWorkspaceId, openSlots.length, terminalId]);
 
-  const handleOpenParallelSession = useCallback(() => {
+  const handleOpenParallelSession = useCallback((): number | null => {
     const slot = useHelpPanelStore.getState().openSlot();
-    if (slot === null) return;
+    if (slot === null) return null;
     useHelpPanelStore.getState().setOpen(true);
     useHelpPanelStore.getState().requestFocus();
+    return slot;
   }, []);
 
   // One session on a named agent (#13442); the default stays where it is.
@@ -215,10 +270,77 @@ export function useHelpSessionLanes({
     useHelpPanelStore.getState().requestFocus();
   }, []);
 
+  /**
+   * What closing this lane would end, read at the moment of the close. The
+   * conversation id is the AGENT'S (what `help.resumePastSession` takes), not the
+   * lane's provisioning `sessionId`: a live lane carries it on its terminal from
+   * spawn (minted for Claude, carried over for a resumed lane), a dormant tab in
+   * its captured resume entry. A fresh Codex lane has none until a capture.
+   */
+  const readLaneForClose = useCallback(
+    (slot: number) => {
+      const state = useHelpPanelStore.getState();
+      const lane = selectSlot(state, slot);
+      const panel = lane.terminalId
+        ? usePanelStore.getState().panelsById[lane.terminalId]
+        : undefined;
+      const pty = panel && isPtyPanel(panel) ? panel : undefined;
+      const captured =
+        !lane.terminalId && activeWorkspaceId
+          ? state.hibernateSessions[assistantSlotKey(activeWorkspaceId, slot)]
+          : undefined;
+      const agentId = lane.agentId ?? captured?.agentId ?? null;
+      const working =
+        pty?.agentState !== undefined && CLOSE_CONFIRM_AGENT_STATES.has(pty.agentState);
+      // A working agent has a conversation even when the touched latch, which
+      // only watches the lane on screen, never saw it start.
+      const hasConversation = lane.conversationTouched || Boolean(captured) || working;
+      const conversationId = pty?.agentSessionId || captured?.sessionId || null;
+      const recovery: ClosedSessionRecovery | null =
+        hasConversation && isListedAssistantAgent(agentId)
+          ? conversationId
+            ? { kind: "reopen", agentId, sessionId: conversationId }
+            : { kind: "past-sessions" }
+          : null;
+      return {
+        agentId,
+        working,
+        dormant: Boolean(captured),
+        // Ending it costs something the app can't give back. A working agent
+        // alone doesn't ask: Reopen brings its conversation back, and "working"
+        // is a guess from PTY output that a resume's transcript redraw also
+        // trips, which made the same close ask one time and not the next.
+        needsConfirm: hasConversation && recovery === null,
+        recovery,
+      };
+    },
+    [activeWorkspaceId]
+  );
+
+  const reopenClosedSession = useCallback((recovery: ClosedSessionRecovery) => {
+    void (async () => {
+      if (recovery.kind === "reopen") {
+        const result = await actionService.dispatch<{ outcome: HelpPastSessionPickOutcome }>(
+          "help.resumePastSession",
+          { agentId: recovery.agentId, sessionId: recovery.sessionId },
+          { source: "user" }
+        );
+        // Every tab filled again since the close: the picker asks which one to
+        // give up rather than this replacing one unasked.
+        if (!result.ok || result.result?.outcome !== "lanes-full") return;
+      }
+      await actionService.dispatch("help.resumePastSession", undefined, { source: "user" });
+    })();
+  }, []);
+
   const closeSlotNow = useCallback(
     (slot: number) => {
       const state = useHelpPanelStore.getState();
       const lane = state.sessions[slot];
+      // Read before the teardown below discards the lane's resume pointer.
+      const { recovery } = readLaneForClose(slot);
+      const label = spokenLaneLabel(sessionTabs.find((tab) => tab.slot === slot));
+      const isLastLane = !selectOpenSlots(state).some((open) => open !== slot);
       // Revoke and kill BEFORE dropping the lane. `stop()` only disarms
       // listeners — it deliberately does not end the session — so releasing the
       // controller first would strand a live agent with nothing to shut it down.
@@ -243,17 +365,39 @@ export function useHelpSessionLanes({
       // An unbound last lane — dormant, or closed mid-launch before anything
       // bound — never reaches `endSession`'s slide-out, but the recreated slot 0
       // still gets a fresh controller that would auto-launch into the open panel.
-      if (!selectOpenSlots(state).some((open) => open !== slot)) state.setOpen(false);
+      if (isLastLane) state.setOpen(false);
       releaseHelpSessionController(slot);
       state.closeSlot(slot);
+
+      if (!recovery || !activeWorkspaceId) return;
+      // A toast for every close, not a strip inside the panel: the strip sat
+      // under the terminal where it went unseen, and the last lane's close slides
+      // the panel away with it, so the way back needs one place that is always
+      // in view.
+      notify({
+        type: "info",
+        title: `${label} closed`,
+        message: "Its conversation stays in past sessions",
+        priority: "high",
+        transient: true,
+        duration: UNDO_TOAST_DURATION_MS,
+        // A way back held behind quiet hours would expire unseen, the same
+        // reason an Undo toast is urgent by default.
+        urgent: true,
+        context: { eventKind: "uiFeedback" },
+        action: {
+          label:
+            recovery.kind === "reopen" ? CLOSED_SESSION_REOPEN_LABEL : CLOSED_SESSION_FIND_LABEL,
+          onClick: () => reopenClosedSession(recovery),
+        },
+      });
     },
-    [activeWorkspaceId]
+    [activeWorkspaceId, readLaneForClose, sessionTabs, reopenClosedSession]
   );
 
   // Same "something to lose" gate the Stop control uses, but evaluated against
-  // the lane BEING CLOSED OR RESTARTED rather than the one on screen — a
-  // background lane is exactly where a working agent goes unnoticed. Both
-  // discard the lane's conversation, so both take this one gate.
+  // the lane BEING RESTARTED rather than the one on screen — a background lane
+  // is exactly where a working agent goes unnoticed.
   const laneNeedsDiscardConfirm = useCallback((slot: number) => {
     const lane = selectSlot(useHelpPanelStore.getState(), slot);
     if (lane.conversationTouched) return true;
@@ -265,19 +409,27 @@ export function useHelpSessionLanes({
 
   const handleCloseSlot = useCallback(
     (slot: number) => {
-      if (laneNeedsDiscardConfirm(slot)) {
+      const lane = readLaneForClose(slot);
+      if (lane.needsConfirm) {
         const index = sessionTabs.findIndex((tab) => tab.slot === slot);
         const successor =
           slot === activeSlot
             ? null
             : (sessionTabs[index + 1]?.slot ?? sessionTabs[index - 1]?.slot ?? null);
         setPendingCloseSuccessor(successor);
+        setPendingCloseCost({
+          working: lane.working,
+          agentId: lane.agentId,
+          dormant: lane.dormant,
+          sole: sessionTabs.length === 1,
+        });
+        closeFocusSlotRef.current = slot;
         setPendingCloseSlot(slot);
         return;
       }
       closeSlotNow(slot);
     },
-    [laneNeedsDiscardConfirm, closeSlotNow, sessionTabs, activeSlot]
+    [readLaneForClose, closeSlotNow, sessionTabs, activeSlot]
   );
 
   const handleConfirmCloseSlot = useCallback(() => {
@@ -290,40 +442,54 @@ export function useHelpSessionLanes({
     setPendingCloseSlot(null);
   }, []);
 
-  // A task title is free text, so it is quoted the way every confirm quotes the entity
-  // it names, and given whole: two tasks that share an opening would otherwise ask
-  // the same question. `Session N` is already a name and reads wrong in quotes.
-  const pendingCloseTab =
-    pendingCloseSlot === null
-      ? undefined
-      : sessionTabs.find((tab) => tab.slot === pendingCloseSlot);
-  const pendingCloseLabel = !pendingCloseTab
-    ? "this session"
-    : pendingCloseTab.fullTitle !== undefined
-      ? `'${pendingCloseTab.fullTitle}'`
-      : pendingCloseTab.label;
+  const pendingCloseLabel = spokenLaneLabel(
+    pendingCloseSlot === null ? undefined : sessionTabs.find((tab) => tab.slot === pendingCloseSlot)
+  );
 
   // Read at call time rather than from the render that offered the item: a
   // confirm can outlive its lane, and acquiring a controller for a closed slot
-  // would mint one with nothing to run.
-  const restartSlotNow = useCallback((slot: number) => {
-    const lane = selectSlot(useHelpPanelStore.getState(), slot);
-    if (!lane.terminalId || !lane.agentId) return;
-    acquireHelpSessionController(slot).newSession();
-  }, []);
+  // would mint one with nothing to run. A paused request also has to find the
+  // pause it was asked about still in view: a lane resumed meanwhile, or a pause
+  // this view no longer sees, is not what the user agreed to throw away.
+  const restartSlotNow = useCallback(
+    (slot: number, paused: PausedLane | null) => {
+      const lane = selectSlot(useHelpPanelStore.getState(), slot);
+      if (paused) {
+        if (
+          lane.terminalId ||
+          pausedLane?.slot !== slot ||
+          pausedLane.workspaceId !== paused.workspaceId ||
+          pausedLane.agentId !== paused.agentId
+        ) {
+          return;
+        }
+        acquireHelpSessionController(slot).newSession(paused.agentId);
+        return;
+      }
+      if (!lane.terminalId || !lane.agentId) return;
+      acquireHelpSessionController(slot).newSession();
+    },
+    [pausedLane]
+  );
 
   const handleRestartSlot = useCallback(
     (slot: number) => {
       const lane = selectSlot(useHelpPanelStore.getState(), slot);
+      if (!lane.terminalId && pausedLane?.slot === slot) {
+        // Always asks: the captured conversation is exactly what a restart discards.
+        restartFocusSlotRef.current = slot;
+        setPendingRestart({ slot, paused: pausedLane });
+        return;
+      }
       if (!lane.terminalId || !lane.agentId) return;
       if (laneNeedsDiscardConfirm(slot)) {
         restartFocusSlotRef.current = slot;
-        setPendingRestartSlot(slot);
+        setPendingRestart({ slot, paused: null });
         return;
       }
-      restartSlotNow(slot);
+      restartSlotNow(slot, null);
     },
-    [laneNeedsDiscardConfirm, restartSlotNow]
+    [pausedLane, laneNeedsDiscardConfirm, restartSlotNow]
   );
 
   // The header's overflow item and the revoked-session banner act on the lane on screen.
@@ -333,13 +499,13 @@ export function useHelpSessionLanes({
   );
 
   const handleConfirmRestartSlot = useCallback(() => {
-    const slot = pendingRestartSlot;
-    setPendingRestartSlot(null);
-    if (slot !== null) restartSlotNow(slot);
-  }, [pendingRestartSlot, restartSlotNow]);
+    const pending = pendingRestart;
+    setPendingRestart(null);
+    if (pending) restartSlotNow(pending.slot, pending.paused);
+  }, [pendingRestart, restartSlotNow]);
 
   const handleCancelRestartSlot = useCallback(() => {
-    setPendingRestartSlot(null);
+    setPendingRestart(null);
   }, []);
 
   const resolveRestartFocusTarget = useCallback(
@@ -355,6 +521,15 @@ export function useHelpSessionLanes({
   const resolveCloseFocusTarget = useCallback(() => {
     const panel = panelRef.current;
     if (!panel) return null;
+    // Cancelled: the lane is still there. A tab menu's item can't take focus back,
+    // and its neighbour is not where the user was.
+    const kept =
+      closeFocusSlotRef.current === null
+        ? null
+        : panel.querySelector<HTMLElement>(
+            `[role="tab"][data-slot="${closeFocusSlotRef.current}"]`
+          );
+    if (kept) return kept;
     const successor =
       pendingCloseSuccessor === null
         ? null
@@ -375,12 +550,14 @@ export function useHelpSessionLanes({
     handleCloseSlot,
     handleRestartSlot,
     handleRestartActiveSlot,
-    pendingRestartSlot,
+    pendingRestartSlot: pendingRestart?.slot ?? null,
+    pendingRestartPaused: pendingRestart?.paused ?? null,
     handleConfirmRestartSlot,
     handleCancelRestartSlot,
     resolveRestartFocusTarget,
     pendingCloseSlot,
     pendingCloseLabel,
+    pendingCloseCost,
     handleConfirmCloseSlot,
     handleCancelCloseSlot,
     resolveCloseFocusTarget,

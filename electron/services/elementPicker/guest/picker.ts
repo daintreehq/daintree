@@ -90,6 +90,90 @@ const PROBE_SIZE = 100;
 /** 16px line plus padding; the label is one line. */
 const LABEL_HEIGHT = 20;
 
+/**
+ * The overlay's colours, fixed rather than themed: it draws inside a page
+ * whose palette nobody chose for it. No single colour survives every page, so
+ * a selection's stroke carries a dark keyline and a white halo outside it,
+ * one of the three always contrasting with whatever is underneath.
+ * Hover is neutral and dashed, its dashes alternating dark and light so they
+ * read as dashes on any page; a selection is the one coloured, solid thing —
+ * blue for an element, violet for a component, as design tools draw them.
+ */
+const INK = {
+  hover: "rgba(17, 24, 39, 0.9)",
+  element: "#2563eb",
+  component: "#7c3aed",
+  halo: "rgba(255, 255, 255, 0.95)",
+  keyline: "rgba(10, 14, 22, 0.45)",
+  chip: "#1b1e25",
+  chipEdge: "rgba(255, 255, 255, 0.16)",
+  chipText: "#f4f6fb",
+  chipMuted: "#aeb6c6",
+} as const;
+/** Screen pixels kept between a label and the viewport edge. */
+const VIEWPORT_INSET = 4;
+/** Screen pixels a component's group outline stands off its roots. */
+const GROUP_PADDING = 6;
+const LABEL_MAX_WIDTH = 360;
+const WIDEN_KEY = /Mac|iPhone|iPad/.test(
+  typeof navigator === "object" ? navigator.platform || navigator.userAgent : ""
+)
+  ? "⌥↑"
+  : "Alt ↑";
+
+/** A rectangle in viewport coordinates. */
+interface Box {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+interface FrameLook {
+  /** Stroke width in screen pixels. */
+  width: number;
+  color: string;
+  dashed: boolean;
+  /** A dark ring between the stroke and its white halo, for the selection strokes. */
+  keyline: boolean;
+}
+
+const HOVER_FRAME: FrameLook = { width: 1, color: INK.hover, dashed: true, keyline: false };
+/** A selection; painted blue for an element and violet for a component. */
+const ELEMENT_FRAME: FrameLook = { width: 2, color: INK.element, dashed: false, keyline: true };
+/** A selection held in Browse: shown rather than offered, so thinner, never fainter. */
+const BROWSE_FRAME: FrameLook = { width: 1, color: INK.element, dashed: false, keyline: true };
+/** Each root of a component selected as a group: marked, and quieter than the group. */
+const ROOT_FRAME: FrameLook = { width: 1, color: INK.component, dashed: false, keyline: false };
+
+/** A run of chip text. Context gives way before the name; a kind or key never does. */
+interface ChipPart {
+  text: string;
+  role: "name" | "context" | "kind" | "key";
+}
+
+type ChipSide = "above" | "below" | "inside";
+
+interface ChipSpot {
+  side: ChipSide;
+  left: number;
+  top: number;
+  fits: boolean;
+}
+
+function unionOf(boxes: readonly Box[]): Box {
+  return {
+    left: Math.min(...boxes.map((box) => box.left)),
+    top: Math.min(...boxes.map((box) => box.top)),
+    right: Math.max(...boxes.map((box) => box.right)),
+    bottom: Math.max(...boxes.map((box) => box.bottom)),
+  };
+}
+
+function overlaps(a: Box, b: Box): boolean {
+  return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+}
+
 /** Keys the arrow walk leaves to a page control that has focus. */
 const CONTROL_ROLES: ReadonlySet<string> = new Set([
   "textbox",
@@ -389,6 +473,13 @@ export function createPicker(host: PickerHost): PickerHandle {
   let scope: ScopeState = ELEMENT_SCOPE;
   /** The primary selected element's chain, as its framework described it, for widening. */
   let selectedChain: { framework: string; chain: ComponentChain } | null = null;
+  /**
+   * The component Alt+ArrowUp would select next, by name: undefined until the
+   * key hints first ask, null when the page could not find one.
+   */
+  let widening: string | null | undefined = undefined;
+  /** Crosshair over the whole page while Inspect is on. */
+  let cursorSheet: CSSStyleSheet | null = null;
   /** The latest pointer hit not yet resolved; `undefined` when nothing is pending. */
   let pendingHit: Element | null | undefined = undefined;
   let frame = 0;
@@ -431,6 +522,7 @@ export function createPicker(host: PickerHost): PickerHandle {
   const reported = new Set<string>();
   const teardown: Array<() => void> = [];
   const selectTeardown: Array<() => void> = [];
+  const trackTeardown: Array<() => void> = [];
   const overlayTag = "daintree-element-picker-" + Math.random().toString(36).slice(2, 10);
   const handshakeEvent = channelEvent(host.channel, "handshake");
   const extractEvent = channelEvent(host.channel, "extract");
@@ -802,11 +894,14 @@ export function createPicker(host: PickerHost): PickerHandle {
     return fields;
   }
 
-  function nearestName(chain: ComponentChain): string | null {
-    const nearest = chain.components.find((record) => record.componentId === chain.nearestId);
+  function recordName(record: ComponentChain["components"][number] | undefined): string | null {
     // Page data in the declared shape, unchecked below the record.
-    const name: unknown = nearest?.name?.value;
+    const name: unknown = record?.name?.value;
     return typeof name === "string" && name.length > 0 ? clamp(name, LIMITS.componentName) : null;
+  }
+
+  function nearestName(chain: ComponentChain): string | null {
+    return recordName(chain.components.find((record) => record.componentId === chain.nearestId));
   }
 
   // Hover never walks ancestry: it is paid for on every element the pointer crosses.
@@ -1017,6 +1112,7 @@ export function createPicker(host: PickerHost): PickerHandle {
     // was told about: what it was told is element scope.
     if (reportedScope.kind === "element") scope = ELEMENT_SCOPE;
     selectedChain = chain;
+    widening = undefined;
     lastSelection = text;
     if (cut !== null) host.post({ type: "runtimeIssue", code: "capacity", detail: cut });
     host.post(event);
@@ -1099,8 +1195,28 @@ export function createPicker(host: PickerHost): PickerHandle {
    * names its components and still knows what each one rendered.
    */
   function widen(): void {
+    const next = nextComponentOut();
+    if (next === null) return;
+    const { record, found, framework } = next;
+    commit(
+      found.elements.map((root) => ({ hit: root, target: root, picked: false })),
+      {
+        kind: "component",
+        componentId: record.componentId,
+        framework,
+        rootsComplete: found.data.complete === true && !found.truncated,
+      },
+      "user"
+    );
+  }
+
+  function nextComponentOut(): {
+    record: ComponentChain["components"][number];
+    found: NonNullable<ReturnType<typeof locate>>;
+    framework: string;
+  } | null {
     const anchor = primary();
-    if (anchor === null || selectedChain === null) return;
+    if (anchor === null || selectedChain === null) return null;
     const { framework, chain } = selectedChain;
     const scoped = scope.kind === "component" ? scope.componentId : null;
     const current = chain.components.findIndex((record) => record.componentId === scoped);
@@ -1109,18 +1225,22 @@ export function createPicker(host: PickerHost): PickerHandle {
       if (record === undefined || record.name === null) continue;
       const found = locate(framework, { kind: "roots", componentId: record.componentId }, anchor);
       if (found === null || found.elements.length === 0) continue;
-      commit(
-        found.elements.map((root) => ({ hit: root, target: root, picked: false })),
-        {
-          kind: "component",
-          componentId: record.componentId,
-          framework,
-          rootsComplete: found.data.complete === true && !found.truncated,
-        },
-        "user"
-      );
-      return;
+      return { record, found, framework };
     }
+    return null;
+  }
+
+  /**
+   * What the key hints offer Alt+ArrowUp for, found the way the key would
+   * find it, once per selection: a page whose framework cannot list a
+   * component's roots is never shown a key that does nothing there.
+   */
+  function wideningName(): string | null {
+    if (widening === undefined) {
+      const next = nextComponentOut();
+      widening = next === null ? null : recordName(next.record);
+    }
+    return widening;
   }
 
   function setHover(node: Element | null): void {
@@ -1172,6 +1292,8 @@ export function createPicker(host: PickerHost): PickerHandle {
     // worth drawing and must not be kept alive by the picker.
     dropDetached();
     if (hovered !== null && !hovered.isConnected) setHover(null);
+    // Browse that just lost its last selected node has nothing left to track.
+    syncTracking();
     paint();
   }
 
@@ -1265,82 +1387,285 @@ export function createPicker(host: PickerHost): PickerHandle {
 
   type Transform = ReturnType<typeof readTransform>;
 
-  function drawBox(
-    layer: HTMLElement,
-    node: Element,
-    kind: "hover" | "selected",
-    transform: Transform
-  ): void {
+  function boxOf(node: Element): Box {
     const rect = node.getBoundingClientRect();
-    const box = document.createElement("div");
-    style(box, [
-      ["position", "fixed"],
-      ["left", (rect.left - transform.x) / transform.sx + "px"],
-      ["top", (rect.top - transform.y) / transform.sy + "px"],
-      ["width", Math.max(0, rect.width) / transform.sx + "px"],
-      ["height", Math.max(0, rect.height) / transform.sy + "px"],
-      ["box-sizing", "border-box"],
-      ["pointer-events", "none"],
-      ["border", kind === "selected" ? "2px solid #3884ff" : "1px solid rgba(56, 132, 255, 0.9)"],
-      ["background", kind === "selected" ? "rgba(56, 132, 255, 0.16)" : "rgba(56, 132, 255, 0.08)"],
-    ]);
-    layer.appendChild(box);
+    return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
   }
 
   /**
-   * Above the element, else below it, else just inside its top edge — an
-   * element as tall as the viewport has no outside to put a label in — and
-   * kept inside the viewport horizontally, measured once it has a width.
+   * `box` grown by `by` on every side, so a stroke sits outside the element
+   * and never paints over its edge or its text. An edge already flush with
+   * the viewport stays on screen, its stroke drawn inward instead.
    */
-  function drawLabel(layer: HTMLElement, node: Element, transform: Transform): void {
-    const rect = node.getBoundingClientRect();
-    const label = document.createElement("div");
-    // The component its framework named, then the element: a selection can be
-    // widened to the component, so the label says which one that would be.
-    if (hoverName !== null) {
-      const name = document.createElement("span");
-      name.textContent = hoverName;
-      style(name, [["font-weight", "600"]]);
-      label.appendChild(name);
-      label.appendChild(document.createTextNode(" " + describe(node)));
+  function outset(box: Box, by: number): Box {
+    const grown = {
+      left: box.left - by,
+      top: box.top - by,
+      right: box.right + by,
+      bottom: box.bottom + by,
+    };
+    if (box.left >= 0 && grown.left < 0) grown.left = 0;
+    if (box.top >= 0 && grown.top < 0) grown.top = 0;
+    if (box.right <= innerWidth && grown.right > innerWidth) grown.right = innerWidth;
+    if (box.bottom <= innerHeight && grown.bottom > innerHeight) grown.bottom = innerHeight;
+    return grown;
+  }
+
+  /** Viewport coordinates → the overlay's, which an ancestor's transform may scale. */
+  function position(node: HTMLElement, box: Box, transform: Transform): void {
+    style(node, [
+      ["left", (box.left - transform.x) / transform.sx + "px"],
+      ["top", (box.top - transform.y) / transform.sy + "px"],
+    ]);
+  }
+
+  /**
+   * One outline, `pad` screen pixels off `box`, returned as the box its
+   * stroke covers. Every length is divided by the page's scale, so a zoomed
+   * page gets the same strokes, keyline and halo as any other.
+   */
+  function drawFrame(
+    layer: HTMLElement,
+    box: Box,
+    look: FrameLook,
+    transform: Transform,
+    pad = 0
+  ): Box {
+    const unit = 1 / transform.sx;
+    const frame = outset(box, look.width + pad);
+    const node = document.createElement("div");
+    style(node, [
+      ["position", "fixed"],
+      ["width", Math.max(0, frame.right - frame.left) / transform.sx + "px"],
+      ["height", Math.max(0, frame.bottom - frame.top) / transform.sy + "px"],
+      ["box-sizing", "border-box"],
+      ["pointer-events", "none"],
+      ["border", `${look.width * unit}px solid ${look.color}`],
+    ]);
+    if (look.dashed) {
+      // Light dashes painted over the dark stroke: dashed on a light page and
+      // on a dark one, where a halo would have turned the dashes solid white.
+      style(node, [
+        ["outline", `${look.width * unit}px dashed ${INK.halo}`],
+        ["outline-offset", `${-look.width * unit}px`],
+      ]);
     } else {
-      label.textContent = describe(node);
+      // The keyline hugs the stroke, so on a light page it reads as the
+      // stroke's own edge rather than a second rule; the halo goes outside it.
+      const rings = look.keyline
+        ? `0 0 0 ${unit}px ${INK.keyline}, 0 0 0 ${2 * unit}px ${INK.halo}`
+        : `0 0 0 ${unit}px ${INK.halo}`;
+      style(node, [["box-shadow", rings]]);
     }
-    style(label, [
+    position(node, frame, transform);
+    layer.appendChild(node);
+    return frame;
+  }
+
+  /**
+   * A one-line chip: a selection's tag in its outline's colour, or a neutral
+   * dark one — the hover's label, the key hints, a tag in Browse. Built before
+   * it is measured; `placeChip` positions it.
+   */
+  function createChip(
+    layer: HTMLElement,
+    parts: readonly ChipPart[],
+    tone: "neutral" | "element" | "component",
+    transform: Transform,
+    /** Two pixels shorter than a tag, so a chip in a tag's row stops at the outline's halo. */
+    compact = false
+  ): HTMLElement {
+    const unit = 1 / transform.sx;
+    const tag = tone !== "neutral";
+    const chip = document.createElement("div");
+    style(chip, [
       ["position", "fixed"],
       ["left", "0px"],
       ["top", "0px"],
-      ["max-width", "320px"],
-      ["overflow", "hidden"],
-      ["text-overflow", "ellipsis"],
+      ["display", "flex"],
+      ["align-items", "center"],
+      ["gap", 5 * unit + "px"],
+      ["box-sizing", "border-box"],
+      ["max-width", Math.min(LABEL_MAX_WIDTH, innerWidth - 2 * VIEWPORT_INSET) * unit + "px"],
+      ["padding", `${(compact ? 1 : 2) * unit}px ${6 * unit}px`],
+      ["border-radius", 4 * unit + "px"],
+      ["background", tag ? INK[tone] : INK.chip],
+      ["color", INK.chipText],
+      [
+        "box-shadow",
+        tag
+          ? `0 0 0 ${unit}px ${INK.halo}`
+          : `0 0 0 ${unit}px ${INK.chipEdge}, 0 ${unit}px ${3 * unit}px rgba(0, 0, 0, 0.25)`,
+      ],
+      [
+        "font",
+        `500 ${11 * unit}px/${16 * unit}px system-ui, -apple-system, "Segoe UI", sans-serif`,
+      ],
       ["white-space", "nowrap"],
-      ["padding", "2px 6px"],
-      ["border-radius", "4px"],
-      ["background", "rgba(20, 22, 28, 0.92)"],
-      ["color", "#f4f6fb"],
-      ["font", "500 11px/16px system-ui, -apple-system, sans-serif"],
+      ["overflow", "hidden"],
       ["pointer-events", "none"],
     ]);
-    layer.appendChild(label);
-    // Measured as rendered, so a scaled root's larger label is placed by its
-    // real size; the fallback is for a document with no layout to measure.
-    const measured = label.getBoundingClientRect();
-    const width = measured.width;
-    const height = measured.height > 0 ? measured.height : LABEL_HEIGHT;
-    let top = rect.top - height - 2;
-    if (top < 0) top = rect.bottom + 2;
-    if (top + height > innerHeight) top = Math.max(0, rect.top) + 2;
-    top = Math.max(0, Math.min(top, innerHeight - height));
-    const left = Math.max(0, Math.min(rect.left, innerWidth - width));
-    style(label, [
-      ["left", (left - transform.x) / transform.sx + "px"],
-      ["top", (top - transform.y) / transform.sy + "px"],
-    ]);
+    // Context gives way whole before the name loses a character; the name is
+    // cut only when it alone is wider than the chip. A kind or key never is.
+    const yields = parts.some((part) => part.role === "context");
+    for (const part of parts) {
+      const span = document.createElement("span");
+      span.textContent = part.text;
+      if (part.role === "key") {
+        style(span, [
+          ["flex", "none"],
+          ["padding", `0 ${3 * unit}px`],
+          ["border", `${unit}px solid ${INK.chipMuted}`],
+          ["border-radius", 3 * unit + "px"],
+          ["font-size", 10 * unit + "px"],
+          ["line-height", 13 * unit + "px"],
+        ]);
+      } else {
+        style(span, [
+          ["min-width", "0"],
+          ["max-width", "100%"],
+          ["overflow", "hidden"],
+          ["text-overflow", "ellipsis"],
+          [
+            "flex",
+            part.role === "kind" || (part.role === "name" && yields) ? "0 0 auto" : "0 1 auto",
+          ],
+          ["font-weight", part.role === "name" ? "600" : "400"],
+        ]);
+        if (!tag && part.role !== "name") style(span, [["color", INK.chipMuted]]);
+      }
+      chip.appendChild(span);
+    }
+    layer.appendChild(chip);
+    return chip;
+  }
+
+  /** Where a chip `width` wide lines up with `frame`: its left edge, or its right where the left would run off. */
+  function chipLeft(frame: Box, width: number): number {
+    let left = frame.left;
+    if (left + width > innerWidth - VIEWPORT_INSET) left = frame.right - width;
+    return Math.max(VIEWPORT_INSET, Math.min(left, innerWidth - VIEWPORT_INSET - width));
+  }
+
+  /**
+   * Candidate places `gap` off `frame`, in the order given: above or below
+   * it when that stays `VIEWPORT_INSET` inside the viewport, or just inside
+   * its top edge, which always fits — a frame as tall as the viewport has no
+   * outside.
+   */
+  function spotsBeside(
+    frame: Box,
+    left: number,
+    gap: number,
+    height: number,
+    sides: readonly ChipSide[]
+  ): ChipSpot[] {
+    const maxTop = innerHeight - VIEWPORT_INSET - height;
+    return sides.map((side) => {
+      if (side === "above") {
+        const top = frame.top - gap - height;
+        return { side, left, top, fits: top >= VIEWPORT_INSET };
+      }
+      if (side === "below") {
+        const top = frame.bottom + gap;
+        return { side, left, top, fits: top <= maxTop };
+      }
+      return {
+        side,
+        left,
+        top: Math.max(VIEWPORT_INSET, Math.min(frame.top + gap, maxTop)),
+        fits: true,
+      };
+    });
+  }
+
+  /** The first spot that fits and covers none of `avoid`, else the first that fits. */
+  function placeChip(
+    chip: HTMLElement,
+    size: { width: number; height: number },
+    spots: readonly ChipSpot[],
+    avoid: readonly Box[],
+    transform: Transform
+  ): { side: ChipSide; box: Box } {
+    const boxAt = (spot: ChipSpot): Box => ({
+      left: spot.left,
+      top: spot.top,
+      right: spot.left + size.width,
+      bottom: spot.top + size.height,
+    });
+    const chosen =
+      spots.find((spot) => spot.fits && avoid.every((box) => !overlaps(boxAt(spot), box))) ??
+      spots.find((spot) => spot.fits) ??
+      spots[spots.length - 1];
+    if (chosen === undefined)
+      return { side: "inside", box: boxAt({ side: "inside", left: 0, top: 0, fits: true }) };
+    const box = boxAt(chosen);
+    position(chip, box, transform);
+    return { side: chosen.side, box };
+  }
+
+  /** Measured as rendered, so a scaled root's larger chip is placed by its real size. */
+  function sizeOf(chip: HTMLElement): { width: number; height: number } {
+    const rect = chip.getBoundingClientRect();
+    // The fallback is for a document with no layout to measure.
+    return { width: rect.width, height: rect.height > 0 ? rect.height : LABEL_HEIGHT };
+  }
+
+  /** The element as the overlay names it: by its id alone when it has one, the drawer's fuller label otherwise. */
+  function shortName(node: Element): string {
+    const id = node.getAttribute("id");
+    return id !== null && id.length > 0
+      ? clamp(node.localName + "#" + id, LIMITS.label)
+      : describe(node);
+  }
+
+  /** What the selection is, in the drawer's words: the element, or "Component" and its name. */
+  function selectionParts(first: Element): ChipPart[] {
+    if (scope.kind !== "component") return [{ text: shortName(first), role: "name" }];
+    const componentId = scope.componentId;
+    const record = selectedChain?.chain.components.find(
+      (entry) => entry.componentId === componentId
+    );
+    const parts: ChipPart[] = [
+      { text: "Component", role: "kind" },
+      { text: recordName(record) ?? shortName(first), role: "name" },
+    ];
+    if (selection.length > 1) {
+      const count = String(selection.length) + (scope.rootsComplete ? "" : "+");
+      parts.push({ text: `· ${count} roots`, role: "kind" });
+    }
+    return parts;
+  }
+
+  /**
+   * The keys that act on the selection, as the strip names them: the arrow
+   * walk always, and Alt+ArrowUp with the component it would select only
+   * where the page can find that component's roots.
+   */
+  function hintParts(): ChipPart[] {
+    const parts: ChipPart[] = [
+      { text: "↑↓←→", role: "key" },
+      { text: "move", role: "kind" },
+    ];
+    const next = wideningName();
+    if (next !== null)
+      parts.push({ text: WIDEN_KEY, role: "key" }, { text: next, role: "context" });
+    return parts;
+  }
+
+  function contains(outer: Box, inner: Box): boolean {
+    return (
+      inner.left >= outer.left &&
+      inner.right <= outer.right &&
+      inner.top >= outer.top &&
+      inner.bottom <= outer.bottom
+    );
   }
 
   function paint(): void {
     if (disposed) return;
-    if (mode !== "select") {
+    const browsing = mode !== "select";
+    if (browsing && selection.length === 0) {
       if (overlayLayer !== null) overlayLayer.textContent = "";
       return;
     }
@@ -1349,12 +1674,103 @@ export function createPicker(host: PickerHost): PickerHandle {
     if (layer === null) return;
     layer.textContent = "";
     const transform = readTransform();
-    for (const entry of selection) drawBox(layer, entry.target, "selected", transform);
-    if (hovered !== null) {
-      if (!selection.some((entry) => entry.target === hovered)) {
-        drawBox(layer, hovered, "hover", transform);
+    const targets = selection.map((entry) => entry.target);
+    const component = scope.kind === "component";
+    let selected: { frame: Box; tag: HTMLElement; hint: HTMLElement | null } | null = null;
+    const first = targets[0];
+    if (first !== undefined) {
+      const boxes = targets.map(boxOf);
+      // Browse shows the selection held rather than offered: a thinner
+      // outline and a neutral tag, at full contrast, and no keys.
+      const look = browsing ? BROWSE_FRAME : ELEMENT_FRAME;
+      const color = component ? INK.component : INK.element;
+      let frame: Box;
+      if (component && boxes.length > 1) {
+        // One component, however many roots: each root marked thin, and the
+        // group outlined and tagged once around all of them.
+        for (const box of boxes) drawFrame(layer, box, { ...ROOT_FRAME, color }, transform);
+        frame = drawFrame(layer, unionOf(boxes), { ...look, color }, transform, GROUP_PADDING);
+      } else {
+        frame = drawFrame(layer, unionOf(boxes), { ...look, color }, transform);
       }
-      drawLabel(layer, hovered, transform);
+      const tone = browsing ? "neutral" : component ? "component" : "element";
+      const tag = createChip(layer, selectionParts(first), tone, transform);
+      // Keys beside the selection while it has the user's attention: the
+      // pointer on it or off the page, never next to another element's label.
+      const hint =
+        !browsing && (hovered === null || targets.includes(hovered))
+          ? createChip(layer, hintParts(), "neutral", transform, true)
+          : null;
+      selected = { frame, tag, hint };
+    }
+    let hover: { frame: Box; label: HTMLElement } | null = null;
+    // The selection's own tag already names a selected element under the pointer.
+    if (!browsing && hovered !== null && !targets.includes(hovered)) {
+      const frame = drawFrame(layer, boxOf(hovered), HOVER_FRAME, transform);
+      const parts: ChipPart[] = [{ text: shortName(hovered), role: "name" }];
+      // The component a selection here could be widened to.
+      if (hoverName !== null) parts.push({ text: "in " + hoverName, role: "context" });
+      hover = { frame, label: createChip(layer, parts, "neutral", transform) };
+    }
+    // Every chip measured before any is moved, so the layer is laid out once.
+    const tagSize = selected === null ? null : sizeOf(selected.tag);
+    const hintSize = selected?.hint ? sizeOf(selected.hint) : null;
+    const labelSize = hover === null ? null : sizeOf(hover.label);
+    const taken: Box[] = [];
+    let tagSide: ChipSide = "above";
+    if (selected !== null && tagSize !== null) {
+      const { tag } = selected;
+      // Flush with the outline's outer ring rather than its stroke, so no ring pokes out beside the tag.
+      const frame = { ...selected.frame, left: selected.frame.left - 1 };
+      const left = chipLeft(frame, tagSize.width);
+      const spots = spotsBeside(frame, left, 0, tagSize.height, ["above", "below", "inside"]);
+      const placed = placeChip(tag, tagSize, spots, [], transform);
+      tagSide = placed.side;
+      taken.push(placed.box);
+      // Flush on the outline: the corner they share is squared, so it reads as the outline's tab.
+      if (placed.side !== "inside" && left === frame.left) {
+        const radius = 4 / transform.sx + "px";
+        const corners =
+          placed.side === "above"
+            ? `${radius} ${radius} ${radius} 0`
+            : `0 ${radius} ${radius} ${radius}`;
+        style(tag, [["border-radius", corners]]);
+      }
+      if (selected.hint !== null && hintSize !== null) {
+        // In the tag's row, so the selection's chips cover one band of the
+        // page rather than two; under the outline only when the row is full.
+        const beside = placed.box.right + 4;
+        const hintSpots: ChipSpot[] = [
+          {
+            side: placed.side,
+            left: beside,
+            // Level with the tag's far edge: the tag sits on the stroke, the hints clear of it.
+            top: placed.side === "below" ? placed.box.bottom - hintSize.height : placed.box.top,
+            fits: beside + hintSize.width <= innerWidth - VIEWPORT_INSET,
+          },
+          ...spotsBeside(frame, chipLeft(frame, hintSize.width), 3, hintSize.height, [
+            "below",
+            "above",
+            "inside",
+          ]),
+        ];
+        taken.push(placeChip(selected.hint, hintSize, hintSpots, taken, transform).box);
+      }
+    }
+    if (hover !== null && labelSize !== null) {
+      const left = chipLeft(hover.frame, labelSize.width);
+      const spots = spotsBeside(hover.frame, left, 2, labelSize.height, [
+        "above",
+        "below",
+        "inside",
+      ]);
+      // Inside a selected component the label would cover what the component
+      // shows; outside it, opposite its tag, it covers neither.
+      if (selected !== null && contains(selected.frame, hover.frame)) {
+        const away: ChipSide = tagSide === "below" ? "above" : "below";
+        spots.unshift(...spotsBeside(selected.frame, left, 2, labelSize.height, [away]));
+      }
+      placeChip(hover.label, labelSize, spots, taken, transform);
     }
     trackOutlined();
   }
@@ -1480,13 +1896,52 @@ export function createPicker(host: PickerHost): PickerHandle {
     for (const type of ["pointerleave", "mouseleave", "pointerout", "mouseout"]) {
       listen(document, type, onPointerLeave, passiveCapture, selectTeardown);
     }
-    listen(window, "scroll", schedule, passiveCapture, selectTeardown);
-    listen(window, "resize", schedule, { passive: true }, selectTeardown);
+    showPickCursor(true);
+    selectTeardown.push(() => showPickCursor(false));
+  }
+
+  /**
+   * The page says it is being picked from: links and buttons stop working in
+   * Inspect, so they stop looking clickable too. A constructed sheet rather
+   * than a <style> or an inline cursor on page elements: `style-src` does not
+   * govern it, nothing in the page's DOM changes, and it comes off whole.
+   */
+  function showPickCursor(on: boolean): void {
+    try {
+      if (on) {
+        if (cursorSheet === null) {
+          cursorSheet = new CSSStyleSheet();
+          cursorSheet.replaceSync("*, *::before, *::after { cursor: crosshair !important; }");
+        }
+        if (!document.adoptedStyleSheets.includes(cursorSheet)) {
+          document.adoptedStyleSheets = [...document.adoptedStyleSheets, cursorSheet];
+        }
+      } else if (cursorSheet !== null) {
+        const sheet = cursorSheet;
+        document.adoptedStyleSheets = document.adoptedStyleSheets.filter(
+          (entry) => entry !== sheet
+        );
+      }
+    } catch {
+      // A document without constructed sheets keeps its own cursor; the overlay still draws.
+    }
+  }
+
+  /**
+   * What keeps the outlines on their elements, apart from the listeners that
+   * pick: Inspect needs it, and so does a selection held in Browse, whose
+   * outline would otherwise be left behind by the first scroll.
+   */
+  function attachTracking(): void {
+    if (trackTeardown.length > 0) return;
+    const passiveCapture: AddEventListenerOptions = { capture: true, passive: true };
+    listen(window, "scroll", schedule, passiveCapture, trackTeardown);
+    listen(window, "resize", schedule, { passive: true }, trackTeardown);
     // An image or font arriving, or a transition ending, moves an element
     // without resizing it or touching the DOM. None of these bubble; all of
     // them pass `window` in the capture phase.
     for (const type of ["load", "transitionend", "animationend"]) {
-      listen(window, type, schedule, passiveCapture, selectTeardown);
+      listen(window, type, schedule, passiveCapture, trackTeardown);
     }
     // Layout and structure move with no event at all — an HMR patch, a class
     // flip. One frame absorbs any number of records, and neither observer
@@ -1498,16 +1953,30 @@ export function createPicker(host: PickerHost): PickerHandle {
       attributes: true,
       attributeFilter: ["class", "style"],
     });
-    selectTeardown.push(() => mutations.disconnect());
+    trackTeardown.push(() => mutations.disconnect());
     if (typeof ResizeObserver === "function") {
       const observer = new ResizeObserver(schedule);
       resizes = observer;
-      selectTeardown.push(() => {
+      trackTeardown.push(() => {
         observer.disconnect();
         resizes = null;
         tracked = [];
       });
     }
+  }
+
+  /**
+   * Browse with nothing selected leaves nothing behind: no listeners, no
+   * observers, no overlay. Anything else has something to draw.
+   */
+  function syncTracking(): void {
+    if (disposed) return;
+    if (mode === "select" || selection.length > 0) {
+      attachTracking();
+      return;
+    }
+    while (trackTeardown.length > 0) trackTeardown.pop()?.();
+    removeOverlay();
   }
 
   /**
@@ -1539,10 +2008,12 @@ export function createPicker(host: PickerHost): PickerHandle {
     mode = next;
     if (next === "select") {
       attachSelectListeners();
+      syncTracking();
       schedule();
       return;
     }
-    // Browse leaves nothing behind: no listeners, no observers, no overlay.
+    // Browse swallows nothing and outlines no hover; a held selection stays
+    // drawn, quieter, and keeps only what tracking its outline needs.
     detachSelectListeners();
     pendingHit = undefined;
     setHover(null);
@@ -1550,7 +2021,8 @@ export function createPicker(host: PickerHost): PickerHandle {
       cancelAnimationFrame(frame);
       frame = 0;
     }
-    removeOverlay();
+    syncTracking();
+    if (selection.length > 0) schedule();
   }
 
   function clearSelection(): void {
@@ -1558,7 +2030,9 @@ export function createPicker(host: PickerHost): PickerHandle {
     selection = [];
     scope = ELEMENT_SCOPE;
     selectedChain = null;
+    widening = undefined;
     lastSelection = null;
+    syncTracking();
     schedule();
   }
 
@@ -1586,7 +2060,8 @@ export function createPicker(host: PickerHost): PickerHandle {
       dropDetached();
     }
     if (hovered !== null && hovered.isConnected) postHover(true);
-    if (mode === "select") schedule();
+    syncTracking();
+    if (mode === "select" || selection.length > 0) schedule();
   }
 
   function heldElement(id: unknown): Element | null {
@@ -1600,6 +2075,8 @@ export function createPicker(host: PickerHost): PickerHandle {
    * same node; else whatever the framework's locator finds — exactly the copy
    * it names, never the first in its place. A locator that asks for a widened
    * component gets that invocation's roots back, the way Alt+ArrowUp would.
+   * So does a component id from the selection's own chain — a crumb on any
+   * page whose framework can find a component's roots — or nothing at all.
    */
   function reselect(request: unknown): boolean {
     if (disposed || mode !== "select" || !isPlainObject(request)) return false;
@@ -1609,7 +2086,21 @@ export function createPicker(host: PickerHost): PickerHandle {
         : null;
     let target = heldElement(request.elementId);
     let componentId: unknown;
-    if (framework !== null && request.locator !== undefined) {
+    const aimed = request.componentId !== undefined;
+    if (aimed) {
+      // Ids are this document's and this chain's: one the selection was not
+      // read with names nothing here.
+      const named = request.componentId;
+      if (
+        typeof named !== "string" ||
+        framework === null ||
+        selectedChain?.framework !== framework ||
+        !selectedChain.chain.components.some((record) => record.componentId === named)
+      ) {
+        return false;
+      }
+      componentId = named;
+    } else if (framework !== null && request.locator !== undefined) {
       const found = locate(framework, { kind: "reselect", locator: request.locator }, target);
       const first = found?.elements[0];
       if (first !== undefined) {
@@ -1630,6 +2121,9 @@ export function createPicker(host: PickerHost): PickerHandle {
           framework,
           rootsComplete: roots.data.complete === true && !roots.truncated,
         };
+      } else if (aimed) {
+        // A crumb that cannot select its component selects nothing else instead.
+        return false;
       }
     }
     if (!commit(entries, next, "reselect")) return false;
@@ -1669,6 +2163,7 @@ export function createPicker(host: PickerHost): PickerHandle {
     if (disposed) return;
     disposed = true;
     detachSelectListeners();
+    while (trackTeardown.length > 0) trackTeardown.pop()?.();
     while (teardown.length > 0) teardown.pop()?.();
     if (frame !== 0) {
       cancelAnimationFrame(frame);
@@ -1800,7 +2295,10 @@ export function createPicker(host: PickerHost): PickerHandle {
     } else {
       emitDocumentReady();
     }
-    if (mode === "select") attachSelectListeners();
+    if (mode === "select") {
+      attachSelectListeners();
+      attachTracking();
+    }
   } catch (err) {
     dispose();
     throw err;

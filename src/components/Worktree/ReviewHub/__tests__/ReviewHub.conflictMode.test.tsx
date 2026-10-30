@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, cleanup, render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { StagingStatus } from "@shared/types";
+import type { ConflictMarkerScanEntry } from "@shared/types/ipc/git";
 import type { WorktreeState, Project } from "@shared/types";
 import { useProjectStore } from "@/store/projectStore";
 
@@ -287,7 +288,11 @@ vi.mock("@/components/ui/EmptyState", () => ({
 import { ReviewHubContent } from "../ReviewHubContent";
 import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
-import { resetStagingStatusCacheForTests } from "../stagingStatusCache";
+import {
+  beginStagingStatusRead,
+  rememberStagingStatus,
+  resetStagingStatusCacheForTests,
+} from "../stagingStatusCache";
 
 const WORKTREE_PATH = "/home/user/project";
 
@@ -780,6 +785,184 @@ describe("ReviewHub", () => {
       await waitFor(() => screen.getByTestId("conflict-panel"));
       const badge = await screen.findByTestId("conflict-hunk-count-src/app.ts");
       expect(badge.textContent).toBe("3 regions");
+    });
+
+    it("rescans a conflicted file rewritten inside Daintree, with no focus change", async () => {
+      let fireTick: (() => void) | undefined;
+      onUpdateMock.mockImplementation((type: string, callback: (data: unknown) => void) => {
+        if (type === "worktree-tick") {
+          fireTick = () => callback({ tick: { worktreeId: "main-wt", path: WORKTREE_PATH } });
+        }
+        return mockUnsubscribe;
+      });
+      // Each read is a fresh object, as it is over IPC; the path set never moves.
+      getStagingStatusMock.mockImplementation(async () => makeMergingStatus());
+      scanConflictMarkersMock.mockResolvedValue([
+        { path: "src/app.ts", hunkCount: 3, firstMarkerLine: 12 },
+      ]);
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      const badge = await screen.findByTestId("conflict-hunk-count-src/app.ts");
+      expect(badge.textContent).toBe("3 regions");
+
+      // An agent in a terminal fixes two of the three regions: the watcher's
+      // flush reaches the hub as a tick, and the file stays conflicted.
+      scanConflictMarkersMock.mockResolvedValue([
+        { path: "src/app.ts", hunkCount: 1, firstMarkerLine: 40 },
+      ]);
+      act(() => fireTick?.());
+
+      await waitFor(() =>
+        expect(screen.getByTestId("conflict-hunk-count-src/app.ts").textContent).toBe("1 region")
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: /Open src\/app\.ts in external editor/i })
+      );
+      await waitFor(() => {
+        expect(openInEditorMock).toHaveBeenCalledWith({
+          path: `${WORKTREE_PATH}/src/app.ts`,
+          line: 40,
+          projectId: REVIEW_PROJECT_ID,
+        });
+      });
+    });
+
+    it.each(["answers", "fails"] as const)(
+      "keeps the newer scan when one a status read overtook %s late",
+      async (outcome) => {
+        let fireTick: (() => void) | undefined;
+        onUpdateMock.mockImplementation((type: string, callback: (data: unknown) => void) => {
+          if (type === "worktree-tick") {
+            fireTick = () => callback({ tick: { worktreeId: "main-wt", path: WORKTREE_PATH } });
+          }
+          return mockUnsubscribe;
+        });
+        getStagingStatusMock.mockImplementation(async () => makeMergingStatus());
+        let settleFirst:
+          | { resolve: (entries: ConflictMarkerScanEntry[]) => void; reject: (err: Error) => void }
+          | undefined;
+        scanConflictMarkersMock.mockImplementationOnce(
+          () =>
+            new Promise<ConflictMarkerScanEntry[]>((resolve, reject) => {
+              settleFirst = { resolve, reject };
+            })
+        );
+
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        await waitFor(() => expect(scanConflictMarkersMock).toHaveBeenCalledTimes(1));
+
+        scanConflictMarkersMock.mockResolvedValue([
+          { path: "src/app.ts", hunkCount: 1, firstMarkerLine: 40 },
+        ]);
+        act(() => fireTick?.());
+        await waitFor(() => expect(scanConflictMarkersMock).toHaveBeenCalledTimes(2));
+        await waitFor(() =>
+          expect(screen.getByTestId("conflict-hunk-count-src/app.ts").textContent).toBe("1 region")
+        );
+
+        // The overtaken scan read the file before the newer one did.
+        await act(async () => {
+          if (outcome === "answers") {
+            settleFirst?.resolve([{ path: "src/app.ts", hunkCount: 3, firstMarkerLine: 12 }]);
+          } else {
+            settleFirst?.reject(new Error("EACCES"));
+          }
+        });
+        expect(screen.getByTestId("conflict-hunk-count-src/app.ts").textContent).toBe("1 region");
+        fireEvent.click(
+          screen.getByRole("button", { name: /Open src\/app\.ts in external editor/i })
+        );
+        await waitFor(() => {
+          expect(openInEditorMock).toHaveBeenCalledWith({
+            path: `${WORKTREE_PATH}/src/app.ts`,
+            line: 40,
+            projectId: REVIEW_PROJECT_ID,
+          });
+        });
+      }
+    );
+
+    it("rescans each time the app regains focus", async () => {
+      getStagingStatusMock.mockResolvedValue(makeMergingStatus());
+      scanConflictMarkersMock.mockResolvedValue([
+        { path: "src/app.ts", hunkCount: 3, firstMarkerLine: 12 },
+      ]);
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      expect((await screen.findByTestId("conflict-hunk-count-src/app.ts")).textContent).toBe(
+        "3 regions"
+      );
+
+      for (const [hunkCount, label] of [
+        [2, "2 regions"],
+        [1, "1 region"],
+      ] as const) {
+        scanConflictMarkersMock.mockResolvedValue([
+          { path: "src/app.ts", hunkCount, firstMarkerLine: 30 },
+        ]);
+        act(() => {
+          window.dispatchEvent(new Event("focus"));
+        });
+        await waitFor(() =>
+          expect(screen.getByTestId("conflict-hunk-count-src/app.ts").textContent).toBe(label)
+        );
+      }
+    });
+
+    it("never shows another worktree's scan on a same-named file after a switch", async () => {
+      const OTHER_PATH = "/home/user/other";
+      getStagingStatusMock.mockImplementation(async () => makeMergingStatus());
+      // A warm cache keeps the panel mounted across the switch.
+      rememberStagingStatus(OTHER_PATH, makeMergingStatus(), beginStagingStatusRead());
+      scanConflictMarkersMock.mockResolvedValue([
+        { path: "src/app.ts", hunkCount: 3, firstMarkerLine: 12 },
+      ]);
+
+      const { rerender } = render(
+        <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+      );
+      expect((await screen.findByTestId("conflict-hunk-count-src/app.ts")).textContent).toBe(
+        "3 regions"
+      );
+      const panel = screen.getByTestId("conflict-panel");
+
+      // Every scan of the other worktree shares one answer, held back until
+      // the switch has been checked.
+      let resolveOther: ((entries: ConflictMarkerScanEntry[]) => void) | undefined;
+      const otherScan = new Promise<ConflictMarkerScanEntry[]>((resolve) => {
+        resolveOther = resolve;
+      });
+      scanConflictMarkersMock.mockImplementation(() => otherScan);
+      rerender(<ReviewHubContent isOpen={true} worktreePath={OTHER_PATH} onClose={vi.fn()} />);
+      await waitFor(() =>
+        expect(scanConflictMarkersMock).toHaveBeenCalledWith(OTHER_PATH, ["src/app.ts"])
+      );
+
+      expect(screen.getByTestId("conflict-panel")).toBe(panel);
+      expect(screen.queryByTestId("conflict-hunk-count-src/app.ts")).toBeNull();
+      const openButton = () =>
+        screen.getByRole("button", { name: /Open src\/app\.ts in external editor/i });
+      fireEvent.click(openButton());
+      await waitFor(() => {
+        expect(openInEditorMock).toHaveBeenCalledWith({
+          path: `${OTHER_PATH}/src/app.ts`,
+          projectId: REVIEW_PROJECT_ID,
+        });
+      });
+
+      await act(async () => {
+        resolveOther?.([{ path: "src/app.ts", hunkCount: 1, firstMarkerLine: 5 }]);
+      });
+      expect(screen.getByTestId("conflict-hunk-count-src/app.ts").textContent).toBe("1 region");
+      fireEvent.click(openButton());
+      await waitFor(() => {
+        expect(openInEditorMock).toHaveBeenCalledWith({
+          path: `${OTHER_PATH}/src/app.ts`,
+          line: 5,
+          projectId: REVIEW_PROJECT_ID,
+        });
+      });
     });
 
     it("opens confirm dialog before aborting and calls abort on confirm", async () => {

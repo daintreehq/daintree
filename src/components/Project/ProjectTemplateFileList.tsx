@@ -1,5 +1,6 @@
 import type { ProjectTemplatePreview } from "@shared/types/plugin";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Skeleton, SkeletonHint, SkeletonText } from "@/components/ui/Skeleton";
@@ -12,6 +13,8 @@ interface ProjectTemplateFileListProps {
   preview: ProjectTemplatePreview | null;
   /** Past the loading gate, so a quick read never flashes a placeholder. */
   showLoading: boolean;
+  /** Read the files again, offered when the last read failed rather than the template refused. */
+  onRetry?: () => void;
 }
 
 const KIND_LABEL = {
@@ -26,7 +29,11 @@ const KIND_LABEL = {
  * project-plugin files are marked, since those are the ones that change what an
  * agent or Daintree does in the new project.
  */
-export function ProjectTemplateFileList({ preview, showLoading }: ProjectTemplateFileListProps) {
+export function ProjectTemplateFileList({
+  preview,
+  showLoading,
+  onRetry,
+}: ProjectTemplateFileListProps) {
   if (preview === null) {
     // `immediate`: the caller's gate has already held this back past 400ms.
     return showLoading ? (
@@ -41,7 +48,17 @@ export function ProjectTemplateFileList({ preview, showLoading }: ProjectTemplat
 
   if (preview.status === "unusable") {
     return (
-      <Callout severity="error" role="alert">
+      <Callout
+        severity="error"
+        role="alert"
+        action={
+          preview.retryable && onRetry ? (
+            <Button variant="outline" size="sm" onClick={onRetry}>
+              Retry
+            </Button>
+          ) : undefined
+        }
+      >
         <p>Can't use this template. {preview.reason}</p>
       </Callout>
     );

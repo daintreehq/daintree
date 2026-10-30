@@ -294,3 +294,33 @@ describe("PanelPalette Home/End", () => {
     expect(active()).toBe(`panel-option-${resumeResults[0]!.id}`);
   });
 });
+
+describe("PanelPalette IME composition (#15066)", () => {
+  it("leaves Enter, arrows and Tab to the composition, then acts once it commits", () => {
+    const onConfirm = vi.fn();
+    const onSelectNext = vi.fn();
+    const onSelectPrevious = vi.fn();
+    render(
+      <PanelPalette
+        {...baseProps}
+        query="に"
+        results={resumeResults}
+        onConfirm={onConfirm}
+        onSelectNext={onSelectNext}
+        onSelectPrevious={onSelectPrevious}
+      />
+    );
+    const field = document.querySelector<HTMLElement>('[role="combobox"]')!;
+
+    for (const key of ["Enter", "ArrowDown", "ArrowUp", "Tab"]) {
+      expect(fireEvent.keyDown(field, { key, isComposing: true })).toBe(true);
+      expect(fireEvent.keyDown(field, { key, keyCode: 229 })).toBe(true);
+    }
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(onSelectNext).not.toHaveBeenCalled();
+    expect(onSelectPrevious).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+});

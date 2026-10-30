@@ -2,7 +2,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-const dispatch = vi.hoisted(() => vi.fn());
+const dispatch = vi.hoisted(() =>
+  vi.fn(
+    async (
+      _id: string,
+      _args?: unknown,
+      _opts?: unknown
+    ): Promise<
+      { ok: true; result: unknown } | { ok: false; error: { code: string; message: string } }
+    > => ({ ok: true, result: undefined })
+  )
+);
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 
 let currentProjectId: string | null = "proj-1";
@@ -260,10 +270,118 @@ describe("PluginSetupStrip with a setup checklist (#13824)", () => {
       { pluginId: "acme.linear", key: "team" },
       { source: "user" }
     );
+    // Out of the way once the action has gone through.
+    await waitFor(() => expect(screen.queryByText("Step team")).toBeNull());
 
     await openSteps();
     fireEvent.click(screen.getByRole("button", { name: "Run: Step sync" }));
     expect(dispatch).toHaveBeenCalledWith("acme.linear.sync", undefined, { source: "user" });
+    await waitFor(() => expect(screen.queryByText("Step team")).toBeNull());
+  });
+
+  it("stays open and says so on the row when a step's command fails, then retries from it (#15236)", async () => {
+    dispatch.mockResolvedValueOnce({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "Linear is offline." },
+    });
+    render(<PluginSetupStrip pluginId="acme.linear" />);
+    await openSteps();
+
+    fireEvent.click(screen.getByRole("button", { name: "Run: Step sync" }));
+
+    await waitFor(() =>
+      expect(document.querySelector('[data-setup-step="sync"]')?.textContent).toContain(
+        "Couldn't run this step: Linear is offline."
+      )
+    );
+    expect(screen.getByText("Step team")).toBeTruthy();
+    expect(document.querySelector('[data-setup-step="team"]')?.textContent).not.toContain(
+      "Couldn't"
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Run: Step sync" }));
+    await waitFor(() => expect(screen.queryByText("Step team")).toBeNull());
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("runs a step once while its command is still answering (#15236)", async () => {
+    let finish!: () => void;
+    dispatch.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve({ ok: true, result: undefined });
+        })
+    );
+    render(<PluginSetupStrip pluginId="acme.linear" />);
+    await openSteps();
+
+    const run = screen.getByRole("button", { name: "Run: Step sync" });
+    fireEvent.click(run);
+    fireEvent.click(run);
+    // Nor another step's, until this one answers.
+    fireEvent.click(screen.getByRole("button", { name: "Open setting: Step team" }));
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Step team")).toBeTruthy();
+
+    await act(async () => finish());
+    await waitFor(() => expect(screen.queryByText("Step team")).toBeNull());
+  });
+
+  it("reports a confirmation refusal that staged no dialog as a failure", async () => {
+    dispatch.mockResolvedValueOnce({
+      ok: false,
+      error: { code: "CONFIRMATION_REQUIRED", message: "Needs confirmation from plugin sources." },
+    });
+    render(<PluginSetupStrip pluginId="acme.linear" />);
+    await openSteps();
+
+    fireEvent.click(screen.getByRole("button", { name: "Run: Step sync" }));
+
+    await waitFor(() =>
+      expect(document.querySelector('[data-setup-step="sync"]')?.textContent).toContain(
+        "Couldn't run this step"
+      )
+    );
+    expect(screen.getByText("Step team")).toBeTruthy();
+  });
+
+  it("leaves a later opening alone when an earlier one's answer lands after it closed", async () => {
+    let finish!: () => void;
+    dispatch.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve({ ok: true, result: undefined });
+        })
+    );
+    render(<PluginSetupStrip pluginId="acme.linear" />);
+    await openSteps();
+    fireEvent.click(screen.getByRole("button", { name: "Run: Step sync" }));
+
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByText("Step team")).toBeNull());
+    await openSteps();
+
+    await act(async () => finish());
+    expect(screen.getByText("Step team")).toBeTruthy();
+  });
+
+  it("steps aside without an error when the command stages a confirmation (#15236)", async () => {
+    const { ConfirmationStagedError } = await import("@/services/actions/confirmationStaged");
+    dispatch.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: "CONFIRMATION_REQUIRED",
+        message: "Needs confirmation",
+        details: new ConfirmationStagedError("Needs confirmation"),
+      } as { code: string; message: string },
+    });
+    render(<PluginSetupStrip pluginId="acme.linear" />);
+    await openSteps();
+
+    fireEvent.click(screen.getByRole("button", { name: "Run: Step sync" }));
+
+    await waitFor(() => expect(screen.queryByText("Step team")).toBeNull());
+    expect(screen.queryByText(/Couldn't run this step/)).toBeNull();
   });
 
   it("skips a step, and gives way to the required prompt once every step is handled", async () => {

@@ -13,7 +13,10 @@ import {
   getPanelKindRegistrySnapshot,
   type PanelKindOrigin,
 } from "@shared/config/panelKindRegistry";
-import { useRecipeStore } from "@/store/recipeStore";
+import { useRecipeStore, type RecipeRunOptions } from "@/store/recipeStore";
+import { requestRecipeRunConfirmation } from "@/store/recipeRunConfirmStore";
+import { missingRecipeVariables } from "@/utils/recipeAgentStep";
+import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { useActionMruStore } from "@/store/actionMruStore";
 import { actionService } from "@/services/ActionService";
 import { launchPanelKind } from "@/registry/panelKindLaunch";
@@ -73,8 +76,9 @@ export type DockLaunchPresetGroup = "default" | "ccr" | "project" | "custom";
 
 /**
  * One selectable preset for an agent. `presetId: null` is the synthetic
- * "Default" choice — the sentinel that clears a saved preset rather than
- * inheriting it, so it is deliberately distinct from `undefined`.
+ * "Default" choice — the bare agent rather than whatever preset is saved, so it
+ * is deliberately distinct from `undefined`. `isSelected` marks the saved
+ * default, which launching any choice leaves alone.
  */
 export interface DockLaunchPresetChoice {
   presetId: string | null;
@@ -1261,7 +1265,7 @@ export interface ActivateDockLaunchItemContext {
   /**
    * `presetId` carries a three-way distinction the launcher depends on:
    * `undefined` launches whatever preset is saved, `null` is the explicit
-   * Default that clears it, and a string selects one. Collapsing null into
+   * Default (the bare agent), and a string selects one. Collapsing null into
    * undefined silently relaunches the saved preset when the user asked for
    * plain.
    */
@@ -1385,17 +1389,45 @@ export function activateDockLaunchItem(
     return;
   }
 
+  activateDockRecipe(item, ctx);
+}
+
+/**
+ * Run a recipe row, held behind a confirm when its prompts would send built-in
+ * variables blank (#15022). The launcher has closed by then, so the question
+ * goes to the app's dialog host rather than anything the menu owns.
+ */
+function activateDockRecipe(item: DockLaunchRecipeItem, ctx: ActivateDockLaunchItemContext): void {
+  const worktreeId = ctx.activeWorktreeId ?? undefined;
   // Fire-and-forget, but surface spawn failures — the menu closes on select, so
   // a toast/inbox entry is the only signal the user gets when terminals are
   // dropped (e.g. panel limit).
-  const worktreeId = ctx.activeWorktreeId ?? undefined;
-  void useRecipeStore
-    .getState()
-    .runRecipeWithResults(item.recipe.id, ctx.cwd, worktreeId, ctx.recipeContext)
-    .then((results) =>
-      notifyRecipeSpawnFailures(results, { recipeName: item.recipe.name, worktreeId })
-    )
-    .catch((error) => logError("Recipe launch from dock failed", error));
+  const launch = (options?: RecipeRunOptions) =>
+    void useRecipeStore
+      .getState()
+      .runRecipeWithResults(item.recipe.id, ctx.cwd, worktreeId, ctx.recipeContext, options)
+      .then((results) =>
+        notifyRecipeSpawnFailures(results, { recipeName: item.recipe.name, worktreeId })
+      )
+      .catch((error) => logError("Recipe launch from dock failed", error));
+
+  // A shadowed row runs the team recipe it defers to, so that is what to read.
+  const recipe = useRecipeStore.getState().getRecipeById(item.recipe.id) ?? item.recipe;
+  // The store launches with the cwd as `worktreePath`, whatever the context says.
+  const { builtIn: missing } = missingRecipeVariables(recipe, {
+    ...ctx.recipeContext,
+    worktreePath: ctx.cwd,
+  });
+  if (missing.length === 0) {
+    launch();
+    return;
+  }
+  void requestRecipeRunConfirmation({ recipeName: recipe.name, missing }).then((approved) => {
+    if (!approved) return;
+    launch({
+      expectedRecipe: { id: recipe.id, terminalsDigest: recipeApprovalDigest(recipe.terminals) },
+    });
+  });
 }
 
 /**

@@ -262,6 +262,11 @@ export function validateSmokeOutput(runIndex, runCount, result, requiredMarkers)
   if (validationOutput.includes("[SMOKE] FAILED")) {
     throw new Error(`Packaged smoke run ${runIndex}/${runCount} reported a smoke failure`);
   }
+  if (validationOutput.includes("Bootstrap failed:")) {
+    throw new Error(
+      `Packaged smoke run ${runIndex}/${runCount} reported a renderer bootstrap failure`
+    );
+  }
   for (const marker of requiredMarkers) {
     if (!validationOutput.includes(marker)) {
       throw new Error(

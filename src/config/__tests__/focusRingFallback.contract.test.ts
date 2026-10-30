@@ -549,7 +549,7 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   },
   {
     file: "src/components/Fleet/FleetArmingRibbon.tsx",
-    fragment: 'FLEET_RIBBON_SHELL_CLASS, "overflow-hidden outline-hidden"',
+    fragment: 'FLEET_RIBBON_SHELL_CLASS, "overflow-x-clip outline-hidden"',
     reason:
       "Status ribbon — focus delegated to child controls (Exit button, count chip, selection-menu trigger); ribbon container uses tabIndex=-1 to receive programmatic focus only",
   },

@@ -1,9 +1,15 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { useContext } from "react";
 import { EnvironmentSettingsTab } from "../EnvironmentSettingsTab";
 import { SettingsValidationProvider } from "../SettingsValidationRegistry";
+import {
+  SettingsFlushContext,
+  SettingsFlushProvider,
+  type FailedSettingsFlush,
+} from "../SettingsFlushRegistry";
 
 vi.mock("@/lib/notify", () => ({
   notify: vi.fn(),
@@ -35,6 +41,30 @@ function renderTab() {
       <EnvironmentSettingsTab />
     </SettingsValidationProvider>
   );
+}
+
+// The tab under the dialog's flush registry; `flushAll` is the close-time flush.
+let flushAll: () => Promise<FailedSettingsFlush[]> = async () => [];
+function renderTabInDialog() {
+  const { result } = renderHook(() => useContext(SettingsFlushContext)!, {
+    wrapper: ({ children }) => (
+      <SettingsValidationProvider>
+        <SettingsFlushProvider>
+          <EnvironmentSettingsTab />
+          {children}
+        </SettingsFlushProvider>
+      </SettingsValidationProvider>
+    ),
+  });
+  flushAll = () => result.current.flushAll();
+}
+
+async function closeFlush() {
+  let failed: FailedSettingsFlush[] = [];
+  await act(async () => {
+    failed = await flushAll();
+  });
+  return failed;
 }
 
 describe("EnvironmentSettingsTab", () => {
@@ -183,5 +213,97 @@ describe("EnvironmentSettingsTab", () => {
     await waitFor(() => {
       expect(window.electron.globalEnv.set).toHaveBeenCalledWith({ NEW_VAR: "new_value" });
     });
+  });
+});
+
+describe("EnvironmentSettingsTab close-time save", () => {
+  it("keeps an invalid draft and points the close at the row that failed", async () => {
+    window.electron.globalEnv.get = vi.fn().mockResolvedValue({ GOOD: "1" });
+    renderTabInDialog();
+    await waitFor(() => {
+      expect(screen.getAllByLabelText("Environment variable name")).toHaveLength(1);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /add variable/i }));
+    const badName = screen.getAllByLabelText<HTMLInputElement>("Environment variable name")[1]!;
+    fireEvent.change(badName, { target: { value: "1BAD" } });
+
+    const failed = await closeFlush();
+
+    expect(failed).toHaveLength(1);
+    expect(failed[0]!.tab).toBe("environment");
+    const landing = document.getElementById(failed[0]!.landOn);
+    expect(landing?.contains(badName)).toBe(true);
+    expect(landing?.contains(screen.getAllByLabelText("Environment variable name")[0]!)).toBe(
+      false
+    );
+    // The reason is on screen once the close has tried to save.
+    expect(badName.getAttribute("aria-invalid")).toBe("true");
+    expect(badName.value).toBe("1BAD");
+    expect(window.electron.globalEnv.set).not.toHaveBeenCalled();
+  });
+
+  it("keeps a draft whose save failed, with the error on the page", async () => {
+    window.electron.globalEnv.get = vi.fn().mockResolvedValue({ GOOD: "1" });
+    window.electron.globalEnv.set = vi.fn().mockRejectedValue(new Error("disk full"));
+    renderTabInDialog();
+    await waitFor(() => {
+      expect(screen.getAllByLabelText("Environment variable name")).toHaveLength(1);
+    });
+    const value = screen.getByLabelText("Environment variable value") as HTMLInputElement;
+    fireEvent.change(value, { target: { value: "2" } });
+
+    const failed = await closeFlush();
+
+    expect(failed).toHaveLength(1);
+    const landing = document.getElementById(failed[0]!.landOn);
+    expect(landing?.contains(value)).toBe(true);
+    expect(landing?.contains(screen.getByRole("alert"))).toBe(true);
+    expect(screen.getByRole("alert").textContent).toContain("disk full");
+    expect(value.value).toBe("2");
+  });
+
+  it("saves a valid draft and lets the close through", async () => {
+    window.electron.globalEnv.get = vi.fn().mockResolvedValue({ GOOD: "1" });
+    renderTabInDialog();
+    await waitFor(() => {
+      expect(screen.getAllByLabelText("Environment variable name")).toHaveLength(1);
+    });
+    fireEvent.change(screen.getByLabelText("Environment variable value"), {
+      target: { value: "2" },
+    });
+
+    expect(await closeFlush()).toEqual([]);
+    expect(window.electron.globalEnv.set).toHaveBeenCalledWith({ GOOD: "2" });
+  });
+
+  it("answers a close during a Save with that Save's outcome, without saving twice", async () => {
+    window.electron.globalEnv.get = vi.fn().mockResolvedValue({ GOOD: "1" });
+    let rejectSave: (err: Error) => void = () => {};
+    window.electron.globalEnv.set = vi.fn(
+      () => new Promise<void>((_resolve, reject) => (rejectSave = reject))
+    );
+    renderTabInDialog();
+    await waitFor(() => {
+      expect(screen.getAllByLabelText("Environment variable name")).toHaveLength(1);
+    });
+    fireEvent.change(screen.getByLabelText("Environment variable value"), {
+      target: { value: "2" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    });
+
+    let failed: FailedSettingsFlush[] | null = null;
+    await act(async () => {
+      void flushAll().then((result) => (failed = result));
+      await Promise.resolve();
+    });
+    expect(failed).toBeNull();
+
+    await act(async () => rejectSave(new Error("disk full")));
+
+    expect(failed).toHaveLength(1);
+    expect(window.electron.globalEnv.set).toHaveBeenCalledTimes(1);
   });
 });

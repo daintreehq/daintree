@@ -8,6 +8,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BackendTerminalInfo, TerminalState } from "@shared/types/ipc/terminal";
 import type { WorktreeState } from "@shared/types";
 import type { PtyPanelData } from "@shared/types/panel";
+import type { CodexRestoreMatchRequest } from "@shared/types/ipc/agentSubagents";
+import { createHash } from "crypto";
+import { launchPromptArgText } from "@shared/types/agentSettings";
 
 vi.mock("@/utils/logger", () => ({
   logWarn: vi.fn(),
@@ -26,8 +29,21 @@ vi.mock("@/services/TerminalInstanceService", () => {
 const resolveResumeLatestSession = vi.hoisted(() =>
   vi.fn(async (_payload: { cwd: string }): Promise<string | null> => null)
 );
+// Stands in for main's prompt match (#15269): answers a pane asking for its
+// conversation with the thread whose first message has the pane's digest.
+const threadsByPromptHash = vi.hoisted(() => new Map<string, string>());
+const matchRestoreSessions = vi.hoisted(() =>
+  vi.fn(async (request: CodexRestoreMatchRequest) => ({
+    matches: request.scopes.flatMap((scope) =>
+      scope.panes.flatMap((pane) => {
+        const sessionId = threadsByPromptHash.get(pane.promptHash);
+        return pane.resolve && sessionId !== undefined ? [{ key: pane.key, sessionId }] : [];
+      })
+    ),
+  }))
+);
 vi.mock("@/clients/codexClient", () => ({
-  codexClient: { resolveResumeLatestSession },
+  codexClient: { resolveResumeLatestSession, matchRestoreSessions },
 }));
 
 vi.mock("../reconnectManager", () => ({
@@ -149,6 +165,8 @@ async function restore(
 beforeEach(() => {
   resolveResumeLatestSession.mockReset();
   resolveResumeLatestSession.mockResolvedValue(null);
+  matchRestoreSessions.mockClear();
+  threadsByPromptHash.clear();
 });
 
 describe("cold restore of moved Codex panes (#12434)", () => {
@@ -539,5 +557,136 @@ describe("restore provenance through restore (#14017)", () => {
     expect(byId.get("rebuilt")?.existingId).toBe("rebuilt");
     expect(byId.get("rebuilt")?.restoreProvenance).toEqual(provenance);
     expect(byId.get("never")?.restoreProvenance).toBeUndefined();
+  });
+});
+
+describe("held same-folder Codex panes named by their launch prompts (#15269)", () => {
+  const AT = 1_800_000_000_000;
+
+  /** Main has a thread in /repo whose first message is `prompt`. */
+  function threadFor(prompt: string, sessionId: string): void {
+    threadsByPromptHash.set(
+      createHash("sha256").update(launchPromptArgText(prompt), "utf8").digest("hex"),
+      sessionId
+    );
+  }
+
+  const codexPane = (name: string, prompt?: string, overrides: Partial<TerminalState> = {}) =>
+    ({
+      id: name,
+      title: `Codex ${name}`,
+      kind: "terminal",
+      launchAgentId: "codex",
+      cwd: "/repo",
+      worktreeId: "/repo",
+      location: "grid",
+      ...(prompt !== undefined && { firstPrompt: { text: prompt, via: "launch", at: AT } }),
+      ...overrides,
+    }) as TerminalState;
+
+  const coldProbe = (panels: TerminalState[]) => ({
+    prefetchedReconnectResults: Object.fromEntries(
+      panels.map((saved) => [saved.id, { exists: false }])
+    ),
+  });
+
+  /** Five panes that kept their ids, plus `extra`, all in one folder. */
+  function quitWithLostIds(extra: TerminalState[]): TerminalState[] {
+    return [
+      ...TASKS.map((t) => codexPane(`kept-${t}`, undefined, { agentSessionId: `sess-kept-${t}` })),
+      ...extra,
+    ];
+  }
+
+  function persist(id: string, args: RestoredArgs | undefined): TerminalState {
+    const panel: PtyPanelData = {
+      id,
+      kind: "terminal",
+      title: args?.title ?? id,
+      location: "grid",
+      cols: 80,
+      rows: 24,
+      cwd: args?.cwd ?? "",
+      worktreeId: args?.worktreeId,
+      launchAgentId: "codex",
+      command: args?.command,
+      agentLaunchFlags: args?.agentLaunchFlags,
+      restoreRecovery: args?.restoreRecovery,
+      firstPrompt: args?.firstPrompt,
+      hasPty: false,
+    };
+    return {
+      id,
+      title: panel.title,
+      location: "grid",
+      kind: "terminal",
+      worktreeId: panel.worktreeId,
+      ...serializePtyPanel(panel),
+    };
+  }
+
+  it("resumes each pane whose prompt names its thread, and holds the one that names none", async () => {
+    threadFor("Triage the parser", "sess-parser");
+    threadFor("Triage the renderer\nwith care", "sess-renderer");
+    const panels = quitWithLostIds([
+      codexPane("parser", "Triage the parser"),
+      codexPane("renderer", "Triage the renderer\nwith care"),
+      codexPane("docs", "Triage the docs"),
+    ]);
+
+    const byId = await restore(panels, coldProbe(panels));
+
+    for (const [name, sessionId] of [
+      ["parser", "sess-parser"],
+      ["renderer", "sess-renderer"],
+    ] as const) {
+      const args = byId.get(name);
+      expect(args?.command).toMatch(new RegExp(`^codex .*resume ${sessionId} -C \\S+$`));
+      expect(args?.agentSessionId).toBe(sessionId);
+      expect(args?.restoreRecovery).toBeUndefined();
+      // The run its first prompt belongs to carries on.
+      expect(args?.firstPrompt?.text).toBeDefined();
+    }
+    const docs = byId.get("docs");
+    expect(docs?.restoreRecovery).toEqual({ reason: "sibling-owns-resume-latest-slot" });
+    expect(docs?.command).not.toContain("resume");
+    for (const t of TASKS) {
+      expect(byId.get(`kept-${t}`)?.agentSessionId).toBe(`sess-kept-${t}`);
+    }
+    expect(matchRestoreSessions).toHaveBeenCalledTimes(1);
+  });
+
+  it("names a pane a previous restore held, so an upgrade clears the backlog", async () => {
+    const first = await restore(
+      quitWithLostIds([codexPane("parser", "Triage the parser")]),
+      // A build without the match: nothing comes back named.
+      { prefetchedReconnectResults: undefined }
+    );
+    expect(first.get("parser")?.restoreRecovery).toEqual({
+      reason: "sibling-owns-resume-latest-slot",
+    });
+
+    threadFor("Triage the parser", "sess-parser");
+    const again = [persist("parser", first.get("parser"))];
+    const second = await restore(again, coldProbe(again));
+
+    expect(second.get("parser")?.command).toMatch(/resume sess-parser -C \S+$/);
+    expect(second.get("parser")?.restoreRecovery).toBeUndefined();
+  });
+
+  it("keeps a named conversation on the hold when restarts are set not to resume", async () => {
+    threadFor("Triage the parser", "sess-parser");
+    const panels = quitWithLostIds([codexPane("parser", "Triage the parser")]);
+
+    const byId = await restore(panels, {
+      ...coldProbe(panels),
+      agentSettings: { agents: { codex: {} }, resumeOnRestart: "never" },
+    });
+
+    expect(byId.get("parser")?.restoreRecovery).toEqual({
+      reason: "resume-deferred",
+      sessionId: "sess-parser",
+    });
+    expect(byId.get("parser")?.command).not.toContain("resume");
   });
 });

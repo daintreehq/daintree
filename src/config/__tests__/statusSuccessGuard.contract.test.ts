@@ -66,6 +66,13 @@ const COLOUR_UTILITY_ROOTS = [
 const ALPHA_MODIFIER = "(?:\\/(?:\\d+(?:\\.\\d+)?|\\[[^\\]]*\\]|\\([^)]*\\)))?";
 
 /**
+ * The success token and its text-grade twin, `status-success-text`. The twin is
+ * the same green moved toward text-primary until it reads as small text (#15424),
+ * so painting with it is painting green; the `-surface` wash stays out.
+ */
+const SUCCESS_TOKEN = "status-success(?:-text)?";
+
+/**
  * A utility painting with the success token — variants, opacity modifier and
  * the important marker included, since none of them changes what it paints:
  * `bg-status-success`, `hover:text-status-success/70`,
@@ -73,7 +80,7 @@ const ALPHA_MODIFIER = "(?:\\/(?:\\d+(?:\\.\\d+)?|\\[[^\\]]*\\]|\\([^)]*\\)))?";
  * Anchored both ends so the two lookalike classes above stay out.
  */
 const PAINT_UTILITY = new RegExp(
-  `(?:^|:)!?(?:${COLOUR_UTILITY_ROOTS})-status-success${ALPHA_MODIFIER}!?$`
+  `(?:^|:)!?(?:${COLOUR_UTILITY_ROOTS})-${SUCCESS_TOKEN}${ALPHA_MODIFIER}!?$`
 );
 
 /**
@@ -81,11 +88,11 @@ const PAINT_UTILITY = new RegExp(
  * without ever spelling the utility suffix, so it needs its own shape.
  */
 const PAINT_VAR_SHORTHAND = new RegExp(
-  `(?:^|:)!?(?:${COLOUR_UTILITY_ROOTS})-\\(--color-status-success\\)${ALPHA_MODIFIER}!?$`
+  `(?:^|:)!?(?:${COLOUR_UTILITY_ROOTS})-\\(--color-${SUCCESS_TOKEN}\\)${ALPHA_MODIFIER}!?$`
 );
 
 /** The same colour reached through the variable, as arbitrary values do. */
-const PAINT_VAR = "var(--color-status-success)";
+const PAINT_VAR = new RegExp(`var\\(--color-${SUCCESS_TOKEN}\\)`);
 
 /**
  * Only painting is governed, not defining. `applyAppTheme` and
@@ -95,9 +102,7 @@ const PAINT_VAR = "var(--color-status-success)";
  * outside this guard by construction.
  */
 function isPaintLexeme(lexeme: string): boolean {
-  return (
-    PAINT_UTILITY.test(lexeme) || PAINT_VAR_SHORTHAND.test(lexeme) || lexeme.includes(PAINT_VAR)
-  );
+  return PAINT_UTILITY.test(lexeme) || PAINT_VAR_SHORTHAND.test(lexeme) || PAINT_VAR.test(lexeme);
 }
 
 function normalise(value: string): string {
@@ -292,8 +297,16 @@ describe("status-success guard", () => {
         // The theme layer naming the token rather than painting with it.
         ["status-success", ""],
         ["--theme-status-success", ""],
+        // The text-grade twin is the same green, by utility or by variable.
+        ["text-status-success-text", "text-status-success-text"],
+        ["text-(--color-status-success-text)", "text-(--color-status-success-text)"],
+        [
+          "text-[color-mix(in_oklab,var(--color-status-success-text)_90%,transparent)]",
+          "text-[color-mix(in_oklab,var(--color-status-success-text)_90%,transparent)]",
+        ],
         // A different token that shares the prefix, and a non-colour utility.
         ["bg-status-success-surface", ""],
+        ["--theme-status-success-text", ""],
         ["my-status-success", ""],
         // `selection` and `marker` are variants, not colour utilities — Tailwind
         // emits nothing for the bare form, so only the variant spelling counts.

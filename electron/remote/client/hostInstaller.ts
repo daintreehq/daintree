@@ -600,7 +600,7 @@ async function waitForIdle(
       report({
         stage: "waiting-for-idle",
         fraction: null,
-        message: `Waiting for ${busy} agent${busy === 1 ? "" : "s"} working or waiting on the host`,
+        message: `${busy} agent${busy === 1 ? " is" : "s are"} still working or waiting on the host`,
       });
     }
     await deps.sleep(poll, signal);

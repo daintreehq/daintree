@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 vi.stubGlobal(
@@ -79,23 +79,33 @@ vi.mock("../SettingsSelect", () => ({
     value,
     onValueChange,
     options,
+    placeholder,
+    isModified,
+    onReset,
   }: {
     label: string;
     description?: React.ReactNode;
     value: string;
     onValueChange: (v: string) => void;
     options: SettingsSelectStubOption[];
+    placeholder?: string;
+    isModified?: boolean;
+    onReset?: () => void;
   }) => (
     <label>
       {label}
       {description != null && <span>{description}</span>}
       <select aria-label={label} value={value} onChange={(e) => onValueChange(e.target.value)}>
+        {placeholder != null && <option value="">{placeholder}</option>}
         {options.map((o) => (
           <option key={o.value} value={o.value}>
             {o.label}
           </option>
         ))}
       </select>
+      {isModified && onReset && (
+        <button type="button" aria-label={`Reset ${label} to default`} onClick={onReset} />
+      )}
     </label>
   ),
 }));
@@ -130,7 +140,13 @@ vi.mock("../SettingsInput", () => ({
 const helpPanelState = {
   preferredAgentId: null as string | null,
   droppedPreferredAgentId: null as string | null,
+  // The one lane on screen, flattened: `selectActiveSlot` projects the state as it.
+  activeSlot: 0,
   sessionId: null as string | null,
+  agentId: null as string | null,
+  terminalId: null as string | null,
+  globalSelected: false,
+  globalTarget: null,
   setPreferredAgent: vi.fn(),
   clearDroppedPreferredAgent: vi.fn(),
 };
@@ -182,6 +198,7 @@ vi.mock("@/config/agents", () => ({
 
 import { DaintreeAssistantSettingsTab } from "../DaintreeAssistantSettingsTab";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { actionService } from "@/services/ActionService";
 import { DEFAULT_AGENT_SETTINGS } from "@shared/types/agentSettings";
 import { SettingsValidationProvider } from "../SettingsValidationRegistry";
@@ -192,6 +209,11 @@ import {
 import type { HelpAssistantTier } from "@shared/types";
 
 const writeText = vi.fn().mockResolvedValue(undefined);
+
+interface HelpApi {
+  getGlobalAssistantState: ReturnType<typeof vi.fn>;
+  onGlobalAssistantChanged: ReturnType<typeof vi.fn>;
+}
 
 interface HelpAssistantApi {
   getSettings: ReturnType<typeof vi.fn>;
@@ -223,7 +245,8 @@ interface SystemApi {
 function installApi(
   helpAssistant: Partial<HelpAssistantApi> = {},
   mcpServer: Partial<McpServerApi> = {},
-  system: Partial<SystemApi> = {}
+  system: Partial<SystemApi> = {},
+  help: Partial<HelpApi> = {}
 ) {
   const helpDefaults: HelpAssistantApi = {
     getSettings: vi.fn().mockResolvedValue({
@@ -284,7 +307,22 @@ function installApi(
       lastChecked: null,
     }),
   };
+  const globalHelpDefaults: HelpApi = {
+    getGlobalAssistantState: vi.fn().mockResolvedValue({
+      phase: "absent",
+      generation: 0,
+      agentId: null,
+      terminalId: null,
+      attachments: [],
+      inputOwner: null,
+      inputEpoch: 0,
+      subject: null,
+      agentState: null,
+    }),
+    onGlobalAssistantChanged: vi.fn(() => () => {}),
+  };
   window.electron = {
+    help: { ...globalHelpDefaults, ...help },
     helpAssistant: { ...helpDefaults, ...helpAssistant },
     mcpServer: { ...mcpDefaults, ...mcpServer },
     system: { ...systemDefaults, ...system },
@@ -297,9 +335,15 @@ function installApi(
   } as unknown as typeof window.electron;
 }
 
+const initialCliAvailability = {
+  availability: useCliAvailabilityStore.getState().availability,
+  hasRealData: useCliAvailabilityStore.getState().hasRealData,
+};
+
 describe("DaintreeAssistantSettingsTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useCliAvailabilityStore.setState(initialCliAvailability);
     helpPanelState.preferredAgentId = null;
     helpPanelState.droppedPreferredAgentId = null;
     helpPanelState.sessionId = null;
@@ -761,6 +805,258 @@ describe("DaintreeAssistantSettingsTab", () => {
     expect(container.textContent).not.toContain("unless an automation grant covers them");
   });
 
+  describe("the only installed agent (#14987)", () => {
+    const SOLE_COPY = "Using Claude Code, the only installed agent the assistant supports";
+    const BLOCKER_COPY = "The help assistant can't start until you choose one";
+
+    function setCliAvailability(availability: Record<string, string>, hasRealData = true) {
+      act(() => {
+        useCliAvailabilityStore.setState({
+          availability: availability as never,
+          hasRealData,
+        });
+      });
+    }
+
+    function renderTab() {
+      return render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+    }
+
+    function agentSelect(container: HTMLElement): HTMLSelectElement {
+      const select = container.querySelector("select[aria-label='Agent']");
+      if (!(select instanceof HTMLSelectElement)) throw new Error("agent select not found");
+      return select;
+    }
+
+    it("names the only installed agent instead of saying the assistant can't start", async () => {
+      setCliAvailability({ claude: "ready" });
+
+      const { container } = renderTab();
+      await waitForContent(container, "Search documentation");
+
+      expect(container.textContent).toContain(SOLE_COPY);
+      expect(container.textContent).not.toContain(BLOCKER_COPY);
+      // Naming the agent in use is not saving it.
+      expect(agentSelect(container).value).toBe("");
+      expect(helpPanelState.setPreferredAgent).not.toHaveBeenCalled();
+    });
+
+    it("still lets the user save that agent explicitly", async () => {
+      setCliAvailability({ claude: "ready" });
+
+      const { container } = renderTab();
+      await waitForContent(container, "Search documentation");
+      fireEvent.change(agentSelect(container), { target: { value: "claude" } });
+
+      expect(helpPanelState.setPreferredAgent).toHaveBeenCalledWith("claude");
+    });
+
+    it("counts only installed agents the assistant supports", async () => {
+      mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+      setCliAvailability({ claude: "ready", codex: "missing", gemini: "ready" });
+
+      const { container } = renderTab();
+      await waitForContent(container, "Search documentation");
+
+      expect(container.textContent).toContain(SOLE_COPY);
+    });
+
+    it("keeps the can't-start copy with several installed agents", async () => {
+      mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+      setCliAvailability({ claude: "ready", codex: "installed" });
+
+      const { container } = renderTab();
+      await waitForContent(container, "Search documentation");
+
+      expect(container.textContent).toContain(BLOCKER_COPY);
+      expect(container.textContent).not.toContain("the only installed agent");
+    });
+
+    it("keeps the can't-start copy with no installed agent", async () => {
+      setCliAvailability({ claude: "missing" });
+
+      const { container } = renderTab();
+      await waitForContent(container, "Search documentation");
+
+      expect(container.textContent).toContain(BLOCKER_COPY);
+      expect(container.textContent).not.toContain("the only installed agent");
+    });
+
+    it("names no agent before CLI detection has real data", async () => {
+      setCliAvailability({ claude: "ready" }, false);
+
+      const { container } = renderTab();
+      await waitForContent(container, "Search documentation");
+
+      expect(container.textContent).toContain(BLOCKER_COPY);
+      expect(container.textContent).not.toContain("the only installed agent");
+    });
+
+    it("lets a saved agent win over the only installed one", async () => {
+      mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+      helpPanelState.preferredAgentId = "codex";
+      setCliAvailability({ claude: "ready", codex: "missing" });
+
+      const { container } = renderTab();
+      await waitForContent(container, "Bypass Codex approvals and sandbox");
+
+      expect(container.textContent).toContain("The CLI that runs the help assistant in the dock");
+      expect(container.textContent).not.toContain("the only installed agent");
+    });
+
+    it("offers the bypass toggle for the agent a new session starts on", async () => {
+      setCliAvailability({ claude: "ready" });
+
+      const { container } = renderTab();
+
+      await waitForContent(container, "Bypass Claude permission prompts");
+    });
+
+    function mockClaudeAndCodexCatalogs() {
+      window.electron.agentCapabilities.getResolvedModelList = vi
+        .fn()
+        .mockImplementation((agentId: string) =>
+          Promise.resolve({
+            agentId,
+            models:
+              agentId === "codex"
+                ? [
+                    { id: "gpt-6-astra", name: "GPT-6 Astra", shortLabel: "Astra" },
+                    { id: "gpt-6-luna", name: "GPT-6 Luna", shortLabel: "Luna" },
+                  ]
+                : [
+                    { id: "opus", name: "Opus", shortLabel: "Opus" },
+                    { id: "sonnet", name: "Sonnet", shortLabel: "Sonnet" },
+                  ],
+            contextWindow: null,
+            source: "merged",
+          })
+        );
+    }
+
+    it("names whichever agent is the only one installed", async () => {
+      mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+      setCliAvailability({ claude: "missing", codex: "ready" });
+
+      const { container } = renderTab();
+      await waitForContent(container, "Bypass Codex approvals and sandbox");
+
+      expect(container.textContent).toContain(
+        "Using Codex, the only installed agent the assistant supports"
+      );
+      expect(container.textContent).not.toContain("Bypass Claude");
+      expect(container.textContent).toContain("Codex's skip permission prompts setting");
+    });
+
+    it("writes a model change to that agent's entry without saving it as the agent", async () => {
+      mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+      mockClaudeAndCodexCatalogs();
+      setCliAvailability({ claude: "missing", codex: "ready" });
+
+      renderTab();
+      const select = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+      await waitFor(() => expect(select.value).toBe("__default__"));
+      fireEvent.change(select, { target: { value: "gpt-6-astra" } });
+
+      await waitFor(() =>
+        expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+          modelIds: { codex: "gpt-6-astra" },
+        })
+      );
+      expect(helpPanelState.setPreferredAgent).not.toHaveBeenCalled();
+    });
+
+    it("resets that agent's saved model without saving it as the agent", async () => {
+      installApi({
+        getSettings: vi.fn().mockResolvedValue({
+          docSearch: true,
+          daintreeControl: true,
+          tier: "core" as const,
+          bypassPermissions: false,
+          auditRetention: 7,
+          modelIds: { claude: "sonnet" },
+          customArgs: "",
+        }),
+      });
+      mockClaudeAndCodexCatalogs();
+      setCliAvailability({ claude: "ready" });
+
+      renderTab();
+      fireEvent.click(await screen.findByLabelText("Reset Model to default"));
+
+      await waitFor(() =>
+        expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+          modelIds: { claude: null },
+        })
+      );
+      expect(helpPanelState.setPreferredAgent).not.toHaveBeenCalled();
+    });
+
+    describe("Daintree confirmations", () => {
+      afterEach(() => {
+        useAgentSettingsStore.setState({ settings: null });
+      });
+
+      it("follows the only installed agent's own skip setting and links to its settings", async () => {
+        useAgentSettingsStore.setState({
+          settings: {
+            ...DEFAULT_AGENT_SETTINGS,
+            agents: { ...DEFAULT_AGENT_SETTINGS.agents, claude: { dangerousMode: "on" } },
+            globalSkipPermissions: false,
+          },
+        });
+        setCliAvailability({ claude: "ready" });
+        const dispatch = vi.spyOn(actionService, "dispatch");
+
+        const { container } = renderTab();
+        await waitForContent(container, "Daintree confirmations");
+
+        expect(container.textContent).toContain(
+          "By default it follows Claude Code's skip permission prompts setting, which is on, set on Claude Code."
+        );
+        expect(container.textContent).not.toContain("With no agent chosen");
+        const link = Array.from(container.querySelectorAll("button")).find(
+          (button) => button.textContent === "Claude Code's skip permission prompts setting"
+        );
+        if (!link) throw new Error("expected the agent settings link");
+        fireEvent.click(link);
+        expect(dispatch).toHaveBeenCalledWith(
+          "app.settings.openTab",
+          { tab: "agents", subtab: "claude" },
+          { source: "user" }
+        );
+        dispatch.mockRestore();
+      });
+    });
+
+    it("probes the version of the agent a new session starts on", async () => {
+      setCliAvailability({ claude: "ready" });
+
+      const { container } = renderTab();
+      await waitForContent(container, "Search documentation");
+
+      expect(window.electron.system.getAgentVersion).toHaveBeenCalledWith("claude");
+    });
+
+    it("drops the agent-specific settings when a second agent is installed", async () => {
+      mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+      setCliAvailability({ claude: "ready" });
+
+      const { container } = renderTab();
+      await waitForContent(container, "Bypass Claude permission prompts");
+
+      setCliAvailability({ claude: "ready", codex: "ready" });
+
+      await waitFor(() => expect(container.textContent).toContain(BLOCKER_COPY));
+      expect(container.textContent).not.toContain("Bypass Claude permission prompts");
+      expect(helpPanelState.setPreferredAgent).not.toHaveBeenCalled();
+    });
+  });
+
   it("renders exactly the model catalog the resolver returns", async () => {
     helpPanelState.preferredAgentId = "claude";
     window.electron.agentCapabilities.getResolvedModelList = vi.fn().mockResolvedValue({
@@ -1048,7 +1344,7 @@ describe("DaintreeAssistantSettingsTab", () => {
     await waitForContent(container, "Tool set");
 
     expect(container.textContent).toContain(
-      "Create worktrees, launch and prompt agents, and move, rename or close terminals"
+      "Create worktrees, launch and prompt agents, move, rename or close terminals, and read issues and PRs"
     );
     expect(container.textContent).not.toContain("This covers most orchestration");
 
@@ -2019,6 +2315,8 @@ describe("SessionLiveStatusCard (live help session)", () => {
 
   afterEach(() => {
     helpPanelState.sessionId = null;
+    helpPanelState.agentId = null;
+    helpPanelState.globalSelected = false;
   });
 
   const settingsWithTier = (tier: HelpAssistantTier) => ({
@@ -2114,6 +2412,74 @@ describe("SessionLiveStatusCard (live help session)", () => {
     );
 
     await waitFor(() => expect(getLiveSessionStatus).toHaveBeenCalledWith({ sessionId: "help-1" }));
+  });
+
+  it("names the lane it reads and the agent running it (#14990)", async () => {
+    helpPanelState.sessionId = "help-7";
+    helpPanelState.agentId = "claude";
+    const getLiveSessionStatus = vi
+      .fn()
+      .mockResolvedValue({ connected: true, tier: "core", activeGrants: [] });
+    installApi(
+      { getSettings: vi.fn().mockResolvedValue(settingsWithTier("core")), getLiveSessionStatus },
+      {}
+    );
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    await waitFor(() => expect(container.textContent).toContain("matches the configured default"));
+    expect(
+      container.querySelector('[data-testid="assistant-live-session-identity"]')?.textContent
+    ).toBe("Project · Session 1 · Claude Code");
+    expect(getLiveSessionStatus).toHaveBeenCalledWith({ sessionId: "help-7" });
+    expect(getLiveSessionStatus).not.toHaveBeenCalledWith({ sessionId: "help-1" });
+  });
+
+  it("never reads the project lane's status while the dock shows Global (#14990)", async () => {
+    helpPanelState.globalSelected = true;
+    const getLiveSessionStatus = vi
+      .fn()
+      .mockResolvedValue({ connected: true, tier: "core", activeGrants: [] });
+    installApi(
+      { getSettings: vi.fn().mockResolvedValue(settingsWithTier("core")), getLiveSessionStatus },
+      {},
+      {},
+      {
+        getGlobalAssistantState: vi.fn().mockResolvedValue({
+          phase: "running",
+          generation: 1,
+          agentId: "codex",
+          terminalId: "g-1",
+          attachments: [],
+          inputOwner: null,
+          inputEpoch: 0,
+          subject: {
+            hostId: "local",
+            scope: { kind: "global" },
+            terminalId: "g-1",
+            incarnation: 1,
+          },
+          agentState: null,
+        }),
+      }
+    );
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    await waitFor(() => expect(container.textContent).toContain("Running. Its tool set"), {
+      timeout: 5000,
+    });
+    expect(
+      container.querySelector('[data-testid="assistant-live-session-identity"]')?.textContent
+    ).toBe("Global · Codex");
+    expect(getLiveSessionStatus).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Approve grant" })).toBeNull();
   });
 });
 

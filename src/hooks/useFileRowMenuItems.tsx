@@ -37,6 +37,9 @@ import { isWorktreeRelativePath, matchesFileMenuTarget } from "@/registry/fileMe
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import type { BuiltInRuntimeActionId } from "@shared/config/actionIds";
 import type { CopyTreeRunSource, GitStatus } from "@shared/types";
+import type { ActionError } from "@shared/types/actions";
+import type { FileMutationKind } from "@/store/fileMutationConfirmStore";
+import { describeFileMutationFailure } from "@/components/Git/fileMutationCopy";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2";
@@ -45,7 +48,7 @@ const INSERT_LABEL = "Insert file reference";
 
 /**
  * Statuses with a committed state to go back to. `untracked` has none — its
- * only undo is Delete — and `conflicted` belongs to the conflict panel.
+ * only undo is Trash file — and `conflicted` belongs to the conflict panel.
  */
 const DISCARDABLE_STATUSES: ReadonlySet<GitStatus> = new Set([
   "modified",
@@ -106,7 +109,16 @@ function runRowAction<Result>(
   errorTitle: string,
   worktreeId: string | null,
   /** Called as each attempt starts, inside its gesture; returns its success handler. */
-  onAttempt?: () => (result: Result) => void
+  onAttempt?: () => (result: Result) => void,
+  /**
+   * Words a failure from its cause, for an action whose failures want more
+   * than "Retry" (#15122). `retry` runs the same call again; null means the
+   * failure leaves nothing worth saying.
+   */
+  describeFailure?: (
+    error: ActionError,
+    retry: () => void
+  ) => { title: string; message: string; action?: { label: string; onClick: () => void } } | null
 ): void {
   const run = async () => {
     const onSuccess = onAttempt?.();
@@ -114,18 +126,58 @@ function runRowAction<Result>(
       source: "context-menu",
     });
     if (!result.ok) {
+      const retry = () => void run();
+      const failure = describeFailure
+        ? describeFailure(result.error, retry)
+        : {
+            title: errorTitle,
+            message: result.error.message,
+            action: { label: "Retry", onClick: retry },
+          };
+      if (failure === null) return;
       notify({
         type: "error",
-        title: errorTitle,
-        message: result.error.message,
+        title: failure.title,
+        message: failure.message,
         context: worktreeId ? { worktreeId } : undefined,
-        action: { label: "Retry", onClick: () => void run() },
+        action: failure.action,
       });
       return;
     }
     onSuccess?.(result.result);
   };
   void run();
+}
+
+/**
+ * The failure toast for the two file-changing items: one fitting recovery per
+ * cause, or none, rather than a Retry that can only fail the same way again.
+ */
+function describeMutationFailure(
+  kind: FileMutationKind,
+  relativePath: string,
+  reveal: { label: string; run: () => void }
+): (
+  error: ActionError,
+  retry: () => void
+) => {
+  title: string;
+  message: string;
+  action?: { label: string; onClick: () => void };
+} | null {
+  return (error, retry) => {
+    const failure = describeFileMutationFailure(kind, relativePath, error.details, error.message);
+    if (failure.kind === "silent") return null;
+    const action =
+      failure.recovery === "review"
+        ? { label: "Review changes", onClick: retry }
+        : failure.recovery === "retry"
+          ? { label: "Retry", onClick: retry }
+          : failure.recovery === "reveal"
+            ? { label: reveal.label, onClick: reveal.run }
+            : undefined;
+    return { title: failure.title, message: failure.message, action };
+  };
 }
 
 /**
@@ -179,7 +231,7 @@ export interface FileRowMenuItemOptions {
   /**
    * Whether `status` describes the working tree. False for a base-branch
    * review, whose rows are committed changes: `Discard changes` and
-   * `Delete file` there would act on whatever the working tree happens to
+   * `Trash file` there would act on whatever the working tree happens to
    * hold, not on the change shown, so neither is offered.
    */
   statusIsLocal?: boolean;
@@ -355,28 +407,39 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
     [reveal, worktreeId]
   );
 
+  // The actions ask for the confirm, so a retry re-asks — with a fresh
+  // preview — rather than reusing an approval given for a file that may have
+  // changed since.
   const handleDiscardChanges = useCallback(
-    (relativePath: string) =>
-      // The action asks for the confirm, so Retry re-asks rather than reusing
-      // an approval given for a file that may have changed since.
+    (relativePath: string, absolutePath: string) =>
       runRowAction(
         "git.discardFileChanges",
         { worktreePath, filePath: relativePath },
         "Couldn't discard changes",
-        worktreeId
+        worktreeId,
+        undefined,
+        describeMutationFailure("discard", relativePath, {
+          label: reveal.label,
+          run: () => handleReveal(absolutePath),
+        })
       ),
-    [worktreePath, worktreeId]
+    [worktreePath, worktreeId, reveal, handleReveal]
   );
 
-  const handleDeleteFile = useCallback(
-    (relativePath: string) =>
+  const handleTrashFile = useCallback(
+    (relativePath: string, absolutePath: string) =>
       runRowAction(
         "file.trash",
         { worktreePath, filePath: relativePath },
-        "Couldn't delete file",
-        worktreeId
+        "Couldn't trash file",
+        worktreeId,
+        undefined,
+        describeMutationFailure("trash", relativePath, {
+          label: reveal.label,
+          run: () => handleReveal(absolutePath),
+        })
       ),
-    [worktreePath, worktreeId]
+    [worktreePath, worktreeId, reveal, handleReveal]
   );
 
   const handleCopyContext = useCallback(
@@ -433,7 +496,7 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
       // it back — and a conflicted one is the conflict panel's. An untracked
       // file gets this alone: with nothing to restore to, discarding it and
       // deleting it are one operation, so it is offered once.
-      const showDelete = canMutate && status !== "deleted" && status !== "conflicted";
+      const showTrash = canMutate && status !== "deleted" && status !== "conflicted";
       // The host decides which rows an item applies to (kind, extensions,
       // paths), so a plugin never has to no-op on a row it wasn't meant for. A
       // group left empty drops out, and with it the submenu and its label.
@@ -604,19 +667,21 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
             </>
           )}
           {/* Last and set apart: the only items here that change the file. */}
-          {(showDiscard || showDelete) && (
+          {(showDiscard || showTrash) && (
             <>
               <ContextMenuSeparator />
               {showDiscard && (
-                <ContextMenuItem onSelect={() => handleDiscardChanges(relativePath)}>
+                <ContextMenuItem onSelect={() => handleDiscardChanges(relativePath, absolutePath)}>
                   <RotateCcw className={ICON_CLASS} />
                   Discard changes
                 </ContextMenuItem>
               )}
-              {showDelete && (
-                <ContextMenuItem onSelect={() => handleDeleteFile(relativePath)}>
+              {/* "Trash", not "Delete": the file goes to the OS Trash, where it
+                  can be restored — the soft delete in the house wording. */}
+              {showTrash && (
+                <ContextMenuItem onSelect={() => handleTrashFile(relativePath, absolutePath)}>
                   <Trash2 className={ICON_CLASS} />
-                  Delete file
+                  Trash file
                 </ContextMenuItem>
               )}
             </>
@@ -639,7 +704,7 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
       handleCopyFileContents,
       handleReveal,
       handleDiscardChanges,
-      handleDeleteFile,
+      handleTrashFile,
     ]
   );
 

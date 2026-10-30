@@ -5,12 +5,33 @@ import { getWorstSeverity, SEVERITY_WEIGHTS } from "@/lib/notificationSeverity";
 // quarters of a laptop-height list, so the first screen held one row of what
 // had actually arrived. Overflow is still counted and still in the list below.
 const NEEDS_ATTENTION_CAP = 3;
+// History keeps unread entries forever, and the rail took that as licence to
+// pin an error nobody marked read for weeks, above whatever had just broken.
+// Past a day it is history, not "needs you now": still in Unread and All,
+// dated, but no longer promoted.
+export const NEEDS_ATTENTION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const CONTEXT_NONE_KEY = "__none__";
 
 export type NotificationFilter = "all" | "unread" | "archived" | "snoozed";
 
 function isUnreadGroup(group: ThreadGroup): boolean {
   return group.entries.some((e) => !e.seenAsToast);
+}
+
+/** Unread and warning-or-worse: what the rail pins while it is recent and not snoozed. */
+function isRailCandidate(group: ThreadGroup): boolean {
+  if (!isUnreadGroup(group)) return false;
+  const sev = getWorstSeverity(group.entries);
+  return sev === "error" || sev === "warning";
+}
+
+/** When the thread last got something the user hasn't seen. A newer read entry doesn't count. */
+function newestUnreadTimestamp(group: ThreadGroup): number {
+  let newest = -Infinity;
+  for (const e of group.entries) {
+    if (!e.seenAsToast && e.timestamp > newest) newest = e.timestamp;
+  }
+  return newest;
 }
 
 /** An agent asking for input outranks anything that has merely gone wrong. */
@@ -175,6 +196,7 @@ export function deriveTriageView({
   groupByContext,
   lastClosedAt,
   snoozedThreads,
+  now,
 }: {
   entries: NotificationHistoryEntry[];
   filteredEntries: NotificationHistoryEntry[];
@@ -182,12 +204,14 @@ export function deriveTriageView({
   groupByContext: boolean;
   lastClosedAt: number;
   snoozedThreads: Record<string, number>;
+  /** The clock for the rail's age horizon, moved by `msUntilNeedsAttentionExpiry`. */
+  now: number;
 }): TriageView {
-  const now = Date.now();
+  const snoozeNow = Date.now();
   const isSnoozedGroup = (g: ThreadGroup): boolean => {
     if (!g.correlationId) return false;
     const until = snoozedThreads[g.correlationId];
-    return typeof until === "number" && until > now;
+    return typeof until === "number" && until > snoozeNow;
   };
   // Pinned reflects the global unread severe-threads set so it stays the
   // same in All and Unread filter views. Hidden in Archived and Snoozed —
@@ -199,9 +223,8 @@ export function deriveTriageView({
       : groupByCorrelationId(entries.filter((e) => e.archivedAt === null))
           .filter((g) => {
             if (isSnoozedGroup(g)) return false;
-            if (!isUnreadGroup(g)) return false;
-            const sev = getWorstSeverity(g.entries);
-            return sev === "error" || sev === "warning";
+            if (!isRailCandidate(g)) return false;
+            return now - newestUnreadTimestamp(g) <= NEEDS_ATTENTION_MAX_AGE_MS;
           })
           .sort((a, b) => {
             // Asking first. The brief's first question is "is anything
@@ -215,7 +238,9 @@ export function deriveTriageView({
               SEVERITY_WEIGHTS[getWorstSeverity(b.entries)] -
               SEVERITY_WEIGHTS[getWorstSeverity(a.entries)];
             if (sevDiff !== 0) return sevDiff;
-            return b.latestTimestamp - a.latestTimestamp;
+            // The same clock as the horizon, so a read follow-up can't
+            // re-date a thread whose unread part is old.
+            return newestUnreadTimestamp(b) - newestUnreadTimestamp(a);
           });
   const pinned = severeUnread.slice(0, NEEDS_ATTENTION_CAP);
 
@@ -244,6 +269,25 @@ export function deriveTriageView({
     chronoSections: sections,
     dividerGroupId: divider,
   };
+}
+
+/**
+ * How long until the next thread ages out of Needs attention, or null when
+ * none will. Snoozed threads count too, so the clock is already current when
+ * one wakes and the rail recomputes for some other reason.
+ */
+export function msUntilNeedsAttentionExpiry(
+  entries: NotificationHistoryEntry[],
+  now: number
+): number | null {
+  let soonest: number | null = null;
+  for (const g of groupByCorrelationId(entries.filter((e) => e.archivedAt === null))) {
+    if (!isRailCandidate(g)) continue;
+    const left = newestUnreadTimestamp(g) + NEEDS_ATTENTION_MAX_AGE_MS - now;
+    if (left >= 0 && (soonest === null || left < soonest)) soonest = left;
+  }
+  // Still pinned at exactly the horizon, so land just past it.
+  return soonest === null ? null : soonest + 1;
 }
 
 /** One roving-focus stop per rendered row: the pinned rail first, then the list. */

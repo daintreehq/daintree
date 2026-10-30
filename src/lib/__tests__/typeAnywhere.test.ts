@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import {
   findPanelIdForElement,
+  focusOwnsKey,
   getFocusTarget,
   hasBlockingOverlay,
   hasUsefulFocus,
@@ -176,6 +177,35 @@ describe("hasUsefulFocus", () => {
   });
 });
 
+describe("focusOwnsKey", () => {
+  beforeEach(() => {
+    document.body.innerHTML = `
+      <div id="stage" tabindex="0" data-owned-keys="+-0"><span id="inner"></span></div>
+      <div id="plain" tabindex="0"></div>`;
+  });
+
+  it("owns only the keys the surface names", () => {
+    const stage = document.getElementById("stage");
+    expect(focusOwnsKey(stage, "+")).toBe(true);
+    expect(focusOwnsKey(stage, "0")).toBe(true);
+    // Not named, so the rescue still applies: the surface would eat it.
+    expect(focusOwnsKey(stage, "r")).toBe(false);
+  });
+
+  it("applies to focus on a descendant of the surface", () => {
+    expect(focusOwnsKey(document.getElementById("inner"), "-")).toBe(true);
+  });
+
+  it("owns nothing on a surface that names no keys", () => {
+    expect(focusOwnsKey(document.getElementById("plain"), "+")).toBe(false);
+    expect(focusOwnsKey(null, "+")).toBe(false);
+  });
+
+  it("never matches an empty key", () => {
+    expect(focusOwnsKey(document.getElementById("stage"), "")).toBe(false);
+  });
+});
+
 describe("getFocusTarget", () => {
   beforeEach(() => {
     document.body.innerHTML = "";
@@ -230,6 +260,25 @@ describe("hasBlockingOverlay", () => {
   it("ignores a non-modal dialog", () => {
     document.body.innerHTML = `<div role="dialog"></div>`;
     expect(hasBlockingOverlay()).toBe(false);
+  });
+
+  // It blocks one pane, not the window (#15037).
+  it("counts a page dialog only when focus is inside it", () => {
+    document.body.innerHTML = `<div role="dialog" data-pane-dialog><button id="ok"></button></div><button id="elsewhere"></button>`;
+    const ok = document.getElementById("ok")!;
+    const elsewhere = document.getElementById("elsewhere")!;
+
+    expect(hasBlockingOverlay(elsewhere)).toBe(false);
+    expect(hasBlockingOverlay(ok)).toBe(true);
+    expect(hasBlockingOverlay()).toBe(false);
+    ok.focus();
+    expect(hasBlockingOverlay()).toBe(true);
+  });
+
+  it("still blocks everywhere for an app modal beside a page dialog", () => {
+    document.body.innerHTML = `<div role="dialog" data-pane-dialog></div><div role="dialog" aria-modal="true"></div><button id="elsewhere"></button>`;
+
+    expect(hasBlockingOverlay(document.getElementById("elsewhere"))).toBe(true);
   });
 });
 

@@ -12,7 +12,8 @@ const {
   mockMcpSetSessionTier,
   mockMcpIssueGrant,
   mockMcpResetDenialCounts,
-  mockMcpRevokeSessionGrants,
+  mockMcpRevokeGrant,
+  mockMcpRevokeNativeGrant,
   mockSystemSleepOnSuspend,
   mockSystemSleepOnWake,
   systemSleepListeners,
@@ -42,7 +43,8 @@ const {
     expiresAt: Date.now() + 900_000,
   }),
   mockMcpResetDenialCounts: vi.fn().mockResolvedValue(undefined),
-  mockMcpRevokeSessionGrants: vi.fn().mockResolvedValue({ sessionId: "", revokedCount: 0 }),
+  mockMcpRevokeGrant: vi.fn().mockResolvedValue({ sessionId: "", toolId: "", revoked: true }),
+  mockMcpRevokeNativeGrant: vi.fn().mockResolvedValue({ grantId: "", revoked: true }),
   mockSystemSleepOnSuspend: vi.fn(),
   mockSystemSleepOnWake: vi.fn(),
   systemSleepListeners: {
@@ -253,8 +255,10 @@ beforeEach(() => {
     ttlMs: 900_000,
     expiresAt: Date.now() + 900_000,
   });
-  mockMcpRevokeSessionGrants.mockReset();
-  mockMcpRevokeSessionGrants.mockResolvedValue({ sessionId: "", revokedCount: 1 });
+  mockMcpRevokeGrant.mockReset();
+  mockMcpRevokeGrant.mockResolvedValue({ sessionId: "", toolId: "", revoked: true });
+  mockMcpRevokeNativeGrant.mockReset();
+  mockMcpRevokeNativeGrant.mockResolvedValue({ grantId: "", revoked: true });
   mockSystemSleepOnSuspend.mockReset();
   mockSystemSleepOnSuspend.mockImplementation((cb: () => void) => {
     systemSleepListeners.suspend.push(cb);
@@ -307,7 +311,8 @@ beforeEach(() => {
           setSessionTier: mockMcpSetSessionTier,
           issueGrant: mockMcpIssueGrant,
           resetDenialCounts: mockMcpResetDenialCounts,
-          revokeSessionGrants: mockMcpRevokeSessionGrants,
+          revokeGrant: mockMcpRevokeGrant,
+          revokeNativeGrant: mockMcpRevokeNativeGrant,
         },
         terminal: { gracefulKill: vi.fn().mockResolvedValue(null) },
       },
@@ -629,84 +634,94 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
     });
   }
 
-  it("grant.issued sets the active countdown and clears the prompting mismatch", () => {
+  function issue(toolId: string, expiresAt = Date.now() + 900_000) {
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "s1",
+      toolId,
+      ttlMs: 900_000,
+      expiresAt,
+    });
+  }
+
+  function toolIds(ctrl: HelpSessionController): string[] {
+    return ctrl.getSnapshot().activeGrants.map((g) => g.toolId);
+  }
+
+  function startController(): HelpSessionController {
     // #12108: MCP pushes are matched against the lane's own session id.
     helpPanelState.sessionId = "s1";
     const ctrl = new HelpSessionController();
     ctrl.start();
+    return ctrl;
+  }
+
+  it("grant.issued adds a countdown and clears the prompting mismatch", () => {
+    const ctrl = startController();
     armMismatch();
     expect(ctrl.getSnapshot().tierMismatch).not.toBeNull();
 
     const expiresAt = Date.now() + 900_000;
-    grantLifecycleListeners[0]?.({
-      type: "grant.issued",
-      sessionId: "s1",
-      toolId: "t1",
-      ttlMs: 900_000,
-      expiresAt,
-    });
+    issue("t1", expiresAt);
 
-    expect(ctrl.getSnapshot().activeGrant).toEqual({
-      sessionId: "s1",
-      toolId: "t1",
-      ttlMs: 900_000,
-      expiresAt,
-    });
+    expect(ctrl.getSnapshot().activeGrants).toEqual([
+      expect.objectContaining({ sessionId: "s1", toolId: "t1", ttlMs: 900_000, expiresAt }),
+    ]);
     expect(ctrl.getSnapshot().tierMismatch).toBeNull();
     expect(ctrl.getSnapshot().grantEnded).toBeNull();
     ctrl.stop();
   });
 
-  it("grant.issued without expiresAt is ignored rather than seeding a NaN countdown", () => {
-    // #12108: MCP pushes are matched against the lane's own session id.
-    helpPanelState.sessionId = "s1";
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    grantLifecycleListeners[0]?.({
-      type: "grant.issued",
-      sessionId: "s1",
-      toolId: "t1",
-      ttlMs: 900_000,
-    });
-    expect(ctrl.getSnapshot().activeGrant).toBeNull();
+  it("keeps every live approval instead of letting the newest replace the rest (#14975)", () => {
+    const ctrl = startController();
+    issue("t1");
+    issue("t2");
+    issue("t3");
+    expect(toolIds(ctrl)).toEqual(["t1", "t2", "t3"]);
+    const [first, , last] = ctrl.getSnapshot().activeGrants;
+
+    // Re-approving a tool replaces its own row in place, never adds a second.
+    const reissuedAt = Date.now() + 1_000_000;
+    issue("t2", reissuedAt);
+    expect(ctrl.getSnapshot().activeGrants).toEqual([
+      first,
+      expect.objectContaining({ toolId: "t2", expiresAt: reissuedAt }),
+      last,
+    ]);
     ctrl.stop();
   });
 
-  it("grant.expired retires the active grant and surfaces an 'expired' notice", () => {
-    // #12108: MCP pushes are matched against the lane's own session id.
-    helpPanelState.sessionId = "s1";
-    const ctrl = new HelpSessionController();
-    ctrl.start();
+  it("grant.issued without expiresAt is ignored rather than seeding a NaN countdown", () => {
+    const ctrl = startController();
     grantLifecycleListeners[0]?.({
       type: "grant.issued",
       sessionId: "s1",
       toolId: "t1",
       ttlMs: 900_000,
-      expiresAt: Date.now() + 900_000,
     });
+    expect(ctrl.getSnapshot().activeGrants).toEqual([]);
+    ctrl.stop();
+  });
+
+  it("grant.expired retires that grant and surfaces an 'expired' notice", () => {
+    const ctrl = startController();
+    issue("t1");
+    issue("t2");
+    issue("t3");
     grantLifecycleListeners[0]?.({
       type: "grant.expired",
       sessionId: "s1",
-      toolId: "t1",
+      toolId: "t2",
       ttlMs: 900_000,
     });
-    expect(ctrl.getSnapshot().activeGrant).toBeNull();
-    expect(ctrl.getSnapshot().grantEnded).toEqual({ toolId: "t1", reason: "expired" });
+    expect(toolIds(ctrl)).toEqual(["t1", "t3"]);
+    expect(ctrl.getSnapshot().grantEnded).toEqual({ toolId: "t2", reason: "expired" });
     ctrl.stop();
   });
 
   it("grant.revoked with grant-ceiling surfaces a ceiling notice", () => {
-    // #12108: MCP pushes are matched against the lane's own session id.
-    helpPanelState.sessionId = "s1";
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    grantLifecycleListeners[0]?.({
-      type: "grant.issued",
-      sessionId: "s1",
-      toolId: "t1",
-      ttlMs: 900_000,
-      expiresAt: Date.now() + 900_000,
-    });
+    const ctrl = startController();
+    issue("t1");
     grantLifecycleListeners[0]?.({
       type: "grant.revoked",
       sessionId: "s1",
@@ -714,7 +729,7 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
       ttlMs: 900_000,
       revokedReason: "grant-ceiling",
     });
-    expect(ctrl.getSnapshot().activeGrant).toBeNull();
+    expect(ctrl.getSnapshot().activeGrants).toEqual([]);
     expect(ctrl.getSnapshot().grantEnded).toEqual({ toolId: "t1", reason: "grant-ceiling" });
     ctrl.stop();
   });
@@ -722,95 +737,192 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
   it.each(["user", "session-ended", "session-idle"] as const)(
     "grant.revoked with reason %s clears the grant silently (no notice)",
     (revokedReason) => {
-      // #12108: MCP pushes are matched against the lane's own session id.
-      helpPanelState.sessionId = "s1";
-      const ctrl = new HelpSessionController();
-      ctrl.start();
-      grantLifecycleListeners[0]?.({
-        type: "grant.issued",
-        sessionId: "s1",
-        toolId: "t1",
-        ttlMs: 900_000,
-        expiresAt: Date.now() + 900_000,
-      });
+      const ctrl = startController();
+      issue("t1");
+      issue("t2");
       grantLifecycleListeners[0]?.({
         type: "grant.revoked",
         sessionId: "s1",
-        toolId: "t1",
+        toolId: "t2",
         ttlMs: 900_000,
         revokedReason,
       });
-      expect(ctrl.getSnapshot().activeGrant).toBeNull();
+      expect(toolIds(ctrl)).toEqual(["t1"]);
       expect(ctrl.getSnapshot().grantEnded).toBeNull();
       ctrl.stop();
     }
   );
 
-  it("a lapse for a different tool leaves the on-screen countdown intact", () => {
-    // #12108: MCP pushes are matched against the lane's own session id.
-    helpPanelState.sessionId = "s1";
-    const ctrl = new HelpSessionController();
-    ctrl.start();
+  it("grant.refreshed moves only its own grant's deadline after a use slides it (#14998)", () => {
+    const ctrl = startController();
+    const issuedAt = Date.now();
+    issue("t0", issuedAt + 900_000);
     grantLifecycleListeners[0]?.({
       type: "grant.issued",
       sessionId: "s1",
       toolId: "t1",
       ttlMs: 900_000,
+      expiresAt: issuedAt + 900_000,
+      maxExpiresAt: issuedAt + 1_800_000,
+    });
+    issue("t2", issuedAt + 900_000);
+    const t1 = () => ctrl.getSnapshot().activeGrants.find((g) => g.toolId === "t1");
+    expect(t1()?.maxExpiresAt).toBe(issuedAt + 1_800_000);
+
+    grantLifecycleListeners[0]?.({
+      type: "grant.refreshed",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt: issuedAt + 1_500_000,
+      maxExpiresAt: issuedAt + 1_700_000,
+    });
+    expect(t1()).toMatchObject({
+      expiresAt: issuedAt + 1_500_000,
+      maxExpiresAt: issuedAt + 1_700_000,
+    });
+
+    // A refresh that doesn't restate the ceiling keeps the one already known.
+    grantLifecycleListeners[0]?.({
+      type: "grant.refreshed",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt: issuedAt + 1_600_000,
+    });
+    expect(t1()).toMatchObject({
+      expiresAt: issuedAt + 1_600_000,
+      maxExpiresAt: issuedAt + 1_700_000,
+    });
+
+    // The other tools' countdowns never moved.
+    expect(toolIds(ctrl)).toEqual(["t0", "t1", "t2"]);
+    expect(ctrl.getSnapshot().activeGrants[0]?.expiresAt).toBe(issuedAt + 900_000);
+    expect(ctrl.getSnapshot().activeGrants[2]?.expiresAt).toBe(issuedAt + 900_000);
+    ctrl.stop();
+  });
+
+  it('tells native grants apart by grantId, not their shared "*" tool id (#14998)', () => {
+    const ctrl = startController();
+    const now = Date.now();
+    const native = (
+      grantId: string,
+      type:
+        "grant.issued" | "grant.refreshed" | "grant.expired" | "grant.revoked" | "grant.exhausted",
+      extra: { toolId?: string; expiresAt?: number } = {}
+    ) =>
+      grantLifecycleListeners[0]?.({
+        type,
+        sessionId: "s1",
+        toolId: extra.toolId ?? "*",
+        ttlMs: 900_000,
+        expiresAt: extra.expiresAt,
+        grantId,
+        allowedTools: ["project.runCheck"],
+        revokedReason: type === "grant.revoked" ? "grant-ceiling" : undefined,
+      });
+    const nativeIds = () => ctrl.getSnapshot().activeGrants.map((g) => g.grantId);
+
+    native("native-a", "grant.issued", { expiresAt: now + 900_000 });
+    native("native-b", "grant.issued", { expiresAt: now + 900_000 });
+    expect(nativeIds()).toEqual(["native-a", "native-b"]);
+    expect(ctrl.getSnapshot().activeGrants[0]?.allowedTools).toEqual(["project.runCheck"]);
+
+    // native-a's use moves only its own countdown, and its end leaves native-b.
+    native("native-a", "grant.refreshed", { expiresAt: now + 1_200_000 });
+    expect(ctrl.getSnapshot().activeGrants[0]?.expiresAt).toBe(now + 1_200_000);
+    expect(ctrl.getSnapshot().activeGrants[1]?.expiresAt).toBe(now + 900_000);
+    native("native-a", "grant.revoked");
+    expect(nativeIds()).toEqual(["native-b"]);
+
+    // A per-tool event never ends a native grant, even one naming "*".
+    grantLifecycleListeners[0]?.({ type: "grant.expired", sessionId: "s1", toolId: "*", ttlMs: 1 });
+    expect(nativeIds()).toEqual(["native-b"]);
+    // Its lazy expiry names the tool that tripped it, and still retires it.
+    native("native-b", "grant.expired", { toolId: "t9" });
+    expect(ctrl.getSnapshot().activeGrants).toEqual([]);
+    expect(ctrl.getSnapshot().grantEnded).toEqual({ toolId: "*", reason: "expired" });
+
+    // A native lazy expiry names the tool that tripped it; it must not end a
+    // per-tool grant for that same tool.
+    issue("t1", now + 900_000);
+    native("native-c", "grant.expired", { toolId: "t1" });
+    native("native-c", "grant.refreshed", { toolId: "t1", expiresAt: now + 1_200_000 });
+    expect(ctrl.getSnapshot().activeGrants).toEqual([
+      expect.objectContaining({ toolId: "t1", expiresAt: now + 900_000, grantId: undefined }),
+    ]);
+
+    // A native grant that used its last use retires silently, alone.
+    ctrl.dismissGrantEnded();
+    native("native-d", "grant.issued", { expiresAt: now + 900_000 });
+    native("native-e", "grant.issued", { expiresAt: now + 900_000 });
+    native("native-d", "grant.exhausted", { toolId: "project.runCheck" });
+    expect(ctrl.getSnapshot().activeGrants.map((g) => g.grantId ?? g.toolId)).toEqual([
+      "t1",
+      "native-e",
+    ]);
+    expect(ctrl.getSnapshot().grantEnded).toBeNull();
+    ctrl.stop();
+  });
+
+  it("a grant.refreshed after the grant ended never re-arms the countdown (#14998)", () => {
+    const ctrl = startController();
+    issue("t1");
+    grantLifecycleListeners[0]?.({
+      type: "grant.expired",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+    });
+    grantLifecycleListeners[0]?.({
+      type: "grant.refreshed",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
       expiresAt: Date.now() + 900_000,
     });
-    // A stale expiry for a tool we're not counting down must not clear t1.
+    expect(ctrl.getSnapshot().activeGrants).toEqual([]);
+    expect(ctrl.getSnapshot().grantEnded).toEqual({ toolId: "t1", reason: "expired" });
+    ctrl.stop();
+  });
+
+  it("a lapse for a tool with no live grant leaves the countdowns intact", () => {
+    const ctrl = startController();
+    issue("t1");
     grantLifecycleListeners[0]?.({
       type: "grant.expired",
       sessionId: "s1",
       toolId: "other-tool",
       ttlMs: 900_000,
     });
-    expect(ctrl.getSnapshot().activeGrant?.toolId).toBe("t1");
+    expect(toolIds(ctrl)).toEqual(["t1"]);
     expect(ctrl.getSnapshot().grantEnded).toBeNull();
     ctrl.stop();
   });
 
   it("tier.elevated / tier.decayed do not disturb the per-tool countdown", () => {
-    // #12108: MCP pushes are matched against the lane's own session id.
-    helpPanelState.sessionId = "s1";
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    grantLifecycleListeners[0]?.({
-      type: "grant.issued",
-      sessionId: "s1",
-      toolId: "t1",
-      ttlMs: 900_000,
-      expiresAt: Date.now() + 900_000,
-    });
+    const ctrl = startController();
+    issue("t1");
     grantLifecycleListeners[0]?.({
       type: "tier.elevated",
       sessionId: "s1",
       toolId: "*",
       ttlMs: 900_000,
     });
-    expect(ctrl.getSnapshot().activeGrant?.toolId).toBe("t1");
+    expect(toolIds(ctrl)).toEqual(["t1"]);
     grantLifecycleListeners[0]?.({
       type: "tier.decayed",
       sessionId: "s1",
       toolId: "*",
       ttlMs: 900_000,
     });
-    expect(ctrl.getSnapshot().activeGrant?.toolId).toBe("t1");
+    expect(toolIds(ctrl)).toEqual(["t1"]);
     ctrl.stop();
   });
 
   it("a fresh tier denial supersedes a lingering 'approval ended' notice", () => {
-    // #12108: MCP pushes are matched against the lane's own session id.
-    helpPanelState.sessionId = "s1";
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    grantLifecycleListeners[0]?.({
-      type: "grant.issued",
-      sessionId: "s1",
-      toolId: "t1",
-      ttlMs: 900_000,
-      expiresAt: Date.now() + 900_000,
-    });
+    const ctrl = startController();
+    issue("t1");
     grantLifecycleListeners[0]?.({
       type: "grant.expired",
       sessionId: "s1",
@@ -824,128 +936,230 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
     ctrl.stop();
   });
 
-  function issueGrant() {
+  function keyOf(ctrl: HelpSessionController, toolId: string): string {
+    const grant = ctrl.getSnapshot().activeGrants.find((g) => g.toolId === toolId);
+    if (!grant) throw new Error(`no live grant for ${toolId}`);
+    return grant.key;
+  }
+
+  it("revoking one approval ends only that grant and leaves the others live (#14975)", async () => {
+    const ctrl = startController();
+    issue("t1");
+    issue("t2");
+
+    ctrl.revokeGrant(keyOf(ctrl, "t2"));
+    expect(ctrl.getSnapshot().revokingGrantKeys).toEqual([keyOf(ctrl, "t2")]);
+    expect(mockMcpRevokeGrant).toHaveBeenCalledWith({ sessionId: "s1", toolId: "t2" });
+    // Authoritative renderer-side fallback: even with no `grant.revoked`
+    // lifecycle event echoed back, the row clears when the IPC settles.
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().revokingGrantKeys).toEqual([]);
+      expect(toolIds(ctrl)).toEqual(["t1"]);
+    });
+    ctrl.stop();
+  });
+
+  it("revokes a native automation grant by its id", async () => {
+    const ctrl = startController();
     grantLifecycleListeners[0]?.({
       type: "grant.issued",
       sessionId: "s1",
+      toolId: "*",
+      ttlMs: 900_000,
+      expiresAt: Date.now() + 900_000,
+      grantId: "native-a",
+    });
+    issue("t1");
+    const nativeKey = ctrl.getSnapshot().activeGrants[0]!.key;
+
+    ctrl.revokeGrant(nativeKey);
+    expect(mockMcpRevokeNativeGrant).toHaveBeenCalledWith({ grantId: "native-a" });
+    expect(mockMcpRevokeGrant).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(toolIds(ctrl)).toEqual(["t1"]);
+    });
+    ctrl.stop();
+  });
+
+  it("a second click on a grant whose revoke is in flight is a no-op, but another grant's isn't", () => {
+    const ctrl = startController();
+    issue("t1");
+    issue("t2");
+    mockMcpRevokeGrant.mockReturnValue(new Promise(() => {}));
+    ctrl.revokeGrant(keyOf(ctrl, "t1"));
+    ctrl.revokeGrant(keyOf(ctrl, "t1"));
+    expect(mockMcpRevokeGrant).toHaveBeenCalledTimes(1);
+
+    ctrl.revokeGrant(keyOf(ctrl, "t2"));
+    expect(mockMcpRevokeGrant).toHaveBeenCalledTimes(2);
+    expect(ctrl.getSnapshot().revokingGrantKeys).toEqual([keyOf(ctrl, "t1"), keyOf(ctrl, "t2")]);
+    ctrl.stop();
+  });
+
+  it("settling one revoke leaves another in flight, and a failure touches only its own row", async () => {
+    const ctrl = startController();
+    issue("t1");
+    issue("t2");
+    issue("t3");
+    const t1Key = keyOf(ctrl, "t1");
+    const t2Key = keyOf(ctrl, "t2");
+    let resolveT1: (() => void) | undefined;
+    let rejectT2: (() => void) | undefined;
+    mockMcpRevokeGrant
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveT1 = () => resolve({ sessionId: "s1", toolId: "t1", revoked: true });
+        })
+      )
+      .mockReturnValueOnce(
+        new Promise((_, reject) => {
+          rejectT2 = () => reject(new Error("ipc boom"));
+        })
+      );
+    ctrl.revokeGrant(t1Key);
+    ctrl.revokeGrant(t2Key);
+
+    rejectT2?.();
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().revokingGrantKeys).toEqual([t1Key]);
+    });
+    expect(toolIds(ctrl)).toEqual(["t1", "t2", "t3"]);
+
+    resolveT1?.();
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().revokingGrantKeys).toEqual([]);
+    });
+    expect(toolIds(ctrl)).toEqual(["t2", "t3"]);
+    ctrl.stop();
+  });
+
+  it("a use that slides the grant mid-revoke doesn't stop the reply from removing its row", async () => {
+    const ctrl = startController();
+    issue("t1");
+    let resolveRevoke: (() => void) | undefined;
+    mockMcpRevokeGrant.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveRevoke = () => resolve({ sessionId: "s1", toolId: "t1", revoked: true });
+      })
+    );
+    ctrl.revokeGrant(keyOf(ctrl, "t1"));
+    grantLifecycleListeners[0]?.({
+      type: "grant.refreshed",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      expiresAt: Date.now() + 1_000_000,
+    });
+    resolveRevoke?.();
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().activeGrants).toEqual([]);
+    });
+    ctrl.stop();
+  });
+
+  it("a revoke reply that lands after the same tool was approved again keeps the new approval", async () => {
+    const ctrl = startController();
+    issue("t1");
+    let resolveRevoke: (() => void) | undefined;
+    mockMcpRevokeGrant.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveRevoke = () => resolve({ sessionId: "s1", toolId: "t1", revoked: true });
+      })
+    );
+    ctrl.revokeGrant(keyOf(ctrl, "t1"));
+    // Main revoked it and said so, then the tool was approved again, all before
+    // the revoke's own reply reached the renderer.
+    grantLifecycleListeners[0]?.({
+      type: "grant.revoked",
+      sessionId: "s1",
+      toolId: "t1",
+      ttlMs: 900_000,
+      revokedReason: "user",
+    });
+    const reissuedAt = Date.now() + 1_000_000;
+    issue("t1", reissuedAt);
+
+    resolveRevoke?.();
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().revokingGrantKeys).toEqual([]);
+    });
+    expect(ctrl.getSnapshot().activeGrants).toEqual([
+      expect.objectContaining({ toolId: "t1", expiresAt: reissuedAt }),
+    ]);
+    ctrl.stop();
+  });
+
+  it("a revoke that settles leaves a grant approved while it was in flight", async () => {
+    const ctrl = startController();
+    issue("t1");
+    let resolveRevoke: (() => void) | undefined;
+    mockMcpRevokeGrant.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveRevoke = () => resolve({ sessionId: "s1", toolId: "t1", revoked: true });
+      })
+    );
+    ctrl.revokeGrant(keyOf(ctrl, "t1"));
+    issue("t2");
+    resolveRevoke?.();
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().revokingGrantKeys).toEqual([]);
+    });
+    expect(toolIds(ctrl)).toEqual(["t2"]);
+    ctrl.stop();
+  });
+
+  it("a failed revoke keeps that grant's row up as the retry surface", async () => {
+    const ctrl = startController();
+    issue("t1");
+    mockMcpRevokeGrant.mockRejectedValueOnce(new Error("ipc boom"));
+    ctrl.revokeGrant(keyOf(ctrl, "t1"));
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().revokingGrantKeys).toEqual([]);
+    });
+    // Revoke failed → the grant is still live, so the row must stay put.
+    expect(toolIds(ctrl)).toEqual(["t1"]);
+    ctrl.stop();
+  });
+
+  it("a teardown mid-revoke does not leak a disabled Revoke button into the next grant", async () => {
+    const ctrl = startController();
+    issue("t1");
+    let resolveRevoke: (() => void) | undefined;
+    mockMcpRevokeGrant.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveRevoke = () => resolve({ sessionId: "s1", toolId: "t1", revoked: true });
+      })
+    );
+    ctrl.revokeGrant(keyOf(ctrl, "t1"));
+    expect(ctrl.getSnapshot().revokingGrantKeys).toHaveLength(1);
+    helpPanelState.terminalId = "term-1";
+    helpPanelState.sessionId = "sess-1";
+    ctrl.handleTerminalPanelMissing({ terminalId: "term-1", terminalExists: false });
+    expect(ctrl.getSnapshot().revokingGrantKeys).toEqual([]);
+    expect(ctrl.getSnapshot().activeGrants).toEqual([]);
+
+    // The next session approves the same tool; the old reply lands late and
+    // must leave that approval, and its Revoke button, alone.
+    grantLifecycleListeners[0]?.({
+      type: "grant.issued",
+      sessionId: "sess-1",
       toolId: "t1",
       ttlMs: 900_000,
       expiresAt: Date.now() + 900_000,
     });
-  }
-
-  it("revokeGrant() revokes the session's grants and clears the countdown once the IPC settles", async () => {
-    // #12108: MCP pushes are matched against the lane's own session id.
-    helpPanelState.sessionId = "s1";
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    issueGrant();
-    ctrl.revokeGrant();
-    expect(ctrl.getSnapshot().isRevokingGrant).toBe(true);
-    expect(mockMcpRevokeSessionGrants).toHaveBeenCalledWith({ sessionId: "s1" });
-    // Authoritative renderer-side fallback: even with no `grant.revoked`
-    // lifecycle event echoed back, the countdown clears when the IPC settles.
-    await vi.waitFor(() => {
-      expect(ctrl.getSnapshot().isRevokingGrant).toBe(false);
-      expect(ctrl.getSnapshot().activeGrant).toBeNull();
-    });
-    ctrl.stop();
-  });
-
-  it("revokeGrant() is a no-op while a revoke is already in flight", () => {
-    // #12108: MCP pushes are matched against the lane's own session id.
-    helpPanelState.sessionId = "s1";
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    issueGrant();
-    let resolveRevoke: (() => void) | undefined;
-    mockMcpRevokeSessionGrants.mockReturnValueOnce(
-      new Promise<{ sessionId: string; revokedCount: number }>((resolve) => {
-        resolveRevoke = () => resolve({ sessionId: "s1", revokedCount: 1 });
-      })
-    );
-    ctrl.revokeGrant();
-    ctrl.revokeGrant();
-    expect(mockMcpRevokeSessionGrants).toHaveBeenCalledTimes(1);
+    const next = ctrl.getSnapshot().activeGrants;
+    expect(next).toHaveLength(1);
     resolveRevoke?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(ctrl.getSnapshot().activeGrants).toBe(next);
+    expect(ctrl.getSnapshot().revokingGrantKeys).toEqual([]);
     ctrl.stop();
   });
 
-  it("revokeGrant() does not wipe a newer grant that arrived before the IPC settled", async () => {
-    // #12108: MCP pushes are matched against the lane's own session id.
-    helpPanelState.sessionId = "s1";
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    issueGrant();
-    let resolveRevoke: (() => void) | undefined;
-    mockMcpRevokeSessionGrants.mockReturnValueOnce(
-      new Promise<{ sessionId: string; revokedCount: number }>((resolve) => {
-        resolveRevoke = () => resolve({ sessionId: "s1", revokedCount: 1 });
-      })
-    );
-    ctrl.revokeGrant();
-    // A new grant for a different tool lands while the revoke is in flight.
-    const newerExpiry = Date.now() + 900_000;
-    grantLifecycleListeners[0]?.({
-      type: "grant.issued",
-      sessionId: "s1",
-      toolId: "t2",
-      ttlMs: 900_000,
-      expiresAt: newerExpiry,
-    });
-    resolveRevoke?.();
-    await vi.waitFor(() => {
-      expect(ctrl.getSnapshot().isRevokingGrant).toBe(false);
-    });
-    // The settle must not clear the newer t2 grant — only the one we revoked.
-    expect(ctrl.getSnapshot().activeGrant?.toolId).toBe("t2");
-    ctrl.stop();
-  });
-
-  it("a failed revoke keeps the countdown banner up as the retry surface", async () => {
-    // #12108: MCP pushes are matched against the lane's own session id.
-    helpPanelState.sessionId = "s1";
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    issueGrant();
-    mockMcpRevokeSessionGrants.mockRejectedValueOnce(new Error("ipc boom"));
-    ctrl.revokeGrant();
-    await vi.waitFor(() => {
-      expect(ctrl.getSnapshot().isRevokingGrant).toBe(false);
-    });
-    // Revoke failed → the grant is still live, so the banner must stay put.
-    expect(ctrl.getSnapshot().activeGrant?.toolId).toBe("t1");
-    ctrl.stop();
-  });
-
-  it("a teardown mid-revoke does not leak a disabled Revoke button into the next grant", () => {
-    // #12108: MCP pushes are matched against the lane's own session id.
-    helpPanelState.sessionId = "s1";
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    issueGrant();
-    mockMcpRevokeSessionGrants.mockReturnValueOnce(
-      new Promise<{ sessionId: string; revokedCount: number }>(() => {
-        // never resolves — the teardown happens first
-      })
-    );
-    ctrl.revokeGrant();
-    expect(ctrl.getSnapshot().isRevokingGrant).toBe(true);
-    helpPanelState.terminalId = "term-1";
-    helpPanelState.sessionId = "sess-1";
-    ctrl.handleTerminalPanelMissing({ terminalId: "term-1", terminalExists: false });
-    expect(ctrl.getSnapshot().isRevokingGrant).toBe(false);
-    expect(ctrl.getSnapshot().activeGrant).toBeNull();
-    ctrl.stop();
-  });
-
-  it("revokeGrant() is a no-op when there is no active grant", () => {
-    // #12108: MCP pushes are matched against the lane's own session id.
-    helpPanelState.sessionId = "s1";
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    ctrl.revokeGrant();
-    expect(mockMcpRevokeSessionGrants).not.toHaveBeenCalled();
+  it("revokeGrant() is a no-op for a key with no live grant", () => {
+    const ctrl = startController();
+    ctrl.revokeGrant("tool:s1:t1");
+    expect(mockMcpRevokeGrant).not.toHaveBeenCalled();
     ctrl.stop();
   });
 });

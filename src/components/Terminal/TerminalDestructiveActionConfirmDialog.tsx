@@ -286,7 +286,10 @@ function TargetPreview({
                   {terminal.hasRunningAgent && (
                     <span className="flex shrink-0 items-center gap-1 text-xs text-text-secondary">
                       <WorkingIcon
-                        className={cn("h-3 w-3", STATE_COLORS.working)}
+                        className={cn(
+                          "h-3 w-3 animate-spin-slow motion-reduce:animate-none",
+                          STATE_COLORS.working
+                        )}
                         aria-hidden="true"
                       />
                       Working

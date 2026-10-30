@@ -523,10 +523,10 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
       const { filePath, ...location } = fileMutationArgsSchema.parse(args);
       const worktreePath = requireWorktreePath(location, ctx);
       if (ctx.dispatchSource !== "agent") {
-        const confirmed = await useFileMutationConfirmStore
+        const approval = await useFileMutationConfirmStore
           .getState()
-          .requestConfirmation({ kind: "trash", relativePath: filePath });
-        if (!confirmed) return;
+          .requestConfirmation({ kind: "trash", relativePath: filePath, worktreePath });
+        if (!approval) return;
       }
       await window.electron.files.trash({ worktreePath, relativePath: filePath });
       try {

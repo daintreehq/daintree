@@ -157,7 +157,7 @@ function PanelDialogFrame({
     >
       <AppDialog.Header>
         <AppDialog.Title>{panel.title}</AppDialog.Title>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 self-start">
           {/* Promotion always targets the topmost dialog, so it is only offered
               there — a suspended parent's button would move the wrong panel. */}
           {canReload && (

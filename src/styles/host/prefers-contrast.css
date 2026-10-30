@@ -130,7 +130,7 @@
   }
 
   /* Native form controls have border-width:0 from Preflight; restoring a
-   * visible 2px border (with the theme's own color) anchors the click target. */
+   * visible 2px border anchors the click target. */
   button,
   [role="button"],
   [type="button"],
@@ -140,6 +140,42 @@
   select,
   textarea {
     border-width: 2px;
+  }
+
+  /* The frame's ink. Left to the base `* { border-border }` it is the quietest
+     rung of the divider ladder, about 1.1:1 on every surface, so the widened
+     border drew nothing. `text-secondary` is held to 4.5:1 against all five
+     display surfaces in both polarities (`CONTRAST_PAIRS`), clear of the 3:1
+     WCAG 1.4.11 asks of a control's boundary.
+
+     In the base layer, unlike everything else in this block: a control that
+     colours its own border says so with a utility (an invalid field's status
+     edge, a selected tab's underline), and that utility has to keep winning.
+     Only the fall-through changes.
+
+     Text entry is left out. A bare `input` or `textarea` is usually the inner
+     half of a compound field whose shell draws the edge (date pickers, the
+     mention composer, the search fields), and inking its border would draw a
+     second box inside the first. Text fields take their frame from
+     `border-input` below. */
+  @layer base {
+    button,
+    [role="button"],
+    [type="button"],
+    [type="submit"],
+    [type="reset"],
+    select {
+      border-color: var(--color-text-secondary);
+    }
+  }
+
+  /* The text-entry edge takes the same ink. `border-input` is the field
+     boundary's own token, named by every `Input`, `Textarea`, `SelectTrigger`
+     and field shell, but most themes leave it following `border-strong`
+     (1.2-1.5:1). Rebound on `body` because theme tokens are inline styles on the
+     root element, which no `:root` rule can outrank. */
+  body {
+    --theme-border-input: var(--theme-text-secondary);
   }
 
   /* Same exemption as the forced-colors block, and deliberately restated here

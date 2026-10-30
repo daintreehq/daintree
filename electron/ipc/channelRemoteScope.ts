@@ -43,6 +43,7 @@ export const CHANNEL_REMOTE_SCOPE: Readonly<Record<string, RemoteScopeTarget>> =
   "terminal:replay-history": TERMINAL_FIELD,
   "claude:list-subagents": TERMINAL_FIELD,
   "claude:read-subagent-transcript": TERMINAL_FIELD,
+  "claude:find-reply-span": TERMINAL_FIELD,
   "codex:list-subagents": TERMINAL_FIELD,
   "codex:read-subagent-transcript": TERMINAL_FIELD,
   // A folder in no project is anyone's to ask about; another project's is not.
@@ -56,6 +57,7 @@ export const CHANNEL_REMOTE_SCOPE: Readonly<Record<string, RemoteScopeTarget>> =
   // another project's is not.
   "git:mark-safe-directory": [{ from: "path", at: [0], unowned: "allow" }],
   "git:get-file-diff": CWD_FIELD,
+  "git:preview-file-mutation": [{ from: "path", at: [0, "worktreePath"] }],
   "git:get-working-diff": CWD_FIELD,
   "git:get-staging-status": CWD_ARG,
   "git:get-username": CWD_ARG,

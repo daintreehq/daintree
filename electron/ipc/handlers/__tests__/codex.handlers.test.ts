@@ -11,6 +11,7 @@ const serviceMock = vi.hoisted(() => ({
   readCodexSubagentTranscript: vi.fn(),
   resolveCodexResumeLatestSession: vi.fn(),
   listCodexSessionsForCwd: vi.fn(),
+  matchCodexRestoreSessions: vi.fn(),
 }));
 
 vi.mock("electron", () => ({ ipcMain: ipcMainMock }));
@@ -38,6 +39,7 @@ function fakeEvent(): Electron.IpcMainInvokeEvent {
 
 const resolveChannel = CHANNELS.CODEX_RESOLVE_RESUME_LATEST_SESSION;
 const findSessionsChannel = CHANNELS.CODEX_FIND_SESSIONS;
+const matchRestoreChannel = CHANNELS.CODEX_MATCH_RESTORE_SESSIONS;
 
 describe("codex IPC handlers", () => {
   let cleanup: () => void;
@@ -133,6 +135,54 @@ describe("codex IPC handlers", () => {
       await expect(getHandler(findSessionsChannel)(fakeEvent(), { cwd: "/repo" })).rejects.toThrow(
         "app-server down"
       );
+    });
+  });
+
+  describe("matchRestoreSessions", () => {
+    const hash = "a".repeat(64);
+    const request = {
+      scopes: [
+        {
+          cwd: "/repo",
+          codexHome: "/profiles/work",
+          reserveLatest: true,
+          panes: [{ key: "pane-1", promptHash: hash, at: 1_800_000_000_000, resolve: true }],
+        },
+      ],
+      exclude: ["sess-held"],
+    };
+
+    it("passes a well-formed request through and returns ids only", async () => {
+      serviceMock.matchCodexRestoreSessions.mockResolvedValue({
+        matches: [{ key: "pane-1", sessionId: "sess-1" }],
+      });
+
+      const result = await getHandler(matchRestoreChannel)(fakeEvent(), request);
+
+      expect(result).toEqual({ matches: [{ key: "pane-1", sessionId: "sess-1" }] });
+      expect(serviceMock.matchCodexRestoreSessions).toHaveBeenCalledWith(request);
+    });
+
+    const withPane = (pane: Record<string, unknown>) => ({
+      ...request,
+      scopes: [{ ...request.scopes[0], panes: [{ ...request.scopes[0]!.panes[0], ...pane }] }],
+    });
+
+    it.each([
+      ["prompt text in place of a digest", withPane({ promptHash: "Fix the parser" })],
+      ["an uppercase digest", withPane({ promptHash: "A".repeat(64) })],
+      ["a launch time that isn't one", withPane({ at: 0 })],
+      ["a relative folder", { ...request, scopes: [{ ...request.scopes[0], cwd: "repo" }] }],
+      [
+        "a relative profile",
+        { ...request, scopes: [{ ...request.scopes[0], codexHome: "profiles/work" }] },
+      ],
+      ["a scope with no panes", { ...request, scopes: [{ ...request.scopes[0], panes: [] }] }],
+      ["a missing exclude list", { scopes: request.scopes }],
+    ])("rejects %s before reaching the service", async (_label, payload) => {
+      await expect(getHandler(matchRestoreChannel)(fakeEvent(), payload)).rejects.toThrow();
+
+      expect(serviceMock.matchCodexRestoreSessions).not.toHaveBeenCalled();
     });
   });
 

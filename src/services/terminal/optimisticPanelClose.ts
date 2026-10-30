@@ -18,6 +18,12 @@
 import { panelStoreApi } from "@/store";
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { consultPanelCloseGuards, hasPanelCloseGuard } from "@/services/panelCloseGuard";
+import { pickGridSuccessorFocusId } from "@/store/panelFocusFallback";
+import {
+  getClosingIds,
+  isOptimisticallyClosing,
+  replaceClosingIds,
+} from "@/services/terminal/optimisticPanelCloseIds";
 import { logError } from "@/utils/logger";
 
 // The canonical teardown runs in idle time — after the optimistic removal has
@@ -55,7 +61,6 @@ export interface PanelCloseRequest {
 }
 
 const EMPTY: ReadonlySet<string> = new Set<string>();
-let closingIds: ReadonlySet<string> = EMPTY;
 let renderClosingIds: ReadonlySet<string> = EMPTY;
 let pending: PanelCloseRequest[] = [];
 let flushTimer: number | undefined;
@@ -84,22 +89,20 @@ export function getClosingIdsSnapshot(): ReadonlySet<string> {
   return renderClosingIds;
 }
 
-export function isOptimisticallyClosing(id: string): boolean {
-  return closingIds.has(id);
-}
+export { isOptimisticallyClosing };
 
 export function hasPendingOptimisticCloses(): boolean {
   return pending.length > 0;
 }
 
 function setClosingIds(next: Set<string>): void {
-  closingIds = next.size === 0 ? EMPTY : next;
+  replaceClosingIds(next);
   renderClosingIds = EMPTY;
   emit();
 }
 
 function setClosingIdsSilently(next: Set<string>): void {
-  closingIds = next.size === 0 ? EMPTY : next;
+  replaceClosingIds(next);
 }
 
 function getPanelElement(id: string): HTMLElement | null {
@@ -126,67 +129,6 @@ function hidePanelsImperatively(ids: string[]): void {
   }
 }
 
-function firstFocusablePanelInGroup(
-  panelIds: string[],
-  activeTabId: string | undefined,
-  closing: ReadonlySet<string>
-): string | null {
-  if (activeTabId && panelIds.includes(activeTabId) && !closing.has(activeTabId)) {
-    return activeTabId;
-  }
-  return panelIds.find((id) => !closing.has(id)) ?? null;
-}
-
-function findNextGridFocusTarget(hideIds: string[]): string | null {
-  const state = panelStoreApi.getState();
-  const closing = new Set(closingIds);
-  const closingWorktreeId = state.panelsById[hideIds[0] ?? ""]?.worktreeId;
-  const groups = state.getTabGroups?.("grid", closingWorktreeId);
-
-  if (groups && groups.length > 0) {
-    const closedGroupIndex = groups.findIndex((group) =>
-      group.panelIds.some((id) => hideIds.includes(id))
-    );
-
-    if (closedGroupIndex >= 0) {
-      for (let i = closedGroupIndex + 1; i < groups.length; i++) {
-        const group = groups[i]!;
-        const candidate = firstFocusablePanelInGroup(group.panelIds, group.activeTabId, closing);
-        if (candidate) return candidate;
-      }
-      for (let i = closedGroupIndex - 1; i >= 0; i--) {
-        const group = groups[i]!;
-        const candidate = firstFocusablePanelInGroup(group.panelIds, group.activeTabId, closing);
-        if (candidate) return candidate;
-      }
-      return null;
-    }
-  }
-
-  const closedIndexes = hideIds
-    .map((id) => state.panelIds.indexOf(id))
-    .filter((index) => index >= 0);
-  const startIndex = closedIndexes.length > 0 ? Math.max(...closedIndexes) + 1 : 0;
-
-  const isGridSurvivor = (id: string): boolean => {
-    if (closing.has(id)) return false;
-    const terminal = state.panelsById[id];
-    if (!terminal) return false;
-    if (terminal.location !== "grid" && terminal.location !== undefined) return false;
-    return terminal.worktreeId === closingWorktreeId;
-  };
-
-  for (let i = startIndex; i < state.panelIds.length; i++) {
-    const id = state.panelIds[i]!;
-    if (isGridSurvivor(id)) return id;
-  }
-  for (let i = startIndex - 2; i >= 0; i--) {
-    const id = state.panelIds[i]!;
-    if (isGridSurvivor(id)) return id;
-  }
-  return null;
-}
-
 // Closing the focused panel must advance `focusedId` synchronously: keybinding
 // closes (Cmd+W) resolve their target from `focusedId`, so without this a rapid
 // Cmd+W stream would keep re-targeting the same already-closing panel. The
@@ -197,7 +139,7 @@ function advanceFocusPastClosing(hideIds: string[]): void {
   const focusedId = state.focusedId;
   if (!focusedId || !hideIds.includes(focusedId)) return;
 
-  const next = findNextGridFocusTarget(hideIds);
+  const next = pickGridSuccessorFocusId(state, hideIds, isOptimisticallyClosing);
   state.setFocused(next);
   if (next) {
     // Move DOM focus too — the closed pane's xterm textarea is unmounting, so
@@ -210,7 +152,7 @@ function advanceFocusPastClosing(hideIds: string[]): void {
       // Re-check before the deferred focus lands: a rapid close burst or a
       // click elsewhere may have moved focus on, or closed this target too.
       const current = panelStoreApi.getState().focusedId;
-      if (current === focusTarget && !closingIds.has(focusTarget)) {
+      if (current === focusTarget && !isOptimisticallyClosing(focusTarget)) {
         peekTerminalService()?.focus(focusTarget);
       }
     });
@@ -240,8 +182,8 @@ function runFlush(): void {
 
   // The canonical commit moved these panels to trash, so the grid derivations
   // exclude them on their own now — drop them from the lifecycle overlay.
-  if (closingIds.size > 0) {
-    const next = new Set(closingIds);
+  if (getClosingIds().size > 0) {
+    const next = new Set(getClosingIds());
     for (const request of batch) {
       for (const id of request.hideIds) next.delete(id);
     }
@@ -273,7 +215,7 @@ export function flushOptimisticCloses(): void {
  * was, so the common case gains no await.
  */
 export function requestPanelClose(request: PanelCloseRequest): void {
-  const fresh = request.hideIds.filter((id) => !closingIds.has(id));
+  const fresh = request.hideIds.filter((id) => !isOptimisticallyClosing(id));
   if (fresh.length === 0) return; // already closing — ignore the duplicate
 
   if (fresh.some(hasPanelCloseGuard)) {
@@ -287,7 +229,7 @@ export function requestPanelClose(request: PanelCloseRequest): void {
       const state = panelStoreApi.getState();
       const stillOpen = request.hideIds.filter((id) => {
         const panel = state.panelsById[id];
-        return panel !== undefined && panel.location !== "trash" && !closingIds.has(id);
+        return panel !== undefined && panel.location !== "trash" && !isOptimisticallyClosing(id);
       });
       if (stillOpen.length === 0) {
         request.onOutcome?.(false);
@@ -304,7 +246,7 @@ export function requestPanelClose(request: PanelCloseRequest): void {
 }
 
 function hideAndCommit(request: PanelCloseRequest): void {
-  const next = new Set(closingIds);
+  const next = new Set(getClosingIds());
   for (const id of request.hideIds) next.add(id);
   setClosingIdsSilently(next);
   hidePanelsImperatively(request.hideIds);
@@ -320,7 +262,7 @@ export function __resetOptimisticPanelCloseForTests(): void {
     flushTimer = undefined;
   }
   pending = [];
-  closingIds = EMPTY;
+  replaceClosingIds(EMPTY);
   renderClosingIds = EMPTY;
   listeners.clear();
 }

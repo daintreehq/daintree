@@ -78,22 +78,23 @@ export function AddPresetDialog({
       case "blank":
         void submit({ name: "New preset", env: {} });
         break;
-      case "clone":
+      case "clone": {
         // Guarded rather than defaulted: `canCreate` keeps the button disabled
         // instead of quietly creating something other than what was asked for.
         if (!currentPreset) return;
+        // Same copy as Duplicate: every field carries over except the identity and
+        // the display title, so the clone doesn't share a custom label with its source.
+        const { id: _id, ...rest } = currentPreset;
         void submit({
+          ...rest,
           name: `${currentPreset.name} (copy)`,
+          displayTitle: undefined,
           env: currentPreset.env ? { ...currentPreset.env } : {},
           args: currentPreset.args ? [...currentPreset.args] : undefined,
-          dangerousEnabled: currentPreset.dangerousEnabled,
-          dangerousMode: currentPreset.dangerousMode,
-          customFlags: currentPreset.customFlags,
-          inlineMode: currentPreset.inlineMode,
-          color: currentPreset.color,
-          fallbacks: undefined,
+          fallbacks: currentPreset.fallbacks ? [...currentPreset.fallbacks] : undefined,
         });
         break;
+      }
       case "template":
         if (!selectedTemplate) return;
         void submit({

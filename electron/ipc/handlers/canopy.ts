@@ -117,7 +117,6 @@ const MAX_SUBMIT_LENGTH = 100_000;
 const MAX_SUBMIT_IMAGES = 10;
 const MAX_KEY_LENGTH = 32;
 const MAX_LABEL_LENGTH = 200;
-const BACKDROP_JPEG_QUALITY = 85;
 /**
  * Reading runs only once the user has turned it on, and so does acting on what
  * was read. Checked here as well as in the panel, so no other caller can reach
@@ -1469,6 +1468,37 @@ function followDriveLease(): void {
   offDriveLease ??= peekDriveLeaseService()?.onChange(() => followDriveLeaseChange()) ?? null;
 }
 
+/** A composer's message and its image chips, as the host may take them. */
+function assertSubmission(ctx: IpcContext, text: unknown, imagePaths: unknown): void {
+  if (typeof text !== "string" || text.length > MAX_SUBMIT_LENGTH) {
+    throw new Error("Invalid message");
+  }
+  if (
+    imagePaths !== undefined &&
+    (!Array.isArray(imagePaths) ||
+      imagePaths.length > MAX_SUBMIT_IMAGES ||
+      !imagePaths.every((path) => typeof path === "string" && isImageAttachmentPath(path)))
+  ) {
+    throw new Error("Invalid attachments");
+  }
+  // A path the viewer's machine named is nothing on this one.
+  if (Array.isArray(imagePaths) && imagePaths.length > 0 && isViewer(ctx)) {
+    throw new AppError({
+      code: "VALIDATION",
+      message: "a Canopy viewer named image paths from another machine",
+      userMessage: "Images can't be sent to an agent on another host.",
+    });
+  }
+}
+
+function submitTo(runId: string, text: string, imagePaths: string[] | undefined): void {
+  if (imagePaths !== undefined && imagePaths.length > 0) {
+    requirePtyClient().submit(runId, text, undefined, undefined, undefined, imagePaths);
+  } else {
+    requirePtyClient().submit(runId, text);
+  }
+}
+
 function assertDrivesRun(ctx: IpcContext, runId: string): void {
   if (!drivesRun(ctx, runId)) throw drivenElsewhere(requirePtyClient().getTerminalProjectId(runId));
 }
@@ -1777,25 +1807,6 @@ export const canopyNamespace = defineIpcNamespace({
       return service ? service.getSnapshot() : hiddenOrIdleSnapshot();
     }),
 
-    /**
-     * A still of the view as it stands, for the panel to hold behind itself so
-     * the app under it stops moving while it is open — the grid pane of the
-     * terminal the panel streams included, frozen at its own size. JPEG: a
-     * full-window PNG takes longer to encode than the panel takes to open.
-     */
-    captureBackdrop: op(
-      CANOPY_METHOD_CHANNELS.captureBackdrop,
-      async (ctx): Promise<Uint8Array | null> => {
-        checkRateLimit(CANOPY_METHOD_CHANNELS.captureBackdrop, 10, 10_000);
-        // A Shell channel: only a view on this machine asks, for its own pixels.
-        if (!ctx.event) return null;
-        const image = await ctx.event.sender.capturePage();
-        if (image.isEmpty()) return null;
-        return new Uint8Array(image.toJPEG(BACKDROP_JPEG_QUALITY));
-      },
-      { withContext: true }
-    ),
-
     /** Raw keystrokes from the live view, for the terminal it is streaming. */
     terminalInput: op(
       CANOPY_METHOD_CHANNELS.terminalInput,
@@ -1860,25 +1871,7 @@ export const canopyNamespace = defineIpcNamespace({
     terminalSubmit: op(
       CANOPY_METHOD_CHANNELS.terminalSubmit,
       async (ctx, watchId: number, text: string, imagePaths?: string[]): Promise<void> => {
-        if (typeof text !== "string" || text.length > MAX_SUBMIT_LENGTH) {
-          throw new Error("Invalid message");
-        }
-        if (
-          imagePaths !== undefined &&
-          (!Array.isArray(imagePaths) ||
-            imagePaths.length > MAX_SUBMIT_IMAGES ||
-            !imagePaths.every((path) => typeof path === "string" && isImageAttachmentPath(path)))
-        ) {
-          throw new Error("Invalid attachments");
-        }
-        // A path the viewer's machine named is nothing on this one.
-        if (imagePaths !== undefined && imagePaths.length > 0 && isViewer(ctx)) {
-          throw new AppError({
-            code: "VALIDATION",
-            message: "a Canopy viewer named image paths from another machine",
-            userMessage: "Images can't be sent to an agent on another host.",
-          });
-        }
+        assertSubmission(ctx, text, imagePaths);
         const watched = requireWatched(ctx.webContentsId, watchId);
         assertMayType(watched);
         // The stream ends on exit, but a submit is worth one more look at the
@@ -1898,22 +1891,49 @@ export const canopyNamespace = defineIpcNamespace({
         // Input may have moved to another window while the host answered.
         assertMayType(current);
         assertDrivesRun(ctx, watched.runId);
-        if (imagePaths !== undefined && imagePaths.length > 0) {
-          requirePtyClient().submit(
-            watched.runId,
-            text,
-            undefined,
-            undefined,
-            undefined,
-            imagePaths
-          );
-        } else {
-          requirePtyClient().submit(watched.runId, text);
-        }
+        submitTo(watched.runId, text, imagePaths);
         if (!watched.assistant) {
           service?.noteUserSent(watched.runId, watched.spawnedAt);
           service?.markHandled(watched.runId, watched.spawnedAt);
         }
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * A reply that outlived its card: a dictated send waits for its cleanup,
+     * and the user may have moved to another run, whose stream replaced this
+     * one's, by the time it goes (#15510). It goes by the run, as an answer does.
+     */
+    submitReply: op(
+      CANOPY_METHOD_CHANNELS.submitReply,
+      async (
+        ctx,
+        runId: string,
+        target: CanopyTarget,
+        text: string,
+        imagePaths?: string[]
+      ): Promise<void> => {
+        // The user's own words, as typed into the pane: no reading needed.
+        checkRateLimit(CANOPY_METHOD_CHANNELS.submitReply, 30, 10_000);
+        assertRunId(runId);
+        assertTarget(target);
+        assertSubmission(ctx, text, imagePaths);
+        assertDrivesRun(ctx, runId);
+        // Taken before validating, so a respawn while the host is asked can't
+        // take the reply its predecessor was sent.
+        const ptyClient = requirePtyClient();
+        const generation = ptyClient.getLiveGeneration(runId);
+        await assertNotGlobalAssistant(runId);
+        await assertSameTerminal(runId, target);
+        if (generation !== null && !ptyClient.isLiveGeneration(runId, generation)) {
+          throw new Error("That agent isn't running any more.");
+        }
+        // Control can move to another screen while the host answered.
+        assertDrivesRun(ctx, runId);
+        submitTo(runId, text, imagePaths);
+        service?.noteUserSent(runId, target.spawnedAt);
+        service?.markHandled(runId, target.spawnedAt);
       },
       { withContext: true }
     ),

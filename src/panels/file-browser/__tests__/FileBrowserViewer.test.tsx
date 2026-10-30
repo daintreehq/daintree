@@ -314,6 +314,7 @@ interface ViewerOpts {
   /** Worktree-relative path of the open file; defaults to its file name. */
   relativePath?: string | null;
   onCloseSelection?: () => void;
+  onOpenAsPanel?: (absolutePath: string) => void;
 }
 
 function change(relativePath: string, status: GitStatus = "modified"): WorkingTreeFileChange {
@@ -375,6 +376,7 @@ function viewerJsx(filePath: string | null, opts: ViewerOpts = {}) {
         missingFilePath={opts.missingFilePath ?? null}
         onShowFolder={opts.onShowFolder ?? vi.fn()}
         onCloseSelection={opts.onCloseSelection ?? vi.fn()}
+        onOpenAsPanel={opts.onOpenAsPanel}
       />
     </TooltipProvider>
   );
@@ -1046,6 +1048,69 @@ describe("FileBrowserViewer PDF preview (#11427)", () => {
   });
 });
 
+describe("FileBrowserViewer unparseable SVG (#15030)", () => {
+  it("says an SVG that passes the sanitizer but doesn't parse couldn't be parsed", async () => {
+    // Truncated mid-write: still has its `<svg`, so the sanitizer passes it.
+    readMock.mockResolvedValue({
+      content: '<svg xmlns="http://www.w3.org/2000/svg"><rect></svg>',
+    });
+    const { container } = renderViewer("/repo/icon.svg");
+
+    const unavailable = await screen.findByTestId("file-browser-unavailable");
+    expect(unavailable.textContent).toContain("Can't preview this SVG");
+    expect(unavailable.textContent).toContain("couldn't be parsed");
+    expect(within(unavailable).queryAllByRole("button").length).toBeGreaterThan(0);
+    expect(container.querySelector('img[src^="data:image/svg+xml,"]')).toBeNull();
+  });
+
+  it("offers Retry beside the way to the source, reading the file again", async () => {
+    readMock.mockResolvedValue({ content: '<svg xmlns="http://www.w3.org/2000/svg"><rect>' });
+    const onRefresh = vi.fn();
+    renderViewer("/repo/icon.svg", { onRefresh });
+
+    const unavailable = await screen.findByTestId("file-browser-unavailable");
+    const buttons = within(unavailable).getAllByRole("button");
+    expect(buttons.length).toBe(2);
+    fireEvent.click(within(unavailable).getByRole("button", { name: "Retry" }));
+
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("recovers once Refresh brings back markup that parses", async () => {
+    readMock.mockResolvedValue({ content: '<svg xmlns="http://www.w3.org/2000/svg"><rect>' });
+    const { container, rerender } = renderViewer("/repo/icon.svg", { surfaceRefreshNonce: 0 });
+    await screen.findByTestId("file-browser-unavailable");
+
+    readMock.mockResolvedValue({
+      content: '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>',
+    });
+    rerender(viewerJsx("/repo/icon.svg", { surfaceRefreshNonce: 1 }));
+
+    await waitFor(() =>
+      expect(container.querySelector('img[src^="data:image/svg+xml,"]')).not.toBeNull()
+    );
+    expect(screen.queryByTestId("file-browser-unavailable")).toBeNull();
+  });
+
+  it("shows an error, not a blank stage, when the image decoder can't draw the SVG", async () => {
+    readMock.mockResolvedValue({
+      content: '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>',
+    });
+    const { container } = renderViewer("/repo/icon.svg");
+    const img = await waitFor(() => {
+      const found = container.querySelector('img[src^="data:image/svg+xml,"]');
+      if (!found) throw new Error("svg preview not rendered");
+      return found;
+    });
+
+    fireEvent.error(img);
+
+    const unavailable = await screen.findByTestId("file-browser-unavailable");
+    expect(unavailable.textContent).toContain("Can't preview this SVG");
+    expect(unavailable.textContent).toContain("couldn't be drawn");
+  });
+});
+
 describe("FileBrowserViewer Refresh control (#11586, #11938)", () => {
   it("leaves Refresh to the tree header while the tree column is mounted and nothing is open", () => {
     renderViewer(null, { sidebarCollapsed: false });
@@ -1702,6 +1767,52 @@ describe("FileBrowserViewer copy file contents (#12136)", () => {
       "Open in editor",
       "Close file",
     ]);
+  });
+});
+
+describe("opening the shown file as a panel (#15015)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("hands the shown file's absolute path to the pane", async () => {
+    readMock.mockResolvedValue({ content: "x" });
+    const onOpenAsPanel = vi.fn();
+    renderViewer("/repo/src/notes.txt", { onOpenAsPanel });
+    await screen.findByTestId("code-viewer-mock");
+
+    fireEvent.click(screen.getByRole("button", { name: "Open as panel" }));
+
+    expect(onOpenAsPanel).toHaveBeenCalledExactlyOnceWith("/repo/src/notes.txt");
+  });
+
+  it("moves into the folded menu at compact widths, leaving no loose button", async () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, 0, 320, 30)
+    );
+    readMock.mockResolvedValue({ content: "x" });
+    const onOpenAsPanel = vi.fn();
+    renderViewer("/repo/src/notes.txt", { onOpenAsPanel });
+    await screen.findByTestId("code-viewer-mock");
+
+    expect(screen.queryByRole("button", { name: "Open as panel" })).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Open as panel" }));
+
+    expect(onOpenAsPanel).toHaveBeenCalledExactlyOnceWith("/repo/src/notes.txt");
+  });
+
+  it("offers nothing when the pane supplies no route", async () => {
+    readMock.mockResolvedValue({ content: "x" });
+    renderViewer("/repo/src/notes.txt");
+    await screen.findByTestId("code-viewer-mock");
+
+    expect(screen.queryByRole("button", { name: "Open as panel" })).toBeNull();
+  });
+
+  it("offers nothing when no file is shown", () => {
+    renderViewer(null, { folderPath: "src", folderRows: [], onOpenAsPanel: vi.fn() });
+
+    expect(screen.queryByRole("button", { name: "Open as panel" })).toBeNull();
   });
 });
 

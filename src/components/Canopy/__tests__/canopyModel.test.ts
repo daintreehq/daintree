@@ -689,6 +689,81 @@ describe("the row's name", () => {
     expect(itemSubject(item!)).toBe("Billing spike");
   });
 
+  it("goes by a name automation gave the pane when the agent has no task of its own", () => {
+    const worktree = { ...waiting, cwd: "/Users/dev/app-worktrees/fix-rounding" };
+    const [item] = inbox(
+      [
+        run("a", {
+          ...worktree,
+          title: "Triage #449 — Assistant intent shortcuts",
+          titleMode: "custom",
+        }),
+      ],
+      [card("a", { category: "finished", task: "Refactor server routing" })]
+    );
+    expect(itemSubject(item!)).toBe("Triage #449 — Assistant intent shortcuts");
+  });
+
+  it("tells Codex panes apart by their automation names while each titles itself with its folder", () => {
+    const cwd = "/Users/dev/app-worktrees/neo";
+    const items = inbox(
+      ["Triage #449", "Triage #450"].map((title, i) =>
+        run(`r${i}`, {
+          ...waiting,
+          agentId: "codex",
+          cwd,
+          title,
+          titleMode: "custom",
+          lastObservedTitle: "neo",
+        })
+      )
+    );
+    expect(items.map(itemSubject).sort()).toEqual(["Triage #449", "Triage #450"]);
+  });
+
+  it("still names a custom-titled pane by what its agent reports once it has a task", () => {
+    const [item] = inbox([
+      run("a", {
+        ...waiting,
+        cwd: "/Users/dev/app-worktrees/fix-rounding",
+        title: "Triage #449",
+        titleMode: "custom",
+        lastObservedTitle: "✳ Server routing refactor",
+      }),
+    ]);
+    expect(itemSubject(item!)).toBe("Server routing refactor");
+  });
+
+  it.each([
+    ["the agent's own name", "Claude"],
+    ["a launch's preset stamp", "Claude [Z.ai]"],
+    ["a model and preset stamp", "Claude (Opus) [Z.ai]"],
+    ["a stamped title with trailing space", "Claude [Z.ai] "],
+  ])("names a custom-titled pane by its worktree when the title is only %s", (_, title) => {
+    const [item] = inbox([
+      run("a", {
+        ...waiting,
+        cwd: "/Users/dev/app-worktrees/fix-rounding",
+        title,
+        titleMode: "custom",
+      }),
+    ]);
+    expect(itemSubject(item!)).toBe("fix-rounding");
+  });
+
+  it("names a custom-titled pane by its worktree after its agent has exited", () => {
+    const exited = run("a", {
+      cwd: "/Users/dev/app-worktrees/fix-rounding",
+      title: "Claude [Z.ai]",
+      titleMode: "custom",
+      launchAgentId: "claude",
+      agentState: "exited",
+    });
+    delete exited.agentId;
+    const [item] = inbox([exited]);
+    expect(itemSubject(item!)).toBe("fix-rounding");
+  });
+
   it("names a pane titled only for its agent by its worktree, never by a line the reader picked", () => {
     const worktree = { ...waiting, cwd: "/Users/dev/app-worktrees/fix-rounding" };
     const [titled] = inbox([run("a", worktree)], [card("a", { task: "Fix unit rounding" })]);

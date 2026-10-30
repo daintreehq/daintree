@@ -89,6 +89,7 @@ const {
     setBrowserUrl: vi.fn(),
     setBrowserHistory: vi.fn(),
     setBrowserZoom: vi.fn(),
+    stampLastActive: vi.fn(),
   };
   const usePanelStoreMock = vi.fn((selector: (state: typeof terminalStoreState) => unknown) =>
     selector(terminalStoreState)
@@ -313,6 +314,25 @@ describe("BrowserPane webview lifecycle regression", () => {
     expect(webview.hasAttribute("allowpopups")).toBe(true);
   });
 
+  it("marks the pane used each time the keyboard enters its page, and only then (#14965)", () => {
+    const { container, unmount } = render(<BrowserPane {...baseProps} id="browser-panel-7" />);
+    const webview = getWebviewElement(container);
+    emitWebviewEvent(webview, "did-stop-loading");
+    expect(terminalStoreState.stampLastActive).not.toHaveBeenCalled();
+
+    // What Electron dispatches on the <webview> when its guest takes focus.
+    webview.dispatchEvent(new Event("focus"));
+    webview.dispatchEvent(new Event("focus"));
+    expect(terminalStoreState.stampLastActive.mock.calls).toEqual([
+      ["browser-panel-7"],
+      ["browser-panel-7"],
+    ]);
+
+    unmount();
+    webview.dispatchEvent(new Event("focus"));
+    expect(terminalStoreState.stampLastActive).toHaveBeenCalledTimes(2);
+  });
+
   describe("a view on another machine", () => {
     const forwardTo = (localPort: number) =>
       vi.fn(async ({ hostId, remotePort }: { hostId: string; remotePort: number }) => ({
@@ -439,6 +459,25 @@ describe("BrowserPane webview lifecycle regression", () => {
       const { container } = render(<BrowserPane {...baseProps} />);
       const webview = getWebviewElement(container);
       expect(webview.getAttribute("partition")).toBe("persist:browser-default");
+    });
+
+    it("moves the used-pane stamp to the webview a partition change remounts (#14965)", () => {
+      const { container, rerender } = render(<BrowserPane {...baseProps} />);
+      const original = getWebviewElement(container);
+
+      useProjectStoreMock.mockImplementation((selector) =>
+        selector({ currentProject: { id: "other-project" } })
+      );
+      act(() => {
+        rerender(<BrowserPane {...baseProps} />);
+      });
+      const remounted = getWebviewElement(container);
+      expect(remounted).not.toBe(original);
+
+      original.dispatchEvent(new Event("focus"));
+      expect(terminalStoreState.stampLastActive).not.toHaveBeenCalled();
+      remounted.dispatchEvent(new Event("focus"));
+      expect(terminalStoreState.stampLastActive).toHaveBeenCalledExactlyOnceWith("browser-panel-1");
     });
   });
 
@@ -907,6 +946,7 @@ describe("BrowserPane webview lifecycle regression", () => {
       // Unapproved host: surface the approval prompt, do not navigate yet.
       expect(container.textContent).toContain("example.com");
       expect(container.textContent).toContain("Allow browser panel to load");
+      expect(container.textContent).toContain("Applies to every Browser panel in this project");
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const goToHistoryIndex = (window as any).electron.webview.goToHistoryIndex;
       expect(goToHistoryIndex).not.toHaveBeenCalled();

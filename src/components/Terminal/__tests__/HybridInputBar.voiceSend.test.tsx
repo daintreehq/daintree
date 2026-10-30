@@ -25,11 +25,22 @@ import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { subscribeDictationRangeTracking } from "@/store/dictationRangeStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { HybridInputBar } from "../HybridInputBar";
 
 type DeltaPayload = { text: string; itemId?: string };
-type CompletePayload = { text: string; willCorrect: boolean; itemId?: string };
-type CorrectResult = { action: "no_change" | "replace"; correctedText: string };
+type CompletePayload = {
+  text: string;
+  willCorrect: boolean;
+  itemId?: string;
+  transcriptId?: string;
+};
+type FileTokenPayload = {
+  sessionId: string;
+  transcriptId: string;
+  references: Array<{ description: string; path: string | null; failed?: true }>;
+};
+type CorrectResult = { action: "no_change" | "replace"; correctedText: string; failed?: true };
 
 const WT_ID = "/repo/wt";
 const PANEL_ID = "term-1";
@@ -37,7 +48,8 @@ const PANEL_ID = "term-1";
 const callbacks: {
   delta: ((payload: DeltaPayload) => void) | null;
   complete: ((payload: CompletePayload) => void) | null;
-} = { delta: null, complete: null };
+  fileToken: ((payload: FileTokenPayload) => void) | null;
+} = { delta: null, complete: null, fileToken: null };
 
 const correct = vi.fn<(request: { rawText: string }) => Promise<CorrectResult>>();
 
@@ -131,7 +143,10 @@ beforeEach(async () => {
         }),
         onParagraphBoundary: vi.fn(() => () => {}),
         onCorrectionProgress: vi.fn(() => () => {}),
-        onFileTokenResolved: vi.fn(() => () => {}),
+        onFileTokenResolved: vi.fn((cb: (payload: FileTokenPayload) => void) => {
+          callbacks.fileToken = cb;
+          return () => {};
+        }),
         onError: vi.fn(() => () => {}),
         onStatus: vi.fn(() => () => {}),
         onSessionEnded: vi.fn(() => () => {}),
@@ -184,6 +199,68 @@ async function mount(onSend: (payload: { text: string }) => void) {
   await act(async () => {});
   return EditorView.findFromDOM(result.container.querySelector<HTMLElement>(".cm-editor")!)!;
 }
+
+const statuses = () =>
+  [...document.querySelectorAll('[role="status"]')].map((el) => el.textContent ?? "");
+
+describe("HybridInputBar dictated send without its cleanup (#14959)", () => {
+  it("names Enter while the cleanup is awaited, and says a second one skipped it", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const onSend = vi.fn();
+    act(() => {
+      dictate("hello wrld");
+    });
+    const view = await mount(onSend);
+
+    await act(async () => {
+      runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, UI_INLINE_LOADING_GATE_MS + 50));
+    });
+    expect(statuses().some((text) => /Press Enter/.test(text))).toBe(true);
+
+    await act(async () => {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })
+      );
+    });
+    expect(onSend.mock.calls.map(([payload]) => payload.text)).toEqual(["hello wrld"]);
+    expect(document.querySelector("[data-voice-submit-caption]")?.textContent).toMatch(
+      /cleanup skipped/
+    );
+    expect(statuses().some((text) => /cleanup skipped/.test(text))).toBe(true);
+
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+  });
+
+  it("sends the words as dictated and says on its receipt that the cleanup failed", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const onSend = vi.fn();
+    act(() => {
+      dictate("hello wrld");
+    });
+    const view = await mount(onSend);
+
+    await act(async () => {
+      runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+    });
+    await act(async () => {
+      pending.resolve({ action: "no_change", correctedText: "hello wrld", failed: true });
+    });
+
+    expect(onSend.mock.calls.map(([payload]) => payload.text)).toEqual(["hello wrld"]);
+    expect(document.querySelector("[data-voice-submit-caption]")?.textContent).toMatch(
+      /cleanup failed/
+    );
+    // Its wait went inside the progress gate, unannounced, and still says so.
+    expect(statuses().some((text) => /cleanup failed/.test(text))).toBe(true);
+  });
+});
 
 describe("HybridInputBar dictated send with the next dictation already started (#14804)", () => {
   it("sends the cleaned prompt alone and keeps every word of the next one in the composer", async () => {
@@ -349,5 +426,231 @@ describe("HybridInputBar dictated send with the next dictation already started (
 
     expect(onSend.mock.calls.map(([payload]) => payload.text)).toEqual(["Hello world."]);
     expect(draft()).toBe("next");
+  });
+});
+
+describe("HybridInputBar with a missed file reference arriving during a dictated send (#14983)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    useVoiceRecordingStore.setState({ fileReferenceNote: null });
+  });
+
+  it("holds the note while the send waits, then shows it its full time after", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const onSend = vi.fn();
+    act(() => {
+      useVoiceRecordingStore.getState().beginSession({ panelId: PANEL_ID }, "session-links");
+      useVoiceRecordingStore.getState().setStatus("recording");
+      callbacks.delta!({ text: "link to the old API", itemId: "item-links" });
+      callbacks.complete!({
+        text: "link to the old API",
+        willCorrect: false,
+        itemId: "item-links",
+        transcriptId: "t1",
+      });
+    });
+    const view = await mount(onSend);
+    const caption = () => document.querySelector("[data-file-reference-caption]");
+
+    await act(async () => {
+      runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    act(() => {
+      callbacks.fileToken!({
+        sessionId: "session-links",
+        transcriptId: "t1",
+        references: [{ description: "old API", path: null }],
+      });
+    });
+    const note = useVoiceRecordingStore.getState().fileReferenceNote;
+    expect(note).toMatchObject({ panelId: PANEL_ID, references: [{ description: "old API" }] });
+    expect(caption()).toBeNull();
+
+    // A cleanup slower than the note lasts.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(useVoiceRecordingStore.getState().fileReferenceNote).toBe(note);
+
+    await act(async () => {
+      pending.resolve({ action: "no_change", correctedText: "link to the old API" });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onSend.mock.calls[0]![0].text).toBe("link to the old API");
+    expect(caption()).not.toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+    expect(useVoiceRecordingStore.getState().fileReferenceNote).toBeNull();
+    expect(caption()).toBeNull();
+  });
+});
+
+describe("HybridInputBar dictated send whose composer unmounts mid-wait (#15510)", () => {
+  async function mountBar(onSend: (payload: { text: string }) => void) {
+    const result = render(
+      <TooltipProvider>
+        <WorktreeStoreContext.Provider value={createWorktreeStore()}>
+          <HybridInputBar terminalId={PANEL_ID} cwd={WT_ID} agentId="claude" onSend={onSend} />
+        </WorktreeStoreContext.Provider>
+      </TooltipProvider>
+    );
+    await act(async () => {});
+    const view = EditorView.findFromDOM(
+      result.container.querySelector<HTMLElement>(".cm-editor")!
+    )!;
+    return { view, unmount: result.unmount };
+  }
+
+  async function enterThenLeave(onSend: (payload: { text: string }) => void) {
+    const bar = await mountBar(onSend);
+    await act(async () => {
+      runScopeHandlers(bar.view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+    });
+    expect(onSend).not.toHaveBeenCalled();
+    act(() => {
+      bar.unmount();
+    });
+  }
+
+  it("sends the cleaned prompt to its terminal once the cleanup lands, and clears the draft", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const onSend = vi.fn();
+    act(() => {
+      dictate("hello wrld");
+    });
+    await enterThenLeave(onSend);
+
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+
+    expect(onSend.mock.calls.map(([payload]) => payload.text)).toEqual(["Hello world."]);
+    expect(draft()).toBe("");
+    expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
+  });
+
+  it("sends the words as dictated when the cleanup fails", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const onSend = vi.fn();
+    act(() => {
+      dictate("hello wrld");
+    });
+    await enterThenLeave(onSend);
+
+    await act(async () => {
+      pending.resolve({ action: "no_change", correctedText: "hello wrld", failed: true });
+    });
+
+    expect(onSend.mock.calls.map(([payload]) => payload.text)).toEqual(["hello wrld"]);
+    expect(draft()).toBe("");
+  });
+
+  it("leaves the next dictation's words in the draft", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const onSend = vi.fn();
+    act(() => {
+      dictate("hello wrld");
+    });
+    const bar = await mountBar(onSend);
+    await act(async () => {
+      runScopeHandlers(bar.view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+    });
+    await act(async () => {
+      dictate("these are the next prompt");
+    });
+    act(() => {
+      bar.unmount();
+    });
+
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+
+    expect(onSend.mock.calls.map(([payload]) => payload.text)).toEqual(["Hello world."]);
+    expect(draft()).toBe("these are the next prompt");
+  });
+
+  it("shows the wait in the composer that mounts for it, whose second Enter sends what stands", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const onSend = vi.fn();
+    act(() => {
+      dictate("hello wrld");
+    });
+    await enterThenLeave(onSend);
+
+    const again = await mountBar(onSend);
+    expect(again.view.state.facet(EditorView.editable)).toBe(false);
+
+    await act(async () => {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })
+      );
+    });
+
+    expect(onSend.mock.calls.map(([payload]) => payload.text)).toEqual(["hello wrld"]);
+    expect(again.view.state.doc.toString()).toBe("");
+    expect(draft()).toBe("");
+
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("HybridInputBar dictated send whose composer went disabled before it unmounted (#15510)", () => {
+  it("still sends through its submit, which checks the destination itself", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const submitText = vi.fn(async (_text: string, _imagePaths: readonly string[]) => true);
+    const bar = (disabled: boolean) => (
+      <TooltipProvider>
+        <WorktreeStoreContext.Provider value={createWorktreeStore()}>
+          <HybridInputBar
+            terminalId={PANEL_ID}
+            cwd={WT_ID}
+            agentId="claude"
+            disabled={disabled}
+            onSend={vi.fn()}
+            submitText={submitText}
+          />
+        </WorktreeStoreContext.Provider>
+      </TooltipProvider>
+    );
+    act(() => {
+      dictate("hello wrld");
+    });
+    const result = render(bar(false));
+    await act(async () => {});
+    const view = EditorView.findFromDOM(
+      result.container.querySelector<HTMLElement>(".cm-editor")!
+    )!;
+    await act(async () => {
+      runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+    });
+    // A Canopy reply's stream dropping mid-wait disables its composer.
+    result.rerender(bar(true));
+    await act(async () => {});
+    act(() => {
+      result.unmount();
+    });
+
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+
+    expect(submitText.mock.calls.map(([text]) => text)).toEqual(["Hello world."]);
+    expect(draft()).toBe("");
   });
 });

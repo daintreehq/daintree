@@ -129,6 +129,13 @@ export function forgetComposerMemories(previewPanelId: string): void {
   if (removed) for (const listener of [...listeners]) listener();
 }
 
+/** Every preview holding a draft, a request or a folded drawer, in any worktree. */
+export function composerPreviewIds(): Set<string> {
+  const ids = new Set(collapsedDrawers);
+  for (const key of memories.keys()) ids.add(key.slice(0, key.indexOf("\n")));
+  return ids;
+}
+
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);

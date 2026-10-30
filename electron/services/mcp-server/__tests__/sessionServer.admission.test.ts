@@ -220,6 +220,101 @@ describe("sessionServer tier-mismatch notifier", () => {
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("TIER_NOT_PERMITTED");
   });
+
+  // #14995: the banner's "Allow this tool" lifts the refusal in place, so the
+  // refusal says so wherever that banner was actually raised.
+  describe("the Allow this tool hint", () => {
+    const HINT = "The user can allow it from the Assistant panel";
+
+    function helpDeps(overrides: Partial<Parameters<typeof fakeDeps>[0]> = {}) {
+      // The notifier reports the banner reached a live view.
+      const deps = fakeDeps({ notifyTierMismatch: vi.fn(() => true), ...overrides });
+      deps.sessionStore.sessionOriginMap.set("session-H", "help");
+      return deps;
+    }
+
+    async function refusalText(deps: ReturnType<typeof fakeDeps>, name: string) {
+      const server = createSessionServer("session-H", deps);
+      await server.connect(makeMockTransport());
+      const result = (await callTool(server, { name, arguments: {} })) as {
+        content: Array<{ text: string }>;
+      };
+      return result.content[0].text;
+    }
+
+    it("tells the assistant's help session it can retry once allowed", async () => {
+      const deps = helpDeps();
+      const text = await refusalText(deps, "project.runCheck");
+      expect(text).toContain("not permitted for the 'core' tier.");
+      expect(text).toContain(HINT);
+      expect(text).toContain("retry once told it's allowed");
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("leaves it out for a session with no banner to answer", async () => {
+      // External origin: the notifier paints nothing for a third-party client.
+      const text = await refusalText(
+        fakeDeps({ notifyTierMismatch: vi.fn(() => true) }),
+        "project.runCheck"
+      );
+      expect(text).toContain("TIER_NOT_PERMITTED");
+      expect(text).not.toContain(HINT);
+    });
+
+    it("leaves it out when no tier would admit the tool", async () => {
+      // No target tier, so the banner carries no Allow button.
+      const text = await refusalText(helpDeps(), "worktree.create");
+      expect(text).toContain("TIER_NOT_PERMITTED");
+      expect(text).not.toContain(HINT);
+    });
+
+    it("leaves it out when the banner reached no live view", async () => {
+      // No pinned view, or one already destroyed: nothing painted the button.
+      const deps = helpDeps({ notifyTierMismatch: vi.fn(() => false) });
+      const text = await refusalText(deps, "project.runCheck");
+      expect(text).toContain("TIER_NOT_PERMITTED");
+      expect(text).not.toContain(HINT);
+    });
+
+    it("leaves it out once the banner is suppressed for repeat refusals", async () => {
+      const notify = vi.fn(() => true);
+      const deps = helpDeps({ notifyTierMismatch: notify });
+      const server = createSessionServer("session-H", deps);
+      await server.connect(makeMockTransport());
+      const texts: string[] = [];
+      for (let i = 0; i < 3; i++) {
+        const result = (await callTool(server, { name: "project.runCheck", arguments: {} })) as {
+          content: Array<{ text: string }>;
+        };
+        texts.push(result.content[0].text);
+      }
+      expect(notify).toHaveBeenCalledTimes(2);
+      expect(texts[1]).toContain(HINT);
+      expect(texts[2]).not.toContain(HINT);
+    });
+
+    it("leaves it out when the refusal ends the session", async () => {
+      const deps = helpDeps({
+        recordDenial: vi.fn(() => ({ tripped: true })),
+        clearDenialState: vi.fn(),
+        notifySessionRevoked: vi.fn(),
+      });
+      (deps.sessionStore as unknown as { revokeSession: () => void }).revokeSession = vi.fn();
+      const text = await refusalText(deps, "project.runCheck");
+      expect(text).toContain("TIER_NOT_PERMITTED");
+      expect(text).not.toContain(HINT);
+    });
+
+    it("leaves it out when the banner could not be raised", async () => {
+      const deps = helpDeps({
+        notifyTierMismatch: vi.fn(() => {
+          throw new Error("boom");
+        }),
+      });
+      const text = await refusalText(deps, "project.runCheck");
+      expect(text).not.toContain(HINT);
+    });
+  });
 });
 
 describe("sessionServer grant cache fallback (#8442)", () => {
@@ -1456,4 +1551,62 @@ describe("unscoped terminal input by session origin (#12407)", () => {
     const names = (await listTools(server)).tools.map((t) => t.name);
     for (const id of RESERVED) expect(names).not.toContain(id);
   });
+});
+
+// Picking work, triaging it and confirming an agent's PR passed CI happen in the
+// assistant's default session (#15399), so every forge read is listed and
+// dispatched at core, for the assistant and for an agent pane alike.
+describe("sessionServer forge reads at core (#15399)", () => {
+  const FORGE_READS: ReadonlyArray<[string, Record<string, unknown>]> = [
+    ["forge.listIssues", { search: "no:assignee", state: "open" }],
+    ["forge.getIssue", { issueNumber: 42 }],
+    ["forge.listIssueComments", { issueNumber: 42, cursor: "c1" }],
+    ["forge.listPRs", { search: "author:@me", state: "open" }],
+    ["forge.getPR", { prNumber: 7 }],
+    ["forge.getPRs", { prNumbers: [7, 8] }],
+    ["forge.getCIStatus", { prNumber: 7 }],
+    ["forge.getChecks", { prNumber: 7 }],
+  ];
+
+  function coreDeps(origin: "help" | "external") {
+    const manifest = [
+      ...FORGE_READS.map(([id]) => makeManifestEntry(id)),
+      { ...makeManifestEntry("forge.createIssue"), kind: "command" as const },
+    ];
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("core"),
+      requestManifest: vi.fn().mockResolvedValue(manifest),
+      getCachedManifest: vi.fn(() => manifest),
+    });
+    deps.sessionStore.sessionOriginMap.set("s-forge", origin);
+    return deps;
+  }
+
+  it.each(["help", "external"] as const)(
+    "lists every forge read and no forge write to a %s session",
+    async (origin) => {
+      const server = createSessionServer("s-forge", coreDeps(origin));
+      const names = (await listTools(server)).tools.map((t) => t.name).sort();
+      expect(names).toEqual(FORGE_READS.map(([id]) => id).sort());
+    }
+  );
+
+  it.each(["help", "external"] as const)(
+    "dispatches every forge read for a %s session",
+    async (origin) => {
+      const deps = coreDeps(origin);
+      const server = createSessionServer("s-forge", deps);
+      await server.connect(makeMockTransport());
+
+      for (const [name, args] of FORGE_READS) {
+        const result = await callTool(server, { name, arguments: args });
+        expect(result.isError, name).not.toBe(true);
+        expect(deps.dispatchAction).toHaveBeenCalledWith(
+          name,
+          expect.objectContaining(args),
+          false
+        );
+      }
+    }
+  );
 });

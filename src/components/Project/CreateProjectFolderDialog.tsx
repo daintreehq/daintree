@@ -19,6 +19,7 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { ProjectTemplateFileList } from "./ProjectTemplateFileList";
 import { useProjectStore } from "@/store/projectStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { logError } from "@/utils/logger";
 import { validateFolderName } from "@shared/utils/folderName";
 import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
 import { ProjectEmojiButton } from "./ProjectEmojiButton";
@@ -148,10 +149,15 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
     let cancelled = false;
     void pluginClient
       .previewProjectTemplate(selectedTemplate.pluginId, selectedTemplate.templateId)
-      .catch((err: unknown): ProjectTemplatePreview => ({
-        status: "unusable",
-        reason: formatErrorMessage(err, "Couldn't read this template's files"),
-      }))
+      .catch((err: unknown): ProjectTemplatePreview => {
+        // The raw message can carry a path or errno; the log keeps it (#15232).
+        logError("Couldn't preview a project template", err);
+        return {
+          status: "unusable",
+          reason: "Couldn't read this template's files.",
+          retryable: true,
+        };
+      })
       .then((preview) => {
         if (!cancelled) setTemplatePreview({ key, preview });
       });
@@ -169,6 +175,11 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
     selectedTemplate !== null && currentPreview === null,
     UI_DOHERTY_THRESHOLD
   );
+
+  const retryTemplatePreview = () => {
+    setTemplatePreview(null);
+    setPreviewGeneration((generation) => generation + 1);
+  };
 
   const handleBrowseParent = useCallback(async () => {
     try {
@@ -394,7 +405,11 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
           </FormRow>
         </FormGrid>
         {selectedTemplate && (
-          <ProjectTemplateFileList preview={currentPreview} showLoading={showTemplateLoading} />
+          <ProjectTemplateFileList
+            preview={currentPreview}
+            showLoading={showTemplateLoading}
+            onRetry={retryTemplatePreview}
+          />
         )}
         {failure && (
           <Callout severity="error" role="alert">

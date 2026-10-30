@@ -10,6 +10,7 @@ import { terminalClient } from "@/clients";
 import { formatForTerminalPaste } from "@shared/utils/terminalInputProtocol";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
+import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useDiffNotesStore } from "@/store/diffNotesStore";
 import {
   formatDiffNotesPrompt,
@@ -23,6 +24,24 @@ export interface DiffNoteTarget {
   isInputLocked: boolean;
   kind: PtyPanelData["kind"];
   chrome: TerminalChromeDescriptor;
+  worktreeId: string | null;
+  /** The worktree's name, or `null` for an agent that isn't in one. */
+  worktreeName: string | null;
+}
+
+/**
+ * Every live agent is offered, in any worktree, so the menu orders the ones in
+ * the diff's own worktree first. A stable partition: each side keeps grid order.
+ */
+export function orderDiffNoteTargets(
+  targets: readonly DiffNoteTarget[],
+  worktreeId: string | null
+): DiffNoteTarget[] {
+  if (!worktreeId) return [...targets];
+  return [
+    ...targets.filter((target) => target.worktreeId === worktreeId),
+    ...targets.filter((target) => target.worktreeId !== worktreeId),
+  ];
 }
 
 /**
@@ -47,7 +66,8 @@ function isAgentPasteTarget(panel: PanelInstance | undefined): panel is PtyPanel
   return deriveTerminalChrome(panel).isAgent;
 }
 
-export function useDiffNoteTargets(): DiffNoteTarget[] {
+export function useDiffNoteTargets(worktreeId: string | null): DiffNoteTarget[] {
+  const worktrees = useWorktreeStore((state) => state.worktrees);
   const showAgentTaskTitles = usePreferencesStore((s) => s.showAgentTaskTitles);
   const panels = usePanelStore(
     useShallow((state) =>
@@ -58,19 +78,32 @@ export function useDiffNoteTargets(): DiffNoteTarget[] {
   );
   return useMemo(
     () =>
-      panels.map((panel) => ({
-        id: panel.id,
-        title: getTerminalDisplayTitle(panel, "full", { showTask: showAgentTaskTitles }),
-        isInputLocked: panel.isInputLocked === true,
-        kind: panel.kind,
-        chrome: deriveTerminalChrome(panel),
-      })),
-    [panels, showAgentTaskTitles]
+      orderDiffNoteTargets(
+        panels.map((panel) => ({
+          id: panel.id,
+          title: getTerminalDisplayTitle(panel, "full", { showTask: showAgentTaskTitles }),
+          isInputLocked: panel.isInputLocked === true,
+          kind: panel.kind,
+          chrome: deriveTerminalChrome(panel),
+          worktreeId: panel.worktreeId ?? null,
+          worktreeName: panel.worktreeId ? (worktrees.get(panel.worktreeId)?.name ?? null) : null,
+        })),
+        worktreeId
+      ),
+    [panels, showAgentTaskTitles, worktrees, worktreeId]
   );
 }
 
 export type DiffNoteDeliveryResult =
-  { ok: true; sent: number; kept: number; targetTitle: string } | { ok: false; message: string };
+  | {
+      ok: true;
+      sent: number;
+      kept: number;
+      targetTitle: string;
+      /** The notes the send cleared, as they were stored, so an Undo can put them back. */
+      cleared: readonly DiffNote[];
+    }
+  | { ok: false; message: string };
 
 /**
  * Pastes the notes into an agent pane and clears the ones that went. Never
@@ -122,11 +155,12 @@ export function deliverDiffNotes(
   }
   if (managed) terminalService?.notifyUserInput(targetId);
 
-  const sent = useDiffNotesStore.getState().clearSent(ordered);
+  const cleared = useDiffNotesStore.getState().clearSent(ordered);
   return {
     ok: true,
-    sent,
-    kept: notes.length - sent,
+    sent: cleared.length,
+    kept: notes.length - cleared.length,
     targetTitle: getTerminalDisplayTitle(panel, "base"),
+    cleared,
   };
 }

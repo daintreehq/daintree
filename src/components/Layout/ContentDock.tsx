@@ -13,18 +13,8 @@ import {
 } from "@/components/DragDrop/useArmedDropTarget";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { usePanelStore, useWorktreeSelectionStore } from "@/store";
-import {
-  isDockPanel,
-  isPtyPanel,
-  type DockPanelData,
-  type PanelInstance,
-} from "@shared/types/panel";
+import { isPtyPanel, type DockPanelData, type PanelInstance } from "@shared/types/panel";
 import { dockChipTitle } from "./dockChipTitle";
-import { getRenderablePanel } from "@/store/slices/panelRegistry/selectors";
-import {
-  collectUngroupedCandidateIds,
-  panelMatchesWorktreeScope,
-} from "@/store/slices/panelRegistry/worktreeIndex";
 import type { TrashedTerminal } from "@/store/slices";
 import { DockedTerminalItem } from "./DockedTerminalItem";
 import { DockedNonPtyPanelItem } from "./DockedNonPtyPanelItem";
@@ -69,7 +59,12 @@ import {
 } from "@/components/ui/context-menu";
 
 import { useHelpPanelStore, selectSlotTerminalIds } from "@/store/helpPanelStore";
-import { buildDockRenderItems, type DockRenderItem } from "./dockRenderItems";
+import {
+  buildDockRenderItems,
+  collectDockPanels,
+  filterRailDockPanels,
+  type DockRenderItem,
+} from "./dockRenderItems";
 import { usePreferencesStore, type DockDensity } from "@/store/preferencesStore";
 
 const DOCK_DENSITY_OPTIONS = [
@@ -122,13 +117,8 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   // Narrow dock subscription (#10908). Subscribing to the whole `panelsById`
   // re-rendered the dock on every panel's rAF status-buffer flush — including
   // grid agents that never appear here. This selector reacts only to dock
-  // panels. Membership is `isDockPanel` — every registered kind that hasn't
-  // opted out with `dockable: false`, PTY and non-PTY alike, including plugin
-  // kinds (#11332). Panels are read through `getRenderablePanel` (not
-  // `getNarrowPanel`, which drops plugin kinds); the PTY chip and the generic
-  // `DockedNonPtyPanelItem` chip cover every member below. This is NOT the
-  // #10512 grid render-eligibility predicate, which deliberately does not
-  // apply to the dock.
+  // panels, whose membership `collectDockPanels` owns; the PTY chip and the
+  // generic `DockedNonPtyPanelItem` chip cover every member below.
   //
   // The list is object-valued (the dock renders live activity/agent state from
   // it) and ordered, and it is the sole authority for chip order — so a pure
@@ -138,53 +128,18 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   // drops deps a callback never consumes, so that memo held the pre-drag order
   // and every dock reorder snapped back (#11873). Everything downstream now
   // consumes its inputs for real, so the compiler keeps them in the cache key.
-  //
-  // Candidate ids come from `collectUngroupedCandidateIds`, the same helper
-  // `getTabGroups` uses, so a panel committed mid-spawn-batch — eagerly in the
-  // worktree index while `panelIds` only appends at flush — still paints on
-  // first mount (#9649). Pass the active worktree, not `undefined`: the scoped
-  // call orders pending ids active-bucket-then-global, while the unscoped one
-  // follows `panelIdsByWorktreeId`'s insertion order. Only the pending tail
-  // differs, and only while a batch is open, but the downstream worktree filter
-  // can't restore the order — so scope it here and stay identical to
-  // `getTabGroups`. Committed `panelIds` order is unaffected either way.
   const dockTerminalsRaw = usePanelStore(
     useShallow((state) => {
-      const result: DockPanelData[] = [];
-      for (const id of collectUngroupedCandidateIds(
-        state.panelIds,
-        state.panelIdsByWorktreeId,
-        activeWorktreeId ?? undefined
-      )) {
-        const terminal = getRenderablePanel(state.panelsById, id);
-        if (
-          terminal &&
-          isDockPanel(terminal) &&
-          terminal.location === "dock" &&
-          !state.trashedTerminals.has(terminal.id)
-        ) {
-          result.push(terminal);
-        }
-      }
+      const result = collectDockPanels(state, activeWorktreeId);
       return result.length === 0 ? EMPTY_DOCK_TERMINALS : result;
     })
   );
 
-  const dockTerminals = useMemo<DockPanelData[]>(() => {
-    // `dockTerminalsRaw` already narrows to dock/dockable/non-trashed panels;
-    // apply the help-panel and active-worktree filters here (external stores
-    // the store selector can't read).
-    const result: DockPanelData[] = [];
-    for (const terminal of dockTerminalsRaw) {
-      if (
-        !helpTerminalIdList.includes(terminal.id) &&
-        panelMatchesWorktreeScope(terminal.worktreeId, activeWorktreeId, "dock")
-      ) {
-        result.push(terminal);
-      }
-    }
-    return result;
-  }, [dockTerminalsRaw, helpTerminalIdList, activeWorktreeId]);
+  // The help-panel and worktree filters read stores the selector above can't.
+  const dockTerminals = useMemo<DockPanelData[]>(
+    () => filterRailDockPanels(dockTerminalsRaw, activeWorktreeId, helpTerminalIdList),
+    [dockTerminalsRaw, helpTerminalIdList, activeWorktreeId]
+  );
 
   // Trashed panels resolved from the store, keyed by id. Values are the actual
   // store panel references (not freshly constructed), so `useShallow` bails
@@ -248,7 +203,22 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   useLayoutEffect(() => {
     const items = getDockItems();
     if (items.length === 0) return;
-    const clamped = Math.min(activeDockIndexRef.current, items.length - 1);
+    // The tab stop follows the chip, not its slot: a chip moved by the keyboard
+    // (#14972) keeps it, and the next arrow roves from where the chip now sits.
+    // React has already put focus back on a moved chip by now, so one that holds
+    // it is scrolled into view the way an arrow-key rove would.
+    const followed = prevFocusedDockItemRef.current;
+    const followedIdx = followed ? items.indexOf(followed) : -1;
+    if (
+      followed &&
+      followedIdx !== -1 &&
+      followedIdx !== activeDockIndexRef.current &&
+      document.activeElement === followed
+    ) {
+      followed.scrollIntoView({ behavior: "instant", block: "nearest", inline: "nearest" });
+    }
+    const clamped =
+      followedIdx !== -1 ? followedIdx : Math.min(activeDockIndexRef.current, items.length - 1);
     activeDockIndexRef.current = clamped;
     syncDockTabStops(items, clamped);
 

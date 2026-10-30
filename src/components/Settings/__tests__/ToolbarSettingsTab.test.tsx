@@ -91,9 +91,10 @@ vi.mock("@/store", () => ({
 
 const setStateMock = vi.fn();
 const mockNotify = vi.fn();
-// The project overlay notice has its own tests; it reads stores this file mocks partially.
+// The project toolbar rows have their own tests; they read stores this file mocks partially.
 vi.mock("@/components/Settings/ProjectToolbarProfileNotice", () => ({
   ProjectToolbarProfileNotice: () => null,
+  ProjectToolbarResetRow: () => <div data-project-toolbar-reset-row="" />,
 }));
 vi.mock("@/lib/notify", () => ({ notify: (...args: unknown[]) => mockNotify(...args) }));
 
@@ -1451,6 +1452,13 @@ describe("ToolbarSettingsTab — reset", () => {
     payload.action.onClick();
     expect(restored().layout).toEqual(layout);
     expect(restored().launcher.alwaysShowDevServer).toBe(!launcher.alwaysShowDevServer);
+  });
+
+  it("ends the page with the project's reset, the one with no undo (#15232)", () => {
+    render(<ToolbarSettingsTab />);
+    const group = document.getElementById("toolbar-reset");
+    expect(group?.lastElementChild?.hasAttribute("data-project-toolbar-reset-row")).toBe(true);
+    expect(group?.parentElement?.lastElementChild).toBe(group);
   });
 
   it("leaves both sides alone once either side changed again", () => {

@@ -77,3 +77,85 @@ export function pickDockCloseFocusId(options: {
   const previous = rendered.find((panel) => panel.id === options.previousFocusedId);
   return previous?.id ?? rendered[0]?.id ?? null;
 }
+
+function firstFocusablePanelInGroup(
+  panelIds: string[],
+  activeTabId: string | undefined,
+  closing: Pick<ReadonlySet<string>, "has">
+): string | null {
+  if (activeTabId && panelIds.includes(activeTabId) && !closing.has(activeTabId)) {
+    return activeTabId;
+  }
+  return panelIds.find((id) => !closing.has(id)) ?? null;
+}
+
+/**
+ * Where focus goes when the panels in `hideIds` leave their worktree's grid,
+ * closed or moved to another worktree (#14974): the next tab group in visual
+ * order, else the nearest one before it, landing on that group's visible tab. A
+ * leaver outside the grid's groups (a docked pane) walks the flat panel order
+ * the same way. `isUnavailable` names panels already on their way out, such as
+ * a close still pending, which can't take focus either.
+ *
+ * Read it before the leavers are refiled: a moved group is gone from this
+ * worktree's order afterwards, leaving no position to step on from.
+ */
+export function pickGridSuccessorFocusId(
+  state: {
+    panelIds: string[];
+    panelsById: Record<string, CarrierPanel>;
+    getTabGroups?: (
+      location: "grid",
+      worktreeId?: string
+    ) => ReadonlyArray<{ panelIds: string[]; activeTabId: string }>;
+  },
+  hideIds: readonly string[],
+  isUnavailable: (id: string) => boolean = () => false
+): string | null {
+  const closing = { has: (id: string) => hideIds.includes(id) || isUnavailable(id) };
+  const closingWorktreeId = state.panelsById[hideIds[0] ?? ""]?.worktreeId;
+  const groups = state.getTabGroups?.("grid", closingWorktreeId);
+
+  if (groups && groups.length > 0) {
+    const closedGroupIndex = groups.findIndex((group) =>
+      group.panelIds.some((id) => hideIds.includes(id))
+    );
+
+    if (closedGroupIndex >= 0) {
+      for (let i = closedGroupIndex + 1; i < groups.length; i++) {
+        const group = groups[i]!;
+        const candidate = firstFocusablePanelInGroup(group.panelIds, group.activeTabId, closing);
+        if (candidate) return candidate;
+      }
+      for (let i = closedGroupIndex - 1; i >= 0; i--) {
+        const group = groups[i]!;
+        const candidate = firstFocusablePanelInGroup(group.panelIds, group.activeTabId, closing);
+        if (candidate) return candidate;
+      }
+      return null;
+    }
+  }
+
+  const closedIndexes = hideIds
+    .map((id) => state.panelIds.indexOf(id))
+    .filter((index) => index >= 0);
+  const startIndex = closedIndexes.length > 0 ? Math.max(...closedIndexes) + 1 : 0;
+
+  const isGridSurvivor = (id: string): boolean => {
+    if (closing.has(id)) return false;
+    const terminal = state.panelsById[id];
+    if (!terminal) return false;
+    if (terminal.location !== "grid" && terminal.location !== undefined) return false;
+    return terminal.worktreeId === closingWorktreeId;
+  };
+
+  for (let i = startIndex; i < state.panelIds.length; i++) {
+    const id = state.panelIds[i]!;
+    if (isGridSurvivor(id)) return id;
+  }
+  for (let i = startIndex - 2; i >= 0; i--) {
+    const id = state.panelIds[i]!;
+    if (isGridSurvivor(id)) return id;
+  }
+  return null;
+}

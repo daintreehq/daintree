@@ -429,9 +429,25 @@ describe("WorktreeBulkRemoveDialog — gating", () => {
 describe("WorktreeBulkRemoveDialog — exclusions state their reason", () => {
   it("says an already-removed worktree is excluded", () => {
     renderDialog({ targets: [target("a", { status: { state: "gone" } })] });
-    expect(document.querySelector('[data-testid="bulk-remove-excluded"]')?.textContent).toContain(
-      "Already deleted"
-    );
+    expect(
+      document.querySelector('[data-testid="bulk-remove-excluded-gone"]')?.textContent
+    ).toContain("Already deleted");
+  });
+
+  // Every gone worktree says the same thing and needs nothing, so they share one
+  // row rather than letting a pile of leftovers outweigh the real deletions.
+  it("lists every already-removed worktree in one row", () => {
+    renderDialog({
+      targets: [
+        target("a"),
+        target("b", { status: { state: "gone" } }),
+        target("c", { status: { state: "gone" } }),
+      ],
+    });
+    const rows = document.querySelectorAll('[data-testid="bulk-remove-excluded-gone"]');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.textContent).toContain("feature/b");
+    expect(rows[0]?.textContent).toContain("feature/c");
   });
 
   it("says an unverifiable worktree is excluded and offers a retry", () => {
@@ -617,7 +633,7 @@ describe("WorktreeBulkRemoveDialog — the title and the button agree", () => {
   it("says only what enables the primary when the whole batch is eligible", () => {
     renderDialog({ targets: [target("a"), target("b")] });
     const hint = () => document.querySelector('[data-testid="app-dialog-hint"]');
-    expect(hint()?.textContent).toBe("Type the confirmation phrase to enable");
+    expect(hint()?.textContent).toBe("Type the confirmation phrase to continue");
     typeTheCount("2 worktrees");
     expect(hint()).toBeNull();
   });

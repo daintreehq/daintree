@@ -43,6 +43,7 @@ import { logError } from "@/utils/logger";
 import { useHostConnection } from "@/hooks/useHostConnection";
 import { useHostPlatform } from "@/hooks/useHostPlatform";
 import { pluginViewHostId } from "@/components/Plugin/remotePluginView";
+import { projectIdFromPluginInstanceKey } from "@shared/types/plugin";
 import type {
   LoadedPluginInfo,
   PluginPickPathRequest,
@@ -70,6 +71,19 @@ const SCOPE_BADGE_LABEL: Record<PluginSettingsScope, string> = {
   project: "This project",
   local: "This project, this machine",
 };
+
+/**
+ * Where this instance's value actually lands, which the scope alone misstates
+ * twice: a `user` value is stored under the instance key, and a project-owned
+ * instance's key carries its project id; and a `project` secret is kept in the
+ * local file, never in the repository.
+ */
+function scopeBadgeLabel(scope: PluginSettingsScope, pluginId: string, isSecret: boolean): string {
+  const machineOnly =
+    (scope === "user" && projectIdFromPluginInstanceKey(pluginId) !== null) ||
+    (scope === "project" && isSecret);
+  return machineOnly ? SCOPE_BADGE_LABEL.local : SCOPE_BADGE_LABEL[scope];
+}
 
 /**
  * Scopes whose file is resolved from a project, so their values reload on a
@@ -570,7 +584,7 @@ function SettingField({
   };
   const scopeBadge = (
     <>
-      <Badge size="xs">{SCOPE_BADGE_LABEL[scope]}</Badge>
+      <Badge size="xs">{scopeBadgeLabel(scope, pluginId, isSecret)}</Badge>
       {def.required === true && <Badge size="xs">Required</Badge>}
     </>
   );
@@ -778,7 +792,15 @@ function SettingField({
           layout="stacked"
           control={({ labelId, descriptionId, disabled }) => (
             <div className="grid gap-1.5">
-              <div className="flex items-center gap-2">
+              <div
+                className="flex items-center gap-2"
+                // Commit when focus leaves the field and its eye together, so
+                // Tab can reach the eye and check a typed value before it saves.
+                onBlur={(e) => {
+                  if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+                  void commitSecret();
+                }}
+              >
                 <Input
                   type={revealed ? "text" : "password"}
                   value={draft}
@@ -795,10 +817,13 @@ function SettingField({
                   onChange={(e) => {
                     setDraft(e.target.value);
                     setSecretEdited(true);
+                    // An emptied field starts the next entry masked.
+                    if (e.target.value === "") setRevealed(false);
                   }}
-                  onBlur={() => void commitSecret()}
                 />
-                {hasStored && (
+                {/* Typed text can be checked before anything is stored; with
+                    nothing typed, only a stored value has anything to show. */}
+                {(hasStored || draft !== "") && (
                   <Button
                     type="button"
                     variant="ghost"
@@ -807,7 +832,7 @@ function SettingField({
                     // A toggle: one name, its state carried by `pressed`.
                     aria-label={`Show ${label}`}
                     pressed={revealed}
-                    // Toggle reveal without firing the input's blur-commit.
+                    // A click toggles reveal and leaves the caret in the field.
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
                       if (secretEdited) {

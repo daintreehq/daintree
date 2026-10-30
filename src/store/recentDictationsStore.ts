@@ -9,11 +9,16 @@ interface RecentDictationsState {
    */
   dictations: RecentDictation[];
   setDictations: (dictations: RecentDictation[]) => void;
+  /** The dictation the palette should open on, asked for by the toolbar menu's "View full dictation…". */
+  revealId: string | null;
+  reveal: (id: string | null) => void;
 }
 
 export const useRecentDictationsStore = create<RecentDictationsState>()((set) => ({
   dictations: [],
   setDictations: (dictations) => set({ dictations }),
+  revealId: null,
+  reveal: (revealId) => set({ revealId }),
 }));
 
 /** Which of a dictation's two texts a recovery uses. */

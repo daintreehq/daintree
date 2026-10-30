@@ -4,10 +4,11 @@ import { renderHook, act } from "@testing-library/react";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 
 vi.mock("@/components/Settings/settingsTabIds", () => ({
-  isSettingsTab: (tab: string) => ["general", "code-forge", "appearance"].includes(tab),
+  isSettingsTab: (tab: string) => ["general", "code-forge", "appearance", "hosts"].includes(tab),
 }));
 
 import type { SettingsTab } from "@/components/Settings/settingsTabIds";
+import { takePendingHostPlugins } from "@/components/Settings/Hosts/hostPluginRequests";
 import { useSettingsDialog } from "../useSettingsDialog";
 
 // Stale/fake ids exercised below sit outside the SettingsTab union by design —
@@ -113,5 +114,48 @@ describe("useSettingsDialog — repeat navigation", () => {
 
     expect(result.current.settingsTab).toBe("general");
     expect(result.current.settingsNavNonce).not.toBe(first);
+  });
+});
+
+describe("useSettingsDialog — a host's plugins", () => {
+  it.each(["host-plugins", "host-plugin-views"])(
+    "asks Settings → Hosts for a remote host's %s and drops the section",
+    (sectionId) => {
+      const { result } = renderHook(() => useSettingsDialog());
+
+      act(() => {
+        result.current.handleOpenSettingsTab({
+          tab: asTab("hosts"),
+          subtab: "studio-01",
+          sectionId,
+        });
+      });
+
+      expect(takePendingHostPlugins()).toEqual({ hostId: "studio-01", sectionId });
+      expect(result.current.isSettingsOpen).toBe(true);
+      expect(result.current.settingsTab).toBe("hosts");
+      expect(result.current.settingsSubtab).toBeUndefined();
+      expect(result.current.settingsSectionId).toBeUndefined();
+    }
+  );
+
+  it.each([
+    { tab: asTab("hosts"), subtab: "local", sectionId: "host-plugins" },
+    { tab: asTab("hosts"), subtab: "local", sectionId: "host-plugin-views" },
+    { tab: asTab("hosts"), subtab: "bad:id", sectionId: "host-plugins" },
+    { tab: asTab("hosts"), sectionId: "host-plugins" },
+    { tab: asTab("hosts"), subtab: "studio-01", sectionId: "hosts-list" },
+    { tab: asTab("appearance"), subtab: "studio-01", sectionId: "host-plugins" },
+  ])("asks for nothing and navigates as told for %o", (target) => {
+    const { result } = renderHook(() => useSettingsDialog());
+
+    act(() => {
+      result.current.handleOpenSettingsTab(target);
+    });
+
+    expect(takePendingHostPlugins()).toBeNull();
+    expect(result.current.settingsTab).toBe(target.tab);
+    expect(result.current.settingsSubtab).toBe(target.subtab);
+    expect(result.current.settingsSectionId).toBe(target.sectionId);
   });
 });

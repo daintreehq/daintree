@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, act, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, act, fireEvent, within } from "@testing-library/react";
 import { useState } from "react";
 import type { BranchInfo } from "@/types/electron";
 import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
@@ -20,11 +20,16 @@ const mockDispatch = vi.fn();
 /** The form's draft for another host, as the placement row would ask for it. */
 const placement = vi.hoisted(() => ({
   getDraft: null as null | (() => unknown),
+  onCommitChange: null as null | ((commit: unknown) => void),
 }));
 
 vi.mock("@/components/Hosts/Overview/LazyHostOverviewParts", () => ({
-  LazyWorktreePlacementRow: (props: { getDraft: () => unknown }) => {
+  LazyWorktreePlacementRow: (props: {
+    getDraft: () => unknown;
+    onCommitChange?: (commit: unknown) => void;
+  }) => {
     placement.getDraft = props.getDraft;
+    placement.onCommitChange = props.onCommitChange ?? null;
     return null;
   },
 }));
@@ -95,7 +100,9 @@ vi.mock("@/store/panelStore", () => {
 });
 
 const mockGenerateRecipeFromActiveTerminals = vi.fn().mockReturnValue([]);
-const recipeFixtures = vi.hoisted(() => ({ recipes: [] as unknown[] }));
+const recipeFixtures = vi.hoisted(() => ({
+  recipes: [] as { id: string; name: string; terminals: { type: string }[] }[],
+}));
 vi.mock("@/store/recipeStore", () => {
   const recipeState = {
     get recipes() {
@@ -125,7 +132,7 @@ vi.mock("@/store/preferencesStore", () => ({
       assignWorktreeToSelf: mockAssignWorktreeToSelf,
       setAssignWorktreeToSelf: vi.fn(),
       lastSelectedWorktreeRecipeIdByProject: {},
-      setLastSelectedWorktreeRecipeIdByProject: vi.fn(),
+      setLastSelectedWorktreeRecipeIdByProject: mockSetLastRecipe,
       lastSelectedWorktreeAgentIdByProject: firstAgentFixtures.lastAgentByProject,
       setLastSelectedWorktreeAgentIdByProject: mockSetLastAgent,
     }),
@@ -140,6 +147,7 @@ const firstAgentFixtures = vi.hoisted(() => ({
   }[],
 }));
 const mockSetLastAgent = vi.hoisted(() => vi.fn());
+const mockSetLastRecipe = vi.hoisted(() => vi.fn());
 vi.mock("@/components/Worktree/hooks/useFirstAgentOptions", () => ({
   useFirstAgentOptions: () => firstAgentFixtures.options,
 }));
@@ -150,14 +158,25 @@ vi.mock("@/components/Worktree/views/AgentPickerPopover", () => ({
     agents,
     selectedAgentId,
     onSelectAgent,
+    disabled,
   }: {
     agents: { id: string; name: string }[];
     selectedAgentId: string | null;
     onSelectAgent: (id: string | null) => void;
+    disabled?: boolean;
   }) => (
-    <div data-testid="first-agent-picker" data-selected={selectedAgentId ?? ""}>
+    <div
+      data-testid="first-agent-picker"
+      data-selected={selectedAgentId ?? ""}
+      data-disabled={disabled ? "true" : undefined}
+    >
       {agents.map((a) => (
-        <button key={a.id} data-testid={`pick-agent-${a.id}`} onClick={() => onSelectAgent(a.id)}>
+        <button
+          key={a.id}
+          data-testid={`pick-agent-${a.id}`}
+          disabled={disabled}
+          onClick={() => onSelectAgent(a.id)}
+        >
           {a.name}
         </button>
       ))}
@@ -226,7 +245,11 @@ vi.mock("@/components/Worktree/hooks/useRecipePicker", async (importOriginal) =>
     recipePickerCalls.last = args;
     return {
       selectedRecipeId: recipePickerCalls.selected?.id ?? null,
-      setSelectedRecipeId: vi.fn(),
+      // Stands in for the hook's state: a pick also dispatches its touched
+      // flag, and the re-render that follows reads the new selection.
+      setSelectedRecipeId: (id: string | null) => {
+        recipePickerCalls.selected = recipeFixtures.recipes.find((r) => r.id === id) ?? null;
+      },
       recipePickerOpen: false,
       setRecipePickerOpen: vi.fn(),
       recipeSelectionTouchedRef: { current: false },
@@ -236,7 +259,10 @@ vi.mock("@/components/Worktree/hooks/useRecipePicker", async (importOriginal) =>
 }));
 
 const projectSettingsFixture = vi.hoisted(() => ({
-  value: null as { defaultWorktreeRecipeId?: string } | null,
+  value: null as {
+    defaultWorktreeRecipeId?: string;
+    resourceEnvironments?: Record<string, object>;
+  } | null,
 }));
 vi.mock("@/components/Worktree/hooks/useNewWorktreeProjectSettings", () => ({
   useNewWorktreeProjectSettings: () => ({
@@ -262,7 +288,28 @@ vi.mock("@/components/ui/AppDialog", () => {
   Dialog.Title = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
   Dialog.CloseButton = () => <button aria-label="Close" />;
   Dialog.Body = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
-  Dialog.Footer = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
+  Dialog.Description = ({ children }: { children: React.ReactNode }) => <p>{children}</p>;
+  type FooterAction = { label: string; onClick: () => void };
+  Dialog.Footer = ({
+    children,
+    hint,
+    primaryAction,
+    secondaryAction,
+  }: {
+    children?: React.ReactNode;
+    hint?: React.ReactNode;
+    primaryAction?: FooterAction;
+    secondaryAction?: FooterAction;
+  }) => (
+    <div>
+      {hint}
+      {children}
+      {secondaryAction && (
+        <button onClick={secondaryAction.onClick}>{secondaryAction.label}</button>
+      )}
+      {primaryAction && <button onClick={primaryAction.onClick}>{primaryAction.label}</button>}
+    </div>
+  );
   return { AppDialog: Dialog };
 });
 
@@ -357,6 +404,7 @@ vi.mock("@/components/Worktree/worktreeCreationErrors", () => ({
 Element.prototype.scrollIntoView = vi.fn();
 
 import { NewWorktreeDialog, clearBranchListCache } from "../NewWorktreeDialog";
+import { CLONE_LAYOUT_ID } from "../hooks/useRecipePicker";
 import { useRecipeStore } from "@/store/recipeStore";
 import {
   buildCacheKey,
@@ -1650,6 +1698,49 @@ describe("NewWorktreeDialog — recipe scope visibility (#11510)", () => {
   });
 });
 
+describe("NewWorktreeDialog — environment picker with a saved local key", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockListBranches.mockResolvedValue(TEST_BRANCHES);
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockGetCurrentUser.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+    projectSettingsFixture.value = null;
+  });
+
+  it("hides the Environment row when local is the only saved environment", async () => {
+    projectSettingsFixture.value = { resourceEnvironments: { local: {} } };
+
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    expect(screen.queryByRole("radiogroup", { name: "Environment" })).toBeNull();
+    expect(screen.queryByText("Environment", { exact: true })).toBeNull();
+  });
+
+  it("offers Local once beside the usable environments", async () => {
+    projectSettingsFixture.value = { resourceEnvironments: { local: {}, staging: {} } };
+
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const group = screen.getByRole("radiogroup", { name: "Environment" });
+    const radios = within(group).getAllByRole("radio");
+    expect(radios.map((r) => r.textContent?.trim())).toEqual(["Local", "staging"]);
+  });
+});
+
 describe("NewWorktreeDialog — in-use base branch selection", () => {
   // `main` is in use by `main-wt` via mockWorktreeDataMap. Make `develop` the
   // current branch so it wins deriveDefaultBaseBranch — otherwise `main` is
@@ -2032,7 +2123,7 @@ describe("NewWorktreeDialog — first agent and prompt (#12796)", () => {
     return mockDispatch.mock.calls.filter(([id]) => id === actionId);
   }
 
-  it("hides the prompt until an agent is picked, and remembers the pick per project", async () => {
+  it("hides the prompt until an agent is picked", async () => {
     renderDialog();
     await advanceTimersGradually(500);
     expect(screen.queryByTestId("first-agent-prompt")).toBeNull();
@@ -2042,7 +2133,6 @@ describe("NewWorktreeDialog — first agent and prompt (#12796)", () => {
     });
 
     expect(screen.getByTestId("first-agent-prompt")).toBeDefined();
-    expect(mockSetLastAgent).toHaveBeenCalledWith("test-project", "claude");
   });
 
   it("preselects the project's remembered agent", async () => {
@@ -2241,5 +2331,376 @@ describe("NewWorktreeDialog — first agent and prompt (#12796)", () => {
     );
     expect(handedBack).toBeDefined();
     expect(JSON.stringify(handedBack)).not.toContain("SENTINEL");
+  });
+});
+
+describe("NewWorktreeDialog — creating on another host (#14991)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockListBranches.mockResolvedValue(TEST_BRANCHES);
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockGetCurrentUser.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    recipePickerCalls.selected = null;
+    placement.onCommitChange = null;
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  async function nameBranch() {
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("branch-name-input"), {
+        target: { value: "feature/placed" },
+      });
+    });
+    await advanceTimersGradually(500);
+  }
+
+  /** What the row hands the dialog for another host; null for this window's own. */
+  async function chooseHost(hostName: string | null, overrides: Record<string, unknown> = {}) {
+    const submit = vi.fn();
+    await act(async () => {
+      placement.onCommitChange?.(
+        hostName === null
+          ? null
+          : {
+              hostId: hostName,
+              hostName,
+              homeName: "This Mac",
+              status: "idle",
+              unavailable: null,
+              relativePath: "../root-worktrees/feature-placed",
+              submit,
+              ...overrides,
+            }
+      );
+    });
+    return submit;
+  }
+
+  it("widens the host label cap only when the summary has moved above the buttons", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await chooseHost("studio-02");
+    const label = () => screen.getByTestId("create-worktree-button").querySelector("span.truncate");
+    expect(label()?.className).toContain("max-w-60");
+    await chooseHost("Greg's Mac Studio (build-west)");
+    expect(label()?.className).toContain("max-w-96");
+  });
+
+  it("makes its one primary create on the chosen host, by click and by Cmd+Enter", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    const submit = await chooseHost("studio-02");
+
+    const primary = screen.getByTestId("create-worktree-button");
+    expect(primary.textContent).toContain("Create on studio-02");
+    expect(primary.getAttribute("aria-disabled")).toBeNull();
+    expect(screen.getByTestId("placed-worktree-path").textContent).toBe(
+      "../root-worktrees/feature-placedBeside the project on studio-02"
+    );
+
+    await act(async () => {
+      fireEvent.click(primary, { metaKey: true });
+    });
+    expect(submit).toHaveBeenLastCalledWith(expect.objectContaining({ metaKey: true }));
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    });
+    expect(submit).toHaveBeenCalledTimes(2);
+    // The keyboard chord carries no click: this window, not a new one.
+    expect(submit).toHaveBeenLastCalledWith(undefined);
+    expect(mockDispatch).not.toHaveBeenCalledWith(
+      "worktree.create",
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it("holds the primary with the reason while the chosen host can't take it", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    const submit = await chooseHost("studio-02", { unavailable: "Not connected" });
+
+    const primary = screen.getByTestId("create-worktree-button");
+    expect(primary.getAttribute("aria-disabled")).toBe("true");
+    const reason = document.getElementById(primary.getAttribute("aria-describedby")!);
+    expect(reason?.textContent).toBe("studio-02: Not connected");
+    await act(async () => {
+      fireEvent.click(primary);
+    });
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  function draft(): { recipeId?: string | null } | null {
+    let value: { recipeId?: string | null } | null = null;
+    act(() => {
+      value = (placement.getDraft?.() ?? null) as { recipeId?: string | null } | null;
+    });
+    return value;
+  }
+
+  it("turns off the setup another host won't apply, says so, and keeps it for this host", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("pick-agent-claude"));
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("first-agent-prompt"), {
+        target: { value: "fix the login bug" },
+      });
+    });
+    expect(screen.queryByTestId("placement-setup-note")).toBeNull();
+
+    await chooseHost("studio-02");
+    expect(screen.getByTestId("placement-setup-note").textContent).toBe(
+      "The agent and prompt are off on studio-02. Your choices are kept for This Mac."
+    );
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-disabled")).toBe("true");
+    const prompt = screen.getByTestId("first-agent-prompt") as HTMLTextAreaElement;
+    expect(prompt.disabled).toBe(true);
+    expect(prompt.value).toBe("fix the login bug");
+
+    await chooseHost(null);
+    expect(screen.queryByTestId("placement-setup-note")).toBeNull();
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-disabled")).toBeNull();
+    expect((screen.getByTestId("first-agent-prompt") as HTMLTextAreaElement).disabled).toBe(false);
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-selected")).toBe("claude");
+  });
+
+  it("says a recipe kept on this host won't run there, and doesn't send it", async () => {
+    recipePickerCalls.selected = { id: "personal-setup", name: "Setup", terminals: [] };
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await chooseHost("studio-02");
+
+    expect(screen.getByTestId("placed-recipe-note").textContent).toBe(
+      "studio-02 runs only team recipes. Setup is kept for This Mac."
+    );
+    expect(draft()).toMatchObject({ recipeId: null });
+  });
+
+  it("doesn't take a plugin's recipe for a team one, whatever its id (#14991)", async () => {
+    recipePickerCalls.selected = {
+      id: "inrepo-acme.tools.setup",
+      name: "Setup",
+      terminals: [],
+      origin: { kind: "plugin", pluginId: "inrepo-acme.tools", contributionId: "setup" },
+    } as typeof recipePickerCalls.selected;
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await chooseHost("studio-02");
+
+    expect(screen.getByTestId("placed-recipe-note").textContent).toBe(
+      "studio-02 runs only team recipes. Setup is kept for This Mac."
+    );
+    expect(draft()).toMatchObject({ recipeId: null });
+  });
+
+  it("sends a team recipe, saying it runs only if that host's copy has it", async () => {
+    recipePickerCalls.selected = {
+      id: "0f9c1e5a-team",
+      name: "Setup",
+      terminals: [],
+      scope: "inrepo",
+    } as typeof recipePickerCalls.selected;
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await chooseHost("studio-02");
+
+    expect(screen.getByTestId("placed-recipe-note").textContent).toBe(
+      "Runs only if studio-02's copy of the repository has this recipe"
+    );
+    expect(draft()).toMatchObject({ recipeId: "0f9c1e5a-team" });
+  });
+
+  it("says a cloned layout won't be made there, even when it was only the default", async () => {
+    // No saved recipes and no agent: on this host the Recipe row stays hidden.
+    recipePickerCalls.selected = { id: CLONE_LAYOUT_ID, name: "", terminals: [] };
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    expect(screen.queryByTestId("placed-recipe-note")).toBeNull();
+
+    await chooseHost("studio-02");
+    expect(screen.getByTestId("placed-recipe-note").textContent).toBe(
+      "studio-02 can't clone this window's layout. Clone current layout is kept for This Mac."
+    );
+    expect(draft()).toMatchObject({ recipeId: null });
+  });
+});
+
+describe("NewWorktreeDialog — remembered setup on discard (#14996)", () => {
+  const WORK = { id: "global-work", name: "Work", terminals: [], createdAt: 0 };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockListBranches.mockResolvedValue(TEST_BRANCHES);
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockGetCurrentUser.mockResolvedValue(null);
+    mockDispatch.mockImplementation(async (actionId: string) =>
+      actionId === "worktree.create"
+        ? { ok: true, result: { worktreeId: "new-wt-id", branch: "feature/test" } }
+        : { ok: true, result: undefined }
+    );
+  });
+
+  afterEach(() => {
+    firstAgentFixtures.lastAgentByProject = {};
+    recipePickerCalls.selected = null;
+    recipeFixtures.recipes = [];
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  async function pickAgent() {
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("pick-agent-claude"));
+    });
+  }
+
+  async function pickWorkRecipe() {
+    // Options run clone layout, no layout, then the saved recipes in order.
+    await act(async () => {
+      fireEvent.click(document.getElementById("recipe-selector-option-2")!);
+    });
+  }
+
+  async function cancel() {
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    });
+  }
+
+  it("closes straight away when nothing was changed", async () => {
+    const onClose = vi.fn();
+    renderDialog({ onClose });
+    await advanceTimersGradually(500);
+
+    await cancel();
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Discard changes" })).toBeNull();
+  });
+
+  it("asks before discarding a changed agent, and keeps the remembered one", async () => {
+    const onClose = vi.fn();
+    renderDialog({ onClose });
+    await advanceTimersGradually(500);
+
+    await pickAgent();
+    await cancel();
+    expect(onClose).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(mockSetLastAgent).not.toHaveBeenCalled();
+  });
+
+  it("keeps the remembered recipe when a recipe pick is discarded", async () => {
+    recipeFixtures.recipes = [WORK];
+    const onClose = vi.fn();
+    renderDialog({ onClose });
+    await advanceTimersGradually(500);
+
+    await pickWorkRecipe();
+    await cancel();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+    });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(mockSetLastRecipe).not.toHaveBeenCalled();
+  });
+
+  it("remembers the picked recipe and agent once the worktree is created", async () => {
+    recipeFixtures.recipes = [WORK];
+    recipePickerCalls.selected = { id: CLONE_LAYOUT_ID, name: "", terminals: [] };
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    await pickWorkRecipe();
+    await pickAgent();
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("branch-name-input"), {
+        target: { value: "feature/test" },
+      });
+    });
+    await advanceTimersGradually(500);
+    expect(mockSetLastRecipe).not.toHaveBeenCalled();
+    expect(mockSetLastAgent).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+
+    expect(mockSetLastRecipe.mock.calls).toEqual([["test-project", "global-work"]]);
+    expect(mockSetLastAgent.mock.calls).toEqual([["test-project", "claude"]]);
+  });
+
+  it("writes nothing when Create stops at validation", async () => {
+    recipeFixtures.recipes = [WORK];
+    recipePickerCalls.selected = WORK;
+    const onClose = vi.fn();
+    renderDialog({ onClose });
+    await advanceTimersGradually(500);
+
+    await pickWorkRecipe();
+    await pickAgent();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(mockSetLastRecipe).not.toHaveBeenCalled();
+    expect(mockSetLastAgent).not.toHaveBeenCalled();
+  });
+
+  it("doesn't pin a setup the user never picked as the remembered one", async () => {
+    recipeFixtures.recipes = [WORK];
+    recipePickerCalls.selected = WORK;
+    firstAgentFixtures.lastAgentByProject = { "test-project": "claude" };
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("branch-name-input"), {
+        target: { value: "feature/test" },
+      });
+    });
+    await advanceTimersGradually(500);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+
+    expect(mockAddPendingCreation).toHaveBeenCalled();
+    expect(mockSetLastRecipe).not.toHaveBeenCalled();
+    expect(mockSetLastAgent).not.toHaveBeenCalled();
   });
 });

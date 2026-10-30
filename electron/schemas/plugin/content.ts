@@ -145,7 +145,7 @@ export const PromptTemplateArgumentSchema = z
 
 /**
  * `contributes.promptTemplates` manifest entry (#13799). A template the
- * composer's command picker offers under the plugin's name; choosing it fills
+ * composer's `/` menu offers under the plugin's name; choosing it fills
  * the draft and never submits. The body's `{{name}}` references are checked
  * against `args` by the manifest-level `superRefine`. Inert declarative
  * content, so no capability is required. Strict so unknown fields fail loudly.

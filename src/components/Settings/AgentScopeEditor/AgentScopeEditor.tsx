@@ -10,14 +10,17 @@ import { BehavioralControls } from "./BehavioralControls";
 import { EnvBlock } from "./EnvBlock";
 import { FallbackChainEditor } from "./FallbackChainEditor";
 import { ReadOnlyDetail } from "./ReadOnlyDetail";
+import { savedPresetStatus } from "./scopeUtils";
 import type { AgentPreset } from "@/config/agents";
 import type { AgentSettingsEntry } from "@shared/types";
+import type { PresetInventoryState } from "@shared/utils/agentPresets";
 
 interface AgentScopeEditorProps {
   agentId: string;
   activeEntry: AgentSettingsEntry;
   ccrPresets: AgentPreset[] | undefined;
   projectPresets: AgentPreset[] | undefined;
+  presetInventory: PresetInventoryState;
   defaultDangerousArg: string;
   editingPresetId: string | null;
   setEditingPresetId: (id: string | null) => void;
@@ -43,6 +46,11 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
   const scope = useAgentScope(props);
   const agentName = scope.agentCfg?.name ?? props.agentId;
   const agentColor = scope.agentCfg?.color ?? "var(--theme-text-secondary)";
+  // The rows below would edit the agent's own settings, which isn't what a
+  // launch with the saved preset uses, so they wait for it to load.
+  const selectionLoading =
+    savedPresetStatus(props.activeEntry.presetId, scope.allPresets, props.presetInventory) ===
+    "loading";
 
   return (
     <SettingsSection
@@ -64,7 +72,11 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
         <SettingsRow
           label="Preset"
           accessory={<ScopeBadge scopeKind={scope.scopeKind} />}
-          description={describeScope(scope.scopeKind, agentName)}
+          description={
+            selectionLoading
+              ? `New ${agentName} sessions launch with the saved preset once it loads`
+              : describeScope(scope.scopeKind, agentName)
+          }
           control={({ labelId, descriptionId }) => (
             <div className={SETTINGS_CONTROL_WIDTH.wide}>
               <PresetSelector
@@ -73,6 +85,7 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
                 ccrPresets={scope.ccrPresets ?? []}
                 projectPresets={scope.projectPresets ?? []}
                 customPresets={scope.customPresets ?? []}
+                selectionLoading={selectionLoading}
                 onChange={(presetId) => {
                   void (async () => {
                     await props.updateAgent(props.agentId, {
@@ -92,92 +105,95 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
         {/* Keyed on scope so rename/edit state resets naturally on switch (#4958). A
             fragment rather than a wrapper, so the group's hairlines still fall between
             rows. */}
-        <Fragment key={props.activeEntry.presetId ?? "default"}>
-          {scope.scopeKind === "custom" && scope.selectedPreset && (
-            <CustomPresetChrome
-              selectedPreset={scope.selectedPreset}
-              agentColor={agentColor}
-              isEditing={props.editingPresetId === scope.selectedPreset.id}
-              editName={props.editName}
-              onEditNameChange={props.setEditName}
-              onCommitEdit={scope.handleCommitEdit}
-              onCancelEdit={scope.handleCancelEdit}
-              renameError={scope.renameError}
-              onStartEdit={scope.handleStartEdit}
-              onColorChange={(color) =>
-                scope.handleUpdatePreset(scope.selectedPreset!.id, { color })
-              }
-              onDisplayTitleChange={scope.handleDisplayTitleChange}
-              onDuplicate={scope.handleDuplicatePreset}
-            />
-          )}
+        {!selectionLoading && (
+          <Fragment key={props.activeEntry.presetId ?? "default"}>
+            {scope.scopeKind === "custom" && scope.selectedPreset && (
+              <CustomPresetChrome
+                selectedPreset={scope.selectedPreset}
+                agentColor={agentColor}
+                isEditing={props.editingPresetId === scope.selectedPreset.id}
+                editName={props.editName}
+                onEditNameChange={props.setEditName}
+                onCommitEdit={scope.handleCommitEdit}
+                onCancelEdit={scope.handleCancelEdit}
+                renameError={scope.renameError}
+                onStartEdit={scope.handleStartEdit}
+                onColorChange={(color) =>
+                  scope.handleUpdatePreset(scope.selectedPreset!.id, { color })
+                }
+                onDisplayTitleChange={scope.handleDisplayTitleChange}
+                onDuplicate={scope.handleDuplicatePreset}
+              />
+            )}
 
-          {(scope.scopeKind === "default" || scope.scopeKind === "custom") && (
-            <EnvBlock
-              scopeKind={scope.scopeKind}
-              agentId={props.agentId}
-              agentName={agentName}
-              globalEnv={props.activeEntry.globalEnv as Record<string, string> | undefined}
-              selectedPreset={scope.scopeKind === "custom" ? scope.selectedPreset : undefined}
-              suggestions={scope.agentEnvSuggestions}
-              onGlobalEnvChange={(env) => {
-                void (async () => {
-                  await props.updateAgent(props.agentId, {
-                    globalEnv: Object.keys(env).length > 0 ? env : undefined,
-                  } as Partial<AgentSettingsEntry>);
-                  props.onSettingsChange?.();
-                })();
-              }}
-              onPresetEnvChange={(env) =>
-                scope.handleUpdatePreset(scope.selectedPreset!.id, { env })
-              }
-            />
-          )}
+            {(scope.scopeKind === "default" || scope.scopeKind === "custom") && (
+              <EnvBlock
+                scopeKind={scope.scopeKind}
+                agentId={props.agentId}
+                agentName={agentName}
+                globalEnv={props.activeEntry.globalEnv as Record<string, string> | undefined}
+                selectedPreset={scope.scopeKind === "custom" ? scope.selectedPreset : undefined}
+                suggestions={scope.agentEnvSuggestions}
+                onGlobalEnvChange={(env) => {
+                  void (async () => {
+                    await props.updateAgent(props.agentId, {
+                      globalEnv: Object.keys(env).length > 0 ? env : undefined,
+                    } as Partial<AgentSettingsEntry>);
+                    props.onSettingsChange?.();
+                  })();
+                }}
+                onPresetEnvChange={(env) =>
+                  scope.handleUpdatePreset(scope.selectedPreset!.id, { env })
+                }
+              />
+            )}
 
-          {scope.isEditableScope && (
-            <BehavioralControls
-              scopeKind={scope.scopeKind}
-              scopeLabel={scope.scopeLabel}
-              dangerousMode={scope.dangerousMode}
-              effectiveSkipPerms={scope.effectiveSkipPerms}
-              inheritResolvesToOn={scope.inheritResolvesToOn}
-              inheritOriginLabel={scope.inheritOriginLabel}
-              inlineMode={scope.inlineMode}
-              inlineInheritResolvesToInline={scope.inlineInheritResolvesToInline}
-              inlineInheritOriginLabel={scope.inlineInheritOriginLabel}
-              customArgsValue={scope.customArgsValue}
-              customArgsPlaceholder={scope.customArgsPlaceholder}
-              customArgsDescription={scope.customArgsDescription}
-              customFlagsOverride={scope.customFlagsOverride}
-              supportsInlineMode={scope.supportsInlineMode}
-              defaultDangerousArg={defaultDangerousArg}
-              onDangerousModeChange={scope.handleDangerousModeChange}
-              onInlineModeChange={scope.handleInlineModeChange}
-              onCustomFlagsChange={scope.handleCustomFlagsChange}
-              onCustomFlagsOverrideReset={scope.handleCustomFlagsOverrideReset}
-            />
-          )}
+            {scope.isEditableScope && (
+              <BehavioralControls
+                scopeKind={scope.scopeKind}
+                scopeLabel={scope.scopeLabel}
+                dangerousMode={scope.dangerousMode}
+                effectiveSkipPerms={scope.effectiveSkipPerms}
+                inheritResolvesToOn={scope.inheritResolvesToOn}
+                inheritOriginLabel={scope.inheritOriginLabel}
+                inlineMode={scope.inlineMode}
+                inlineInheritResolvesToInline={scope.inlineInheritResolvesToInline}
+                inlineInheritOriginLabel={scope.inlineInheritOriginLabel}
+                customArgsValue={scope.customArgsValue}
+                customArgsPlaceholder={scope.customArgsPlaceholder}
+                customArgsDescription={scope.customArgsDescription}
+                customFlagsOverride={scope.customFlagsOverride}
+                supportsInlineMode={scope.supportsInlineMode}
+                defaultDangerousArg={defaultDangerousArg}
+                onDangerousModeChange={scope.handleDangerousModeChange}
+                onInlineModeChange={scope.handleInlineModeChange}
+                onCustomFlagsChange={scope.handleCustomFlagsChange}
+                onCustomFlagsOverrideReset={scope.handleCustomFlagsOverrideReset}
+              />
+            )}
 
-          {scope.scopeKind === "custom" && scope.selectedPreset && (
-            <FallbackChainEditor
-              selectedPreset={scope.selectedPreset}
-              allPresets={scope.allPresets}
-              onUpdatePreset={scope.handleUpdatePreset}
-            />
-          )}
+            {scope.scopeKind === "custom" && scope.selectedPreset && (
+              <FallbackChainEditor
+                selectedPreset={scope.selectedPreset}
+                allPresets={scope.allPresets}
+                onUpdatePreset={scope.handleUpdatePreset}
+              />
+            )}
 
-          {(scope.scopeKind === "ccr" || scope.scopeKind === "project") && scope.selectedPreset && (
-            <ReadOnlyDetail
-              scopeKind={scope.scopeKind}
-              selectedPreset={scope.selectedPreset}
-              agentName={agentName}
-              agentCustomFlags={scope.agentDefaultCustomFlags}
-              effectiveSkipPerms={scope.effectiveSkipPerms}
-              effectiveInline={scope.supportsInlineMode ? scope.effectiveInlineMode : undefined}
-              onDuplicate={scope.handleDuplicatePreset}
-            />
-          )}
-        </Fragment>
+            {(scope.scopeKind === "ccr" || scope.scopeKind === "project") &&
+              scope.selectedPreset && (
+                <ReadOnlyDetail
+                  scopeKind={scope.scopeKind}
+                  selectedPreset={scope.selectedPreset}
+                  agentName={agentName}
+                  agentCustomFlags={scope.agentDefaultCustomFlags}
+                  effectiveSkipPerms={scope.effectiveSkipPerms}
+                  effectiveInline={scope.supportsInlineMode ? scope.effectiveInlineMode : undefined}
+                  onDuplicate={scope.handleDuplicatePreset}
+                />
+              )}
+          </Fragment>
+        )}
       </SettingsGroup>
 
       {/* A group of its own after the preset's settings: destructive actions are

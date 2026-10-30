@@ -28,6 +28,7 @@ vi.mock("../radix-loader", () => ({
 }));
 
 import { Select, SelectTrigger, SelectValue } from "../select";
+import { PickerChevron } from "../PickerChevron";
 
 const FakeTrigger = React.forwardRef<HTMLButtonElement, React.ComponentProps<"button">>(
   ({ children, ...props }, ref) => (
@@ -102,6 +103,19 @@ describe("Select before Radix loads", () => {
     rerender(<SelectUnderTest onOpenChange={onOpenChange} />);
 
     expect(rootProps.at(-1)?.defaultOpen).toBe(true);
+  });
+
+  it("draws the chevron the loaded trigger draws, so nothing swaps when Radix arrives", () => {
+    const shared = render(<PickerChevron />);
+    const expected = shared.container.querySelector("svg")!.getAttribute("class")!;
+    shared.unmount();
+    const group = /group-data-\[state=open\]\/([\w-]+):rotate-180/.exec(expected)?.[1];
+    expect(group).toBeDefined();
+
+    const { container } = render(<SelectUnderTest />);
+    const svgs = trigger(container).querySelectorAll("svg");
+    expect(svgs[svgs.length - 1]!.getAttribute("class")).toBe(expected);
+    expect(trigger(container).classList.contains(`group/${group}`)).toBe(true);
   });
 
   it("drops an open queued while enabled if the root is disabled before Radix arrives", () => {

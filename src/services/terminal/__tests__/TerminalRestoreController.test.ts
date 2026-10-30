@@ -5,6 +5,7 @@ import { TerminalRestoreController, safeChunkSlice } from "../TerminalRestoreCon
 import { TerminalWriteController } from "../TerminalWriteController";
 import { INCREMENTAL_RESTORE_CONFIG, type ManagedTerminal } from "../types";
 import { streamRangeOf, utf8Length } from "../streamFence";
+import type { SuggestedCommandLinks } from "../SuggestedCommandLinksAddon";
 import type { SerializedTerminalSnapshot } from "@shared/types/terminal";
 import { PARSER_GROUND, PartialEscapeTracker } from "@shared/utils/terminalPartialEscapeTail";
 import { terminalClient } from "@/clients";
@@ -183,6 +184,53 @@ describe("TerminalRestoreController", () => {
       );
     });
 
+    it("tells the pane its replayed rows were laid out at a width it never saw", async () => {
+      const markRowsStale = vi.fn();
+      const commandLinksDisposable: SuggestedCommandLinks = {
+        dispose: vi.fn(),
+        widthKnownFrom: vi.fn(() => 0),
+        markRowsStale,
+      };
+      instances.set("t1", makeManagedTerminal({ commandLinksDisposable }));
+
+      controller.restoreFromSerialized("t1", "small-state");
+      expect(markRowsStale).not.toHaveBeenCalled();
+      await flushMicrotasks();
+
+      expect(markRowsStale).toHaveBeenCalledTimes(1);
+    });
+
+    it("marks the rows a restore wrote before it failed", () => {
+      const markRowsStale = vi.fn();
+      const commandLinksDisposable: SuggestedCommandLinks = {
+        dispose: vi.fn(),
+        widthKnownFrom: vi.fn(() => 0),
+        markRowsStale,
+      };
+      instances.set("t1", makeManagedTerminal({ commandLinksDisposable }));
+      mockTerminal.write.mockImplementationOnce(() => {
+        throw new Error("parse failed");
+      });
+
+      expect(controller.restoreFromSerialized("t1", "small-state")).toBe(false);
+      expect(markRowsStale).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves the pane's rows alone when a restore replays nothing", async () => {
+      const markRowsStale = vi.fn();
+      const commandLinksDisposable: SuggestedCommandLinks = {
+        dispose: vi.fn(),
+        widthKnownFrom: vi.fn(() => 0),
+        markRowsStale,
+      };
+      instances.set("t1", makeManagedTerminal({ commandLinksDisposable }));
+      vi.mocked(terminalClient.getSerializedState).mockResolvedValueOnce(null);
+
+      await controller.fetchAndRestore("t1");
+
+      expect(markRowsStale).not.toHaveBeenCalled();
+    });
+
     it("flushes deferred output after restore", async () => {
       const managed = makeManagedTerminal();
       managed.deferredOutput = [
@@ -287,6 +335,25 @@ describe("TerminalRestoreController", () => {
         .reduce((sum: number, len: number) => sum + len, 0);
       // One CAN leads the replay.
       expect(totalWritten).toBe(largeState.length + 1);
+    });
+
+    it("tells the pane its replayed rows were laid out at a width it never saw", async () => {
+      const markRowsStale = vi.fn();
+      const commandLinksDisposable: SuggestedCommandLinks = {
+        dispose: vi.fn(),
+        widthKnownFrom: vi.fn(() => 0),
+        markRowsStale,
+      };
+      instances.set("t1", makeManagedTerminal({ commandLinksDisposable }));
+      const largeState = "x".repeat(INCREMENTAL_RESTORE_CONFIG.chunkBytes * 3);
+
+      const restorePromise = controller.restoreFromSerializedIncremental("t1", largeState);
+      for (let i = 0; i < 10; i++) {
+        await flushScheduler();
+      }
+      await restorePromise;
+
+      expect(markRowsStale).toHaveBeenCalledTimes(1);
     });
 
     it("falls back to scheduler.postTask when yield is unavailable", async () => {

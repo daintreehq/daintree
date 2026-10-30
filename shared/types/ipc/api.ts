@@ -19,6 +19,7 @@ import type { ChecklistState, HelpAssistantTier, IpcEventBusMap, IpcInvokeMap } 
 import type { GeneratedElectronAPI } from "./generated-api.js";
 import type { AgentSettings, AgentSettingsEntry, ResumeOnRestart } from "../agentSettings.js";
 import type { AgentPreset } from "../../config/agentRegistry.js";
+import type { VoiceReasoningEffort } from "../../config/voiceCorrection.js";
 import type {
   VoiceInputError,
   VoiceInputStatus,
@@ -32,6 +33,7 @@ import type {
 import type {
   VoiceCorrectionTiming,
   VoiceCorrectionVerdict,
+  VoicePrefetchMatch,
   VoiceSessionReport,
 } from "../voiceSessionSummary.js";
 export type { VoiceInputError, VoiceInputStatus };
@@ -183,6 +185,7 @@ export interface KeybindingImportResult {
 import type {
   TerminalStatusPayload,
   TerminalSubmitStatusPayload,
+  TerminalFirstPromptPayload,
   PtyHostActivityTier,
   SpawnResult,
   TerminalResourceBatchPayload,
@@ -428,6 +431,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Submit-lane status for one terminal (#11875). Fires only for submits that
      *  cross the slow/stalled threshold or fail. */
     onSubmitStatus(callback: (data: TerminalSubmitStatusPayload) => void): () => void;
+    /** The first send written to an agent run of this project that had no first prompt (#15521). */
+    onFirstPrompt(callback: (data: TerminalFirstPromptPayload) => void): () => void;
     /** A pane's pending terminal notices changed. Callers filter by `terminalId`. */
     onNotifyState(
       callback: (data: import("../terminalNotify.js").PaneNotifyState) => void
@@ -2314,6 +2319,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       terminalId?: string;
       /** Nothing but whitespace comes before the passage in the draft. */
       startsPrompt?: boolean;
+      /** The command or skill the whole draft opens with, as typed: cleanup is told what it takes as arguments. */
+      openingCommandToken?: string;
       /** The dictation the passage came from: its context was read while it ran. */
       sessionId?: string;
       /** Dictated into a terminal outside the asking view: cleaned up without its project's vocabulary. */
@@ -2327,6 +2334,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       /** Why the passage came back as it did: a code, never text. */
       verdict?: VoiceCorrectionVerdict;
       timing?: VoiceCorrectionTiming;
+      /** A streamed reply that came back whole; a retried request's stall left out. */
+      pace?: VoiceCorrectionPace;
+      /** What became of a pause's prefetch of the passage; only for a passage with a session. */
+      prefetch?: VoicePrefetchMatch;
+      /** A failure that will recur, on the one reply of its outage that should say so. */
+      cleanupFailure?: VoiceCleanupFailure;
     }>;
     /** A streaming correction's text so far, cut at a word boundary; only ever grows. */
     onCorrectionProgress(
@@ -2336,7 +2349,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (payload: {
         sessionId: string;
         transcriptId: string;
-        references: Array<{ description: string; path: string | null }>;
+        references: Array<{ description: string; path: string | null; failed?: true }>;
       }) => void
     ): () => void;
   };
@@ -2484,6 +2497,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
          * (#12874); anything else keeps it.
          */
         authorization?: import("./mcpServer.js").McpDispatchAuthorization;
+        /**
+         * Which of this machine's panes or Assistant tabs sent the call
+         * (#14992), set only by main, so the dialog can name it.
+         */
+        requester?: import("./mcpServer.js").McpRequester;
       }) => void
     ): () => void;
     /** Send action dispatch result to main process */
@@ -2996,7 +3014,36 @@ export type VoiceTranscriptionProvider = "openai" | "deepgram" | "grok";
  * `shared/config/voiceCorrection.ts` lists the same models
  * (`VOICE_CLEANUP_MODELS`) and names the default (`VOICE_CLEANUP_AI_MODEL`).
  */
-export type VoiceCorrectionModel = "gpt-6.1-terra" | "gpt-6-luna";
+export type VoiceCorrectionModel =
+  "gpt-6.1-terra" | "gpt-6-luna" | "claude-haiku-5-5" | "claude-sonnet-5-5";
+
+/**
+ * How long one passage's cleanup took, in its two parts, and what it ran on:
+ * timings only, nothing of the passage.
+ */
+export interface VoiceCorrectionPace {
+  model: VoiceCorrectionModel;
+  effort: VoiceReasoningEffort;
+  /** From main taking the request to the reply's first text: the request and its thinking. */
+  firstTextMs: number;
+  /** From the reply's first text to its last. */
+  outputMs: number;
+}
+
+/**
+ * The API cleanup and spoken rewrite go to. Each has its own models
+ * (`VOICE_CLEANUP_MODELS_BY_PROVIDER`) and its own key.
+ */
+export type VoiceCorrectionProvider = "openai" | "anthropic";
+
+/**
+ * A cleanup failure that will keep happening until the account or its
+ * settings change: a code, never the provider's message (#14963).
+ */
+export interface VoiceCleanupFailure {
+  reason: "key_rejected" | "billing_required" | "region_refused" | "access_denied";
+  provider: VoiceCorrectionProvider;
+}
 
 /**
  * Paragraphing strategy for voice dictation.
@@ -3035,6 +3082,8 @@ export interface VoiceInputSettings {
   deepgramApiKey: string;
   /** xAI API key for the Grok transcription provider. Empty string when unset. */
   xaiApiKey: string;
+  /** Anthropic API key for Claude cleanup. Empty string when unset. */
+  anthropicApiKey: string;
   language: string;
   /**
    * The user's dictionary, oldest entry first. Main owns every write: the
@@ -3046,6 +3095,9 @@ export interface VoiceInputSettings {
   transcriptionProvider: VoiceTranscriptionProvider;
   transcriptionModel: VoiceTranscriptionModel;
   correctionEnabled: boolean;
+  /** Which API cleans up and rewrites. Defaults to "openai". */
+  correctionProvider: VoiceCorrectionProvider;
+  /** One of the provider's own models (`VOICE_CLEANUP_MODELS_BY_PROVIDER`). */
   correctionModel: VoiceCorrectionModel;
   correctionCustomInstructions: string;
   /** Controls how paragraph breaks are inserted during dictation. Defaults to "spoken-command". */
@@ -3113,6 +3165,33 @@ export interface VoiceDictionaryEntry {
 export interface VoiceDictionaryState {
   dictionary: VoiceDictionaryEntry[];
   suggestedDictionary: SuggestedDictionaryEntry[];
+}
+
+/**
+ * What to do with a heard-as phrase another entry in the same dictionary
+ * already has: refuse the whole change, leave the phrase out, or take it from
+ * that entry. Only the entry listed first ever fires for a phrase.
+ */
+export type HeardAsConflictPolicy = "reject" | "skip" | "move";
+
+/** A heard-as phrase an add or edit asked for that another entry already has. */
+export interface HeardAsConflict {
+  /** The phrase as it was asked for. */
+  phrase: string;
+  /** The term of the entry the phrase fires for now. */
+  owner: string;
+}
+
+/** An add or edit of the user's dictionary, and the phrases it didn't get. */
+export interface VoiceDictionaryChange extends VoiceDictionaryState {
+  /** Left out under "skip"; under "reject", why nothing changed. Empty otherwise. */
+  conflicts: HeardAsConflict[];
+}
+
+/** An add or edit of a project's dictionary, and the phrases it didn't get. */
+export interface ProjectVoiceDictionaryChange {
+  dictionary: VoiceDictionaryEntry[];
+  conflicts: HeardAsConflict[];
 }
 
 /** A word and what it was heard as, the pair a dismissed suggestion keeps from coming back. */
@@ -3232,6 +3311,12 @@ export interface HelpAssistantSettings {
  */
 export interface HelpSessionActiveGrant {
   /**
+   * The MCP transport session holding the grant — the id a per-tool revoke
+   * names, which differs from the public help-session id the snapshot was
+   * requested with.
+   */
+  sessionId: string;
+  /**
    * For per-tool grants, the dotted `BuiltInActionId` authorized (e.g.
    * `terminal.kill`). For native grants, `"*"` — the authorized tools are
    * listed in {@link allowedTools}.
@@ -3239,6 +3324,11 @@ export interface HelpSessionActiveGrant {
   toolId: string;
   /** Absolute epoch millis when the grant expires without refresh. */
   expiresAt: number;
+  /**
+   * The hard ceiling no use can extend past, in absolute epoch millis. The
+   * grant ends at the earlier of this and {@link expiresAt}.
+   */
+  maxExpiresAt?: number;
   /** TTL the grant was minted with, in milliseconds. */
   ttlMs: number;
   /** Discriminates the grant kind. Defaults to `"per-tool"` when absent. */

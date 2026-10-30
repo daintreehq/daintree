@@ -17,6 +17,7 @@ import {
   setViewUnsavedChanges,
   subscribeViewUnsavedChanges,
   getViewUnsavedPanelIds,
+  getViewUnsavedPluginPanels,
   syncPluginPanels,
   type PluginPanelSnapshotEntry,
 } from "@/services/plugin/pluginPanelLifecycle";
@@ -465,5 +466,36 @@ describe("view unsaved-change signal (#13815)", () => {
     syncPluginPanels([], new Set());
     expect(listener).toHaveBeenCalledTimes(1);
     expect(getViewUnsavedPanelIds()).toEqual([]);
+  });
+
+  it("names each dirty panel's plugin, from its flag or its tracking (#15031)", () => {
+    syncPluginPanels([
+      panel({ panelId: "p1", pluginId: "acme" }),
+      panel({ panelId: "clean", pluginId: "acme" }),
+    ]);
+    setViewUnsavedChanges("p1", {}, true);
+    setViewUnsavedChanges("hosted", {}, true, { pluginId: "beta", displayName: "Beta" });
+    setViewUnsavedChanges("unplaced", {}, true);
+
+    expect(getViewUnsavedPluginPanels()).toEqual([
+      { panelId: "hosted", pluginId: "beta", displayName: "Beta" },
+      { panelId: "p1", pluginId: "acme", displayName: "" },
+    ]);
+  });
+
+  it("keeps a recordless view's identity through a store sweep, until its flag drops (#15031)", async () => {
+    const owner = {};
+    reportViewMounted("hosted", { kindId: "beta.side", pluginId: "beta" });
+    setViewUnsavedChanges("hosted", owner, true, { pluginId: "beta", displayName: "Beta" });
+    syncPluginPanels([panel()], new Set(["p1"]));
+    // The sweep reports the never-listed view removed, and the flush forgets it.
+    expect(await drainPhases()).toContain("removed");
+    expect(getViewUnsavedPluginPanels()).toEqual([
+      { panelId: "hosted", pluginId: "beta", displayName: "Beta" },
+    ]);
+
+    setViewUnsavedChanges("hosted", owner, false);
+    setViewUnsavedChanges("hosted", {}, true);
+    expect(getViewUnsavedPluginPanels()).toEqual([]);
   });
 });

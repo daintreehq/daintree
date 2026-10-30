@@ -258,7 +258,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
     id: "fleet.saveNamedFleet",
     title: "Fleet: save named fleet",
     description:
-      "Persist the current fleet selection (snapshot) or a state filter (predicate) under a name for later recall.",
+      "Persist the armed local panes (snapshot) or a state filter (predicate) under a name for later recall.",
     category: "terminal",
     kind: "command",
     danger: "safe",

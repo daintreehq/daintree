@@ -7,9 +7,17 @@ import {
   __resetMcpConfirmStoreForTesting,
   requestMcpConfirmation,
   useMcpConfirmStore,
+  type McpConfirmDeadline,
 } from "@/store/mcpConfirmStore";
+import {
+  MCP_CONFIRM_DECISION_MS,
+  MCP_CONFIRM_HOLD_GRACE_MS,
+  MCP_CONFIRM_QUEUE_HOLD_MS,
+  MCP_DISPATCH_TIMEOUT_MS,
+} from "@shared/config/mcpConfirmWindow";
 import type { ActionDanger } from "@shared/types/actions";
 import type { McpBearerIdentity } from "@shared/types/ipc/mcpServer";
+import type { McpConfirmRequester } from "@/store/mcpConfirmStore";
 
 vi.mock("zustand/react/shallow", () => ({
   useShallow: (fn: unknown) => fn,
@@ -63,11 +71,56 @@ const pluginClientMock = vi.hoisted(() => ({
 }));
 vi.mock("@/clients/pluginClient", () => ({ pluginClient: pluginClientMock }));
 
-vi.mock("@/hooks/useAnimatedPresence", () => ({
-  useAnimatedPresence: ({ isOpen }: { isOpen: boolean }) => ({
-    isVisible: isOpen,
-    shouldRender: isOpen,
-  }),
+// Set `defer` to hold a close open until `finish()`, as a real exit animation
+// does; otherwise a close finishes at once.
+const presence = vi.hoisted(() => ({ defer: false, finish: null as (() => void) | null }));
+vi.mock("@/hooks/useAnimatedPresence", async () => {
+  const { useEffect, useRef, useState } = await import("react");
+  return {
+    // A close still reports that it finished, which is when a dialog hands
+    // focus back and runs its close-complete step.
+    useAnimatedPresence: ({
+      isOpen,
+      onAnimateOut,
+    }: {
+      isOpen: boolean;
+      onAnimateOut?: () => void;
+    }) => {
+      const wasOpen = useRef(isOpen);
+      // Rendered from opening until a deferred close finishes, as the real
+      // hook keeps it, so an exit never unmounts the dialog early.
+      const [rendered, setRendered] = useState(isOpen);
+      if (isOpen && !rendered) setRendered(true);
+      useEffect(() => {
+        if (isOpen) {
+          // Reopened mid-exit: the close that was under way never finishes.
+          presence.finish = null;
+        } else if (wasOpen.current) {
+          if (presence.defer) {
+            presence.finish = () => {
+              presence.finish = null;
+              setRendered(false);
+              onAnimateOut?.();
+            };
+          } else {
+            setRendered(false);
+            onAnimateOut?.();
+          }
+        }
+        wasOpen.current = isOpen;
+      }, [isOpen, onAnimateOut]);
+      return { isVisible: isOpen, shouldRender: isOpen || (presence.defer && rendered) };
+    },
+  };
+});
+
+const requesterMocks = vi.hoisted(() => ({
+  live: { present: true } as { present: boolean; otherWorktreeName?: string },
+  show: vi.fn(async (_identity: unknown) => true),
+}));
+vi.mock("@/lib/mcpConfirmRequester", () => ({
+  useMcpRequesterLiveState: () => requesterMocks.live,
+  showMcpRequester: requesterMocks.show,
 }));
 
 vi.stubGlobal(
@@ -96,6 +149,7 @@ function enqueue(
     offerSessionApproval?: boolean;
     approvalReason?: "above-tier";
     worktreeDeleteNotesTargetId?: string;
+    requester?: McpConfirmRequester;
     selectableTargets?: {
       id: string;
       name: string;
@@ -103,35 +157,67 @@ function enqueue(
       kindLabel: string;
       agentRunning: boolean;
     }[];
-  } = {}
+  } = {},
+  deadline?: McpConfirmDeadline
 ) {
-  return requestMcpConfirmation({
-    requestId: overrides.requestId ?? "req-1",
-    actionId: "worktree.delete",
-    actionTitle: overrides.actionTitle ?? "Delete worktree",
-    actionDescription: "Permanently delete a worktree.",
-    argsSummary: overrides.argsSummary ?? '{"worktreeId":"wt-1"}',
-    danger: overrides.danger ?? "confirm",
-    callerInfo: overrides.callerInfo,
-    ...(overrides.sessionOrigin ? { sessionOrigin: overrides.sessionOrigin } : {}),
-    ...(overrides.subject ? { subject: overrides.subject } : {}),
-    ...(overrides.dangerRationale ? { dangerRationale: overrides.dangerRationale } : {}),
-    ...(overrides.preview ? { preview: overrides.preview } : {}),
-    ...(overrides.previewTitle ? { previewTitle: overrides.previewTitle } : {}),
-    ...(overrides.previewPending ? { previewPending: overrides.previewPending } : {}),
-    ...(overrides.typedNameTarget ? { typedNameTarget: overrides.typedNameTarget } : {}),
-    ...(overrides.offerSessionApproval ? { offerSessionApproval: true } : {}),
-    ...(overrides.approvalReason ? { approvalReason: overrides.approvalReason } : {}),
-    ...(overrides.worktreeDeleteNotesTargetId
-      ? { worktreeDeleteNotesTargetId: overrides.worktreeDeleteNotesTargetId }
-      : {}),
-    ...(overrides.selectableTargets
-      ? {
-          selectableTargets: overrides.selectableTargets,
-          selectionConfirmLabel: { verb: "Kill", one: "terminal", many: "terminals" },
-        }
-      : {}),
-  });
+  return requestMcpConfirmation(
+    {
+      requestId: overrides.requestId ?? "req-1",
+      actionId: "worktree.delete",
+      actionTitle: overrides.actionTitle ?? "Delete worktree",
+      actionDescription: "Permanently delete a worktree.",
+      argsSummary: overrides.argsSummary ?? '{"worktreeId":"wt-1"}',
+      danger: overrides.danger ?? "confirm",
+      callerInfo: overrides.callerInfo,
+      ...(overrides.sessionOrigin ? { sessionOrigin: overrides.sessionOrigin } : {}),
+      ...(overrides.subject ? { subject: overrides.subject } : {}),
+      ...(overrides.dangerRationale ? { dangerRationale: overrides.dangerRationale } : {}),
+      ...(overrides.preview ? { preview: overrides.preview } : {}),
+      ...(overrides.previewTitle ? { previewTitle: overrides.previewTitle } : {}),
+      ...(overrides.previewPending ? { previewPending: overrides.previewPending } : {}),
+      ...(overrides.typedNameTarget ? { typedNameTarget: overrides.typedNameTarget } : {}),
+      ...(overrides.offerSessionApproval ? { offerSessionApproval: true } : {}),
+      ...(overrides.approvalReason ? { approvalReason: overrides.approvalReason } : {}),
+      ...(overrides.requester ? { requester: overrides.requester } : {}),
+      ...(overrides.worktreeDeleteNotesTargetId
+        ? { worktreeDeleteNotesTargetId: overrides.worktreeDeleteNotesTargetId }
+        : {}),
+      ...(overrides.selectableTargets
+        ? {
+            selectableTargets: overrides.selectableTargets,
+            selectionConfirmLabel: { verb: "Kill", one: "terminal", many: "terminals" },
+          }
+        : {}),
+    },
+    deadline
+  );
+}
+
+/**
+ * Main's side of a dispatch's deadline, as `holdDispatch` keeps it (#14989):
+ * the plain deadline from the send, held while it waits, and a fresh decision
+ * window once it is on screen. `refuse` makes main answer as if the call had
+ * already gone.
+ */
+function mainDeadline(options: { refuse?: boolean } = {}): McpConfirmDeadline & {
+  phases: string[];
+} {
+  let deadlineAt = Date.now() + MCP_DISPATCH_TIMEOUT_MS;
+  const phases: string[] = [];
+  return {
+    deadlineAt,
+    phases,
+    hold: async (phase) => {
+      phases.push(phase);
+      const now = Date.now();
+      if (options.refuse || now >= deadlineAt) return null;
+      deadlineAt =
+        phase === "queued"
+          ? Math.max(deadlineAt, now + MCP_CONFIRM_QUEUE_HOLD_MS)
+          : now + MCP_CONFIRM_DECISION_MS + MCP_CONFIRM_HOLD_GRACE_MS;
+      return deadlineAt - now;
+    },
+  };
 }
 
 const BATCH_TARGETS = [
@@ -185,6 +271,11 @@ describe("McpConfirmDialog", () => {
     helpPanelState.preferredAgentId = null;
     helpPanelState.activeSlotAgentId = null;
     loggerMocks.logError.mockReset();
+    requesterMocks.live = { present: true };
+    presence.defer = false;
+    presence.finish = null;
+    requesterMocks.show.mockReset();
+    requesterMocks.show.mockResolvedValue(true);
     helpAssistantApi.getSettings = vi.fn().mockResolvedValue({ daintreeConfirmations: "inherit" });
     helpAssistantApi.setSettings = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("electron", { helpAssistant: helpAssistantApi });
@@ -212,12 +303,20 @@ describe("McpConfirmDialog", () => {
     it("times out as unseen when its window was never on screen", async () => {
       vi.useFakeTimers();
       try {
-        const pending = enqueue();
+        const deadline = mainDeadline();
+        const pending = enqueue({}, deadline);
         render(<McpConfirmDialog />);
+        // Held while the view stays hidden, and never granted a decision window.
         await act(async () => {
-          await vi.advanceTimersByTimeAsync(30_000);
+          await vi.advanceTimersByTimeAsync(MCP_CONFIRM_QUEUE_HOLD_MS - 5_000);
+        });
+        await expectStillPending(pending);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5_000);
         });
         expect(await pending).toEqual({ decision: "timeout", unseen: true });
+        expect(deadline.phases).toEqual(["queued"]);
+        expect(useMcpConfirmStore.getState().current).toBeNull();
       } finally {
         vi.useRealTimers();
       }
@@ -227,7 +326,7 @@ describe("McpConfirmDialog", () => {
       vi.useFakeTimers();
       try {
         visibility = "visible";
-        const pending = enqueue({ requestId: "req-preview", previewPending: true });
+        const pending = enqueue({ requestId: "req-preview", previewPending: true }, mainDeadline());
         render(<McpConfirmDialog />);
         await act(async () => {
           await vi.advanceTimersByTimeAsync(2_000);
@@ -238,7 +337,7 @@ describe("McpConfirmDialog", () => {
           useMcpConfirmStore.getState().setPreview("req-preview", ["worktree wt-1"]);
         });
         await act(async () => {
-          await vi.advanceTimersByTimeAsync(30_000);
+          await vi.advanceTimersByTimeAsync(MCP_CONFIRM_DECISION_MS);
         });
         expect(await pending).toEqual({ decision: "timeout" });
       } finally {
@@ -249,17 +348,152 @@ describe("McpConfirmDialog", () => {
     it("is an ordinary timeout once its window came on screen while it asked", async () => {
       vi.useFakeTimers();
       try {
-        const pending = enqueue();
+        const pending = enqueue({}, mainDeadline());
         render(<McpConfirmDialog />);
         await act(async () => {
-          await vi.advanceTimersByTimeAsync(5_000);
+          await vi.advanceTimersByTimeAsync(60_000);
         });
         visibility = "visible";
         act(() => {
           document.dispatchEvent(new Event("visibilitychange"));
         });
+        // The minute it spent hidden did not come out of its window.
         await act(async () => {
-          await vi.advanceTimersByTimeAsync(30_000);
+          await vi.advanceTimersByTimeAsync(MCP_CONFIRM_DECISION_MS - 1_000);
+        });
+        await expectStillPending(pending);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1_000);
+        });
+        expect(await pending).toEqual({ decision: "timeout" });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe("decision window (#14989)", () => {
+    it("does not charge a queued request for the time it waited behind another", async () => {
+      vi.useFakeTimers();
+      try {
+        const firstDeadline = mainDeadline();
+        const secondDeadline = mainDeadline();
+        const first = enqueue(
+          { requestId: "req-first", actionTitle: "Delete worktree" },
+          firstDeadline
+        );
+        const second = enqueue(
+          { requestId: "req-second", actionTitle: "Push branch" },
+          secondDeadline
+        );
+        render(<McpConfirmDialog />);
+        // Long past the plain deadline both dispatches started with.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(90_000);
+        });
+        act(() => {
+          fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+        });
+        expect(await first).toEqual({ decision: "rejected" });
+        expect(screen.getByText("Run 'Push branch'?")).toBeTruthy();
+
+        // A whole window from the moment it was shown, less nothing for the wait.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(MCP_CONFIRM_DECISION_MS - 1_000);
+        });
+        await expectStillPending(second);
+        expect(secondDeadline.phases).toEqual(["queued", "shown"]);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1_000);
+        });
+        expect(await second).toEqual({ decision: "timeout" });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not renew the window when a preview lands late", async () => {
+      vi.useFakeTimers();
+      try {
+        const pending = enqueue(
+          { requestId: "req-late-preview", previewPending: true },
+          mainDeadline()
+        );
+        render(<McpConfirmDialog />);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(MCP_CONFIRM_DECISION_MS - 5_000);
+        });
+        act(() => {
+          useMcpConfirmStore.getState().setPreview("req-late-preview", ["M src/app.ts"]);
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5_000);
+        });
+        expect(await pending).toEqual({ decision: "timeout" });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps an expired request up, inert, until it is closed, then shows the next", async () => {
+      vi.useFakeTimers();
+      try {
+        const expiring = enqueue(
+          {
+            requestId: "req-expiring",
+            actionTitle: "Delete worktree",
+            typedNameTarget: "feature/x",
+          },
+          mainDeadline()
+        );
+        const next = enqueue({ requestId: "req-next", actionTitle: "Push branch" }, mainDeadline());
+        render(<McpConfirmDialog />);
+        // Already mounted, and empty, so the expiry is a change it announces.
+        const status = screen.getByRole("status");
+        expect(status.textContent).toBe("");
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(MCP_CONFIRM_DECISION_MS);
+        });
+        expect(screen.getByRole("status")).toBe(status);
+        expect(status.textContent).toContain("nothing ran");
+
+        // The caller hears at once; the person still sees what they were answering.
+        expect(await expiring).toEqual({ decision: "timeout" });
+        expect(screen.getByText("Run 'Delete worktree'?")).toBeTruthy();
+        expect(document.body.textContent).toContain("Timed out before an answer, so nothing ran");
+        const confirm = screen.getByRole("button", { name: "Delete worktree" });
+        expect(confirm.getAttribute("aria-disabled")).toBe("true");
+        act(() => {
+          fireEvent.change(screen.getByRole("textbox"), { target: { value: "feature/x" } });
+          fireEvent.click(confirm);
+        });
+        // Typing the name and clicking answers nothing: it already timed out.
+        expect(useMcpConfirmStore.getState().current?.requestId).toBe("req-expiring");
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5_000);
+        });
+        act(() => {
+          fireEvent.click(screen.getByRole("button", { name: "Close" }));
+        });
+        expect(screen.getByText("Run 'Push branch'?")).toBeTruthy();
+        // The next one's window starts now, not when it was queued.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(MCP_CONFIRM_DECISION_MS - 1_000);
+        });
+        await expectStillPending(next);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("ends a request main no longer holds as soon as it says so", async () => {
+      vi.useFakeTimers();
+      try {
+        const pending = enqueue({}, mainDeadline({ refuse: true }));
+        render(<McpConfirmDialog />);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
         });
         expect(await pending).toEqual({ decision: "timeout" });
       } finally {
@@ -636,6 +870,249 @@ describe("McpConfirmDialog", () => {
       render(<McpConfirmDialog />);
 
       expect(screen.getByText(/needs your approval/)).toBeTruthy();
+    });
+  });
+
+  // #14992: with several agents running, which pane or tab is asking is often
+  // what decides the answer, and the user can go and look without answering.
+  describe("the requester (#14992)", () => {
+    const PANE = {
+      identity: { kind: "pane", terminalId: "t-orch" },
+      name: "Orchestrator",
+      kindLabel: "Claude",
+      worktreeId: "wt-2",
+      worktreeName: "feature/auth",
+    } as const satisfies McpConfirmRequester;
+
+    function requesterRow(): string {
+      return screen.getByText("Requested by").parentElement?.textContent ?? "";
+    }
+
+    it("names the pane and its agent, and its worktree only when it isn't on screen", () => {
+      void enqueue({ offerSessionApproval: true, danger: "safe", requester: PANE });
+      const { unmount } = render(<McpConfirmDialog />);
+      expect(requesterRow()).toContain("Orchestrator");
+      expect(requesterRow()).toContain("Claude");
+      expect(requesterRow()).not.toContain("feature/auth");
+      unmount();
+
+      // Where the pane is now, not where it was when it asked.
+      requesterMocks.live = { present: true, otherWorktreeName: "feature/moved" };
+      render(<McpConfirmDialog />);
+      expect(requesterRow()).toContain("feature/moved");
+      expect(requesterRow()).not.toContain("feature/auth");
+      expect(screen.getByRole("button", { name: "Show pane" })).toBeTruthy();
+    });
+
+    it("names the pane a session grant would cover", () => {
+      void enqueue({
+        offerSessionApproval: true,
+        danger: "safe",
+        actionTitle: "Push",
+        requester: PANE,
+      });
+      render(<McpConfirmDialog />);
+
+      expect(screen.getByText(/Later Push calls from 'Orchestrator' · any arguments/)).toBeTruthy();
+    });
+
+    it("names the Assistant tab that asked", () => {
+      void enqueue({
+        danger: "safe",
+        sessionOrigin: "help",
+        requester: { identity: { kind: "assistant", helpSessionId: "help-2" }, name: "Session 2" },
+      });
+      render(<McpConfirmDialog />);
+
+      expect(requesterRow()).toContain("Daintree Assistant");
+      expect(requesterRow()).toContain("Session 2");
+      expect(screen.getByRole("button", { name: "Show tab" })).toBeTruthy();
+    });
+
+    it("says a requester has gone rather than offering to show it", () => {
+      requesterMocks.live = { present: false };
+      void enqueue({ offerSessionApproval: true, danger: "safe", requester: PANE });
+      render(<McpConfirmDialog />);
+
+      expect(requesterRow()).toContain("No longer open");
+      expect(screen.queryByRole("button", { name: "Show pane" })).toBeNull();
+    });
+
+    it("still names an unnamed pane as a pane when it can't offer the session grant", () => {
+      requesterMocks.live = { present: false };
+      void enqueue({ danger: "safe", requester: { identity: PANE.identity } });
+      render(<McpConfirmDialog />);
+
+      expect(requesterRow()).toContain("Agent in a terminal pane");
+      expect(requesterRow()).not.toContain("Unidentified client");
+      expect(requesterRow()).not.toContain("No longer open");
+    });
+
+    it("steps aside to show the pane, leaving the request unanswered, and comes back to it", async () => {
+      vi.useFakeTimers();
+      try {
+        const pending = enqueue(
+          { requestId: "req-show", danger: "safe", actionTitle: "Push", requester: PANE },
+          mainDeadline()
+        );
+        render(<McpConfirmDialog />);
+
+        act(() => {
+          fireEvent.click(screen.getByRole("button", { name: "Show pane" }));
+        });
+        await act(async () => {
+          await Promise.resolve();
+        });
+
+        expect(screen.queryByRole("button", { name: "Push" })).toBeNull();
+        expect(requesterMocks.show).toHaveBeenCalledWith(PANE.identity);
+        const region = screen.getByRole("region", { name: "Approval request" });
+        expect(region.textContent).toContain("Run 'Push'?");
+        await expectStillPending(pending);
+
+        act(() => {
+          fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+        });
+        expect(screen.queryByRole("region", { name: "Approval request" })).toBeNull();
+        act(() => {
+          fireEvent.click(screen.getByRole("button", { name: "Push" }));
+        });
+        expect(await pending).toEqual({ decision: "approved" });
+        expect(requesterMocks.show).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("goes to the requester only once the dialog has finished closing", async () => {
+      presence.defer = true;
+      void enqueue({ danger: "safe", actionTitle: "Push", requester: PANE });
+      render(<McpConfirmDialog />);
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Show pane" }));
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      // Going now would lose focus to the close handing it back.
+      expect(requesterMocks.show).not.toHaveBeenCalled();
+
+      act(() => {
+        presence.finish?.();
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(requesterMocks.show).toHaveBeenCalledWith(PANE.identity);
+    });
+
+    it("goes nowhere when the request is brought back before the dialog has closed", async () => {
+      presence.defer = true;
+      const pending = enqueue({ danger: "safe", actionTitle: "Push", requester: PANE });
+      render(<McpConfirmDialog />);
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Show pane" }));
+      });
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+      });
+      // Whatever the abandoned exit would have done, it doesn't.
+      await act(async () => {
+        presence.finish?.();
+        await Promise.resolve();
+      });
+
+      expect(requesterMocks.show).not.toHaveBeenCalled();
+      expect(screen.queryByRole("region", { name: "Approval request" })).toBeNull();
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Push" }));
+      });
+      await expect(pending).resolves.toEqual({ decision: "approved" });
+    });
+
+    it("still animates out when an identified request is the last one answered", async () => {
+      presence.defer = true;
+      const pending = enqueue({ danger: "safe", actionTitle: "Push", requester: PANE });
+      render(<McpConfirmDialog />);
+      const surface = () => document.querySelector('[role="dialog"], [role="alertdialog"]');
+      const opened = surface();
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      });
+      await expect(pending).resolves.toEqual({ decision: "rejected" });
+      // The same surface, exiting, not a fresh one.
+      expect(opened).not.toBeNull();
+      expect(surface()).toBe(opened);
+
+      act(() => {
+        presence.finish?.();
+      });
+      expect(surface()).toBeNull();
+    });
+
+    it("comes straight back when the requester can't be reached", async () => {
+      requesterMocks.show.mockResolvedValue(false);
+      void enqueue({ danger: "safe", actionTitle: "Push", requester: PANE });
+      render(<McpConfirmDialog />);
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Show pane" }));
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(requesterMocks.show).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole("button", { name: "Push" })).toBeTruthy();
+      expect(screen.queryByRole("region", { name: "Approval request" })).toBeNull();
+    });
+
+    it("keeps the request's clock running while it is stepped aside", async () => {
+      vi.useFakeTimers();
+      try {
+        const pending = enqueue(
+          { requestId: "req-clock", danger: "safe", actionTitle: "Push", requester: PANE },
+          mainDeadline()
+        );
+        render(<McpConfirmDialog />);
+        act(() => {
+          fireEvent.click(screen.getByRole("button", { name: "Show pane" }));
+        });
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(MCP_CONFIRM_DECISION_MS);
+        });
+
+        expect(await pending).toEqual({ decision: "timeout" });
+        const region = screen.getByRole("region", { name: "Approval request" });
+        expect(region.textContent).toContain("Timed out");
+        act(() => {
+          fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+        });
+        expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
+        expect(screen.queryByRole("button", { name: "Show pane" })).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("lands initial focus on Cancel rather than the control that steps away", async () => {
+      vi.useFakeTimers();
+      try {
+        void enqueue({ danger: "safe", actionTitle: "Push", argsSummary: "", requester: PANE });
+        render(<McpConfirmDialog />);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(50);
+        });
+
+        expect(document.activeElement?.getAttribute("data-confirm-role")).toBe("cancel");
+      } finally {
+        vi.runOnlyPendingTimers();
+        vi.useRealTimers();
+      }
     });
   });
 
@@ -1093,7 +1570,11 @@ describe("McpConfirmDialog", () => {
   it("never leaves approval possible after main's dispatch deadline has passed", async () => {
     vi.useFakeTimers();
     try {
-      const p = enqueue({ actionTitle: "Delete worktree", danger: "confirm" });
+      // A deadline main never extended: another machine is timing the call.
+      const p = enqueue(
+        { actionTitle: "Delete worktree", danger: "confirm" },
+        { deadlineAt: Date.now() + MCP_DISPATCH_TIMEOUT_MS }
+      );
 
       // ~29s spent queued behind earlier modals before promotion.
       act(() => {
@@ -1106,7 +1587,10 @@ describe("McpConfirmDialog", () => {
         await vi.advanceTimersByTimeAsync(1_000);
       });
 
-      await expect(p).resolves.toEqual({ decision: "timeout" });
+      // Its time ran out before it reached the screen, so it never opens to
+      // be approved at all.
+      await expect(p).resolves.toEqual({ decision: "timeout", unseen: true });
+      expect(screen.queryByRole("button", { name: "Delete worktree" })).toBeNull();
     } finally {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
@@ -1136,12 +1620,12 @@ describe("McpConfirmDialog", () => {
   it("keeps the auto-timeout window above the cooldown for a long-queued destructive item", async () => {
     vi.useFakeTimers();
     try {
-      const p = enqueue({ actionTitle: "Delete worktree", danger: "confirm" });
+      const p = enqueue({ actionTitle: "Delete worktree", danger: "confirm" }, mainDeadline());
 
-      // Simulate ~27.5s spent queued behind earlier modals before promotion,
-      // so only ~500ms of the 28s budget remains at render time.
-      act(() => {
-        vi.advanceTimersByTime(27_500);
+      // ~27.5s spent queued behind earlier modals before promotion, which once
+      // left only ~500ms of a budget that started at enqueue.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(27_500);
       });
 
       render(<McpConfirmDialog />);

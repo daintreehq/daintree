@@ -27,6 +27,30 @@ const RETIRED_PATH = `/Applications/.${APP_NAME}.old`;
 // Matches the running main process regardless of where it was launched from.
 const PROC_MATCH = "Daintree.app/Contents/MacOS/Daintree";
 
+// `open` hands its own environment to the app it launches. Run by an agent, that
+// carries the agent's Claude session markers into Daintree, so every Claude
+// started in a Daintree terminal believes it is that session's child and stops
+// saving its transcript. Mirrors HOST_AGENT_SESSION_VARS in EnvironmentFilter.ts.
+const CLAUDE_SESSION_VARS = [
+  "CLAUDECODE",
+  "CLAUDE_CODE_CHILD_SESSION",
+  "CLAUDE_CODE_SESSION_ID",
+  "CLAUDE_CODE_SESSION_ATTENDED",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_EXECPATH",
+  "CLAUDE_CODE_MESSAGING_SOCKET",
+  "CLAUDE_CODE_MESSAGING_TOKEN",
+  "CLAUDE_PID",
+  "CLAUDE_EFFORT",
+  "AI_AGENT",
+];
+
+export function launchEnv(env = process.env) {
+  const result = { ...env };
+  for (const name of CLAUDE_SESSION_VARS) delete result[name];
+  return result;
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const isRunning = () => spawnSync("pgrep", ["-f", PROC_MATCH], { stdio: "ignore" }).status === 0;
 
@@ -96,7 +120,7 @@ export async function installApp(root, { launchIfNotRunning = true } = {}) {
   if (isRunning()) {
     console.log("Daintree is running — quit and reopen it to run the new version.");
   } else if (launchIfNotRunning) {
-    const open = spawnSync("open", [INSTALL_PATH], { stdio: "ignore" });
+    const open = spawnSync("open", [INSTALL_PATH], { stdio: "ignore", env: launchEnv() });
     if (open.status !== 0) {
       console.warn(`Warning: \`open ${INSTALL_PATH}\` failed — launch it manually.`);
       return;

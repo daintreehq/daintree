@@ -84,6 +84,28 @@ export interface DaintreeTerminalMetadata {
 const HOST_RUNTIME_VARS = new Set(["NODE_ENV"]);
 
 /**
+ * What Claude Code exports into every process its session spawns, present here
+ * only when Daintree itself was started from inside a Claude session (an agent
+ * running `npm run install:local` or `npm run dev`). Inherited, they mark every
+ * Claude launched in a Daintree terminal as that session's child, which turns
+ * off its transcript saving so `--resume` can't find it, and point it at a
+ * session and messaging socket that no longer exist.
+ */
+const HOST_AGENT_SESSION_VARS = new Set([
+  "CLAUDECODE",
+  "CLAUDE_CODE_CHILD_SESSION",
+  "CLAUDE_CODE_SESSION_ID",
+  "CLAUDE_CODE_SESSION_ATTENDED",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_EXECPATH",
+  "CLAUDE_CODE_MESSAGING_SOCKET",
+  "CLAUDE_CODE_MESSAGING_TOKEN",
+  "CLAUDE_PID",
+  "CLAUDE_EFFORT",
+  "AI_AGENT",
+]);
+
+/**
  * Set on Linux by how Daintree itself was launched, not by the user. Chromium
  * exports `CHROME_DESKTOP` naming Daintree's desktop entry, which another
  * Chromium or Electron app started from a terminal takes as its own (window
@@ -228,8 +250,8 @@ export function mergeEnvVars(
 
 /**
  * Filter an environment object, removing sensitive variables, DAINTREE_* vars,
- * Daintree's own runtime mode (`NODE_ENV`) and, on Linux, what Daintree's own
- * launcher set (`CHROME_DESKTOP`, the AppImage runtime's variables and mount).
+ * Daintree's own runtime mode (`NODE_ENV`), the markers of a Claude session
+ * that launched Daintree and, on Linux, what Daintree's own launcher set (`CHROME_DESKTOP`, the AppImage runtime's variables and mount).
  * Undefined values are also stripped (node-pty requires Record<string, string>).
  *
  * Use this on **inherited `process.env`** to defend against spoofing — DAINTREE_*
@@ -248,6 +270,7 @@ export function filterEnvironment(env: Record<string, string | undefined>): Reco
     // same variable.
     if (foldEnvKey(key).startsWith(DAINTREE_PREFIX)) continue;
     if (HOST_RUNTIME_VARS.has(foldEnvKey(key))) continue;
+    if (HOST_AGENT_SESSION_VARS.has(foldEnvKey(key))) continue;
     if (isSensitiveVar(key)) continue;
     setEnvVar(result, key, value);
   }

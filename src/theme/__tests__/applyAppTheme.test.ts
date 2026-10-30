@@ -3,11 +3,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   APP_THEME_TOKEN_KEYS,
+  DIFF_TEXT_MIN_CONTRAST,
+  STATUS_TEXT_CONTRAST,
+  STATUS_TEXT_INKS,
+  contrastRatio,
   getAppThemeById,
   getAppThemeCssVariables,
+  hexToOklch,
+  normalizeAppColorScheme,
+  resolveDiffTextBackdrops,
+  resolveStatusTextBackdrops,
   type AppColorScheme,
 } from "@shared/theme";
-import { RED_GREEN_OVERRIDES } from "@shared/theme/colorVisionOverrides";
+import { BLUE_YELLOW_OVERRIDES, RED_GREEN_OVERRIDES } from "@shared/theme/colorVisionOverrides";
 import { applyAppThemeToRoot, applyColorVisionMode, applyDefaultAppTheme } from "../applyAppTheme";
 
 const DIFF_TOKENS = [
@@ -17,6 +25,8 @@ const DIFF_TOKENS = [
   "--theme-diff-delete-background",
   "--theme-diff-delete-edit-background",
   "--theme-diff-gutter-delete",
+  "--theme-diff-text-insert",
+  "--theme-diff-text-delete",
 ] as const;
 
 function createTestScheme(
@@ -171,6 +181,70 @@ describe("applyColorVisionMode diff token restoration", () => {
     );
   });
 
+  it("red-green lifts the churn inks from the CVD status inks against this theme's backdrops", () => {
+    const root = document.createElement("div");
+    applyAppThemeToRoot(root, lightScheme);
+    applyColorVisionMode(root, "red-green", lightScheme);
+
+    const backdrops = resolveDiffTextBackdrops(lightScheme.tokens);
+    for (const [token, status] of [
+      ["--theme-diff-text-insert", "--theme-status-success"],
+      ["--theme-diff-text-delete", "--theme-status-danger"],
+    ] as const) {
+      const ink = root.style.getPropertyValue(token);
+      expect(ink).not.toBe(base[token]);
+      const cvdHue = hexToOklch(RED_GREEN_OVERRIDES[status]!)!.h;
+      expect(Math.abs(hexToOklch(ink)!.h - cvdHue)).toBeLessThan(1.5);
+      for (const backdrop of backdrops) {
+        expect(
+          contrastRatio(ink, backdrop.hex),
+          `${token} on ${backdrop.label}`
+        ).toBeGreaterThanOrEqual(DIFF_TEXT_MIN_CONTRAST);
+      }
+    }
+
+    applyColorVisionMode(root, "default", lightScheme);
+    expect(root.style.getPropertyValue("--theme-diff-text-insert")).toBe(
+      base["--theme-diff-text-insert"]
+    );
+  });
+
+  it("lifts the red-green churn inks against a dark theme's own backdrops", () => {
+    const darkScheme = getAppThemeById("daintree")!;
+    const root = document.createElement("div");
+    applyAppThemeToRoot(root, darkScheme);
+    applyColorVisionMode(root, "red-green", darkScheme);
+    const darkInk = root.style.getPropertyValue("--theme-diff-text-insert");
+
+    for (const backdrop of resolveDiffTextBackdrops(darkScheme.tokens)) {
+      expect(contrastRatio(darkInk, backdrop.hex), backdrop.label).toBeGreaterThanOrEqual(
+        DIFF_TEXT_MIN_CONTRAST
+      );
+    }
+    // Lighter than the raw override on dark; Bondi lifts the same hue darker.
+    expect(hexToOklch(darkInk)!.l).toBeGreaterThan(
+      hexToOklch(RED_GREEN_OVERRIDES["--theme-status-success"]!)!.l
+    );
+  });
+
+  it("only replaces a churn ink whose status ink the mode overrides", () => {
+    const named = normalizeAppColorScheme({
+      id: "named-churn",
+      name: "Named churn",
+      type: "dark",
+      tokens: { "diff-text-insert": "#eeeeee", "diff-text-delete": "#dddddd" },
+    });
+    const root = document.createElement("div");
+    applyAppThemeToRoot(root, named);
+
+    applyColorVisionMode(root, "blue-yellow", named);
+    expect(root.style.getPropertyValue("--theme-diff-text-insert")).toBe("#eeeeee");
+    expect(root.style.getPropertyValue("--theme-diff-text-delete")).toBe("#dddddd");
+
+    applyColorVisionMode(root, "red-green", named);
+    expect(root.style.getPropertyValue("--theme-diff-text-insert")).not.toBe("#eeeeee");
+  });
+
   it("blue-yellow restores base diff and status tokens instead of stripping them", () => {
     const root = document.createElement("div");
     applyAppThemeToRoot(root, lightScheme);
@@ -275,5 +349,73 @@ describe("applyDefaultAppTheme (#9169)", () => {
 
     expect(applied.id).toBe("daintree");
     expect(root.dataset.theme).toBe("daintree");
+  });
+});
+
+describe("applyColorVisionMode status text inks", () => {
+  // A git status letter paints the text-grade twin of its status hue, lifted
+  // against the theme's own backdrops, so a mode that swaps the hue has to lift
+  // it again or the letter keeps the very red or green the mode replaces.
+
+  /**
+   * The lifted ink is still the mode's colour: a chromatic override keeps at least
+   * half its chroma (lifting toward white or black sheds some to stay in sRGB) at
+   * the same hue angle, and a grey override stays grey. Lifting all the way to a
+   * neutral would pass every contrast check while throwing the mode's hue away.
+   */
+  function expectOnHue(ink: string, hue: string, label: string): void {
+    const lifted = hexToOklch(ink)!;
+    const source = hexToOklch(hue)!;
+    if (source.c < 0.005) {
+      expect(lifted.c, `${label} stays neutral`).toBeLessThan(0.005);
+      return;
+    }
+    const angle = Math.abs(lifted.h - source.h) % 360;
+    expect(Math.min(angle, 360 - angle), `${label} hue`).toBeLessThan(2.5);
+    expect(lifted.c, `${label} chroma`).toBeGreaterThan(source.c * 0.5);
+  }
+
+  it.each([
+    ["red-green", RED_GREEN_OVERRIDES, "daintree"],
+    ["red-green", RED_GREEN_OVERRIDES, "bondi"],
+    ["blue-yellow", BLUE_YELLOW_OVERRIDES, "highlands"],
+    ["blue-yellow", BLUE_YELLOW_OVERRIDES, "hokkaido"],
+  ] as const)("%s lifts the letters it recolours on %s", (mode, overrides, id) => {
+    const scheme = getAppThemeById(id)!;
+    const root = document.createElement("div");
+    applyAppThemeToRoot(root, scheme);
+    applyColorVisionMode(root, mode, scheme);
+
+    const recoloured = Object.entries(STATUS_TEXT_INKS).filter(([status, text]) => {
+      const hue = overrides[`--theme-${status}`];
+      const ink = root.style.getPropertyValue(`--theme-${text}`);
+      if (!hue) {
+        expect(ink, text).toBe(scheme.tokens[text]);
+        return false;
+      }
+      expect(ink, text).not.toBe(scheme.tokens[text]);
+      expectOnHue(ink, hue, text);
+      for (const backdrop of resolveStatusTextBackdrops(hue, scheme.tokens)) {
+        expect(
+          contrastRatio(ink, backdrop.hex),
+          `${text} on ${backdrop.label}`
+        ).toBeGreaterThanOrEqual(STATUS_TEXT_CONTRAST.minimum);
+      }
+      return true;
+    });
+    expect(recoloured).toHaveLength(2);
+  });
+
+  it("returning to default restores the theme's own inks", () => {
+    const scheme = getAppThemeById("bondi")!;
+    const root = document.createElement("div");
+    applyAppThemeToRoot(root, scheme);
+    applyColorVisionMode(root, "red-green", scheme);
+    applyColorVisionMode(root, "blue-yellow", scheme);
+    applyColorVisionMode(root, "default", scheme);
+
+    for (const text of Object.values(STATUS_TEXT_INKS)) {
+      expect(root.style.getPropertyValue(`--theme-${text}`), text).toBe(scheme.tokens[text]);
+    }
   });
 });

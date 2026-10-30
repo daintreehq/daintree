@@ -1,6 +1,7 @@
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useScratchStore } from "@/store/scratchStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
@@ -11,6 +12,7 @@ import {
   worktreeNameFromId,
 } from "@/lib/notificationSourceLabel";
 import {
+  isOpenableWorkspace,
   isOtherProjectContext,
   resolveNotificationDestination,
   type NotificationDestination,
@@ -102,6 +104,13 @@ function useViewOwnerId(): string | undefined {
   return getViewWorkspaceId() ?? currentProjectId;
 }
 
+/** Booleans, so a row re-renders when its own workspace comes or goes, not on every list change. */
+function useIsOpenableWorkspace(workspaceId: string | undefined): boolean {
+  const asProject = useProjectStore((s) => isOpenableWorkspace(workspaceId, s.projects, []));
+  const asScratch = useScratchStore((s) => isOpenableWorkspace(workspaceId, [], s.scratches));
+  return asProject || asScratch;
+}
+
 /**
  * The row's destination as it stands now, re-derived whenever the panel is
  * trashed or restored or the worktree comes or goes. Click time re-reads it
@@ -118,11 +127,13 @@ export function useNotificationDestination(context: NotificationContext): Notifi
   );
   const panelWorktreeShown = useIsPanelWorktreeShown(panelWorktreeId);
   const worktreeLive = useIsWorktreeLive(context?.worktreeId);
+  const otherWorkspaceOpenable = useIsOpenableWorkspace(context?.projectId);
   return resolveNotificationDestination(context, {
     currentProjectId,
     panelLocation,
     panelWorktreeId,
     panelWorktreeShown,
     worktreeLive,
+    otherWorkspaceOpenable,
   });
 }

@@ -1,9 +1,12 @@
 import { usePanelStore } from "@/store/panelStore";
+import { pickGridSuccessorFocusId } from "@/store/panelFocusFallback";
+import { isOptimisticallyClosing } from "@/services/terminal/optimisticPanelCloseIds";
+import { selectWorktreeMovePanelIds } from "@/store/slices/panelRegistry/selectors";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { classifyLaunchRootAlignment } from "@/utils/worktreeAlignment";
 import { isRuntimeAgentTerminal } from "@/utils/terminalType";
-import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
+import { isDevPreviewPanel, isPtyPanel, type PanelInstance } from "@shared/types/panel";
 
 /**
  * Whether the panel's process can still act on the filesystem right now.
@@ -43,14 +46,7 @@ function readWorktreePaths(): { id: string; path: string; name?: string }[] {
  * group, so every member is in scope even though only one was dragged.
  */
 export function collectMovedPanelIds(terminalId: string): string[] {
-  const group = usePanelStore.getState().getPanelGroup(terminalId);
-  if (!group) return [terminalId];
-  const state = usePanelStore.getState();
-  const panelIds = group.panelIds.filter((pid) => {
-    const panel = state.panelsById[pid];
-    return panel && panel.location !== "trash" && !state.trashedTerminals.has(pid);
-  });
-  return panelIds.length > 0 ? panelIds : [terminalId];
+  return selectWorktreeMovePanelIds(usePanelStore.getState(), terminalId);
 }
 
 /**
@@ -94,6 +90,28 @@ function confirmHeldPanelDestination(panelId: string, worktreeId: string): void 
 }
 
 /**
+ * A command-backed preview serves whatever directory it runs in, so it goes
+ * where it was moved (#14958): its next ensure restarts the server in the
+ * destination rather than filing the source's server under it. A user-stopped
+ * preview only takes the new directory and stays stopped. An endpoint preview
+ * follows the destination's endpoint instead, and a directory under no
+ * worktree stays where the user put it, as with `alignDeadPanelCwd`.
+ */
+function alignMovedDevPreviewCwd(panelId: string, worktreeId: string): void {
+  const panel = usePanelStore.getState().panelsById[panelId];
+  if (!panel || !isDevPreviewPanel(panel) || panel.previewsResourceEndpoint) return;
+  // A grouped move refused for capacity leaves the preview where it was.
+  if (panel.worktreeId !== worktreeId) return;
+  const worktrees = readWorktreePaths();
+  if (classifyLaunchRootAlignment(panel.cwd, worktrees, worktreeId) !== "launch-root-mismatch") {
+    return;
+  }
+  const destination = worktrees.find((w) => w.id === worktreeId);
+  if (!destination?.path) return;
+  usePanelStore.getState().updateTerminalCwd(panelId, destination.path);
+}
+
+/**
  * Bring one moved panel's after-effects in line with where it now lives.
  *
  * Three outcomes, and the split is the whole point of #11853:
@@ -111,6 +129,10 @@ function confirmHeldPanelDestination(panelId: string, worktreeId: string): void 
 export function reconcileMovedPanel(panelId: string, destinationWorktreeId: string): void {
   const store = usePanelStore.getState();
   const panel = store.panelsById[panelId];
+  if (panel && isDevPreviewPanel(panel)) {
+    alignMovedDevPreviewCwd(panelId, destinationWorktreeId);
+    return;
+  }
   if (!panel || !isPtyPanel(panel)) return;
 
   if (panel.restoreRecovery) {
@@ -183,8 +205,47 @@ export function moveTerminalToWorktreeAndFollowRescue(
   // the panels have already been filed under.
   const movedPanelIds = collectMovedPanelIds(terminalId);
 
+  // Focus leaves only if it was inside what moved and the move takes it out of
+  // the worktree the user is in (#14974). A grid pane hands it on the way a close
+  // would, picked before the move for the same reason as the membership above; a
+  // source the user isn't standing in hands it to nobody, since focusing a pane
+  // there would switch worktrees under them. A dock pane's popover closes, and
+  // the dock has its own hand-back for that (#11133).
+  const { focusedId, panelsById } = usePanelStore.getState();
+  const movesFocus = focusedId !== null && movedPanelIds.includes(focusedId);
+  const focusStaysInView = targetWorktreeId === before.activeWorktreeId;
+  const focusWasDocked = movesFocus && panelsById[focusedId]?.location === "dock";
+  const focusSuccessor =
+    movesFocus &&
+    !focusWasDocked &&
+    (sourceWorktreeId ?? undefined) === (before.activeWorktreeId ?? undefined)
+      ? pickGridSuccessorFocusId(usePanelStore.getState(), movedPanelIds, isOptimisticallyClosing)
+      : null;
+
   usePanelStore.getState().moveTerminalToWorktree(terminalId, targetWorktreeId);
-  usePanelStore.getState().setFocused(null);
+  if (
+    movesFocus &&
+    usePanelStore.getState().panelsById[focusedId]?.worktreeId === targetWorktreeId
+  ) {
+    if (focusStaysInView) {
+      // A pane arriving in the grid with the keyboard can't be parked behind
+      // another pane's fullscreen (#11060). A docked pane stays docked (#14966)
+      // and its popover opens alongside fullscreen, so re-asserting focus keeps
+      // it open; only a kind the dock can't host comes out into the grid, and
+      // the dock lets go of that one.
+      if (usePanelStore.getState().panelsById[focusedId]?.location === "grid") {
+        usePanelStore.getState().exitMaximize();
+      }
+      usePanelStore.getState().setFocused(focusedId);
+    } else {
+      if (focusWasDocked) usePanelStore.getState().closeDockTerminal(focusedId);
+      // The dock stands down for a popover it doesn't think is open, and focus
+      // still can't stay behind on a pane that has left.
+      if (usePanelStore.getState().focusedId === focusedId) {
+        usePanelStore.getState().setFocused(focusSuccessor);
+      }
+    }
+  }
 
   // Per panel, not per group. A dragged tab group gives each member its own bar
   // when the user switches to it — no one click that messages four agents.
@@ -211,4 +272,15 @@ export function moveTerminalToWorktreeAndFollowRescue(
   // is what the fallback-to-main path already did — only the target changes.
   after.selectWorktree(targetWorktreeId);
   after.retargetParkedFleetSelection(targetWorktreeId);
+}
+
+/**
+ * A panel drag released on a worktree: the drop paths' one way into the move. A
+ * grouped panel takes its whole tab group with it (#14962). A destination that
+ * isn't a live worktree (a deleted row's id, or no view store registered yet)
+ * moves nothing; filing panels under it would strand them on another ghost.
+ */
+export function moveDroppedPanelToWorktree(panelId: string, worktreeId: string): void {
+  if (!getCurrentViewStoreOrNull()?.getState().worktrees.has(worktreeId)) return;
+  moveTerminalToWorktreeAndFollowRescue(panelId, worktreeId);
 }

@@ -2259,3 +2259,167 @@ describe("TerminalFocusSlice - activation leaves fullscreen (#11506)", () => {
     });
   });
 });
+
+describe("TerminalFocusSlice - maximizePanel carries fullscreen (#15335)", () => {
+  type SliceCreator = ReturnType<typeof createTerminalFocusSlice>;
+
+  const makePanel = (
+    id: string,
+    location: PanelLocation | undefined,
+    worktreeId: string | undefined = "worktree-1"
+  ): PtyPanelData =>
+    ({
+      id,
+      title: id,
+      kind: "terminal",
+      type: "terminal",
+      cwd: "/test",
+      location,
+      agentState: "idle",
+      isVisible: true,
+      cols: 80,
+      rows: 24,
+      worktreeId,
+    }) as PtyPanelData;
+
+  const snapshot = { gridCols: 2, gridItemCount: 4, worktreeId: "worktree-1" };
+  const groups = new Map<string, { id: string; panelIds: string[] }>();
+  const getPanelGroup = (panelId: string) =>
+    [...groups.values()].find((group) => group.panelIds.includes(panelId));
+
+  let panels: PtyPanelData[];
+  let state: TerminalFocusSlice;
+  let writes: number;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetActiveWorktreeId.mockReturnValue("worktree-1");
+    groups.clear();
+    panelGroupInfoImpl = (id) => {
+      const group = getPanelGroup(id);
+      return group ? { groupId: group.id, activeTabId: group.panelIds[0] ?? null } : undefined;
+    };
+    panels = [
+      makePanel("grid-1", "grid"),
+      makePanel("grid-2", "grid"),
+      makePanel("legacy-1", undefined),
+      makePanel("dock-1", "dock"),
+      makePanel("trash-1", "trash"),
+      makePanel("bg-1", "background"),
+      makePanel("other-wt-1", "grid", "worktree-2"),
+    ];
+    writes = 0;
+    const getState: Parameters<SliceCreator>[1] = () => state;
+    const setState: Parameters<SliceCreator>[0] = (updater) => {
+      const currentState = getState();
+      const updates = typeof updater === "function" ? updater(currentState) : updater;
+      if (updates === currentState) return;
+      writes++;
+      state = { ...currentState, ...updates };
+    };
+    state = createTerminalFocusSlice(
+      () => panels,
+      mockGetActiveWorktreeId,
+      mockStampLastActive,
+      mockGetPanelGroupInfo
+    )(setState, getState, {} as Parameters<SliceCreator>[2]);
+    state.maximizedId = "grid-1";
+    state.maximizeTarget = { type: "panel", id: "grid-1" };
+    state.preMaximizeLayout = snapshot;
+  });
+
+  afterAll(() => {
+    mockGetActiveWorktreeId.mockReturnValue("worktree-1");
+    panelGroupInfoImpl = () => undefined;
+  });
+
+  it("moves fullscreen to another grid pane and keeps the layout to return to", () => {
+    state.maximizePanel("grid-2", getPanelGroup);
+
+    expect(state.maximizedId).toBe("grid-2");
+    expect(state.maximizeTarget).toEqual({ type: "panel", id: "grid-2" });
+    expect(state.preMaximizeLayout).toBe(snapshot);
+  });
+
+  it("keeps the maximized pane maximized instead of toggling it off", () => {
+    state.maximizePanel("grid-1", getPanelGroup);
+
+    expect(state.maximizedId).toBe("grid-1");
+    expect(state.maximizeTarget).toEqual({ type: "panel", id: "grid-1" });
+    expect(writes).toBe(0);
+  });
+
+  it("maximizes the whole tab group when the pane has siblings", () => {
+    groups.set("group-a", { id: "group-a", panelIds: ["grid-2", "legacy-1"] });
+
+    state.maximizePanel("legacy-1", getPanelGroup);
+
+    expect(state.maximizedId).toBe("legacy-1");
+    expect(state.maximizeTarget).toEqual({ type: "group", id: "group-a" });
+  });
+
+  it("maximizes a lone group member as a panel", () => {
+    groups.set("group-a", { id: "group-a", panelIds: ["grid-2"] });
+
+    state.maximizePanel("grid-2", getPanelGroup);
+
+    expect(state.maximizeTarget).toEqual({ type: "panel", id: "grid-2" });
+  });
+
+  it("maximizes even when nothing was fullscreen", () => {
+    state.maximizedId = null;
+    state.maximizeTarget = null;
+
+    state.maximizePanel("grid-2", getPanelGroup);
+
+    expect(state.maximizedId).toBe("grid-2");
+    expect(state.maximizeTarget).toEqual({ type: "panel", id: "grid-2" });
+    expect(state.preMaximizeLayout).toBe(snapshot);
+  });
+
+  it("drops a layout snapshot that belongs to another worktree", () => {
+    state.preMaximizeLayout = { ...snapshot, worktreeId: "worktree-2" };
+
+    state.maximizePanel("grid-2", getPanelGroup);
+
+    expect(state.maximizedId).toBe("grid-2");
+    expect(state.preMaximizeLayout).toBeNull();
+  });
+
+  it("drops a foreign snapshot even when the pane is already maximized", () => {
+    state.preMaximizeLayout = { ...snapshot, worktreeId: "worktree-2" };
+
+    state.maximizePanel("grid-1", getPanelGroup);
+
+    expect(state.preMaximizeLayout).toBeNull();
+  });
+
+  it("widens a maximized pane to its group once it has siblings", () => {
+    groups.set("group-a", { id: "group-a", panelIds: ["grid-1", "grid-2"] });
+
+    state.maximizePanel("grid-1", getPanelGroup);
+
+    expect(state.maximizedId).toBe("grid-1");
+    expect(state.maximizeTarget).toEqual({ type: "group", id: "group-a" });
+  });
+
+  it.each(["dock-1", "trash-1", "bg-1", "other-wt-1", "missing"])(
+    "leaves fullscreen alone for %s, which the grid can't show",
+    (id) => {
+      state.maximizePanel(id, getPanelGroup);
+
+      expect(state.maximizedId).toBe("grid-1");
+      expect(state.maximizeTarget).toEqual({ type: "panel", id: "grid-1" });
+      expect(writes).toBe(0);
+    }
+  );
+
+  it("keeps the transferred pane fullscreen through activation", () => {
+    state.maximizePanel("grid-2", getPanelGroup);
+    state.activateTerminal("grid-2");
+
+    expect(state.focusedId).toBe("grid-2");
+    expect(state.maximizedId).toBe("grid-2");
+    expect(state.maximizeTarget).toEqual({ type: "panel", id: "grid-2" });
+  });
+});

@@ -29,7 +29,7 @@ export const VOICE_CLEANUP_SCHEMA_VERSION = 4;
 // rescore still reads them and lands each saved reply once, as schema 4 does.
 export const VOICE_CLEANUP_READABLE_SCHEMAS: readonly number[] = [3, VOICE_CLEANUP_SCHEMA_VERSION];
 // Bump when a definition below changes, so runs scored differently aren't compared.
-export const VOICE_CLEANUP_SCORING_VERSION = 8;
+export const VOICE_CLEANUP_SCORING_VERSION = 9;
 
 /** Today's send yardstick (#14793): the wait a send used to give cleanup. */
 export const SEND_WAIT_TARGET_MS = 2000;
@@ -117,6 +117,8 @@ function countKept(haystack: string, keep: string): number {
  * "can you, can you" was.
  */
 function countPhrase(haystack: string, phrase: string): number {
+  // A trail-off ("...") has no words to match, so it's counted as written.
+  if (phrase === "...") return (haystack.match(/\.\.\.|…/gu) ?? []).length;
   const words = straightenApostrophes(phrase)
     .split(/[^\p{L}\p{N}']+/u)
     .filter(Boolean)
@@ -159,7 +161,8 @@ function keepChecks(entry: CleanupCase): KeepCheck[] {
   const checks: KeepCheck[] = [];
   const seen = new Set<string>();
   for (const { text: span } of scanProtectedSpans(entry.raw)) {
-    if (seen.has(span)) continue;
+    // A span the reference rewrites was misheard ("@all" for "at all"), not protected.
+    if (seen.has(span) || !entry.reference.includes(span)) continue;
     seen.add(span);
     checks.push({ label: span, count: (text) => countProtectedSpan(text, span) });
   }
@@ -586,6 +589,10 @@ export interface ModelPrice {
 export const MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
   "gpt-6-luna": { input: 0.1, cachedInput: 0.01, cacheWrite: 0.125, output: 0.5 },
   "gpt-6.1-terra": { input: 1, cachedInput: 0.05, cacheWrite: 1.25, output: 5 },
+  // Anthropic's rates for prompts of 100K tokens or fewer: cache reads at 0.1
+  // times input, five-minute cache writes at 1.25 times.
+  "claude-haiku-5-5": { input: 0.1, cachedInput: 0.01, cacheWrite: 0.125, output: 0.5 },
+  "claude-sonnet-5-5": { input: 2, cachedInput: 0.2, cacheWrite: 2.5, output: 10 },
 };
 
 export interface TokenUsage {
@@ -613,6 +620,30 @@ export function requestCost(model: string, usage: TokenUsage | undefined): numbe
       usage.outputTokens * price.output) /
     1_000_000
   );
+}
+
+/**
+ * The lower bounds of the passage lengths the benchmark reports by, in
+ * characters of the trimmed raw transcript: what the service measures a
+ * passage by when it picks its reasoning effort (#15504), split at Haiku's
+ * cutoff (`CLEANUP_REASONING_MIN_CHARS`).
+ */
+export const PASSAGE_LENGTH_BANDS: readonly number[] = [0, 30, 60, 90, 120, 160, 300, 600];
+
+export function passageChars(entry: CleanupCase): number {
+  return entry.raw.trim().length;
+}
+
+/** Draft text comes before the passage: production sends it as `recentContext`. */
+export function isContinuing(entry: CleanupCase): boolean {
+  return (entry.recentContext?.length ?? 0) > 0;
+}
+
+/** The band a passage falls in, written as its range of characters. */
+export function lengthBandOf(chars: number): string {
+  const next = PASSAGE_LENGTH_BANDS.find((bound) => bound > chars);
+  const from = PASSAGE_LENGTH_BANDS.filter((bound) => bound <= chars).at(-1) ?? 0;
+  return next === undefined ? `${from}+` : `${from}–${next - 1}`;
 }
 
 /** Nearest-rank, the convention the replay benchmark uses. */
@@ -667,6 +698,9 @@ export interface Trial {
   roundTripMs: number | null;
   /** Request out to the first corrected text a streamed reply showed; absent when it didn't stream or showed none. */
   firstTextMs?: number | null;
+  /** `correct()` to the reply's first text, a retried request's stall left out, and on to its last; absent unless it streamed back whole. */
+  untilOutputMs?: number;
+  outputMs?: number;
   /** All of `correct()`, the wait for a preconnect and the checks included. */
   totalMs: number;
   usage?: TokenUsage & { cacheWriteTokens: number; reasoningTokens: number };

@@ -191,11 +191,28 @@ describe("help prompt outputs", () => {
       expect(perms).toMatch(/never use the shell[^.]*bypass a tier or confirmation/i);
       expect(perms).not.toMatch(/deny list|Codex has none/);
       const tier = section(body, "## Tier Model");
-      expect(tier).toMatch(/Don't retry and don't look for a way around it/);
-      expect(tier).toMatch(/new help session/);
+      expect(tier).toMatch(/don't work around it/);
       expect(tier).toContain("Settings → Daintree Assistant → Security → Tool set");
       expect(tier).toContain("`daintree` has no past-conversation text search");
       expect(tier).toMatch(/`unavailable`/);
+    });
+
+    // #15399: an assistant told issues and PRs were `full` refused to read them
+    // at the default tool set, and wouldn't reach for `gh` either.
+    it.each(ALL_GENERATED)("%s puts issue and PR reads on the default tool set", (_name, body) => {
+      const tier = section(body, "## Tier Model");
+      expect(tier).toMatch(/\*\*`core`\*\* \(default;[^)]*issues, PRs\)/);
+      expect(tier).not.toMatch(/\*\*`full`\*\* \([^)]*(issue|forge|CI)/);
+    });
+
+    // #14995: the panel's "Allow this tool" lifts a refusal in place, so the
+    // prompt must neither forbid the retry nor send the user to a new session.
+    it.each(ALL_GENERATED)("%s lets a refused tool be retried once allowed", (_name, body) => {
+      const tier = section(body, "## Tier Model");
+      expect(tier).toContain("**Allow this tool** lifts that tool here");
+      expect(tier).toMatch(/Retry once told it's allowed/);
+      expect(tier).toMatch(/Tool set in new sessions/);
+      expect(tier).not.toMatch(/Don't retry|start a new help session/);
     });
 
     // The renderer's launcher refuses a launch while another of the same agent
@@ -578,6 +595,15 @@ describe("global assistant prompts (#14546)", () => {
       expect(body).toContain(tool);
     }
     expect(body).toContain("<!-- DAINTREE_RUNBOOKS_START -->");
+  });
+
+  // #14995: `host.call` carries the caller's own tier and the global
+  // assistant has no Allow banner, so no change on any host lifts a refusal
+  // for the session already running.
+  it.each(GLOBAL)("%s sends a tier refusal to a new session", (_name, body) => {
+    expect(body).toMatch(/TIER_NOT_PERMITTED`\*\*, don't work around it or retry in this session/);
+    expect(body).toMatch(/Tool set on this machine changes it for new sessions/);
+    expect(body).not.toMatch(/host's Settings/);
   });
 
   it.each(GLOBAL)("%s omits the project assistant's direct-call text", (_name, body) => {

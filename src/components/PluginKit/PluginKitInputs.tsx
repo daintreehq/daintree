@@ -62,7 +62,9 @@ import {
   rowCount,
 } from "./kitProps";
 import { useKitOverlayZClass, usePluginKitOwner } from "./kitScope";
-import { safeFormat } from "./kitDiagnostics";
+import { runPluginAction, safeFormat } from "./kitDiagnostics";
+import { SkippedNote, skippedFilesLines, sortFiles } from "./kitFiles";
+import { SliderReadout } from "./kitRangeSlider";
 import { getPluginKitHost } from "./kitHost";
 import { InlineError } from "@/components/ui/field";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -687,15 +689,14 @@ function KitSlider(props: PluginSliderProps) {
         style={fillStyle}
       />
       {showValue === true ? (
-        <span
-          aria-hidden="true"
-          className={cn(
-            "shrink-0 text-xs tabular-nums text-text-secondary",
-            disabled === true && "opacity-50"
+        <SliderReadout
+          text={words ?? String(current)}
+          reserve={[lo, hi].map(
+            (end) =>
+              (formatter ? nonEmpty(safeFormat(formatter, end, String)) : undefined) ?? String(end)
           )}
-        >
-          {words ?? String(current)}
-        </span>
+          className={disabled === true ? "opacity-50" : undefined}
+        />
       ) : null}
     </div>
   );
@@ -1471,23 +1472,7 @@ function KitTagInput(props: PluginTagInputProps) {
   );
 }
 
-/** `accept` as `<input type="file">` reads it: extensions, `type/*` and exact MIME types. */
-export function fileMatchesAccept(file: { name: string; type: string }, accept?: string): boolean {
-  const tokens = (accept ?? "")
-    .split(",")
-    .map((token) => token.trim().toLowerCase())
-    .filter(Boolean);
-  if (tokens.length === 0) return true;
-  const fileName = file.name.toLowerCase();
-  const type = file.type.toLowerCase();
-  return tokens.some((token) =>
-    token.startsWith(".")
-      ? fileName.endsWith(token)
-      : token.endsWith("/*")
-        ? type.startsWith(token.slice(0, -1))
-        : type === token
-  );
-}
+export { fileMatchesAccept } from "./kitFiles";
 
 function carriesFiles(event: DragEvent): boolean {
   return Array.from(event.dataTransfer?.types ?? []).includes("Files");
@@ -1520,6 +1505,9 @@ function KitFileDropzone({
   const [depth, setDepth] = useState(0);
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
+  // What the last drop or pick left behind, said by the zone itself when the
+  // plugin has no `onReject` to explain it.
+  const [skipped, setSkipped] = useState<string[]>([]);
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -1542,10 +1530,16 @@ function KitFileDropzone({
 
   const take = (list: FileList | null | undefined) => {
     const files = list ? Array.from(list) : [];
-    const accepted = files.filter((file) => fileMatchesAccept(file, acceptText));
-    const refused = files.filter((file) => !fileMatchesAccept(file, acceptText));
-    const kept = many ? accepted : accepted.slice(0, 1);
-    if (refused.length > 0) reject?.(refused);
+    const { kept, rejections } = sortFiles(files, acceptText, many ? undefined : 1);
+    setSkipped(reject || rejections.length === 0 ? [] : skippedFilesLines(rejections));
+    if (reject && rejections.length > 0) {
+      runPluginAction("FileDropzone onReject", () =>
+        reject(
+          rejections.map((entry) => entry.file),
+          rejections
+        )
+      );
+    }
     if (kept.length === 0) return;
     if (!deliverArtifacts) {
       deliver?.(kept);
@@ -1658,6 +1652,7 @@ function KitFileDropzone({
           {importError}
         </InlineError>
       ) : null}
+      <SkippedNote lines={skipped} />
       <input
         ref={inputRef}
         type="file"

@@ -124,9 +124,9 @@ describe("PulseSummary — visual contrast (issue #2645)", () => {
     expect(content).toContain("<DiffStat");
     expect(content).not.toMatch(/text-status-(success|error)\/\d+/);
     const diffStat = await readFile(DIFF_STAT_PATH, "utf-8");
-    expect(diffStat).toContain("text-status-success");
-    expect(diffStat).toContain("text-status-error");
-    expect(diffStat).not.toMatch(/text-status-(success|error)\/\d+/);
+    expect(diffStat).toContain("text-diff-text-insert");
+    expect(diffStat).toContain("text-diff-text-delete");
+    expect(diffStat).not.toMatch(/text-(status-(success|error)|diff-text-(insert|delete))\/\d+/);
   });
 });
 

@@ -86,6 +86,10 @@ vi.mock("@/config/agents", () => ({
   getMergedPresets: () => [],
 }));
 
+vi.mock("@/services/layout/reorderGroupTabs", () => ({
+  reorderGroupTabsWithUndo: vi.fn(),
+}));
+
 vi.mock("@/services/terminal/panelDuplicationService", () => ({
   buildPanelDuplicateOptions: vi.fn(),
 }));
@@ -292,7 +296,7 @@ vi.mock("@dnd-kit/sortable", () => ({
 
 vi.mock("@dnd-kit/modifiers", () => ({
   restrictToHorizontalAxis: vi.fn(),
-  restrictToParentElement: vi.fn(),
+  restrictToFirstScrollableAncestor: vi.fn(),
 }));
 
 vi.mock("framer-motion", () => ({

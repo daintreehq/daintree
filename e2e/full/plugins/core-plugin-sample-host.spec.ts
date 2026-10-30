@@ -564,7 +564,12 @@ test.describe.serial("plugin settings form", () => {
     await expect(input).toBeEnabled({ timeout: T_MEDIUM });
     await expect(input).toHaveAttribute("type", "password");
     await input.fill("s3cr3t");
-    await window.keyboard.press("Tab");
+    const reveal = window.getByRole("button", { name: "Show API key" });
+    // The field and eye share a commit boundary: Tab can reveal the draft
+    // before leaving both controls saves it.
+    await input.press("Tab");
+    await expect(reveal).toBeFocused();
+    await reveal.press("Tab");
 
     // A host with no OS keychain refuses the secret rather than storing it in
     // plaintext: the typed value stays in the field beside the error.
@@ -579,7 +584,6 @@ test.describe.serial("plugin settings form", () => {
     // Reported as set; the value itself never rides on getSettingValues.
     await expect.poll(() => userSecretsSet(window)).toContain("apiKey");
 
-    const reveal = window.getByRole("button", { name: "Show API key" });
     await expect(reveal).toBeVisible({ timeout: T_MEDIUM });
     await expect(reveal).toHaveAttribute("aria-pressed", "false");
     await reveal.click();

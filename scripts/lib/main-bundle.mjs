@@ -8,6 +8,7 @@ import path from "node:path";
  */
 export const MAIN_BUNDLE_EXTERNAL = [
   "electron",
+  "original-fs", // Electron's unpatched fs: stats app.asar as the file on disk (#14937)
   "@parcel/watcher", // Native N-API module (FSEvents)
   "node-pty", // Native module
   "better-sqlite3", // Native module

@@ -9,11 +9,11 @@ import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import {
   getAttachedShells,
-  type AttachedShell,
   isExitConfirmationPending,
   setExitConfirmationPending,
 } from "../lifecycle/attachedShells.js";
-import { showUpdateWarning } from "../utils/quitWarning.js";
+import { getActiveAgentCount, showUpdateWarning, type QuitImpact } from "../utils/quitWarning.js";
+import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
 import { requestGracefulShutdownForUpdate } from "../lifecycle/shutdownCoordinator.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 import { trackEvent } from "./TelemetryService.js";
@@ -512,17 +512,24 @@ class AutoUpdaterService {
   }
 
   /**
-   * The user-facing "Restart to update" asks first when other machines are
-   * attached to this host, since the restart disconnects them. The dialog
-   * must come before the install — on macOS Squirrel closes every window
+   * The user-facing "Restart to update" asks first when agents are working or
+   * other machines are attached to this host, the same question Quit asks. The
+   * dialog must come before the install — on macOS Squirrel closes every window
    * ahead of `before-quit`. Cancelling leaves the update staged.
    */
-  private async confirmAttachedShells(shells: AttachedShell[]): Promise<boolean> {
-    if (this.installInFlight || isExitConfirmationPending()) return false;
+  private restartImpact(): QuitImpact | null {
+    const impact = {
+      activeAgents: getActiveAgentCount(getAgentAvailabilityStore()),
+      attachedShells: getAttachedShells(),
+    };
+    return impact.activeAgents > 0 || impact.attachedShells.length > 0 ? impact : null;
+  }
+
+  private async confirmRestartImpact(impact: QuitImpact): Promise<boolean> {
     setExitConfirmationPending(true);
     try {
       const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null;
-      return await showUpdateWarning(shells, dialog.showMessageBox, win);
+      return await showUpdateWarning(impact, dialog.showMessageBox, win);
     } catch (error) {
       console.error("[MAIN] Error showing update warning:", error);
       return false;
@@ -534,8 +541,11 @@ class AutoUpdaterService {
   async confirmAndQuitAndInstall(): Promise<boolean> {
     if (isWindowsStoreBuild()) return false;
     if (this.menuState !== "ready" || !this.updateDownloaded) return false;
-    const shells = getAttachedShells();
-    if (shells.length > 0 && !(await this.confirmAttachedShells(shells))) return false;
+    // Checked before the impact, so a second click can't slip past an open
+    // dialog because the agents stopped or the Shells left meanwhile.
+    if (this.installInFlight || isExitConfirmationPending()) return false;
+    const impact = this.restartImpact();
+    if (impact && !(await this.confirmRestartImpact(impact))) return false;
     return this.quitAndInstallIfReady();
   }
 
@@ -1229,12 +1239,13 @@ class AutoUpdaterService {
           console.warn("[MAIN] Quit-and-install called before download completed");
           return;
         }
-        const shells = getAttachedShells();
-        if (shells.length === 0) {
+        if (this.installInFlight || isExitConfirmationPending()) return;
+        const impact = this.restartImpact();
+        if (!impact) {
           this.startQuitAndInstall();
           return;
         }
-        void this.confirmAttachedShells(shells).then((confirmed) => {
+        void this.confirmRestartImpact(impact).then((confirmed) => {
           if (confirmed && this.updateDownloaded) this.startQuitAndInstall();
         });
       });

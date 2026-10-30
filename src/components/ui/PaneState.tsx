@@ -26,7 +26,12 @@ export function PaneState({
   title: string;
   description?: ReactNode;
   children?: ReactNode;
-  live?: "status" | "alert";
+  /**
+   * `off` keeps the status role but doesn't announce changes: for a state
+   * whose changes the window already says once (who has control of the
+   * project), so N panes don't each say it again.
+   */
+  live?: "status" | "alert" | "off";
   /**
    * Take up room in the layout instead of covering the pane — for a host that
    * sizes to its content, such as a dialog, where an overlay has no height.
@@ -46,7 +51,11 @@ export function PaneState({
       )}
     >
       <div className="flex min-h-full flex-col items-center justify-center gap-5 p-6">
-        <div role={live} aria-live={live === "status" ? "polite" : undefined} className="w-full">
+        <div
+          role={live === "alert" ? "alert" : "status"}
+          aria-live={live === "status" ? "polite" : live === "off" ? "off" : undefined}
+          className="w-full"
+        >
           <EmptyState
             variant="zero-data"
             scale="canvas"

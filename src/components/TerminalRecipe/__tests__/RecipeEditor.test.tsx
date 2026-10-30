@@ -36,7 +36,10 @@ vi.mock("@/components/TerminalRecipe/RecipeVariablePreview", () => ({
 import { RecipeEditor } from "../RecipeEditor";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
-import type { Project, TerminalRecipe } from "@/types";
+import type { RecipeLayoutOmissions } from "@/store/recipeStore";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import { getAgentDisplayTitle } from "@/config/agents";
+import type { Project, RecipeTerminal, TerminalRecipe } from "@/types";
 
 const RECIPE: TerminalRecipe = {
   id: "r1",
@@ -57,11 +60,11 @@ function chrome(el: Element): string[] {
     .sort();
 }
 
-const updateRecipe = vi.fn();
+const updateRecipe = vi.fn<ReturnType<typeof useRecipeStore.getState>["updateRecipe"]>();
 const createRecipe = vi.fn();
 
 beforeEach(() => {
-  updateRecipe.mockReset().mockResolvedValue(undefined);
+  updateRecipe.mockReset().mockResolvedValue("saved");
   createRecipe.mockReset().mockResolvedValue(undefined);
   useRecipeStore.setState({ updateRecipe, createRecipe });
   useProjectStore.setState({
@@ -189,7 +192,7 @@ describe("RecipeEditor", () => {
     const scope = document.getElementById("recipe-scope")!;
     expect(scope.textContent).toMatch(/^Global/);
     fireEvent.keyDown(scope, { key: "ArrowDown" });
-    const project = await screen.findByRole("option", { name: /^Project/ });
+    const project = await screen.findByRole("option", { name: /^Team/ });
     expect(project.getAttribute("aria-disabled")).toBe("true");
     fireEvent.keyDown(project, { key: "Escape" });
 
@@ -200,5 +203,275 @@ describe("RecipeEditor", () => {
     expect(createRecipe).toHaveBeenCalledTimes(1);
     expect(createRecipe.mock.calls[0]?.[0]).toBeUndefined();
     expect(document.querySelector("[data-inline-status-banner]")).toBeNull();
+  });
+
+  it("says a new project recipe is written into the repository before it is saved", () => {
+    renderEditor();
+    const help = document.getElementById("recipe-scope-help")!;
+    expect(help.textContent).toContain(".daintree/recipes/");
+    expect(document.getElementById("recipe-scope")!.getAttribute("aria-describedby")).toBe(
+      "recipe-scope-help"
+    );
+  });
+
+  // The type picker is one stray click from a long prompt: a switch keeps what
+  // the step had for its old type, for as long as the editor stays open.
+  describe("switching a step's type", () => {
+    const pickType = async (index: number, label: string) => {
+      const trigger = document.getElementById(`terminal-type-${index}`)!;
+      fireEvent.keyDown(trigger, { key: "ArrowDown" });
+      const option = await screen.findByRole("option", { name: label });
+      await act(async () => {
+        option.click();
+      });
+      expect(document.getElementById(`terminal-type-${index}`)?.textContent).toBe(label);
+    };
+    const value = (id: string) => {
+      const field = document.getElementById(id);
+      return field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement
+        ? field.value
+        : undefined;
+    };
+    const type = (id: string, text: string) =>
+      fireEvent.change(document.getElementById(id)!, { target: { value: text } });
+    const saveTerminals = async () => {
+      await act(async () => {
+        screen.getByRole("button", { name: "Update recipe" }).click();
+      });
+      return updateRecipe.mock.calls.at(-1)?.[1].terminals ?? [];
+    };
+
+    const AGENT_RECIPE: TerminalRecipe = {
+      ...RECIPE,
+      terminals: [
+        {
+          type: "claude",
+          title: "Agent",
+          initialPrompt: "Review the diff",
+          args: "--model opus",
+          env: {},
+        },
+      ],
+    };
+
+    it("brings back an agent's prompt and arguments after a trip through Terminal", async () => {
+      renderEditor(AGENT_RECIPE);
+      await pickType(0, "Terminal");
+      expect(value("terminal-initial-prompt-0")).toBeUndefined();
+      expect(value("terminal-command-0")).toBe("");
+      type("terminal-command-0", "npm test");
+
+      await pickType(0, "Claude");
+      expect(value("terminal-initial-prompt-0")).toBe("Review the diff");
+      expect(value("terminal-args-0")).toBe("--model opus");
+
+      await pickType(0, "Terminal");
+      expect(value("terminal-command-0")).toBe("npm test");
+
+      type("terminal-command-0", "");
+      await pickType(0, "Claude");
+      await pickType(0, "Terminal");
+      expect(value("terminal-command-0")).toBe("");
+    });
+
+    it("carries the prompt to another agent and keeps it when the step comes back", async () => {
+      renderEditor(AGENT_RECIPE);
+      await pickType(0, "Codex");
+      expect(value("terminal-initial-prompt-0")).toBe("Review the diff");
+      await pickType(0, "Dev server");
+      await pickType(0, "Gemini");
+      expect(value("terminal-initial-prompt-0")).toBe("Review the diff");
+      expect(value("terminal-args-0")).toBe("--model opus");
+    });
+
+    it("brings back a dev server's command", async () => {
+      renderEditor(RECIPE);
+      await pickType(0, "Terminal");
+      expect(value("terminal-dev-command-0")).toBeUndefined();
+      await pickType(0, "Dev server");
+      expect(value("terminal-dev-command-0")).toBe("npm run dev");
+
+      type("terminal-dev-command-0", "vite");
+      await pickType(0, "Claude");
+      await pickType(0, "Dev server");
+      expect(value("terminal-dev-command-0")).toBe("vite");
+    });
+
+    it("still starts each type from its own command", async () => {
+      renderEditor({
+        ...RECIPE,
+        terminals: [{ type: "claude", title: "Agent", command: "claude --resume", env: {} }],
+      });
+      await pickType(0, "Codex");
+      expect((await saveTerminals())[0]).toMatchObject({ type: "codex", command: "" });
+      await pickType(0, "Claude");
+      expect((await saveTerminals())[0]).toMatchObject({
+        type: "claude",
+        command: "claude --resume",
+      });
+    });
+
+    it("saves only the fields of the type the step ends on", async () => {
+      renderEditor({
+        ...RECIPE,
+        terminals: [AGENT_RECIPE.terminals[0]!, RECIPE.terminals[0]!, RECIPE.terminals[0]!],
+      });
+      await pickType(0, "Dev server");
+      await pickType(1, "Terminal");
+      await pickType(2, "Codex");
+      const saved = await saveTerminals();
+      expect(saved[0]).toMatchObject({ type: "dev-preview", initialPrompt: "", args: "" });
+      expect(saved[1]).toMatchObject({ type: "terminal", devCommand: "" });
+      expect(saved[2]).toMatchObject({ type: "codex", devCommand: "" });
+    });
+
+    it("brings back the latest prompt, including one edited under another agent", async () => {
+      renderEditor(AGENT_RECIPE);
+      await pickType(0, "Codex");
+      type("terminal-initial-prompt-0", "");
+      type("terminal-args-0", "--model sonnet");
+      await pickType(0, "Terminal");
+      await pickType(0, "Claude");
+      expect(value("terminal-initial-prompt-0")).toBe("");
+      expect(value("terminal-args-0")).toBe("--model sonnet");
+    });
+
+    it("offers every built-in agent in the registry's order, under the registry's names", () => {
+      renderEditor(AGENT_RECIPE);
+      fireEvent.keyDown(document.getElementById("terminal-type-0")!, { key: "ArrowDown" });
+      const offered = screen.getAllByRole("option").map((o) => o.textContent);
+      expect(offered).toEqual([
+        "Terminal",
+        ...BUILT_IN_AGENT_IDS.map((id) => getAgentDisplayTitle(id)),
+        "Dev server",
+      ]);
+    });
+
+    it("lets a new step pick an agent the editor used to leave out", async () => {
+      renderEditor(AGENT_RECIPE);
+      await pickType(0, "Aider");
+      expect((await saveTerminals())[0]?.type).toBe("aider");
+    });
+
+    it("keeps offering a captured agent the picker doesn't list, so the step can go back", async () => {
+      renderEditor({
+        ...RECIPE,
+        terminals: [
+          {
+            type: "acme-agent" as RecipeTerminal["type"],
+            title: "Agent",
+            initialPrompt: "Fix it",
+            env: {},
+          },
+        ],
+      });
+      const captured = document.getElementById("terminal-type-0")!.textContent!;
+      await pickType(0, "Terminal");
+      await pickType(0, captured);
+      expect(value("terminal-initial-prompt-0")).toBe("Fix it");
+    });
+
+    it("keeps each step's own fields when an earlier step is removed", async () => {
+      renderEditor({
+        ...RECIPE,
+        terminals: [AGENT_RECIPE.terminals[0]!, RECIPE.terminals[0]!],
+      });
+      await pickType(0, "Terminal");
+      await pickType(1, "Claude");
+      expect(value("terminal-initial-prompt-1")).toBe("");
+      act(() => {
+        screen.getByRole("button", { name: "Remove terminal 1" }).click();
+      });
+      await pickType(0, "Dev server");
+      expect(value("terminal-dev-command-0")).toBe("npm run dev");
+
+      act(() => {
+        screen.getByRole("button", { name: /Add terminal/ }).click();
+      });
+      await pickType(1, "Dev server");
+      expect(value("terminal-dev-command-1")).toBe("");
+    });
+
+    it("forgets what a step held once the editor is closed and opened again", async () => {
+      const view = renderEditor(RECIPE);
+      await pickType(0, "Terminal");
+      view.rerender(<RecipeEditor recipe={RECIPE} isOpen={false} onClose={() => {}} />);
+      view.rerender(
+        <RecipeEditor
+          recipe={{ ...RECIPE, terminals: [{ type: "terminal", title: "Dev", env: {} }] }}
+          isOpen
+          onClose={() => {}}
+        />
+      );
+      await pickType(0, "Dev server");
+      expect(value("terminal-dev-command-0")).toBe("");
+    });
+  });
+
+  describe("layout capture omissions (#14968)", () => {
+    const CAPTURED: RecipeTerminal[] = [
+      { type: "terminal", command: "npm test", env: {} },
+      { type: "claude", env: {} },
+    ];
+    const notice = () => screen.queryByTestId("recipe-layout-omissions");
+    const renderCapture = (layoutOmissions: RecipeLayoutOmissions, recipe?: TerminalRecipe) =>
+      render(
+        <RecipeEditor
+          recipe={recipe}
+          initialTerminals={CAPTURED}
+          layoutOmissions={layoutOmissions}
+          isOpen
+          onClose={() => {}}
+        />
+      );
+
+    it("says which panels a recipe can't hold and how many steps the cap cut", () => {
+      renderCapture({ panelKinds: { browser: 2, file: 1 }, cappedTerminalCount: 3 });
+      const paragraphs = [...notice()!.querySelectorAll("p")].map((p) => p.textContent);
+      expect(paragraphs).toEqual([
+        "Some panels weren't captured",
+        "Recipes can't hold 2 browsers and 1 file viewer, so they were left out.",
+        "3 more panels were left out: a recipe holds at most 10 terminals.",
+      ]);
+      expect(notice()!.dataset.callout).toBe("warning");
+    });
+
+    it("counts plugin panel kinds together without naming them", () => {
+      const view = renderCapture({ panelKinds: { "acme.kanban": 1 }, cappedTerminalCount: 0 });
+      expect(notice()!.textContent).toContain(
+        "Recipes can't hold 1 other panel, so it was left out."
+      );
+      expect(notice()!.dataset.callout).toBe("info");
+      view.unmount();
+
+      renderCapture({
+        panelKinds: { "acme.kanban": 1, review: 1, "acme.board": 2, constructor: 1 },
+        cappedTerminalCount: 0,
+      });
+      expect(notice()!.textContent).toContain(
+        "Recipes can't hold 1 review panel and 4 other panels, so they were left out."
+      );
+      expect(notice()!.textContent).not.toMatch(/acme|constructor/);
+    });
+
+    it("stays quiet for a complete capture and for an existing recipe", () => {
+      const view = renderCapture({ panelKinds: {}, cappedTerminalCount: 0 });
+      expect(notice()).toBeNull();
+      view.unmount();
+
+      renderCapture({ panelKinds: { browser: 1 }, cappedTerminalCount: 1 }, RECIPE);
+      expect(notice()).toBeNull();
+    });
+
+    it("keeps describing the capture after a step is removed", () => {
+      renderCapture({ panelKinds: {}, cappedTerminalCount: 1 });
+      act(() => {
+        screen.getByRole("button", { name: "Remove terminal 2" }).click();
+      });
+      expect(screen.queryByRole("button", { name: "Remove terminal 2" })).toBeNull();
+      expect(notice()!.textContent).toContain(
+        "1 more panel was left out: a recipe holds at most 10 terminals."
+      );
+    });
   });
 });

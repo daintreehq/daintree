@@ -2,10 +2,14 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { PtyPanelData } from "@shared/types/panel";
 import { buildKeybindingWhenContext } from "../keybindingWhenContext";
+import { PANE_DIALOG_ATTR } from "@/lib/paneDialog";
 import { usePaletteStore, usePanelStore } from "@/store";
 import type { PaletteId } from "@/store/paletteStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useCanopyStore } from "@/store/canopyStore";
+import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import type { VoiceInputStatus } from "@shared/types/voice";
+import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import { usePluginContextKeyStore } from "@/store/pluginContextKeyStore";
 import { buildPluginWhenContext } from "@shared/utils/pluginContextKeys";
 import { evaluate, parse } from "@shared/utils/whenClause";
@@ -40,6 +44,7 @@ function eventFrom(target: Element | null): KeyboardEvent {
 
 afterEach(() => {
   useCanopyStore.setState({ mode: "unset" });
+  useVoiceRecordingStore.setState({ status: "idle", pendingTarget: null, sessionElsewhere: null });
   usePaletteStore.setState({ activePaletteId: null });
   useFleetArmingStore.setState({ armedIds: new Set<string>() });
   usePanelStore.setState({ panelsById: {} });
@@ -73,6 +78,38 @@ describe("buildKeybindingWhenContext", () => {
     }
   });
 
+  it("reports dictationActive from arming until the session is over, here or in another view", () => {
+    const statuses: [VoiceInputStatus, boolean][] = [
+      ["idle", false],
+      ["arming", true],
+      ["connecting", true],
+      ["recording", true],
+      ["paused", true],
+      ["reconnecting", true],
+      ["finishing", true],
+      ["error", false],
+    ];
+    for (const [status, active] of statuses) {
+      useVoiceRecordingStore.setState({ status });
+      expect(buildKeybindingWhenContext(eventFrom(null)).dictationActive).toBe(active);
+    }
+
+    useVoiceRecordingStore.setState({ status: "idle", pendingTarget: { panelId: "p1" } });
+    expect(buildKeybindingWhenContext(eventFrom(null)).dictationActive).toBe(true);
+
+    useVoiceRecordingStore.setState({
+      pendingTarget: null,
+      sessionElsewhere: {
+        sessionId: "s1",
+        hostId: LOCAL_HOST_ID,
+        projectId: "proj-2",
+        projectName: "Other",
+        details: null,
+      },
+    });
+    expect(buildKeybindingWhenContext(eventFrom(null)).dictationActive).toBe(true);
+  });
+
   it("reports terminalFocused only for targets inside an xterm host", () => {
     const xterm = document.createElement("div");
     xterm.className = "xterm";
@@ -96,6 +133,22 @@ describe("buildKeybindingWhenContext", () => {
     document.body.appendChild(dialog);
 
     expect(buildKeybindingWhenContext(eventFrom(null)).modalOpen).toBe(true);
+  });
+
+  // A page's dialog blocks only its own pane (#15037): a key typed into it
+  // sees a modal, a key anywhere else doesn't.
+  it("reports modalOpen for a page dialog only for keys inside it", () => {
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute(PANE_DIALOG_ATTR, "");
+    const ok = document.createElement("button");
+    dialog.appendChild(ok);
+    const elsewhere = document.createElement("button");
+    document.body.append(dialog, elsewhere);
+
+    expect(buildKeybindingWhenContext(eventFrom(ok)).modalOpen).toBe(true);
+    expect(buildKeybindingWhenContext(eventFrom(elsewhere)).modalOpen).toBe(false);
+    expect(buildKeybindingWhenContext(eventFrom(null)).modalOpen).toBe(false);
   });
 
   it("reports the open palette and its id", () => {

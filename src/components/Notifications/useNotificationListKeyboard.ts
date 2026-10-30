@@ -16,8 +16,10 @@ function sourceUnreachableMessage(context: NotificationHistoryEntry["context"]):
   const destination = resolveLiveNotificationDestination(context);
   if (destination.kind !== "none") return "Couldn't open the source";
   switch (destination.reason) {
+    case "other-host":
+      return "It came from another machine";
     case "other-project":
-      return "From another project. Switch to it to open the source";
+      return "Its project is no longer available";
     case "panel-trashed":
       return "Its panel is in the trash";
     case "gone":
@@ -210,7 +212,7 @@ export function useNotificationListKeyboard({
           }
           if (e.metaKey || e.ctrlKey) return;
           e.preventDefault();
-          void goToNotificationSource(row.context).then((arrived) => {
+          void goToNotificationSource(row.context, row.entryId).then((arrived) => {
             if (!arrived) announceTriage(sourceUnreachableMessage(row.context));
           });
           return;

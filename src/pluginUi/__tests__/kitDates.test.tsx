@@ -341,25 +341,55 @@ describe("DatePicker", () => {
     expect(input.value).toContain("5");
   });
 
-  it("marks text that is not an allowed date invalid and keeps the value", () => {
+  it("says why typed text is refused, and keeps the value", () => {
     const onValueChange = vi.fn();
     renderLoose(kit.DatePicker, {
       value: "2026-09-30",
       max: "2026-12-31",
       onValueChange,
       "aria-label": "Due date",
+      name: "due",
     });
     const input = screen.getByRole("textbox", { name: "Due date" }) as HTMLInputElement;
+    const said = () => screen.queryByRole("alert")?.textContent ?? null;
     fireEvent.change(input, { target: { value: "not a date" } });
-    fireEvent.blur(input);
+    fireEvent.keyDown(input, { key: "Enter" });
     expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(said()).toBe("Enter a valid date");
+    expect(input.getAttribute("aria-describedby")).toBe(screen.getByRole("alert").id);
     fireEvent.change(input, { target: { value: "2027-01-01" } });
-    fireEvent.blur(input);
+    expect(said()).toBeNull();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(said()).toMatch(/^Choose a date on or before .*2026/);
     expect(input.getAttribute("aria-invalid")).toBe("true");
-    expect(onValueChange).not.toHaveBeenCalled();
     fireEvent.keyDown(input, { key: "Escape" });
     expect(input.getAttribute("aria-invalid")).toBeNull();
+    expect(said()).toBeNull();
     expect(input.value).toContain("2026");
+    expect(onValueChange).not.toHaveBeenCalled();
+  });
+
+  it("puts the value back when focus leaves on refused text, and says it wasn't changed", () => {
+    const onValueChange = vi.fn();
+    renderLoose(kit.DatePicker, {
+      value: "2026-09-30",
+      max: "2026-12-31",
+      onValueChange,
+      "aria-label": "Due date",
+      name: "due",
+    });
+    const input = screen.getByRole("textbox", { name: "Due date" }) as HTMLInputElement;
+    const shownBefore = input.value;
+    fireEvent.change(input, { target: { value: "2027-01-01" } });
+    fireEvent.blur(input);
+    // What is on screen is what the form holds.
+    expect(input.value).toBe(shownBefore);
+    expect(document.querySelector<HTMLInputElement>('input[name="due"]')?.value).toBe("2026-09-30");
+    expect(input.getAttribute("aria-invalid")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toMatch(/The date wasn't changed\.$/);
+    expect(onValueChange).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: "2026-10-01" } });
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("clears to null, or not at all when required", () => {

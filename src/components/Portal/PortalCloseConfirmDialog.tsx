@@ -349,9 +349,6 @@ export function PortalCloseConfirmDialog(): ReactElement | null {
       // Scrollable list of the tabs being closed — a dialog, not an
       // alertdialog, which APG reserves for a brief message read whole.
       hasPreview={pending.tabsToClose.length > 0}
-      // A list body: the 16px edge fade, so the row under it still reads as a
-      // row rather than as disabled content.
-      compactBodyShadow
       onConfirm={handleConfirm}
     >
       {pending.tabsToClose.length > 0 && <ClosingTabsPreview tabs={pending.tabsToClose} />}

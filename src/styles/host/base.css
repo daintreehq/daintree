@@ -3,19 +3,59 @@
     @apply border-border;
   }
 
-  /* Native checkboxes/radios paint their checked state in the text colour,
-     matching the house `Checkbox` primitive — never the OS cobalt, and not the
-     theme accent either. A checked option is membership, and accent restraint
-     allows at most ONE load-bearing accent per focus region; a checkbox group
-     spending it on every tick is precisely what the rule excludes.
+  /* Native checkboxes paint their checked state in the text colour, matching
+     the house `Checkbox` primitive — never the OS cobalt, and not the theme
+     accent either. A checked option is membership, and accent restraint allows
+     at most ONE load-bearing accent per focus region; a checkbox group spending
+     it on every tick is precisely what the rule excludes. Radios take the same
+     ink below, drawn rather than tinted.
 
      `--checkbox-accent` stays as a seam for the rare control whose colour
      carries meaning; a semantic accent-colour utility still wins, since
      utilities sit in a later layer. The AccentColor keyword keeps any context
      without the vars on OS behaviour. */
-  input[type="checkbox"],
-  input[type="radio"] {
+  input[type="checkbox"] {
     accent-color: var(--checkbox-accent, var(--color-text-primary, AccentColor));
+  }
+
+  /* `accent-color` only reaches a radio's checked state. Unchecked, Chromium
+     paints it in the root's colour scheme, which on a dark theme is a filled
+     mid-grey disc that reads as chosen-but-disabled beside the light themes'
+     hollow ring. So the radio is drawn: an empty ring, and the same ring
+     around a dot once chosen, in the `Checkbox` primitive's edge, fill and ink.
+
+     Never under forced colours. There the UA's own control is the only checked
+     state that survives (author fills are flattened and a gradient dot is
+     dropped), so none of this applies and the native radio comes back
+     untouched, at its native size. */
+  @media (forced-colors: none) {
+    input[type="radio"] {
+      appearance: none;
+      box-sizing: border-box;
+      width: 1rem;
+      height: 1rem;
+      border: 1px solid var(--color-text-secondary);
+      border-radius: 50%;
+      background-color: var(--color-surface-canvas);
+      background-position: center;
+      background-repeat: no-repeat;
+      background-size: 0.5rem 0.5rem;
+    }
+
+    input[type="radio"]:checked {
+      border-color: var(--checkbox-accent, var(--color-text-primary));
+      background-image: radial-gradient(
+        circle closest-side,
+        var(--checkbox-accent, var(--color-text-primary)) 85%,
+        transparent 100%
+      );
+    }
+
+    /* What the native control did for itself; a row that also dims its label
+       dims both, as it did before. */
+    input[type="radio"]:disabled {
+      opacity: 0.5;
+    }
   }
 
   /* Neutral option controls: membership, not emphasis. */

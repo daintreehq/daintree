@@ -1,9 +1,21 @@
 import { describe, expect, it } from "vitest";
 import type { VoiceDictionaryEntry } from "../../types/ipc/api.js";
+import { findCorrectionCandidates } from "../phoneticSimilarity.js";
+import {
+  acceptSuggestion,
+  addDictionaryEntry,
+  dictionaryTerms,
+  mergeSuggestions,
+  updateDictionaryEntry,
+} from "../voiceDictionary.js";
 import { MAX_HEARD_AS_RULES, collectHeardAsRules, createHeardAsRewriter } from "../voiceHeardAs.js";
 
 function entry(term: string, heardAs: string[] = []): VoiceDictionaryEntry {
   return { term, heardAs, source: "manual", addedAt: 0 };
+}
+
+function learned(term: string, heardAs: string[], addedAt = 0): VoiceDictionaryEntry {
+  return { term, heardAs, source: "learned", addedAt };
 }
 
 function rewriterFor(...entries: VoiceDictionaryEntry[]) {
@@ -49,6 +61,18 @@ describe("collectHeardAsRules", () => {
     );
   });
 
+  it("fires a heard form moved to a newer entry for that entry, not the one it left", () => {
+    const entries = [entry("Zustand", ["zoo stand"]), entry("Daintree")];
+    const refused = addDictionaryEntry(entries, { term: "Zoostand", heardAs: ["Zoo  Stand"] }, 1);
+    expect(refused).toBe(entries);
+    const moved = addDictionaryEntry(
+      entries,
+      { term: "Zoostand", heardAs: ["Zoo  Stand"], heardAsConflict: "move" },
+      1
+    );
+    expect(rewriterFor(...moved)("use zoo stand here")).toBe("use Zoostand here");
+  });
+
   it("collapses spacing and drops forms with no letters or digits", () => {
     expect(collectHeardAsRules([entry("Zustand", ["  zoo   stand ", "--", "  "])])).toEqual([
       { heard: "zoo stand", term: "Zustand" },
@@ -79,6 +103,42 @@ describe("collectHeardAsRules", () => {
 
   it("has no rules for terms without heard-as forms", () => {
     expect(collectHeardAsRules([entry("React"), entry("Go")])).toEqual([]);
+  });
+});
+
+describe("a correction learned onto an everyday word", () => {
+  const sentence = "I just want to check";
+
+  function learnFrom(baseline: string, edited: string): VoiceDictionaryEntry[] {
+    const candidates = findCorrectionCandidates(baseline, edited);
+    const suggestedDictionary = mergeSuggestions(candidates, [], [], 1) ?? [];
+    const [suggestion] = suggestedDictionary;
+    if (!suggestion) throw new Error(`No suggestion from "${baseline}" → "${edited}"`);
+    return acceptSuggestion({ dictionary: [], suggestedDictionary }, suggestion.word, 2).dictionary;
+  }
+
+  it("still teaches the term once accepted, without rewriting the word it was heard as", () => {
+    const dictionary = learnFrom("run just", "run Jest");
+    expect(dictionary).toEqual([learned("Jest", [], 2)]);
+    expect(rewriterFor(...dictionary)(sentence)).toBe(sentence);
+    expect(dictionaryTerms(dictionary)).toEqual(["Jest"]);
+  });
+
+  it("keeps the rule a learned phrase that isn't everyday English gets", () => {
+    const dictionary = learnFrom("add zoo stand", "add Zustand");
+    expect(rewriterFor(...dictionary)("use zoo stand")).toBe("use Zustand");
+  });
+
+  it("keeps the rule when the user types the everyday word in by hand, on any entry", () => {
+    const typed = "I Jest want to check";
+    expect(rewriterFor(entry("Jest", ["just"]))(sentence)).toBe(typed);
+    const accepted = learnFrom("run just", "run Jest");
+    const added = addDictionaryEntry(accepted, { term: "jest", heardAs: ["just"] }, 3);
+    expect(rewriterFor(...added)(sentence)).toBe(typed);
+    const replaced = updateDictionaryEntry([learned("Jest", ["jessed"])], "Jest", {
+      heardAs: ["just"],
+    });
+    expect(rewriterFor(...replaced)(sentence)).toBe(typed);
   });
 });
 

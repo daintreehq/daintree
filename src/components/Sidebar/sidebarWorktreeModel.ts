@@ -90,6 +90,8 @@ export interface SidebarWorktreeFilterResult {
   filteredWorktrees: WorktreeState[];
   groupedSections: GroupedSection<WorktreeState>[] | null;
   hasResultsWithoutQuickState: boolean;
+  /** How many worktrees the quick-state tab alone is hiding; 0 when it is "all". */
+  resultsWithoutQuickStateCount: number;
   totalCount: number;
 }
 
@@ -129,7 +131,7 @@ export function filterSidebarWorktrees({
     customTitles: worktreeCustomTitles,
   };
 
-  let withoutQuickStateMatch = false;
+  let withoutQuickStateCount = 0;
   const filtered = nonMainWorktrees.filter((worktree) => {
     const derived = derivedMetaMap.get(worktree.id) ?? {
       terminalCount: 0,
@@ -148,20 +150,20 @@ export function filterSidebarWorktrees({
     // Counterfactual: would this worktree be visible if the quick state
     // filter were "all"? Mirrors the same precedence below (active /
     // waiting bypasses → matchesFilters), with quickStateFilter forced
-    // to "all". Short-circuit once we find any match — only the boolean
-    // matters for the empty-state branch.
-    if (!withoutQuickStateMatch && quickStateFilter !== "all") {
+    // to "all". Counted rather than short-circuited: an empty tab that is
+    // hiding a search's matches says how many it is hiding.
+    if (quickStateFilter !== "all") {
       if (alwaysShowActive && isActive && !hasActiveQuery && !hasFacetFiltersActive) {
-        withoutQuickStateMatch = true;
+        withoutQuickStateCount++;
       } else if (
         alwaysShowWaiting &&
         derived.hasWaitingAgent &&
         !hasActiveQuery &&
         !hasFacetFiltersActive
       ) {
-        withoutQuickStateMatch = true;
+        withoutQuickStateCount++;
       } else if (matchesFilters(worktree, filters, derived, isActive, devServerSessions)) {
-        withoutQuickStateMatch = true;
+        withoutQuickStateCount++;
       }
     }
 
@@ -220,7 +222,8 @@ export function filterSidebarWorktrees({
     return {
       filteredWorktrees: sorted,
       groupedSections: groupByType(sorted, orderBy, validPinnedWorktrees),
-      hasResultsWithoutQuickState: withoutQuickStateMatch,
+      hasResultsWithoutQuickState: withoutQuickStateCount > 0,
+      resultsWithoutQuickStateCount: withoutQuickStateCount,
       totalCount: nonMainWorktrees.length,
     };
   }
@@ -228,7 +231,8 @@ export function filterSidebarWorktrees({
   return {
     filteredWorktrees: sorted,
     groupedSections: null,
-    hasResultsWithoutQuickState: withoutQuickStateMatch,
+    hasResultsWithoutQuickState: withoutQuickStateCount > 0,
+    resultsWithoutQuickStateCount: withoutQuickStateCount,
     totalCount: nonMainWorktrees.length,
   };
 }

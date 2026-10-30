@@ -41,7 +41,7 @@ describe("HostCard", () => {
     expect(fact(card, "Memory")).toBe("4 GB of 16 GB");
     expect(card.textContent).toContain("1 working · 2 waiting · 3 idle (observed)");
     expect(fact(card, "Link")).toBe("12 ms");
-    expect(fact(card, "Driving")).toBe("Driven from greg-mbp");
+    expect(fact(card, "Control")).toBe("greg-mbp has control");
     expect(screen.getAllByTestId("host-sparkline")).toHaveLength(2);
   });
 
@@ -74,8 +74,8 @@ describe("HostCard", () => {
       ],
     });
     render(<HostCard row={makeRow({ summary })} history={[summary]} onSwitch={() => {}} />);
-    expect(fact(screen.getByTestId("host-overview-card"), "Driving")).toBe(
-      "Driven from studio-02 and greg-mbp (away)"
+    expect(fact(screen.getByTestId("host-overview-card"), "Control")).toBe(
+      "studio-02 and greg-mbp (away) have control"
     );
   });
 
@@ -251,6 +251,22 @@ describe("HostCard", () => {
       ctrlKey: true,
     });
     expect(onOpenProject).toHaveBeenCalledWith("p7", true);
+  });
+
+  it("reserves the emoji slot on every row once any project has one", () => {
+    const render1 = (projects: { id: string; name: string; path: string; emoji?: string }[]) => {
+      const { unmount } = render(
+        <HostCard row={makeRow({})} history={[]} onSwitch={() => {}} projects={projects} />
+      );
+      const slots = screen
+        .getByTestId("host-overview-projects")
+        .querySelectorAll("li button > span[aria-hidden]");
+      unmount();
+      return slots.length;
+    };
+    const plain = { id: "a", name: "alpha", path: "/a" };
+    expect(render1([plain, { id: "b", name: "beta", path: "/b", emoji: "🌲" }])).toBe(2);
+    expect(render1([plain])).toBe(0);
   });
 
   it("says a host has no projects yet, and lists nothing it hasn't read", () => {

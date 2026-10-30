@@ -172,6 +172,9 @@ describe("buildVoiceSessionSnapshot", () => {
     useVoiceRecordingStore.setState({ micNotice: silent });
     expect(build()?.micNotice).toEqual({ kind: "silent", bluetooth: true });
 
+    useVoiceRecordingStore.setState({ micNotice: { ...silent, appReplaced: true } });
+    expect(build()?.micNotice).toEqual({ kind: "silent", bluetooth: true, appReplaced: true });
+
     useVoiceRecordingStore.setState({ micNotice: { ...silent, target: { panelId: "p-2" } } });
     expect(build()?.micNotice).toBeNull();
 

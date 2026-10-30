@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { beforeEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { applyFleetBroadcastResult, broadcastFleetRawInput } from "../fleetRawInputBroadcast";
-import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { armCrossHostTarget } from "../crossHostFleet";
+import { selectFleetMemberCount, useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
@@ -84,6 +85,7 @@ function resetStores(): void {
     lastArmedId: null,
     broadcastSignal: 0,
     previewArmedIds: new Set<string>(),
+    crossHostTargets: [],
   });
   useFleetFailureStore.getState().clear();
   useFleetBroadcastProgressStore.setState({ isActive: false });
@@ -169,6 +171,68 @@ describe("broadcastFleetRawInput", () => {
     expect(broadcastFleetRawInput("grid-a", "ls\r")).toBe(true);
 
     expect(broadcastMock).toHaveBeenCalledWith(["grid-a", "grid-b"], "ls\r", false);
+  });
+
+  it("leaves a locked armed pane out of raw input and restores it once unlocked (#14964)", () => {
+    seedPanels([makeTerminal("a"), makeTerminal("b"), makeTerminal("c", { isInputLocked: true })]);
+    useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+
+    expect(broadcastFleetRawInput("a", "x")).toBe(true);
+    expect(broadcastMock).toHaveBeenLastCalledWith(["a", "b"], "x", false);
+    expect(notifyUserInputMock).not.toHaveBeenCalledWith("c", "x");
+
+    usePanelStore.setState((s) => ({
+      panelsById: { ...s.panelsById, c: makeTerminal("c", { isInputLocked: false }) },
+    }));
+    expect(broadcastFleetRawInput("a", "y")).toBe(true);
+    expect(broadcastMock).toHaveBeenLastCalledWith(["a", "b", "c"], "y", false);
+  });
+
+  it("never fans out raw input from a locked origin", () => {
+    seedPanels([makeTerminal("a", { isInputLocked: true }), makeTerminal("b"), makeTerminal("c")]);
+    useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+    const before = useFleetArmingStore.getState().broadcastSignal;
+
+    expect(broadcastFleetRawInput("a", "x")).toBe(false);
+    expect(broadcastMock).not.toHaveBeenCalled();
+    expect(notifyUserInputMock).not.toHaveBeenCalled();
+    expect(useFleetArmingStore.getState().broadcastSignal).toBe(before);
+  });
+
+  it("types only locally when the only armed peer is locked", () => {
+    seedPanels([makeTerminal("a"), makeTerminal("b", { isInputLocked: true })]);
+    useFleetArmingStore.getState().armIds(["a", "b"]);
+
+    expect(broadcastFleetRawInput("a", "x")).toBe(false);
+    expect(broadcastMock).not.toHaveBeenCalled();
+    expect(useFleetArmingStore.getState().armedIds.has("b")).toBe(true);
+  });
+
+  it("keeps raw input to this view's panes when agents on another host are armed (#14957)", () => {
+    seedPanels([makeTerminal("t1"), makeTerminal("t2")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    armCrossHostTarget({ hostId: "mini", hostName: "mini", terminalId: "r1", title: "Remote" });
+
+    expect(selectFleetMemberCount(useFleetArmingStore.getState())).toBe(3);
+
+    expect(broadcastFleetRawInput("t1", "\r")).toBe(true);
+
+    expect(broadcastMock.mock.calls).toEqual([[["t1", "t2"], "\r", false]]);
+    expect(notifyUserInputMock.mock.calls.map(([id]) => id)).toEqual(["t2"]);
+    expect(notifyEnterPressedMock.mock.calls.map(([id]) => id)).toEqual(["t1", "t2"]);
+  });
+
+  it("types into the pane alone when its only armed peer is on another host (#14957)", () => {
+    seedPanels([makeTerminal("t1")]);
+    useFleetArmingStore.getState().armIds(["t1"]);
+    armCrossHostTarget({ hostId: "mini", hostName: "mini", terminalId: "r1", title: "Remote" });
+    const before = useFleetArmingStore.getState().broadcastSignal;
+    expect(selectFleetMemberCount(useFleetArmingStore.getState())).toBe(2);
+
+    expect(broadcastFleetRawInput("t1", "x")).toBe(false);
+
+    expect(broadcastMock).not.toHaveBeenCalled();
+    expect(useFleetArmingStore.getState().broadcastSignal).toBe(before);
   });
 
   it("returns false for empty raw input", () => {

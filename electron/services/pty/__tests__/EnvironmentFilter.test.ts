@@ -149,6 +149,34 @@ describe("filterEnvironment", () => {
     expect(result).toEqual({ PATH: "/usr/bin" });
   });
 
+  it("drops the markers of a Claude session that launched Daintree", () => {
+    const result = filterEnvironment({
+      PATH: "/usr/bin",
+      CLAUDECODE: "1",
+      CLAUDE_CODE_CHILD_SESSION: "1",
+      CLAUDE_CODE_SESSION_ID: "75d39610-ed78-48db-a1d1-1dc2a12ddc6d",
+      CLAUDE_CODE_SESSION_ATTENDED: "1",
+      CLAUDE_CODE_ENTRYPOINT: "cli",
+      CLAUDE_CODE_EXECPATH: "/Users/u/.local/share/claude/versions/2.1.314",
+      CLAUDE_CODE_MESSAGING_SOCKET: "/tmp/cc-socks/85234.sock",
+      CLAUDE_PID: "85234",
+      CLAUDE_EFFORT: "high",
+      AI_AGENT: "claude-code",
+    });
+
+    expect(result).toEqual({ PATH: "/usr/bin" });
+  });
+
+  it("keeps the user's own Claude Code configuration", () => {
+    const env = {
+      CLAUDE_CODE_MAX_OUTPUT_TOKENS: "20000",
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      CLAUDE_CODE_FORCE_SESSION_PERSISTENCE: "1",
+    };
+
+    expect(filterEnvironment(env)).toEqual(env);
+  });
+
   it("keeps a differently-cased variable on POSIX, where it is a different variable", () => {
     if (process.platform === "win32") return;
     expect(filterEnvironment({ node_env: "custom" })).toEqual({ node_env: "custom" });

@@ -19,6 +19,7 @@ import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeV
 import { FileSourceMetadataStrip } from "@/components/FileViewer/FileSourceMetadataStrip";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
+import { ZoomableImage } from "@/components/FileViewer/ZoomableImage";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
 import { FileAudioPreview } from "@/components/FileViewer/FileAudioPreview";
 import { FilePdfPreview } from "@/components/FileViewer/FilePdfPreview";
@@ -32,6 +33,7 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { NO_WATCHED_PATHS, useExternalChangeTick } from "@/hooks/useExternalChangeTick";
 import { copyWithToast } from "@/lib/copyWithToast";
+import { SVG_DRAW_ERROR } from "@/lib/svg";
 import { lookupLocalChangeStatus } from "./localChangeStatus";
 import { useHeightHold } from "./useHeightHold";
 import type { ProjectSurfaceChoice } from "@shared/types/plugin";
@@ -159,7 +161,14 @@ export function FilePane({
   const diffViewType = usePreferencesStore((state) => state.diffViewType);
   const diffWrapLines = usePreferencesStore((state) => state.diffWrapLines);
 
-  const heightHold = useHeightHold();
+  // Destructured: handing one field of the hook's object to `ref` makes the
+  // compiler read every other field of it as a ref read during render.
+  const {
+    bodyRef: heightHoldBodyRef,
+    hold: holdHeight,
+    cancel: cancelHeightHold,
+    handleRendered: handleHeightHoldRendered,
+  } = useHeightHold();
 
   const filePath = panel?.filePath;
   const isMarkdown = filePath !== undefined && isMarkdownFilePath(filePath);
@@ -230,12 +239,11 @@ export function FilePane({
         if (!diffWorktreePath) return undefined;
         for (const worktree of state.worktrees.values()) {
           if (normalize(worktree.path) !== normalize(diffWorktreePath)) continue;
-          return (
-            Math.max(
-              worktree.worktreeChanges?.lastUpdated ?? 0,
-              state.workingTreeChangedAtById.get(worktree.id) ?? 0
-            ) || undefined
+          const tick = Math.max(
+            worktree.worktreeChanges?.lastUpdated ?? 0,
+            state.workingTreeChangedAtById.get(worktree.id) ?? 0
           );
+          return tick > 0 ? tick : undefined;
         }
         return undefined;
       },
@@ -426,21 +434,21 @@ export function FilePane({
       // the rendered document's onRendered.
       const collapsesOnEntry = mode === "diff" || (mode === "rendered" && isMarkdown);
       if (location === "dialog" && viewMode === "source" && collapsesOnEntry) {
-        heightHold.hold();
+        holdHeight();
       } else {
-        heightHold.cancel();
+        cancelHeightHold();
       }
       setFileViewMode(id, mode);
     },
-    [location, isMarkdown, viewMode, heightHold, setFileViewMode, id]
+    [location, isMarkdown, viewMode, holdHeight, cancelHeightHold, setFileViewMode, id]
   );
 
   // A file swapped underneath an active pin would hold the new document at the
   // old one's height, and a pane promoted out of the dialog would carry a
   // content-sized floor into a layout-sized host.
   useEffect(() => {
-    heightHold.cancel();
-  }, [filePath, location, heightHold]);
+    cancelHeightHold();
+  }, [filePath, location, cancelHeightHold]);
 
   // Only fetch while Diff is the live mode; a null subject also invalidates any
   // response still in flight from a mode the user has since left.
@@ -462,8 +470,8 @@ export function FilePane({
   // The diff has no onRendered of its own; its first content commit (including
   // the ERROR sentinel) is the equivalent signal for releasing a dialog pin.
   useEffect(() => {
-    if (viewMode === "diff" && diffContent !== undefined) heightHold.handleRendered();
-  }, [viewMode, diffContent, heightHold]);
+    if (viewMode === "diff" && diffContent !== undefined) handleHeightHoldRendered();
+  }, [viewMode, diffContent, handleHeightHoldRendered]);
 
   // The live signal for a file no worktree contains: a scratch folder, a
   // worktree-less project, a path picked from anywhere else on disk. Polled
@@ -746,7 +754,7 @@ export function FilePane({
     >
       <FileContentContextMenu items={fileMenuItems}>
         <div
-          ref={heightHold.bodyRef}
+          ref={heightHoldBodyRef}
           className={`flex-1 min-h-0 overflow-auto bg-surface-canvas${
             viewMode === "diff" ? " diff-scroll-root" : ""
           }`}
@@ -844,7 +852,26 @@ export function FilePane({
           {filePath &&
             !showPluginViewer &&
             viewMode !== "diff" &&
-            (loadState === "image" || loadState === "svg") && (
+            loadState === "image" &&
+            location !== "dialog" && (
+              // `cacheBust` rather than a new `key`: a rewritten image reloads its
+              // bytes in place, so the reader keeps the zoom and pan they were
+              // inspecting it at.
+              <ZoomableImage
+                filePath={filePath}
+                rootPath={effectiveRootPath}
+                alt={fileName ?? filePath}
+                cacheBust={String(reloadNonce)}
+                onError={(error) => failPreview(previewErrorCode(error, "NOT_FOUND"))}
+              />
+            )}
+
+          {/* SVG, and the temporary viewer dialog, stay fit-only: a dialog is a
+              glance at a file, not a place to inspect pixels. */}
+          {filePath &&
+            !showPluginViewer &&
+            viewMode !== "diff" &&
+            (loadState === "svg" || (loadState === "image" && location === "dialog")) && (
               <FileImagePreview
                 filePath={filePath}
                 rootPath={effectiveRootPath}
@@ -852,7 +879,11 @@ export function FilePane({
                 sanitizedSvg={loadState === "svg" ? sanitizedSvg : null}
                 cacheBust={String(reloadNonce)}
                 onError={(error) => {
-                  failPreview(previewErrorCode(error, "NOT_FOUND"));
+                  // Drawn from markup already read, so an SVG's failure is the
+                  // markup's: the sanitizer rejection's surface, not a lost file.
+                  if (loadState === "svg")
+                    failPreview("INVALID_PATH", error?.title ?? SVG_DRAW_ERROR);
+                  else failPreview(previewErrorCode(error, "NOT_FOUND"));
                 }}
                 maxHeightClassName="max-h-full"
               />
@@ -974,7 +1005,7 @@ export function FilePane({
                 wrapLines={markdownWrapLines}
                 fontSize={markdownFontSize}
                 cacheBust={String(reloadNonce)}
-                onRendered={heightHold.handleRendered}
+                onRendered={handleHeightHoldRendered}
               />
             ) : viewMode === "rendered" && isHtml ? (
               // Rendered HTML fills the pane in a sandboxed iframe rather than the

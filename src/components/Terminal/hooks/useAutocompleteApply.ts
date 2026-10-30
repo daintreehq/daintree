@@ -3,6 +3,7 @@ import { EditorSelection } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import type { AutocompleteItem } from "../AutocompleteMenu";
 import { getActiveCompletionContext, type ActiveCompletionContext } from "../hybridInputParsing";
+import type { DraftSpan } from "../promptTemplateCompletion";
 
 interface LatestRefShape {
   autocompleteItems: AutocompleteItem[];
@@ -18,7 +19,10 @@ interface UseAutocompleteApplyParams {
     nextValue: string,
     options?: { selection?: EditorSelection; focus?: boolean }
   ) => void;
-  sendText: (text: string) => void;
+  /** Runs an execute row's completed draft; where it goes is the host's call. */
+  onExecute: (text: string) => void;
+  /** A prompt template row, by key, with the token it was picked with. */
+  onPickTemplate: (templateKey: string, token: DraftSpan) => void;
   setActiveCompletionContext: (value: ActiveCompletionContext | null) => void;
   setSelectedIndex: (value: number) => void;
 }
@@ -33,7 +37,8 @@ function applyAutocompleteItem(
   latestRef: React.RefObject<LatestRefShape | null>,
   lastQueryRef: React.RefObject<string>,
   applyEditorValue: UseAutocompleteApplyParams["applyEditorValue"],
-  sendText: UseAutocompleteApplyParams["sendText"],
+  onExecute: UseAutocompleteApplyParams["onExecute"],
+  onPickTemplate: UseAutocompleteApplyParams["onPickTemplate"],
   setActiveCompletionContext: UseAutocompleteApplyParams["setActiveCompletionContext"],
   setSelectedIndex: UseAutocompleteApplyParams["setSelectedIndex"]
 ) {
@@ -54,6 +59,20 @@ function applyAutocompleteItem(
   );
   if (!ctx) return;
 
+  const clear = () => {
+    setActiveCompletionContext(null);
+    setSelectedIndex(0);
+    lastQueryRef.current = "";
+  };
+
+  // Every way of picking a template does what the template does; none of them
+  // types its title into the draft.
+  if (item.template) {
+    onPickTemplate(item.template.key, { from: ctx.start, to: ctx.tokenEnd });
+    clear();
+    return;
+  }
+
   const action = mode === "enter" ? (item.enterAction ?? "insert") : "insert";
 
   const before = currentValue.slice(0, ctx.start);
@@ -63,14 +82,8 @@ function applyAutocompleteItem(
   const token = shouldAppendSpace ? `${item.insertText} ` : item.insertText;
   const nextValue = `${before}${token}${after}`;
 
-  const clear = () => {
-    setActiveCompletionContext(null);
-    setSelectedIndex(0);
-    lastQueryRef.current = "";
-  };
-
   if (action === "execute") {
-    sendText(nextValue);
+    onExecute(nextValue);
     clear();
     return;
   }
@@ -88,7 +101,8 @@ export function useAutocompleteApply({
   latestRef,
   lastQueryRef,
   applyEditorValue,
-  sendText,
+  onExecute,
+  onPickTemplate,
   setActiveCompletionContext,
   setSelectedIndex,
 }: UseAutocompleteApplyParams) {
@@ -105,7 +119,8 @@ export function useAutocompleteApply({
         latestRef,
         lastQueryRef,
         applyEditorValue,
-        sendText,
+        onExecute,
+        onPickTemplate,
         setActiveCompletionContext,
         setSelectedIndex
       );
@@ -116,7 +131,8 @@ export function useAutocompleteApply({
       latestRef,
       lastQueryRef,
       applyEditorValue,
-      sendText,
+      onExecute,
+      onPickTemplate,
       setActiveCompletionContext,
       setSelectedIndex,
     ]
@@ -131,7 +147,8 @@ export function useAutocompleteApply({
         latestRef,
         lastQueryRef,
         applyEditorValue,
-        sendText,
+        onExecute,
+        onPickTemplate,
         setActiveCompletionContext,
         setSelectedIndex
       ),
@@ -140,7 +157,8 @@ export function useAutocompleteApply({
       latestRef,
       lastQueryRef,
       applyEditorValue,
-      sendText,
+      onExecute,
+      onPickTemplate,
       setActiveCompletionContext,
       setSelectedIndex,
     ]

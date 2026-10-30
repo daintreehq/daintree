@@ -141,13 +141,8 @@ describe("settings header owner chip", () => {
 });
 
 describe("settings header owner chip with another machine picked (#14706)", () => {
-  it("names the picked host over its work settings, even from a local window", () => {
-    render(<SettingsOwnerHeaderChip tab="general" picked="studio-03" />);
-    expect(screen.getByText("Settings on studio-03")).toBeTruthy();
-  });
-
   it("says a device page is this machine's own, even from a local window", () => {
-    render(<SettingsOwnerHeaderChip tab="keyboard" picked={null} />);
+    render(<SettingsOwnerHeaderChip tab="keyboard" devicePagePicked />);
     expect(screen.getByText("This Mac")).toBeTruthy();
   });
 

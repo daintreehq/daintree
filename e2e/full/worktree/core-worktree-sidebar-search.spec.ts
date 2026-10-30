@@ -47,7 +47,10 @@ test.describe.serial("Core: Worktree Sidebar Search", () => {
     });
     await expect(sidebar.locator("[data-worktree-branch]")).toHaveCount(0);
 
-    await sidebar.getByRole("button", { name: "Show all worktrees" }).click();
+    await sidebar
+      .getByRole("button", { name: "Clear search", exact: true })
+      .filter({ hasText: "Clear search" })
+      .click();
     await expect(searchInput).toHaveValue("");
     await expect(mainCard).toBeVisible({ timeout: T_MEDIUM });
     await expect(featureCard).toBeVisible({ timeout: T_MEDIUM });

@@ -94,6 +94,11 @@ interface RowModel {
   /** The condition's comparison when its field offers it. */
   allowedOp: PluginFilterOperator | undefined;
   problem: string | undefined;
+  /**
+   * A comparison that takes a value has none yet: not wrong, but the filter
+   * matches nothing until it is finished, so the row says what it needs.
+   */
+  unfinished: string | undefined;
 }
 
 function readRow(entry: unknown, fields: ReadonlyMap<string, FilterFieldModel>): RowModel {
@@ -105,6 +110,7 @@ function readRow(entry: unknown, fields: ReadonlyMap<string, FilterFieldModel>):
       field: undefined,
       allowedOp: undefined,
       problem: "This condition can't be read",
+      unfinished: undefined,
     };
   }
   const fieldId = str(field(entry, "field"));
@@ -125,7 +131,11 @@ function readRow(entry: unknown, fields: ReadonlyMap<string, FilterFieldModel>):
         ? `This value isn't available for ${model.label}`
         : `This value isn't valid for ${model.label}`;
   }
-  return { fieldId, op, value, field: model, allowedOp, problem };
+  const unfinished =
+    model && allowedOp && !isNullaryOperator(allowedOp) && value === undefined
+      ? `${model.type === "text" || model.type === "number" ? "Enter" : "Choose"} a value for ${model.label}`
+      : undefined;
+  return { fieldId, op, value, field: model, allowedOp, problem, unfinished };
 }
 
 // One empty list for every unreadable value: a fresh one per render would
@@ -360,7 +370,7 @@ function KitFilterBuilder({
   }
 
   const [focusTarget, setFocusTarget] = useState<
-    { key: string; part: "field" | "remove" } | "add" | null
+    { key: string; part: "field" | "value" | "remove" } | "add" | null
   >(null);
   useLayoutEffect(() => {
     const node = rootRef.current;
@@ -374,6 +384,11 @@ function KitFilterBuilder({
           );
     // The row's first control is its field picker.
     const fieldPicker = row?.querySelector<HTMLElement>(FOCUSABLE);
+    const valueControl = row?.querySelector<HTMLElement>(
+      FOCUSABLE.split(", ")
+        .map((selector) => `[data-filter-value] ${selector}`)
+        .join(", ")
+    );
     const remove = row?.querySelector<HTMLElement>("[data-filter-remove]:not(:disabled)");
     const add = node.querySelector<HTMLElement>("[data-filter-add]:not(:disabled)");
     const order =
@@ -381,7 +396,9 @@ function KitFilterBuilder({
         ? [add]
         : focusTarget.part === "remove"
           ? [remove, fieldPicker, add]
-          : [fieldPicker, remove];
+          : focusTarget.part === "value"
+            ? [valueControl, fieldPicker, remove]
+            : [fieldPicker, remove];
     (order.find((element) => element != null) ?? node).focus();
   }, [focusTarget]);
 
@@ -408,7 +425,8 @@ function KitFilterBuilder({
     if (!first || op === undefined || inert) return;
     const key = newRowKey();
     emit([...conditions, { field: first.id, op }], [...keys, key]);
-    setFocusTarget({ key, part: "field" });
+    // Straight to what the new row still needs, which its hint names.
+    setFocusTarget({ key, part: "value" });
   };
   const removeAt = (index: number) => {
     if (inert) return;
@@ -487,7 +505,10 @@ function KitFilterBuilder({
           {conditions.map((entry, index) => {
             const key = keys[index] ?? `#${index}`;
             const row = readRow(entry, schema);
-            const errorId = row.problem === undefined ? undefined : `${baseId}${key}-error`;
+            const errorId =
+              row.problem === undefined && row.unfinished === undefined
+                ? undefined
+                : `${baseId}${key}-error`;
             const ordinal = index + 1;
             const model = row.field;
             return (
@@ -495,6 +516,7 @@ function KitFilterBuilder({
                 key={key}
                 data-filter-row={key}
                 data-invalid={row.problem === undefined ? undefined : ""}
+                data-unfinished={row.unfinished === undefined ? undefined : ""}
                 role="group"
                 aria-label={`Condition ${ordinal}`}
                 className="flex min-w-0 flex-col gap-1"
@@ -530,12 +552,14 @@ function KitFilterBuilder({
                     />
                   ) : null}
                   {model && row.allowedOp && !isNullaryOperator(row.allowedOp) ? (
-                    <ValueControl
-                      row={{ ...row, field: model }}
-                      disabled={inert}
-                      describedBy={errorId}
-                      onValue={(next) => setValue(index, row, next)}
-                    />
+                    <span data-filter-value="" className="contents">
+                      <ValueControl
+                        row={{ ...row, field: model }}
+                        disabled={inert}
+                        describedBy={errorId}
+                        onValue={(next) => setValue(index, row, next)}
+                      />
+                    </span>
                   ) : null}
                   <Button
                     variant="ghost"
@@ -548,9 +572,14 @@ function KitFilterBuilder({
                     <X aria-hidden="true" />
                   </Button>
                 </div>
-                {row.problem === undefined ? null : (
+                {row.problem !== undefined ? (
                   <InlineError id={errorId}>{row.problem}</InlineError>
-                )}
+                ) : row.unfinished !== undefined ? (
+                  // A row just added is unfinished, not wrong: a quiet line, no error.
+                  <p id={errorId} className="m-0 text-xs text-text-secondary">
+                    {row.unfinished}
+                  </p>
+                ) : null}
               </li>
             );
           })}
@@ -810,6 +839,15 @@ function SavedViewsControl({
     : store.activeId;
   const active = views.find((view) => view.id === activeId) ?? null;
   const now = readSavedViewState(current);
+  // A condition still waiting for its value matches nothing, so a view saved
+  // with one would show nothing every time it is chosen.
+  const unfinished =
+    now !== null &&
+    now.filter.conditions.some(
+      (condition) => condition.value === undefined && !isNullaryOperator(condition.op)
+    );
+  const canSave = now !== null && !unfinished;
+  const unfinishedId = useId();
   // Choices that cannot be read differ from the view by definition: saving
   // them is refused, but putting the view back stays possible.
   const modified = active !== null && (now === null || !sameSavedViewState(active, now));
@@ -856,7 +894,7 @@ function SavedViewsControl({
     if (view.id !== activeId) commitActive(view.id);
   };
   const saveChanges = () => {
-    if (!active || !now || inert) return;
+    if (!active || !now || !canSave || inert) return;
     commitViews(
       views.map((view) =>
         view.id === active.id ? { id: view.id, name: view.name, ...copyState(now) } : view
@@ -883,6 +921,11 @@ function SavedViewsControl({
       commitViews(views.map((view) => (view.id === naming.target ? { ...view, name } : view)));
     } else {
       if (!now) return closeNaming();
+      // The filter can change while the name is typed.
+      if (!canSave) {
+        setNameError("Finish the filter before saving");
+        return;
+      }
       const id = newViewId(views);
       commitViews([...views, { id, name, ...copyState(now) }]);
       commitActive(id);
@@ -921,7 +964,13 @@ function SavedViewsControl({
             <ChevronDown aria-hidden="true" className="shrink-0 text-text-secondary" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent {...owner} className={overlayZ} align="start" aria-label={label}>
+        <DropdownMenuContent
+          {...owner}
+          className={overlayZ}
+          align="start"
+          aria-label={label}
+          aria-describedby={unfinished ? unfinishedId : undefined}
+        >
           {views.length > 0 ? (
             <>
               <DropdownMenuRadioGroup value={activeId ?? ""} onValueChange={choose}>
@@ -936,12 +985,17 @@ function SavedViewsControl({
               <DropdownMenuSeparator />
             </>
           ) : null}
+          {unfinished ? (
+            <p id={unfinishedId} className="m-0 px-2.5 py-1.5 text-xs text-text-secondary">
+              Finish the filter to save it
+            </p>
+          ) : null}
           {active && modified ? (
-            <DropdownMenuItem disabled={!now} onSelect={saveChanges}>
+            <DropdownMenuItem disabled={!canSave} onSelect={saveChanges}>
               Save changes
             </DropdownMenuItem>
           ) : null}
-          <DropdownMenuItem disabled={!now} onSelect={() => openNaming("new")}>
+          <DropdownMenuItem disabled={!canSave} onSelect={() => openNaming("new")}>
             {active ? "Save as new view…" : "Save view…"}
           </DropdownMenuItem>
           {active && modified ? (

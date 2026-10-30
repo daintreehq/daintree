@@ -912,8 +912,8 @@ export interface ProjectSettings {
   /**
    * Daintree MCP tool set exposed to agents launched in this project's worktrees.
    * - `off` (default): no MCP server injected
-   * - `core`: orchestration — create worktrees, launch agents, prompt, read, wait on, move and close the terminals the agent's own session opened
-   * - `full`: core + recipes, workflows, project checks, forge and git reads, context tools, and diagnostics
+   * - `core`: orchestration — create worktrees, launch agents, prompt, read, wait on, move and close the terminals the agent's own session opened, and read issues and PRs
+   * - `full`: core + recipes, workflows, project checks, git activity, context tools, and diagnostics
    */
   daintreeMcpTier?: DaintreeMcpTier;
   /**

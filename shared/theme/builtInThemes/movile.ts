@@ -239,6 +239,12 @@ export const theme: BuiltInThemeSource = {
     "pr-merged": "#80709D",
     "pr-closed": "#A9655A",
     "pr-draft": "#757A7E",
+    // Solid so the field edge clears 3:1 on every surface a field sits on
+    // (3.37–3.66:1); the alpha `border-strong` it used to follow measured
+    // 1.23–1.29:1. A step above what the surfaces alone need, for the typed-name
+    // confirm field: the 10% `status-danger` well it sits in is lighter than
+    // this panel (3.07:1 there).
+    "border-input": "#726757",
     "focus-ring": "rgba(211,204,192,0.42)",
     // Category hues label branches, worktrees, action categories and panel
     // kinds. The engine hands them out at full strength — the dark defaults
@@ -340,7 +346,6 @@ export const theme: BuiltInThemeSource = {
     "dock-bg": "#070605",
     "dock-border": "rgba(201,183,154,0.12)",
 
-    "dialog-header-bg": "rgba(7,6,5,0.60)",
     "settings-dialog-bg": "#0E0C0B",
     "settings-card-bg": "#15120F",
     "settings-list-item-bg": "#15120F",

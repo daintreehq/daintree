@@ -5,6 +5,9 @@ import { fireEvent, render, waitFor, within } from "@testing-library/react";
 import type { CanopyMode, CanopyModelInfo, CanopySnapshot } from "@shared/types/ipc/canopy";
 import { useCanopyStore } from "@/store/canopyStore";
 import { CanopySettingsTab } from "../CanopySettingsTab";
+import { getSettingsTabEntry } from "../settingsTabRegistry";
+import { SETTINGS_SEARCH_INDEX } from "../settingsSearchIndex";
+import { filterSettings } from "../settingsSearchUtils";
 
 // The real dialog pulls in the app's icons and portals; what matters here is what it is given.
 vi.mock("@/components/ui/ConfirmDialog", () => ({
@@ -217,6 +220,31 @@ describe("CanopySettingsTab", () => {
       // Deleting while it was on is the one thing that turns it off, and the page shows it.
       expect(useCanopyStore.getState().mode).toBe("unset");
       unmount();
+    }
+  });
+
+  it("is searched for by what the page says and shows, not by the hosted reader it replaced", () => {
+    const sections = getSettingsTabEntry("canopy")?.sections ?? [];
+    expect(sections.length).toBeGreaterThan(0);
+    expect(sections.find((s) => s.id === "canopy-read-terminals")?.description).toBe(CANOPY_LOCAL);
+    for (const section of sections) {
+      expect(`${section.description} ${section.keywords?.join(" ")}`).not.toMatch(
+        /servers?\b|paid|beta|plan\b|pricing|subscription/i
+      );
+    }
+
+    // Search lands in a layout effect, before the model's info has loaded, and with
+    // Canopy off: each result's row has to be there on that first render.
+    install("unset");
+    const { container } = render(<CanopySettingsTab />);
+    const rendered = new Set([...container.querySelectorAll("[id]")].map((el) => el.id));
+    expect(sections.map((s) => s.id).filter((id) => !rendered.has(id))).toEqual([]);
+
+    for (const query of ["model", "download model", "delete model"]) {
+      expect(
+        filterSettings(SETTINGS_SEARCH_INDEX, query).some((r) => r.tab === "canopy"),
+        query
+      ).toBe(true);
     }
   });
 });

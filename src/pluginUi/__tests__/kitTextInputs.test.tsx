@@ -16,7 +16,9 @@ import {
   listErrors,
   parseAssignments,
 } from "@/components/PluginKit/PluginKitTextInputs";
+import { setPluginKitHost } from "@/components/PluginKit/kitHost";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { BUILT_IN_APP_SCHEMES, blendOverBackground, contrastRatio, parseRgba } from "@shared/theme";
 import { keybindingService } from "@/services/KeybindingService";
 
 beforeAll(async () => {
@@ -144,6 +146,34 @@ describe("MentionTextarea", () => {
     fireEvent.keyDown(field, { key: "Enter" });
     expect(screen.getByTestId("value").textContent).toBe("ask @carol ");
     expect(field.getAttribute("aria-controls")).toBeNull();
+  });
+
+  it("says suggestions failed to load rather than that nothing matched", async () => {
+    let fail = true;
+    render(
+      <Mentions
+        getSuggestions={(_trigger, query) =>
+          fail
+            ? Promise.reject(new Error("offline"))
+            : PEOPLE.filter((person) => person.label.startsWith(query)).slice(0, 0)
+        }
+      />
+    );
+    const field = textarea();
+    type(field, "@a");
+    await flush();
+    expect(document.querySelector("[data-autocomplete-menu]")?.textContent).toContain(
+      "Couldn't load suggestions"
+    );
+    expect(document.querySelector("[data-autocomplete-menu]")?.textContent).not.toContain(
+      "No people match"
+    );
+    fail = false;
+    type(field, "@al");
+    await flush();
+    expect(document.querySelector("[data-autocomplete-menu]")?.textContent).toContain(
+      "No people match"
+    );
   });
 
   it("puts the caret after the inserted token", () => {
@@ -380,6 +410,23 @@ describe("Composer", () => {
     fireEvent.paste(screen.getByRole("textbox"), { clipboardData: { files: [png, txt] } });
     expect(onAttach).toHaveBeenCalledWith([png]);
     expect(screen.getByRole("button", { name: "Attach files" })).toBeTruthy();
+    // No onReject: the composer names what it skipped rather than dropping it unseen.
+    expect(screen.getByRole("alert").textContent).toBe(
+      "Skipped notes.txt: not an accepted file type"
+    );
+  });
+
+  it("hands files accept rules out to onReject with their reason, even when none fit", () => {
+    const onAttach = vi.fn();
+    const onReject = vi.fn();
+    render(<Harness onAttach={onAttach} onReject={onReject} accept=".png" />, {
+      wrapper: TooltipProvider,
+    });
+    const txt = new File(["x"], "notes.txt", { type: "text/plain" });
+    fireEvent.paste(screen.getByRole("textbox"), { clipboardData: { files: [txt] } });
+    expect(onAttach).not.toHaveBeenCalled();
+    expect(onReject).toHaveBeenCalledWith([txt], [{ file: txt, reason: "type-not-accepted" }]);
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("counts characters once the draft passes 80% of the limit", () => {
@@ -724,6 +771,30 @@ describe("KeyValueEditor", () => {
     expect(new Set(pairs.map((pair) => pair.id)).size).toBe(4);
   });
 
+  it("says how many pasted lines didn't fit under max, and refuses aloud when full", () => {
+    render(<Editor max={3} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add header" }));
+    fireEvent.paste(screen.getByLabelText("Key 3"), {
+      clipboardData: { getData: () => "A=1\nB=2\nC=3" },
+    });
+    const keys = () =>
+      [...(screen.getByTestId("pairs").textContent ?? "").matchAll(/"key":"([^"]*)"/g)].map(
+        (match) => match[1]
+      );
+    expect(keys()).toEqual(["Authorization", "Accept", "A"]);
+    expect(screen.getByRole("alert").textContent).toBe("2 lines skipped, up to 3 entries");
+    const paste = new Event("paste", { bubbles: true, cancelable: true });
+    Object.assign(paste, { clipboardData: { getData: () => "D=4\nE=5" } });
+    act(() => {
+      screen.getByLabelText("Key 1").dispatchEvent(paste);
+    });
+    expect(paste.defaultPrevented).toBe(true);
+    expect(keys()).toEqual(["Authorization", "Accept", "A"]);
+    expect(screen.getByRole("alert").textContent).toBe("No room to paste, up to 3 entries");
+    fireEvent.change(screen.getByLabelText("Key 3"), { target: { value: "AA" } });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("survives a throwing onValidityChange", () => {
     render(
       <kit.KeyValueEditor
@@ -778,9 +849,97 @@ describe("ListEditor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove gitlab.com" }));
     expect(onValueChange).toHaveBeenLastCalledWith(["github.com", "bitbucket.org"]);
   });
+
+  it("says how many pasted lines it skipped past max", () => {
+    const onValueChange = vi.fn();
+    render(
+      <kit.ListEditor
+        aria-label="Hosts"
+        defaultValue={[""]}
+        onValueChange={onValueChange}
+        max={2}
+      />
+    );
+    fireEvent.paste(screen.getByLabelText("Hosts 1"), {
+      clipboardData: { getData: () => "a.com\nb.com\nc.com\nd.com" },
+    });
+    expect(onValueChange).toHaveBeenLastCalledWith(["a.com", "b.com"]);
+    expect(screen.getByRole("alert").textContent).toBe("2 lines skipped, up to 2 items");
+  });
 });
 
 describe("SecretInput", () => {
+  it("says a save failed, from a throw or a rejection, and clears it on the next edit", async () => {
+    const onSubmit = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error("Token rejected by GitHub");
+      })
+      .mockImplementationOnce(() => Promise.reject(new Error("Network down")));
+    render(<kit.SecretInput aria-label="Key" defaultValue="ghp_bad" onSubmit={onSubmit} />);
+    const input = screen.getByLabelText("Key") as HTMLInputElement;
+    fireEvent.keyDown(input, { key: "Enter" });
+    const thrown = screen.getByRole("alert");
+    // The draft is kept to try again.
+    expect(input.value).toBe("ghp_bad");
+    expect(thrown.textContent).toBe("Token rejected by GitHub");
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(input.getAttribute("aria-describedby")).toBe(thrown.id);
+    fireEvent.keyDown(input, { key: "Enter" });
+    await flush();
+    expect(screen.getByRole("alert").textContent).toBe("Network down");
+    fireEvent.change(input, { target: { value: "ghp_good" } });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(input.getAttribute("aria-invalid")).toBeNull();
+  });
+
+  it("never shows a failure message that repeats the secret, padded or not", async () => {
+    for (const typed of ["sk-live-123", "  sk-live-123  "]) {
+      render(
+        <kit.SecretInput
+          aria-label="Key"
+          defaultValue={typed}
+          onSubmit={(secret) => Promise.reject(new Error(secret))}
+        />
+      );
+      fireEvent.keyDown(screen.getByLabelText("Key"), { key: "Enter" });
+      await flush();
+      expect(screen.getByRole("alert").textContent).toBe("Couldn't save");
+      cleanup();
+    }
+  });
+
+  it("drops a failure once the value is replaced from outside", async () => {
+    let reject: (error: Error) => void = () => {};
+    function Owner() {
+      const [value, setValue] = useState("first");
+      return (
+        <>
+          <kit.SecretInput
+            aria-label="Key"
+            value={value}
+            onValueChange={setValue}
+            onSubmit={() =>
+              new Promise<void>((_resolve, fail) => {
+                reject = fail;
+              })
+            }
+          />
+          <button type="button" onClick={() => setValue("second")}>
+            Reset
+          </button>
+        </>
+      );
+    }
+    render(<Owner />);
+    fireEvent.keyDown(screen.getByLabelText("Key"), { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    reject(new Error("Network down"));
+    await flush();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByLabelText("Key").getAttribute("aria-invalid")).toBeNull();
+  });
+
   it("masks the value, reveals it and blocks copying by default", () => {
     render(<kit.SecretInput aria-label="API token" defaultValue="ghp_123" />);
     const input = screen.getByLabelText("API token") as HTMLInputElement;
@@ -1064,11 +1223,16 @@ describe("ShortcutRecorder", () => {
     return screen.getByRole("button", { name: "Shortcut" });
   }
 
-  it("records a combo on focus, holding the app's shortcuts back while it does", () => {
+  function arm(field: HTMLElement) {
+    act(() => field.focus());
+    fireEvent.click(field);
+  }
+
+  it("records a combo once armed, holding the app's shortcuts back while it does", () => {
     const onValueChange = vi.fn();
     render(<kit.ShortcutRecorder onValueChange={onValueChange} />);
     const field = recorder();
-    act(() => field.focus());
+    arm(field);
     expect(keybindingService.isCapturingShortcut()).toBe(true);
     fireEvent.keyDown(field, { key: "Control", code: "ControlLeft", ctrlKey: true });
     expect(field.textContent).toContain("Now press a key");
@@ -1083,7 +1247,7 @@ describe("ShortcutRecorder", () => {
     const onValueChange = vi.fn();
     render(<kit.ShortcutRecorder defaultValue="Cmd+J" onValueChange={onValueChange} />);
     const field = recorder();
-    act(() => field.focus());
+    arm(field);
     fireEvent.keyDown(field, { key: "j", code: "KeyJ" });
     expect(screen.getByRole("alert").textContent).toMatch(/Include Ctrl or Alt/);
     expect(onValueChange).not.toHaveBeenCalled();
@@ -1098,7 +1262,7 @@ describe("ShortcutRecorder", () => {
     const onValueChange = vi.fn();
     render(<kit.ShortcutRecorder allowChords onValueChange={onValueChange} />);
     const field = recorder();
-    act(() => field.focus());
+    arm(field);
     fireEvent.keyDown(field, { key: "k", code: "KeyK", ctrlKey: true });
     expect(field.textContent).toContain("Press second key");
     fireEvent.keyDown(field, { key: "s", code: "KeyS", ctrlKey: true });
@@ -1109,6 +1273,53 @@ describe("ShortcutRecorder", () => {
       vi.advanceTimersByTime(1100);
     });
     expect(onValueChange).toHaveBeenLastCalledWith("Alt+P");
+  });
+
+  it("rests on focus, so tabbing through and pressing a shortcut leaves it alone", () => {
+    const onValueChange = vi.fn();
+    render(<kit.ShortcutRecorder defaultValue="Cmd+J" onValueChange={onValueChange} />);
+    const field = recorder();
+    act(() => field.focus());
+    expect(field.getAttribute("aria-pressed")).toBe("false");
+    expect(keybindingService.isCapturingShortcut()).toBe(false);
+    fireEvent.keyDown(field, { key: "s", code: "KeyS", metaKey: true });
+    expect(onValueChange).not.toHaveBeenCalled();
+    expect(field.textContent).not.toContain("Press a shortcut");
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(field.getAttribute("aria-pressed")).toBe("true");
+    expect(keybindingService.isCapturingShortcut()).toBe(true);
+  });
+
+  it("names a conflicting action by its title, never its id or a restricted title", () => {
+    vi.spyOn(keybindingService, "findConflicts").mockImplementation((combo: string) => [
+      {
+        actionId: combo === "Cmd+T" ? "acme.sync.run" : combo === "Cmd+Y" ? "acme.secret" : "x.y",
+        combo,
+        scope: "global",
+        priority: 0,
+        kind: "conflict",
+      },
+    ]);
+    const uninstall = setPluginKitHost({
+      getAction: (id) =>
+        id === "acme.sync.run"
+          ? { title: "Sync now", danger: "safe", enabled: true }
+          : id === "acme.secret"
+            ? { title: "Rotate keys", danger: "restricted", enabled: true }
+            : null,
+    });
+    try {
+      const { rerender } = render(<kit.ShortcutRecorder value="Cmd+T" />);
+      expect(screen.getByText(/Daintree uses this for Sync now/)).toBeTruthy();
+      rerender(<kit.ShortcutRecorder value="Cmd+Y" />);
+      expect(screen.queryByText(/Rotate keys|acme\.secret/)).toBeNull();
+      expect(screen.getByText(/Daintree uses this for another action/)).toBeTruthy();
+      rerender(<kit.ShortcutRecorder value="Cmd+U" />);
+      expect(screen.queryByText(/x\.y/)).toBeNull();
+      expect(screen.getByText(/Daintree uses this for another action/)).toBeTruthy();
+    } finally {
+      uninstall();
+    }
   });
 
   it("flags a combo Daintree uses and the plugin's own conflicts", () => {
@@ -1134,7 +1345,7 @@ describe("ShortcutRecorder", () => {
   it("releases the app's shortcuts once a combo is recorded", () => {
     render(<kit.ShortcutRecorder />);
     const field = recorder();
-    act(() => field.focus());
+    arm(field);
     fireEvent.keyDown(field, { key: "k", code: "KeyK", ctrlKey: true });
     expect(keybindingService.isCapturingShortcut()).toBe(false);
   });
@@ -1144,7 +1355,7 @@ describe("ShortcutRecorder", () => {
     const onValueChange = vi.fn();
     render(<kit.ShortcutRecorder allowChords defaultValue="Cmd+J" onValueChange={onValueChange} />);
     const field = recorder();
-    act(() => field.focus());
+    arm(field);
     fireEvent.keyDown(field, { key: "k", code: "KeyK", ctrlKey: true });
     fireEvent.click(screen.getByRole("button", { name: "Clear shortcut" }));
     act(() => {
@@ -1158,7 +1369,7 @@ describe("ShortcutRecorder", () => {
     const onValueChange = vi.fn();
     const { rerender } = render(<kit.ShortcutRecorder allowChords onValueChange={onValueChange} />);
     const field = recorder();
-    act(() => field.focus());
+    arm(field);
     fireEvent.keyDown(field, { key: "k", code: "KeyK", ctrlKey: true });
     rerender(<kit.ShortcutRecorder allowChords onValueChange={onValueChange} disabled />);
     expect(keybindingService.isCapturingShortcut()).toBe(false);
@@ -1183,7 +1394,7 @@ describe("ShortcutRecorder", () => {
         : []
     );
     render(<kit.ShortcutRecorder defaultValue="Cmd+T" allowChords />);
-    act(() => recorder().focus());
+    arm(recorder());
     // Still in force until something new is pressed: no line that comes and goes on focus.
     expect(screen.getByText(/New terminal/)).toBeTruthy();
     fireEvent.keyDown(recorder(), { key: "k", code: "KeyK", ctrlKey: true });
@@ -1194,7 +1405,7 @@ describe("ShortcutRecorder", () => {
     vi.useFakeTimers();
     const onValueChange = vi.fn();
     render(<kit.ShortcutRecorder allowChords defaultValue="Cmd+J" onValueChange={onValueChange} />);
-    act(() => recorder().focus());
+    arm(recorder());
     fireEvent.keyDown(recorder(), { key: "k", code: "KeyK", ctrlKey: true });
     act(() => {
       window.dispatchEvent(new Event("blur"));
@@ -1224,5 +1435,48 @@ describe("ShortcutRecorder", () => {
     const field = recorder();
     expect(field.tabIndex).toBe(-1);
     expect(screen.queryByRole("button", { name: "Clear shortcut" })).toBeNull();
+  });
+
+  // The resting edge is the field's 3:1 boundary, so hover and recording have to
+  // read as a step up from it on every built-in theme, against the fill inside
+  // the edge and the panel outside it. Measured on the themes' real values.
+  it("steps its edge up from rest on hover and while recording", () => {
+    const edgeToken = (field: HTMLElement, prefix: string) => {
+      const token = field.className
+        .split(/\s+/)
+        .find((x) => x.startsWith(`${prefix}border-`) && !x.slice(prefix.length).includes(":"))
+        ?.slice(prefix.length + "border-".length);
+      if (!token) throw new Error(`no ${prefix || "rest"} edge`);
+      return token;
+    };
+    render(<kit.ShortcutRecorder checkHostConflicts={false} />);
+    const rest = edgeToken(recorder(), "");
+    const hover = edgeToken(recorder(), "hover:");
+    arm(recorder());
+    expect(recorder().getAttribute("aria-pressed")).toBe("true");
+    const recording = edgeToken(recorder(), "");
+
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      const tokens = scheme.tokens as Record<string, string>;
+      const contrastOn = (token: string, surface: string) => {
+        const value = tokens[token];
+        if (!value) throw new Error(`${token} is not a ${scheme.id} theme token`);
+        const bg = tokens[surface]!;
+        const alpha = parseRgba(value);
+        return contrastRatio(alpha ? blendOverBackground(alpha.hex, bg, alpha.opacity) : value, bg);
+      };
+      for (const surface of ["surface-input", "surface-panel"]) {
+        const at = `${scheme.id} on ${surface}`;
+        const r = contrastOn(rest, surface);
+        expect(
+          contrastOn(hover, surface),
+          `${at}: hover ${hover} over rest ${rest}`
+        ).toBeGreaterThan(r);
+        expect(
+          contrastOn(recording, surface),
+          `${at}: recording ${recording} over rest ${rest}`
+        ).toBeGreaterThan(r);
+      }
+    }
   });
 });

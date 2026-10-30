@@ -9,6 +9,7 @@ import {
   type AssistantHandbacksSeen,
   type CanopyRoleFilter,
 } from "@/components/Canopy/canopyAssistants";
+import { clampCanopyListWidth } from "@/components/Canopy/canopyListWidth";
 import type { CanopyReplyRow } from "./voiceRecordingStore";
 import {
   CANOPY_URGENT_PRIORITY,
@@ -97,6 +98,26 @@ interface CanopyState {
   assistantHandbacksSeen: AssistantHandbacksSeen;
   seeAssistantHandback: (assistantId: string, observedAt: number) => void;
   /**
+   * The callout offering reading above a listed inbox was put away: for good,
+   * on every host and across launches. The status bar's offer stays.
+   */
+  readingOfferDismissed: boolean;
+  dismissReadingOffer: () => void;
+  /**
+   * The inbox list's width in px, as the user last dragged or stepped it: for
+   * every project view and across launches. Null keeps the default, which
+   * follows the window.
+   */
+  listWidth: number | null;
+  setListWidth: (width: number | null) => void;
+  /**
+   * The width the list's edge is being dragged to, null when no drag is under
+   * way. This view's alone and never saved: the drag's end keeps it, and the
+   * open terminal holds its size until then.
+   */
+  listDrag: number | null;
+  setListDrag: (width: number | null) => void;
+  /**
    * The row a dictation is writing a reply into, asked for from the recording
    * indicator (#14778): the panel opens on its host and selects it with the
    * keyboard in its reply, then settles the request whether or not it could.
@@ -136,6 +157,8 @@ const ORDER_STORAGE_KEY = "daintree-canopy-order";
 export const CANOPY_ACKNOWLEDGED_STORAGE_KEY = "daintree-canopy-acknowledged";
 export const CANOPY_ROLE_STORAGE_KEY = "daintree-canopy-role";
 const HANDBACKS_SEEN_STORAGE_KEY = "daintree-canopy-assistant-handbacks";
+const READING_OFFER_DISMISSED_STORAGE_KEY = "daintree-canopy-reading-offer-dismissed";
+const LIST_WIDTH_STORAGE_KEY = "daintree-canopy-list-width";
 /** Assistants whose seen handback is kept at most, the oldest seen dropped first: as many as one directory names. */
 const MAX_HANDBACKS_SEEN = AGENT_DIRECTORY_ENTRIES_MAX;
 
@@ -242,6 +265,41 @@ function saveRoleFilter(roleFilter: CanopyRoleFilter): void {
     window.localStorage.setItem(CANOPY_ROLE_STORAGE_KEY, roleFilter);
   } catch {
     // Best effort: the choice still holds for this session.
+  }
+}
+
+function loadReadingOfferDismissed(): boolean {
+  try {
+    return window.localStorage.getItem(READING_OFFER_DISMISSED_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function saveReadingOfferDismissed(): void {
+  try {
+    window.localStorage.setItem(READING_OFFER_DISMISSED_STORAGE_KEY, "1");
+  } catch {
+    // Best effort: the callout still stays away for this session.
+  }
+}
+
+function loadListWidth(): number | null {
+  try {
+    const stored = window.localStorage.getItem(LIST_WIDTH_STORAGE_KEY);
+    // Number(), not parseFloat: "" and "600px" are no width, never 0 or 600.
+    return stored === null || stored.trim() === "" ? null : clampCanopyListWidth(Number(stored));
+  } catch {
+    return null;
+  }
+}
+
+function saveListWidth(width: number | null): void {
+  try {
+    if (width === null) window.localStorage.removeItem(LIST_WIDTH_STORAGE_KEY);
+    else window.localStorage.setItem(LIST_WIDTH_STORAGE_KEY, String(width));
+  } catch {
+    // Best effort: the width still holds for this session.
   }
 }
 
@@ -500,6 +558,23 @@ export const useCanopyStore = create<CanopyState>((set, get) => ({
             ),
           }
     ),
+  readingOfferDismissed: loadReadingOfferDismissed(),
+  dismissReadingOffer: () => {
+    saveReadingOfferDismissed();
+    set({ readingOfferDismissed: true });
+  },
+  listWidth: loadListWidth(),
+  setListWidth: (width) => {
+    const next = width === null ? null : clampCanopyListWidth(width);
+    if (width !== null && next === null) return;
+    // Unchanged only if storage agrees: a sibling's write whose event hasn't
+    // landed yet would otherwise outlive a reset made here first.
+    if (next === get().listWidth && next === loadListWidth()) return;
+    saveListWidth(next);
+    set({ listWidth: next });
+  },
+  listDrag: null,
+  setListDrag: (width) => set({ listDrag: width }),
   resume: null,
   // Every opening starts on the window's own host, unless the user chose All
   // hosts or is coming back from "Go to terminal".
@@ -571,6 +646,14 @@ if (typeof window !== "undefined") {
           readHandbacksSeen()
         ),
       }));
+      return;
+    }
+    if (event.key === READING_OFFER_DISMISSED_STORAGE_KEY) {
+      if (loadReadingOfferDismissed()) useCanopyStore.setState({ readingOfferDismissed: true });
+      return;
+    }
+    if (event.key === LIST_WIDTH_STORAGE_KEY) {
+      useCanopyStore.setState({ listWidth: loadListWidth() });
       return;
     }
     if (event.key !== CANOPY_ACKNOWLEDGED_STORAGE_KEY) return;

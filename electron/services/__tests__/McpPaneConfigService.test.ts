@@ -56,6 +56,7 @@ function deferred() {
 import { McpPaneConfigService, type PanePluginServer } from "../McpPaneConfigService.js";
 import { PluginMcpGrantRegistry } from "../pluginAgentMcp/grantRegistry.js";
 import { pluginMcpRoutePath } from "../pluginAgentMcp/types.js";
+import { MCP_CONFIRMABLE_CALL_MAX_MS } from "../../../shared/config/mcpConfirmWindow.js";
 import { makeProjectPluginInstanceKey } from "../../../shared/types/plugin.js";
 
 const PROJECT_A = "a".repeat(64);
@@ -576,6 +577,9 @@ describe("McpPaneConfigService", () => {
         'mcp_servers.daintree.url="http://127.0.0.1:45454/mcp"',
         "-c",
         'mcp_servers.daintree.bearer_token_env_var="DAINTREE_MCP_TOKEN"',
+        // Only Daintree's own server can hold a call open on the approval dialog.
+        "-c",
+        `mcp_servers.daintree.tool_timeout_sec=${Math.ceil(MCP_CONFIRMABLE_CALL_MAX_MS / 1_000)}`,
         "-c",
         `mcp_servers.${key}.url="http://127.0.0.1:45454${pluginMcpRoutePath("acme.ledger")}"`,
         "-c",

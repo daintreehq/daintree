@@ -64,6 +64,8 @@ const snapshot = {
   tierMismatch: null,
   isApprovingTier: false,
   assistantVersionTooOld: null,
+  activeGrants: [],
+  revokingGrantKeys: [],
 };
 
 // Pass-through dropdown mock (same shape as PanelHeader.test.tsx) — keeps the
@@ -97,6 +99,7 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     </button>
   ),
   DropdownMenuSeparator: () => <hr />,
+  DropdownMenuCheckboxItem: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
 }));
 
 // The session tabs' per-lane menu is incidental here, and the real primitive
@@ -306,7 +309,11 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "window", {
     value: {
       electron: {
-        help: { getPinnedActionContext: vi.fn().mockResolvedValue({}) },
+        help: {
+          getPinnedActionContext: vi.fn().mockResolvedValue({}),
+          getGlobalAssistantState: () => new Promise(() => {}),
+          onGlobalAssistantChanged: () => () => {},
+        },
         app: { onViewRevealed: () => () => {} },
       },
     },
@@ -481,7 +488,11 @@ describe("HelpPanel — Daintree Assistant reveal (no local repaint cascade, #10
     Object.defineProperty(globalThis, "window", {
       value: {
         electron: {
-          help: { getPinnedActionContext: vi.fn().mockResolvedValue({}) },
+          help: {
+            getPinnedActionContext: vi.fn().mockResolvedValue({}),
+            getGlobalAssistantState: () => new Promise(() => {}),
+            onGlobalAssistantChanged: () => () => {},
+          },
           app: {
             onViewRevealed: (cb: () => void) => {
               viewRevealedCbs.push(cb);

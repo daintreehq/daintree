@@ -1,4 +1,10 @@
-import { isGridPanelLocation, isPtyPanel, type PanelInstance } from "@shared/types/panel";
+import {
+  isGridPanelLocation,
+  isPtyPanel,
+  type PanelInstance,
+  type PtyPanelData,
+} from "@shared/types/panel";
+import { isBuiltInAgentId } from "@shared/config/agentIds";
 import type { PluginAgentPane, PluginSendToAgentRefusalReason } from "@shared/types/plugin";
 import type { WorktreeSnapshot } from "@shared/types";
 import type { BackendStatus } from "@/store/panelStore";
@@ -47,6 +53,20 @@ export function resolveDraftRefusal(
   // a shell, a demoted ex-agent and a plugin-contributed agent have none.
   if (hasExited || getBuiltInRuntimeAgentId(panel) === undefined) return "not-agent";
   if (!isGridPanelLocation(panel.location)) return "not-in-grid";
+  const composerRefusal = resolveComposerRefusal(inputs, panel, terminalId);
+  if (composerRefusal !== null) return composerRefusal;
+  // In a live broadcast, Enter in an armed agent's draft goes to every armed
+  // agent — the same two-armed threshold `tryFleetBroadcastFromEditor` uses.
+  if (inputs.armedIds.size >= 2 && inputs.armedIds.has(terminalId)) return "fleet-armed";
+  return null;
+}
+
+/** The transient half of the gate: whether the composer can be written to right now. */
+function resolveComposerRefusal(
+  inputs: DraftTargetInputs,
+  panel: PtyPanelData,
+  terminalId: string
+): PluginSendToAgentRefusalReason | null {
   if (!inputs.hybridInputEnabled) return "input-bar-off";
   if (inputs.backendStatus !== "connected") return "backend-unavailable";
   if (panel.isInputLocked === true) return "input-locked";
@@ -55,10 +75,27 @@ export function resolveDraftRefusal(
   if (panel.isRestarting === true || panel.restoreRecovery !== undefined) return "restarting";
   // A dictation about to auto-submit would send the handoff with it.
   if (inputs.voiceSubmittingIds.has(terminalId)) return "input-busy";
-  // In a live broadcast, Enter in an armed agent's draft goes to every armed
-  // agent — the same two-armed threshold `tryFleetBroadcastFromEditor` uses.
-  if (inputs.armedIds.size >= 2 && inputs.armedIds.has(terminalId)) return "fleet-armed";
   return null;
+}
+
+/**
+ * {@link resolveDraftRefusal} for the Assistant's terminal, which lives in its
+ * own panel rather than the grid and never joins a fleet. Its composer is drawn
+ * for the agent the session slot names, not the pane's runtime identity, so
+ * that is the identity checked here.
+ */
+export function resolveAssistantDraftRefusal(
+  inputs: DraftTargetInputs,
+  terminalId: string,
+  slotAgentId: string | undefined
+): PluginSendToAgentRefusalReason | null {
+  const panel = inputs.panelsById[terminalId];
+  if (panel === undefined || panel.location === "trash") return "unknown-terminal";
+  if (!isPtyPanel(panel)) return "not-agent";
+  if (panel.hasPty === false || panel.runtimeStatus === "exited" || panel.runtimeStatus === "error")
+    return "exited";
+  if (!isBuiltInAgentId(slotAgentId)) return "not-agent";
+  return resolveComposerRefusal(inputs, panel, terminalId);
 }
 
 export interface AgentPaneListInputs extends DraftTargetInputs {

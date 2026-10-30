@@ -84,8 +84,9 @@ async function post(
   body: unknown,
   headers: Record<string, string> = {}
 ): Promise<{ status: number; sessionId: string | null; body: any }> {
-  // Longer than the renderer's 30s confirmation deadline, so a call parked on
-  // a dialog nobody answers comes back as the product's timeout, not ours.
+  // Every call here is answered or refused well inside this. A call left on a
+  // dialog nobody answers is held for minutes (#14989), so this cuts it off
+  // rather than letting a failing test wait out the product's own deadline.
   const res = await fetch(`http://127.0.0.1:${endpoint.port}/mcp`, {
     method: "POST",
     headers: {
@@ -511,7 +512,9 @@ test.describe.serial("MCP: consent dialogs and project tiers, end to end", () =>
     await expect(dialog).toBeVisible({ timeout: T_LONG });
     await expect(approvalDialog(pageB, FULL_ONLY_TOOL_TITLE)).toHaveCount(0);
     await expect(dialog).toContainText("Above this project's MCP tier, so it needs your approval");
-    await expect(dialog).toContainText("Agent in a terminal pane");
+    await expect(dialog).toContainText("tier-core");
+    await expect(dialog).toContainText("Claude");
+    await expect(dialog.getByRole("button", { name: "Show pane", exact: true })).toBeVisible();
     await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
     expect(toolErrorCode(await declined)).toBe("USER_REJECTED");
     await expect(dialog).toHaveCount(0);

@@ -5,13 +5,15 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vite
 import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
 import { primeRadix } from "@/components/ui/radix-loader";
 import type { ForgeCheckRun } from "@shared/types/ipc/forge";
+import type { AgentHandoffContent } from "@/services/agentHandoff/agentDraft";
 
 const getChecksMock = vi.fn();
 const getPRMock = vi.fn<(cwd: string, prNumber: number) => Promise<unknown>>();
 const getRepoMetadataMock = vi.fn<(cwd: string) => Promise<unknown>>();
 // Typed rather than bare `vi.fn()`: an untyped mock returns `any`, and the cast
 // back at the call site is exactly what `no-unsafe-type-assertion` flags.
-const openSendToAgentMock = vi.fn<(text: string, sourceTerminalId?: string) => boolean>();
+const openSendToAgentMock =
+  vi.fn<(content: AgentHandoffContent, sourceTerminalId?: string) => boolean>();
 
 vi.mock("@/clients/forgeClient", () => ({
   forgeClient: {
@@ -22,8 +24,8 @@ vi.mock("@/clients/forgeClient", () => ({
 }));
 
 vi.mock("@/hooks/useSendToAgentPalette", () => ({
-  openSendToAgentPaletteWithText: (text: string, sourceTerminalId?: string) =>
-    openSendToAgentMock(text, sourceTerminalId),
+  openSendToAgentPaletteWithText: (content: AgentHandoffContent, sourceTerminalId?: string) =>
+    openSendToAgentMock(content, sourceTerminalId),
 }));
 
 import { PrChecksPopover } from "../PrChecksPopover";
@@ -70,7 +72,7 @@ function renderPopover(props: Partial<React.ComponentProps<typeof PrChecksPopove
       worktreePath="/tmp/wt"
       prNumber={42}
       prUrl="https://github.com/o/r/pull/42"
-      triggerLabel="Pull request #42 open — CI failing. Show CI checks"
+      triggerDescription="Pull request #42 open — CI failing"
       onOpenExternal={onOpenExternal}
       {...props}
     >
@@ -443,9 +445,11 @@ describe("PrChecksPopover", () => {
     fireEvent.click(await screen.findByTestId("pr-checks-send"));
     expect(openSendToAgentMock).toHaveBeenCalledTimes(1);
 
-    const [text, sourceTerminalId] = openSendToAgentMock.mock.calls[0]!;
+    const [{ text, sourceLabel }, sourceTerminalId] = openSendToAgentMock.mock.calls[0]!;
     // The Review Hub is not a terminal, so nothing may be excluded as the source.
     expect(sourceTerminalId).toBeUndefined();
+    // The receiving draft heads the block with the pull request it came from.
+    expect(sourceLabel).toContain("#42");
     expect(text).toContain("pull request #42");
     expect(text).toContain("build");
     expect(text).not.toContain("lint");
@@ -589,7 +593,7 @@ describe("PrChecksPopover", () => {
 
       await openAndSettle();
       const action = await screen.findByTestId("pr-merge-action");
-      expect(action.textContent).toBe("Merge when ready");
+      expect(action.textContent).toBe("Enable auto-merge");
       expect(screen.getByTestId("pr-merge-method-squash").getAttribute("aria-checked")).toBe(
         "true"
       );
@@ -598,7 +602,30 @@ describe("PrChecksPopover", () => {
 
       // The popover closes and the confirm, mounted outside it, opens.
       await waitFor(() => expect(screen.queryByTestId("pr-checks-popover")).toBeNull());
-      expect(await screen.findByRole("button", { name: "Merge when ready" })).toBeTruthy();
+      expect(await screen.findByRole("button", { name: "Enable auto-merge" })).toBeTruthy();
+    });
+
+    it("says why a draft can't merge instead of leaving the row out", async () => {
+      getChecksMock.mockResolvedValue({ checks: [check()] });
+      getPRMock.mockResolvedValue({ ...openPR, isDraft: true });
+      getRepoMetadataMock.mockResolvedValue(metadata);
+      renderPopover();
+
+      await openAndSettle();
+      const row = await screen.findByTestId("pr-merge-control");
+      expect(row.textContent).toMatch(/Draft pull request/);
+      expect(screen.queryByTestId("pr-merge-action")).toBeNull();
+    });
+
+    it("retries its own read in place", async () => {
+      getChecksMock.mockResolvedValue({ checks: [check()] });
+      getPRMock.mockRejectedValueOnce(new Error("offline")).mockResolvedValue(openPR);
+      getRepoMetadataMock.mockResolvedValue(metadata);
+      renderPopover();
+
+      await openAndSettle();
+      fireEvent.click(await screen.findByTestId("pr-merge-control-retry"));
+      expect((await screen.findByTestId("pr-merge-action")).textContent).toBe("Enable auto-merge");
     });
 
     it("explains a disabled arm instead of hiding it", async () => {

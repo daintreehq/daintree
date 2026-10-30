@@ -120,6 +120,7 @@ import type {
   TrimStateSummary,
   TerminalSubmitGuard,
   PtyHostDriveLease,
+  FirstPromptCandidate,
 } from "../../shared/types/pty-host.js";
 import type {
   ClosedProcessKillResult,
@@ -129,7 +130,7 @@ import type {
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
 import type { AgentState, AgentId, WaitingReason } from "../../shared/types/agent.js";
-import type { PanelKind, PanelTitleMode } from "../../shared/types/panel.js";
+import type { PanelKind, PanelTitleMode, TerminalFirstPrompt } from "../../shared/types/panel.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
 import type { PowerPolicyLevel } from "../../shared/types/powerPolicy.js";
 import type {
@@ -140,6 +141,8 @@ import type { BuiltInAgentId } from "../../shared/config/agentIds.js";
 import type { TerminalSubmissionRecord } from "../../shared/types/terminalSubmission.js";
 import { terminalAnswerOf, type TerminalAnswer } from "../../shared/utils/terminalSubmission.js";
 import type { TerminalHandback } from "../../shared/types/handback.js";
+import { withoutHandbackInstruction } from "../../shared/utils/handback.js";
+import { buildFirstPrompt, sanitizeFirstPrompt } from "../../shared/utils/firstPrompt.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -203,6 +206,8 @@ interface TerminalInfoResponse {
    * means none was observed. Reset with the record when the PTY is replaced.
    */
   agentIncarnation?: number;
+  /** Lifecycle-ledger generation of the record that answered. */
+  launchGeneration?: number;
   /** Runtime-detected agent identity (cleared when the agent exits). */
   detectedAgentId?: BuiltInAgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
@@ -333,6 +338,11 @@ function readPersistedOverrides(): Record<string, string> {
  */
 export interface TerminalInputNotice {
   answer: TerminalAnswer;
+}
+
+/** An agent run with no first-prompt record yet (#15521). */
+function takesFirstSend(options: PtyHostSpawnOptions | undefined): boolean {
+  return options?.launchAgentId !== undefined && options.hasFirstPrompt !== true;
 }
 
 export class PtyClient extends EventEmitter {
@@ -859,6 +869,8 @@ export class PtyClient extends EventEmitter {
           if (result.launchGeneration === null) return false;
           return getLifecycleLedger().isCurrent(id, result.launchGeneration);
         },
+        onFirstPromptWritten: (id, launchGeneration, firstPrompt) =>
+          this.acceptFirstPrompt(id, launchGeneration, firstPrompt),
       },
       logWarn: (message) => console.warn(message),
     };
@@ -1536,14 +1548,22 @@ export class PtyClient extends EventEmitter {
     if (answer !== null) this.emit("terminal-input", id, { answer } satisfies TerminalInputNotice);
   }
 
+  /**
+   * `promptAsWritten` is the text as its caller wrote it, before Daintree added
+   * anything of its own (a provenance stamp), for the run's first-prompt record
+   * (#15521). Absent, it is `text` without the handback instruction for
+   * `handbackCode`. `null` marks a submission that is nobody's prompt.
+   */
   submit(
     id: string,
     text: string,
     submissionToken?: string,
     handbackCode?: string,
     guard?: TerminalSubmitGuard,
-    imagePaths?: readonly string[]
+    imagePaths?: readonly string[],
+    promptAsWritten?: string | null
   ): void {
+    const firstPrompt = this.firstPromptCandidate(id, text, handbackCode, promptAsWritten);
     this.shardForTerminal(id).send({
       type: "submit",
       id,
@@ -1552,12 +1572,61 @@ export class PtyClient extends EventEmitter {
       handbackCode,
       ...(guard !== undefined ? { guard } : {}),
       ...(imagePaths !== undefined && imagePaths.length > 0 ? { imagePaths: [...imagePaths] } : {}),
+      ...(firstPrompt !== undefined ? { firstPrompt } : {}),
     });
     // A guarded submission is Daintree waking an idle agent, not anyone
     // answering it, and the host may yet refuse it.
     if (guard === undefined) {
       this.emit("terminal-input", id, { answer: "submit" } satisfies TerminalInputNotice);
     }
+  }
+
+  /**
+   * What a submit offers as its run's first prompt (#15521), held by the host
+   * until the submission's Enter is written. Nothing once the run has one: the
+   * check reads the spawn entry of the incarnation running now, so a send to
+   * any terminal with a record costs that lookup and nothing more.
+   */
+  private firstPromptCandidate(
+    id: string,
+    text: string,
+    handbackCode: string | undefined,
+    promptAsWritten: string | null | undefined
+  ): FirstPromptCandidate | undefined {
+    if (promptAsWritten === null) return undefined;
+    // While a duplicate spawn awaits its answer, the one it displaced is running.
+    const live = this.displacedSpawns.get(id)?.entry ?? this.pendingSpawns.get(id);
+    if (!takesFirstSend(live)) return undefined;
+    const asWritten =
+      promptAsWritten ??
+      (handbackCode !== undefined ? withoutHandbackInstruction(text, handbackCode) : text);
+    const record = buildFirstPrompt(asWritten, "send", 0);
+    if (!record) return undefined;
+    return { text: record.text, ...(record.truncated && { truncated: true as const }) };
+  }
+
+  /**
+   * A first-prompt candidate's Enter was written (#15521). The first one the
+   * run still has no record for becomes it; any other, including one written
+   * to a predecessor after a respawn, is dropped.
+   */
+  private acceptFirstPrompt(
+    id: string,
+    launchGeneration: number | undefined,
+    firstPrompt: TerminalFirstPrompt
+  ): void {
+    if (launchGeneration === undefined) return;
+    const displaced = this.displacedSpawns.get(id)?.entry;
+    const entry =
+      displaced?.launchGeneration === launchGeneration ? displaced : this.pendingSpawns.get(id);
+    if (entry?.launchGeneration !== launchGeneration || !takesFirstSend(entry)) return;
+    const record = sanitizeFirstPrompt(firstPrompt);
+    if (record?.via !== "send") return;
+    // Claimed on the entry itself, so everything that keeps, restores or
+    // replays the entry keeps the claim with it.
+    entry.hasFirstPrompt = true;
+    // The owner is the claimed run's, not a duplicate spawn's still pending.
+    this.emit("first-prompt", id, record, entry.projectId);
   }
 
   /**
@@ -2761,6 +2830,21 @@ export class PtyClient extends EventEmitter {
 
   updateObservedTitle(id: string, title: string): void {
     this.shardForTerminal(id).send({ type: "update-observed-title", id, title });
+  }
+
+  /**
+   * Hand the host the conversation a live run was attributed to (#15268). The
+   * cached spawn options are deliberately left alone, unlike `updateTitle`:
+   * crash recovery replays them as a fresh launch, and a fresh launch starts a
+   * new conversation that this id doesn't describe.
+   */
+  noteLiveAgentSessionId(id: string, sessionId: string, launchGeneration: number): void {
+    this.shardForTerminal(id).send({
+      type: "note-live-agent-session-id",
+      id,
+      sessionId,
+      launchGeneration,
+    });
   }
 
   updateTitle(id: string, title: string, titleMode: PanelTitleMode): void {

@@ -213,8 +213,13 @@ async function handleSaveImage(
   return { filePath, thumbnailDataUrl };
 }
 
+/** Composer chips draw 40px tall; larger is for an image someone inspects, capped well short of the source. */
+const THUMBNAIL_HEIGHT_DEFAULT = 40;
+const THUMBNAIL_HEIGHT_MAX = 240;
+
 async function handleThumbnailFromPath(
-  filePath: string
+  filePath: string,
+  options?: { height?: number }
 ): Promise<{ filePath: string; thumbnailDataUrl: string }> {
   // The renderer supplies this path, so it is untrusted. Constrain it to the
   // clipboard temp dir or a known project root (drag-dropped images live
@@ -274,7 +279,16 @@ async function handleThumbnailFromPath(
   }
 
   const size = image.getSize();
-  const thumbHeight = 40;
+  const requested = options?.height;
+  // A requested size is never enlarged past the image's own height: a bigger
+  // blur shows nothing more. The default stays what the chips have always drawn.
+  const thumbHeight =
+    typeof requested === "number" && Number.isFinite(requested)
+      ? Math.min(
+          size.height,
+          Math.max(THUMBNAIL_HEIGHT_DEFAULT, Math.min(THUMBNAIL_HEIGHT_MAX, Math.round(requested)))
+        )
+      : THUMBNAIL_HEIGHT_DEFAULT;
   const thumbWidth = Math.max(1, Math.round((size.width / size.height) * thumbHeight));
   const thumbnail = image.resize({ width: thumbWidth, height: thumbHeight });
   const thumbnailDataUrl = `data:image/png;base64,${thumbnail.toPNG().toString("base64")}`;

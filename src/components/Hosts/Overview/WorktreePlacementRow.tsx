@@ -1,8 +1,10 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { LOCAL_HOST_ID, type HostId } from "@shared/types/remoteHosts";
 import type { PlacedWorktree } from "@shared/types/ipc/projectMatch";
 import { onHostSwitchSettled } from "@/components/HostSwitch/hostSwitchRequests";
 import { Button } from "@/components/ui/button";
+import { Callout } from "@/components/ui/Callout";
+import { FactSeparator } from "@/components/ui/FactSeparator";
 import {
   Select,
   SelectContent,
@@ -14,13 +16,26 @@ import { FormRow } from "@/components/Worktree/views/WorktreeFormLayout";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { actionService } from "@/services/ActionService";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useHostMetricsStore, type HostMetricsHistory } from "@/store/hostMetricsStore";
+import { cn } from "@/lib/utils";
 import { logWarn } from "@/utils/logger";
 import { hasRemoteHosts, useHostList } from "../hostList";
-import { buildHostMenuRows, clientPlatform, type HostMenuRow } from "../hostModel";
+import {
+  buildHostMenuRows,
+  clientPlatform,
+  describeHostMenuState,
+  hostAgentCliNames,
+  localHostLabel,
+  type HostMenuRow,
+} from "../hostModel";
 import { isNewWindowClick } from "../hostSwitching";
 import { useProjectHosts } from "../projectHosts";
-import { describePlacementProjectFacts } from "./placementProjectFacts";
+import {
+  CHECKING,
+  describePlacementProjectFacts,
+  type PlacementProjectFacts,
+} from "./placementProjectFacts";
 import { startHostMetricsFeed } from "./hostMetricsFeed";
 import { compareHostCapacity, isLive, type PlacementComparison } from "./overviewModel";
 
@@ -29,17 +44,50 @@ export interface PlacementDraft extends Omit<PlacedWorktree, "relativePath"> {
   path: string;
 }
 
+/**
+ * Where an attempt to create the worktree on another host stands: pending
+ * while that host's dialog has it, failed when it couldn't be handed over,
+ * cancelled when that dialog closed without creating anything.
+ */
+export type PlacementStatus = "idle" | "pending" | "failed" | "cancelled";
+
+/**
+ * Another host chosen for the worktree, for the dialog to answer with: its
+ * primary creates the worktree there instead of here.
+ */
+export interface PlacementCommit {
+  hostId: HostId;
+  hostName: string;
+  /**
+   * This window's own host as the host menu names it ("This Mac", or a host's
+   * name): where the choices the chosen host won't use are kept.
+   */
+  homeName: string;
+  status: PlacementStatus;
+  /** The link's own words while the host can't take it ("Not connected"); null while it can. */
+  unavailable: string | null;
+  /** The worktree's path relative to the project, as the host lays it out; null when the host picks. */
+  relativePath: string | null;
+  /** Create the form's worktree there; a Cmd/Ctrl-click opens the host in a new window. */
+  submit: (click?: Pick<MouseEvent, "metaKey" | "ctrlKey">) => void;
+}
+
 interface WorktreePlacementRowProps {
   /** This window's project, which moves to another host through git. */
   projectId: string | null;
   /** The project folder on this window's host, which the worktree path is taken relative to. */
   rootPath: string;
+  /** The form's path on this window's host, which carries to another host relative to the project. */
+  worktreePath: string;
   /** The form, validated; null when it isn't valid (the dialog then shows why). */
   getDraft: () => PlacementDraft | null;
   /** Close the new-worktree dialog once the worktree exists on the chosen host. */
   onLeave: () => void;
-  /** True while another host than the window's is chosen: nothing is created here then. */
-  onElsewhereChange?: (elsewhere: boolean) => void;
+  /**
+   * Another host chosen, while one is: nothing is created here then, and the
+   * dialog's primary creates it on that host. Null for the window's own host.
+   */
+  onCommitChange?: (commit: PlacementCommit | null) => void;
 }
 
 export function suggestPlacement(
@@ -82,70 +130,87 @@ export function toPlacedWorktree(draft: PlacementDraft, rootPath: string): Place
   return { ...rest, relativePath: placedRelativePath(rootPath, path) };
 }
 
+/** A host that can't be picked, in its link's own words: "Not connected · Last seen 3 hours ago". */
+function describeUnavailable(row: HostMenuRow): string {
+  const { state, note } = describeHostMenuState(row);
+  return [state ?? "Not connected", note].filter(Boolean).join(" · ");
+}
+
+/**
+ * Facts set apart by the house dot, each kept whole so a line only breaks
+ * between them. Every fact carries its dot in front, and the run is shifted
+ * left by one dot's width and clipped, so the dot that would open a line is
+ * cut off and none is left dangling at a line's end.
+ */
+function FactRun({ parts }: { parts: readonly string[] }) {
+  return (
+    <span className="block overflow-hidden">
+      <span className="-ml-3 flex flex-wrap">
+        {parts.map((part) => (
+          <span key={part} className="whitespace-nowrap">
+            <span className="inline-block w-3 text-center">
+              <FactSeparator />
+            </span>
+            {part}
+          </span>
+        ))}
+      </span>
+    </span>
+  );
+}
+
 /**
  * Where the new worktree goes. The window's host is preselected, so nothing
- * changes unless the user picks another; each host's reported facts sit
- * beside it, and the one with the most free cores and memory is named when
- * there is one. Picking another host creates the worktree there instead:
- * the project goes through the open-on-host flow (matched or cloned there),
- * and the dialog on that host creates this form's branch, path and recipe.
- * This dialog stays open until that has happened. Shown only once a host
- * other than this machine exists.
+ * changes unless the user picks another; the chosen host's reported facts sit
+ * under it, and the one with the most free cores and memory is named when
+ * there is one. Picking another host hands the dialog's primary to it (see
+ * {@link PlacementCommit}): the project goes through the open-on-host flow
+ * (matched or cloned there), and the dialog on that host creates this form's
+ * branch, path and recipe. This dialog stays open until that has happened.
+ * Shown only once a host other than this machine exists.
  */
 export function WorktreePlacementRow({
   projectId,
   rootPath,
+  worktreePath,
   getDraft,
   onLeave,
-  onElsewhereChange,
+  onCommitChange,
 }: WorktreePlacementRowProps) {
   const hostList = useHostList();
   const history = useHostMetricsStore((state) => state.history);
   const windowHostId = getViewHostId() ?? LOCAL_HOST_ID;
   const [chosen, setChosen] = useState<HostId>(windowHostId);
-  const [handoff, setHandoff] = useState<
-    { status: "idle" } | { status: "pending" } | { status: "failed"; hostName: string }
-  >({ status: "idle" });
+  const [status, setStatus] = useState<PlacementStatus>("idle");
   const projectHosts = useProjectHosts(projectId);
   const visible = isRemoteShellSupported() && hasRemoteHosts(hostList);
 
   useEffect(() => (visible ? startHostMetricsFeed() : undefined), [visible]);
-  const elsewhere = visible && chosen !== windowHostId;
-  useEffect(() => onElsewhereChange?.(elsewhere), [elsewhere, onElsewhereChange]);
-  // Gone from the dialog, it chooses no other host: local Create must not stay blocked.
-  useEffect(() => () => onElsewhereChange?.(false), [onElsewhereChange]);
-
-  if (!visible) return null;
-
   const rows = buildHostMenuRows(hostList.hosts, {
     localPlatform: clientPlatform(),
     currentHostId: windowHostId,
     localSummary: history.get(LOCAL_HOST_ID)?.[0] ?? hostList.localSummary,
   });
-  const comparison = suggestPlacement(rows, history);
-  const best = rows.find((row) => row.hostId === comparison.suggestedHostId) ?? null;
-  const factsOf = (hostId: HostId) =>
-    comparison.options.find((option) => option.hostId === hostId)?.facts;
-  const projectFactsOf = (hostId: HostId): string[] => {
-    const host = projectHosts.find((entry) => entry.hostId === hostId);
-    if (!host) return [];
-    return describePlacementProjectFacts(
-      host,
-      host.row,
-      history.get(hostId)?.[0] ?? host.row.summary
-    );
-  };
   const chosenRow = rows.find((row) => row.hostId === chosen) ?? rows[0]!;
+  const elsewhere = visible && chosen !== windowHostId;
+  const relativePath = placedRelativePath(rootPath, worktreePath);
+  const unavailable = elsewhere && !isLive(chosenRow) ? describeUnavailable(chosenRow) : null;
+
+  const choose = (hostId: HostId) => {
+    setChosen(hostId);
+    setStatus("idle");
+  };
 
   // The dialog stays open until the worktree exists on the host: closing
   // first would leave a failed or abandoned handoff with nothing to retry from.
-  // Cmd/Ctrl-click leaves this window on its own host and opens the project in a new one.
+  const lastNewWindow = useRef(false);
   const continueOnHost = async (newWindow: boolean) => {
-    if (!projectId || handoff.status === "pending") return;
+    if (!projectId || status === "pending") return;
     const draft = getDraft();
     if (!draft) return;
     const target = chosenRow;
-    setHandoff({ status: "pending" });
+    lastNewWindow.current = newWindow;
+    setStatus("pending");
     const result = await actionService.dispatch(
       "project.openOnHost",
       {
@@ -163,118 +228,215 @@ export function WorktreePlacementRow({
         : undefined;
     if (result.ok && typeof requestId === "number") {
       onHostSwitchSettled(requestId, (settlement) => {
-        setHandoff({ status: "idle" });
-        if (settlement === "completed") onLeave();
+        if (settlement === "completed") {
+          setStatus("idle");
+          onLeave();
+          return;
+        }
+        setStatus("cancelled");
+        useAnnouncerStore.getState().announce(`Nothing created on ${target.name}`);
       });
       return;
     }
     if (result.ok) {
-      setHandoff({ status: "idle" });
+      setStatus("idle");
       return;
     }
     logWarn("[Hosts] Handing the project to another host failed", { error: result.error });
-    setHandoff({ status: "failed", hostName: target.name });
+    setStatus("failed");
   };
+  // The dialog holds one stable submit; each call reaches the latest form.
+  const continueRef = useRef(continueOnHost);
+  useEffect(() => {
+    continueRef.current = continueOnHost;
+  });
+  const [submit] = useState(
+    () => (click?: Pick<MouseEvent, "metaKey" | "ctrlKey">) =>
+      void continueRef.current(click ? isNewWindowClick(click) : false)
+  );
+
+  const hostName = elsewhere ? chosenRow.name : null;
+  const homeName =
+    rows.find((row) => row.hostId === windowHostId)?.name ?? localHostLabel(clientPlatform());
+  useEffect(() => {
+    onCommitChange?.(
+      hostName === null
+        ? null
+        : { hostId: chosen, hostName, homeName, status, unavailable, relativePath, submit }
+    );
+  }, [onCommitChange, chosen, hostName, homeName, status, unavailable, relativePath, submit]);
+  // Gone from the dialog, it chooses no other host: local Create must not stay blocked.
+  useEffect(() => () => onCommitChange?.(null), [onCommitChange]);
+
+  if (!visible) return null;
+
+  const comparison = suggestPlacement(rows, history);
+  const best = rows.find((row) => row.hostId === comparison.suggestedHostId) ?? null;
+  const usageOf = (hostId: HostId) =>
+    comparison.options.find((option) => option.hostId === hostId)?.parts ?? [];
+  const projectFactsOf = (hostId: HostId): PlacementProjectFacts | null => {
+    const host = projectHosts.find((entry) => entry.hostId === hostId);
+    if (!host) return null;
+    return describePlacementProjectFacts(
+      host,
+      host.row,
+      history.get(hostId)?.[0] ?? host.row.summary
+    );
+  };
+
+  const chosenFacts = chosenRow.isCurrent ? null : projectFactsOf(chosenRow.hostId);
+  const facts: { label: string; value: ReactNode; live?: boolean; pending?: boolean }[] = [];
+  if (chosenFacts) {
+    facts.push({
+      label: "Project",
+      value: chosenFacts.project,
+      live: true,
+      pending: chosenFacts.project === CHECKING,
+    });
+  }
+  facts.push({ label: "Usage", value: <FactRun parts={usageOf(chosenRow.hostId)} /> });
+  if (!chosenRow.isLocal) {
+    const clis = chosenFacts ? chosenFacts.agentClis : hostAgentCliNames(chosenRow);
+    facts.push({
+      label: "Agent CLIs",
+      value:
+        clis === null ? (
+          "Not reported"
+        ) : clis.length === 0 ? (
+          "None detected"
+        ) : (
+          <FactRun parts={clis} />
+        ),
+    });
+  }
+  if (chosenFacts?.control) {
+    facts.push({
+      label: "Control",
+      value: chosenFacts.control,
+      pending: chosenFacts.control === CHECKING,
+    });
+  }
+  // Named when only two hosts were compared: "than the others" would be one host.
+  const liveRows = rows.filter(isLive);
+  const comparedWith =
+    liveRows.length === 2 ? liveRows.find((row) => row.hostId !== best?.hostId)?.name : null;
 
   return (
     <FormRow
       label="Host"
       htmlFor="worktree-host"
       hint={
-        handoff.status === "failed" ? (
-          <span
-            role="alert"
-            className="text-xs text-status-error"
-            data-testid="worktree-placement-error"
+        <div className="flex flex-col gap-2">
+          {/* The floor keeps the value column still as rows come and go between hosts. */}
+          <dl
+            className="grid grid-cols-[minmax(4.5rem,max-content)_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-xs leading-4"
+            data-testid="worktree-placement-facts"
           >
-            {`Couldn't open this project on ${handoff.hostName}. Check that it's connected and retry.`}
-          </span>
-        ) : (
-          <>
-            <span
-              className="text-xs text-text-secondary"
+            {facts.map((fact) => (
+              <Fragment key={fact.label}>
+                <dt className="text-text-secondary">{fact.label}</dt>
+                <dd
+                  className={cn(
+                    "min-w-0",
+                    fact.pending ? "text-text-secondary" : "text-text-primary"
+                  )}
+                >
+                  {fact.live ? <span role="status">{fact.value}</span> : fact.value}
+                </dd>
+              </Fragment>
+            ))}
+          </dl>
+          {status === "failed" && (
+            <Callout
+              severity="error"
+              size="compact"
+              role="alert"
+              data-testid="worktree-placement-error"
+              title={`Couldn't open this project on ${chosenRow.name}`}
+              action={
+                // The same window the failed attempt asked for.
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  onClick={() => void continueOnHost(lastNewWindow.current)}
+                >
+                  Retry
+                </Button>
+              }
+            >
+              <p>Check that it&apos;s connected.</p>
+            </Callout>
+          )}
+          {best && best.hostId !== chosenRow.hostId && (
+            <p
+              className="text-xs leading-4 text-text-secondary"
               data-testid="worktree-placement-suggestion"
             >
-              {best ? `${best.name} reports more free cores and memory than the others. ` : ""}
-              {`${chosenRow.name}: ${factsOf(chosenRow.hostId) ?? "No measurements reported"}`}
-            </span>
-            <span
-              className="block text-xs text-text-secondary"
-              data-testid="worktree-placement-project-facts"
-            >
-              {projectFactsOf(chosenRow.hostId).join(" · ")}
-            </span>
-          </>
-        )
+              {`${best.name} reports more free cores and memory than ${comparedWith ?? "the others"}. `}
+              <Button
+                variant="link"
+                size="inline"
+                className="text-xs"
+                disabled={status === "pending"}
+                onClick={() => choose(best.hostId)}
+              >
+                Use {best.name}
+              </Button>
+            </p>
+          )}
+        </div>
       }
     >
-      <div className="flex min-w-0 items-center gap-2">
-        <Select
-          value={chosenRow.hostId}
-          disabled={handoff.status === "pending"}
-          onValueChange={(hostId) => {
-            setChosen(hostId);
-            setHandoff({ status: "idle" });
+      <Select
+        value={chosenRow.hostId}
+        disabled={status === "pending"}
+        onValueChange={(hostId) => {
+          const row = rows.find((entry) => entry.hostId === hostId);
+          if (row && isLive(row)) choose(hostId);
+        }}
+      >
+        <SelectTrigger
+          id="worktree-host"
+          className="h-8 min-w-0"
+          data-testid="worktree-host-select"
+          onKeyDown={(event) => {
+            // The dialog's create shortcut, not a way to open the list: Radix
+            // opens on any Enter unless the event is already handled.
+            if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) event.preventDefault();
           }}
         >
-          <SelectTrigger
-            id="worktree-host"
-            className="h-8 min-w-0 flex-1"
-            data-testid="worktree-host-select"
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {rows.map((row) => (
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {rows.map((row) => {
+            const live = isLive(row);
+            const project = row.hostId === windowHostId ? null : projectFactsOf(row.hostId);
+            return (
               <SelectItem
                 key={row.hostId}
                 value={row.hostId}
-                disabled={!isLive(row)}
+                unavailable={!live}
                 description={
-                  <>
-                    <span className="block">{factsOf(row.hostId)}</span>
-                    {projectFactsOf(row.hostId).map((line) => (
-                      <span key={line} className="block">
-                        {line}
-                      </span>
-                    ))}
-                  </>
+                  live ? (
+                    <>
+                      {best?.hostId === row.hostId && (
+                        <span className="block">Reports more free cores and memory</span>
+                      )}
+                      <FactRun parts={usageOf(row.hostId)} />
+                      {project && <span className="block">{project.project}</span>}
+                    </>
+                  ) : (
+                    describeUnavailable(row)
+                  )
                 }
               >
                 {row.name}
                 {row.hostId === windowHostId ? " (this window)" : ""}
-                {best?.hostId === row.hostId ? " · most free" : ""}
               </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {best && best.hostId !== chosenRow.hostId && (
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={handoff.status === "pending"}
-            onClick={() => {
-              setChosen(best.hostId);
-              setHandoff({ status: "idle" });
-            }}
-          >
-            Use {best.name}
-          </Button>
-        )}
-        {elsewhere && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={(event) => void continueOnHost(isNewWindowClick(event))}
-            disabled={!projectId || handoff.status === "pending"}
-            data-testid="worktree-placement-continue"
-          >
-            {handoff.status === "pending"
-              ? `Creating on ${chosenRow.name}…`
-              : `Create on ${chosenRow.name}…`}
-          </Button>
-        )}
-      </div>
+            );
+          })}
+        </SelectContent>
+      </Select>
     </FormRow>
   );
 }

@@ -309,7 +309,7 @@ describe("describeDriver", () => {
         driven("docs", "c1", "greg-mbp", at(11, 10, 0)),
       ],
     });
-    expect(describeDriver(summary)).toBe("Driven from studio-02 and greg-mbp");
+    expect(describeDriver(summary)).toBe("studio-02 and greg-mbp have control");
   });
 
   it("tells two launches of one machine apart, and says which one is away", () => {
@@ -323,7 +323,7 @@ describe("describeDriver", () => {
       ],
     });
     expect(describeDriver(summary)).toBe(
-      `Driven from Greg's Mac Studio (since ${formatHostTime(relaunched, NOW)}) and Greg's Mac Studio (away, since ${formatHostTime(earlier, NOW)})`
+      `Greg's Mac Studio (since ${formatHostTime(relaunched, NOW)}) and Greg's Mac Studio (away, since ${formatHostTime(earlier, NOW)}) have control`
     );
     expect(describeDriverDetail(summary)).toBe(
       `site: Greg's Mac Studio (since ${formatHostTime(relaunched, NOW)}); daintree: Greg's Mac Studio (since ${formatHostTime(earlier, NOW)}), away until ${formatHostTime(at(11, 32, 53), NOW)}`
@@ -339,7 +339,16 @@ describe("describeDriver", () => {
         driven("docs", "local", "studio-01", at(11, 2, 0), null, true),
       ],
     });
-    expect(describeDriver(summary)).toBe("Driven from greg-mbp and its own screen");
+    expect(describeDriver(summary)).toBe("greg-mbp and its own screen have control");
+    // Only the host's own screen is capitalised when it leads; a machine keeps its name's case.
+    expect(
+      describeDriver(
+        makeSummary({
+          sampledAt: NOW,
+          drivers: [driven("docs", "local", "studio-01", at(11, 2, 0), null, true)],
+        })
+      )
+    ).toBe("Its own screen has control");
   });
 
   it("reads a host from before drivers by its newest holder, and nobody driving as nothing", () => {
@@ -351,9 +360,9 @@ describe("describeDriver", () => {
       isHostLocal: false,
       acquiredAt: 1,
     };
-    expect(describeDriver(makeSummary({ driver: holder }))).toBe("Driven from greg-mbp");
+    expect(describeDriver(makeSummary({ driver: holder }))).toBe("greg-mbp has control");
     expect(describeDriver(makeSummary({ driver: holder, drivers: null }))).toBe(
-      "Driven from greg-mbp"
+      "greg-mbp has control"
     );
     expect(describeDriver(makeSummary({ driver: null, drivers: [] }))).toBeNull();
     expect(describeDriverDetail(makeSummary({ driver: holder }))).toBeUndefined();

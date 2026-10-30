@@ -5,14 +5,15 @@
  * opened. A fixed height rather than padding: the chip (22px) and the text-only
  * confirm line both sit inside 36px, and neither can change the bar's size.
  *
- * The amber tint plus the 2px left stripe are the mode's non-colour structural
- * cue and are shared with the drafting pill and the fleet-primary input bar.
+ * The amber band plus the 2px left stripe are the mode's cue, the stripe being
+ * the part that survives without colour. Both colours come from
+ * `fleet-ribbon-surface` (styles/components/fleet-ribbon.css): a pill's subtle
+ * tint is too weak for a full-width band and barely left the page on light
+ * themes.
  */
 export const FLEET_RIBBON_SHELL_CLASS =
-  "relative flex h-9 items-center gap-3 border-b border-border-default bg-category-amber-subtle px-3 text-xs leading-[inherit] text-text-primary " +
-  // The text token, not the border token: the border mix sits at ~1.3:1
-  // against the subtle fill on every theme, which is no cue at all.
-  "before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-category-amber-text";
+  "fleet-ribbon-surface relative flex h-9 items-center gap-3 border-b border-border-default px-3 text-xs leading-[inherit] text-text-primary " +
+  "before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-[var(--fleet-ribbon-ink)]";
 
 /** 24×24 hit area for the ribbon's glyph-only controls (exit, dismiss, disarm, menu). */
 export const FLEET_RIBBON_ICON_BUTTON_CLASS =

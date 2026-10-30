@@ -292,6 +292,10 @@ export type VoiceMicSignal = "pending" | "live" | "silent";
  * - lost: the input device went away; the session was ended and its text kept.
  * - silent: the mic is still delivering silence after the grace window.
  *   `builtIn` is the mic to switch to, when one other than this one is found.
+ *   `appReplaced` marks a silence heard after the app's bundle was replaced
+ *   under it (#14937), which no other mic fixes and a restart does.
+ * - fallback: the chosen mic wasn't available, so another one is recording
+ *   (#15512). `chosenLabel` is the chosen mic's saved name, when it has one.
  */
 export type VoiceMicNotice =
   | { kind: "lost"; target: VoiceRecordingTarget; deviceLabel: string | null }
@@ -301,6 +305,13 @@ export type VoiceMicNotice =
       deviceLabel: string | null;
       bluetooth: boolean;
       builtIn: VoiceMicDevice | null;
+      appReplaced?: true;
+    }
+  | {
+      kind: "fallback";
+      target: VoiceRecordingTarget;
+      deviceLabel: string | null;
+      chosenLabel: string | null;
     };
 
 interface VoiceAnnouncement {
@@ -313,6 +324,29 @@ interface FinishSessionOptions {
   preserveLiveText?: boolean;
   /** The preview as the caller committed it, when that isn't the words the buffer holds. */
   committedLiveText?: string;
+}
+
+/**
+ * A spoken "scratch that" that removed nothing (#14973): the session's latest
+ * words were edited by hand, or none of them are left.
+ */
+export interface VoiceScratchRefusal {
+  panelId: string;
+  reason: "edited" | "nothing";
+  /** Tells two refusals with the same reason apart. */
+  id: number;
+}
+
+/**
+ * Spoken file references a dictation detected but couldn't resolve (#14983).
+ * Their words stay as spoken; the composer says which found nothing.
+ */
+export interface VoiceFileReferenceNote {
+  panelId: string;
+  /** The misses and failed lookups, in spoken order. */
+  references: ReadonlyArray<{ description: string; failed?: true }>;
+  /** Tells two notes saying the same apart. */
+  id: number;
 }
 
 /** A first Escape that would take dictated words back out of the draft, waiting on the second. */
@@ -338,6 +372,8 @@ interface VoiceRecordingState {
   /** True in the last seconds before a listening session with no new words auto-stops. */
   idleStopWarning: boolean;
   dictationCancelConfirm: DictationCancelConfirm | null;
+  scratchRefusal: VoiceScratchRefusal | null;
+  fileReferenceNote: VoiceFileReferenceNote | null;
   activeTarget: VoiceRecordingTarget | null;
   /**
    * Where the next session will record, from the press until it begins. A
@@ -391,6 +427,8 @@ interface VoiceRecordingState {
   setPauseStopWarning: (warning: boolean) => void;
   setIdleStopWarning: (warning: boolean) => void;
   setDictationCancelConfirm: (confirm: DictationCancelConfirm | null) => void;
+  setScratchRefusal: (refusal: VoiceScratchRefusal | null) => void;
+  setFileReferenceNote: (note: VoiceFileReferenceNote | null) => void;
   setErrorPanelId: (panelId: string | null) => void;
   setElapsedSeconds: (seconds: number) => void;
   /** `replace` sets the preview to `delta` instead of appending (a revised hypothesis). */
@@ -461,6 +499,8 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       pauseStopWarning: false,
       idleStopWarning: false,
       dictationCancelConfirm: null,
+      scratchRefusal: null,
+      fileReferenceNote: null,
       activeTarget: null,
       pendingTarget: null,
       lockedTarget: null,
@@ -498,6 +538,8 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       setPauseStopWarning: (pauseStopWarning) => set({ pauseStopWarning }),
       setIdleStopWarning: (idleStopWarning) => set({ idleStopWarning }),
       setDictationCancelConfirm: (dictationCancelConfirm) => set({ dictationCancelConfirm }),
+      setScratchRefusal: (scratchRefusal) => set({ scratchRefusal }),
+      setFileReferenceNote: (fileReferenceNote) => set({ fileReferenceNote }),
 
       setErrorPanelId: (errorPanelId) => set({ errorPanelId }),
 
@@ -544,6 +586,8 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           lastError: null,
           errorPanelId: null,
           dictationCancelConfirm: null,
+          scratchRefusal: null,
+          fileReferenceNote: null,
           elapsedSeconds: 0,
           micSignal: "pending",
           micDeviceLabel: null,
@@ -772,9 +816,10 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       finishSession: ({ nextStatus = "idle", preserveLiveText = false, committedLiveText } = {}) =>
         set((state) => {
           const panelId = state.activeTarget?.panelId;
-          // A silent warning belongs to the session that was silent; the other
-          // notices outlive it until dismissed or the next session starts.
-          const micNotice = state.micNotice?.kind === "silent" ? null : state.micNotice;
+          // Silence and a stand-in mic belong to the session they were heard
+          // in; a lost mic says why it ended, so it stays until dismissed or
+          // the next session starts.
+          const micNotice = state.micNotice?.kind === "lost" ? state.micNotice : null;
           const errorPanelId = nextStatus === "error" ? (panelId ?? null) : null;
           if (!panelId) {
             return {
@@ -841,10 +886,19 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
 
       clearPanelBuffer: (panelId) =>
         set((state) => {
-          if (!(panelId in state.panelBuffers)) return state;
+          const scratchRefusal =
+            state.scratchRefusal?.panelId === panelId ? null : state.scratchRefusal;
+          const fileReferenceNote =
+            state.fileReferenceNote?.panelId === panelId ? null : state.fileReferenceNote;
+          if (!(panelId in state.panelBuffers)) {
+            return scratchRefusal === state.scratchRefusal &&
+              fileReferenceNote === state.fileReferenceNote
+              ? state
+              : { scratchRefusal, fileReferenceNote };
+          }
           const next = { ...state.panelBuffers };
           delete next[panelId];
-          return { panelBuffers: next };
+          return { panelBuffers: next, scratchRefusal, fileReferenceNote };
         }),
 
       announce: (text) =>

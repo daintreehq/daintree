@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ReactNode } from "react";
-import { render, act, cleanup, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, act, cleanup, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import type { GitStatus } from "@shared/types/git";
@@ -102,7 +102,8 @@ vi.mock("@/lib/viewCacheState", () => ({
   },
 }));
 vi.mock("@/store/projectStore", () => ({
-  useProjectStore: (selector: (state: unknown) => unknown) => selector({ currentProject: null }),
+  useProjectStore: (selector: (state: unknown) => unknown) =>
+    selector({ currentProject: null, projects: [] }),
 }));
 const { setMarkdownFontSizeMock, setDiffWrapLinesMock, setMarkdownWrapLinesMock } = vi.hoisted(
   () => ({
@@ -2757,6 +2758,51 @@ describe("FilePane live disk refresh (#11451)", () => {
     expect(loadingSkeleton(container)).toBeNull();
   });
 
+  it("says an SVG that passes the sanitizer but doesn't parse couldn't be parsed (#15030)", async () => {
+    // Truncated mid-write: still has its `<svg`, so the sanitizer passes it.
+    readMock.mockResolvedValue({
+      content: '<svg xmlns="http://www.w3.org/2000/svg"><rect></svg>',
+    });
+    await renderPane({ filePath: "/repo/assets/icon.svg" });
+
+    const body = await screen.findByTestId("file-pane-unavailable");
+    expect(body.textContent).toContain("Can't preview this SVG");
+    expect(body.textContent).toContain("couldn't be parsed");
+    expect(within(body).getByRole("button", { name: "Open in editor" })).toBeTruthy();
+    expect(within(body).getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("keeps the last good SVG when a background re-read catches it unparseable", async () => {
+    seedWorktree(OUTER_ID, "/repo", { git: 100 });
+    readMock.mockResolvedValue({
+      content: '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>',
+    });
+    const { container, rerender } = await renderPane({ filePath: "/repo/assets/icon.svg" });
+    await waitFor(() => expect(shownSvgPart(container, "rect")).not.toBeNull());
+
+    readMock.mockResolvedValue({ content: '<svg xmlns="http://www.w3.org/2000/svg"><circle>' });
+    seedWorktree(OUTER_ID, "/repo", { git: 200 });
+    await commitTick(rerender);
+
+    expect(shownSvgPart(container, "rect")).not.toBeNull();
+    expect(screen.queryByTestId("file-pane-unavailable")).toBeNull();
+  });
+
+  it("names an SVG the image decoder couldn't draw as the markup's failure, not a lost file", async () => {
+    readMock.mockResolvedValue({
+      content: '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>',
+    });
+    const { container } = await renderPane({ filePath: "/repo/assets/icon.svg" });
+    await waitFor(() => expect(shownSvgPart(container, "rect")).not.toBeNull());
+
+    fireEvent.error(container.querySelector('img[src^="data:image/svg+xml,"]')!);
+
+    const body = await screen.findByTestId("file-pane-unavailable");
+    expect(body.textContent).toContain("Can't preview this SVG");
+    expect(body.textContent).toContain("couldn't be drawn");
+    expect(within(body).getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
   it("re-reads an SVG when the app window regains the foreground", async () => {
     // A separate listener from the pane-focus one, and the only automatic
     // signal a file outside every worktree ever gets — no tick can reach it.
@@ -2831,6 +2877,105 @@ describe("FilePane live disk refresh (#11451)", () => {
     await commitTick(rerender);
 
     expect(readMock.mock.calls.length).toBe(initialReads);
+  });
+
+  describe("raster image zoom and pan (#15024)", () => {
+    const readout = () => screen.getByTestId("zoomable-image-status").textContent ?? "";
+    const atFit = () => /^Fit/.test(readout());
+
+    async function renderAt(location: "grid" | "dock" | "dialog") {
+      panelsById["file-1"] = { id: "file-1", kind: "file", filePath: "/repo/assets/logo.png" };
+      const view = render(
+        <TooltipProvider>
+          <FilePane
+            id="file-1"
+            title="logo.png"
+            isFocused={false}
+            location={location}
+            onFocus={() => {}}
+            onClose={() => {}}
+          />
+        </TooltipProvider>
+      );
+      await act(async () => {});
+      return view;
+    }
+
+    it("zooms and pans a raster image the way the File Browser viewer does", async () => {
+      const { container } = await renderPane({ filePath: "/repo/assets/logo.png" });
+
+      expect(screen.getByRole("button", { name: "Zoom in" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Zoom out" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Fit to screen" })).toBeTruthy();
+      expect(atFit()).toBe(true);
+
+      const stage = screen.getByRole("group", { name: /^logo\.png/ });
+      fireEvent.keyDown(stage, { key: "+" });
+      expect(atFit()).toBe(false);
+      fireEvent.keyDown(stage, { key: "ArrowLeft" });
+      const panned = container.querySelector("img")?.style.transform;
+      expect(panned).not.toMatch(/^translate\(0px, 0px\)/);
+      fireEvent.keyDown(stage, { key: "0" });
+      expect(atFit()).toBe(true);
+      expect(container.querySelector("img")?.style.transform).toMatch(/^translate\(0px, 0px\)/);
+      expect(readMock).not.toHaveBeenCalled();
+    });
+
+    it("zooms in the dock too, not only the grid", async () => {
+      await renderAt("dock");
+
+      fireEvent.keyDown(screen.getByRole("group", { name: /^logo\.png/ }), { key: "+" });
+
+      expect(atFit()).toBe(false);
+    });
+
+    it("keeps the zoom when a rewritten image reloads its bytes", async () => {
+      seedWorktree(OUTER_ID, "/repo", { git: 100 });
+      const { container, rerender } = await renderPane({ filePath: "/repo/assets/logo.png" });
+      fireEvent.keyDown(screen.getByRole("group", { name: /^logo\.png/ }), { key: "+" });
+      expect(atFit()).toBe(false);
+      const zoomed = readout();
+      const before = imageSrc(container);
+
+      seedWorktree(OUTER_ID, "/repo", { git: 200 });
+      await commitTick(rerender);
+
+      expect(imageSrc(container)).not.toBe(before);
+      expect(readout()).toBe(zoomed);
+    });
+
+    it("starts a different file at fit", async () => {
+      const { rerender } = await renderPane({ filePath: "/repo/assets/logo.png" });
+      fireEvent.keyDown(screen.getByRole("group", { name: /^logo\.png/ }), { key: "+" });
+      expect(atFit()).toBe(false);
+
+      panelsById["file-1"] = { id: "file-1", kind: "file", filePath: "/repo/assets/other.png" };
+      await commitTick(rerender);
+
+      expect(screen.getByRole("group", { name: /^other\.png/ })).toBeTruthy();
+      expect(atFit()).toBe(true);
+    });
+
+    it("leaves the temporary viewer dialog fit-only", async () => {
+      const { container } = await renderAt("dialog");
+
+      expect(imageSrc(container)).toContain("daintree-file://");
+      expect(screen.queryByRole("button", { name: "Zoom in" })).toBeNull();
+      expect(screen.queryByTestId("zoomable-image-status")).toBeNull();
+    });
+
+    it("leaves an SVG fit-only", async () => {
+      readMock.mockResolvedValue({
+        content: '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>',
+      });
+      const { container } = await renderPane({ filePath: "/repo/assets/icon.svg" });
+
+      await waitFor(() =>
+        expect(container.querySelector('img[src^="data:image/svg+xml,"]')).not.toBeNull()
+      );
+      expect(screen.queryByRole("button", { name: "Zoom in" })).toBeNull();
+      expect(screen.queryByTestId("zoomable-image-status")).toBeNull();
+    });
   });
 
   describe("rendered HTML across a tick", () => {
@@ -3837,7 +3982,7 @@ describe("FilePane edit mode (#12323)", () => {
         draftText: "# Plan (edited)\n",
         dirty: true,
         conflict: false,
-        save: async () => true,
+        save: async () => ({ status: "saved" as const }),
         discard: async () => {},
       });
     });
@@ -3852,7 +3997,7 @@ describe("FilePane edit mode (#12323)", () => {
         draftText: "# Plan (edited)\n",
         dirty: true,
         conflict: true,
-        save: async () => true,
+        save: async () => ({ status: "saved" as const }),
         discard: async () => {},
       });
     });
@@ -3929,7 +4074,7 @@ describe("FilePane edit mode (#12323)", () => {
           draftText: "# Plan (edited)\n",
           dirty: true,
           conflict: false,
-          save: async () => false,
+          save: async () => ({ status: "conflict" as const, reason: "The file changed on disk" }),
           discard: async () => {},
         });
       });
@@ -4039,7 +4184,7 @@ describe("FilePane edit mode (#12323)", () => {
         draftText: "# Plan (edited)\n",
         dirty: true,
         conflict: false,
-        save: async () => true,
+        save: async () => ({ status: "saved" as const }),
         discard: async () => {},
       });
       await renderPane({ fileViewMode: "edit" });
@@ -4164,8 +4309,10 @@ describe("FilePane edit mode (#12323)", () => {
           choices: { [SLOT]: { pluginId: "acme.records", choice: "stock", decidedAt: 1 } },
         }));
 
+        // No display name seeded: the notice never falls back to the manifest
+        // id (#15236).
         expect(
-          screen.getByText("acme.records set up this project: Editor for docs/*.md")
+          screen.getByText("A project plugin set up this project: Editor for docs/*.md")
         ).toBeTruthy();
         await act(async () => {
           fireEvent.click(screen.getByRole("button", { name: "Use Daintree's" }));
@@ -4514,7 +4661,7 @@ describe("FilePane in a remote window (#13925)", () => {
     );
   }
 
-  it("says another window has control of a refused image, and loads it once this view drives", async () => {
+  it("says a refused image waits for control, names who has it, and loads it once this view drives", async () => {
     setDriveLeaseSnapshot(lease(false));
     fetchMock.mockResolvedValue({
       ok: false,
@@ -4531,8 +4678,9 @@ describe("FilePane in a remote window (#13925)", () => {
       image.dispatchEvent(new Event("error"));
     });
 
-    await screen.findByText("Another window has control");
-    expect(container.textContent).toContain("greg-mbp has control of this project");
+    await screen.findByText("Waiting for control");
+    expect(container.textContent).toContain("greg-mbp has control of");
+    expect(container.textContent).toContain("read-only on greg-mbp");
     expect(container.textContent).not.toMatch(/damaged/);
     expect(screen.getByRole("button", { name: "Take control" })).toBeTruthy();
     expect(container.querySelector("img")).toBeNull();

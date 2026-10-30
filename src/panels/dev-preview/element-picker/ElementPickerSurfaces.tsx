@@ -5,22 +5,24 @@ import {
   useState,
   useSyncExternalStore,
   type ComponentType,
-  type ReactNode,
   type RefObject,
 } from "react";
 import {
   AlertTriangle,
   ChevronRight,
+  CirclePause,
   FolderCode,
   FolderTree,
+  Info,
   MousePointer2,
   PanelRightClose,
   PanelRightOpen,
   SquareDashedMousePointer,
   Unplug,
+  XCircle,
 } from "lucide-react";
 import type { DevPreviewToolSurfaceProps } from "@/services/devPreviewTools/types";
-import { Badge } from "@/components/ui/badge";
+import { actionService } from "@/services/ActionService";
 import { Button } from "@/components/ui/button";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { KBD_COMPACT_CLASS, KbdChord } from "@/components/ui/Kbd";
@@ -44,7 +46,8 @@ import {
 } from "./inspectorController.js";
 import { InspectorNotice } from "./InspectorNotice.js";
 import { PropertyRow, SectionHeader } from "./InspectorSection.js";
-import { SelectionIdentity } from "./SelectionCard.js";
+import { SelectionIdentity, SourcePath } from "./SelectionCard.js";
+import { Spinner } from "@/components/ui/Spinner";
 import { AgentComposer } from "./AgentComposer.js";
 import {
   composerMemoryKey,
@@ -57,15 +60,22 @@ import { WaitingRow } from "./WaitingRow.js";
 import { IdentitySkeleton } from "./IdentitySkeleton.js";
 import { useDeferredLoading, useDohertyGate, useSkeletonFloor } from "@/hooks/useDeferredLoading";
 import { UI_STILL_WORKING_MS } from "@/lib/animationUtils";
-import { elementPlace, scopesFor, type PickedSelection, type SourcePoint } from "./selection.js";
+import { elementPlace, primaryObservation, scopesFor, type PickedSelection } from "./selection.js";
 import {
+  BROWSE_COPY,
   DETACH_COPY,
+  INSPECT_IDLE_COPY,
   ORIGIN_SUSPENDED_COPY,
+  SELECTION_OUTCOME_COPY,
+  STALE_COPY,
+  TOOL_NAME,
   UNTESTED_TOOLCHAIN_TITLE,
+  WORKSPACE_FAILURE_COPY,
+  issueDetailIsDiagnostic,
+  relativeTo,
   untestedToolchainDetail,
 } from "./copy.js";
-import { middleTruncatePath } from "@/utils/textParsing";
-import { SelectionTrail, trailFor } from "./SelectionTrail.js";
+import { SelectionTrail, trailFor, type CrumbSelect } from "./SelectionTrail.js";
 import { PickerIconButton } from "./PickerIconButton.js";
 
 const MODE_OPTIONS = [
@@ -124,7 +134,7 @@ function useSelectCrumb(
    * or focus is spent on a landing that has not been rendered.
    */
   landingReady = true
-): ((usedAt: SourcePoint) => void) | undefined {
+): CrumbSelect | undefined {
   // The generation the pick was made from; the answer advances it.
   const pending = useRef<{ generation: number; timer: ReturnType<typeof setTimeout> } | null>(null);
   const status = state.selection.status;
@@ -152,16 +162,22 @@ function useSelectCrumb(
     target?.focus();
   }, [status, generation, landingReady, root, landing, drop]);
   useEffect(() => drop, [drop]);
-  if (controller === null || !controller.canSelectComponent()) return undefined;
-  return (usedAt) => {
-    drop();
-    const focused = root.current?.contains(document.activeElement) ?? false;
-    if (focused) {
-      pending.current = { generation, timer: setTimeout(drop, CRUMB_FOCUS_WAIT_MS) };
-    }
-    void controller.selectComponent(usedAt).then((sent) => {
-      if (!sent) drop();
-    });
+  const by = controller?.componentSelection() ?? null;
+  if (controller === null || by === null) return undefined;
+  return {
+    by,
+    select: (target, keepFocus = false) => {
+      drop();
+      // A pick from the trail's overflow menu is made from a portalled menu, so
+      // focus is outside the surface at that moment; the surface still owns it.
+      const focused = keepFocus || (root.current?.contains(document.activeElement) ?? false);
+      if (focused) {
+        pending.current = { generation, timer: setTimeout(drop, CRUMB_FOCUS_WAIT_MS) };
+      }
+      void controller.selectComponent(target).then((sent) => {
+        if (!sent) drop();
+      });
+    },
   };
 }
 
@@ -174,7 +190,9 @@ const CRUMB_FOCUS_WAIT_MS = 3000;
  * roving keys keep working from there.
  */
 function stripLanding(root: HTMLElement): HTMLElement | null {
-  const crumbs = root.querySelectorAll<HTMLElement>('nav[aria-label="Breadcrumb"] button');
+  const crumbs = root.querySelectorAll<HTMLElement>(
+    'nav[aria-label="Breadcrumb"] button:not([aria-disabled="true"])'
+  );
   return crumbs[crumbs.length - 1] ?? root.querySelector<HTMLElement>("button");
 }
 
@@ -215,25 +233,45 @@ export function ElementPickerToolbar(props: DevPreviewToolSurfaceProps<Inspector
   const composerOccupied = useComposerOccupied(composerMemoryKey(props.panelId, props.worktreeId));
   const hasDetails = drawerHasDetails(state, composerOccupied);
   const selectCrumb = useSelectCrumb(controller, state, stripRef, stripLanding);
+  const close = (
+    <DismissButton
+      aria-label={`Close ${TOOL_NAME}`}
+      tooltip={`Close ${TOOL_NAME}`}
+      onClick={() => props.onClose()}
+    />
+  );
   if (!controller) {
     return (
       <div
         ref={stripRef}
         role="toolbar"
-        aria-label="Element Picker"
+        aria-label={TOOL_NAME}
         onKeyDown={onStripKeyDown}
         className="flex h-8 shrink-0 items-center gap-2 border-b border-overlay bg-surface px-2"
       >
-        <WaitingRow label="Starting the Element Picker" />
+        <div className="flex min-w-0 flex-1 items-center">
+          <WaitingRow label={`Starting the ${TOOL_NAME}`} />
+        </div>
+        {close}
       </div>
     );
   }
+  const notice = stripNotice(state);
+  // What the live region says: the strip's sentence, or — folded, where the
+  // drawer's own notice isn't there to say it — that the selection is stale.
+  const selection = state.selection;
+  const staleNote =
+    selection.status === "ready" && selection.stale && !selection.reproving
+      ? STALE_COPY[selection.stale].title
+      : null;
+  const drawerShowing = hasDetails && !drawerCollapsed;
+  const announcement = notice?.text ?? (staleNote && !drawerShowing ? staleNote : "");
 
   return (
     <div
       ref={stripRef}
       role="toolbar"
-      aria-label="Element Picker"
+      aria-label={TOOL_NAME}
       onKeyDown={onStripKeyDown}
       className="@container/strip flex h-8 shrink-0 items-center gap-2 border-b border-overlay bg-surface px-2"
     >
@@ -246,20 +284,27 @@ export function ElementPickerToolbar(props: DevPreviewToolSurfaceProps<Inspector
       />
       <div aria-hidden="true" className="toolbar-divider h-4 w-px shrink-0" />
       <div className="flex min-w-0 flex-1 items-center gap-1.5 text-xs text-text-secondary">
-        <StripStatus
-          state={state}
-          controller={controller}
-          bound={bound}
-          drawerShowing={!drawerCollapsed}
-          selectCrumb={selectCrumb}
-        />
+        {notice ? (
+          <StripNoticeRow notice={notice} controller={controller} />
+        ) : (
+          <StripStatus
+            state={state}
+            controller={controller}
+            bound={bound}
+            drawerShowing={drawerShowing}
+            selectCrumb={selectCrumb}
+            worktreePath={props.worktreePath}
+          />
+        )}
       </div>
-      <DrawerToggle panelId={props.panelId} expanded={hasDetails && !drawerCollapsed} />
-      <DismissButton
-        aria-label="Close Element Picker"
-        tooltip="Close Element Picker"
-        onClick={() => props.onClose()}
-      />
+      {/* One persistent live region for the strip's sentence, so a disconnect
+          or a lost pick is announced as it happens rather than only being
+          there for whoever looks. Waits announce through their own row. */}
+      <span role="status" className="sr-only">
+        {announcement}
+      </span>
+      <DrawerToggle panelId={props.panelId} expanded={drawerShowing} available={hasDetails} />
+      {close}
     </div>
   );
 }
@@ -271,25 +316,40 @@ export function ElementPickerToolbar(props: DevPreviewToolSurfaceProps<Inspector
  * away: it hides itself when there is nothing in it, and claiming expansion
  * over an empty strip would be a claim about nothing.
  *
+ * With nothing to show it is disabled rather than live: pressing it then would
+ * flip a flag the user can't see, and their next pick would land with the
+ * drawer shut and nothing on screen saying why.
+ *
  * `aria-expanded`, not `aria-pressed`: the two must never appear together, and
  * this shows and hides a region rather than latching a setting.
  */
-function DrawerToggle({ panelId, expanded }: { panelId: string; expanded: boolean }) {
+function DrawerToggle({
+  panelId,
+  expanded,
+  available,
+}: {
+  panelId: string;
+  expanded: boolean;
+  available: boolean;
+}) {
   const collapsed = useDrawerCollapsed(panelId);
   return (
     <PickerIconButton
+      // The glyph says what the drawer is doing, like the state it mirrors:
+      // a toggle with nothing to show must not wear "close".
       icon={
-        collapsed ? <PanelRightOpen aria-hidden="true" /> : <PanelRightClose aria-hidden="true" />
+        expanded ? <PanelRightClose aria-hidden="true" /> : <PanelRightOpen aria-hidden="true" />
       }
-      aria-label="Element Picker details"
+      aria-label={`${TOOL_NAME} details`}
       aria-expanded={expanded}
+      disabled={!available}
       onClick={() => setDrawerCollapsed(panelId, !collapsed)}
     />
   );
 }
 
 /** How to walk the page from the keyboard once something is selected. */
-function KeyHints() {
+function KeyHints({ canWiden }: { canWiden: boolean }) {
   return (
     // The compact key cap, not a hand-rolled box: the product already has one
     // key-cap grammar and this row is exactly the dense case it was tightened
@@ -301,11 +361,184 @@ function KeyHints() {
         <kbd className={cn(KBD_COMPACT_CLASS, "font-sans")}>↑↓←→</kbd>
         move
       </span>
-      <span className="flex items-center gap-1">
-        <KbdChord shortcut="Alt+Up" density="compact" />
-        component
-      </span>
+      {/* Only where the page can actually widen to a component. */}
+      {canWiden ? (
+        <span className="flex items-center gap-1">
+          <KbdChord shortcut="Alt+Up" density="compact" />
+          component
+        </span>
+      ) : null}
     </span>
+  );
+}
+
+type GlyphComponent = ComponentType<{ className?: string; "aria-hidden"?: boolean | "true" }>;
+
+/**
+ * Every sentence the strip can say instead of a selection, in one place, so
+ * the strip and its live region say the same thing and the drawer's notices
+ * have one vocabulary to match. Null while the strip shows a selection or a
+ * wait, which carry their own presentation.
+ */
+interface StripNotice {
+  icon: GlyphComponent;
+  tone?: "warning" | "error";
+  text: string;
+  /** The diagnostic behind the sentence, one step away. */
+  detail?: string;
+  action?: { label: string; run: (controller: InspectorController) => void };
+}
+
+function stripNotice(state: InspectorState): StripNotice | null {
+  const binding = state.binding;
+  if (binding.status === "detached") {
+    return {
+      // A runtime that never started is a failure, not a disconnect.
+      ...(binding.reason === "install-failed"
+        ? { icon: XCircle, tone: "error" as const }
+        : { icon: Unplug }),
+      text: DETACH_COPY[binding.reason],
+      action: { label: "Reconnect", run: (c) => void c.connect() },
+    };
+  }
+  if (binding.status === "failed" && !binding.retrying) {
+    return {
+      icon: XCircle,
+      tone: "error",
+      text: "Couldn't connect to the page",
+      detail: binding.message,
+      action: { label: "Retry", run: (c) => void c.retryConnect() },
+    };
+  }
+  if (binding.status !== "bound") return null;
+  if (binding.suspended) return { icon: CirclePause, text: ORIGIN_SUSPENDED_COPY };
+  const selection = state.selection;
+  if (selection.status === "ready" || selection.status === "resolving") return null;
+  if (state.mode === "browse") return { icon: MousePointer2, text: BROWSE_COPY };
+  // The strip must not contradict the drawer: an invitation to click while the
+  // drawer says the click didn't take is two surfaces telling two stories, and
+  // with the drawer folded the strip is the only one telling any.
+  switch (selection.status) {
+    case "lost":
+      return { icon: AlertTriangle, tone: "warning", text: SELECTION_OUTCOME_COPY.lost.title };
+    case "settling":
+      return selection.retrying
+        ? null
+        : { icon: AlertTriangle, tone: "warning", text: SELECTION_OUTCOME_COPY.settled.title };
+    case "failed":
+      if (selection.reason === "host") {
+        return {
+          icon: XCircle,
+          tone: "error",
+          // The drawer says "click it again" under its headline; folded, the
+          // strip has one line to say both.
+          text: `${SELECTION_OUTCOME_COPY.host.title} — select it again`,
+          detail: selection.message,
+        };
+      }
+      if (selection.reason === "mismatch") {
+        return {
+          icon: AlertTriangle,
+          tone: "warning",
+          text: SELECTION_OUTCOME_COPY.mismatch.title,
+          action: { label: "Switch to Browse", run: (c) => void c.setMode("browse") },
+        };
+      }
+      return {
+        icon: AlertTriangle,
+        tone: "warning",
+        text: SELECTION_OUTCOME_COPY[selection.reason].title,
+      };
+  }
+  const workspace = state.workspace;
+  if (workspace.status === "ambiguous") {
+    return { icon: FolderTree, text: "Choose which app this preview shows" };
+  }
+  if (workspace.status === "failed") {
+    return {
+      icon: AlertTriangle,
+      tone: "warning",
+      text: WORKSPACE_FAILURE_COPY[workspace.reason].strip,
+    };
+  }
+  // A choice being opened is a wait, said by the wait row; the first open of
+  // a preview is quick and silent, and a click made during it is held.
+  if (workspace.status === "opening" && workspace.appPath) return null;
+  // One sentence, whatever the framework: what the picker offers is the same
+  // for every page it can trace.
+  return { icon: SquareDashedMousePointer, text: INSPECT_IDLE_COPY };
+}
+
+/**
+ * Every strip sentence leads with a glyph in the same slot, so the text starts
+ * at one x whatever the state; states without one made the sentence jump as
+ * the page connected, armed and detached.
+ */
+function StripNoticeRow({
+  notice,
+  controller,
+}: {
+  notice: StripNotice;
+  controller: InspectorController;
+}) {
+  const Icon = notice.icon;
+  return (
+    <>
+      <span className="flex min-w-0 items-center gap-1.5">
+        <Icon
+          className={cn(
+            "h-3.5 w-3.5 shrink-0",
+            notice.tone === "warning" && "text-status-warning",
+            notice.tone === "error" && "text-status-error"
+          )}
+          aria-hidden="true"
+        />
+        {/* A control that does nothing, as the stale sentence is: a cut
+            sentence is a focus away in the roving order, not only a hover. */}
+        <TruncatedTooltip content={notice.text}>
+          <button
+            type="button"
+            aria-disabled="true"
+            className="min-w-0 cursor-default truncate rounded-[var(--radius-sm)] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+          >
+            {notice.text}
+          </button>
+        </TruncatedTooltip>
+      </span>
+      {notice.action ? (
+        // The strip's only action: `secondary` has a fill and a ring, where
+        // `subtle` sat in the same grey as the sentence before it.
+        <Button
+          variant="secondary"
+          size="xs"
+          className="shrink-0"
+          onClick={() => notice.action?.run(controller)}
+        >
+          {notice.action.label}
+        </Button>
+      ) : null}
+      {notice.detail ? <DetailsButton detail={notice.detail} /> : null}
+    </>
+  );
+}
+
+/**
+ * The diagnostic behind a strip sentence: a control in the toolbar's roving
+ * order, so the evidence a pointer user can hover is one arrow key away for
+ * everyone else, and never in the sentence slot itself.
+ */
+function DetailsButton({ detail }: { detail: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button variant="ghost" size="icon-xs" aria-label="Details" className="shrink-0">
+          <Info aria-hidden="true" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" align="start">
+        <span className="font-mono text-3xs wrap-anywhere">{detail}</span>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -315,6 +548,7 @@ function StripStatus({
   bound,
   drawerShowing,
   selectCrumb,
+  worktreePath,
 }: {
   state: InspectorState;
   controller: InspectorController;
@@ -322,39 +556,12 @@ function StripStatus({
   /** The drawer is open beside the page and already names the source. */
   drawerShowing: boolean;
   /** Select a component from the trail; absent while that can't be done. */
-  selectCrumb: ((usedAt: SourcePoint) => void) | undefined;
+  selectCrumb: CrumbSelect | undefined;
+  worktreePath: string | null;
 }) {
   const binding = state.binding;
-  if (binding.status === "detached") {
-    return (
-      <>
-        <StripMessage icon={Unplug}>{DETACH_COPY[binding.reason]}</StripMessage>
-        {/* The strip's only action: `secondary` has a fill and a ring, where
-            `subtle` sat in the same grey as the sentence before it. */}
-        <Button variant="secondary" size="xs" onClick={() => void controller.connect()}>
-          Reconnect
-        </Button>
-      </>
-    );
-  }
-  if (binding.status === "failed") {
-    return (
-      <>
-        <StripMessage icon={AlertTriangle} tone="warning" title={binding.message}>
-          {binding.retrying
-            ? "Waiting for the page to load"
-            : `Couldn't connect to the page — ${binding.message}`}
-        </StripMessage>
-        <Button variant="secondary" size="xs" onClick={() => void controller.retryConnect()}>
-          Retry
-        </Button>
-      </>
-    );
-  }
+  if (binding.status === "failed") return <WaitingRow label="Connecting to the page" />;
   if (!bound) return <WaitingRow label="Connecting to the page" />;
-  if (binding.status === "bound" && binding.suspended) {
-    return <StripMessage icon={Unplug}>{ORIGIN_SUSPENDED_COPY}</StripMessage>;
-  }
 
   const selection = state.selection;
   if (selection.status === "ready") {
@@ -367,20 +574,42 @@ function StripStatus({
       const place = scope ? null : elementPlace(picked);
       const location =
         scope && scope.kind !== "element"
-          ? scope.file
+          ? scope.file === null
+            ? null
+            : { path: scope.file, line: null }
           : place
-            ? `${place.path}${place.line === null ? "" : `:${place.line}`}`
+            ? { path: place.path, line: place.line }
             : null;
       return (
         <>
           {/* The same trail the drawer draws, from the same function. The strip
               has no header, so its trail ends at what is selected — the
               component when a component was picked, the element otherwise. */}
-          <StripTrail selection={picked} onSelect={selectCrumb} />
-          {pickedIndex > 0 ? (
-            <Badge size="xs" tone="outline">
-              Component
-            </Badge>
+          <StripTrail
+            selection={picked}
+            onSelect={selectCrumb}
+            currentBadge={pickedIndex > 0 ? "Component" : undefined}
+          />
+          {/* A selection that has to be made again says so here too, so a
+              folded drawer never hides that the trail is out of date. */}
+          {selection.stale && !selection.reproving ? (
+            <span className="flex min-w-0 shrink items-center gap-1.5">
+              <AlertTriangle
+                className="h-3.5 w-3.5 shrink-0 text-status-warning"
+                aria-hidden="true"
+              />
+              {/* A control that does nothing, so a cut sentence is a focus
+                  away in the roving order as well as a hover away. */}
+              <TruncatedTooltip content={STALE_COPY[selection.stale].title}>
+                <button
+                  type="button"
+                  aria-disabled="true"
+                  className="min-w-0 cursor-default truncate rounded-[var(--radius-sm)] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+                >
+                  {STALE_COPY[selection.stale].title}
+                </button>
+              </TruncatedTooltip>
+            </span>
           ) : null}
           {/* Escape clears it too, but only while the page has the keyboard —
               which it stops having the moment the request is being typed. */}
@@ -401,89 +630,85 @@ function StripStatus({
           >
             Deselect
           </Button>
-          <KeyHints />
+          <KeyHints
+            canWiden={
+              primaryObservation(picked)?.capabilities.componentSelection.state === "available"
+            }
+          />
           {location && !drawerShowing ? (
             <>
               <div aria-hidden="true" className="toolbar-divider mx-1 h-4 w-px shrink-0" />
-              {/* Pointer-only: the strip is a roving toolbar with one tab
-                  stop, and the drawer names the full source for the keyboard. */}
-              <TruncatedTooltip
-                content={location}
-                focusable={false}
-                isTruncated={middleTruncatePath(location, 38) !== location || undefined}
-              >
-                <span className="min-w-0 shrink truncate font-mono text-3xs text-text-secondary">
-                  {middleTruncatePath(location, 38)}
-                </span>
-              </TruncatedTooltip>
+              <StripLocation
+                path={location.path}
+                line={location.line}
+                worktreePath={worktreePath}
+              />
             </>
           ) : null}
         </>
       );
     }
   }
-  if (selection.status === "resolving" || (selection.status === "settling" && selection.retrying)) {
-    return <WaitingRow label="Finding the source" />;
+  if (selection.status === "resolving") return <WaitingRow label="Finding the source" />;
+  if (selection.status === "settling") {
+    return <WaitingRow label="Waiting for the preview to update" />;
   }
-  if (state.mode === "select") {
-    // The strip must not contradict the drawer: an invitation to click while
-    // the drawer says the source could not be opened is two surfaces telling
-    // two stories. The workspace's state is the strip's state too.
-    const workspace = state.workspace;
-    if (workspace.status === "ambiguous") {
-      return <StripMessage icon={FolderTree}>Choose which app this preview shows</StripMessage>;
-    }
-    if (workspace.status === "failed") {
-      return (
-        <StripMessage icon={AlertTriangle} tone="warning" title={workspace.message}>
-          Couldn't open the site source
-        </StripMessage>
-      );
-    }
-    // One sentence, whatever the framework: what the picker offers is the
-    // same for every page it can trace.
-    return (
-      <StripMessage icon={SquareDashedMousePointer}>
-        Click an element to ask an agent about it
-      </StripMessage>
-    );
+  const workspace = state.workspace;
+  if (workspace.status === "opening" && workspace.appPath) {
+    return <WaitingRow label={`Opening ${workspace.appPath}`} />;
   }
-  return (
-    <StripMessage icon={MousePointer2}>Browsing — switch to Select to pick an element</StripMessage>
-  );
+  return null;
 }
 
 /**
- * Every strip sentence leads with a glyph in the same slot, so the text starts
- * at one x whatever the state; states without one made the sentence jump as
- * the page connected, armed and detached.
+ * Where the selection is written, in the strip once the drawer that would say
+ * it is folded away. A control rather than text: the strip is a roving toolbar,
+ * so the full path reaches the keyboard on focus, and opening the file is the
+ * thing a location is for. The path shortens by the same rule as the drawer's.
  */
-function StripMessage({
-  icon: Icon,
-  tone,
-  title,
-  children,
+function StripLocation({
+  path,
+  line,
+  worktreePath,
 }: {
-  icon: ComponentType<{ className?: string; "aria-hidden"?: boolean | "true" }>;
-  tone?: "warning";
-  title?: string;
-  children: ReactNode;
+  path: string;
+  line: number | null;
+  worktreePath: string | null;
 }) {
-  const message = (
-    <span className="flex min-w-0 items-center gap-1.5">
-      <Icon
-        className={cn("h-3.5 w-3.5 shrink-0", tone === "warning" && "text-status-warning")}
-        aria-hidden="true"
-      />
-      <span className="truncate">{children}</span>
-    </span>
-  );
-  if (!title) return message;
+  const absolute = path.startsWith("/")
+    ? path
+    : worktreePath
+      ? `${worktreePath.replace(/\/+$/, "")}/${path}`
+      : null;
+  const full = `${path}${line === null ? "" : `:${line}`}`;
+  if (absolute === null) {
+    return <SourcePath file={path} line={line} className="min-w-0 max-w-[40%] shrink text-3xs" />;
+  }
   return (
     <Tooltip>
-      <TooltipTrigger asChild>{message}</TooltipTrigger>
-      <TooltipContent side="bottom" align="start">
-        {title}
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="xs"
+          // Capped, so a long path shortens itself rather than the trail: the
+          // selection's name outranks where it is written.
+          className="min-w-0 max-w-[40%] shrink px-1 font-normal"
+          onClick={() =>
+            void actionService.dispatch(
+              "file.openInEditor",
+              line === null ? { path: absolute } : { path: absolute, line },
+              { source: "user" }
+            )
+          }
+        >
+          <SourcePath file={path} line={line} disclose={false} className="text-3xs" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" align="end">
+        <span className="flex flex-col gap-0.5">
+          <span>Open in editor</span>
+          <span className="font-mono text-3xs wrap-anywhere">{full}</span>
+        </span>
       </TooltipContent>
     </Tooltip>
   );
@@ -497,23 +722,29 @@ function StripMessage({
 function StripTrail({
   selection,
   onSelect,
+  currentBadge,
 }: {
   selection: PickedSelection;
-  onSelect: ((usedAt: SourcePoint) => void) | undefined;
+  onSelect: CrumbSelect | undefined;
+  currentBadge?: string;
 }) {
-  const { above, current } = trailFor(selection);
+  const { above, current, truncated } = trailFor(selection);
   return (
     <SelectionTrail
       crumbs={[...above, current]}
       currentIndex={above.length}
       currentLabel={current.label}
+      truncated={truncated}
+      density="strip"
+      currentBadge={currentBadge}
       onSelect={
         onSelect
-          ? (crumb) => {
-              if (crumb.usedAt) onSelect(crumb.usedAt);
+          ? (crumb, fromMenu) => {
+              if (crumb.component) onSelect.select(crumb.component, fromMenu);
             }
           : undefined
       }
+      selectBy={onSelect?.by}
       className="min-w-0 flex-1"
     />
   );
@@ -587,11 +818,22 @@ export function ElementPickerDrawer(props: DevPreviewToolSurfaceProps<InspectorC
               ) : undefined
             }
           >
-            {state.issue.detail}
+            {/* The verdict's meaning in our words; the page's own words only
+                where they are a diagnostic, set as one. */}
+            {state.issue.body || issueDiagnostic(state.issue) ? (
+              <>
+                {state.issue.body ? <span className="block">{state.issue.body}</span> : null}
+                {issueDiagnostic(state.issue) ? (
+                  <Diagnostic text={issueDiagnostic(state.issue)!} />
+                ) : null}
+              </>
+            ) : null}
           </InspectorNotice>
         ) : null}
         <WorkspaceStatus state={state} controller={controller} worktreePath={props.worktreePath} />
-        {selection.status === "ready" ? null : <SelectionBody state={state} />}
+        {selection.status === "ready" ? null : (
+          <SelectionBody state={state} controller={controller} />
+        )}
 
         {/* The panel's one route, and therefore not a section of it. There is no
           header, no glyph and no disclosure: the picker exists to hand a
@@ -627,11 +869,24 @@ function workspaceNeedsAttention(state: InspectorState): boolean {
   // diagnostic nobody has to act on does not earn opening the drawer: it waits
   // in Site source for something else to open it.
   if (workspace.status === "ready") return workspace.appPaths.length > 1;
+  // A choice being opened keeps the list it was made from on screen; the
+  // drawer blinking shut under the user's focus is what it must not do.
+  if (workspace.status === "opening") return workspace.appPath !== undefined;
   return (
     workspace.status === "ambiguous" ||
     workspace.status === "failed" ||
     workspace.status === "no-worktree"
   );
+}
+
+/** The page's own words behind a verdict, when they are a diagnostic rather than a restatement. */
+function issueDiagnostic(issue: NonNullable<InspectorState["issue"]>): string | null {
+  return issue.detail && issueDetailIsDiagnostic(issue.code) ? issue.detail : null;
+}
+
+/** A diagnostic under a sentence: its own face, wrapped only where it has to be. */
+function Diagnostic({ text }: { text: string }) {
+  return <span className="mt-1 block font-mono text-3xs wrap-anywhere">{text}</span>;
 }
 
 /** What the toolchain verdict says, when the app's layout has been read and it found something untested. */
@@ -654,15 +909,41 @@ function WorkspaceStatus({
   worktreePath: string | null;
 }) {
   const workspace = state.workspace;
-  if (workspace.status === "idle" || workspace.status === "opening") return null;
+  const sectionRef = useRef<HTMLElement | null>(null);
+  // A choice made from inside the section hands focus on to what replaces the
+  // list once the app is open, rather than dropping it on the document.
+  const focusAfterOpen = useRef(false);
+  const status = workspace.status;
+  useEffect(() => {
+    if (status === "opening" || !focusAfterOpen.current) return;
+    focusAfterOpen.current = false;
+    const active = document.activeElement;
+    const section = sectionRef.current;
+    if (!section || (active !== document.body && !section.contains(active))) return;
+    section.querySelector<HTMLElement>('button:not([disabled]), [role="combobox"]')?.focus();
+  }, [status]);
+  if (workspace.status === "idle") return null;
+  if (workspace.status === "opening" && workspace.appPath === undefined) return null;
   if (workspace.status === "ready" && !readyHasSomethingToSay(state)) return null;
   // One surface for everything about the project rather than the element, so
   // a setup problem and an element-level limitation never look like the same
   // kind of notice sat in the same column.
   return (
-    <section aria-label="Site source" className="flex flex-col gap-1">
+    <section ref={sectionRef} aria-label="Site source" className="flex flex-col gap-1">
       <SectionHeader title="Site source" icon={FolderCode} />
-      <SiteSourceBody state={state} controller={controller} worktreePath={worktreePath} />
+      <SiteSourceBody
+        state={state}
+        controller={controller}
+        worktreePath={worktreePath}
+        onChoose={(appPath) => {
+          focusAfterOpen.current = true;
+          void controller.openWorkspace(appPath);
+        }}
+        onSwitch={(appPath) => {
+          focusAfterOpen.current = true;
+          controller.switchApp(appPath);
+        }}
+      />
     </section>
   );
 }
@@ -671,33 +952,53 @@ function SiteSourceBody({
   state,
   controller,
   worktreePath,
+  onChoose,
+  onSwitch,
 }: {
   state: InspectorState;
   controller: InspectorController;
   worktreePath: string | null;
+  onChoose: (appPath: string) => void;
+  onSwitch: (appPath: string) => void;
 }) {
   const workspace = state.workspace;
   switch (workspace.status) {
     case "idle":
-    case "opening":
       return null;
     case "no-worktree":
       return (
         <InspectorNotice tone="info" title="Preview only — no worktree" density="compact">
-          This preview isn't attached to a worktree, so elements can't be traced to source.
+          A request still carries what the page reports, but no file is checked against source.
         </InspectorNotice>
       );
-    case "ambiguous":
+    case "opening":
+    case "ambiguous": {
+      const appPaths = workspace.appPaths ?? [];
+      const opening = workspace.status === "opening" ? workspace.appPath : undefined;
+      const serverCwd = workspace.serverCwd ?? null;
+      const scanComplete = workspace.status === "ambiguous" ? workspace.scanComplete : true;
       return (
         <div className="flex flex-col gap-1.5">
           <p className="text-xs text-text-secondary">
             More than one app lives in this worktree. Choose the one this preview is showing.
           </p>
-          {workspace.scanComplete ? null : (
-            <p className="text-xs text-text-secondary">
-              The worktree was too large to search all of it, so an app may be missing here.
-            </p>
-          )}
+          {/* What the preview is, beside what it could be: the address it
+              shows and the folder its server runs from, so the choice is a
+              match rather than a memory test. */}
+          <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 text-2xs">
+            <dt className="text-text-secondary">Preview</dt>
+            <dd className="min-w-0 truncate font-mono text-text-primary">
+              {previewAddress(state)}
+            </dd>
+            <dt className="text-text-secondary">Server runs in</dt>
+            <dd className="min-w-0 truncate font-mono text-text-primary">
+              {serverCwd === null ? (
+                <span className="font-sans text-text-secondary">Not reported</span>
+              ) : (
+                serverFolder(worktreePath, serverCwd)
+              )}
+            </dd>
+          </dl>
           {/* 28px path rows with a chevron: a choice list, not three bordered
               boxes that read as empty inputs. Every path in the same face. */}
           <ul
@@ -705,21 +1006,37 @@ function SiteSourceBody({
             // sentence above; the dividers run the row's full width.
             className="-mx-2 flex flex-col divide-y divide-border-subtle"
             aria-label="Choose site source"
+            aria-busy={opening !== undefined || undefined}
           >
-            {workspace.appPaths.map((appPath) => {
+            {appPaths.map((appPath) => {
+              const busy = appPath === opening;
               return (
-                <li key={appPath}>
+                <li key={appPath} className="relative">
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
                         variant="ghost"
                         size="sm"
-                        className="h-7 w-full justify-between gap-2 px-2 font-mono text-xs font-normal"
-                        onClick={() => void controller.openWorkspace(appPath)}
+                        className={cn(
+                          "h-7 w-full justify-between gap-2 px-2 font-normal",
+                          busy && "bg-overlay-subtle text-text-primary"
+                        )}
+                        // Kept mounted and focusable while the choice opens:
+                        // a disabled button drops the focus it holds.
+                        aria-disabled={opening !== undefined || undefined}
+                        aria-busy={busy || undefined}
+                        onClick={() => {
+                          if (opening === undefined) onChoose(appPath);
+                        }}
                       >
-                        <span className="min-w-0 truncate">{appPath === "." ? "./" : appPath}</span>
+                        <AppPath appPath={appPath} />
+                        {/* Held in place while busy, so the row keeps its width; the
+                            wait itself is drawn beside the button, never inside it. */}
                         <ChevronRight
-                          className="h-3.5 w-3.5 shrink-0 text-text-secondary"
+                          className={cn(
+                            "h-3.5 w-3.5 shrink-0 text-text-secondary",
+                            busy && "invisible"
+                          )}
                           aria-hidden="true"
                         />
                       </Button>
@@ -728,32 +1045,29 @@ function SiteSourceBody({
                       {absoluteIn(worktreePath, appPath)}
                     </TooltipContent>
                   </Tooltip>
+                  {busy ? (
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute inset-y-0 right-2 flex items-center"
+                    >
+                      <Spinner size="xs" />
+                    </span>
+                  ) : null}
                 </li>
               );
             })}
           </ul>
+          {scanComplete ? null : (
+            <p className="flex items-start gap-1.5 text-2xs text-text-secondary">
+              <Info className="mt-px h-3 w-3 shrink-0" aria-hidden="true" />
+              The search stopped early, so this list may be incomplete.
+            </p>
+          )}
         </div>
       );
+    }
     case "failed":
-      return (
-        <InspectorNotice
-          tone="error"
-          role="alert"
-          title="Couldn't open the site source"
-          density="compact"
-          action={
-            <Button variant="subtle" size="xs" onClick={() => void controller.openWorkspace()}>
-              Retry
-            </Button>
-          }
-        >
-          {/* A sentence first; then the diagnostic — EACCES, ENOENT — which is
-              the one thing the user can act on, in its own face so it reads as
-              a diagnostic rather than as prose that ran on. */}
-          <span className="block">Daintree couldn't read this site's source.</span>
-          <span className="mt-1 block break-all font-mono text-3xs">{workspace.message}</span>
-        </InspectorNotice>
-      );
+      return <SiteSourceFailure workspace={workspace} controller={controller} />;
     case "ready": {
       if (!readyHasSomethingToSay(state)) return null;
       const untested = untestedReasons(state);
@@ -772,15 +1086,14 @@ function SiteSourceBody({
               choice shows, not by closing the picker to be asked again. */}
           {workspace.appPaths.length > 1 ? (
             <PropertyRow label="App">
-              <Select
-                value={workspace.appPath}
-                onValueChange={(appPath) => controller.switchApp(appPath)}
-              >
+              <Select value={workspace.appPath} onValueChange={onSwitch}>
                 <SelectTrigger
                   aria-label="Site source app"
                   className="h-7 min-w-0 flex-1 font-mono text-xs"
                 >
-                  <SelectValue />
+                  <SelectValue>
+                    <AppPath appPath={workspace.appPath} />
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent className="w-[var(--radix-select-trigger-width)]">
                   {workspace.appPaths.map((appPath) => {
@@ -791,21 +1104,131 @@ function SiteSourceBody({
                         title={absoluteIn(worktreePath, appPath)}
                         className="font-mono"
                       >
-                        {/* A monorepo path runs longer than a trigger-width
-                            popup; without asking to truncate it is cut at the
-                            edge with no ellipsis. */}
-                        <span className="block truncate">{appPath === "." ? "./" : appPath}</span>
+                        <AppPath appPath={appPath} />
                       </SelectItem>
                     );
                   })}
                 </SelectContent>
               </Select>
+              {/* Said before it happens: the selection was proven against
+                  this app's source and goes with it. */}
+              {state.selection.status === "ready" && state.selection.selection.workspaceId ? (
+                <p className="text-2xs text-text-secondary">
+                  Switching apps clears the current selection.
+                </p>
+              ) : null}
             </PropertyRow>
           ) : null}
         </div>
       );
     }
   }
+}
+
+/**
+ * Why the source couldn't be opened, with the way forward that can work: a read
+ * error is retried, a remembered app that has gone is chosen again, and a
+ * server running from another checkout is named — retrying can't move it.
+ */
+function SiteSourceFailure({
+  workspace,
+  controller,
+}: {
+  workspace: Extract<InspectorState["workspace"], { status: "failed" }>;
+  controller: InspectorController;
+}) {
+  const copy = WORKSPACE_FAILURE_COPY[workspace.reason];
+  switch (workspace.reason) {
+    case "read-error":
+      return (
+        <InspectorNotice
+          tone="error"
+          role="alert"
+          title={copy.title}
+          density="compact"
+          action={
+            <Button variant="secondary" size="xs" onClick={() => void controller.openWorkspace()}>
+              Retry
+            </Button>
+          }
+        >
+          {/* The diagnostic — EACCES, ENOENT — is the one thing the user can
+              act on, in its own face so it reads as one. */}
+          <Diagnostic text={workspace.message} />
+        </InspectorNotice>
+      );
+    case "invalid-app":
+      return (
+        <InspectorNotice
+          tone="warning"
+          role="status"
+          title={copy.title}
+          density="compact"
+          action={
+            <Button variant="secondary" size="xs" onClick={() => controller.chooseAnotherApp()}>
+              Choose another app
+            </Button>
+          }
+        >
+          {workspace.message ? (
+            <>
+              Previous choice: <span className="font-mono">{workspace.message}</span>
+            </>
+          ) : null}
+        </InspectorNotice>
+      );
+    case "unknown-worktree":
+      return (
+        <InspectorNotice
+          tone="error"
+          role="alert"
+          title={copy.title}
+          density="compact"
+          action={
+            <Button variant="secondary" size="xs" onClick={() => void controller.openWorkspace()}>
+              Retry
+            </Button>
+          }
+        >
+          The preview belongs to a worktree the project doesn&apos;t have open.
+        </InspectorNotice>
+      );
+    case "other-worktree":
+      return (
+        <InspectorNotice tone="warning" role="status" title={copy.title} density="compact">
+          Restart it from this worktree to trace elements to source. It&apos;s running in
+          <Diagnostic text={workspace.message} />
+        </InspectorNotice>
+      );
+  }
+}
+
+/**
+ * An app's folder, shortened the way the picker shortens any path: the parent
+ * folders yield first and the app's own name last, so `marketing-site-v2` and
+ * `marketing-site-v3` stay told apart in a 280px drawer.
+ */
+function AppPath({ appPath }: { appPath: string }) {
+  if (appPath === ".") return <span className="font-mono text-xs">./</span>;
+  return <SourcePath file={appPath} line={null} disclose={false} className="text-xs" />;
+}
+
+/** The address the preview shows, as a reader matches it against an app. */
+function previewAddress(state: InspectorState): string {
+  const url = state.page?.url ?? (state.binding.status === "bound" ? state.binding.url : null);
+  if (!url) return "Not loaded yet";
+  try {
+    const parsed = new URL(url);
+    return `${parsed.host}${parsed.pathname === "/" ? "" : parsed.pathname}`;
+  } catch {
+    return url;
+  }
+}
+
+/** The dev server's folder, relative to the worktree it should be in. */
+function serverFolder(worktreePath: string | null, serverCwd: string): string {
+  const relative = relativeTo(worktreePath, serverCwd);
+  return relative === "." ? "./ (worktree root)" : relative;
 }
 
 /** A ready workspace shows the section for the app switcher, or for the verdict. */
@@ -895,6 +1318,16 @@ function SelectionHeader({
         selection={selection}
         worktreePath={worktreePath}
         onSelectComponent={selectCrumb}
+        pageVerdict={state.issue?.code}
+        noWorktree={state.workspace.status === "no-worktree"}
+        onChooseApp={
+          state.workspace.status === "ambiguous"
+            ? () =>
+                drawerRef.current
+                  ?.querySelector<HTMLElement>('[aria-label="Choose site source"] button')
+                  ?.focus()
+            : undefined
+        }
       />
     </div>
   );
@@ -928,7 +1361,13 @@ function ResolvingHeader({ skeleton, resolving }: { skeleton: boolean; resolving
   );
 }
 
-function SelectionBody({ state }: { state: InspectorState }) {
+function SelectionBody({
+  state,
+  controller,
+}: {
+  state: InspectorState;
+  controller: InspectorController;
+}) {
   const selection = state.selection;
   switch (selection.status) {
     case "none":
@@ -941,23 +1380,75 @@ function SelectionBody({ state }: { state: InspectorState }) {
       // only when that fails is it the user's to repeat.
       if (selection.retrying) return <WaitingRow label="Waiting for the preview to update" />;
       return (
-        <InspectorNotice tone="warning" title="This file just changed — select again" role="status">
-          The preview may still be showing the old version. Wait a moment for it to update, then
-          click the element again.
+        <InspectorNotice
+          tone="warning"
+          title={SELECTION_OUTCOME_COPY.settled.title}
+          role="status"
+          density="compact"
+        >
+          {SELECTION_OUTCOME_COPY.settled.detail}
         </InspectorNotice>
       );
     case "lost":
       return (
-        <InspectorNotice tone="warning" title="Selection changed — select again" role="status">
-          The page changed while its source was being found. Click the element again.
+        <InspectorNotice
+          tone="warning"
+          title={SELECTION_OUTCOME_COPY.lost.title}
+          role="status"
+          density="compact"
+        >
+          {SELECTION_OUTCOME_COPY.lost.detail}
         </InspectorNotice>
       );
     case "failed":
-      return (
-        <InspectorNotice tone="error" title="Couldn't select this element" role="alert">
-          {selection.message}
-        </InspectorNotice>
-      );
+      switch (selection.reason) {
+        case "loading":
+          // Routine timing, not a failure: a warning that says what to do.
+          return (
+            <InspectorNotice
+              tone="warning"
+              title={SELECTION_OUTCOME_COPY.loading.title}
+              role="status"
+              density="compact"
+            />
+          );
+        case "mismatch":
+          return (
+            <InspectorNotice
+              tone="warning"
+              title={SELECTION_OUTCOME_COPY.mismatch.title}
+              role="status"
+              density="compact"
+              action={
+                state.mode === "select" ? (
+                  <Button
+                    variant="secondary"
+                    size="xs"
+                    onClick={() => void controller.setMode("browse")}
+                  >
+                    Switch to Browse
+                  </Button>
+                ) : undefined
+              }
+            >
+              <span className="block">{selection.message}</span>
+              <span className="mt-1 block">{SELECTION_OUTCOME_COPY.mismatch.detail}</span>
+            </InspectorNotice>
+          );
+        case "host":
+          return (
+            <InspectorNotice
+              tone="error"
+              title={SELECTION_OUTCOME_COPY.host.title}
+              role="alert"
+              density="compact"
+            >
+              <span className="block">{SELECTION_OUTCOME_COPY.host.detail}</span>
+              <Diagnostic text={selection.message} />
+            </InspectorNotice>
+          );
+      }
+      return null;
     case "ready":
       return <SelectionIdentity selection={selection} worktreePath={null} />;
   }

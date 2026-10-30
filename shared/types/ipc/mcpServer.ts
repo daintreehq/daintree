@@ -60,6 +60,23 @@ export type McpAuditResult =
 export type McpConfirmationDecision = "approved" | "rejected" | "timeout";
 
 /**
+ * Where a confirm-gated dispatch has got to, as its view reports it to main
+ * (#14989). Each phase moves main's deadline for the call: `queued` holds it
+ * while the prompt waits to reach the screen, `shown` grants the decision
+ * window, and `approved` claims the run, which main refuses once the call is
+ * no longer live. Phases only move forward; a repeat changes nothing.
+ */
+export type McpDispatchHoldPhase = "queued" | "shown" | "approved";
+
+/**
+ * Main's answer to a hold. `remainingMs` is measured on main's clock when it
+ * answered, so the view anchors it to when it asked and stays on the early
+ * side. Not `held` means main no longer holds the call: it timed out, was
+ * answered, or was never this view's to hold.
+ */
+export type McpDispatchHoldResult = { held: true; remainingMs: number } | { held: false };
+
+/**
  * How far an approval in the MCP confirm dialog reaches (#12692). `once`
  * covers the call on screen; `session` also mints a time-bounded per-tool grant
  * for the agent pane that asked, so its next calls to the same tool run without
@@ -289,7 +306,7 @@ export interface McpAuditRelay {
  *   passed. Emitted at most once per `(sessionId, toolId)` per grant. The
  *   periodic sweep also drives this when an idle session's grant ages out
  *   without a follow-up read.
- * - `grant.revoked`: an explicit `revokeSessionGrants` IPC, a session
+ * - `grant.revoked`: an explicit `revokeGrant` / `revokeNativeGrant` IPC, a session
  *   teardown, an idle reaper firing, or the hard max-lifetime ceiling being
  *   reached wiped the grant before its sliding TTL elapsed. `revokedReason`
  *   distinguishes those sources.
@@ -449,17 +466,33 @@ export function isAuditRecord(record: McpLogRecord): record is McpAuditRecord {
 }
 
 /**
+ * Live-only lifecycle types: pushed to the renderer, never written to the
+ * audit log. `grant.refreshed` is a successful use sliding a grant's
+ * `expiresAt` forward (#14998); the dispatch record already logs each use, so
+ * auditing the slide too would only double the ring buffer's per-call rows.
+ * Sent only when the deadline the user sees moves, so once the hard ceiling is
+ * what ends the grant, further uses push nothing.
+ */
+export type McpGrantLifecycleType = McpGrantRecordType | "grant.refreshed";
+
+/**
  * Live event payload broadcast to the pinned renderer for a grant
  * transition. Mirrors `McpGrantRecord` because renderers want the same
  * fields they'd see in the audit log. Send is targeted (never broadcast)
  * because grant state is session-scoped.
  */
 export interface McpGrantLifecyclePayload {
-  type: McpGrantRecordType;
+  type: McpGrantLifecycleType;
   sessionId: string;
   toolId: string;
   ttlMs: number;
   expiresAt?: number;
+  /**
+   * The hard ceiling: absolute epoch millis past which no use can extend the
+   * grant. Set on `grant.issued`/`grant.refreshed`. The grant ends at the
+   * earlier of this and `expiresAt`.
+   */
+  maxExpiresAt?: number;
   revokedReason?: McpGrantRevokedReason;
   /** Native automation grant fields (#10648); absent for per-tool grants. */
   grantId?: string;
@@ -553,13 +586,15 @@ export interface McpTurnOutcomeAlertPayload {
 }
 
 /**
- * Result of a renderer-driven `revokeSessionGrants` IPC. The handler
- * deletes every grant for the named session and reports how many entries
- * were affected — useful for UI confirmation copy ("Revoked N grants").
+ * Result of a renderer-driven `revokeGrant` IPC. Ends the one per-tool grant
+ * for the pair; the session's other per-tool and automation grants survive.
+ * `revoked` is false when the grant was already gone (expired, or torn down
+ * with its session), so a retry after a lost race is an idempotent no-op.
  */
-export interface McpRevokeSessionGrantsResult {
+export interface McpRevokeGrantResult {
   sessionId: string;
-  revokedCount: number;
+  toolId: string;
+  revoked: boolean;
 }
 
 /**
@@ -942,6 +977,16 @@ export interface McpBearerIdentity {
   token4LastChars: string;
   userAgent: string;
 }
+
+/**
+ * Which of this machine's own surfaces sent a dispatch (#14992), so the confirm
+ * dialog can name the pane or Assistant tab that is asking rather than only its
+ * class. Main derives it from what the session's bearer resolved to at
+ * handshake, never from anything the client sends; the renderer looks up what
+ * to call it in its own stores. Display-only: it grants and routes nothing.
+ */
+export type McpRequester =
+  { kind: "pane"; terminalId: string } | { kind: "assistant"; helpSessionId: string };
 
 /**
  * Result of a renderer-driven `disconnectBearer` IPC. `disconnected` is true

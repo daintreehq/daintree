@@ -221,9 +221,43 @@ describe("the shared consent notice", () => {
     render(<Frames slots={["emptyCanvas", HOME]} />);
 
     expect(screen.getAllByRole("status")).toHaveLength(1);
+    // Not loaded into the project plugin list yet: named for what it is, never
+    // by its manifest id (#15236).
     expect(frames()[1]?.notice?.textContent).toContain(
-      "beta.home set up this project: Project home"
+      "A project plugin set up this project: Project home"
     );
+    expect(frames()[1]?.notice?.textContent).not.toContain("beta.home");
+  });
+
+  it("picks up the plugin's name once it arrives (#15236)", () => {
+    act(() => useProjectPluginStore.setState({ plugins: [] }));
+    seed();
+    render(<Frames slots={["emptyCanvas"]} />);
+    expect(screen.getByRole("status").textContent).toContain(
+      "A project plugin set up this project"
+    );
+    expect(screen.getByRole("status").textContent).not.toContain("acme.dash");
+
+    act(() =>
+      useProjectPluginStore.setState({
+        plugins: [
+          {
+            projectId: "p1",
+            id: "acme.dash",
+            instanceId: OWNER,
+            displayName: "Acme Dashboard",
+            version: "1.0.0",
+            capabilities: [],
+            dirName: "dash",
+            state: "active",
+            muted: false,
+            collidesWithGlobal: false,
+          },
+        ],
+      })
+    );
+
+    expect(screen.getByRole("status").textContent).toContain("Acme Dashboard set up this project");
   });
 
   it("hands the question to the next frame when its frame goes away", () => {

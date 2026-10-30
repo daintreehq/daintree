@@ -3,7 +3,7 @@ import { getAssistantSupportedAgentIds } from "@/config/agents";
 // Through the barrel, as the panel reads it: its suites mock `@/store` wholesale
 // with the availability they test against.
 import { useCliAvailabilityStore } from "@/store";
-import { isAgentInstalled } from "@shared/utils/agentAvailability";
+import { selectInstalledAssistantAgentIds } from "./assistantAgentSelection";
 
 /**
  * The agents that can run the Daintree Assistant here: wired for it at the
@@ -13,8 +13,9 @@ import { isAgentInstalled } from "@shared/utils/agentAvailability";
 export function useAssistantAgentChoices(): string[] {
   const hasRealData = useCliAvailabilityStore((s) => s.hasRealData);
   const availability = useCliAvailabilityStore((s) => s.availability);
-  return useMemo(() => {
-    if (!hasRealData) return [];
-    return getAssistantSupportedAgentIds().filter((id) => isAgentInstalled(availability[id]));
-  }, [hasRealData, availability]);
+  return useMemo(
+    () =>
+      selectInstalledAssistantAgentIds(getAssistantSupportedAgentIds(), availability, hasRealData),
+    [hasRealData, availability]
+  );
 }

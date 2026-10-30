@@ -5,6 +5,7 @@ import type { DevPreviewSessionState } from "../../shared/types/ipc/devPreview";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { onHostResync } from "@/store/hostResyncSignal";
+import { onDevPreviewResume } from "@/store/devPreviewResumeSignal";
 
 export type DevPreviewStatus =
   "stopped" | "starting" | "installing" | "running" | "stopping" | "error" | "restored-stopped";
@@ -91,6 +92,17 @@ export function _resetPersistedEnsureCacheForTests(): void {
   persistedEnsureCache.clear();
 }
 
+// Module scope, not the hook: a panel in a worktree that isn't on screen has no
+// mounted hook to hear the resume, and its cached key would otherwise skip the
+// ensure on its next mount even though Main dropped the session (#15002).
+const offDevPreviewResume = onDevPreviewResume(({ panelIds }) => {
+  for (const panelId of panelIds) persistedEnsureCache.delete(panelId);
+});
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(offDevPreviewResume);
+}
+
 function serializeEnv(env?: Record<string, string>): string {
   if (!env) return "";
   return Object.keys(env)
@@ -124,6 +136,30 @@ function buildEnsureConfigKey(params: {
     params.envSignature,
     (params.turbopackEnabled ?? true) ? "turbo:on" : "turbo:off",
   ].join("|");
+}
+
+/** The key of the config an ensure sends from this context; null without a project. */
+function ensureKeyFor(context: {
+  projectId: string | null;
+  panelId: string;
+  cwd: string;
+  worktreeId?: string;
+  devCommand: string;
+  endpoint?: string | null;
+  env?: Record<string, string>;
+  turbopackEnabled?: boolean;
+}): string | null {
+  if (!context.projectId) return null;
+  return buildEnsureConfigKey({
+    projectId: context.projectId,
+    panelId: context.panelId,
+    cwd: context.cwd,
+    worktreeId: context.worktreeId,
+    devCommand: context.devCommand,
+    endpoint: context.endpoint,
+    envSignature: serializeEnv(context.env),
+    turbopackEnabled: context.turbopackEnabled,
+  });
 }
 
 export function useDevServer({
@@ -172,7 +208,9 @@ export function useDevServer({
   /** The latest host resync's ask; an older one's answer is dropped. */
   const resyncAskRef = useRef(0);
   const lastEnsureConfigRef = useRef<string>("");
-  const pendingEnsureRef = useRef<{ configKey: string; resume: boolean } | null>(null);
+  const pendingEnsureRef = useRef<{ resume: boolean; force: boolean } | null>(null);
+  /** Callers of forced ensures queued behind the one in flight, settled once theirs has gone out or been called off. */
+  const queuedForceWaitersRef = useRef<Array<() => void>>([]);
   const userStoppedRef = useRef(false);
   // Bumped by every endpoint restart and every Stop. A restart whose resource
   // cycle finishes after its number moved on was superseded and must not connect.
@@ -278,21 +316,28 @@ export function useDevServer({
   // `resume` marks an explicit Start: only that may lift a user Stop in Main.
   // Automatic ensures (mount, remount, config edits) leave a stopped panel
   // stopped, so a queued Start keeps its resume through later config changes
-  // and always drains; only a Stop cancels it.
+  // and always drains; only a Stop cancels it. `force` re-sends an unchanged
+  // config without lifting a user Stop, for a server Main dropped behind the
+  // panel's back (#15002). A forced call that queues still resolves only once
+  // its ensure has gone out, so a worktree delete retried meanwhile can't stop
+  // the server before the restart reaches Main.
   const ensureLatestConfig = useCallback(
-    async (configKey: string, resume = false) => {
+    async (resume = false, force = false): Promise<void> => {
       if (isEnsuringRef.current) {
-        const pending = pendingEnsureRef.current;
         pendingEnsureRef.current = {
-          configKey,
-          resume: resume || (pending?.resume ?? false),
+          resume: resume || (pendingEnsureRef.current?.resume ?? false),
+          force: force || (pendingEnsureRef.current?.force ?? false),
         };
-        return;
+        if (!force) return;
+        return new Promise<void>((resolve) => {
+          queuedForceWaitersRef.current.push(resolve);
+        });
       }
 
       const latest = latestContextRef.current;
       const requestProjectId = latest.projectId;
-      if (!requestProjectId) return;
+      const sentKey = ensureKeyFor(latest);
+      if (!requestProjectId || !sentKey) return;
 
       if (!launchTarget(latest.devCommand, latest.endpoint)) return;
       const endpointMode = latest.endpoint !== undefined;
@@ -301,7 +346,10 @@ export function useDevServer({
       const requestVersion = requestVersionRef.current;
 
       isEnsuringRef.current = true;
-      lastEnsureConfigRef.current = configKey;
+      lastEnsureConfigRef.current = sentKey;
+      // Nothing is settled until this lands, so switching back to the last
+      // settled config mid-ensure queues instead of hitting the cache.
+      persistedEnsureCache.delete(requestPanelId);
 
       try {
         const nextState = await window.electron.devPreview.ensure({
@@ -318,7 +366,7 @@ export function useDevServer({
 
         if (isRequestCurrent(requestVersion, requestProjectId, requestPanelId)) {
           applyState(nextState);
-          persistedEnsureCache.set(requestPanelId, configKey);
+          persistedEnsureCache.set(requestPanelId, sentKey);
         }
       } catch (err) {
         if (isRequestCurrent(requestVersion, requestProjectId, requestPanelId)) {
@@ -328,10 +376,24 @@ export function useDevServer({
         isEnsuringRef.current = false;
         const pending = pendingEnsureRef.current;
         pendingEnsureRef.current = null;
-        if (pending && (pending.configKey !== configKey || pending.resume)) {
-          safeFireAndForget(ensureLatestConfig(pending.configKey, pending.resume), {
-            context: "Re-running queued dev preview ensure",
-          });
+        const forceWaiters = queuedForceWaitersRef.current;
+        queuedForceWaitersRef.current = [];
+        const settleForceWaiters = () => {
+          for (const settle of forceWaiters) settle();
+        };
+        // Drain against the config as it is now, not as it was when queued: a
+        // switch away and back mid-ensure leaves nothing new to send. An
+        // unmounted hook leaves config catch-up to whichever mount replaced it,
+        // but still delivers a Start the user clicked.
+        const drains = pending !== null && (isMountedRef.current || pending.resume);
+        const nextKey = drains ? ensureKeyFor(latestContextRef.current) : null;
+        if (pending && nextKey && (nextKey !== sentKey || pending.resume || pending.force)) {
+          safeFireAndForget(
+            ensureLatestConfig(pending.resume, pending.force).finally(settleForceWaiters),
+            { context: "Re-running queued dev preview ensure" }
+          );
+        } else {
+          settleForceWaiters();
         }
       }
     },
@@ -355,17 +417,7 @@ export function useDevServer({
       return;
     }
 
-    const configKey = buildEnsureConfigKey({
-      projectId: latest.projectId,
-      panelId: latest.panelId,
-      cwd: latest.cwd,
-      worktreeId: latest.worktreeId,
-      devCommand: latest.devCommand,
-      endpoint: latest.endpoint,
-      envSignature: serializeEnv(latest.env),
-      turbopackEnabled: latest.turbopackEnabled,
-    });
-    await ensureLatestConfig(configKey, true);
+    await ensureLatestConfig(true);
   }, [applyInvokeError, ensureLatestConfig]);
 
   const stop = useCallback(() => {
@@ -567,6 +619,21 @@ export function useDevServer({
     });
   }, [panelId, currentProjectId, applyState]);
 
+  // A worktree delete stopped this panel's server and was then abandoned, so
+  // the worktree is still here (#15002). Main dropped the session and the
+  // config hasn't changed, so the auto-start below won't fire again by itself.
+  // Not a Start: a Stop the user made since still holds in Main.
+  useEffect(() => {
+    if (!currentProjectId) return;
+    return onDevPreviewResume(({ worktreeId: resumedWorktreeId, panelIds }) => {
+      if (!panelIds.has(panelId)) return;
+      if (latestContextRef.current.worktreeId !== resumedWorktreeId) return;
+      // An endpoint restart reconnects by itself once its resource cycle ends.
+      if (endpointCyclingRef.current) return;
+      return ensureLatestConfig(false, true);
+    });
+  }, [panelId, currentProjectId, ensureLatestConfig]);
+
   const target = launchTarget(devCommand, endpoint);
 
   useEffect(() => {
@@ -631,7 +698,7 @@ export function useDevServer({
       return;
     }
 
-    safeFireAndForget(ensureLatestConfig(configKey), {
+    safeFireAndForget(ensureLatestConfig(), {
       context: "Ensuring dev preview config matches latest",
     });
   }, [

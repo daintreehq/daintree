@@ -5,8 +5,14 @@ import {
   deltaEOK,
   getThemeContrastWarnings,
   isHexColor,
+  relativeLuminance,
 } from "../contrast.js";
-import { applyAccentOverrideToScheme, BUILT_IN_APP_SCHEMES } from "../themes.js";
+import { hexToOklch } from "../oklch.js";
+import {
+  applyAccentOverrideToScheme,
+  BUILT_IN_APP_SCHEMES,
+  deriveDestructiveAction,
+} from "../themes.js";
 import type { AppColorScheme, AppColorSchemeTokens, AppThemeTokenKey } from "./../types.js";
 
 function makeScheme(overrides: Partial<AppColorSchemeTokens>): AppColorScheme {
@@ -258,6 +264,13 @@ describe("getThemeContrastWarnings", () => {
       "status-warning": "#000000" as AppColorSchemeTokens["status-warning"],
       "status-danger": "#000000" as AppColorSchemeTokens["status-danger"],
       "status-info": "#000000" as AppColorSchemeTokens["status-info"],
+      // Their text twins, which a hand-built scheme does not re-derive.
+      "status-success-text": "#000000" as AppColorSchemeTokens["status-success-text"],
+      "status-warning-text": "#000000" as AppColorSchemeTokens["status-warning-text"],
+      "status-danger-text": "#000000" as AppColorSchemeTokens["status-danger-text"],
+      "status-info-text": "#000000" as AppColorSchemeTokens["status-info-text"],
+      // The destructive button paints this on a status-danger fill; white keeps it clear.
+      "text-inverse": "#ffffff" as AppColorSchemeTokens["text-inverse"],
       "surface-panel": "#ffffff" as AppColorSchemeTokens["surface-panel"],
       "surface-grid": "#ffffff" as AppColorSchemeTokens["surface-grid"],
       "surface-sidebar": "#ffffff" as AppColorSchemeTokens["surface-sidebar"],
@@ -922,5 +935,111 @@ describe("contrast-CTA pair (text-inverse on text-primary)", () => {
     });
     expect(findWarning(dark)).toBeUndefined();
     expect(findWarning(light)).toBeUndefined();
+  });
+});
+
+describe("destructive button label", () => {
+  const schemeWith = (label: string, rest: string, hover = rest, press = rest) =>
+    makeScheme({
+      "destructive-foreground": label as AppColorSchemeTokens["destructive-foreground"],
+      "destructive-fill": rest as AppColorSchemeTokens["destructive-fill"],
+      "destructive-fill-hover": hover as AppColorSchemeTokens["destructive-fill-hover"],
+      "destructive-fill-active": press as AppColorSchemeTokens["destructive-fill-active"],
+    });
+  const destructiveWarnings = (label: string, rest: string, hover?: string, press?: string) =>
+    getThemeContrastWarnings(schemeWith(label, rest, hover, press)).filter((w) =>
+      w.message.includes("destructive button")
+    );
+  const failingStates = (label: string, rest: string, hover?: string, press?: string) =>
+    destructiveWarnings(label, rest, hover, press).map((w) => {
+      expect(w.kind).toBe("low-contrast");
+      return /\(destructive button, ([a-z ]+)\)/.exec(w.message)?.[1];
+    });
+
+  it("measures each state against its own fill", () => {
+    // White on #767676 is 4.54:1 and on #777777 4.48:1, either side of 4.5.
+    expect(failingStates("#FFFFFF", "#767676", "#777777", "#767676")).toEqual(["hovered"]);
+    expect(failingStates("#FFFFFF", "#767676", "#767676", "#777777")).toEqual(["pressed"]);
+  });
+
+  it("names each state that falls short", () => {
+    expect(failingStates("#FFFFFF", "#777777", "#888888", "#767676")).toEqual([
+      "at rest",
+      "hovered",
+    ]);
+  });
+
+  it("holds the resting label to the AA floor for normal text", () => {
+    expect(failingStates("#FFFFFF", "#777777")).toContain("at rest");
+    expect(failingStates("#FFFFFF", "#767676")).not.toContain("at rest");
+  });
+
+  it("passes every built-in theme's derived pair in every state", () => {
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      const warnings = getThemeContrastWarnings(scheme).filter((w) =>
+        w.message.includes("destructive button")
+      );
+      expect(warnings, scheme.id).toEqual([]);
+    }
+  });
+
+  it("leaves a non-hex fill to the unevaluable notice its source token raises", () => {
+    // Missing its `#`, the fill would still parse as white if the gate read it, and
+    // fail against the white label.
+    expect(destructiveWarnings("#FFFFFF", "FFFFFF")).toEqual([]);
+  });
+
+  it("refuses to measure a translucent label or fill as if it were opaque", () => {
+    // As opaque colours both pairs clear every state comfortably.
+    expect(destructiveWarnings("#FFFFFF", "#8B0000")).toEqual([]);
+    for (const [label, rest, hover] of [
+      ["#FFFFFF33", "#8B0000", "#8B0000"],
+      ["#FFFFFF", "#8B0000", "#8B000033"],
+    ] as const) {
+      const warnings = destructiveWarnings(label, rest, hover);
+      expect(warnings.map((w) => w.kind)).toEqual(["unevaluable"]);
+      expect(warnings[0]?.message).toContain("translucent");
+    }
+    // An opaque alpha channel is only a spelling, measured like any other.
+    expect(destructiveWarnings("#FFFFFFFF", "#8B0000FF")).toEqual([]);
+    expect(failingStates("#FFFF", "#FFFFFFFF")).toEqual(["at rest", "hovered", "pressed"]);
+  });
+});
+
+describe("deriveDestructiveAction", () => {
+  it("deepens a dark theme's light coral until its near-white label reads in every state", () => {
+    const derived = deriveDestructiveAction(
+      { "status-danger": "#C8746C", "text-primary": "#e4e4e7", "text-inverse": "#1a1918" },
+      "dark"
+    );
+    expect(derived["destructive-foreground"]).toBe("#e4e4e7");
+    for (const key of ["destructive-fill", "destructive-fill-hover", "destructive-fill-active"]) {
+      const fill = derived[key as keyof typeof derived]!;
+      expect(contrastRatio("#e4e4e7", fill), key).toBeGreaterThanOrEqual(4.5);
+      // Same hue family as the danger ink it came from.
+      expect(Math.abs(hexToOklch(fill)!.h - hexToOklch("#C8746C")!.h), key).toBeLessThan(6);
+    }
+    expect(relativeLuminance(derived["destructive-fill"]!)).toBeLessThan(
+      relativeLuminance("#C8746C")
+    );
+  });
+
+  it("keeps a light theme's danger lightness when its white label already reads", () => {
+    const derived = deriveDestructiveAction(
+      { "status-danger": "#A33530", "text-primary": "#1a1918", "text-inverse": "#FDFCF9" },
+      "light"
+    );
+    expect(derived["destructive-foreground"]).toBe("#FDFCF9");
+    expect(
+      Math.abs(hexToOklch(derived["destructive-fill"]!)!.l - hexToOklch("#A33530")!.l)
+    ).toBeLessThan(0.005);
+  });
+
+  it("gives a dusty danger ink enough chroma to read as red rather than brown", () => {
+    const derived = deriveDestructiveAction(
+      { "status-danger": "#C08078", "text-primary": "#E0DDE3", "text-inverse": "#1F1E22" },
+      "dark"
+    );
+    expect(hexToOklch(derived["destructive-fill"]!)!.c).toBeGreaterThanOrEqual(0.145);
   });
 });

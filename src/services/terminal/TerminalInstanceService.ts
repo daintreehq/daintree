@@ -1,4 +1,4 @@
-import type { Terminal, IBufferRange } from "@xterm/xterm";
+import type { Terminal } from "@xterm/xterm";
 import { loadXtermCore } from "./xtermCore";
 import { isMac } from "@/lib/platform";
 import { isHostWindows } from "@/hooks/useHostPlatform";
@@ -19,21 +19,11 @@ import {
   RefreshTierProvider,
   AgentStateCallback,
   PostCompleteHook,
-  TerminalLink,
   TerminalResyncOptions,
 } from "./types";
 import { NO_PADDING_PAINT, type TerminalPaddingPaint } from "./terminalPaddingPaint";
 import { tallyScrollbackRestoreStates } from "./scrollbackRestoreAggregate";
-import {
-  setupTerminalAddons,
-  createImageAddon,
-  createSearchAddon,
-  createFileLinksAddon,
-  createImageLinksAddon,
-  createSuggestedCommandLinksAddon,
-  createPluginTerminalLinksAddon,
-  createWebLinksAddon,
-} from "./TerminalAddonManager";
+import { setupTerminalAddons, createImageAddon, createSearchAddon } from "./TerminalAddonManager";
 import { TerminalOutputIngestService } from "./TerminalOutputIngestService";
 import { streamRangeOf, type StreamRange } from "./streamFence";
 import { PartialEscapeTracker } from "@shared/utils/terminalPartialEscapeTail";
@@ -41,16 +31,13 @@ import { TerminalParserHandler } from "./TerminalParserHandler";
 import { TerminalUnseenOutputTracker, UnseenOutputSnapshot } from "./TerminalUnseenOutputTracker";
 import { TerminalOffscreenManager } from "./TerminalOffscreenManager";
 import { TerminalLinkHandler, type OpenLinkOptions } from "./TerminalLinkHandler";
+import { hideTerminalLinkTooltip } from "./terminalLinkTooltip";
 import {
-  activatePluginPatternLink,
-  findPluginPatternLinks,
-  findPluginUrlClaim,
-  getTerminalLinkSubject,
-  initPluginTerminalLinks,
-  isPluginPatternLinkCurrent,
-} from "./pluginTerminalLinks";
-import { hideTerminalLinkTooltip, showTerminalLinkTooltip } from "./terminalLinkTooltip";
-import { isSuggestedCommandSource, runSuggestedCommand } from "./suggestedCommandRunner";
+  hoveredUrlPluginName,
+  installTerminalLinkProviders,
+  sharedTerminalOptions,
+  type TerminalLinkTarget,
+} from "./terminalLinkSurface";
 import { TerminalResizeController, hasStreamingWrites } from "./TerminalResizeController";
 import { TerminalRendererPolicy } from "./TerminalRendererPolicy";
 import { TerminalWebGLManager } from "./TerminalWebGLManager";
@@ -101,7 +88,6 @@ import type { TerminalResizeResult } from "@shared/types/pty-host";
 import { applyXtermReflowFastpath } from "@shared/utils/xtermReflowFastpath";
 import { usePanelStore } from "@/store/panelStore";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
-import { useHelpPanelStore, selectSlot, selectSlotForTerminal } from "@/store/helpPanelStore";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import { PaintFabricCompositor } from "./paintFabric/PaintFabricCompositor";
 import type { PaintSurface } from "./paintFabric/PaintSurfaceRegistry";
@@ -504,7 +490,7 @@ class TerminalInstanceService {
       getInstance: (id) => this.instances.get(id),
       hostHasRenderableDims: (managed) => this.hostHasRenderableDims(managed),
       ensureOpened: (id, managed) => this.ensureOpened(id, managed),
-      makeLinkHandler: (id) => this.makeTerminalLinkHandler(id),
+      sharedOptions: (id) => sharedTerminalOptions(this.linkTargetFor(id)),
       makeListenerInstallDeps: () => this.makeListenerInstallDeps(),
       applyDeferredResize: (id) => this.resizeController.applyDeferredResize(id),
       drawDataLossMarker: (id, droppedBytes) => this.drawDataLossMarker(id, droppedBytes),
@@ -872,44 +858,12 @@ class TerminalInstanceService {
   }
 
   /**
-   * Builds a synthetic ILink for WebLinksAddon and OSC 8 link sources (which
-   * don't expose an ILink natively). activate() routes through the link
-   * handler so localhost URLs hit the browser-panel path when needed.
-   */
-  private makeSyntheticLink(
-    text: string,
-    range: IBufferRange | null,
-    terminalId: string
-  ): TerminalLink {
-    return {
-      kind: "url",
-      range: range ?? { start: { x: 0, y: 0 }, end: { x: 0, y: 0 } },
-      text,
-      activate: (event: MouseEvent, uri: string) => {
-        const current = this.instances.get(terminalId);
-        if (current) hideTerminalLinkTooltip(current.terminal);
-        this.linkHandler.openLink(uri, terminalId, event);
-      },
-    };
-  }
-
-  /** Names the plugin a hovered URL goes to, when one claims it (#13798). */
-  private showUrlClaimTooltip(id: string, event: MouseEvent, url: string): void {
-    const managed = this.instances.get(id);
-    if (!managed || getTerminalLinkSubject(id) === null) return;
-    const claim = findPluginUrlClaim(url);
-    if (claim) showTerminalLinkTooltip(managed.terminal, event, `Open with ${claim.pluginName}`);
-  }
-
-  /**
    * The plugin the hovered URL would go to, or null when none claims it or
    * nothing URL-like is hovered. Read when the context menu opens, so it can
    * name the plugin and still offer the external browser.
    */
   getHoveredLinkPluginName(id: string): string | null {
-    const link = this.instances.get(id)?.hoveredLink;
-    if (link?.kind !== "url" || getTerminalLinkSubject(id) === null) return null;
-    return findPluginUrlClaim(link.text)?.pluginName ?? null;
+    return hoveredUrlPluginName({ terminalId: id }, this.instances.get(id)?.hoveredLink ?? null);
   }
 
   /**
@@ -1650,8 +1604,7 @@ class TerminalInstanceService {
   ): Promise<ManagedTerminal> {
     const terminalOptions = {
       ...options,
-      rescaleOverlappingGlyphs: true,
-      linkHandler: this.makeTerminalLinkHandler(id),
+      ...sharedTerminalOptions(this.linkTargetFor(id)),
     };
 
     if (launchAgentId !== undefined) {
@@ -2073,142 +2026,10 @@ class TerminalInstanceService {
    * terminal; the tier machinery disposes these addons there on purpose (#9809).
    */
   private async ensureDeferredAddons(id: string, managed: ManagedTerminal): Promise<void> {
-    // The file/image/web link providers are synchronous, so build them first and
+    // The link providers are synchronous, so build them first and
     // unconditionally — the lazy, async ImageAddon load below must not defer them
     // behind a microtask (they are observable synchronously on tier upgrade).
-    // Claude Code's `! command` suggestions register first: xterm gives an
-    // overlapping link to the earliest provider, and a suggestion often holds a
-    // path or URL that must not take the click away from the whole command.
-    // Set when this call registers a built-in provider: one created after the
-    // plugin provider (a help lane bound later, a retried failure) would rank
-    // below it, so the plugin provider is then registered again, last.
-    let builtInAdded = false;
-    if (!managed.commandLinksDisposable) {
-      try {
-        managed.commandLinksDisposable = createSuggestedCommandLinksAddon(
-          managed.terminal,
-          () => isSuggestedCommandSource(id, this.instances.get(id)?.runtimeAgentId),
-          (command) => runSuggestedCommand(id, command)
-        );
-        builtInAdded = true;
-      } catch (err) {
-        logWarn("Failed to create SuggestedCommandLinksAddon", { id, error: err });
-      }
-    }
-    if (!managed.fileLinksDisposable) {
-      try {
-        managed.fileLinksDisposable = createFileLinksAddon(
-          managed.terminal,
-          () => (this.cwdProviders.get(id) ?? (() => ""))(),
-          (link) => {
-            const current = this.instances.get(id);
-            if (!current) return;
-            current.hoveredLink = link;
-          }
-        );
-        builtInAdded = true;
-      } catch (err) {
-        logWarn("Failed to create FileLinksAddon", { id, error: err });
-      }
-    }
-    // `[image #N]` references are clickable only in the assistant terminal,
-    // where the help session owns the figure state (#9830). Gating on the
-    // bound help terminal keeps grid terminals that happen to print the token
-    // inert, and the provider rebuilds with the rest on tier promotion.
-    // Resolve the lane at build time, then re-resolve on every read: a terminal
-    // belongs to exactly one lane, but which one can change if the lane is
-    // relaunched, and reading a sibling lane's figures would make `[image #N]`
-    // point at another conversation's picture (#12108).
-    if (
-      !managed.imageLinksDisposable &&
-      selectSlotForTerminal(useHelpPanelStore.getState(), id) !== null
-    ) {
-      try {
-        managed.imageLinksDisposable = createImageLinksAddon(
-          managed.terminal,
-          () => {
-            const state = useHelpPanelStore.getState();
-            const slot = selectSlotForTerminal(state, id);
-            if (slot === null) return [];
-            return selectSlot(state, slot).figures.map((f) => f.figureNumber);
-          },
-          (figureNumber, openLightbox) => {
-            const state = useHelpPanelStore.getState();
-            const slot = selectSlotForTerminal(state, id);
-            if (slot === null) return;
-            // Plain click marks the figure current in the rail; Cmd/Ctrl+click
-            // also opens it in the lightbox.
-            state.activateFigure(slot, figureNumber, openLightbox);
-          }
-        );
-        builtInAdded = true;
-      } catch (err) {
-        logWarn("Failed to create ImageLinksAddon", { id, error: err });
-      }
-    }
-    if (!managed.webLinksAddon) {
-      try {
-        managed.webLinksAddon = createWebLinksAddon(
-          managed.terminal,
-          (event, uri) => {
-            const current = this.instances.get(id);
-            if (current) hideTerminalLinkTooltip(current.terminal);
-            this.linkHandler.openLink(uri, id, event);
-          },
-          {
-            hover: (event, text) => {
-              const current = this.instances.get(id);
-              if (!current) return;
-              current.hoveredLink = this.makeSyntheticLink(text, null, id);
-              this.showUrlClaimTooltip(id, event, text);
-            },
-            leave: () => {
-              const current = this.instances.get(id);
-              if (!current) return;
-              current.hoveredLink = null;
-              hideTerminalLinkTooltip(current.terminal);
-            },
-          }
-        );
-        builtInAdded = true;
-      } catch (err) {
-        logWarn("Failed to create WebLinksAddon", { id, error: err });
-      }
-    }
-    // Plugin pattern matchers (#13798) register after every built-in provider:
-    // xterm hands an overlapping link to the earliest one, so a plugin's match
-    // never takes a click from a path, URL, figure or suggested command. The
-    // matchers are read live on each hover, so nothing here rebuilds when a
-    // plugin loads, stops or is switched off.
-    if (builtInAdded && managed.pluginLinksDisposable) {
-      managed.pluginLinksDisposable.dispose();
-      managed.pluginLinksDisposable = null;
-    }
-    if (!managed.pluginLinksDisposable) {
-      const terminal = managed.terminal;
-      try {
-        initPluginTerminalLinks();
-        managed.pluginLinksDisposable = createPluginTerminalLinksAddon(terminal, {
-          find: (text) =>
-            getTerminalLinkSubject(id) === null
-              ? Promise.resolve([])
-              : findPluginPatternLinks(text),
-          activate: (match) => {
-            hideTerminalLinkTooltip(terminal);
-            activatePluginPatternLink(match, id);
-          },
-          // xterm keeps a row's links while the pointer stays on it, so a link
-          // found before its plugin was switched off can still be hovered.
-          hover: (match, event) => {
-            if (!isPluginPatternLinkCurrent(match)) return;
-            showTerminalLinkTooltip(terminal, event, `Open with ${match.entry.pluginName}`);
-          },
-          leave: () => hideTerminalLinkTooltip(terminal),
-        });
-      } catch (err) {
-        logWarn("Failed to create PluginTerminalLinksAddon", { id, error: err });
-      }
-    }
+    installTerminalLinkProviders(managed.terminal, managed, this.linkTargetFor(id));
     // ImageAddon is lazy-loaded (#10840), so creation is async and runs last —
     // after the synchronous link providers above. Two callers can reach this
     // concurrently (the cold-open path in ensureOpened() and the BACKGROUND→
@@ -2339,28 +2160,18 @@ class TerminalInstanceService {
    * the live instance, never a captured `ManagedTerminal`, so they stay correct
    * across a swap.
    */
-  private makeTerminalLinkHandler(id: string) {
-    const setHoveredLink = (link: TerminalLink | null) => {
-      const current = this.instances.get(id);
-      if (!current) return;
-      current.hoveredLink = link;
-    };
-
+  /** Where a grid terminal's links lead: its own panel and cwd, on this view's host. */
+  private linkTargetFor(id: string): TerminalLinkTarget {
     return {
-      activate: (event: MouseEvent, text: string) => {
+      terminalId: id,
+      getTerminal: () => this.instances.get(id)?.terminal ?? null,
+      getCwd: () => (this.cwdProviders.get(id) ?? (() => ""))(),
+      getRuntimeAgentId: () => this.instances.get(id)?.runtimeAgentId,
+      setHoveredLink: (link) => {
         const current = this.instances.get(id);
-        if (current) hideTerminalLinkTooltip(current.terminal);
-        this.linkHandler.openLink(text, id, event);
+        if (current) current.hoveredLink = link;
       },
-      hover: (event: MouseEvent, text: string, range: IBufferRange) => {
-        setHoveredLink(this.makeSyntheticLink(text, range, id));
-        this.showUrlClaimTooltip(id, event, text);
-      },
-      leave: () => {
-        setHoveredLink(null);
-        const current = this.instances.get(id);
-        if (current) hideTerminalLinkTooltip(current.terminal);
-      },
+      openLink: (url, event, options) => this.linkHandler.openLink(url, id, event, options),
     };
   }
 
@@ -2425,6 +2236,7 @@ class TerminalInstanceService {
         if (element) prepared.push({ job, element });
       } catch (error) {
         logError("attach reveal failed", error, { id: job.id });
+        this.settleAfterFailedReveal(job.id);
       }
     }
 
@@ -2440,6 +2252,7 @@ class TerminalInstanceService {
         settles.push(job.reveal());
       } catch (error) {
         logError("attach reveal failed", error, { id: job.id });
+        this.settleAfterFailedReveal(job.id);
       }
     }
     if (settles.length === 0) return;
@@ -2453,10 +2266,26 @@ class TerminalInstanceService {
             settle[step]();
           } catch (error) {
             logError("attach settle failed", error, { id: settle.id });
+            if (step === "settle") this.settleAfterFailedReveal(settle.id);
           }
         }
       }
     });
+  }
+
+  /**
+   * A reveal step that throws still leaves the xterm attached, so its waiters
+   * hear about it: the startup queue holds the next spawn on that wait, and a
+   * missed notify cost every launch behind it the full timeout (#15271). The
+   * notify re-checks the settle predicate, so a pane still mid-attach stays
+   * pending.
+   */
+  private settleAfterFailedReveal(id: string): void {
+    try {
+      this.settleWaiters.notifyAttachSettledWaiters(id);
+    } catch (error) {
+      logError("attach settle notify failed", error, { id });
+    }
   }
 
   attach(id: string, container: HTMLElement): ManagedTerminal | null {

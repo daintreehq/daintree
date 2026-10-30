@@ -50,10 +50,13 @@ export function ScrollShadowOverlay({
   edge,
   visible,
   compact,
+  forcedColorsOnly,
 }: {
   edge: ScrollShadowEdge;
   visible: boolean;
   compact?: boolean;
+  /** Drawn only under forced colours — see `ScrollShadow.edgeFade`. */
+  forcedColorsOnly?: boolean;
 }) {
   const vertical = edge === "top" || edge === "bottom";
   return (
@@ -79,7 +82,8 @@ export function ScrollShadowOverlay({
         "contrast-more:bg-none contrast-more:bg-border-strong",
         vertical ? "contrast-more:h-px" : "contrast-more:w-px",
         EDGE_CLASS[edge],
-        visible ? "opacity-100" : "opacity-0"
+        visible ? "opacity-100" : "opacity-0",
+        forcedColorsOnly && "hidden forced-colors:block"
       )}
     />
   );
@@ -105,17 +109,38 @@ interface ScrollShadowProps extends Omit<ComponentPropsWithoutRef<"div">, "class
    * the full fade covers most of a row and makes a live item read as disabled.
    */
   compact?: boolean;
+  /** Called whenever the content starts or stops continuing past either edge. */
+  onEdgesChange?: (edges: { up: boolean; down: boolean }) => void;
+  /**
+   * `false` for a scroller whose host already draws the cue from
+   * `onEdgesChange` (a dialog's header and footer rules): the fade would only
+   * wash the first and last lines. It is kept under forced colours, where the
+   * host's rule is repainted solid and no longer tracks the scroll.
+   */
+  edgeFade?: boolean;
   children: ReactNode;
 }
 
 export const ScrollShadow = forwardRef<HTMLDivElement, ScrollShadowProps>(
-  ({ className, scrollClassName, compact, children, ...rest }, forwardedRef) => {
+  (
+    { className, scrollClassName, compact, onEdgesChange, edgeFade = true, children, ...rest },
+    forwardedRef
+  ) => {
     const internalRef = useRef<HTMLDivElement>(null);
     const { canScrollUp, canScrollDown } = useVerticalScrollShadows(internalRef);
 
+    useEffect(() => {
+      onEdgesChange?.({ up: canScrollUp, down: canScrollDown });
+    }, [canScrollUp, canScrollDown, onEdgesChange]);
+
     return (
       <div className={cn("relative overflow-hidden min-h-0 flex flex-col", className)}>
-        <ScrollShadowOverlay edge="top" visible={canScrollUp} compact={compact} />
+        <ScrollShadowOverlay
+          edge="top"
+          visible={canScrollUp}
+          compact={compact}
+          forcedColorsOnly={!edgeFade}
+        />
         <div
           ref={mergeRefs(internalRef, forwardedRef)}
           className={cn("flex-1 overflow-y-auto", scrollClassName)}
@@ -123,7 +148,12 @@ export const ScrollShadow = forwardRef<HTMLDivElement, ScrollShadowProps>(
         >
           {children}
         </div>
-        <ScrollShadowOverlay edge="bottom" visible={canScrollDown} compact={compact} />
+        <ScrollShadowOverlay
+          edge="bottom"
+          visible={canScrollDown}
+          compact={compact}
+          forcedColorsOnly={!edgeFade}
+        />
       </div>
     );
   }

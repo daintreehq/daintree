@@ -291,19 +291,25 @@ export class DevPreviewSessionService {
   }
 
   /**
-   * After a session is deleted, remove its stale worktreeToSession entry and
-   * hand the mapping back to any surviving session that still claims the same worktreeId.
+   * After a session is deleted or moves to another worktree, remove its stale
+   * worktreeToSession entry and hand the mapping back to a surviving session
+   * that still claims the same worktreeId, a running one first so the card's
+   * controls reach the server that is actually up.
    */
-  private restoreWorktreeMapping(worktreeId: string | undefined, deletedKey: string): void {
+  private restoreWorktreeMapping(worktreeId: string | undefined, departedKey: string): void {
     if (!worktreeId) return;
-    if (this.worktreeToSession.get(worktreeId) !== deletedKey) return;
+    if (this.worktreeToSession.get(worktreeId) !== departedKey) return;
     this.worktreeToSession.delete(worktreeId);
+    let idleKey: string | undefined;
     for (const [survivingKey, survivingSession] of this.sessions) {
-      if (survivingSession.worktreeId === worktreeId) {
+      if (survivingSession.worktreeId !== worktreeId) continue;
+      if (RUNNING_STATES.has(survivingSession.status)) {
         this.worktreeToSession.set(worktreeId, survivingKey);
-        break;
+        return;
       }
+      idleKey ??= survivingKey;
     }
+    if (idleKey !== undefined) this.worktreeToSession.set(worktreeId, idleKey);
   }
 
   /**
@@ -495,6 +501,10 @@ export class DevPreviewSessionService {
       if (session.turbopackEnabled !== nextTurbopackEnabled) changedFields.push("turbopackEnabled");
       if (envChanged) changedFields.push("env");
       const configChanged = changedFields.length > 0;
+      // The server runs from `cwd`; the worktree only says where it's filed. A
+      // move that changes nothing else re-files it, never restarts it in the
+      // directory it was already in (#14958).
+      const launchConfigChanged = changedFields.some((field) => field !== "worktreeId");
 
       this.recordSessionDiagnostic(session, { type: "ensure-requested", configChanged });
       if (configChanged) {
@@ -513,8 +523,9 @@ export class DevPreviewSessionService {
 
       // A config change is an explicit "try again with new settings" — clear a
       // tripped crash-loop guard so the fresh config gets its full attempt
-      // budget instead of inheriting a stopped state from the old config.
-      if (configChanged) {
+      // budget instead of inheriting a stopped state from the old config. A
+      // user's Start is just as explicit, and must not wait behind a backoff.
+      if (launchConfigChanged || request.resumeUserStopped) {
         resetCrashLoopGuard(session);
       }
 
@@ -527,8 +538,10 @@ export class DevPreviewSessionService {
         const mapped = this.sessions.get(mappedKey);
         return !mapped || !RUNNING_STATES.has(mapped.status);
       };
-      if (prevWorktreeId && prevWorktreeId !== session.worktreeId && ownsMapping(prevWorktreeId)) {
-        this.worktreeToSession.delete(prevWorktreeId);
+      // Only this session's own claim on the worktree it left goes, and it goes
+      // to a preview still there rather than leaving that worktree's card bare.
+      if (prevWorktreeId && prevWorktreeId !== session.worktreeId) {
+        this.restoreWorktreeMapping(prevWorktreeId, key);
       }
       if (session.worktreeId && ownsMapping(session.worktreeId)) {
         this.worktreeToSession.set(session.worktreeId, key);
@@ -554,7 +567,7 @@ export class DevPreviewSessionService {
           message: capDiagnosticText(commandError),
         });
         invalidatePendingLaunch(session);
-        if (configChanged && session.terminalId) {
+        if (launchConfigChanged && session.terminalId) {
           await this.stopSessionTerminal(session, "invalid-command");
         }
         this.updateSession(session, {
@@ -568,12 +581,17 @@ export class DevPreviewSessionService {
         return;
       }
 
-      if (configChanged) {
+      if (launchConfigChanged) {
         invalidatePendingLaunch(session);
         if (session.terminalId) {
           const epoch = await this.stopSessionTerminal(session, "config-change");
           if (this.relaunchSuperseded(session, epoch)) return;
         }
+      } else if (configChanged) {
+        // Nothing relaunches to announce the new worktree, so cards, the
+        // dashboard and the restore manifest hear it here.
+        this.updateSession(session, {});
+        if (RUNNING_STATES.has(session.status)) this.persistManifest();
       }
 
       await this.ensureSessionTerminal(session);

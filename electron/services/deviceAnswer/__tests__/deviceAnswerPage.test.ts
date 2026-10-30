@@ -120,9 +120,9 @@ describe("the paired device's page", () => {
     // Hosts' runs are asked for only by a page that can answer them there.
     expect(sent[0]).toMatchObject({ method: "GET", path: "/api/waiting?hosts=1" });
     const cards = [...document.querySelectorAll(".run")];
-    expect(cards.map((card) => card.querySelector(".host")?.textContent)).toEqual([
-      "greg-studio",
-      "studio-03",
+    expect(cards.map((card) => card.querySelector(".where")?.textContent)).toEqual([
+      "greg-studio · Claude",
+      "studio-03 · Claude",
     ]);
     expect(document.getElementById("hosts")!.textContent).toContain(
       "studio-04 needs a newer Daintree"
@@ -140,7 +140,7 @@ describe("the paired device's page", () => {
   it("names no machine when only this one's runs are listed, as an older Daintree sends them", async () => {
     await openPage({ runs: [run({})] });
     const card = document.querySelector(".run")!;
-    expect(card.querySelector(".host")).toBeNull();
+    expect(card.querySelector(".where")!.textContent).toBe("Claude");
 
     button(card, "Yes").click();
     await vi.advanceTimersByTimeAsync(0);
@@ -155,21 +155,26 @@ describe("the paired device's page", () => {
 
   const emptyText = () => {
     const empty = document.getElementById("empty")!;
-    return empty.hidden ? null : empty.textContent;
+    return empty.hidden ? null : document.getElementById("empty-covered")!.textContent;
   };
 
-  it("says no agent is waiting only when every host was read", async () => {
+  it("names every machine it read when nothing is waiting", async () => {
     await openPage({
       runs: [],
       hosts: [{ hostId: "studio-03", host: "Studio", status: "ok" }],
     });
-    expect(emptyText()).toBe("No agent is waiting.");
+    expect(emptyText()).toBe("No agent is waiting on this computer or Studio.");
     expect(document.getElementById("hosts")!.textContent).toBe("");
   });
 
-  it("says no agent is waiting when it's told of no hosts, as an older Daintree sends it", async () => {
+  it("names this computer when it's told of no hosts, as an older Daintree sends it", async () => {
     await openPage({ runs: [] });
-    expect(emptyText()).toBe("No agent is waiting.");
+    expect(emptyText()).toBe("No agent is waiting on this computer.");
+  });
+
+  it("names this computer by the name the list gives it", async () => {
+    await openPage({ computer: "Greg's MacBook Pro", runs: [], hosts: [] });
+    expect(emptyText()).toBe("No agent is waiting on Greg's MacBook Pro.");
   });
 
   it.each([
@@ -221,8 +226,7 @@ describe("the paired device's page", () => {
     });
     expect(emptyText()).toBeNull();
     expect(document.getElementById("hosts")!.textContent).toContain("Not connected to Mini");
-    // A host this Shell knows of, connected or not, is one to tell its runs from.
-    expect(document.querySelector(".run .host")!.textContent).toBe("greg-studio");
+    expect(document.querySelector(".run .where")!.textContent).toBe("greg-studio · Claude");
   });
 
   it("never says nothing was pressed when the reply to an answer was lost", async () => {
@@ -276,15 +280,16 @@ describe("the paired device's page", () => {
     waitingReply = "pending";
     await vi.advanceTimersByTimeAsync(3000);
     const [first, second] = [...document.querySelectorAll(".run")];
+    const receipt = "Answered “Yes” · " + hhmm(Date.now());
     button(first!, "Yes").click();
     await vi.advanceTimersByTimeAsync(0);
-    expect(first!.querySelector(".result")!.textContent).toBe("Picked “Yes”.");
+    expect(first!.querySelector(".result")!.textContent).toBe(receipt);
 
     settlePending("unreachable");
     await vi.advanceTimersByTimeAsync(0);
     expect(status()).toContain("Couldn't reach Daintree since");
     expect([...second!.querySelectorAll("button")].every((b) => b.disabled)).toBe(true);
-    expect(first!.querySelector(".result")!.textContent).toBe("Picked “Yes”.");
+    expect(first!.querySelector(".result")!.textContent).toBe(receipt);
   });
 
   it("shows nothing from a read that comes back after unpairing", async () => {
@@ -292,7 +297,11 @@ describe("the paired device's page", () => {
     waitingReply = "pending";
     await vi.advanceTimersByTimeAsync(3000);
     document.getElementById("forget")!.click();
+    // Unpairing is confirmed first; nothing is removed by the first tap.
+    expect(document.querySelectorAll(".run")).toHaveLength(1);
+    document.getElementById("unpair-confirm")!.click();
     await vi.advanceTimersByTimeAsync(0);
+    expect(sent.at(-1)).toMatchObject({ method: "POST", path: "/api/unpair" });
     expect(document.querySelectorAll(".run")).toHaveLength(0);
 
     settlePending("ok");
@@ -376,7 +385,7 @@ describe("the paired device's page", () => {
     waiting.hostsUnlisted = false;
     await vi.advanceTimersByTimeAsync(3000);
     expect(notes()).toBe("");
-    expect(emptyText()).toBe("No agent is waiting.");
+    expect(emptyText()).toBe("No agent is waiting on this computer.");
   });
 
   it("gives no time for a host that was never read, since it can't know when it went", async () => {

@@ -1,12 +1,5 @@
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-} from "react";
+import { createContext, useContext, useMemo, type CSSProperties, type ReactNode } from "react";
+import { useWindowFullscreen } from "@/hooks/useWindowFullscreen";
 import { isMac, isWindows } from "@/lib/platform";
 import { WINDOWS_CAPTION_WIDTH_PX, type BannerSeverity } from "@shared/config/windowChrome";
 
@@ -43,8 +36,8 @@ export function useTitleBarSurface(): ((severity: BannerSeverity | null) => void
 }
 
 /**
- * Reserves space for the OS window controls for any surface pinned to the very
- * top of the window (the global banner host). Mirrors the Toolbar /
+ * The padding that keeps a surface pinned to the very top of the window clear
+ * of the OS window controls, wherever it renders. Mirrors the Toolbar /
  * PluginManager spacers: macOS reserves ~80px on the left (matching the
  * toolbar's `px-4` + `w-16` lead-in), Windows reserves the caption-button strip
  * on the right, Linux reserves nothing. All collapse in fullscreen, where the
@@ -55,6 +48,23 @@ export function useTitleBarSurface(): ((severity: BannerSeverity | null) => void
  * in the child WebContentsView this app renders in — see
  * `shared/config/windowChrome.ts`.
  */
+export function useWindowControlsReservation(): CSSProperties {
+  const isFullscreen = useWindowFullscreen();
+  return useMemo<CSSProperties>(() => {
+    if (isFullscreen) return EMPTY;
+    if (isMac()) return { paddingLeft: "5rem" };
+    // A gutter past the caption strip: the surface's own dismiss is an × too,
+    // and flush against the minimize backplate it reads as one more caption
+    // glyph rather than the surface's control.
+    if (isWindows()) return { paddingRight: `${WINDOWS_CAPTION_WIDTH_PX + 12}px` };
+    return EMPTY;
+  }, [isFullscreen]);
+}
+
+/**
+ * Hands {@link useWindowControlsReservation} to everything under it through
+ * {@link useWindowControlsInset}, for the global banner host.
+ */
 export function WindowControlsInsetProvider({
   children,
   onSeverityChange,
@@ -63,18 +73,7 @@ export function WindowControlsInsetProvider({
   /** Present only for the global banner host — see {@link useTitleBarSurface}. */
   onSeverityChange?: (severity: BannerSeverity | null) => void;
 }) {
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  useEffect(() => window.electron?.window?.onFullscreenChange?.(setIsFullscreen), []);
-
-  const inset = useMemo<CSSProperties>(() => {
-    if (isFullscreen) return EMPTY;
-    if (isMac()) return { paddingLeft: "5rem" };
-    // A gutter past the caption strip: the surface's own dismiss is an × too,
-    // and flush against the minimize backplate it reads as one more caption
-    // glyph rather than the banner's control.
-    if (isWindows()) return { paddingRight: `${WINDOWS_CAPTION_WIDTH_PX + 12}px` };
-    return EMPTY;
-  }, [isFullscreen]);
+  const inset = useWindowControlsReservation();
 
   return (
     <WindowControlsInsetContext.Provider value={inset}>

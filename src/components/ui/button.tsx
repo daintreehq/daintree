@@ -3,7 +3,21 @@ import { Slot, Slottable } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
 
 import { cn } from "@/lib/utils";
-import { Spinner } from "@/components/ui/Spinner";
+import { Spinner, SPINNER_SIZE_CLASSES } from "@/components/ui/Spinner";
+
+/**
+ * The filled dialog primaries while their action is unavailable. Fading the fill
+ * to half opacity left a muddy maroon with a dark label on dark themes and a
+ * washed-out salmon on light ones: a button that looked broken rather than not
+ * yet ready. Unavailable is one neutral look for both fills instead: a flat,
+ * frameless chip with a secondary label that neither hovers nor presses, so it
+ * reads as a step still to come, never as a second, weaker red, and never as
+ * the framed outline button an enabled secondary action wears. Keyed on
+ * `data-unavailable`, which the Button sets only when the action is unavailable
+ * and not merely busy: a loading button keeps its fill under the spinner.
+ */
+const FILLED_UNAVAILABLE =
+  "data-unavailable:bg-overlay-soft data-unavailable:text-text-secondary data-unavailable:ring-transparent data-unavailable:shadow-none data-unavailable:cursor-not-allowed data-unavailable:hover:bg-overlay-soft data-unavailable:active:bg-overlay-soft data-unavailable:active:scale-100";
 
 // Every paint property `transition` covers except the spatial ones: `scale`
 // stays out so the press snaps back as well as in, and `press-scale` is what
@@ -20,8 +34,12 @@ const buttonVariants = cva(
         // smudge a dark label on a light accent.
         default:
           "bg-primary text-primary-foreground ring-1 ring-tint/20 shadow-[var(--theme-shadow-ambient)] inset-shadow-[0_1px_0_rgba(255,255,255,0.15)] hover:brightness-110 active:brightness-95 active:inset-shadow-none",
-        destructive:
-          "bg-destructive text-text-inverse [text-shadow:0_1px_0_rgba(255,255,255,0.15)] ring-1 ring-tint/20 shadow-[var(--theme-shadow-ambient)] inset-shadow-[0_1px_0_rgba(255,255,255,0.15)] hover:brightness-110 active:brightness-95 active:inset-shadow-none",
+        // A solid fill derived per theme from the danger ink, deep enough that the
+        // theme's near-white end reads on it (`deriveDestructiveAction`), with
+        // hover and press as fills of their own so the gate measures every state
+        // the button paints. Flat like `contrast`: no emboss or top highlight,
+        // which read as a raised plastic plaque against the app's flat chrome.
+        destructive: `bg-destructive-fill text-destructive-foreground ring-1 ring-tint/15 shadow-[var(--theme-shadow-ambient)] hover:bg-destructive-fill-hover active:bg-destructive-fill-active active:shadow-none ${FILLED_UNAVAILABLE}`,
         outline:
           "ring-1 ring-border-strong bg-surface-panel-elevated/95 backdrop-blur-md text-text-primary shadow-[var(--theme-shadow-ambient)] inset-shadow-[0_1px_0_var(--color-overlay-soft)] hover:bg-surface-panel-elevated hover:ring-border-default hover:text-text-primary active:bg-overlay-soft active:shadow-none",
         // High-contrast INVERSE CTA: a near-white fill + off-black text on dark
@@ -36,8 +54,7 @@ const buttonVariants = cva(
         // press cue that reads correctly in both polarities (darkens the white
         // fill / lightens the black fill). Not opacity, which would fade the
         // label and let the surface bleed through.
-        contrast:
-          "bg-text-primary text-text-inverse ring-1 ring-tint/15 shadow-[var(--theme-shadow-ambient)] hover:bg-[color-mix(in_oklab,var(--color-text-primary)_90%,var(--color-text-inverse))] active:bg-[color-mix(in_oklab,var(--color-text-primary)_82%,var(--color-text-inverse))] active:shadow-none",
+        contrast: `bg-text-primary text-text-inverse ring-1 ring-tint/15 shadow-[var(--theme-shadow-ambient)] hover:bg-[color-mix(in_oklab,var(--color-text-primary)_90%,var(--color-text-inverse))] active:bg-[color-mix(in_oklab,var(--color-text-primary)_82%,var(--color-text-inverse))] active:shadow-none ${FILLED_UNAVAILABLE}`,
         secondary:
           "bg-secondary text-secondary-foreground ring-1 ring-tint/[0.08] shadow-[var(--theme-shadow-ambient)] hover:bg-secondary/90 active:shadow-none",
         // `overlay-hover`, not `overlay-soft`: it is the one fill in the ladder
@@ -53,8 +70,9 @@ const buttonVariants = cva(
         subtle:
           "bg-surface-panel text-text-secondary ring-1 ring-border-strong hover:bg-surface-panel-elevated hover:ring-border-default hover:text-text-primary",
         pill: "rounded-full bg-surface-panel backdrop-blur-md ring-1 ring-border-strong text-text-secondary hover:bg-surface-panel-elevated hover:ring-border-default hover:text-text-primary",
-        "ghost-danger":
-          "text-status-error hover:bg-status-error/10 focus-visible:outline-status-error",
+        // The text-grade danger ink: the graphical one fell under 4.5:1 on its
+        // own hover wash. The focus ring stays the app's one focus colour.
+        "ghost-danger": "text-status-danger-text hover:bg-status-error/10",
         "ghost-info": "text-status-info hover:bg-status-info/10",
         info: "bg-status-info text-text-inverse [text-shadow:0_1px_0_rgba(255,255,255,0.15)] ring-1 ring-tint/20 shadow-[var(--theme-shadow-ambient)] inset-shadow-[0_1px_0_rgba(255,255,255,0.15)] hover:brightness-110 active:brightness-95 active:inset-shadow-none",
         glow: "bg-primary text-primary-foreground shadow-[0_0_15px_rgb(from_var(--theme-accent-primary)_r_g_b/0.3)] ring-1 ring-tint/25 hover:shadow-[0_0_25px_rgb(from_var(--theme-accent-primary)_r_g_b/0.45)] hover:brightness-110 active:shadow-[var(--shadow-inset)] active:brightness-95",
@@ -64,7 +82,13 @@ const buttonVariants = cva(
       size: {
         default: "h-8 px-4 py-1.5 gap-2 text-sm [&_svg]:size-4",
         sm: "h-7 px-3 py-1 gap-1.5 text-xs [&_svg]:size-3.5",
-        xs: "h-6 px-2.5 py-0.5 gap-1 text-2xs leading-none [&_svg]:size-3",
+        // A `truncate` label clips at its own box, and `leading-none` makes that
+        // box shorter than the glyphs, so the descenders are sliced off. Padding
+        // grows the clip box and the equal negative margin gives the room back,
+        // so the label neither moves nor changes the button's height (a taller
+        // line box would shift the text a pixel, and the `h-auto` xs buttons
+        // take their height from it).
+        xs: "h-6 px-2.5 py-0.5 gap-1 text-2xs leading-none [&_svg]:size-3 [&_.truncate]:-my-1 [&_.truncate]:py-1",
         lg: "h-9 px-6 py-2 gap-2.5 text-sm [&_svg]:size-4",
         icon: "h-8 w-8 text-sm [&_svg]:size-4",
         "icon-sm": "h-7 w-7 text-sm [&_svg]:size-3.5",
@@ -104,7 +128,7 @@ type ButtonSize = NonNullable<VariantProps<typeof buttonVariants>["size"]>;
 
 // Spinner size per button size — kept in lockstep with the CVA `[&_svg]:size-*`
 // rules so the overlay matches inline icon sizing.
-const SPINNER_SIZE_MAP: Record<ButtonSize, React.ComponentProps<typeof Spinner>["size"]> = {
+const SPINNER_SIZE_MAP: Record<ButtonSize, keyof typeof SPINNER_SIZE_CLASSES> = {
   default: "md",
   sm: "sm",
   xs: "xs",
@@ -128,16 +152,48 @@ const GAP_CLASS_MAP: Record<ButtonSize, string> = {
   inline: "gap-1",
 };
 
+// The labelled presentation is opt-in, not the default (#15304). Most busy
+// buttons are a lone Save or an icon, where the overlay already reads, and the
+// labelled form costs layout the rest can't pay: its content wrapper is a real
+// box even when idle, so a caller's `w-full justify-between` and `truncate`
+// rows (#8843) no longer reach the button's flex directly, and the reserved
+// slot widens every button that opts in. Reach for it where a spinner alone
+// can't say which action is busy: several actions side by side, or one with
+// consequences.
+//
+// The slot plus its gap sits before the label in both states, so the width
+// never changes. Idle, the content shifts back by half of that so the label
+// reads centred; busy, the shift drops and spinner and label centre together.
+// Half of spinner + gap per size, in lockstep with SPINNER_SIZE_MAP and
+// GAP_CLASS_MAP. The shift snaps, so reduced motion has nothing to remove.
+// Icon sizes have no label to keep readable, and `inline` sizes every glyph
+// to the text around it (`size-[1em]`), which would outgrow a fixed slot and
+// run into the label; both stay on the overlay.
+const LABELLED_IDLE_SHIFT_CLASS_MAP: Partial<Record<ButtonSize, string>> = {
+  default: "-translate-x-3",
+  sm: "-translate-x-2.5",
+  xs: "-translate-x-2",
+  lg: "-translate-x-3.25",
+};
+
 export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement>, VariantProps<typeof buttonVariants> {
   asChild?: boolean;
   /**
-   * When true, overlays a centered spinner and hides the label without swapping
-   * it (preserving width + accessible name). Sets `aria-busy`/`aria-disabled`
-   * and blocks clicks/keyboard activation without using the native `disabled`
-   * attribute, so focus is preserved.
+   * When true, the button is busy: sets `aria-busy`/`aria-disabled` and blocks
+   * clicks/keyboard activation without using the native `disabled` attribute,
+   * so focus is preserved. `loadingPresentation` decides what it looks like.
    */
   loading?: boolean;
+  /**
+   * `"overlay"` (the default) draws a centred spinner and hides the label
+   * behind it without swapping it, preserving width and accessible name.
+   * `"labelled"` keeps the label readable, with the spinner in its own slot
+   * before it. Pass it on every render, not only while loading: the slot is
+   * reserved while idle too, which is what holds the width. Ignored for icon
+   * sizes, `inline` and `asChild`, which keep the overlay.
+   */
+  loadingPresentation?: "overlay" | "labelled";
   /**
    * Makes the button a toggle: sets `aria-pressed` and draws the shared pressed
    * treatment while it is true. Leave it undefined for an ordinary button, and
@@ -155,6 +211,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       asChild = false,
       type,
       loading = false,
+      loadingPresentation = "overlay",
       pressed,
       onClick,
       disabled,
@@ -170,6 +227,13 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     // the inline one rather than the default's 32px padded frame.
     const resolvedSize: ButtonSize = size ?? (variant === "link" ? "inline" : "default");
     const resolvedAriaDisabled = loading || disabled ? true : ariaDisabled || undefined;
+    const unavailable =
+      !loading && (Boolean(disabled) || ariaDisabled === true || ariaDisabled === "true");
+    const labelledShift =
+      loadingPresentation === "labelled" && !asChild
+        ? LABELLED_IDLE_SHIFT_CLASS_MAP[resolvedSize]
+        : undefined;
+    const labelled = labelledShift !== undefined;
 
     const handleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
       if (loading) {
@@ -180,15 +244,16 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       onClick?.(event);
     };
 
-    const spinner = loading ? (
-      <span
-        data-slot="button-spinner"
-        className="pointer-events-none absolute inset-0 flex items-center justify-center"
-        aria-hidden="true"
-      >
-        <Spinner size={SPINNER_SIZE_MAP[resolvedSize]} />
-      </span>
-    ) : null;
+    const spinner =
+      loading && !labelled ? (
+        <span
+          data-slot="button-spinner"
+          className="pointer-events-none absolute inset-0 flex items-center justify-center"
+          aria-hidden="true"
+        >
+          <Spinner size={SPINNER_SIZE_MAP[resolvedSize]} />
+        </span>
+      ) : null;
 
     return (
       <Comp
@@ -200,7 +265,12 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
           className,
           // Busy outranks unavailable: a caller's own disabled dimming (the
           // `disabled:`/`aria-disabled:` 50%) would fade the spinner it overlays.
-          loading && "disabled:opacity-100 aria-disabled:opacity-100"
+          loading && "disabled:opacity-100 aria-disabled:opacity-100",
+          // The filled primaries draw their own unavailable look, which a caller's
+          // stock half-opacity dimming would wash out again.
+          unavailable &&
+            (variant === "destructive" || variant === "contrast") &&
+            "disabled:opacity-100 aria-disabled:opacity-100"
         )}
         ref={ref}
         // Never natively disabled while busy — that would drop keyboard focus to
@@ -219,6 +289,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         aria-busy={loading || ariaBusy || undefined}
         aria-disabled={resolvedAriaDisabled}
         data-loading={loading || undefined}
+        data-unavailable={unavailable || undefined}
         // A durable hook for the forced-colors rule in index.css. In
         // forced-colors the UA replaces every button's background with a system
         // colour, so `bg-destructive` stops distinguishing this button from
@@ -234,6 +305,24 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
             combines asChild with loading. */}
         {asChild ? (
           <Slottable>{children}</Slottable>
+        ) : labelled ? (
+          <span
+            data-slot="button-content"
+            className={cn(
+              "inline-flex min-w-0 max-w-full items-center justify-center",
+              GAP_CLASS_MAP[resolvedSize],
+              !loading && labelledShift
+            )}
+          >
+            <span
+              data-slot="button-spinner-slot"
+              className={cn("flex shrink-0", SPINNER_SIZE_CLASSES[SPINNER_SIZE_MAP[resolvedSize]])}
+              aria-hidden="true"
+            >
+              {loading && <Spinner size={SPINNER_SIZE_MAP[resolvedSize]} />}
+            </span>
+            {children}
+          </span>
         ) : (
           // `display: contents` when not loading so the wrapper is transparent
           // to layout — children are flex items of the <button> directly, which

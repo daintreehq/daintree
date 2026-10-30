@@ -2,9 +2,10 @@ import { useMemo } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Button } from "@/components/ui/button";
+import { PickerChevron } from "@/components/ui/PickerChevron";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { useListboxCursor } from "@/hooks/useListboxCursor";
-import { Check, ChevronsUpDown, Copy, Play } from "lucide-react";
+import { Check, Copy, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FIELD_TRIGGER } from "./WorktreeFormLayout";
 import type { TerminalRecipe } from "@/types";
@@ -23,10 +24,18 @@ interface RecipePickerPopoverProps {
   onMarkTouched: () => void;
   disabled?: boolean;
   listId: string;
+  /** The hint under the field, for the trigger to be described by. */
+  describedBy?: string;
+  /**
+   * Why a row can't be picked here, shown beside it ("This Mac only"), or null
+   * when it can. Such a row stays listed and arrow-reachable, but choosing it
+   * does nothing.
+   */
+  unavailableReason?: (option: RecipeOption) => string | null;
 }
 
 /** One row of the list. `id` is the recipe id, or a sentinel for the two fixed rows. */
-type RecipeOption =
+export type RecipeOption =
   | { id: typeof CLONE_LAYOUT_ID; kind: "clone" }
   | { id: null; kind: "none" }
   | { id: string; kind: "recipe"; recipe: TerminalRecipe };
@@ -42,6 +51,8 @@ export function RecipePickerPopover({
   onMarkTouched,
   disabled,
   listId,
+  describedBy,
+  unavailableReason,
 }: RecipePickerPopoverProps) {
   const options = useMemo<RecipeOption[]>(
     () => [
@@ -52,18 +63,22 @@ export function RecipePickerPopover({
     [recipes]
   );
 
-  const handleSelect = (id: string | null) => {
+  const handleSelect = (option: RecipeOption) => {
+    if (unavailableReason?.(option)) return;
     onMarkTouched();
-    onSelectRecipe(id);
+    onSelectRecipe(option.id);
     onOpenChange(false);
   };
 
   const { activeIndex, setActiveIndex, listRef, handleKeyDown } = useListboxCursor({
     itemCount: options.length,
     open,
+    // The committed row, so Enter on a freshly opened list keeps the pick
+    // rather than acting on whichever row happens to lead.
+    initialIndex: options.findIndex((option) => option.id === selectedRecipeId),
     onSelect: (index) => {
       const option = options[index];
-      if (option) handleSelect(option.id);
+      if (option) handleSelect(option);
     },
     onClose: () => onOpenChange(false),
   });
@@ -81,6 +96,7 @@ export function RecipePickerPopover({
           aria-haspopup="listbox"
           aria-controls={listId}
           aria-activedescendant={open && activeIndex >= 0 ? optionId(activeIndex) : undefined}
+          aria-describedby={describedBy}
           className={FIELD_TRIGGER}
           disabled={disabled}
           // Focus never leaves the trigger, so the list is driven from here —
@@ -117,7 +133,7 @@ export function RecipePickerPopover({
               </>
             )}
           </span>
-          <ChevronsUpDown className="text-text-secondary shrink-0" />
+          <PickerChevron />
         </Button>
       </PopoverTrigger>
       <PopoverContent
@@ -151,8 +167,9 @@ export function RecipePickerPopover({
               isCursor={index === activeIndex}
               isSelectedValue={option.id === selectedRecipeId}
               defaultRecipeId={defaultRecipeId}
+              unavailable={unavailableReason?.(option) ?? null}
               onActivate={() => setActiveIndex(index)}
-              onSelect={() => handleSelect(option.id)}
+              onSelect={() => handleSelect(option)}
             />
           ))}
         </ScrollShadow>
@@ -168,6 +185,8 @@ interface RecipeRowProps {
   isCursor: boolean;
   isSelectedValue: boolean;
   defaultRecipeId?: string;
+  /** Why the row can't be picked, or null when it can. */
+  unavailable: string | null;
   onActivate: () => void;
   onSelect: () => void;
 }
@@ -179,6 +198,7 @@ function RecipeRow({
   isCursor,
   isSelectedValue,
   defaultRecipeId,
+  unavailable,
   onActivate,
   onSelect,
 }: RecipeRowProps) {
@@ -193,17 +213,27 @@ function RecipeRow({
       // and the committed value gets a check instead of a competing background.
       aria-selected={isCursor}
       aria-current={isSelectedValue ? "true" : undefined}
+      // The house unavailable row (SelectItem's `unavailable`): listed and
+      // reachable, the reason beside it, and no choice on click or Enter.
+      aria-disabled={unavailable !== null || undefined}
+      data-unavailable={unavailable !== null || undefined}
       onPointerMove={onActivate}
       onClick={onSelect}
       className={cn(
         PALETTE_ROW_CLASS,
-        "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer"
+        "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)]",
+        unavailable !== null ? "cursor-default text-text-secondary" : "cursor-pointer"
       )}
     >
       {option.kind === "clone" ? (
-        <span className="flex items-center gap-2">
-          <Copy className="h-3.5 w-3.5 text-text-secondary" aria-hidden="true" />
-          <span>Clone current layout</span>
+        <span className="flex items-center gap-2 min-w-0">
+          <Copy className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
+          <span className={cn("truncate", unavailable && "text-text-secondary")}>
+            Clone current layout
+          </span>
+          {unavailable && (
+            <span className="text-xs text-text-secondary shrink-0">{unavailable}</span>
+          )}
         </span>
       ) : option.kind === "none" ? (
         <span className="text-text-secondary">No recipe</span>
@@ -211,7 +241,12 @@ function RecipeRow({
         <span className="flex items-center gap-2 min-w-0">
           {/* Overridden steps the name down the ramp rather than fading the
               row, as the rest of the palette family treats a lesser row. */}
-          <span className={cn("truncate", option.recipe.shadowedBy && "text-text-secondary")}>
+          <span
+            className={cn(
+              "truncate",
+              (option.recipe.shadowedBy || unavailable) && "text-text-secondary"
+            )}
+          >
             {option.recipe.name}
           </span>
           <span className="text-xs text-text-secondary shrink-0">
@@ -225,6 +260,9 @@ function RecipeRow({
           )}
           {option.recipe.id === defaultRecipeId && (
             <span className="text-xs text-text-secondary shrink-0">(default)</span>
+          )}
+          {unavailable && (
+            <span className="text-xs text-text-secondary shrink-0">{unavailable}</span>
           )}
         </span>
       )}

@@ -1,5 +1,6 @@
 import type { InputHTMLAttributes, ReactNode, Ref } from "react";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { PathTail } from "@/components/ui/PathTail";
 import { FolderOpen } from "lucide-react";
 import { basename, normalize } from "@shared/utils/path";
 import { cn } from "@/lib/utils";
@@ -162,6 +163,7 @@ export function SlottedInputField({
   leading,
   trailing,
   invalid,
+  elideStart,
   className,
   ref,
   ...inputProps
@@ -169,8 +171,31 @@ export function SlottedInputField({
   leading?: ReactNode;
   trailing?: ReactNode;
   invalid?: boolean;
+  /**
+   * While the field isn't focused, show a path's tail behind a leading ellipsis.
+   * An input can't do that itself: scrolled to its end it slices whichever glyph
+   * straddles the left edge, and a right-to-left input moves a leading slash to
+   * the far end. So a {@link PathTail} paints over the input's own (transparent)
+   * text until focus hands the field back to the caret. Forced colours repaint
+   * transparent text, so there the input shows alone rather than doubled.
+   */
+  elideStart?: boolean;
   ref?: Ref<HTMLInputElement>;
 }) {
+  const tail = elideStart && typeof inputProps.value === "string" ? inputProps.value : "";
+  const input = (
+    <input
+      ref={ref}
+      type="text"
+      {...inputProps}
+      aria-invalid={invalid || undefined}
+      className={cn(
+        COMPOUND_INPUT,
+        tail && "peer text-transparent focus:text-text-primary",
+        className
+      )}
+    />
+  );
   return (
     <div
       className={cn(
@@ -182,13 +207,22 @@ export function SlottedInputField({
       )}
     >
       {leading}
-      <input
-        ref={ref}
-        type="text"
-        {...inputProps}
-        aria-invalid={invalid || undefined}
-        className={cn(COMPOUND_INPUT, className)}
-      />
+      {elideStart ? (
+        <span className="relative flex h-full min-w-0 flex-1">
+          {input}
+          {tail && (
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 flex items-center px-2.5 text-text-primary peer-focus:hidden peer-disabled:opacity-50 forced-colors:hidden"
+            >
+              {/* `pre`: an input keeps runs of spaces, and the copy must match it. */}
+              <PathTail className={cn("min-w-0 whitespace-pre", className)}>{tail}</PathTail>
+            </span>
+          )}
+        </span>
+      ) : (
+        input
+      )}
       {trailing}
     </div>
   );

@@ -2,12 +2,13 @@
 import { render, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { getOverlayContrastWarnings } from "@shared/theme/colorValidator";
+import { DESTRUCTIVE_BUTTON_CONTRAST } from "@shared/theme/contrast";
 import { BUILT_IN_APP_SCHEMES } from "@shared/theme/themes";
 import type { AppColorScheme } from "@shared/theme/types";
 
 import { Button, buttonVariants } from "../button";
 import { FilterChip } from "../FilterChip";
-import { readIndexCss } from "@/__tests__/support/hostCss";
+import { readHostCss, readIndexCss } from "@/__tests__/support/hostCss";
 
 describe("buttonVariants", () => {
   it("transitions paint only, so the press scale snaps both ways", () => {
@@ -18,6 +19,33 @@ describe("buttonVariants", () => {
     expect(transitions[0]).toMatch(/^transition-\[[a-z,-]+\]$/);
     expect(transitions[0]).toContain("background-color");
     expect(transitions[0]).not.toMatch(/scale|transform|translate|rotate|all/);
+  });
+
+  // A `truncate` label clips at its own box, and at `leading-none` that box is
+  // shorter than the glyphs, so the descenders are sliced off. The room comes
+  // from padding on the clip box, handed back by an equal negative margin so
+  // the label doesn't move and an `h-auto` button doesn't grow.
+  it("gives a truncating label room for its descenders without moving it", () => {
+    const sizes = ["default", "sm", "xs", "lg", "icon", "icon-sm", "icon-xs", "inline"] as const;
+    const tight = sizes.filter((size) =>
+      buttonVariants({ size }).split(/\s+/).includes("leading-none")
+    );
+    expect(tight.length).toBeGreaterThan(0);
+    for (const size of tight) {
+      const tokens = buttonVariants({ size }).split(/\s+/);
+      const amount = (utility: string) => {
+        const match = tokens
+          .map((token) =>
+            token.match(new RegExp(`^\\[&_\\.truncate\\]:${utility}-(\\d+(?:\\.\\d+)?)$`))
+          )
+          .find(Boolean);
+        return match ? Number(match[1]) : null;
+      };
+      const padding = amount("py");
+      expect(padding, size).not.toBeNull();
+      expect(padding, size).toBeGreaterThan(0);
+      expect(amount("-my"), size).toBe(padding);
+    }
   });
 });
 
@@ -198,6 +226,160 @@ describe("Button loading state", () => {
   });
 });
 
+describe("Button labelled loading presentation", () => {
+  const spacing = (className: string, utility: string): number | null => {
+    const match = className
+      .split(/\s+/)
+      .map((token) => token.match(new RegExp(`^${utility}-(\\d+(?:\\.\\d+)?)$`)))
+      .find(Boolean);
+    return match ? Number(match[1]) : null;
+  };
+  const parts = (container: HTMLElement) => ({
+    button: container.querySelector("button")!,
+    content: container.querySelector('[data-slot="button-content"]')!,
+    slot: container.querySelector('[data-slot="button-spinner-slot"]'),
+  });
+
+  it("keeps the label readable with the spinner in a slot before it", () => {
+    const onClick = vi.fn();
+    const { container, getByRole, getAllByText } = render(
+      <Button loading loadingPresentation="labelled" onClick={onClick}>
+        Take control
+      </Button>
+    );
+    const { button, content, slot } = parts(container);
+    expect(button.getAttribute("aria-busy")).toBe("true");
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(button.hasAttribute("disabled")).toBe(false);
+    expect(getByRole("button", { name: "Take control" })).toBe(button);
+    // No overlay, and nothing hiding the label.
+    expect(container.querySelector('[data-slot="button-spinner"]')).toBeNull();
+    expect(content.className).not.toContain("opacity-0");
+    expect(getAllByText("Take control")).toHaveLength(1);
+    expect(content.firstElementChild).toBe(slot);
+    expect(slot!.getAttribute("aria-hidden")).toBe("true");
+    expect(slot!.querySelector("svg")).toBeTruthy();
+    expect(content.textContent).toBe("Take control");
+
+    fireEvent.click(button);
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  // The slot is what holds the width, so it has to be there before the
+  // button is busy and still there after.
+  it("reserves the same slot while idle, so going busy keeps the width and focus", () => {
+    const { container, rerender } = render(
+      <Button loadingPresentation="labelled">Take control</Button>
+    );
+    const idle = parts(container);
+    idle.button.focus();
+    expect(idle.slot).toBeTruthy();
+    expect(idle.slot!.childElementCount).toBe(0);
+    const idleSlotClass = idle.slot!.className;
+    expect(spacing(idle.content.className, "-translate-x")).not.toBeNull();
+
+    rerender(
+      <Button loading loadingPresentation="labelled">
+        Take control
+      </Button>
+    );
+    const busy = parts(container);
+    expect(busy.button).toBe(idle.button);
+    expect(busy.slot).toBe(idle.slot);
+    expect(busy.slot!.className).toBe(idleSlotClass);
+    expect(busy.slot!.querySelector("svg")).toBeTruthy();
+    expect(spacing(busy.content.className, "-translate-x")).toBeNull();
+    expect(document.activeElement).toBe(busy.button);
+
+    rerender(<Button loadingPresentation="labelled">Take control</Button>);
+    const after = parts(container);
+    expect(after.slot).toBe(idle.slot);
+    expect(after.slot!.childElementCount).toBe(0);
+    expect(after.button.hasAttribute("aria-busy")).toBe(false);
+    expect(spacing(after.content.className, "-translate-x")).not.toBeNull();
+  });
+
+  // Idle, the label sits after an empty slot and a gap; shifting back by half
+  // of both is what centres it, at every size that has a label.
+  it("shifts the idle label back by half the slot and gap at every labelled size", () => {
+    for (const size of ["default", "sm", "xs", "lg"] as const) {
+      const { container, unmount } = render(
+        <Button size={size} loadingPresentation="labelled">
+          Save
+        </Button>
+      );
+      const { content, slot } = parts(container);
+      const slotWidth = spacing(slot!.className, "w");
+      const gap = spacing(content.className, "gap");
+      expect(slotWidth, size).not.toBeNull();
+      expect(gap, size).not.toBeNull();
+      expect(spacing(content.className, "-translate-x"), size).toBe((slotWidth! + gap!) / 2);
+      unmount();
+    }
+  });
+
+  it("sizes the slot to the spinner it holds", () => {
+    for (const size of ["default", "sm", "xs", "lg"] as const) {
+      const { container, unmount } = render(
+        <Button size={size} loading loadingPresentation="labelled">
+          Save
+        </Button>
+      );
+      const slot = container.querySelector('[data-slot="button-spinner-slot"]')!;
+      const spinner = slot.querySelector("svg")!.parentElement!;
+      expect(spacing(slot.className, "w"), size).toBe(spacing(spinner.className, "w"));
+      expect(spacing(slot.className, "h"), size).toBe(spacing(spinner.className, "h"));
+      unmount();
+    }
+  });
+
+  it("keeps the overlay for icon sizes, inline links and asChild", () => {
+    const icon = render(
+      <Button size="icon-sm" loading loadingPresentation="labelled" aria-label="Delete">
+        <svg />
+      </Button>
+    );
+    expect(icon.container.querySelector('[data-slot="button-spinner"]')).toBeTruthy();
+    expect(icon.container.querySelector('[data-slot="button-spinner-slot"]')).toBeNull();
+
+    // An inline link draws its glyphs at 1em, which no fixed slot can hold.
+    const link = render(
+      <Button variant="link" loading loadingPresentation="labelled">
+        Retry
+      </Button>
+    );
+    expect(link.container.querySelector('[data-slot="button-spinner"]')).toBeTruthy();
+    expect(link.container.querySelector('[data-slot="button-spinner-slot"]')).toBeNull();
+
+    const slotted = render(
+      <Button asChild loading loadingPresentation="labelled">
+        <a href="/x">Link</a>
+      </Button>
+    );
+    expect(slotted.container.querySelector('[data-slot="button-spinner"]')).toBeTruthy();
+    expect(slotted.container.querySelector('[data-slot="button-spinner-slot"]')).toBeNull();
+  });
+
+  it("stays undimmed when loading and disabled together", () => {
+    const { container } = render(
+      <Button
+        loading
+        disabled
+        loadingPresentation="labelled"
+        className="aria-disabled:opacity-50 disabled:opacity-40"
+      >
+        Save
+      </Button>
+    );
+    const button = container.querySelector("button")!;
+    expect(button.hasAttribute("disabled")).toBe(false);
+    const dimming = button.className
+      .split(/\s+/)
+      .filter((c) => /^(aria-)?disabled:opacity-/.test(c));
+    expect(dimming.every((c) => c.endsWith("opacity-100"))).toBe(true);
+  });
+});
+
 function renderToggle(props: Parameters<typeof Button>[0], pressed: boolean | undefined) {
   const { container } = render(
     <Button {...props} pressed={pressed}>
@@ -317,6 +499,62 @@ describe("ghost hover fill", () => {
       );
       expect(pressed, theme.id).toBeGreaterThan(hover);
     }
+  });
+});
+
+describe("destructive variant", () => {
+  const classes = () => buttonVariants({ variant: "destructive" }).split(/\s+/);
+
+  // Follows `--color-*` through its `var()` aliases to the theme token it lands on.
+  const themeTokenOf = (utility: string, prefix: "bg-" | "text-") => {
+    const declarations = new Map(
+      [...readHostCss().matchAll(/(--[\w-]+)\s*:\s*var\((--[\w-]+)\)\s*;/g)].map(
+        ([, name, value]) => [name, value]
+      )
+    );
+    let current = `--color-${utility.slice(prefix.length)}`;
+    while (!current.startsWith("--theme-")) {
+      const next = declarations.get(current);
+      if (next === undefined) return current;
+      current = next;
+    }
+    return current.slice("--theme-".length);
+  };
+
+  // Fills and labels for one interaction state, ignoring the unavailable look,
+  // which the validator deliberately does not hold to the destructive pair.
+  const inState = (state: "" | "hover:" | "active:", kind: "bg-" | "text-") =>
+    classes().filter(
+      (c) =>
+        c.startsWith(`${state}${kind}`) &&
+        !/^(?:hover:|active:)?text-(3xs|2xs|xs|sm|base|lg|\d?xl|left|center|right)$/.test(c)
+    );
+
+  // The theme validator holds `destructive-foreground` to 4.5:1 on each of the three
+  // fills (#15363). A variant that paints a different pair, or moves a state to a
+  // filter or fill the validator does not read, would leave that guarantee
+  // describing a button nobody sees.
+  it("paints the label and the per-state fills the theme validator measures", () => {
+    const { foreground, fills } = DESTRUCTIVE_BUTTON_CONTRAST;
+    // Arbitrary values count too: a later `bg-[#fff]` would win over the token fill.
+    const rest = inState("", "bg-");
+    const hover = inState("hover:", "bg-");
+    const press = inState("active:", "bg-");
+    const label = inState("", "text-");
+    expect(rest).toHaveLength(1);
+    expect(hover).toHaveLength(1);
+    expect(press).toHaveLength(1);
+    expect(label).toHaveLength(1);
+    expect(themeTokenOf(rest[0]!, "bg-")).toBe(fills.rest);
+    expect(themeTokenOf(hover[0]!.slice("hover:".length), "bg-")).toBe(fills.hover);
+    expect(themeTokenOf(press[0]!.slice("active:".length), "bg-")).toBe(fills.press);
+    expect(themeTokenOf(label[0]!, "text-")).toBe(foreground);
+  });
+
+  it("changes nothing else the validator would have to model on hover or press", () => {
+    const unmodelled =
+      /^(?:(?:hover|active):(?:text|opacity)-|(?:(?:hover|active):)?(?:-?(?:brightness|contrast|saturate|grayscale|invert|sepia|hue-rotate)(?:-|$)|\[filter:))/;
+    expect(classes().filter((c) => unmodelled.test(c))).toEqual([]);
   });
 });
 

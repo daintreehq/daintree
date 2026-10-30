@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect } from "react";
+import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { lazyWithPreload } from "@/lib/lazyWithPreload";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -7,7 +7,10 @@ import { useWorktrees } from "@/hooks/useWorktrees";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { useBuiltinView } from "@/registry/builtinRendererRegistry";
 import type { ForgeBulkCreateWorktreeDialogProps } from "@/types/forgeSlotProps";
-import { useProjectSurface } from "@/components/Plugin/ProjectSurfaceView";
+import {
+  useProjectSurface,
+  useSurfaceSwitchedToStock,
+} from "@/components/Plugin/ProjectSurfaceView";
 import { ProjectWorktreeCreateDialog } from "./ProjectWorktreeCreateDialog";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -65,24 +68,41 @@ function ProjectDialogHost() {
   // still renders and the user hasn't chosen stock; otherwise the same opening
   // falls through to the stock dialog with its prefills intact.
   const worktreeCreateSurface = useProjectSurface("worktreeCreate");
+  const worktreeCreateSwitchedToStock = useSurfaceSwitchedToStock("worktreeCreate");
+  const openingKindId = createDialog.isOpen ? createDialog.surfacePanelKindId : undefined;
   const pluginCreateConfig =
-    createDialog.isOpen &&
-    createDialog.surfacePanelKindId !== undefined &&
-    worktreeCreateSurface?.config.id === createDialog.surfacePanelKindId
+    openingKindId !== undefined && worktreeCreateSurface?.config.id === openingKindId
       ? worktreeCreateSurface.config
       : null;
-  const isStockCreateOpen = createDialog.isOpen && pluginCreateConfig === null;
+  const openingId = createDialog.openingId;
+  // The opening whose plugin dialog has been on screen. Only that one has an
+  // exit to play; one switched to stock before it ever showed falls straight
+  // through like a lost claim.
+  const [shownPluginOpening, setShownPluginOpening] = useState<number | undefined>(undefined);
+  useEffect(() => {
+    if (pluginCreateConfig !== null) setShownPluginOpening(openingId);
+  }, [pluginCreateConfig, openingId]);
+  // Stock chosen while the plugin dialog is up (its strip's switch, the consent
+  // notice, or another window): the dialog closes first and hands the opening
+  // over once focus is back on the control that opened it, as "Standard
+  // dialog…" does. Opened in the same render, stock would record the plugin
+  // dialog's unmounting control as its opener and strand focus when it closes.
+  const leavingCreateConfig =
+    pluginCreateConfig === null &&
+    openingKindId !== undefined &&
+    shownPluginOpening === openingId &&
+    worktreeCreateSwitchedToStock?.config.id === openingKindId
+      ? worktreeCreateSwitchedToStock.config
+      : null;
+  const pluginDialogConfig = pluginCreateConfig ?? leavingCreateConfig;
+  const isStockCreateOpen = createDialog.isOpen && pluginDialogConfig === null;
   // A claim that stops rendering mid-opening hands that opening to stock for
   // good: if the same claim came back, swapping a fresh plugin view in would
   // tear down a stock form the user may already be filling.
-  const lostClaim =
-    createDialog.isOpen &&
-    createDialog.surfacePanelKindId !== undefined &&
-    pluginCreateConfig === null;
+  const lostClaim = openingKindId !== undefined && pluginDialogConfig === null;
   useEffect(() => {
     if (lostClaim) showStockCreateDialog();
   }, [lostClaim, showStockCreateDialog]);
-  const openingId = createDialog.openingId;
   const closePluginCreateDialog = useCallback(
     () => closeSurfaceCreateDialog(openingId),
     [closeSurfaceCreateDialog, openingId]
@@ -104,6 +124,7 @@ function ProjectDialogHost() {
     isRecipeEditorOpen,
     recipeEditorWorktreeId,
     recipeEditorInitialTerminals,
+    recipeEditorLayoutOmissions,
     recipeEditorDefaultScope,
     recipeManagerEdit,
     isRecipeManagerOpen,
@@ -135,6 +156,7 @@ function ProjectDialogHost() {
               recipe={recipeManagerEdit}
               worktreeId={recipeEditorWorktreeId}
               initialTerminals={recipeEditorInitialTerminals}
+              layoutOmissions={recipeEditorLayoutOmissions}
               defaultScope={recipeEditorDefaultScope}
               isOpen={isRecipeEditorOpen}
               onClose={handleCloseRecipeEditor}
@@ -186,15 +208,19 @@ function ProjectDialogHost() {
         </ErrorBoundary>
       )}
 
-      {pluginCreateConfig !== null && (
+      {pluginDialogConfig !== null && (
+        // Keyed by opening, so a hand-off one opening started never carries
+        // into the next.
         <ErrorBoundary
+          key={openingId}
           variant="component"
           componentName="ProjectWorktreeCreateDialog"
-          resetKeys={[pluginCreateConfig.id]}
+          resetKeys={[pluginDialogConfig.id]}
         >
           <ProjectWorktreeCreateDialog
-            config={pluginCreateConfig}
+            config={pluginDialogConfig}
             isOpen
+            leavingForStock={leavingCreateConfig !== null}
             onClose={closePluginCreateDialog}
             onUseStock={showStockCreateDialog}
           />

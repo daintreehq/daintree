@@ -286,6 +286,89 @@ describe("registerWebviewHandlers", () => {
       });
     });
 
+    it("marks accessor properties instead of reporting them as undefined", async () => {
+      debuggerMock.sendCommand.mockImplementation((cmd: string) => {
+        if (cmd === "Runtime.getProperties") {
+          return Promise.resolve({
+            result: [
+              {
+                name: "total",
+                get: { type: "function", objectId: "getter-1", description: "get total() {}" },
+                set: { type: "undefined" },
+                configurable: true,
+                enumerable: true,
+                isOwn: true,
+              },
+              {
+                name: "sink",
+                get: { type: "undefined" },
+                set: { type: "function", objectId: "setter-1", description: "set sink(v) {}" },
+                configurable: true,
+                enumerable: true,
+                isOwn: true,
+              },
+              {
+                name: "both",
+                get: { type: "function", objectId: "getter-2", description: "get both() {}" },
+                set: { type: "function", objectId: "setter-2", description: "set both(v) {}" },
+                configurable: true,
+                enumerable: true,
+                isOwn: true,
+              },
+              {
+                name: "writeOnly",
+                set: { type: "function", objectId: "setter-3", description: "set writeOnly(v) {}" },
+                configurable: true,
+                enumerable: true,
+                isOwn: true,
+              },
+              {
+                name: "proxied",
+                get: { type: "object", subtype: "proxy", objectId: "proxy-1" },
+                set: { type: "undefined" },
+                configurable: true,
+                enumerable: true,
+                isOwn: true,
+              },
+              {
+                name: "missing",
+                value: { type: "undefined" },
+                configurable: true,
+                enumerable: true,
+                writable: true,
+                isOwn: true,
+              },
+              { name: "bare", configurable: true, enumerable: true, isOwn: true },
+            ],
+          });
+        }
+        return Promise.resolve();
+      });
+
+      cleanup = registerWebviewHandlers(deps);
+      const rowId = await emitObjectRow("pane-1", "obj-acc");
+      const handler = getHandler("webview:get-console-properties");
+      const result = await handler(null, 42, "pane-1", rowId, "obj-acc");
+
+      const [total, sink, both, writeOnly, proxied, missing, bare] = result.properties;
+      expect(total.value).toBeUndefined();
+      expect(total.accessor).toEqual({ getter: true, setter: false });
+      expect(sink.value).toBeUndefined();
+      expect(sink.accessor).toEqual({ getter: false, setter: true });
+      expect(both.accessor).toEqual({ getter: true, setter: true });
+      expect(writeOnly.accessor).toEqual({ getter: false, setter: true });
+      expect(proxied.accessor).toEqual({ getter: true, setter: false });
+      expect(missing.accessor).toBeUndefined();
+      expect(missing.value).toEqual({ type: "primitive", kind: "undefined", value: null });
+      expect(bare.accessor).toBeUndefined();
+      expect(bare.value).toBeUndefined();
+
+      // Expanding never runs the getter: nothing but the property read reaches the page.
+      const commands = debuggerMock.sendCommand.mock.calls.map(([cmd]) => cmd);
+      expect(commands).not.toContain("Runtime.callFunctionOn");
+      expect(commands).not.toContain("Runtime.evaluate");
+    });
+
     it("returns empty properties when object not found", async () => {
       debuggerMock.sendCommand.mockImplementation((cmd: string) => {
         if (cmd === "Runtime.getProperties") {

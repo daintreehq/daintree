@@ -268,11 +268,11 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
       let origOnExit: { dispose(): void } = { dispose() {} };
 
       // At most one gate arm is live at a time, created immediately before each
-      // press and settled by the first of: a fresh `gateText` match in
+      // press and settled by the first of: a fresh `gateTexts` match in
       // `gateProbe`, its own per-press timer, or `finish()`. `settled` is the
-      // latch that makes Ratatui's full-frame redraws harmless — the footer is
-      // repainted on every tick, so without it one press would keep re-arming
-      // the escalation off a single stale frame.
+      // latch that makes Ratatui's full-frame redraws harmless — a footer gate
+      // is repainted on every tick, so without it one press would keep
+      // re-arming the escalation off a single stale frame.
       let gateArm: {
         settled: boolean;
         timer: NodeJS.Timeout | null;
@@ -280,7 +280,7 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
       } | null = null;
       // Output since the CURRENT press only. Reset per press rather than scanned
       // by offset into `shutdownBuffer`, whose tail truncation would shift any
-      // stored index; accumulating also means a `gateText` split across two PTY
+      // stored index; accumulating also means a gate split across two PTY
       // chunks still matches.
       let gateProbe = "";
 
@@ -341,19 +341,27 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
 
         // Gate first so the escalation is never starved by an early `return`
         // below, but settled only after the capture check — a frame that carries
-        // both the footer and the resume hint must resolve as a capture, not as
+        // both a gate and the resume hint must resolve as a capture, not as
         // permission to press again.
         //
         // Both buffers are matched BEFORE they are trimmed to their cap. Reads
         // held back by a pause arrive as one large chunk once they resume, and
         // trimming first would drop whatever sits at its head (#12432).
+        let gateMatched = false;
         if (gateArm && shutdownSignal) {
           gateProbe += data;
+          const visible = stripAnsiCodes(gateProbe);
+          // A press seen quitting the TUI ends the escalation even with a gate
+          // beside it. A gate proves only that its text was DELIVERED after the
+          // press, not printed after it: held-back reads resume as one burst
+          // (#12432), and an acknowledgement printed before the press can ride
+          // in with the shutdown that press started.
+          if (shutdownSignal.quittingTexts?.some((text) => visible.includes(text))) {
+            settleGateArm(false);
+          } else {
+            gateMatched = shutdownSignal.gateTexts.some((gate) => visible.includes(gate));
+          }
         }
-        const gateMatched =
-          gateArm !== null &&
-          shutdownSignal !== undefined &&
-          stripAnsiCodes(gateProbe).includes(shutdownSignal.gateText);
         if (gateProbe.length > GRACEFUL_SHUTDOWN_BUFFER_SIZE) {
           gateProbe = gateProbe.slice(-GRACEFUL_SHUTDOWN_BUFFER_SIZE);
         }
@@ -401,17 +409,18 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
         finish(sessionId, sessionId ? "captured" : "exited-no-match");
       });
 
-      // Escalate one press at a time, gated on the agent's own confirm-to-quit
-      // footer (#11851). Nothing else is written: no input-clear prelude (its
-      // Ctrl-E/Ctrl-U readline assumption does not hold here, and Ctrl-C already
-      // clears leftover composer text on its own) and no quit command.
+      // Escalate one press at a time, gated on the agent's own acknowledgement
+      // of the last one (#11851, #15267). Nothing else is written: no
+      // input-clear prelude (its Ctrl-E/Ctrl-U readline assumption does not
+      // hold here, and Ctrl-C already clears leftover composer text on its own)
+      // and no quit command.
       //
       // Running out of gate matches or presses ends the ESCALATION, never the
       // teardown. The measured resume hint lands 0.76-1.16s after the first
       // press, so killing at the first unanswered gate would throw away captures
       // the old code would have caught — a press that quit the agent outright,
-      // or one that dismissed a modal without redrawing the footer, prints its
-      // hint with no further footer ever appearing. Stop pressing, keep
+      // or one that dismissed a modal without printing a gate, prints its
+      // hint with no further gate ever appearing. Stop pressing, keep
       // listening, and let the normal outcomes decide.
       const runGatedEscalation = async (signal: AgentGatedKeyEscalation): Promise<void> => {
         while (pressesSent < signal.maxPresses) {

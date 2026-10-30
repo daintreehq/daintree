@@ -85,7 +85,8 @@ const PROJECT_HASH_LEN = 16;
 
 // `core` is the default tool set for assistant sessions: orchestration —
 // worktrees, agent launches, prompts, terminal reads and waits, moves and
-// closes — which is what the assistant is almost always asked to do, while
+// closes, and the issue and PR reads that pick and confirm the work — which is
+// what the assistant is almost always asked to do, while
 // every other tool stays out of the per-turn tool list until the user picks
 // `full`. Admission and approval are separate gates: a `danger: "confirm"` tool
 // admitted here still goes to the renderer for a native ConfirmDialog. What

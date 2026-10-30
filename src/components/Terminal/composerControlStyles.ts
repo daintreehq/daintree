@@ -9,18 +9,19 @@
  *
  * Mixing toward `--ib-bg` rather than transparent keeps each a solid colour
  * whose contrast is fixed by the pair, whichever polarity the terminal has.
- * Neutral throughout: these controls repeat in every composer on screen, and
- * the shell's own focus ring already spends the accent.
+ * How much foreground goes in is `--ib-control-mix`, fitted per palette to 3:1
+ * (`resolveInputBarColors`): a fixed 72% left Solarized Light's paperclip at
+ * 2.6:1. Neutral throughout: these controls repeat in every composer on
+ * screen, and the shell's own focus ring already spends the accent.
  */
 export const COMPOSER_CONTROL_TEXT_CLASS =
-  "text-[color-mix(in_oklab,var(--ib-fg)_72%,var(--ib-bg))] hover:text-[var(--ib-fg)] focus-visible:text-[var(--ib-fg)]";
+  "text-[color-mix(in_oklab,var(--ib-fg)_var(--ib-control-mix,72%),var(--ib-bg))] hover:text-[var(--ib-fg)] focus-visible:text-[var(--ib-fg)]";
 
 /**
- * The `❯` marker sits at the head of the line being typed, so it is the
- * control that says which composer is the selected one: `--ib-marker` steps up
- * on the selected composer and stays at the control ink everywhere else.
- * Layered after `COMPOSER_CONTROL_TEXT_CLASS`, it replaces only the rest ink
- * (`cn` keeps the later colour), so hover and focus stay the shared recipe.
+ * The `❯` marker sits at the head of the line being typed, so it is what says
+ * which composer is the selected one: `--ib-marker` steps up on the selected
+ * composer and stays at the control ink everywhere else. It is a glyph, not a
+ * control, so it takes no hover or focus recipe.
  */
 export const COMPOSER_MARKER_TEXT_CLASS = "text-[var(--ib-marker)]";
 
@@ -32,7 +33,8 @@ export const COMPOSER_CONTROL_HOVER_BG_CLASS =
  * mic in its error state) keeps it under keyboard focus. Inset, because the
  * trailing controls sit edge to edge and an outward ring would paint over the
  * neighbour. Drawn on the control itself so a Tab onto one reads as that
- * control and not the editor beside it.
+ * control and not the editor beside it. The same fitted mix as the control
+ * ink, so the ring clears 3:1 wherever the glyph does.
  */
 export const COMPOSER_CONTROL_FOCUS_CLASS =
-  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[color-mix(in_oklab,var(--ib-fg)_60%,var(--ib-bg))]";
+  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[color-mix(in_oklab,var(--ib-fg)_var(--ib-control-mix,72%),var(--ib-bg))]";

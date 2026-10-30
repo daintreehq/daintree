@@ -1,6 +1,7 @@
 import { useState, useCallback, useTransition, useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { TerminalRecipe } from "@/types";
+import type { Issue, PR } from "@shared/types/forge";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -8,6 +9,7 @@ import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSear
 import { actionService } from "@/services/ActionService";
 import { getAutoAssign } from "@shared/types/project";
 import { detectPrefixFromIssue, buildBranchName } from "@/components/Worktree/branchPrefixUtils";
+import { isStartingLayoutRecipe } from "@/components/Worktree/hooks/useRecipePicker";
 import { generateBranchSlug } from "@/utils/textParsing";
 import { issueBranchName } from "@shared/utils/issueBranchName";
 import { linkProviderIssue } from "@/utils/linkProviderIssue";
@@ -21,6 +23,25 @@ export type QuickCreateItem =
 
 function isCustomize(item: QuickCreateItem): item is QuickCreateItem & { _kind: "customize" } {
   return item._kind === "customize";
+}
+
+/**
+ * The branch a pick creates straight away, or `null` when the issue or PR
+ * context can't name one and the pick hands off to the New Worktree dialog.
+ */
+function quickCreateBranchName(issue: Issue | null, pr: PR | null): string | null {
+  const issueTitle = issue?.title ?? pr?.title;
+  if (!issueTitle) return null;
+
+  // A provider-suggested name stands on its own, even for a title that
+  // slugs to nothing.
+  const suggestedBranch = issueBranchName(issue, "");
+  const prefix = issue ? (detectPrefixFromIssue(issue) ?? "feature") : "feature";
+  const slug = generateBranchSlug(issueTitle);
+  if (!slug && !suggestedBranch) return null;
+
+  const issuePrefix = issue?.number ? `issue-${issue.number}-` : "";
+  return suggestedBranch || buildBranchName(prefix, `${issuePrefix}${slug}`);
 }
 
 export type UseQuickCreatePaletteReturn = UseSearchablePaletteReturn<QuickCreateItem> & {
@@ -46,12 +67,22 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
   const [assignToSelf, setAssignToSelf] = useState(true);
   const comboCountRef = useRef(0);
 
-  // Shadowed recipes stay listed (dimmed, marked "Overridden") rather than
-  // vanishing — the row still launches, resolved to the winner (#11510).
+  const issue = quickCreate.issue;
+  const pr = quickCreate.pr;
+  const branchName = quickCreateBranchName(issue, pr);
+
+  // Without a branch name a pick opens the New Worktree dialog, whose picker
+  // can't select a worktree recipe, so offering one here would swap it for a
+  // different recipe (#14994). Shadowed recipes stay listed (dimmed, marked
+  // "Overridden") rather than vanishing — the row still launches, resolved to
+  // the winner (#11510).
+  // Customize… stays while any recipe exists, so a project whose recipes are
+  // all worktree recipes still reaches the dialog rather than "No recipes yet".
+  const offeredRecipes = branchName ? recipes : recipes.filter(isStartingLayoutRecipe);
   const hasRecipes = recipes.length > 0;
   const items: QuickCreateItem[] = hasRecipes
     ? [
-        ...recipes.map((r): QuickCreateItem => ({ ...r, _kind: "recipe" })),
+        ...offeredRecipes.map((r): QuickCreateItem => ({ ...r, _kind: "recipe" })),
         { _kind: "customize", id: "__customize__", name: "Customize…" },
       ]
     : [];
@@ -79,9 +110,6 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
       palette.open();
     }
   }, [quickCreate.isOpen, palette.isOpen, palette]);
-
-  const issue = quickCreate.issue;
-  const pr = quickCreate.pr;
 
   const selectedRecipe =
     palette.results.length > 0 &&
@@ -115,31 +143,14 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
 
       const recipe = item as TerminalRecipe & { _kind: "recipe" };
 
-      // Derive branch name from issue or PR context
-      const issueTitle = issue?.title ?? pr?.title;
+      if (!branchName) {
+        closeQuickCreate();
+        palette.close();
+        openCreateDialog(issue, { initialRecipeId: recipe.id });
+        return;
+      }
+
       const issueNumber = issue?.number;
-      if (!issueTitle) {
-        // No context to derive a branch name — fall through to full modal
-        closeQuickCreate();
-        palette.close();
-        openCreateDialog(issue, { initialRecipeId: recipe.id });
-        return;
-      }
-
-      // A provider-suggested name stands on its own, even for a title that
-      // slugs to nothing.
-      const suggestedBranch = issueBranchName(issue, "");
-      const prefix = issue ? (detectPrefixFromIssue(issue) ?? "feature") : "feature";
-      const slug = generateBranchSlug(issueTitle);
-      if (!slug && !suggestedBranch) {
-        closeQuickCreate();
-        palette.close();
-        openCreateDialog(issue, { initialRecipeId: recipe.id });
-        return;
-      }
-
-      const issuePrefix = issueNumber ? `issue-${issueNumber}-` : "";
-      const branchName = suggestedBranch || buildBranchName(prefix, `${issuePrefix}${slug}`);
 
       // A shadowed row launches the winning recipe, so its auto-assign
       // preference has to come from that winner, not the losing row.
@@ -296,7 +307,16 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
         }
       });
     },
-    [isPending, closeQuickCreate, openCreateDialog, issue, pr, assignToSelf, palette, getRecipeById]
+    [
+      isPending,
+      closeQuickCreate,
+      openCreateDialog,
+      issue,
+      branchName,
+      assignToSelf,
+      palette,
+      getRecipeById,
+    ]
   );
 
   const confirmSelection = useCallback(() => {

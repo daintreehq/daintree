@@ -45,6 +45,7 @@ import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import type {
   McpBearerIdentity,
   McpDispatchAuthorization,
+  McpRequester,
 } from "../../../shared/types/ipc/mcpServer.js";
 import { buildAnnotations } from "./tierAuth.js";
 import { bindHostControl } from "./hostControlTools.js";
@@ -61,7 +62,7 @@ import { computeMcpAuditSeverity } from "../../../shared/types/ipc/mcpServer.js"
 import type { TurnOutcomeService } from "./turnOutcomeLog.js";
 import { helpNotifyKey, relayNoticePane } from "./terminalNotify.js";
 import type { AbusePolicy } from "./abusePolicy.js";
-import { MCP_DISPATCH_TIMEOUT_MS } from "./shared.js";
+import { MCP_CONFIRMABLE_CALL_MAX_MS } from "../../../shared/config/mcpConfirmWindow.js";
 import { createLogger } from "../../utils/logger.js";
 
 const pinnedViewLogger = createLogger("main:McpPinnedView");
@@ -86,6 +87,7 @@ export function sendToPinnedView(
       endpoint.send({ type: "event", channel, args: [buildPayload()] });
     } catch (err) {
       console.error(`[MCP] ${label} send failed:`, err);
+      return false;
     }
     return true;
   }
@@ -95,6 +97,7 @@ export function sendToPinnedView(
     wc.send(channel, buildPayload());
   } catch (err) {
     console.error(`[MCP] ${label} send failed:`, err);
+    return false;
   }
   return true;
 }
@@ -168,7 +171,10 @@ export interface SessionServerDepsSource {
     confirmed?: boolean,
     contextOverride?: import("../../../shared/types/actions.js").ActionContext,
     sessionOrigin?: McpSessionOrigin,
-    approval?: Pick<WorkspaceDispatchOptions, "approvalOnly" | "approvalReason" | "authorization">
+    approval?: Pick<
+      WorkspaceDispatchOptions,
+      "approvalOnly" | "approvalReason" | "authorization" | "requester"
+    >
   ) => Promise<import("./shared.js").DispatchEnvelope>;
   // Workspace-bound variants used for external sessions that named a workspace
   // at handshake (#11789) and for agent panes bound to their launch workspace
@@ -365,10 +371,10 @@ function createSessionNotifiers(
     // approve. Targeted at the pinned WebContents so the assistant panel
     // that triggered the call gets the event, even if a different project
     // view is currently focused.
-    if (!isRendererOwned(payload.sessionId)) return;
+    if (!isRendererOwned(payload.sessionId)) return false;
     const id = deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
-    if (id === undefined) return;
-    sendToPinnedView(
+    if (id === undefined) return false;
+    return sendToPinnedView(
       id,
       CHANNELS.MCP_TIER_NOT_PERMITTED,
       () => ({
@@ -438,7 +444,9 @@ function createSessionNotifiers(
           {
             actionId: payload.toolId,
             since: waitingSince,
-            expiresAt: waitingSince + MCP_DISPATCH_TIMEOUT_MS + CONFIRMATION_DEADLINE_GRACE_MS,
+            // The latest the call can still be open (#14989); the marker's
+            // settle is what normally clears it, well before.
+            expiresAt: waitingSince + MCP_CONFIRMABLE_CALL_MAX_MS + CONFIRMATION_DEADLINE_GRACE_MS,
           }
         );
       }
@@ -585,6 +593,14 @@ export function createSessionServerDeps(
   // workspace, for the workspace's reason: a session torn down while a call
   // awaits its manifest must still dispatch against the pane's own worktree,
   // not drop its context and act on whatever the view has selected.
+  // The bearer's own terminal, so a dialog can say which pane is asking
+  // (#14992). Never the launch context's focused terminal, which is whatever
+  // had focus when the pane started, and never a relayed pane, which lives on
+  // the machine that relayed it.
+  const paneRequester: McpRequester | undefined =
+    paneBinding && ownPane && ownPane.relay === undefined
+      ? { kind: "pane", terminalId: ownPane.terminalId }
+      : undefined;
   const paneDispatchOptions: WorkspaceDispatchOptions | undefined = paneBinding
     ? {
         contextOverride: paneBinding.actionContext,
@@ -593,6 +609,7 @@ export function createSessionServerDeps(
         // rather than a ceiling (#12692), so its dialogs may offer to keep
         // allowing the tool for the rest of the session.
         offerSessionApproval: true,
+        ...(paneRequester ? { requester: paneRequester } : {}),
       }
     : undefined;
   const preferredWebContentsId = paneBinding?.launchWebContentsId;
@@ -625,6 +642,13 @@ export function createSessionServerDeps(
   // assistant's own spawns to "an external client did this" (#11808). Read
   // here, before the closure, never inside it.
   const sessionOrigin = deps.sessionStore.getOrigin(sessionId);
+  // The Assistant tab asking (#14992), by the help session id its lane holds.
+  // Only for the assistant's own session: a relayed call's tab is on the
+  // machine that relayed it.
+  const assistantRequester: McpRequester | undefined =
+    sessionOrigin === "help" && helpSessionId !== null && relay === undefined
+      ? { kind: "assistant", helpSessionId }
+      : undefined;
 
   // The view captured with the pin, so a webContents id recycled after the
   // view is gone never resolves as the one the assistant was opened in.
@@ -919,9 +943,10 @@ export function createSessionServerDeps(
       // the model's turn (#8317). Absent for context-less sessions, in
       // which case pinned dispatch falls back to live renderer context.
       const boundContext = deps.sessionStore.sessionContextMap.get(sessionId);
-      return authorization !== undefined
+      return authorization !== undefined || assistantRequester !== undefined
         ? pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin, {
-            authorization,
+            ...(authorization !== undefined ? { authorization } : {}),
+            ...(assistantRequester !== undefined ? { requester: assistantRequester } : {}),
           })
         : pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin);
     }
@@ -977,7 +1002,11 @@ export function createSessionServerDeps(
         false,
         deps.sessionStore.sessionContextMap.get(sessionId),
         sessionOrigin,
-        { approvalOnly: true, approvalReason: "protected-close" }
+        {
+          approvalOnly: true,
+          approvalReason: "protected-close",
+          ...(assistantRequester !== undefined ? { requester: assistantRequester } : {}),
+        }
       );
     };
 

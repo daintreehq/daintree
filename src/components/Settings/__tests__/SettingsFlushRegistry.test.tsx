@@ -86,12 +86,62 @@ describe("SettingsFlushRegistry", () => {
       { wrapper: wrap }
     );
 
+    // A throw has no message on its page to keep the dialog open for, so it isn't a failure.
     await act(async () => {
-      await expect(result.current!.flushAll()).resolves.toBeUndefined();
+      await expect(result.current!.flushAll()).resolves.toEqual([]);
     });
 
     expect(ok).toHaveBeenCalledTimes(1);
     expect(bad).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports each tab whose flush kept its draft, with where to land, in registration order", async () => {
+    let finishWorktree: (failure: { landOn: string }) => void = () => {};
+    const environment = vi.fn().mockResolvedValue({ landOn: "env-row" });
+    const worktree = vi.fn(
+      () => new Promise<{ landOn: string }>((resolve) => (finishWorktree = resolve))
+    );
+    const assistant = vi.fn().mockResolvedValue(undefined);
+
+    const { result } = renderHook(
+      () => {
+        useSettingsTabFlush("worktree", worktree, true);
+        useSettingsTabFlush("assistant", assistant, true);
+        useSettingsTabFlush("environment", environment, true);
+        return useContext(SettingsFlushContext);
+      },
+      { wrapper: wrap }
+    );
+
+    let failed: unknown;
+    await act(async () => {
+      const pending = result.current!.flushAll();
+      // Worktree finishes last but registered first, so it still comes first.
+      await Promise.resolve();
+      finishWorktree({ landOn: "worktree-path-pattern" });
+      failed = await pending;
+    });
+
+    expect(failed).toEqual([
+      { tab: "worktree", landOn: "worktree-path-pattern" },
+      { tab: "environment", landOn: "env-row" },
+    ]);
+  });
+
+  it("treats a synchronous failure the same as an async one", async () => {
+    const { result } = renderHook(
+      () => {
+        useSettingsTabFlush("environment", () => ({ landOn: "env-row" }), true);
+        return useContext(SettingsFlushContext);
+      },
+      { wrapper: wrap }
+    );
+
+    await act(async () => {
+      await expect(result.current!.flushAll()).resolves.toEqual([
+        { tab: "environment", landOn: "env-row" },
+      ]);
+    });
   });
 
   it("invokes the latest callback after rerender", async () => {

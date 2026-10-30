@@ -13,7 +13,7 @@ const projection = (overrides: Partial<FileDocumentProjection>): FileDocumentPro
   draftText: null,
   dirty: false,
   conflict: false,
-  save: async () => true,
+  save: async () => ({ status: "saved" as const }),
   discard: async () => {},
   ...overrides,
 });

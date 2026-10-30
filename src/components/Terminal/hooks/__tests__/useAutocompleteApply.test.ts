@@ -20,7 +20,8 @@ function setup(
     state: EditorState.create({ doc, selection: { anchor: doc.length } }),
   });
   const applyEditorValue = vi.fn<Params["applyEditorValue"]>();
-  const sendText = vi.fn<Params["sendText"]>();
+  const onExecute = vi.fn<Params["onExecute"]>();
+  const onPickTemplate = vi.fn<Params["onPickTemplate"]>();
   const setActiveCompletionContext = vi.fn<Params["setActiveCompletionContext"]>();
   const latest: Latest = {
     autocompleteItems: [item],
@@ -33,13 +34,21 @@ function setup(
     latestRef: { current: latest },
     lastQueryRef: { current: "" },
     applyEditorValue,
-    sendText,
+    onExecute,
+    onPickTemplate,
     setActiveCompletionContext,
     setSelectedIndex: vi.fn(),
   };
 
   const { result } = renderHook(() => useAutocompleteApply(params));
-  return { ...result.current, applyEditorValue, sendText, setActiveCompletionContext, view };
+  return {
+    ...result.current,
+    applyEditorValue,
+    onExecute,
+    onPickTemplate,
+    setActiveCompletionContext,
+    view,
+  };
 }
 
 const dollarContext: ActiveCompletionContext = {
@@ -103,7 +112,7 @@ describe("useAutocompleteApply", () => {
   });
 
   it("inserts the canonical token on click, never the display label", () => {
-    const { handleAutocompleteSelect, applyEditorValue, sendText, view } = setup(
+    const { handleAutocompleteSelect, applyEditorValue, onExecute, view } = setup(
       "$plug",
       capability,
       dollarContext
@@ -112,7 +121,7 @@ describe("useAutocompleteApply", () => {
       handleAutocompleteSelect(capability);
       expect(applyEditorValue).toHaveBeenCalledTimes(1);
       expect(applyEditorValue.mock.calls[0]![0]).toBe("$plugin-creator ");
-      expect(sendText).not.toHaveBeenCalled();
+      expect(onExecute).not.toHaveBeenCalled();
     } finally {
       view.destroy();
     }
@@ -122,7 +131,7 @@ describe("useAutocompleteApply", () => {
     const {
       applyAutocompleteSelection,
       applyEditorValue,
-      sendText,
+      onExecute,
       setActiveCompletionContext,
       view,
     } = setup("$plug", capability, dollarContext);
@@ -130,7 +139,7 @@ describe("useAutocompleteApply", () => {
       expect(applyAutocompleteSelection("enter")).toBe(true);
       expect(applyEditorValue).toHaveBeenCalledTimes(1);
       expect(applyEditorValue.mock.calls[0]![0]).toBe("$plugin-creator ");
-      expect(sendText).not.toHaveBeenCalled();
+      expect(onExecute).not.toHaveBeenCalled();
       // Menu closes after the first Enter — so the NEXT Enter has no active
       // context and falls through to a normal send (the two-Enter $ flow).
       expect(setActiveCompletionContext).toHaveBeenCalledWith(null);
@@ -140,15 +149,15 @@ describe("useAutocompleteApply", () => {
   });
 
   it("a / command executes on Enter with the canonical token", () => {
-    const { applyAutocompleteSelection, applyEditorValue, sendText, view } = setup(
+    const { applyAutocompleteSelection, applyEditorValue, onExecute, view } = setup(
       "/plug",
       command,
       slashContext
     );
     try {
       expect(applyAutocompleteSelection("enter")).toBe(true);
-      expect(sendText).toHaveBeenCalledTimes(1);
-      expect(sendText.mock.calls[0]![0]).toBe("/commit");
+      expect(onExecute).toHaveBeenCalledTimes(1);
+      expect(onExecute.mock.calls[0]![0]).toBe("/commit");
       expect(applyEditorValue).not.toHaveBeenCalled();
     } finally {
       view.destroy();
@@ -156,7 +165,7 @@ describe("useAutocompleteApply", () => {
   });
 
   it("Tab/complete always inserts even for an execute item", () => {
-    const { applyAutocompleteSelection, applyEditorValue, sendText, view } = setup(
+    const { applyAutocompleteSelection, applyEditorValue, onExecute, view } = setup(
       "/plug",
       command,
       slashContext
@@ -165,9 +174,77 @@ describe("useAutocompleteApply", () => {
       expect(applyAutocompleteSelection("complete")).toBe(true);
       expect(applyEditorValue).toHaveBeenCalledTimes(1);
       expect(applyEditorValue.mock.calls[0]![0]).toBe("/commit ");
-      expect(sendText).not.toHaveBeenCalled();
+      expect(onExecute).not.toHaveBeenCalled();
     } finally {
       view.destroy();
     }
+  });
+
+  describe("a prompt template row", () => {
+    const template: AutocompleteItem = {
+      key: "template:acme::boilerplate",
+      label: "Add boilerplate",
+      insertText: "",
+      group: "Prompt templates",
+      template: { key: "acme::boilerplate", opensForm: false },
+    };
+    const midDraft: ActiveCompletionContext = {
+      triggerChar: "/",
+      start: 4,
+      tokenEnd: 9,
+      query: "boil",
+    };
+
+    it.each([
+      ["Enter", "enter"],
+      ["Tab", "complete"],
+    ] as const)("hands %s to the host with the token it was picked with", (_key, mode) => {
+      const {
+        applyAutocompleteSelection,
+        applyEditorValue,
+        onExecute,
+        onPickTemplate,
+        setActiveCompletionContext,
+        view,
+      } = setup("Fix /boil", template, midDraft);
+      try {
+        expect(applyAutocompleteSelection(mode)).toBe(true);
+        expect(onPickTemplate).toHaveBeenCalledWith("acme::boilerplate", { from: 4, to: 9 });
+        expect(applyEditorValue).not.toHaveBeenCalled();
+        expect(onExecute).not.toHaveBeenCalled();
+        expect(setActiveCompletionContext).toHaveBeenCalledWith(null);
+      } finally {
+        view.destroy();
+      }
+    });
+
+    it("hands a click to the host and types nothing", () => {
+      const { handleAutocompleteSelect, applyEditorValue, onPickTemplate, view } = setup(
+        "/boil",
+        template,
+        { ...slashContext, tokenEnd: 5 }
+      );
+      try {
+        handleAutocompleteSelect(template);
+        expect(onPickTemplate).toHaveBeenCalledWith("acme::boilerplate", { from: 0, to: 5 });
+        expect(applyEditorValue).not.toHaveBeenCalled();
+      } finally {
+        view.destroy();
+      }
+    });
+
+    it("does nothing when the token it was picked from is gone", () => {
+      const { applyAutocompleteSelection, onPickTemplate, view } = setup(
+        "Fix it",
+        template,
+        midDraft
+      );
+      try {
+        applyAutocompleteSelection("enter");
+        expect(onPickTemplate).not.toHaveBeenCalled();
+      } finally {
+        view.destroy();
+      }
+    });
   });
 });

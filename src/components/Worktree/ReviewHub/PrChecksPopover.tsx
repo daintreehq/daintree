@@ -19,7 +19,7 @@ import {
 import { pluralize } from "@/lib/pluralize";
 import { PrMergeControl } from "./PrMergeControl";
 import { PrMergeConfirmDialog } from "./PrMergeConfirmDialog";
-import type { PrMergeRequest } from "./prMergeModel";
+import { describeMergeOutcome, type PrMergeOutcome, type PrMergeRequest } from "./prMergeModel";
 
 /**
  * Set on the trigger — which is always in the hub's own DOM — while the
@@ -54,9 +54,14 @@ interface PrChecksPopoverProps {
   worktreePath: string;
   prNumber: number;
   prUrl: string;
-  /** Accessible name for the trigger; the badge inside it carries none of its own. */
-  triggerLabel: string;
+  /**
+   * The trigger's state in full sentences, as its accessible description. Its
+   * name is the badge's own text, so the name always holds the words on screen.
+   */
+  triggerDescription: string;
   onOpenExternal: (url: string) => void;
+  /** What GitHub reported after a merge, arm or cancel confirmed from here. */
+  onMergeOutcome?: (outcome: PrMergeOutcome) => void;
   /** The PR badge, rendered inside the trigger button. */
   children: ReactNode;
 }
@@ -79,8 +84,9 @@ export function PrChecksPopover({
   worktreePath,
   prNumber,
   prUrl,
-  triggerLabel,
+  triggerDescription,
   onOpenExternal,
+  onMergeOutcome,
   children,
 }: PrChecksPopoverProps) {
   const [open, setOpen] = useState(false);
@@ -91,7 +97,13 @@ export function PrChecksPopover({
   // Lives outside the popover: opening the confirm moves focus out, which
   // closes the popover and would unmount a dialog mounted inside it.
   const [mergeRequest, setMergeRequest] = useState<PrMergeRequest | null>(null);
+  // The merge row's own read lands on its own clock; it reports here so the
+  // one status region speaks for the whole popover.
+  const [mergeStatusText, setMergeStatusText] = useState("");
+  // Said once the confirm has closed, when there is no popover to speak for.
+  const [outcomeAnnouncement, setOutcomeAnnouncement] = useState("");
   const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const triggerDescriptionId = useId();
 
   // Monotonic, not a cancelled flag: the popover can be closed and reopened, and
   // the reload re-fired, while an earlier read is still in flight. Only the
@@ -136,6 +148,8 @@ export function PrChecksPopover({
       setOpen(next);
       if (next) {
         suppressCloseFocusRef.current = false;
+        setMergeStatusText("");
+        setOutcomeAnnouncement("");
         runFetch();
         return;
       }
@@ -186,11 +200,25 @@ export function PrChecksPopover({
     setMergeRequest(request);
   }, []);
 
+  const handleMergeOutcome = useCallback(
+    (outcome: PrMergeOutcome) => {
+      setOutcomeAnnouncement(describeMergeOutcome(outcome, prNumber).spoken);
+      onMergeOutcome?.(outcome);
+    },
+    [prNumber, onMergeOutcome]
+  );
+
   const handleSend = useCallback(() => {
     if (state.kind !== "loaded") return;
     const text = composePrChecksAgentText({ prNumber, prUrl, worktreePath, rows: state.rows });
     if (!text) return;
-    if (openSendToAgentPaletteWithText(text)) {
+    if (
+      openSendToAgentPaletteWithText({
+        text,
+        sourceLabel: `PR #${prNumber}`,
+        title: "Failing checks",
+      })
+    ) {
       suppressCloseFocusRef.current = true;
       setOpen(false);
       return;
@@ -208,19 +236,26 @@ export function PrChecksPopover({
 
   return (
     <>
+      <span id={triggerDescriptionId} hidden>
+        {triggerDescription}
+      </span>
       {/* Outside `PopoverContent` on purpose: that subtree is lazily mounted, so
           a region living inside it would first appear already carrying its
           message — which is the announcement that does not land. Here it is
           mounted empty for the whole life of the chip. */}
       <p role="status" aria-live="polite" className="sr-only">
-        {open ? describeState(state, prNumber, showSkeleton, sendHint) : ""}
+        {open
+          ? [describeState(state, prNumber, showSkeleton, sendHint), mergeStatusText]
+              .filter(Boolean)
+              .join(". ")
+          : outcomeAnnouncement}
       </p>
       <Popover open={open} onOpenChange={handleOpenChange}>
         <PopoverTrigger
           ref={triggerRef}
           type="button"
           data-testid="pr-checks-trigger"
-          aria-label={triggerLabel}
+          aria-describedby={triggerDescriptionId}
           // Also held while the merge confirm is up: the hub's Escape would
           // otherwise close the whole hub out from under the dialog.
           {...{ [PR_CHECKS_OPEN_ATTR]: open || mergeRequest !== null ? "true" : undefined }}
@@ -327,6 +362,8 @@ export function PrChecksPopover({
             prNumber={prNumber}
             reloadKey={mergeReloadKey}
             onRequest={handleMergeRequest}
+            onOpenExternal={onOpenExternal}
+            onStatusChange={setMergeStatusText}
           />
 
           {/* Mounted in every state on purpose. Re-reading used to unmount the
@@ -381,6 +418,7 @@ export function PrChecksPopover({
         prNumber={prNumber}
         request={mergeRequest}
         onClose={() => setMergeRequest(null)}
+        onComplete={handleMergeOutcome}
         restoreFocusTo={triggerRef}
       />
     </>

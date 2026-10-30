@@ -88,7 +88,9 @@ describe("VoiceCorrectionService streaming", () => {
       (text) => heard.push(text)
     );
 
-    expect(JSON.parse(fetchMock.mock.calls[0]![1].body as string).stream).toBe(true);
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string);
+    expect(body.stream).toBe(true);
+    expect(body.store).toBe(false);
     expect(result).toMatchObject({ action: "replace", correctedText: corrected });
     expect(heard.length).toBeGreaterThan(3);
     heard.forEach((text, i) => {
@@ -357,11 +359,39 @@ describe("VoiceCorrectionService streaming", () => {
     );
 
     expect(result).toMatchObject({ action: "no_change", failed: true });
+    expect(result).not.toHaveProperty("cleanupFailure");
     expect(logWarn).toHaveBeenCalledWith(
       expect.stringContaining("Correction failed"),
       expect.objectContaining({ code: "server_error" })
     );
     expect(JSON.stringify(vi.mocked(logWarn).mock.calls)).not.toContain("parser");
+  });
+
+  // #14963: the stream answered 200, so only the code says why.
+  it.each([
+    ["insufficient_quota", "billing_required"],
+    ["invalid_api_key", "key_rejected"],
+    ["model_not_found", "access_denied"],
+  ] as const)("names a %s mid-stream a failure that will recur", async (code, reason) => {
+    const frames = replyFrames(reply("Fix the parser now."), null).slice(0, 3);
+    frames.push({
+      type: "response.failed",
+      response: { error: { code, message: "fix the parser now" } },
+    });
+    stubFetch(streamed(frames));
+
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "fix the parser now" },
+      SETTINGS,
+      undefined,
+      vi.fn()
+    );
+
+    expect(result).toMatchObject({
+      confirmedText: "fix the parser now",
+      failed: true,
+      cleanupFailure: { reason, provider: "openai" },
+    });
   });
 
   describe("verdicts", () => {
@@ -457,7 +487,7 @@ describe("VoiceCorrectionService streaming", () => {
         const heard: string[] = [];
         const pending = new VoiceCorrectionService().correct(
           { rawText: "fix the bug in the parser now" },
-          SETTINGS,
+          { ...SETTINGS, reasoningEffort: "none" },
           undefined,
           (text) => heard.push(text)
         );
@@ -487,5 +517,130 @@ describe("VoiceCorrectionService streaming", () => {
 
       expect(result).toMatchObject({ action: "no_change", failed: true, verdict: "failed" });
     });
+  });
+});
+
+describe("VoiceCorrectionService reply phases", () => {
+  let clock = 0;
+
+  /** Each frame read only when asked for, `afterMs` after the one before. */
+  function paced(frames: Array<{ frame: Frame; afterMs: number }>): Response {
+    const encoder = new TextEncoder();
+    let i = 0;
+    const body = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          const next = frames[i++];
+          if (!next) {
+            controller.close();
+            return;
+          }
+          clock += next.afterMs;
+          controller.enqueue(
+            encoder.encode(`event: ${next.frame.type}\ndata: ${JSON.stringify(next.frame)}\n\n`)
+          );
+        },
+      },
+      { highWaterMark: 0 }
+    );
+    return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+  }
+
+  /** An empty delta while the model thinks, the reply in `parts` deltas `gapMs` apart, then its end. */
+  function thinkThenWrite(json: string, thinkMs: number, parts: number, gapMs: number) {
+    const size = Math.ceil(json.length / parts);
+    return [
+      { frame: { type: "response.output_text.delta", delta: "" }, afterMs: thinkMs / 2 },
+      ...Array.from({ length: parts }, (_, i) => ({
+        frame: { type: "response.output_text.delta", delta: json.slice(i * size, (i + 1) * size) },
+        afterMs: i === 0 ? thinkMs / 2 : gapMs,
+      })),
+      { frame: completed(json), afterMs: gapMs },
+    ];
+  }
+
+  beforeEach(() => {
+    clock = 1_000;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("splits a streamed reply into the wait for its first text and the text", async () => {
+    const json = reply("Run the tests.");
+    stubFetch(paced(thinkThenWrite(json, 800, 3, 150)));
+
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "run the tests" },
+      { ...SETTINGS, reasoningEffort: "medium" },
+      undefined,
+      () => {}
+    );
+
+    expect(result.phases).toEqual({ untilOutputMs: 800, outputMs: 450, effort: "medium" });
+  });
+
+  it("leaves a stalled first attempt out of the wait for the first text", async () => {
+    const json = reply("Run the tests.");
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(
+        (_url: string, init: RequestInit) =>
+          new Promise<Response>((_resolve, reject) =>
+            init.signal!.addEventListener(
+              "abort",
+              () => {
+                clock += 4_000;
+                reject(init.signal!.reason);
+              },
+              { once: true }
+            )
+          )
+      )
+      .mockResolvedValueOnce(paced(thinkThenWrite(json, 600, 2, 90)));
+    vi.stubGlobal("fetch", fetchMock);
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const pending = new VoiceCorrectionService().correct(
+        { rawText: "run the tests" },
+        SETTINGS,
+        undefined,
+        () => {}
+      );
+      await vi.advanceTimersByTimeAsync(4_000);
+      const result = await pending;
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(result.roundTrip?.ms).toBe(4_780);
+      expect(result.phases).toEqual({ untilOutputMs: 600, outputMs: 180, effort: "low" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives no phases for a reply thrown away or one that didn't stream", async () => {
+    const json = reply("Run the tests.");
+    stubFetch(streamed(replyFrames(json, completed(json, "incomplete"))));
+    const cutOff = await new VoiceCorrectionService().correct(
+      { rawText: "run the tests" },
+      SETTINGS,
+      undefined,
+      () => {}
+    );
+    expect(cutOff.failed).toBe(true);
+    expect(cutOff.phases).toBeUndefined();
+
+    stubFetch(
+      new Response(JSON.stringify({ status: "completed", output: [{ content: [{ text: json }] }] }))
+    );
+    const whole = await new VoiceCorrectionService().correct(
+      { rawText: "run the tests" },
+      SETTINGS
+    );
+    expect(whole.action).toBe("replace");
+    expect(whole.phases).toBeUndefined();
   });
 });

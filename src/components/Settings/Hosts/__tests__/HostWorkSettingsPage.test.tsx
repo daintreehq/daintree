@@ -54,6 +54,13 @@ function snapshot(
 
 const switchNamed = (name: string) => screen.getByRole("switch", { name });
 
+/** What a control's description says: its own error sits there, attached to it. */
+const describedText = (element: HTMLElement) =>
+  (element.getAttribute("aria-describedby") ?? "")
+    .split(" ")
+    .map((id) => document.getElementById(id)?.textContent ?? "")
+    .join(" ");
+
 beforeEach(() => {
   api.read.mockReset();
   api.update.mockReset();
@@ -82,7 +89,9 @@ describe("HostWorkSettingsPage (#14167, #14706)", () => {
   it("reads nothing and offers no controls while the host isn't connected", async () => {
     await renderSection(false);
     expect(api.read).not.toHaveBeenCalled();
-    expect(screen.getByText(/Connect to Studio/)).toBeTruthy();
+    // The page keeps its shape, with no value it hasn't read.
+    expect(screen.getByText("Default agent")).toBeTruthy();
+    expect(screen.getByText("Not read yet")).toBeTruthy();
     expect(screen.queryAllByRole("switch")).toHaveLength(0);
   });
 
@@ -97,9 +106,11 @@ describe("HostWorkSettingsPage (#14167, #14706)", () => {
       settings: [{ key: "idleTerminalNotify.enabled", value: true, revision: "r-idle-true" }],
     });
     await renderSection();
-    expect(switchNamed("Alert about idle terminals").getAttribute("aria-checked")).toBe("false");
+    expect(switchNamed("Notify me about idle terminals").getAttribute("aria-checked")).toBe(
+      "false"
+    );
     await act(async () => {
-      fireEvent.click(switchNamed("Alert about idle terminals"));
+      fireEvent.click(switchNamed("Notify me about idle terminals"));
     });
     expect(api.update).toHaveBeenCalledWith({
       hostId: "studio-01",
@@ -109,7 +120,7 @@ describe("HostWorkSettingsPage (#14167, #14706)", () => {
         revisions: { "idleTerminalNotify.enabled": "r-idle-false" },
       },
     });
-    expect(switchNamed("Alert about idle terminals").getAttribute("aria-checked")).toBe("true");
+    expect(switchNamed("Notify me about idle terminals").getAttribute("aria-checked")).toBe("true");
   });
 
   it("turns Canopy on only after the consequence is stated and agreed to", async () => {
@@ -139,7 +150,9 @@ describe("HostWorkSettingsPage (#14167, #14706)", () => {
     api.read.mockResolvedValue(snapshot("unset", false, { readsLocally: false }));
     await renderSection();
     expect(switchNamed("Read agent terminals").hasAttribute("disabled")).toBe(true);
-    expect(screen.getByText("Update Daintree on Studio to turn Canopy on there")).toBeTruthy();
+    expect(
+      screen.getByText("Needs Daintree 0.47.0 or later on this host to turn Canopy on")
+    ).toBeTruthy();
     api.read.mockResolvedValue(snapshot("on", false, { readsLocally: false }));
     cleanup();
     await renderSection();
@@ -158,10 +171,12 @@ describe("HostWorkSettingsPage (#14167, #14706)", () => {
     });
     await renderSection();
     await act(async () => {
-      fireEvent.click(switchNamed("Alert about idle terminals"));
+      fireEvent.click(switchNamed("Notify me about idle terminals"));
     });
-    expect(screen.getByText(/changed on Studio since it was read/)).toBeTruthy();
-    expect(switchNamed("Alert about idle terminals").getAttribute("aria-checked")).toBe("true");
+    expect(describedText(switchNamed("Notify me about idle terminals"))).toMatch(
+      /changed on Studio since it was read/
+    );
+    expect(switchNamed("Notify me about idle terminals").getAttribute("aria-checked")).toBe("true");
   });
 
   it("reads the host again when a change went unconfirmed", async () => {
@@ -176,10 +191,12 @@ describe("HostWorkSettingsPage (#14167, #14706)", () => {
     });
     await renderSection();
     await act(async () => {
-      fireEvent.click(switchNamed("Alert about idle terminals"));
+      fireEvent.click(switchNamed("Notify me about idle terminals"));
     });
     expect(api.read).toHaveBeenCalledTimes(2);
-    expect(screen.getByText(/didn't confirm the change/)).toBeTruthy();
+    expect(describedText(switchNamed("Notify me about idle terminals"))).toMatch(
+      /didn't confirm the change\. Its current value is shown/
+    );
   });
 
   it("offers a retry when the host can't be read", async () => {
@@ -199,13 +216,13 @@ describe("HostWorkSettingsPage (#14167, #14706)", () => {
       })
     );
     await renderSection();
-    expect(switchNamed("Restore live projects").hasAttribute("disabled")).toBe(true);
-    expect(
-      screen.getAllByText(/Update Daintree on Studio to 0\.47\.0 or later/).length
-    ).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "Save" }).hasAttribute("disabled")).toBe(true);
+    // Named with the update it needs, and no control holding a value the host never reported.
+    expect(screen.getByText("Restore live projects")).toBeTruthy();
+    expect(screen.queryByRole("switch", { name: "Restore live projects" })).toBeNull();
+    expect(screen.getAllByText("Needs Daintree 0.47.0 or later on this host")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
     // What it does know stays editable.
-    expect(switchNamed("Alert about idle terminals").hasAttribute("disabled")).toBe(false);
+    expect(switchNamed("Notify me about idle terminals").hasAttribute("disabled")).toBe(false);
   });
 
   it("saves the host's environment as a whole, against the set it read", async () => {
@@ -221,8 +238,9 @@ describe("HostWorkSettingsPage (#14167, #14706)", () => {
       ],
     });
     await renderSection();
+    // Unavailable, not disabled: pressing Save makes the group clean, and focus has to stay.
     const save = screen.getByRole("button", { name: "Save" });
-    expect(save.hasAttribute("disabled")).toBe(true);
+    expect(save.getAttribute("aria-disabled")).toBe("true");
     fireEvent.change(screen.getByRole("textbox", { name: "Environment variable value" }), {
       target: { value: "C.UTF-8" },
     });
@@ -234,6 +252,6 @@ describe("HostWorkSettingsPage (#14167, #14706)", () => {
       patch: { globalEnvironmentVariables: { LANG: "C.UTF-8" } },
       expect: { instanceId: "launch-1", revisions: { globalEnvironmentVariables: "r-env" } },
     });
-    expect(screen.getByRole("button", { name: "Save" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Save" }).getAttribute("aria-disabled")).toBe("true");
   });
 });

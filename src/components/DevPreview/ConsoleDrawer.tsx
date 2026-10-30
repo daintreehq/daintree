@@ -186,10 +186,13 @@ export function ConsoleDrawer({
   const hasRestartControls = !!onRestartDevServer;
   const restartDisabled = !hasRestartControls || isRestarting || status === "starting";
   const chevronDisabled = restartDisabled;
+  // No terminal means a resource endpoint: restart runs the resource's pause and resume.
+  const isEndpoint = terminalId === null;
+  const restartLabel = isEndpoint ? "Pause and resume resource environment" : "Restart dev server";
   const restartTooltip =
-    status === "installing"
+    status === "installing" && !isEndpoint
       ? "Restart dev server (may interrupt installation)"
-      : "Restart dev server";
+      : restartLabel;
   const stopVisible =
     onStop &&
     (status === "starting" ||
@@ -326,7 +329,7 @@ export function ConsoleDrawer({
                     </DropdownMenuItem>
                     <DropdownMenuItem onSelect={onRestartDevServer}>
                       <RotateCw data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-                      Restart dev server
+                      {restartLabel}
                     </DropdownMenuItem>
                     {/* A resource endpoint has no local cache or dependencies to touch. */}
                     {(onRequestRestartAndClearCache || onRequestReinstallAndRestart) && (

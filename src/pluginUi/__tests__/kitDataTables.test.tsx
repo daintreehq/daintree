@@ -606,6 +606,41 @@ describe("DataTable, rich", () => {
     const reopened = screen.getByRole("textbox", { name: "Edit Name" }) as HTMLInputElement;
     expect(reopened.value).toBe("late");
     expect(reopened.getAttribute("aria-invalid")).toBe("true");
+    // Escape discards the failed draft: the stored value is back, unmarked.
+    fireEvent.keyDown(reopened, { key: "Escape" });
+    expect(rowNamed("web").textContent).not.toContain("Not saved");
+    fireEvent.doubleClick(rowNamed("web").querySelectorAll("td")[0]!);
+    const fresh = screen.getByRole("textbox", { name: "Edit Name" }) as HTMLInputElement;
+    expect(fresh.value).toBe("web");
+    expect(fresh.getAttribute("aria-invalid")).toBeNull();
+  });
+
+  it("closes without saving when a failed draft goes back to the stored value", () => {
+    const onCellEdit = vi.fn(() => {
+      throw new Error("Read-only");
+    });
+    render(
+      inViewport(
+        createElement(kit.DataTable<Deploy>, {
+          "aria-label": "Back",
+          rows: DEPLOYS,
+          rowKey: "id",
+          columns: [{ id: "name", header: "Name", editable: true }],
+          onCellEdit,
+        })
+      )
+    );
+    const grid = screen.getByRole("grid", { name: "Back" });
+    act(() => grid.focus());
+    fireEvent.keyDown(grid, { key: "F2" });
+    const name = () => screen.getByRole("textbox", { name: "Edit Name" }) as HTMLInputElement;
+    fireEvent.change(name(), { target: { value: "web-2" } });
+    fireEvent.keyDown(name(), { key: "Enter" });
+    expect(name().getAttribute("aria-invalid")).toBe("true");
+    fireEvent.change(name(), { target: { value: "web" } });
+    fireEvent.keyDown(name(), { key: "Enter" });
+    expect(onCellEdit).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("textbox", { name: "Edit Name" })).toBeNull();
   });
 
   it("leaves focus where the reader went when a save fails after they left", async () => {

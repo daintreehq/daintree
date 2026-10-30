@@ -51,6 +51,7 @@ import {
   trackAgentSessionCapture,
 } from "./pty/agentSessionCaptureDelivery.js";
 import type {
+  FirstPromptCandidate,
   GracefulKillResult,
   TerminalResizeResult,
   TerminalSubmitGuard,
@@ -608,6 +609,14 @@ export class PtyManager extends EventEmitter {
             }
             this.emit("submit-status", termId, state);
           },
+          onFirstPromptWritten: (termId, firstPrompt) => {
+            // Same staleness guard: a predecessor's send written as it was
+            // replaced is not the successor's first prompt.
+            if (this.registry.get(termId) !== terminalProcess) {
+              return;
+            }
+            this.emit("first-prompt-written", termId, options.launchGeneration, firstPrompt);
+          },
           openGracefulCapture: (termId) => {
             // Same staleness guard: a replaced incarnation must not open a
             // window on the id its successor now owns.
@@ -731,7 +740,8 @@ export class PtyManager extends EventEmitter {
     submissionToken?: string,
     handbackCode?: string,
     guard?: TerminalSubmitGuard,
-    imagePaths?: readonly string[]
+    imagePaths?: readonly string[],
+    firstPrompt?: FirstPromptCandidate
   ): void {
     const terminal = this.registry.get(id);
     if (!terminal) {
@@ -742,7 +752,7 @@ export class PtyManager extends EventEmitter {
       // that would answer for tokens this host never accepted.
       return;
     }
-    terminal.submit(text, submissionToken, handbackCode, guard, imagePaths);
+    terminal.submit(text, submissionToken, handbackCode, guard, imagePaths, firstPrompt);
   }
 
   /**
@@ -1248,6 +1258,11 @@ export class PtyManager extends EventEmitter {
     const terminal = this.registry.get(id);
     if (!terminal) return;
     terminal.setTitle(title, titleMode);
+  }
+
+  /** See `TerminalProcess.noteLiveAgentSessionId`; a terminal that has gone is a no-op. */
+  noteLiveAgentSessionId(id: string, sessionId: string, launchGeneration: number): void {
+    this.registry.get(id)?.noteLiveAgentSessionId(sessionId, launchGeneration);
   }
 
   /**

@@ -19,7 +19,6 @@ import { isPointerClaimed } from "@/lib/pointerClaim";
 import { logError } from "@/utils/logger";
 import { actionService } from "@/services/ActionService";
 import {
-  usePortalStore,
   usePerformanceModeStore,
   useScrollbackStore,
   useLayoutConfigStore,
@@ -88,7 +87,11 @@ import {
   SettingsValidationProvider,
   SettingsValidationContext,
 } from "./SettingsValidationRegistry";
-import { SettingsFlushProvider, SettingsFlushContext } from "./SettingsFlushRegistry";
+import {
+  SettingsFlushProvider,
+  SettingsFlushContext,
+  type FailedSettingsFlush,
+} from "./SettingsFlushRegistry";
 import { useProgressiveRenderLimit } from "@/hooks/useProgressiveRenderLimit";
 import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
 import { pluralize, pluralNoun } from "@/lib/pluralize";
@@ -106,7 +109,14 @@ import { useHostList } from "@/components/Hosts/hostList";
 import { useSettingsTargetStore } from "@/store/settingsTargetStore";
 import type { HostId } from "@shared/types/remoteHosts";
 import { HostWorkSettingsPage } from "./Hosts/HostWorkSettingsPage";
-import { SettingsMachinePicker, settingsMachineOptions } from "./Hosts/SettingsMachinePicker";
+import {
+  SettingsMachinePicker,
+  HostNameText,
+  settingsMachineOptions,
+} from "./Hosts/SettingsMachinePicker";
+import { HostLinkStatus } from "./Hosts/HostLinkStatus";
+import { requestHostSettings } from "./Hosts/hostSettingsRequests";
+import { hostEnvDrafts } from "./Hosts/hostEnvDrafts";
 
 let rememberedTab: SettingsTab = "general";
 let rememberedProjectTab: SettingsTab = "project:general";
@@ -284,6 +294,10 @@ function SettingsDialogInner({
   const setShowingDevicePage = useSettingsTargetStore((s) => s.setShowingDevicePage);
   // Another machine's work settings own the page; this machine's device pages stay listed.
   const editingOther = target !== null && activeScope === "global";
+  // Whether the picked host's page holds a reading, so its link status can say what is shown.
+  const [hostHasReading, setHostHasReading] = useState(false);
+  // The host whose unsaved environment edit held a close, counted so each held close lands again.
+  const [closeHeldBy, setCloseHeldBy] = useState<{ hostId: HostId; count: number } | null>(null);
 
   useEffect(() => {
     const id = requestIdleCallback(
@@ -313,16 +327,12 @@ function SettingsDialogInner({
   const [activeSubtabs, setActiveSubtabs] = useState<Partial<Record<SettingsTab, string>>>({});
   const [searchQuery, setSearchQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const setPortalOpen = usePortalStore((state) => state.setOpen);
   const setTab = useSettingsStore((s) => s.setTab);
   const setSubtab = useSettingsStore((s) => s.setSubtab);
 
   useEffect(() => {
-    if (isOpen) {
-      setPortalOpen(false);
-      refreshSettingOwnersShown();
-    }
-  }, [isOpen, setPortalOpen]);
+    if (isOpen) refreshSettingOwnersShown();
+  }, [isOpen]);
 
   const [appVersion, setAppVersion] = useState<string>(cachedVersionInfo?.appVersion ?? "");
   const [buildArch, setBuildArch] = useState<string | undefined>(cachedVersionInfo?.arch);
@@ -507,12 +517,13 @@ function SettingsDialogInner({
 
   // Coalesced: a visibility change landing mid-close would otherwise re-issue
   // every registered tab flusher alongside the one already in flight.
-  const flushInFlightRef = useRef<Promise<void> | null>(null);
+  const flushInFlightRef = useRef<Promise<FailedSettingsFlush[]> | null>(null);
   const flushDialog = () => {
     if (flushInFlightRef.current) return flushInFlightRef.current;
     const pending = (async () => {
-      if (flushAllTabs) await flushAllTabs();
+      const failed = flushAllTabs ? await flushAllTabs() : [];
       await projectForm.flush();
+      return failed;
     })();
     flushInFlightRef.current = pending;
     return pending.finally(() => {
@@ -523,8 +534,11 @@ function SettingsDialogInner({
   // Electron 41 WebContentsView detach (project switch, window close) does not
   // fire beforeunload — visibilitychange is the reliable signal. Flushing on
   // hide ensures debounced autosaves and per-tab dirty state persist before
-  // the view is evicted.
-  useFlushOnHide(flushDialog, isOpen);
+  // the view is evicted. A hide can't be held open, so a page that couldn't
+  // save is left as it is.
+  useFlushOnHide(async () => {
+    await flushDialog();
+  }, isOpen);
 
   const [globalEnvVars, setGlobalEnvVars] = useState<Record<string, string>>({});
   useEffect(() => {
@@ -539,24 +553,10 @@ function SettingsDialogInner({
       });
   }, [isOpen]);
 
-  const handleBeforeClose = async () => {
-    await flushDialog();
-    return true;
-  };
-
   // AppDialog-mediated closes (Escape, backdrop, the header's close button) have
   // already flushed via onBeforeClose, so this only dismisses. Flushing again
   // would re-issue every tab's persistence IPC and the full project save.
   const handleDialogClose = () => {
-    onClose();
-  };
-
-  // Handed to tab content via the registry's `needsOnClose` flag. That route
-  // never passes through onBeforeClose, so it keeps its own flush — no tab
-  // invokes it today (AppThemePicker only tests it for presence), but a caller
-  // that did would otherwise close without persisting.
-  const handleClose = async () => {
-    await flushDialog();
     onClose();
   };
 
@@ -606,12 +606,72 @@ function SettingsDialogInner({
   // even when its parent was already on.
   const pendingRequirementRef = useRef<{ settingId: string; label: string } | null>(null);
 
+  // A page whose close-time save didn't go through keeps Settings open on its
+  // draft and error, rather than closing as if it had saved: the user fixes it
+  // or uses that page's Discard. The page shown wins over others that failed.
+  const flushBeforeClose = async () => {
+    // A hide flush still running took its list of drafts when it started, so one
+    // made since isn't in it: let it finish, then flush again for the close.
+    const lifecycleFlush = flushInFlightRef.current;
+    if (lifecycleFlush) await lifecycleFlush;
+    const failed = await flushDialog();
+    const shown = failed.find((f) => f.tab === activeTabRef.current) ?? failed[0];
+    if (shown) {
+      revealFailedFlush(shown);
+      return false;
+    }
+    // A host's unsaved environment edit holds the close the same way, on that host's page.
+    const unsavedHost = hostEnvDrafts.firstUnsaved();
+    if (unsavedHost && machineOptions.some((option) => option.hostId === unsavedHost)) {
+      setSearchQuery("");
+      setHiddenSettingBanner(null);
+      if (activeScope !== "global") {
+        setActiveScope("global");
+        setActiveTab(rememberedTab);
+      }
+      setTargetHostId(unsavedHost);
+      setCloseHeldBy((held) => ({
+        hostId: unsavedHost,
+        count: held?.hostId === unsavedHost ? held.count + 1 : 1,
+      }));
+      return false;
+    }
+    return true;
+  };
+
+  // Everything that could cover the page goes: search, another machine's page,
+  // the hidden-setting note. Its tab is already mounted, since only a mounted
+  // tab registers a flush, so the switch can't suspend and needs no transition.
+  const revealFailedFlush = ({ tab, landOn }: FailedSettingsFlush) => {
+    const scope = scopeForTab(tab);
+    // Judged by the scope the page is in, not the one shown: a close from project
+    // scope still lands behind the other machine's page once global comes back.
+    if (target !== null && scope === "global") {
+      if (ownerForTab(tab) === "device") setShowingDevicePage(true);
+      else setTargetHostId(null);
+    }
+    setSearchQuery("");
+    setHiddenSettingBanner(null);
+    pendingRequirementRef.current = null;
+    setActiveScope(scope);
+    setActiveTab(tab);
+    setScrollToSection(landOn);
+  };
+
+  // Handed to tab content via the registry's `needsOnClose` flag. That route
+  // never passes through onBeforeClose, so it keeps its own flush — no tab
+  // invokes it today (AppThemePicker only tests it for presence), but a caller
+  // that did would otherwise close without persisting.
+  const handleClose = async () => {
+    if (await flushBeforeClose()) onClose();
+  };
+
   // A plugin's setting lives in the plugin manager or Project settings → Plugins,
   // so it goes through the action `host.settings.open` uses instead of a tab here.
   const openPluginSetting = async (plugin: NonNullable<SettingsSearchEntry["plugin"]>) => {
     // The action may open the plugin manager over this dialog, which closes it
     // without passing through the dialog's own close flush.
-    await flushDialog();
+    if (!(await flushBeforeClose())) return;
     const result = await actionService.dispatch(
       "plugin.openSettings",
       {
@@ -743,6 +803,8 @@ function SettingsDialogInner({
 
   const handleScopeSwitch = (scope: SettingsScope) => {
     if (scope === activeScope) return;
+    // The picker isn't shown in project scope, so a pick kept there would come back unseen.
+    if (scope === "project") setTargetHostId(null);
     setSearchQuery("");
     setHiddenSettingBanner(null);
     const tab = scope === "project" ? rememberedProjectTab : rememberedTab;
@@ -867,7 +929,13 @@ function SettingsDialogInner({
     <AppDialog
       isOpen={isOpen}
       onClose={handleDialogClose}
-      onBeforeClose={handleBeforeClose}
+      onBeforeClose={flushBeforeClose}
+      // The pick lasts as long as the dialog: the next open edits this window's own machine.
+      onCloseComplete={() => {
+        setTargetHostId(null);
+        hostEnvDrafts.clear();
+        setCloseHeldBy(null);
+      }}
       size="4xl"
       // Search owns first focus (below), not the first tabbable — which was the scope
       // control, so every open painted a focus ring on "Global" and typing did nothing.
@@ -946,8 +1014,9 @@ function SettingsDialogInner({
             onBlur={handleTablistBlur}
           >
             {editingOther && target && (
-              <NavGroup label={target.name}>
+              <NavGroup label={<HostNameText name={target.name} />}>
                 <HostWorkNavItem
+                  hostName={target.name}
                   selected={showHostPage}
                   tabStop={
                     (focusedNavTab ?? (showHostPage ? HOST_WORK_TAB : null)) === HOST_WORK_TAB
@@ -1003,8 +1072,10 @@ function SettingsDialogInner({
 
         <SettingsSubpageProvider value={setTabSubpage}>
           <div className="settings-shell flex-1 flex flex-col min-w-0">
-            <AppDialog.Header>
-              <div className="flex min-w-0 flex-1 items-center">
+            {/* 56px, so the page title and the X centre on the sidebar's first
+                row (12px padding + a 32px row) rather than 6px above it. */}
+            <AppDialog.Header className="py-3.5">
+              <div className="@container/title flex min-w-0 flex-1 items-center">
                 {shownSubpage && (
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -1042,12 +1113,24 @@ function SettingsDialogInner({
                   over every section reads as a double title, and the nav the user just
                   clicked through is the sighted answer to the same question. */}
                   <span className="sr-only">
-                    {scopeAnnouncement(headerScope, hasProject ? projectLabel : null)}
+                    {showHostPage && !isSearching && target
+                      ? `Work settings on ${target.name}`
+                      : scopeAnnouncement(headerScope, hasProject ? projectLabel : null)}
                   </span>
                   {isSearching ? (
                     "Search results"
-                  ) : showHostPage ? (
-                    "Work settings"
+                  ) : showHostPage && target ? (
+                    // Machine first, the way the sidebar groups it; the sr-only sentence above
+                    // is the name. Short of room, the page name goes before the machine's.
+                    <span aria-hidden="true" className="flex min-w-0 items-center gap-2">
+                      <HostNameText name={target.name} />
+                      <span className="flex min-w-0 shrink-[4] items-center gap-2 @max-[24rem]/title:hidden">
+                        <ChevronRight className="h-4 w-4 shrink-0 text-text-secondary" />
+                        <span className="min-w-0 truncate font-normal text-text-secondary">
+                          Work settings
+                        </span>
+                      </span>
+                    </span>
                   ) : shownSubpage ? (
                     <>
                       <span className="font-normal text-text-secondary">
@@ -1073,17 +1156,32 @@ function SettingsDialogInner({
                       />
                     </span>
                   )}
-                  {/* Search results have no single owner to name. */}
-                  {!isSearching && (
-                    <SettingsOwnerHeaderChip
-                      tab={activeTab}
-                      picked={
-                        editingOther && target ? (showHostPage ? target.name : null) : undefined
-                      }
-                    />
+                  {/* Search results have no single owner to name; the host page names its own. */}
+                  {!isSearching && !showHostPage && (
+                    <SettingsOwnerHeaderChip tab={activeTab} devicePagePicked={editingOther} />
                   )}
                 </AppDialog.Title>
               </div>
+              {showHostPage && !isSearching && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="ml-4 mr-2 shrink-0"
+                  onClick={(event) => {
+                    // The button goes with the page, so focus lands on the picker that now
+                    // names this machine — ringed only when the press came from the keyboard.
+                    const viaKeyboard = event.detail === 0;
+                    handleMachineChange(null);
+                    requestAnimationFrame(() =>
+                      document
+                        .querySelector<HTMLElement>("[data-settings-machine-trigger]")
+                        ?.focus({ preventScroll: true, focusVisible: viaKeyboard })
+                    );
+                  }}
+                >
+                  Back to {machineOptions[0]?.name}
+                </Button>
+              )}
               <AppDialog.CloseButton aria-label="Close settings" />
             </AppDialog.Header>
 
@@ -1113,6 +1211,26 @@ function SettingsDialogInner({
                     Loading settings for {projectLabel}…
                   </p>
                 )}
+              </div>
+            )}
+
+            {/* Above the scrollport for the same reason: the page under it may be long,
+              and whether the host can be changed at all is what every row depends on. */}
+            {showHostPage && !isSearching && target?.hostId && target.connection && (
+              <div className="px-6 pt-6 shrink-0 empty:hidden">
+                <HostLinkStatus
+                  key={target.hostId}
+                  hostId={target.hostId}
+                  hostName={target.name}
+                  connection={target.connection}
+                  hasReading={hostHasReading}
+                  onOpenHost={() => {
+                    const hostId = target.hostId;
+                    if (!hostId) return;
+                    requestHostSettings({ kind: "detail", hostId });
+                    handleNavSelect("hosts");
+                  }}
+                />
               </div>
             )}
 
@@ -1147,6 +1265,8 @@ function SettingsDialogInner({
                     hostName={target.name}
                     connected={target.connected}
                     shellVersion={appVersion || undefined}
+                    onReadingChange={setHostHasReading}
+                    closeHeld={closeHeldBy?.hostId === target.hostId ? closeHeldBy.count : 0}
                   />
                 </HostWorkPanel>
               )}
@@ -1729,7 +1849,7 @@ export function NavGroup({
   hideLabel,
   children,
 }: {
-  label: string;
+  label: React.ReactNode;
   hideLabel?: boolean;
   children: React.ReactNode;
 }) {
@@ -1952,11 +2072,14 @@ function HostWorkPanel({
  * is no tab of this machine's, so it is never a deep-link or search target.
  */
 function HostWorkNavItem({
+  hostName,
   selected,
   tabStop,
   isSearching,
   onSelect,
 }: {
+  /** Named in the tab itself: the group label above it is hidden from assistive tech. */
+  hostName: string;
   selected: boolean;
   tabStop: boolean;
   isSearching: boolean;
@@ -1970,6 +2093,7 @@ function HostWorkNavItem({
       data-tab={HOST_WORK_TAB}
       aria-selected={selected}
       aria-controls={HOST_WORK_PANEL_ID}
+      aria-label={`Work settings on ${hostName}`}
       tabIndex={tabStop ? 0 : -1}
       onClick={onSelect}
       className={cn(
@@ -2078,22 +2202,19 @@ export function ScopeChip({
  */
 export function SettingsOwnerHeaderChip({
   tab,
-  picked,
+  devicePagePicked = false,
 }: {
   tab: SettingsTab;
   /**
-   * With another machine picked (#14706): its name over its work settings, or
-   * null over one of this machine's own pages, which says so even locally.
+   * One of this machine's own pages while another machine is picked (#14706),
+   * which says so even locally. The picked machine's page names it in its title.
    */
-  picked?: string | null;
+  devicePagePicked?: boolean;
 }) {
   const ownerContext = useOwnerContext();
-  const label =
-    picked === undefined
-      ? settingsOwnerHeaderLabel(ownerForTab(tab), ownerContext)
-      : picked === null
-        ? deviceOwnerLabel()
-        : `Settings on ${picked}`;
+  const label = devicePagePicked
+    ? deviceOwnerLabel()
+    : settingsOwnerHeaderLabel(ownerForTab(tab), ownerContext);
   if (label === null) return null;
   return (
     <span className="flex font-normal" data-settings-owner-chip="">

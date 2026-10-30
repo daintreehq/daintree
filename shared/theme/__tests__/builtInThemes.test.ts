@@ -14,7 +14,12 @@ import {
 import type { BuiltInThemeSource } from "../builtInThemeSources.js";
 import { EXTENSION_KEY_REGISTRY, isExtensionKeyRequired } from "../extensionRegistry.js";
 import { auditSurfaceRamp, auditBorderSeparation, hexToOklch } from "../oklch.js";
-import { BUILT_IN_APP_SCHEMES, createDaintreeTokens, normalizeAppColorScheme } from "../themes.js";
+import {
+  APP_THEME_POLARITY_VARIABLES,
+  BUILT_IN_APP_SCHEMES,
+  createDaintreeTokens,
+  normalizeAppColorScheme,
+} from "../themes.js";
 import { RED_GREEN_OVERRIDES, BLUE_YELLOW_OVERRIDES } from "../colorVisionOverrides.js";
 import { APP_THEME_TOKEN_KEYS, EXTENSION_KEYS, type AppThemeTokenKey } from "../types.js";
 
@@ -919,53 +924,86 @@ describe("border-input", () => {
    * input boundary is a user-interface component under WCAG 1.4.11 and owes 3:1
    * on its own, while `border-strong` is a separation value shared with dividers
    * and card edges that reads as a hard ruled line at that weight. The engine
-   * default is therefore whatever `border-strong` resolved to, and a theme moves
-   * only by naming the token.
+   * default is therefore whatever `border-strong` resolved to, so every built-in
+   * theme names the token.
    *
    * These assertions are about the RULE, not the hex: any ink that clears the
-   * ratio on both surfaces a field edge touches passes.
+   * ratio on every surface a field edge touches passes.
    */
   const INPUT_BOUNDARY_MIN_CONTRAST = 3;
 
-  const OPTED_IN = ["daintree", "bondi"] as const;
-
-  it.each(OPTED_IN)("clears 3:1 on %s against both surfaces a field edge touches", (id) => {
-    const scheme = BUILT_IN_APP_SCHEMES.find((s) => s.id === id);
-    expect(scheme, `${id} scheme`).toBeDefined();
-    if (!scheme) return;
-
+  // Solid, because an alpha ink composites to a different colour on every
+  // surface it is measured on, so clearing the field fill says nothing about the
+  // panel. Asserted rather than composited: `contrastRatio` reads only the RGB of
+  // an eight-digit hex, so a transparent `#rrggbb00` would pass every ratio.
+  const solidInk = (scheme: (typeof BUILT_IN_APP_SCHEMES)[number]) => {
     const ink = scheme.tokens["border-input"];
-    // The edge sits between the field fill and the panel behind it, so it has to
-    // carry the ratio against both — one side alone is not the indicator.
-    for (const surface of ["surface-input", "surface-panel"] as const) {
-      const bg = scheme.tokens[surface];
-      // An alpha ink is composited against the surface it is measured on —
-      // which is the whole reason this token wants a solid value: the same
-      // rgba() lands on a different colour over the field fill than over the
-      // panel, so clearing one side says nothing about the other.
-      const alpha = parseRgba(ink);
-      const ratio = contrastRatio(
-        alpha ? blendOverBackground(alpha.hex, bg, alpha.opacity) : ink,
-        bg
-      );
-      expect(
-        ratio,
-        `${id} border-input (${ink}) is ${ratio.toFixed(2)}:1 on ${surface} (${scheme.tokens[surface]}); WCAG 1.4.11 wants ${INPUT_BOUNDARY_MIN_CONTRAST}:1`
-      ).toBeGreaterThanOrEqual(INPUT_BOUNDARY_MIN_CONTRAST);
-    }
-  });
+    expect(ink, `${scheme.id} border-input must be a solid #rrggbb`).toMatch(/^#[0-9a-f]{6}$/i);
+    return ink;
+  };
 
-  it("is exactly border-strong on every theme that does not opt in", () => {
-    const optedIn = new Set<string>(OPTED_IN);
-    const others = BUILT_IN_APP_SCHEMES.filter((s) => !optedIn.has(s.id));
-    expect(others.length).toBeGreaterThan(0);
-    for (const scheme of others) {
-      expect(
-        scheme.tokens["border-input"],
-        `${scheme.id} must inherit border-strong until it deliberately raises its field edge`
-      ).toBe(scheme.tokens["border-strong"]);
+  const expectBoundary = (
+    scheme: (typeof BUILT_IN_APP_SCHEMES)[number],
+    bg: string,
+    on: string
+  ) => {
+    const ink = solidInk(scheme);
+    const ratio = contrastRatio(ink, bg);
+    expect(
+      ratio,
+      `${scheme.id} border-input (${ink}) is ${ratio.toFixed(2)}:1 on ${on} (${bg}); WCAG 1.4.11 wants ${INPUT_BOUNDARY_MIN_CONTRAST}:1`
+    ).toBeGreaterThanOrEqual(INPUT_BOUNDARY_MIN_CONTRAST);
+  };
+
+  it.each(BUILT_IN_APP_SCHEMES)(
+    "clears 3:1 on $id against every surface a field edge touches",
+    (scheme) => {
+      // The edge sits between the field fill and whatever the field is placed on:
+      // a panel, a dialog (panel on dark, elevated on light), a popover (sidebar
+      // on dark, elevated on light), the canvas, or the sidebar. It has to carry
+      // the ratio against each — one side alone is not the indicator.
+      for (const surface of [
+        "surface-input",
+        "surface-panel",
+        "surface-panel-elevated",
+        "surface-canvas",
+        "surface-sidebar",
+      ] as const) {
+        expectBoundary(scheme, scheme.tokens[surface], surface);
+      }
     }
-  });
+  );
+
+  // `TypedNameConfirmInput` puts its field in a `bg-status-danger/10` well on the
+  // dialog surface. On a dark theme the wash lifts that surface toward the edge,
+  // and the colour-vision overrides swap `status-danger` app-wide, so the well
+  // has to hold under them too.
+  const DANGER_WELL_ALPHA = 0.1;
+  const COLOR_VISION_OVERRIDES = {
+    "red-green": RED_GREEN_OVERRIDES,
+    "blue-yellow": BLUE_YELLOW_OVERRIDES,
+  };
+  const dialogSurface = (scheme: (typeof BUILT_IN_APP_SCHEMES)[number]) => {
+    const ref = APP_THEME_POLARITY_VARIABLES[scheme.type]["--theme-surface-dialog"];
+    const token = ref?.match(/^var\(--theme-([a-z-]+)\)$/)?.[1];
+    if (!token) throw new Error(`no surface-dialog mapping for ${scheme.type}`);
+    return (scheme.tokens as Record<string, string>)[token]!;
+  };
+
+  it.each(BUILT_IN_APP_SCHEMES)(
+    "clears 3:1 on $id inside the destructive-confirm well",
+    (scheme) => {
+      const dangers: Array<[string, string]> = [["status-danger", scheme.tokens["status-danger"]]];
+      for (const [mode, overrides] of Object.entries(COLOR_VISION_OVERRIDES)) {
+        const danger = overrides["--theme-status-danger"];
+        if (danger) dangers.push([`${mode} status-danger`, danger]);
+      }
+      for (const [label, danger] of dangers) {
+        const well = blendOverBackground(danger, dialogSurface(scheme), DANGER_WELL_ALPHA);
+        expectBoundary(scheme, well, `the ${label} well`);
+      }
+    }
+  );
 });
 
 describe("border-input on a partial import", () => {

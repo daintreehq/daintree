@@ -2,6 +2,7 @@ import type React from "react";
 import { useLayoutEffect, useState } from "react";
 import {
   AppDialog,
+  type DialogAction,
   type DialogInitialFocus,
   type DialogSize,
   type DialogZIndex,
@@ -24,7 +25,7 @@ const CANNOT_BE_UNDONE_BODY_RE = /cannot be undone|can['’]t be undone/i;
  * either — in a long body the gate can sit below the fold, where "above" is
  * a pointer to nothing on screen.
  */
-const TYPED_GATE_HINT = "Type the confirmation phrase to enable";
+export const TYPED_GATE_HINT = "Type the confirmation phrase to continue";
 
 const devWarnedKeys = new Set<string>();
 
@@ -116,6 +117,11 @@ type ConfirmDialogBaseProps = {
   /** Forwarded to {@link AppDialog.Footer.hintPlacement}. */
   hintPlacement?: "inline" | "above";
   /**
+   * Forwarded to {@link AppDialog.Footer.leadingAction}: a third answer beside
+   * Cancel and the primary. Locked with them while the confirm runs.
+   */
+  leadingAction?: DialogAction;
+  /**
    * Forwarded to {@link AppDialog.hasPreview}: set to true when the dialog
    * body contains scrollable preview content (commit lists, directory tables).
    * Switches the ARIA role from `alertdialog` to `dialog` for destructive
@@ -134,8 +140,6 @@ type ConfirmDialogBaseProps = {
    * previous item's scroll offset.
    */
   bodyResetKey?: string | number;
-  /** Forwarded to {@link AppDialog.Body.compactShadow}. */
-  compactBodyShadow?: boolean;
 };
 
 export type ConfirmDialogProps =
@@ -181,8 +185,8 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     size = "sm",
     hint,
     hintPlacement,
+    leadingAction,
     bodyResetKey,
-    compactBodyShadow,
   } = props;
   const rawTypedNameTarget = (props as { typedNameTarget?: string }).typedNameTarget;
   const typedNameTarget = variant === "destructive" ? rawTypedNameTarget : undefined;
@@ -295,7 +299,12 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
       variant={variant}
       hasPreview={hasPreview}
       zIndex={zIndex}
-      initialFocus={initialFocus}
+      // A destructive leading action is the first tabbable control in the
+      // footer, so the default "first" focus would open a Save / Discard
+      // confirm with Discard already focused, one Enter from losing the work.
+      initialFocus={
+        initialFocus ?? (leadingAction?.intent === "destructive" ? "cancel" : undefined)
+      }
       focusResetKey={focusResetKey}
       restoreFocusTo={restoreFocusTo}
       preferRestoreFocusTo={preferRestoreFocusTo}
@@ -308,11 +317,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
         <AppDialog.CloseButton />
       </AppDialog.Header>
 
-      <AppDialog.Body
-        className="space-y-3"
-        resetScrollKey={bodyResetKey}
-        compactShadow={compactBodyShadow}
-      >
+      <AppDialog.Body className="space-y-3" resetScrollKey={bodyResetKey}>
         {description && <AppDialog.Description>{description}</AppDialog.Description>}
         {children}
         {hasTypedNameGate && (
@@ -338,6 +343,9 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
         // can't see, since the typed value lives here.
         hint={hint ?? (hasTypedNameGate && !isTypedMatched ? TYPED_GATE_HINT : undefined)}
         hintPlacement={hintPlacement}
+        leadingAction={
+          leadingAction && { ...leadingAction, disabled: isLocked || leadingAction.disabled }
+        }
         secondaryAction={{
           label: cancelLabel,
           onClick: handleClose,

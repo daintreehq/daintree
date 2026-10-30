@@ -97,6 +97,8 @@ const THREE_DOT_ALLOWED = new Set([
   "electron/services/pty/HandbackDetector.ts",
   // Recognises a spread in a statically read `svelte.config.js`: JavaScript syntax, not copy.
   "electron/services/elementPicker/projectAdapters/sveltekit/routes.ts",
+  // Haiku's cleanup prompt quotes the "..." trail-offs a transcriber writes, for the model to remove.
+  "shared/config/voiceCorrectionClaude.ts",
 ]);
 
 const IN_APP_BROWSER_FILES = /^src\/components\/(Browser|Portal|DevPreview)\//;

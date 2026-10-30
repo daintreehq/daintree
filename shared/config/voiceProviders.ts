@@ -1,14 +1,23 @@
-import type { VoiceInputSettings, VoiceTranscriptionProvider } from "../types/ipc/api.js";
+import type {
+  VoiceCorrectionProvider,
+  VoiceInputSettings,
+  VoiceTranscriptionProvider,
+} from "../types/ipc/api.js";
 
 /** A stored voice-input credential: any `VoiceInputSettings` field named `<company>ApiKey`. */
 export type VoiceApiKeyField = Extract<keyof VoiceInputSettings, `${string}ApiKey`>;
 
-export interface VoiceTranscriptionProviderInfo {
+/** The keys a transcription provider can hold; Anthropic's only cleans up. */
+export type TranscriptionKeyField = Exclude<VoiceApiKeyField, "anthropicApiKey">;
+
+interface VoiceProviderInfo<Field extends VoiceApiKeyField> {
   name: string;
   /** Who issues the key, as its settings row names it. */
   keyIssuer: string;
-  keyField: VoiceApiKeyField;
+  keyField: Field;
 }
+
+export type VoiceTranscriptionProviderInfo = VoiceProviderInfo<TranscriptionKeyField>;
 
 /**
  * One entry per transcription provider, naming the settings field that holds the key it
@@ -24,15 +33,36 @@ export const VOICE_TRANSCRIPTION_PROVIDERS: Record<
   grok: { name: "Grok", keyIssuer: "xAI", keyField: "xaiApiKey" },
 };
 
-/** Cleanup, file-link detection and rewrite all run on OpenAI, whichever provider transcribes. */
-export const VOICE_CLEANUP_KEY_FIELD = "openaiApiKey" satisfies VoiceApiKeyField;
+/** Cleanup and spoken rewrite run on the chosen cleanup provider, whichever provider transcribes. */
+export const VOICE_CLEANUP_PROVIDER_INFO: Record<
+  VoiceCorrectionProvider,
+  VoiceProviderInfo<VoiceApiKeyField>
+> = {
+  openai: { name: "OpenAI", keyIssuer: "OpenAI", keyField: "openaiApiKey" },
+  anthropic: { name: "Anthropic", keyIssuer: "Anthropic", keyField: "anthropicApiKey" },
+};
+
+/** File-link detection and its reranking run on OpenAI, whichever provider cleans up. */
+export const VOICE_FILE_LINK_KEY_FIELD = "openaiApiKey" satisfies VoiceApiKeyField;
+
+function cleanupInfo(provider: VoiceCorrectionProvider): VoiceProviderInfo<VoiceApiKeyField> {
+  return VOICE_CLEANUP_PROVIDER_INFO[provider] ?? VOICE_CLEANUP_PROVIDER_INFO.openai;
+}
+
+export function cleanupKeyField(provider: VoiceCorrectionProvider): VoiceApiKeyField {
+  return cleanupInfo(provider).keyField;
+}
+
+export function cleanupKeyIssuer(provider: VoiceCorrectionProvider): string {
+  return cleanupInfo(provider).keyIssuer;
+}
 
 /** An unrecognised stored provider reads as OpenAI, as the main process settings merge does. */
 function providerInfo(provider: VoiceTranscriptionProvider): VoiceTranscriptionProviderInfo {
   return VOICE_TRANSCRIPTION_PROVIDERS[provider] ?? VOICE_TRANSCRIPTION_PROVIDERS.openai;
 }
 
-export function transcriptionKeyField(provider: VoiceTranscriptionProvider): VoiceApiKeyField {
+export function transcriptionKeyField(provider: VoiceTranscriptionProvider): TranscriptionKeyField {
   return providerInfo(provider).keyField;
 }
 
@@ -44,7 +74,7 @@ export function transcriptionKeyIssuer(provider: VoiceTranscriptionProvider): st
   return providerInfo(provider).keyIssuer;
 }
 
-type KeySettings = Pick<VoiceInputSettings, "transcriptionProvider" | VoiceApiKeyField>;
+type KeySettings = Pick<VoiceInputSettings, "transcriptionProvider" | TranscriptionKeyField>;
 
 /** The key the selected provider transcribes with. */
 export function transcriptionApiKey(settings: KeySettings): string {
@@ -55,7 +85,14 @@ export function hasTranscriptionKey(settings: KeySettings): boolean {
   return !!transcriptionApiKey(settings);
 }
 
-/** Whether a cleanup pass has the OpenAI key it needs. */
-export function hasCleanupKey(settings: Pick<VoiceInputSettings, typeof VOICE_CLEANUP_KEY_FIELD>) {
-  return !!settings[VOICE_CLEANUP_KEY_FIELD];
+type CleanupKeySettings = Pick<VoiceInputSettings, "correctionProvider" | VoiceApiKeyField>;
+
+/** The key the chosen cleanup provider cleans up and rewrites with. */
+export function cleanupApiKey(settings: CleanupKeySettings): string {
+  return settings[cleanupKeyField(settings.correctionProvider)];
+}
+
+/** Whether a cleanup pass or a spoken rewrite has the key its provider needs. */
+export function hasCleanupKey(settings: CleanupKeySettings): boolean {
+  return !!cleanupApiKey(settings);
 }

@@ -589,15 +589,25 @@ export function useTerminalFileTransfer(
         });
     };
 
+    // In a remote window the image crosses the link the way a drop does, so it
+    // gets the drop's chip: progress on a slow link, and a cancel before a
+    // path lands.
+    const materializeClipboardImage = () =>
+      isRemoteWindow()
+        ? trackUpload(terminalUploadSurface(terminalId), "Pasted image", (options) =>
+            materialize({ kind: "clipboard-image" }, options)
+          )
+        : materialize({ kind: "clipboard-image" });
+
     // This machine's clipboard image, saved (or, in a remote window, uploaded
     // to the host) and typed as its path — the DOM paste below without the
     // event. Ctrl+V in a remote agent terminal and the Windows/Linux paste keys
     // use it; "empty" lets the caller fall back to what the key does without
-    // an image.
+    // an image, so a cancelled upload is "failed", never "empty".
     const pasteClipboardImage = async (): Promise<"inserted" | "empty" | "failed"> => {
       const lockEpoch = lockEpochRef.current;
       try {
-        const { hostPath: filePath } = await materialize({ kind: "clipboard-image" });
+        const { hostPath: filePath } = await materializeClipboardImage();
         if (cancelled || !isMountedRef.current || isInputLockedRef.current) return "failed";
         if (lockEpochRef.current !== lockEpoch) return "failed";
         if (!filePath || !isDeliverablePath(filePath)) return "failed";
@@ -668,7 +678,7 @@ export function useTerminalFileTransfer(
       const lockEpoch = lockEpochRef.current;
 
       try {
-        const { hostPath: filePath } = await materialize({ kind: "clipboard-image" });
+        const { hostPath: filePath } = await materializeClipboardImage();
         // Re-check after the await: the pane may have unmounted or locked, and
         // the running agent may have changed, while the image was being saved.
         if (cancelled || !isMountedRef.current || isInputLockedRef.current) return;

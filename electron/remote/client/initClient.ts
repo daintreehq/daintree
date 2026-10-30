@@ -361,7 +361,7 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
           projectId,
           projectPath,
           undefined,
-          request
+          { ...request, switchScreenHandoff: true }
         );
         recordWindowSwitch(windowId, from, toHostScopedKey(hostId, projectId));
         // The title names the place: "<project> — <host>".
@@ -384,12 +384,10 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
         const pvm = managerFor(windowId);
         const from = pvm.getActiveProjectId();
         if (focusIntent) pvm.setPendingFocusIntent(workspace.id, focusIntent);
-        const { view, isNew } = await pvm.switchTo(
-          workspace.id,
-          workspace.path,
-          undefined,
-          request
-        );
+        const { view, isNew } = await pvm.switchTo(workspace.id, workspace.path, undefined, {
+          ...request,
+          switchScreenHandoff: true,
+        });
         recordWindowSwitch(windowId, from, workspace.id);
         const registry = getWindowRegistry();
         const win = registry?.getByWindowId(windowId)?.browserWindow;

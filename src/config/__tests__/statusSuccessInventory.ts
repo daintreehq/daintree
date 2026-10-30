@@ -97,31 +97,17 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Recorded result of the last CI run on the pull request",
     },
   ],
-  "src/components/Commands/CommandBuilder.tsx": [
-    {
-      category: "outcome",
-      signature: "bg-status-success/15",
-      expectedOccurrences: 1,
-      rationale: "Recorded result of the command the user just ran; leaves with the dialog",
-    },
-    {
-      category: "outcome",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Recorded result of the command the user just ran; leaves with the dialog",
-    },
-  ],
   "src/components/FileViewer/diffChangeSet.ts": [
     {
       category: "domain",
-      signature: "text-status-success",
+      signature: "text-status-success-text",
       anchor: 'label: "A"',
       expectedOccurrences: 1,
       rationale: "Git status letter A, the notation git itself paints green",
     },
     {
       category: "domain",
-      signature: "text-status-success",
+      signature: "text-status-success-text",
       anchor: 'label: "?"',
       expectedOccurrences: 1,
       rationale: "Git status letter ?, the notation git itself paints green",
@@ -311,7 +297,7 @@ export const STATUS_SUCCESS_INVENTORY = {
     },
     {
       category: "domain",
-      signature: "text-status-success",
+      signature: "text-status-success-text",
       anchor: 'label: "A"',
       expectedOccurrences: 1,
       rationale: "Git status letter A, the notation git itself paints green",
@@ -325,10 +311,19 @@ export const STATUS_SUCCESS_INVENTORY = {
     },
     {
       category: "domain",
-      signature: "text-status-success",
+      signature: "text-status-success-text",
       anchor: 'label: "?"',
       expectedOccurrences: 1,
       rationale: "Git status letter ?, the notation git itself paints green",
+    },
+  ],
+  "src/components/Worktree/ReviewHub/PrStatusChip.tsx": [
+    {
+      category: "transient",
+      signature: "text-status-success",
+      expectedOccurrences: 1,
+      rationale:
+        "Confirmation beside the PR chip that the merge, arm or cancel the user just confirmed landed; clears on a timer",
     },
   ],
   "src/components/Worktree/ReviewHub/prChecks.ts": [
@@ -348,7 +343,7 @@ export const STATUS_SUCCESS_INVENTORY = {
     },
     {
       category: "domain",
-      signature: "text-status-success",
+      signature: "text-status-success-text",
       expectedOccurrences: 1,
       rationale: "Git status letter A, the notation git itself paints green",
     },
@@ -426,14 +421,14 @@ export const STATUS_SUCCESS_INVENTORY = {
   "src/lib/gitStatusPresentation.ts": [
     {
       category: "domain",
-      signature: "text-status-success",
+      signature: "text-status-success-text",
       anchor: 'name: "Added"',
       expectedOccurrences: 1,
       rationale: "Git status letter A, the notation git itself paints green",
     },
     {
       category: "domain",
-      signature: "text-status-success",
+      signature: "text-status-success-text",
       anchor: 'name: "Untracked"',
       expectedOccurrences: 1,
       rationale: "Git status letter ?, the notation git itself paints green",
@@ -508,24 +503,6 @@ export const STATUS_SUCCESS_INVENTORY = {
         "PullRequestRow's review verdict: the forge's recorded approval of the pull request",
     },
   ],
-  "src/components/ui/DiffStat.tsx": [
-    {
-      category: "domain",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale:
-        "The one line-churn stat: the insertion count every diff row, summary and card renders through",
-    },
-  ],
-  "src/components/Tour/scenes/ReviewScene.tsx": [
-    {
-      category: "domain",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale:
-        "The tour's Review Hub mock spells DiffStat's insertion count inline (tour scenes can't import host components)",
-    },
-  ],
 } as const satisfies StatusSuccessInventory;
 
 /**
@@ -533,5 +510,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 58;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 60;
+export const EXPECTED_STATUS_SUCCESS_SITES = 55;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 57;

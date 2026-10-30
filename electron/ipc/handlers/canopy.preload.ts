@@ -31,7 +31,6 @@ export const CANOPY_METHOD_CHANNELS = {
   readAgentDirectory: "canopy:read-agent-directory",
   readAssistantWork: "canopy:read-assistant-work",
   unwatchTerminal: "canopy:unwatch-terminal",
-  captureBackdrop: "canopy:capture-backdrop",
   setMode: "canopy:set-mode",
   getModel: "canopy:get-model",
   getSizeHolds: "canopy:get-size-holds",
@@ -41,6 +40,7 @@ export const CANOPY_METHOD_CHANNELS = {
   terminalResize: "canopy:terminal-resize",
   terminalSendKey: "canopy:terminal-send-key",
   terminalSubmit: "canopy:terminal-submit",
+  submitReply: "canopy:submit-reply",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof CANOPY_METHOD_CHANNELS;

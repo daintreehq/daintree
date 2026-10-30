@@ -237,7 +237,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
 
       {/* A new query is a new list: keep the best match in view rather than
           holding the offset the user had scrolled to in the old one. */}
-      <AppDialog.Body resetScrollKey={trimmedQuery} compactShadow>
+      <AppDialog.Body resetScrollKey={trimmedQuery}>
         <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
           {trimmedQuery
             ? rowCount === 0

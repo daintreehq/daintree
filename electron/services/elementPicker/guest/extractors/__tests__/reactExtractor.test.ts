@@ -171,6 +171,22 @@ function bump(): void {
   press(".bump");
 }
 
+function widen(): void {
+  window.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "ArrowUp", altKey: true, bubbles: true, cancelable: true })
+  );
+}
+
+/** What the last selection the host was told of covers. */
+function selected(): { scope: unknown; elementIds: string[] } | null {
+  const last = events.filter((event) => event.type === "selectionChanged").at(-1);
+  if (last?.type !== "selectionChanged") return null;
+  return {
+    scope: last.scope,
+    elementIds: last.observations.map((observation) => observation.elementId),
+  };
+}
+
 describe.each(["plain", "compiled"] as const)("the React extractor, compiler %s", (variant) => {
   it("runs the variant it names", () => {
     mount(fixtures[variant]);
@@ -358,6 +374,67 @@ describe.each(["plain", "compiled"] as const)("the React extractor, compiler %s"
 
     bump();
     expect(record(pick("b.notice-title"), "Notice").componentId).toBe(notice.componentId);
+  });
+
+  it("widens to each component out in turn, as that invocation's rendered roots, with Alt+ArrowUp", () => {
+    mount(fixtures[variant]);
+    const items = [1, 2, 3].map((index) => idOf(`li.item:nth-child(${index})`));
+    const roots = [idOf("main.app"), idOf(".modal-body")];
+    const picked = pick("li.item");
+    widen();
+    expect(selected()).toEqual({
+      scope: { kind: "component", componentId: record(picked, "Items").componentId },
+      elementIds: items,
+    });
+    widen();
+    expect(selected()).toEqual({
+      scope: { kind: "component", componentId: record(picked, "App").componentId },
+      elementIds: roots,
+    });
+    // Nothing is further out than App.
+    const count = events.length;
+    widen();
+    expect(events).toHaveLength(count);
+  });
+
+  it("selects a component a crumb names by its id, and nothing for one the chain does not carry", () => {
+    mount(fixtures[variant]);
+    const roots = [idOf("main.app"), idOf(".modal-body")];
+    const picked = pick("li.item");
+    const app = record(picked, "App").componentId;
+    expect(
+      picker!.reselect({ elementId: picked.elementId, framework: "react", componentId: app })
+    ).toBe(true);
+    expect(selected()).toEqual({
+      scope: { kind: "component", componentId: app },
+      elementIds: roots,
+    });
+
+    // Badge's own element would find Badge, but Badge is not on the chain the
+    // selection was read with, so the page is not asked for it.
+    const held = pick("span.badge");
+    const badge = record(held, "Badge").componentId;
+    pick("li.item");
+    const count = events.length;
+    expect(
+      picker!.reselect({ elementId: held.elementId, framework: "react", componentId: badge })
+    ).toBe(false);
+    expect(
+      picker!.reselect({ elementId: picked.elementId, framework: "vue", componentId: app })
+    ).toBe(false);
+    expect(events).toHaveLength(count);
+  });
+
+  it("widens from a component's roots after a render retired the fibers it was read from", () => {
+    mount(fixtures[variant]);
+    bump();
+    const roots = [idOf("b.notice-title"), idOf("p.notice-body")];
+    const picked = pick("b.notice-title");
+    widen();
+    expect(selected()).toEqual({
+      scope: { kind: "component", componentId: record(picked, "Notice").componentId },
+      elementIds: roots,
+    });
   });
 
   it("labels a hover with the nearest component alone", () => {

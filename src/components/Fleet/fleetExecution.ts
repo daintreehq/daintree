@@ -8,8 +8,9 @@ import {
   peek as peekTerminalService,
   with as withTerminalService,
 } from "@/services/terminal/terminalInstanceServiceAccessor";
-import { isTerminalFleetEligible } from "@/store/fleetEligibility";
+import { isTerminalFleetBroadcastTarget, isTerminalFleetEligible } from "@/store/fleetEligibility";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
+import { isPtyPanel } from "@shared/types/panel";
 import { replaceRecipeVariables, detectUnresolvedVariables } from "@/utils/recipeVariables";
 import {
   buildFleetBroadcastRecipeContext,
@@ -21,8 +22,14 @@ import {
 import {
   getArmedCrossHostTargets,
   isCrossHostTargetId,
+  isHostQualifiedTargetId,
   submitCrossHostTarget,
 } from "./crossHostFleet";
+import {
+  expandDraftContext,
+  listDraftContextTokens,
+  shareContextReferenceResolutions,
+} from "@/components/Terminal/draftContextExpansion";
 
 export interface FleetTargetPreview {
   terminalId: string;
@@ -31,6 +38,12 @@ export interface FleetTargetPreview {
   unresolvedVars: string[];
   excluded: boolean;
   exclusionReason?: string;
+  /** Left out because the person locked the pane's input, not because it broke. */
+  inputLocked?: boolean;
+  /** Where this agent's `@diff` is taken at send; absent for an agent on another host. */
+  contextCwd?: string;
+  /** An agent on another host, which can't be handed this machine's context. */
+  crossHost?: boolean;
 }
 
 export interface FleetExecutionResult {
@@ -71,7 +84,7 @@ export function buildFleetTargetPreviews(draft: string): FleetTargetPreview[] {
     if (!armedIds.has(id)) continue;
     const panel = getNarrowPanel(panelsById, id);
 
-    if (isTerminalFleetEligible(panel)) {
+    if (isTerminalFleetBroadcastTarget(panel)) {
       const ctx = buildFleetBroadcastRecipeContext(id) ?? {};
       const resolved = replaceRecipeVariables(draft, ctx);
       const unresolvedVars = detectUnresolvedVariables(draft, ctx);
@@ -82,15 +95,18 @@ export function buildFleetTargetPreviews(draft: string): FleetTargetPreview[] {
         resolvedPayload: resolved,
         unresolvedVars,
         excluded: false,
+        contextCwd: panel.cwd,
       });
     } else {
+      const inputLocked = isTerminalFleetEligible(panel);
       previews.push({
         terminalId: id,
         title: panel?.title ?? "Unknown",
         resolvedPayload: draft,
         unresolvedVars: [],
         excluded: true,
-        exclusionReason: "Panel no longer eligible",
+        exclusionReason: inputLocked ? "Input locked" : "Panel no longer eligible",
+        ...(inputLocked ? { inputLocked: true } : {}),
       });
     }
   }
@@ -104,6 +120,7 @@ export function buildFleetTargetPreviews(draft: string): FleetTargetPreview[] {
       resolvedPayload: draft,
       unresolvedVars: [],
       excluded: false,
+      crossHost: true,
     });
   }
 
@@ -111,8 +128,26 @@ export function buildFleetTargetPreviews(draft: string): FleetTargetPreview[] {
 }
 
 /**
+ * The agents on other hosts whose text in this send still carries a context
+ * token. Nothing here can expand one for them, and sent as typed it would
+ * mean something other than what every agent here gets, so a send that
+ * includes any of them can't go.
+ */
+export function findCrossHostContextTargets(
+  draft: string,
+  targetIds: readonly string[],
+  perTargetOverrides?: Record<string, string>
+): string[] {
+  return targetIds.filter(
+    (id) =>
+      isHostQualifiedTargetId(id) &&
+      listDraftContextTokens(perTargetOverrides?.[id] ?? draft).length > 0
+  );
+}
+
+/**
  * Drop ids whose backing panel is no longer fleet-eligible (trashed,
- * backgrounded, no PTY, etc.). Exported so the Enter-broadcast confirm
+ * backgrounded, no PTY, etc.) or whose input is locked. Exported so the Enter-broadcast confirm
  * path can re-check eligibility at dispatch time — a pane that went
  * away while the confirm dialog was open must not still receive bytes.
  */
@@ -120,7 +155,8 @@ export function filterEligibleIds(ids: string[]): string[] {
   const { panelsById } = usePanelStore.getState();
   // Another host's agent stays eligible while it is armed; the host refuses a dead one.
   return ids.filter(
-    (id) => isCrossHostTargetId(id) || isTerminalFleetEligible(getNarrowPanel(panelsById, id))
+    (id) =>
+      isCrossHostTargetId(id) || isTerminalFleetBroadcastTarget(getNarrowPanel(panelsById, id))
   );
 }
 
@@ -175,6 +211,39 @@ function resolveSubmissions(
   });
 }
 
+/**
+ * Each agent here gets the context its own text names, from itself: `@diff`
+ * from its own working directory, `@terminal` and `@selection` from its own
+ * screen, as a send from its own composer would. Plugin context is asked for
+ * once and handed to every agent alike.
+ */
+async function expandSubmissionContext(
+  submissions: ResolvedSubmission[]
+): Promise<ResolvedSubmission[]> {
+  const resolveReferences = shareContextReferenceResolutions();
+  const { panelsById } = usePanelStore.getState();
+  return Promise.all(
+    submissions.map(async (submission) => {
+      if (!carriesLocalContext(submission)) return submission;
+      const panel = getNarrowPanel(panelsById, submission.terminalId);
+      const cwd = panel && isPtyPanel(panel) ? panel.cwd : "";
+      const payload = await expandDraftContext(submission.payload, {
+        terminalId: submission.terminalId,
+        cwd,
+        resolveReferences,
+      });
+      return { ...submission, payload };
+    })
+  );
+}
+
+function carriesLocalContext(submission: ResolvedSubmission): boolean {
+  return (
+    !isCrossHostTargetId(submission.terminalId) &&
+    listDraftContextTokens(submission.payload).length > 0
+  );
+}
+
 // A send that landed is one its terminal's dictations can be cleaned up
 // against, noted as it lands so a slower target can't put it behind a later
 // send. Another host's agent keeps its own.
@@ -188,6 +257,14 @@ function submitAndNote(submission: ResolvedSubmission, retry: boolean): Promise<
   });
 }
 
+// Callers filter locked panes when they pick targets, but a pane locked while a
+// broadcast waits its turn or between large-paste batches must still get nothing.
+function isLocalTargetLocked(terminalId: string): boolean {
+  if (isCrossHostTargetId(terminalId)) return false;
+  const panel = getNarrowPanel(usePanelStore.getState().panelsById, terminalId);
+  return panel !== undefined && isPtyPanel(panel) && panel.isInputLocked === true;
+}
+
 function shouldBatchAcrossTargets(resolved: ResolvedSubmission[]): boolean {
   if (resolved.length <= FLEET_LARGE_PASTE_BATCH_SIZE) return false;
   for (const r of resolved) {
@@ -197,6 +274,10 @@ function shouldBatchAcrossTargets(resolved: ResolvedSubmission[]): boolean {
   }
   return false;
 }
+
+// The progress store follows one broadcast. A newer one aborts and takes it
+// over, so a superseded run settling later leaves it alone.
+let latestRun = 0;
 
 /**
  * Execute a fleet broadcast to the given target IDs with per-target payload
@@ -226,21 +307,30 @@ export async function executeFleetBroadcast(
   options: { retry?: boolean } = {}
 ): Promise<FleetExecutionResult> {
   const retry = options.retry === true;
-  const resolved = resolveSubmissions(draft, targetIds, perTargetOverrides);
+  const run = ++latestRun;
+  const progress = () => (run === latestRun ? useFleetBroadcastProgressStore.getState() : null);
+  let resolved = resolveSubmissions(draft, targetIds, perTargetOverrides);
+  // Targets that stopped being fleet recipients while their context was read.
+  let leftFleet: ReadonlySet<string> | null = null;
+  const canDispatch = (r: ResolvedSubmission) =>
+    !isLocalTargetLocked(r.terminalId) && !leftFleet?.has(r.terminalId);
   const results: PromiseSettledResult<void>[] = [];
+  // Parallel to `results`: what was actually sent, since a pane locked
+  // mid-broadcast drops out of its batch.
+  const dispatched: ResolvedSubmission[] = [];
   let dispatchedCount = 0;
   let finalized = false;
 
-  useFleetBroadcastProgressStore.getState().init(resolved.length);
+  progress()?.init(resolved.length);
 
   const buildResult = (cancelled: boolean): FleetExecutionResult => {
     const perTarget: FleetExecutionResult["perTarget"] = results.map((r, i) => {
       if (r.status === "fulfilled") {
-        return { terminalId: resolved[i]!.terminalId, status: "fulfilled" };
+        return { terminalId: dispatched[i]!.terminalId, status: "fulfilled" };
       }
       const reason = String(r.reason);
       return {
-        terminalId: resolved[i]!.terminalId,
+        terminalId: dispatched[i]!.terminalId,
         status: "rejected",
         reason,
         kind: classifyFleetRejectionReason(reason),
@@ -271,19 +361,34 @@ export async function executeFleetBroadcast(
 
   try {
     if (signal?.aborted) {
-      useFleetBroadcastProgressStore.getState().finishCancelled();
+      progress()?.finishCancelled();
       finalized = true;
       return buildResult(true);
+    }
+
+    if (resolved.some(carriesLocalContext)) {
+      // A `@diff` fetch or a plugin is a wait that Cancel, or a newer send,
+      // can land in before anything has gone out.
+      resolved = await expandSubmissionContext(resolved);
+      if (signal?.aborted) {
+        progress()?.finishCancelled();
+        finalized = true;
+        return buildResult(true);
+      }
+      const ids = resolved.map((r) => r.terminalId);
+      const eligible = new Set(filterEligibleIds(ids));
+      leftFleet = new Set(ids.filter((id) => !eligible.has(id)));
     }
 
     if (shouldBatchAcrossTargets(resolved)) {
       for (let i = 0; i < resolved.length; i += FLEET_LARGE_PASTE_BATCH_SIZE) {
         if (signal?.aborted) {
-          useFleetBroadcastProgressStore.getState().finishCancelled();
+          progress()?.finishCancelled();
           finalized = true;
           return buildResult(true);
         }
-        const batch = resolved.slice(i, i + FLEET_LARGE_PASTE_BATCH_SIZE);
+        const slice = resolved.slice(i, i + FLEET_LARGE_PASTE_BATCH_SIZE);
+        const batch = slice.filter(canDispatch);
         dispatchedCount += batch.length;
         // Enter `directing` on every target BEFORE submit dispatches —
         // mirrors what xterm onData → onUserInput does for the origin.
@@ -297,6 +402,7 @@ export async function executeFleetBroadcast(
         for (let j = 0; j < batchResults.length; j += 1) {
           const r = batchResults[j]!;
           results.push(r);
+          dispatched.push(batch[j]!);
           const terminalId = batch[j]!.terminalId;
           if (r.status === "fulfilled") {
             // Submit landed — close out directing and flip to working.
@@ -312,21 +418,23 @@ export async function executeFleetBroadcast(
         }
 
         const batchFailures = batchResults.filter((r) => r.status === "rejected").length;
-        useFleetBroadcastProgressStore.getState().advance(batch.length, batchFailures);
+        progress()?.advance(slice.length, batchFailures);
 
         if (i + FLEET_LARGE_PASTE_BATCH_SIZE < resolved.length) {
           await yieldToScheduler();
         }
       }
     } else {
-      dispatchedCount = resolved.length;
+      const batch = resolved.filter(canDispatch);
+      dispatchedCount = batch.length;
       // Same ordering rule as the batched path — see comment above.
-      for (const r of resolved) noteUserInput(r.terminalId, r.payload);
-      const all = await Promise.allSettled(resolved.map((r) => submitAndNote(r, retry)));
+      for (const r of batch) noteUserInput(r.terminalId, r.payload);
+      const all = await Promise.allSettled(batch.map((r) => submitAndNote(r, retry)));
       for (let j = 0; j < all.length; j += 1) {
         const r = all[j]!;
         results.push(r);
-        const terminalId = resolved[j]!.terminalId;
+        dispatched.push(batch[j]!);
+        const terminalId = batch[j]!.terminalId;
         if (r.status === "fulfilled") {
           noteSubmitted(terminalId);
         } else {
@@ -334,13 +442,13 @@ export async function executeFleetBroadcast(
         }
       }
       const nonBatchedFailures = all.filter((r) => r.status === "rejected").length;
-      useFleetBroadcastProgressStore.getState().advance(resolved.length, nonBatchedFailures);
+      progress()?.advance(resolved.length, nonBatchedFailures);
     }
 
     return buildResult(signal?.aborted ?? false);
   } finally {
     if (!finalized) {
-      useFleetBroadcastProgressStore.getState().finish();
+      progress()?.finish();
     }
   }
 }

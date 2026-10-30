@@ -333,9 +333,8 @@ describe("WorktreeDeleteDialog — warning messages", () => {
     );
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
-    const warning = screen.getByText(/Required to delete this worktree/);
-    expect(warning.textContent).toContain("2 untracked files");
-    expect(warning.textContent).not.toContain("uncommitted changes");
+    const tally = screen.getByTestId("delete-worktree-change-tally");
+    expect(tally.textContent).toBe("2 untracked");
   });
 
   it("shows uncommitted-file count when only tracked changes exist", () => {
@@ -347,9 +346,8 @@ describe("WorktreeDeleteDialog — warning messages", () => {
     );
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
-    const warning = screen.getByText(/Required to delete this worktree/);
-    expect(warning.textContent).toContain("uncommitted changes to 2 tracked files");
-    expect(warning.textContent).not.toContain("untracked file");
+    const tally = screen.getByTestId("delete-worktree-change-tally");
+    expect(tally.textContent).toBe("2 tracked");
   });
 
   it("shows both counts when tracked and untracked files exist", () => {
@@ -362,10 +360,8 @@ describe("WorktreeDeleteDialog — warning messages", () => {
     );
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
-    const warning = screen.getByText(/Required to delete this worktree/);
-    expect(warning.textContent).toContain(
-      "uncommitted changes to 2 tracked files and 1 untracked file"
-    );
+    const tally = screen.getByTestId("delete-worktree-change-tally");
+    expect(tally.textContent).toBe("2 tracked · 1 untracked");
   });
 
   it("excludes ignored files from the uncommitted count", () => {
@@ -377,8 +373,8 @@ describe("WorktreeDeleteDialog — warning messages", () => {
     );
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
-    const warning = screen.getByText(/Required to delete this worktree/);
-    expect(warning.textContent).toContain("uncommitted changes to 1 tracked file ");
+    const tally = screen.getByTestId("delete-worktree-change-tally");
+    expect(tally.textContent).toBe("1 tracked");
   });
 
   it("persists banner with escalated copy when force is checked for tracked changes", () => {
@@ -437,7 +433,9 @@ describe("WorktreeDeleteDialog — warning messages", () => {
    * the varying detail moved to a sub-line under a constant label. Invariance
    * itself is pinned in the "dialog chrome contract" block.
    */
-  it("states the change breakdown under the force toggle without altering its label", () => {
+  // The counts live in the tally beside the change list and, once force is on,
+  // in the loss row; under the toggle a third copy only said them again.
+  it("says why force is required under the toggle without altering its label", () => {
     const worktree = makeWorktree(
       makeChanges([
         { path: "src/app.ts", status: "modified" },
@@ -447,9 +445,9 @@ describe("WorktreeDeleteDialog — warning messages", () => {
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
     const toggle = screen.getByRole("checkbox", { name: /force delete/i });
-    expect(toggle.closest("label")?.textContent).toContain(
-      "uncommitted changes to 1 tracked file and 1 untracked file present"
-    );
+    const label = toggle.closest("label")?.textContent ?? "";
+    expect(label.startsWith("Force delete")).toBe(true);
+    expect(label).toContain("Required to delete a worktree with uncommitted work");
   });
 });
 
@@ -475,13 +473,15 @@ describe("WorktreeDeleteDialog — consequence list", () => {
 
   const DIRECTORY_ROW = "Worktree directory will be deleted from disk";
 
-  it("shows ONLY the directory row for a clean worktree with nothing attached", () => {
+  it("shows only the directory and kept-branch rows for a clean worktree with nothing attached", () => {
     const worktree = makeWorktree(makeChanges([]));
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
     const list = screen.getByTestId("delete-worktree-consequences");
-    expect(within(list).getAllByRole("listitem")).toHaveLength(1);
+    const rows = within(list).getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
     expect(within(list).getByText(DIRECTORY_ROW)).toBeDefined();
+    expect(rows[1]?.textContent).toBe("Branch feature/test is kept");
   });
 
   it("never renders a struck-through consequence row in any state", () => {
@@ -569,7 +569,7 @@ describe("WorktreeDeleteDialog — consequence list", () => {
 
     const danger = within(screen.getByTestId("delete-worktree-consequences"))
       .getAllByRole("listitem")
-      .filter((row) => row.className.includes("text-status-error"));
+      .filter((row) => row.className.includes("text-status-danger-text"));
     expect(danger).toHaveLength(1);
     expect(danger[0]?.textContent).toContain("permanently lost");
   });

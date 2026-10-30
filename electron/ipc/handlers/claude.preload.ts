@@ -3,6 +3,7 @@ import type { IpcInvokeMap } from "../../types/index.js";
 export const CLAUDE_METHOD_CHANNELS = {
   listSubagents: "claude:list-subagents",
   readSubagentTranscript: "claude:read-subagent-transcript",
+  findReplySpan: "claude:find-reply-span",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof CLAUDE_METHOD_CHANNELS;

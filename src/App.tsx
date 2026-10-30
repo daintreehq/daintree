@@ -13,6 +13,7 @@ import {
   useMenuActions,
   useErrors,
   useReEntrySummary,
+  useOverlayClaim,
   useOverlayClaimCountMarker,
 } from "./hooks";
 import type { ProjectCreationIdentity } from "@shared/types";
@@ -49,6 +50,7 @@ import {
   useAccessibilityAnnouncements,
   useUnloadCleanup,
   usePanelRecoveryResponder,
+  usePluginUnsavedPanelsReporter,
   useHomeDir,
   usePerformanceMonitors,
   useSettingsDialog,
@@ -131,6 +133,7 @@ function AppInner() {
   useErrors();
   useUnloadCleanup();
   usePanelRecoveryResponder();
+  usePluginUnsavedPanelsReporter();
   useResourceProfile();
   usePowerSavingMotion();
   useOverlayClaimCountMarker();
@@ -285,6 +288,10 @@ function AppInner() {
     prevPluginManagerOpenRef.current = isPluginManagerOpen;
     if (!wasOpen && isPluginManagerOpen) setIsSettingsOpen(false);
   }, [isPluginManagerOpen, setIsSettingsOpen]);
+  // PluginManagerView claims the viewport only once its lazy chunk mounts, and
+  // Settings' claim can drop first, letting the Portal flash in the gap. Same
+  // handoff as the theme browser's presence claim in AppLayout.
+  useOverlayClaim("plugin-manager-presence", isPluginManagerOpen);
 
   const shouldMountCrossDiffDialog = useKeepMounted(crossDiffDialog.isOpen);
   const shouldMountShortcutsDialog = useKeepMounted(isShortcutsOpen);
@@ -321,6 +328,7 @@ function AppInner() {
     pluginMcpConfirmResetKey,
     pluginCapabilityConfirmResetKey,
     pluginArchiveInstallResetKey,
+    recipeRunConfirmResetKey,
     diagnosticsReviewResetKey,
     terminalInfoResetKey,
   } = useModalResetKeys();
@@ -641,6 +649,7 @@ function AppInner() {
                 pluginMcpConfirmResetKey={pluginMcpConfirmResetKey}
                 pluginCapabilityConfirmResetKey={pluginCapabilityConfirmResetKey}
                 pluginArchiveInstallResetKey={pluginArchiveInstallResetKey}
+                recipeRunConfirmResetKey={recipeRunConfirmResetKey}
                 panelLimitResetKey={panelLimitResetKey}
                 diagnosticsReviewResetKey={diagnosticsReviewResetKey}
                 gitPushResetKey={gitPushResetKey}

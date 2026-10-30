@@ -81,6 +81,40 @@ describe("VoiceInputButton", () => {
     expect(container.innerHTML).not.toBe("");
   });
 
+  it("still offers the stop once dictation is turned off mid-session (#14947)", async () => {
+    useVoiceRecordingStore.setState({
+      isConfigured: false,
+      status: "recording",
+      micSignal: "live",
+      activeTarget: { panelId: "panel-1" },
+    });
+    const { getByRole } = render(
+      <VoiceInputButton panelId="panel-1" projectId="project-1" projectName="Daintree" />
+    );
+    const button = getByRole("button");
+    expect(button.getAttribute("aria-label")).toBe("Stop voice recording");
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.focus(button);
+    expect((await screen.findByRole("tooltip")).textContent).toBe("Stop recording");
+  });
+
+  it("offers setup again once the session that outlived dictation has closed", async () => {
+    useVoiceRecordingStore.setState({
+      isConfigured: false,
+      status: "finishing",
+      activeTarget: { panelId: "panel-1" },
+    });
+    const { getByRole } = render(
+      <VoiceInputButton panelId="panel-1" projectId="project-1" projectName="Daintree" />
+    );
+    const button = getByRole("button");
+    expect(button.getAttribute("aria-label")).toBe("Set up voice input");
+    expect(button.getAttribute("aria-pressed")).toBeNull();
+    // Its last words are still on their way, but it offers no restart.
+    fireEvent.focus(button);
+    expect((await screen.findByRole("tooltip")).textContent).toBe("Finishing transcription…");
+  });
+
   it("renders a resume affordance when this panel is paused", async () => {
     useVoiceRecordingStore.setState({
       isConfigured: true,

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState, type ReactElement } from "react";
-import { XCircle, ArrowLeft, ChevronDown, Plus, X } from "lucide-react";
+import type { CrossHostFleetTarget } from "@/store/fleetArmingStore";
+import { XCircle, ArrowLeft, ChevronDown, Lock, Plus, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { useEscapeStack, useWorktreeColorMap } from "@/hooks";
@@ -28,6 +29,9 @@ import {
   POPOVER_TITLE_CLASS,
 } from "@/components/ui/popoverHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { pluralize } from "@/lib/pluralize";
+import { RemoteAgentMark } from "./RemoteAgentMark";
+import { shortTerminalId } from "./crossHostFleet";
 
 interface FleetCountChipProps {
   armedCount: number;
@@ -38,6 +42,40 @@ interface FleetCountChipProps {
 type FleetChipPopoverMode = "list" | "picker";
 
 const EMPTY_WORKTREES: ReadonlyMap<string, { name: string }> = new Map();
+
+/** Section label inside the member list. Normal case: host names are typed by the person. */
+const GROUP_LABEL_CLASS = "truncate px-2 pt-2 pb-0.5 text-2xs font-medium text-text-secondary";
+
+interface HostGroup {
+  hostId: string;
+  hostName: string;
+  targets: CrossHostFleetTarget[];
+}
+
+function groupByHost(targets: readonly CrossHostFleetTarget[]): HostGroup[] {
+  const groups = new Map<string, HostGroup>();
+  for (const target of targets) {
+    const group = groups.get(target.hostId);
+    if (group) group.targets.push(target);
+    else
+      groups.set(target.hostId, {
+        hostId: target.hostId,
+        hostName: target.hostName,
+        targets: [target],
+      });
+  }
+  return [...groups.values()];
+}
+
+/**
+ * Where the fleet's members are, for the chip beside the composer: up to two
+ * places by name, so a message's destination stays in view while it is typed.
+ */
+function describeHostScope(localCount: number, remoteHosts: readonly string[]): string {
+  if (remoteHosts.length === 0) return "";
+  const places = localCount > 0 ? ["this window", ...remoteHosts] : [...remoteHosts];
+  return places.length <= 2 ? places.join(", ") : pluralize(places.length, "host");
+}
 
 export function FleetCountChip({
   armedCount,
@@ -126,6 +164,18 @@ export function FleetCountChip({
       return out;
     })
   );
+  // A locked pane stays armed but gets nothing a broadcast sends (#14964), so
+  // its row says why it's being left out.
+  const inputLockedByPane = usePanelStore(
+    useShallow((state) => {
+      const out: Record<string, boolean> = {};
+      for (const id of armOrder) {
+        const p = state.panelsById[id];
+        out[id] = !!p && isPtyPanel(p) && p.isInputLocked === true;
+      }
+      return out;
+    })
+  );
   const colorMap = useWorktreeColorMap();
   const worktrees = useWorktreeStoreOptional((state) => state.worktrees, EMPTY_WORKTREES);
   const focusedId = usePanelStore((state) => state.focusedId);
@@ -188,9 +238,15 @@ export function FleetCountChip({
   );
 
   const scope = useFleetWorktreeScope();
+  const hostGroups = groupByHost(crossHostTargets);
+  const hostScope = describeHostScope(
+    armOrder.length,
+    hostGroups.map((group) => group.hostName)
+  );
   const worktreeScopeText = scope.worktreeCount > 1 ? ` · ${scope.worktreeCount} worktrees` : "";
+  const hostScopeText = hostScope ? ` · ${hostScope}` : "";
   const exitedAriaText = scope.exitedCount > 0 ? `, ${scope.exitedCount} exited` : "";
-  const label = `${armedCount} in fleet${worktreeScopeText}${exitedAriaText}`;
+  const label = `${armedCount} in fleet${worktreeScopeText}${hostScopeText}${exitedAriaText}`;
 
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
@@ -211,9 +267,16 @@ export function FleetCountChip({
             label={String(armedCount)}
             textClassName="font-semibold tabular-nums text-text-primary"
           />
-          <span className="text-text-secondary">
+          {/* One run of text with the place in it, so the separator keeps the
+              sentence's spacing rather than the chip's gap. */}
+          <span className="flex min-w-0 text-text-secondary">
             in fleet
             {scope.worktreeCount > 1 ? ` · ${scope.worktreeCount} worktrees` : ""}
+            {hostScope && (
+              <span className="max-w-40 truncate" data-testid="fleet-host-scope">
+                {`\u00a0· ${hostScope}`}
+              </span>
+            )}
           </span>
           <FleetWorktreeDots scope={scope} />
           {scope.exitedCount > 0 ? (
@@ -253,131 +316,181 @@ export function FleetCountChip({
                   />
                 </li>
               ) : (
-                armOrder.map((id) => {
-                  const title = titlesByPane[id] ?? id;
-                  const sendFailed = run?.targets.some(
-                    (t) => t.terminalId === id && t.submission === "failed"
-                  );
-                  const worktreeId = worktreeIdsByPane[id];
-                  const dotColor = worktreeId && colorMap ? colorMap[worktreeId] : undefined;
-                  const worktreeName = worktreeId ? worktrees.get(worktreeId)?.name : undefined;
-                  return (
-                    // Identity beyond the truncated title lives in the aria-label and
-                    // a tooltip on the title text — a span, so it opens for the
-                    // pointer only; on the button it would open on the focus
-                    // Radix hands the first row. A focus-driven unwrap was tried and rejected:
-                    // Radix focuses the first row on open, so the row expanded every
-                    // time, and blurring it mid-click moved "Add panes…" between
-                    // mousedown and mouseup.
-                    <li
-                      key={id}
-                      className={cn(
-                        "flex items-center gap-2 rounded-[var(--radius-md)]",
-                        POPOVER_ROW_HOVER_CLASS
-                      )}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => focusArmedPane(id)}
-                        aria-label={[
-                          `Focus ${title}`,
-                          worktreeName ? `in ${worktreeName}` : null,
-                          id === focusedId ? "(primary)" : null,
-                        ]
-                          .filter((part) => part !== null)
-                          .join(" ")}
-                        className={cn(
-                          "flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 text-left text-xs leading-[inherit] text-text-primary",
-                          PALETTE_ROW_FOCUS_CLASS
-                        )}
-                      >
-                        {dotColor && (
-                          <span
-                            aria-hidden="true"
-                            className="h-2 w-2 shrink-0 rounded-full"
-                            style={{ backgroundColor: dotColor }}
-                          />
-                        )}
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className="truncate">{title}</span>
-                          </TooltipTrigger>
-                          <TooltipContent side="right">
-                            {worktreeName ? `${title} · ${worktreeName}` : title}
-                          </TooltipContent>
-                        </Tooltip>
-                        {id === focusedId && (
-                          <Badge size="xs" data-testid={`fleet-row-primary-${id}`}>
-                            Primary
-                          </Badge>
-                        )}
-                      </button>
-                      {sendFailed && (
-                        <span
-                          className="inline-flex shrink-0 items-center gap-1 text-3xs font-medium text-text-primary"
-                          data-testid={`fleet-row-send-failed-${id}`}
-                        >
-                          <XCircle className="h-3 w-3 text-status-error" aria-hidden="true" />
-                          Send failed
-                        </span>
-                      )}
-                      {renderPaneStateBadge(id, agentStatesByPane[id], waitingReasonsByPane[id])}
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        onClick={() => disarmId(id)}
-                        aria-label={`Disarm ${title}`}
-                        // Ringed inside: the list scrolls and clips anything outside it.
-                        className="mr-0.5 shrink-0 [&_svg]:size-3.5 focus-visible:-outline-offset-2"
-                      >
-                        <X aria-hidden="true" />
-                      </Button>
+                <>
+                  {hostGroups.length > 0 && armOrder.length > 0 && (
+                    <li aria-hidden="true" className={GROUP_LABEL_CLASS}>
+                      This window
                     </li>
-                  );
-                })
+                  )}
+                  {armOrder.map((id) => {
+                    const title = titlesByPane[id] ?? id;
+                    const sendFailed = run?.targets.some(
+                      (t) => t.terminalId === id && t.submission === "failed"
+                    );
+                    const worktreeId = worktreeIdsByPane[id];
+                    const dotColor = worktreeId && colorMap ? colorMap[worktreeId] : undefined;
+                    const worktreeName = worktreeId ? worktrees.get(worktreeId)?.name : undefined;
+                    return (
+                      // Identity beyond the truncated title lives in the aria-label and
+                      // a tooltip on the title text — a span, so it opens for the
+                      // pointer only; on the button it would open on the focus
+                      // Radix hands the first row. A focus-driven unwrap was tried and rejected:
+                      // Radix focuses the first row on open, so the row expanded every
+                      // time, and blurring it mid-click moved "Add panes…" between
+                      // mousedown and mouseup.
+                      <li
+                        key={id}
+                        className={cn(
+                          "flex items-center gap-2 rounded-[var(--radius-md)]",
+                          POPOVER_ROW_HOVER_CLASS
+                        )}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => focusArmedPane(id)}
+                          aria-label={[
+                            `Focus ${title}`,
+                            worktreeName ? `in ${worktreeName}` : null,
+                            id === focusedId ? "(primary)" : null,
+                            inputLockedByPane[id] ? "(input locked, left out of broadcasts)" : null,
+                          ]
+                            .filter((part) => part !== null)
+                            .join(" ")}
+                          className={cn(
+                            "flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 text-left text-xs leading-[inherit] text-text-primary",
+                            PALETTE_ROW_FOCUS_CLASS
+                          )}
+                        >
+                          {dotColor && (
+                            <span
+                              aria-hidden="true"
+                              className="h-2 w-2 shrink-0 rounded-full"
+                              style={{ backgroundColor: dotColor }}
+                            />
+                          )}
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className="truncate">{title}</span>
+                            </TooltipTrigger>
+                            <TooltipContent side="right">
+                              {worktreeName ? `${title} · ${worktreeName}` : title}
+                            </TooltipContent>
+                          </Tooltip>
+                          {id === focusedId && (
+                            <Badge size="xs" data-testid={`fleet-row-primary-${id}`}>
+                              Primary
+                            </Badge>
+                          )}
+                        </button>
+                        {sendFailed && (
+                          <span
+                            className="inline-flex shrink-0 items-center gap-1 text-3xs font-medium text-text-primary"
+                            data-testid={`fleet-row-send-failed-${id}`}
+                          >
+                            <XCircle className="h-3 w-3 text-status-error" aria-hidden="true" />
+                            Send failed
+                          </span>
+                        )}
+                        {inputLockedByPane[id] && (
+                          <span
+                            className="inline-flex shrink-0 items-center gap-1 text-3xs font-medium text-text-secondary"
+                            data-testid={`fleet-row-input-locked-${id}`}
+                          >
+                            <Lock className="h-3 w-3" aria-hidden="true" />
+                            Input locked
+                          </span>
+                        )}
+                        {renderPaneStateBadge(id, agentStatesByPane[id], waitingReasonsByPane[id])}
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          onClick={() => disarmId(id)}
+                          aria-label={`Disarm ${title}`}
+                          // Ringed inside: the list scrolls and clips anything outside it.
+                          className="mr-0.5 shrink-0 [&_svg]:size-3.5 focus-visible:-outline-offset-2"
+                        >
+                          <X aria-hidden="true" />
+                        </Button>
+                      </li>
+                    );
+                  })}
+                </>
               )}
-              {crossHostTargets.map((target) => {
-                const label = `${target.title} · ${target.hostName}`;
-                const sendFailed = run?.targets.some(
-                  (t) => t.terminalId === target.key && t.submission === "failed"
-                );
-                return (
-                  // Another host's agent has no pane here to focus, so its row
-                  // only names it and lets it leave the fleet.
-                  <li
-                    key={target.key}
-                    className={cn(
-                      "flex items-center gap-2 rounded-[var(--radius-md)]",
-                      POPOVER_ROW_HOVER_CLASS
-                    )}
-                    data-testid={`fleet-row-host-${target.key}`}
-                  >
-                    <span
-                      className="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 text-xs leading-[inherit] text-text-primary"
-                      title={label}
-                    >
-                      <span className="truncate">{target.title}</span>
-                      <span className="shrink-0 text-text-secondary">on {target.hostName}</span>
-                    </span>
-                    {sendFailed && (
-                      <span className="inline-flex shrink-0 items-center gap-1 text-3xs font-medium text-text-primary">
-                        <XCircle className="h-3 w-3 text-status-error" aria-hidden="true" />
-                        Send failed
-                      </span>
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      onClick={() => disarmId(target.key)}
-                      aria-label={`Disarm ${target.title} on ${target.hostName}`}
-                      // Ringed inside: the list scrolls and clips anything outside it.
-                      className="mr-0.5 shrink-0 [&_svg]:size-3.5 focus-visible:-outline-offset-2"
-                    >
-                      <X aria-hidden="true" />
-                    </Button>
-                  </li>
-                );
-              })}
+              {hostGroups.map((group) => (
+                // Another host's agents, under that host: none has a pane here to
+                // focus, so a row names its agent and lets it leave the fleet.
+                <li key={group.hostId}>
+                  <div id={`${headingId}-${group.hostId}`} className={GROUP_LABEL_CLASS}>
+                    {group.hostName}
+                  </div>
+                  <ul aria-labelledby={`${headingId}-${group.hostId}`} className="flex flex-col">
+                    {group.targets.map((target) => {
+                      const twin = group.targets.some(
+                        (other) =>
+                          other.key !== target.key &&
+                          other.title === target.title &&
+                          (other.projectName ?? null) === (target.projectName ?? null)
+                      );
+                      const twinId = twin ? shortTerminalId(target.terminalId) : null;
+                      const detail = [target.projectName, twinId].filter(Boolean).join(" · ");
+                      const sendFailed = run?.targets.some(
+                        (t) => t.terminalId === target.key && t.submission === "failed"
+                      );
+                      return (
+                        <li
+                          key={target.key}
+                          className={cn(
+                            "flex items-center gap-2 rounded-[var(--radius-md)]",
+                            POPOVER_ROW_HOVER_CLASS
+                          )}
+                          data-testid={`fleet-row-host-${target.key}`}
+                        >
+                          <span className="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 text-xs leading-[inherit] text-text-primary">
+                            <RemoteAgentMark agentId={target.agentId} />
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="min-w-0 flex-1 truncate">{target.title}</span>
+                              </TooltipTrigger>
+                              <TooltipContent side="right">
+                                {[target.title, detail, target.hostName]
+                                  .filter(Boolean)
+                                  .join(" · ")}
+                              </TooltipContent>
+                            </Tooltip>
+                            {/* Never truncated: it is what tells two same-named agents apart. */}
+                            {twinId && (
+                              <span className="shrink-0 font-mono text-2xs text-text-secondary">
+                                {twinId}
+                              </span>
+                            )}
+                            {target.projectName && (
+                              <span className="min-w-0 max-w-[45%] shrink truncate text-2xs text-text-secondary">
+                                {target.projectName}
+                              </span>
+                            )}
+                          </span>
+                          {sendFailed && (
+                            <span className="inline-flex shrink-0 items-center gap-1 text-3xs font-medium text-text-primary">
+                              <XCircle className="h-3 w-3 text-status-error" aria-hidden="true" />
+                              Send failed
+                            </span>
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            onClick={() => disarmId(target.key)}
+                            aria-label={`Disarm ${target.title}${detail ? ` (${detail})` : ""} on ${target.hostName}`}
+                            // Ringed inside: the list scrolls and clips anything outside it.
+                            className="mr-0.5 shrink-0 [&_svg]:size-3.5 focus-visible:-outline-offset-2"
+                          >
+                            <X aria-hidden="true" />
+                          </Button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </li>
+              ))}
             </ul>
             <div className="mt-1 border-t border-divider pt-1">
               <Button

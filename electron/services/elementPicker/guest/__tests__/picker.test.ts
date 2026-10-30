@@ -373,20 +373,27 @@ describe("createPicker", () => {
     expect(ofType("selectionChanged").at(-1)?.observations[0]?.label).toBe("b#one");
   });
 
-  it("stops listening and drops the overlay when switched to browse", () => {
+  it("stops listening in browse, outlining only the selection it still holds", () => {
     const handle = start();
     document.getElementById("first")!.click();
     runFrames();
     expect(handle.getOverlayRoot()?.host.isConnected).toBe(true);
 
     handle.setMode("browse");
-    expect(handle.getOverlayRoot()).toBeNull();
+    const selections = ofType("selectionChanged").length;
     let pageClicks = 0;
     document.getElementById("second")!.addEventListener("click", () => {
       pageClicks += 1;
     });
     document.getElementById("second")!.click();
     expect(pageClicks).toBe(1);
+    expect(ofType("selectionChanged")).toHaveLength(selections);
+
+    runFrames();
+    expect(handle.getOverlayRoot()?.host.isConnected).toBe(true);
+    // With nothing held, browse leaves nothing behind.
+    handle.clearSelection();
+    expect(handle.getOverlayRoot()).toBeNull();
   });
 
   it("reports a framework the selection's markup names, once per document", () => {

@@ -17,6 +17,12 @@ export interface SwitchRequestOptions {
    * rollback put back on screen.
    */
   requesterWebContentsId?: number;
+  /**
+   * A switch to a host, whose screen may be up in the view being left: the
+   * incoming view takes it over at the swap and fades it out (#15300). Other
+   * switches have no screen to hand over and skip the round trip.
+   */
+  switchScreenHandoff?: boolean;
 }
 
 /**

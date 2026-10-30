@@ -61,6 +61,8 @@ const snapshot = {
   tierMismatch: null,
   isApprovingTier: false,
   assistantVersionTooOld: null,
+  activeGrants: [],
+  revokingGrantKeys: [],
 };
 
 // Pass-through dropdown mock (same shape as PanelHeader.test.tsx) — keeps the
@@ -94,6 +96,7 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     </button>
   ),
   DropdownMenuSeparator: () => <hr />,
+  DropdownMenuCheckboxItem: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
 }));
 
 // The session tabs' per-lane menu is incidental here, and the real primitive
@@ -259,6 +262,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
   ConfirmDialog: ({
     isOpen,
     title,
+    description,
     confirmLabel,
     cancelLabel = "Cancel",
     onConfirm,
@@ -266,6 +270,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
   }: {
     isOpen: boolean;
     title: React.ReactNode;
+    description?: React.ReactNode;
     confirmLabel: string;
     cancelLabel?: string;
     onConfirm: () => void;
@@ -274,6 +279,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
     isOpen ? (
       <div role="dialog" data-testid="confirm-dialog">
         <h2 data-testid="dialog-title">{title}</h2>
+        <p data-testid="dialog-description">{description}</p>
         <button data-testid="dialog-cancel" onClick={onClose}>
           {cancelLabel}
         </button>
@@ -317,6 +323,8 @@ beforeEach(() => {
     value: {
       electron: {
         help: {
+          getGlobalAssistantState: () => new Promise(() => {}),
+          onGlobalAssistantChanged: () => () => {},
           getPinnedActionContext: vi.fn().mockResolvedValue({}),
         },
       },
@@ -402,6 +410,32 @@ describe("HelpPanel agent switch (#8353, #13345)", () => {
     });
     expect(controllerSpies.selectAgent).toHaveBeenCalledWith("claude-code");
     expect(helpPanelState.agentSwitchRequest).toBeNull();
+  });
+
+  // The conversation being left is the running agent's: only its store decides
+  // whether "Resume a past session…" can bring it back (#14979).
+  // `claude-code` stands in for an agent the picker doesn't list: this suite's
+  // registry knows it, the picker's union doesn't.
+  it.each([
+    { from: "claude", to: "claude-code", listed: true },
+    { from: "codex", to: "claude-code", listed: true },
+    { from: "claude-code", to: "claude", listed: false },
+    { from: "claude-code", to: "codex", listed: false },
+  ])("says what holds for the conversation $from leaves behind", async ({ from, to, listed }) => {
+    bindTerminal(from, "working");
+    helpPanelState.preferredAgentId = from;
+    const { rerender, getByTestId } = render(<HelpPanel width={380} />);
+
+    await act(async () => {
+      pickInSettings(to);
+      rerender(<HelpPanel width={380} />);
+    });
+
+    expect(controllerSpies.selectAgent).not.toHaveBeenCalled();
+    const description = getByTestId("dialog-description").textContent ?? "";
+    expect(description).toMatch(/^The current agent stops /);
+    expect(description).not.toMatch(/discard|delet/i);
+    expect(/stays in past sessions/.test(description)).toBe(listed);
   });
 
   it("names the picked agent in the confirm even after the host's default moves on", async () => {
@@ -582,7 +616,11 @@ describe("HelpPanel — agent self-exit debounce (/exit, #10989)", () => {
     Object.defineProperty(globalThis, "window", {
       value: {
         electron: {
-          help: { getPinnedActionContext: vi.fn().mockResolvedValue({}) },
+          help: {
+            getPinnedActionContext: vi.fn().mockResolvedValue({}),
+            getGlobalAssistantState: () => new Promise(() => {}),
+            onGlobalAssistantChanged: () => () => {},
+          },
           app: { onViewRevealed: () => () => {} },
         },
       },

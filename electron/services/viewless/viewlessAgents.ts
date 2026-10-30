@@ -30,7 +30,10 @@ import {
   unknownAgentIdMessage,
 } from "../../../shared/utils/agentLaunchValidation.js";
 import { buildAvailableAgentListing, listedAgentIds } from "../../../shared/utils/agentListing.js";
-import { getMergedPresetIdentities } from "../../../shared/utils/agentPresets.js";
+import {
+  getMergedPresetIdentities,
+  type PresetInventoryState,
+} from "../../../shared/utils/agentPresets.js";
 import {
   hasSystemPromptOverride,
   resolveSystemPromptArgs,
@@ -95,7 +98,7 @@ const PANEL_LAUNCH_IDS: ReadonlySet<string> = new Set(["browser", "dev-preview"]
 
 /** A launch that started nothing, in the shape the action's output schema requires. */
 function declined(
-  spawnStatus: "missing-cli" | "panel-limit" | "spawn-failed",
+  spawnStatus: "missing-cli" | "panel-limit" | "spawn-failed" | "presets-loading",
   panelLimit: ReturnType<typeof buildPanelLimitSnapshot> | null = null,
   identity?: ReturnType<typeof buildLaunchIdentity>
 ): ActionDispatchResult {
@@ -128,7 +131,8 @@ function ownBucket(
  * The preset sources a launch with no view resolves a preset id against, read
  * once for the launch and the listing alike, so `agent.listPresets` names
  * exactly the presets `agent.launch` accepts (#14139). A source that fails to
- * read is launched without, and makes the read incomplete.
+ * read makes the read incomplete, and `presetInventory` says which, so a
+ * launch never takes an unread preset for a deleted one (#15025).
  */
 async function readPresetSources(
   agentId: string,
@@ -138,24 +142,37 @@ async function readPresetSources(
   settings: AgentSettings | null;
   ccrPresets: AgentPreset[] | undefined;
   projectPresets: AgentPreset[] | undefined;
+  presetInventory: PresetInventoryState;
   complete: boolean;
 }> {
-  let complete = true;
-  const missing = <T>(fallback: T) => {
-    complete = false;
-    return fallback;
-  };
+  const presetInventory: PresetInventoryState = { ccr: true, project: true };
+  let settingsRead = true;
   const [settings, ccrPresets, projectPresets] = await Promise.all([
-    deps.agents.getSettings().catch(() => missing(null)),
-    deps.agents.getCcrPresets(agentId).catch(() => missing(undefined)),
+    deps.agents.getSettings().catch(() => {
+      settingsRead = false;
+      return null;
+    }),
+    deps.agents.getCcrPresets(agentId).catch(() => {
+      presetInventory.ccr = false;
+      return undefined;
+    }),
     projectPath === undefined
       ? Promise.resolve(undefined)
       : deps.agents
           .getProjectPresets(projectPath)
           .then((byAgent) => ownBucket(byAgent, agentId))
-          .catch(() => missing(undefined)),
+          .catch(() => {
+            presetInventory.project = false;
+            return undefined;
+          }),
   ]);
-  return { settings, ccrPresets, projectPresets, complete };
+  return {
+    settings,
+    ccrPresets,
+    projectPresets,
+    presetInventory,
+    complete: settingsRead && presetInventory.ccr && presetInventory.project,
+  };
 }
 
 /**
@@ -307,7 +324,7 @@ export async function runAgentLaunch(
 
   const handbackCode = args.handback === true ? mintHandbackCode() : undefined;
   const agentConfig = getEffectiveAgentConfig(agentId);
-  const { settings, ccrPresets, projectPresets } = await readPresetSources(
+  const { settings, ccrPresets, projectPresets, presetInventory } = await readPresetSources(
     agentId,
     project.path,
     deps
@@ -320,6 +337,7 @@ export async function runAgentLaunch(
     settings,
     ccrPresets,
     projectPresets,
+    presetInventory,
     options: {
       presetId: args.presetId,
       env: args.env,
@@ -349,6 +367,9 @@ export async function runAgentLaunch(
     // back from here, and clearing it is left to the next launch from a view,
     // whose settings store owns that write and tells every window about it.
   });
+  // The disk reads already finished, so an unread source here failed: nothing
+  // will arrive to wait for.
+  if (plan.unloadedPresetId !== undefined) return declined("presets-loading", null, identity);
   if (isAgent && !plan.command) return declined("spawn-failed", null, identity);
   // A CLI that cannot launch would only start and fail. A view opens its setup
   // diagnostic panel instead; with no view, the result says why nothing ran.
@@ -386,6 +407,12 @@ export async function runAgentLaunch(
         }
       : undefined;
 
+  // Only an agent is handed the prompt as its launch argument, recorded as the
+  // caller wrote it (#14592), and a run that has it never offers a send as its
+  // first prompt (#15521).
+  const firstPrompt =
+    launchAgentId !== undefined ? buildFirstPrompt(args.prompt, "launch", Date.now()) : undefined;
+
   try {
     await deps.invoke<string>(project.id, CHANNELS.TERMINAL_SPAWN, [
       {
@@ -412,6 +439,7 @@ export async function runAgentLaunch(
             }
           : {}),
         ...(handbackCode !== undefined ? { handbackCode } : {}),
+        ...(firstPrompt !== undefined ? { hasFirstPrompt: true } : {}),
         ...(actionContext !== undefined ? { actionContext } : {}),
       },
     ]);
@@ -423,10 +451,7 @@ export async function runAgentLaunch(
   // What a view's persistence would write for this panel the moment it was
   // added: the shared base fields, then the PTY fragment through the same
   // serializer. Never fatal — the agent is running either way, and hydration
-  // still finds it through the pty-host. Only an agent is handed the prompt as
-  // its launch argument, recorded as the caller wrote it (#14592).
-  const firstPrompt =
-    launchAgentId !== undefined ? buildFirstPrompt(args.prompt, "launch", Date.now()) : undefined;
+  // still finds it through the pty-host.
   const panel: PtySnapshotSource = {
     cwd,
     launchAgentId,
@@ -497,7 +522,7 @@ export async function spawnHostAssistant(
   deps: ViewlessDeps
 ): Promise<boolean> {
   const { agentId } = spec;
-  const { settings, ccrPresets, projectPresets } = await readPresetSources(
+  const { settings, ccrPresets, projectPresets, presetInventory } = await readPresetSources(
     agentId,
     project.path,
     deps
@@ -510,6 +535,7 @@ export async function spawnHostAssistant(
     settings,
     ccrPresets,
     projectPresets,
+    presetInventory,
     options: {
       env: spec.env,
       prompt: spec.prompt,

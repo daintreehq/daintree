@@ -8,7 +8,7 @@ export { BranchPickerPanel } from "./BranchPickerPanel";
 export { NewBranchInput, BranchResolvedHint } from "./NewBranchInput";
 export { WorktreePathPicker, PathResolvedHint } from "./WorktreePathPicker";
 export { EnvironmentRadioGroup, EnvironmentHint } from "./EnvironmentRadioGroup";
-export { RecipePickerPopover } from "./RecipePickerPopover";
+export { RecipePickerPopover, type RecipeOption } from "./RecipePickerPopover";
 export { AgentPickerPopover } from "./AgentPickerPopover";
 export {
   FormGrid,

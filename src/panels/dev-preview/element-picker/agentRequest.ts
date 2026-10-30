@@ -6,10 +6,10 @@ import {
   type AgentRequestDelivery,
   type AgentRequestDestination,
 } from "@/services/agentRequests";
-import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
 import { usePanelStore } from "@/store/panelStore";
-import { ELEMENT_PICKER_TOOL_ID } from "./toolId.js";
 import {
+  composerPreviewIds,
+  forgetComposerMemories,
   putComposerDelivery,
   readComposerMemory,
   removeComposerDelivery,
@@ -42,9 +42,11 @@ export function removeAgentRequest(memoryKey: string, id: string): void {
 const launchedSessions = new Map<string, { terminalId: string; at: number }>();
 
 /**
- * End every request still waiting for this preview's agent: the picker was
- * switched off, the preview removed or moved, or the plugin disabled. A session
- * that becomes ready afterwards must not receive a request nobody is watching.
+ * End every request still waiting for this preview's agent: the preview was
+ * trashed, removed or moved, or the source it cites switched. A session that
+ * becomes ready afterwards must not receive a request nobody is watching.
+ * Switching the picker off is not one of these: it puts the picker away, and
+ * what was sent is still on its way when it is opened again.
  * Every worktree the preview has been in, hence the prefix — the owner key is
  * the composer's, which carries the worktree after the panel id.
  */
@@ -55,12 +57,47 @@ export function cancelAgentRequests(previewPanelId: string): void {
   }
 }
 
-/** The request belongs to this preview, in this worktree, with the picker on. */
+/** The request belongs to this preview, in this worktree, whether or not the picker is open. */
 function stillOwned(previewPanelId: string, worktreeId: string | null): boolean {
   const panel = usePanelStore.getState().panelsById[previewPanelId];
   if (!panel || panel.location === "trash") return false;
-  if ((panel.worktreeId ?? null) !== worktreeId) return false;
-  return useDevPreviewToolStore.getState().activeByPanel[previewPanelId] === ELEMENT_PICKER_TOOL_ID;
+  return (panel.worktreeId ?? null) === worktreeId;
+}
+
+let watchingPreviews: (() => void) | null = null;
+const seenWorktrees = new Map<string, string | null>();
+
+/**
+ * The ends a preview's picker state has, seen with the picker open or not: a
+ * trashed or removed preview takes its drafts and requests with it, and one
+ * moved to another worktree ends the requests made in the old one. A request's
+ * own ownership check would catch a move at its next step, but not one that
+ * went and came back in between. Idempotent; started by whatever first gives a
+ * preview picker state, never at module evaluation.
+ */
+export function watchPickerPreviews(): void {
+  if (watchingPreviews) return;
+  watchingPreviews = usePanelStore.subscribe(endGonePreviews);
+  endGonePreviews();
+}
+
+function endGonePreviews(): void {
+  const panels = usePanelStore.getState().panelsById;
+  for (const panelId of new Set([...composerPreviewIds(), ...seenWorktrees.keys()])) {
+    const panel = panels[panelId];
+    if (panel === undefined || panel.location === "trash") {
+      seenWorktrees.delete(panelId);
+      // Cancelled first: it writes each request's last state into the memory
+      // that is forgotten next.
+      cancelAgentRequests(panelId);
+      forgetComposerMemories(panelId);
+      continue;
+    }
+    const worktreeId = panel.worktreeId ?? null;
+    const seen = seenWorktrees.get(panelId);
+    seenWorktrees.set(panelId, worktreeId);
+    if (seen !== undefined && seen !== worktreeId) cancelAgentRequests(panelId);
+  }
 }
 
 function sameDelivery(a: ComposerDelivery | undefined, b: AgentRequestDelivery): boolean {
@@ -120,6 +157,10 @@ export function deliverAgentRequest({
   subjectKey?: string;
 }): Promise<void> {
   const previewPanelId = memoryKey.slice(0, memoryKey.indexOf("\n"));
+  watchPickerPreviews();
+  // Where it was made is where the preview was, so the first move after it
+  // reads as a move even if the watcher has never looked at this preview.
+  if (!seenWorktrees.has(previewPanelId)) seenWorktrees.set(previewPanelId, worktreeId);
   const launchKey = destination.kind === "launch" ? `${memoryKey}\n${destination.agentId}` : null;
   const madeAt = Date.now();
   let accepted = false;

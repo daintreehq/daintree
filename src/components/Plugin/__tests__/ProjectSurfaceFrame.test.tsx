@@ -40,7 +40,11 @@ vi.mock("@/components/Plugin/PluginViewContent", () => ({
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ProjectSurfaceFrame } from "../ProjectSurfaceFrame";
 import { SurfacePaletteAction } from "../SurfacePaletteAction";
-import { ProjectSurfaceView, useProjectSurface } from "../ProjectSurfaceView";
+import {
+  ProjectSurfaceView,
+  useProjectSurface,
+  useSurfaceSwitchedToStock,
+} from "../ProjectSurfaceView";
 import { _resetPluginHostedViewRuntimesForTest } from "../PluginHostedView";
 import {
   _resetPluginProjectSurfacesStoreForTest,
@@ -698,6 +702,30 @@ describe("useProjectSurface", () => {
     setClaim();
 
     const { result } = renderHook(() => useProjectSurface("emptyCanvas"));
+
+    expect(result.current).toBeNull();
+  });
+});
+
+describe("useSurfaceSwitchedToStock (#15236)", () => {
+  it("hands back the claim once stock is chosen for it, and only then", () => {
+    registerSurfaceKind();
+    setClaim();
+    const { result, rerender } = renderHook(() => useSurfaceSwitchedToStock("emptyCanvas"));
+    expect(result.current).toBeNull();
+
+    act(() => usePluginProjectSurfacesStore.setState({ choices: answer("stock") }));
+    rerender();
+    expect(result.current?.config.id).toBe(KIND_ID);
+
+    act(() => usePluginProjectSurfacesStore.setState({ choices: answer("surface") }));
+    rerender();
+    expect(result.current).toBeNull();
+  });
+
+  it("has nothing to hand back once the claim can't render", () => {
+    setClaim(answer("stock"));
+    const { result } = renderHook(() => useSurfaceSwitchedToStock("emptyCanvas"));
 
     expect(result.current).toBeNull();
   });

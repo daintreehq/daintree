@@ -12,7 +12,7 @@ const {
   mockMcpSetSessionTier,
   mockMcpIssueGrant,
   mockMcpResetDenialCounts,
-  mockMcpRevokeSessionGrants,
+  mockMcpRevokeGrant,
   mockSystemSleepOnSuspend,
   mockSystemSleepOnWake,
   systemSleepListeners,
@@ -42,7 +42,7 @@ const {
     expiresAt: Date.now() + 900_000,
   }),
   mockMcpResetDenialCounts: vi.fn().mockResolvedValue(undefined),
-  mockMcpRevokeSessionGrants: vi.fn().mockResolvedValue({ sessionId: "", revokedCount: 0 }),
+  mockMcpRevokeGrant: vi.fn().mockResolvedValue({ sessionId: "", toolId: "", revoked: true }),
   mockSystemSleepOnSuspend: vi.fn(),
   mockSystemSleepOnWake: vi.fn(),
   systemSleepListeners: {
@@ -282,8 +282,8 @@ beforeEach(() => {
     ttlMs: 900_000,
     expiresAt: Date.now() + 900_000,
   });
-  mockMcpRevokeSessionGrants.mockReset();
-  mockMcpRevokeSessionGrants.mockResolvedValue({ sessionId: "", revokedCount: 1 });
+  mockMcpRevokeGrant.mockReset();
+  mockMcpRevokeGrant.mockResolvedValue({ sessionId: "", toolId: "", revoked: true });
   mockSystemSleepOnSuspend.mockReset();
   mockSystemSleepOnSuspend.mockImplementation((cb: () => void) => {
     systemSleepListeners.suspend.push(cb);
@@ -337,7 +337,7 @@ beforeEach(() => {
           setSessionTier: mockMcpSetSessionTier,
           issueGrant: mockMcpIssueGrant,
           resetDenialCounts: mockMcpResetDenialCounts,
-          revokeSessionGrants: mockMcpRevokeSessionGrants,
+          revokeGrant: mockMcpRevokeGrant,
         },
         terminal: { gracefulKill: vi.fn().mockResolvedValue(null) },
       },
@@ -698,6 +698,122 @@ describe("HelpSessionController — endSession (Stop assistant, #10989)", () => 
     });
 
     expect(ctrl["_hasAutoLaunched"]).toBe(false);
+    ctrl.stop();
+  });
+});
+
+describe("HelpSessionController — newSession on a paused lane (#14981)", () => {
+  // A paused lane has no terminal: main holds its captured conversation, and the
+  // panel names the agent that conversation belongs to.
+  function syncPausedLane(ctrl: HelpSessionController) {
+    syncWorkspaceInputs(ctrl, { id: "proj-1", path: "/repo" }, { terminalId: null });
+  }
+
+  async function flushLaunch() {
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+  }
+
+  it("discards the paused conversation and reserves a fresh terminal for the captured agent", async () => {
+    const ctrl = new HelpSessionController();
+    syncPausedLane(ctrl);
+
+    ctrl.newSession("claude");
+
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
+    expect(window.electron.help.discardConversation).toHaveBeenCalledWith("proj-1", 0);
+    expect(helpPanelState.setTerminal).toHaveBeenCalledWith(
+      0,
+      expect.stringMatching(/^terminal-/),
+      "claude",
+      null
+    );
+    await flushLaunch();
+    // A fresh start, not a resume: the captured entry is never claimed.
+    expect(window.electron.help.takePendingHibernation).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("does nothing on a lane with no terminal and no captured agent", () => {
+    const ctrl = new HelpSessionController();
+    syncPausedLane(ctrl);
+
+    ctrl.newSession();
+
+    expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
+    expect(window.electron.help.discardConversation).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("restarts a running lane on its own agent, whatever agent is named", () => {
+    const ctrl = new HelpSessionController();
+    helpPanelState.terminalId = "term-1";
+    helpPanelState.agentId = "claude";
+    panelStoreState.panelsById = { "term-1": { id: "term-1", kind: "terminal", cwd: "/help" } };
+    syncWorkspaceInputs(ctrl, { id: "proj-1", path: "/repo" });
+
+    ctrl.newSession("codex");
+
+    expect(helpPanelState.setTerminal).toHaveBeenCalledWith(
+      0,
+      expect.stringMatching(/^terminal-/),
+      "claude",
+      null
+    );
+    ctrl.stop();
+  });
+
+  it("checks the agent's version, and drops its reservation when the gate blocks", async () => {
+    vi.mocked(window.electron.system.getAgentVersion).mockResolvedValue({
+      installedVersion: "0.5.0",
+      latestVersion: null,
+    } as never);
+    const ctrl = new HelpSessionController();
+    syncPausedLane(ctrl);
+
+    ctrl.newSession("claude");
+    const reservedId = vi.mocked(helpPanelState.setTerminal).mock.calls[0]?.[1];
+    helpPanelState.terminalId = reservedId ?? null;
+    await flushLaunch();
+
+    expect(window.electron.system.getAgentVersion).toHaveBeenCalledWith("claude", false);
+    expect(ctrl.getSnapshot().assistantVersionTooOld).toMatchObject({ agentId: "claude" });
+    expect(helpPanelState.clearTerminal).toHaveBeenCalledWith(0);
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("still checks the version over a reservation a cancelled launch left behind", async () => {
+    // The probe never answers, so the user cancels while the reservation still
+    // holds the lane; restarting again must not take that for a vetted terminal.
+    vi.mocked(window.electron.system.getAgentVersion).mockReturnValue(
+      new Promise(() => {}) as never
+    );
+    const ctrl = new HelpSessionController();
+    syncPausedLane(ctrl);
+    ctrl.newSession("claude");
+    helpPanelState.terminalId = vi.mocked(helpPanelState.setTerminal).mock.calls[0]?.[1] ?? null;
+    helpPanelState.agentId = "claude";
+    await flushLaunch();
+    ctrl.cancelLaunch();
+
+    ctrl.newSession();
+    await flushLaunch();
+
+    expect(window.electron.system.getAgentVersion).toHaveBeenCalledTimes(2);
+    ctrl.stop();
+  });
+
+  it("skips the version check when restarting a running lane", async () => {
+    const ctrl = new HelpSessionController();
+    helpPanelState.terminalId = "term-1";
+    helpPanelState.agentId = "claude";
+    panelStoreState.panelsById = { "term-1": { id: "term-1", kind: "terminal", cwd: "/help" } };
+    syncWorkspaceInputs(ctrl, { id: "proj-1", path: "/repo" });
+
+    ctrl.newSession();
+    await flushLaunch();
+
+    expect(window.electron.system.getAgentVersion).not.toHaveBeenCalled();
     ctrl.stop();
   });
 });

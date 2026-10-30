@@ -1,4 +1,5 @@
-import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
+import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { isTerminalFleetBroadcastTarget } from "@/store/fleetEligibility";
 import { usePanelStore } from "@/store/panelStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import type { RecipeContext } from "@/utils/recipeVariables";
@@ -103,7 +104,7 @@ export function resolveFleetBroadcastTargetIds(): string[] {
   for (const id of armOrder) {
     if (!armedIds.has(id)) continue;
     const panel = panelsById[id];
-    if (isFleetArmEligible(panel)) out.push(id);
+    if (isTerminalFleetBroadcastTarget(panel)) out.push(id);
   }
   for (const target of crossHost) out.push(target.key);
   return out;

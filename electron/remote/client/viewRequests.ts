@@ -199,14 +199,17 @@ async function dispatchAction(
     skipPreference,
     undefined,
     "external",
+    // The host times this call, so this view never holds it open past the
+    // host's own deadline, which is the one its agent is told about (#14989).
     skipPreference
-      ? { authorization: "skip-preference" }
+      ? { authorization: "skip-preference", fixedDeadline: true }
       : request.approvalOnly
         ? {
             approvalOnly: true,
             ...(request.approvalReason ? { approvalReason: request.approvalReason } : {}),
+            fixedDeadline: true,
           }
-        : undefined,
+        : { fixedDeadline: true },
     describeHost(
       hostId,
       request.relayed === true &&
@@ -245,6 +248,8 @@ export async function askHostApprovalInWindow(
       {
         approvalOnly: true,
         hostPreview: { lines: ask.lines, ...(ask.subject ? { subject: ask.subject } : {}) },
+        // The host's own approval window governs a call it runs itself.
+        fixedDeadline: true,
       },
       describeHost(ask.hostId, true)
     );

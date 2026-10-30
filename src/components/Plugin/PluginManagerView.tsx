@@ -9,7 +9,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { Callout, CALLOUT_ICON, CALLOUT_ICON_TONE, calloutVariants } from "@/components/ui/Callout";
-import { useState, useEffect, useRef, useMemo, useDeferredValue } from "react";
+import { useState, useEffect, useRef, useMemo, useDeferredValue, useId } from "react";
 import { createPortal } from "react-dom";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { Button } from "@/components/ui/button";
@@ -52,6 +52,7 @@ import { isMac, isWindows } from "@/lib/platform";
 import { WINDOWS_CAPTION_WIDTH_PX } from "@shared/config/windowChrome";
 import { usePluginManager } from "./usePluginManager";
 import { PluginDetailPane, SOURCE_BADGE_LABELS, pluginLabel } from "./PluginDetailPane";
+import { UnsavedPanelsCallout } from "./UnsavedPanelsCallout";
 import { PluginInstallProgressBanner } from "./PluginInstallProgressBanner";
 import { PluginCatalog } from "./PluginCatalog";
 import { PluginIconTile } from "./pluginIcons";
@@ -330,11 +331,25 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     intent: deepLinkIntent ?? null,
     onConsumed: onDeepLinkConsumed,
   });
+  const deleteDataHintId = useId();
   // Install-from-URL and uninstall both keep their dialog open on a correctable
   // failure, and both wrote the reason to the one error slot in the master
   // column — behind the dialog's own scrim. Each now renders the message
   // itself, and this stops the sidebar showing a second, hidden copy.
   const errorOwnedByDialog = pm.showUrlDialog || pm.pendingUninstall !== null;
+  // An "Update all" run with more than one update walks them one confirm at a
+  // time, so dismissing one skips it rather than ending the run. Those confirms
+  // say so, say where the run is, and offer a way out of the rest (#15042). A
+  // single check, or a run that found one update, keeps its plain Cancel.
+  const updateBatch = pm.updateBatch && pm.updateBatch.total > 1 ? pm.updateBatch : null;
+  const batchControls = updateBatch && {
+    cancelLabel: "Skip update",
+    hint: `Update ${updateBatch.position} of ${updateBatch.total}`,
+    hintPlacement: "above" as const,
+    leadingAction: { label: "Stop updates", onClick: pm.stopUpdateBatch },
+    initialFocus: "cancel" as const,
+  };
+  const httpBatchControls = pm.pendingHttpFromReinstall ? batchControls : null;
 
   // Selection is pure UI state owned by the view — `usePluginManager` stays
   // data/IPC only. The detail pane derives from the selected id.
@@ -729,6 +744,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               size="sm"
               onClick={() => void pm.checkAllForUpdates()}
               loading={pm.isCheckingAllUpdates}
+              disabled={pm.updateBatch !== null}
               className="app-no-drag"
             >
               <RefreshCw />
@@ -1126,7 +1142,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         isOpen={pm.pendingUninstall !== null}
         onClose={pm.closeUninstall}
         title={pm.pendingUninstall ? `Uninstall '${pluginLabel(pm.pendingUninstall)}'?` : ""}
-        description="Removes the plugin and deletes its files, unloading its panels, commands, and integrations. Per-project settings under .daintree/ are always kept; this plugin's saved settings are kept too unless you check the box below."
+        description="Removes the plugin and deletes its installed files, unloading its panels, commands, and integrations. Its settings, connected accounts, and stored data are kept unless you check the box below."
         confirmLabel="Uninstall plugin"
         cancelLabel="Keep plugin"
         onConfirm={() => void pm.confirmUninstall()}
@@ -1134,15 +1150,22 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         variant="destructive"
         zIndex="nested"
       >
+        <UnsavedPanelsCallout verb="Uninstalling" panels={pm.uninstallPanels} className="mb-3" />
         <label className="flex cursor-pointer items-start gap-2 text-sm text-text-primary select-none">
           <Checkbox
             checked={pm.deleteSettings}
             onCheckedChange={(checked) => pm.setDeleteSettings(checked === true)}
             disabled={pm.isUninstalling}
+            aria-describedby={deleteDataHintId}
             className="mt-0.5"
           />
-          Also delete this plugin's saved settings
+          Also delete its settings, connected accounts, and stored data
         </label>
+        <p id={deleteDataHintId} className="mt-1 pl-6 text-xs text-text-secondary">
+          Covers every project on this machine, secrets included, and signs the plugin out.
+          Databases and files the plugin created are kept, as are settings under a repository's
+          .daintree/.
+        </p>
         {/* A failed uninstall leaves this dialog open and sets the error, which
             the master column no longer renders while the dialog owns it — so
             without this the failure would be invisible in both places. */}
@@ -1162,9 +1185,15 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         cancelLabel="Cancel"
         onConfirm={() => void pm.confirmReinstall()}
         isConfirmLoading={pm.isReinstalling}
-        variant="default"
+        variant={pm.updatePanels.length > 0 ? "destructive" : "default"}
         zIndex="nested"
+        // Skipping keeps this one dialog open on the next plugin, which must
+        // not inherit the last one's focus or scroll.
+        focusResetKey={pm.pendingUpdate?.plugin.manifest.name}
+        bodyResetKey={pm.pendingUpdate?.plugin.manifest.name}
+        {...batchControls}
       >
+        <UnsavedPanelsCallout verb="Updating" panels={pm.updatePanels} className="mt-3" />
         {pm.pendingUpdate && (
           <div className="mt-3 space-y-1.5 text-xs text-text-secondary">
             <div>
@@ -1200,6 +1229,33 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
       </ConfirmDialog>
 
       <ConfirmDialog
+        isOpen={pm.pendingDiscard !== null}
+        onClose={pm.closeDiscard}
+        title={
+          pm.pendingDiscard
+            ? `${pm.pendingDiscard.action === "disable" ? "Disable" : "Retry"} '${pluginLabel(pm.pendingDiscard.plugin)}'?`
+            : ""
+        }
+        description={
+          pm.pendingDiscard?.action === "retry"
+            ? "Retrying loads the plugin again, unloading its open panels first."
+            : "Disabling the plugin unloads its open panels."
+        }
+        confirmLabel="Discard changes"
+        cancelLabel="Cancel"
+        onConfirm={() => void pm.confirmDiscard()}
+        variant="destructive"
+        zIndex="nested"
+      >
+        {pm.pendingDiscard && (
+          <UnsavedPanelsCallout
+            verb={pm.pendingDiscard.action === "disable" ? "Disabling" : "Retrying"}
+            panels={pm.pendingDiscard.panels}
+          />
+        )}
+      </ConfirmDialog>
+
+      <ConfirmDialog
         isOpen={pm.pendingHttpUrl !== null}
         onClose={pm.cancelHttpInstall}
         title="Install over HTTP?"
@@ -1210,6 +1266,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         isConfirmLoading={pm.isInstalling}
         variant="destructive"
         zIndex="nested"
+        {...httpBatchControls}
       />
 
       <AppDialog

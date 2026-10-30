@@ -215,15 +215,36 @@ export function registerProjectSettingsHandlers(deps: HandlerDependencies = {}):
     // changed or can't be copied leaves nothing behind.
     let writeTemplate: (() => Promise<void>) | null = null;
     if (template !== undefined) {
-      const { loadProjectTemplateInventory, writeProjectTemplate } =
+      const { loadProjectTemplateInventory, plainProjectTemplateError, writeProjectTemplate } =
         await import("../../../services/plugin/projectTemplateFiles.js");
-      const inventory = await loadProjectTemplateInventory(template.pluginId, template.templateId);
+      const ids = { pluginId: template.pluginId, templateId: template.templateId };
+      const inventory = await loadProjectTemplateInventory(ids.pluginId, ids.templateId).catch(
+        (err: unknown) => {
+          throw plainProjectTemplateError(err, "Couldn't read this template's files.", ids);
+        }
+      );
       if (inventory.digest !== template.digest) {
         throw new Error(
           "The template's files changed after they were listed. Check the list again, then create the folder."
         );
       }
-      writeTemplate = () => writeProjectTemplate(fullPath, inventory);
+      // The bytes are already read, so a failure here is the new folder's: a
+      // full disk or a locked folder says so, as it does for the folder itself.
+      writeTemplate = () =>
+        writeProjectTemplate(fullPath, inventory).catch((err: unknown) => {
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code === "ENOSPC") {
+            throw new Error("Not enough disk space to copy the template's files");
+          }
+          if (code === "EACCES" || code === "EPERM" || code === "EROFS") {
+            throw new Error("Permission denied: cannot copy the template's files into this folder");
+          }
+          throw plainProjectTemplateError(
+            err,
+            "Couldn't copy the template's files into the new folder.",
+            ids
+          );
+        });
     }
 
     try {

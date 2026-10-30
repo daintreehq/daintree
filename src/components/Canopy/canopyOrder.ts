@@ -28,6 +28,8 @@ export interface CanopyOrder {
    * The runs in the Needs you band: those that needed the user when it was
    * ranked, and asks urgent since. A run joins or leaves only when the order
    * may move, so a reading or a reply never shifts the rows under the user.
+   * The selection pins nothing: the holds keep it still while the user works
+   * in the list, and a pin would outlast them.
    */
   band: readonly string[];
 }
@@ -41,8 +43,6 @@ export interface CanopyRankInput {
   urgent: readonly string[];
   /** The runs that need the user now: the band a re-rank gives. */
   needsYou: readonly string[];
-  /** The run the panel has selected: never taken out of the band under the user. */
-  selected: string | null;
   /** The runs the user archived: out of the band at once, as they are out of the list. */
   archived: readonly string[];
   refreshedAt: number | null;
@@ -83,7 +83,7 @@ export type CanopyRankStep =
  * arrived, and an ask newly urgent moves up to its place alone, leaving every
  * other row where it is. The Needs you band moves with the list: a run joins
  * or leaves it only at a rank, save an ask newly urgent, which joins it as it
- * is placed — and the selected run stays in it while it is selected.
+ * is placed.
  */
 export function nextCanopyOrder(order: CanopyOrder | null, input: CanopyRankInput): CanopyRankStep {
   // A rank records what is urgent now, so an ask newly urgent is placed by it
@@ -100,7 +100,7 @@ export function nextCanopyOrder(order: CanopyOrder | null, input: CanopyRankInpu
           ),
     rankedFor: input.refreshedAt,
     urgent: input.urgent,
-    band: rankedBand(order, input),
+    band: rankedBand(input),
   };
   // A scan read something new, or who needs the user changed without one: a
   // reply, or what Daintree itself saw of a run.
@@ -173,35 +173,18 @@ export function nextCanopyOrder(order: CanopyOrder | null, input: CanopyRankInpu
  */
 export function canopyReorderWaiting(
   order: CanopyOrder | null,
-  input: Pick<
-    CanopyRankInput,
-    "fresh" | "priorities" | "refreshedAt" | "needsYou" | "selected" | "archived"
-  >
+  input: Pick<CanopyRankInput, "fresh" | "priorities" | "refreshedAt" | "needsYou">
 ): boolean {
   if (order === null) return false;
-  if (!sameMembers(rankedBand(order, input), order.band)) return true;
+  if (!sameMembers(rankedBand(input), order.band)) return true;
   if (order.rankedFor === input.refreshedAt) return false;
   return !sameIds(rerank(order.ids, input.fresh, input.priorities), order.ids);
 }
 
-/**
- * The band a rank gives: every run that needs the user now, and the selected
- * run if it was in the band — a reply reads as replied where it is, and the
- * run leaves at a rank once the user has moved off it.
- */
-function rankedBand(
-  order: CanopyOrder | null,
-  input: Pick<CanopyRankInput, "fresh" | "needsYou" | "selected" | "archived">
-): string[] {
-  const selected = input.selected;
-  const kept =
-    selected !== null &&
-    order?.band.includes(selected) === true &&
-    !input.archived.includes(selected)
-      ? selected
-      : null;
+/** The band a rank gives: every run that needs the user now, in the readers' order. */
+function rankedBand(input: Pick<CanopyRankInput, "fresh" | "needsYou">): string[] {
   const needs = new Set(input.needsYou);
-  return input.fresh.filter((id) => needs.has(id) || id === kept);
+  return input.fresh.filter((id) => needs.has(id));
 }
 
 function sameIds(a: readonly string[], b: readonly string[]): boolean {

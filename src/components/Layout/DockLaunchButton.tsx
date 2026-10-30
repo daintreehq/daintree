@@ -14,6 +14,7 @@ import { useShallow } from "zustand/react/shallow";
 import Fuse, { type IFuseOptions } from "fuse.js";
 import {
   ChevronRight,
+  Circle,
   Ellipsis,
   EyeOff,
   Keyboard,
@@ -699,24 +700,31 @@ export function DockLaunchButton({
       // Clear the NEW signal only for the agent actually launched — opening the
       // launcher alone must not burn the cue for every other one.
       void markAgentsSeen([agentId]);
-      // `null` = explicit default: clear the agent-level preset so
-      // `resolveEffectivePresetId` returns undefined and Default reads as the
-      // selection next time.
-      if (presetId === null) {
-        void useAgentSettingsStore.getState().updateAgent(agentId, { presetId: undefined });
-      }
-      // Persist the pick to the worktree-scoped slot so a later press on this
-      // worktree relaunches the same preset while other worktrees keep theirs.
-      // `undefined` is the plain fall-through and writes nothing.
-      if (activeWorktreeId && presetId !== undefined) {
-        void updateWorktreePreset(agentId, activeWorktreeId, presetId ?? undefined);
-      }
+      // Launching a preset is one-off and writes no default, as in the toolbar
+      // chevron: a preset carries the account and permission mode, and a pick
+      // that quietly became the next plain launch changed both unannounced
+      // (#15051). Saving is `setPresetDefault`'s job alone.
       // Only a plugin entry passes options; every other row keeps the two-argument call.
       if (options) onLaunchAgent(agentId, presetId, options);
       else onLaunchAgent(agentId, presetId);
     },
-    [activeWorktreeId, markAgentsSeen, onLaunchAgent, updateWorktreePreset]
+    [markAgentsSeen, onLaunchAgent]
   );
+
+  // The explicit "Set as default", saved to this worktree alone. Default (`null`)
+  // saves the bare agent rather than clearing the slot, which would fall back to
+  // the agent-level preset every other worktree inherits (#15054). Absent with
+  // no active worktree, where there is no slot to write.
+  const setPresetDefault = useMemo(() => {
+    if (!activeWorktreeId) return undefined;
+    return (row: DockLaunchRow) => {
+      if (row.kind !== "preset" || row.preset.isSelected) return;
+      // The store rolls back and records the failure itself.
+      void updateWorktreePreset(row.item.agent.id, activeWorktreeId, row.preset.presetId).catch(
+        () => {}
+      );
+    };
+  }, [activeWorktreeId, updateWorktreePreset]);
 
   const activateRow = useCallback(
     (row: DockLaunchRow) => {
@@ -934,6 +942,22 @@ export function DockLaunchButton({
         return;
       }
 
+      // Alt+D sets the selected preset as this worktree's default — the
+      // chevron's D, modified for the same type-ahead reason as Alt+P.
+      const isSetDefaultShortcut =
+        event.altKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.shiftKey &&
+        !event.nativeEvent.getModifierState?.("AltGraph") &&
+        normalizeKeyForBinding(event.nativeEvent).toLowerCase() === "d";
+      if (isSetDefaultShortcut && selectedRow?.kind === "preset" && setPresetDefault) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat) setPresetDefault(selectedRow);
+        return;
+      }
+
       // Focus can sit on the results region after Tab. Typing there used to do
       // nothing at all while the arrows kept working; hand a printable key (or
       // a deletion) back to the search box instead. Moving focus during
@@ -970,6 +994,7 @@ export function DockLaunchButton({
       selectedRow,
       selectNext,
       selectPrevious,
+      setPresetDefault,
       setSelectedIndex,
       togglePin,
     ]
@@ -1017,6 +1042,7 @@ export function DockLaunchButton({
           onPointerMove={handleRowPointerMove}
           onActivate={activateRow}
           onTogglePin={togglePin}
+          onSetDefault={setPresetDefault}
           onStartCapture={setCapturingRowKey}
           onToggleExpanded={toggleExpanded}
           placement={placement}
@@ -1466,6 +1492,8 @@ interface DockLaunchOptionProps {
   onPointerMove: (index: number, event: React.PointerEvent) => void;
   onActivate: (row: DockLaunchRow) => void;
   onTogglePin: (target: DockLaunchPinTarget) => void;
+  /** Absent with no active worktree, where a preset has no default to become. */
+  onSetDefault: ((row: DockLaunchRow) => void) | undefined;
   onStartCapture: (rowKey: string) => void;
   onToggleExpanded: (rowKey: string) => void;
   placement: DockLaunchPlacement;
@@ -1483,6 +1511,7 @@ function DockLaunchOption({
   onPointerMove,
   onActivate,
   onTogglePin,
+  onSetDefault,
   onStartCapture,
   onToggleExpanded,
   placement,
@@ -1551,8 +1580,8 @@ function DockLaunchOption({
     row.band === "results" || (row.kind === "item" && item?.category === "agent");
 
   // Which saved named preset Enter launches, so a plain click on the agent
-  // never starts something the row did not say. The expansion's "Current"
-  // marks the same choice from the inside.
+  // never starts something the row did not say. The expansion's "Current
+  // default" marks the same choice from the inside.
   const savedPreset =
     row.kind === "item" && rowHasPresets(row)
       ? agent?.presetChoices?.find((choice) => choice.isSelected && choice.presetId !== null)
@@ -1582,7 +1611,7 @@ function DockLaunchOption({
           [
             `${row.item.agent.name} preset`,
             DOCK_LAUNCH_PRESET_GROUP_LABELS[row.preset.group] || undefined,
-            row.preset.isSelected ? "Current" : undefined,
+            row.preset.isSelected ? "Current default" : undefined,
           ]
             .filter(Boolean)
             .join(" · ")
@@ -1624,9 +1653,9 @@ function DockLaunchOption({
       ? row.contents
       : row.kind === "preset"
         ? // The provenance heading is rendered directly above this row, so the
-          // group name here is the same word twice. "Current" is not.
+          // group name here is the same word twice. "Current default" is not.
           row.preset.isSelected
-          ? "Current"
+          ? "Current default"
           : undefined
         : // State first, in both modes: these change what Enter does.
           disabledReason !== undefined
@@ -1698,6 +1727,8 @@ function DockLaunchOption({
   // row carries its keys, so the name stays the row's. The warning is deliberately
   // NOT folded in: `title` alongside an `aria-label` computes as the
   // description, so repeating it here would announce it twice.
+  // The saved default offers nothing to set; its "Current default" says so.
+  const canSetDefault = row.kind === "preset" && !row.preset.isSelected && onSetDefault;
   const optionLabel = [
     spokenQualifier ? `${displayName}, ${spokenQualifier}` : displayName,
     // Its own clause rather than folded into `spokenQualifier`, which for a
@@ -1728,6 +1759,7 @@ function DockLaunchOption({
     pinTarget
       ? `Press ${describeChord("Alt+P", isMac())} to ${pinTarget.onToolbar ? "unpin from" : "pin to"} toolbar`
       : undefined,
+    canSetDefault ? `Press ${describeChord("Alt+D", isMac())} to set as default` : undefined,
     shortcutAgentId ? "Press F2 to edit shortcut" : undefined,
   ]
     .filter(Boolean)
@@ -2016,6 +2048,36 @@ function DockLaunchOption({
               )}
             </span>
           </>
+        )}
+        {/* Every preset row in an expansion shares one worktree, so either all
+            of them reserve this slot or none do, and the column holds still. */}
+        {row.kind === "preset" && onSetDefault && (
+          <span className="ml-1 w-6 shrink-0" data-launcher-slot="default">
+            {canSetDefault && (
+              <RowControlTooltip label="Set as default" shortcut="Alt+D">
+                <span
+                  // Presentational inside `role="option"` for the same reasons as
+                  // the pin: the option's name carries the Alt+D phrase.
+                  role="presentation"
+                  data-launcher-set-default=""
+                  onPointerDown={(event) => event.preventDefault()}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onSetDefault(row);
+                  }}
+                  className={cn(
+                    ROW_CONTROL_CLASS,
+                    "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 group-aria-selected:opacity-100"
+                  )}
+                >
+                  {/* The chevron gutter's set-default glyph; its Check means
+                      "already the default", which this row is not. */}
+                  <Circle className="h-2.5 w-2.5" aria-hidden />
+                </span>
+              </RowControlTooltip>
+            )}
+          </span>
         )}
       </div>
     </>

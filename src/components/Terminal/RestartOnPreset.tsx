@@ -11,7 +11,6 @@ import {
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { getAgentConfig } from "@/config/agents";
 import { getBrandColorHex } from "@/lib/colorUtils";
-import { closeAndAnnounce } from "@/lib/accessibility";
 import { actionService } from "@/services/ActionService";
 import type { ActionSource } from "@shared/types/actions";
 import {
@@ -19,6 +18,7 @@ import {
   type DestructiveConfirmCopy,
 } from "./TerminalDestructiveActionConfirmDialog";
 import { useRestartPresetChoices, type RestartPresetChoice } from "./restartOnPresetChoices";
+import { restartPanesOnPreset } from "./restartPanesOnPreset";
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 
@@ -135,12 +135,19 @@ export function RestartOnPresetConfirmDialog({
 }) {
   const handleConfirm = useCallback(() => {
     if (!request) return;
-    void actionService.dispatch(
-      "terminal.restartOnPreset",
-      { terminalId: request.terminalId, presetId: request.preset.id, confirmed: true },
-      { source: sourceRef.current }
+    const source = sourceRef.current;
+    onClose();
+    void restartPanesOnPreset(
+      [{ id: request.terminalId, title: request.terminalTitle }],
+      request.preset.name,
+      (pane) =>
+        actionService.dispatch(
+          "terminal.restartOnPreset",
+          { terminalId: pane.id, presetId: request.preset.id, confirmed: true },
+          { source }
+        ),
+      () => `Restarting on ${request.preset.name}`
     );
-    closeAndAnnounce(onClose, `Restarting on ${request.preset.name}`);
   }, [request, onClose, sourceRef]);
 
   if (!request) return null;

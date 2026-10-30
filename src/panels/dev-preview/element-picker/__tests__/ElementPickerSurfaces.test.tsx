@@ -136,6 +136,38 @@ function text(): string {
   return document.body.textContent ?? "";
 }
 
+/** Send, by the destination it names: "Send to {session}" or "Start a new {agent} session and send". */
+const SEND_NAME = /^(Send to |Start a new .+ session and send$)/;
+
+/** The note under Send, which Send names as its description. */
+function sendNote(): string {
+  const send = screen.getByRole("button", { name: SEND_NAME });
+  return document.getElementById(send.getAttribute("aria-describedby") ?? "")?.textContent ?? "";
+}
+
+/** The identity block and the note under Send word a stale selection the same way. */
+function expectStaleAgrees(headline: string): void {
+  const identity = screen.getByRole("region", { name: "Selected element" });
+  expect(within(identity).getByText(headline)).toBeTruthy();
+  expect(sendNote()).toBe(headline);
+}
+
+/** Send is off through `aria-disabled`, so it stays focusable to say why. */
+function isOff(button: HTMLElement): boolean {
+  return button.getAttribute("aria-disabled") === "true";
+}
+
+/**
+ * The buttons in a surface that act. Every crumb is a button so its name and
+ * file are a focus away; the ones that can't be picked say so with
+ * `aria-disabled`, and those are not offers.
+ */
+function enabledButtons(surface: HTMLElement, name?: string): HTMLElement[] {
+  return within(surface)
+    .queryAllByRole("button", name === undefined ? {} : { name })
+    .filter((button) => button.getAttribute("aria-disabled") !== "true");
+}
+
 /** Let real time pass, flushing what it settles. */
 function pause(ms: number) {
   return act(() => new Promise<void>((resolve) => setTimeout(resolve, ms)));
@@ -262,36 +294,53 @@ describe("page verdicts", () => {
   it("drops a production-build verdict that a traced selection disproves", async () => {
     await mountBound();
     await act(async () => host.runtimeIssue("not-dev-build"));
-    expect(text()).toContain("production build");
+    expect(text()).toContain("Production build");
 
     await act(async () => host.select(0));
     await screen.findByRole("textbox", { name: "Request for the agent" });
-    expect(text()).not.toContain("production build");
+    expect(text()).not.toContain("Production build");
   });
 
   it("drops a production-build verdict once the pointer finds a traced element", async () => {
     await mountBound();
     await act(async () => host.runtimeIssue("not-dev-build"));
-    expect(text()).toContain("production build");
+    expect(text()).toContain("Production build");
     // The page hydrated after its audit; nothing was clicked, only hovered.
     await act(async () => host.hover(svelteObservation()));
-    expect(text()).not.toContain("production build");
+    expect(text()).not.toContain("Production build");
   });
 
   it("keeps a framework's verdict that another framework's element says nothing about", async () => {
     await mountBound();
     await act(async () => host.runtimeIssue("metadata-unavailable", { framework: "react" }));
-    expect(text()).toContain("no React source locations");
+    expect(text()).toContain("No React source locations");
 
     // A traced Svelte element is no proof of React's metadata…
     await act(async () => host.select(0));
     await screen.findByRole("textbox", { name: "Request for the agent" });
-    expect(text()).toContain("no React source locations");
+    expect(text()).toContain("No React source locations");
 
     // …and a traced React one is.
     host.template = () => reactObservation();
     await act(async () => host.select(0));
-    await waitFor(() => expect(text()).not.toContain("no React source locations"));
+    await waitFor(() => expect(text()).not.toContain("No React source locations"));
+  });
+
+  it("never promises what a request carries, which the composer's Includes row says", async () => {
+    await mountBound();
+    await act(async () => host.runtimeIssue("not-dev-build"));
+    expect(text()).toContain("dev server");
+    expect(text()).not.toMatch(/screenshot|request still carries/i);
+
+    await act(async () => host.runtimeIssue("metadata-unavailable", { framework: "react" }));
+    expect(text()).toContain("No React source locations");
+    expect(text()).not.toMatch(/screenshot|request still carries/i);
+
+    await act(async () =>
+      host.runtimeIssue("extractor-failed", { framework: "svelte", detail: "no __svelte_meta" })
+    );
+    expect(text()).toContain("Couldn't read this page's Svelte components");
+    expect(text()).not.toMatch(/screenshot|request still carries/i);
   });
 
   it("warns up front when the page's components can't be read", async () => {
@@ -299,7 +348,7 @@ describe("page verdicts", () => {
     await act(async () =>
       host.runtimeIssue("extractor-failed", { framework: "svelte", detail: "no __svelte_meta" })
     );
-    expect(text()).toContain("couldn't read this page's Svelte components");
+    expect(text()).toContain("Couldn't read this page's Svelte components");
     // The page's own words survive under the headline.
     expect(text()).toContain("no __svelte_meta");
   });
@@ -309,7 +358,7 @@ describe("page verdicts", () => {
     await act(async () => host.runtimeIssue("overlay-blocked"));
     await act(async () => host.select(0));
     await screen.findByRole("textbox", { name: "Request for the agent" });
-    expect(text()).toContain("The page blocked the selection overlay");
+    expect(text()).toContain("The page blocked the selection outline");
   });
 
   it("raises the page's own verdict whichever app the worktree holds", async () => {
@@ -513,7 +562,7 @@ describe("preview binding", () => {
       } as never,
     });
     await mountBound();
-    await screen.findByText(/runs from another worktree/);
+    await screen.findAllByText(/runs from another worktree/);
     expect(host.calls("openWorkspace")).toHaveLength(0);
   });
 
@@ -557,7 +606,7 @@ describe("preview binding", () => {
       scanComplete: false,
     });
     await mountBound();
-    await screen.findByText(/too large to search all of it/);
+    await screen.findByText(/The search stopped early/);
   });
 });
 
@@ -579,15 +628,19 @@ describe("a location the page got wrong", () => {
     // A hydrated SvelteKit page can tag an element with a neighbour's location
     // (Svelte's dev `add_locations` counts a child component's root while
     // hydrating). Nothing changed, and selecting again gives the same answer,
-    // so "Selection changed — select again" would be wrong twice over.
+    // so "Page changed — select it again" would be wrong twice over.
     host.resultsFor = () => mismatch();
     await mountBound();
     await act(async () => host.select(0));
-    const notice = await screen.findByRole("alert");
-    expect(notice.textContent).toContain("Couldn't select this element");
-    expect(notice.textContent).toContain(`<button> at ${FILE}:6`);
-    expect(notice.textContent).toContain("doesn't hold it there");
-    expect(text()).not.toContain("Selection changed");
+    // A warning with its way out beside it, not an alert: nothing failed.
+    await screen.findAllByText("Reported location doesn't match the file");
+    expect(screen.queryByRole("alert")).toBeNull();
+    const notice = screen
+      .getAllByRole("status")
+      .find((element) => element.textContent?.includes("doesn't hold it there"));
+    expect(notice?.textContent).toContain(`<button> at ${FILE}:6`);
+    expect(screen.getAllByRole("button", { name: "Switch to Browse" }).length).toBeGreaterThan(0);
+    expect(text()).not.toContain("Page changed");
   });
 
   it("reads the disagreement as the page catching up when the file just changed", async () => {
@@ -602,7 +655,7 @@ describe("a location the page got wrong", () => {
     await act(async () => host.select(0));
     // The click is kept and asked for again once the page has caught up…
     await elapse(UI_DOHERTY_THRESHOLD);
-    expect(screen.getByText("Waiting for the preview to update")).toBeTruthy();
+    expect(screen.getAllByText("Waiting for the preview to update").length).toBeGreaterThan(0);
     expect(host.picker.reselect).not.toHaveBeenCalled();
     expect(text()).not.toContain("neighbour");
     await elapse(HMR_SETTLE_MS - UI_DOHERTY_THRESHOLD);
@@ -610,7 +663,7 @@ describe("a location the page got wrong", () => {
     // …and is the user's to repeat only when the page still can't vouch for
     // it. The page's answer arrives a tick after the ask.
     await elapse(10);
-    expect(screen.getByText("This file just changed — select again")).toBeTruthy();
+    expect(screen.getAllByText("File changed — select it again").length).toBeGreaterThan(0);
     expect(host.picker.reselect).toHaveBeenCalledTimes(1);
     // Nothing is left scheduled to ask again.
     await elapse(HMR_SETTLE_MS * 10);
@@ -635,7 +688,7 @@ describe("a location the page got wrong", () => {
     ];
     await mountBound();
     await act(async () => host.select(0));
-    await screen.findByText("Selection changed — select again");
+    await screen.findAllByText("Page changed — select it again");
   });
 });
 
@@ -694,7 +747,8 @@ describe("selection identity", () => {
     // Named, but no file claimed for it — not even the file of the element it
     // was reached through.
     expect(identity.textContent).toContain("PricingCard");
-    expect(identity.textContent).toContain("Couldn't find where it's written");
+    // The header names the component, so the slot says only the sentence.
+    expect(within(identity).getByText("Couldn't find the source", { exact: true })).toBeTruthy();
     expect(identity.textContent).not.toContain(`${FILE}:6`);
     const strip = screen.getByRole("toolbar", { name: "Element Picker" });
     expect(strip.textContent).not.toContain(`${FILE}:6`);
@@ -713,11 +767,10 @@ describe("selection identity", () => {
     );
     // The strip defers to the open drawer for the file.
     expect(strip.textContent).not.toContain(CARD_FILE);
-    // And the file is the checked scope's hover detail.
-    const scope = screen.getByRole("radio", { name: "PricingCard", checked: true });
-    expect(screen.queryByRole("tooltip")).toBeNull();
-    fireEvent.focus(scope);
-    expect((await screen.findByRole("tooltip")).textContent).toBe(CARD_FILE);
+    // And the checked target draws the file it points the agent at, in the
+    // composer itself rather than behind a hover.
+    expect(screen.getByRole("radio", { name: "PricingCard", checked: true })).toBeTruthy();
+    expect(screen.getByRole("group", { name: "Ask an agent" }).textContent).toContain(CARD_FILE);
   });
 
   it("won't send a request about a component nobody found the file of, and offers what it can be about", async () => {
@@ -736,13 +789,20 @@ describe("selection identity", () => {
     );
     const request = await screen.findByRole("textbox", { name: "Request for the agent" });
     fireEvent.change(request, { target: { value: "Make the card pop" } });
-    const sendButton = () =>
-      screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-    expect(sendButton().disabled).toBe(true);
-    expect(text()).toContain("Couldn't find where PricingCard is written");
+    const sendButton = () => screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+    expect(isOff(sendButton())).toBe(true);
+    // The identity says it under the name in its header; the note says it again
+    // only as far as it must, naming the target and what to do.
+    expect(sendNote()).toBe("Couldn't find the source for PricingCard — choose another target");
+    expect(
+      within(screen.getByRole("region", { name: "Selected element" })).getByText(
+        "Couldn't find the source",
+        { exact: true }
+      )
+    ).toBeTruthy();
     // The element itself is still something the request can be about.
     fireEvent.click(screen.getByRole("radio", { name: "Element" }));
-    await waitFor(() => expect(sendButton().disabled).toBe(false));
+    await waitFor(() => expect(isOff(sendButton())).toBe(false));
   });
 
   it("shows a React element's components and the line its creation maps to", async () => {
@@ -757,9 +817,10 @@ describe("selection identity", () => {
       "navigation",
       { name: "Breadcrumb" }
     );
-    const crumbs = Array.from(trail.querySelectorAll("li")).map((li) =>
-      (li.textContent ?? "").trim()
-    );
+    // The trail's own list, not the hidden row it measures crumbs in.
+    const crumbs = Array.from(trail.querySelectorAll("li"))
+      .filter((li) => li.closest('[aria-hidden="true"]') === null)
+      .map((li) => (li.textContent ?? "").trim());
     expect(crumbs).toEqual(["Toolbar", "SaveButton", "button.save"]);
     // The host mapped the frames without reading the files: nothing is cited
     // as checked, so a request carries no revisions to hold.
@@ -768,16 +829,57 @@ describe("selection identity", () => {
     expect(citedRevisions(state.selection)).toEqual({});
   });
 
-  it("offers no crumb to click on a React selection, which the page can't widen to a component", async () => {
+  it("selects a React component from a crumb by the id the page gave it", async () => {
+    // React has no locator, so a crumb is asked for by the component's id in
+    // this document, and only one the page reported roots for can be asked.
     host.template = () => reactObservation();
     await mountBound();
     await act(async () => host.select(0));
     await screen.findByRole("region", { name: "Selected element" });
+    expect(session().componentSelection()).toBe("id");
+    const strip = screen.getByRole("toolbar", { name: "Element Picker" });
     for (const trail of screen.getAllByRole("navigation", { name: "Breadcrumb" })) {
-      expect(trail.textContent).toContain("SaveButton");
-      expect(within(trail).queryAllByRole("button")).toHaveLength(0);
+      expect(enabledButtons(trail, "SaveButton")).toHaveLength(1);
+      expect(enabledButtons(trail, "Toolbar")).toHaveLength(0);
     }
-    expect(session().canSelectComponent()).toBe(false);
+
+    fireEvent.click(within(strip).getByRole("button", { name: "SaveButton" }));
+    expect(host.picker.reselect).toHaveBeenCalledTimes(1);
+    expect(host.picker.reselect.mock.calls[0]![0]).toEqual({
+      sessionId: "session-1",
+      elementId: "el-r",
+      framework: "react",
+      componentId: "r-save",
+      reveal: true,
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("region", { name: "Selected element" }).textContent).toContain(
+        "Component"
+      )
+    );
+  });
+
+  it("asks nothing by id once the document the element was proved in is gone", async () => {
+    host.template = () => reactObservation();
+    await mountBound();
+    await act(async () => host.select(0));
+    await screen.findByRole("region", { name: "Selected element" });
+    const controller = session();
+    const target = {
+      componentId: "r-save",
+      framework: "react" as const,
+      usedAt: null,
+      rendered: true,
+    };
+    // Toolbar reported no roots: there is nothing an id could select.
+    await expect(
+      controller.selectComponent({ ...target, componentId: "r-toolbar", rendered: false })
+    ).resolves.toBe(false);
+    expect(host.picker.reselect).not.toHaveBeenCalled();
+    await act(async () => host.documentReady(1));
+    expect(controller.componentSelection()).toBeNull();
+    await expect(controller.selectComponent(target)).resolves.toBe(false);
+    expect(host.picker.reselect).not.toHaveBeenCalled();
   });
 });
 
@@ -816,8 +918,8 @@ describe("starting a fresh agent", () => {
       await mountSelected();
       const request = screen.getByRole("textbox", { name: "Request for the agent" });
       fireEvent.change(request, { target: { value: "Say Upgrade" } });
-      const sendButton = screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-      await waitFor(() => expect(sendButton.disabled).toBe(false));
+      const sendButton = screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+      await waitFor(() => expect(isOff(sendButton)).toBe(false));
       fireEvent.click(sendButton);
       await waitFor(() =>
         expect(dispatch).toHaveBeenCalledWith(
@@ -890,9 +992,9 @@ describe("request scope", () => {
     host.template = () => chain;
     await mountBound();
     await act(async () => host.select(0));
-    await screen.findByRole("combobox", { name: "What the request is about" });
+    await screen.findByRole("combobox", { name: "What the request targets" });
     // A list, not a row of segments: no scope radio is drawn beside the picker.
-    expect(screen.queryByRole("radiogroup", { name: "What the request is about" })).toBeNull();
+    expect(screen.queryByRole("radiogroup", { name: "What the request targets" })).toBeNull();
     expect(screen.queryByRole("radio", { name: "Element" })).toBeNull();
   });
 });
@@ -968,15 +1070,14 @@ describe("the composer", () => {
     await mountSelected();
     const request = screen.getByRole("textbox", { name: "Request for the agent" });
     fireEvent.change(request, { target: { value: "Say Upgrade" } });
-    const sendButton = () =>
-      screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-    expect(sendButton().disabled).toBe(false);
+    const sendButton = () => screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+    expect(isOff(sendButton())).toBe(false);
 
     host.reselectFinds = false;
     await act(async () => host.epochAdvanced(1));
     // Blocked from the moment the page moved, not from when the panel gives up
     // asking the new page for it: unproven is unsendable either way.
-    await waitFor(() => expect(sendButton().disabled).toBe(true));
+    await waitFor(() => expect(isOff(sendButton())).toBe(true));
     expect((request as HTMLTextAreaElement).value).toBe("Say Upgrade");
   });
 
@@ -989,10 +1090,10 @@ describe("the composer", () => {
     await mountSelected();
     const request = screen.getByRole("textbox", { name: "Request for the agent" });
     fireEvent.change(request, { target: { value: "Say Upgrade" } });
-    const send = () => screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-    await waitFor(() => expect(send().disabled).toBe(false));
+    const send = () => screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+    await waitFor(() => expect(isOff(send())).toBe(false));
     // And it is surfaced as an observation rather than swallowed.
-    expect(text()).toMatch(/Activity in /);
+    expect(text()).toMatch(/The terminal is showing activity/);
   });
 
   it("headlines a delivery with what was proven, never with a reading of the agent", async () => {
@@ -1014,36 +1115,31 @@ describe("the composer", () => {
         },
       ],
     });
-    const notice = await screen.findByRole("status");
-    // The notice's headline is its first paragraph; the body follows it.
-    const headline = notice.querySelector("p")?.textContent ?? "";
+    // The request's row: its heading is the state and where it went.
+    const queue = await screen.findByRole("list", { name: "Requests" });
+    const row = within(queue).getAllByRole("listitem")[0]!;
+    const headline = within(row).getByText(/^Sent to /).textContent ?? "";
     expect(headline).toContain("claude · pricing polish");
     expect(headline).not.toMatch(/working|activity/i);
     // And the observation is not suppressed either — it just lives below the
     // headline, where it reads as something seen rather than something proven.
-    expect(notice.textContent ?? "").toMatch(/activity/i);
+    expect(row.textContent ?? "").toMatch(/activity/i);
   });
 
-  it("inserts a suggestion's whole instruction, not the short label on its chip", async () => {
-    // A chip may abbreviate itself to fit, but it must never put words into the
-    // draft that the user could not read before clicking.
+  it("inserts exactly the words a suggestion's chip shows", async () => {
+    // A chip must never put words into the draft that the user could not read
+    // on it before clicking.
     await mountSelected();
     const chips = within(screen.getByRole("group", { name: "Suggestions" })).getAllByRole("button");
     expect(chips.length).toBeGreaterThan(0);
     const chip = chips[0]!;
-    const label = chip.textContent?.trim() ?? "";
-    // Shown through the shared tooltip before the click, never the OS one.
-    expect(chip.hasAttribute("title")).toBe(false);
-    fireEvent.focus(chip);
-    const promised = (await screen.findByRole("tooltip")).textContent ?? "";
-    fireEvent.blur(chip);
-    expect(promised.length).toBeGreaterThan(0);
+    const words = chip.textContent?.trim() ?? "";
+    expect(words.length).toBeGreaterThan(0);
     fireEvent.click(chip);
     const request = screen.getByRole("textbox", {
       name: "Request for the agent",
     }) as HTMLTextAreaElement;
-    await waitFor(() => expect(request.value).toBe(promised));
-    expect(request.value.length).toBeGreaterThanOrEqual(label.length);
+    await waitFor(() => expect(request.value).toBe(words));
   });
 
   it("names the composer as a group, so it is reachable without a visible heading", async () => {
@@ -1058,9 +1154,8 @@ describe("the composer", () => {
     await mountSelected();
     const request = screen.getByRole("textbox", { name: "Request for the agent" });
     fireEvent.change(request, { target: { value: "Round the corners" } });
-    const sendButton = () =>
-      screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-    expect(sendButton().disabled).toBe(false);
+    const sendButton = () => screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+    expect(isOff(sendButton())).toBe(false);
 
     act(() => {
       updateComposerMemory(composerMemoryKey("preview-1", "wt-1"), {
@@ -1081,17 +1176,17 @@ describe("the composer", () => {
       });
     });
 
-    await waitFor(() => expect(sendButton().disabled).toBe(true));
-    // Answering the notice is the acknowledgement.
+    await waitFor(() => expect(isOff(sendButton())).toBe(true));
+    // Answering the row is the acknowledgement.
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-    await waitFor(() => expect(sendButton().disabled).toBe(false));
+    await waitFor(() => expect(isOff(sendButton())).toBe(false));
     expect((request as HTMLTextAreaElement).value).toBe("Round the corners");
   });
 
   it("won't re-send on Enter when delivery couldn't be confirmed, but sends when asked to", async () => {
     // The host lost track of the submission: the request may be in the agent
     // already. The unchanged draft must not go again on a casual Enter — and
-    // the notice's own "Send it again" must actually send.
+    // the row's own Retry must actually send.
     usePanelStore.setState({
       panelsById: {
         "preview-1": { id: "preview-1", kind: "dev-preview", location: "grid", worktreeId: "wt-1" },
@@ -1133,9 +1228,8 @@ describe("the composer", () => {
     await mountSelected();
     const request = screen.getByRole("textbox", { name: "Request for the agent" });
     fireEvent.change(request, { target: { value: "Say Upgrade" } });
-    const sendButton = () =>
-      screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-    await waitFor(() => expect(sendButton().disabled).toBe(false));
+    const sendButton = () => screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+    await waitFor(() => expect(isOff(sendButton())).toBe(false));
 
     // What the row was about travels with it, which is what lets it be sent
     // again: the pin the composer made when the words were typed.
@@ -1159,20 +1253,22 @@ describe("the composer", () => {
         ],
       });
     });
-    await waitFor(() => expect(sendButton().disabled).toBe(true));
+    await waitFor(() => expect(isOff(sendButton())).toBe(true));
     const before = dispatch.mock.calls.length;
     fireEvent.keyDown(request, { key: "Enter" });
     await act(async () => {});
     expect(dispatch.mock.calls.length).toBe(before);
-    expect(text()).toContain("Delivery unconfirmed");
+    expect(text()).toContain("Unconfirmed in claude");
 
     expect(sent).toEqual([]);
 
-    fireEvent.click(screen.getByRole("button", { name: "Send it again" }));
+    // Its session is gone, so Retry names where it goes instead.
+    fireEvent.click(screen.getByRole("button", { name: /^Retry in New .+ session$/ }));
     // A new run, all the way to the terminal: exactly one more submission.
     await waitFor(() => expect(sent).toHaveLength(1), { timeout: 4000 });
     expect(sent[0]).toContain("Say Upgrade");
-    await screen.findByText(/^Sent to /);
+    // The row, not the status region that announces it in the same words.
+    await within(screen.getByRole("list", { name: "Requests" })).findByText(/^Sent to /);
   });
 
   it("doesn't offer to send again when there is nothing it could send", async () => {
@@ -1191,8 +1287,8 @@ describe("the composer", () => {
         ],
       });
     });
-    await screen.findByText("Delivery unconfirmed");
-    expect(screen.queryByRole("button", { name: "Send it again" })).toBeNull();
+    await screen.findByText("Unconfirmed in claude");
+    expect(screen.queryByRole("button", { name: /^Retry/ })).toBeNull();
   });
 
   it("hands a failed request's words back, and keeps a row open as its request moves on", async () => {
@@ -1207,7 +1303,7 @@ describe("the composer", () => {
       terminalId: "term-1",
     });
     act(() => updateComposerMemory(key, { deliveries: [record({ status: "queued" })] }));
-    fireEvent.click(await screen.findByRole("button", { name: /^Queued for claude/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^Next for claude/ }));
     expect(screen.getByRole("group", { name: "Request text" }).textContent).toContain(
       "Round the corners"
     );
@@ -1275,11 +1371,11 @@ describe("the composer", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Request for the agent" }), {
       target: { value: "One more thing" },
     });
-    const send = screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-    await waitFor(() => expect(send.disabled).toBe(false));
+    const send = screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+    await waitFor(() => expect(isOff(send)).toBe(false));
 
     // Only the request at the head can be pushed on; either can be taken out.
-    const rows = within(queue).getAllByRole("button", { name: /^Queued for claude/ });
+    const rows = within(queue).getAllByRole("button", { name: /^(Next|Queued) for claude/ });
     expect(rows).toHaveLength(2);
     fireEvent.click(rows[0]!);
     expect(within(queue).getAllByRole("button", { name: "Send now" })).toHaveLength(1);
@@ -1293,7 +1389,7 @@ describe("the composer", () => {
 
     fireEvent.click(within(queue).getAllByRole("button", { name: "Remove" })[1]!);
     await waitFor(() => expect(within(queue).getAllByRole("listitem")).toHaveLength(2));
-    expect(text()).not.toContain("Add a hover state");
+    expect(queue.textContent).not.toContain("Add a hover state");
   });
 
   it("still allows an immediate retry when nothing was typed into the agent", async () => {
@@ -1316,10 +1412,9 @@ describe("the composer", () => {
         ],
       });
     });
-    const sendButton = () =>
-      screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-    await screen.findByText("Couldn't send to the agent");
-    expect(sendButton().disabled).toBe(false);
+    const sendButton = () => screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+    await screen.findByText("Couldn't send to claude");
+    expect(isOff(sendButton())).toBe(false);
   });
 });
 
@@ -1347,8 +1442,8 @@ describe("selecting a component from the trail", () => {
     for (const surface of [strip, identity]) {
       expect(within(surface).getByRole("button", { name: "PricingCard" })).toBeTruthy();
     }
-    // The element is where you already are: text, not a control.
-    expect(within(strip).queryByRole("button", { name: 'button "Start Pro"' })).toBeNull();
+    // The element is where you already are: nothing to act on.
+    expect(enabledButtons(strip, 'button "Start Pro"')).toHaveLength(0);
 
     fireEvent.click(within(identity).getByRole("button", { name: "PricingCard" }));
     expect(host.picker.reselect).toHaveBeenCalledTimes(1);
@@ -1374,8 +1469,8 @@ describe("selecting a component from the trail", () => {
     expect(trail.textContent).not.toContain("Start Pro");
     expect(trail.querySelector('[aria-current="true"]')?.textContent).toBe("PricingCard");
     // Now the selection: no longer a control in either surface.
-    expect(within(strip).queryByRole("button", { name: "PricingCard" })).toBeNull();
-    expect(within(reselected()).queryByRole("button", { name: "PricingCard" })).toBeNull();
+    expect(enabledButtons(strip, "PricingCard")).toHaveLength(0);
+    expect(enabledButtons(reselected(), "PricingCard")).toHaveLength(0);
     // And the request is about it: the composer's About control follows the
     // page's answer, not the crumb.
     const about = within(reselected().parentElement!.parentElement!).getAllByRole("radio", {
@@ -1389,7 +1484,12 @@ describe("selecting a component from the trail", () => {
     await mountBound();
     const controller = session();
     await expect(
-      controller.selectComponent({ file: CARD_CALL.file, line: 3, column: 0 })
+      controller.selectComponent({
+        componentId: "s-card",
+        framework: "svelte",
+        usedAt: { file: CARD_CALL.file, line: 3, column: 0 },
+        rendered: true,
+      })
     ).resolves.toBe(false);
     expect(host.picker.reselect).not.toHaveBeenCalled();
   });
@@ -1411,7 +1511,7 @@ describe("selecting a component from the trail", () => {
     await act(async () => host.select(0));
     await screen.findByRole("region", { name: "Selected element" });
     const strip = screen.getByRole("toolbar", { name: "Element Picker" });
-    const cards = within(strip).getAllByRole("button", { name: "Card" });
+    const cards = enabledButtons(strip, "Card");
     expect(cards).toHaveLength(2);
     cards[0]!.focus();
     fireEvent.click(cards[0]!);
@@ -1422,7 +1522,7 @@ describe("selecting a component from the trail", () => {
     const current = trail().querySelector('[aria-current="true"]')!;
     expect(current.textContent).toBe("Card");
     const layout = within(strip).getByRole("button", { name: "Layout" });
-    expect(within(strip).queryByRole("button", { name: "Card" })).toBeNull();
+    expect(enabledButtons(strip, "Card")).toHaveLength(0);
     // On a control the toolbar's roving keys work from, not on the text that
     // replaced the button.
     expect(document.activeElement).toBe(layout);
@@ -1431,6 +1531,7 @@ describe("selecting a component from the trail", () => {
       within(identity).getByRole("navigation", { name: "Breadcrumb" }).querySelectorAll("li")
     )
       .filter((li) => !li.classList.contains("sr-only"))
+      .filter((li) => li.closest('[aria-hidden="true"]') === null)
       .map((li) => (li.textContent ?? "").trim());
     expect(drawerCrumbs).toEqual(["Layout"]);
   });
@@ -1456,7 +1557,7 @@ describe("selecting a component from the trail", () => {
     for (const surface of [strip, identity]) {
       expect(within(surface).getAllByText("Tree").length).toBeGreaterThan(0);
       // The outermost Tree, at its own call site, is still a step up.
-      expect(within(surface).getAllByRole("button", { name: "Tree" })).toHaveLength(1);
+      expect(enabledButtons(surface, "Tree")).toHaveLength(1);
     }
   });
 
@@ -1485,9 +1586,9 @@ describe("selecting a component from the trail", () => {
     expect(within(strip).getByRole("navigation", { name: "Breadcrumb" }).textContent).toContain(
       "PricingCard"
     );
-    expect(within(strip).queryByRole("button", { name: "PricingCard" })).toBeNull();
+    expect(enabledButtons(strip, "PricingCard")).toHaveLength(0);
     const identity = screen.getByRole("region", { name: "Selected element" });
-    expect(within(identity).queryByRole("button", { name: "PricingCard" })).toBeNull();
+    expect(enabledButtons(identity, "PricingCard")).toHaveLength(0);
   });
 });
 
@@ -1531,8 +1632,8 @@ async function recordSends() {
 async function sendRequest(sent: string[], words = "Make this bigger"): Promise<string> {
   const request = await screen.findByRole("textbox", { name: "Request for the agent" });
   fireEvent.change(request, { target: { value: words } });
-  const send = () => screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-  await waitFor(() => expect(send().disabled).toBe(false));
+  const send = () => screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+  await waitFor(() => expect(isOff(send())).toBe(false));
   fireEvent.click(send());
   await waitFor(() => expect(sent).toHaveLength(1), { timeout: 4000 });
   return sent[0]!;
@@ -1633,8 +1734,8 @@ describe("revision checks before a request goes", () => {
       url: "http://localhost:5173/pricing?plan=",
     });
 
-    // The notice keeps the exact request, one disclosure away.
-    fireEvent.click(await screen.findByRole("button", { name: "View request" }));
+    // The request's row keeps the exact request, one disclosure away.
+    fireEvent.click(await screen.findByRole("button", { name: /^Sent to / }));
     expect(screen.getByRole("group", { name: "Request text" }).textContent).toBe(prompt);
     // Beside the status region, not inside it: a status is read out whole.
     expect(
@@ -1650,9 +1751,25 @@ describe("stale selections", () => {
     vi.useFakeTimers();
     await act(async () => host.epochAdvanced(1));
     // Asked first, a bounded number of times; then it is the user's to redo.
-    expect(screen.queryByText("Select again — the page reloaded")).toBeNull();
+    expect(screen.queryAllByText("Page reloaded — select it again")).toHaveLength(0);
     await elapse(HMR_SETTLE_MS * 8);
-    expect(screen.getByText("Select again — the page reloaded")).toBeTruthy();
+    expect(screen.getAllByText("Page reloaded — select it again").length).toBeGreaterThan(0);
+    // Said once in the identity and again under Send, in the same words.
+    expectStaleAgrees("Page reloaded — select it again");
+  });
+
+  it("words a disconnected preview the same under Send as in the identity", async () => {
+    await mountSelected();
+    // Asked to disconnect, so nothing reattaches and the pick stays unproven.
+    await act(async () =>
+      host.pushPreview({
+        kind: "detached",
+        sessionId: "session-1",
+        projectId: "p1",
+        reason: "requested",
+      })
+    );
+    expectStaleAgrees("Preview disconnected — select it again");
   });
 
   it("proves the selection again after its file changes, and the draft follows it", async () => {
@@ -1664,17 +1781,19 @@ describe("stale selections", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Request for the agent" }), {
       target: { value: "Make it green" },
     });
-    const send = screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-    await waitFor(() => expect(send.disabled).toBe(false));
+    const send = screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+    await waitFor(() => expect(isOff(send)).toBe(false));
 
     await act(async () => host.sourceChanged(FILE, sha("an agent's edit")));
-    // Unproven, so it can't be sent — but nobody is told to click again yet.
-    expect(send.disabled).toBe(true);
-    expect(screen.queryByText("Select again — the file changed")).toBeNull();
+    // Unproven, so it can't be sent — but nobody is told to click again yet,
+    // and Send says what is happening instead of asking for a click.
+    expect(isOff(send)).toBe(true);
+    expect(screen.queryAllByText("File changed — select it again")).toHaveLength(0);
+    expect(sendNote()).toBe("Checking this selection again");
 
     // Proved again as a new selection, which the pinned draft moves to: it is
     // sendable, and not offered its own subject as a different one.
-    await waitFor(() => expect(send.disabled).toBe(false), { timeout: 4000 });
+    await waitFor(() => expect(isOff(send)).toBe(false), { timeout: 4000 });
     expect(host.calls("resolve")).toHaveLength(2);
     expect(host.picker.reselect).toHaveBeenCalledWith({
       sessionId: "session-1",
@@ -1683,7 +1802,7 @@ describe("stale selections", () => {
       locator: { loc: { file: FILE, line: 6, column: 2 }, index: 2 },
     });
     expect(screen.queryByRole("button", { name: "Use current selection" })).toBeNull();
-    expect(screen.queryByText("Select again — the file changed")).toBeNull();
+    expect(screen.queryAllByText("File changed — select it again")).toHaveLength(0);
     // The draft is about the selection proved again, which names the one it replaced.
     const live = session().getSnapshot().selection;
     if (live.status !== "ready") throw new Error("not ready");
@@ -1715,14 +1834,14 @@ describe("stale selections", () => {
     await act(async () => host.select(0));
     const request = await screen.findByRole("textbox", { name: "Request for the agent" });
     fireEvent.change(request, { target: { value: "Make it green" } });
-    const send = screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-    await waitFor(() => expect(send.disabled).toBe(false));
+    const send = screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+    await waitFor(() => expect(isOff(send)).toBe(false));
 
     // The creation site was mapped, not read: its file carries no revision,
     // and an edit to it moves the line all the same.
     await act(async () => host.sourceChanged("src/Dashboard.tsx"));
-    expect(send.disabled).toBe(true);
-    await waitFor(() => expect(send.disabled).toBe(false), { timeout: 4000 });
+    expect(isOff(send)).toBe(true);
+    await waitFor(() => expect(isOff(send)).toBe(false), { timeout: 4000 });
     // React gives the page no locator, so the same node is all it can be asked for.
     expect(host.picker.reselect).toHaveBeenCalledWith({
       sessionId: "session-1",
@@ -1732,6 +1851,32 @@ describe("stale selections", () => {
     expect(screen.getByRole("region", { name: "Selected element" }).textContent).toContain(
       "src/Dashboard.tsx:40"
     );
+  });
+
+  it("proves a React component selection again by the id it was selected by", async () => {
+    host.template = () => reactObservation();
+    await mountBound();
+    await act(async () =>
+      host.select(0, undefined, "user", { kind: "component", componentId: "r-save" })
+    );
+    await screen.findByRole("textbox", { name: "Request for the agent" });
+
+    await act(async () => host.sourceChanged("src/Dashboard.tsx"));
+    await waitFor(() => expect(host.picker.reselect).toHaveBeenCalled(), { timeout: 4000 });
+    // SaveButton has no call site to aim at, so its id is what keeps it a component.
+    expect(host.picker.reselect).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      elementId: "el-r",
+      framework: "react",
+      componentId: "r-save",
+    });
+    await waitFor(() => {
+      const state = session().getSnapshot().selection;
+      expect(state.status === "ready" && state.stale === null && state.selection.scope).toEqual({
+        kind: "component",
+        componentId: "r-save",
+      });
+    });
   });
 
   it("asks again by element id for a React pick made while its file was still settling", async () => {
@@ -1769,7 +1914,7 @@ describe("stale selections", () => {
     await act(async () => host.documentReady(1));
     // An id from the old document names some other element now, and there is
     // no locator to ask by: nothing is asked.
-    await screen.findByText("Select again — the page reloaded");
+    await screen.findAllByText("Page reloaded — select it again");
     expect(host.picker.reselect).not.toHaveBeenCalled();
   });
 
@@ -1788,7 +1933,8 @@ describe("stale selections", () => {
       return true;
     });
     await act(async () => host.sourceChanged(FILE));
-    await screen.findByText("Select again — the file changed", {}, { timeout: 4000 });
+    await screen.findAllByText("File changed — select it again", {}, { timeout: 4000 });
+    expectStaleAgrees("File changed — select it again");
     expect(host.calls("resolve")).toHaveLength(1);
     // The page is outlining the stand-in; it is told to stop.
     expect(host.preview.clearSelection).toHaveBeenCalledWith({ sessionId: "session-1" });
@@ -1809,7 +1955,7 @@ describe("stale selections", () => {
       return true;
     });
     await act(async () => host.sourceChanged(FILE));
-    await screen.findByText("Select again — the file changed", {}, { timeout: 4000 });
+    await screen.findAllByText("File changed — select it again", {}, { timeout: 4000 });
     expect(host.picker.reselect.mock.calls[0]![0].locator).toMatchObject({
       component: { file: CARD_CALL.file, line: 3, column: 0 },
     });
@@ -1821,10 +1967,10 @@ describe("stale selections", () => {
     await act(async () => host.sourceChanged(FILE));
     // A Tailwind class the stylesheet never held: the dev server reloads.
     await act(async () => host.documentReady(1));
-    expect(screen.queryByText("Select again — the page reloaded")).toBeNull();
+    expect(screen.queryAllByText("Page reloaded — select it again")).toHaveLength(0);
     await waitFor(() => expect(host.calls("resolve")).toHaveLength(2), { timeout: 4000 });
     expect(host.calls("resolve")[1]).toMatchObject({ documentEpoch: 1 });
-    expect(screen.queryByText("Select again — the page reloaded")).toBeNull();
+    expect(screen.queryAllByText("Page reloaded — select it again")).toHaveLength(0);
     expect(screen.queryByRole("region", { name: "Selected element" })).not.toBeNull();
   });
 
@@ -1842,7 +1988,7 @@ describe("stale selections", () => {
       return true;
     });
     await act(async () => host.documentReady(1));
-    await screen.findByText("Select again — the page reloaded", {}, { timeout: 4000 });
+    await screen.findAllByText("Page reloaded — select it again", {}, { timeout: 4000 });
     // And the page was not asked for it by that id in the first place.
     expect(host.picker.reselect.mock.calls[0]![0]).not.toHaveProperty("elementId");
     expect(host.calls("resolve")).toHaveLength(1);
@@ -1855,7 +2001,7 @@ describe("stale selections", () => {
       return true;
     });
     await act(async () => host.documentReady(1));
-    await screen.findByText("Select again — the page reloaded", {}, { timeout: 4000 });
+    await screen.findAllByText("Page reloaded — select it again", {}, { timeout: 4000 });
     expect(host.calls("resolve")).toHaveLength(1);
   });
 
@@ -1865,13 +2011,15 @@ describe("stale selections", () => {
     await waitFor(() => expect(host.preview.setMode).toHaveBeenCalled());
     await act(async () => host.sourceChanged(FILE));
     // The page answers only in Inspect mode, so this one is the user's to see.
-    await screen.findByText("Select again — the file changed");
+    await screen.findAllByText("File changed — select it again");
     await pause(HMR_SETTLE_MS + PAST_REATTACH_MS);
     expect(host.picker.reselect).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("radio", { name: "Inspect" }));
     await waitFor(() => expect(host.calls("resolve")).toHaveLength(2), { timeout: 4000 });
-    await waitFor(() => expect(screen.queryByText("Select again — the file changed")).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryAllByText("File changed — select it again")).toHaveLength(0)
+    );
   });
 
   it("stops asking, and says so, when the page never finds the element", async () => {
@@ -1880,7 +2028,7 @@ describe("stale selections", () => {
     vi.useFakeTimers();
     await act(async () => host.sourceChanged(FILE));
     await elapse(HMR_SETTLE_MS * 10);
-    expect(screen.getByText("Select again — the file changed")).toBeTruthy();
+    expect(screen.getAllByText("File changed — select it again").length).toBeGreaterThan(0);
     // Bounded: one ask per settle window, then the selection is the user's.
     expect(host.picker.reselect).toHaveBeenCalledTimes(6);
     await elapse(HMR_SETTLE_MS * 10);
@@ -1894,7 +2042,7 @@ describe("stale selections", () => {
       return true;
     });
     await act(async () => host.sourceChanged(FILE));
-    await screen.findByText("Select again — the file changed", {}, { timeout: 4000 });
+    await screen.findAllByText("File changed — select it again", {}, { timeout: 4000 });
     // Never resolved: what now sits at that location is not what was selected.
     expect(host.calls("resolve")).toHaveLength(1);
     expect(host.preview.clearSelection).toHaveBeenCalled();
@@ -1956,13 +2104,17 @@ describe("stale selections", () => {
     // The new page is asked for the selection, and answers for its own epoch.
     await waitFor(() => expect(host.calls("resolve")).toHaveLength(2), { timeout: 4000 });
     expect(host.calls("resolve")[1]).toMatchObject({ documentEpoch: 1 });
-    await waitFor(() => expect(screen.queryByText("Selection changed — select again")).toBeNull());
-    await waitFor(() => expect(screen.queryByText("Select again — the page reloaded")).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryAllByText("Page changed — select it again")).toHaveLength(0)
+    );
+    await waitFor(() =>
+      expect(screen.queryAllByText("Page reloaded — select it again")).toHaveLength(0)
+    );
 
     // The late push for the epoch we are already in must not invalidate anything.
     await act(async () => host.epochAdvanced(1));
-    expect(screen.queryByText("Selection changed — select again")).toBeNull();
-    expect(screen.queryByText("Select again — the page reloaded")).toBeNull();
+    expect(screen.queryAllByText("Page changed — select it again")).toHaveLength(0);
+    expect(screen.queryAllByText("Page reloaded — select it again")).toHaveLength(0);
   });
 
   it("drops a resolve when the owning file changed while it was out", async () => {
@@ -1980,7 +2132,7 @@ describe("stale selections", () => {
     await act(async () => finish());
     // The answer paired old markup with new bytes, so it is thrown away — and
     // the click asked for again rather than handed back.
-    await screen.findByText("Waiting for the preview to update");
+    await screen.findAllByText("Waiting for the preview to update");
     expect(screen.queryByRole("region", { name: "Selected element" })).toBeNull();
     await waitFor(() => expect(host.calls("resolve")).toHaveLength(2), { timeout: 4000 });
     await act(async () => finish());
@@ -2002,7 +2154,7 @@ describe("stale selections", () => {
       suspended: false,
     }));
     fireEvent.click(screen.getByRole("radio", { name: "Browse" }));
-    await screen.findByText("Select again — the page reloaded");
+    await screen.findAllByText("Page reloaded — select it again");
   });
 
   it("holds a click on a file that changed moments ago until HMR can land, then resolves it", async () => {
@@ -2014,7 +2166,7 @@ describe("stale selections", () => {
     await act(async () => host.select(0));
     // The host's answer pairs the click with bytes the page may not show yet,
     // so it is kept back rather than put on screen.
-    await screen.findByText("Waiting for the preview to update");
+    await screen.findAllByText("Waiting for the preview to update");
     expect(screen.queryByRole("textbox", { name: "Request for the agent" })).toBeNull();
     expect(host.calls("resolve")).toHaveLength(1);
 
@@ -2037,7 +2189,7 @@ describe("stale selections", () => {
     await waitFor(() => expect(host.calls("resolve")).toHaveLength(1));
     await act(async () => host.epochAdvanced(1));
     await act(async () => finish());
-    await screen.findByText("Selection changed — select again");
+    await screen.findAllByText("Page changed — select it again");
     expect(screen.queryByRole("region", { name: "Selected element" })).toBeNull();
   });
 });
@@ -2075,7 +2227,7 @@ describe("lifetime", () => {
     await act(async () => host.select(0));
     await screen.findByText(/EACCES/);
     expect(host.calls("openWorkspace")).toHaveLength(2);
-    expect(screen.getByRole("alert").textContent).toContain("Couldn't open the site source");
+    expect(screen.getByRole("alert").textContent).toContain("Couldn't read the site source");
   });
 
   it("keeps working with no plugin loaded, and with the plugins that used to own it switched off", async () => {
@@ -2201,7 +2353,7 @@ describe("preview reattach", () => {
         suspended: true,
       })
     );
-    await screen.findByText("Paused — this page isn't at a local address");
+    await screen.findAllByText("Paused — this page isn't at a local address");
     // An observation, not a fault: the binding is intact, so nothing to click
     // and no reconnect attempt of the controller's own.
     expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull();
@@ -2218,7 +2370,7 @@ describe("preview reattach", () => {
       })
     );
     await waitFor(() =>
-      expect(screen.queryByText("Paused — this page isn't at a local address")).toBeNull()
+      expect(screen.queryAllByText("Paused — this page isn't at a local address")).toHaveLength(0)
     );
     expect(host.picker.bind).toHaveBeenCalledTimes(1);
   });
@@ -2285,7 +2437,7 @@ describe("picker lifetime while switched on", () => {
     publishDevPreviewToolContext({ ...hostContext(), isWebviewReady: false });
     useDevPreviewToolStore.getState().setActive("preview-1", ELEMENT_PICKER_TOOL_ID);
     render(<PickerHarness />, { wrapper: TooltipProvider });
-    await screen.findByText("Waiting for the page to load");
+    await screen.findByText("Connecting to the page");
     // A cold dev server: long enough for the backoff to reach its long steps.
     await elapse(40_000);
 
@@ -2296,7 +2448,7 @@ describe("picker lifetime while switched on", () => {
       publishDevPreviewToolContext(hostContext());
       await vi.advanceTimersByTimeAsync(1_000);
     });
-    expect(screen.queryByText("Waiting for the page to load")).toBeNull();
+    expect(screen.queryByText("Connecting to the page")).toBeNull();
     expect(session().getSnapshot().binding.status).toBe("bound");
   });
 
@@ -2313,7 +2465,7 @@ describe("picker lifetime while switched on", () => {
       return boundState(request);
     });
     mount();
-    await screen.findByText("Waiting for the page to load");
+    await screen.findByText("Connecting to the page");
     await elapse(12_000);
     expect(session().getSnapshot().binding.status).toBe("bound");
   });
@@ -2337,7 +2489,7 @@ describe("picker lifetime while switched on", () => {
     publishDevPreviewToolContext({ ...hostContext(), isWebviewReady: false });
     useDevPreviewToolStore.getState().setActive("preview-1", ELEMENT_PICKER_TOOL_ID);
     render(<PickerHarness />, { wrapper: TooltipProvider });
-    await screen.findByText("Waiting for the page to load");
+    await screen.findByText("Connecting to the page");
     // Through every step but the last, whose attempt is the one held open.
     await elapse(61_000);
     pageUp = true;
@@ -2358,11 +2510,13 @@ describe("picker lifetime while switched on", () => {
       throw new Error("The preview's page refused the runtime");
     });
     mount();
-    await screen.findByText("Waiting for the page to load");
+    await screen.findByText("Connecting to the page");
     await elapse(10 * 60_000);
-    await screen.findByText(
-      "Couldn't connect to the page — The preview's page refused the runtime"
-    );
+    await screen.findAllByText("Couldn't connect to the page");
+    expect(text()).not.toContain("refused the runtime");
+    const details = screen.getByRole("button", { name: "Details" });
+    act(() => details.focus());
+    await waitFor(() => expect(text()).toContain("The preview's page refused the runtime"));
   });
 });
 
@@ -2445,16 +2599,16 @@ async function agentActions(options: { onSend?: () => Promise<void> } = {}) {
 async function typeAndSend() {
   const request = screen.getByRole("textbox", { name: "Request for the agent" });
   fireEvent.change(request, { target: { value: "Say Upgrade" } });
-  const send = () => screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
-  await waitFor(() => expect(send().disabled).toBe(false));
+  const send = () => screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+  await waitFor(() => expect(isOff(send())).toBe(false));
   fireEvent.click(send());
 }
 
 describe("delivery across the picker's lifetime", () => {
-  it("types nothing into the agent when the picker is switched off during the readiness wait", async () => {
-    // The request is waiting on an agent that has shown no sign it can take
-    // input. The picker going away has to stop the run itself — and a session
-    // that reaches its prompt afterwards must not be typed into.
+  it("still delivers a request when its agent becomes ready after the picker is switched off", async () => {
+    // Closing the picker puts it away. A request Send already accepted is still
+    // on its way, and the source it cites stays open to be checked against
+    // until it has gone in.
     panels(true);
     const agent = await agentActions();
     await mountSelected();
@@ -2463,14 +2617,156 @@ describe("delivery across the picker's lifetime", () => {
 
     cleanup();
     await switchOff();
-    const pollsAtSwitchOff = agent.polls();
+    expect(host.calls("closeWorkspace")).toEqual([]);
+    agent.becomeReady();
+
+    await waitFor(() => expect(agent.sent).toHaveLength(1), { timeout: 4_000 });
+    expect(agent.sent[0]).toContain("Say Upgrade");
+    await waitFor(() => expect(host.calls("closeWorkspace")).toEqual([{ workspaceId: "ws-1" }]));
+    expect(readComposerMemory(composerMemoryKey("preview-1", "wt-1")).deliveries).toEqual([
+      expect.objectContaining({ instruction: "Say Upgrade", state: { status: "sent" } }),
+    ]);
+  });
+
+  it("brings back the draft and a waiting request when the picker is opened again", async () => {
+    panels(true);
+    const agent = await agentActions();
+    await mountSelected();
+    await typeAndSend();
+    await waitFor(() => expect(agent.polls()).toBeGreaterThan(1));
+    const request = screen.getByRole("textbox", { name: "Request for the agent" });
+    fireEvent.change(request, { target: { value: "And make it bold" } });
+
+    cleanup();
+    await switchOff();
+    // The next session gets a workspace of its own, as the host hands out.
+    host.openWith = () => ({
+      status: "ready",
+      workspaceId: "ws-2",
+      appPath: ".",
+      appPaths: ["."],
+      scanComplete: true,
+    });
+    mount();
+    await waitFor(() => expect(host.calls("openWorkspace")).toHaveLength(2));
+    await screen.findByRole("radio", { name: "Browse" });
+    await act(async () => host.documentReady(0));
+
+    const reopened = (await screen.findByRole("textbox", {
+      name: "Request for the agent",
+    })) as HTMLTextAreaElement;
+    expect(reopened.value).toBe("And make it bold");
+    expect(readComposerMemory(composerMemoryKey("preview-1", "wt-1")).deliveries).toEqual([
+      expect.objectContaining({ instruction: "Say Upgrade", state: { status: "queued" } }),
+    ]);
+
+    // Still about what it was written about, and sendable through the new session.
+    const send = () => screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+    await waitFor(() => expect(isOff(send())).toBe(false));
+    fireEvent.click(send());
+    agent.becomeReady();
+
+    await waitFor(() => expect(agent.sent).toHaveLength(2), { timeout: 8_000 });
+    expect(agent.sent[0]).toContain("Say Upgrade");
+    expect(agent.sent[1]).toContain("And make it bold");
+    // The closed session waited for its own request, then let its workspace go.
+    await waitFor(() => expect(host.calls("closeWorkspace")).toEqual([{ workspaceId: "ws-1" }]));
+  });
+
+  it("lets an idle reopened session go at once, and tells its picks from the restored pin", async () => {
+    panels(true);
+    const agent = await agentActions();
+    await mountSelected();
+    await typeAndSend();
+    fireEvent.change(screen.getByRole("textbox", { name: "Request for the agent" }), {
+      target: { value: "And make it bold" },
+    });
+    cleanup();
+    await switchOff();
+    host.openWith = () => ({
+      status: "ready",
+      workspaceId: "ws-2",
+      appPath: ".",
+      appPaths: ["."],
+      scanComplete: true,
+    });
+    mount();
+    await screen.findByRole("radio", { name: "Browse" });
+    await act(async () => host.documentReady(0));
+    await act(async () => host.select(0));
+    // Same element, same epoch, new session: not the selection the draft was pinned to.
+    await screen.findByRole("button", { name: /^Switch to / });
+
+    cleanup();
+    await switchOff();
+    expect(host.calls("closeWorkspace")).toEqual([{ workspaceId: "ws-2" }]);
+    expect(agent.sent).toEqual([]);
+  });
+
+  it("won't send a restored draft whose source changed while the picker was closed", async () => {
+    panels(true);
+    const agent = await agentActions();
+    await mountSelected();
+    const request = screen.getByRole("textbox", { name: "Request for the agent" });
+    fireEvent.change(request, { target: { value: "Say Upgrade" } });
+
+    cleanup();
+    await switchOff();
+    host.diskRevisions.set(FILE, sha("edited while closed"));
+    host.openWith = () => ({
+      status: "ready",
+      workspaceId: "ws-2",
+      appPath: ".",
+      appPaths: ["."],
+      scanComplete: true,
+    });
+    mount();
+    await waitFor(() => expect(host.calls("openWorkspace")).toHaveLength(2));
+    agent.becomeReady();
+    const send = () => screen.getByRole("button", { name: SEND_NAME }) as HTMLButtonElement;
+    await waitFor(() => expect(isOff(send())).toBe(false));
+    fireEvent.click(send());
+
+    await waitFor(() =>
+      expect(readComposerMemory(composerMemoryKey("preview-1", "wt-1")).deliveries).toEqual([
+        expect.objectContaining({
+          instruction: "Say Upgrade",
+          state: expect.objectContaining({ status: "failed" }),
+        }),
+      ])
+    );
+    expect(agent.sent).toEqual([]);
+  });
+
+  it("types nothing into the agent when the preview is trashed during the readiness wait", async () => {
+    // The request is waiting on an agent that has shown no sign it can take
+    // input. The preview going away has to stop the run itself — and a session
+    // that reaches its prompt afterwards must not be typed into.
+    panels(true);
+    const agent = await agentActions();
+    await mountSelected();
+    await typeAndSend();
+    await waitFor(() => expect(agent.polls()).toBeGreaterThan(1));
+
+    cleanup();
+    await act(async () =>
+      usePanelStore.setState((state) => ({
+        panelsById: {
+          ...state.panelsById,
+          "preview-1": { ...state.panelsById["preview-1"]!, location: "trash" },
+        } as never,
+      }))
+    );
+    const pollsAtTrash = agent.polls();
     await pause(QUIET_WINDOW_MS);
     agent.becomeReady();
     await pause(QUIET_WINDOW_MS);
 
     expect(agent.sent).toEqual([]);
     // And the run really stopped, rather than quietly polling on.
-    expect(agent.polls()).toBe(pollsAtSwitchOff);
+    expect(agent.polls()).toBe(pollsAtTrash);
+    expect(readComposerMemory(composerMemoryKey("preview-1", "wt-1")).deliveries).toEqual([]);
+    await waitFor(() => expect(host.calls("closeWorkspace")).toEqual([{ workspaceId: "ws-1" }]));
   });
 
   it("doesn't retry a request the picker was switched off in the middle of writing", async () => {
@@ -2520,7 +2816,7 @@ describe("delivery across the picker's lifetime", () => {
     await waitFor(() => expect(agent.sent).toHaveLength(1), { timeout: 4_000 });
     expect(agent.sent[0]).toContain("Say Upgrade");
     expect(agent.launches).toEqual(["claude"]);
-    await screen.findByText(/^Sent to /);
+    await within(await screen.findByRole("list", { name: "Requests" })).findByText(/^Sent to /);
   });
 });
 
@@ -2648,9 +2944,10 @@ describe("issue recovery", () => {
     await mountSelected();
     await act(async () => host.runtimeIssue("capacity", { detail: "capped at 24 nodes" }));
 
-    await waitFor(() => expect(text()).toContain("past a limit the Element Picker works within"));
-    // The page's own words survive under ours, so the notice says which limit.
-    expect(text()).toContain("capped at 24 nodes");
+    await waitFor(() => expect(text()).toContain("Outer components were left out"));
+    // The guest's own words are a log line, not copy: the headline says which
+    // limit in the product's terms.
+    expect(text()).not.toContain("capped at 24 nodes");
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull();
     // And the selection it was about is still there.
@@ -2661,12 +2958,12 @@ describe("issue recovery", () => {
     await mountBound();
     await act(async () => host.runtimeIssue("metadata-unavailable", { framework: "svelte" }));
 
-    await waitFor(() => expect(text()).toContain("no Svelte source locations"));
+    await waitFor(() => expect(text()).toContain("No Svelte source locations"));
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-    await waitFor(() => expect(text()).not.toContain("no Svelte source locations"));
+    await waitFor(() => expect(text()).not.toContain("No Svelte source locations"));
   });
 });
 
@@ -2895,7 +3192,7 @@ describe("an element with nothing to trace", () => {
     await screen.findByRole("textbox", { name: "Request for the agent" });
     const identity = screen.getByRole("region", { name: "Selected element" });
     expect(identity.textContent).toContain("main > button.cta");
-    expect(identity.textContent).toContain("Not traced to source");
+    expect(identity.textContent).toContain("No source reported for this element");
     // Taken when the element was picked, cropped to the box the page measured.
     expect(host.captureElement).toHaveBeenCalledWith("preview-1", {
       rect: { x: 40, y: 80, width: 120, height: 40 },
@@ -2918,6 +3215,25 @@ describe("an element with nothing to trace", () => {
     expect(prompt).not.toContain("- App:");
     expect(prompt).toContain("no source file was traced");
     expect(prompt).not.toContain("file references");
+  });
+
+  it("leaves what a request includes to the Includes row, which says when there is no picture", async () => {
+    withAgent("term-noshot");
+    host.captureElement.mockResolvedValueOnce({ status: "offscreen" });
+    await mountBound();
+    await act(async () => host.select(0, [PAGE_NODE]));
+
+    await screen.findByRole("textbox", { name: "Request for the agent" });
+    const identity = screen.getByRole("region", { name: "Selected element" });
+    expect(identity.textContent).toContain("No source reported for this element");
+    // The notice says why there is no source, never what a request carries.
+    expect(identity.textContent).not.toMatch(/screenshot|markup|styles|request carries/i);
+    // Parts keep their words together with non-breaking spaces.
+    await waitFor(() =>
+      expect(document.querySelector("[data-composer-includes]")?.textContent).toMatch(
+        /no\sscreenshot/
+      )
+    );
   });
 
   it("goes without a picture, and says why, when the element is off screen", async () => {
@@ -3051,7 +3367,7 @@ describe("an element with nothing to trace", () => {
     await act(async () => answer({ status: "unavailable", reason: "unknown-worktree" }));
     const identity = await screen.findByRole("region", { name: "Selected element" });
     // The page said where it is written; nothing here could check it.
-    expect(identity.textContent).toContain("Source not checked");
+    expect(identity.textContent).toContain("Location not checked against source");
     expect(host.calls("resolve")).toEqual([]);
     const prompt = await sendRequest(sent);
     // The picture taken at the click, of what was clicked.

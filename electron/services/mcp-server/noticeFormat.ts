@@ -251,6 +251,24 @@ export function formatRetiredExchangesLine(
   return `Daintree: assistant messaging was retired in this update, so ${total} ${noun} sent to other hosts' assistants will get no reply and are no longer followed: ${named.join(", ")}. Their work may already have run. Check it there with host.call before asking again.`;
 }
 
+/**
+ * What the user approved from the Assistant panel's tier banner (#14995): one
+ * tool by "Allow this tool", or the whole session's tool set by "Set project
+ * default". Both are a validated action id or tier, never caller text.
+ */
+export type AssistantApproval = { kind: "tool"; toolId: string } | { kind: "tier"; tier: string };
+
+/**
+ * The line telling an assistant its refused call may now go through. It
+ * invites a retry rather than replaying the call: the call was refused, and
+ * the assistant may have moved on since.
+ */
+export function formatAssistantApprovalLine(approval: AssistantApproval): string {
+  return approval.kind === "tool"
+    ? `Daintree: the user allowed '${approval.toolId}' for this session. Retry it if you still need it.`
+    : `Daintree: the user raised this session to the '${approval.tier}' tool set. Retry what it refused if you still need it.`;
+}
+
 /** What became of a `host.watch` (#14463), as its run is told: observations only. */
 export interface HostWatchNotice {
   hostName: string;

@@ -35,9 +35,9 @@ import { Spinner } from "@/components/ui/Spinner";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useFrozenBackdrop } from "./useFrozenBackdrop";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Callout } from "@/components/ui/Callout";
+import { DismissButton } from "@/components/ui/DismissButton";
 import { itemNeedsAttention, repliedAt, type CanopyItem } from "./canopyModel";
 import { isWorkerEntry } from "./canopyInboxProjection";
 import { CanopyCard, canopyCardDomId } from "./CanopyCard";
@@ -53,6 +53,7 @@ import { CanopyEmptyLine } from "./CanopyEmptyLine";
 import { CanopyStatusBar, formatModelBytes } from "./CanopyStatusBar";
 import { CanopyPlace } from "./CanopyPlace";
 import { CanopyPitch } from "./CanopyPitch";
+import { CanopyListColumn } from "./CanopyListColumn";
 import { CANOPY_TITLE } from "./canopyTerms";
 import { CanopyHeaderCenter, CanopyHostPicker, useCanopyHostRows } from "./CanopyHostPicker";
 import { CanopyHostOffer, CanopyHostOutdated } from "./CanopyHostOffer";
@@ -292,7 +293,6 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
     if (!hostListed) setHostId(null);
   }, [hostListed, setHostId]);
   useOverlayClaim("canopy", isOpen);
-  const still = useFrozenBackdrop(isOpen);
   // A view put in the background — another project shown in its place — can
   // be seen by no one: an inbox left open there would acknowledge asks nobody
   // saw, keep its pages held back, and hold an agent's terminal at its size.
@@ -362,17 +362,11 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
     };
   }, [isOpen, showingOwnHost, applySnapshot]);
 
-  const backdrop =
-    still === null ? undefined : (
-      <img src={still} alt="" draggable={false} className="h-screen w-screen max-w-none" />
-    );
-
   // Every host together: each host's own Canopy says whether it is on, inside
   // the inbox, and none is turned on by being listed.
   if (readingAll) {
     return (
       <CanopyInbox
-        backdrop={backdrop}
         restoreOpener={restoreOnReplace}
         hostId={ALL_HOSTS_ID}
         hostRow={null}
@@ -387,7 +381,6 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
     const hostRow = hostRows?.find((row) => row.hostId === hostId) ?? null;
     return (
       <CanopyInbox
-        backdrop={backdrop}
         restoreOpener={restoreOnReplace}
         hostId={hostId}
         hostRow={hostRow}
@@ -404,13 +397,11 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
       <AppDialog
         isOpen={isOpen}
         onClose={close}
-        size="workspace"
-        maxHeight="h-[min(90vh,1100px)]"
+        placement="window"
         // Nothing to land on yet, and Close is no place for a reflexive Enter.
         initialFocus="none"
         restoreFocusTo={restoreOnReplace}
         preferRestoreFocusTo
-        backdrop={backdrop}
         data-testid="canopy-dialog"
       >
         <AppDialog.Header>
@@ -433,11 +424,9 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
       <AppDialog
         isOpen={isOpen}
         onClose={close}
-        size="workspace"
-        maxHeight="h-[min(90vh,1100px)]"
+        placement="window"
         restoreFocusTo={restoreOnReplace}
         preferRestoreFocusTo
-        backdrop={backdrop}
         data-testid="canopy-dialog"
       >
         <AppDialog.Header>
@@ -457,7 +446,6 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
       <CanopyPitch
         isOpen={isOpen}
         onClose={close}
-        backdrop={backdrop}
         onTurnOn={() => window.electron.canopy.setMode("on").then(applySnapshot)}
         onHide={hideCanopy}
         restoreFocusTo={restoreOnReplace}
@@ -467,7 +455,6 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
   }
   return (
     <CanopyInbox
-      backdrop={backdrop}
       restoreOpener={restoreOnReplace}
       hostId={null}
       hostRow={null}
@@ -489,6 +476,15 @@ interface ShortcutRow {
  * Every key the panel answers to, one press away instead of always on screen,
  * grouped by where the keyboard is: the pane's keys are the agent's.
  */
+/** Sets the title bar's status apart from the title, as the status's own parts are. */
+function TitleDot() {
+  return (
+    <span aria-hidden="true" className="mx-2 shrink-0 text-sm text-text-secondary">
+      ·
+    </span>
+  );
+}
+
 function CanopyShortcuts() {
   const step = isMac() ? "Cmd" : "Alt";
   // How to get here again: the user's own binding, and double-Shift while on.
@@ -570,7 +566,7 @@ function CanopyShortcuts() {
       <Tooltip>
         <TooltipTrigger asChild>
           <PopoverTrigger asChild>
-            <Button variant="ghost" size="icon-xs" aria-label="Keyboard shortcuts">
+            <Button variant="ghost" size="icon-sm" aria-label="Keyboard shortcuts">
               <Keyboard />
             </Button>
           </PopoverTrigger>
@@ -615,7 +611,6 @@ function CanopyShortcuts() {
 }
 
 function CanopyInbox({
-  backdrop,
   restoreOpener,
   hostId,
   hostRow,
@@ -623,7 +618,6 @@ function CanopyInbox({
   hostPicker,
   onOfferReading = null,
 }: {
-  backdrop: React.ReactNode;
   /** What had the keyboard when the panel opened, while it is still there. */
   restoreOpener: () => HTMLElement | null;
   /** The other host the panel shows, or null for the window's own. */
@@ -822,9 +816,7 @@ function CanopyInbox({
   useLayoutEffect(() => {
     if (openedRunId !== null) acknowledgeOpened(openedRunId);
   }, [openedRunId, acknowledgeOpened]);
-  // The list is placed once the run this render selects is known: the band
-  // never loses it under the user, even when a rank lands with the selection.
-  useLayoutEffect(() => placeOrder(openedRunId), [placeOrder, openedRunId, orderWake]);
+  useLayoutEffect(() => placeOrder(), [placeOrder, orderWake]);
   const { reserveUndo, undoReads, undoLine } = useCanopyInboxUndo({ hostId, api });
 
   // A held reorder is said once, not row by row as its scores land.
@@ -966,6 +958,8 @@ function CanopyInbox({
     readerOff && !hostOutdated
       ? (onOfferReading ?? (hostOffer ? () => setHostOfferOpen(true) : null))
       : null;
+  const readingOfferDismissed = useCanopyStore((s) => s.readingOfferDismissed);
+  const dismissReadingOffer = useCanopyStore((s) => s.dismissReadingOffer);
 
   // Canopy's Trash: every agent run the host's trash holds, any project's.
   const trashRef = useRef<CanopyTrashSectionHandle>(null);
@@ -1115,9 +1109,10 @@ function CanopyInbox({
           : hostOfferShown
             ? `Canopy is off on ${hostName}`
             : null;
-  // A run that needs the user, held out of the band until the list may re-rank:
+  // The band is behind who needs the user until the list may re-rank — a run
+  // that needs them held out of it, or one that no longer does held in it:
   // nothing is concluded meanwhile.
-  const unsorted = inbox.inbox.some((item) => itemNeedsAttention(item) && !band.has(item.runId))
+  const unsorted = inbox.inbox.some((item) => itemNeedsAttention(item) !== band.has(item.runId))
     ? { words: "Not every agent is sorted yet", allClear: false }
     : null;
   // What the line and the empty band both say while no agent needs the user, and
@@ -1161,9 +1156,10 @@ function CanopyInbox({
             ? "No agents in this project"
             : "No agents are running"
           : // What needs you leads; what is new follows. The list's own heading
-            // counts the agents.
+            // counts the agents. A count the band is behind says so too.
             [
               needsYou > 0 ? needsYouLead : nothingWaiting.words,
+              needsYou > 0 ? unsorted?.words : null,
               unreadCount > 0 ? `${unreadCount.toLocaleString()} unread` : null,
             ]
               .filter(Boolean)
@@ -1365,7 +1361,7 @@ function CanopyInbox({
           type="button"
           data-testid="canopy-needs-you-count"
           onClick={showNeedsYou}
-          className="rounded-sm text-text-primary outline-hidden hover:underline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-selection-outline"
+          className="rounded-sm font-medium text-text-primary tabular-nums outline-hidden hover:underline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-selection-outline"
         >
           {needsYouLead}
         </button>
@@ -1438,7 +1434,6 @@ function CanopyInbox({
     <>
       <SegmentedRadioGroup<CanopyRoleFilter>
         aria-label="Roles to show"
-        density="compact"
         className="mr-3"
         value={roleFilter}
         onChange={setRoleFilter}
@@ -1457,7 +1452,6 @@ function CanopyInbox({
       {!otherHost && (
         <SegmentedRadioGroup<"all" | "project">
           aria-label="Agents to show"
-          density="compact"
           className="mr-3"
           value={scope}
           onChange={setScope}
@@ -1468,25 +1462,28 @@ function CanopyInbox({
         />
       )}
       <CanopyShortcuts />
-      {/* Nothing is read while the reader is off, so there is nothing to refresh. */}
-      {!readerOff && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              ref={refreshRef}
-              variant="ghost"
-              size="icon-xs"
-              aria-label="Refresh"
-              aria-busy={refreshes > 0 || undefined}
-              disabled={canopy === null}
-              onClick={refresh}
-            >
-              <SpinningIcon icon={RefreshCw} active={refreshes > 0} />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Refresh</TooltipContent>
-        </Tooltip>
-      )}
+      {/* Nothing is read while the reader is off, so there is nothing to refresh;
+          its slot stays, so the filters don't move when reading turns on or off. */}
+      <span className="flex size-7 shrink-0 items-center justify-center">
+        {!readerOff && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                ref={refreshRef}
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Refresh"
+                aria-busy={refreshes > 0 || undefined}
+                disabled={canopy === null}
+                onClick={refresh}
+              >
+                <SpinningIcon icon={RefreshCw} active={refreshes > 0} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Refresh</TooltipContent>
+          </Tooltip>
+        )}
+      </span>
       <AppDialog.CloseButton />
     </>
   );
@@ -1495,26 +1492,27 @@ function CanopyInbox({
     <AppDialog
       isOpen={isOpen}
       onClose={close}
-      size="workspace"
-      maxHeight="h-[min(90vh,1100px)]"
+      placement="window"
       // The panel lands on its first run itself, two frames in; the dialog's own
       // first-control focus would race it. With no rows to land on, the first
       // control takes focus instead of leaving it on whatever opened the panel.
       initialFocus={items.length > 0 && !hostHeld ? "none" : "first"}
       restoreFocusTo={() => focusAfterClose() ?? restoreOpener()}
       preferRestoreFocusTo
-      backdrop={backdrop}
       data-testid="canopy-dialog"
     >
       <AppDialog.Header>
         {hostPicker ? (
           // Three parts, the outer two sharing what is left, so the picker
-          // stands in the middle of the header.
+          // stands in the middle of the header. The controls' part never
+          // goes below their own width: in a narrow window the words give way
+          // and the picker leaves the middle rather than run under them.
           <>
             <span className="flex min-w-0 flex-1 basis-0 items-center">
               <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
+              <TitleDot />
               <span
-                className="mx-3 min-w-0 flex-1 truncate text-sm text-text-secondary"
+                className="mr-3 min-w-0 flex-1 truncate text-sm text-text-secondary"
                 data-testid="canopy-summary"
               >
                 {headerWords}
@@ -1535,15 +1533,16 @@ function CanopyInbox({
                 </span>
               )}
             </span>
-            <span className="ml-3 flex min-w-0 flex-1 basis-0 items-center justify-end">
+            <span className="ml-3 flex flex-1 basis-0 items-center justify-end">
               {headerControls}
             </span>
           </>
         ) : (
           <>
             <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
+            <TitleDot />
             <span
-              className="mr-3 ml-3 min-w-0 flex-1 truncate text-sm text-text-secondary"
+              className="mr-3 min-w-0 flex-1 truncate text-sm text-text-secondary"
               data-testid="canopy-summary"
             >
               {headerWords}
@@ -1555,7 +1554,7 @@ function CanopyInbox({
 
       <div
         ref={bodyRef}
-        className="flex min-h-0 flex-1 flex-col"
+        className="canopy-frame flex min-h-0 flex-1 flex-col"
         onKeyDownCapture={onAgentStepKeyDownCapture}
         onKeyDown={onNavigationKeyDown}
       >
@@ -1660,12 +1659,54 @@ function CanopyInbox({
             )}
           </div>
         )}
+        {/* A listed inbox with the reader off reads as broken unless it says
+            why: the offer once, above it, until put away. An empty one has
+            the status bar's offer under its own message, and the assistants
+            alone aren't what reading reads. */}
+        {offerReading &&
+          !readingOfferDismissed &&
+          !hostHeld &&
+          workersShown &&
+          items.length > 0 && (
+            <div
+              data-canopy-reading-offer=""
+              className="flex shrink-0 flex-col gap-2 border-b border-border-default p-3"
+            >
+              <Callout
+                severity="neutral"
+                size="compact"
+                action={
+                  <Button variant="outline" size="xs" onClick={offerReading}>
+                    Turn on reading
+                  </Button>
+                }
+                dismiss={
+                  <DismissButton
+                    aria-label="Dismiss reading offer"
+                    className="-my-1"
+                    onClick={(event) => {
+                      // The X leaves with the callout: the keyboard stays in the
+                      // panel, on the search.
+                      searchRef.current?.focus({
+                        preventScroll: true,
+                        focusVisible: event.detail === 0,
+                      });
+                      dismissReadingOffer();
+                    }}
+                  />
+                }
+              >
+                Get a short summary of what each agent did, from a small model on{" "}
+                {otherHost ? hostName : "this computer"}.
+              </Callout>
+            </div>
+          )}
         {!hostHeld && (items.length > 0 || listsAssistants || listsTrash) && (
           // An inbox: what needs you down a sidebar, most urgent first, the rest
           // folded away beneath it, and the selected agent's own terminal beside
           // it, drawn as its pane.
           <div className="flex min-h-0 flex-1">
-            <div className="canopy-inbox-column flex min-h-0 w-[28rem] shrink-0 flex-col self-stretch border-r border-border-default">
+            <CanopyListColumn className="canopy-inbox-column flex min-h-0 shrink-0 flex-col self-stretch border-r border-border-default">
               <div className="shrink-0 px-3 pt-3 pb-1">
                 <SearchField
                   size="compact"
@@ -1909,6 +1950,7 @@ function CanopyInbox({
                                       ? selectedAssistant?.id === item.id
                                       : listed.length === 0 && index === 0
                                   }
+                                  nowMs={nowMs}
                                   onSelect={() => selectAssistant(item.id)}
                                   onOpen={() => openAssistant(item)}
                                   onKeyDown={(event) => onAssistantKeyDown(event, item)}
@@ -1953,6 +1995,7 @@ function CanopyInbox({
                                   ? selectedAssistant.id === item.id
                                   : index === 0
                               }
+                              nowMs={nowMs}
                               onSelect={() => selectAssistant(item.id)}
                               onOpen={() => openAssistant(item)}
                               onKeyDown={(event) => onAssistantKeyDown(event, item)}
@@ -2064,7 +2107,7 @@ function CanopyInbox({
                 waiting={canopy?.waiting}
                 offer={offerReading}
               />
-            </div>
+            </CanopyListColumn>
             {/* Inset on every side: the top one puts the place line level with the
                 search beside it, and the card's top with the Inbox bar's. */}
             <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-surface-canvas p-2">
@@ -2114,6 +2157,7 @@ function CanopyInbox({
                       terminalApi={terminalApi}
                       workLabel={workLabelOf(focusedItem)}
                       moveOnTo={moveOnTo}
+                      reading={!readerOff}
                       reconnecting={
                         everyHost
                           ? focusedLinkStatus !== undefined && focusedLinkStatus !== "connected"

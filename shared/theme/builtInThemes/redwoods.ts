@@ -33,7 +33,7 @@ export const theme: BuiltInThemeSource = {
     status: {
       success: "#5A7E52",
       warning: "#BA8A42",
-      danger: "#B85C52",
+      danger: "#C76A5F",
       info: "#6B8287",
     },
     activity: {
@@ -82,6 +82,12 @@ export const theme: BuiltInThemeSource = {
     },
   },
   tokens: {
+    // Solid so the field edge clears 3:1 on every surface a field sits on
+    // (3.20–3.85:1); the alpha `border-strong` it used to follow measured
+    // 1.19–1.23:1. A step above what the surfaces alone need, for the
+    // typed-name confirm field's 10% `status-danger` well, which the red-green
+    // colour-vision override makes lighter still (3.09:1 there).
+    "border-input": "#866858",
     "border-strong": "rgba(180,140,120,0.14)",
     "border-subtle": "rgba(180,140,120,0.08)",
     // Bark striation; total perceived alpha must stay ≤ ~2% (above reads as dirt).

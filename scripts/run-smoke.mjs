@@ -17,7 +17,7 @@ import { access, mkdtemp, rm } from "fs/promises";
 import { createRequire } from "module";
 import os from "os";
 import path from "path";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 
 const require = createRequire(import.meta.url);
 const electronPath = require("electron");
@@ -139,7 +139,7 @@ function runElectronSmokeOnce({ runIndex, runCount, timeoutMs, extraArgs }) {
   });
 }
 
-function validateSmokeOutput(runIndex, runCount, result) {
+export function validateSmokeOutput(runIndex, runCount, result) {
   const { code, signal, output, timedOut } = result;
   if (timedOut) {
     throw new Error(`Smoke run ${runIndex}/${runCount} timed out`);
@@ -151,6 +151,9 @@ function validateSmokeOutput(runIndex, runCount, result) {
   }
   if (output.includes("[SMOKE] FAILED")) {
     throw new Error(`Smoke run ${runIndex}/${runCount} reported a smoke failure`);
+  }
+  if (output.includes("Bootstrap failed:")) {
+    throw new Error(`Smoke run ${runIndex}/${runCount} reported a renderer bootstrap failure`);
   }
   for (const marker of REQUIRED_MARKERS) {
     if (!output.includes(marker)) {
@@ -219,7 +222,9 @@ async function main() {
   );
 }
 
-main().catch((error) => {
-  console.error("[SMOKE-RUNNER] FAILED:", error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error("[SMOKE-RUNNER] FAILED:", error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });
+}

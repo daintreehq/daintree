@@ -9,6 +9,7 @@ import path from "path";
 const fsHook = vi.hoisted(() => ({
   beforeLstat: null as null | ((target: string) => Promise<void>),
   beforeOpen: null as null | ((target: string) => Promise<void>),
+  opened: [] as { fd: number }[],
 }));
 
 vi.mock("fs/promises", async (importOriginal) => {
@@ -21,13 +22,16 @@ vi.mock("fs/promises", async (importOriginal) => {
     },
     open: async (target: string, flags?: string | number, mode?: number) => {
       await fsHook.beforeOpen?.(target);
-      return actual.open(target, flags, mode);
+      const handle = await actual.open(target, flags, mode);
+      fsHook.opened.push(handle);
+      return handle;
     },
   };
 });
 import {
   fitWithinResponseCap,
   readClaudeLastMessage,
+  readClaudeRecentReplies,
   tailWithinJsonBytes,
 } from "../ClaudeSessionReader.js";
 import { deriveProjectSlug } from "../ClaudeSubagentReader.js";
@@ -57,6 +61,7 @@ beforeEach(async () => {
 afterEach(async () => {
   fsHook.beforeLstat = null;
   fsHook.beforeOpen = null;
+  fsHook.opened.length = 0;
   await rm(root, { recursive: true, force: true });
 });
 
@@ -1100,5 +1105,108 @@ describe("fitWithinResponseCap", () => {
 
     expect(Buffer.byteLength(JSON.stringify(fitted))).toBeLessThanOrEqual(300);
     expect(fitted.message?.truncated).toBe(true);
+  });
+});
+
+describe("readClaudeRecentReplies", () => {
+  const recent = (options: Parameters<typeof readClaudeRecentReplies>[1] = {}) =>
+    readClaudeRecentReplies({ projectsRoot, cwd: CWD, sessionId: SESSION }, options);
+
+  it("returns each text block of the main chain's replies, newest first and untrimmed", async () => {
+    await seed([
+      prompt("go"),
+      assistant("msg_1", [text("First reply.")]),
+      assistant("msg_2", [text("  indented\n\n- item\n"), toolUse("t1", "Bash")]),
+      toolResult("t1", "tool output"),
+      assistant("msg_3", [thinking("hmm"), text("Second block."), text("Third block.")]),
+    ]);
+
+    expect(await recent()).toEqual([
+      "Third block.",
+      "Second block.",
+      "  indented\n\n- item\n",
+      "First reply.",
+    ]);
+  });
+
+  it("leaves out sidechain, meta and empty records, prompts and tool results", async () => {
+    await seed([
+      assistant("msg_1", [text("Kept.")]),
+      assistant("msg_2", [text("Subagent.")], { isSidechain: true }),
+      assistant("msg_3", [text("Injected.")], { isMeta: true }),
+      assistant("msg_4", [text("   ")]),
+      prompt("a prompt"),
+      toolResult("t1", [text("result text")]),
+    ]);
+
+    expect(await recent()).toEqual(["Kept."]);
+  });
+
+  it("stops at the block limit and at the character budget", async () => {
+    await seed([
+      assistant("msg_1", [text("one")]),
+      assistant("msg_2", [text("two")]),
+      assistant("msg_3", [text("three")]),
+    ]);
+
+    expect(await recent({ limit: 2 })).toEqual(["three", "two"]);
+    expect(await recent({ maxChars: 8 })).toEqual(["three", "two"]);
+    expect(await recent({ maxChars: 4 })).toEqual([]);
+  });
+
+  it("has nothing for a session with no transcript", async () => {
+    expect(await recent()).toEqual([]);
+  });
+
+  it("never looks up an id shaped to climb out of its project's directory", async () => {
+    await seed([assistant("msg_1", [text("Kept.")])]);
+    // Where `<slug>/../escape.jsonl` lands, inside the store, so only the id check stops it.
+    await writeFile(
+      path.join(projectsRoot, "escape.jsonl"),
+      assistant("msg_2", [text("Decoy.")]) + "\n",
+      "utf8"
+    );
+
+    expect(
+      await readClaudeRecentReplies({ projectsRoot, cwd: CWD, sessionId: "../escape" })
+    ).toEqual([]);
+    expect(fsHook.opened).toHaveLength(0);
+  });
+
+  it("refuses a transcript planted as a symlink", async () => {
+    const real = path.join(root, "elsewhere.jsonl");
+    await writeFile(real, assistant("msg_1", [text("Not this session's.")]) + "\n", "utf8");
+    const dir = path.join(projectsRoot, deriveProjectSlug(CWD));
+    await mkdir(dir, { recursive: true });
+    await symlink(real, path.join(dir, `${SESSION}.jsonl`));
+
+    expect(await recent()).toEqual([]);
+  });
+
+  it("throws once aborted rather than answering", async () => {
+    await seed([assistant("msg_1", [text("Kept.")])]);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(recent({ signal: controller.signal })).rejects.toThrow();
+  });
+
+  it("stops at the scan ceiling rather than reading past a huge record", async () => {
+    await seed([assistant("msg_1", [text("Older.")]), toolResult("t1", "x".repeat(4096))]);
+
+    expect(await recent({ maxScanBytes: 1024, chunkBytes: 256 })).toEqual([]);
+    expect(await recent({ maxScanBytes: 64 * 1024, chunkBytes: 256 })).toEqual(["Older."]);
+  });
+
+  it("closes the transcript however the read ends", async () => {
+    await seed([assistant("msg_1", [text("one")]), assistant("msg_2", [text("two")])]);
+    await recent();
+    await recent({ limit: 1 });
+    const controller = new AbortController();
+    fsHook.beforeOpen = async () => controller.abort();
+    await expect(recent({ signal: controller.signal })).rejects.toThrow();
+
+    expect(fsHook.opened).toHaveLength(3);
+    for (const handle of fsHook.opened) expect(handle.fd).toBe(-1);
   });
 });

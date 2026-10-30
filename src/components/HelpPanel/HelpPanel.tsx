@@ -9,7 +9,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { ExternalLink, History, MessageCircle, Settings2, Sparkles } from "lucide-react";
+import { ExternalLink, History, MessageCircle, RotateCw, Settings2, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { reportCanopySent } from "@/lib/canopySeen";
 import { Button } from "@/components/ui/button";
@@ -37,8 +37,17 @@ import {
   markHelpPanelRuntimeMounted,
   markHelpPanelRuntimeUnmounted,
 } from "@/lib/helpPanelRuntimeGate";
-import { useHelpSessionController } from "@/controllers/helpSessionControllerRegistry";
+import {
+  acquireHelpSessionController,
+  useHelpSessionController,
+} from "@/controllers/helpSessionControllerRegistry";
+import { assistantSlotKey } from "@shared/config/assistantSlots";
 import { HelpPanelBanners } from "./HelpPanelBanners";
+import {
+  closeSessionDescription,
+  useLatchedWhileOpen,
+  usePastSessionsNote,
+} from "./pastSessionsNote";
 import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
 import { HelpAssistantAgentChooser } from "./HelpAssistantAgentChooser";
 import { HelpLaunchingState } from "./HelpLaunchingState";
@@ -46,7 +55,8 @@ import { HelpPanelFooter } from "./HelpPanelFooter";
 import { HelpPanelResizeHandle } from "./HelpPanelResizeHandle";
 import { useHelpPanelResize } from "./useHelpPanelResize";
 import { useHelpPanelRevealFocus } from "./useHelpPanelRevealFocus";
-import { useHelpSessionLanes } from "./useHelpSessionLanes";
+import { useHelpSessionLanes, type PausedLane } from "./useHelpSessionLanes";
+import { useGlobalAssistantActivity } from "./useGlobalAssistantActivity";
 import { FigureRail } from "./FigureRail";
 import { useHelpPanelStore, selectSlot } from "@/store/helpPanelStore";
 import {
@@ -64,11 +74,13 @@ import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { selectMicNoticeForPanel, useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useFocusStore } from "@/store/focusStore";
-import { getAgentConfig } from "@/config/agents";
+import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
 import { buildResumeCommand } from "@shared/types/agentSettings";
 import { actionService } from "@/services/ActionService";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { useAssistantAgentChoices } from "@/hooks/useAssistantAgentChoices";
+import { resolveLaunchableAssistantAgentId } from "@/hooks/assistantAgentSelection";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { TerminalRefreshTier } from "@/types";
 import { CLOSE_CONFIRM_AGENT_STATES } from "@shared/types/agent";
@@ -99,6 +111,13 @@ const ASSISTANT_INSTALLER_URL = "https://daintree.org/download";
 // flap (#10911) bounces back to a live state well within the window — keeping a
 // spurious tick from tearing down a running conversation.
 const ASSISTANT_AGENT_EXIT_SETTLE_MS = 750;
+
+/** "Claude or Codex": the agents that can run the assistant, for the line saying what to install. */
+function assistantAgentNames(): string {
+  const names = getAssistantSupportedAgentIds().map((id) => getAgentConfig(id)?.name ?? id);
+  if (names.length === 0) return "a supported agent";
+  return new Intl.ListFormat("en", { type: "disjunction" }).format(names);
+}
 
 // Stock starter prompts, shown whenever the assistant has no session and the
 // project supplies none of its own. Clicking one starts the assistant AND seeds
@@ -408,6 +427,11 @@ export function HelpPanel({
   // "New session with…" items, which the toolbar button offers from the same list.
   const supportedInstalledAgentIds = useAssistantAgentChoices();
   const supportedInstalledAgentIdsKey = supportedInstalledAgentIds.join(",");
+  // The choices stay empty until detection has real data, so an empty list
+  // only means "none installed" once it does (#15233).
+  const agentDetectionDone = useCliAvailabilityStore((s) => s.hasRealData);
+  const agentDetectionFailed = useCliAvailabilityStore((s) => Boolean(s.error));
+  const showAgentDetection = useDohertyGate(!agentDetectionDone && !agentDetectionFailed);
 
   // A conversation the eviction/crash path captured for this workspace but never
   // resumed. On LRU eviction (or renderer crash) main kills the assistant PTY
@@ -420,10 +444,7 @@ export function HelpPanel({
   // (#13205). The peek is non-consuming, like the launch flow's claim via
   // takePendingHibernation. We stamp the entry with its workspace id so
   // a mid-flight A→B switch can't show workspace A's Resume CTA over workspace B.
-  const [resumablePending, setResumablePending] = useState<{
-    workspaceId: string;
-    agentId: string;
-  } | null>(null);
+  const [resumablePending, setResumablePending] = useState<PausedLane | null>(null);
   useEffect(() => {
     if (!isOpen || terminalId || !activeWorkspaceId) {
       setResumablePending(null);
@@ -454,7 +475,14 @@ export function HelpPanel({
               !!pending?.agentSessionId &&
               buildResumeCommand(pendingAgentId, pending.agentSessionId) !== undefined));
         setResumablePending(
-          canResume ? { workspaceId: activeWorkspaceId, agentId: pendingAgentId } : null
+          canResume
+            ? {
+                workspaceId: activeWorkspaceId,
+                slot: activeSlot,
+                agentId: pendingAgentId,
+                live: pending?.live === true,
+              }
+            : null
         );
       })
       .catch((err) => {
@@ -473,12 +501,22 @@ export function HelpPanel({
     supportedInstalledAgentIds,
   ]);
 
-  // Cross-workspace bleed guard: an A→B switch re-runs the peek effect, but B's
-  // peek resolves asynchronously, so only trust a pending entry whose workspace
-  // id matches the workspace currently in view.
-  const resumableAgentId =
-    resumablePending && resumablePending.workspaceId === activeWorkspaceId
-      ? resumablePending.agentId
+  // Cross-workspace and cross-lane bleed guard: an A→B switch (of workspace or
+  // of tab) re-runs the peek effect, but B's peek resolves asynchronously, so
+  // only trust a pending entry stamped with the workspace and lane in view.
+  const pendingInView =
+    resumablePending &&
+    resumablePending.workspaceId === activeWorkspaceId &&
+    resumablePending.slot === activeSlot
+      ? resumablePending
+      : null;
+  const resumableAgentId = pendingInView?.agentId ?? null;
+  // The same pause, offered as a fresh start too (#14981). A fresh start launches
+  // the captured agent anew, so it needs that agent installed, which a Resume of
+  // one still running on the host does not.
+  const pausedLane =
+    pendingInView && supportedInstalledAgentIds.includes(pendingInView.agentId)
+      ? pendingInView
       : null;
 
   // #10815: report this workspace's panel open-state to main on every change so
@@ -777,15 +815,46 @@ export function HelpPanel({
     handleRestartSlot,
     handleRestartActiveSlot,
     pendingRestartSlot,
+    pendingRestartPaused,
     handleConfirmRestartSlot,
     handleCancelRestartSlot,
     resolveRestartFocusTarget,
     pendingCloseSlot,
     pendingCloseLabel,
+    pendingCloseCost,
     handleConfirmCloseSlot,
     handleCancelCloseSlot,
     resolveCloseFocusTarget,
-  } = useHelpSessionLanes({ panelRef, activeSlot, activeWorkspaceId, terminalId });
+  } = useHelpSessionLanes({ panelRef, activeSlot, activeWorkspaceId, terminalId, pausedLane });
+  // A restart can target a background lane, whose agent may not be the one on
+  // screen: read from the same lane record the confirm gate reads. A paused lane
+  // has no agent bound, so its captured one names the conversation instead.
+  const pendingRestartLaneAgentId = useHelpPanelStore((s) =>
+    pendingRestartSlot === null ? null : selectSlot(s, pendingRestartSlot).agentId
+  );
+  const restartDescription = usePastSessionsNote(
+    pendingRestartSlot !== null,
+    pendingRestartPaused && !pendingRestartPaused.live
+      ? "This tab starts a new conversation"
+      : "The agent stops and this tab starts a new conversation",
+    pendingRestartPaused?.agentId ?? pendingRestartLaneAgentId
+  );
+  const endSessionDescription = usePastSessionsNote(
+    showEndSessionConfirm,
+    "The agent stops and the next start opens a new conversation",
+    agentId
+  );
+  const closeDescription = useLatchedWhileOpen(
+    pendingCloseSlot !== null,
+    pendingCloseCost ? closeSessionDescription(pendingCloseCost) : ""
+  );
+  const closeTitle = useLatchedWhileOpen(pendingCloseSlot !== null, `Close ${pendingCloseLabel}?`);
+  // The conversation being left is the running agent's, not the pick's.
+  const agentSwitchDescription = usePastSessionsNote(
+    showAgentSwitchConfirm,
+    "The current agent stops and the new one starts in this tab",
+    agentId
+  );
 
   // Shows the global run, whichever it is; never starts one.
   // The focus request outstanding when Global was picked on the switch: the
@@ -801,11 +870,16 @@ export function HelpPanel({
     }
   }, []);
   const projectActivity = useMemo(() => summarizeLaneActivity(sessionTabs), [sessionTabs]);
+  const globalAgentState = useGlobalAssistantActivity(isOpen && isVisible && !globalSelected);
+  const globalActivity = useMemo(
+    () => summarizeLaneActivity([{ label: "Global assistant", agentState: globalAgentState }]),
+    [globalAgentState]
+  );
   // The header slot the global pane draws its agent and menu into.
   const [globalControlsHost, setGlobalControlsHost] = useState<HTMLDivElement | null>(null);
 
   // Stop reuses the same "something to lose" gate as +New session — confirm
-  // only when a working agent or an engaged conversation would be discarded.
+  // only when a working agent or an engaged conversation would be ended.
   const handleEndSession = useCallback(() => {
     if (!terminalId || !agentId) return;
     if (shouldConfirmNewSession) {
@@ -900,9 +974,10 @@ export function HelpPanel({
   // user's preference, or the sole installed assistant backend. Mirrors the
   // controller's own auto-launch eligibility so the CTA is shown only when a
   // single unambiguous target exists; with several, the empty state asks.
-  const launchableAgentId =
-    preferredAgentId ??
-    (supportedInstalledAgentIds.length === 1 ? (supportedInstalledAgentIds[0] ?? null) : null);
+  const launchableAgentId = resolveLaunchableAssistantAgentId(
+    preferredAgentId,
+    supportedInstalledAgentIds
+  );
 
   // Each empty-state CTA wears the mark of the agent it would actually launch,
   // so the button says what's about to start. Rendered bare: the Button variant
@@ -919,22 +994,39 @@ export function HelpPanel({
     ? (getAgentConfig(resumableAgentId)?.icon ?? Sparkles)
     : Sparkles;
 
-  // Explicit, billed start (#10699). Records consent so future opens may
-  // auto-launch, then launches directly — relying on syncInputs re-evaluation
-  // would leave a render-cycle gap. An optional starter prompt seeds the first
-  // turn (skips the resume path by design).
+  // Explicit, billed start (#10699). Starts this one session and nothing more:
+  // whether later opens start one is the menu's "Start when the panel opens",
+  // never a side effect of this click (#14976). An optional starter prompt
+  // seeds the first turn (skips the resume path by design).
   const handleStartAssistant = useCallback(
     (seedPrompt?: string) => {
       if (!launchableAgentId) return;
-      setAutoLaunchEnabled(true);
       controller.launch({
         agentId: launchableAgentId,
         replaceExisting: true,
         ...(seedPrompt ? { seedPrompt } : {}),
       });
     },
-    [controller, launchableAgentId, setAutoLaunchEnabled]
+    [controller, launchableAgentId]
   );
+
+  // The strip's "New session" is an explicit start too, so it launches into the
+  // new tab itself rather than leaving that to the tab's auto-launch, which only
+  // runs with "Start when the panel opens" on (#14976). Queued before the tab's
+  // first input sync; with several agents and no default, the tab asks instead.
+  // A tab that turns out to hold a captured conversation (a cold view whose
+  // lanes are still being listed) is left to offer its own Resume: the default
+  // agent started there would replace that conversation.
+  const handleNewSession = useCallback(() => {
+    const slot = handleOpenParallelSession();
+    if (slot === null || !launchableAgentId) return;
+    const { hibernateSessions } = useHelpPanelStore.getState();
+    if (activeWorkspaceId && hibernateSessions[assistantSlotKey(activeWorkspaceId, slot)]) return;
+    acquireHelpSessionController(slot).launchWhenReady({
+      agentId: launchableAgentId,
+      replaceExisting: true,
+    });
+  }, [activeWorkspaceId, handleOpenParallelSession, launchableAgentId]);
 
   // A starter never submits into a live session: if one has appeared since the
   // card rendered, the prompt lands in its input as a draft for the user to send.
@@ -966,17 +1058,16 @@ export function HelpPanel({
     (chosenAgentId: string) => {
       // Launched directly below, so no switch request rides along.
       setPreferredAgent(chosenAgentId, { switchSession: false });
-      setAutoLaunchEnabled(true);
       controller.launch({ agentId: chosenAgentId, replaceExisting: true });
     },
-    [controller, setAutoLaunchEnabled, setPreferredAgent]
+    [controller, setPreferredAgent]
   );
 
   // Recovery resume after the eviction/crash path killed the assistant PTY on a
-  // project switch-away. Unlike "Start assistant", this deliberately does NOT
-  // record auto-launch consent (#10699): resuming a stranded session is a
-  // one-time, user-initiated recovery, not an opt-in to billed auto-launch on
-  // every future open. The launch flow seeds the captured entry from main and
+  // project switch-away. Like "Start assistant", this does NOT record
+  // auto-launch consent (#10699): resuming a stranded session is a one-time,
+  // user-initiated recovery, not an opt-in to billed auto-launch on every
+  // future open. The launch flow seeds the captured entry from main and
   // spawns a `--resume` process (HelpSessionController._executeLaunch). Launched
   // with the captured agent id (not the CTA agent) so the resume branch — gated
   // on `hibernated.agentId === launchAgentId` — actually fires.
@@ -992,7 +1083,7 @@ export function HelpPanel({
   const dismissTierMismatch = useCallback(() => controller.dismissTierMismatch(), [controller]);
   const approveTierOnce = useCallback(() => controller.approveTierOnce(), [controller]);
   const alwaysAllowTier = useCallback(() => controller.alwaysAllowTier(), [controller]);
-  const revokeGrant = useCallback(() => controller.revokeGrant(), [controller]);
+  const revokeGrant = useCallback((key: string) => controller.revokeGrant(key), [controller]);
   const dismissGrantEnded = useCallback(() => controller.dismissGrantEnded(), [controller]);
   const cancelLaunch = useCallback(() => controller.cancelLaunch(), [controller]);
   const checkVersionAgain = useCallback(() => controller.checkVersionAgain(), [controller]);
@@ -1090,12 +1181,17 @@ export function HelpPanel({
         onScopeChange={handleScopeChange}
         globalControlsRef={setGlobalControlsHost}
         projectActivity={projectActivity}
-        canRestartConversation={!globalSelected && Boolean(terminalId && agentId)}
+        globalActivity={globalActivity}
+        canRestartConversation={
+          !globalSelected && (Boolean(terminalId && agentId) || pausedLane !== null)
+        }
         canEndSession={!globalSelected && Boolean(terminalId && agentId)}
         onRestartConversation={handleRestartActiveSlot}
         onEndSession={handleEndSession}
         onResumePastSession={handleResumePastSession}
         onOpenDocs={handleOpenAssistantDocs}
+        autoLaunchEnabled={autoLaunchEnabled}
+        onAutoLaunchEnabledChange={setAutoLaunchEnabled}
         onClose={handleClose}
         isFocused={isHighlighted}
         newSessionAgentIds={supportedInstalledAgentIds}
@@ -1120,7 +1216,7 @@ export function HelpPanel({
           // header's overflow menu as well, which put the one findable route to a
           // second session two clicks behind an ellipsis.
           canOpenSession={canOpenParallelSession}
-          onOpenSession={handleOpenParallelSession}
+          onOpenSession={handleNewSession}
           newSessionAgentIds={supportedInstalledAgentIds}
           canOpenSessionWithAgent={canStartSessionWithAgent}
           onOpenSessionWithAgent={handleOpenSessionWithAgent}
@@ -1176,9 +1272,9 @@ export function HelpPanel({
             launchError={session.launchError}
             sessionRevoked={session.sessionRevoked}
             isApprovingTier={session.isApprovingTier}
-            activeGrant={session.activeGrant}
+            activeGrants={session.activeGrants}
             grantEnded={session.grantEnded}
-            isRevokingGrant={session.isRevokingGrant}
+            revokingGrantKeys={session.revokingGrantKeys}
             onDismissResume={dismissResume}
             onDismissTierMismatch={dismissTierMismatch}
             onApproveOnce={approveTierOnce}
@@ -1346,9 +1442,8 @@ export function HelpPanel({
                 <div className="flex flex-col items-center gap-4 w-full max-w-[34ch]">
                   {/* Recovery resume — the eviction/crash path killed the PTY on
                       switch-away, but the conversation can be picked back up.
-                      Does not record auto-launch consent (#10699), unlike "Start
-                      assistant". This is the single load-bearing accent here.
-                      Starting fresh is the overflow menu's "Restart conversation". */}
+                      Does not record auto-launch consent (#10699). This is the
+                      single load-bearing accent here. */}
                   <Button
                     type="button"
                     onClick={handleResumeAssistant}
@@ -1357,6 +1452,21 @@ export function HelpPanel({
                     <ResumeAssistantIcon />
                     Resume assistant
                   </Button>
+                  {/* Coming back to a stale conversation is when a clean one is most
+                      likely wanted (#14981): the same confirmed restart the overflow
+                      menu offers, kept neutral so Resume stays the primary. */}
+                  {pausedLane && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleRestartActiveSlot}
+                      data-testid="help-restart-paused-conversation"
+                    >
+                      <RotateCw aria-hidden="true" />
+                      Restart conversation
+                    </Button>
+                  )}
                 </div>
               ) : launchableAgentId ? (
                 <div className="flex flex-col items-center gap-4 w-full max-w-[34ch]">
@@ -1398,11 +1508,38 @@ export function HelpPanel({
                     onChoose={handleChooseAssistant}
                   />
                 </div>
-              ) : (
+              ) : agentDetectionDone ? (
                 <p className="text-xs text-text-secondary max-w-[32ch]">
-                  Configure an assistant agent in settings to get started.
+                  {`Install ${assistantAgentNames()} to use Daintree Assistant.`}
                 </p>
-              )}
+              ) : agentDetectionFailed ? (
+                <div className="flex flex-col items-center gap-2">
+                  <p className="text-xs text-text-secondary max-w-[32ch]">
+                    Couldn&apos;t check which agents are installed.
+                  </p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      // The store keeps the error that drives this line; a
+                      // second failure only needs logging.
+                      void useCliAvailabilityStore
+                        .getState()
+                        .refresh(true)
+                        .catch((error: unknown) =>
+                          logWarn("[HelpPanel] Agent detection retry failed", { error })
+                        )
+                    }
+                  >
+                    Retry
+                  </Button>
+                </div>
+              ) : showAgentDetection ? (
+                <p className="text-xs text-text-secondary max-w-[32ch]">
+                  Checking installed agents…
+                </p>
+              ) : null}
               <div className="flex flex-col gap-2">
                 <button
                   type="button"
@@ -1456,7 +1593,7 @@ export function HelpPanel({
         // the thing being confirmed is a loss, and it collided with the strip's own
         // new-session control.
         title="Restart this conversation?"
-        description="The current agent will stop and the conversation will be discarded"
+        description={restartDescription}
         confirmLabel="Restart conversation"
         onConfirm={handleConfirmRestartSlot}
         onClose={handleCancelRestartSlot}
@@ -1468,7 +1605,7 @@ export function HelpPanel({
       <ConfirmDialog
         isOpen={showEndSessionConfirm}
         title="Stop assistant?"
-        description="The assistant will stop and the conversation will be discarded"
+        description={endSessionDescription}
         confirmLabel="Stop assistant"
         onConfirm={handleConfirmEndSession}
         onClose={handleCancelEndSession}
@@ -1476,8 +1613,8 @@ export function HelpPanel({
       />
       <ConfirmDialog
         isOpen={pendingCloseSlot !== null}
-        title={`Close ${pendingCloseLabel}?`}
-        description="The assistant will stop and the conversation will be discarded"
+        title={closeTitle}
+        description={closeDescription}
         confirmLabel="Close session"
         onConfirm={handleConfirmCloseSlot}
         onClose={handleCancelCloseSlot}
@@ -1495,7 +1632,7 @@ export function HelpPanel({
           agentSwitchRequest?.agentId ??
           "agent"
         }?`}
-        description="The current session will end and the conversation will be discarded"
+        description={agentSwitchDescription}
         confirmLabel="Switch agent"
         onConfirm={handleConfirmAgentSwitch}
         onClose={handleCancelAgentSwitch}

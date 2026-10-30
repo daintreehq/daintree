@@ -2,9 +2,11 @@ import { useProjectStore } from "@/store/projectStore";
 import { scratchName, useScratchStore } from "@/store/scratchStore";
 import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
 import { usePanelStore } from "@/store/panelStore";
-import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
-import { isBuiltInAgentId } from "@shared/config/agentIds";
-import { hasCleanupKey, hasTranscriptionKey } from "@shared/config/voiceProviders";
+import {
+  cleanupKeyIssuer,
+  hasCleanupKey,
+  hasTranscriptionKey,
+} from "@shared/config/voiceProviders";
 import {
   carrySpansThroughEdits,
   shiftSpans,
@@ -17,7 +19,7 @@ import {
   shiftPausePositions,
   slicePausePositions,
 } from "@shared/utils/voicePausePositions";
-import { shouldShowHybridInputBar } from "@/components/Terminal/terminalFocus";
+import { panelHasComposer } from "@/components/Terminal/terminalComposer";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
@@ -51,6 +53,7 @@ import {
   type VoiceMicNotice,
   type VoiceRecordingTarget,
   type VoiceRewriteRequest,
+  type VoiceScratchRefusal,
 } from "@/store/voiceRecordingStore";
 import { keepRecentDictation, keepRecentDictationCorrection } from "@/services/recentDictations";
 import { joinCompletedSegments } from "@/lib/voiceTranscriptSegments";
@@ -60,6 +63,8 @@ import {
   isActiveVoiceSession,
   VOICE_REPLAY_AUDIO_LOST_CODE,
   VOICE_STOP_AUDIO_LOST_CODE,
+  type VoiceCleanupFailure,
+  type VoiceCorrectionModel,
   type VoiceInputStatus,
   type VoiceRecordingMode,
   type VoiceSessionElsewhere,
@@ -90,7 +95,6 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { notify } from "@/lib/notify";
 import type { NotificationAction } from "@/store/notificationStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
-import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   OPENING_CHUNK_WINDOW,
@@ -135,11 +139,21 @@ import {
   isBluetoothMicLabel,
   isMicPermissionDenial,
   openChosenMic,
+  stripPseudoDevicePrefix,
   type OpenedMic,
   type VoiceMicDevice,
 } from "@/services/voiceMicDevices";
-import { isScratchCommand, recordScratchLanded } from "@/services/voiceScratchCommand";
-import { planFileReferenceEdits, planHeardSwaps } from "@/services/voiceFileReferences";
+import {
+  isScratchCommand,
+  recordScratchLanded,
+  SCRATCH_REFUSAL_STATUS,
+} from "@/services/voiceScratchCommand";
+import {
+  planFileReferenceEdits,
+  planHeardSwaps,
+  type SpokenFileReference,
+  unresolvedFileReferencesStatus,
+} from "@/services/voiceFileReferences";
 import { isSpokenSendable } from "@/services/voiceSpokenSend";
 import { findRewriteComposer, type RewriteSelection } from "@/services/voiceRewriteSelection";
 import {
@@ -160,6 +174,8 @@ import { getHostListSnapshot } from "@/components/Hosts/hostList";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import {
+  cleanupReasoningEffortFor,
+  VOICE_CLEANUP_AI_MODEL,
   VOICE_REWRITE_MAX_INSTRUCTION_CHARS,
   VOICE_REWRITE_MAX_SELECTION_CHARS,
 } from "@shared/config/voiceCorrection";
@@ -201,6 +217,8 @@ type StartStepLogger = (step: string, details?: Record<string, unknown>) => void
 /** How a composer's send was asked for: a spoken "send it" holds back a too-short draft. */
 export interface VoiceSendOptions {
   spoken?: boolean;
+  /** A spoken "send it" its draft was too short for: nothing is sent, and the composer says so. */
+  tooShort?: boolean;
 }
 
 /** The running session's clock, as {@link VoiceRecordingService.getSessionClock} reads it. */
@@ -233,6 +251,21 @@ function formatTargetLabel(target: VoiceRecordingTarget): string {
   if (project) return project;
   if (worktree) return worktree;
   return "current panel";
+}
+
+function cleanupFailureMessage({ reason, provider }: VoiceCleanupFailure): string {
+  const issuer = cleanupKeyIssuer(provider);
+  const kept = "so dictation is kept as you said it.";
+  switch (reason) {
+    case "key_rejected":
+      return `${issuer} rejected the API key, ${kept} Update the key in voice settings.`;
+    case "billing_required":
+      return `The ${issuer} account is out of credit or at its spending limit, ${kept} Add credit, raise the limit, or use a key from another account.`;
+    case "region_refused":
+      return `${issuer} isn't available in your region, ${kept} Choose another cleanup provider in voice settings.`;
+    case "access_denied":
+      return `The cleanup model isn't available to this ${issuer} key, ${kept} Check the key's access or choose another model in voice settings.`;
+  }
 }
 
 /**
@@ -478,6 +511,9 @@ interface DictationCleanup {
   baseline: { text: string; spans: Map<CorrectionPassage, { from: number; to: number }> } | null;
 }
 
+type ScratchOutcome =
+  { kind: "removed"; sources: number } | { kind: "refused"; reason: VoiceScratchRefusal["reason"] };
+
 /** Where the live session may cut its next chunk, waiting on what's said after it. */
 interface ChunkBreak {
   sessionId: string;
@@ -487,10 +523,6 @@ interface ChunkBreak {
   paragraph: boolean;
   /** What has been said since. */
   after: string;
-}
-
-function longestPassage(passages: CorrectionPassage[]): number {
-  return passages.reduce((longest, passage) => Math.max(longest, passage.text.length), 0);
 }
 
 /**
@@ -698,8 +730,10 @@ interface CaptureAttempt {
   deviceId: string | null;
   // UI-only: device names never go into logs.
   deviceLabel: string | null;
-  // A working mic other than the chosen one opened: named once it hears, never a notice.
+  // A working mic other than the chosen one opened; the pane names both.
   substituted: boolean;
+  // The chosen mic's saved name, for that notice. UI-only, like deviceLabel.
+  chosenLabel: string | null;
   // The OS pulled the track ("ended"). Latched, so a lost attempt is never
   // promoted and a lost session is torn down once.
   lost: boolean;
@@ -764,6 +798,7 @@ class VoiceRecordingService {
   private stream: MediaStream | null = null;
   // The promoted attempt, whose track loss ends the session.
   private sessionCapture: CaptureAttempt | null = null;
+  private displacedFallbackNotice: VoiceMicNotice | null = null;
   private trackObserverDisposers = new WeakMap<MediaStream, () => void>();
   private isSwitchingMic = false;
   private elapsedTimer: ReturnType<typeof setInterval> | null = null;
@@ -789,6 +824,9 @@ class VoiceRecordingService {
   // nothing has joined it or started since: a "send it" its drain lands still
   // sends.
   private stopTakesSpokenSend = false;
+  // The stop in flight still says it stopped: a "send it" its drain lands on
+  // a draft too short to send leaves the composer to say what became of it.
+  private stopAnnounces = true;
   private levelRaf: number | null = null;
   private pendingLevel = 0;
   // Session-wide audio-level stats, logged on stop so a captured log can show
@@ -814,6 +852,11 @@ class VoiceRecordingService {
   private idleTimeoutId: ReturnType<typeof setTimeout> | null = null;
   // An Escape that would discard dictated words waits this long for a second.
   private cancelConfirmTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  // Long enough to outlast the replacement words dictated straight after it.
+  private scratchRefusalTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private scratchRefusalCount = 0;
+  private static readonly SCRATCH_REFUSAL_NOTE_MS = 6_000;
+  private fileReferenceNoteCount = 0;
   // Whether the Escape being handled is the key repeating, so holding it
   // down can't press it a second time.
   private escapeRepeat = false;
@@ -867,6 +910,14 @@ class VoiceRecordingService {
   // Each dictation's cleanup across its chunks and the stop-time pass, by
   // session id, until it has stopped and every pass has its reply (#14772).
   private cleanups = new Map<string, DictationCleanup>();
+  // The passes each waiting send has seen for its sessions, kept past their
+  // settling so the send can say whether its words went without their
+  // cleanup (#14959).
+  private sendObservers = new Set<{
+    panelId: string;
+    sessions: ReadonlySet<string>;
+    passes: Set<PendingCorrection>;
+  }>();
   // Where the live session may cut its next chunk.
   private chunkBreak: ChunkBreak | null = null;
   // performance.now() when the live session's last words landed: a long gap
@@ -885,7 +936,10 @@ class VoiceRecordingService {
   private pendingRewrites = new Set<PendingRewrite>();
   // Null until the settings have been read: a rewrite then goes ahead and main
   // reports a missing key.
-  private hasOpenAIKey: boolean | null = null;
+  private hasCleanupKey: boolean | null = null;
+  private cleanupKeyIssuer = "OpenAI";
+  // Until the settings have been read, the default's pace.
+  private cleanupModel: VoiceCorrectionModel = VOICE_CLEANUP_AI_MODEL;
   // Each session's summary until its line is logged, by session id (#14617).
   private timelines = new Map<string, VoiceSessionTimeline>();
   // The in-flight start's summary, until its capture is promoted.
@@ -1002,13 +1056,19 @@ class VoiceRecordingService {
               // Recent dictations keep what landed, so scratched words leave the
               // session's transcript with the draft (#14637), every segment a
               // cleaned chunk ran together included.
-              const sources = this.scratchLastUtterance(
+              const scratch = this.scratchLastUtterance(
                 panelId,
                 projectId,
                 buffer?.dictationSessionId
               );
-              for (let i = 0; i < sources; i++) {
-                useVoiceRecordingStore.getState().dropLastCompletedSegment(panelId);
+              if (scratch.kind === "removed") {
+                for (let i = 0; i < scratch.sources; i++) {
+                  useVoiceRecordingStore.getState().dropLastCompletedSegment(panelId);
+                }
+                this.clearScratchRefusal();
+              } else {
+                // Swallowed with nothing removed, the command looked like it worked.
+                this.noteScratchRefusal(voiceState.activeTarget!, scratch.reason);
               }
               // What a waiting chunk break was judged on is gone.
               this.chunkBreak = null;
@@ -1125,6 +1185,10 @@ class VoiceRecordingService {
           }
 
           const { panelId, projectId } = record;
+          // Words no file was found for stay as spoken; the composer says so,
+          // whether or not a hit beside them lands (#14983).
+          const unresolved = references.filter((reference) => !reference.path);
+          if (unresolved.length > 0) this.noteUnresolvedFileReferences(panelId, unresolved);
           const inputStore = useTerminalInputStore.getState();
           const draft = inputStore.getDraftInput(panelId, projectId);
           const edits = planFileReferenceEdits(record, transcriptId, references, draft);
@@ -1399,6 +1463,9 @@ class VoiceRecordingService {
           // release mustn't act on whatever runs by then.
           this.dropHeldPress();
           void this.stopAnySession(returnToTarget === true ? { pressedHere: false } : undefined);
+          // Dictation turned off in another view asks this way too, and that
+          // view's settings event never reaches this one (#14947).
+          void this.refreshConfiguration();
           return;
         }
         // Started here before a reload: nothing in this view holds its
@@ -1571,14 +1638,16 @@ class VoiceRecordingService {
 
   async refreshConfiguration(): Promise<boolean> {
     const settings = await window.electron.voiceInput.getSettings();
-    // "Configured" means the selected provider has its own API key. The OpenAI key is a
-    // separate matter: it only gates cleanup and rewrite.
+    // "Configured" means the selected provider has its own API key. The cleanup
+    // provider's key is a separate matter: it only gates cleanup and rewrite.
     const hasProviderKey = hasTranscriptionKey(settings);
     const isConfigured = settings.enabled && hasProviderKey;
     this.selectedDeviceId = settings.deviceId ?? "";
     this.selectedDeviceLabel = settings.deviceLabel ?? "";
     this.recordingMode = settings.recordingMode ?? "tap-or-hold";
-    this.hasOpenAIKey = hasCleanupKey(settings);
+    this.hasCleanupKey = hasCleanupKey(settings);
+    this.cleanupKeyIssuer = cleanupKeyIssuer(settings.correctionProvider);
+    this.cleanupModel = settings.correctionModel;
     this.transcriptionProvider = settings.transcriptionProvider;
     this.heardAsRules = createHeardAsRewriter(collectHeardAsRules(settings.dictionary ?? []));
     this.dropHesitations = normalizeVoiceLanguage(settings.language) === "en";
@@ -1619,22 +1688,9 @@ class VoiceRecordingService {
       return;
     }
 
-    // A second press during the arming window aborts back to idle. No session
-    // exists yet, so there is nothing for stop() to drain — cancelArming()
-    // releases whatever the in-flight start() has opened and makes it bail at
-    // its next staleness check, discarding any audio it already queued.
-    // Once the mic is recording into the start's queue, the press keeps that
-    // speech and ends the session after it is sent.
-    if (
-      state.pendingTarget?.panelId === target.panelId ||
-      (isActiveTarget && state.status === "arming")
-    ) {
-      if (!this.deferStopToStartup("user")) this.cancelArming("user");
-      return;
-    }
-
-    if (isActiveTarget && isActive) {
-      await this.requestUserStop("user");
+    const stopping = this.stopPanelDictation(target.panelId);
+    if (stopping) {
+      await stopping;
       return;
     }
 
@@ -1650,6 +1706,30 @@ class VoiceRecordingService {
     // ~50–200ms, by which point beginSession() has overwritten this state.
     this.armTarget(target);
     await this.start(target);
+  }
+
+  /**
+   * Ends the dictation starting or running in `panelId`, as a second press of
+   * its toggle does, and never starts or resumes one, so it needs no composer
+   * there. Null when there's nothing in that panel to stop.
+   */
+  stopPanelDictation(panelId: string): Promise<void> | null {
+    const state = useVoiceRecordingStore.getState();
+    const isActiveTarget = state.activeTarget?.panelId === panelId;
+    // A second press during the arming window aborts back to idle. No session
+    // exists yet, so there is nothing for stop() to drain — cancelArming()
+    // releases whatever the in-flight start() has opened and makes it bail at
+    // its next staleness check, discarding any audio it already queued.
+    // Once the mic is recording into the start's queue, the press keeps that
+    // speech and ends the session after it is sent.
+    if (state.pendingTarget?.panelId === panelId || (isActiveTarget && state.status === "arming")) {
+      if (!this.deferStopToStartup("user")) this.cancelArming("user");
+      return Promise.resolve();
+    }
+    if (isActiveTarget && this.isStoppableSession(state.status)) {
+      return this.requestUserStop("user");
+    }
+    return null;
   }
 
   /**
@@ -1758,6 +1838,63 @@ class VoiceRecordingService {
       const store = useVoiceRecordingStore.getState();
       if (store.dictationCancelConfirm === confirm) store.setDictationCancelConfirm(null);
     }, PRESS_AGAIN_CONFIRM_MS);
+  }
+
+  private noteScratchRefusal(
+    target: VoiceRecordingTarget,
+    reason: VoiceScratchRefusal["reason"]
+  ): void {
+    if (this.scratchRefusalTimeoutId !== null) clearTimeout(this.scratchRefusalTimeoutId);
+    const refusal = { panelId: target.panelId, reason, id: ++this.scratchRefusalCount };
+    const store = useVoiceRecordingStore.getState();
+    if (store.fileReferenceNote?.panelId === target.panelId) store.setFileReferenceNote(null);
+    store.setScratchRefusal(refusal);
+    // A reply box's own composer says it while Canopy is open: the app's
+    // announcer goes unheard inside its dialog.
+    if (!isCanopyReplyTarget(target) || !useCanopyStore.getState().isOpen) {
+      store.announce(SCRATCH_REFUSAL_STATUS[reason]);
+    }
+    this.scratchRefusalTimeoutId = setTimeout(() => {
+      this.scratchRefusalTimeoutId = null;
+      // A new session or a closed panel may have dropped it already.
+      const current = useVoiceRecordingStore.getState();
+      if (current.scratchRefusal === refusal) current.setScratchRefusal(null);
+    }, VoiceRecordingService.SCRATCH_REFUSAL_NOTE_MS);
+  }
+
+  private noteUnresolvedFileReferences(
+    panelId: string,
+    references: readonly SpokenFileReference[]
+  ): void {
+    const store = useVoiceRecordingStore.getState();
+    // One note on a composer's border at a time, the newer.
+    if (store.scratchRefusal?.panelId === panelId) this.clearScratchRefusal();
+    const note = {
+      panelId,
+      references: references.map(({ description, failed }) => ({
+        description,
+        ...(failed ? { failed } : {}),
+      })),
+      id: ++this.fileReferenceNoteCount,
+    };
+    store.setFileReferenceNote(note);
+    // As a scratch refusal: a reply box's own composer says it while Canopy
+    // is open. The session may have finished already, so its target is read
+    // only while it still names this composer.
+    const target = store.activeTarget;
+    const canopyReply = target?.panelId === panelId && isCanopyReplyTarget(target);
+    if (!canopyReply || !useCanopyStore.getState().isOpen) {
+      store.announce(unresolvedFileReferencesStatus(note.references));
+    }
+  }
+
+  private clearScratchRefusal(): void {
+    if (this.scratchRefusalTimeoutId !== null) {
+      clearTimeout(this.scratchRefusalTimeoutId);
+      this.scratchRefusalTimeoutId = null;
+    }
+    const store = useVoiceRecordingStore.getState();
+    if (store.scratchRefusal) store.setScratchRefusal(null);
   }
 
   private clearCancelConfirm(): void {
@@ -2424,6 +2561,7 @@ class VoiceRecordingService {
       deviceId: null,
       deviceLabel: null,
       substituted: false,
+      chosenLabel: null,
       lost: false,
       frozen: false,
     };
@@ -2548,6 +2686,7 @@ class VoiceRecordingService {
     capture.deviceLabel = opened.label;
     capture.deviceId = opened.deviceId;
     capture.substituted = opened.substituted;
+    capture.chosenLabel = stripPseudoDevicePrefix(requestedDeviceLabel) || null;
     if (opened.relocatedId) void this.rememberRelocatedMic(requestedDeviceId, opened.relocatedId);
     if (opened.substituted) {
       logWarn(`${LOG_PREFIX} Microphone device mismatch`, {
@@ -2659,6 +2798,7 @@ class VoiceRecordingService {
           firstLiveChunk = arrivedChunks;
           timeline.mark("micLive");
         }
+        if (isSpeechLevel(stats)) timeline.noteSpeech();
         if (!this.isStartRequestStale(startRequestId)) this.noteHeldPressAudio(stats);
         if (!openingAudio.logged) {
           openingAudio.chunks.push(stats);
@@ -2802,6 +2942,15 @@ class VoiceRecordingService {
     // announcing here would tell the user to speak into a mic still delivering
     // zeros.
     useVoiceRecordingStore.getState().setMicDeviceLabel(capture.deviceLabel);
+    this.displacedFallbackNotice = null;
+    if (capture.substituted) {
+      useVoiceRecordingStore.getState().setMicNotice({
+        kind: "fallback",
+        target,
+        deviceLabel: capture.deviceLabel,
+        chosenLabel: capture.chosenLabel,
+      });
+    }
 
     this.sessionStartedAt = Date.now();
     this.sessionProvider = this.transcriptionProvider;
@@ -2988,6 +3137,7 @@ class VoiceRecordingService {
     }
 
     this.stopTakesSpokenSend = reason === "key_release" || reason === "user";
+    this.stopAnnounces = true;
     this.stopPromise = (async () => {
       this.initialize();
       const { skipRemoteStop = false, preserveLiveText = true, nextStatus = "idle" } = options;
@@ -3137,8 +3287,19 @@ class VoiceRecordingService {
         if (stoppedTarget && !stoppedTarget.rewrite) {
           finished = takeFinishedTranscript(stoppedTarget, stoppedSessionId);
         }
-        if (shouldAnnounce) {
-          useVoiceRecordingStore.getState().announce(announcement);
+        if (shouldAnnounce && this.stopAnnounces) {
+          // A note still on the session's border goes with it: this would
+          // cut one just heard off before the announcer reads it.
+          const { scratchRefusal: refusal, fileReferenceNote } = useVoiceRecordingStore.getState();
+          const note =
+            refusal && refusal.panelId === stoppedTarget?.panelId
+              ? SCRATCH_REFUSAL_STATUS[refusal.reason]
+              : fileReferenceNote && fileReferenceNote.panelId === stoppedTarget?.panelId
+                ? unresolvedFileReferencesStatus(fileReferenceNote.references)
+                : null;
+          useVoiceRecordingStore
+            .getState()
+            .announce(note ? `${announcement} ${note}` : announcement);
         }
       } else if (nextStatus === "idle") {
         useVoiceRecordingStore.getState().setStatus("idle");
@@ -3475,12 +3636,30 @@ class VoiceRecordingService {
       replied: false,
       counted: false,
       startedAt: performance.now(),
-      expectedMs: estimateCorrectionMs(longestPassage(passages)),
+      // The passages go out together, so the pass lands with its slowest.
+      expectedMs: Math.max(
+        0,
+        ...passages.map((passage) =>
+          estimateCorrectionMs(
+            this.cleanupModel,
+            cleanupReasoningEffortFor(this.cleanupModel, {
+              chars: passage.text.trim().length,
+              continuing: passage.context.length > 0,
+            }),
+            passage.text.length
+          )
+        )
+      ),
     };
     cleanup.passes.push(correction);
     if (kind === "stop") timeline?.beginCorrection();
     else timeline?.beginChunkPass();
     this.pendingCorrections.add(correction);
+    for (const observer of this.sendObservers) {
+      if (this.correctionFor(correction, observer.panelId, observer.sessions)) {
+        observer.passes.add(correction);
+      }
+    }
     this.watchCorrectionDrafts();
 
     // Show the dotted-underline "correcting" decoration over each passage.
@@ -3837,18 +4016,12 @@ class VoiceRecordingService {
 
   private async requestCorrection(correction: PendingCorrection): Promise<void> {
     const { cleanup } = correction;
-    const { results, lastTiming } = await settlePassageReplies(
+    const { results, last } = await settlePassageReplies(
       correction.passages.map((passage) => this.requestPassageCorrection(passage, correction))
     );
     correction.replied = true;
-    if (correction.kind === "stop") correction.timeline?.noteCorrectionReplies(lastTiming);
-    // Timed whether or not its draft is still there to take it: the call cost
-    // the same either way.
-    if (results.every((result) => !result.failed)) {
-      recordCorrectionPace(
-        longestPassage(correction.passages),
-        performance.now() - correction.startedAt
-      );
+    if (correction.kind === "stop") {
+      correction.timeline?.noteCorrectionReplies(last?.timing ?? null, last?.prefetch ?? null);
     }
     correction.passages.forEach((passage, i) => {
       cleanup.results.set(passage, results[i]?.text ?? null);
@@ -4014,6 +4187,7 @@ class VoiceRecordingService {
     failed: boolean;
     verdict: VoiceCorrectionVerdict | undefined;
     timing: unknown;
+    prefetch: unknown;
   }> {
     // Unique past an HMR swap, which leaves the old singleton's requests out.
     const streamId = crypto.randomUUID();
@@ -4028,6 +4202,11 @@ class VoiceRecordingService {
         ...correctionRequest(passage, correction.context, correction.sessionId),
         streamId,
       });
+      // Told whatever became of the draft: the account fails the next passage too.
+      if (result.cleanupFailure) this.reportCleanupFailure(result.cleanupFailure);
+      // Timed whether or not its draft is still there to take it: the call cost
+      // the same either way.
+      if (!result.failed && result.pace) recordCorrectionPace(passage.text.length, result.pace);
       // The passage runs from its first word to its last; its separators and
       // paragraph breaks either side stay the session's, not the model's.
       text = result.action === "replace" ? result.correctedText.trim() || null : null;
@@ -4036,13 +4215,14 @@ class VoiceRecordingService {
         failed: result.failed === true,
         verdict: result.verdict,
         timing: result.timing ?? null,
+        prefetch: result.prefetch ?? null,
       };
     } catch (error) {
       logWarn(
         `${LOG_PREFIX} Correction request failed, keeping raw text`,
         voiceErrorLogFields(error)
       );
-      return { text: null, failed: true, verdict: "failed", timing: null };
+      return { text: null, failed: true, verdict: "failed", timing: null, prefetch: null };
     } finally {
       this.correctionStreams.delete(streamId);
       // A passage whose cleanup came back shows all of it until every passage
@@ -4172,10 +4352,12 @@ class VoiceRecordingService {
         return;
       case "unavailable":
         selection.release();
-        useVoiceRecordingStore.getState().announce("Rewriting by voice needs an OpenAI API key.");
+        useVoiceRecordingStore
+          .getState()
+          .announce(`Rewriting by voice needs an ${this.cleanupKeyIssuer} API key.`);
         this.reportStartFailure(
           "Rewrite unavailable",
-          "Add an OpenAI API key in voice settings to rewrite selected text by voice.",
+          `Add an ${this.cleanupKeyIssuer} API key in voice settings to rewrite selected text by voice.`,
           this.settingsAction()
         );
         return;
@@ -4193,6 +4375,20 @@ class VoiceRecordingService {
         });
         return;
     }
+  }
+
+  /** Main hands a failure that will recur to one reply per outage, so this is said once. */
+  private reportCleanupFailure(failure: VoiceCleanupFailure): void {
+    const message = cleanupFailureMessage(failure);
+    useVoiceRecordingStore.getState().announce(message);
+    notify({
+      type: "error",
+      title: "Dictation cleanup unavailable",
+      message,
+      replaceKey: "voice-cleanup-failure",
+      context: { eventKind: "connectivity" },
+      action: this.settingsAction(),
+    });
   }
 
   private reportPassageFailed(): void {
@@ -4288,6 +4484,39 @@ class VoiceRecordingService {
       if (rewrite.panelId === panelId) return true;
     }
     return false;
+  }
+
+  /**
+   * Follows the cleanup a send taking `sessions` owns until `release`: every
+   * pass pending as it starts, and any registered after, the stop's and a
+   * retry's included. `failed` says whether a passage among them kept its
+   * dictated words because its request failed or timed out, with no later
+   * pass taking them over (#14959).
+   */
+  observeSendCorrections(
+    panelId: string,
+    sessions: ReadonlySet<string>
+  ): { failed: () => boolean; release: () => void } {
+    const observer = { panelId, sessions, passes: new Set<PendingCorrection>() };
+    for (const correction of this.pendingCorrections) {
+      if (this.correctionFor(correction, panelId, sessions)) observer.passes.add(correction);
+    }
+    this.sendObservers.add(observer);
+    return {
+      failed: () => {
+        for (const pass of observer.passes) {
+          const { failed, released } = pass.cleanup;
+          const kept = (passage: CorrectionPassage) =>
+            pass.live.has(passage) && failed.has(passage) && !released.has(passage);
+          if (pass.passages.some(kept)) return true;
+        }
+        return false;
+      },
+      release: () => {
+        this.sendObservers.delete(observer);
+        observer.passes.clear();
+      },
+    };
   }
 
   /**
@@ -4450,17 +4679,17 @@ class VoiceRecordingService {
   }
 
   /**
-   * Removes the session's latest dictated utterance from the draft. Returns
-   * how many of the transcriber's segments it held: none when there was none
-   * left to remove, or only an edited one, and more than one when a chunk's
-   * cleanup ran several together.
+   * Removes the session's latest dictated utterance from the draft, with how
+   * many of the transcriber's segments it held: more than one when a chunk's
+   * cleanup ran several together. Refused when there was none left to remove,
+   * or only an edited one.
    */
   private scratchLastUtterance(
     panelId: string,
     projectId: string | undefined,
     sessionId: string | null | undefined
-  ): number {
-    if (!sessionId) return 0;
+  ): ScratchOutcome {
+    if (!sessionId) return { kind: "refused", reason: "nothing" };
     const inputStore = useTerminalInputStore.getState();
     const draft = inputStore.getDraftInput(panelId, projectId);
     const ranges = useDictationRangeStore.getState();
@@ -4469,7 +4698,7 @@ class VoiceRecordingService {
       .find((record) => record.sessionId === sessionId)
       ?.utterances.at(-1);
     const span = ranges.takeLastUtterance({ sessionId, panelId, projectId }, draft);
-    if (!span) return 0;
+    if (!span) return { kind: "refused", reason: last?.insertion.edited ? "edited" : "nothing" };
     const next = draft.slice(0, span.from) + draft.slice(span.to);
     // A caret that followed the words stays where they were. The composer's
     // own diff could slide it along a run the removal shares with the text
@@ -4490,7 +4719,7 @@ class VoiceRecordingService {
     recordScratchLanded(panelId, projectId, next);
     // Like the words it removes, it leaves the caret to the user.
     inputStore.bumpExternalDraftRevision({ keepsSelection: true });
-    return last?.sources ?? 1;
+    return { kind: "removed", sources: last?.sources ?? 1 };
   }
 
   /**
@@ -4661,10 +4890,18 @@ class VoiceRecordingService {
     // fired (mirrors the assistant-focus pattern below for #6959). When the
     // locked panel has been trashed or removed, clear the stale lock and fall
     // through to normal focus-based resolution rather than failing silently.
+    // A locked panel that has lost its composer (its agent exited, hybrid
+    // input went off) starts nothing and keeps the lock, since the composer
+    // may come back; falling through would hand the words to a pane the lock
+    // was taken to keep them out of (#14955).
     const lockedTarget = useVoiceRecordingStore.getState().lockedTarget;
     if (lockedTarget) {
       const lockedPanel = usePanelStore.getState().panelsById[lockedTarget.panelId];
       if (lockedPanel && lockedPanel.location !== "trash") {
+        if (!this.getDictationTarget(lockedTarget.panelId)) {
+          this.reportLockedPanelUnavailable(lockedTarget);
+          return;
+        }
         await this.toggle(lockedTarget);
         return;
       }
@@ -4715,6 +4952,22 @@ class VoiceRecordingService {
     }
 
     await this.startOrToggle(target);
+  }
+
+  private reportLockedPanelUnavailable(locked: VoiceRecordingTarget): void {
+    const why = `Dictation is locked to ${locked.panelTitle?.trim() || "a panel"}, which has no input to dictate into.`;
+    const voiceStore = useVoiceRecordingStore.getState();
+    voiceStore.setLastError({ severity: "fatal", code: "renderer_error", message: why });
+    voiceStore.announce(why);
+    this.reportStartFailure(
+      "Dictation unavailable",
+      `${why} Unlock it to dictate into the focused agent terminal.`,
+      {
+        label: "Unlock dictation",
+        // Only this lock: one taken since the toast went up stays.
+        onClick: () => useVoiceRecordingStore.getState().clearLockedTarget(locked.panelId),
+      }
+    );
   }
 
   private async toggleCanopyReply(): Promise<void> {
@@ -4912,11 +5165,12 @@ class VoiceRecordingService {
       this.reportNothingToRewrite("Select text in an agent's prompt to rewrite it by voice.");
       return;
     }
-    if (this.hasOpenAIKey === false) {
-      useVoiceRecordingStore.getState().announce("Rewriting by voice needs an OpenAI API key.");
+    if (this.hasCleanupKey === false) {
+      const issuer = this.cleanupKeyIssuer;
+      useVoiceRecordingStore.getState().announce(`Rewriting by voice needs an ${issuer} API key.`);
       this.reportStartFailure(
         "Rewrite unavailable",
-        "Add an OpenAI API key in voice settings to rewrite selected text by voice.",
+        `Add an ${issuer} API key in voice settings to rewrite selected text by voice.`,
         this.settingsAction()
       );
       return;
@@ -4987,7 +5241,7 @@ class VoiceRecordingService {
     if (selectActiveSlot(useHelpPanelStore.getState()).terminalId === terminalId) {
       return this.getAssistantTarget();
     }
-    return this.getPanelTarget(terminalId);
+    return this.getDictationTarget(terminalId);
   }
 
   // In push-to-talk mode the keyboard shortcut starts recording; the keyup
@@ -5153,40 +5407,25 @@ class VoiceRecordingService {
     return assistant ? this.getAssistantTarget() : this.getFocusedPanelTarget();
   }
 
-  // Mirrors shouldShowHybridInputBar: dictation lands in the composer, so a
-  // panel that renders none would take the text into a draft nobody can see.
-  private hasComposer(panel: PanelInstance): boolean {
-    if (!isPtyPanel(panel)) return false;
-    const chrome = deriveTerminalChrome({
-      kind: "terminal",
-      launchAgentId: panel.launchAgentId,
-      runtimeIdentity: panel.runtimeIdentity,
-      detectedAgentId: panel.detectedAgentId,
-      detectedProcessId: panel.detectedProcessId,
-    });
-    const armed = useFleetArmingStore.getState().armedIds;
-    return shouldShowHybridInputBar({
-      hasAgentIdentity: isBuiltInAgentId(chrome.agentId),
-      hybridInputEnabled: useTerminalInputStore.getState().hybridInputEnabled,
-      isFleetArmed: armed.has(panel.id),
-      fleetSize: armed.size,
-    });
-  }
-
   private getFocusedPanelTarget(): VoiceRecordingTarget | null {
     const panelId = usePanelStore.getState().focusedId;
-    return panelId ? this.getPanelTarget(panelId) : null;
+    return panelId ? this.getDictationTarget(panelId) : null;
   }
 
-  private getPanelTarget(panelId: string): VoiceRecordingTarget | null {
-    const terminalState = usePanelStore.getState();
-
-    const foundPanel = terminalState.panelsById[panelId];
-    if (!foundPanel || foundPanel.location === "trash") return null;
-    // A pane held for recovery (#12434) has no input surface to dictate into.
-    if (isPtyPanel(foundPanel) && foundPanel.restoreRecovery) return null;
-    if (!this.hasComposer(foundPanel)) return null;
-    const panel = foundPanel;
+  /** The pane as a dictation target, or null when it has no composer to show the words. */
+  getDictationTarget(panelId: string): VoiceRecordingTarget | null {
+    const panel = usePanelStore.getState().panelsById[panelId];
+    if (!panel) return null;
+    const armed = useFleetArmingStore.getState().armedIds;
+    if (
+      !panelHasComposer(panel, {
+        hybridInputEnabled: useTerminalInputStore.getState().hybridInputEnabled,
+        isFleetArmed: armed.has(panelId),
+        fleetSize: armed.size,
+      })
+    ) {
+      return null;
+    }
 
     const currentProject = useProjectStore.getState().currentProject;
     const worktree = panel.worktreeId
@@ -5358,7 +5597,9 @@ class VoiceRecordingService {
     });
     state.setMicSignal("live");
     this.playCue("dictation-start");
-    if (state.micNotice?.kind === "silent") state.setMicNotice(null);
+    // The stand-in mic is still the one recording once it is heard.
+    if (state.micNotice?.kind === "silent") state.setMicNotice(this.displacedFallbackNotice);
+    this.displacedFallbackNotice = null;
     const capture = this.sessionCapture;
     const fallbackMic = capture?.substituted ? (capture.deviceLabel ?? "another microphone") : null;
     state.announce(
@@ -5398,40 +5639,83 @@ class VoiceRecordingService {
 
   /**
    * Shows the silent-mic warning in the pane, offering the built-in mic when
-   * there is one other than the silent mic. The device list is dropped if the
-   * session moved on, or the mic came alive, while it was read.
+   * there is one other than the silent mic. When the app's bundle was replaced
+   * since launch (#14937), the warning offers a restart instead: macOS denies
+   * the mic to the old process, so every mic is as silent as this one. Each
+   * answer is dropped if the session moved on, began stopping, or the mic came
+   * alive while it was read.
    */
   private async raiseSilentMicNotice(generation: number): Promise<void> {
     const capture = this.sessionCapture;
     const target = useVoiceRecordingStore.getState().activeTarget;
     if (!capture || !target) return;
     const { deviceId, deviceLabel } = capture;
-    let builtIn: VoiceMicDevice | null = null;
+    const isStale = (state: ReturnType<typeof useVoiceRecordingStore.getState>) =>
+      this.generation !== generation ||
+      this.sessionCapture !== capture ||
+      this.stopPromise !== null ||
+      state.status === "finishing" ||
+      state.micSignal !== "silent" ||
+      state.micNotice?.kind === "lost";
+    const bluetooth = isBluetoothMicLabel(deviceLabel);
+    // Listed alongside the bundle check, but only waited on when the mic
+    // advice is the answer.
+    const builtInMic = this.findOtherBuiltInMic(deviceId, deviceLabel);
+
+    if (await this.isAppReplaced()) {
+      const state = useVoiceRecordingStore.getState();
+      if (isStale(state)) return;
+      logWarn(`${LOG_PREFIX} Silent microphone after the app bundle was replaced`);
+      this.displaceFallbackNotice(state.micNotice);
+      state.setMicNotice({
+        kind: "silent",
+        target,
+        deviceLabel,
+        bluetooth,
+        builtIn: null,
+        appReplaced: true,
+      });
+      state.announce("Daintree was updated while running and needs a restart.");
+      return;
+    }
+
+    const builtIn = await builtInMic;
+    const state = useVoiceRecordingStore.getState();
+    if (isStale(state)) return;
+    this.displaceFallbackNotice(state.micNotice);
+    state.setMicNotice({ kind: "silent", target, deviceLabel, bluetooth, builtIn });
+  }
+
+  // The silent warning takes the pane's one notice slot; a stand-in notice it
+  // covers comes back once the mic is heard, unless it was dismissed first.
+  private displaceFallbackNotice(notice: VoiceMicNotice | null): void {
+    if (notice?.kind === "fallback") this.displacedFallbackNotice = notice;
+  }
+
+  private async findOtherBuiltInMic(
+    deviceId: string | null,
+    deviceLabel: string | null
+  ): Promise<VoiceMicDevice | null> {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const candidate = findBuiltInMic(devices.filter((device) => device.kind === "audioinput"));
       if (candidate && candidate.deviceId !== deviceId && candidate.label !== deviceLabel) {
-        builtIn = candidate;
+        return candidate;
       }
     } catch (err) {
       logDebug(`${LOG_PREFIX} Could not list microphones`, voiceErrorLogFields(err));
     }
-    const state = useVoiceRecordingStore.getState();
-    if (
-      this.generation !== generation ||
-      this.sessionCapture !== capture ||
-      state.micSignal !== "silent" ||
-      state.micNotice?.kind === "lost"
-    ) {
-      return;
+    return null;
+  }
+
+  // Unknown reads as not replaced, so the mic advice stands.
+  private async isAppReplaced(): Promise<boolean> {
+    try {
+      return (await window.electron.voiceInput.isAppReplaced()) === true;
+    } catch (err) {
+      logDebug(`${LOG_PREFIX} Could not check the app bundle`, voiceErrorLogFields(err));
+      return false;
     }
-    state.setMicNotice({
-      kind: "silent",
-      target,
-      deviceLabel,
-      bluetooth: isBluetoothMicLabel(deviceLabel),
-      builtIn,
-    });
   }
 
   // The saved id went stale and the mic's name found it again: save the id it
@@ -5644,11 +5928,13 @@ class VoiceRecordingService {
    * The session panel's Stop: the dictation key's stop for whatever this view
    * is recording, taking the person back to it as the key does (#14791), and
    * nothing when there is nothing left to stop, so a late click can't start
-   * another session.
+   * another session. Settings' mic test stops it without going there (#14951).
    */
-  stopActiveSession(): Promise<void> {
+  stopActiveSession({ returnToTarget = true }: { returnToTarget?: boolean } = {}): Promise<void> {
     this.initialize();
-    return this.stopAnySession({ pressedHere: true }) ?? Promise.resolve();
+    return (
+      this.stopAnySession(returnToTarget ? { pressedHere: true } : undefined) ?? Promise.resolve()
+    );
   }
 
   /**
@@ -5798,6 +6084,15 @@ class VoiceRecordingService {
       handler();
       return;
     }
+    // A reply too short to send by voice stays in the draft (#14633). The stop
+    // alone would pass for an ordinary one, so the composer says it wasn't
+    // sent and how to send it, in place of the stop's own word (#14944).
+    if (handler && draft.trim()) {
+      if (stopping) this.stopAnnounces = false;
+      else void this.stop("Dictation stopped.", { reason: "send", announce: false });
+      handler({ tooShort: true });
+      return;
+    }
     if (!stopping) void this.stop("Dictation stopped.", { reason: "send" });
   }
 
@@ -5814,6 +6109,7 @@ class VoiceRecordingService {
     this.clearPauseTimeout();
     this.clearIdleTimeout();
     this.clearCancelConfirm();
+    this.clearScratchRefusal();
     this.clearElapsedTimer();
     this.sessionClockRunning = false;
     this.clearMicSilenceTimer();
@@ -5833,6 +6129,7 @@ class VoiceRecordingService {
     for (const panelId of correctedPanels) this.syncCorrectionRange(panelId);
     this.correctionStreams.clear();
     this.cleanups.clear();
+    this.sendObservers.clear();
     this.resetChunking();
     this.baselineOwners.clear();
     this.unfollowLearningBaselines();

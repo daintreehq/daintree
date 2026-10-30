@@ -2276,6 +2276,73 @@ describe("FileBrowserPane row activation (#11496)", () => {
   });
 });
 
+describe("FileBrowserPane viewer Open as panel (#15015)", () => {
+  const openAsPanel = () => screen.findByRole("button", { name: "Open as panel" });
+
+  it("opens the file the viewer shows through the same action the tree uses", async () => {
+    mockPanel.browserSelectedPath = "src/app.ts";
+    renderPane();
+
+    await act(async () => {
+      fireEvent.click(await openAsPanel());
+    });
+
+    expect(dispatchMock.mock.calls).toEqual([
+      ["file.openPanel", { path: "/repo/src/app.ts" }, { source: "user" }],
+    ]);
+  });
+
+  it("closes a dialog-hosted browser once the panel exists", async () => {
+    mockPanel.browserSelectedPath = "src/app.ts";
+    const onClose = vi.fn();
+    render(
+      <TooltipProvider>
+        <FileBrowserPane
+          id="fb-1"
+          title="Files"
+          worktreeId="wt-1"
+          isFocused
+          location="dialog"
+          onFocus={vi.fn()}
+          onClose={onClose}
+        />
+      </TooltipProvider>
+    );
+
+    await act(async () => {
+      fireEvent.click(await openAsPanel());
+    });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the dialog open when the open failed", async () => {
+    mockPanel.browserSelectedPath = "src/app.ts";
+    dispatchMock.mockResolvedValue({ ok: false, error: { message: "panel limit reached" } });
+    const onClose = vi.fn();
+    render(
+      <TooltipProvider>
+        <FileBrowserPane
+          id="fb-1"
+          title="Files"
+          worktreeId="wt-1"
+          isFocused
+          location="dialog"
+          onFocus={vi.fn()}
+          onClose={onClose}
+        />
+      </TooltipProvider>
+    );
+
+    await act(async () => {
+      fireEvent.click(await openAsPanel());
+    });
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
 describe("FileBrowserPane Refresh reachability and media wiring (#11586, #11938)", () => {
   // Refresh once lived only in the tree header, which unmounts with the tree
   // column — so the viewer-only layout had no way to refresh at all. The viewer
@@ -3280,7 +3347,7 @@ describe("file browser document navigation guards", () => {
         draftText: "draft",
         dirty: true,
         conflict: false,
-        save: async () => true,
+        save: async () => ({ status: "saved" as const }),
         discard: async () => {},
       });
       const guard = vi.fn(async () => verdict);

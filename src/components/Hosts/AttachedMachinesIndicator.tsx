@@ -19,6 +19,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { useDriveLeaseView } from "@/components/Recovery/driveLeaseState";
 import { takeControl, useTakeControlPending } from "@/components/Recovery/takeControl";
+import { takeControlConsequence } from "@/components/Recovery/recoveryCopy";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import type { AttachedClientInfo, HostModeStatus } from "@shared/types/ipc/hostMode";
 
@@ -108,7 +109,8 @@ function controlledProjects(
   );
   const named = ids.flatMap((id) => {
     const name = names.get(id);
-    return name ? [id === thisProjectId ? `${name} (this window)` : name] : [];
+    // "Open here", not "this window": the machine named above is not this window.
+    return name ? [id === thisProjectId ? `${name} (open here)` : name] : [];
   });
   return {
     named,
@@ -257,7 +259,22 @@ export function AttachedMachinesIndicator() {
             disabled={taking}
             onSelect={() => void takeControl(controlledHere.projectId)}
           >
-            Take control of {thisProjectName}
+            {/* What it does to the machine that has it, as every offer says. */}
+            <span className="flex min-w-0 flex-col">
+              <span>
+                {taking
+                  ? `Taking control of ${thisProjectName}…`
+                  : `Take control of ${thisProjectName}`}
+              </span>
+              <span className="text-xs text-text-secondary">
+                {takeControlConsequence({
+                  holder: controlledHere.holder?.clientName ?? "the machine with control",
+                  holderIsHostScreen: false,
+                  project: thisProjectName,
+                  host: null,
+                })}
+              </span>
+            </span>
           </DropdownMenuItem>
         )}
         {/* About this machine as a host, so it opens that section, not the host list. */}

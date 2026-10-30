@@ -22,6 +22,8 @@ import {
 } from "@/hooks/useDiffNoteDelivery";
 import { PANE_TOOLBAR_TEXT_BUTTON_CLASS } from "@/components/ui/paneToolbarStyles";
 import { pluralize } from "@/lib/pluralize";
+import { notify } from "@/lib/notify";
+import { UNDO_ACTION_LABEL, UNDO_TOAST_DURATION_MS, latestUndoOnly } from "@/lib/undoToast";
 
 export type DiffNoteSendScope = "file" | "all";
 
@@ -35,6 +37,8 @@ export interface DiffNoteSendRequest {
 
 interface DiffNotesSendMenuProps {
   worktreePath: string;
+  /** The diff's worktree, whose agents the menu lists first. */
+  worktreeId: string | null;
   /** Worktree-relative path of the file on screen; "" when none is. */
   filePath: string;
   onResult: (request: DiffNoteSendRequest, result: DiffNoteDeliveryResult) => void;
@@ -45,7 +49,12 @@ interface DiffNotesSendMenuProps {
  * the file on screen; "All files" is a deliberate second choice because it
  * reaches notes the reviewer can't see from here.
  */
-export function DiffNotesSendMenu({ worktreePath, filePath, onResult }: DiffNotesSendMenuProps) {
+export function DiffNotesSendMenu({
+  worktreePath,
+  worktreeId,
+  filePath,
+  onResult,
+}: DiffNotesSendMenuProps) {
   const allNotes = useDiffNotesStore(useShallow((state) => selectDiffNotes(state, worktreePath)));
   const fileCount = allNotes.filter((note) => note.filePath === filePath).length;
   const [scope, setScope] = useState<DiffNoteSendScope>("file");
@@ -106,7 +115,7 @@ export function DiffNotesSendMenu({ worktreePath, filePath, onResult }: DiffNote
         <DropdownMenuLabel>
           {count === 0 ? "No notes on this file" : `Paste ${pluralize(count, "note")} into`}
         </DropdownMenuLabel>
-        <DiffNoteTargetItems disabled={count === 0} onSend={send} />
+        <DiffNoteTargetItems worktreeId={worktreeId} disabled={count === 0} onSend={send} />
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -115,13 +124,15 @@ export function DiffNotesSendMenu({ worktreePath, filePath, onResult }: DiffNote
 // Mounted only while the menu is open, so a closed pane holds no subscription
 // to the panel map.
 function DiffNoteTargetItems({
+  worktreeId,
   disabled,
   onSend,
 }: {
+  worktreeId: string | null;
   disabled: boolean;
   onSend: (targetId: string) => void;
 }) {
-  const targets = useDiffNoteTargets();
+  const targets = useDiffNoteTargets(worktreeId);
   if (targets.length === 0) {
     return (
       <DropdownMenuItem inset disabled>
@@ -137,6 +148,7 @@ function DiffNoteTargetItems({
         <DropdownMenuItem
           key={target.id}
           disabled={disabled || target.isInputLocked}
+          aria-label={`${target.title}, ${target.worktreeName ?? "no worktree"}`}
           onSelect={() => onSend(target.id)}
         >
           <span
@@ -147,6 +159,12 @@ function DiffNoteTargetItems({
             <TerminalIcon kind={target.kind} chrome={target.chrome} className="h-3.5 w-3.5" />
           </span>
           <span className="truncate">{target.title}</span>
+          <DropdownMenuMeta
+            className="max-w-[140px] truncate"
+            title={target.worktreeName ?? undefined}
+          >
+            {target.worktreeName ?? "No worktree"}
+          </DropdownMenuMeta>
         </DropdownMenuItem>
       ))}
     </>
@@ -162,4 +180,36 @@ export function sendDiffNotes(request: DiffNoteSendRequest): DiffNoteDeliveryRes
     scope === "file" ? filePath : undefined
   );
   return deliverDiffNotes(targetId, notes);
+}
+
+/**
+ * A send clears the notes it pasted, so it offers the Undo a deleted note
+ * gets (D0). The paste can't be taken back out of the agent, so the toast says
+ * Undo only brings the notes back. A toast rather than the pane's status line:
+ * the reviewer is usually looking at the agent's composer when they want it.
+ */
+export function offerSentNotesUndo(result: Extract<DiffNoteDeliveryResult, { ok: true }>): void {
+  if (result.cleared.length === 0) return;
+  // Per note, so a note that came back and went out again answers only to the
+  // newest toast holding it.
+  const guards = result.cleared.map((note) => latestUndoOnly(`diff-note:${note.id}`, () => note));
+  const one = result.cleared.length === 1;
+  notify({
+    type: "success",
+    title: one ? "Note sent" : "Notes sent",
+    message:
+      `Pasted ${pluralize(result.sent, "note")} into ${result.targetTitle}. ` +
+      `Undo restores ${one ? "it" : "them"} but leaves the pasted text in place.`,
+    priority: "high",
+    transient: true,
+    duration: UNDO_TOAST_DURATION_MS,
+    context: { eventKind: "uiFeedback" },
+    action: {
+      label: UNDO_ACTION_LABEL,
+      onClick: () => {
+        const notes = guards.flatMap((restore) => restore() ?? []);
+        useDiffNotesStore.getState().restoreNotes(notes);
+      },
+    },
+  });
 }

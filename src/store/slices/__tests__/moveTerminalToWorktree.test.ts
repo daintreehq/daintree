@@ -87,8 +87,35 @@ describe("moveTerminalToWorktree", () => {
     vi.useRealTimers();
   });
 
+  it("keeps a docked terminal in the dock of the target worktree (#14966)", () => {
+    setTerminals([createMockTerminal("t1", "wt-a", "dock")]);
+
+    usePanelStore.getState().moveTerminalToWorktree("t1", "wt-b");
+
+    const moved = usePanelStore.getState().panelsById["t1"];
+    expect(moved?.worktreeId).toBe("wt-b");
+    expect(moved?.location).toBe("dock");
+    expect(moved?.isVisible).toBe(false);
+    expect(usePanelStore.getState().panelIdsByWorktreeId["wt-b"]).toContain("t1");
+  });
+
+  it("falls back to the grid when a docked panel's kind can't be docked (#14966)", () => {
+    const review = {
+      ...createMockTerminal("r1", "wt-a", "dock"),
+      kind: "review" as const,
+    } as unknown as PtyPanelData;
+    setTerminals([review]);
+
+    usePanelStore.getState().moveTerminalToWorktree("r1", "wt-b");
+
+    const moved = usePanelStore.getState().panelsById["r1"];
+    expect(moved?.worktreeId).toBe("wt-b");
+    expect(moved?.location).toBe("grid");
+    expect(moved?.isVisible).toBe(true);
+  });
+
   it("moves terminal to target worktree grid when under capacity", () => {
-    const source = createMockTerminal("t1", "wt-a", "dock");
+    const source = createMockTerminal("t1", "wt-a", "grid");
     const targetGridTerminals = Array.from({ length: 3 }, (_, i) =>
       createMockTerminal(`target-${i}`, "wt-b", "grid")
     );

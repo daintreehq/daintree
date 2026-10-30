@@ -4,7 +4,13 @@ import { defineIpcNamespace, opValidated } from "../define.js";
 import { checkRateLimit } from "../utils.js";
 import type { IpcContext } from "../types.js";
 import { remoteCallerHoldsRoot } from "./files.js";
-import { discardFileChanges, trashFile } from "../../services/git/fileMutation.js";
+import {
+  discardFileChanges,
+  previewDiscard,
+  previewTrash,
+  trashFile,
+} from "../../services/git/fileMutation.js";
+import type { FileMutationPreview } from "../../../shared/types/fileMutation.js";
 import { invalidateStagingDiffStatCache } from "../../utils/git.js";
 import {
   FILES_TRASH_METHOD_CHANNELS,
@@ -14,6 +20,14 @@ import {
 const fileMutationPayloadSchema = z.object({
   worktreePath: z.string().min(1),
   relativePath: z.string().min(1),
+});
+
+const fileDiscardPayloadSchema = fileMutationPayloadSchema.extend({
+  expectedToken: z.string().min(1).optional(),
+});
+
+const fileMutationPreviewPayloadSchema = fileMutationPayloadSchema.extend({
+  kind: z.enum(["discard", "trash"]),
 });
 
 async function requireHeldRoot(ctx: IpcContext, worktreePath: string): Promise<void> {
@@ -36,16 +50,34 @@ export function registerFileMutationHandlers(): () => void {
     ops: {
       discardFileChanges: opValidated(
         GIT_DISCARD_METHOD_CHANNELS.discardFileChanges,
-        fileMutationPayloadSchema,
+        fileDiscardPayloadSchema,
         async (ctx, payload): Promise<void> => {
           checkRateLimit(GIT_DISCARD_METHOD_CHANNELS.discardFileChanges, 10, 10_000);
           await requireHeldRoot(ctx, payload.worktreePath);
           try {
-            await discardFileChanges(payload.worktreePath, payload.relativePath, trashItem);
+            await discardFileChanges(
+              payload.worktreePath,
+              payload.relativePath,
+              trashItem,
+              payload.expectedToken
+            );
           } finally {
             // A discard that failed partway may still have moved the index.
             invalidateStagingDiffStatCache(payload.worktreePath);
           }
+        },
+        { withContext: true }
+      ),
+      // What the confirm shows before either mutation runs: read-only, so it
+      // isn't rate-limited with them, but held to the same worktree.
+      previewFileMutation: opValidated(
+        GIT_DISCARD_METHOD_CHANNELS.previewFileMutation,
+        fileMutationPreviewPayloadSchema,
+        async (ctx, payload): Promise<FileMutationPreview> => {
+          await requireHeldRoot(ctx, payload.worktreePath);
+          return payload.kind === "discard"
+            ? previewDiscard(payload.worktreePath, payload.relativePath)
+            : previewTrash(payload.worktreePath, payload.relativePath);
         },
         { withContext: true }
       ),

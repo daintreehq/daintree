@@ -30,6 +30,17 @@ export interface SuggestedCommandTerminal {
 /** Called with the exact command a clicked `! command` suggestion shows. */
 export type OnRunSuggestedCommand = (command: string) => void;
 
+/** The registered provider, and what it tracks of the width rows were laid out at. */
+export interface SuggestedCommandLinks extends IDisposable {
+  /**
+   * The first row of `buffer` known to be laid out at the pane's width now;
+   * `buffer.length` when none is.
+   */
+  widthKnownFrom(buffer: IBuffer): number;
+  /** Every row the buffer holds now was laid out at a width it never saw, as a replayed snapshot's were. */
+  markRowsStale(): void;
+}
+
 export interface SuggestedCommand {
   command: string;
   range: IBufferRange;
@@ -349,6 +360,10 @@ export class SuggestedCommandLinksAddon implements ILinkProvider {
     ];
   }
 
+  markRowsStale(): void {
+    this._markAllStale();
+  }
+
   private _isNormalActive(): boolean {
     return this._terminal?.buffer.active.type === "normal";
   }
@@ -376,7 +391,8 @@ export class SuggestedCommandLinksAddon implements ILinkProvider {
     this._staleThrough = terminal.registerMarker(row - (normal.baseY + normal.cursorY));
   }
 
-  private _knownFrom(buffer: IBuffer): number {
+  widthKnownFrom(buffer: IBuffer): number {
+    if (!this._terminal) return buffer.length;
     // The alternate screen has no scrollback; an app there redraws it whole.
     if (buffer.type !== "normal") return 0;
     if (this._staleOnReturn) return buffer.length;
@@ -397,7 +413,7 @@ export class SuggestedCommandLinksAddon implements ILinkProvider {
       buffer,
       terminal.cols,
       bufferLineNumber - 1,
-      this._knownFrom(buffer)
+      this.widthKnownFrom(buffer)
     );
     callback(found ? [new SuggestedCommandLink(found, () => this._activate(found))] : undefined);
   }
@@ -412,7 +428,7 @@ export class SuggestedCommandLinksAddon implements ILinkProvider {
       buffer,
       terminal.cols,
       hovered.range.start.y - 1,
-      this._knownFrom(buffer)
+      this.widthKnownFrom(buffer)
     );
     if (!current || current.command !== hovered.command) return;
     if (!sameRange(current.range, hovered.range)) return;

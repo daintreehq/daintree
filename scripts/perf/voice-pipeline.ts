@@ -47,6 +47,7 @@ import {
   sessionKey,
   sharedSessions,
   renderPipelineTable,
+  renderStopPreviewTable,
   renderVoiceTable,
   scorePipelineSession,
   summarisePipeline,
@@ -81,8 +82,8 @@ Dictates every replay clip, in each voice, into the real GrokTranscriptionProvid
 against the live xAI socket, then cleans up what landed with the real
 VoiceCorrectionService (gpt-6.1-terra) against the live Responses API, as a
 dictation in a Claude Code pane does. Scores what reached the draft and how long
-the speaker waited after the stop. Needs GROK_API_KEY (or XAI_API_KEY) and
-OPENAI_API_KEY; gemini voices need GOOGLE_API_KEY (or GEMINI_API_KEY), minimax
+the speaker waited after the stop. Needs GROK_API_KEY (or XAI_API_KEY), and
+OPENAI_API_KEY unless every arm is raw; gemini voices need GOOGLE_API_KEY (or GEMINI_API_KEY), minimax
 voices REPLICATE_API_TOKEN. With VOICE_REPLAY_RECORDINGS_DIR set, its <clip id>.wav
 recordings play as a voice of their own, recorded, and a clip with no recording
 is skipped for it. Costs cents.
@@ -627,6 +628,20 @@ function renderReport(run: RunRecord, scored: readonly ScoredPipelineSession[]):
   }
   lines.push("", "## Per voice", "");
   for (const arm of run.arms) lines.push(renderVoiceTable(scored, arm, run.arms), "");
+  lines.push(
+    "## Preview at stop against the final",
+    "",
+    "Whether the text the provider held at the stop, completions and open preview, is exactly the text the final commits, each piece trimmed and without hesitations as production lands it. Invalid sessions errored, reconnected, dropped audio, ended on a final that never came or heard nothing, and count nowhere else. Waited is the valid dictations with something pending at the stop. Words after the stop ending in a spoken command, or a final naming a file, count as a miss, since production rewrites them once they land. Stop → final is to the last words landing, Stop → drain to the drain's end, when the stop's cleanup goes out; p50 / p95.",
+    ""
+  );
+  for (const arm of run.arms) lines.push(renderStopPreviewTable(scored, arm, run.arms), "");
+  // A dictation that threw has no session to score, but it still counts against the run.
+  if (run.failures.length > 0) {
+    lines.push(
+      `${run.failures.length} dictation(s) failed outright and are in no table; they count with the invalid.`,
+      ""
+    );
+  }
   lines.push(...renderIntentTable(scored, run.arms));
   lines.push("## Sessions whose final text differs from the reference", "");
   for (const clip of CLIPS) {
@@ -674,15 +689,20 @@ async function main(): Promise<number> {
       `${path.basename(options.rescore).replace(/\.json$/, "")}-rescored.md`
     );
     writeFileSync(out, `${report}\n`);
-    console.log(renderPipelineTable(summarisePipeline(scoreRun(run), run.arms)));
+    const scored = scoreRun(run);
+    console.log(renderPipelineTable(summarisePipeline(scored, run.arms)));
+    for (const arm of run.arms) console.log(`\n${renderStopPreviewTable(scored, arm, run.arms)}`);
     console.error(`[voice-pipeline] wrote ${path.relative(REPO_ROOT, path.resolve(out))}`);
     return 0;
   }
 
   const xaiKey = process.env.GROK_API_KEY ?? process.env.XAI_API_KEY ?? "";
   const openaiKey = process.env.OPENAI_API_KEY ?? "";
-  if (!xaiKey || !openaiKey) {
-    console.error("[voice-pipeline] needs GROK_API_KEY (or XAI_API_KEY) and OPENAI_API_KEY");
+  // A run of raw arms only reads Grok, as the preview against the final does.
+  if (!xaiKey || (!openaiKey && options.arms.some((arm) => arm.cleanup))) {
+    console.error(
+      "[voice-pipeline] needs GROK_API_KEY (or XAI_API_KEY), and OPENAI_API_KEY unless every arm is raw"
+    );
     return 1;
   }
   if (process.env.DAINTREE_GROK_WS_URL) {
@@ -868,6 +888,7 @@ async function main(): Promise<number> {
   const markdownPath = jsonPath.replace(/\.json$/, ".md");
   writeFileSync(markdownPath, `${renderReport(run, scored)}\n`);
   console.log(renderPipelineTable(run.summary));
+  for (const arm of run.arms) console.log(`\n${renderStopPreviewTable(scored, arm, run.arms)}`);
   console.error(
     `\n[voice-pipeline] wrote ${path.relative(REPO_ROOT, jsonPath)} and .md (both quote transcripts; keep them in .tmp/)`
   );

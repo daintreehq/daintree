@@ -15,6 +15,7 @@ import { computeSavedScopePaneCount } from "@/services/actions/definitions/fleet
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useArmedCrossHostTargets, type CrossHostFleetTarget } from "./crossHostFleet";
 import type { PredicateFleetSavedScope } from "@shared/types";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
 import { pluralize } from "@/lib/pluralize";
@@ -26,8 +27,29 @@ type RuleScope = PredicateFleetSavedScope["scope"];
 interface SaveFleetDialogProps {
   isOpen: boolean;
   onClose: () => void;
+  /** This view's armed panes: all a snapshot can hold. */
   armedCount: number;
   restoreFocusTo?: RestoreFocusTarget;
+}
+
+// Pinned to English, like the sentence around it.
+const listFormat = new Intl.ListFormat("en", { style: "long", type: "conjunction" });
+// A host can contribute hundreds of agents, and the hint is the type group's
+// accessible description: past a few names, the rest are counted.
+const MAX_NAMED_LEFT_OUT = 3;
+
+/** The other hosts' agents a snapshot can't hold, named the way the fleet list names them. */
+export function describeLeftOut(targets: readonly CrossHostFleetTarget[]): string {
+  const names = targets.map((t) => `${t.title} on ${t.hostName}`);
+  // Never "and 1 other": one more name costs no more than the count would.
+  const listed =
+    names.length > MAX_NAMED_LEFT_OUT + 1
+      ? [
+          ...names.slice(0, MAX_NAMED_LEFT_OUT),
+          pluralize(names.length - MAX_NAMED_LEFT_OUT, "other"),
+        ]
+      : names;
+  return `Left out, since a snapshot can't hold agents on other hosts: ${listFormat.format(listed)}.`;
 }
 
 function savedIds(): Set<string> {
@@ -66,6 +88,10 @@ export function SaveFleetDialog({
     setFailed(false);
     requestAnimationFrame(() => inputRef.current?.focus());
   }, [isOpen]);
+
+  // Fleet members on other hosts: a snapshot stores this view's pane ids only,
+  // so the dialog names the ones it leaves out rather than dropping them unsaid.
+  const crossHostTargets = useArmedCrossHostTargets();
 
   const trimmed = name.trim();
   const canSave = trimmed.length > 0 && (kind !== "snapshot" || armedCount > 0) && !saving;
@@ -161,11 +187,18 @@ export function SaveFleetDialog({
             label="Type"
             selfLabelled
             hint={
-              <p id={kindHintId} className="text-xs text-text-secondary">
-                {kind === "snapshot"
-                  ? `The ${pluralize(armedCount, "pane")} armed now. Panes you close drop out of it.`
-                  : `Whichever panes match when you recall it. ${pluralize(ruleMatchCount, "pane matches", "panes match")} now.`}
-              </p>
+              <div id={kindHintId} className="space-y-1 text-xs text-text-secondary">
+                <p>
+                  {kind !== "snapshot"
+                    ? `Whichever panes match when you recall it. ${pluralize(ruleMatchCount, "pane matches", "panes match")} now.`
+                    : armedCount > 0
+                      ? `The ${pluralize(armedCount, "pane")} armed now. Panes you close drop out of it.`
+                      : "Only panes armed here go in a snapshot. Panes you close drop out of it."}
+                </p>
+                {kind === "snapshot" && crossHostTargets.length > 0 && (
+                  <p>{describeLeftOut(crossHostTargets)}</p>
+                )}
+              </div>
             }
           >
             <SegmentedRadioGroup<SaveFleetKind>
@@ -245,7 +278,7 @@ export function SaveFleetDialog({
       <AppDialog.Footer
         hint={
           kind === "snapshot" && armedCount === 0
-            ? "Arm panes to save a snapshot"
+            ? "Arm panes here to save a snapshot"
             : trimmed.length === 0
               ? "Name the fleet to save it"
               : undefined

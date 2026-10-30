@@ -19,22 +19,26 @@ function withGeneration(
   return launchGeneration === undefined ? event : { ...event, launchGeneration };
 }
 
-// On Windows, node-pty reports `pid: 0` during the brief window before the
-// ConPTY `connect()` resolves, and never emits a follow-up event when the real
-// PID lands. We poll the live PTY object across event-loop turns to recover the
-// PID, capped so a terminal that never resolves can't poll forever.
-const PID_RETRY_MAX_ATTEMPTS = 20;
+// On Windows, node-pty reports `pid: 0` until the ConPTY `connect()` resolves,
+// and never emits a follow-up event when the real PID lands. We poll the live
+// PTY object on a timer to recover it. The wait is wall-clock, not event-loop
+// turns: connect() measured 65-150 ms on an idle Windows 11 machine, tens of
+// thousands of turns, so a turn-counted budget ran out first and the terminal
+// silently went without a process detector (#15481). Capped so a terminal that
+// never resolves can't poll forever.
+export const PID_RETRY_INTERVAL_MS = 25;
+export const PID_RETRY_MAX_ATTEMPTS = 400;
 
 export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
   const { ptyManager, pauseCoordinators, sendEvent, getOrCreatePauseCoordinator } = ctx;
 
-  // Poll the live PTY object across event-loop turns for a terminal that
+  // Poll the live PTY object for a terminal that
   // spawned with an invalid PID (Windows ConPTY). Once a positive PID lands,
   // emit `terminal-pid` and start the process detector. Stops if the terminal
   // disappears (killed/trashed) before the PID resolves, or after the cap.
   function schedulePidRetry(id: string, launchGeneration: number | undefined, attempt = 0): void {
     if (attempt >= PID_RETRY_MAX_ATTEMPTS) return;
-    setImmediate(() => {
+    setTimeout(() => {
       const terminalInfo = ptyManager.getTerminal(id);
       if (!terminalInfo) return; // terminal gone — abandon the retry
       // A same-id respawn replaced the incarnation this retry was resolving;
@@ -50,7 +54,7 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
         return;
       }
       schedulePidRetry(id, launchGeneration, attempt + 1);
-    });
+    }, PID_RETRY_INTERVAL_MS);
   }
 
   return {
@@ -235,6 +239,10 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
 
     "update-title": (msg) => {
       ptyManager.updateTitle(msg.id, msg.title, msg.titleMode);
+    },
+
+    "note-live-agent-session-id": (msg) => {
+      ptyManager.noteLiveAgentSessionId(msg.id, msg.sessionId, msg.launchGeneration);
     },
 
     "update-worktree-id": (msg) => {

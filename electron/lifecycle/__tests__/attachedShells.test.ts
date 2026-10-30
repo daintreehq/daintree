@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  describeShellNames,
   getAttachedShells,
   isExitConfirmationPending,
   setAttachedShellsProvider,
@@ -35,15 +34,5 @@ describe("attachedShells", () => {
     expect(isExitConfirmationPending()).toBe(false);
     setExitConfirmationPending(true);
     expect(isExitConfirmationPending()).toBe(true);
-  });
-
-  it("joins names once each, with a fallback for an unnamed machine", () => {
-    expect(describeShellNames([{ clientName: "A" }])).toBe("A");
-    expect(
-      describeShellNames([{ clientName: "A" }, { clientName: "A" }, { clientName: "B" }])
-    ).toBe("A and B");
-    expect(
-      describeShellNames([{ clientName: "A" }, { clientName: "B" }, { clientName: " " }])
-    ).toBe("A, B and Another machine");
   });
 });

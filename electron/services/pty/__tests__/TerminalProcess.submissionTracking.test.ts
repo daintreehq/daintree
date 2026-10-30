@@ -465,3 +465,118 @@ describe("TerminalProcess handback requests (#12488)", () => {
     terminal.dispose();
   });
 });
+
+/**
+ * #15521: a submission carrying a first-prompt candidate offers it only once
+ * its Enter has been written to an agent, through the same phases as above.
+ */
+describe("TerminalProcess first prompt (#15521)", () => {
+  const candidate = { text: "Fix the login bug" };
+  let offered: Array<{ id: string; firstPrompt: unknown }>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    ptyWriteMock = vi.fn<(data: string) => void>();
+    offered = [];
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  function createAgentTerminal(options?: Partial<TerminalProcessOptions>): TerminalProcess {
+    return new TerminalProcess(
+      "t1",
+      {
+        cwd: process.cwd(),
+        cols: 80,
+        rows: 24,
+        kind: "terminal" as const,
+        launchAgentId: "claude",
+        ...options,
+      },
+      {
+        emitData: () => {},
+        onExit: () => {},
+        onFirstPromptWritten: (id, firstPrompt) => offered.push({ id, firstPrompt }),
+      },
+      {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        agentStateService: { handleActivityState: () => {} } as any,
+        ptyPool: null,
+        processTreeCache: null,
+      },
+      defaultSpawnContext(),
+      createMockPty()
+    );
+  }
+
+  it("offers the record once the Enter is written, stamped with that moment", async () => {
+    vi.setSystemTime(10_000);
+    let enterAt: number | undefined;
+    ptyWriteMock.mockImplementation((data) => {
+      if (data === "\r") enterAt = Date.now();
+    });
+    const terminal = createAgentTerminal();
+
+    terminal.submit("Fix the login bug", "tok-1", undefined, undefined, undefined, candidate);
+    expect(offered).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(enterAt).toBeGreaterThan(10_000);
+    expect(offered).toEqual([
+      { id: "t1", firstPrompt: { text: "Fix the login bug", via: "send", at: enterAt } },
+    ]);
+  });
+
+  it("offers nothing when the Enter write throws", async () => {
+    const terminal = createAgentTerminal();
+    ptyWriteMock.mockImplementation((data) => {
+      if (data === "\r") throw Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+    });
+
+    terminal.submit("Fix the login bug", "tok-1", undefined, undefined, undefined, candidate);
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(terminal.getSubmission("tok-1")?.phase).toBe("failed");
+    expect(offered).toEqual([]);
+  });
+
+  it("offers nothing when the Enter is abandoned or the send is refused", async () => {
+    const abandoned = createAgentTerminal();
+    abandoned.submit("Fix the login bug", "tok-1", undefined, undefined, undefined, candidate);
+    acquireInputLock(abandoned);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(abandoned.getSubmission("tok-1")?.phase).toBe("cancelled");
+
+    const refused = createAgentTerminal();
+    acquireInputLock(refused);
+    refused.submit("Fix the login bug", "tok-2", undefined, undefined, undefined, candidate);
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(offered).toEqual([]);
+  });
+
+  it("offers nothing to the shell a launched agent has exited to", async () => {
+    const terminal = createAgentTerminal();
+    // Launch affinity alone would still call this an agent.
+    terminal.getInfo().agentState = "exited";
+    terminal.submit("ls", undefined, undefined, undefined, undefined, candidate);
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(ptyWriteMock).toHaveBeenLastCalledWith("\r");
+    expect(offered).toEqual([]);
+  });
+
+  it("offers nothing to a shell, or for a send that carried no candidate", async () => {
+    const shell = createAgentTerminal({ launchAgentId: undefined });
+    shell.submit("ls", undefined, undefined, undefined, undefined, candidate);
+    const agent = createAgentTerminal();
+    agent.submit("Fix the login bug");
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(ptyWriteMock).toHaveBeenCalledWith("\r");
+    expect(offered).toEqual([]);
+  });
+});

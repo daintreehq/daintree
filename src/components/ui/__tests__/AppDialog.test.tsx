@@ -1988,6 +1988,36 @@ describe("AppDialog — shared chrome contract", () => {
     expect(svg.getAttribute("class")).toContain("text-status-warning");
   });
 
+  it("aligns the title glyph and the close button to the same edge of a wrapped title", () => {
+    render(
+      <AppDialog isOpen onClose={() => {}}>
+        <AppDialog.Header>
+          <AppDialog.Title icon={<svg />}>
+            daintree isn't on a-very-long-host-name yet
+          </AppDialog.Title>
+          <AppDialog.CloseButton />
+        </AppDialog.Header>
+      </AppDialog>
+    );
+    const slot = screen
+      .getByRole("heading", { name: "daintree isn't on a-very-long-host-name yet" })
+      .querySelector<HTMLElement>("[data-dialog-title-icon]")!;
+    const closeButton = screen.getByRole("button", { name: "Close dialog" });
+    const matching = (el: HTMLElement, pattern: RegExp) =>
+      el.className.split(/\s+/).filter((c) => pattern.test(c));
+
+    // The header and heading centre their children, which parks both on the
+    // middle of a two-line title. Layout isn't computed under jsdom, so this
+    // pins what carries the fix: the glyph and the X each declare the same one
+    // cross-axis alignment, and it is the start edge. `end` would pin them to
+    // the last line and `auto` would hand back the inherited centring.
+    expect(matching(slot, /^self-/)).toEqual(["self-start"]);
+    expect(matching(closeButton, /^self-/)).toEqual(["self-start"]);
+    // Exactly one line of the heading's own type, so the glyph centres on line
+    // one at whatever size a caller sets. Two lines would centre it between.
+    expect(matching(slot, /^h-/)).toEqual(["h-[1lh]"]);
+  });
+
   it("keeps a leading action apart from Cancel and the primary, and off initial focus", async () => {
     const onDiscard = vi.fn();
     render(
@@ -2024,5 +2054,25 @@ describe("AppDialog — shared chrome contract", () => {
     expect(discard.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(discard);
     expect(onDiscard).not.toHaveBeenCalled();
+  });
+
+  // Under forced colours the red label is gone, and `forced-colors.css` frames
+  // `button[data-variant="ghost-danger"]` instead, so only a destructive
+  // leading action may carry that variant, and it has to be a real button.
+  it("renders only a destructive leading action as the danger ghost that forced colours frames", () => {
+    const footer = (intent?: "destructive") => (
+      <AppDialog isOpen onClose={() => {}}>
+        <AppDialog.Footer
+          leadingAction={{ label: "Discard changes", onClick: () => {}, intent }}
+          primaryAction={{ label: "Save", onClick: () => {} }}
+        />
+      </AppDialog>
+    );
+    const leading = () => screen.getByRole("button", { name: "Discard changes" });
+    const { rerender } = render(footer("destructive"));
+    expect(leading().tagName).toBe("BUTTON");
+    expect(leading().getAttribute("data-variant")).toBe("ghost-danger");
+    rerender(footer());
+    expect(leading().getAttribute("data-variant")).toBe("ghost");
   });
 });

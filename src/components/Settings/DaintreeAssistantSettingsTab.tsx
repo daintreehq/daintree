@@ -20,6 +20,11 @@ import { DEFAULT_DANGEROUS_ARGS } from "@shared/types/agentSettings";
 import { resolveAssistantModelId } from "@shared/config/agentRegistry";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import {
+  resolveLaunchableAssistantAgentId,
+  selectInstalledAssistantAgentIds,
+} from "@/hooks/assistantAgentSelection";
 import { DAINTREE_CONFIRMATION_OPTIONS } from "@/config/assistantDaintreeConfirmations";
 import {
   assistantSkipsDaintreeConfirmations,
@@ -53,8 +58,8 @@ import { useAssistantVersionWarning } from "./Assistant/useAssistantVersionWarni
 // One sentence of consequence beside the select; the rest lives in the tool set's
 // disclosure with the action inventory, where it can be read in full.
 const TIER_SUMMARIES: Record<HelpAssistantTier, string> = {
-  core: "Create worktrees, launch and prompt agents, and move, rename or close terminals",
-  full: "Adds recipes, workflows, project checks, forge and git reads, context tools and diagnostics",
+  core: "Create worktrees, launch and prompt agents, move, rename or close terminals, and read issues and PRs",
+  full: "Adds recipes, workflows, project checks, git activity, context tools and diagnostics",
 };
 
 // Descriptive exclusive choice: each tool set's consequence stays readable in full, so
@@ -65,8 +70,8 @@ const TIER_CHOICES: { value: HelpAssistantTier; label: string; description: stri
 ];
 
 const TIER_DETAILS: Record<HelpAssistantTier, string> = {
-  core: "The assistant can create worktrees, launch agents and send them prompts, read and wait on terminals, and move, rename or close them. It can delete worktrees, including ones an earlier session created, which asks you to confirm unless Daintree confirmations says otherwise. It can message and start assistants on your other hosts, as each host's settings allow. This covers most orchestration and keeps the tool list the model rereads every turn short.",
-  full: "Adds recipes and project checks, starting work on an issue, forge PR, issue and CI reads, git activity, CopyTree context, managing worktree resources, and diagnostics. Teardowns ask you to confirm unless Daintree confirmations says otherwise. Git and forge writes and file edits aren't available in either tool set.",
+  core: "The assistant can create worktrees, launch agents and send them prompts, read and wait on terminals, and move, rename or close them. It can read issues and their comments, and pull requests with their CI checks. It can delete worktrees, including ones an earlier session created, which asks you to confirm unless Daintree confirmations says otherwise. It can message and start assistants on your other hosts, as each host's settings allow. This covers most orchestration and keeps the tool list the model rereads every turn short.",
+  full: "Adds recipes and project checks, starting work on an issue, git activity, CopyTree context, managing worktree resources, and diagnostics. Teardowns ask you to confirm unless Daintree confirmations says otherwise. Git and forge writes and file edits aren't available in either tool set.",
 };
 
 function groupToolsByNamespace(tools: readonly string[]): Array<[string, string[]]> {
@@ -210,7 +215,27 @@ export function DaintreeAssistantSettingsTab() {
   const droppedPreferredAgentId = useHelpPanelStore((s) => s.droppedPreferredAgentId);
   const clearDroppedPreferredAgent = useHelpPanelStore((s) => s.clearDroppedPreferredAgent);
 
-  const versionWarning = useAssistantVersionWarning(preferredAgentId);
+  const cliAvailability = useCliAvailabilityStore((s) => s.availability);
+  const cliAvailabilityKnown = useCliAvailabilityStore((s) => s.hasRealData);
+  // The registry is read again whenever availability changes, as the dock's
+  // choices hook does: Reload configuration can add or drop a user-defined
+  // backend, and both sides must keep agreeing on which agent is the only one.
+  const installedAgentIds = useMemo(
+    () =>
+      selectInstalledAssistantAgentIds(
+        getAssistantSupportedAgentIds(),
+        cliAvailability,
+        cliAvailabilityKnown
+      ),
+    [cliAvailability, cliAvailabilityKnown]
+  );
+  // The agent a new session starts on: the saved choice, or the only installed
+  // agent the dock launches without asking. Everything that belongs to "the
+  // assistant's agent" (model, bypass, skip, version) follows it, because the
+  // launch reads those for the agent it starts, not for the saved choice.
+  const effectiveAgentId = resolveLaunchableAssistantAgentId(preferredAgentId, installedAgentIds);
+
+  const versionWarning = useAssistantVersionWarning(effectiveAgentId);
 
   const agentOptions = useMemo(() => {
     return getAssistantSupportedAgentIds().map((id) => ({
@@ -218,16 +243,22 @@ export function DaintreeAssistantSettingsTab() {
       label: getAgentConfig(id)?.name ?? id,
     }));
   }, []);
-  // Track the persisted choice exactly — falling back to a default would visually
-  // suggest a value is set when it isn't, leaving onChange unfired and the help
-  // panel still in its empty state. The placeholder makes "no selection" explicit.
+  // The select tracks the persisted choice exactly. Showing the only installed
+  // agent as selected would read as saved, and picking a value the select
+  // already shows never fires onChange, so the user couldn't save it. The
+  // description names the agent in use instead.
   const agentSelectValue = preferredAgentId ?? "";
+  const agentDescription = preferredAgentId
+    ? "The CLI that runs the help assistant in the dock"
+    : effectiveAgentId
+      ? `Using ${getAgentConfig(effectiveAgentId)?.name ?? effectiveAgentId}, the only installed agent the assistant supports`
+      : "The help assistant can't start until you choose one";
 
   const globalSkipPermissions = useAgentSettingsStore(
     (state) => state.settings?.globalSkipPermissions === true
   );
   const agentEntries = useAgentSettingsStore((state) => state.settings?.agents);
-  const assistantAgentSkip = resolveAssistantAgentSkip(preferredAgentId, {
+  const assistantAgentSkip = resolveAssistantAgentSkip(effectiveAgentId, {
     agents: agentEntries ?? {},
     globalSkipPermissions,
   });
@@ -236,8 +267,8 @@ export function DaintreeAssistantSettingsTab() {
     assistantAgentSkip.skips
   );
   const bypassCopy = useMemo(
-    () => getBypassCopy(preferredAgentId, settings.tier, confirmationsSkipped),
-    [preferredAgentId, settings.tier, confirmationsSkipped]
+    () => getBypassCopy(effectiveAgentId, settings.tier, confirmationsSkipped),
+    [effectiveAgentId, settings.tier, confirmationsSkipped]
   );
 
   const {
@@ -248,7 +279,7 @@ export function DaintreeAssistantSettingsTab() {
     modelOptions,
     modelSelectValue,
     showModelPicker,
-  } = useAssistantModelCatalog(preferredAgentId, settings.modelIds);
+  } = useAssistantModelCatalog(effectiveAgentId, settings.modelIds);
 
   const saveError = (group: SaveGroup) =>
     saveFailure?.group === group ? (
@@ -315,14 +346,14 @@ export function DaintreeAssistantSettingsTab() {
   };
 
   const handleModelChange = (value: string) => {
-    if (!preferredAgentId) return;
+    if (!effectiveAgentId) return;
     const modelId = value === MODEL_DEFAULT_SENTINEL ? "" : value;
     // Picking the recommended model stores "no choice", so it keeps tracking
     // the recommendation and doesn't read as modified.
-    const recommended = resolveAssistantModelId(preferredAgentId, null, catalogIds);
+    const recommended = resolveAssistantModelId(effectiveAgentId, null, catalogIds);
     void persist({
       modelIds: {
-        [preferredAgentId]: modelId !== "" && modelId === recommended ? null : modelId,
+        [effectiveAgentId]: modelId !== "" && modelId === recommended ? null : modelId,
       },
     });
   };
@@ -348,10 +379,10 @@ export function DaintreeAssistantSettingsTab() {
   };
 
   const handleGoToAssistantAgentSettings = () => {
-    if (!preferredAgentId) return;
+    if (!effectiveAgentId) return;
     void actionService.dispatch(
       "app.settings.openTab",
-      { tab: "agents", subtab: preferredAgentId },
+      { tab: "agents", subtab: effectiveAgentId },
       { source: "user" }
     );
   };
@@ -365,7 +396,7 @@ export function DaintreeAssistantSettingsTab() {
         Settings &gt; Agents &gt; Skip permission prompts
       </Button>
     );
-    if (!preferredAgentId) {
+    if (!effectiveAgentId) {
       return (
         <>
           By default it follows the assistant agent&apos;s skip permission prompts setting. With no
@@ -373,7 +404,7 @@ export function DaintreeAssistantSettingsTab() {
         </>
       );
     }
-    const agentName = getAgentConfig(preferredAgentId)?.name ?? preferredAgentId;
+    const agentName = getAgentConfig(effectiveAgentId)?.name ?? effectiveAgentId;
     if (assistantAgentSkip.source === "agent") {
       return (
         <>
@@ -459,16 +490,19 @@ export function DaintreeAssistantSettingsTab() {
         />
       )}
 
-      <SettingsSection title="Agent" description="Changes apply to new assistant sessions.">
+      {/* A pick isn't future-only: HelpPanel answers the switch request against the
+          project's selected lane, even while Global is on screen, and
+          GlobalAssistantService ends a global run once the launchable agent it
+          resolves to changes. */}
+      <SettingsSection
+        title="Agent"
+        description="Picking an agent switches this project's selected assistant tab to it, asking first unless the tab has been idle since it opened. The global assistant stops if this changes its agent."
+      >
         {saveError("agent")}
         <SettingsGroup>
           <SettingsSelect
             label="Agent"
-            description={
-              preferredAgentId
-                ? "The CLI that runs the help assistant in the dock"
-                : "The help assistant can't start until you choose one"
-            }
+            description={agentDescription}
             value={agentSelectValue}
             onValueChange={handleAgentChange}
             options={agentOptions}
@@ -489,7 +523,7 @@ export function DaintreeAssistantSettingsTab() {
                     </Button>
                   </>
                 ) : (
-                  "A --model flag in Custom CLI args overrides this"
+                  "Applies the next time this agent starts. A --model flag in Custom CLI args overrides it."
                 )
               }
               value={modelSelectValue}
@@ -499,7 +533,7 @@ export function DaintreeAssistantSettingsTab() {
               disabled={settingsUnavailable}
               isModified={savedModelId !== null}
               onReset={() => {
-                if (preferredAgentId) void persist({ modelIds: { [preferredAgentId]: null } });
+                if (effectiveAgentId) void persist({ modelIds: { [effectiveAgentId]: null } });
               }}
             />
           )}
@@ -530,9 +564,10 @@ export function DaintreeAssistantSettingsTab() {
         )}
       </SettingsSection>
 
+      {/* All three are read once, when the session is provisioned. */}
       <SettingsSection
         title="Behavior"
-        description="Which tools the assistant can use during help sessions"
+        description="Which tools the assistant gets when it starts. A conversation already running keeps the tools it started with."
       >
         {saveError("behavior")}
         <SettingsGroup>

@@ -89,6 +89,11 @@ export interface SerializedConsoleRow {
 export interface CdpPropertyDescriptor {
   name: string;
   value?: CdpRemoteArg;
+  /**
+   * Present for an accessor property, which has no `value` because reading it
+   * would run page code. Says which halves the accessor defines.
+   */
+  accessor?: { getter: boolean; setter: boolean };
   configurable: boolean;
   enumerable: boolean;
   writable?: boolean;

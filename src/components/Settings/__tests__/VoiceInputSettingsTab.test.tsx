@@ -15,7 +15,8 @@ vi.mock("@/lib/voiceInputSettingsEvents", () => ({
 vi.mock("@/utils/logger", () => ({ logWarn: vi.fn() }));
 
 const mockStartMicTest = vi.fn();
-vi.mock("@/services/voiceMicTest", () => ({
+vi.mock("@/services/voiceMicTest", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/services/voiceMicTest")>()),
   startMicTest: (...args: unknown[]) => mockStartMicTest(...args),
 }));
 

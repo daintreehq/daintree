@@ -202,7 +202,7 @@ Each worktree card shows:
 
 Agent state is a glyph, not a pill. Every state is a circle, or a circle with a mark inside, drawn at one outer diameter (`src/components/icons/AgentStateCircles.tsx`):
 
-- **Working:** `SpinnerCircle` in `state-working` (green), always spinning
+- **Working:** `SpinnerCircle` in `state-working` (green), spinning unless a reduced-motion, performance or power-saving mode stills it. By design it stands still only where the stillness is the message: in a quick-state filter bar's Working segment while nothing is working (dimmed at zero), and in the waiting hue for Pilot's quiet band, a run that has gone silent
 - **Waiting:** `HollowCircle` in `state-waiting` (amber); an agent asking a question adds a `?`
 - **Directing:** ring with a plus in `category-blue`
 - **Finished:** ring with a check in `text-secondary`, white in the pane header
@@ -493,13 +493,10 @@ In Bondi: `#FCFCFD` — very close to white, making the settings feel open and a
 **Header bar** (`dialog-header`):
 
 ```css
-background: var(
-  --dialog-header-bg,
-  color-mix(in oklch, var(--theme-surface-sidebar) 50%, transparent)
-);
+background: var(--dialog-header-bg, transparent);
 ```
 
-A semi-transparent tinted bar showing the current section title and close button.
+The section title and close button on the dialog's own surface. No built-in theme tints it; a theme that wants a title band authors `dialog-header-bg`.
 
 ### Settings Navigation Items
 
@@ -681,7 +678,7 @@ Borders use a 5-tier system from nearly invisible to prominent:
 | `border-default` | solid hex | solid hex | Primary borders on cards, inputs, panels |
 | `border-strong` | white 14% | black 14% | Focused elements, emphasized containers |
 | `border-interactive` | white 20% | black 10% | Hovered inputs, interactive element borders |
-| `border-input` | `border-strong` | `border-strong` | Resting edge of `Input` and `Textarea` — set it solid when the ladder value cannot carry 3:1 |
+| `border-input` | `border-strong` | `border-strong` | Resting edge of `Input` and `Textarea` — every built-in theme sets it solid, since the ladder value cannot carry 3:1 |
 
 **Polarity pattern:** Dark themes use white-alpha borders (they lighten). Light themes use black-alpha borders (they darken). This ensures borders are always visible as a step darker/lighter than their surface.
 

@@ -81,6 +81,13 @@ const userReloadHandlers = new Map<string, Array<() => void>>();
  * panel can overlap: one leaving must not clear what the other still holds.
  */
 const unsavedOwners = new Map<string, Set<object>>();
+/**
+ * Whose a dirty panel is, as the view that raised the flag said (#15031). Held
+ * beside the flag rather than read from `tracked`, because a view hosted
+ * outside the grid has no panel record: the store sweep forgets its entry while
+ * its flag stays up.
+ */
+const unsavedIdentity = new Map<string, UnsavedViewIdentity>();
 const unsavedListeners = new Set<() => void>();
 let pending: PluginPanelLifecycleEvent[] = [];
 let flushScheduled = false;
@@ -329,14 +336,26 @@ export function requestUserViewReload(panelId: string): boolean {
   return true;
 }
 
+/** The plugin a dirty view belongs to, and the view's own name. */
+export interface UnsavedViewIdentity {
+  pluginId: string;
+  displayName: string;
+}
+
 /**
  * Record whether the view attempt identified by `owner` holds unsaved work.
  * Clearing is owner-scoped: only the attempt that raised the flag can lower
  * it, so a stale setter cannot clear its replacement's flag.
  */
-export function setViewUnsavedChanges(panelId: string, owner: object, dirty: boolean): void {
+export function setViewUnsavedChanges(
+  panelId: string,
+  owner: object,
+  dirty: boolean,
+  identity?: UnsavedViewIdentity
+): void {
   const owners = unsavedOwners.get(panelId);
   if (dirty) {
+    if (identity) unsavedIdentity.set(panelId, identity);
     if (owners) owners.add(owner);
     else {
       unsavedOwners.set(panelId, new Set([owner]));
@@ -347,6 +366,7 @@ export function setViewUnsavedChanges(panelId: string, owner: object, dirty: boo
   if (!owners?.delete(owner)) return;
   if (owners.size === 0) {
     unsavedOwners.delete(panelId);
+    unsavedIdentity.delete(panelId);
     notifyUnsavedChanged();
   }
 }
@@ -358,6 +378,20 @@ function notifyUnsavedChanged(): void {
 /** Ids of the panels whose live view says it holds unsaved work, sorted. */
 export function getViewUnsavedPanelIds(): string[] {
   return [...unsavedOwners.keys()].sort();
+}
+
+/**
+ * The panels whose live view says it holds unsaved work, with the plugin each
+ * belongs to and the view's own name. One whose plugin isn't known is left out.
+ */
+export function getViewUnsavedPluginPanels(): Array<{ panelId: string } & UnsavedViewIdentity> {
+  const panels: Array<{ panelId: string } & UnsavedViewIdentity> = [];
+  for (const panelId of getViewUnsavedPanelIds()) {
+    const identity = unsavedIdentity.get(panelId);
+    const pluginId = identity?.pluginId || tracked.get(panelId)?.pluginId;
+    if (pluginId) panels.push({ panelId, pluginId, displayName: identity?.displayName ?? "" });
+  }
+  return panels;
 }
 
 /** Fires when a panel's unsaved status flips, not on every owner change. */
@@ -426,7 +460,10 @@ export function syncPluginPanels(
     // outside the grid reports its mounts under a synthetic id the store never
     // lists, and its unsaved flag must outlive every sweep while it is mounted;
     // its own unmount lowers it (#14095).
-    if (entry.location !== undefined && unsavedOwners.delete(panelId)) notifyUnsavedChanged();
+    if (entry.location !== undefined && unsavedOwners.delete(panelId)) {
+      unsavedIdentity.delete(panelId);
+      notifyUnsavedChanged();
+    }
     entry.removed = true;
     entry.lastPhase = "removed";
     enqueue(panelId, entry, "removed");
@@ -440,6 +477,7 @@ export function resetPluginPanelLifecycleForTests(): void {
   userReloadHandlers.clear();
   const hadUnsaved = unsavedOwners.size > 0;
   unsavedOwners.clear();
+  unsavedIdentity.clear();
   if (hadUnsaved) notifyUnsavedChanged();
   pending = [];
   flushScheduled = false;

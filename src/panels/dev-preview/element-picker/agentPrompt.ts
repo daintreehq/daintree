@@ -447,6 +447,65 @@ function describeElement(
 }
 
 /**
+ * What a request carries besides the user's words, counted from the same input
+ * {@link buildAgentTaskPrompt} writes the text from, so a summary of it can't
+ * promise anything the text leaves out.
+ */
+export interface PromptInventory {
+  /** The route the project matched, or null when the request names only the page's address. */
+  route: string | null;
+  /** The page's address as the request quotes it (redacted). */
+  page: string;
+  /** Worktree files the text cites: route files, held source locations, the target file. */
+  files: number;
+  /** Elements whose selector the text gives. */
+  selectors: number;
+  markup: boolean;
+  styles: boolean;
+  /** Components the text names around the elements. */
+  components: number;
+  screenshot: PageScreenshot;
+}
+
+export function promptInventory(input: AgentPromptInput): PromptInventory {
+  const files = new Set<string>();
+  for (const file of input.project?.route?.files ?? []) files.add(file.path);
+  for (const element of input.elements) {
+    for (const result of element.resolutions) {
+      if (result.state === "verified" || result.state === "mapped" || result.state === "observed") {
+        files.add(result.target.file.path);
+      }
+      if (result.state === "verified" && result.definition) {
+        files.add(result.definition.file.path);
+      }
+    }
+  }
+  if (input.scope.kind === "file") files.add(input.scope.file.path);
+  if (input.scope.kind === "component" && input.scope.importedFrom) {
+    files.add(input.scope.importedFrom.path);
+  }
+  const contexts = input.elements.flatMap((element) =>
+    element.observation.context ? [element.observation.context] : []
+  );
+  // Markup and styles go out only for the elements described in full, by
+  // their place in the selection, as `describeElement` counts them.
+  const described = input.elements
+    .slice(0, DESCRIBED_NODES)
+    .flatMap((element) => (element.observation.context ? [element.observation.context] : []));
+  const first = input.elements[0];
+  return {
+    route: input.project?.route?.id ?? null,
+    page: input.page.displayedUrl,
+    files: files.size,
+    selectors: contexts.length,
+    markup: described.some((context) => context.markup !== ""),
+    styles: described.some((context) => context.styles.length > 0),
+    components: first ? chainOf(first.observation).length : 0,
+    screenshot: input.screenshot,
+  };
+}
+
+/**
  * The one prompt a picker request is sent as, for any framework. What it says
  * follows from what was observed, not from which framework observed it: source
  * claims where the page made them, each with how far it was established; the
@@ -535,7 +594,7 @@ export function buildAgentTaskPrompt(input: AgentPromptInput): string {
 
   if (screenshot.status === "attached") {
     lines.push(
-      `- Screenshot of the selection, cropped from the preview: ${hostPath(screenshot.path)} (the outline around it is Daintree's selection highlight, not part of the page)`
+      `- Screenshot of the selection, cropped from the preview: ${hostPath(screenshot.path)} (the outline around it and the labels on that outline are Daintree's selection highlight, not part of the page)`
     );
   } else {
     lines.push(`- Screenshot: not attached — ${screenshot.reason}`);

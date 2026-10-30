@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { PtyPanelData, PanelInstance } from "@shared/types/panel";
+import type { BrowserPanelData, PtyPanelData, PanelInstance } from "@shared/types/panel";
 import type { StagingStatus } from "@shared/types";
 
 vi.mock("@/clients", () => ({
@@ -136,6 +136,7 @@ const { initStoreOrchestrator, destroyStoreOrchestrator } =
 const { useReviewMarksStore, _resetReviewMarksStoreForTesting } =
   await import("../reviewMarksStore");
 const { useDiffViewedStore } = await import("../diffViewedStore");
+const { useLayoutUndoStore } = await import("../layoutUndoStore");
 
 describe("rendererStoreOrchestrator", () => {
   beforeEach(async () => {
@@ -553,6 +554,153 @@ describe("rendererStoreOrchestrator", () => {
     expect(useWorktreeSelectionStore.getState().lastFocusedTerminalByWorktree.has("wt-1")).toBe(
       false
     );
+  });
+
+  describe("layout undo history (#14969)", () => {
+    function browserPanel(id: string, overrides: Partial<BrowserPanelData> = {}): BrowserPanelData {
+      return { id, kind: "browser", title: id, location: "grid", ...overrides };
+    }
+
+    function seedPanels(panels: BrowserPanelData[]) {
+      usePanelStore.setState({
+        panelsById: Object.fromEntries(panels.map((p) => [p.id, p])),
+        panelIds: panels.map((p) => p.id),
+      });
+    }
+
+    function movePanel(id: string, location: PanelInstance["location"]) {
+      const { panelsById } = usePanelStore.getState();
+      usePanelStore.setState({
+        panelsById: { ...panelsById, [id]: { ...panelsById[id]!, location } },
+      });
+    }
+
+    beforeEach(() => {
+      useLayoutUndoStore.getState().clearHistory();
+    });
+
+    afterEach(() => {
+      useLayoutUndoStore.getState().clearHistory();
+    });
+
+    it("keeps undo working when a panel from another worktree is removed", () => {
+      seedPanels([
+        browserPanel("a", { worktreeId: "wt-1" }),
+        browserPanel("b", { worktreeId: "wt-2" }),
+      ]);
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      movePanel("a", "dock");
+
+      usePanelStore.getState().removePanel("b");
+
+      expect(useLayoutUndoStore.getState().canUndo).toBe(true);
+      useLayoutUndoStore.getState().undo();
+      const state = usePanelStore.getState();
+      expect(state.panelsById["a"]!.location).toBe("grid");
+      expect(state.panelsById["b"]).toBeUndefined();
+      expect(useLayoutUndoStore.getState().canRedo).toBe(true);
+    });
+
+    it("keeps history when a panel is added, and the new panel survives undo", () => {
+      seedPanels([browserPanel("a")]);
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      movePanel("a", "dock");
+
+      const { panelsById, panelIds } = usePanelStore.getState();
+      usePanelStore.setState({
+        panelsById: { ...panelsById, c: browserPanel("c", { location: "dock" }) },
+        panelIds: [...panelIds, "c"],
+      });
+
+      expect(useLayoutUndoStore.getState().canUndo).toBe(true);
+      useLayoutUndoStore.getState().undo();
+      const state = usePanelStore.getState();
+      expect(state.panelIds).toEqual(["a", "c"]);
+      expect(state.panelsById["a"]!.location).toBe("grid");
+      expect(state.panelsById["c"]!.location).toBe("dock");
+    });
+
+    it.each<[string, Partial<BrowserPanelData>]>([
+      ["goes to the trash", { location: "trash" }],
+      ["moves into a dialog", { location: "dialog" }],
+      ["is excluded from persistence", { excludeFromPersistence: true }],
+    ])("disables undo once the only panel an entry restores %s", (_label, change) => {
+      seedPanels([browserPanel("a"), browserPanel("b", { location: "trash" })]);
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      movePanel("b", "grid");
+      expect(useLayoutUndoStore.getState().canUndo).toBe(true);
+
+      const { panelsById } = usePanelStore.getState();
+      usePanelStore.setState({
+        panelsById: { ...panelsById, a: { ...panelsById["a"]!, ...change } },
+      });
+
+      expect(usePanelStore.getState().panelIds).toEqual(["a", "b"]);
+      expect(useLayoutUndoStore.getState().canUndo).toBe(false);
+      expect(useLayoutUndoStore.getState().undoStack).toHaveLength(0);
+    });
+
+    it("prunes the redo stack the same way", () => {
+      seedPanels([browserPanel("a"), browserPanel("b")]);
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      movePanel("a", "dock");
+      useLayoutUndoStore.getState().undo();
+      expect(useLayoutUndoStore.getState().canRedo).toBe(true);
+
+      usePanelStore.getState().removePanel("a");
+      expect(useLayoutUndoStore.getState().canRedo).toBe(true);
+
+      usePanelStore.getState().removePanel("b");
+      expect(useLayoutUndoStore.getState().canRedo).toBe(false);
+    });
+
+    it("empties history when the panel store is cleared", () => {
+      seedPanels([browserPanel("a"), browserPanel("b")]);
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      movePanel("a", "dock");
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      movePanel("b", "dock");
+      useLayoutUndoStore.getState().undo();
+      expect(useLayoutUndoStore.getState().undoStack).toHaveLength(1);
+      expect(useLayoutUndoStore.getState().redoStack).toHaveLength(1);
+
+      usePanelStore.setState({ panelsById: {}, panelIds: [] });
+
+      const history = useLayoutUndoStore.getState();
+      expect(history.undoStack).toHaveLength(0);
+      expect(history.redoStack).toHaveLength(0);
+      expect(history.canUndo).toBe(false);
+      expect(history.canRedo).toBe(false);
+    });
+
+    it("leaves history alone on reorders and metadata updates", () => {
+      seedPanels([browserPanel("a"), browserPanel("b")]);
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+      const prune = vi.spyOn(useLayoutUndoStore.getState(), "pruneHistory");
+
+      usePanelStore.setState({ panelIds: ["b", "a"] });
+      usePanelStore.getState().updateTitle("a", "renamed", "automation");
+
+      expect(prune).not.toHaveBeenCalled();
+      prune.mockRestore();
+      expect(useLayoutUndoStore.getState().undoStack).toHaveLength(1);
+    });
+
+    it("stops pruning once torn down and catches up when re-initialized", () => {
+      seedPanels([browserPanel("a")]);
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+
+      destroyStoreOrchestrator();
+      usePanelStore.setState({ panelsById: {}, panelIds: [] });
+
+      expect(useLayoutUndoStore.getState().undoStack).toHaveLength(1);
+
+      // Coming back up reconciles the history it missed, without waiting for
+      // another panel change.
+      initStoreOrchestrator();
+      expect(useLayoutUndoStore.getState().undoStack).toHaveLength(0);
+      expect(useLayoutUndoStore.getState().canUndo).toBe(false);
+    });
   });
 
   describe("stashed maximize cleanup (#11183)", () => {
@@ -1913,6 +2061,83 @@ describe("rendererStoreOrchestrator", () => {
       initStoreOrchestrator();
 
       expect([...useFleetArmingStore.getState().armedIds]).toEqual([]);
+    });
+  });
+
+  describe("fleet draft holds (#14949)", () => {
+    function agent(id: string): PtyPanelData {
+      return {
+        id,
+        kind: "terminal",
+        title: id,
+        location: "grid",
+        worktreeId: "wt-1",
+        detectedAgentId: "claude",
+        everDetectedAgent: true,
+        agentState: "idle",
+        hasPty: true,
+      } as PtyPanelData;
+    }
+
+    async function armWithHeldDraft() {
+      const { useFleetArmingStore } = await import("../fleetArmingStore");
+      usePanelStore.setState({
+        panelsById: { "agent-a": agent("agent-a"), "agent-b": agent("agent-b") },
+        panelIds: ["agent-a", "agent-b"],
+      });
+      useTerminalInputStore.setState({ draftInputs: new Map(), fleetDraftHolds: new Map() });
+      useTerminalInputStore.getState().setDraftInput("agent-b", "b's own");
+      useFleetArmingStore.getState().armIds(["agent-a", "agent-b"]);
+      useTerminalInputStore
+        .getState()
+        .mirrorFleetDraft("agent-a", "shared", useFleetArmingStore.getState().armedIds);
+      expect(useTerminalInputStore.getState().getDraftInput("agent-b")).toBe("shared");
+      return useFleetArmingStore;
+    }
+
+    it("gives a pane trashed out of the fleet its own draft back", async () => {
+      await armWithHeldDraft();
+
+      usePanelStore.setState({
+        panelsById: {
+          ...usePanelStore.getState().panelsById,
+          "agent-b": { ...agent("agent-b"), location: "trash" } as PtyPanelData,
+        },
+      });
+
+      expect(useTerminalInputStore.getState().getDraftInput("agent-b")).toBe("b's own");
+      expect(useTerminalInputStore.getState().fleetDraftHolds.size).toBe(0);
+    });
+
+    it("puts nothing back for a pane that was closed", async () => {
+      await armWithHeldDraft();
+
+      usePanelStore.setState({
+        panelsById: { "agent-a": agent("agent-a") },
+        panelIds: ["agent-a"],
+      });
+
+      expect(useTerminalInputStore.getState().draftInputs.has("agent-b")).toBe(false);
+      expect(useTerminalInputStore.getState().fleetDraftHolds.size).toBe(0);
+    });
+
+    it("releases holds left behind while it was torn down, once registered again", async () => {
+      const useFleetArmingStore = await armWithHeldDraft();
+      destroyStoreOrchestrator();
+      useFleetArmingStore.getState().clear();
+      expect(useTerminalInputStore.getState().getDraftInput("agent-b")).toBe("shared");
+      expect(useTerminalInputStore.getState().fleetDraftHolds.get("agent-b")?.draft).toBe(
+        "b's own"
+      );
+
+      initStoreOrchestrator();
+
+      expect(useTerminalInputStore.getState().getDraftInput("agent-b")).toBe("b's own");
+      expect(useTerminalInputStore.getState().fleetDraftHolds.size).toBe(0);
+      const releaseSpy = vi.spyOn(useTerminalInputStore.getState(), "releaseFleetDraftHolds");
+      useFleetArmingStore.getState().armIds(["agent-a", "agent-b"]);
+      expect(releaseSpy).toHaveBeenCalledTimes(1);
+      releaseSpy.mockRestore();
     });
   });
 

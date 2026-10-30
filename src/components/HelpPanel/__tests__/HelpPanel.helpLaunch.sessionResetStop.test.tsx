@@ -11,6 +11,8 @@ const {
   mockProvisionSession,
   mockRevokeSession,
   mockTakePendingHibernation,
+  mockPeekPendingHibernation,
+  mockDiscardConversation,
   mockGetAssistantSupportedAgentIds,
   mockGetHelpAssistantSettings,
   mockGetAgentVersion,
@@ -38,6 +40,8 @@ const {
   mockProvisionSession: vi.fn().mockResolvedValue(null),
   mockRevokeSession: vi.fn().mockResolvedValue(undefined),
   mockTakePendingHibernation: vi.fn().mockResolvedValue(null),
+  mockPeekPendingHibernation: vi.fn().mockResolvedValue(null),
+  mockDiscardConversation: vi.fn().mockResolvedValue(undefined),
   mockGetAssistantSupportedAgentIds: vi.fn(() => ["claude"]),
   mockGetHelpAssistantSettings: vi.fn().mockResolvedValue({
     docSearch: true,
@@ -186,6 +190,7 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     </button>
   ),
   DropdownMenuSeparator: () => <hr />,
+  DropdownMenuCheckboxItem: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
 }));
 
 // The real primitive drags the keybinding graph in behind these suites' partial
@@ -503,6 +508,7 @@ import {
   __resetHelpSessionControllersForTests,
   acquireHelpSessionController,
 } from "@/controllers/helpSessionControllerRegistry";
+import { assistantSlotKey } from "@shared/config/assistantSlots";
 
 // The real `app:view-revealed` bridge fans out to every registered listener;
 // HelpPanel registers the switch-back recovery effect against it (#10739).
@@ -510,6 +516,8 @@ let viewRevealedCbs: Array<() => void> = [];
 
 function resetState() {
   viewRevealedCbs = [];
+  mockPeekPendingHibernation.mockReset();
+  mockPeekPendingHibernation.mockResolvedValue(null);
   helpPanelState.isOpen = true;
   helpPanelState.width = 380;
   helpPanelState.terminalId = null;
@@ -646,11 +654,15 @@ beforeEach(() => {
     value: {
       electron: {
         help: {
+          getGlobalAssistantState: () => new Promise(() => {}),
+          onGlobalAssistantChanged: () => () => {},
           getFolderPath: mockGetFolderPath,
           markTerminal: mockMarkTerminal,
           provisionSession: mockProvisionSession,
           revokeSession: mockRevokeSession,
           takePendingHibernation: mockTakePendingHibernation,
+          peekPendingHibernation: mockPeekPendingHibernation,
+          discardConversation: mockDiscardConversation,
           restorePendingHibernation: vi.fn().mockResolvedValue(false),
           getPinnedActionContext: vi.fn().mockResolvedValue({}),
         },
@@ -707,6 +719,34 @@ beforeEach(() => {
 
 /** The project lanes' tabs, not the global assistant's beside them. */
 const LANE_TABS = '[role="tab"]:not([data-slot="global"])';
+
+/**
+ * Ending a lane's run clears only its resume pointer; a Claude or Codex transcript
+ * stays where "Resume a past session…" finds it, so the confirm says so rather than
+ * calling it discarded (#14979).
+ */
+function expectStaysInPastSessions(description: string | null) {
+  expect(description).toMatch(/^The (current )?agent stops .+\. .*stays in past sessions\.$/);
+  expect(description).not.toMatch(/discard|delet/i);
+}
+
+/** An agent the picker doesn't list: its confirm says only what ends. */
+function expectNoPastSessionsNote(description: string | null) {
+  expect(description).toMatch(/^The (current )?agent stops /);
+  expect(description).not.toMatch(/past session|discard|delet/i);
+}
+
+/**
+ * Closing a working lane whose conversation can't come back names its agent and the
+ * turn it cuts short, then says why it asked (#15385).
+ */
+function expectWorkingCloseConfirm(description: string | null, agentName: string) {
+  expect(description).toMatch(
+    new RegExp(`^${agentName} is working\\. Closing stops its current turn and closes this tab\\. `)
+  );
+  expect(description).toMatch(/can't resume this conversation in Daintree\.$/);
+  expect(description).not.toMatch(/discard|delet/i);
+}
 
 describe("HelpPanel — + New session destructive reset", () => {
   function setupBoundTerminal(opts: {
@@ -790,9 +830,18 @@ describe("HelpPanel — + New session destructive reset", () => {
     expect(helpPanelState.clearTerminal).not.toHaveBeenCalled();
     expect(getByTestId("dialog-title").textContent).toBe("Restart this conversation?");
     expect(getByTestId("dialog-confirm").textContent).toBe("Restart conversation");
-    expect(getByTestId("dialog-description").textContent).toContain(
-      "the conversation will be discarded"
-    );
+    expectStaysInPastSessions(getByTestId("dialog-description").textContent);
+  });
+
+  it("promises no past session for an agent the picker doesn't list", () => {
+    setupBoundTerminal({ agentState: "working" });
+    helpPanelState.agentId = "gemini";
+
+    const { container, getByTestId } = render(<HelpPanel width={380} />);
+    fireEvent.click(restartConversationButton(container)!);
+
+    expect(getByTestId("dialog-title").textContent).toBe("Restart this conversation?");
+    expectNoPastSessionsNote(getByTestId("dialog-description").textContent);
   });
 
   it("shows the confirm dialog when the conversation has been touched", () => {
@@ -983,6 +1032,207 @@ describe("HelpPanel — + New session destructive reset", () => {
   });
 });
 
+describe("HelpPanel — restarting a paused lane (#14981)", () => {
+  // Main captured this lane's conversation and killed its process, so the lane has
+  // no terminal and the panel offers Resume. A clean start has to be reachable
+  // from here without paying for the resume first.
+  function setupPausedLane(capture: { agentId?: string; live?: boolean } = {}) {
+    helpPanelState.autoLaunchEnabled = false;
+    projectStoreState.currentProject = { id: "proj-1", path: "/repo" };
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: capture.agentId ?? "claude",
+      agentSessionId: capture.live ? "" : "abc-123",
+      cwd: "/help",
+      panelWasOpen: false,
+      ...(capture.live ? { live: true } : {}),
+    });
+  }
+
+  async function renderPaused() {
+    const view = render(<HelpPanel width={380} />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(view.queryByTestId("help-resume-assistant")).not.toBeNull();
+    return view;
+  }
+
+  async function flushLaunch() {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+
+  it("offers a restart beside Resume, in the header and in the lane's own tab menu", async () => {
+    setupPausedLane();
+
+    const { container, getByTestId } = await renderPaused();
+
+    expect(getByTestId("help-restart-paused-conversation").textContent).toBe(
+      "Restart conversation"
+    );
+    expect(restartConversationButton(container)).not.toBeNull();
+    expect(tabMenuItem(container, 0, "Restart conversation")).not.toBeNull();
+    // Stop still needs something running to stop.
+    expect(
+      Array.from(container.querySelectorAll("button")).find((b) =>
+        b.textContent?.includes("Stop assistant")
+      )
+    ).toBeUndefined();
+  });
+
+  it("always asks first, naming a new conversation rather than an agent that stops", async () => {
+    setupPausedLane();
+
+    const { getByTestId } = await renderPaused();
+    fireEvent.click(getByTestId("help-restart-paused-conversation"));
+
+    expect(getByTestId("dialog-title").textContent).toBe("Restart this conversation?");
+    const description = getByTestId("dialog-description").textContent;
+    expect(description).toMatch(/^This tab starts a new conversation\. .*stays in past sessions/);
+    expect(mockDiscardConversation).not.toHaveBeenCalled();
+    expect(helpPanelState.clearHibernateSession).not.toHaveBeenCalled();
+  });
+
+  it("says the agent stops when the paused lane's assistant is still running on the host", async () => {
+    setupPausedLane({ live: true });
+
+    const { getByTestId } = await renderPaused();
+    fireEvent.click(getByTestId("help-restart-paused-conversation"));
+
+    expectStaysInPastSessions(getByTestId("dialog-description").textContent);
+  });
+
+  it("keeps the paused conversation when the confirm is cancelled", async () => {
+    setupPausedLane();
+
+    const { getByTestId, queryByTestId } = await renderPaused();
+    fireEvent.click(getByTestId("help-restart-paused-conversation"));
+    await act(async () => {
+      fireEvent.click(getByTestId("dialog-cancel"));
+    });
+
+    expect(queryByTestId("confirm-dialog")).toBeNull();
+    expect(mockDiscardConversation).not.toHaveBeenCalled();
+    expect(helpPanelState.clearHibernateSession).not.toHaveBeenCalled();
+    expect(mockDispatch).not.toHaveBeenCalledWith(
+      "agent.launch",
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it("discards the paused conversation and starts the captured agent fresh once confirmed", async () => {
+    // Captured on Codex while the default is Claude, with the renderer still holding
+    // the capture: a resume, or a launch of the default, would both show up here.
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    helpPanelState.preferredAgentId = "claude";
+    setupPausedLane({ agentId: "codex" });
+    helpPanelState.hibernateSessions = {
+      [assistantSlotKey("proj-1", 0)]: { sessionId: "abc-123", cwd: "/help", agentId: "codex" },
+    };
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "terminal-fresh" } });
+    mockProvisionSession.mockResolvedValue({
+      sessionId: "sess-fresh",
+      sessionPath: "/sessions/fresh",
+      token: "tok-fresh",
+      tier: "core",
+      mcpUrl: null,
+      windowId: 1,
+    });
+
+    const { container, getByTestId } = await renderPaused();
+    fireEvent.click(restartConversationButton(container)!);
+    await act(async () => {
+      fireEvent.click(getByTestId("dialog-confirm"));
+    });
+    await flushLaunch();
+
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
+    expect(mockDiscardConversation).toHaveBeenCalledWith("proj-1", 0);
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "agent.launch",
+      expect.objectContaining({
+        agentId: "codex",
+        requestedId: expect.stringMatching(/^terminal-/),
+      }),
+      { source: "user" }
+    );
+    expect(helpPanelState.setTerminal).toHaveBeenLastCalledWith(
+      0,
+      "terminal-fresh",
+      "codex",
+      "sess-fresh"
+    );
+    // A fresh start: the captured conversation is neither claimed nor respawned.
+    expect(mockTakePendingHibernation).not.toHaveBeenCalled();
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+    // Restarting is not consent to start on every open (#10699).
+    expect(helpPanelState.setAutoLaunchEnabled).not.toHaveBeenCalled();
+  });
+
+  it("restarts nothing when the lane picked up a terminal while the confirm was open", async () => {
+    setupPausedLane();
+    const newSession = vi.spyOn(acquireHelpSessionController(0), "newSession");
+
+    const { getByTestId } = await renderPaused();
+    fireEvent.click(getByTestId("help-restart-paused-conversation"));
+    helpPanelState.terminalId = "term-resumed";
+    helpPanelState.agentId = "claude";
+    await act(async () => {
+      fireEvent.click(getByTestId("dialog-confirm"));
+    });
+
+    expect(newSession).not.toHaveBeenCalled();
+    expect(mockDiscardConversation).not.toHaveBeenCalled();
+  });
+
+  it("drops the previous lane's pause the moment another lane is selected", async () => {
+    setupPausedLane();
+    const unbound = {
+      terminalId: null,
+      agentId: null,
+      sessionId: null,
+      conversationTouched: false,
+      figures: [],
+      activeFigureNumber: null,
+    };
+    helpPanelState.openSlots = [0, 1];
+    helpPanelState.sessions = { 0: { ...unbound }, 1: { ...unbound } };
+    const lane0Capture = await mockPeekPendingHibernation();
+    // Lane 1's own peek hasn't answered yet.
+    mockPeekPendingHibernation.mockImplementation((_workspaceId: string, slot: number) =>
+      slot === 0 ? Promise.resolve(lane0Capture) : new Promise(() => {})
+    );
+
+    const { container, queryByTestId, rerender } = await renderPaused();
+    helpPanelState.activeSlot = 1;
+    rerender(<HelpPanel width={380} />);
+    await flushLaunch();
+
+    expect(queryByTestId("help-resume-assistant")).toBeNull();
+    expect(queryByTestId("help-restart-paused-conversation")).toBeNull();
+    expect(restartConversationButton(container)).toBeNull();
+    expect(tabMenuItem(container, 0, "Restart conversation")).toBeNull();
+    expect(tabMenuItem(container, 1, "Restart conversation")).toBeNull();
+  });
+
+  it("offers no restart when the captured agent is no longer installed", async () => {
+    // Resume can still take a running process over; a fresh start would launch an
+    // agent that isn't there.
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    cliAvailabilityState.availability = { claude: "ready", codex: "missing" };
+    setupPausedLane({ agentId: "codex", live: true });
+
+    const { container, queryByTestId } = await renderPaused();
+
+    expect(queryByTestId("help-restart-paused-conversation")).toBeNull();
+    expect(restartConversationButton(container)).toBeNull();
+    expect(tabMenuItem(container, 0, "Restart conversation")).toBeNull();
+  });
+});
+
 describe("HelpPanel — Stop assistant (end session, #10989)", () => {
   function setupBoundTerminal(opts: {
     agentState?: string;
@@ -1061,9 +1311,18 @@ describe("HelpPanel — Stop assistant (end session, #10989)", () => {
     expect(helpPanelState.clearTerminal).not.toHaveBeenCalled();
     expect(getByTestId("dialog-title").textContent).toBe("Stop assistant?");
     expect(getByTestId("dialog-confirm").textContent).toBe("Stop assistant");
-    expect(getByTestId("dialog-description").textContent).toContain(
-      "the conversation will be discarded"
-    );
+    expectStaysInPastSessions(getByTestId("dialog-description").textContent);
+  });
+
+  it("stops an agent the picker doesn't list without promising a past session", () => {
+    setupBoundTerminal({ agentState: "working" });
+    helpPanelState.agentId = "gemini";
+
+    const { container, getByTestId } = render(<HelpPanel width={380} />);
+    fireEvent.click(queryStopItem(container)!);
+
+    expect(getByTestId("dialog-title").textContent).toBe("Stop assistant?");
+    expectNoPastSessionsNote(getByTestId("dialog-description").textContent);
   });
 
   it("shows the confirm when the conversation has been touched even while idle", () => {
@@ -1323,8 +1582,121 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     expect(helpPanelState.setOpen).not.toHaveBeenCalledWith(false);
   });
 
-  it("confirms before closing a lane whose agent is working, gated on THAT lane", () => {
+  /** Asserts the last toast offers `label` as the way back, and runs it. */
+  function runLastToastAction(title: string, label: string) {
+    let onClick: unknown;
+    expect(mockNotify).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        title,
+        action: expect.objectContaining({
+          label,
+          onClick: expect.toSatisfy((fn: unknown) => {
+            onClick = fn;
+            return typeof fn === "function";
+          }),
+        }),
+      })
+    );
+    if (typeof onClick === "function") onClick();
+  }
+
+  /** Both lanes on an agent "Resume a past session…" can't list. */
+  function onUnlistedAgent() {
+    helpPanelState.agentId = "gemini";
+    helpPanelState.sessions[0]!.agentId = "gemini";
+    helpPanelState.sessions[1]!.agentId = "gemini";
+  }
+
+  it("closes a working lane at once when Reopen can bring its conversation back", () => {
+    // A resumed lane's transcript redraw reads as "working", so gating on it made
+    // the same close ask one time and not the next.
     setupTwoLanes({ backgroundAgentState: "working" });
+    Object.assign(panelStoreState.panelsById["term-2"]!, { agentSessionId: "conv-back" });
+
+    const { container, queryByTestId } = render(<HelpPanel width={380} />);
+    fireEvent.click(closeButtonFor(container, "Session 2"));
+
+    expect(queryByTestId("confirm-dialog")).toBeNull();
+    expect(mockRevokeSession).toHaveBeenCalledWith("sess-back");
+    expect(helpPanelState.closeSlot).toHaveBeenCalledWith(1);
+    // The way back is a toast even while other lanes keep the panel open.
+    expect(helpPanelState.setOpen).not.toHaveBeenCalledWith(false);
+    runLastToastAction("Session 2 closed", "Reopen");
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "help.resumePastSession",
+      { agentId: "claude", sessionId: "conv-back" },
+      { source: "user" }
+    );
+  });
+
+  it("offers the past-sessions picker for a lane that never learned its conversation id", () => {
+    // A fresh Codex lane has no id until a capture, so Reopen couldn't keep its promise.
+    setupTwoLanes({ backgroundAgentState: "working" });
+    helpPanelState.sessions[1]!.agentId = "codex";
+
+    const { container, queryByTestId } = render(<HelpPanel width={380} />);
+    fireEvent.click(closeButtonFor(container, "Session 2 — Codex"));
+
+    expect(queryByTestId("confirm-dialog")).toBeNull();
+    runLastToastAction("Session 2 closed", "Past sessions…");
+    expect(mockDispatch).toHaveBeenCalledWith("help.resumePastSession", undefined, {
+      source: "user",
+    });
+  });
+
+  it("offers Reopen for a dormant tab's captured conversation after discarding its pointers", () => {
+    setupTwoLanes();
+    helpPanelState.sessions[1] = {
+      ...helpPanelState.sessions[1]!,
+      terminalId: null,
+      agentId: null,
+      sessionId: null,
+    };
+    helpPanelState.hibernateSessions = {
+      [assistantSlotKey("proj-1", 1)]: {
+        sessionId: "conv-dormant",
+        cwd: "/help",
+        agentId: "claude",
+      },
+    };
+
+    const { container, queryByTestId } = render(<HelpPanel width={380} />);
+    fireEvent.click(closeButtonFor(container, "Session 2"));
+
+    expect(queryByTestId("confirm-dialog")).toBeNull();
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 1);
+    expect(mockDiscardConversation).toHaveBeenCalledWith("proj-1", 1);
+    runLastToastAction("Session 2 closed", "Reopen");
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "help.resumePastSession",
+      { agentId: "claude", sessionId: "conv-dormant" },
+      { source: "user" }
+    );
+  });
+
+  it("toasts the way back when the last lane closes and the panel slides away", () => {
+    setupTwoLanes();
+    helpPanelState.openSlots = [0];
+    delete helpPanelState.sessions[1];
+    // The active lane is the flat fixture in this harness.
+    helpPanelState.conversationTouched = true;
+    Object.assign(panelStoreState.panelsById["term-1"]!, { agentSessionId: "conv-front" });
+
+    const { container } = render(<HelpPanel width={380} />);
+    fireEvent.click(closeButtonFor(container, "Session 1"));
+
+    expect(helpPanelState.closeSlot).toHaveBeenCalledWith(0);
+    runLastToastAction("Session 1 closed", "Reopen");
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "help.resumePastSession",
+      { agentId: "claude", sessionId: "conv-front" },
+      { source: "user" }
+    );
+  });
+
+  it("confirms before closing a working lane whose conversation can't come back", () => {
+    setupTwoLanes({ backgroundAgentState: "working" });
+    onUnlistedAgent();
 
     const { container, getByTestId } = render(<HelpPanel width={380} />);
     fireEvent.click(closeButtonFor(container, "Session 2"));
@@ -1334,12 +1706,30 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     expect(helpPanelState.closeSlot).not.toHaveBeenCalled();
     expect(getByTestId("dialog-title").textContent).toBe("Close Session 2?");
     expect(getByTestId("dialog-confirm").textContent).toBe("Close session");
-    expect(getByTestId("dialog-description").textContent).toContain(
-      "the conversation will be discarded"
-    );
+    expectWorkingCloseConfirm(getByTestId("dialog-description").textContent, "Gemini");
 
     fireEvent.click(getByTestId("dialog-confirm"));
     expect(mockRevokeSession).toHaveBeenCalledWith("sess-back");
+    expect(helpPanelState.closeSlot).toHaveBeenCalledWith(1);
+  });
+
+  it("gates the close on the closed lane's agent, not the one on screen", () => {
+    setupTwoLanes({ backgroundAgentState: "working" });
+    helpPanelState.sessions[1]!.agentId = "gemini";
+
+    // Lanes on different agents name theirs in the tab.
+    const first = render(<HelpPanel width={380} />);
+    fireEvent.click(closeButtonFor(first.container, "Session 2 — Gemini"));
+    expectWorkingCloseConfirm(first.getByTestId("dialog-description").textContent, "Gemini");
+    first.unmount();
+
+    // And the other way round: an unlisted agent in front, a listed one behind.
+    helpPanelState.sessions[1]!.agentId = "codex";
+    helpPanelState.agentId = "gemini";
+    helpPanelState.sessions[0]!.agentId = "gemini";
+    const second = render(<HelpPanel width={380} />);
+    fireEvent.click(closeButtonFor(second.container, "Session 2 — Codex"));
+    expect(second.queryByTestId("confirm-dialog")).toBeNull();
     expect(helpPanelState.closeSlot).toHaveBeenCalledWith(1);
   });
 
@@ -1414,6 +1804,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
 
   it("names the task in the close confirm, quoted as the entity being closed", () => {
     setupTwoLanes({ backgroundAgentState: "working" });
+    onUnlistedAgent();
     Object.assign(panelStoreState.panelsById["term-2"]!, {
       detectedAgentId: "claude",
       lastObservedTitle: "fix auth tests",
@@ -1427,6 +1818,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
 
   it("keeps the lane when the close confirm is cancelled", () => {
     setupTwoLanes({ backgroundAgentState: "working" });
+    onUnlistedAgent();
 
     const { container, getByTestId, queryByTestId } = render(<HelpPanel width={380} />);
     fireEvent.click(closeButtonFor(container, "Session 2"));
@@ -1498,9 +1890,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       expect(back).not.toHaveBeenCalled();
       expect(getByTestId("dialog-title").textContent).toBe("Restart this conversation?");
       expect(getByTestId("dialog-confirm").textContent).toBe("Restart conversation");
-      expect(getByTestId("dialog-description").textContent).toContain(
-        "the conversation will be discarded"
-      );
+      expectStaysInPastSessions(getByTestId("dialog-description").textContent);
 
       await act(async () => {
         fireEvent.click(getByTestId("dialog-confirm"));
@@ -1508,6 +1898,27 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       expect(back).toHaveBeenCalledTimes(1);
       expect(front).not.toHaveBeenCalled();
     });
+
+    it.each([
+      { front: "claude", back: "gemini", listed: false },
+      { front: "gemini", back: "codex", listed: true },
+    ])(
+      "says what holds for the restarted lane's agent ($back), not the one on screen ($front)",
+      ({ front, back, listed }) => {
+        setupTwoLanes({ backgroundAgentState: "working" });
+        helpPanelState.agentId = front;
+        helpPanelState.sessions[0]!.agentId = front;
+        helpPanelState.sessions[1]!.agentId = back;
+
+        const { container, getByTestId } = render(<HelpPanel width={380} />);
+        fireEvent.click(tabMenuItem(container, 1, "Restart conversation")!);
+
+        expect(getByTestId("dialog-title").textContent).toBe("Restart this conversation?");
+        const description = getByTestId("dialog-description").textContent;
+        if (listed) expectStaysInPastSessions(description);
+        else expectNoPastSessionsNote(description);
+      }
+    );
 
     it("confirms for a touched background lane even while it is idle and the front is untouched", () => {
       setupTwoLanes({ backgroundTouched: true });

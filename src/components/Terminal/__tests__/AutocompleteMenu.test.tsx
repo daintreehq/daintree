@@ -3,9 +3,18 @@ import React from "react";
 import { describe, it, expect, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 
-vi.mock("@/components/ui/ScrollShadow", () => ({
-  ScrollShadow: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
+// Forwards its ref to the scroller, as the real one does: the menu reveals the
+// selected row by scrolling that element.
+vi.mock("@/components/ui/ScrollShadow", async () => {
+  const { forwardRef } = await vi.importActual<typeof import("react")>("react");
+  return {
+    ScrollShadow: forwardRef<HTMLDivElement, { children: React.ReactNode }>(({ children }, ref) => (
+      <div ref={ref} data-menu-scroller="">
+        {children}
+      </div>
+    )),
+  };
+});
 
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -485,79 +494,214 @@ describe("AutocompleteMenu", () => {
     expect(option.textContent).not.toContain("$plugin-creator");
   });
 
-  it("scrolls to the selection on the first open, not only when it moves", () => {
-    const scrollSpy = vi.fn();
+  /**
+   * Lays the menu out the way a browser would for the reveal: the list's
+   * scroller is a 100px viewport and the selected row sits `selectedTop` px
+   * down it. Records every `scrollTop` write, and spies `scrollIntoView`,
+   * which must never run: it scrolls every scrollable ancestor too, and a grid
+   * pane is one, so a menu wider than the pane slid the whole pane sideways.
+   */
+  function layOutReveal(selectedTop: { current: number }) {
+    const box = (top: number, height: number) =>
+      ({
+        top,
+        bottom: top + height,
+        left: 0,
+        right: 100,
+        width: 100,
+        height,
+        x: 0,
+        y: top,
+      }) as DOMRect;
+    const rects = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: Element
+    ) {
+      if (this.matches('[role="option"][aria-selected="true"]'))
+        return box(selectedTop.current, 28);
+      if (this.matches("[data-menu-scroller]")) return box(0, 100);
+      return box(0, 0);
+    });
+    const writes: { target: Element; value: number }[] = [];
+    const scrollTop = vi.spyOn(Element.prototype, "scrollTop", "set").mockImplementation(function (
+      this: Element,
+      value: number
+    ) {
+      writes.push({ target: this, value });
+    });
+    const scrollIntoView = vi.fn();
     const original = Element.prototype.scrollIntoView;
-    Element.prototype.scrollIntoView = scrollSpy;
+    Element.prototype.scrollIntoView = scrollIntoView;
+    return {
+      writes,
+      scrollIntoView,
+      restore() {
+        rects.mockRestore();
+        scrollTop.mockRestore();
+        if (original === undefined) {
+          delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+        } else {
+          Element.prototype.scrollIntoView = original;
+        }
+      },
+    };
+  }
+
+  const revealItems: AutocompleteItem[] = [
+    { key: "a", label: "alpha", insertText: "alpha" },
+    { key: "b", label: "beta", insertText: "beta" },
+    { key: "c", label: "gamma", insertText: "gamma" },
+  ];
+
+  it("scrolls its own list to the selection on the first open, never an ancestor", () => {
+    const layout = layOutReveal({ current: 200 });
     try {
-      const items: AutocompleteItem[] = [
-        { key: "a", label: "alpha", insertText: "alpha" },
-        { key: "b", label: "beta", insertText: "beta" },
-        { key: "c", label: "gamma", insertText: "gamma" },
-      ];
-      render(
+      const { container } = render(
         <AutocompleteMenu
           isOpen={true}
-          items={items}
+          items={revealItems}
           selectedIndex={2}
           onSelect={noop}
           emptyMessage="No matches"
         />
       );
-      const selected = screen
-        .getAllByRole("option")
-        .find((o) => o.getAttribute("aria-selected") === "true");
-      expect(scrollSpy.mock.contexts).toContain(selected);
+      const scroller = container.querySelector("[data-menu-scroller]");
+      // The row's foot (228) brought to the viewport's foot (100).
+      expect(layout.writes).toContainEqual({ target: scroller, value: 128 });
+      expect(layout.writes.every((w) => w.target === scroller)).toBe(true);
+      expect(layout.scrollIntoView).not.toHaveBeenCalled();
     } finally {
-      if (original === undefined) {
-        delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
-      } else {
-        Element.prototype.scrollIntoView = original;
-      }
+      layout.restore();
     }
   });
 
-  it("scrolls the keyboard-selected option into view as selection moves", () => {
-    const scrollSpy = vi.fn();
-    const original = Element.prototype.scrollIntoView;
-    Element.prototype.scrollIntoView = scrollSpy;
+  it("scrolls its own list as the keyboard moves the selection out of sight", () => {
+    const selectedTop = { current: 10 };
+    const layout = layOutReveal(selectedTop);
     try {
-      const items: AutocompleteItem[] = [
-        { key: "a", label: "alpha", insertText: "alpha" },
-        { key: "b", label: "beta", insertText: "beta" },
-        { key: "c", label: "gamma", insertText: "gamma" },
-      ];
-
-      const { rerender } = render(
+      const { container, rerender } = render(
         <AutocompleteMenu
           isOpen={true}
-          items={items}
+          items={revealItems}
           selectedIndex={0}
           onSelect={noop}
           emptyMessage="No matches"
         />
       );
-      const callsAfterMount = scrollSpy.mock.calls.length;
+      // Already in sight: nothing scrolls.
+      expect(layout.writes).toEqual([]);
 
+      selectedTop.current = 140;
       rerender(
         <AutocompleteMenu
           isOpen={true}
-          items={items}
+          items={revealItems}
           selectedIndex={2}
           onSelect={noop}
           emptyMessage="No matches"
         />
       );
 
-      expect(scrollSpy.mock.calls.length).toBeGreaterThan(callsAfterMount);
-      expect(scrollSpy).toHaveBeenLastCalledWith({ block: "nearest" });
+      const scroller = container.querySelector("[data-menu-scroller]");
+      expect(layout.writes).toContainEqual({ target: scroller, value: 68 });
+      expect(layout.scrollIntoView).not.toHaveBeenCalled();
     } finally {
-      if (original === undefined) {
-        delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
-      } else {
-        Element.prototype.scrollIntoView = original;
-      }
+      layout.restore();
     }
+  });
+
+  describe("bands", () => {
+    const commands: AutocompleteItem[] = ["/clear", "/review"].map((label) => ({
+      key: label,
+      label,
+      insertText: label,
+      enterAction: "execute",
+    }));
+    const templates: AutocompleteItem[] = [
+      {
+        key: "template:a",
+        label: "Add boilerplate",
+        insertText: "",
+        group: "Prompt templates",
+        template: { key: "a", opensForm: true },
+      },
+      {
+        key: "template:b",
+        label: "Close out",
+        insertText: "",
+        group: "Prompt templates",
+        template: { key: "b", opensForm: false },
+      },
+    ];
+
+    it("labels a band where it begins, outside the rows the keys move through", () => {
+      const onHoverIndex = vi.fn();
+      render(
+        <AutocompleteMenu
+          isOpen
+          items={[...commands, ...templates]}
+          selectedIndex={2}
+          onSelect={noop}
+          onHoverIndex={onHoverIndex}
+          listboxId="menu"
+          title="Commands"
+          emptyMessage="No matches"
+        />
+      );
+      const options = screen.getAllByRole("option");
+      const labels = options.filter((o) => o.getAttribute("aria-disabled") === "true");
+      expect(labels.map((o) => o.getAttribute("aria-label"))).toEqual(["Prompt templates"]);
+      expect(options.indexOf(labels[0]!)).toBe(2);
+      expect(labels[0]!.getAttribute("aria-selected")).toBe("false");
+      expect(labels[0]!.id).toBe("");
+
+      // Rows keep the index the editor names them by, band or not.
+      const rows = options.filter((o) => o !== labels[0]);
+      expect(rows.map((o) => o.id)).toEqual(
+        [0, 1, 2, 3].map((i) => autocompleteOptionId("menu", i))
+      );
+      expect(rows[2]!.getAttribute("aria-selected")).toBe("true");
+      fireEvent.pointerMove(rows[3]!);
+      expect(onHoverIndex).toHaveBeenCalledWith(3);
+    });
+
+    it("draws nothing extra for rows outside any band", () => {
+      render(
+        <AutocompleteMenu
+          isOpen
+          items={commands}
+          selectedIndex={0}
+          onSelect={noop}
+          title="Commands"
+          emptyMessage="No matches"
+        />
+      );
+      expect(screen.getAllByRole("option")).toHaveLength(commands.length);
+    });
+
+    it("says what picking a template does, on both keys", () => {
+      const header = (selectedIndex: number) => {
+        const { container, unmount } = render(
+          <AutocompleteMenu
+            isOpen
+            items={templates}
+            selectedIndex={selectedIndex}
+            onSelect={noop}
+            title="Commands"
+            emptyMessage="No matches"
+          />
+        );
+        const text = container.querySelector("kbd")?.closest("[aria-hidden]")?.textContent ?? "";
+        const spoken = screen.getAllByRole("option").map((o) => o.textContent ?? "");
+        unmount();
+        return { text, spoken };
+      };
+
+      const opensForm = header(0);
+      expect(opensForm.text).toMatch(/↵.*⇥.*open form/);
+      expect(opensForm.spoken.some((t) => /Enter or Tab to open form/.test(t))).toBe(true);
+      expect(header(1).text).toMatch(/fill draft/);
+      expect(header(-1).text).toMatch(/open form first/);
+    });
   });
 
   describe("getComboboxState", () => {

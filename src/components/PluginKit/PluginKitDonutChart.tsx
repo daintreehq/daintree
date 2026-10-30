@@ -185,6 +185,13 @@ export function KitDonutChart({
           onKeyDown={cursor.onKeyDown}
           onBlur={cursor.clear}
           onPointerLeave={() => cursor.point(null)}
+          // The hole and the corners are inside the ring's box but on no slice:
+          // leaving a slice for them lowers it, or its tooltip covers the figure.
+          onPointerMove={(event) => {
+            if (!(event.target instanceof Element) || !event.target.closest("[data-chart-part]")) {
+              cursor.point(null);
+            }
+          }}
           className="absolute inset-0 rounded-full focus-visible:outline-offset-2"
         >
           <svg width={size} height={size} className="block" aria-hidden="true">
@@ -237,10 +244,14 @@ export function KitDonutChart({
           <li
             key={part.key}
             data-active={index === active ? "" : undefined}
-            className="flex min-w-0 items-center gap-2"
+            // The raised slice's row lifts and its name firms up, so the match
+            // never rests on the swatch colour alone.
+            className="group -mx-1.5 flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-1.5 data-[active]:bg-overlay-soft"
           >
             <Swatch color={part.color} shape="bar" />
-            <span className="min-w-0 flex-1 truncate text-text-secondary">{part.name}</span>
+            <span className="min-w-0 flex-1 truncate text-text-secondary group-data-[active]:font-medium group-data-[active]:text-text-primary">
+              {part.name}
+            </span>
             <span className="tabular-nums text-text-primary">{format(part.value)}</span>
             <span className="w-10 text-right tabular-nums text-text-secondary">
               {share(part.value, total)}

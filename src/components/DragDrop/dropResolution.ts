@@ -144,6 +144,19 @@ export function dragCarriesNonDockableIntoDock(
   return isNonDockableDockDrop(targetContainer, representativeKind);
 }
 
+/**
+ * The member ids a drag's dockability check covers. A grid or dock group drag
+ * commits every member into the dock, so all of them count (#11375). A sidebar
+ * row carries its group only to show what a worktree move takes (#14962); that
+ * move keeps the group's own location, so the row is checked on its own kind.
+ */
+export function dockCheckedGroupPanelIds(
+  dragData: { groupId?: unknown; groupPanelIds?: unknown; origin?: unknown } | null | undefined
+): unknown {
+  if (!dragData?.groupId || dragData.origin === "accordion") return undefined;
+  return dragData.groupPanelIds;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -179,12 +192,6 @@ export function shouldCancelDrop(params: CancelDropParams): boolean {
     const { id, kind } = activeData.terminal;
     if (typeof id !== "string") return true;
 
-    const groupPanelIds = activeData.groupPanelIds;
-    const isGroupDrag =
-      !!activeData.groupId && Array.isArray(groupPanelIds) && groupPanelIds.length > 1;
-    const isWorktreeDrop = overData?.type === "worktree" && !!overData.worktreeId;
-    if (isGroupDrag && isWorktreeDrop) return true;
-
     // A panel whose kind the dock can't render must never commit into the
     // dock — it would strand invisibly (#11054). For a group drag EVERY member
     // is checked, not just the dragged representative (#11375). `cursor-no-drop`
@@ -196,12 +203,33 @@ export function shouldCancelDrop(params: CancelDropParams): boolean {
     return dragCarriesNonDockableIntoDock(
       targetContainer,
       typeof kind === "string" ? (kind as PanelKind) : undefined,
-      isGroupDrag ? groupPanelIds : undefined,
+      dockCheckedGroupPanelIds(activeData),
       panelsById
     );
   } catch {
     return true;
   }
+}
+
+/** The panel drag fields a worktree card reads to decide whether to light up. */
+export interface WorktreeCardDragData {
+  terminal?: unknown;
+  origin?: string;
+  worktreeId?: string;
+}
+
+/**
+ * Whether a drag over a worktree card is one handleDragEnd would move onto it:
+ * any panel drag, a whole tab group included (#14962). Worktree-sort drags
+ * carry no terminal, and a sidebar row dragged within its own worktree is a
+ * reorder, so neither lights the card.
+ */
+export function isPanelDragMovableToWorktree(
+  dragData: WorktreeCardDragData | undefined,
+  worktreeId: string
+): boolean {
+  if (dragData?.terminal === undefined) return false;
+  return dragData.origin !== "accordion" || dragData.worktreeId !== worktreeId;
 }
 
 /** Minimal dnd-kit droppable shape the dock collision filter reads. */

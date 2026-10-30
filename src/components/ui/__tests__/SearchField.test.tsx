@@ -31,6 +31,16 @@ function rulesFor(selector: RegExp): string {
 }
 
 describe("SearchField", () => {
+  it("turns spellcheck off unless the caller opts in", () => {
+    const { rerender } = render(
+      <SearchField aria-label="Search things" value="" onChange={() => {}} />
+    );
+    expect(screen.getByRole("textbox").getAttribute("spellcheck")).toBe("false");
+
+    rerender(<SearchField aria-label="Search things" value="" onChange={() => {}} spellCheck />);
+    expect(screen.getByRole("textbox").getAttribute("spellcheck")).toBe("true");
+  });
+
   it("shows the clear control only while there is something to clear", () => {
     const onClear = vi.fn();
     const { rerender } = render(

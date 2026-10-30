@@ -95,7 +95,7 @@ Dim or disabled icons must use a solid token (`text-text-muted` for disabled/nee
 
 **Polarity pattern:** Dark themes use white-alpha; light themes use black-alpha.
 
-**`border-input` is the ladder value until a theme raises it.** A text field's boundary is a user-interface component under WCAG 1.4.11 and owes 3:1 on its own, which `border-strong` — a separation value shared with dividers and card edges — is not tuned for: on `daintree` it composited to ~1.55:1 against the field fill. The token defaults to whatever `border-strong` resolved to, so a theme that says nothing renders exactly as before; a theme that needs the ratio sets it to a **solid** hex, because an alpha border composites differently on the field fill than on the panel behind it and a value that clears one can fail the other. The `border-input` block in `shared/theme/__tests__/builtInThemes.test.ts` holds the opted-in theme to 3:1 on both surfaces and every other theme to its `border-strong`.
+**`border-input` is solid on every built-in theme.** A text field's boundary is a user-interface component under WCAG 1.4.11 and owes 3:1 on its own, which `border-strong` — a separation value shared with dividers and card edges — is not tuned for: it composited to 1.2–1.6:1 against the field fill across the built-in themes. The engine still defaults the token to whatever `border-strong` resolved to, so an imported theme that says nothing renders as it did; every built-in theme sets it to a **solid** hex instead, because an alpha border composites differently on the field fill than on the panel behind it and a value that clears one can fail the other. Each value is the theme's own border ink mixed over its field fill until it clears 3:1 on every surface a field sits on. The `border-input` block in `shared/theme/__tests__/builtInThemes.test.ts` holds every built-in theme to a solid hex at 3:1 against `surface-input`, `surface-panel`, `surface-panel-elevated`, `surface-canvas` and `surface-sidebar`, and inside the typed-name confirm field's 10% `status-danger` well, colour-vision overrides included.
 
 **`selection-outline` is deliberately outside that ladder.** It is the outline drawn on a highlighted row — the inset keyboard ring on menu, context-menu and select items, the `prefers-contrast: more` outline every highlighted row takes, and the palette search field's focus edge. It is derived from `text-primary` rather than the border ink, and sits 2-3x above `border-strong`, because an outline is an indicator: it touches the `overlay-highlight` fill on one side and the surrounding palette surface on the other, and `getThemeContrastWarnings` gates it at 3:1 against both — so retuning `text-primary` or the fill trips the theme contract rather than silently weakening the indicator. The highlighted row itself is a fill alone; see [interaction-state-recipes.md](./interaction-state-recipes.md#highlighted-row).
 
@@ -136,6 +136,21 @@ Fixed hue families across all themes. Each theme tunes brightness/saturation.
 | `status-warning-surface` | Wash for caution banners/pills | Derived: same rule |
 | `status-danger-surface` | Validation wash for invalid fields | Derived: same rule |
 | `status-info-surface` | Wash for informational banners/pills | Derived: same rule |
+| `status-success-text` | Text-grade success ink for small status text such as git status letters | Derived: `success` lifted along OKLCH lightness until it holds 4.5:1 on every backdrop `diff-text-*` answers to, and on its own 15% wash over each |
+| `status-warning-text` | Text-grade caution ink | Derived: same rule |
+| `status-danger-text` | Text-grade error ink | Derived: same rule |
+| `status-info-text` | Text-grade informational ink | Derived: same rule |
+
+The plain status inks are graphical colours held to 3:1 for dots, icons and borders; painted as small text they fall under AA on most themes, which is what the four `*-text` inks are for. They are lifted the same way as the churn inks below, from the same final tokens, against the same row backdrops plus the letter's own wash. A theme that names one keeps it, and the contrast gate reports it if it falls short. Colour-vision modes lift them again from the hues they swap in.
+
+| Token | Purpose | Derivation |
+| --- | --- | --- |
+| `destructive-fill` | Solid fill of the destructive Button (the final commit of a destructive confirm) | Derived: `status-danger` moved along OKLCH lightness, at its hue and as much chroma as sRGB allows, until `destructive-foreground` holds 4.5:1 on it and on both state fills |
+| `destructive-fill-hover` | Hover fill of the destructive Button | Derived: `destructive-fill` lightened 0.04 in OKLCH lightness |
+| `destructive-fill-active` | Press fill of the destructive Button | Derived: `destructive-fill` darkened 0.03 in OKLCH lightness |
+| `destructive-foreground` | Label on all three destructive fills | Derived: `text-primary` on dark themes, `text-inverse` on light ones, so the label is always the near-white end of the theme |
+
+The destructive fill used to be `status-danger` itself with `text-inverse` on it. On every dark theme that ink is a light coral, which forced a dark label onto a pastel fill, the pattern that reads as a cheap web app. Deriving a deeper fill from the same hue keeps the theme's own red and puts the near-white label on it. The states are fills rather than a `brightness()` filter so each one is a hex the contrast gate can measure. A theme that names any of the four keeps it, and the gate reports a pair that falls short.
 
 The four `*-surface` washes are built with `withAlpha` (plain `rgba` for a hex input) rather than `color-mix(…, transparent)` — the `color-mix` form black-shifts on light backgrounds in oklab under Chromium.
 
@@ -316,18 +331,22 @@ CSS automatically generates `-subtle`, `-text`, and `-border` composite variants
 
 ## Diff Tokens
 
-Theme-controlled colors for the diff viewer. Derived from `status-success` and `status-danger`.
+Theme-controlled colors for the diff viewer and `DiffStat`. Derived from `status-success` and `status-danger`.
 
-| Token                         | Dark default            | Light default           |
-| ----------------------------- | ----------------------- | ----------------------- |
-| `diff-insert-background`      | `status-success` at 18% | `status-success` at 10% |
+| Token | Dark default | Light default |
+| --- | --- | --- |
+| `diff-insert-background` | `status-success` at 18% | `status-success` at 10% |
 | `diff-insert-edit-background` | `status-success` at 28% | `status-success` at 20% |
-| `diff-delete-background`      | `status-danger` at 18%  | `status-danger` at 10%  |
-| `diff-delete-edit-background` | `status-danger` at 28%  | `status-danger` at 20%  |
-| `diff-gutter-insert`          | `status-success`        | `status-success`        |
-| `diff-gutter-delete`          | `status-danger`         | `status-danger`         |
-| `diff-selected-background`    | `tint` at 6%            | `tint` at 6%            |
-| `diff-omit-gutter-line`       | `activity-idle`         | `activity-idle`         |
+| `diff-delete-background` | `status-danger` at 18% | `status-danger` at 10% |
+| `diff-delete-edit-background` | `status-danger` at 28% | `status-danger` at 20% |
+| `diff-gutter-insert` | `status-success` | `status-success` |
+| `diff-gutter-delete` | `status-danger` | `status-danger` |
+| `diff-text-insert` | `status-success`, lightened to 4.5:1 | `status-success`, darkened to 4.5:1 |
+| `diff-text-delete` | `status-danger`, lightened to 4.5:1 | `status-danger`, darkened to 4.5:1 |
+| `diff-selected-background` | `tint` at 6% | `tint` at 6% |
+| `diff-omit-gutter-line` | `activity-idle` | `activity-idle` |
+
+`diff-text-insert` and `diff-text-delete` are DiffStat's churn counts. The status inks only carry the 3:1 non-text floor, so each is lifted along OKLCH lightness, at the same hue and with as much of its chroma as sRGB can show, until it holds 4.5:1 on every display surface, on the 4% `tint` frame and on the `overlay-subtle`, `overlay-soft`, `overlay-highlight` and `overlay-selected` row fills over each. The derivation reruns on the final tokens of a palette, plugin or imported theme, and a theme that names either token keeps it. `getThemeContrastWarnings` gates both at 4.5:1 against the same backdrops.
 
 ## UI Utility Tokens
 
@@ -465,7 +484,7 @@ Import and add to `shared/theme/builtInThemes/index.ts`.
 | Focus | 1 (`focus-ring`) |
 | Status | 8 (4 colors + 4 `*-surface` washes) |
 | Activity | 5 |
-| Overlay | 11 (base + 5 ladder + hover/active/selected/elevated/raised) |
+| Overlay | 12 (base + 5 ladder + hover/active/selected/elevated/raised/highlight) |
 | Filter-selected | 2 |
 | Wash | 3 |
 | Scrim | 5 (3 colors + 2 blur depths) |
@@ -479,8 +498,8 @@ Import and add to `shared/theme/builtInThemes/index.ts`.
 | Category | 12 |
 | UI Utility | 15 (4 scrollbar + 3 panel-state + 2 state-chip + 2 label-pill + 2 grain + focus-ring-offset + chrome-noise-texture) |
 | Form | 2 (`knob-base` + `state-modified`) |
-| Diff | 8 |
-| **Total** | **156** |
+| Diff | 10 |
+| **Total** | **159** |
 
 This must equal `APP_THEME_TOKEN_KEYS.length` in `shared/theme/types.ts`, which is the contract — if the two disagree, the array wins and this table is stale.
 

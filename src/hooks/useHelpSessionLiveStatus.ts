@@ -8,6 +8,13 @@ const DISCONNECTED: HelpSessionLiveStatus = {
   activeGrants: [],
 };
 
+interface PulledStatus {
+  sessionId: string | null;
+  status: HelpSessionLiveStatus;
+}
+
+const NOTHING_PULLED: PulledStatus = { sessionId: null, status: DISCONNECTED };
+
 /**
  * Live tier + per-tool grants for the pinned help session, addressed by its
  * public help-session id (`helpPanelStore.sessionId`). Unlike the persisted
@@ -27,16 +34,17 @@ const DISCONNECTED: HelpSessionLiveStatus = {
  *
  * Returns safe `connected: false` defaults when `sessionId` is null or no live
  * session is pinned to this renderer — callers render that as a quiet idle
- * state, never a spinner.
+ * state, never a spinner. A snapshot is only ever returned for the id it was
+ * pulled for, and is dropped on every session change: the previous session's
+ * grants (and their revoke buttons) never linger while the next pull is in
+ * flight, nor come back stale when the user returns to that session.
  */
 export function useHelpSessionLiveStatus(sessionId: string | null): HelpSessionLiveStatus {
-  const [status, setStatus] = useState<HelpSessionLiveStatus>(DISCONNECTED);
+  const [snapshot, setSnapshot] = useState<PulledStatus>(NOTHING_PULLED);
 
   useEffect(() => {
-    if (!sessionId) {
-      setStatus(DISCONNECTED);
-      return;
-    }
+    setSnapshot(NOTHING_PULLED);
+    if (!sessionId) return;
 
     let cancelled = false;
     let inFlight = false;
@@ -48,12 +56,12 @@ export function useHelpSessionLiveStatus(sessionId: string | null): HelpSessionL
         .getLiveSessionStatus({ sessionId })
         .then((live) => {
           if (cancelled) return;
-          setStatus(live);
+          setSnapshot({ sessionId, status: live });
         })
         .catch((err) => {
           if (cancelled) return;
           logError("Failed to load live help-session status", err);
-          setStatus(DISCONNECTED);
+          setSnapshot({ sessionId, status: DISCONNECTED });
         })
         .finally(() => {
           inFlight = false;
@@ -85,5 +93,5 @@ export function useHelpSessionLiveStatus(sessionId: string | null): HelpSessionL
     };
   }, [sessionId]);
 
-  return status;
+  return snapshot.sessionId === sessionId ? snapshot.status : DISCONNECTED;
 }

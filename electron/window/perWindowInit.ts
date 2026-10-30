@@ -27,6 +27,7 @@ import { onPluginToursChanged } from "../services/plugin/PluginTourRegistry.js";
 import { onProjectPresenceChanged } from "./projectPresenceChanges.js";
 import { ProjectSwitchService } from "../services/ProjectSwitchService.js";
 import { notificationService } from "../services/NotificationService.js";
+import { createNotificationProjectOpener } from "./notificationNavigation.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { logInfo } from "../utils/logger.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
@@ -208,8 +209,11 @@ export async function initPerWindowServices(
   finalizeDeferredRegistration();
 
   if (windowRegistry) {
-    notificationService.initialize(windowRegistry, (projectId) =>
-      projectStore.getProjectById(projectId)
+    const getProject = (projectId: string) => projectStore.getProjectById(projectId);
+    notificationService.initialize(
+      windowRegistry,
+      getProject,
+      createNotificationProjectOpener(windowRegistry, getProject)
     );
     ctx.cleanup.add(toDisposable(() => notificationService.detachWindowListeners(win.id)));
   }

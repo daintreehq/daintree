@@ -8,6 +8,7 @@ import type {
 } from "@shared/types/agentDirectory";
 import { getAgentDisplayTitle } from "@shared/config/agentRegistry";
 import { pluralize } from "@/lib/pluralize";
+import { agoPhrase } from "@/lib/projectRowStatus";
 
 /** Which runs Canopy lists: its workers, the Daintree Assistants, or both. */
 export type CanopyRoleFilter = "all" | "workers" | "assistants";
@@ -42,11 +43,21 @@ export interface CanopyAssistantItem {
   /** Unique across hosts, lanes and launches; never a worker's run id. */
   id: string;
   subject: AgentDirectorySubject;
+  /** The agent implementation it runs on, as the directory names it. */
+  agentId: string | null;
   /** The agent it runs on (Claude, Codex…): never its role, which is always Daintree Assistant. */
   agentName: string | null;
-  /** Where it runs: its project and session, or the global assistant. */
+  /** Where it runs: its project, host and session, or the global assistant. */
   scopeLabel: string;
   projectId: string | null;
+  /** Its project's name; null for the global assistant. */
+  projectName: string | null;
+  /** The emoji its project wears, as a worker's place line leads with it. */
+  projectEmoji: string | null;
+  /** The machine it runs on, named only when the list spans hosts. */
+  hostName: string | null;
+  /** Which of its project's sessions it is; null when it isn't one of several. */
+  session: string | null;
   label: string | null;
   agentState: AgentDirectoryLiveEntry["agentState"];
   waitingReason: AgentDirectoryLiveEntry["waitingReason"];
@@ -118,6 +129,9 @@ export function buildAssistantItems(
   directory: AgentDirectory | null,
   options: {
     projectName: (projectId: string) => string | null;
+    projectEmoji?: (projectId: string) => string | null;
+    /** This machine's name, when the list spans hosts; nothing otherwise. */
+    hostName?: string | null;
     seen: AssistantHandbacksSeen;
     /** Only this project's, when the panel shows one project. */
     projectId?: string | null;
@@ -138,12 +152,13 @@ export function buildAssistantItems(
     if (options.projectId != null && projectId !== options.projectId) continue;
     const id = canopyAssistantId(subject);
     const session = assistantSessionLabel(subject.lane);
+    const projectName =
+      projectId === null ? null : (options.projectName(projectId) ?? "Unknown project");
+    const hostName = options.hostName ?? null;
     const scopeLabel =
-      projectId === null
+      projectName === null
         ? "Global"
-        : [options.projectName(projectId) ?? "Unknown project", session]
-            .filter((part) => part !== null)
-            .join(" · ");
+        : [projectName, hostName, session].filter((part) => part !== null).join(" · ");
     const confirmations =
       coverage === null
         ? (entry.confirmations?.waiting ?? []).filter(
@@ -153,9 +168,14 @@ export function buildAssistantItems(
     items.push({
       id,
       subject,
+      agentId: entry.agentId,
       agentName: entry.agentId ? getAgentDisplayTitle(entry.agentId) : null,
       scopeLabel,
       projectId,
+      projectName,
+      projectEmoji: projectId === null ? null : (options.projectEmoji?.(projectId) ?? null),
+      hostName,
+      session,
       label: entry.label,
       agentState: entry.agentState,
       waitingReason: entry.waitingReason,
@@ -184,17 +204,23 @@ export function buildAssistantItems(
  * no claim it stopped working.
  */
 export function assistantNoticeSummary(notices: AgentDirectoryNotices | null): string | null {
-  if (!notices) return null;
-  const parts: string[] = [];
-  if (notices.pending > 0) {
-    parts.push(`Watching ${pluralize(notices.pending, "terminal")}`);
-  }
-  if (notices.ready > 0) {
-    const waiting = `${pluralize(notices.ready, "notice")} not delivered`;
-    const why = NOTICE_DELIVERY_NOTE[notices.delivery];
-    parts.push(why ? `${waiting} (${why})` : waiting);
-  }
+  const parts = [watchingNote(notices), undeliveredNote(notices)].filter(
+    (part): part is string => part !== null
+  );
   return parts.length > 0 ? parts.join(", ") : null;
+}
+
+function watchingNote(notices: AgentDirectoryNotices | null): string | null {
+  return notices && notices.pending > 0
+    ? `Watching ${pluralize(notices.pending, "terminal")}`
+    : null;
+}
+
+function undeliveredNote(notices: AgentDirectoryNotices | null): string | null {
+  if (!notices || notices.ready === 0) return null;
+  const waiting = `${pluralize(notices.ready, "notice")} not delivered`;
+  const why = NOTICE_DELIVERY_NOTE[notices.delivery];
+  return why ? `${waiting} (${why})` : waiting;
 }
 
 /** Where delivery stands, by its mechanics alone: the reason isn't in the directory. */
@@ -217,6 +243,71 @@ export function assistantCoverageNote(item: CanopyAssistantItem): string | null 
       return "This host doesn't report its assistants";
     default:
       return null;
+  }
+}
+
+/**
+ * Everything said of how it supervises and how it was read, in full: the
+ * pane and the row's description carry all of it, the row one note.
+ */
+export function assistantSupervision(item: CanopyAssistantItem): string[] {
+  return [
+    assistantCoverageNote(item),
+    assistantNoticeSummary(item.notices),
+    item.attached ? null : "No window here",
+  ].filter((part): part is string => part !== null);
+}
+
+/**
+ * The one note the row has room for, the most pressing first: a read that
+ * may be out of date outranks a count that reassures, and notices stuck on
+ * their way outrank how many terminals it watches.
+ */
+export function assistantRowNote(item: CanopyAssistantItem): string | null {
+  return (
+    assistantCoverageNote(item) ??
+    undeliveredNote(item.notices) ??
+    (item.attached ? null : "No window here") ??
+    watchingNote(item.notices)
+  );
+}
+
+/**
+ * When what the row says began. An ask is as old as the thing it asks
+ * about — the call held on a dialog, the handback marker — and the rest is
+ * as old as the last observed change of state.
+ */
+export function assistantStateSince(item: CanopyAssistantItem): number | null {
+  if (item.ask === "confirm") return item.confirmation?.since ?? item.since;
+  if (item.ask === "handback") return item.handbackAt ?? item.since;
+  return item.since;
+}
+
+/** The row's clock, read aloud with the verb that says what it measures. */
+export function assistantAgePhrase(item: CanopyAssistantItem, age: string): string {
+  switch (item.ask) {
+    case "confirm":
+    case "approval":
+    case "question":
+      return `waiting for ${age}`;
+    case "error":
+      return `blocked for ${age}`;
+    case "handback":
+      return `handed back ${agoPhrase(age)}`;
+    default:
+      break;
+  }
+  switch (item.agentState) {
+    case "working":
+      return `working for ${age}`;
+    case "waiting":
+      return `at its prompt for ${age}`;
+    case "completed":
+      return `finished ${agoPhrase(age)}`;
+    case "exited":
+      return `exited ${agoPhrase(age)}`;
+    default:
+      return `for ${age}`;
   }
 }
 
@@ -250,6 +341,8 @@ export function assistantMatches(item: CanopyAssistantItem, terms: readonly stri
   const haystack = [
     "assistant",
     item.scopeLabel,
+    // The global assistant's label leaves out the host its row shows.
+    item.hostName ?? "",
     item.label ?? "",
     item.agentName ?? "",
     assistantStatus(item),

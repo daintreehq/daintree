@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveRecipeAgentStep } from "../recipeAgentStep";
+import { missingRecipeVariables, resolveRecipeAgentStep } from "../recipeAgentStep";
 import type { RecipeTerminal, TerminalRecipe } from "@shared/types/project";
 
 const pluginRecipe = (terminal: RecipeTerminal): TerminalRecipe => ({
@@ -87,5 +87,73 @@ describe("resolveRecipeAgentStep (#13797)", () => {
   it("leaves a user's own dash-leading prompt as it always was", () => {
     const terminal: RecipeTerminal = { type: "claude", initialPrompt: "--help" };
     expect(resolveRecipeAgentStep(userRecipe(terminal), terminal, "claude", {}).ok).toBe(true);
+  });
+});
+
+describe("missingRecipeVariables (#15022)", () => {
+  const recipeOf = (...terminals: RecipeTerminal[]): TerminalRecipe => ({
+    ...userRecipe(terminals[0]!),
+    terminals,
+  });
+
+  it("names each built-in an agent's first turn would send empty, once, in first-use order", () => {
+    const recipe = recipeOf(
+      { type: "claude", initialPrompt: "Fix {{PR_NUMBER}} on {{branch_name}}" },
+      { type: "codex", initialPrompt: "Then {{issue_number}} and {{pr_number}}" }
+    );
+    expect(missingRecipeVariables(recipe, { worktreePath: "/repo" })).toEqual({
+      builtIn: ["pr_number", "branch_name", "issue_number"],
+      plugin: [],
+    });
+  });
+
+  it("counts a value that substitutes to nothing as missing", () => {
+    const recipe = recipeOf({ type: "claude", initialPrompt: "On {{branch_name}}" });
+    expect(missingRecipeVariables(recipe, { branchName: "" }).builtIn).toEqual(["branch_name"]);
+  });
+
+  it("is satisfied by whichever of issue or PR fills {{number}}", () => {
+    const recipe = recipeOf({ type: "claude", initialPrompt: "Fix {{number}}" });
+    expect(missingRecipeVariables(recipe, { prNumber: 9 }).builtIn).toEqual([]);
+    expect(missingRecipeVariables(recipe, {}).builtIn).toEqual(["number"]);
+  });
+
+  it("ignores fields the launch sends as typed, and tokens that aren't variables", () => {
+    const recipe = recipeOf(
+      { type: "terminal", command: "gh issue view {{issue_number}}" },
+      { type: "terminal", initialPrompt: "{{issue_number}}" },
+      { type: "dev-preview", devCommand: "npm run dev -- {{branch_name}}" },
+      { type: "claude", args: "--name {{pr_number}}", initialPrompt: "Fix {{ issue_number }}" }
+    );
+    expect(missingRecipeVariables(recipe, {}).builtIn).toEqual([]);
+  });
+
+  it("reads a system prompt only in a plugin's own recipe, which is the only place it launches", () => {
+    const terminal: RecipeTerminal = { type: "claude", systemPrompt: "Track {{issue_number}}" };
+    expect(missingRecipeVariables(userRecipe(terminal), {}).builtIn).toEqual([]);
+    expect(missingRecipeVariables(pluginRecipe(terminal), {}).builtIn).toEqual(["issue_number"]);
+  });
+
+  it("keeps a plugin recipe's own variables apart from the built-ins", () => {
+    const terminal: RecipeTerminal = {
+      type: "claude",
+      initialPrompt: "Review {{plugin.notes}} for {{issue_number}} with {{plugin.scope}}",
+    };
+    expect(
+      missingRecipeVariables(pluginRecipe(terminal), { pluginVariables: { scope: "api" } })
+    ).toEqual({ builtIn: ["issue_number"], plugin: ["plugin.notes"] });
+    // Anywhere else `{{plugin.x}}` is text the user typed.
+    expect(missingRecipeVariables(userRecipe(terminal), { issueNumber: 1 })).toEqual({
+      builtIn: [],
+      plugin: [],
+    });
+  });
+
+  it("reads only the steps a retry would launch", () => {
+    const recipe = recipeOf(
+      { type: "claude", initialPrompt: "Fix {{issue_number}}" },
+      { type: "codex", initialPrompt: "Review {{pr_number}}" }
+    );
+    expect(missingRecipeVariables(recipe, {}, [1]).builtIn).toEqual(["pr_number"]);
   });
 });

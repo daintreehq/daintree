@@ -596,10 +596,34 @@ export interface PluginTagInputProps extends PluginAriaRootAttributes {
   className?: string;
 }
 
+/** One file a `FileDropzone` or `Composer` was given and did not take, and why. */
+export interface PluginFileRejection {
+  file: File;
+  /**
+   * `"type-not-accepted"`: `accept` rules it out. `"too-many-files"`: a zone
+   * without `multiple` already took the first file of the drop.
+   */
+  reason: "type-not-accepted" | "too-many-files";
+}
+
+/**
+ * Files that were given and not taken, in the order they came, with each one's
+ * reason. Called once per drop, paste or pick. Without it, the control says
+ * what it skipped itself, so a file never vanishes unexplained.
+ */
+export type PluginFileRejectHandler = (
+  files: File[],
+  rejections: readonly PluginFileRejection[]
+) => void;
+
 /** What every `FileDropzone` takes, whichever way it hands over the files. */
 export interface PluginFileDropzoneBaseProps extends PluginRootAttributes {
-  /** Dropped files `accept` ruled out. The dialog only offers accepted ones. */
-  onReject?: (files: File[]) => void;
+  /**
+   * Files a drop brought that the zone didn't take: ones `accept` rules out,
+   * and without `multiple` every file after the first. The dialog only offers
+   * accepted ones.
+   */
+  onReject?: PluginFileRejectHandler;
   /** As on `<input type="file">`: extensions (`.md`) and MIME types (`image/*`), comma-separated. */
   accept?: string;
   /** More than one file at a time. Without it, a drop of several keeps the first. */
@@ -802,6 +826,8 @@ export interface PluginComposerProps extends PluginAriaRootAttributes {
   onAttach?: (files: File[]) => void;
   /** As on `<input type="file">`: extensions and MIME types, comma-separated. */
   accept?: string;
+  /** Files from a drop or a paste that `accept` rules out, as on `FileDropzone`. */
+  onReject?: PluginFileRejectHandler;
   /**
    * At most this many characters. A count shows once the text passes 80% of
    * it.

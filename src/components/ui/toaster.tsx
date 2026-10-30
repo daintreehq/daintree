@@ -578,7 +578,7 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
               const result = action.onClick();
 
               if (!action.successLabel) {
-                handleDismiss();
+                if (action.dismissOnClick !== false) handleDismiss();
                 return;
               }
 

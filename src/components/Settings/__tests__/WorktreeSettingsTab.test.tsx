@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
+import { useContext } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_WORKTREE_PATH_PATTERN } from "@shared/utils/pathPattern";
 
@@ -14,6 +15,11 @@ vi.mock("../FileBrowserVisibilitySettings", () => ({ FileBrowserVisibilitySettin
 
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorktreeSettingsTab } from "../WorktreeSettingsTab";
+import {
+  SettingsFlushContext,
+  SettingsFlushProvider,
+  type FailedSettingsFlush,
+} from "../SettingsFlushRegistry";
 
 async function renderWithSavedPattern(pathPattern: string) {
   dispatch.mockImplementation(async (id: string) =>
@@ -154,5 +160,109 @@ describe("WorktreeSettingsTab save in flight", () => {
     await act(async () => answer({ ok: true, result: { pathPattern: next } }));
     expect(input.readOnly).toBe(false);
     expect(input.value).toBe(next);
+  });
+});
+
+// The tab under the dialog's flush registry; `flushAll` is the close-time flush.
+let flushAll: () => Promise<FailedSettingsFlush[]> = async () => [];
+async function renderInDialog(setPattern: () => Promise<unknown>) {
+  dispatch.mockImplementation((id: string) =>
+    id === "worktreeConfig.get"
+      ? Promise.resolve({ ok: true, result: { pathPattern: CUSTOM_PATTERN } })
+      : setPattern()
+  );
+  const { result } = renderHook(() => useContext(SettingsFlushContext)!, {
+    wrapper: ({ children }) => (
+      <SettingsFlushProvider>
+        <TooltipProvider>
+          <WorktreeSettingsTab />
+        </TooltipProvider>
+        {children}
+      </SettingsFlushProvider>
+    ),
+  });
+  flushAll = () => result.current.flushAll();
+  await act(async () => {});
+}
+
+async function closeFlush() {
+  let failed: FailedSettingsFlush[] = [];
+  await act(async () => {
+    failed = await flushAll();
+  });
+  return failed;
+}
+
+function setPatternCalls() {
+  return dispatch.mock.calls.filter(([id]) => id === "worktreeConfig.setPattern");
+}
+
+describe("WorktreeSettingsTab close-time save", () => {
+  it("keeps an invalid pattern and points the close at the field and its error", async () => {
+    await renderInDialog(() => Promise.resolve({ ok: true, result: {} }));
+    const input = screen.getByRole("textbox") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "{parent-dir}/../{branch-slug}" } });
+
+    const failed = await closeFlush();
+
+    expect(failed).toHaveLength(1);
+    expect(failed[0]!.tab).toBe("worktree");
+    const landing = document.getElementById(failed[0]!.landOn);
+    expect(landing?.contains(input)).toBe(true);
+    expect(landing?.contains(screen.getByText(/Path traversal/))).toBe(true);
+    expect(input.value).toBe("{parent-dir}/../{branch-slug}");
+    expect(setPatternCalls()).toHaveLength(0);
+  });
+
+  it("keeps a pattern whose save was refused, with the reason under the field", async () => {
+    await renderInDialog(() =>
+      Promise.resolve({ ok: false, error: { message: "Config is read-only" } })
+    );
+    const input = screen.getByRole("textbox") as HTMLInputElement;
+    const next = "{parent-dir}/{repo-name}-{branch-slug}";
+    fireEvent.change(input, { target: { value: next } });
+
+    const failed = await closeFlush();
+
+    expect(failed).toHaveLength(1);
+    const landing = document.getElementById(failed[0]!.landOn);
+    expect(landing?.contains(input)).toBe(true);
+    expect(landing?.contains(screen.getByRole("alert"))).toBe(true);
+    expect(screen.getByRole("alert").textContent).toContain("Config is read-only");
+    expect(input.value).toBe(next);
+  });
+
+  it("saves a valid pattern and lets the close through", async () => {
+    const next = "{parent-dir}/{repo-name}-{branch-slug}";
+    await renderInDialog(() => Promise.resolve({ ok: true, result: { pathPattern: next } }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: next } });
+
+    expect(await closeFlush()).toEqual([]);
+    expect(setPatternCalls()).toEqual([
+      ["worktreeConfig.setPattern", { pattern: next }, { source: "user" }],
+    ]);
+  });
+
+  it("answers a close during a Save with that Save's outcome, without saving twice", async () => {
+    let answer: (value: unknown) => void = () => {};
+    await renderInDialog(() => new Promise((resolve) => (answer = resolve)));
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "{parent-dir}/{repo-name}-{branch-slug}" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    });
+
+    let failed: FailedSettingsFlush[] | null = null;
+    await act(async () => {
+      void flushAll().then((result) => (failed = result));
+      await Promise.resolve();
+    });
+    expect(failed).toBeNull();
+
+    await act(async () => answer({ ok: false, error: { message: "Config is read-only" } }));
+
+    expect(failed).toHaveLength(1);
+    expect(setPatternCalls()).toHaveLength(1);
   });
 });

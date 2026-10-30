@@ -424,6 +424,9 @@ export const TerminalSpawnOptionsSchema = z.object({
   // Handback code for the initial prompt (#12488). Listed or zod strips it, and
   // held to the marker grammar because the pty-host searches for it literally.
   handbackCode: z.string().regex(HANDBACK_CODE_PATTERN).optional(),
+  // Listed or zod strips it, and every send to a run that has its first prompt
+  // would be offered as that record again (#15521).
+  hasFirstPrompt: z.boolean().optional(),
   // Launch-time ActionContext snapshot, replayed by an agent pane's workspace
   // binding (#12486). Optional so existing spawn callers are unaffected.
   actionContext: ActionContextSchema.optional(),
@@ -817,7 +820,13 @@ export const VoicePublishDetailsRequestSchema = z.object({
     worktreeLabel: VoiceDetailLabelSchema.nullable(),
     micLabel: VoiceDetailLabelSchema.nullable(),
     micSignal: z.enum(["pending", "live", "silent"]),
-    micNotice: z.object({ kind: z.enum(["lost", "silent"]), bluetooth: z.boolean() }).nullable(),
+    micNotice: z
+      .object({
+        kind: z.enum(["lost", "silent"]),
+        bluetooth: z.boolean(),
+        appReplaced: z.literal(true).optional(),
+      })
+      .nullable(),
     stopWarning: z.boolean(),
     correctionEnabled: z.boolean(),
     locked: z.boolean(),
@@ -882,6 +891,12 @@ export const VoiceInputCorrectPayloadSchema = z.object({
   /** The panel the passage was dictated into: it picks the project vocabulary and the agent's commands. */
   terminalId: z.string().min(1).max(256).optional(),
   startsPrompt: z.boolean().optional(),
+  /**
+   * The command or skill the draft opens with, as typed. Main reads more about
+   * it only when the target agent lists it. One that doesn't validate is
+   * dropped rather than failing the cleanup.
+   */
+  openingCommandToken: z.string().min(2).max(256).optional().catch(undefined),
   /** The dictation the passage came from: its context was read while it ran. */
   sessionId: VoiceSessionIdSchema.optional(),
   /**

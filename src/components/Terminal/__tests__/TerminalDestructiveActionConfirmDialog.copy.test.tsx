@@ -237,10 +237,16 @@ describe("TerminalDestructiveActionConfirmDialog — copy and preview invariants
         .flatMap((g) => g.terminals)
         .filter((t) => t.hasRunningAgent)
         .map((t) => t.terminalTitle);
-      const marked = rows
-        .filter((row) => /Working$/.test(row.textContent ?? ""))
-        .map((row) => (row.textContent ?? "").replace(/Working$/, ""));
+      const markedRows = rows.filter((row) => /Working$/.test(row.textContent ?? ""));
+      const marked = markedRows.map((row) => (row.textContent ?? "").replace(/Working$/, ""));
       expect(marked.sort()).toEqual(expected.sort());
+      // A working agent's spinner moves; the glyph rule keeps a still one for
+      // the filter bars' empty bucket and Pilot's quiet band.
+      for (const row of markedRows) {
+        expect(row.querySelector(".spinner-circle")?.getAttribute("class")).toContain(
+          "animate-spin-slow"
+        );
+      }
     }
   );
 

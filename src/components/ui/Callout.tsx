@@ -74,6 +74,12 @@ const ICON_SIZE = {
   compact: "w-3.5 h-3.5 mt-px",
 } as const;
 
+// The column the row leaves for the glyph: its width plus the root's `gap-2`.
+const GLYPH_COLUMN = {
+  default: "ms-6",
+  compact: "ms-5.5",
+} as const;
+
 // One step above the body, the way `InlineStatusBanner` titles its band, so a
 // banner and a callout in the same dialog read as one family.
 const TITLE_SIZE = {
@@ -87,8 +93,13 @@ export interface CalloutProps extends Omit<React.HTMLAttributes<HTMLDivElement>,
   size?: "default" | "compact";
   /** A short headline. The body under it steps down to secondary text. */
   title?: React.ReactNode;
-  /** One trailing control beside the message — a Retry. Anything more goes in the body. */
+  /**
+   * One trailing control beside the message — a Retry. It drops under the
+   * message when the box is too narrow for both. Anything more goes in the body.
+   */
   action?: React.ReactNode;
+  /** A dismiss X, held at the trailing edge: unlike `action`, it never wraps under the message. */
+  dismiss?: React.ReactNode;
   /** A domain glyph in place of `Info`, for `neutral` only: every other tone's glyph is its severity. */
   icon?: LucideIcon;
 }
@@ -98,6 +109,7 @@ export function Callout({
   size = "default",
   title,
   action,
+  dismiss,
   icon,
   className,
   children,
@@ -108,30 +120,43 @@ export function Callout({
     <div
       {...props}
       data-callout={severity}
-      className={cn(calloutVariants({ severity, size }), className)}
+      // Centred for the dismiss X the way the row centres for an action.
+      className={cn(calloutVariants({ severity, size }), dismiss && "items-center", className)}
     >
-      <Icon
-        className={cn(
-          ICON_SIZE[size],
-          title && size === "default" && "mt-0.5",
-          "shrink-0",
-          CALLOUT_ICON_TONE[severity]
-        )}
-        aria-hidden="true"
-        data-severity-glyph=""
-      />
-      <div
-        className={cn(
-          "min-w-0 flex-1 break-words",
-          title ? "text-text-secondary" : "text-text-primary"
-        )}
-      >
-        {title && (
-          <p className={cn("mb-0.5 font-medium text-text-primary", TITLE_SIZE[size])}>{title}</p>
-        )}
-        {children}
+      {/* One wrapping row with or without an action, so an action coming or going
+          never remounts the message. With one, the message holds a readable
+          measure and the action wraps under it rather than squeezing it. The row
+          centres the two: a one-line message shares the action's centre, and a
+          taller one fills the row while the action centres on it. */}
+      <div className={cn("flex min-w-0 flex-1 flex-wrap items-center gap-2", GLYPH_COLUMN[size])}>
+        <div
+          className={cn(
+            "relative min-w-0 break-words",
+            action ? "grow basis-[16em]" : "flex-1",
+            title ? "text-text-secondary" : "text-text-primary"
+          )}
+        >
+          {/* Hung off the message into the row's glyph column rather than set beside
+              the row, so it moves with the words when they centre on an action and
+              a wrapped action still starts under the words, not under the glyph. */}
+          <Icon
+            className={cn(
+              "absolute end-full me-2",
+              ICON_SIZE[size],
+              title && size === "default" && "mt-0.5",
+              CALLOUT_ICON_TONE[severity]
+            )}
+            aria-hidden="true"
+            data-severity-glyph=""
+          />
+          {title && (
+            <p className={cn("mb-0.5 font-medium text-text-primary", TITLE_SIZE[size])}>{title}</p>
+          )}
+          {children}
+        </div>
+        {action && <div className="shrink-0 self-center">{action}</div>}
       </div>
-      {action && <div className="shrink-0 self-center">{action}</div>}
+      {dismiss && <div className="shrink-0 self-center">{dismiss}</div>}
     </div>
   );
 }

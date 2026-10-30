@@ -2,6 +2,8 @@ import type {
   AgentSubagentsResult,
   AgentSubagentTranscriptResult,
   CodexFolderSessionsResult,
+  CodexRestoreMatchRequest,
+  CodexRestoreMatchResult,
 } from "@shared/types/ipc/agentSubagents";
 import type { CodexQuotaProfile } from "@shared/types/ipc/agentQuota";
 
@@ -46,7 +48,17 @@ export const codexClient = {
   },
 
   /**
-   * Codex account quota for main's own profile and each distinct `CODEX_HOME`
+   * The conversations restore can name for held same-folder panes from their
+   * launch prompts (#15269): only a pane whose prompt points at exactly one
+   * thread that nobody else could own comes back. Never rejects on a failed
+   * read; an empty list leaves every pane held.
+   */
+  matchRestoreSessions: (payload: CodexRestoreMatchRequest): Promise<CodexRestoreMatchResult> => {
+    return window.electron.codex.matchRestoreSessions(payload);
+  },
+
+  /**
+   * Codex account quota for the default profile and each distinct `CODEX_HOME`
    * a Codex preset sets (#12797, #13686). Never rejects on a failed read.
    */
   readQuota: (): Promise<CodexQuotaProfile[]> => {

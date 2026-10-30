@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
 import { beforeEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { buildFleetTargetPreviews, executeFleetBroadcast } from "../fleetExecution";
+import {
+  buildFleetTargetPreviews,
+  executeFleetBroadcast,
+  filterEligibleIds,
+  findCrossHostContextTargets,
+} from "../fleetExecution";
 import { crossHostTargetKey } from "../crossHostFleet";
 import { FLEET_LARGE_PASTE_BATCH_SIZE } from "../fleetBroadcast";
 import { terminalClient } from "@/clients";
@@ -19,6 +24,11 @@ const clearDirectingStateMock = vi.hoisted(() => vi.fn<(id: string) => void>());
 const buildFleetBroadcastRecipeContextMock = vi.hoisted(() =>
   vi.fn<(id: string) => RecipeContext | undefined>()
 );
+// What each pane's screen shows, for `@terminal` and `@selection`.
+const screens = vi.hoisted(() => ({
+  output: new Map<string, string>(),
+  selection: new Map<string, string>(),
+}));
 
 vi.mock("../fleetBroadcast", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../fleetBroadcast")>();
@@ -44,6 +54,22 @@ vi.mock("@/services/TerminalInstanceService", () => {
     notifyUserInput: notifyUserInputMock,
     notifyEnterPressed: notifyEnterPressedMock,
     clearDirectingState: clearDirectingStateMock,
+    get: (id: string) => {
+      const output = screens.output.get(id);
+      if (output === undefined) return undefined;
+      const lines = output.split("\n");
+      return {
+        terminal: {
+          buffer: {
+            active: {
+              length: lines.length,
+              getLine: (i: number) => ({ translateToString: () => lines[i]! }),
+            },
+          },
+        },
+      };
+    },
+    getCachedSelection: (id: string) => screens.selection.get(id) ?? null,
   };
   return {
     createTerminalPaintPlane: () => terminalInstanceService,
@@ -103,6 +129,8 @@ function reset() {
   });
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
   useTerminalInputStore.setState({ sentPrompts: new Map() });
+  screens.output.clear();
+  screens.selection.clear();
 }
 
 const sentTo = (id: string) =>
@@ -566,6 +594,194 @@ describe("executeFleetBroadcast", () => {
   });
 });
 
+describe("executeFleetBroadcast — context tokens (#14953)", () => {
+  const readDiff = async (cwd: string, type: string) => `diff ${type} in ${cwd}`;
+  const getWorkingDiff = vi.fn(readDiff);
+  const remoteSubmit = vi.fn();
+  const resolveContextReferences = vi.fn(async (refs: Array<{ prefix: string; id: string }>) =>
+    refs.map((ref) => ({
+      status: "resolved" as const,
+      pluginId: "recs",
+      pluginName: "Recs",
+      text: `record ${ref.id}`,
+    }))
+  );
+
+  beforeEach(() => {
+    reset();
+    getWorkingDiff.mockReset().mockImplementation(readDiff);
+    resolveContextReferences.mockClear();
+    remoteSubmit.mockReset().mockResolvedValue(undefined);
+    Object.assign(window, {
+      electron: {
+        git: { getWorkingDiff },
+        plugin: { resolveContextReferences },
+        hostMetrics: { submitFleet: remoteSubmit },
+      },
+    });
+  });
+
+  /** Holds each `@diff` read until the test lets it answer. */
+  function holdDiffs() {
+    const waiting = new Map<string, () => void>();
+    getWorkingDiff.mockImplementation(
+      (cwd: string) =>
+        new Promise<string>((resolve) => waiting.set(cwd, () => resolve(`diff in ${cwd}`)))
+    );
+    return async (cwd: string) => {
+      await vi.waitFor(() => expect(waiting.has(cwd)).toBe(true));
+      waiting.get(cwd)!();
+    };
+  }
+
+  const sentBy = () => new Map(submitMock.mock.calls.map(([id, payload]) => [id, payload]));
+
+  it("takes @diff from each agent's own working directory", async () => {
+    seedPanels([makeAgent("a", { cwd: "/wt/a" }), makeAgent("b", { cwd: "/wt/b" })]);
+    await executeFleetBroadcast("Review @diff:staged", ["a", "b"]);
+    expect(sentBy().get("a")).toContain("diff staged in /wt/a");
+    expect(sentBy().get("b")).toContain("diff staged in /wt/b");
+    expect(sentBy().get("a")).not.toContain("@diff");
+  });
+
+  it("takes @terminal and @selection from each agent's own screen", async () => {
+    seedPanels([makeAgent("a"), makeAgent("b")]);
+    screens.output.set("a", "output of a");
+    screens.output.set("b", "output of b");
+    screens.selection.set("a", "picked in a");
+    await executeFleetBroadcast("Explain @terminal and @selection", ["a", "b"]);
+    expect(sentBy().get("a")).toContain("output of a");
+    expect(sentBy().get("a")).toContain("picked in a");
+    expect(sentBy().get("b")).toContain("output of b");
+    expect(sentBy().get("b")).toContain("[No terminal selection]");
+    expect(sentBy().get("b")).not.toContain("output of a");
+  });
+
+  it("asks the plugins once for a reference every agent's text carries", async () => {
+    seedPanels([makeAgent("a"), makeAgent("b"), makeAgent("c")]);
+    await executeFleetBroadcast("Use @rec:142", ["a", "b", "c"], { c: "Also @rec:142 here" });
+    expect(resolveContextReferences).toHaveBeenCalledTimes(1);
+    expect(resolveContextReferences).toHaveBeenCalledWith([{ prefix: "rec", id: "142" }]);
+    expect([...sentBy().keys()].sort()).toEqual(["a", "b", "c"]);
+    for (const payload of sentBy().values()) expect(payload).toContain("record 142");
+  });
+
+  it("expands context in a per-target edit, and records what was written", async () => {
+    seedPanels([makeAgent("a", { cwd: "/wt/a" }), makeAgent("b", { cwd: "/wt/b" })]);
+    await executeFleetBroadcast("hello", ["a", "b"], { b: "Look at @diff" });
+    expect(sentBy().get("a")).toBe("hello");
+    expect(sentBy().get("b")).toContain("diff unstaged in /wt/b");
+    expect(sentTo("b")).toEqual(["Look at @diff"]);
+  });
+
+  it("fills recipe variables first, so a diff's own {{…}} text goes as written", async () => {
+    buildFleetBroadcastRecipeContextMock.mockReturnValue({ branchName: "feature/terra" });
+    getWorkingDiff.mockResolvedValue("+ {{branch_name}}");
+    seedPanels([makeAgent("a"), makeAgent("b")]);
+    await executeFleetBroadcast("On {{branch_name}}: @diff", ["a", "b"]);
+    expect(sentBy().get("a")).toContain("On feature/terra:");
+    expect(sentBy().get("a")).toContain("+ {{branch_name}}");
+  });
+
+  it("sends nothing when cancelled while the context is read", async () => {
+    seedPanels([makeAgent("a"), makeAgent("b")]);
+    const controller = new AbortController();
+    getWorkingDiff.mockImplementation(async (cwd: string) => {
+      controller.abort();
+      return `diff in ${cwd}`;
+    });
+    const result = await executeFleetBroadcast(
+      "Review @diff",
+      ["a", "b"],
+      undefined,
+      controller.signal
+    );
+    expect(submitMock).not.toHaveBeenCalled();
+    expect(notifyUserInputMock).not.toHaveBeenCalled();
+    expect(result.cancelled).toBe(true);
+    expect(result.skippedCount).toBe(2);
+    expect(useFleetBroadcastProgressStore.getState().cancelled).toBe(true);
+  });
+
+  it("never expands context for an agent on another host", async () => {
+    const remote = crossHostTargetKey("host-2", "t9");
+    useFleetArmingStore.setState({
+      crossHostTargets: [
+        { key: remote, hostId: "host-2", hostName: "Studio", terminalId: "t9", title: "t9" },
+      ],
+    });
+    seedPanels([makeAgent("a", { cwd: "/wt/a" })]);
+    await executeFleetBroadcast("Review @diff", ["a", remote]);
+    expect(sentBy().get("a")).toContain("diff unstaged in /wt/a");
+    expect(getWorkingDiff).toHaveBeenCalledTimes(1);
+    expect(remoteSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalId: "t9", text: "Review @diff" })
+    );
+  });
+
+  it("sends nothing to a pane that left the fleet while its context was read", async () => {
+    seedPanels([makeAgent("a", { cwd: "/wt/a" }), makeAgent("b", { cwd: "/wt/b" })]);
+    const answer = holdDiffs();
+    const sending = executeFleetBroadcast("Review @diff", ["a", "b"]);
+    usePanelStore.setState((state) => ({
+      panelsById: { ...state.panelsById, b: { ...state.panelsById.b!, location: "dock" } },
+    }));
+    await answer("/wt/a");
+    await answer("/wt/b");
+    const result = await sending;
+    expect([...sentBy().keys()]).toEqual(["a"]);
+    expect(notifyUserInputMock).not.toHaveBeenCalledWith("b", expect.anything());
+    expect(result.skippedCount).toBe(1);
+  });
+
+  it("leaves the progress of a newer broadcast alone when a superseded one settles", async () => {
+    seedPanels([makeAgent("a", { cwd: "/wt/a" }), makeAgent("b", { cwd: "/wt/b" })]);
+    const answer = holdDiffs();
+    const older = new AbortController();
+    const first = executeFleetBroadcast("Review @diff", ["a"], undefined, older.signal);
+    older.abort();
+    const second = executeFleetBroadcast("Review @diff", ["b"]);
+
+    await answer("/wt/a");
+    expect((await first).cancelled).toBe(true);
+    expect(useFleetBroadcastProgressStore.getState()).toMatchObject({
+      isActive: true,
+      cancelled: false,
+      total: 1,
+    });
+
+    await answer("/wt/b");
+    await second;
+    expect(useFleetBroadcastProgressStore.getState()).toMatchObject({
+      isActive: false,
+      cancelled: false,
+      completed: 1,
+    });
+    expect([...sentBy().keys()]).toEqual(["b"]);
+  });
+
+  it("leaves a draft with no context to go out without waiting on anything", () => {
+    seedPanels([makeAgent("a"), makeAgent("b")]);
+    void executeFleetBroadcast("plain text", ["a", "b"]);
+    expect(submitMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("findCrossHostContextTargets", () => {
+  const REMOTE = crossHostTargetKey("host-2", "t9");
+
+  it("names the other host's agents whose text still carries context", () => {
+    expect(findCrossHostContextTargets("Review @diff", ["a", REMOTE])).toEqual([REMOTE]);
+    expect(findCrossHostContextTargets("Review", ["a", REMOTE])).toEqual([]);
+    expect(
+      findCrossHostContextTargets("Review @diff", ["a", REMOTE], { [REMOTE]: "Review" })
+    ).toEqual([]);
+    expect(findCrossHostContextTargets("Review", ["a", REMOTE], { [REMOTE]: "@terminal" })).toEqual(
+      [REMOTE]
+    );
+  });
+});
+
 describe("buildFleetTargetPreviews", () => {
   beforeEach(() => {
     reset();
@@ -594,6 +810,27 @@ describe("buildFleetTargetPreviews", () => {
     expect(browser?.excluded).toBe(true);
     expect(browser?.title).toBe("Browser pane");
     expect(browser?.exclusionReason).toBe("Panel no longer eligible");
+  });
+
+  it("shows an armed pane with locked input as left out for that reason (#14964)", () => {
+    seedPanels([makeAgent("open"), makeAgent("locked", { isInputLocked: true })]);
+    useFleetArmingStore.getState().armIds(["open", "locked"]);
+    const previews = buildFleetTargetPreviews("hi");
+    const locked = previews.find((p) => p.terminalId === "locked");
+    expect(locked?.excluded).toBe(true);
+    expect(locked?.exclusionReason).toBe("Input locked");
+    expect(locked?.inputLocked).toBe(true);
+    expect(previews.find((p) => p.terminalId === "open")?.excluded).toBe(false);
+    expect(previews.find((p) => p.terminalId === "open")?.inputLocked).toBeUndefined();
+  });
+
+  it("doesn't call a dead pane input-locked", () => {
+    seedPanels([makeAgent("open"), makeAgent("dead", { isInputLocked: true, hasPty: false })]);
+    useFleetArmingStore.getState().armIds(["open", "dead"]);
+    const dead = buildFleetTargetPreviews("hi").find((p) => p.terminalId === "dead");
+    expect(dead?.excluded).toBe(true);
+    expect(dead?.inputLocked).toBeUndefined();
+    expect(dead?.exclusionReason).toBe("Panel no longer eligible");
   });
 
   it("falls back to 'Unknown' title when an armed id is no longer in the carrier", () => {
@@ -683,5 +920,65 @@ describe("buildFleetTargetPreviews", () => {
       expect(buildFleetBroadcastRecipeContextMock).toHaveBeenCalledWith("t1");
       expect(buildFleetBroadcastRecipeContextMock).toHaveBeenCalledWith("t2");
     });
+  });
+});
+
+describe("filterEligibleIds", () => {
+  beforeEach(() => {
+    reset();
+  });
+
+  it("drops a pane whose input is locked and keeps it once unlocked (#14964)", () => {
+    seedPanels([makeAgent("a"), makeAgent("b", { isInputLocked: true })]);
+    expect(filterEligibleIds(["a", "b"])).toEqual(["a"]);
+
+    seedPanels([makeAgent("a"), makeAgent("b", { isInputLocked: false })]);
+    expect(filterEligibleIds(["a", "b"])).toEqual(["a", "b"]);
+  });
+});
+
+describe("executeFleetBroadcast — panes locked after targets were picked (#14964)", () => {
+  beforeEach(() => {
+    reset();
+  });
+
+  it("skips a target locked before dispatch and reports the rest against the right ids", async () => {
+    seedPanels([makeAgent("a"), makeAgent("b", { isInputLocked: true }), makeAgent("c")]);
+    submitMock.mockImplementation(async (id) => {
+      if (id === "c") throw new Error("EAGAIN: busy");
+    });
+
+    const result = await executeFleetBroadcast("hi", ["a", "b", "c"]);
+
+    expect(submitMock.mock.calls.map((call) => call[0])).toEqual(["a", "c"]);
+    expect(notifyUserInputMock.mock.calls.map((call) => call[0])).toEqual(["a", "c"]);
+    expect(result.perTarget.map((t) => [t.terminalId, t.status])).toEqual([
+      ["a", "fulfilled"],
+      ["c", "rejected"],
+    ]);
+    expect(result.failedIds).toEqual(["c"]);
+    expect(result.skippedCount).toBe(1);
+  });
+
+  it("skips a pane locked between large-paste batches", async () => {
+    const ids = Array.from({ length: FLEET_LARGE_PASTE_BATCH_SIZE + 2 }, (_, i) => `t${i}`);
+    seedPanels(ids.map((id) => makeAgent(id)));
+    const lateId = ids[ids.length - 1]!;
+    submitMock.mockImplementation(async (id) => {
+      if (id === ids[0]) {
+        usePanelStore.setState((s) => ({
+          panelsById: { ...s.panelsById, [lateId]: makeAgent(lateId, { isInputLocked: true }) },
+        }));
+      }
+    });
+
+    const result = await executeFleetBroadcast("x".repeat(120_000), ids);
+
+    const sent = submitMock.mock.calls.map((call) => call[0]);
+    expect(sent).not.toContain(lateId);
+    expect(sent).toHaveLength(ids.length - 1);
+    expect(result.successCount).toBe(ids.length - 1);
+    expect(result.skippedCount).toBe(1);
+    expect(useFleetBroadcastProgressStore.getState().isActive).toBe(false);
   });
 });

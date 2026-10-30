@@ -34,6 +34,7 @@ const serviceMock = vi.hoisted(() => ({
   listActiveBearers: vi.fn(() => []),
   disconnectBearer: vi.fn((tokenHash: string) => ({ tokenHash, disconnected: true })),
   resetDenialCounts: vi.fn(),
+  revokeGrant: vi.fn((sessionId: string, toolId: string) => ({ sessionId, toolId, revoked: true })),
   setSessionTier: vi.fn((sessionId: string, tier: string) => ({ sessionId, tier })),
   onTerminalAdoptionsChange: vi.fn(() => () => {}),
   adoptTerminal: vi.fn(() => ({ status: "refused" as const, reason: "self" as const })),
@@ -44,6 +45,7 @@ const serviceMock = vi.hoisted(() => ({
   ),
   getPaneNotifyState: vi.fn(() => null),
   stopPaneNotices: vi.fn(),
+  holdDispatch: vi.fn(() => ({ held: true as const, remainingMs: 1_000 })),
 }));
 
 const paneConfigMock = vi.hoisted(() => ({
@@ -181,6 +183,29 @@ describe("mcpServer IPC adversarial", () => {
     expect(serviceMock[method]).not.toHaveBeenCalled();
   });
 
+  it("holdDispatch refuses a malformed hold before asking the service (#14989)", async () => {
+    const hold = getHandler(CHANNELS.MCP_SERVER_HOLD_DISPATCH);
+    for (const request of [
+      null,
+      "req-1",
+      { requestId: "", phase: "shown" },
+      { requestId: 7, phase: "shown" },
+      { requestId: "req-1", phase: "forever" },
+      { requestId: "req-1" },
+    ]) {
+      await expect(hold(fakeEvent(), request)).rejects.toThrow(/Invalid/);
+    }
+    expect(serviceMock.holdDispatch).not.toHaveBeenCalled();
+  });
+
+  it("holdDispatch holds the call for the view that asked, and only that view (#14989)", async () => {
+    const event = { sender: { id: 77 } } as unknown as Electron.IpcMainInvokeEvent;
+    await expect(
+      getHandler(CHANNELS.MCP_SERVER_HOLD_DISPATCH)(event, { requestId: "req-1", phase: "shown" })
+    ).resolves.toEqual({ held: true, remainingMs: 1_000 });
+    expect(serviceMock.holdDispatch).toHaveBeenCalledWith(77, "req-1", "shown");
+  });
+
   it("stopPaneNotices forwards the pane to the service", async () => {
     await getHandler(CHANNELS.MCP_SERVER_STOP_PANE_NOTICES)(fakeEvent(), "pane-1");
     expect(serviceMock.stopPaneNotices).toHaveBeenCalledWith("pane-1");
@@ -308,6 +333,37 @@ describe("mcpServer IPC adversarial", () => {
     // The caller-pin id must ride along so the service can reject a renderer
     // that doesn't own the session.
     expect(serviceMock.resetDenialCounts).toHaveBeenCalledWith("sess-7", 77);
+  });
+
+  it("revokeGrant rejects a malformed payload before reaching the service", async () => {
+    const handler = getHandler(CHANNELS.MCP_SERVER_REVOKE_GRANT);
+    for (const bad of [null, "s1", 42]) {
+      await expect(handler(fakeEvent(), bad)).rejects.toThrow(/Invalid payload/);
+    }
+    for (const sessionId of ["", 42, null]) {
+      await expect(handler(fakeEvent(), { sessionId, toolId: "terminal.kill" })).rejects.toThrow(
+        /Invalid sessionId/
+      );
+    }
+    for (const toolId of ["", 42, null]) {
+      await expect(handler(fakeEvent(), { sessionId: "s1", toolId })).rejects.toThrow(
+        /Invalid toolId/
+      );
+    }
+    expect(serviceMock.revokeGrant).not.toHaveBeenCalled();
+  });
+
+  it("revokeGrant forwards the session, the tool, and the caller's webContents id", async () => {
+    const event = {
+      sender: { id: 77 } as Electron.WebContents,
+    } as Electron.IpcMainInvokeEvent;
+    await expect(
+      getHandler(CHANNELS.MCP_SERVER_REVOKE_GRANT)(event, {
+        sessionId: "sess-7",
+        toolId: "terminal.kill",
+      })
+    ).resolves.toEqual({ sessionId: "sess-7", toolId: "terminal.kill", revoked: true });
+    expect(serviceMock.revokeGrant).toHaveBeenCalledWith("sess-7", "terminal.kill", 77);
   });
 
   it("setSessionTier rejects the pre-split ladder names and anything else outside core/full", async () => {

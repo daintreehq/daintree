@@ -190,6 +190,18 @@ export interface SearchablePaletteProps<T> {
    * for it either.
    */
   getActionLabel?: (selectedItem: T) => string | null;
+  /**
+   * A pane beside the results for the selected row: a clipboard-history
+   * preview, where a row can only show an excerpt. Receives `null` with no
+   * selection; return `null` and the results take the full width. Outside the
+   * listbox and not live — the row's own name is what each arrow press says.
+   * Side by side once the window gives the workspace tier its full width
+   * (900px), stacked below the results under it; size the results column with
+   * `bodyClassName` and use the same breakpoint there.
+   */
+  getDetail?: (selectedItem: T | null) => React.ReactNode;
+  /** Ambient metadata for the header's label row (`AppPaletteDialog.Header` `trailing`). */
+  headerTrailing?: React.ReactNode;
   /** Additional className for AppPaletteDialog.Body */
   bodyClassName?: string;
   /** Custom content before the list */
@@ -258,6 +270,8 @@ export function SearchablePalette<T>({
   footer,
   getFooter,
   getActionLabel,
+  getDetail,
+  headerTrailing,
   bodyClassName,
   beforeList,
   afterList,
@@ -538,6 +552,7 @@ export function SearchablePalette<T>({
       </p>
     ) : null;
   const resolvedEmptyContent = emptyContent ?? autoEmptyChip;
+  const detail = getDetail?.(selectedItem) ?? null;
 
   return (
     <AppPaletteDialog
@@ -550,6 +565,7 @@ export function SearchablePalette<T>({
       <AppPaletteDialog.Header
         label={label}
         shortcut={shortcut}
+        trailing={headerTrailing}
         className={headerClassName}
         isLoading={isLoading}
       >
@@ -571,96 +587,101 @@ export function SearchablePalette<T>({
         />
       </AppPaletteDialog.Header>
 
-      <AppPaletteDialog.Body
-        className={bodyClassName}
-        ariaLabel={label}
-        activeDescendant={activeDescendant}
-        onNavigationKeyDown={handleNavigationKeyDown}
-        keepPointerFocusOnInput
-      >
-        {renderBody ? (
-          renderBody()
-        ) : (
-          <>
-            {beforeList}
-            {results.length === 0 ? (
-              // While loading, suppress the empty state so the header progress
-              // bar is the only signal — otherwise the user sees "no results"
-              // and the loading bar at the same time. The body keeps its
-              // min-height so the modal doesn't collapse before data arrives.
-              isLoading ? null : (
-                <AppPaletteDialog.Empty
-                  query={query}
-                  emptyMessage={emptyMessage}
-                  noMatchMessage={noMatchMessage}
-                  // Escape clears the query before it closes (see handleKeyDown),
-                  // so every no-match state has the same way back; a consumer
-                  // with a better next step passes its own.
-                  noMatchContent={noMatchContent ?? <PaletteNoMatchHint />}
+      {/* `detail !== null` rather than a second flag: the pane comes and goes
+          with the selection, and the results take the width back with it. */}
+      <div className={detail !== null ? "flex min-h-0 max-[900px]:flex-col" : "contents"}>
+        <AppPaletteDialog.Body
+          className={bodyClassName}
+          ariaLabel={label}
+          activeDescendant={activeDescendant}
+          onNavigationKeyDown={handleNavigationKeyDown}
+          keepPointerFocusOnInput
+        >
+          {renderBody ? (
+            renderBody()
+          ) : (
+            <>
+              {beforeList}
+              {results.length === 0 ? (
+                // While loading, suppress the empty state so the header progress
+                // bar is the only signal — otherwise the user sees "no results"
+                // and the loading bar at the same time. The body keeps its
+                // min-height so the modal doesn't collapse before data arrives.
+                isLoading ? null : (
+                  <AppPaletteDialog.Empty
+                    query={query}
+                    emptyMessage={emptyMessage}
+                    noMatchMessage={noMatchMessage}
+                    // Escape clears the query before it closes (see handleKeyDown),
+                    // so every no-match state has the same way back; a consumer
+                    // with a better next step passes its own.
+                    noMatchContent={noMatchContent ?? <PaletteNoMatchHint />}
+                  >
+                    {resolvedEmptyContent}
+                  </AppPaletteDialog.Empty>
+                )
+              ) : (
+                <div
+                  ref={listRef}
+                  id={listId}
+                  role="listbox"
+                  aria-label={label}
+                  aria-multiselectable={multiselectable || undefined}
+                  className={isFiltering ? "palette-results-stale" : undefined}
+                  data-stale={isFiltering ? "true" : undefined}
+                  aria-busy={isFiltering || undefined}
                 >
-                  {resolvedEmptyContent}
-                </AppPaletteDialog.Empty>
-              )
-            ) : (
-              <div
-                ref={listRef}
-                id={listId}
-                role="listbox"
-                aria-label={label}
-                aria-multiselectable={multiselectable || undefined}
-                className={isFiltering ? "palette-results-stale" : undefined}
-                data-stale={isFiltering ? "true" : undefined}
-                aria-busy={isFiltering || undefined}
-              >
-                {getSectionLabel
-                  ? sectionRuns(results.slice(0, renderLimit), getSectionLabel).map((run) => (
-                      <Fragment key={`${run.start}-${run.label}`}>
-                        {/* Not role="group": inside a listbox, Chromium +
-                            VoiceOver drop a group's label and announce "empty
-                            group". The head is an inert option instead, as in
-                            the action palette; arrow keys skip it because it is
-                            not in `results`. */}
-                        <div
-                          className={SECTION_HEADER_CLASS}
-                          role="option"
-                          aria-disabled="true"
-                          aria-selected="false"
-                          aria-label={run.label}
-                        >
-                          {run.label}
-                        </div>
-                        {run.items.map((item, offset) => {
-                          const index = run.start + offset;
-                          return renderItem(
+                  {getSectionLabel
+                    ? sectionRuns(results.slice(0, renderLimit), getSectionLabel).map((run) => (
+                        <Fragment key={`${run.start}-${run.label}`}>
+                          {/* Not role="group": inside a listbox, Chromium +
+                              VoiceOver drop a group's label and announce "empty
+                              group". The head is an inert option instead, as in
+                              the action palette; arrow keys skip it because it is
+                              not in `results`. */}
+                          <div
+                            className={SECTION_HEADER_CLASS}
+                            role="option"
+                            aria-disabled="true"
+                            aria-selected="false"
+                            aria-label={run.label}
+                          >
+                            {run.label}
+                          </div>
+                          {run.items.map((item, offset) => {
+                            const index = run.start + offset;
+                            return renderItem(
+                              item,
+                              index,
+                              index === selectedIndex,
+                              hoverIndexHandler,
+                              matchesById?.get(getItemId(item))
+                            );
+                          })}
+                        </Fragment>
+                      ))
+                    : results
+                        .slice(0, renderLimit)
+                        .map((item, index) =>
+                          renderItem(
                             item,
                             index,
                             index === selectedIndex,
                             hoverIndexHandler,
                             matchesById?.get(getItemId(item))
-                          );
-                        })}
-                      </Fragment>
-                    ))
-                  : results
-                      .slice(0, renderLimit)
-                      .map((item, index) =>
-                        renderItem(
-                          item,
-                          index,
-                          index === selectedIndex,
-                          hoverIndexHandler,
-                          matchesById?.get(getItemId(item))
-                        )
-                      )}
-              </div>
-            )}
-            {totalResults != null && (
-              <PaletteOverflowNotice shown={results.length} total={totalResults} />
-            )}
-            {afterList}
-          </>
-        )}
-      </AppPaletteDialog.Body>
+                          )
+                        )}
+                </div>
+              )}
+              {totalResults != null && (
+                <PaletteOverflowNotice shown={results.length} total={totalResults} />
+              )}
+              {afterList}
+            </>
+          )}
+        </AppPaletteDialog.Body>
+        {detail}
+      </div>
 
       <AppPaletteDialog.Footer>{footerContent}</AppPaletteDialog.Footer>
     </AppPaletteDialog>

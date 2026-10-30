@@ -495,7 +495,10 @@ describe("voiceInput — dictating into a host's pane", () => {
       await vi.waitFor(() => expect(shared.correctCalls).toHaveLength(1));
       await stop(view, "paused");
 
-      await expect(askAtStop()).resolves.toMatchObject({ correctedText: "run the tests" });
+      await expect(askAtStop()).resolves.toMatchObject({
+        correctedText: "run the tests",
+        prefetch: "adopted",
+      });
       expect(shared.correctCalls).toHaveLength(1);
       expect(shared.correctCalls[0]?.request.agentReply).toEqual(reply);
     });
@@ -517,7 +520,7 @@ describe("voiceInput — dictating into a host's pane", () => {
       await prefetch();
       await vi.waitFor(() => expect(shared.correctCalls).toHaveLength(1));
       await stop(view, "paused");
-      await askAtStop();
+      await expect(askAtStop()).resolves.toMatchObject({ prefetch: "inputs_changed" });
 
       expect(shared.correctCalls.map(({ request }) => request.agentReply)).toEqual([
         reply,
@@ -533,7 +536,7 @@ describe("voiceInput — dictating into a host's pane", () => {
       await prefetch();
       await vi.waitFor(() => expect(shared.correctCalls).toHaveLength(1));
       await stop(view, "paused");
-      await askAtStop();
+      await expect(askAtStop()).resolves.toMatchObject({ prefetch: "inputs_changed" });
 
       expect(shared.correctCalls.map(({ request }) => request.terminalOutput)).toEqual([
         "while dictating",
@@ -590,6 +593,22 @@ describe("voiceInput — dictating into a host's pane", () => {
       { projectId: PROJECT, terminalId: TERMINAL },
       ["voice input handler"],
       expect.objectContaining({ timeoutMs: expect.any(Number) })
+    );
+    expectNoLocalReads();
+  });
+
+  it("sends a spoken reference as a failed lookup when the host doesn't answer", async () => {
+    shared.provider = "openai";
+    shared.detected = [{ description: "voice input handler" }];
+    reader.findFileCandidates.mockResolvedValueOnce(null as never);
+    await start(view);
+    emitComplete("Look at the link to file voice input handler.");
+    await vi.waitFor(() =>
+      expect(
+        view.sent.find((m) => m.channel === CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED)?.payload
+      ).toMatchObject({
+        references: [{ description: "voice input handler", path: null, failed: true }],
+      })
     );
     expectNoLocalReads();
   });

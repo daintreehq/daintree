@@ -89,7 +89,13 @@ export interface PortalBounds {
   height: number;
 }
 
-export interface PortalNavEvent {
+/** Session history of a live tab's view. Lost with the view, so never persisted. */
+export interface PortalTabHistory {
+  canGoBack: boolean;
+  canGoForward: boolean;
+}
+
+export interface PortalNavEvent extends PortalTabHistory {
   tabId: string;
   title: string;
   url: string;

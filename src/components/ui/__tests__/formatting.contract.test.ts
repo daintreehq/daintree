@@ -86,11 +86,14 @@ describe("formatting contract", () => {
 
   it("renders line churn through DiffStat", () => {
     expect(
-      offenders(/(text-status-success|text-diff-gutter-insert)[^"]*"\s*>\s*\+\{/, {
-        "src/components/ui/DiffStat.tsx": "the primitive",
-        "src/components/Tour/scenes/ReviewScene.tsx":
-          "tour scenes may not import host components (#12769); it spells DiffStat inline",
-      })
+      offenders(
+        /(text-status-success|text-diff-gutter-insert|text-diff-text-insert)[^"]*"\s*>\s*\+\{/,
+        {
+          "src/components/ui/DiffStat.tsx": "the primitive",
+          "src/components/Tour/scenes/ReviewScene.tsx":
+            "tour scenes may not import host components (#12769); it spells DiffStat inline",
+        }
+      )
     ).toEqual([]);
     expect(offenders(/>\s*−\{/, {})).toEqual([]);
   });

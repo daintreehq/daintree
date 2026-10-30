@@ -53,6 +53,171 @@ function readForcedColorsBlocks(content: string): string {
   return blocks.join("\n");
 }
 
+interface ForcedColorsRule {
+  selectors: string[];
+  declarations: Array<[property: string, value: string]>;
+}
+
+// Splits on `separator` outside brackets, parentheses and strings.
+function splitTopLevel(text: string, separator: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let quote: string | null = null;
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (quote) {
+      if (ch === "\\") i++;
+      else if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === "(" || ch === "[") depth++;
+    else if (ch === ")" || ch === "]") depth--;
+    else if (ch === separator && depth === 0) {
+      parts.push(text.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(text.slice(start));
+  return parts.map((part) => part.replace(/\s+/g, " ").trim()).filter(Boolean);
+}
+
+// The `prelude { body }` blocks directly inside `text`.
+function childBlocks(text: string): Array<{ prelude: string; body: string }> {
+  const blocks: Array<{ prelude: string; body: string }> = [];
+  let depth = 0;
+  let quote: string | null = null;
+  let preludeStart = 0;
+  let bodyStart = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (quote) {
+      if (ch === "\\") i++;
+      else if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === "{") {
+      if (depth === 0) bodyStart = i + 1;
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        const prelude = text
+          .slice(preludeStart, bodyStart - 1)
+          .replace(/\s+/g, " ")
+          .trim();
+        blocks.push({ prelude, body: text.slice(bodyStart, i) });
+        preludeStart = i + 1;
+      }
+    } else if (ch === ";" && depth === 0) preludeStart = i + 1;
+  }
+  return blocks;
+}
+
+// The style rules directly inside a top-level forced-colors block, parsed so a
+// selector matches only whole and a later declaration overrides an earlier one.
+// Rules under a nested at-rule are left out: they need its condition as well.
+function forcedColorsRules(): ForcedColorsRule[] {
+  const css = readIndexCss().replace(
+    /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|\/\*[\s\S]*?\*\//g,
+    (match) => (match.startsWith("/*") ? " " : match)
+  );
+  return childBlocks(css)
+    .filter((media) => media.prelude === "@media (forced-colors: active)")
+    .flatMap((media) => childBlocks(media.body))
+    .filter((rule) => !rule.prelude.startsWith("@"))
+    .map((rule) => ({
+      selectors: splitTopLevel(rule.prelude, ",").map((s) => s.replace(/'/g, '"')),
+      declarations: splitTopLevel(rule.body, ";").map((declaration) => {
+        const colon = declaration.indexOf(":");
+        return [
+          declaration.slice(0, colon).trim().toLowerCase(),
+          declaration.slice(colon + 1).trim(),
+        ];
+      }),
+    }));
+}
+
+// Every rule whose selector list carries this selector whole, in source order.
+function rulesFor(rules: ForcedColorsRule[], selector: string): ForcedColorsRule[] {
+  const found = rules.filter((rule) => rule.selectors.includes(selector));
+  expect(found.length, selector).toBeGreaterThan(0);
+  return found;
+}
+
+const LINE_STYLES = new Set([
+  "none",
+  "hidden",
+  "dotted",
+  "dashed",
+  "solid",
+  "double",
+  "groove",
+  "ridge",
+  "inset",
+  "outset",
+]);
+
+// The border style and width these rules leave on the element, later
+// declarations winning unless an earlier one is !important. A shorthand resets
+// what it omits, and a per-side value list reads as "mixed": no single stroke
+// describes that frame.
+function borderOf(rules: ForcedColorsRule[]): { style?: string; width?: string } {
+  const frame: { style?: string; width?: string } = {};
+  const important = new Set<keyof typeof frame>();
+  const set = (key: keyof typeof frame, value: string | undefined, isImportant: boolean) => {
+    if (important.has(key) && !isImportant) return;
+    if (isImportant) important.add(key);
+    frame[key] = value;
+  };
+  for (const [property, raw] of rules.flatMap((rule) => rule.declarations)) {
+    const isImportant = /!\s*important$/i.test(raw);
+    const tokens = raw.replace(/\s*!\s*important$/i, "").split(" ");
+    if (property === "border") {
+      set("style", tokens.find((t) => LINE_STYLES.has(t)) ?? "none", isImportant);
+      const width = tokens.find((t) => /^[\d.]+px$|^(thin|medium|thick)$/.test(t));
+      set("width", width ?? "medium", isImportant);
+    } else if (property === "border-style") {
+      set("style", tokens.length === 1 ? tokens[0] : "mixed", isImportant);
+    } else if (property === "border-width") {
+      set("width", tokens.length === 1 ? tokens[0] : "mixed", isImportant);
+    }
+  }
+  return frame;
+}
+
+// A button's frame: every rule on bare `button`, then its variant's own, which
+// outrank those on specificity wherever they sit in the file.
+function buttonFrame(
+  rules: ForcedColorsRule[],
+  variant?: string
+): { style?: string; width?: string } {
+  const own = variant ? rulesFor(rules, `button[data-variant="${variant}"]`) : [];
+  return borderOf([...rulesFor(rules, "button"), ...own]);
+}
+
+// The `:not()` arguments of the 1px pin-back on buttons.
+function pinBackExemptions(rules: ForcedColorsRule[]): string[] {
+  const pin = rules.find(
+    (rule) =>
+      rule.selectors.length === 1 &&
+      rule.selectors[0]!.startsWith("html :where(") &&
+      rule.declarations.length === 1 &&
+      rule.declarations[0]![0] === "border-width" &&
+      rule.declarations[0]![1] === "1px"
+  );
+  expect(pin).toBeDefined();
+  const selector = pin!.selectors[0]!;
+  const open = selector.indexOf(":not(") + ":not(".length;
+  expect(open).toBeGreaterThan(":not(".length - 1);
+  let depth = 1;
+  let close = open;
+  while (close < selector.length && depth > 0) {
+    if (selector[close] === "(") depth++;
+    else if (selector[close] === ")") depth--;
+    close++;
+  }
+  return splitTopLevel(selector.slice(open, close - 1), ",");
+}
+
 describe("forced-colors status-indicator contract (#8936)", () => {
   it("index.css repaints severity glyphs coloured on the SVG itself", () => {
     const block = readForcedColorsBlocks(readIndexCss());
@@ -213,18 +378,18 @@ describe("forced-colors shared status-mark contract (#12000)", () => {
 describe("forced-colors heavier-border hooks survive the 1px pin-back", () => {
   // The hooks that land on buttons. Hooks on non-button elements (the segmented
   // thumb is a span) are out of the pin-back's reach and need no exemption.
-  const BUTTON_HOOKS = ['[data-variant="destructive"]', '[data-notification-action="primary"]'];
+  const BUTTON_HOOKS = [
+    '[data-variant="destructive"]',
+    '[data-variant="contrast"]',
+    '[data-notification-action="primary"]',
+  ];
 
   it("exempts every button hook that asserts a 2px ButtonText border", () => {
     // Comments quote these selectors, so match live rules only.
     const blocks = readForcedColorsBlocks(readIndexCss())
       .replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/'/g, '"');
-    const pin = blocks.match(
-      /html\s*:where\([^)]*\):not\(([^)]*)\)\s*\{\s*border-width:\s*1px;\s*\}/
-    );
-    expect(pin).not.toBeNull();
-    const exempt = pin![1]!.split(",").map((arg) => arg.trim());
+    const exempt = pinBackExemptions(forcedColorsRules());
     for (const hook of BUTTON_HOOKS) {
       const escaped = hook.replace(/[[\]"]/g, "\\$&");
       expect(blocks).toMatch(
@@ -232,6 +397,64 @@ describe("forced-colors heavier-border hooks survive the 1px pin-back", () => {
       );
       expect(exempt).toContain(hook);
     }
+  });
+
+  // The danger ghost's cue is a double rule, and a pinned 1px double draws as
+  // one solid line: exactly the Cancel beside it.
+  it("exempts the ghost-danger hook, whose double rule the pin-back would thin to one line", () => {
+    expect(pinBackExemptions(forcedColorsRules())).toContain('[data-variant="ghost-danger"]');
+  });
+});
+
+// #15377: a `ghost-danger` button carries its meaning in its red label alone,
+// and forced colours repaints every label ButtonText, so the destructive answer
+// on a dialog footer's leading edge rendered as the same 1px box as the Cancel
+// beside it. It cannot take the destructive variant's 2px weight: the same
+// footer carries a contrast primary at 2px, and two heavy buttons would mark
+// the destroying one as a default. So it needs a stroke the others don't draw.
+// That AppDialog renders the destructive leading action as this variant, on a
+// real button, is pinned in AppDialog.test.tsx.
+describe("forced-colors ghost-danger button distinction (#15377)", () => {
+  it("gives ghost-danger a border style no neighbouring button draws", () => {
+    const rules = forcedColorsRules();
+    const danger = buttonFrame(rules, "ghost-danger").style;
+    expect(danger).toBeDefined();
+    // Not drawn at all, drawn in shades the forced palette doesn't have, or
+    // already the drop frame's stroke.
+    expect([
+      "none",
+      "hidden",
+      "mixed",
+      "groove",
+      "ridge",
+      "inset",
+      "outset",
+      "dashed",
+    ]).not.toContain(danger);
+    // Undefined is the plain frame Cancel and the neutral ghost take.
+    for (const variant of [undefined, "contrast", "destructive"]) {
+      const neighbour = buttonFrame(rules, variant).style;
+      expect(neighbour, variant).toBeDefined();
+      expect(danger, variant).not.toBe(neighbour);
+    }
+  });
+
+  // Under 3px a double border has no room for its gap and draws one solid line.
+  it("is wide enough for its style to draw as intended", () => {
+    const { style, width } = buttonFrame(forcedColorsRules(), "ghost-danger");
+    const px = Number(width?.match(/^([\d.]+)px$/)?.[1]);
+    expect(px).toBeGreaterThanOrEqual(style === "double" ? 3 : 1);
+  });
+
+  // Any colour declaration, shorthand or longhand, sits at the aria-disabled
+  // rule's specificity and wins on source order, so a blocked "Discard changes"
+  // would keep an available-looking frame round its GrayText label. And the
+  // focus ring owns outline: a later outline rule would erase the cue on the
+  // very button the user has focused.
+  it("sets only border width and style, leaving colour and outline to other rules", () => {
+    const danger = rulesFor(forcedColorsRules(), 'button[data-variant="ghost-danger"]');
+    const properties = danger.flatMap((rule) => rule.declarations.map(([property]) => property));
+    for (const property of properties) expect(["border-width", "border-style"]).toContain(property);
   });
 });
 

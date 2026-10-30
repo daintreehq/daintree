@@ -55,8 +55,9 @@ const EMPTY_SNAPSHOT = {
   mcpActivity: null,
   tierMismatch: null,
   sessionRevoked: null,
-  activeGrant: null,
+  activeGrants: [],
   grantEnded: null,
+  revokingGrantKeys: [],
   outcomeAlert: null,
 } as unknown as HelpSessionSnapshot;
 

@@ -2,7 +2,11 @@ import { lstat, open, readdir, realpath } from "fs/promises";
 import os from "os";
 import path from "path";
 import { LAUNCH_GREETINGS } from "../../shared/config/helpAssistantGreeting.js";
-import type { HelpPastSession } from "../../shared/types/ipc/help.js";
+import {
+  HELP_PAST_SESSIONS_LIMIT,
+  type HelpPastSession,
+  type HelpPastSessionsListing,
+} from "../../shared/types/ipc/help.js";
 import type { CodexFolderSessionsResult } from "../../shared/types/ipc/agentSubagents.js";
 
 /**
@@ -13,11 +17,10 @@ import type { CodexFolderSessionsResult } from "../../shared/types/ipc/agentSuba
  * so the agents' own transcript stores already hold that project's whole
  * history. This reads them — never writes — and turns each conversation into a
  * picker row. Both stores are uncontracted formats, so every field is
- * optional and every failure degrades to fewer rows rather than an error.
+ * optional and a failure degrades to fewer rows rather than an error — but the
+ * listing says which store came up short, so fewer never passes for all.
  */
 
-/** Rows returned at most. Older conversations stay resumable through `/resume`. */
-export const HELP_PAST_SESSIONS_LIMIT = 50;
 const TITLE_MAX_CHARS = 120;
 /**
  * Bytes read from each end of a Claude transcript. A long conversation runs to
@@ -198,17 +201,32 @@ export function defaultClaudeProjectsRoot(env: NodeJS.ProcessEnv = process.env):
     : path.join(os.homedir(), ".claude", "projects");
 }
 
+/** Gone, or never there: no history, as opposed to history that couldn't be read. */
+function isAbsent(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+export interface ClaudeHelpSessionsRead {
+  sessions: HelpPastSession[];
+  /** False when a project folder or transcript that exists couldn't be read. */
+  complete: boolean;
+}
+
 export async function listClaudeHelpSessions(
   sessionPath: string,
   projectsRoot: string
-): Promise<HelpPastSession[]> {
+): Promise<ClaudeHelpSessionsRead> {
   // Claude records the cwd as the process saw it, which may be the resolved
   // spelling of the path main handed it.
   const spellings = new Set([sessionPath]);
+  let complete = true;
   try {
     spellings.add(await realpath(sessionPath));
-  } catch {
-    // A session directory that does not exist yet has no transcripts either.
+  } catch (error) {
+    // A session directory that does not exist yet has no transcripts either;
+    // one that can't be resolved may have filed them under the other spelling.
+    if (!isAbsent(error)) complete = false;
   }
 
   const sessions = new Map<string, HelpPastSession>();
@@ -230,8 +248,9 @@ export async function listClaudeHelpSessions(
         title: summary.title,
         updatedAt: stats.mtimeMs,
       });
-    } catch {
-      // Removed or unreadable mid-scan: one fewer row.
+    } catch (error) {
+      // Removed mid-scan is one fewer conversation; unreadable is one hidden.
+      if (!isAbsent(error)) complete = false;
     }
   };
 
@@ -242,7 +261,8 @@ export async function listClaudeHelpSessions(
       // A symlinked project folder could point at another project's history.
       if (!(await lstat(dir)).isDirectory()) continue;
       names = await readdir(dir);
-    } catch {
+    } catch (error) {
+      if (!isAbsent(error)) complete = false;
       continue;
     }
     let next = 0;
@@ -253,7 +273,7 @@ export async function listClaudeHelpSessions(
     };
     await Promise.all(Array.from({ length: Math.min(READ_CONCURRENCY, names.length) }, worker));
   }
-  return [...sessions.values()];
+  return { sessions: [...sessions.values()], complete };
 }
 
 export function codexHelpSessionsFrom(result: CodexFolderSessionsResult): HelpPastSession[] {
@@ -292,28 +312,66 @@ export interface HelpPastSessionPaths {
   codex: readonly string[];
 }
 
+/** A directory, or a path that couldn't be inspected and so may be one. */
+async function mayBeDirectory(dirPath: string): Promise<boolean> {
+  try {
+    return (await lstat(dirPath)).isDirectory();
+  } catch (error) {
+    return !isAbsent(error);
+  }
+}
+
+interface CodexRead {
+  sessions: HelpPastSession[];
+  readable: boolean;
+  more: boolean;
+}
+
+async function readCodexHelpSessions(
+  codexPath: string,
+  paths: HelpPastSessionPaths,
+  deps: ListHelpPastSessionsDeps
+): Promise<CodexRead> {
+  let result: CodexFolderSessionsResult;
+  try {
+    result = await deps.listCodexSessions(codexPath);
+  } catch {
+    return { sessions: [], readable: false, more: false };
+  }
+  if (result.status === "ok") {
+    return { sessions: codexHelpSessionsFrom(result), readable: true, more: result.more === true };
+  }
+  if (result.reason !== "cli-missing") return { sessions: [], readable: false, more: false };
+  // No CLI is no history for a project that never ran Codex, which is most of
+  // them. Only Codex's own session directory says it ran here: the shared one
+  // from before the split is Claude's now, and exists for every Claude user.
+  const ranHere = codexPath !== paths.claude && (await mayBeDirectory(codexPath));
+  return { sessions: [], readable: !ranHere, more: false };
+}
+
 /** Newest first, capped. Each store fails on its own without hiding the other. */
 export async function listHelpPastSessions(
   paths: HelpPastSessionPaths,
   deps: ListHelpPastSessionsDeps
-): Promise<HelpPastSession[]> {
+): Promise<HelpPastSessionsListing> {
   const [claude, ...codexByPath] = await Promise.all([
-    listClaudeHelpSessions(paths.claude, deps.claudeProjectsRoot).catch(() => []),
-    ...paths.codex.map((codexPath) =>
-      deps
-        .listCodexSessions(codexPath)
-        .then(codexHelpSessionsFrom)
-        .catch(() => [])
+    listClaudeHelpSessions(paths.claude, deps.claudeProjectsRoot).catch(
+      (): ClaudeHelpSessionsRead => ({ sessions: [], complete: false })
     ),
+    ...paths.codex.map((codexPath) => readCodexHelpSessions(codexPath, paths, deps)),
   ]);
   // A conversation resumed into the newer directory can be reported under both.
   const codex = new Map<string, HelpPastSession>();
-  for (const session of codexByPath.flat()) {
+  for (const session of codexByPath.flatMap((read) => read.sessions)) {
     const seen = codex.get(session.sessionId);
     if (!seen || session.updatedAt > seen.updatedAt) codex.set(session.sessionId, session);
   }
-  return (
-    [...claude, ...codex.values()]
+  const merged = [...claude.sessions, ...codex.values()];
+  const unreadable: HelpPastSessionsListing["unreadable"] = [];
+  if (!claude.complete) unreadable.push("claude");
+  if (codexByPath.some((read) => !read.readable)) unreadable.push("codex");
+  return {
+    sessions: merged
       // Ties break on identity so the order — and what the cap keeps — is stable.
       .sort(
         (a, b) =>
@@ -321,6 +379,9 @@ export async function listHelpPastSessions(
           a.agentId.localeCompare(b.agentId) ||
           a.sessionId.localeCompare(b.sessionId)
       )
-      .slice(0, HELP_PAST_SESSIONS_LIMIT)
-  );
+      .slice(0, HELP_PAST_SESSIONS_LIMIT),
+    unreadable,
+    // Codex hands back one page, so older threads past it are cut there.
+    truncated: merged.length > HELP_PAST_SESSIONS_LIMIT || codexByPath.some((read) => read.more),
+  };
 }

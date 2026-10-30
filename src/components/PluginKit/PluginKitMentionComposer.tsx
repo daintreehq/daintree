@@ -26,7 +26,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { stepListboxCursor } from "@/hooks/useListboxCursor";
 import { isMac } from "@/lib/platform";
 import { cn } from "@/lib/utils";
-import { fileMatchesAccept } from "./PluginKitInputs";
 import {
   field,
   fn,
@@ -40,7 +39,8 @@ import {
   rowCount,
 } from "./kitProps";
 import { useKitOverlayZClass } from "./kitScope";
-import { isThenable, reportPluginFault, settleThenable } from "./kitDiagnostics";
+import { isThenable, reportPluginFault, runPluginAction, settleThenable } from "./kitDiagnostics";
+import { SkippedNote, skippedFilesLines, sortFiles } from "./kitFiles";
 import { invalidProp, useKitFieldControl } from "./kitField";
 import { AttachmentChipView, readAttachmentList } from "./PluginKitWorkflows";
 import { pickAria, joinIds, safely, attempt } from "./kitTextInputHelpers";
@@ -386,6 +386,9 @@ function MentionField(props: MentionFieldProps) {
   const [session, setSession] = useState<MentionSession | null>(null);
   const [items, setItems] = useState<PluginMentionSuggestion[]>([]);
   const [itemsKey, setItemsKey] = useState<string | null>(null);
+  // Whether those items stand for a lookup that failed, not one that found
+  // nothing: the plugin's static empty copy can't tell the two apart.
+  const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState(0);
   // The trigger Escape closed; the menu stays shut until the caret leaves it.
@@ -473,11 +476,12 @@ function MentionField(props: MentionFieldProps) {
   const request = (next: MentionSession) => {
     const seq = ++requestRef.current;
     const key = sessionKey(next);
-    const settle = (list: unknown) => {
+    const settle = (list: unknown, didFail = false) => {
       if (requestRef.current !== seq) return;
       const read = readSuggestions(list);
       setItems(read);
       setItemsKey(key);
+      setFailed(didFail);
       setLoading(false);
       setSelected(firstEnabled(read));
     };
@@ -485,15 +489,18 @@ function MentionField(props: MentionFieldProps) {
     const outcome = attempt(() => load(next.char, next.query));
     if (!outcome.ok) {
       reportPluginFault("MentionTextarea getSuggestions threw", outcome.error);
-      settle([]);
+      settle([], true);
       return;
     }
     if (isThenable(outcome.value)) {
       setLoading(true);
-      settleThenable(outcome.value).then(settle, (error: unknown) => {
-        reportPluginFault("MentionTextarea getSuggestions rejected", error);
-        settle([]);
-      });
+      settleThenable(outcome.value).then(
+        (list) => settle(list),
+        (error: unknown) => {
+          reportPluginFault("MentionTextarea getSuggestions rejected", error);
+          settle([], true);
+        }
+      );
       return;
     }
     settle(outcome.value);
@@ -686,7 +693,9 @@ function MentionField(props: MentionFieldProps) {
                 listboxId={listboxId}
                 title={trigger?.title}
                 ariaLabel={trigger?.title ?? "Suggestions"}
-                emptyMessage={trigger?.emptyMessage ?? "No matches"}
+                emptyMessage={
+                  failed ? "Couldn't load suggestions" : (trigger?.emptyMessage ?? "No matches")
+                }
               />
             </div>,
             document.body
@@ -726,6 +735,7 @@ export function KitComposer(props: PluginComposerProps) {
     onRemoveAttachment,
     onAttach,
     accept,
+    onReject,
     maxLength,
     toolbar,
     submitLabel,
@@ -740,6 +750,9 @@ export function KitComposer(props: PluginComposerProps) {
   const [own, setOwn] = useState(() => str(defaultValue) ?? "");
   const text = controlled ? (str(value) ?? "") : own;
   const [dragDepth, setDragDepth] = useState(0);
+  // Files the last drop, paste or pick left out, said by the composer itself
+  // when the plugin has no `onReject` to explain them.
+  const [skipped, setSkipped] = useState<string[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const chipsRef = useRef<HTMLUListElement>(null);
@@ -748,6 +761,7 @@ export function KitComposer(props: PluginComposerProps) {
   const submit = fn(onSubmit);
   const stop = fn(onStop);
   const attach = fn(onAttach);
+  const reject = fn(onReject);
   const removeAttachment = fn(onRemoveAttachment);
   const handleValue = fn(onValueChange);
   const inert = disabled === true;
@@ -769,13 +783,23 @@ export function KitComposer(props: PluginComposerProps) {
   };
   const send = () => {
     if (!canSend) return;
+    setSkipped([]);
     safely("Composer onSubmit", submit, text);
   };
   const halt = () => safely("Composer onStop", stop);
   const take = (list: ArrayLike<File> | null | undefined) => {
     if (!attach || !list) return;
-    const files = Array.from(list).filter((file) => fileMatchesAccept(file, acceptText));
-    if (files.length > 0) safely("Composer onAttach", attach, files);
+    const { kept, rejections } = sortFiles(Array.from(list), acceptText);
+    setSkipped(reject || rejections.length === 0 ? [] : skippedFilesLines(rejections));
+    if (reject && rejections.length > 0) {
+      runPluginAction("Composer onReject", () =>
+        reject(
+          rejections.map((entry) => entry.file),
+          rejections
+        )
+      );
+    }
+    if (kept.length > 0) safely("Composer onAttach", attach, kept);
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -904,6 +928,7 @@ export function KitComposer(props: PluginComposerProps) {
         ])}
         aria-keyshortcuts={sendKeys}
       />
+      <SkippedNote lines={skipped} className="px-1" />
       <div className="flex min-h-7 min-w-0 items-center gap-1">
         {attach ? (
           <>

@@ -126,6 +126,13 @@
   --color-status-success-surface: var(--theme-status-success-surface);
   --color-status-warning-surface: var(--theme-status-warning-surface);
   --color-status-info-surface: var(--theme-status-info-surface);
+  --color-status-danger-text: var(--theme-status-danger-text);
+  --color-status-success-text: var(--theme-status-success-text);
+  --color-status-warning-text: var(--theme-status-warning-text);
+  --color-status-info-text: var(--theme-status-info-text);
+  --color-destructive-fill: var(--theme-destructive-fill);
+  --color-destructive-fill-hover: var(--theme-destructive-fill-hover);
+  --color-destructive-fill-active: var(--theme-destructive-fill-active);
   --color-knob-base: var(--theme-knob-base);
   --color-state-modified: var(--theme-state-modified);
   --color-activity-active: var(--theme-activity-active);
@@ -219,6 +226,8 @@
   --color-diff-delete-edit-background: var(--theme-diff-delete-edit-background);
   --color-diff-gutter-insert: var(--theme-diff-gutter-insert);
   --color-diff-gutter-delete: var(--theme-diff-gutter-delete);
+  --color-diff-text-insert: var(--theme-diff-text-insert);
+  --color-diff-text-delete: var(--theme-diff-text-delete);
   --color-diff-selected-background: var(--theme-diff-selected-background);
   --color-diff-omit-gutter-line: var(--theme-diff-omit-gutter-line);
   --radius: calc(0.625rem * var(--theme-radius-scale, 1));

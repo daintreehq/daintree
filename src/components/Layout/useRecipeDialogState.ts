@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useRecipeStore } from "@/store/recipeStore";
+import { useRecipeStore, type RecipeLayoutOmissions } from "@/store/recipeStore";
 import { useRecipeEditorActivityStore } from "@/store/recipeEditorActivityStore";
 import type { RecipeTerminal } from "@/types";
 import type { TerminalRecipe } from "@/types";
@@ -8,6 +8,7 @@ interface UseRecipeDialogStateReturn {
   isRecipeEditorOpen: boolean;
   recipeEditorWorktreeId: string | undefined;
   recipeEditorInitialTerminals: RecipeTerminal[] | undefined;
+  recipeEditorLayoutOmissions: RecipeLayoutOmissions | undefined;
   recipeEditorDefaultScope: "global" | "project" | undefined;
   recipeManagerEdit: TerminalRecipe | undefined;
   isRecipeManagerOpen: boolean;
@@ -15,6 +16,24 @@ interface UseRecipeDialogStateReturn {
   handleCloseRecipeManager: () => void;
   handleRecipeManagerEdit: (recipe: TerminalRecipe) => void;
   handleRecipeManagerCreate: (scope: "global" | "project") => void;
+}
+
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The event detail is untyped; a malformed report is dropped rather than shown. */
+function readLayoutOmissions(value: unknown): RecipeLayoutOmissions | undefined {
+  if (!isPlainRecord(value)) return undefined;
+  const { panelKinds, cappedTerminalCount } = value;
+  if (!isCount(cappedTerminalCount) || !isPlainRecord(panelKinds)) return undefined;
+  const entries = Object.entries(panelKinds);
+  if (!entries.every((entry): entry is [string, number] => isCount(entry[1]))) return undefined;
+  return { panelKinds: Object.fromEntries(entries), cappedTerminalCount };
 }
 
 function useRecipeDialogState(): UseRecipeDialogStateReturn {
@@ -25,6 +44,9 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
   const [recipeEditorInitialTerminals, setRecipeEditorInitialTerminals] = useState<
     RecipeTerminal[] | undefined
   >(undefined);
+  const [recipeEditorLayoutOmissions, setRecipeEditorLayoutOmissions] = useState<
+    RecipeLayoutOmissions | undefined
+  >(undefined);
   const [recipeEditorDefaultScope, setRecipeEditorDefaultScope] = useState<
     "global" | "project" | undefined
   >(undefined);
@@ -33,7 +55,9 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
 
   // Mirror the open/close transitions of the two recipe surfaces into the
   // shared activity store so the focus-reload hook can suppress its silent
-  // reload while the user is mid-edit (#9186).
+  // reload while the user is mid-edit (#9186). The editor registers itself as
+  // well, for mounts outside this host; holding it here too covers the lazy
+  // editor chunk's load, after the recipe snapshot is already taken.
   useEffect(() => {
     if (!isRecipeEditorOpen) return;
     useRecipeEditorActivityStore.getState().enter();
@@ -47,9 +71,19 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
   }, [isRecipeManagerOpen]);
 
   const handleOpenRecipeEditor = useCallback(
-    (worktreeId: string, initialTerminals?: RecipeTerminal[]) => {
+    (
+      worktreeId: string,
+      initialTerminals?: RecipeTerminal[],
+      layoutOmissions?: RecipeLayoutOmissions
+    ) => {
+      // A new draft replaces whatever the editor held: left in place, an
+      // existing recipe would win over the capture and take its save.
+      setIsRecipeManagerOpen(false);
+      setRecipeManagerEdit(undefined);
+      setRecipeEditorDefaultScope(undefined);
       setRecipeEditorWorktreeId(worktreeId);
       setRecipeEditorInitialTerminals(initialTerminals);
+      setRecipeEditorLayoutOmissions(layoutOmissions);
       setIsRecipeEditorOpen(true);
     },
     []
@@ -64,6 +98,7 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
         worktreeId?: unknown;
         recipeId?: unknown;
         initialTerminals?: unknown;
+        layoutOmissions?: unknown;
         acknowledge?: () => void;
       };
       // The dispatcher can pass a callback to learn that this listener actually
@@ -83,6 +118,7 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
           setRecipeEditorWorktreeId(recipe.worktreeId);
           setRecipeEditorDefaultScope(recipe.projectId === undefined ? "global" : "project");
           setRecipeEditorInitialTerminals(undefined);
+          setRecipeEditorLayoutOmissions(undefined);
           setRecipeManagerEdit(recipe);
           setIsRecipeEditorOpen(true);
           acknowledge();
@@ -95,7 +131,11 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
       const initialTerminals = Array.isArray(d.initialTerminals)
         ? (d.initialTerminals as RecipeTerminal[])
         : undefined;
-      handleOpenRecipeEditor(worktreeId, initialTerminals);
+      handleOpenRecipeEditor(
+        worktreeId,
+        initialTerminals,
+        initialTerminals ? readLayoutOmissions(d.layoutOmissions) : undefined
+      );
       acknowledge();
     };
 
@@ -126,6 +166,7 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
     setRecipeEditorWorktreeId(recipe.worktreeId);
     setRecipeEditorDefaultScope(recipe.projectId === undefined ? "global" : "project");
     setRecipeEditorInitialTerminals(undefined);
+    setRecipeEditorLayoutOmissions(undefined);
     setTimeout(() => {
       setIsRecipeEditorOpen(true);
     }, 100);
@@ -137,6 +178,7 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
     setRecipeEditorDefaultScope(scope);
     setRecipeEditorWorktreeId(undefined);
     setRecipeEditorInitialTerminals(undefined);
+    setRecipeEditorLayoutOmissions(undefined);
     setRecipeManagerEdit(undefined);
     setTimeout(() => {
       setIsRecipeEditorOpen(true);
@@ -147,6 +189,7 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
     setIsRecipeEditorOpen(false);
     setRecipeEditorWorktreeId(undefined);
     setRecipeEditorInitialTerminals(undefined);
+    setRecipeEditorLayoutOmissions(undefined);
     setRecipeEditorDefaultScope(undefined);
     setRecipeManagerEdit(undefined);
   }, []);
@@ -155,6 +198,7 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
     isRecipeEditorOpen,
     recipeEditorWorktreeId,
     recipeEditorInitialTerminals,
+    recipeEditorLayoutOmissions,
     recipeEditorDefaultScope,
     recipeManagerEdit,
     isRecipeManagerOpen,

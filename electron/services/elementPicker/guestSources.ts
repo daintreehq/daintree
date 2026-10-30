@@ -277,8 +277,8 @@ export function buildPickerAvailabilitySource(
 /**
  * Asks the bootstrap to select again what the host had selected. Evaluates, by
  * value, to whether it did; false for a bootstrap some later install replaced.
- * The request is data for the guest to validate: an element id and a
- * framework locator the host built from an observation it admitted.
+ * The request is data for the guest to validate: an element id, a framework
+ * locator or component id, built from an observation the host admitted.
  */
 export function buildPickerReselectSource(
   installId: number,
@@ -286,6 +286,7 @@ export function buildPickerReselectSource(
     elementId?: string;
     framework?: ElementPickerProviderId;
     locator?: unknown;
+    componentId?: string;
     reveal?: boolean;
   }
 ): string {

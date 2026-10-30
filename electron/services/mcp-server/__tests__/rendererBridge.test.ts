@@ -79,6 +79,11 @@ import { WorkspaceViewLeaseRegistry } from "../workspaceViewLease.js";
 import type { RoutedViewWorktreePort } from "../worktreeViewPort.js";
 import type { PendingRequest, DispatchEnvelope } from "../shared.js";
 import { buildMcpErrorPayload, MCP_DISPATCH_TIMEOUT_MS, RETRIABLE_ERROR_CODES } from "../shared.js";
+import {
+  MCP_CONFIRM_DECISION_MS,
+  MCP_CONFIRM_HOLD_GRACE_MS,
+  MCP_CONFIRM_QUEUE_HOLD_MS,
+} from "../../../../shared/config/mcpConfirmWindow.js";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
 
 /**
@@ -284,6 +289,35 @@ describe("rendererBridge — per-session pinned dispatch (#7002)", () => {
 
     expect(sentPayload?.offerSessionApproval).toBe(true);
     expect(sentPayload).not.toHaveProperty("approvalOnly");
+  });
+
+  it("names the requester to the local view, and only when main identified one (#14992)", async () => {
+    const wc = makeWebContents(704);
+    mockWebContentsRegistry.set(704, wc);
+
+    const sent: Array<Record<string, unknown>> = [];
+    wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
+      if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
+      sent.push(payload as Record<string, unknown>);
+      queueMicrotask(() => {
+        mockIpcMain.emit(
+          CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+          { sender: { id: 704 } },
+          { requestId: payload.requestId, result: { ok: true, result: "ok" } }
+        );
+      });
+    });
+
+    const requester = { kind: "assistant" as const, helpSessionId: "help-1" };
+    await bridge.dispatchActionForWebContents(704, "terminal.close", {}, false, undefined, "help", {
+      approvalOnly: true,
+      approvalReason: "protected-close",
+      requester,
+    });
+    await bridge.dispatchActionForWebContents(704, "terminal.close", {}, false, undefined, "help");
+
+    expect(sent[0]?.requester).toEqual(requester);
+    expect(sent[1]).not.toHaveProperty("requester");
   });
 
   it("threads the session's authenticated origin into the dispatch IPC payload (#11808)", async () => {
@@ -2956,5 +2990,178 @@ describe("rendererBridge — terminal in another project (#13120)", () => {
     expect(envelope.result).toEqual(inOtherProject);
     // Retrying from the same view cannot reach another project's panel.
     expect(RETRIABLE_ERROR_CODES.has("TERMINAL_IN_OTHER_PROJECT")).toBe(false);
+  });
+});
+
+describe("rendererBridge — holding a confirm-gated dispatch open (#14989)", () => {
+  let pendingDispatches: Map<string, PendingRequest<DispatchEnvelope>>;
+  let bridge: ReturnType<typeof createRendererBridge>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockIpcMain.removeAllListeners();
+    mockWebContentsRegistry.clear();
+    pendingDispatches = new Map();
+    bridge = createRendererBridge(new Map(), pendingDispatches, () => null);
+    bridge.setupListeners([]);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function startDispatch(
+    id: number,
+    approval?: Parameters<typeof bridge.dispatchActionForWebContents>[6]
+  ) {
+    const wc = makeWebContents(id);
+    mockWebContentsRegistry.set(id, wc);
+    let requestId = "";
+    wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
+      if (channel === CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) requestId = payload.requestId;
+    });
+    let outcome: DispatchEnvelope | Error | undefined;
+    void bridge
+      .dispatchActionForWebContents(
+        id,
+        "worktree.delete",
+        {},
+        false,
+        undefined,
+        "external",
+        approval
+      )
+      .then(
+        (envelope) => {
+          outcome = envelope;
+        },
+        (err: Error) => {
+          outcome = err;
+        }
+      );
+    // A pinned dispatch thaws its view before it sends.
+    await vi.advanceTimersByTimeAsync(0);
+    return {
+      requestId: () => requestId,
+      outcome: () => outcome,
+      respond: (result: unknown) =>
+        mockIpcMain.emit(
+          CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+          { sender: { id } },
+          { requestId, result, confirmationDecision: "approved" }
+        ),
+    };
+  }
+
+  it("keeps a call open while its prompt waits, then grants a full window once it is shown", async () => {
+    const call = await startDispatch(801);
+    expect(bridge.holdDispatch(801, call.requestId(), "queued")).toEqual({
+      held: true,
+      remainingMs: MCP_CONFIRM_QUEUE_HOLD_MS,
+    });
+
+    await vi.advanceTimersByTimeAsync(100_000);
+    expect(call.outcome()).toBeUndefined();
+    expect(bridge.holdDispatch(801, call.requestId(), "shown")).toEqual({
+      held: true,
+      remainingMs: MCP_CONFIRM_DECISION_MS + MCP_CONFIRM_HOLD_GRACE_MS,
+    });
+
+    await vi.advanceTimersByTimeAsync(MCP_CONFIRM_DECISION_MS);
+    expect(bridge.holdDispatch(801, call.requestId(), "approved")).toEqual({
+      held: true,
+      remainingMs: MCP_DISPATCH_TIMEOUT_MS,
+    });
+    call.respond({ ok: true, result: "deleted" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(call.outcome()).toMatchObject({ result: { ok: true, result: "deleted" } });
+  });
+
+  it("gives an accepted approval the run budget and no more", async () => {
+    const call = await startDispatch(808);
+    bridge.holdDispatch(808, call.requestId(), "shown");
+    await vi.advanceTimersByTimeAsync(MCP_CONFIRM_DECISION_MS);
+    bridge.holdDispatch(808, call.requestId(), "approved");
+
+    // Past the shown deadline it replaced, still inside the run.
+    await vi.advanceTimersByTimeAsync(MCP_DISPATCH_TIMEOUT_MS - 1);
+    expect(call.outcome()).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(call.outcome()).toBeInstanceOf(Error);
+  });
+
+  it("answers a call whose prompt ran out as the confirmation timeout it is", async () => {
+    const call = await startDispatch(802);
+    bridge.holdDispatch(802, call.requestId(), "queued");
+    bridge.holdDispatch(802, call.requestId(), "shown");
+
+    await vi.advanceTimersByTimeAsync(MCP_CONFIRM_DECISION_MS + MCP_CONFIRM_HOLD_GRACE_MS);
+
+    expect(call.outcome()).toEqual({
+      result: {
+        ok: false,
+        error: { code: "CONFIRMATION_TIMEOUT", message: expect.stringContaining("Nothing ran") },
+      },
+      confirmationDecision: "timeout",
+    });
+    expect(pendingDispatches.size).toBe(0);
+  });
+
+  it("refuses an approval claimed past the deadline even before its timer has fired", async () => {
+    const call = await startDispatch(803);
+    bridge.holdDispatch(803, call.requestId(), "shown");
+
+    vi.setSystemTime(Date.now() + MCP_CONFIRM_DECISION_MS + MCP_CONFIRM_HOLD_GRACE_MS);
+
+    expect(bridge.holdDispatch(803, call.requestId(), "approved")).toEqual({ held: false });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(call.outcome()).toMatchObject({ confirmationDecision: "timeout" });
+    // The approval that follows lands on nothing.
+    call.respond({ ok: true, result: "deleted" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(call.outcome()).toMatchObject({ confirmationDecision: "timeout" });
+  });
+
+  it("lets only the view it was sent to hold a call", async () => {
+    const call = await startDispatch(804);
+
+    expect(bridge.holdDispatch(805, call.requestId(), "queued")).toEqual({ held: false });
+    expect(bridge.holdDispatch(804, "not-a-request", "queued")).toEqual({ held: false });
+
+    await vi.advanceTimersByTimeAsync(MCP_DISPATCH_TIMEOUT_MS);
+    expect(call.outcome()).toBeInstanceOf(Error);
+  });
+
+  it("never renews a phase or moves one back", async () => {
+    const call = await startDispatch(806);
+    bridge.holdDispatch(806, call.requestId(), "shown");
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    const window = MCP_CONFIRM_DECISION_MS + MCP_CONFIRM_HOLD_GRACE_MS;
+    expect(bridge.holdDispatch(806, call.requestId(), "shown")).toEqual({
+      held: true,
+      remainingMs: window - 60_000,
+    });
+    expect(bridge.holdDispatch(806, call.requestId(), "queued")).toEqual({
+      held: true,
+      remainingMs: window - 60_000,
+    });
+  });
+
+  it("holds a host's dispatch no longer than the host's own deadline", async () => {
+    const call = await startDispatch(807, { fixedDeadline: true });
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(bridge.holdDispatch(807, call.requestId(), "queued")).toEqual({
+      held: true,
+      remainingMs: MCP_DISPATCH_TIMEOUT_MS - 10_000,
+    });
+    expect(bridge.holdDispatch(807, call.requestId(), "shown")).toEqual({
+      held: true,
+      remainingMs: MCP_DISPATCH_TIMEOUT_MS - 10_000,
+    });
+
+    await vi.advanceTimersByTimeAsync(MCP_DISPATCH_TIMEOUT_MS - 10_000);
+    expect(call.outcome()).toMatchObject({ confirmationDecision: "timeout" });
   });
 });

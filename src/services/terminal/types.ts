@@ -12,6 +12,7 @@ import type { TerminalGeometry } from "@shared/types/terminal";
 import type { TerminalResizeResult } from "@shared/types/pty-host";
 import type { PartialEscapeTracker } from "@shared/utils/terminalPartialEscapeTail";
 import type { StreamRange } from "./streamFence";
+import type { SuggestedCommandLinks } from "./SuggestedCommandLinksAddon";
 
 export type RefreshTierProvider = () => TerminalRefreshTier;
 
@@ -82,7 +83,7 @@ export interface ManagedTerminal {
   searchAddonPromise?: Promise<SearchAddon | null>;
   fileLinksDisposable: IDisposable | null;
   imageLinksDisposable: IDisposable | null;
-  commandLinksDisposable: IDisposable | null;
+  commandLinksDisposable: SuggestedCommandLinks | null;
   /** Plugin pattern matchers (#13798), registered after every built-in provider. */
   pluginLinksDisposable: IDisposable | null;
   webLinksAddon: WebLinksAddon | null;

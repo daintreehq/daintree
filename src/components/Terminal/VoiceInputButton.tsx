@@ -122,6 +122,9 @@ export function VoiceInputButton({
   // Only a session still feeding from the mic gets the orbit. Reconnecting is
   // not listening: speech past the provider's short reconnect buffer is lost.
   const isOrbiting = isListening && !isReconnecting;
+  // Setup is only the offer once nothing here can still be stopped or resumed:
+  // turning dictation off mid-session leaves it running until it closes (#14947).
+  const needsSetup = !isConfigured && !isSessionOpen && !isPending && !isPaused;
   // Waiting on the machine (a start not yet open, the mic, the link, the last
   // words) spins a neutral arc; a pause the user chose holds a still ring.
   const isWaiting = isPending || isMicStarting || isReconnecting || isFinishing;
@@ -279,31 +282,32 @@ export function VoiceInputButton({
     canopyRow,
   ]);
 
-  const tooltipText = !isConfigured
-    ? "Configure voice input"
-    : hasError
-      ? formatVoiceErrorTooltip(lastError)
-      : isPending
-        ? "Starting microphone… Click to stop"
-        : isFinishing
-          ? disabled
-            ? "Finishing transcription…"
-            : "Finishing transcription… Click to start again"
-          : isPaused
-            ? pauseStopWarning
-              ? "Paused — stops in 10s · Click to resume"
-              : "Paused — click to resume"
-            : isMicStarting
-              ? micSignal === "silent"
-                ? `No audio from ${micDeviceLabel ?? "microphone"} · Click to stop`
-                : "Starting microphone… Click to stop"
-              : isReconnecting
-                ? "Reconnecting… Click to stop"
-                : isListening
-                  ? idleStopWarning
-                    ? "Stopping in 10s unless you speak · Click to stop"
-                    : "Stop recording"
-                  : "Start voice input";
+  const tooltipText =
+    needsSetup && !isFinishing
+      ? "Configure voice input"
+      : hasError
+        ? formatVoiceErrorTooltip(lastError)
+        : isPending
+          ? "Starting microphone… Click to stop"
+          : isFinishing
+            ? disabled || !isConfigured
+              ? "Finishing transcription…"
+              : "Finishing transcription… Click to start again"
+            : isPaused
+              ? pauseStopWarning
+                ? "Paused — stops in 10s · Click to resume"
+                : "Paused — click to resume"
+              : isMicStarting
+                ? micSignal === "silent"
+                  ? `No audio from ${micDeviceLabel ?? "microphone"} · Click to stop`
+                  : "Starting microphone… Click to stop"
+                : isReconnecting
+                  ? "Reconnecting… Click to stop"
+                  : isListening
+                    ? idleStopWarning
+                      ? "Stopping in 10s unless you speak · Click to stop"
+                      : "Stop recording"
+                    : "Start voice input";
 
   return (
     <div
@@ -408,7 +412,7 @@ export function VoiceInputButton({
                   : cn(COMPOSER_CONTROL_TEXT_CLASS, COMPOSER_CONTROL_HOVER_BG_CLASS)
             )}
             aria-label={
-              !isConfigured
+              needsSetup
                 ? "Set up voice input"
                 : isPaused
                   ? "Resume voice recording"
@@ -416,7 +420,7 @@ export function VoiceInputButton({
                     ? "Stop voice recording"
                     : "Start voice recording"
             }
-            aria-pressed={isConfigured ? isSessionOpen || isPaused || isPending : undefined}
+            aria-pressed={needsSetup ? undefined : isSessionOpen || isPaused || isPending}
           >
             {/* The glyph is what a click does: stop an open session or a start
                 still on its way, resume a paused one, start again once the

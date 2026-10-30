@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { resolveScopeKind, isBoolModified, isStringModified } from "../AgentScopeEditor/scopeUtils";
+import {
+  resolveScopeKind,
+  isBoolModified,
+  isStringModified,
+  savedPresetStatus,
+} from "../AgentScopeEditor/scopeUtils";
 
 /**
  * Pure-logic tests for the unified scope editor used inside AgentSettings.
@@ -75,5 +80,32 @@ describe("scope kind resolution", () => {
   it("resolves to 'default' when selected id is absent from all source arrays", () => {
     const result = scopeKindFromIds("orphan-id", ["user-a"], ["proj-b"]);
     expect(result.scopeKind).toBe("default");
+  });
+});
+
+describe("saved preset status (#15025)", () => {
+  const presets = [{ id: "user-a", name: "A" }];
+  const loaded = { ccr: true, project: true };
+
+  it("finds a preset on hand whatever has loaded", () => {
+    expect(savedPresetStatus("user-a", presets, { ccr: false, project: false })).toBe("found");
+    expect(savedPresetStatus(undefined, presets, loaded)).toBe("none");
+  });
+
+  it("keeps an id the unread project presets could still hold, whatever it looks like", () => {
+    const unread = { ccr: true, project: false };
+    expect(savedPresetStatus("team-opus", presets, unread)).toBe("loading");
+    expect(savedPresetStatus("user-gone", presets, unread)).toBe("loading");
+  });
+
+  it("keeps a CCR id until the routes are read, but lets any other id go", () => {
+    const unread = { ccr: false, project: true };
+    expect(savedPresetStatus("ccr-opus", presets, unread)).toBe("loading");
+    expect(savedPresetStatus("user-gone", presets, unread)).toBe("missing");
+  });
+
+  it("reports an id gone once everything that could hold it has loaded", () => {
+    expect(savedPresetStatus("ccr-opus", presets, loaded)).toBe("missing");
+    expect(savedPresetStatus("team-opus", presets, loaded)).toBe("missing");
   });
 });

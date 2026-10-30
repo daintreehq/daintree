@@ -229,7 +229,8 @@ export function reactObservation(
     capabilities: {
       names: { state: "available" },
       chain: { state: "available" },
-      componentSelection: { state: "unavailable", reason: "not-exposed" },
+      // SaveButton's roots are reported, so the page can select it.
+      componentSelection: { state: "available" },
       file: { state: "unknown" },
       line: { state: "unknown" },
       exactRange: { state: "unknown" },

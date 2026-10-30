@@ -25,6 +25,7 @@ import { isPluginNotOnHostError, isRemoteUnsupportedError } from "../remotePlugi
 import { PluginNotOnHostPlaceholder } from "../PluginNotOnHostPlaceholder";
 import { _resetPluginPanelRemovalForTesting, trackPluginPanelKinds } from "../pluginPanelRemoval";
 import { useHostPluginParityNotice } from "../useHostPluginParityNotice";
+import { useSettingsDialog } from "@/hooks/app/useSettingsDialog";
 import {
   describeIncompatibility,
   pluginParityErrorText,
@@ -152,6 +153,98 @@ describe("PluginNotOnHostPlaceholder", () => {
     ]);
     const { container, queryByRole } = render(<PluginNotOnHostPlaceholder pluginId="acme.md" />);
     await waitFor(() => expect(container.textContent).toContain("Has no build for Linux"));
+    expect(container.textContent).toContain("Markdown Preview can't run here from studio-01");
+    expect(container.textContent).not.toContain("isn't installed");
+    expect(queryByRole("button", { name: /Install on/ })).toBeNull();
+  });
+
+  it("never says a plugin the host has isn't installed there", async () => {
+    parity.diff.mockResolvedValue([
+      row({
+        group: "incompatible",
+        hostVersion: "1.0.0",
+        action: null,
+        incompatibility: { kind: "unconfigured", missing: ["API key"] },
+      }),
+    ]);
+    const { container, queryByRole } = render(<PluginNotOnHostPlaceholder pluginId="acme.md" />);
+    await waitFor(() =>
+      expect(container.textContent).toContain(
+        "Markdown Preview's panel isn't available from studio-01"
+      )
+    );
+    expect(container.textContent).toContain("Set it up on studio-01: API key isn't set there.");
+    expect(container.textContent).not.toContain("isn't installed");
+    expect(queryByRole("button", { name: /Install on/ })).toBeNull();
+  });
+
+  it("says the comparison failed instead of advising an install, and compares again on Retry", async () => {
+    parity.diff.mockRejectedValueOnce(new Error("link down"));
+    const { container, findByRole, getByRole, queryByRole } = render(
+      <PluginNotOnHostPlaceholder pluginId="acme.md" />
+    );
+    await findByRole("button", { name: "Retry" });
+    expect(container.textContent).toContain("Couldn't check acme.md on studio-01");
+    expect(container.textContent).not.toMatch(/Install it|link down/);
+    expect(queryByRole("button", { name: /Install on/ })).toBeNull();
+
+    parity.diff.mockResolvedValueOnce([row({})]);
+    // The empty state remounts its cells as the copy settles; click the live button.
+    await waitFor(() => {
+      fireEvent.click(getByRole("button", { name: "Retry" }));
+      expect(parity.diff).toHaveBeenCalledTimes(2);
+    });
+    await findByRole("button", { name: "Install on studio-01" });
+    expect(container.textContent).toContain("Markdown Preview isn't installed on studio-01");
+  });
+
+  it("says an install went in, offers no second one, and then goes by the next comparison", async () => {
+    let settle: (rows: PluginParityRow[]) => void = () => {};
+    parity.diff.mockResolvedValueOnce([row({})]);
+    parity.diff.mockImplementationOnce(
+      () => new Promise<PluginParityRow[]>((resolve) => (settle = resolve))
+    );
+    const { container, findByRole, getByRole, queryByRole } = render(
+      <PluginNotOnHostPlaceholder pluginId="acme.md" />
+    );
+    await findByRole("button", { name: "Install on studio-01" });
+    await waitFor(() => {
+      fireEvent.click(getByRole("button", { name: "Install on studio-01" }));
+      expect(parity.installOnHost).toHaveBeenCalled();
+    });
+    // The row still offers an install until the comparison after it answers.
+    await waitFor(() => expect(container.textContent).toContain("Installed on studio-01."));
+    expect(queryByRole("button", { name: /Install on/ })).toBeNull();
+    expect(parity.diff).toHaveBeenCalledTimes(2);
+
+    await act(async () => settle([row({ group: "same", hostVersion: "1.0.0", action: null })]));
+    await waitFor(() =>
+      expect(container.textContent).toContain(
+        "It's installed on studio-01, but studio-01 hasn't offered this panel here."
+      )
+    );
+    expect(queryByRole("button", { name: /Install on/ })).toBeNull();
+  });
+
+  it("offers the install again when a later comparison finds the host's copy gone", async () => {
+    parity.diff.mockResolvedValueOnce([row({})]);
+    parity.diff.mockResolvedValueOnce([row({})]);
+    const { findByRole, getByRole } = render(<PluginNotOnHostPlaceholder pluginId="acme.md" />);
+    await findByRole("button", { name: "Install on studio-01" });
+    await waitFor(() => {
+      fireEvent.click(getByRole("button", { name: "Install on studio-01" }));
+      expect(parity.installOnHost).toHaveBeenCalled();
+    });
+    await waitFor(() => expect(parity.diff).toHaveBeenCalledTimes(2));
+    await findByRole("button", { name: "Install on studio-01" });
+  });
+
+  it("claims nothing about this machine when the comparison has no row for the plugin", async () => {
+    parity.diff.mockResolvedValue([]);
+    const { container, queryByRole } = render(<PluginNotOnHostPlaceholder pluginId="acme.md" />);
+    await waitFor(() => expect(container.textContent).toContain("Daintree has no copy of it here"));
+    expect(container.textContent).toContain("acme.md isn't available from studio-01");
+    expect(container.textContent).not.toMatch(/Install it|isn't installed on this machine/);
     expect(queryByRole("button", { name: /Install on/ })).toBeNull();
   });
 
@@ -309,15 +402,18 @@ describe("the switch notice", () => {
     const payload = notifyMock.mock.calls[0]![0];
     expect(payload.message).toBe("2 of your plugins aren't installed on studio-01");
     expect(payload.action.label).toBe("Review");
+    // The toast's Review and the inbox's go the same way: the action and its args.
+    expect(payload.action.actionId).toBe("app.settings.openTab");
     payload.action.onClick();
-    expect(takePendingHostPlugins()).toBe("studio-01");
-    // Review opens that host's plugins, never the Add host flow.
     expect(dispatchMock).toHaveBeenCalledTimes(1);
-    expect(dispatchMock).toHaveBeenCalledWith(
-      "app.settings.openTab",
-      { tab: "hosts" },
-      { source: "user" }
-    );
+    expect(dispatchMock).toHaveBeenCalledWith("app.settings.openTab", payload.action.actionArgs, {
+      source: "user",
+    });
+    // Review opens that host's plugins, never the Add host flow.
+    const { result } = renderHook(() => useSettingsDialog());
+    act(() => result.current.handleOpenSettingsTab(payload.action.actionArgs));
+    expect(result.current.settingsTab).toBe("hosts");
+    expect(takePendingHostPlugins()).toEqual({ hostId: "studio-01", sectionId: "host-plugins" });
     expect(dispatchMock).not.toHaveBeenCalledWith("host.add", expect.anything(), expect.anything());
   });
 
@@ -357,9 +453,7 @@ describe("parity copy", () => {
         { kind: "engine", required: ">=0.40.0", hostVersion: "0.38.0" },
         "studio-01"
       )
-    ).toBe(
-      "Requires Daintree >=0.40.0; studio-01 runs 0.38.0. It still loads there, but may not work."
-    );
+    ).toBe("Requires Daintree >=0.40.0; studio-01 runs 0.38.0, so it may not work there.");
     expect(
       describeIncompatibility({ kind: "unconfigured", missing: ["apiToken"] }, "studio-01")
     ).toBe("Set it up on studio-01: apiToken isn't set there.");

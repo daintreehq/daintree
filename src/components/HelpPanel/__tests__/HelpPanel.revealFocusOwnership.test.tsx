@@ -85,6 +85,8 @@ const snapshot = {
   tierMismatch: null,
   isApprovingTier: false,
   assistantVersionTooOld: null,
+  activeGrants: [],
+  revokingGrantKeys: [],
 };
 
 // Controls `shouldShowHybridInputBar` per test without re-mocking the module.
@@ -120,6 +122,7 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     </button>
   ),
   DropdownMenuSeparator: () => <hr />,
+  DropdownMenuCheckboxItem: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
 }));
 
 // The session tabs' per-lane menu is incidental here, and the real primitive
@@ -438,7 +441,11 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "window", {
     value: {
       electron: {
-        help: { getPinnedActionContext: vi.fn().mockResolvedValue({}) },
+        help: {
+          getPinnedActionContext: vi.fn().mockResolvedValue({}),
+          getGlobalAssistantState: () => new Promise(() => {}),
+          onGlobalAssistantChanged: () => () => {},
+        },
         app: { onViewRevealed: () => () => {} },
       },
     },

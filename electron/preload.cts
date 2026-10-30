@@ -26,6 +26,7 @@ import type {
   McpSessionOrigin,
   McpApprovalReason,
   McpHostPreview,
+  McpRequester,
   McpToolCallStartedPayload,
   McpToolCallSettledPayload,
   McpHelpDisplayImagePayload,
@@ -225,6 +226,7 @@ import type { PaneNotifyState } from "../shared/types/terminalNotify.js";
 import type {
   TerminalStatusPayload,
   TerminalSubmitStatusPayload,
+  TerminalFirstPromptPayload,
   SpawnResult,
   TerminalResourceBatchPayload,
   BroadcastWriteResultPayload,
@@ -999,6 +1001,9 @@ function buildElectronApi(): ElectronAPI {
 
       onSubmitStatus: (callback: (data: TerminalSubmitStatusPayload) => void): (() => void) =>
         _eventBusOn("terminal:submit-status", callback),
+
+      onFirstPrompt: (callback: (data: TerminalFirstPromptPayload) => void): (() => void) =>
+        _eventBusOn("terminal:first-prompt", callback),
 
       onNotifyState: (callback: (data: PaneNotifyState) => void): (() => void) =>
         _eventBusOn("terminal:notify-state", callback),
@@ -2120,8 +2125,15 @@ function buildElectronApi(): ElectronAPI {
     portal: {
       ...buildPortalPreloadBindings(_unwrappingInvoke),
 
-      onNavEvent: (callback: (data: { tabId: string; title: string; url: string }) => void) =>
-        _typedOn(CHANNELS.PORTAL_NAV_EVENT, callback),
+      onNavEvent: (
+        callback: (data: {
+          tabId: string;
+          title: string;
+          url: string;
+          canGoBack: boolean;
+          canGoForward: boolean;
+        }) => void
+      ) => _typedOn(CHANNELS.PORTAL_NAV_EVENT, callback),
 
       onFocus: (callback: () => void) => _typedOn(CHANNELS.PORTAL_FOCUS, callback),
 
@@ -2976,11 +2988,14 @@ function buildElectronApi(): ElectronAPI {
           openaiApiKey: string;
           deepgramApiKey: string;
           xaiApiKey: string;
+          anthropicApiKey: string;
           language: string;
           transcriptionProvider: "openai" | "deepgram" | "grok";
           transcriptionModel: "gpt-live-transcribe";
           correctionEnabled: boolean;
-          correctionModel: "gpt-6.1-terra" | "gpt-6-luna";
+          correctionProvider: "openai" | "anthropic";
+          correctionModel:
+            "gpt-6.1-terra" | "gpt-6-luna" | "claude-haiku-5-5" | "claude-sonnet-5-5";
           correctionCustomInstructions: string;
           paragraphingStrategy: "spoken-command" | "manual";
           resolveFileLinks: boolean;
@@ -3070,7 +3085,7 @@ function buildElectronApi(): ElectronAPI {
         callback: (payload: {
           sessionId: string;
           transcriptId: string;
-          references: Array<{ description: string; path: string | null }>;
+          references: Array<{ description: string; path: string | null; failed?: true }>;
         }) => void
       ) => _typedOn(CHANNELS.VOICE_INPUT_FILE_TOKEN_RESOLVED, callback),
     },
@@ -3136,6 +3151,7 @@ function buildElectronApi(): ElectronAPI {
           approvalReason?: McpApprovalReason;
           hostPreview?: McpHostPreview;
           authorization?: McpDispatchAuthorization;
+          requester?: McpRequester;
         }) => void
       ) => _typedOn(CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST, callback),
 

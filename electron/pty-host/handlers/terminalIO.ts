@@ -23,7 +23,22 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
       const imagePaths = Array.isArray(msg.imagePaths)
         ? msg.imagePaths.filter((path: unknown): path is string => typeof path === "string")
         : undefined;
-      ptyManager.submit(msg.id, msg.text, msg.submissionToken, msg.handbackCode, guard, imagePaths);
+      const firstPrompt =
+        typeof msg.firstPrompt?.text === "string"
+          ? {
+              text: msg.firstPrompt.text,
+              ...(msg.firstPrompt.truncated === true && { truncated: true as const }),
+            }
+          : undefined;
+      ptyManager.submit(
+        msg.id,
+        msg.text,
+        msg.submissionToken,
+        msg.handbackCode,
+        guard,
+        imagePaths,
+        firstPrompt
+      );
     },
 
     stage: (msg) => {

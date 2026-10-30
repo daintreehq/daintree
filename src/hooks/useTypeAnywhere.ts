@@ -15,6 +15,7 @@ import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import { requestPaneFocus, requestedPaneSurface } from "@/components/Terminal/paneFocusRequest";
 import {
   findPanelIdForElement,
+  focusOwnsKey,
   getFocusTarget,
   hasBlockingOverlay,
   hasUsefulFocus,
@@ -91,13 +92,13 @@ export function useTypeAnywhere(): void {
   useEffect(() => {
     handlerRef.current = (e: KeyboardEvent) => {
       if (!isRescuableKeystroke(e)) return;
-      // A modal or palette owns every key while open.
-      if (hasBlockingOverlay()) return;
-      if (usePaletteStore.getState().activePaletteId !== null) return;
-
       // Not `document.activeElement`: it retargets to the shadow host, which
       // would make a focused shadow-DOM input look inert and get its key stolen.
       const active = getFocusTarget(e);
+      // A modal or palette owns every key while open.
+      if (hasBlockingOverlay(active)) return;
+      if (usePaletteStore.getState().activePaletteId !== null) return;
+
       const panelStore = usePanelStore.getState();
 
       // --- Locate: focus is in a real terminal that has scrolled away ---
@@ -149,7 +150,7 @@ export function useTypeAnywhere(): void {
       }
 
       // --- Rescue: the keystroke is about to go nowhere ---
-      if (hasUsefulFocus(active)) return;
+      if (hasUsefulFocus(active) || focusOwnsKey(active, e.key)) return;
 
       // Screen-reader browse mode uses single letters as quick-nav keys —
       // hijacking them would break navigation outright.

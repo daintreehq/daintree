@@ -29,8 +29,7 @@ import type {
   DevPreviewToolSessionContext,
 } from "@/services/devPreviewTools/types";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
-import { cancelAgentRequests } from "./agentRequest.js";
-import { forgetComposerMemories } from "./composerMemory.js";
+import { cancelAgentRequests, watchPickerPreviews } from "./agentRequest.js";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { mismatchMessage, runtimeIssueMessage, wireFailureMessage } from "./copy.js";
 import { usePanelStore } from "@/store/panelStore";
@@ -40,8 +39,11 @@ import {
   displayLine,
   elementClaim,
   heldPaths,
+  samePoint,
   svelteEvidence,
   unionBounds,
+  type ComponentSelectionMode,
+  type ComponentTarget,
   type PageScreenshot,
   type PickedSelection,
   type SourcePoint,
@@ -138,7 +140,14 @@ export type BindingState =
 export type WorkspaceState =
   | { status: "idle" }
   | { status: "no-worktree" }
-  | { status: "opening" }
+  | {
+      status: "opening";
+      /** The app the user just chose, when the opening is their choice. */
+      appPath?: string;
+      /** The candidates the choice was made from, kept on screen while it opens. */
+      appPaths?: string[];
+      serverCwd?: string | null;
+    }
   | {
       status: "ready";
       workspaceId: string;
@@ -149,8 +158,21 @@ export type WorkspaceState =
       scanComplete: boolean;
     }
   /** More than one app and nothing says which the preview serves: the user chooses. */
-  | { status: "ambiguous"; appPaths: string[]; scanComplete: boolean }
-  | { status: "failed"; message: string };
+  | {
+      status: "ambiguous";
+      appPaths: string[];
+      scanComplete: boolean;
+      /** Where the preview's dev server runs, as the panel reports it; null when it doesn't. */
+      serverCwd: string | null;
+    }
+  | { status: "failed"; reason: WorkspaceFailure; message: string };
+
+/**
+ * Why the source couldn't be opened, which decides the way forward: a read
+ * error is retried, a remembered app that has gone is chosen again, and a
+ * server running from another checkout can only be restarted from this one.
+ */
+export type WorkspaceFailure = "read-error" | "invalid-app" | "unknown-worktree" | "other-worktree";
 
 export interface PageState {
   epoch: number;
@@ -186,7 +208,14 @@ export type SelectionState =
    * the old markup. `retrying` while the click is being asked for again by itself.
    */
   | { status: "settling"; retrying?: boolean }
-  | { status: "failed"; message: string };
+  | { status: "failed"; reason: SelectionFailure; message: string };
+
+/**
+ * Why a pick ended without a selection. A page still loading is routine
+ * timing, not an error; a reported location the file contradicts has its own
+ * way forward; anything else is the host failing, whose words are a diagnostic.
+ */
+export type SelectionFailure = "loading" | "mismatch" | "host";
 
 /**
  * The last proven element, in the terms the page can be asked for it again:
@@ -240,6 +269,24 @@ function invocationSite(
   return site ? { file: site.file, line: site.location.line, column: site.location.column } : null;
 }
 
+/** A component a selection was widened to, as the page is asked for it again. */
+type WidenedComponent = Omit<ComponentTarget, "rendered">;
+
+function widenedTo(
+  observation: SelectionObservation,
+  componentId: string
+): WidenedComponent | null {
+  const record = observation.componentChain.components.find(
+    (entry) => entry.componentId === componentId
+  );
+  if (record === undefined) return null;
+  return {
+    componentId,
+    framework: record.framework,
+    usedAt: invocationSite(observation, componentId),
+  };
+}
+
 /**
  * Svelte's own place for the element: where `__svelte_meta.loc` stamped it,
  * in the page's spelling, and which of the copies stamped there it is — the
@@ -268,8 +315,8 @@ function svelteLocator(observation: SelectionObservation): Continuity["locator"]
  */
 interface Reprove {
   record: Continuity;
-  /** The component call site a component selection was widened to. */
-  component: SourcePoint | null;
+  /** The component a component selection was widened to. */
+  component: WidenedComponent | null;
   /** A cited file changed, as opposed to the node simply leaving the page. */
   sourceChanged: boolean;
   /** The page reloaded under it: a failure is said as that, not as the element having gone. */
@@ -309,6 +356,8 @@ export interface InspectorIssue {
   code?: string;
   /** The framework the page's verdict is about, when it named one. */
   framework?: ElementPickerProviderId;
+  /** What the verdict means for a request, in the product's words. */
+  body?: string;
   /**
    * The diagnostic behind the title. Separate, because a raw error message is
    * evidence, not a headline, and the notice needs a headline to put a
@@ -331,6 +380,12 @@ const PROJECT_CONTEXT_TIMEOUT_MS = 3_000;
 const CAPTURE_TIMEOUT_MS = 5_000;
 /** Pictures kept for the selections a draft may still be about. */
 const CAPTURES_KEPT = 16;
+/**
+ * Tells one picker session's selections from the next one's. A draft outlives
+ * the session it was pinned in, and a count that starts again would give the
+ * first element picked after reopening the id of the element it is about.
+ */
+let nextGeneration = 0;
 
 /** Keep the newest of a per-selection record, dropping the oldest past the bound. */
 function keepRecent<T>(records: Map<string, T>, selectionId: string, record: T): void {
@@ -464,7 +519,9 @@ export class InspectorController implements DevPreviewToolSession {
   private readonly listeners = new Set<() => void>();
   private readonly unsubscribers: Array<() => void> = [];
   private context: InspectorContext = { projectId: null, worktreeId: null, worktreePath: null };
-  private workspaceKey: string | null = null;
+  // Undefined until the first context arrives: a preview that starts with no
+  // worktree has a null key, and must still be told so.
+  private workspaceKey: string | null | undefined = undefined;
   private workspaceRequest = 0;
   private projectRequest = 0;
   private bindRequest = 0;
@@ -489,7 +546,13 @@ export class InspectorController implements DevPreviewToolSession {
   private recoveringWorkspace: string | null = null;
   private held: HeldSelection | null = null;
   private disposed = false;
+  /** Kept apart from the rest: a closed picker still hears edits while its requests are out. */
+  private offSourceChanged: (() => void) | null = null;
   private selectionCount = 0;
+  private readonly generation = ++nextGeneration;
+  /** Requests this controller made that are still on their way: a closed picker waits for them. */
+  private pendingRequests = 0;
+  private lingering: string | null = null;
   /** The last proven element, for asking the page for it again. */
   private continuity: Continuity | null = null;
   /** Each selection's picture, taken when it was made: oldest first, bounded. */
@@ -500,9 +563,10 @@ export class InspectorController implements DevPreviewToolSession {
     private readonly deps: InspectorDeps
   ) {
     this.panelId = panelId;
-    this.unsubscribers.push(
-      deps.picker.onEvent((payload) => this.handlePreviewPush(payload)),
-      deps.picker.onSourceChanged((payload) => this.handleSourceChanged(payload))
+    watchPickerPreviews();
+    this.unsubscribers.push(deps.picker.onEvent((payload) => this.handlePreviewPush(payload)));
+    this.offSourceChanged = deps.picker.onSourceChanged((payload) =>
+      this.handleSourceChanged(payload)
     );
   }
 
@@ -583,7 +647,7 @@ export class InspectorController implements DevPreviewToolSession {
     // Only a server change keeps the app the user chose.
     const sameWorktree =
       key !== null &&
-      this.workspaceKey !== null &&
+      typeof this.workspaceKey === "string" &&
       key.slice(0, key.lastIndexOf("\n")) ===
         this.workspaceKey.slice(0, this.workspaceKey.lastIndexOf("\n"));
     if (!sameWorktree) this.chosenAppPath = undefined;
@@ -597,7 +661,11 @@ export class InspectorController implements DevPreviewToolSession {
     void this.openWorkspace();
   }
 
-  async openWorkspace(appPath: string | undefined = this.chosenAppPath): Promise<void> {
+  async openWorkspace(
+    appPath: string | undefined = this.chosenAppPath,
+    /** The candidates a choice was made from, when the workspace that listed them is already gone. */
+    candidates?: string[]
+  ): Promise<void> {
     this.chosenAppPath = appPath;
     const { projectId, worktreeId, worktreePath } = this.context;
     if (!projectId || !worktreeId || !worktreePath) return;
@@ -607,16 +675,24 @@ export class InspectorController implements DevPreviewToolSession {
     const cwd = panelCwd(usePanelStore.getState().panelsById[this.panelId]);
     if (cwd !== null && !isWithin(worktreePath, cwd)) {
       this.patchState({
-        workspace: {
-          status: "failed",
-          message:
-            "This preview's dev server runs from another worktree. Restart it from this worktree to trace elements.",
-        },
+        workspace: { status: "failed", reason: "other-worktree", message: cwd },
       });
       this.releaseHeld();
       return;
     }
-    this.patchState({ workspace: { status: "opening" }, project: null });
+    // The candidates stay on screen while the choice opens: the list the user
+    // chose from is where their focus is, and the drawer must not blink shut.
+    const before = this.state.workspace;
+    const listed =
+      candidates ??
+      (before.status === "ambiguous" || before.status === "ready" ? before.appPaths : undefined);
+    this.patchState({
+      workspace: {
+        status: "opening",
+        ...(appPath !== undefined && listed ? { appPath, appPaths: listed, serverCwd: cwd } : {}),
+      },
+      project: null,
+    });
     // A window attached to another machine shows the page at this machine's
     // address, which on the machine holding the source names something else:
     // that workspace fetches no maps rather than the wrong ones.
@@ -635,6 +711,7 @@ export class InspectorController implements DevPreviewToolSession {
       this.patchState({
         workspace: {
           status: "failed",
+          reason: "read-error",
           message: wireFailureMessage(error, "Couldn't open the source"),
         },
       });
@@ -665,6 +742,7 @@ export class InspectorController implements DevPreviewToolSession {
             status: "ambiguous",
             appPaths: result.appPaths,
             scanComplete: result.scanComplete,
+            serverCwd: cwd,
           },
         });
         this.releaseHeld();
@@ -673,10 +751,8 @@ export class InspectorController implements DevPreviewToolSession {
         this.patchState({
           workspace: {
             status: "failed",
-            message:
-              result.reason === "invalid-app"
-                ? "That app isn't in this worktree any more."
-                : "This worktree isn't one of the project's open worktrees.",
+            reason: result.reason,
+            message: appPath ?? "",
           },
         });
         this.releaseHeld();
@@ -686,6 +762,15 @@ export class InspectorController implements DevPreviewToolSession {
 
   private releaseWorkspace(workspaceId: string): void {
     void this.deps.picker.closeWorkspace({ workspaceId }).catch(() => undefined);
+  }
+
+  /** Forget the remembered app and ask the host for the candidates again. */
+  chooseAnotherApp(): void {
+    // Cleared here, not passed: `openWorkspace(undefined)` takes the default,
+    // which is the very choice that has gone.
+    this.chosenAppPath = undefined;
+    this.closeWorkspace();
+    void this.openWorkspace();
   }
 
   /**
@@ -703,8 +788,11 @@ export class InspectorController implements DevPreviewToolSession {
       this.held = null;
       this.selectionRequest++;
     }
+    // The candidates go with the workspace being released; the switch keeps
+    // them on screen while the new app opens, as a first choice does.
+    const candidates = workspace.status === "ready" ? workspace.appPaths : undefined;
     this.closeWorkspace();
-    void this.openWorkspace(appPath);
+    void this.openWorkspace(appPath, candidates);
   }
 
   private closeWorkspace(): void {
@@ -740,7 +828,7 @@ export class InspectorController implements DevPreviewToolSession {
    * looped on.
    */
   private recoverClosedWorkspace(workspaceId: string): void {
-    if (this.currentWorkspaceId() !== workspaceId) return;
+    if (this.disposed || this.currentWorkspaceId() !== workspaceId) return;
     if (this.recoveringWorkspace === workspaceId) return;
     this.recoveringWorkspace = workspaceId;
     this.selectionRequest++;
@@ -1083,11 +1171,12 @@ export class InspectorController implements DevPreviewToolSession {
   }
 
   private raiseRuntimeIssue(event: Extract<ElementPickerEvent, { type: "runtimeIssue" }>): void {
-    const message = runtimeIssueMessage(event.code, event.framework);
+    const message = runtimeIssueMessage(event.code, event.framework, event.detail);
     this.patchState({
       issue: {
         severity: event.code === "internal" ? "error" : "warning",
-        message: message ?? event.detail,
+        message: message?.title ?? event.detail,
+        ...(message?.body ? { body: message.body } : {}),
         code: event.code,
         ...(event.framework ? { framework: event.framework } : {}),
         // The page's own words, under ours. A known code has a headline that
@@ -1139,7 +1228,7 @@ export class InspectorController implements DevPreviewToolSession {
     const binding = this.state.binding;
     this.selectionCount += 1;
     return {
-      selectionId: `${this.panelId}:${epoch}:${this.selectionCount}`,
+      selectionId: `${this.panelId}:${this.generation}:${epoch}:${this.selectionCount}`,
       previewPanelId: this.panelId,
       sessionId: binding.status === "bound" ? binding.sessionId : "",
       documentEpoch: epoch,
@@ -1224,7 +1313,7 @@ export class InspectorController implements DevPreviewToolSession {
         (observations.length === 1 || scope.kind === "component") &&
         this.startReprove({
           record,
-          component: scope.kind === "component" ? invocationSite(primary, scope.componentId) : null,
+          component: scope.kind === "component" ? widenedTo(primary, scope.componentId) : null,
           sourceChanged: true,
           reloaded: false,
           attempts: 0,
@@ -1243,7 +1332,7 @@ export class InspectorController implements DevPreviewToolSession {
     const binding = this.state.binding;
     if (binding.status !== "bound") return;
     if (!page || page.epoch !== epoch) {
-      refuse({ status: "failed", message: "The page is still loading — select again" }, true);
+      refuse({ status: "failed", reason: "loading", message: "" }, true);
       return;
     }
 
@@ -1325,6 +1414,7 @@ export class InspectorController implements DevPreviewToolSession {
       refuse(
         {
           status: "failed",
+          reason: "host",
           message: clientErrorText(error, "Couldn't find the source for this element"),
         },
         false
@@ -1374,6 +1464,7 @@ export class InspectorController implements DevPreviewToolSession {
       refuse(
         {
           status: "failed",
+          reason: "mismatch",
           message: mismatchMessage({
             tagName: primary.tagName,
             file: claim.candidate.file,
@@ -1492,7 +1583,7 @@ export class InspectorController implements DevPreviewToolSession {
     const started = this.startReprove({
       record,
       component:
-        scope.kind === "component" && primary ? invocationSite(primary, scope.componentId) : null,
+        scope.kind === "component" && primary ? widenedTo(primary, scope.componentId) : null,
       sourceChanged: sourceChanged || (this.reprove?.sourceChanged ?? false),
       reloaded: reloaded || (this.reprove?.reloaded ?? false),
       attempts: 0,
@@ -1530,13 +1621,9 @@ export class InspectorController implements DevPreviewToolSession {
     const wanted = reprove.component;
     if (wanted !== null) {
       if (scope.kind !== "component") return false;
-      const site = invocationSite(observation, scope.componentId);
-      if (
-        site === null ||
-        site.file !== wanted.file ||
-        site.line !== wanted.line ||
-        site.column !== wanted.column
-      ) {
+      // An id names one invocation, but only in the document the page minted it in.
+      const sameId = epoch === reprove.record.epoch && scope.componentId === wanted.componentId;
+      if (!sameId && !samePoint(invocationSite(observation, scope.componentId), wanted.usedAt)) {
         return false;
       }
     } else if (scope.kind !== "element") {
@@ -1586,11 +1673,12 @@ export class InspectorController implements DevPreviewToolSession {
   private reselectRequest(
     sessionId: string,
     record: Continuity,
-    component: SourcePoint | null,
+    component: WidenedComponent | null,
     reveal: boolean
   ): ElementPickerReselectRequest | null {
     const sameDocument = record.epoch === this.state.epoch;
     if (!sameDocument && record.locator === null) return null;
+    const site = component?.usedAt ?? null;
     return {
       sessionId,
       // Never an id from another document: there it is some other element.
@@ -1598,9 +1686,12 @@ export class InspectorController implements DevPreviewToolSession {
       ...(record.locator !== null
         ? {
             framework: "svelte" as const,
-            locator: { ...record.locator, ...(component ? { component } : {}) },
+            locator: { ...record.locator, ...(site ? { component: site } : {}) },
           }
-        : {}),
+        : // Without a locator this is the same document, where the page's id still names it.
+          component !== null
+          ? { framework: component.framework, componentId: component.componentId }
+          : {}),
       ...(reveal ? { reveal: true } : {}),
     };
   }
@@ -1740,15 +1831,29 @@ export class InspectorController implements DevPreviewToolSession {
   }
 
   /**
+   * The workspace a selection's files can be read through now: its own, or the
+   * one this picker opened on the same app since — a draft kept while the
+   * picker was closed was pinned in a workspace that is gone. Null when
+   * nothing open now reads the same files.
+   */
+  private workspaceFor(selection: PickedSelection): string | null {
+    const workspace = this.state.workspace;
+    if (workspace.status !== "ready") return null;
+    if (workspace.workspaceId === selection.workspaceId) return workspace.workspaceId;
+    return workspace.appPath === selection.appPath ? workspace.workspaceId : null;
+  }
+
+  /**
    * Whether every file a request cites still has the bytes its claims were
    * checked against. Asked of the workspace open now: one the picker has
    * since let go of cannot vouch for anything.
    */
   async sourcesUnchanged(selection: PickedSelection): Promise<boolean> {
-    const workspaceId = selection.workspaceId;
     // Nothing was resolved, so nothing is cited that could have changed.
-    if (workspaceId === null) return true;
-    if (this.currentWorkspaceId() !== workspaceId) return false;
+    if (selection.workspaceId === null) return true;
+    const workspaceId = this.workspaceFor(selection);
+    if (workspaceId === null) return false;
+    const own = workspaceId === selection.workspaceId;
     const revisions = citedRevisions(selection);
     // A claim held without its file being read carries no revision to compare,
     // but an edit reported to that file since the selection was made still
@@ -1756,6 +1861,8 @@ export class InspectorController implements DevPreviewToolSession {
     const captured = Date.parse(selection.capturedAt);
     for (const path of heldPaths(selection)) {
       if (path in revisions) continue;
+      // Edits made before this workspace opened were never heard here.
+      if (!own) return false;
       const changed = this.recentChanges.get(path);
       // The same millisecond reads as after: a pick can't vouch for bytes it may not have seen.
       if (changed !== undefined && changed >= captured) return false;
@@ -1816,6 +1923,8 @@ export class InspectorController implements DevPreviewToolSession {
     if (workspaceId === null || push.workspaceId !== workspaceId) return;
     const path = push.file.path;
     this.noteChanged(path);
+    // A closed picker only keeps the record a waiting request is checked against.
+    if (this.disposed) return;
     const selection = this.state.selection;
     if (
       selection.status === "ready" &&
@@ -1830,38 +1939,45 @@ export class InspectorController implements DevPreviewToolSession {
   }
 
   /**
-   * Whether a component on the trail can be selected right now — the one rule
-   * the crumbs and {@link selectComponent} share, so a crumb is never a button
-   * that does nothing. The page only answers a selection request in Select
-   * mode; a stale trail describes an element the page no longer shows; and the
-   * page finds a component around an element by the framework's own locator,
-   * which only Svelte's dev runtime gives it.
+   * How a component on the trail can be selected right now, if at all — the
+   * one rule the crumbs and {@link selectComponent} share, so a crumb is never
+   * a button that does nothing. The page only answers a selection request in
+   * Select mode, and a stale trail describes an element the page no longer
+   * shows. Svelte's locator finds a component by its call site; any other
+   * page by the id it gave the component, which names it only in the
+   * document the element was proved in.
    */
-  canSelectComponent(): boolean {
+  componentSelection(): ComponentSelectionMode | null {
     const state = this.state;
-    return (
-      state.binding.status === "bound" &&
-      state.mode === "select" &&
-      state.selection.status === "ready" &&
-      state.selection.stale === null &&
-      this.continuity?.locator != null
-    );
+    const record = this.continuity;
+    if (
+      state.binding.status !== "bound" ||
+      state.mode !== "select" ||
+      state.selection.status !== "ready" ||
+      state.selection.stale !== null ||
+      record === null
+    ) {
+      return null;
+    }
+    if (record.locator !== null) return "site";
+    return record.epoch === state.epoch ? "id" : null;
   }
 
   /**
-   * Select the component invoked at `usedAt` — what a crumb in the trail names
-   * — the way Option/Alt+Up would, aimed: the page re-selects the element it
-   * last proved as a member of that invocation and reports it back, and the
-   * answer resolves as any fresh pick does. False when the pick can't be made
-   * ({@link canSelectComponent}) or the page no longer has the element.
+   * Select the component a crumb in the trail names, the way Option/Alt+Up
+   * would, aimed: the page re-selects the element it last proved and widens it
+   * to that invocation, and the answer resolves as any fresh pick does. False
+   * when the pick can't be made ({@link componentSelection}), the target can't
+   * be asked for that way, or the page no longer has the element.
    */
-  async selectComponent(usedAt: SourcePoint): Promise<boolean> {
+  async selectComponent(target: ComponentTarget): Promise<boolean> {
     const record = this.continuity;
     const binding = this.state.binding;
-    if (record === null || binding.status !== "bound" || !this.canSelectComponent()) {
-      return false;
-    }
-    const request = this.reselectRequest(binding.sessionId, record, usedAt, true);
+    const by = this.componentSelection();
+    if (record === null || binding.status !== "bound" || by === null) return false;
+    // A call site is what Svelte's locator aims at; an id finds only roots the page reported.
+    if (by === "site" ? target.usedAt === null : !target.rendered) return false;
+    const request = this.reselectRequest(binding.sessionId, record, target, true);
     if (request === null) return false;
     try {
       return await this.deps.picker.reselect(request);
@@ -1917,7 +2033,7 @@ export class InspectorController implements DevPreviewToolSession {
    * Null when it can't be read in time; the request then goes without.
    */
   async projectFor(selection: PickedSelection): Promise<ProjectContextOutcome | null> {
-    const workspaceId = selection.workspaceId;
+    const workspaceId = this.workspaceFor(selection);
     if (workspaceId === null) return null;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -2001,10 +2117,9 @@ export class InspectorController implements DevPreviewToolSession {
 
   dispose(): void {
     if (this.disposed) return;
-    // The picker is really over for this preview: nothing typed or in flight
-    // for it may outlive it.
-    cancelAgentRequests(this.panelId);
-    forgetComposerMemories(this.panelId);
+    // Switching the picker off puts it away. What was typed stays in the
+    // composer's memory, and a request still on its way keeps going: only the
+    // preview ending, or the user, cancels it.
     this.clearReattach();
     this.clearConnectRetry();
     this.endReprove();
@@ -2015,11 +2130,44 @@ export class InspectorController implements DevPreviewToolSession {
     if (binding.status === "bound") {
       void this.deps.preview.detach({ sessionId: binding.sessionId }).catch(() => undefined);
     }
-    this.closeWorkspace();
+    const workspace = this.state.workspace;
+    if (workspace.status === "ready" && this.pendingRequests > 0) {
+      // Requests on their way are checked against this workspace before they
+      // go in, so it stays open, and keeps hearing edits, until they settle.
+      this.workspaceRequest++;
+      this.projectRequest++;
+      this.continuity = null;
+      this.lingering = workspace.workspaceId;
+    } else {
+      this.closeWorkspace();
+    }
     this.disposed = true;
     for (const unsubscribe of this.unsubscribers) unsubscribe();
     this.unsubscribers.length = 0;
     this.listeners.clear();
+    if (this.lingering === null) this.stopHearingSource();
+  }
+
+  /**
+   * Keep what `request` is checked against for as long as it is on its way,
+   * picker open or not. Only this controller's own requests hold it: one made
+   * through an earlier session is that session's to wait for.
+   */
+  holdWhile(request: Promise<void>): void {
+    this.pendingRequests++;
+    const done = () => {
+      this.pendingRequests--;
+      if (this.pendingRequests > 0 || this.lingering === null) return;
+      this.releaseWorkspace(this.lingering);
+      this.lingering = null;
+      this.stopHearingSource();
+    };
+    request.then(done, done);
+  }
+
+  private stopHearingSource(): void {
+    this.offSourceChanged?.();
+    this.offSourceChanged = null;
   }
 }
 
@@ -2033,9 +2181,8 @@ export function createElementPickerSession(
   context: DevPreviewToolSessionContext,
   deps: () => InspectorDeps = defaultInspectorDeps
 ): InspectorController {
-  // The chunk can land after the host let this preview go. Disposing what we
-  // would build here cancels agent requests and forgets composer drafts for the
-  // whole panel — which by then may belong to the next session.
+  // The chunk can land after the host let this preview go: nothing is built,
+  // so nothing binds or opens a workspace for a picker nobody switched on.
   if (context.signal.aborted) {
     throw new Error("The Element Picker was switched off while it loaded");
   }

@@ -1,9 +1,17 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render as rtlRender,
+  screen,
+  within,
+} from "@testing-library/react";
 import type { ReactElement } from "react";
 import type { CanopyHostEvent } from "@shared/types/ipc/canopyHost";
 import type { CanopySnapshot } from "@shared/types/ipc/canopy";
+import type { AgentDirectory, AgentDirectoryLiveEntry } from "@shared/types/agentDirectory";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 import type { HostListEntry, HostMetricsSummary } from "@shared/types/remoteHosts";
 
@@ -69,6 +77,7 @@ vi.mock("@/utils/rendererGlobalErrorHandlers", () => ({
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CanopyView } from "../CanopyView";
 import { ALL_HOSTS_ID, useCanopyStore } from "@/store/canopyStore";
+import { usePanelStore } from "@/store/panelStore";
 import { allHostsKey } from "../canopyAllHosts";
 import { notify } from "@/lib/notify";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
@@ -267,9 +276,8 @@ function installElectron() {
     rename: vi.fn(async () => {}),
     refresh: vi.fn(async () => {}),
     setMode: vi.fn(async () => canopySnapshot()),
-    captureBackdrop: vi.fn(async () => null),
     // No assistants: a full, empty directory of this machine.
-    readAgentDirectory: vi.fn(async () => ({
+    readAgentDirectory: vi.fn(async (): Promise<AgentDirectory> => ({
       coverage: "ok" as const,
       observedAt: 1,
       complete: true,
@@ -700,6 +708,48 @@ describe("the Canopy host picker", () => {
     expect(channelsCalled()).not.toContain("studio canopy:unarchive");
   });
 
+  it("lands on Go to terminal's run on another host, not one there sharing the focused agent's id", async () => {
+    useFleetSnapshotStore.setState({ snapshot: fleet(["shared"]) });
+    remoteFleet = fleet(["remote-first", "remote-resume", "shared"]);
+    usePanelStore.setState({
+      panelsById: {
+        shared: { id: "shared", kind: "terminal", location: "grid", detectedAgentId: "claude" },
+      } as never,
+      focusedId: "shared",
+    });
+    try {
+      useCanopyStore.setState({
+        isOpen: false,
+        resume: {
+          at: Date.now(),
+          hostId: "studio",
+          query: "",
+          runId: "remote-resume",
+          order: ["remote-first", "remote-resume", "shared"],
+        },
+      });
+      act(() => useCanopyStore.getState().open());
+      installElectron();
+      render(<CanopyView />);
+      await settle();
+      await act(async () => {
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      });
+      expect(useCanopyStore.getState().hostId).toBe("studio");
+      expect(document.getElementById("canopy-card-shared")).not.toBeNull();
+      // Neither the list's default nor the focused agent's id: Go to terminal's run.
+      expect(document.querySelector("[data-canopy-card]")?.id).toBe("canopy-card-remote-first");
+      expect(
+        document
+          .querySelector('[data-canopy-card][aria-selected="true"]')
+          ?.id.replace(/^canopy-card-/, "")
+      ).toBe("remote-resume");
+    } finally {
+      usePanelStore.setState({ panelsById: {} as never, focusedId: null });
+      useCanopyStore.setState({ resume: null });
+    }
+  });
+
   it("presses no answer into another host's run while the link to it is down", async () => {
     installElectron();
     // Its agents were read; the link has dropped since.
@@ -735,7 +785,8 @@ describe("the Canopy host picker", () => {
     await settle();
     // Its agents stay listed as it observed them, with the offer one press away.
     expect(document.body.textContent).not.toContain("Canopy is off on studio-01");
-    fireEvent.click(screen.getByRole("button", { name: "Turn on reading" }));
+    const bar = document.querySelector<HTMLElement>("[data-canopy-status]")!;
+    fireEvent.click(within(bar).getByRole("button", { name: "Turn on reading" }));
     await settle();
     expect(document.body.textContent).toContain("Canopy is off on studio-01");
     expect(document.querySelector("[data-canopy-card]")).toBeNull();
@@ -743,6 +794,29 @@ describe("the Canopy host picker", () => {
     await settle();
     expect(state.invoke).toHaveBeenCalledWith("studio", "canopy:set-mode", "on");
     expect(own.setMode).not.toHaveBeenCalled();
+  });
+
+  it("offers reading above the picked host's agents by its name, opening that host's offer", async () => {
+    installElectron();
+    remoteCanopy = canopySnapshot({ mode: "unset", activated: false });
+    useCanopyStore.setState({ hostId: "studio" });
+    render(<CanopyView />);
+    await settle();
+    const callout = document.querySelector<HTMLElement>("[data-canopy-reading-offer]")!;
+    expect(callout.textContent).toContain("on studio-01");
+    // Above that host's own agents.
+    const row = document.getElementById("canopy-card-remote-run")!;
+    expect(callout.compareDocumentPosition(row)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    fireEvent.click(within(callout).getByRole("button", { name: "Turn on reading" }));
+    await settle();
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(document.body.textContent).toContain("Canopy is off on studio-01");
+    expect(document.querySelector("[data-canopy-reading-offer]")).toBeNull();
+    // The button left with the inbox: the keyboard lands on the offer's heading, not Turn on.
+    expect(document.activeElement?.id).toBe("canopy-host-offer-title");
+    expect(state.invoke).not.toHaveBeenCalledWith("studio", "canopy:set-mode", "on");
   });
 
   it("says why a host can't be reached, never showing another host's agents instead", async () => {
@@ -926,6 +1000,82 @@ describe("All hosts", () => {
     expect(screen.queryByRole("radiogroup", { name: "Agents to show" })).toBeNull();
   });
 
+  it("opens on this machine's run the main view has focused, never another host's under the same id", async () => {
+    useFleetSnapshotStore.setState({ snapshot: fleet(["local-first", "shared-run"]) });
+    remoteCanopy = canopySnapshot({ cards: [approvalCard("shared-run")] });
+    usePanelStore.setState({
+      panelsById: {
+        "shared-run": {
+          id: "shared-run",
+          kind: "terminal",
+          location: "grid",
+          detectedAgentId: "claude",
+        },
+      } as never,
+      focusedId: "shared-run",
+    });
+    try {
+      installElectron();
+      render(<CanopyView />);
+      await settle();
+      const selected = document.querySelector('[data-canopy-card][aria-selected="true"]');
+      expect(document.querySelector("[data-canopy-card]")).not.toBe(cardOf("local", "shared-run"));
+      expect(cardOf("studio", "shared-run")).not.toBeNull();
+      expect(selected).toBe(cardOf("local", "shared-run"));
+    } finally {
+      usePanelStore.setState({ panelsById: {} as never, focusedId: null });
+    }
+  });
+
+  it("names this machine on an assistant's place line, as on its workers', not in its name (#15370)", async () => {
+    const own = installElectron();
+    const entry = (
+      scope: AgentDirectoryLiveEntry["subject"]["scope"],
+      terminalId: string
+    ): AgentDirectoryLiveEntry => ({
+      state: "live",
+      role: "assistant",
+      subject: {
+        hostId: "local",
+        scope,
+        terminalId,
+        incarnation: 1,
+        ...(scope.kind === "project" ? { lane: 0 } : {}),
+      },
+      agentId: "claude",
+      agentState: "waiting",
+      waitingReason: "prompt",
+      since: NOW - 10_000,
+      label: null,
+      attached: true,
+      handback: null,
+    });
+    own.readAgentDirectory.mockResolvedValue({
+      coverage: "ok",
+      observedAt: NOW,
+      complete: true,
+      omitted: 0,
+      entries: [
+        entry({ kind: "project", projectId: "p1" }, "help-0"),
+        entry({ kind: "global" }, "g-1"),
+      ],
+    });
+    render(<CanopyView />);
+    await settle();
+    const [lane, global] = [...document.querySelectorAll<HTMLElement>("[data-canopy-assistant]")];
+    const where = (row: HTMLElement) => row.querySelector("[data-canopy-where]")!;
+    const workerHost = where(cardOf("local", "shared-run")!).querySelector("[data-canopy-host]")!;
+    const host = workerHost.lastElementChild!.textContent!;
+    for (const row of [lane!, global!]) {
+      expect(where(row).querySelector("[data-canopy-host]")!.textContent).toBe(
+        workerHost.textContent
+      );
+      expect(row.querySelector("[data-canopy-assistant-name]")!.textContent).not.toContain(host);
+    }
+    expect(where(lane!).querySelector("[data-canopy-project]")!.textContent).toBe("local-app");
+    expect(where(global!).querySelector("[data-canopy-project]")!.textContent).toBe("Global");
+  });
+
   it("asks each host about its own terminals, by the id it knows", async () => {
     const own = installElectron();
     render(<CanopyView />);
@@ -996,6 +1146,18 @@ describe("All hosts", () => {
     expect(own.setMode).not.toHaveBeenCalled();
     // What the host that is off adds is what Daintree observes of its runs.
     expect(cardOf("studio", "shared-run")).not.toBeNull();
+  });
+
+  it("offers no reading callout over every host's agents, even with the readers off", async () => {
+    const off = canopySnapshot({ activated: false, mode: "unset", cards: [] });
+    installElectron().setActive.mockResolvedValue(off);
+    useCanopyStore.setState({ snapshot: off });
+    remoteCanopy = off;
+    render(<CanopyView />);
+    await settle();
+    expect(cardOf("local", "shared-run")).not.toBeNull();
+    expect(cardOf("studio", "shared-run")).not.toBeNull();
+    expect(document.querySelector("[data-canopy-reading-offer]")).toBeNull();
   });
 
   it("names a host that can't be reached and keeps the others", async () => {

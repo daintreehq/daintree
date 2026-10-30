@@ -180,6 +180,7 @@ export interface GeneratedIpcInvokeMap {
         | "canopy:set-read"
         | "canopy:set-scope"
         | "canopy:set-shown"
+        | "canopy:submit-reply"
         | "canopy:terminal-input"
         | "canopy:terminal-resize"
         | "canopy:terminal-send-key"
@@ -258,10 +259,6 @@ export interface GeneratedIpcInvokeMap {
       expectTurn?: number | undefined,
     ];
     result: import("./canopy.js").CanopyReadMark | null;
-  };
-  "canopy:capture-backdrop": {
-    args: [];
-    result: Uint8Array<ArrayBufferLike> | null;
   };
   "canopy:empty-trash": {
     args: [targets: (import("./canopy.js").CanopyTrashTarget & { runId: string })[]];
@@ -441,6 +438,15 @@ export interface GeneratedIpcInvokeMap {
     args: [runIds: string[]];
     result: void;
   };
+  "canopy:submit-reply": {
+    args: [
+      runId: string,
+      target: import("./canopy.js").CanopyTarget,
+      text: string,
+      imagePaths?: string[] | undefined,
+    ];
+    result: void;
+  };
   "canopy:terminal-input": {
     args: [watchId: number, data: string];
     result: void;
@@ -490,6 +496,10 @@ export interface GeneratedIpcInvokeMap {
     args: [runId: string, target: import("./canopy.js").CanopyTarget];
     result: import("./canopy.js").CanopyTerminalView;
   };
+  "claude:find-reply-span": {
+    args: [__1: { terminalId: string; selection: string }];
+    result: string | null;
+  };
   "claude:list-subagents": {
     args: [__0: { terminalId: string }];
     result: import("./agentSubagents.js").AgentSubagentsResult;
@@ -519,7 +529,7 @@ export interface GeneratedIpcInvokeMap {
     result: { filePath: string; thumbnailDataUrl: string };
   };
   "clipboard:thumbnail-from-path": {
-    args: [filePath: string];
+    args: [filePath: string, options?: { height?: number | undefined } | undefined];
     result: { filePath: string; thumbnailDataUrl: string };
   };
   "clipboard:write-image": {
@@ -541,6 +551,20 @@ export interface GeneratedIpcInvokeMap {
   "codex:list-subagents": {
     args: [__0: { terminalId: string }];
     result: import("./agentSubagents.js").AgentSubagentsResult;
+  };
+  "codex:match-restore-sessions": {
+    args: [
+      request: {
+        scopes: {
+          cwd: string;
+          panes: { key: string; promptHash: string; at: number; resolve: boolean }[];
+          codexHome?: string | undefined;
+          reserveLatest?: boolean | undefined;
+        }[];
+        exclude: string[];
+      },
+    ];
+    result: import("./agentSubagents.js").CodexRestoreMatchResult;
   };
   "codex:read-quota": {
     args: [];
@@ -864,6 +888,7 @@ export interface GeneratedIpcInvokeMap {
               component?: { file: string; line: number; column: number } | undefined;
             }
           | undefined;
+        componentId?: string | undefined;
         reveal?: boolean | undefined;
       },
     ];
@@ -1209,7 +1234,7 @@ export interface GeneratedIpcInvokeMap {
               sourceMap: {
                 mapUrl: string | null;
                 mapRevision: string;
-                sourceCheck: "unchecked" | "matches" | "differs";
+                sourceCheck: "matches" | "unchecked" | "differs";
               };
               candidateId: string;
               claim:
@@ -1244,7 +1269,7 @@ export interface GeneratedIpcInvokeMap {
                 | {
                     mapUrl: string | null;
                     mapRevision: string;
-                    sourceCheck: "unchecked" | "matches" | "differs";
+                    sourceCheck: "matches" | "unchecked" | "differs";
                   }
                 | undefined;
               placedBy?: "structure" | undefined;
@@ -1290,7 +1315,7 @@ export interface GeneratedIpcInvokeMap {
                     sourceMap: {
                       mapUrl: string | null;
                       mapRevision: string;
-                      sourceCheck: "unchecked" | "matches" | "differs";
+                      sourceCheck: "matches" | "unchecked" | "differs";
                     };
                   }
                 | {
@@ -1311,7 +1336,7 @@ export interface GeneratedIpcInvokeMap {
                       | {
                           mapUrl: string | null;
                           mapRevision: string;
-                          sourceCheck: "unchecked" | "matches" | "differs";
+                          sourceCheck: "matches" | "unchecked" | "differs";
                         }
                       | undefined;
                     placedBy?: "structure" | undefined;
@@ -1360,7 +1385,7 @@ export interface GeneratedIpcInvokeMap {
                     sourceMap: {
                       mapUrl: string | null;
                       mapRevision: string;
-                      sourceCheck: "unchecked" | "matches" | "differs";
+                      sourceCheck: "matches" | "unchecked" | "differs";
                     };
                   }
                 | {
@@ -1381,7 +1406,7 @@ export interface GeneratedIpcInvokeMap {
                       | {
                           mapUrl: string | null;
                           mapRevision: string;
-                          sourceCheck: "unchecked" | "matches" | "differs";
+                          sourceCheck: "matches" | "unchecked" | "differs";
                         }
                       | undefined;
                     placedBy?: "structure" | undefined;
@@ -1827,7 +1852,9 @@ export interface GeneratedIpcInvokeMap {
     result: { exists: boolean; alternateBufferEnabled: boolean; error?: string | undefined };
   };
   "git:discard-file-changes": {
-    args: [payload: { worktreePath: string; relativePath: string }];
+    args: [
+      payload: { worktreePath: string; relativePath: string; expectedToken?: string | undefined },
+    ];
     result: void;
   };
   "git:fetch": {
@@ -1864,6 +1891,10 @@ export interface GeneratedIpcInvokeMap {
       },
     ];
     result: void;
+  };
+  "git:preview-file-mutation": {
+    args: [payload: { worktreePath: string; relativePath: string; kind: "trash" | "discard" }];
+    result: import("../fileMutation.js").FileMutationPreview;
   };
   "git:rebase-onto-base": {
     args: [
@@ -1976,8 +2007,8 @@ export interface GeneratedIpcInvokeMap {
     result: import("./help.js").GlobalAssistantView;
   };
   "help:list-past-sessions": {
-    args: [projectId: string];
-    result: import("./help.js").HelpPastSession[];
+    args: [projectId: string, options?: { listing?: boolean | undefined } | undefined];
+    result: import("./help.js").HelpPastSessionsListing | import("./help.js").HelpPastSession[];
   };
   "help:list-pending-hibernation-slots": {
     args: [projectId: string];
@@ -2239,6 +2270,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./mcpServer.js").AssistantTurnRecord[];
   };
+  "mcp-server:hold-dispatch": {
+    args: [request: { requestId: string; phase: import("./mcpServer.js").McpDispatchHoldPhase }];
+    result: import("./mcpServer.js").McpDispatchHoldResult;
+  };
   "mcp-server:issue-grant": {
     args: [payload: { sessionId: string; toolId: string }];
     result: import("./mcpServer.js").McpIssueGrantResult;
@@ -2282,13 +2317,13 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { sessionId: string }];
     result: void;
   };
+  "mcp-server:revoke-grant": {
+    args: [payload: { sessionId: string; toolId: string }];
+    result: import("./mcpServer.js").McpRevokeGrantResult;
+  };
   "mcp-server:revoke-native-grant": {
     args: [payload: { grantId: string }];
     result: import("./mcpServer.js").McpRevokeNativeGrantResult;
-  };
-  "mcp-server:revoke-session-grants": {
-    args: [payload: { sessionId: string }];
-    result: import("./mcpServer.js").McpRevokeSessionGrantsResult;
   };
   "mcp-server:rotate-api-key": {
     args: [];
@@ -2882,6 +2917,10 @@ export interface GeneratedIpcInvokeMap {
     args: [events: import("../plugin.js").PluginPanelLifecycleEvent[]];
     result: void;
   };
+  "plugin:report-unsaved-panels": {
+    args: [panels: import("../pluginUnsavedPanels.js").PluginUnsavedPanelReport[]];
+    result: void;
+  };
   "plugin:restart-worker": {
     args: [pluginId: string];
     result: import("../plugin.js").PluginRuntimeStatus | null;
@@ -2989,6 +3028,10 @@ export interface GeneratedIpcInvokeMap {
   "plugin:uninstall": {
     args: [pluginId: string, deleteSettings?: boolean | undefined];
     result: void;
+  };
+  "plugin:unsaved-panels-get": {
+    args: [pluginId: string];
+    result: import("../pluginUnsavedPanels.js").PluginUnsavedPanel[];
   };
   "plugin:validate-action-ids": {
     args: [actionIds: string[]];
@@ -3934,6 +3977,7 @@ export interface GeneratedIpcInvokeMap {
         agentPresetColor?: string | undefined;
         originalAgentPresetId?: string | undefined;
         handbackCode?: string | undefined;
+        hasFirstPrompt?: boolean | undefined;
         actionContext?:
           | {
               projectId?: string | undefined;
@@ -3979,7 +4023,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "voice-dictionary:accept-suggestion": {
     args: [__0: { word: string; utterance?: string | undefined }];
-    result: import("./api.js").VoiceDictionaryState;
+    result: import("./api.js").VoiceDictionaryChange;
   };
   "voice-dictionary:add": {
     args: [
@@ -3988,9 +4032,10 @@ export interface GeneratedIpcInvokeMap {
         heardAs?: string[] | undefined;
         source?: "manual" | "learned" | "imported" | undefined;
         addedAt?: number | undefined;
+        heardAsConflict?: "reject" | "skip" | "move" | undefined;
       },
     ];
-    result: import("./api.js").VoiceDictionaryState;
+    result: import("./api.js").VoiceDictionaryChange;
   };
   "voice-dictionary:add-to-project": {
     args: [
@@ -3999,10 +4044,11 @@ export interface GeneratedIpcInvokeMap {
         term: string;
         source?: "manual" | "learned" | "imported" | undefined;
         addedAt?: number | undefined;
+        heardAsConflict?: "reject" | "skip" | "move" | undefined;
         heardAs?: string[] | undefined;
       },
     ];
-    result: import("./api.js").VoiceDictionaryEntry[];
+    result: import("./api.js").ProjectVoiceDictionaryChange;
   };
   "voice-dictionary:dismiss-suggestion": {
     args: [__0: { word: string; utterance?: string | undefined }];
@@ -4026,19 +4072,30 @@ export interface GeneratedIpcInvokeMap {
   };
   "voice-dictionary:update": {
     args: [
-      __0: { term: string; changes: { term?: string | undefined; heardAs?: string[] | undefined } },
+      __0: {
+        term: string;
+        changes: {
+          term?: string | undefined;
+          heardAs?: string[] | undefined;
+          heardAsConflict?: "reject" | "move" | undefined;
+        };
+      },
     ];
-    result: import("./api.js").VoiceDictionaryState;
+    result: import("./api.js").VoiceDictionaryChange;
   };
   "voice-dictionary:update-in-project": {
     args: [
       __0: {
         term: string;
         projectId: string;
-        changes: { term?: string | undefined; heardAs?: string[] | undefined };
+        changes: {
+          term?: string | undefined;
+          heardAs?: string[] | undefined;
+          heardAsConflict?: "reject" | "move" | undefined;
+        };
       },
     ];
-    result: import("./api.js").VoiceDictionaryEntry[];
+    result: import("./api.js").ProjectVoiceDictionaryChange;
   };
   "voice-input:cancel": {
     args: [sessionId: string];
@@ -4056,6 +4113,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../voice.js").VoiceLiveSessionUpdate;
   };
+  "voice-input:is-app-replaced": {
+    args: [];
+    result: boolean;
+  };
   "voice-input:prefetch-corrections": {
     args: [
       payload: {
@@ -4069,6 +4130,7 @@ export interface GeneratedIpcInvokeMap {
           followingText?: string | undefined;
           recentPrompts?: string[] | undefined;
           startsPrompt?: boolean | undefined;
+          openingCommandToken?: string | undefined;
           uncertain?: { from: number; to: number }[] | undefined;
           pauses?: number[] | undefined;
         }[];
@@ -4078,6 +4140,10 @@ export interface GeneratedIpcInvokeMap {
   };
   "voice-input:publish-details": {
     args: [request: import("../voice.js").VoicePublishDetailsRequest];
+    result: boolean;
+  };
+  "voice-input:restart-replaced-app": {
+    args: [];
     result: boolean;
   };
   "voice-input:reveal-live": {

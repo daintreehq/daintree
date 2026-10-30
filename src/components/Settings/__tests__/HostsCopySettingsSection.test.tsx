@@ -77,12 +77,13 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("HostsCopySettingsSection", () => {
-  it("applies to the hosts that are up and reports the offline one", async () => {
+  it("copies to the hosts that are up, and says up front an offline one can't take part", async () => {
     renderSection();
-    fireEvent.click(screen.getByRole("button", { name: /Preview on 3 hosts/ }));
+    expect(screen.getByRole("checkbox", { name: "charlie" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText("Offline. Connect to it first")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Preview on 2 hosts/ }));
     await waitFor(() => screen.getByRole("button", { name: /Copy to 2 hosts/ }));
     expect(settingsCopy.preview).toHaveBeenCalledTimes(2);
-    expect(screen.getAllByText(/charlie is offline|Offline/).length).toBeGreaterThan(1);
 
     fireEvent.click(screen.getByRole("button", { name: /Copy to 2 hosts/ }));
     await waitFor(() => screen.getByText("Results"));
@@ -112,21 +113,29 @@ describe("HostsCopySettingsSection", () => {
           }
     );
     renderSection();
-    fireEvent.click(screen.getByRole("button", { name: /Preview on 3 hosts/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Preview on 2 hosts/ }));
     await waitFor(() => screen.getByRole("button", { name: /Copy to 1 host/ }));
 
-    const alpha = screen.getByRole("group", { name: "alpha" });
-    expect(alpha.textContent).toContain("Claude");
-    expect(alpha.textContent).toContain("Agent settings · Replaced · On → Off");
+    // Each host leads with its own summary; bravo can take none of it.
+    expect(screen.getByText("1 change: 1 overwrite")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Nothing here can be copied. 2 won't copy. 1 category needs a newer Daintree"
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText("Claude")).toBeNull();
 
-    const bravo = screen.getByRole("group", { name: "bravo" });
-    expect(bravo.textContent).not.toContain("Claude");
-    expect(bravo.textContent).toContain("Codex");
-    expect(bravo.textContent).toContain("Skipped · not installed there");
-    expect(bravo.textContent).toContain("API_TOKEN looks like a secret");
+    fireEvent.click(screen.getByRole("button", { name: "Show changes on alpha" }));
+    expect(screen.getByText("Claude")).toBeTruthy();
+    expect(screen.getByText("Overwrites")).toBeTruthy();
+    expect(screen.getByText("Off")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show changes on bravo" }));
+    expect(screen.getByText("Won't copy: not installed there")).toBeTruthy();
+    expect(screen.getByText(/API_TOKEN/)).toBeTruthy();
+    expect(screen.getByText(/it looks like a secret/)).toBeTruthy();
     // Kept even though bravo has nothing else to change.
-    expect(bravo.textContent).toContain("Not known there yet");
-    expect(bravo.textContent).toContain("Worktree path pattern: update Daintree on bravo");
+    expect(screen.getByText(/Daintree on bravo doesn't know these settings yet/)).toBeTruthy();
 
     expect(settingsCopy.apply).not.toHaveBeenCalled();
   });
@@ -136,14 +145,15 @@ describe("HostsCopySettingsSection", () => {
       hostId === "a" ? report({ applied: 2, failed: 1 }) : report({ skipped: 1 })
     );
     renderSection();
-    fireEvent.click(screen.getByRole("button", { name: /Preview on 3 hosts/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Preview on 2 hosts/ }));
     await waitFor(() => screen.getByRole("button", { name: /Copy to 2 hosts/ }));
     fireEvent.click(screen.getByRole("button", { name: /Copy to 2 hosts/ }));
     await waitFor(() => screen.getByText("Results"));
 
-    expect(screen.getByText("Partly applied · 2 settings · 1 failed")).toBeTruthy();
-    expect(screen.getByText("Not applied · 1 skipped")).toBeTruthy();
-    expect(screen.queryByText(/^Applied/)).toBeNull();
+    expect(screen.getByText("Partly copied. 2 settings copied, 1 failed")).toBeTruthy();
+    expect(screen.getByText("Not copied. 1 setting skipped")).toBeTruthy();
+    expect(screen.queryByText(/settings? copied$/)).toBeNull();
+    expect(screen.getByText("2 of 2 hosts didn't copy")).toBeTruthy();
   });
 
   it("refuses a host that changed since its preview without stopping the rest", async () => {
@@ -157,21 +167,19 @@ describe("HostsCopySettingsSection", () => {
       return REPORT;
     });
     const onOpenHost = renderSection();
-    fireEvent.click(screen.getByRole("button", { name: /Preview on 3 hosts/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Preview on 2 hosts/ }));
     await waitFor(() => screen.getByRole("button", { name: /Copy to 2 hosts/ }));
     fireEvent.click(screen.getByRole("button", { name: /Copy to 2 hosts/ }));
     await waitFor(() => screen.getByText("Results"));
-    expect(screen.getByText("Changed since preview")).toBeTruthy();
-    expect(screen.getAllByText("stale")).toHaveLength(1);
-    expect(screen.getByText("Applied · 1 setting")).toBeTruthy();
+    expect(screen.getByText("Not copied. Its settings changed since the preview")).toBeTruthy();
+    expect(screen.getByText("1 setting copied")).toBeTruthy();
+    // Only the changed host is offered again, without redoing the one that copied.
+    expect(screen.getByRole("button", { name: "Retry 1 host" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Open bravo" }));
     expect(onOpenHost).toHaveBeenCalledWith("b");
-    // The changed host's own page is where it is previewed again.
     fireEvent.click(screen.getByRole("button", { name: "Open alpha" }));
     expect(onOpenHost).toHaveBeenCalledWith("a");
-    fireEvent.click(screen.getByRole("button", { name: "Open charlie" }));
-    expect(onOpenHost).toHaveBeenCalledWith("c");
   });
 
   it("previews and copies at most three hosts at a time", async () => {

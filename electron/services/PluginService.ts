@@ -166,7 +166,7 @@ import { isPluginNotificationSilenced } from "./plugin/pluginNotificationSilence
 /** How long a plugin notification waits on a project's mute before going out anyway. */
 const PLUGIN_NOTIFICATION_MUTE_READ_TIMEOUT_MS = 2_000;
 import { store } from "../store.js";
-import { wipeSettingsFile } from "./PluginSettingsStore.js";
+import { queuedSettingsFiles, wipeSettingsFile } from "./PluginSettingsStore.js";
 import { isProjectWorkspaceId } from "../../shared/utils/workspaceIds.js";
 import type { EventBusEnvelope } from "../../shared/types/ipc/maps.js";
 import {
@@ -1488,7 +1488,6 @@ export class PluginService {
     this.installer = new PluginInstaller({
       getPluginsRoot: () => this.pluginsRoot,
       records: this.records,
-      getSettingsRoot: () => this.settings.settingsRoot(),
       loadPlugin: async (root, pluginId, opts) => {
         const before = this.projectInstancePackages.get(pluginId);
         const loaded = await this.loadPlugin(root, pluginId, opts);
@@ -1518,7 +1517,7 @@ export class PluginService {
       setEnabled: (pluginId, enabled) => this.setEnabled(pluginId, enabled),
       broadcastProvenanceChanged: () => this.broadcaster.broadcastProvenanceChanged(),
       purgeRecipeMetadata: (pluginId) => this.purgePluginRecipeMetadata(pluginId),
-      wipeProjectInstanceData: (pluginId) => this.wipeInstalledInstanceData(pluginId),
+      wipePluginData: (pluginId) => this.wipeInstalledPluginData(pluginId),
       getPlugin: (pluginId) => this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId),
       reservedNames: this.reservedNames,
       disabledPlugins: this.disabledPlugins,
@@ -7154,17 +7153,22 @@ export class PluginService {
   }
 
   /**
-   * Delete every per-project instance's user-scope settings and secrets, local
-   * settings, account tokens and user-scope storage for one package. Found by
-   * filename rather than by the enablement list, which an uninstall has already
-   * cleared and which never held projects the package was enabled in before.
+   * Delete the user-scope settings and secrets, local settings, account tokens
+   * and user-scope storage of a plugin id and of every per-project instance of
+   * it. Instances are found by filename rather than by the enablement list,
+   * which an uninstall has already cleared and which never held projects the
+   * package was enabled in before. The id's own user-scope files and any file
+   * with a write still queued are wiped whether or not they exist yet, so a
+   * first write waiting on the keychain can't create one afterwards.
    */
-  private async wipeInstalledInstanceData(manifestId: string): Promise<void> {
-    if (!SCOPED_PLUGIN_NAME_PATTERN.test(manifestId)) return;
-    const isInstanceFile = (name: string): boolean => {
+  private async wipeInstalledPluginData(pluginId: string): Promise<void> {
+    if (!SCOPED_PLUGIN_NAME_PATTERN.test(pluginId)) return;
+    const ownFile = `${pluginId}.json`;
+    const isPluginFile = (name: string): boolean => {
+      if (name === ownFile) return true;
       if (!name.endsWith(".json")) return false;
       const parsed = parseProjectPluginInstanceKey(name.slice(0, -".json".length));
-      return parsed?.installed === true && parsed.manifestId === manifestId;
+      return parsed?.installed === true && parsed.manifestId === pluginId;
     };
     const listDir = async (dir: string): Promise<string[]> => {
       try {
@@ -7175,16 +7179,52 @@ export class PluginService {
       }
     };
     const settingsRoot = this.settings.settingsRoot();
-    const dirs = [settingsRoot, path.join(settingsRoot, "accounts"), this.storage.storageRoot()];
+    const userDirs = [
+      settingsRoot,
+      path.join(settingsRoot, "accounts"),
+      this.storage.storageRoot(),
+    ];
     const localRoot = path.join(settingsRoot, "local");
-    for (const projectId of await listDir(localRoot)) {
-      if (isProjectWorkspaceId(projectId)) dirs.push(path.join(localRoot, projectId));
-    }
-    for (const dir of dirs) {
-      for (const name of await listDir(dir)) {
-        if (isInstanceFile(name)) await wipeSettingsFile(path.join(dir, name));
+    // Registered before the first await: a queued write that finishes while the
+    // directories are read would otherwise create its file after the listing.
+    const userDirSet = new Set(userDirs.map((dir) => path.resolve(dir)));
+    const resolvedLocalRoot = path.resolve(localRoot);
+    const wiped = new Set(userDirs.map((dir) => path.resolve(dir, ownFile)));
+    for (const file of queuedSettingsFiles()) {
+      const dir = path.dirname(file);
+      const inLocalProject =
+        path.dirname(dir) === resolvedLocalRoot && isProjectWorkspaceId(path.basename(dir));
+      if ((userDirSet.has(dir) || inLocalProject) && isPluginFile(path.basename(file))) {
+        wiped.add(file);
       }
     }
+    // Each wipe is marked handled as it starts, since the scan below awaits
+    // before anything else listens; its error still reaches the awaits at the end.
+    const startWipe = (file: string): Promise<void> => {
+      const wipe = wipeSettingsFile(file);
+      wipe.catch(() => {});
+      return wipe;
+    };
+    const wipes = [...wiped].map(startWipe);
+    try {
+      const dirs = [...userDirs];
+      for (const projectId of await listDir(localRoot)) {
+        if (isProjectWorkspaceId(projectId)) dirs.push(path.join(localRoot, projectId));
+      }
+      for (const dir of dirs) {
+        for (const name of await listDir(dir)) {
+          const file = path.resolve(dir, name);
+          if (isPluginFile(name) && !wiped.has(file)) {
+            wiped.add(file);
+            wipes.push(startWipe(file));
+          }
+        }
+      }
+    } catch (err) {
+      await Promise.allSettled(wipes);
+      throw err;
+    }
+    await Promise.all(wipes);
   }
 
   /** Forget every enablement in a project that was removed from Daintree. */
@@ -8354,6 +8394,9 @@ export class PluginService {
         return;
       }
       if (!loaded) {
+        // A blocklist refusal recorded its own row, which stands in for the
+        // skipped one; keeping both would list the id twice.
+        if (this.blockedPlugins.has(pluginId)) this.disabledPlugins.delete(pluginId);
         // Manifest error or a throw: restore the reservation. The
         // disabledPlugins entry was never removed, so the row stays visible.
         // Persisted intent stays "enabled" → pendingRestart:true.

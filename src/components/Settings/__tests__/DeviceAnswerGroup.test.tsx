@@ -25,6 +25,7 @@ function makeStatus(overrides: Partial<DeviceAnswerStatus> = {}): DeviceAnswerSt
     listening: false,
     port: 7421,
     tailnetHost: null,
+    sshTarget: "greg@studio.local",
     error: null,
     pairing: null,
     devices: [],
@@ -152,5 +153,100 @@ describe("DeviceAnswerGroup", () => {
     expect(await screen.findByText("Greg's phone picked “Yes”")).toBeTruthy();
     // The same run id on a connected host is another run, named by its host.
     expect(await screen.findByText("Greg's phone picked “No” on studio-03")).toBeTruthy();
+  });
+
+  it("never says a refused answer was picked", async () => {
+    renderGroup(
+      makeStatus({
+        enabled: true,
+        listening: true,
+        recentAnswers: [
+          {
+            at: Date.now(),
+            deviceId: "d1",
+            deviceName: "Greg's phone",
+            runId: "r1",
+            label: "Yes",
+            outcome: "refused",
+            reason: "This device was removed. Nothing more was pressed.",
+          },
+          {
+            at: Date.now(),
+            deviceId: "d1",
+            deviceName: "Greg's phone",
+            runId: "r2",
+            label: "No",
+            outcome: "refused",
+          },
+        ],
+      })
+    );
+    expect(await screen.findByText("Greg's phone tried “Yes”")).toBeTruthy();
+    expect(screen.getByText("Greg's phone tried “No”")).toBeTruthy();
+    expect(screen.queryByText(/picked/)).toBeNull();
+    expect(
+      screen.getByText(/Refused: This device was removed\. Nothing more was pressed\./)
+    ).toBeTruthy();
+    expect(screen.getAllByText(/· Refused/)).toHaveLength(2);
+  });
+
+  it("copies an ssh tunnel command a shell can run, naming this machine", async () => {
+    renderGroup(makeStatus({ enabled: true, listening: true }));
+    const command = await screen.findByText("ssh -L 7421:127.0.0.1:7421 greg@studio.local");
+    expect(command.textContent).not.toMatch(/[<>]/);
+    expect(
+      screen.getByText(/greg@studio\.local is this machine's login and hostname/)
+    ).toBeTruthy();
+  });
+
+  it("quotes a login a shell would split, on the port in use", async () => {
+    renderGroup(
+      makeStatus({ enabled: true, listening: true, port: 8123, sshTarget: "o'brien@studio" })
+    );
+    expect(await screen.findByText("ssh -L 8123:127.0.0.1:8123 'o'\\''brien@studio'")).toBeTruthy();
+  });
+
+  it("announces the code once instead of every tick of its countdown", async () => {
+    const on = makeStatus({ enabled: true, listening: true });
+    renderGroup({ ...on, pairing: { code: "ABCD-EFGH", expiresAt: Date.now() + 120_000 } });
+    await screen.findByText("ABCD-EFGH");
+    const live = Array.from(document.querySelectorAll("#device-answer-pair [aria-live]"));
+    expect(live).toHaveLength(1);
+    expect(live[0]!.textContent).toBe("Pairing code ABCD-EFGH");
+    expect(screen.getByText(/Expires in/).closest("[aria-live]")).toBeNull();
+  });
+
+  it("keeps the live region still while the countdown ticks, warns once, and clears at expiry", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    try {
+      const on = makeStatus({ enabled: true, listening: true });
+      renderGroup({ ...on, pairing: { code: "ABCD-EFGH", expiresAt: Date.now() + 120_000 } });
+      await screen.findByText("ABCD-EFGH");
+      const live = () => document.querySelector("#device-answer-pair [aria-live]")!.textContent;
+      expect(live()).toBe("Pairing code ABCD-EFGH");
+
+      act(() => vi.advanceTimersByTime(30_000));
+      expect(screen.getByText("Expires in 1:30")).toBeTruthy();
+      expect(live()).toBe("Pairing code ABCD-EFGH");
+
+      act(() => vi.advanceTimersByTime(61_000));
+      expect(screen.getByText("Expires in 0:29")).toBeTruthy();
+      expect(live()).toBe("Pairing code ABCD-EFGH, expires in under 30 seconds");
+
+      act(() => vi.advanceTimersByTime(30_000));
+      expect(screen.queryByText("ABCD-EFGH")).toBeNull();
+      expect(live()).toBe("");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still reads out a code first shown near its expiry, with the warning", async () => {
+    const on = makeStatus({ enabled: true, listening: true });
+    renderGroup({ ...on, pairing: { code: "ABCD-EFGH", expiresAt: Date.now() + 20_000 } });
+    await screen.findByText("ABCD-EFGH");
+    expect(document.querySelector("#device-answer-pair [aria-live]")!.textContent).toBe(
+      "Pairing code ABCD-EFGH, expires in under 30 seconds"
+    );
   });
 });
