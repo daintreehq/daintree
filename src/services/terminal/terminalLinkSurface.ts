@@ -10,6 +10,7 @@ import {
   createWebLinksAddon,
 } from "./TerminalAddonManager";
 import type { FileLinkRoute } from "./FileLinksAddon";
+import type { SuggestedCommandLinks } from "./SuggestedCommandLinksAddon";
 import type { OpenLinkOptions } from "./TerminalLinkHandler";
 import {
   activatePluginPatternLink,
@@ -51,7 +52,7 @@ export interface TerminalLinkTarget {
 
 /** The ordered link providers one terminal holds, each null until built. */
 export interface TerminalLinkSlots {
-  commandLinksDisposable: IDisposable | null;
+  commandLinksDisposable: SuggestedCommandLinks | null;
   fileLinksDisposable: IDisposable | null;
   imageLinksDisposable: IDisposable | null;
   webLinksAddon: WebLinksAddon | null;
