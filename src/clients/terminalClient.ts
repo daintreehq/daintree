@@ -21,6 +21,7 @@ import type { PaneNotifyState } from "@shared/types/terminalNotify";
 import type {
   HostMemoryPauseSnapshot,
   PtyHostToRendererMessage,
+  TerminalFirstPromptPayload,
   TerminalReliabilityMetricPayload,
   TerminalResizeResult,
 } from "@shared/types/pty-host";
@@ -1127,6 +1128,13 @@ export const terminalClient = {
    */
   onSubmitStatus: (callback: (data: TerminalSubmitStatusPayload) => void): (() => void) =>
     window.electron.terminal.onSubmitStatus(callback),
+
+  /**
+   * Listen for the first send written to an agent run of this project that
+   * had no first prompt (#15521). Callers filter by `payload.id` themselves.
+   */
+  onFirstPrompt: (callback: (data: TerminalFirstPromptPayload) => void): (() => void) =>
+    window.electron.terminal.onFirstPrompt(callback),
 
   /**
    * Listen for a pane's pending terminal notices: whether an agent in it is

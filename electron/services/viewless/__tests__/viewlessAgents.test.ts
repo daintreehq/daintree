@@ -447,6 +447,8 @@ describe("agent.launch with no frontend", () => {
     const terminalId = (result as { result: { terminalId: string } }).result.terminalId;
     // The spawn still carries the instruction; only the record goes without it.
     expect(spawned(invoke).command).toContain("DAINTREE-DONE-");
+    // The prompt is the run's first, so none of its sends is offered (#15521).
+    expect(spawned(invoke).hasFirstPrompt).toBe(true);
     const snapshot = store.read()?.terminals.find((terminal) => terminal.id === terminalId);
     expect(snapshot?.firstPrompt).toEqual({
       text: "Fix the flaky test\nthen push",
@@ -458,7 +460,7 @@ describe("agent.launch with no frontend", () => {
   });
 
   it("writes no record for a launch with no prompt (#14592)", async () => {
-    const { deps, store } = launchDeps();
+    const { deps, invoke, store } = launchDeps();
 
     const result = await executeViewlessAction(
       request("agent.launch", { agentId: "claude", worktreeId: "/repo-wt/feature" }),
@@ -469,6 +471,8 @@ describe("agent.launch with no frontend", () => {
     const snapshot = store.read()?.terminals.find((terminal) => terminal.id === terminalId);
     expect(snapshot).toBeDefined();
     expect(snapshot).not.toHaveProperty("firstPrompt");
+    // Its first send written becomes the record instead (#15521).
+    expect(spawned(invoke)).not.toHaveProperty("hasFirstPrompt");
   });
 
   it("opens a plain shell for the terminal id", async () => {

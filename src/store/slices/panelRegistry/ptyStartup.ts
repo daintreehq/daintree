@@ -695,6 +695,9 @@ export function enqueuePtyStartup(
             agentPresetColor: options.agentPresetColor,
             originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
             handbackCode: options.handbackCode,
+            // A launch prompt or a carried record is the run's first prompt, so
+            // main never offers a send as one (#15521).
+            ...((options.launchPrompt || _p1.firstPrompt) && { hasFirstPrompt: true }),
             requiredPluginTools: options.requiredPluginTools,
             // Launch-time context the pane's MCP session replays through its
             // workspace binding (#12486): a caller may supply one, and a Claude

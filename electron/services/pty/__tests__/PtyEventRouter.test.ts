@@ -263,6 +263,22 @@ describe("routeHostEvent", () => {
     expect(errorListener).not.toHaveBeenCalled();
   });
 
+  it("hands a written first prompt to PtyClient and nowhere else (#15521)", () => {
+    const { deps, emitter } = makeDeps();
+    const onFirstPromptWritten = vi.fn();
+    deps.callbacks.onFirstPromptWritten = onFirstPromptWritten;
+    const emit = vi.spyOn(emitter, "emit");
+    const firstPrompt = { text: "Fix the login bug", via: "send" as const, at: 5 };
+
+    routeHostEvent(
+      { type: "first-prompt-written", id: "t1", launchGeneration: 3, firstPrompt },
+      deps
+    );
+
+    expect(onFirstPromptWritten).toHaveBeenCalledWith("t1", 3, firstPrompt);
+    expect(emit).not.toHaveBeenCalled();
+  });
+
   it("calls onReady when the host emits ready", () => {
     const { deps, callbacks } = makeDeps();
     routeHostEvent({ type: "ready" }, deps);

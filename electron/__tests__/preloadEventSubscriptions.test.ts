@@ -41,6 +41,7 @@ const fakeElectron = {
 interface TerminalBridge {
   onActivity: (cb: (payload: unknown) => void) => () => void;
   onExit: (cb: (id: string, code: number) => void) => () => void;
+  onFirstPrompt: (cb: (payload: unknown) => void) => () => void;
 }
 
 interface PluginBridge {
@@ -197,6 +198,18 @@ describe("preload event subscriptions", () => {
     ipcRenderer.emit("events:push", {}, { name: "terminal:exit", payload: ["t2", 1] });
     expect(exits).toEqual([["t1", 0]]);
     expect(ipcRenderer.listenerCount("events:push")).toBe(busListenersBefore);
+  });
+
+  it("hands a run's first prompt to its subscriber until disposed (#15521)", () => {
+    const received: unknown[] = [];
+    const dispose = terminal.onFirstPrompt((payload) => received.push(payload));
+    const payload = { id: "t1", firstPrompt: { text: "Fix the login bug", via: "send", at: 5 } };
+
+    ipcRenderer.emit("events:push", {}, { name: "terminal:first-prompt", payload });
+    dispose();
+    ipcRenderer.emit("events:push", {}, { name: "terminal:first-prompt", payload });
+
+    expect(received).toEqual([payload]);
   });
 
   it("passes a session-preserving teardown's exit context through, and nothing else (#13841)", () => {

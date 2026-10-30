@@ -1,0 +1,370 @@
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { EventEmitter } from "events";
+import type { PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
+import type { TerminalFirstPrompt } from "../../../shared/types/panel.js";
+import { FIRST_PROMPT_MAX_CHARS } from "../../../shared/utils/firstPrompt.js";
+import { appendHandbackInstruction } from "../../../shared/utils/handback.js";
+
+const shared = vi.hoisted(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { EventEmitter } = require("events") as typeof import("events");
+  const appEmitter = new EventEmitter();
+  const appMock = Object.assign(appEmitter, {
+    getPath: vi.fn().mockReturnValue("/mock/user/data"),
+  });
+  return {
+    forkMock: vi.fn(),
+    tracker: { removeTrashed: vi.fn(), persistTrashed: vi.fn(), clearAll: vi.fn() },
+    appMock,
+  };
+});
+
+vi.mock("electron", () => ({
+  utilityProcess: { fork: shared.forkMock },
+  UtilityProcess: EventEmitter,
+  MessagePortMain: class {},
+  app: shared.appMock,
+}));
+
+vi.mock("../TrashedPidTracker.js", () => ({
+  getTrashedPidTracker: () => shared.tracker,
+}));
+
+vi.mock("../../utils/logger.js", () => ({
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+  isValidLogOverrideLevel: vi.fn(() => true),
+  ingestHostLogEvent: vi.fn(),
+}));
+
+interface MockUtilityProcess extends EventEmitter {
+  postMessage: Mock;
+  kill: Mock;
+  stdout: EventEmitter;
+  stderr: EventEmitter;
+  pid?: number;
+}
+
+function createMockChild(): MockUtilityProcess {
+  return Object.assign(new EventEmitter(), {
+    postMessage: vi.fn(),
+    kill: vi.fn(),
+    stdout: new EventEmitter(),
+    stderr: new EventEmitter(),
+    pid: 321,
+  });
+}
+
+interface SubmitMessage {
+  id: string;
+  text: string;
+  firstPrompt?: { text: string; truncated?: true };
+}
+
+function submitMessages(child: MockUtilityProcess): SubmitMessage[] {
+  return child.postMessage.mock.calls
+    .map((call: unknown[]) => call[0] as SubmitMessage & { type?: string })
+    .filter((msg) => msg?.type === "submit");
+}
+
+function spawnGenerations(child: MockUtilityProcess, id: string): number[] {
+  return child.postMessage.mock.calls
+    .map(
+      (call: unknown[]) => call[0] as { type?: string; id?: string; options?: PtyHostSpawnOptions }
+    )
+    .filter((msg) => msg?.type === "spawn" && msg.id === id)
+    .map((msg) => msg.options!.launchGeneration!);
+}
+
+describe("PtyClient first prompt (#15521)", () => {
+  let mockChild: MockUtilityProcess;
+  let PtyClientClass: typeof import("../PtyClient.js").PtyClient;
+  let disposeLifecycleLedger: typeof import("../pty/lifecycleLedger.js").disposeLifecycleLedger;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    shared.appMock.removeAllListeners();
+    mockChild = createMockChild();
+    shared.forkMock.mockReturnValue(mockChild);
+    ({ PtyClient: PtyClientClass } = await import("../PtyClient.js"));
+    ({ disposeLifecycleLedger } = await import("../pty/lifecycleLedger.js"));
+    vi.useFakeTimers();
+    disposeLifecycleLedger();
+  });
+
+  afterEach(() => {
+    disposeLifecycleLedger();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  const agentOptions: PtyHostSpawnOptions = {
+    cwd: "/repo",
+    cols: 80,
+    rows: 24,
+    launchAgentId: "claude",
+    projectId: "proj-1",
+  };
+
+  function readyClient() {
+    const client = new PtyClientClass();
+    mockChild.emit("message", { type: "ready" });
+    const recorded: Array<{ id: string; firstPrompt: TerminalFirstPrompt; projectId?: string }> =
+      [];
+    client.on(
+      "first-prompt",
+      (id: string, firstPrompt: TerminalFirstPrompt, projectId: string | undefined) =>
+        recorded.push({ id, firstPrompt, projectId })
+    );
+    return { client, recorded };
+  }
+
+  function written(
+    id: string,
+    launchGeneration: number,
+    text: string,
+    child: MockUtilityProcess = mockChild
+  ): void {
+    child.emit("message", {
+      type: "first-prompt-written",
+      id,
+      launchGeneration,
+      firstPrompt: { text, via: "send", at: 5_000 },
+    });
+  }
+
+  it("offers an agent run's sends until one is written, then records that one only", () => {
+    const { client, recorded } = readyClient();
+    client.spawn("t1", agentOptions);
+    const [generation] = spawnGenerations(mockChild, "t1");
+
+    client.submit("t1", "Fix the login bug");
+    client.submit("t1", "Also the signup form");
+    expect(submitMessages(mockChild).map((m) => m.firstPrompt?.text)).toEqual([
+      "Fix the login bug",
+      "Also the signup form",
+    ]);
+
+    written("t1", generation!, "Fix the login bug");
+    written("t1", generation!, "Also the signup form");
+    expect(recorded).toEqual([
+      {
+        id: "t1",
+        firstPrompt: { text: "Fix the login bug", via: "send", at: 5_000 },
+        projectId: "proj-1",
+      },
+    ]);
+
+    client.submit("t1", "A third");
+    expect(submitMessages(mockChild).at(-1)?.firstPrompt).toBeUndefined();
+    client.dispose();
+  });
+
+  it("never offers a send to a run that has its record or isn't an agent", () => {
+    const { client } = readyClient();
+    client.spawn("launched", { ...agentOptions, hasFirstPrompt: true });
+    client.spawn("shell", { ...agentOptions, launchAgentId: undefined });
+
+    client.submit("launched", "hello");
+    client.submit("shell", "ls");
+    expect(submitMessages(mockChild).map((m) => m.firstPrompt)).toEqual([undefined, undefined]);
+    client.dispose();
+  });
+
+  it("offers the text as its caller wrote it, before the handback instruction", () => {
+    const { client } = readyClient();
+    client.spawn("t1", agentOptions);
+    client.spawn("t2", agentOptions);
+    client.spawn("t3", agentOptions);
+
+    client.submit("t1", appendHandbackInstruction("Run the suite", "k7f3qa"), "tok", "k7f3qa");
+    client.submit(
+      "t2",
+      "From the Daintree Assistant on studio. Brief.\n\nRun the suite",
+      "tok",
+      undefined,
+      "settled-prompt-strict",
+      undefined,
+      "Run the suite"
+    );
+    // A notice is nobody's prompt.
+    client.submit("t3", "Worker finished", "tok", undefined, "settled-prompt", undefined, null);
+
+    expect(submitMessages(mockChild).map((m) => m.firstPrompt)).toEqual([
+      { text: "Run the suite" },
+      { text: "Run the suite" },
+      undefined,
+    ]);
+    client.dispose();
+  });
+
+  it("caps the offered text and offers nothing for a blank send", () => {
+    const { client } = readyClient();
+    client.spawn("t1", agentOptions);
+
+    client.submit("t1", "   ");
+    client.submit("t1", "x".repeat(FIRST_PROMPT_MAX_CHARS + 50));
+    const [blank, long] = submitMessages(mockChild);
+    expect(blank?.firstPrompt).toBeUndefined();
+    expect(long?.firstPrompt?.text).toHaveLength(FIRST_PROMPT_MAX_CHARS);
+    expect(long?.firstPrompt?.truncated).toBe(true);
+    client.dispose();
+  });
+
+  it("drops a predecessor's write after a respawn and keeps the successor open", () => {
+    const { client, recorded } = readyClient();
+    client.spawn("t1", agentOptions);
+    client.kill("t1");
+    client.spawn("t1", agentOptions);
+    const [first, second] = spawnGenerations(mockChild, "t1");
+
+    written("t1", first!, "meant for the old run");
+    expect(recorded).toEqual([]);
+
+    client.submit("t1", "the new run's task");
+    expect(submitMessages(mockChild).at(-1)?.firstPrompt?.text).toBe("the new run's task");
+    written("t1", second!, "the new run's task");
+    expect(recorded.map((r) => r.firstPrompt.text)).toEqual(["the new run's task"]);
+    client.dispose();
+  });
+
+  it("stops offering once the run exits or is killed", () => {
+    const { client, recorded } = readyClient();
+    client.spawn("t1", agentOptions);
+    client.spawn("t2", agentOptions);
+    const [g1] = spawnGenerations(mockChild, "t1");
+    const [g2] = spawnGenerations(mockChild, "t2");
+
+    mockChild.emit("message", { type: "exit", id: "t1", exitCode: 0, launchGeneration: g1 });
+    client.kill("t2");
+    written("t1", g1!, "late");
+    written("t2", g2!, "late");
+    expect(recorded).toEqual([]);
+    client.dispose();
+  });
+  it("keeps the successor open when the predecessor's exit lands after the respawn", () => {
+    const { client, recorded } = readyClient();
+    client.spawn("t1", agentOptions);
+    client.kill("t1");
+    client.spawn("t1", agentOptions);
+    const [first, second] = spawnGenerations(mockChild, "t1");
+
+    mockChild.emit("message", { type: "exit", id: "t1", exitCode: 0, launchGeneration: first });
+    client.submit("t1", "the new run's task");
+    written("t1", second!, "the new run's task");
+
+    expect(submitMessages(mockChild).at(-1)?.firstPrompt?.text).toBe("the new run's task");
+    expect(recorded.map((r) => r.firstPrompt.text)).toEqual(["the new run's task"]);
+    client.dispose();
+  });
+
+  it("stops offering when the id respawns as a run that has its record", () => {
+    const { client, recorded } = readyClient();
+    client.spawn("t1", agentOptions);
+    client.kill("t1");
+    client.spawn("t1", { ...agentOptions, hasFirstPrompt: true });
+    const [, second] = spawnGenerations(mockChild, "t1");
+
+    client.submit("t1", "steer");
+    written("t1", second!, "steer");
+
+    expect(submitMessages(mockChild).at(-1)?.firstPrompt).toBeUndefined();
+    expect(recorded).toEqual([]);
+    client.dispose();
+  });
+
+  it("keeps the running incarnation's state while a duplicate spawn is refused", () => {
+    const { client, recorded } = readyClient();
+    client.spawn("t1", agentOptions);
+    client.spawn("t1", { ...agentOptions, hasFirstPrompt: true });
+    const [live, duplicate] = spawnGenerations(mockChild, "t1");
+
+    // Still the run without a record that answers sends, until and after the refusal.
+    client.submit("t1", "first task");
+    mockChild.emit("message", {
+      type: "spawn-result",
+      id: "t1",
+      result: {
+        success: false,
+        id: "t1",
+        launchGeneration: duplicate,
+        error: { code: "TERMINAL_ALREADY_LIVE", message: "live" },
+      },
+    });
+    client.submit("t1", "first task, again");
+    written("t1", live!, "first task");
+
+    expect(submitMessages(mockChild).map((m) => m.firstPrompt?.text)).toEqual([
+      "first task",
+      "first task, again",
+    ]);
+    expect(recorded.map((r) => r.firstPrompt.text)).toEqual(["first task"]);
+    client.dispose();
+  });
+
+  it("claims the running incarnation, for its own project, before a duplicate is refused", () => {
+    const { client, recorded } = readyClient();
+    client.spawn("t1", agentOptions);
+    client.spawn("t1", { ...agentOptions, projectId: "proj-2" });
+    const [live, duplicate] = spawnGenerations(mockChild, "t1");
+
+    client.submit("t1", "first task");
+    written("t1", live!, "first task");
+    client.submit("t1", "steer while the duplicate waits");
+    mockChild.emit("message", {
+      type: "spawn-result",
+      id: "t1",
+      result: {
+        success: false,
+        id: "t1",
+        launchGeneration: duplicate,
+        error: { code: "TERMINAL_ALREADY_LIVE", message: "live" },
+      },
+    });
+    client.submit("t1", "steer after the refusal");
+    written("t1", live!, "steer after the refusal");
+
+    expect(submitMessages(mockChild).map((m) => m.firstPrompt?.text)).toEqual([
+      "first task",
+      undefined,
+      undefined,
+    ]);
+    expect(recorded.map((r) => [r.firstPrompt.text, r.projectId])).toEqual([
+      ["first task", "proj-1"],
+    ]);
+    client.dispose();
+  });
+
+  it("carries the run's state across a host crash replay", () => {
+    const { client, recorded } = readyClient();
+    client.spawn("open", agentOptions);
+    client.spawn("claimed", agentOptions);
+    const [claimedGeneration] = spawnGenerations(mockChild, "claimed");
+    client.submit("claimed", "its task");
+    written("claimed", claimedGeneration!, "its task");
+
+    const restartedChild = createMockChild();
+    shared.forkMock.mockReturnValue(restartedChild);
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(200);
+    restartedChild.emit("message", { type: "ready" });
+    const [replayed] = spawnGenerations(restartedChild, "open");
+
+    client.submit("open", "task for the replayed run");
+    client.submit("claimed", "steer");
+    written("open", replayed!, "task for the replayed run", restartedChild);
+
+    expect(submitMessages(restartedChild).map((m) => m.firstPrompt?.text)).toEqual([
+      "task for the replayed run",
+      undefined,
+    ]);
+    expect(recorded.map((r) => [r.id, r.firstPrompt.text])).toEqual([
+      ["claimed", "its task"],
+      ["open", "task for the replayed run"],
+    ]);
+    client.dispose();
+  });
+});

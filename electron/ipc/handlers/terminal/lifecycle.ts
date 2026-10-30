@@ -1297,6 +1297,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         originalAgentPresetId:
           validatedOptions.originalAgentPresetId ?? validatedOptions.agentPresetId,
         handbackCode: validatedOptions.handbackCode,
+        hasFirstPrompt: validatedOptions.hasFirstPrompt,
         // Executed immediately by PtyClient after the spawn message (FIFO on the
         // same channel), so users don't stare at a blank prompt; the shell stays
         // the parent process and reclaims the foreground when the command exits.

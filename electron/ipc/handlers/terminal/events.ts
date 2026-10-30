@@ -31,6 +31,8 @@ import type {
 } from "../../../../shared/types/pty-host.js";
 import type { PtyDataRouting } from "../../../services/pty/types.js";
 import { CodexLiveSessionAttribution } from "../../../services/codex/CodexLiveSessionAttribution.js";
+import { deliverFirstPrompt } from "../../../services/pty/firstPromptDelivery.js";
+import type { TerminalFirstPrompt } from "../../../../shared/types/panel.js";
 import { isCleaningUp } from "../../../lifecycle/shutdownCoordinator.js";
 import {
   setSpawnConfirmationTimeoutHandler,
@@ -141,6 +143,18 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   };
   ptyClient.on("submit-status", handleSubmitStatus);
   handlers.push(() => ptyClient.off("submit-status", handleSubmitStatus));
+
+  // The first send written to a run with no first prompt (#15521), with the
+  // project of the run that took it.
+  const handleFirstPrompt = (
+    id: string,
+    firstPrompt: TerminalFirstPrompt,
+    projectId: string | undefined
+  ) => {
+    if (projectId) deliverFirstPrompt(projectId, id, firstPrompt);
+  };
+  ptyClient.on("first-prompt", handleFirstPrompt);
+  handlers.push(() => ptyClient.off("first-prompt", handleFirstPrompt));
 
   // Spawn result events (success or failure)
   const handleSpawnResult = (id: string, result: SpawnResult) => {

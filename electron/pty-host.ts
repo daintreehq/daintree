@@ -1020,6 +1020,18 @@ ptyManager.on(
   }
 );
 
+// Carries prompt text (#15521): straight to Main, never logged or onto a bus.
+ptyManager.on(
+  "first-prompt-written",
+  (
+    id: string,
+    launchGeneration: number | undefined,
+    firstPrompt: import("../shared/types/panel.js").TerminalFirstPrompt
+  ) => {
+    sendEvent({ type: "first-prompt-written", id, launchGeneration, firstPrompt });
+  }
+);
+
 ptyManager.on(
   "resize-result",
   (id: string, result: import("../shared/types/pty-host.js").TerminalResizeResult) => {

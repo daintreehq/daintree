@@ -1148,6 +1148,9 @@ export const createRestartActions = (
         agentPresetId: nextAgentPresetId,
         agentPresetColor: nextAgentPresetColor,
         originalAgentPresetId: nextOriginalPresetId ?? nextAgentPresetId,
+        // The record the run keeps (#15521): main offers its sends only when
+        // it starts with none.
+        ...(keepsFirstPrompt && currentTerminal.firstPrompt && { hasFirstPrompt: true }),
         // Held to the same plugin tools on every relaunch, unless the user
         // chose to start this one without them (#14096).
         requiredPluginTools: isAgent ? currentTerminal.requiredPluginTools : undefined,

@@ -46,6 +46,16 @@ export function appendHandbackInstruction(text: string, code: string): string {
   return `${text.replace(/[\r\n]+$/, "")}\n\n${buildHandbackInstruction(code)}`;
 }
 
+/**
+ * `submitted` without the instruction {@link appendHandbackInstruction} added
+ * for `code`, or unchanged when it doesn't end with it. Only the trailing line
+ * breaks the append dropped are lost.
+ */
+export function withoutHandbackInstruction(submitted: string, code: string): string {
+  const suffix = `\n\n${buildHandbackInstruction(code)}`;
+  return submitted.endsWith(suffix) ? submitted.slice(0, -suffix.length) : submitted;
+}
+
 /** Opening marker for `code`. */
 export function handbackStartMarker(code: string): string {
   return `DAINTREE-DONE-${code}`;

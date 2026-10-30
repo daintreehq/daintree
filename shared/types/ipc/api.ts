@@ -185,6 +185,7 @@ export interface KeybindingImportResult {
 import type {
   TerminalStatusPayload,
   TerminalSubmitStatusPayload,
+  TerminalFirstPromptPayload,
   PtyHostActivityTier,
   SpawnResult,
   TerminalResourceBatchPayload,
@@ -430,6 +431,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Submit-lane status for one terminal (#11875). Fires only for submits that
      *  cross the slow/stalled threshold or fail. */
     onSubmitStatus(callback: (data: TerminalSubmitStatusPayload) => void): () => void;
+    /** The first send written to an agent run of this project that had no first prompt (#15521). */
+    onFirstPrompt(callback: (data: TerminalFirstPromptPayload) => void): () => void;
     /** A pane's pending terminal notices changed. Callers filter by `terminalId`. */
     onNotifyState(
       callback: (data: import("../terminalNotify.js").PaneNotifyState) => void

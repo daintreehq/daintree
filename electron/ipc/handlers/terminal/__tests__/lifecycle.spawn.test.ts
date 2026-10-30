@@ -389,6 +389,27 @@ describe("terminal spawn handler - projectId resolution", () => {
     expect(spawnArgs.projectId).toBe("project-a-id");
   });
 
+  it("tells the client whether the run has its first prompt (#15521)", async () => {
+    mockGetProjectById.mockReturnValue(projectA);
+    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+    const handler = getSpawnHandler();
+
+    await handler({} as Electron.IpcMainInvokeEvent, {
+      projectId: "project-a-id",
+      cols: 80,
+      rows: 24,
+      hasFirstPrompt: true,
+    });
+    await handler({} as Electron.IpcMainInvokeEvent, {
+      projectId: "project-a-id",
+      cols: 80,
+      rows: 24,
+    });
+
+    expect(ptyClient.spawn.mock.calls[0][1].hasFirstPrompt).toBe(true);
+    expect(ptyClient.spawn.mock.calls[1][1].hasFirstPrompt).toBeUndefined();
+  });
+
   it("records each spawned launch's resume intent (#12433)", async () => {
     mockGetProjectById.mockReturnValue(projectA);
     registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);

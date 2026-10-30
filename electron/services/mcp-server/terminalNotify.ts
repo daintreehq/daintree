@@ -152,7 +152,9 @@ export interface TerminalNotifyPtyClient {
     text: string,
     submissionToken?: string,
     handbackCode?: string,
-    guard?: TerminalSubmitGuard
+    guard?: TerminalSubmitGuard,
+    imagePaths?: readonly string[],
+    promptAsWritten?: string | null
   ): void;
   /** Take back a line that has not reached its Enter; see `WriteQueue.withdrawGuardedSubmission`. */
   withdrawGuardedSubmission(id: string, submissionToken: string): void;
@@ -2206,7 +2208,16 @@ export class TerminalNotifyService {
     // The host re-checks the gate when the line reaches the lane, and drops
     // its Enter if anyone types before it lands.
     try {
-      client.submit(owner.terminalId, lines.join("\n\n"), token, undefined, "settled-prompt");
+      // A notice is nobody's prompt, so it never becomes the run's first one.
+      client.submit(
+        owner.terminalId,
+        lines.join("\n\n"),
+        token,
+        undefined,
+        "settled-prompt",
+        undefined,
+        null
+      );
     } catch (err) {
       // Whether any of it reached the host is unknown, so this is a failed
       // line like any other: its notices wait for the pane's next turn.

@@ -3973,6 +3973,7 @@ export interface GeneratedIpcInvokeMap {
         agentPresetColor?: string | undefined;
         originalAgentPresetId?: string | undefined;
         handbackCode?: string | undefined;
+        hasFirstPrompt?: boolean | undefined;
         actionContext?:
           | {
               projectId?: string | undefined;
