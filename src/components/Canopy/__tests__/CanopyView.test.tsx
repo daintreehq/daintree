@@ -1680,19 +1680,62 @@ describe("CanopyView", () => {
       expect(cards(container).map((card) => card.id)).toEqual(order);
     });
 
-    it("lands on it on the panel's first opening too, and stays there as focus moves on", async () => {
+    it("lands on it on the panel's first opening too, keeping the agent focused as it opened", async () => {
       installElectron();
+      const fleet = useFleetSnapshotStore.getState().snapshot!;
+      useFleetSnapshotStore.setState({ snapshot: { ...fleet, runs: [] } });
       useCanopyStore.setState({ isOpen: false });
       focusInMainView("asking");
       act(() => useCanopyStore.getState().toggle());
-      const { container } = render(<CanopyView />);
+      const first = render(<CanopyView />);
+      await frames();
+      // Focus moves on in the main view before the runs arrive: the landing
+      // keeps the agent the panel opened on.
       focusInMainView("working");
+      act(() => useFleetSnapshotStore.setState({ snapshot: fleet }));
       await frames();
-      expect(selectedRun(container)).toBe("asking");
-      expect(liveRun(container)).toBe("asking");
-      act(() => useCanopyStore.setState({ snapshot: { ...canopySnapshot, refreshedAt: NOW + 1 } }));
+      expect(selectedRun(first.container)).toBe("asking");
+      expect(liveRun(first.container)).toBe("asking");
+      first.unmount();
+
+      // The next opening reads it afresh.
+      act(() => useCanopyStore.getState().close());
+      act(() => useCanopyStore.getState().toggle());
+      const next = render(<CanopyView />);
       await frames();
-      expect(selectedRun(container)).toBe("asking");
+      expect(selectedRun(next.container)).toBe("working");
+    });
+
+    it("lands on it in Archived only while Archived is open, never opening the fold", async () => {
+      const archived: CanopySnapshot = {
+        ...canopySnapshot,
+        dispositions: [{ runId: "working", spawnedAt: NOW - 3_600_000, kind: "archived", at: NOW }],
+      };
+      installElectron(archived);
+      useCanopyStore.setState({ snapshot: archived, isOpen: false, archivedExpanded: false });
+      focusInMainView("working");
+      try {
+        act(() => useCanopyStore.getState().open());
+        const shut = render(<CanopyView />);
+        await frames();
+        expect(useCanopyStore.getState().archivedExpanded).toBe(false);
+        expect(document.getElementById("canopy-card-working")).toBeNull();
+        expect(selectedRun(shut.container)).toBe("waiting");
+        shut.unmount();
+
+        act(() => useCanopyStore.getState().close());
+        useCanopyStore.setState({ archivedExpanded: true });
+        act(() => useCanopyStore.getState().open());
+        const scrolled = vi.mocked(Element.prototype.scrollIntoView);
+        scrolled.mockClear();
+        const open = render(<CanopyView />);
+        await frames();
+        expect(selectedRun(open.container)).toBe("working");
+        expect(liveRun(open.container)).toBe("working");
+        expect(scrolled.mock.contexts).toContain(document.getElementById("canopy-card-working"));
+      } finally {
+        useCanopyStore.setState({ archivedExpanded: false });
+      }
     });
 
     it("opens as before on a pane that isn't an agent, or an agent Canopy doesn't list", async () => {

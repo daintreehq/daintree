@@ -12,27 +12,6 @@ export interface PanelGroupInfo {
 export type GetPanelGroupInfo = (panelId: string) => PanelGroupInfo | undefined;
 
 /**
- * Which tab of a panel's group is on screen, resolved the way GridTabGroup
- * resolves it for rendering: a stale stored id (member removed or moved)
- * yields to the first member, so the focus logic and the renderer never
- * disagree about which tab is visible.
- */
-export function resolvePanelGroupInfo(
-  state: {
-    getPanelGroup: (panelId: string) => { id: string; panelIds: string[] } | undefined;
-    tabGroups: ReadonlyMap<string, { activeTabId: string | null }>;
-  },
-  panelId: string
-): PanelGroupInfo | undefined {
-  const group = state.getPanelGroup(panelId);
-  if (!group) return undefined;
-  const stored = state.tabGroups.get(group.id)?.activeTabId ?? null;
-  const activeTabId =
-    stored && group.panelIds.includes(stored) ? stored : (group.panelIds[0] ?? null);
-  return { groupId: group.id, activeTabId };
-}
-
-/**
  * Whether a panel is laid out in the grid of the active worktree. Legacy rows
  * carry no `location` and are grid panels by omission.
  *

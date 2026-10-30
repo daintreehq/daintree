@@ -710,7 +710,7 @@ describe("the Canopy host picker", () => {
 
   it("lands on Go to terminal's run on another host, not one there sharing the focused agent's id", async () => {
     useFleetSnapshotStore.setState({ snapshot: fleet(["shared"]) });
-    remoteFleet = fleet(["remote-first", "shared"]);
+    remoteFleet = fleet(["remote-first", "remote-resume", "shared"]);
     usePanelStore.setState({
       panelsById: {
         shared: { id: "shared", kind: "terminal", location: "grid", detectedAgentId: "claude" },
@@ -724,8 +724,8 @@ describe("the Canopy host picker", () => {
           at: Date.now(),
           hostId: "studio",
           query: "",
-          runId: "remote-first",
-          order: ["remote-first", "shared"],
+          runId: "remote-resume",
+          order: ["remote-first", "remote-resume", "shared"],
         },
       });
       act(() => useCanopyStore.getState().open());
@@ -737,11 +737,13 @@ describe("the Canopy host picker", () => {
       });
       expect(useCanopyStore.getState().hostId).toBe("studio");
       expect(document.getElementById("canopy-card-shared")).not.toBeNull();
+      // Neither the list's default nor the focused agent's id: Go to terminal's run.
+      expect(document.querySelector("[data-canopy-card]")?.id).toBe("canopy-card-remote-first");
       expect(
         document
           .querySelector('[data-canopy-card][aria-selected="true"]')
           ?.id.replace(/^canopy-card-/, "")
-      ).toBe("remote-first");
+      ).toBe("remote-resume");
     } finally {
       usePanelStore.setState({ panelsById: {} as never, focusedId: null });
       useCanopyStore.setState({ resume: null });

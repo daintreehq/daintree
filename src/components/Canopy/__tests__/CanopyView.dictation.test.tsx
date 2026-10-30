@@ -362,8 +362,13 @@ describe("CanopyView — a reply's dictation outlives its screen (#14778)", () =
       focusedId: "working",
     });
     try {
+      const scrolled = vi.mocked(Element.prototype.scrollIntoView);
+      scrolled.mockClear();
       await goBackTo(target);
       expect(selectedRun()).toBe("asking");
+      // The opening waited on the reply: it never went to the focused agent first.
+      expect(scrolled.mock.contexts).toContain(row("asking"));
+      expect(scrolled.mock.contexts).not.toContain(row("working"));
       await vi.waitFor(() => expect(dictationFocus).toHaveBeenCalledWith("asking"));
     } finally {
       usePanelStore.setState({ panelsById: {} as never, focusedId: null });

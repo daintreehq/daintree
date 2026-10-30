@@ -1,27 +1,16 @@
-import { isRenderedGridPanel, resolvePanelGroupInfo } from "@/store/panelFocusFallback";
 import { usePanelStore } from "@/store/panelStore";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { isAgentTerminal } from "@/utils/terminalType";
 
 /**
- * The agent terminal the main view has focused, while it is on screen there:
- * in the grid, or in the dock's open popover. `focusedId` keeps naming a pane
- * after it is hidden (a background tab, behind a maximized pane, another
- * worktree), and a pane the user can't see isn't the one they were working in.
+ * The agent terminal the main view has focused. `focusedId` is trusted as the
+ * pane the main view shows: keeping it there is the panel store's job across
+ * every way the grid renders (maximized, tab groups, fleet scope, the dock),
+ * and Canopy only selects the row, never moving focus, so re-deriving what is
+ * on screen here would only drift from it.
  */
 export function mainViewFocusedAgentId(): string | null {
-  const state = usePanelStore.getState();
-  const id = state.focusedId;
-  const panel = id === null ? undefined : state.panelsById[id];
-  if (!panel || !isAgentTerminal(panel)) return null;
-  const shown =
-    panel.location === "dock"
-      ? state.activeDockTerminalId === panel.id
-      : isRenderedGridPanel(panel, {
-          activeWorktreeId: useWorktreeSelectionStore.getState().activeWorktreeId,
-          maximizedId: state.maximizedId,
-          maximizeTarget: state.maximizeTarget,
-          getPanelGroupInfo: (panelId) => resolvePanelGroupInfo(state, panelId),
-        });
-  return shown ? panel.id : null;
+  const { focusedId, panelsById } = usePanelStore.getState();
+  const panel = focusedId === null ? undefined : panelsById[focusedId];
+  if (!panel || panel.location === "trash" || panel.location === "background") return null;
+  return isAgentTerminal(panel) ? panel.id : null;
 }

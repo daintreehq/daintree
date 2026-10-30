@@ -11,7 +11,6 @@ import {
   isRenderedGridPanel,
   pickDockCloseFocusId,
   pickGridSuccessorFocusId,
-  resolvePanelGroupInfo,
   type GetPanelGroupInfo,
 } from "../panelFocusFallback";
 
@@ -123,30 +122,6 @@ describe("isRenderedGridPanel", () => {
     expect(isRenderedGridPanel(panel("b"), maximized)).toBe(true);
     expect(isRenderedGridPanel(panel("a"), maximized)).toBe(false);
     expect(isRenderedGridPanel(panel("outside"), maximized)).toBe(false);
-  });
-});
-
-describe("resolvePanelGroupInfo", () => {
-  const group = { id: "g", panelIds: ["a", "b"] };
-  const stateWith = (activeTabId: string | null) => ({
-    getPanelGroup: (panelId: string) => (group.panelIds.includes(panelId) ? group : undefined),
-    tabGroups: new Map([["g", { activeTabId }]]),
-  });
-
-  it("names the stored tab while it is still a member", () => {
-    expect(resolvePanelGroupInfo(stateWith("b"), "a")).toEqual({ groupId: "g", activeTabId: "b" });
-  });
-
-  it("falls back to the first member for a stale or missing tab, as the grid draws it", () => {
-    expect(resolvePanelGroupInfo(stateWith("gone"), "b")).toEqual({
-      groupId: "g",
-      activeTabId: "a",
-    });
-    expect(resolvePanelGroupInfo(stateWith(null), "b")).toEqual({ groupId: "g", activeTabId: "a" });
-  });
-
-  it("is undefined for a panel in no group", () => {
-    expect(resolvePanelGroupInfo(stateWith("a"), "solo")).toBeUndefined();
   });
 });
 
