@@ -49,6 +49,14 @@ vi.mock("@/store", () => ({
   },
 }));
 
+const readViewingModeMock = vi.fn((): "fullscreen" | "grid" | null => "grid");
+const applyViewingModeMock = vi.fn();
+
+vi.mock("../agentRowViewingMode", () => ({
+  readAgentRowViewingMode: () => readViewingModeMock(),
+  applyAgentRowViewingMode: (mode: unknown, panelId: string) => applyViewingModeMock(mode, panelId),
+}));
+
 vi.mock("@/store/worktreeStore", () => ({
   useWorktreeSelectionStore: (selector: (s: unknown) => unknown) =>
     selector({
@@ -216,6 +224,8 @@ beforeEach(() => {
   setActiveTabMock.mockReset();
   selectWorktreeMock.mockReset();
   trackTerminalFocusMock.mockReset();
+  readViewingModeMock.mockReset().mockReturnValue("grid");
+  applyViewingModeMock.mockReset();
   mockTerminals = [];
   mockTabGroups = new Map();
   mockPluginRows = [];
@@ -315,6 +325,29 @@ describe("UnreadContainer", () => {
     expect(trackTerminalFocusMock).toHaveBeenCalledWith("wt-2", "t1");
     expect(selectWorktreeMock).toHaveBeenCalledWith("wt-2");
     expect(activateTerminalMock).toHaveBeenCalledWith("t1");
+  });
+
+  it("carries the viewing mode read before the worktree switch to the picked pane (#15335)", () => {
+    mockTerminals = [makeTerminal({ id: "t1", worktreeId: "wt-2" })];
+    const callOrder: string[] = [];
+    readViewingModeMock.mockImplementation(() => {
+      callOrder.push("readViewingMode");
+      return "fullscreen";
+    });
+    selectWorktreeMock.mockImplementation(() => callOrder.push("selectWorktree"));
+    applyViewingModeMock.mockImplementation(() => callOrder.push("applyViewingMode"));
+    activateTerminalMock.mockImplementation(() => callOrder.push("activateTerminal"));
+    render(<UnreadContainer />);
+
+    fireEvent.click(screen.getByTestId("unread-single-item"));
+
+    expect(applyViewingModeMock).toHaveBeenCalledWith("fullscreen", "t1");
+    expect(callOrder).toEqual([
+      "readViewingMode",
+      "selectWorktree",
+      "applyViewingMode",
+      "activateTerminal",
+    ]);
   });
 });
 

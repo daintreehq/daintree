@@ -148,6 +148,17 @@ export interface TerminalFocusSlice {
    * paths, which must always end up in the grid (#11060).
    */
   exitMaximize: () => void;
+  /**
+   * Show `id` fullscreen, never toggling: a cell that is already maximized
+   * stays maximized. Carries fullscreen from one pane to another as a viewing
+   * mode (#15335), so it keeps the active worktree's `preMaximizeLayout` and
+   * leaving restores the grid the user maximized from. Only a grid panel of the
+   * active worktree can be shown this way; anything else is a no-op.
+   */
+  maximizePanel: (
+    id: string,
+    getPanelGroup: (panelId: string) => { id: string; panelIds: string[] } | undefined
+  ) => void;
   clearPreMaximizeLayout: () => void;
   focusNext: () => void;
   focusPrevious: () => void;
@@ -469,6 +480,34 @@ export const createTerminalFocusSlice =
         set({
           maximizedId: null,
           maximizeTarget: null,
+        });
+      },
+
+      maximizePanel: (id, getPanelGroup) => {
+        const terminal = getTerminals().find((t) => t.id === id);
+        const activeWorktreeId = getActiveWorktreeId();
+        if (!terminal || !isVisibleGridPanel(terminal, activeWorktreeId)) return;
+        const group = getPanelGroup(id);
+        const maximizeTarget: MaximizeTarget =
+          group && group.panelIds.length > 1
+            ? { type: "group", id: group.id }
+            : { type: "panel", id };
+        set((state) => {
+          // A snapshot taken in another worktree describes a grid this one
+          // never had, so restoring from it would be wrong rather than stale.
+          const preMaximizeLayout =
+            state.preMaximizeLayout?.worktreeId === (activeWorktreeId ?? undefined)
+              ? state.preMaximizeLayout
+              : null;
+          if (
+            state.maximizedId === id &&
+            state.maximizeTarget?.type === maximizeTarget.type &&
+            state.maximizeTarget.id === maximizeTarget.id &&
+            state.preMaximizeLayout === preMaximizeLayout
+          ) {
+            return state;
+          }
+          return { maximizedId: id, maximizeTarget, preMaximizeLayout };
         });
       },
 

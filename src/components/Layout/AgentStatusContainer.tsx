@@ -62,6 +62,7 @@ import {
 } from "@/store/pluginPanelAttentionStore";
 import { AGENT_SNOOZE_LABEL } from "@shared/utils/agentSnoozeDurations";
 import { openPluginAttentionPanel } from "@/components/PluginAttention/openPluginAttentionPanel";
+import { applyAgentRowViewingMode, readAgentRowViewingMode } from "./agentRowViewingMode";
 
 /**
  * What sets one agent pill apart from another. Everything else — the triage
@@ -279,6 +280,7 @@ export function AgentStatusContainer({
 
   const handleActivate = useCallback(
     (terminal: PtyPanelData, groupId: string | null) => {
+      const viewingMode = readAgentRowViewingMode();
       const worktreeId = terminal.worktreeId?.trim();
       if (worktreeId && worktreeId !== activeWorktreeId) {
         trackTerminalFocus(worktreeId, terminal.id);
@@ -287,6 +289,7 @@ export function AgentStatusContainer({
       if (groupId) {
         setActiveTab(groupId, terminal.id);
       }
+      applyAgentRowViewingMode(viewingMode, terminal.id);
       activateTerminal(terminal.id);
       pingTerminal(terminal.id);
       focusHandoff.markHandoff();
