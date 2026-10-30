@@ -809,16 +809,16 @@ export function deriveDestructiveAction(
   // Away from the label: down under a light label, up under a dark one.
   const end = ink.l >= start.l ? 0 : 1;
   let near = start.l;
-  let pass: number | null = reads(start.l) ? start.l : null;
-  for (let step = 1; pass === null && step <= DESTRUCTIVE_SCAN_STEPS; step++) {
+  let found: number | null = reads(start.l) ? start.l : null;
+  for (let step = 1; found === null && step <= DESTRUCTIVE_SCAN_STEPS; step++) {
     const l = start.l + ((end - start.l) * step) / DESTRUCTIVE_SCAN_STEPS;
-    if (reads(l)) pass = l;
+    if (reads(l)) found = l;
     else near = l;
   }
-  if (pass === null) pass = end;
-  else if (pass !== start.l) {
+  let pass: number = found ?? end;
+  if (found !== null && found !== start.l) {
     for (let step = 0; step < 24; step++) {
-      const mid = (near + pass) / 2;
+      const mid: number = (near + pass) / 2;
       if (reads(mid)) pass = mid;
       else near = mid;
     }

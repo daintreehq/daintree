@@ -39,7 +39,7 @@ const buttonVariants = cva(
         // hover and press as fills of their own so the gate measures every state
         // the button paints. Flat like `contrast`: no emboss or top highlight,
         // which read as a raised plastic plaque against the app's flat chrome.
-        destructive: `bg-destructive text-destructive-foreground ring-1 ring-tint/15 shadow-[var(--theme-shadow-ambient)] hover:bg-destructive-hover active:bg-destructive-active active:shadow-none ${FILLED_UNAVAILABLE}`,
+        destructive: `bg-destructive-fill text-destructive-foreground ring-1 ring-tint/15 shadow-[var(--theme-shadow-ambient)] hover:bg-destructive-fill-hover active:bg-destructive-fill-active active:shadow-none ${FILLED_UNAVAILABLE}`,
         outline:
           "ring-1 ring-border-strong bg-surface-panel-elevated/95 backdrop-blur-md text-text-primary shadow-[var(--theme-shadow-ambient)] inset-shadow-[0_1px_0_var(--color-overlay-soft)] hover:bg-surface-panel-elevated hover:ring-border-default hover:text-text-primary active:bg-overlay-soft active:shadow-none",
         // High-contrast INVERSE CTA: a near-white fill + off-black text on dark

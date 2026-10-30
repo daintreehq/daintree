@@ -130,8 +130,9 @@
   --color-status-success-text: var(--theme-status-success-text);
   --color-status-warning-text: var(--theme-status-warning-text);
   --color-status-info-text: var(--theme-status-info-text);
-  --color-destructive-hover: var(--theme-destructive-fill-hover);
-  --color-destructive-active: var(--theme-destructive-fill-active);
+  --color-destructive-fill: var(--theme-destructive-fill);
+  --color-destructive-fill-hover: var(--theme-destructive-fill-hover);
+  --color-destructive-fill-active: var(--theme-destructive-fill-active);
   --color-knob-base: var(--theme-knob-base);
   --color-state-modified: var(--theme-state-modified);
   --color-activity-active: var(--theme-activity-active);

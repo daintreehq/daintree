@@ -400,7 +400,7 @@ describe("ConfirmDialog — typed-name gate", () => {
       />
     );
     const hint = () => document.querySelector('[data-testid="app-dialog-hint"]');
-    expect(hint()?.textContent).toMatch(/to enable$/);
+    expect(hint()?.textContent).toMatch(/to continue$/);
     fireEvent.change(findTypedInput(), { target: { value: "my-repo" } });
     expect(hint()).toBeNull();
   });
@@ -1026,11 +1026,18 @@ describe("TypedNameConfirmInput preamble prop", () => {
     expect(input.getAttribute("aria-invalid")).not.toBe("true");
   });
 
-  it('sets aria-invalid="true" once the user has typed something that does not match', () => {
-    render(<TypedNameConfirmInput target="my-thing" value="my-thi" onChange={() => {}} />);
+  it('sets aria-invalid="true" once the typed value can no longer become the target', () => {
+    render(<TypedNameConfirmInput target="my-thing" value="my-thx" onChange={() => {}} />);
 
     const input = screen.getByLabelText(/^Type my-thing to confirm$/i);
     expect(input.getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("does not signal aria-invalid while the typed value is still a correct prefix", () => {
+    render(<TypedNameConfirmInput target="my-thing" value="my-thi" onChange={() => {}} />);
+
+    const input = screen.getByLabelText(/^Type my-thing to confirm$/i);
+    expect(input.getAttribute("aria-invalid")).not.toBe("true");
   });
 
   it("does not signal aria-invalid once the typed value matches the target", () => {

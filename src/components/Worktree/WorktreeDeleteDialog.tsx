@@ -1061,7 +1061,10 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                 >
                   Uncommitted work
                 </span>
-                <span className="text-2xs tabular-nums text-text-secondary">
+                <span
+                  className="text-2xs tabular-nums text-text-secondary"
+                  data-testid="delete-worktree-change-tally"
+                >
                   {changeCountLabel}
                 </span>
               </div>

@@ -521,41 +521,39 @@ describe("destructive variant", () => {
     return current.slice("--theme-".length);
   };
 
-  // The theme validator holds `text-inverse` on `status-danger` to 4.5:1 at rest and
-  // under the hover and press brightness it models (#15363). A variant that paints a
-  // different pair, or moves its states to a filter or fill the validator does not
-  // model, would leave that guarantee describing a button nobody sees.
-  it("paints the label and fill the theme validator measures", () => {
-    // Arbitrary values count too: a later `bg-[#fff]` would win over the token fill.
-    const fill = classes().filter((c) => c.startsWith("bg-"));
-    const label = classes().filter(
+  // Fills and labels for one interaction state, ignoring the unavailable look,
+  // which the validator deliberately does not hold to the destructive pair.
+  const inState = (state: "" | "hover:" | "active:", kind: "bg-" | "text-") =>
+    classes().filter(
       (c) =>
-        c.startsWith("text-") && !/^text-(3xs|2xs|xs|sm|base|lg|\d?xl|left|center|right)$/.test(c)
+        c.startsWith(`${state}${kind}`) &&
+        !/^(?:hover:|active:)?text-(3xs|2xs|xs|sm|base|lg|\d?xl|left|center|right)$/.test(c)
     );
-    expect(fill).toHaveLength(1);
+
+  // The theme validator holds `destructive-foreground` to 4.5:1 on each of the three
+  // fills (#15363). A variant that paints a different pair, or moves a state to a
+  // filter or fill the validator does not read, would leave that guarantee
+  // describing a button nobody sees.
+  it("paints the label and the per-state fills the theme validator measures", () => {
+    const { foreground, fills } = DESTRUCTIVE_BUTTON_CONTRAST;
+    // Arbitrary values count too: a later `bg-[#fff]` would win over the token fill.
+    const rest = inState("", "bg-");
+    const hover = inState("hover:", "bg-");
+    const press = inState("active:", "bg-");
+    const label = inState("", "text-");
+    expect(rest).toHaveLength(1);
+    expect(hover).toHaveLength(1);
+    expect(press).toHaveLength(1);
     expect(label).toHaveLength(1);
-    expect(themeTokenOf(fill[0]!, "bg-")).toBe(DESTRUCTIVE_BUTTON_CONTRAST.background);
-    expect(themeTokenOf(label[0]!, "text-")).toBe(DESTRUCTIVE_BUTTON_CONTRAST.foreground);
+    expect(themeTokenOf(rest[0]!, "bg-")).toBe(fills.rest);
+    expect(themeTokenOf(hover[0]!.slice("hover:".length), "bg-")).toBe(fills.hover);
+    expect(themeTokenOf(press[0]!.slice("active:".length), "bg-")).toBe(fills.press);
+    expect(themeTokenOf(label[0]!, "text-")).toBe(foreground);
   });
 
-  it("signals hover and press with the brightness the validator models, and nothing else", () => {
-    const amounts = classes()
-      .filter((c) => c.includes("brightness-"))
-      .map((c) => {
-        const match = /^(?:(hover|active):)?brightness-(?:(\d+)|\[(\d*\.?\d+)(%?)\])$/.exec(c);
-        expect(match, `a brightness the validator does not model: ${c}`).toBeTruthy();
-        const [, state = "rest", percent, value, unit] = match!;
-        const amount =
-          percent !== undefined ? Number(percent) / 100 : Number(value) / (unit ? 100 : 1);
-        return [state, amount] as const;
-      });
-    expect(amounts).toHaveLength(2);
-    expect(Object.fromEntries(amounts)).toEqual({
-      hover: DESTRUCTIVE_BUTTON_CONTRAST.brightness.hover,
-      active: DESTRUCTIVE_BUTTON_CONTRAST.brightness.press,
-    });
+  it("changes nothing else the validator would have to model on hover or press", () => {
     const unmodelled =
-      /^(?:(?:hover|active):(?:bg|text|opacity)-|(?:(?:hover|active):)?(?:-?(?:contrast|saturate|grayscale|invert|sepia|hue-rotate)(?:-|$)|\[filter:))/;
+      /^(?:(?:hover|active):(?:text|opacity)-|(?:(?:hover|active):)?(?:-?(?:brightness|contrast|saturate|grayscale|invert|sepia|hue-rotate)(?:-|$)|\[filter:))/;
     expect(classes().filter((c) => unmodelled.test(c))).toEqual([]);
   });
 });
