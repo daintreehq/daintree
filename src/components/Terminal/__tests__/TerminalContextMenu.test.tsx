@@ -57,6 +57,7 @@ const {
   panelsById,
   voiceState,
   armed,
+  collectEligibleIds,
   watchedIds,
   presetChoices,
   handOverCandidates,
@@ -88,7 +89,13 @@ const {
     lockedTarget: null as { panelId: string } | null,
     recentTargets: [] as Array<Record<string, unknown>>,
   },
-  armed: { armedIds: new Set<string>() },
+  armed: {
+    armedIds: new Set<string>(),
+    armId: vi.fn(),
+    armIds: vi.fn(),
+    toggleId: vi.fn(),
+  },
+  collectEligibleIds: vi.fn((): string[] => []),
   watchedIds: { current: new Set<string>() },
   presetChoices: { current: [] as Array<{ id: string; name: string }> },
   handOverCandidates: { current: [] as string[] },
@@ -146,6 +153,7 @@ vi.mock("@/store/fleetArmingStore", () => ({
     { getState: () => armed }
   ),
   isFleetArmEligible: () => fleetEligible.current,
+  collectEligibleIds,
 }));
 
 vi.mock("@/store/fleetSnapshotStore", () => ({
@@ -1087,6 +1095,9 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
     presetChoices.current = [];
     handOverCandidates.current = [];
     voiceState.recentTargets = [];
+    armed.armIds.mockClear();
+    armed.toggleId.mockClear();
+    collectEligibleIds.mockClear();
   });
 
   it("keeps an agent pane's top level short, with everyday rows a click away", () => {
@@ -1187,6 +1198,27 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
     const root = level(menuTree());
     expect(root.indexOf(shown)).toBe(root.indexOf("Fleet ›") - 1);
     expect(root).not.toContain(hidden);
+  });
+
+  it("runs the watch and fleet rows from where they now sit", () => {
+    fleetEligible.current = true;
+    armed.armedIds = new Set(["panel-1", "panel-2"]);
+    collectEligibleIds.mockReturnValueOnce(["panel-1", "panel-3"]);
+    renderMenu(agentPane);
+
+    fireEvent.click(screen.getByText("Watch terminal"));
+    expect(dispatch).toHaveBeenCalledWith(
+      "terminal.watch",
+      { terminalId: "panel-1" },
+      expect.anything()
+    );
+    fireEvent.click(screen.getByText("Remove from fleet"));
+    expect(armed.toggleId).toHaveBeenCalledWith("panel-1");
+    fireEvent.click(screen.getByText("Arm all in this worktree"));
+    expect(collectEligibleIds).toHaveBeenCalledWith("current", "wt-1");
+    expect(armed.armIds).toHaveBeenCalledWith(["panel-1", "panel-3"]);
+    fireEvent.click(screen.getByText("Clear fleet"));
+    expect(dispatch).toHaveBeenCalledWith("terminal.disarmAll", undefined, expect.anything());
   });
 
   it.each([
