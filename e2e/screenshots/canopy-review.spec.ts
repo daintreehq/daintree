@@ -812,6 +812,42 @@ async function shoot(page: Page, name: string): Promise<void> {
   if (!existsSync(file)) throw new Error(`${name}: no file written`);
 }
 
+// The native traffic lights draw over the web contents, so a page screenshot
+// never has them. A stand-in at the window's trafficLightPosition ({ x: 12,
+// y: 18 }, three 14px lights 9px apart, as current macOS draws them) shows
+// where the title starts against them; it exists only for the length of one shot.
+const TRAFFIC_LIGHTS_ID = "canopy-shot-traffic-lights";
+
+async function shootTitleBar(page: Page, name: string, height = 96): Promise<void> {
+  await settle(page, 300);
+  await page.evaluate((id) => {
+    const lights = document.createElement("div");
+    lights.id = id;
+    lights.style.cssText =
+      "position:fixed;left:12px;top:18px;display:flex;gap:9px;z-index:2147483647;pointer-events:none";
+    for (const color of ["#ff5f57", "#febc2e", "#28c840"]) {
+      const light = document.createElement("span");
+      light.style.cssText = `width:14px;height:14px;border-radius:9999px;background:${color};box-shadow:inset 0 0 0 0.5px rgba(0,0,0,0.25)`;
+      lights.appendChild(light);
+    }
+    document.body.appendChild(lights);
+  }, TRAFFIC_LIGHTS_ID);
+  const width = await page.evaluate(() => window.innerWidth);
+  const file = path.join(OUT, `${name}.png`);
+  try {
+    await page.screenshot({
+      path: file,
+      type: "png",
+      animations: "disabled",
+      caret: "hide",
+      clip: { x: 0, y: 0, width, height },
+    });
+  } finally {
+    await page.evaluate((id) => document.getElementById(id)?.remove(), TRAFFIC_LIGHTS_ID);
+  }
+  if (!existsSync(file)) throw new Error(`${name}: no file written`);
+}
+
 async function rowCount(page: Page): Promise<number> {
   return page.locator(ROWS).count();
 }
@@ -916,6 +952,8 @@ test("canopy review — the inbox with a fleet", async () => {
     };
 
     await page.addStyleTag({ content: POLISH_CSS }).catch(() => {});
+    // The window's own toolbar, which Canopy's title bar stands in for.
+    await shootTitleBar(page, "tb-00-app-toolbar");
     await inject();
     await openCanopy(page);
     await inject();
@@ -924,6 +962,7 @@ test("canopy review — the inbox with a fleet", async () => {
 
     // 01 — the panel as it opens: the top of the band selected.
     await shoot(page, "01-populated");
+    await shootTitleBar(page, "tb-01-populated");
 
     // 02..04 — each real agent selected, so the pane shows its terminal.
     await selectRow(page, real.question);
@@ -981,6 +1020,7 @@ test("canopy review — the inbox with a fleet", async () => {
     await inject(fleetSnapshot(calm, now), canopySnapshot(calm, now));
     await page.mouse.move(2, 2);
     await shoot(page, "09-all-clear");
+    await shootTitleBar(page, "tb-09-all-clear");
 
     // 10 — the reader off: the observed list.
     await inject(
@@ -994,6 +1034,7 @@ test("canopy review — the inbox with a fleet", async () => {
     );
     await page.mouse.move(2, 2);
     await shoot(page, "10-reader-off");
+    await shootTitleBar(page, "tb-10-reader-off");
 
     // 11 — a smaller window.
     await inject();
@@ -1007,6 +1048,7 @@ test("canopy review — the inbox with a fleet", async () => {
     await inject();
     await page.mouse.move(2, 2);
     await shoot(page, "11-narrow");
+    await shootTitleBar(page, "tb-11-narrow");
     await closeCanopy(page);
 
     // 12..14 — larger windows, up to the whole of a big display, with a live
@@ -1029,6 +1071,7 @@ test("canopy review — the inbox with a fleet", async () => {
       await selectRow(page, real.question);
       await page.mouse.move(2, 2);
       await shoot(page, name);
+      await shootTitleBar(page, `tb-${name}`);
       await closeCanopy(page);
       await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.unmaximize());
     }
@@ -1063,14 +1106,15 @@ test("canopy review — the inbox with a fleet", async () => {
         caret: "hide",
         clip: box,
       });
+      await shootTitleBar(page, `themes/tb-${theme}`);
       await closeCanopy(page);
     }
 
     const written = readdirSync(OUT).filter((f) => f.endsWith(".png")).length;
     const themed = readdirSync(themeDir).filter((f) => f.endsWith(".png")).length;
-    if (written < 14 || themed < THEMES.length) {
+    if (written < 22 || themed < THEMES.length) {
       throw new Error(
-        `expected 14 states and ${THEMES.length} themes, got ${written} and ${themed}`
+        `expected 22 states and ${THEMES.length} themes, got ${written} and ${themed}`
       );
     }
   } finally {
