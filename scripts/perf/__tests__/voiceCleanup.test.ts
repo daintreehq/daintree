@@ -1805,11 +1805,28 @@ describe("rescore", () => {
       drops: [],
       recentContext: ["The send waits for cleanup, but"],
     });
-    const passages = [codex, tail, symbols];
+    // Just under and at the 60-character bound, the first padded: the band is the trimmed passage's.
+    const under = makeCase({
+      id: "under",
+      raw: "  Ship it to the beta channel first and leave stable as is ok  ",
+      reference: "Ship it to the beta channel first and leave stable as is ok",
+      fixes: {},
+      drops: [],
+    });
+    const at = makeCase({
+      id: "at",
+      raw: "Ship it to the beta channel first and leave stable as is ok.",
+      reference: "Ship it to the beta channel first and leave stable as is ok.",
+      fixes: {},
+      drops: [],
+    });
+    const passages = [codex, tail, symbols, under, at];
     const file = writeRun("bands.json", passages, [
       saved(LUNA, "codex", codex.reference),
       saved(LUNA, "tail", "only for seconds, after that it sends the raw text."),
       saved(LUNA, "symbols", symbols.reference),
+      saved(LUNA, "under", under.reference),
+      saved(LUNA, "at", at.reference),
       saved(TERRA, "codex", codex.reference),
       saved(TERRA, "tail", tail.reference),
       saved(TERRA, "symbols", null),
@@ -1824,8 +1841,20 @@ describe("rescore", () => {
         .find((line) => line.startsWith(`| ${variant} | ${context} | ${chars} |`))
         ?.split(" | ")
         .slice(3);
+    expect(
+      section
+        .split("\n")
+        .filter((line) => line.startsWith(`| ${LUNA} |`))
+        .map((line) => line.split(" | ").slice(1, 3).join(" "))
+    ).toEqual([
+      "continuing 30–59",
+      "standalone 0–29",
+      "standalone 30–59",
+      "standalone 60–89",
+      "standalone 90–119",
+    ]);
     // Passages, trials, ready, words lost, risky, failed, n, p50, p95, mean reasoning.
-    expect(row(LUNA, "standalone", "0–39")).toEqual([
+    expect(row(LUNA, "standalone", "0–29")).toEqual([
       "1",
       "1",
       "100.0%",
@@ -1837,7 +1866,18 @@ describe("rescore", () => {
       "900",
       "0 |",
     ]);
-    expect(row(LUNA, "continuing", "40–79")?.slice(0, 5)).toEqual(["1", "1", "0.0%", "1", "1"]);
-    expect(row(TERRA, "standalone", "80–119")?.slice(5, 9)).toEqual(["1", "0", "–", "–"]);
+    expect(row(LUNA, "continuing", "30–59")?.slice(0, 5)).toEqual(["1", "1", "0.0%", "1", "1"]);
+    // The failed trial counts in the cohort and its quality, never in its latency.
+    expect(row(TERRA, "standalone", "90–119")?.slice(0, 9)).toEqual([
+      "1",
+      "1",
+      "0.0%",
+      "0",
+      "0",
+      "1",
+      "0",
+      "–",
+      "–",
+    ]);
   });
 });

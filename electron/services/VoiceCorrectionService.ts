@@ -1410,7 +1410,7 @@ export class VoiceCorrectionService {
   }
 
   // Caches are per account, and the cache key leaves out parts of the prompt.
-  // Claude caches a prompt once per thinking setting, so the effort counts too.
+  // Claude caches a prompt once per thinking setting, so there the effort counts too.
   private promptIdentity(
     settings: VoiceCorrectionSettings,
     effort: VoiceReasoningEffort,
@@ -1423,7 +1423,7 @@ export class VoiceCorrectionService {
           settings.organizationId ?? null,
           settings.projectId ?? null,
           settings.model,
-          effort,
+          voiceCleanupProviderOf(settings.model) === "anthropic" ? effort : null,
           this.buildPromptCacheKey(settings),
           systemPrompt,
         ])

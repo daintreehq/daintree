@@ -94,7 +94,7 @@ export type VoiceReasoningEffort = "none" | "low" | "medium" | "high";
 export interface CleanupPassage {
   /** Characters in the trimmed passage. */
   chars: number;
-  /** Earlier sections of the draft went out before it: it carries confirmed history. */
+  /** Draft text comes before it, sent as its confirmed history (`recentContext`). */
   continuing: boolean;
 }
 

@@ -2818,6 +2818,20 @@ describe("VoiceCorrectionService timing and warm-up", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  // OpenAI caches the prompt whatever the effort, so a passage at any effort warms it.
+  it("counts a passage sent at another effort as the prompt's use", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(makeFetchResponse({ action: "no_change", corrected_text: "" }))
+      .mockResolvedValue(drainedResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const svc = new VoiceCorrectionService();
+
+    await svc.correct({ rawText: "fix the parser" }, { ...SETTINGS, reasoningEffort: "high" });
+    await svc.warm(SETTINGS);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("warms each account and prompt on its own", async () => {
     const fetchMock = vi.fn(async () => drainedResponse());
     vi.stubGlobal("fetch", fetchMock);

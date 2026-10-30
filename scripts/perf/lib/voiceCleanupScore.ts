@@ -625,15 +625,16 @@ export function requestCost(model: string, usage: TokenUsage | undefined): numbe
 /**
  * The lower bounds of the passage lengths the benchmark reports by, in
  * characters of the trimmed raw transcript: what the service measures a
- * passage by when it picks its reasoning effort (#15504).
+ * passage by when it picks its reasoning effort (#15504), split at Haiku's
+ * cutoff (`CLEANUP_REASONING_MIN_CHARS`).
  */
-export const PASSAGE_LENGTH_BANDS: readonly number[] = [0, 40, 80, 120, 160, 300, 600];
+export const PASSAGE_LENGTH_BANDS: readonly number[] = [0, 30, 60, 90, 120, 160, 300, 600];
 
 export function passageChars(entry: CleanupCase): number {
   return entry.raw.trim().length;
 }
 
-/** Earlier sections of the draft went out first: production sends them as `recentContext`. */
+/** Draft text comes before the passage: production sends it as `recentContext`. */
 export function isContinuing(entry: CleanupCase): boolean {
   return (entry.recentContext?.length ?? 0) > 0;
 }
