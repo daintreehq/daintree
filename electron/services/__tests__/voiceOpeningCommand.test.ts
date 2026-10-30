@@ -23,22 +23,26 @@ afterAll(async () => {
   await fsp.rm(root, { recursive: true, force: true });
 });
 
-// An open that hangs until the test lets it fail, so no read outlives its test.
+const hungOpens: Array<() => Promise<void>> = [];
+
+// An open that hangs until it's let fail, which every test's end does if the
+// test didn't, so no read outlives its test whatever its assertions do.
 function hungOpen(): { release: () => Promise<void> } {
   let fail!: (error: Error) => void;
   const pending = new Promise<FileHandle>((_resolve, reject) => {
     fail = reject;
   });
   vi.spyOn(fsp, "open").mockReturnValue(pending);
-  return {
-    release: async () => {
-      fail(new Error("EIO"));
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    },
+  const release = async () => {
+    fail(new Error("EIO"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
   };
+  hungOpens.push(release);
+  return { release };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await Promise.all(hungOpens.splice(0).map((release) => release()));
   vi.restoreAllMocks();
 });
 
@@ -313,6 +317,14 @@ describe("readVoiceOpeningCommand", () => {
       "a .netrc line after a heading",
       "# Fetch\nmachine api.example.com login dev password hunter2",
     ],
+    [
+      "a .netrc line after a line separator",
+      "# Fetch\u2028machine api.example.com login dev password hunter2",
+    ],
+    [
+      "a .netrc line after a paragraph separator",
+      "# Fetch\u2029machine api.example.com login dev password hunter2",
+    ],
   ])("drops an excerpt holding %s", async (_name, body) => {
     const skill = await write(
       `claude/skills/screen-${_name.replace(/\W+/g, "-")}/SKILL.md`,
@@ -323,6 +335,19 @@ describe("readVoiceOpeningCommand", () => {
     expect(await readVoiceOpeningCommand(entries, "/screened")).toEqual({
       token: "/screened",
       description: "Screened",
+    });
+  });
+
+  it("screens a description again once its lines are joined, which can put a flag beside its value", async () => {
+    const skill = await write(
+      "claude/skills/flag-description/SKILL.md",
+      "---\ndescription: |\n  Run mysql --password\n  hunter2 against it.\n---\nConnect.\n"
+    );
+    const entries = entriesFor("claude", [discovered("claude", "/flag-description", skill)]);
+
+    expect(await readVoiceOpeningCommand(entries, "/flag-description")).toEqual({
+      token: "/flag-description",
+      excerpt: "Connect.",
     });
   });
 
@@ -410,6 +435,38 @@ describe("readVoiceOpeningCommand", () => {
     await hung.release();
   });
 
+  it("gives a third file its turn once a read settles, within its budget", async () => {
+    const names = ["d", "e", "f"];
+    for (const name of names) {
+      await write(
+        `claude/skills/turn-${name}/SKILL.md`,
+        `---\ndescription: ${name}\n---\nBody ${name}\n`
+      );
+    }
+    const realOpen = fsp.open.bind(fsp);
+    const open = vi.spyOn(fsp, "open").mockImplementation(async (...args) => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return realOpen(...(args as Parameters<typeof fsp.open>));
+    });
+    const entries = entriesFor(
+      "claude",
+      names.map((name) =>
+        discovered(
+          "claude",
+          `/turn-${name}`,
+          path.join(root, `claude/skills/turn-${name}/SKILL.md`)
+        )
+      )
+    );
+
+    const reads = await Promise.all(
+      names.map((name) => readVoiceOpeningCommand(entries, `/turn-${name}`))
+    );
+
+    expect(reads.map((read) => read?.excerpt)).toEqual(["Body d", "Body e", "Body f"]);
+    expect(open).toHaveBeenCalledTimes(3);
+  });
+
   it("turns away anything that isn't a file without reading it", async () => {
     const handle = {
       stat: vi.fn(async () => ({ isFile: () => false })),
@@ -470,6 +527,28 @@ describe("readVoiceOpeningCommand", () => {
       description: "Keyed",
       argumentHint: "<env>",
       excerpt: "Body",
+    });
+  });
+
+  it("reads an empty frontmatter, and a closing fence that ends the file", async () => {
+    const empty = await write("claude/skills/empty-front/SKILL.md", "---\n---\nBody\n");
+    const eof = await write(
+      "claude/skills/eof-front/SKILL.md",
+      "---\ndescription: At the end\n---"
+    );
+    const entries = entriesFor("claude", [
+      discovered("claude", "/empty-front", empty),
+      discovered("claude", "/eof-front", eof),
+    ]);
+
+    expect(await readVoiceOpeningCommand(entries, "/empty-front")).toEqual({
+      token: "/empty-front",
+      description: "Listing description",
+      excerpt: "Body",
+    });
+    expect(await readVoiceOpeningCommand(entries, "/eof-front")).toEqual({
+      token: "/eof-front",
+      description: "At the end",
     });
   });
 

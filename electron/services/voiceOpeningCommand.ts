@@ -31,7 +31,8 @@ const SCREEN_MARGIN_CHARS = 256;
 // leaves it its listing.
 const READ_BUDGET_MS = 200;
 // Reads of different files at once, so skills on a dead mount can't take the
-// whole fs pool between them. A normal read settles in well under a millisecond.
+// whole fs pool between them. Another waits its turn within its budget; a
+// normal read settles in well under a millisecond.
 const MAX_PENDING_READS = 2;
 
 interface CommandFileText {
@@ -47,10 +48,15 @@ interface CommandFileText {
 // take every worker in the pool.
 const inFlightReads = new Map<string, Promise<string | null>>();
 
-function readPrefixOnce(filePath: string): Promise<string | null> {
-  const pending = inFlightReads.get(filePath);
-  if (pending) return pending;
-  if (inFlightReads.size >= MAX_PENDING_READS) return Promise.resolve(null);
+async function readPrefixOnce(filePath: string, deadline: number): Promise<string | null> {
+  for (;;) {
+    const pending = inFlightReads.get(filePath);
+    if (pending) return pending;
+    if (inFlightReads.size < MAX_PENDING_READS) break;
+    await Promise.race(inFlightReads.values());
+    // A turn that comes after the caller gave up starts no read: none would wait for it.
+    if (performance.now() >= deadline) return null;
+  }
   const started = readPrefix(filePath).finally(() => {
     if (inFlightReads.get(filePath) === started) inFlightReads.delete(filePath);
   });
@@ -81,7 +87,7 @@ async function readPrefix(filePath: string): Promise<string | null> {
 async function readWithinBudget(filePath: string): Promise<string | null> {
   try {
     return await withTimeout(
-      readPrefixOnce(filePath),
+      readPrefixOnce(filePath, performance.now() + READ_BUDGET_MS),
       READ_BUDGET_MS,
       "Timed out reading a command file"
     );
@@ -202,11 +208,12 @@ function screenedClip(text: string, max: number): string | undefined {
   return clip(text, max);
 }
 
-// Screened whole and before its lines are joined, which would hide where each starts.
+// Screened before its lines are joined, which hides where each starts, and
+// after, which can put a flag and its value side by side.
 function oneLine(text: string | undefined, max: number): string | undefined {
   if (!text || holdsAnyCredential(text)) return undefined;
   const flat = text.replace(/\s+/g, " ").trim();
-  return flat ? clip(flat, max) : undefined;
+  return flat && !holdsCredential(flat, true) ? clip(flat, max) : undefined;
 }
 
 function excerptOf(body: string | undefined): string | undefined {
