@@ -891,6 +891,12 @@ export const VoiceInputCorrectPayloadSchema = z.object({
   /** The panel the passage was dictated into: it picks the project vocabulary and the agent's commands. */
   terminalId: z.string().min(1).max(256).optional(),
   startsPrompt: z.boolean().optional(),
+  /**
+   * The command or skill the draft opens with, as typed. Main reads more about
+   * it only when the target agent lists it. One that doesn't validate is
+   * dropped rather than failing the cleanup.
+   */
+  openingCommandToken: z.string().min(2).max(256).optional().catch(undefined),
   /** The dictation the passage came from: its context was read while it ran. */
   sessionId: VoiceSessionIdSchema.optional(),
   /**

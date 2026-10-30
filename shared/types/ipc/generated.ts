@@ -4126,6 +4126,7 @@ export interface GeneratedIpcInvokeMap {
           followingText?: string | undefined;
           recentPrompts?: string[] | undefined;
           startsPrompt?: boolean | undefined;
+          openingCommandToken?: string | undefined;
           uncertain?: { from: number; to: number }[] | undefined;
           pauses?: number[] | undefined;
         }[];

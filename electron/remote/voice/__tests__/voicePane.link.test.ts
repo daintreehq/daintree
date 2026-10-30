@@ -9,7 +9,14 @@ import type { LinkSession } from "../../link/session.js";
 import { makeTempDir, openSessionPair, removeTempDir } from "../../link/__tests__/linkTestUtils.js";
 import { LINK_HEADROOM_MS, VoicePaneHostsClient } from "../client.js";
 import { installVoicePaneHostWith, type VoicePaneHostDeps } from "../host.js";
-import { MAX_PANE_TERMS, MAX_PANE_VOCABULARY, VoicePaneLinkMethod } from "../linkMethods.js";
+import {
+  MAX_PANE_TERMS,
+  MAX_PANE_VOCABULARY,
+  VoicePaneCorrectionResultSchema,
+  VoicePaneLinkMethod,
+  fitPaneCorrection,
+  fitPaneStart,
+} from "../linkMethods.js";
 import {
   MAX_CORRECTION_REPLY_CHARS,
   type VoiceAgentReply,
@@ -190,6 +197,37 @@ describe("dictating into a host's pane reads the pane from that host", () => {
     expect(read?.commandTarget?.vocabulary.entries.map((entry) => entry.token)).toEqual([
       "/review",
     ]);
+  });
+
+  // A command's file is the host's: read on this machine, its path would name
+  // another file, or one a host chose.
+  it("never carries the file a host's command came from", async () => {
+    const commandTarget = START.commandTarget!;
+    const [review] = commandTarget.vocabulary.entries;
+    const withFile = {
+      ...commandTarget,
+      vocabulary: {
+        ...commandTarget.vocabulary,
+        entries: [{ ...review!, sourcePath: "/Users/greg/.claude/skills/review/SKILL.md" }],
+      },
+    };
+    // The host never sends it.
+    expect(
+      fitPaneCorrection({ ...CORRECTION, commandTarget: withFile }).commandTarget?.vocabulary
+        .entries
+    ).toEqual([review]);
+    expect(
+      fitPaneStart({ ...START, commandTarget: withFile }).commandTarget?.vocabulary.entries
+    ).toEqual([review]);
+    // And a host that did would have it dropped before the Shell reads anything.
+    const received = VoicePaneCorrectionResultSchema.parse({
+      ...CORRECTION,
+      commandTarget: withFile,
+    });
+    expect(received.commandTarget?.vocabulary.entries).toEqual([review]);
+    deps.readCorrection.mockResolvedValueOnce({ ...CORRECTION, commandTarget: withFile });
+    const read = await client.readCorrection(HOST, SCOPE, { timeoutMs: 1500 });
+    expect(read?.commandTarget?.vocabulary.entries).toEqual([review]);
   });
 
   it("keeps the newest of a vocabulary too long to send whole", async () => {

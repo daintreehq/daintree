@@ -579,6 +579,45 @@ describe("voiceInput — the target agent's commands", () => {
     });
   });
 
+  it("hands correction what the command the draft opens with says about itself, when the target lists it", async () => {
+    const handleCorrect = getHandler("voice-input:correct") as (
+      e: unknown,
+      request: unknown
+    ) => Promise<unknown>;
+    const compact = claudeTarget().vocabulary.entries.find((entry) => entry.token === "/compact")!;
+    await handleCorrect(fakeEvent, {
+      rawText: "keep the migration notes",
+      terminalId: TERMINAL,
+      startsPrompt: false,
+      openingCommandToken: "/compact",
+    });
+    await handleCorrect(fakeEvent, {
+      rawText: "keep the migration notes",
+      terminalId: TERMINAL,
+      startsPrompt: false,
+      openingCommandToken: "/not-listed",
+    });
+    shared.commandTarget = null;
+    await handleCorrect(fakeEvent, {
+      rawText: "keep the migration notes",
+      terminalId: TERMINAL,
+      startsPrompt: false,
+      openingCommandToken: "/compact",
+    });
+
+    const [listed, unlisted, noTarget] = shared.correctionCalls.map(
+      (call) => call.request as Record<string, unknown>
+    );
+    expect(listed!.openingCommand).toEqual({
+      token: "/compact",
+      description: compact.description,
+    });
+    // The token only names what to look up; the request carries no path or token of its own.
+    expect(listed).not.toHaveProperty("openingCommandToken");
+    expect(unlisted).not.toHaveProperty("openingCommand");
+    expect(noTarget).not.toHaveProperty("openingCommand");
+  });
+
   it("carries the unsure words by position through a stripped send, heard-as rules and pieces", async () => {
     shared.dictionary = [{ term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 1 }];
     await start();

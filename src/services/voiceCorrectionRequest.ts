@@ -12,6 +12,8 @@ export interface CorrectionRequest {
   followingText?: string;
   recentPrompts?: string[];
   startsPrompt: boolean;
+  /** The command the draft opens with; main reads what it says about it. */
+  openingCommandToken?: string;
   sessionId?: string;
   uncertain?: DictationTextSpan[];
   pauses?: number[];
@@ -38,6 +40,7 @@ export function correctionRequest(
     ...(passage.following ? { followingText: passage.following } : {}),
     ...(recentPrompts.length > 0 ? { recentPrompts } : {}),
     startsPrompt: passage.startsPrompt,
+    ...(passage.openingCommand ? { openingCommandToken: passage.openingCommand } : {}),
     ...(sessionId ? { sessionId } : {}),
     ...(passage.uncertain ? { uncertain: passage.uncertain } : {}),
     ...(passage.pauses ? { pauses: passage.pauses } : {}),
