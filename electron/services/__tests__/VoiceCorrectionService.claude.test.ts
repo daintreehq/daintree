@@ -183,6 +183,20 @@ describe("VoiceCorrectionService on Claude", () => {
     expect(sentBody(fetchMock).output_config.effort).toBe("medium");
   });
 
+  it("files a short passage's pace under the effort it went out with", async () => {
+    stubFetch(streamed(frames(reply("Run Vitest."))), streamed(frames(reply("run Vitest"))));
+    const svc = new VoiceCorrectionService();
+    const standalone = await svc.correct({ rawText: "run v test" }, SETTINGS, undefined, () => {});
+    const continuing = await svc.correct(
+      { rawText: "run v test", recentContext: ["Once it builds,"] },
+      SETTINGS,
+      undefined,
+      () => {}
+    );
+    expect(standalone.phases?.effort).toBe("none");
+    expect(continuing.phases?.effort).toBe("medium");
+  });
+
   it("gives a short passage on Haiku the deadline of a request that doesn't reason", async () => {
     vi.stubGlobal(
       "fetch",
