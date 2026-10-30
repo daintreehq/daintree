@@ -123,6 +123,20 @@ describe("findReplySpan", () => {
     expect(findReplySpan("hello world", [reply])).toBe("**hello world**");
   });
 
+  it("pairs delimiters by run, so nested and mismatched emphasis come back right", () => {
+    expect(findReplySpan("⏺ Use bold and italic now.", ["Use **bold *and italic*** now."])).toBe(
+      "Use **bold *and italic*** now."
+    );
+    // `**` and `*` don't pair, so the TUI draws both and the selection took neither.
+    expect(findReplySpan("hello", ["**hello*"])).toBe("hello");
+    expect(findReplySpan("b c", ["*a **b** c*"])).toBe("**b** c");
+  });
+
+  it("follows a code span or a hard break across lines", () => {
+    expect(findReplySpan("b", ["Use `a\n*b*\nc` now."])).toBe("b");
+    expect(findReplySpan("⏺ Run\n  now.", ["Run\\\nnow."])).toBe("Run\\\nnow.");
+  });
+
   it("does the same for single-character emphasis", () => {
     const reply = "She said *hello world* and left.";
 
@@ -135,8 +149,17 @@ describe("findReplySpan", () => {
     expect(findReplySpan("Use *x* now.", ["Use \\*x\\* now."])).toBe("Use \\*x\\* now.");
   });
 
-  it("keeps a quote's marks when the selection took them", () => {
+  it("keeps a quote's marks only when the selection took them", () => {
     expect(findReplySpan("> Quoted line", ["> Quoted line here."])).toBe("> Quoted line");
+    expect(findReplySpan("tag", ["> tag"])).toBe("tag");
+  });
+
+  it("hands back code whose lines the TUI drew a fence-like line among", () => {
+    expect(
+      findReplySpan("  before\n  ```literal\n  after", [
+        "````text\nbefore\n```literal\nafter\n````",
+      ])
+    ).toBe("before\n```literal\nafter");
   });
 
   it("removes only the indent every selected line shares", () => {
@@ -179,16 +202,37 @@ describe("findReplySpan", () => {
     });
 
     it("on a selection that leaves out a line, prefix or mark the code has", () => {
-      for (const reply of [
-        "```text\nbefore\n---\nafter\n```",
-        "````text\nbefore\n```literal\nafter\n````",
-        "```text\nbefore\n+ after\n```",
-      ]) {
-        expect(findReplySpan("before\n  after", [reply])).toBeNull();
-      }
+      // A blank line where the reply has a line of marks, so only the marks can tell them apart.
+      expect(findReplySpan("before\n\n  after", ["```text\nbefore\n---\nafter\n```"])).toBeNull();
+      expect(findReplySpan("before\n\n  after", ["```text\nbefore\n-\nafter\n```"])).toBeNull();
+      expect(
+        findReplySpan("before\n  literal\n  after", ["````text\nbefore\n```literal\nafter\n````"])
+      ).toBeNull();
+      expect(findReplySpan("before\n  after", ["```text\nbefore\n+ after\n```"])).toBeNull();
+      expect(findReplySpan("before\n  after", ["```text\nbefore\n│ after\n```"])).toBeNull();
+      expect(
+        findReplySpan("before\n  ---\n  after", ["```text\nbefore\n- - -\nafter\n```"])
+      ).toBeNull();
       expect(findReplySpan("a b", ["```text\na  b\n```"])).toBeNull();
       expect(findReplySpan("a b", ["```text\na\nb\n```"])).toBeNull();
+      expect(findReplySpan("a *b", ["```text\na* b\n```"])).toBeNull();
       expect(findReplySpan("a│b", ["```text\nab\n```"])).toBeNull();
+    });
+
+    it("on code indented differently from the reply", () => {
+      const reply = "```py\nif ready:\n    run()\n```";
+
+      expect(findReplySpan("  if ready:\n  run()", [reply])).toBeNull();
+      expect(findReplySpan("  if ready:\n        run()", [reply])).toBeNull();
+    });
+
+    it("on a code line entered from prose with a different prefix", () => {
+      expect(findReplySpan("Intro\n  - after", ["Intro\n```text\n+ after\n```"])).toBeNull();
+    });
+
+    it("on whole lines selected beyond what matched", () => {
+      expect(findReplySpan("---\n  after", ["```text\nafter\n```"])).toBeNull();
+      expect(findReplySpan("after\n---", ["```text\nafter\n```"])).toBeNull();
     });
 
     it("on a selection that leaves out what the TUI draws in prose", () => {
@@ -236,6 +280,7 @@ describe("findReplySpan", () => {
       expect(findReplySpan("a. The rest", ["1. Keep the data. The rest goes."])).toBeNull();
       expect(findReplySpan("- The rest", ["The rest goes."])).toBeNull();
       expect(findReplySpan("> Quoted line", ["Quoted line here."])).toBeNull();
+      expect(findReplySpan("> tag", ["> #tag"])).toBeNull();
     });
 
     it("on a span left with emphasis open whichever way it is cut", () => {
