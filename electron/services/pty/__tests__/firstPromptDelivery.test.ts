@@ -28,6 +28,7 @@ function pane(overrides: Partial<TerminalSnapshot> = {}): TerminalSnapshot {
     id: "t1",
     kind: "terminal",
     title: "Claude",
+    location: "grid",
     launchAgentId: "claude",
   };
   return { ...base, ...overrides };

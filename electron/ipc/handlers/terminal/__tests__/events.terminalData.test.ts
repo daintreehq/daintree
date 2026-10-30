@@ -885,20 +885,20 @@ describe("terminal event handlers — submit-status forwarding (#11875)", () => 
     const firstPrompt = { text: "Fix the login bug", via: "send" as const, at: 5 };
     const busEmit = vi.spyOn(events, "emit");
 
-    ptyClient.emit("first-prompt", "t1", firstPrompt);
+    ptyClient.emit("first-prompt", "t1", firstPrompt, "project-a");
 
     expect(JSON.stringify(busEmit.mock.calls)).not.toContain("Fix the login bug");
     busEmit.mockRestore();
 
-    expect(deliverFirstPrompt).toHaveBeenCalledWith("project-for-t1", "t1", firstPrompt);
+    // The run's own project, never whatever a pending duplicate spawn names.
+    expect(ptyClient.getTerminalProjectId).not.toHaveBeenCalled();
+    expect(deliverFirstPrompt).toHaveBeenCalledWith("project-a", "t1", firstPrompt);
     const leaked = [...broadcastToRenderer.mock.calls, ...broadcastToProjectRenderers.mock.calls];
     expect(JSON.stringify(leaked)).not.toContain("Fix the login bug");
   });
 
   it("drops a first prompt for a terminal no project owns", () => {
-    ptyClient.getTerminalProjectId.mockReturnValueOnce(null);
-
-    ptyClient.emit("first-prompt", "t1", { text: "x", via: "send", at: 5 });
+    ptyClient.emit("first-prompt", "t1", { text: "x", via: "send", at: 5 }, undefined);
 
     expect(deliverFirstPrompt).not.toHaveBeenCalled();
   });

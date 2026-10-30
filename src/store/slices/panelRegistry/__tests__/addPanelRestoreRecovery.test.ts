@@ -4,7 +4,7 @@
  */
 
 import { beforeAll, describe, it, expect, beforeEach, vi } from "vitest";
-import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
+import { isPtyPanel, type PtyPanelData, type TerminalFirstPrompt } from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -508,7 +508,7 @@ describe("addPanel — the run's first prompt on an existing record (#14592)", (
     await drainMicrotasks();
   }
 
-  function startHeld(id: string, record?: typeof firstPrompt) {
+  function startHeld(id: string, record?: TerminalFirstPrompt) {
     return usePanelStore.getState().addPanel({
       kind: "terminal",
       requestedId: id,

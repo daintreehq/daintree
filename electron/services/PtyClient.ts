@@ -1625,7 +1625,8 @@ export class PtyClient extends EventEmitter {
     // Claimed on the entry itself, so everything that keeps, restores or
     // replays the entry keeps the claim with it.
     entry.hasFirstPrompt = true;
-    this.emit("first-prompt", id, record);
+    // The owner is the claimed run's, not a duplicate spawn's still pending.
+    this.emit("first-prompt", id, record, entry.projectId);
   }
 
   /**

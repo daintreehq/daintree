@@ -144,9 +144,13 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   ptyClient.on("submit-status", handleSubmitStatus);
   handlers.push(() => ptyClient.off("submit-status", handleSubmitStatus));
 
-  // The first send written to a run with no first prompt (#15521).
-  const handleFirstPrompt = (id: string, firstPrompt: TerminalFirstPrompt) => {
-    const projectId = ptyClient.getTerminalProjectId(id);
+  // The first send written to a run with no first prompt (#15521), with the
+  // project of the run that took it.
+  const handleFirstPrompt = (
+    id: string,
+    firstPrompt: TerminalFirstPrompt,
+    projectId: string | undefined
+  ) => {
     if (projectId) deliverFirstPrompt(projectId, id, firstPrompt);
   };
   ptyClient.on("first-prompt", handleFirstPrompt);

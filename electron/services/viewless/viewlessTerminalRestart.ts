@@ -9,6 +9,7 @@ import {
 import { resolveAgentLaunchBaseCommandFor } from "../../../shared/utils/agentLaunchCommand.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { mergeTerminalLaunchEnv } from "../../../shared/utils/terminalLaunchOptions.js";
+import type { TerminalFirstPrompt } from "../../../shared/types/panel.js";
 import type { ViewlessDeps } from "./ViewlessActionExecutor.js";
 
 /** Why a restart with no view did not run, or that it did. */
@@ -106,11 +107,13 @@ export async function restartTerminalWithoutView(
     }
   }
   // The first prompt stays with the run it was handed to (#14592), as a view's
-  // restart keeps it: a resume goes on with that run, and a start-over replays
-  // the stored command, which carries a launch prompt but never a sent one.
+  // restart keeps it: a resume goes on with that run, including a record it
+  // took while being stopped, and a start-over replays the stored command,
+  // which carries a launch prompt but never a sent one.
   const startsOver = resumedSessionId === undefined;
-  const keepsFirstPrompt =
-    snapshot.firstPrompt !== undefined && (!startsOver || snapshot.firstPrompt.via === "launch");
+  const keepsFirstPrompt = startsOver
+    ? snapshot.firstPrompt?.via === "launch"
+    : (await savedFirstPrompt(deps, projectId, terminalId)) !== undefined;
 
   const layers = await deps.getLaunchEnvLayers(projectId).catch(() => null);
   const env = mergeTerminalLaunchEnv(layers?.global, layers?.project, snapshot.env);
@@ -188,6 +191,22 @@ export async function restartTerminalWithoutView(
     await recordAgentSession(deps, projectId, terminalId, nextSessionId, startsOver);
   }
   return "restarted";
+}
+
+/** The pane's saved first prompt, read behind every write already queued. */
+async function savedFirstPrompt(
+  deps: ViewlessDeps,
+  projectId: string,
+  terminalId: string
+): Promise<TerminalFirstPrompt | undefined> {
+  let firstPrompt: TerminalFirstPrompt | undefined;
+  await deps.stateWriter
+    .enqueueProjectStateUpdate(projectId, (existing) => {
+      firstPrompt = existing?.terminals.find((t) => t.id === terminalId)?.firstPrompt;
+      return null;
+    })
+    .catch(() => undefined);
+  return firstPrompt;
 }
 
 /**

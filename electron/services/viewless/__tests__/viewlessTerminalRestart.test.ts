@@ -147,6 +147,8 @@ describe("restartTerminalWithoutView", () => {
       await restartTerminalWithoutView(PROJECT.id, "t1", deps);
 
       expect(store.read()?.terminals[0]?.firstPrompt).toEqual(kept ? firstPrompt : undefined);
+      // A kept record is the resumed run's, so none of its sends is offered.
+      expect(spawned(invoke).hasFirstPrompt).toBe(kept ? true : undefined);
     }
   );
 

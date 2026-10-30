@@ -111,9 +111,12 @@ describe("PtyClient first prompt (#15521)", () => {
   function readyClient() {
     const client = new PtyClientClass();
     mockChild.emit("message", { type: "ready" });
-    const recorded: Array<{ id: string; firstPrompt: TerminalFirstPrompt }> = [];
-    client.on("first-prompt", (id: string, firstPrompt: TerminalFirstPrompt) =>
-      recorded.push({ id, firstPrompt })
+    const recorded: Array<{ id: string; firstPrompt: TerminalFirstPrompt; projectId?: string }> =
+      [];
+    client.on(
+      "first-prompt",
+      (id: string, firstPrompt: TerminalFirstPrompt, projectId: string | undefined) =>
+        recorded.push({ id, firstPrompt, projectId })
     );
     return { client, recorded };
   }
@@ -147,7 +150,11 @@ describe("PtyClient first prompt (#15521)", () => {
     written("t1", generation!, "Fix the login bug");
     written("t1", generation!, "Also the signup form");
     expect(recorded).toEqual([
-      { id: "t1", firstPrompt: { text: "Fix the login bug", via: "send", at: 5_000 } },
+      {
+        id: "t1",
+        firstPrompt: { text: "Fix the login bug", via: "send", at: 5_000 },
+        projectId: "proj-1",
+      },
     ]);
 
     client.submit("t1", "A third");
@@ -294,6 +301,39 @@ describe("PtyClient first prompt (#15521)", () => {
       "first task, again",
     ]);
     expect(recorded.map((r) => r.firstPrompt.text)).toEqual(["first task"]);
+    client.dispose();
+  });
+
+  it("claims the running incarnation, for its own project, before a duplicate is refused", () => {
+    const { client, recorded } = readyClient();
+    client.spawn("t1", agentOptions);
+    client.spawn("t1", { ...agentOptions, projectId: "proj-2" });
+    const [live, duplicate] = spawnGenerations(mockChild, "t1");
+
+    client.submit("t1", "first task");
+    written("t1", live!, "first task");
+    client.submit("t1", "steer while the duplicate waits");
+    mockChild.emit("message", {
+      type: "spawn-result",
+      id: "t1",
+      result: {
+        success: false,
+        id: "t1",
+        launchGeneration: duplicate,
+        error: { code: "TERMINAL_ALREADY_LIVE", message: "live" },
+      },
+    });
+    client.submit("t1", "steer after the refusal");
+    written("t1", live!, "steer after the refusal");
+
+    expect(submitMessages(mockChild).map((m) => m.firstPrompt?.text)).toEqual([
+      "first task",
+      undefined,
+      undefined,
+    ]);
+    expect(recorded.map((r) => [r.firstPrompt.text, r.projectId])).toEqual([
+      ["first task", "proj-1"],
+    ]);
     client.dispose();
   });
 
