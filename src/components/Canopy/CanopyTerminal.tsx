@@ -44,6 +44,7 @@ import { loadXtermCore } from "@/services/terminal/xtermCore";
 import { hasUsableRenderer } from "@/services/terminal/xtermRendererProbe";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
+import { useCanopyStore } from "@/store/canopyStore";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { useScreenReaderStore } from "@/store/screenReaderStore";
 import {
@@ -408,6 +409,8 @@ export function CanopyTerminal({
         const cell = getXtermCellDimensions(terminal);
         // A host that doesn't take the size keeps the one its own window gave it.
         if (disposed || watchId === null || cell === null || !holdsSize) return;
+        // The list's edge is still moving: the drag's end asks again.
+        if (useCanopyStore.getState().listDrag !== null) return;
         // Fractional bounds, truncated, as the grid pane measures them: a
         // rounded-up clientWidth can promise a column the pane hasn't got.
         const box = frame.getBoundingClientRect();
@@ -434,6 +437,11 @@ export function CanopyTerminal({
     const dimensionsChange = terminal.onDimensionsChange(() => {
       ensureImageAddon();
       requestPanelSize();
+    });
+    // The pane took its new width while the list's edge moved; the agent
+    // redraws for it once, as the edge lands.
+    const unsubscribeListDrag = useCanopyStore.subscribe((state, previous) => {
+      if (previous.listDrag !== null && state.listDrag === null) requestPanelSize();
     });
     const unsubscribeFont = useTerminalFontStore.subscribe((font, previous) => {
       if (font.fontSize === previous.fontSize && font.fontFamily === previous.fontFamily) return;
@@ -775,6 +783,7 @@ export function CanopyTerminal({
       bufferChange.dispose();
       dimensionsChange.dispose();
       unsubscribeFont();
+      unsubscribeListDrag();
       for (const type of GESTURE_EVENTS) frame.removeEventListener(type, markGesture, true);
       frame.removeEventListener("wheel", sideways, true);
       if (gestureTimer !== null) clearTimeout(gestureTimer);

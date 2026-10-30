@@ -452,3 +452,42 @@ describe("the reading offer's callout", () => {
     expect(store.getState().readingOfferDismissed).toBe(true);
   });
 });
+
+describe("the list's width", () => {
+  const KEY = "daintree-canopy-list-width";
+  afterEach(() => window.localStorage.removeItem(KEY));
+  const reload = async () => {
+    vi.resetModules();
+    return (await import("../canopyStore")).useCanopyStore;
+  };
+
+  it("keeps the width the user chose across launches, and forgets it on a reset", async () => {
+    const store = await reload();
+    expect(store.getState().listWidth).toBeNull();
+    store.getState().setListWidth(600);
+    expect((await reload()).getState().listWidth).toBe(600);
+    (await reload()).getState().setListWidth(null);
+    expect((await reload()).getState().listWidth).toBeNull();
+  });
+
+  it("holds a width inside its bounds, whether set here or read back", async () => {
+    const { CANOPY_LIST_MIN_WIDTH, CANOPY_LIST_MAX_WIDTH } = await import("../canopyStore");
+    const store = await reload();
+    store.getState().setListWidth(CANOPY_LIST_MIN_WIDTH - 100);
+    expect(store.getState().listWidth).toBe(CANOPY_LIST_MIN_WIDTH);
+    window.localStorage.setItem(KEY, String(CANOPY_LIST_MAX_WIDTH * 4));
+    expect((await reload()).getState().listWidth).toBe(CANOPY_LIST_MAX_WIDTH);
+    window.localStorage.setItem(KEY, "wide");
+    expect((await reload()).getState().listWidth).toBeNull();
+  });
+
+  it("follows a sibling view's width as soon as that view sets it", async () => {
+    const store = await reload();
+    window.localStorage.setItem(KEY, "700");
+    window.dispatchEvent(new StorageEvent("storage", { key: KEY }));
+    expect(store.getState().listWidth).toBe(700);
+    window.localStorage.removeItem(KEY);
+    window.dispatchEvent(new StorageEvent("storage", { key: KEY }));
+    expect(store.getState().listWidth).toBeNull();
+  });
+});

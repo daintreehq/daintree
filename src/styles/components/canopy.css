@@ -11,12 +11,21 @@
    accent fell to 2.7:1 on namib; the lift alone measures about 1.03:1). The
    selected row is the focused row and draws no ring on top (#8094). */
 /* Canopy fills the window edge to edge, as a split view does: the list holds
-   its laptop width until a wide window gives it a little more room, and the
-   pane beside it takes the rest. The agent is resized to that pane once, on
-   open, whatever its width, so a capped body only cost dead bars either side.
-   The pitch's demo list shares the width, so turning reading on moves nothing. */
+   its laptop width until a wide window gives it a little more room, or the
+   width the user dragged its edge to, and the pane beside it takes the rest.
+   The agent is resized to that pane whatever its width, so a capped body only
+   cost dead bars either side. */
 .canopy-frame {
   --canopy-list-width: clamp(28rem, 20vw, 32rem);
+}
+
+/* The list in the inbox and the pitch's demo alike, so turning reading on moves
+   nothing. However wide it is set, the pane keeps its minimum; a window too
+   narrow for both minimums splits evenly. The width it is set to stays put, and
+   comes back when the window grows. */
+.canopy-list-column {
+  width: var(--canopy-list-width);
+  max-width: max(calc(100% - var(--canopy-pane-min-width, 0px)), 50%);
 }
 
 /* The list and the status bar under it, on one surface. */
