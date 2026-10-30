@@ -14,6 +14,8 @@ import {
   MAX_PANE_VOCABULARY,
   VoicePaneCorrectionResultSchema,
   VoicePaneLinkMethod,
+  fitPaneCorrection,
+  fitPaneStart,
 } from "../linkMethods.js";
 import {
   MAX_CORRECTION_REPLY_CHARS,
@@ -209,15 +211,23 @@ describe("dictating into a host's pane reads the pane from that host", () => {
         entries: [{ ...review!, sourcePath: "/Users/greg/.claude/skills/review/SKILL.md" }],
       },
     };
-    deps.readCorrection.mockResolvedValueOnce({ ...CORRECTION, commandTarget: withFile });
-    const read = await client.readCorrection(HOST, SCOPE, { timeoutMs: 1500 });
-    expect(read?.commandTarget?.vocabulary.entries).toEqual([review]);
-
-    const sent = VoicePaneCorrectionResultSchema.parse({
+    // The host never sends it.
+    expect(
+      fitPaneCorrection({ ...CORRECTION, commandTarget: withFile }).commandTarget?.vocabulary
+        .entries
+    ).toEqual([review]);
+    expect(
+      fitPaneStart({ ...START, commandTarget: withFile }).commandTarget?.vocabulary.entries
+    ).toEqual([review]);
+    // And a host that did would have it dropped before the Shell reads anything.
+    const received = VoicePaneCorrectionResultSchema.parse({
       ...CORRECTION,
       commandTarget: withFile,
     });
-    expect(sent.commandTarget?.vocabulary.entries[0]).not.toHaveProperty("sourcePath");
+    expect(received.commandTarget?.vocabulary.entries).toEqual([review]);
+    deps.readCorrection.mockResolvedValueOnce({ ...CORRECTION, commandTarget: withFile });
+    const read = await client.readCorrection(HOST, SCOPE, { timeoutMs: 1500 });
+    expect(read?.commandTarget?.vocabulary.entries).toEqual([review]);
   });
 
   it("keeps the newest of a vocabulary too long to send whole", async () => {

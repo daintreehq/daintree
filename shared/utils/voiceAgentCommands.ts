@@ -57,7 +57,8 @@ const SCOPE_LIKELIHOOD: Record<SlashCommandScope, number> = {
 // Longer than any command name anyone says aloud.
 const MAX_NAME_WORDS = 6;
 const NON_WORD_RE = /[^\p{L}\p{N}]+/gu;
-const COMMAND_SHAPED_RE = /^[\p{L}\p{N}][\p{L}\p{N}_:.-]*$/u;
+// A name's marks count as part of it: a decomposed `café` keeps its accent apart.
+const COMMAND_SHAPED_RE = /^[\p{L}\p{N}][\p{L}\p{M}\p{N}_:.-]*$/u;
 // Joins a prefix to its name when said aloud: "slash prompts colon deploy".
 const SPOKEN_JOINERS = new Set(["colon"]);
 // Hesitation sounds a spoken command may open with: "Um, slash review".

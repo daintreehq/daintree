@@ -289,6 +289,9 @@ describe("openingVoiceCommandToken", () => {
     ["/compact", "/compact"],
     ["  $plugin-creator on the repo", "$plugin-creator"],
     ["/prompts:deploy\nnow", "/prompts:deploy"],
+    ["\n  /review the diff", "/review"],
+    ["/caf\u00e9 order", "/caf\u00e9"],
+    ["/cafe\u0301 order", "/cafe\u0301"],
     // The agent would read the punctuation as part of the name.
     ["/review, then ship it", null],
     ["/etc/hosts is wrong", null],

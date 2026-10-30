@@ -1,11 +1,11 @@
 import type { FileHandle } from "fs/promises";
-import { promises as fs } from "fs";
+import { constants as fsConstants, promises as fs } from "fs";
 import * as path from "path";
 import { load as parseYaml } from "js-yaml";
 import { parse as parseToml } from "smol-toml";
 import type { VoiceCommandEntry } from "../../shared/utils/voiceAgentCommands.js";
 import { holdsCredential, isSecretShaped } from "./voiceKeytermSecrets.js";
-import { TimeoutError, withTimeout } from "../utils/withTimeout.js";
+import { withTimeout } from "../utils/withTimeout.js";
 
 /**
  * What cleanup is shown about the one command a prompt opens with, beyond its
@@ -26,7 +26,6 @@ const MAX_READ_BYTES = 32 * 1024;
 const MAX_DESCRIPTION_CHARS = 2_000;
 const MAX_ARGUMENT_HINT_CHARS = 200;
 const MAX_EXCERPT_CHARS = 2_000;
-// Text past a cut is screened too, so a credential the cut runs through still counts.
 const SCREEN_MARGIN_CHARS = 256;
 // A cleanup waits no longer than this for a skill's file; a dead mount
 // leaves it its listing.
@@ -39,25 +38,31 @@ interface CommandFileText {
 }
 
 // One read per file at a time, so a file on a dead mount holds one fs worker
-// however many cleanups ask for it. Released when it settles or times out.
+// however many cleanups ask for it. A timed-out read stays here until it
+// settles, unlike `probeOnce`'s: a timeout can't cancel the syscall, and a
+// path pinned to it costs only the excerpt, where a new read per cleanup could
+// take every worker in the pool.
 const inFlightReads = new Map<string, Promise<string | null>>();
-
-function releaseRead(filePath: string, read: Promise<string | null>): void {
-  if (inFlightReads.get(filePath) === read) inFlightReads.delete(filePath);
-}
 
 function readPrefixOnce(filePath: string): Promise<string | null> {
   const pending = inFlightReads.get(filePath);
   if (pending) return pending;
-  const started = readPrefix(filePath).finally(() => releaseRead(filePath, started));
+  const started = readPrefix(filePath).finally(() => {
+    if (inFlightReads.get(filePath) === started) inFlightReads.delete(filePath);
+  });
   inFlightReads.set(filePath, started);
   return started;
 }
 
+// Non-blocking, so a FIFO put where the skill was opens at once and is turned
+// away rather than waiting for a writer. Windows has no such flag, nor FIFOs.
+const OPEN_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0);
+
 async function readPrefix(filePath: string): Promise<string | null> {
   let handle: FileHandle | null = null;
   try {
-    handle = await fs.open(filePath, "r");
+    handle = await fs.open(filePath, OPEN_FLAGS);
+    if (!(await handle.stat()).isFile()) return null;
     const buffer = Buffer.alloc(MAX_READ_BYTES);
     const { bytesRead } = await handle.read(buffer, 0, MAX_READ_BYTES, 0);
     const text = buffer.subarray(0, bytesRead).toString("utf8");
@@ -70,12 +75,13 @@ async function readPrefix(filePath: string): Promise<string | null> {
 }
 
 async function readWithinBudget(filePath: string): Promise<string | null> {
-  const pending = readPrefixOnce(filePath);
   try {
-    return await withTimeout(pending, READ_BUDGET_MS, "Timed out reading a command file");
-  } catch (error) {
-    // A read that timed out may never settle, so nothing else would clear it.
-    if (error instanceof TimeoutError) releaseRead(filePath, pending);
+    return await withTimeout(
+      readPrefixOnce(filePath),
+      READ_BUDGET_MS,
+      "Timed out reading a command file"
+    );
+  } catch {
     return null;
   }
 }
@@ -94,20 +100,26 @@ function stringField(record: Record<string, unknown>, ...keys: string[]): string
   return undefined;
 }
 
+// A fence is a line of exactly three dashes: `----` is a rule and `---x:` a key.
+const OPENING_FENCE_RE = /^---[^\S\n]*\n/;
+const CLOSING_FENCE_RE = /^---[^\S\n]*$/m;
+
 // Claude Code commands and every agent's SKILL.md: YAML frontmatter, then the
 // text the agent reads. A file without frontmatter is all body; one whose
 // frontmatter the read cut off gives nothing.
 function markdownCommand(text: string): CommandFileText {
-  if (!text.startsWith("---")) return { body: text };
-  const end = text.indexOf("\n---", 3);
-  if (end === -1) return {};
+  const opening = text.match(OPENING_FENCE_RE);
+  if (!opening) return { body: text };
+  const rest = text.slice(opening[0].length);
+  const closing = CLOSING_FENCE_RE.exec(rest);
+  if (!closing) return {};
   let record: Record<string, unknown> | null;
   try {
-    record = asRecord(parseYaml(text.slice(3, end)));
+    record = asRecord(parseYaml(rest.slice(0, closing.index)));
   } catch {
     record = null;
   }
-  const bodyStart = text.indexOf("\n", end + 4);
+  const bodyStart = rest.indexOf("\n", closing.index);
   return {
     ...(record
       ? {
@@ -115,7 +127,7 @@ function markdownCommand(text: string): CommandFileText {
           argumentHint: stringField(record, "argument-hint", "argument_hint"),
         }
       : {}),
-    body: bodyStart === -1 ? "" : text.slice(bodyStart + 1),
+    body: bodyStart === -1 ? "" : rest.slice(bodyStart + 1),
   };
 }
 
@@ -169,9 +181,18 @@ function clip(text: string, max: number): string {
   return `${(space > max / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }
 
-// The same screen the command list passes, on the text either side of the cut.
+// The command list's screen, strict as for any text sent on as written, and on
+// each line too: `password:` ending one line holds its value on the next, and
+// a `.netrc` line counts only at the start of one.
+function holdsAnyCredential(text: string): boolean {
+  return (
+    holdsCredential(text, true) || text.split("\n").some((line) => holdsCredential(line, true))
+  );
+}
+
+// Screened either side of the cut, so a credential the cut runs through still counts.
 function screenedClip(text: string, max: number): string | undefined {
-  if (!text || holdsCredential(text.slice(0, max + SCREEN_MARGIN_CHARS))) return undefined;
+  if (!text || holdsAnyCredential(text.slice(0, max + SCREEN_MARGIN_CHARS))) return undefined;
   return clip(text, max);
 }
 

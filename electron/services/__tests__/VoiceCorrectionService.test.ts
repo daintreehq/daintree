@@ -1061,6 +1061,7 @@ describe("VoiceCorrectionService", () => {
       expect(logged).not.toContain("triage");
       expect(logged).not.toContain("Sort open issues");
       expect(logged).not.toContain("--since");
+      expect(logged).not.toContain("gh issue list");
     });
   });
 

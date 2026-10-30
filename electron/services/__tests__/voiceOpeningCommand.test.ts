@@ -1,3 +1,4 @@
+import { execFileSync } from "child_process";
 import { promises as fsp } from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -288,6 +289,27 @@ describe("readVoiceOpeningCommand", () => {
     expect(await readVoiceOpeningCommand(entries, `/${key}`)).toBeUndefined();
   });
 
+  it.each([
+    ["a numeric password assigned", "Connect with PGPASSWORD=123456 and query."],
+    ["a numeric password passed as a flag", "Run mysql --password 123456 against it."],
+    ["a password whose value is on the next line", "# Deploy\npassword:\n  hunter2\nThen deploy."],
+    [
+      "a .netrc line after a heading",
+      "# Fetch\nmachine api.example.com login dev password hunter2",
+    ],
+  ])("drops an excerpt holding %s", async (_name, body) => {
+    const skill = await write(
+      `claude/skills/screen-${_name.replace(/\W+/g, "-")}/SKILL.md`,
+      `---\ndescription: Screened\n---\n${body}\n`
+    );
+    const entries = entriesFor("claude", [discovered("claude", "/screened", skill)]);
+
+    expect(await readVoiceOpeningCommand(entries, "/screened")).toEqual({
+      token: "/screened",
+      description: "Screened",
+    });
+  });
+
   it("screens a credential the excerpt's cut runs through", async () => {
     const key = "sk-proj-" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0";
     const skill = await write(
@@ -313,7 +335,7 @@ describe("readVoiceOpeningCommand", () => {
     );
   });
 
-  it("gives up on a file it can't open in time, with one open however many cleanups ask", async () => {
+  it("gives up on a file it can't open in time, with one open however many cleanups ask, then or later", async () => {
     const skill = await write("claude/skills/slow/SKILL.md", "---\ndescription: Slow\n---\nBody\n");
     const open = vi.spyOn(fsp, "open").mockReturnValue(new Promise(() => {}));
     const entries = entriesFor("claude", [discovered("claude", "/slow", skill)]);
@@ -327,6 +349,55 @@ describe("readVoiceOpeningCommand", () => {
       { token: "/slow", description: "Listing description" },
       { token: "/slow", description: "Listing description" },
     ]);
+    // The open that timed out may still hold a worker, so a later cleanup waits on it too.
+    expect(await readVoiceOpeningCommand(entries, "/slow")).toEqual({
+      token: "/slow",
+      description: "Listing description",
+    });
     expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "turns away a FIFO put where the file was, without waiting for a writer",
+    async () => {
+      const fifo = path.join(root, "claude/skills/fifo/SKILL.md");
+      await fsp.mkdir(path.dirname(fifo), { recursive: true });
+      execFileSync("mkfifo", [fifo]);
+      const entries = entriesFor("claude", [discovered("claude", "/fifo", fifo)]);
+      const open = vi.spyOn(fsp, "open");
+
+      expect(await readVoiceOpeningCommand(entries, "/fifo")).toEqual({
+        token: "/fifo",
+        description: "Listing description",
+      });
+      // Opened and turned away, not left waiting out the budget.
+      expect(open).toHaveBeenCalledTimes(1);
+      await expect(open.mock.results[0]!.value).resolves.toBeDefined();
+    }
+  );
+
+  it("reads only a line of exactly three dashes as a fence", async () => {
+    const rule = await write(
+      "claude/commands/rule.md",
+      "----\nDeploy $ARGUMENTS to staging.\n\n---\n\nThen tell me.\n"
+    );
+    const key = await write(
+      "claude/skills/key/SKILL.md",
+      "---\ndescription: Keyed\n---extra: kept in the frontmatter\nargument-hint: <env>\n---\nBody\n"
+    );
+    const entries = entriesFor("claude", [
+      discovered("claude", "/rule", rule, { kind: "command" }),
+      discovered("claude", "/key", key),
+    ]);
+
+    expect((await readVoiceOpeningCommand(entries, "/rule"))!.excerpt).toBe(
+      "----\nDeploy $ARGUMENTS to staging.\n\n---\n\nThen tell me."
+    );
+    expect(await readVoiceOpeningCommand(entries, "/key")).toEqual({
+      token: "/key",
+      description: "Keyed",
+      argumentHint: "<env>",
+      excerpt: "Body",
+    });
   });
 });
