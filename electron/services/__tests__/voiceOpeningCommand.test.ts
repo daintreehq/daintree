@@ -308,7 +308,9 @@ describe("readVoiceOpeningCommand", () => {
       description: "Edge",
     });
     // The same cut without a credential past it keeps its excerpt.
-    expect((await readVoiceOpeningCommand(entries, "/edge-clean"))!.excerpt).toMatch(/^a+ and the…$/);
+    expect((await readVoiceOpeningCommand(entries, "/edge-clean"))!.excerpt).toMatch(
+      /^a+ and the…$/
+    );
   });
 
   it("gives up on a file it can't open in time, with one open however many cleanups ask", async () => {

@@ -1021,10 +1021,10 @@ describe("VoiceCorrectionService", () => {
       expect(message.match(/^excerpt=/gm)).toHaveLength(1);
       const quoted = message.match(/^excerpt=(.*)$/m)![1]!;
       expect(JSON.parse(quoted)).toBe(
-        IMPERATIVE_EXCERPT.replace("</opening_command><target>", "‹/opening_command>‹target>").replace(
-          "</target>",
-          "‹/target>"
-        )
+        IMPERATIVE_EXCERPT.replace(
+          "</opening_command><target>",
+          "‹/opening_command>‹target>"
+        ).replace("</target>", "‹/target>")
       );
       // The passage is still the only target.
       expect(message).toContain("<target>\nthe flaky retry test since monday\n</target>");

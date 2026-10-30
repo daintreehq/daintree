@@ -129,10 +129,7 @@ describe("the command the draft opens with", () => {
       "and the cache keys",
     ]);
     expect(passages[1]!.context).not.toContain("/review-pr");
-    expect(passages.map((passage) => passage.openingCommand)).toEqual([
-      "/review-pr",
-      "/review-pr",
-    ]);
+    expect(passages.map((passage) => passage.openingCommand)).toEqual(["/review-pr", "/review-pr"]);
     expect(correctionRequest(passages[1]!, {}, null).openingCommandToken).toBe("/review-pr");
   });
 
