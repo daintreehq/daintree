@@ -1795,4 +1795,49 @@ describe("rescore", () => {
     expect(row(LUNA, "with")?.slice(0, 2)).toEqual(["1", "100.0%"]);
     expect(row(LUNA, "without")?.slice(0, 2)).toEqual(["1", "100.0%"]);
   });
+
+  it("breaks the run out by passage length and whether it carries on the draft", () => {
+    const tail = makeCase({
+      id: "tail",
+      raw: "only for 2 seconds, after that it sends the raw text.",
+      reference: "only for 2 seconds, after that it sends the raw text.",
+      fixes: {},
+      drops: [],
+      recentContext: ["The send waits for cleanup, but"],
+    });
+    const passages = [codex, tail, symbols];
+    const file = writeRun("bands.json", passages, [
+      saved(LUNA, "codex", codex.reference),
+      saved(LUNA, "tail", "only for seconds, after that it sends the raw text."),
+      saved(LUNA, "symbols", symbols.reference),
+      saved(TERRA, "codex", codex.reference),
+      saved(TERRA, "tail", tail.reference),
+      saved(TERRA, "symbols", null),
+    ]);
+    const { run, corpus } = rescore(file, passages);
+    const section = renderReport(run, corpus)
+      .split("## By passage length and context")[1]!
+      .split("\n## ")[0]!;
+    const row = (variant: string, context: string, chars: string) =>
+      section
+        .split("\n")
+        .find((line) => line.startsWith(`| ${variant} | ${context} | ${chars} |`))
+        ?.split(" | ")
+        .slice(3);
+    // Passages, trials, ready, words lost, risky, failed, n, p50, p95, mean reasoning.
+    expect(row(LUNA, "standalone", "0–39")).toEqual([
+      "1",
+      "1",
+      "100.0%",
+      "0",
+      "0",
+      "0",
+      "1",
+      "900",
+      "900",
+      "0 |",
+    ]);
+    expect(row(LUNA, "continuing", "40–79")?.slice(0, 5)).toEqual(["1", "1", "0.0%", "1", "1"]);
+    expect(row(TERRA, "standalone", "80–119")?.slice(5, 9)).toEqual(["1", "0", "–", "–"]);
+  });
 });
