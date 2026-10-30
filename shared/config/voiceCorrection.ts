@@ -90,14 +90,49 @@ export const VOICE_DICTATION_REASONING_EFFORT = "none" as const;
 /** The Responses API reasoning tiers a voice-dictation request may ask for. */
 export type VoiceReasoningEffort = "none" | "low" | "medium" | "high";
 
+/** What cleanup knows of a passage when it picks the reasoning effort to send it with. */
+export interface CleanupPassage {
+  /** Characters in the trimmed passage. */
+  chars: number;
+  /** Draft text comes before it, sent as its confirmed history (`recentContext`). */
+  continuing: boolean;
+}
+
+/**
+ * Haiku cleans up a standalone passage shorter than this without reasoning
+ * (#15504). On the cleanup benchmark (2026-10-30) those came back with a p95
+ * of 1.95 s against 3.38 s at medium, and lost no ground on ready text, words
+ * lost or risky trials; from 70 characters a retraction ("run it, no wait")
+ * began to lose words without it.
+ */
+export const CLEANUP_REASONING_MIN_CHARS = 60;
+
 /**
  * The reasoning effort cleanup, its warm-up and rewrite ask each model for,
  * chosen on the cleanup benchmark (2026-10-29). A little reasoning made every
  * model's edits safer: Haiku at medium lost a fifth of the words it lost with
  * none, and the other models gained at low, Sonnet coming back faster too.
+ * Given a passage, Haiku skips it on a short standalone one, which has
+ * nothing to reason over; a continuing one reads right only against what
+ * went before, however short it is. Without one, the model's effort.
  */
-export function cleanupReasoningEffortFor(model: string): VoiceReasoningEffort {
-  return model === "claude-haiku-5-5" ? "medium" : "low";
+export function cleanupReasoningEffortFor(
+  model: string,
+  passage?: CleanupPassage
+): VoiceReasoningEffort {
+  if (model !== "claude-haiku-5-5") return "low";
+  return passage && !passage.continuing && passage.chars < CLEANUP_REASONING_MIN_CHARS
+    ? "none"
+    : "medium";
+}
+
+/**
+ * Every effort a model's cleanup may send a passage with. Claude caches a
+ * prompt once per thinking setting, so the warm-up primes each of them.
+ */
+export function cleanupWarmEffortsFor(model: string): VoiceReasoningEffort[] {
+  const short = cleanupReasoningEffortFor(model, { chars: 0, continuing: false });
+  return [...new Set([cleanupReasoningEffortFor(model), short])];
 }
 
 /** The longest selection a spoken rewrite takes, matching cleanup's passage cap. */

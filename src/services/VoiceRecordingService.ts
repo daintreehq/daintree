@@ -3627,7 +3627,10 @@ class VoiceRecordingService {
         ...passages.map((passage) =>
           estimateCorrectionMs(
             this.cleanupModel,
-            cleanupReasoningEffortFor(this.cleanupModel),
+            cleanupReasoningEffortFor(this.cleanupModel, {
+              chars: passage.text.trim().length,
+              continuing: passage.context.length > 0,
+            }),
             passage.text.length
           )
         )

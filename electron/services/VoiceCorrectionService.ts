@@ -8,9 +8,11 @@ import {
   buildCorrectionSystemPrompt,
   buildRewriteSystemPrompt,
   cleanupReasoningEffortFor,
+  cleanupWarmEffortsFor,
   correctionInstructionsFor,
   isVoiceCleanupModel,
   voiceCleanupProviderOf,
+  type CleanupPassage,
   type CorrectionInstructions,
   type CorrectionPromptContext,
   type CorrectionTargetContext,
@@ -216,7 +218,7 @@ export interface VoiceRewriteRequest {
 
 export interface VoiceCorrectionSettings {
   model: string;
-  /** Overrides `cleanupReasoningEffortFor` for cleanup, its warm-up and rewrite. */
+  /** Overrides `cleanupReasoningEffortFor` for every passage, the warm-up and rewrite. */
   reasoningEffort?: VoiceReasoningEffort;
   /** Cleanup rules in place of the model's own (`correctionInstructionsFor`): the cleanup benchmark's prompt variants. */
   instructions?: CorrectionInstructions;
@@ -329,6 +331,8 @@ interface RequestTrace {
   firstOutputAt?: number;
   settledAt?: number;
   usage?: VoiceCorrectionUsage;
+  /** The effort the passage went out with, which its pace sample is filed under. */
+  effort?: VoiceReasoningEffort;
 }
 
 interface CorrectionApiResult {
@@ -455,8 +459,11 @@ function reasoningHeadroom(effort: VoiceReasoningEffort): number {
   return effort === "none" ? 0 : THINKING_HEADROOM_TOKENS;
 }
 
-function cleanupEffortOf(settings: VoiceCorrectionSettings): VoiceReasoningEffort {
-  return settings.reasoningEffort ?? cleanupReasoningEffortFor(settings.model);
+function cleanupEffortOf(
+  settings: VoiceCorrectionSettings,
+  passage?: CleanupPassage
+): VoiceReasoningEffort {
+  return settings.reasoningEffort ?? cleanupReasoningEffortFor(settings.model, passage);
 }
 
 /**
@@ -702,7 +709,7 @@ export class VoiceCorrectionService {
             phases: {
               untilOutputMs: sentAt - calledAt + (firstOutputAt - attemptSentAt),
               outputMs: settledAt - firstOutputAt,
-              effort: cleanupEffortOf(settings),
+              effort: trace.effort ?? cleanupEffortOf(settings),
             },
           }
         : {};
@@ -1290,12 +1297,18 @@ export class VoiceCorrectionService {
       segmentCount: request.segmentCount ?? 0,
     });
 
+    const effort = cleanupEffortOf(settings, {
+      chars: request.rawText.trim().length,
+      continuing: (request.recentContext?.length ?? 0) > 0,
+    });
+    trace.effort = effort;
     return await withTimeoutSignal(
-      this.getCorrectionTimeoutMs(request, cleanupEffortOf(settings)),
+      this.getCorrectionTimeoutMs(request, effort),
       (deadline) =>
         this.requestCorrection(
           request,
           settings,
+          effort,
           systemPrompt,
           userMessage,
           deadline,
@@ -1353,11 +1366,11 @@ export class VoiceCorrectionService {
   // the prefix it leaves in the cache is the one the passage arrives with.
   private correctionBody(
     settings: VoiceCorrectionSettings,
+    effort: VoiceReasoningEffort,
     systemPrompt: string,
     userMessage: UserTurn,
     maxOutputTokens: number
   ): object {
-    const effort = cleanupEffortOf(settings);
     if (voiceCleanupProviderOf(settings.model) === "anthropic") {
       return claudeRequestBody({
         model: settings.model,
@@ -1397,7 +1410,12 @@ export class VoiceCorrectionService {
   }
 
   // Caches are per account, and the cache key leaves out parts of the prompt.
-  private promptIdentity(settings: VoiceCorrectionSettings, systemPrompt: string): string {
+  // Claude caches a prompt once per thinking setting, so there the effort counts too.
+  private promptIdentity(
+    settings: VoiceCorrectionSettings,
+    effort: VoiceReasoningEffort,
+    systemPrompt: string
+  ): string {
     return createHash("sha256")
       .update(
         JSON.stringify([
@@ -1405,6 +1423,7 @@ export class VoiceCorrectionService {
           settings.organizationId ?? null,
           settings.projectId ?? null,
           settings.model,
+          voiceCleanupProviderOf(settings.model) === "anthropic" ? effort : null,
           this.buildPromptCacheKey(settings),
           systemPrompt,
         ])
@@ -1424,13 +1443,25 @@ export class VoiceCorrectionService {
 
   /**
    * Sends the correction's developer message ahead of any passage, so the
-   * prompt cache holds it when one arrives. The user turn is a fixed
-   * placeholder: nothing dictated, drafted or read from a terminal goes with
-   * it. A prompt that went out in the last few minutes is left alone.
+   * prompt cache holds it when one arrives, once for each effort a passage
+   * may go out with. The user turn is a fixed placeholder: nothing dictated,
+   * drafted or read from a terminal goes with it. A prompt that went out in
+   * the last few minutes is left alone.
    */
   async warm(settings: VoiceCorrectionSettings): Promise<void> {
     const systemPrompt = this.buildSystemPrompt(settings);
-    const identity = this.promptIdentity(settings, systemPrompt);
+    const efforts = settings.reasoningEffort
+      ? [settings.reasoningEffort]
+      : cleanupWarmEffortsFor(settings.model);
+    await Promise.all(efforts.map((effort) => this.warmFor(settings, effort, systemPrompt)));
+  }
+
+  private async warmFor(
+    settings: VoiceCorrectionSettings,
+    effort: VoiceReasoningEffort,
+    systemPrompt: string
+  ): Promise<void> {
+    const identity = this.promptIdentity(settings, effort, systemPrompt);
     const usedAt = this.promptUsedAt.get(identity);
     if (usedAt !== undefined && performance.now() - usedAt < PROMPT_WARM_FOR_MS) return;
     if (this.warming.has(identity)) return;
@@ -1446,7 +1477,13 @@ export class VoiceCorrectionService {
         headers,
         signal: deadline.signal,
         body: JSON.stringify(
-          this.correctionBody(settings, systemPrompt, WARM_USER_MESSAGE, WARM_MAX_OUTPUT_TOKENS)
+          this.correctionBody(
+            settings,
+            effort,
+            systemPrompt,
+            WARM_USER_MESSAGE,
+            WARM_MAX_OUTPUT_TOKENS
+          )
         ),
       });
       // Read to the end, so the socket goes back to the pool.
@@ -1509,6 +1546,7 @@ export class VoiceCorrectionService {
   private async requestCorrection(
     request: VoiceCorrectionRequest,
     settings: VoiceCorrectionSettings,
+    effort: VoiceReasoningEffort,
     systemPrompt: string,
     userMessage: UserTurn,
     signal: AbortSignal,
@@ -1518,7 +1556,7 @@ export class VoiceCorrectionService {
   ): Promise<VoiceCorrectionProposal> {
     const maxOutputTokens = this.getMaxOutputTokens(request);
     const body = JSON.stringify({
-      ...this.correctionBody(settings, systemPrompt, userMessage, maxOutputTokens),
+      ...this.correctionBody(settings, effort, systemPrompt, userMessage, maxOutputTokens),
       ...(onText ? { stream: true } : {}),
     });
     const probe = this.preconnecting.get(voiceCleanupProviderOf(settings.model));
@@ -1553,7 +1591,7 @@ export class VoiceCorrectionService {
               stall?.dispose();
             }
           );
-          this.notePromptUsed(this.promptIdentity(settings, systemPrompt), sentAt);
+          this.notePromptUsed(this.promptIdentity(settings, effort, systemPrompt), sentAt);
           return result;
         } catch (error) {
           // A cancel or the deadline ends it, whatever the attempt was doing.

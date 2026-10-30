@@ -8,6 +8,7 @@ vi.mock("../../utils/logger.js", () => ({
 }));
 
 import { logWarn } from "../../utils/logger.js";
+import { CLEANUP_REASONING_MIN_CHARS } from "../../../shared/config/voiceCorrection.js";
 import { VoiceCorrectionService } from "../VoiceCorrectionService.js";
 
 const SETTINGS = {
@@ -105,7 +106,7 @@ describe("VoiceCorrectionService on Claude", () => {
     vi.restoreAllMocks();
   });
 
-  it("sends a cleanup to the Messages API with the schema enforced, Haiku thinking at medium", async () => {
+  it("sends a cleanup to the Messages API with the schema enforced, a short one without thinking", async () => {
     const fetchMock = stubFetch(jsonResponse(message(reply("Run Vitest."))));
 
     const result = await new VoiceCorrectionService().correct({ rawText: "run v test" }, SETTINGS);
@@ -120,8 +121,8 @@ describe("VoiceCorrectionService on Claude", () => {
     expect(init.headers).not.toHaveProperty("Authorization");
     const body = sentBody(fetchMock);
     expect(body.model).toBe("claude-haiku-5-5");
-    expect(body.thinking).toEqual({ type: "adaptive" });
-    expect(body.output_config.effort).toBe("medium");
+    expect(body.thinking).toEqual({ type: "disabled" });
+    expect(body.max_tokens).toBeLessThan(4096);
     expect(body.output_config.format.type).toBe("json_schema");
     expect(body.output_config.format.schema.required).toEqual([
       "action",
@@ -155,6 +156,77 @@ describe("VoiceCorrectionService on Claude", () => {
     expect(sentBody(fetchMock, 0).thinking).toEqual({ type: "disabled" });
     expect(sentBody(fetchMock, 0).output_config.effort).toBe("low");
     expect(sentBody(fetchMock, 1).thinking).toEqual({ type: "between_tools" });
+  });
+
+  it("thinks at medium on Haiku from the cutoff's length, measured on the trimmed passage", async () => {
+    const fetchMock = stubFetch(
+      jsonResponse(message(reply("Ok."))),
+      jsonResponse(message(reply("Ok.")))
+    );
+    const svc = new VoiceCorrectionService();
+    const below = "a".repeat(CLEANUP_REASONING_MIN_CHARS - 1);
+    await svc.correct({ rawText: `  ${below}  ` }, SETTINGS);
+    await svc.correct({ rawText: `${below}a` }, SETTINGS);
+    expect(sentBody(fetchMock, 0).thinking).toEqual({ type: "disabled" });
+    expect(sentBody(fetchMock, 1).thinking).toEqual({ type: "adaptive" });
+    expect(sentBody(fetchMock, 1).output_config.effort).toBe("medium");
+    expect(sentBody(fetchMock, 1).max_tokens).toBeGreaterThan(4096);
+  });
+
+  it("thinks at medium on Haiku for a short passage that carries on the draft", async () => {
+    const fetchMock = stubFetch(jsonResponse(message(reply("make sure it loads"))));
+    await new VoiceCorrectionService().correct(
+      { rawText: "make sure it loads", recentContext: ["Before you merge,"] },
+      SETTINGS
+    );
+    expect(sentBody(fetchMock).thinking).toEqual({ type: "adaptive" });
+    expect(sentBody(fetchMock).output_config.effort).toBe("medium");
+  });
+
+  it("files a short passage's pace under the effort it went out with", async () => {
+    stubFetch(streamed(frames(reply("Run Vitest."))), streamed(frames(reply("run Vitest"))));
+    const svc = new VoiceCorrectionService();
+    const standalone = await svc.correct({ rawText: "run v test" }, SETTINGS, undefined, () => {});
+    const continuing = await svc.correct(
+      { rawText: "run v test", recentContext: ["Once it builds,"] },
+      SETTINGS,
+      undefined,
+      () => {}
+    );
+    expect(standalone.phases?.effort).toBe("none");
+    expect(continuing.phases?.effort).toBe("medium");
+  });
+
+  it("gives a short passage on Haiku the deadline of a request that doesn't reason", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_url: string, init: RequestInit) =>
+          new Promise<Response>((_resolve, reject) =>
+            init.signal!.addEventListener("abort", () => reject(init.signal!.reason), {
+              once: true,
+            })
+          )
+      )
+    );
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const svc = new VoiceCorrectionService();
+      const settled: string[] = [];
+      const short = svc
+        .correct({ rawText: "run v test" }, SETTINGS)
+        .finally(() => settled.push("short"));
+      const continuing = svc
+        .correct({ rawText: "run v test", recentContext: ["Once it builds,"] }, SETTINGS)
+        .finally(() => settled.push("continuing"));
+      await vi.advanceTimersByTimeAsync(7_000);
+      expect(settled).toEqual(["short"]);
+      expect((await short).verdict).toBe("timed_out");
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect((await continuing).verdict).toBe("timed_out");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("thinks at low by default on Sonnet", async () => {
@@ -431,13 +503,54 @@ describe("VoiceCorrectionService on Claude", () => {
   });
 
   it("warms with the passage's own request shape, without OpenAI's store flag", async () => {
-    const fetchMock = stubFetch(jsonResponse(message(reply("x"), "max_tokens")));
+    const fetchMock = stubFetch(
+      jsonResponse(message(reply("x"), "max_tokens")),
+      jsonResponse(message(reply("x"), "max_tokens"))
+    );
     await new VoiceCorrectionService().warm(SETTINGS);
     expect(fetchMock.mock.calls[0]![0]).toBe("https://api.anthropic.com/v1/messages");
     const body = sentBody(fetchMock);
     expect(body).not.toHaveProperty("store");
-    expect(body.thinking).toEqual({ type: "adaptive" });
     expect(body.output_config.format.type).toBe("json_schema");
+  });
+
+  // Claude caches a prompt once per thinking setting, so a passage sent
+  // without thinking reads nothing a warm-up with it wrote.
+  it("warms Haiku once with thinking and once without, each its own prompt", async () => {
+    const fetchMock = stubFetch(
+      jsonResponse(message(reply("x"), "max_tokens")),
+      jsonResponse(message(reply("x"), "max_tokens")),
+      jsonResponse(message(reply("Ok."))),
+      jsonResponse(message(reply("x"), "max_tokens"))
+    );
+    const svc = new VoiceCorrectionService();
+    await svc.warm(SETTINGS);
+    const warmed = [sentBody(fetchMock, 0), sentBody(fetchMock, 1)];
+    expect(warmed.map((body) => body.thinking.type).sort()).toEqual(["adaptive", "disabled"]);
+    expect(warmed[0].system).toEqual(warmed[1].system);
+
+    await svc.warm(SETTINGS);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    // A passage sent at one effort keeps only that one warm.
+    await svc.correct({ rawText: "ok" }, { ...SETTINGS, customInstructions: "Be brief." });
+    await svc.warm({ ...SETTINGS, customInstructions: "Be brief." });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(sentBody(fetchMock, 3).thinking).toEqual({ type: "adaptive" });
+  });
+
+  it("warms only the effort a setting asks for", async () => {
+    const fetchMock = stubFetch(jsonResponse(message(reply("x"), "max_tokens")));
+    await new VoiceCorrectionService().warm({ ...SETTINGS, reasoningEffort: "none" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(sentBody(fetchMock).thinking).toEqual({ type: "disabled" });
+  });
+
+  it("warms Sonnet once, at its one effort", async () => {
+    const fetchMock = stubFetch(jsonResponse(message(reply("x"), "max_tokens")));
+    await new VoiceCorrectionService().warm({ ...SETTINGS, model: "claude-sonnet-5-5" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(sentBody(fetchMock).output_config.effort).toBe("low");
   });
 
   it("preconnects to Anthropic for a Claude cleanup", async () => {

@@ -5,6 +5,9 @@ import {
   buildRewriteSystemPrompt,
   CLAUDE_CORRECTION_INSTRUCTIONS,
   CLAUDE_CORRECTION_PROMPT,
+  CLEANUP_REASONING_MIN_CHARS,
+  cleanupReasoningEffortFor,
+  cleanupWarmEffortsFor,
   CORE_CORRECTION_PROMPT,
   correctionInstructionsFor,
   LITERAL_CORRECTION_INSTRUCTIONS,
@@ -14,6 +17,44 @@ import {
 } from "../voiceCorrection.js";
 import { acceptSuggestion, dictionaryTerms } from "../../utils/voiceDictionary.js";
 import { collectHeardAsRules } from "../../utils/voiceHeardAs.js";
+
+describe("cleanupReasoningEffortFor", () => {
+  const HAIKU = "claude-haiku-5-5";
+  const standalone = (chars: number) => ({ chars, continuing: false });
+
+  it("skips Haiku's reasoning on a standalone passage shorter than the cutoff", () => {
+    expect(cleanupReasoningEffortFor(HAIKU, standalone(1))).toBe("none");
+    expect(cleanupReasoningEffortFor(HAIKU, standalone(CLEANUP_REASONING_MIN_CHARS - 1))).toBe(
+      "none"
+    );
+    expect(cleanupReasoningEffortFor(HAIKU, standalone(CLEANUP_REASONING_MIN_CHARS))).toBe(
+      "medium"
+    );
+  });
+
+  it("keeps Haiku reasoning on a short passage that carries on the draft", () => {
+    expect(cleanupReasoningEffortFor(HAIKU, { chars: 10, continuing: true })).toBe("medium");
+  });
+
+  it("gives Haiku its own effort when no passage is named", () => {
+    expect(cleanupReasoningEffortFor(HAIKU)).toBe("medium");
+  });
+
+  it("leaves every other model at its effort whatever the passage", () => {
+    for (const model of ["claude-sonnet-5-5", "gpt-6.1-terra", "gpt-6-luna"]) {
+      expect(cleanupReasoningEffortFor(model, standalone(10))).toBe(
+        cleanupReasoningEffortFor(model)
+      );
+    }
+  });
+
+  it("warms every effort a passage may go out with, once each", () => {
+    expect(cleanupWarmEffortsFor(HAIKU).sort()).toEqual(["medium", "none"]);
+    expect(cleanupWarmEffortsFor("gpt-6.1-terra")).toEqual([
+      cleanupReasoningEffortFor("gpt-6.1-terra"),
+    ]);
+  });
+});
 
 describe("CORE_CORRECTION_PROMPT", () => {
   it("includes an explicit idempotency instruction", () => {

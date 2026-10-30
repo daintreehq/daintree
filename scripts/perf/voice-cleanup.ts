@@ -45,9 +45,12 @@ import {
   codeNamesOf,
   corpusProblems,
   fixesOf,
+  isContinuing,
+  lengthBandOf,
   locatePauses,
   locateUncertain,
   MODEL_PRICES,
+  passageChars,
   PROMPT_LENGTH_MIN_CHARS,
   requestCost,
   scoreText,
@@ -73,7 +76,9 @@ const MODEL_ALIASES: Readonly<Record<string, string>> = {
   haiku: "claude-haiku-5-5",
   sonnet: "claude-sonnet-5-5",
 };
-const EFFORTS: readonly VoiceReasoningEffort[] = ["none", "low", "medium", "high"];
+// `auto` sends no effort, so the service picks one per passage as production does.
+type VariantEffort = VoiceReasoningEffort | "auto";
+const EFFORTS: readonly VariantEffort[] = ["none", "low", "medium", "high", "auto"];
 const STYLES: readonly TranscriptStyle[] = ["openai", "deepgram", "grok", "generic"];
 
 const USAGE = `usage: npm run perf voice-cleanup -- [options]
@@ -83,7 +88,8 @@ model and effort, against the live OpenAI or Anthropic API (needs OPENAI_API_KEY
 for OpenAI models and ANTHROPIC_API_KEY for Claude models; costs money).
 
   --variants <list>     model:effort pairs (default terra:none); luna, terra, haiku
-                        and sonnet are aliases, any other model id is sent as is
+                        and sonnet are aliases, any other model id is sent as is;
+                        effort auto lets the service pick one per passage
   --prompts <list>      cleanup prompts, each run with every model:effort (default
                         production): ${Object.keys(PROMPT_VARIANTS).join(", ")}
   --repeats <n>         passes over the corpus (default 1)
@@ -103,7 +109,7 @@ interface Variant {
   /** `model:effort/prompt`. */
   id: string;
   model: string;
-  effort: VoiceReasoningEffort;
+  effort: VariantEffort;
   prompt: string;
 }
 
@@ -125,10 +131,10 @@ function parseModel(spec: string): Omit<Variant, "id" | "prompt"> {
   const [name = "", effort = "none", ...extra] = spec.trim().split(":");
   const model = MODEL_ALIASES[name] ?? name;
   if (!model || extra.length > 0) throw new Error(`bad variant "${spec}": expected model:effort`);
-  if (!EFFORTS.includes(effort as VoiceReasoningEffort)) {
+  if (!EFFORTS.includes(effort as VariantEffort)) {
     throw new Error(`bad effort "${effort}" in "${spec}": one of ${EFFORTS.join(", ")}`);
   }
-  return { model, effort: effort as VoiceReasoningEffort };
+  return { model, effort: effort as VariantEffort };
 }
 
 function namesIn(registry: Readonly<Record<string, unknown>>, kind: string, names: string[]) {
@@ -317,7 +323,7 @@ function settingsFor(
     ...(style && style !== "generic" ? { transcriber: style } : {}),
     ...(commandTarget ? { commandTarget: agentCommandTarget(commandTarget) } : {}),
     model: variant.model,
-    reasoningEffort: variant.effort,
+    ...(variant.effort === "auto" ? {} : { reasoningEffort: variant.effort }),
     instructions: instructionsOf(variant),
     apiKey,
     ...ROUTING,
@@ -736,6 +742,37 @@ export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): st
     }
     lines.push("");
   }
+
+  lines.push(
+    "## By passage length and context",
+    "",
+    "Each passage by its trimmed raw length in characters, and whether earlier sections of the draft went out before it (continuing: it carries confirmed history) or not (standalone). Words lost: words the raw had right that were lost or changed. Risky trials: any word lost, novel or added, or a keep lost. Round trip over the requests that came back readable (n); failed requests count in Failed instead.",
+    "",
+    "| Variant | Context | Chars | Passages | Trials | Ready | Words lost | Risky trials | Failed | n | p50 | p95 | Mean reasoning |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+  );
+  const cohortKey = (entry: CleanupCase) =>
+    `${isContinuing(entry) ? "continuing" : "standalone"} ${lengthBandOf(passageChars(entry))}`;
+  const cohorts = [...new Set(corpus.map(cohortKey))].sort((a, b) =>
+    a.localeCompare(b, undefined, { numeric: true })
+  );
+  for (const variant of run.variants) {
+    for (const cohort of cohorts) {
+      const entries = corpus.filter((entry) => cohortKey(entry) === cohort);
+      const ids = new Set(entries.map((entry) => entry.id));
+      const summary = summariseVariant(
+        variant.id,
+        run.trials.filter((trial) => ids.has(trial.caseId)),
+        entries
+      );
+      if (summary.trials === 0) continue;
+      const { landed, roundTrip } = summary;
+      lines.push(
+        `| ${variant.id} | ${cohort.replace(" ", " | ")} | ${entries.length} | ${summary.trials} | ${pct(landed.agentReadyRate)} | ${landed.broken} | ${landed.trialsWithMeaningRisk} | ${summary.dispositions.failed} | ${roundTrip.count} | ${ms(roundTrip.p50)} | ${ms(roundTrip.p95)} | ${Math.round(summary.tokens.meanReasoning)} |`
+      );
+    }
+  }
+  lines.push("");
 
   const groups: Array<[string, (entry: CleanupCase) => string]> = [
     ["source", (entry) => entry.source],

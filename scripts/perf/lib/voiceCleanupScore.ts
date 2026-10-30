@@ -622,6 +622,30 @@ export function requestCost(model: string, usage: TokenUsage | undefined): numbe
   );
 }
 
+/**
+ * The lower bounds of the passage lengths the benchmark reports by, in
+ * characters of the trimmed raw transcript: what the service measures a
+ * passage by when it picks its reasoning effort (#15504), split at Haiku's
+ * cutoff (`CLEANUP_REASONING_MIN_CHARS`).
+ */
+export const PASSAGE_LENGTH_BANDS: readonly number[] = [0, 30, 60, 90, 120, 160, 300, 600];
+
+export function passageChars(entry: CleanupCase): number {
+  return entry.raw.trim().length;
+}
+
+/** Draft text comes before the passage: production sends it as `recentContext`. */
+export function isContinuing(entry: CleanupCase): boolean {
+  return (entry.recentContext?.length ?? 0) > 0;
+}
+
+/** The band a passage falls in, written as its range of characters. */
+export function lengthBandOf(chars: number): string {
+  const next = PASSAGE_LENGTH_BANDS.find((bound) => bound > chars);
+  const from = PASSAGE_LENGTH_BANDS.filter((bound) => bound <= chars).at(-1) ?? 0;
+  return next === undefined ? `${from}+` : `${from}–${next - 1}`;
+}
+
 /** Nearest-rank, the convention the replay benchmark uses. */
 export function percentile(values: readonly number[], p: number): number | null {
   if (values.length === 0) return null;
