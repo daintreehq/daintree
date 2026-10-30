@@ -210,6 +210,11 @@ export interface SendTextOptions {
    * taken the text by then, and a draft the send left alone hands nothing.
    */
   onHandedOff?: (accepted: Promise<boolean> | void) => void;
+  /**
+   * Sent for a composer that has unmounted (#15510): the disabled state it
+   * last rendered is stale, and a `submit` checks its destination itself.
+   */
+  departed?: boolean;
 }
 
 /**
@@ -291,7 +296,7 @@ export function useTokenResolution({
   const sendText = useCallback(
     async (text: string, options?: SendTextOptions): Promise<boolean> => {
       const latest = latestRef.current;
-      if (!latest || latest.disabled) return false;
+      if (!latest || (latest.disabled && !(options?.departed && options.submit))) return false;
       if (isSendingRef.current) return false;
 
       // Held across the whole transaction, not just the diff fetch it used to

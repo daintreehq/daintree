@@ -703,8 +703,18 @@ export function CanopyCard({
     ? { surface: "surface-panel", extension: "panel-header-focus-bg", lift: "overlay-medium" }
     : { surface: "surface-panel", extension: "panel-header-bg" };
 
-  // Through the open stream only, so main sends to the incarnation on screen
-  // or to nothing.
+  // A dictated reply can go after its card has: the send waits for its
+  // cleanup, and the user may have moved to another run meanwhile (#15510).
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  // Through the open stream, so main sends to the incarnation on screen or to
+  // nothing. A reply that outlived its card goes by the run the card showed,
+  // held to the same incarnation: its stream ended with the card.
   // The draft clears only once main has taken the text: a refused send (the
   // agent exited, the terminal respawned) leaves the reply where it was typed.
   const submit = async (
@@ -713,13 +723,14 @@ export function CanopyCard({
     moveOnTo?: string
   ): Promise<boolean> => {
     const watchId = stream.watchId;
-    if (watchId === null) return false;
+    if (watchId === null && mountedRef.current) return false;
+    const images = imagePaths && imagePaths.length > 0 ? [...imagePaths] : undefined;
     try {
-      await terminalApi.terminalSubmit(
-        watchId,
-        text,
-        imagePaths && imagePaths.length > 0 ? [...imagePaths] : undefined
-      );
+      if (mountedRef.current && watchId !== null) {
+        await terminalApi.terminalSubmit(watchId, text, images);
+      } else {
+        await terminalApi.submitReply(item.runId, { spawnedAt: run.spawnedAt }, text, images);
+      }
     } catch (error) {
       onSendFailed(item, error);
       return false;

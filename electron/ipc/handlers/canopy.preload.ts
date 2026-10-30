@@ -40,6 +40,7 @@ export const CANOPY_METHOD_CHANNELS = {
   terminalResize: "canopy:terminal-resize",
   terminalSendKey: "canopy:terminal-send-key",
   terminalSubmit: "canopy:terminal-submit",
+  submitReply: "canopy:submit-reply",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof CANOPY_METHOD_CHANNELS;

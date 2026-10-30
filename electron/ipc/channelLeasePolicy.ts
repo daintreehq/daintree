@@ -112,6 +112,7 @@ export const CHANNEL_LEASE_POLICY = {
   "canopy:set-scope": "free",
   "canopy:set-shown": "free",
   "canopy:snapshot-updated": "free",
+  "canopy:submit-reply": "handler",
   "canopy:terminal-data": "free",
   "canopy:terminal-input": "handler",
   "canopy:terminal-resize": "handler",

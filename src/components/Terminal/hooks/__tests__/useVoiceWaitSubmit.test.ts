@@ -726,7 +726,140 @@ describe("useVoiceWaitSubmit", () => {
     expect(sendFromEditor).not.toHaveBeenCalled();
   });
 
-  it("drops its send when the composer unmounts mid-wait, leaving the panel free to send", async () => {
+  it("still sends once its cleanup lands when the composer unmounts mid-wait (#15510)", async () => {
+    let finishCorrection!: (landed: boolean) => void;
+    hasPendingMock.mockReturnValue(true);
+    waitMock.mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishCorrection = resolve;
+        })
+    );
+    useTerminalInputStore.getState().setDraftInput(PANEL_ID, "fix the login bug");
+    const handBack = vi.fn();
+    const atEnter = { imagePaths: ["/tmp/shot.png"], fanOut: true };
+    const captureDeparture = vi.fn(() => atEnter);
+
+    const { result, unmount } = renderHook(() =>
+      useVoiceWaitSubmit({
+        terminalId: PANEL_ID,
+        editorViewRef: { current: null },
+        editableCompartmentRef: { current: new Compartment() },
+        sendFromEditor,
+        claimSendHandBack: () => handBack,
+        captureDeparture,
+      })
+    );
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    expect(captureDeparture).toHaveBeenCalledTimes(1);
+    unmount();
+    expect(waitMock.mock.calls[0]![1]!.aborted).toBe(false);
+    // Still waiting: another composer for this draft can't start a second send.
+    expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(true);
+    expect(sendFromEditor).not.toHaveBeenCalled();
+
+    hasPendingMock.mockReturnValue(false);
+    await act(async () => {
+      finishCorrection(true);
+    });
+
+    // Through the departed composer, from the store, and with no hand-back
+    // to a composer that is gone.
+    expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    const [sentHandBack, voiceSend, route, departed] = sendFromEditor.mock.calls[0] as unknown[];
+    expect(sentHandBack).not.toBe(handBack);
+    expect(voiceSend).toMatchObject({ draft: "fix the login bug", text: "fix the login bug" });
+    expect(route).toBeUndefined();
+    // As the composer had it at Enter, not as anything reads after it left.
+    expect(departed).toBe(atEnter);
+    expect(captureDeparture).toHaveBeenCalledTimes(1);
+    expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
+  });
+
+  it("still sends as dictated when the cleanup fails after the composer unmounted", async () => {
+    let finishCorrection!: (landed: boolean) => void;
+    hasPendingMock.mockReturnValue(true);
+    observeMock.mockReturnValueOnce({ failed: () => true, release: () => {} });
+    waitMock.mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishCorrection = resolve;
+        })
+    );
+
+    const { result, unmount } = renderWaitSubmit();
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    unmount();
+    hasPendingMock.mockReturnValue(false);
+    await act(async () => {
+      finishCorrection(false);
+    });
+
+    expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
+  });
+
+  it("sends each of several replies whose composers left mid-wait to its own draft, once (#15510)", async () => {
+    const pending = new Set<string>();
+    const land = new Map<string, (landed: boolean) => void>();
+    hasPendingMock.mockImplementation((panelId: string) => pending.has(panelId));
+    waitMock.mockImplementation(
+      (panelId: string) =>
+        new Promise<boolean>((resolve) => {
+          land.set(panelId, (landed) => {
+            pending.delete(panelId);
+            resolve(landed);
+          });
+        })
+    );
+    const replies = ["run-1", "run-2", "run-3"].map((runId) => ({
+      runId,
+      voiceId: `canopy-reply:${runId}`,
+      send: vi.fn<() => void>(),
+    }));
+
+    for (const reply of replies) {
+      // Its composer's own scope, as an isolated reply keeps it.
+      useTerminalInputStore
+        .getState()
+        .setDraftInput(reply.runId, `reply to ${reply.runId}`, "canopy-reply");
+      pending.add(reply.voiceId);
+      const { result, unmount } = renderHook(() =>
+        useVoiceWaitSubmit({
+          terminalId: reply.runId,
+          projectId: "canopy-reply",
+          voice: { panelId: reply.voiceId, projectId: undefined },
+          editorViewRef: { current: null },
+          editableCompartmentRef: { current: new Compartment() },
+          sendFromEditor: reply.send,
+        })
+      );
+      await act(async () => {
+        result.current.startVoiceWaitSubmit();
+      });
+      unmount();
+    }
+
+    for (const voiceId of ["canopy-reply:run-3", "canopy-reply:run-1", "canopy-reply:run-2"]) {
+      await act(async () => {
+        land.get(voiceId)!(true);
+      });
+    }
+
+    for (const reply of replies) {
+      expect(reply.send).toHaveBeenCalledTimes(1);
+      expect((reply.send.mock.calls[0] as unknown[])[1]).toMatchObject({
+        text: `reply to ${reply.runId}`,
+      });
+      expect(useTerminalInputStore.getState().isVoiceSubmitting(reply.voiceId)).toBe(false);
+    }
+  });
+
+  it("keeps a send Escape called off unsent after the composer unmounts", async () => {
     let finishCorrection!: (landed: boolean) => void;
     hasPendingMock.mockReturnValue(true);
     waitMock.mockImplementation(
@@ -740,12 +873,14 @@ describe("useVoiceWaitSubmit", () => {
     await act(async () => {
       result.current.startVoiceWaitSubmit();
     });
+    act(() => {
+      result.current.cancelVoiceWaitSubmit();
+    });
     unmount();
-    expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
-
     await act(async () => {
       finishCorrection(true);
     });
+
     expect(sendFromEditor).not.toHaveBeenCalled();
   });
 
@@ -840,7 +975,10 @@ describe("useVoiceWaitSubmit keys during the wait (#14780)", () => {
     document.body.replaceChildren();
   });
 
-  function renderWaitSubmit(terminalId = PANEL_ID, send = sendFromEditor) {
+  function renderWaitSubmit(
+    terminalId = PANEL_ID,
+    send: Parameters<typeof useVoiceWaitSubmit>[0]["sendFromEditor"] = sendFromEditor
+  ) {
     return renderHook(() =>
       useVoiceWaitSubmit({
         terminalId,
@@ -1131,7 +1269,7 @@ describe("useVoiceWaitSubmit keys during the wait (#14780)", () => {
     expect(sendFromEditor).toHaveBeenCalledTimes(1);
   });
 
-  it("lets go of them when the composer unmounts mid-wait", async () => {
+  it("lets go of them when the composer unmounts mid-wait, and the send waits on", async () => {
     const { result, unmount } = renderWaitSubmit();
     await act(async () => {
       result.current.startVoiceWaitSubmit();
@@ -1139,10 +1277,95 @@ describe("useVoiceWaitSubmit keys during the wait (#14780)", () => {
     const signal = waitMock.mock.calls[0]![1]!;
     unmount();
 
-    expect(signal.aborted).toBe(true);
     expect(pressKey("Enter").defaultPrevented).toBe(false);
+    expect(pressKey("Escape").defaultPrevented).toBe(false);
     await act(async () => {});
+    expect(signal.aborted).toBe(false);
     expect(sendFromEditor).not.toHaveBeenCalled();
+    expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(true);
+  });
+
+  it("keeps the first departed composer's send when the one that took the wait over leaves too", async () => {
+    const sendFirst = vi.fn<() => void>();
+    const first = renderWaitSubmit(PANEL_ID, sendFirst);
+    await act(async () => {
+      first.result.current.startVoiceWaitSubmit();
+    });
+    first.unmount();
+    // A composer for a later incarnation of the same run takes the wait over, and leaves.
+    const sendLater = vi.fn<() => void>();
+    renderWaitSubmit(PANEL_ID, sendLater).unmount();
+
+    const third = renderWaitSubmit(PANEL_ID, vi.fn<() => void>());
+    await act(async () => {
+      pressKey("Enter");
+    });
+
+    expect(sendLater).not.toHaveBeenCalled();
+    expect(sendFirst).toHaveBeenCalledTimes(1);
+    expect(third.result.current.voiceSubmitOutcome?.kind).toBe("sent");
+  });
+
+  it("hands a wait to the composer that mounts for its draft, whose Escape calls it off", async () => {
+    const first = renderWaitSubmit();
+    await act(async () => {
+      first.result.current.startVoiceWaitSubmit();
+    });
+    const signal = waitMock.mock.calls[0]![1]!;
+    first.unmount();
+
+    const sendAgain = vi.fn<() => void>();
+    const again = renderWaitSubmit(PANEL_ID, sendAgain);
+    expect(again.result.current.voiceSubmitPhase).toBe("polishing");
+
+    let event!: KeyboardEvent;
+    await act(async () => {
+      event = pressKey("Escape");
+    });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(signal.aborted).toBe(true);
+    expect(again.result.current.voiceSubmitPhase).toBeNull();
+    expect(again.result.current.voiceSubmitOutcome?.kind).toBe("cancelled");
+    expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
+    expect(sendFromEditor).not.toHaveBeenCalled();
+    expect(sendAgain).not.toHaveBeenCalled();
+  });
+
+  it("sends what stands at the second Enter of the composer that took the wait over, as the one that left would", async () => {
+    let accept!: (taken: boolean) => void;
+    const sendFirst = vi.fn(
+      (..._args: unknown[]) =>
+        new Promise<boolean>((resolve) => {
+          accept = resolve;
+        })
+    );
+    const first = renderWaitSubmit(PANEL_ID, sendFirst);
+    await act(async () => {
+      first.result.current.startVoiceWaitSubmit();
+    });
+    first.unmount();
+
+    const sendAgain = vi.fn<() => void>();
+    const again = renderWaitSubmit(PANEL_ID, sendAgain);
+    await act(async () => {
+      pressKey("Enter");
+    });
+
+    // Through the departed composer's send: this one's editor never held its
+    // chips, and its terminal may not take input yet.
+    expect(sendAgain).not.toHaveBeenCalled();
+    expect(sendFirst).toHaveBeenCalledTimes(1);
+    expect(sendFirst.mock.calls[0]).toHaveLength(4);
+    expect(again.result.current.voiceSubmitPhase).toBeNull();
+    expect(again.result.current.voiceSubmitOutcome).toMatchObject({ kind: "sending" });
+
+    // Its outcome settles in the composer showing it.
+    await act(async () => {
+      accept(true);
+    });
+    expect(again.result.current.voiceSubmitOutcome?.kind).toBe("sent");
+    expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
   });
 
   it("gives a page Enter to the selected pane's composer when two are waiting", async () => {

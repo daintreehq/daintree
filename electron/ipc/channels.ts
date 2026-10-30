@@ -313,6 +313,7 @@ export const CHANNELS = {
   CANOPY_TERMINAL_RESIZE: "canopy:terminal-resize",
   CANOPY_TERMINAL_SEND_KEY: "canopy:terminal-send-key",
   CANOPY_TERMINAL_SUBMIT: "canopy:terminal-submit",
+  CANOPY_SUBMIT_REPLY: "canopy:submit-reply",
   PROJECT_HISTORY_PEEK: "project-history:peek",
   PROJECT_CREATE_FOLDER: "project:create-folder",
   PROJECT_INIT_GIT: "project:init-git",

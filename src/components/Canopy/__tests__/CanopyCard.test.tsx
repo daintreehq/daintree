@@ -283,6 +283,109 @@ describe("CanopyCard", () => {
     expect(h.onSent).toHaveBeenCalledTimes(1);
   });
 
+  describe("a reply that outlives its card (#15510)", () => {
+    function replyByRun() {
+      const submitReply = vi.fn(async (..._args: unknown[]) => {});
+      Object.assign(window.electron.canopy, { submitReply });
+      return submitReply;
+    }
+
+    it("goes by the run and its incarnation, its stream having ended with the card", async () => {
+      const submitReply = replyByRun();
+      const h = handlers();
+      const item = itemFor("question");
+      const view = render(<CanopyCard item={item} {...PROPS} {...h} />);
+      await streamOpens({ watchId: 7 });
+      const bar = await composer();
+      view.unmount();
+
+      let took: boolean | undefined;
+      await act(async () => {
+        took = await bar.submitText!("Keep it read-only", ["/tmp/shot.png"]);
+      });
+
+      expect(took).toBe(true);
+      expect(submit).not.toHaveBeenCalled();
+      expect(submitReply).toHaveBeenCalledWith(
+        "run-1",
+        { spawnedAt: NOW - 3_600_000 },
+        "Keep it read-only",
+        ["/tmp/shot.png"]
+      );
+      expect(h.onSent).toHaveBeenCalledWith(item, undefined);
+    });
+
+    it("goes by the run even when the stream had dropped before the card went", async () => {
+      const submitReply = replyByRun();
+      const view = render(<CanopyCard item={itemFor("question")} {...PROPS} {...handlers()} />);
+      await streamOpens({ watchId: 7 });
+      await streamOpens({ watchId: null });
+      const bar = await composer();
+      view.unmount();
+
+      let took: boolean | undefined;
+      await act(async () => {
+        took = await bar.submitText!("still mine", []);
+      });
+
+      expect(took).toBe(true);
+      expect(submitReply).toHaveBeenCalledWith(
+        "run-1",
+        { spawnedAt: NOW - 3_600_000 },
+        "still mine",
+        undefined
+      );
+    });
+
+    it("sends each of several to its own run, whatever order their cleanups land in", async () => {
+      const submitReply = replyByRun();
+      const sends = new Map<string, (text: string, imagePaths: string[]) => Promise<boolean>>();
+      for (const runId of ["run-1", "run-2", "run-3"]) {
+        composerProps.current = null;
+        const view = render(
+          <CanopyCard item={itemFor("question", {}, runId)} {...PROPS} {...handlers()} />
+        );
+        await streamOpens({ watchId: sends.size + 1 });
+        sends.set(runId, (await composer()).submitText!);
+        view.unmount();
+      }
+
+      for (const runId of ["run-3", "run-1", "run-2"]) {
+        await act(async () => {
+          await sends.get(runId)!(`reply to ${runId}`, []);
+        });
+      }
+
+      expect(submit).not.toHaveBeenCalled();
+      expect(submitReply.mock.calls.map(([runId, , text]) => [runId, text])).toEqual([
+        ["run-3", "reply to run-3"],
+        ["run-1", "reply to run-1"],
+        ["run-2", "reply to run-2"],
+      ]);
+    });
+
+    it("leaves ⌘↩'s route by the run too, and reports a refusal", async () => {
+      const submitReply = replyByRun();
+      submitReply.mockRejectedValueOnce(new Error("That agent isn't running any more."));
+      const h = handlers();
+      const item = itemFor("question");
+      const view = render(<CanopyCard item={item} {...PROPS} {...h} />);
+      await streamOpens({ watchId: 7 });
+      const route = (await composer()).modEnterSend!();
+      view.unmount();
+
+      let took: boolean | undefined;
+      await act(async () => {
+        took = await route.submitText("too late", []);
+      });
+
+      expect(took).toBe(false);
+      expect(submit).not.toHaveBeenCalled();
+      expect(h.onSendFailed).toHaveBeenCalledTimes(1);
+      expect(h.onSent).not.toHaveBeenCalled();
+    });
+  });
+
   it("passes the composer's keys to the terminal, but Escape goes back to the list", async () => {
     renderCard(itemFor("approval", { options: ["Yes", "No"] }));
     const { h } = { h: currentHandlers! };

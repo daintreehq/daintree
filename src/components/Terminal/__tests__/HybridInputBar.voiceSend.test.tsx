@@ -491,3 +491,166 @@ describe("HybridInputBar with a missed file reference arriving during a dictated
     expect(caption()).toBeNull();
   });
 });
+
+describe("HybridInputBar dictated send whose composer unmounts mid-wait (#15510)", () => {
+  async function mountBar(onSend: (payload: { text: string }) => void) {
+    const result = render(
+      <TooltipProvider>
+        <WorktreeStoreContext.Provider value={createWorktreeStore()}>
+          <HybridInputBar terminalId={PANEL_ID} cwd={WT_ID} agentId="claude" onSend={onSend} />
+        </WorktreeStoreContext.Provider>
+      </TooltipProvider>
+    );
+    await act(async () => {});
+    const view = EditorView.findFromDOM(
+      result.container.querySelector<HTMLElement>(".cm-editor")!
+    )!;
+    return { view, unmount: result.unmount };
+  }
+
+  async function enterThenLeave(onSend: (payload: { text: string }) => void) {
+    const bar = await mountBar(onSend);
+    await act(async () => {
+      runScopeHandlers(bar.view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+    });
+    expect(onSend).not.toHaveBeenCalled();
+    act(() => {
+      bar.unmount();
+    });
+  }
+
+  it("sends the cleaned prompt to its terminal once the cleanup lands, and clears the draft", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const onSend = vi.fn();
+    act(() => {
+      dictate("hello wrld");
+    });
+    await enterThenLeave(onSend);
+
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+
+    expect(onSend.mock.calls.map(([payload]) => payload.text)).toEqual(["Hello world."]);
+    expect(draft()).toBe("");
+    expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
+  });
+
+  it("sends the words as dictated when the cleanup fails", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const onSend = vi.fn();
+    act(() => {
+      dictate("hello wrld");
+    });
+    await enterThenLeave(onSend);
+
+    await act(async () => {
+      pending.resolve({ action: "no_change", correctedText: "hello wrld", failed: true });
+    });
+
+    expect(onSend.mock.calls.map(([payload]) => payload.text)).toEqual(["hello wrld"]);
+    expect(draft()).toBe("");
+  });
+
+  it("leaves the next dictation's words in the draft", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const onSend = vi.fn();
+    act(() => {
+      dictate("hello wrld");
+    });
+    const bar = await mountBar(onSend);
+    await act(async () => {
+      runScopeHandlers(bar.view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+    });
+    await act(async () => {
+      dictate("these are the next prompt");
+    });
+    act(() => {
+      bar.unmount();
+    });
+
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+
+    expect(onSend.mock.calls.map(([payload]) => payload.text)).toEqual(["Hello world."]);
+    expect(draft()).toBe("these are the next prompt");
+  });
+
+  it("shows the wait in the composer that mounts for it, whose second Enter sends what stands", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const onSend = vi.fn();
+    act(() => {
+      dictate("hello wrld");
+    });
+    await enterThenLeave(onSend);
+
+    const again = await mountBar(onSend);
+    expect(again.view.state.facet(EditorView.editable)).toBe(false);
+
+    await act(async () => {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })
+      );
+    });
+
+    expect(onSend.mock.calls.map(([payload]) => payload.text)).toEqual(["hello wrld"]);
+    expect(again.view.state.doc.toString()).toBe("");
+    expect(draft()).toBe("");
+
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("HybridInputBar dictated send whose composer went disabled before it unmounted (#15510)", () => {
+  it("still sends through its submit, which checks the destination itself", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const submitText = vi.fn(async (_text: string, _imagePaths: readonly string[]) => true);
+    const bar = (disabled: boolean) => (
+      <TooltipProvider>
+        <WorktreeStoreContext.Provider value={createWorktreeStore()}>
+          <HybridInputBar
+            terminalId={PANEL_ID}
+            cwd={WT_ID}
+            agentId="claude"
+            disabled={disabled}
+            onSend={vi.fn()}
+            submitText={submitText}
+          />
+        </WorktreeStoreContext.Provider>
+      </TooltipProvider>
+    );
+    act(() => {
+      dictate("hello wrld");
+    });
+    const result = render(bar(false));
+    await act(async () => {});
+    const view = EditorView.findFromDOM(
+      result.container.querySelector<HTMLElement>(".cm-editor")!
+    )!;
+    await act(async () => {
+      runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+    });
+    // A Canopy reply's stream dropping mid-wait disables its composer.
+    result.rerender(bar(true));
+    await act(async () => {});
+    act(() => {
+      result.unmount();
+    });
+
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+
+    expect(submitText.mock.calls.map(([text]) => text)).toEqual(["Hello world."]);
+    expect(draft()).toBe("");
+  });
+});

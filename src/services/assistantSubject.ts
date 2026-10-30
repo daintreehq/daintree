@@ -73,6 +73,7 @@ export function assistantTerminalApi(
       terminalResize: (...args) => canopy.terminalResize(...args),
       terminalSubmit: (...args) => canopy.terminalSubmit(...args),
       terminalSendKey: (...args) => canopy.terminalSendKey(...args),
+      submitReply: () => Promise.reject(new Error("An assistant has no card replies.")),
       answer: () => Promise.reject(new Error("An assistant has no card answers.")),
       onTerminalData: (callback) => canopy.onTerminalData(callback),
       onResync: () => NO_CLEANUP,
@@ -93,6 +94,7 @@ export function assistantTerminalApi(
     terminalSubmit: (...args) => host.assistantInvoke(consumer, "canopy:terminal-submit", ...args),
     terminalSendKey: (...args) =>
       host.assistantInvoke(consumer, "canopy:terminal-send-key", ...args),
+    submitReply: () => Promise.reject(new Error("An assistant has no card replies.")),
     answer: () => Promise.reject(new Error("An assistant has no card answers.")),
     onTerminalData: (callback) =>
       host.onEvent((event) => {

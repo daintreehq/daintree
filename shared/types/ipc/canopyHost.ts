@@ -37,6 +37,7 @@ export const CANOPY_HOST_CHANNELS = [
   "canopy:terminal-resize",
   "canopy:terminal-submit",
   "canopy:terminal-send-key",
+  "canopy:submit-reply",
   "canopy:answer",
   "canopy:set-mode",
   "canopy:retry-model",

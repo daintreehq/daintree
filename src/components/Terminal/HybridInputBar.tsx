@@ -76,6 +76,7 @@ import {
 } from "./composerControlStyles";
 import {
   useVoiceWaitSubmit,
+  type DepartedComposerSend,
   type VoiceSendCleanup,
   type VoiceSubmitOutcome,
 } from "./hooks/useVoiceWaitSubmit";
@@ -1315,10 +1316,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     // Whether the composer took the draft, settled once any awaited expansion
     // or submission has: a voice send completes its progress only then.
+    // A dictated send whose composer unmounted while it waited still goes
+    // (#15510), from the draft store: there is no editor, and the bar's own
+    // state stopped where it unmounted.
     const sendFromEditor = (
       handBack?: SendHandBack,
       voiceSend?: VoiceDraftSend,
-      route?: ComposerSendRoute
+      route?: ComposerSendRoute,
+      departed?: DepartedComposerSend
     ): boolean | Promise<boolean> => {
       // An upload still on its way would leave its reference out of what is sent.
       if (hasPendingUploads(uploadSurface)) return false;
@@ -1326,15 +1331,19 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // its way must not rewrite it mid-send, or land on the next draft (#14611).
       // One for words a dictated send holds back still lands on them (#14804).
       voiceRecordingService.discardPendingCorrections(voiceId, voiceSend?.sessions);
-      const view = editorViewRef.current;
+      const view = departed ? null : editorViewRef.current;
       const latest = latestRef.current;
-      const doc = view?.state.doc.toString() ?? latest?.value ?? "";
+      const doc =
+        departed && voiceSend
+          ? voiceSend.draft
+          : (view?.state.doc.toString() ?? latest?.value ?? "");
       // Only a split of the text the editor shows can say which part of it goes.
       const split = voiceSend?.kept && voiceSend.draft === doc ? voiceSend : null;
       const text = split?.text ?? doc;
       // Typing the store hasn't caught up with: the editor reads differently
       // with no outside write on its way in. Text kept over it would eat it.
       const editorAheadOfStore = () => {
+        if (departed) return false;
         const shown = editorViewRef.current?.state.doc.toString();
         const inputs = useTerminalInputStore.getState();
         return (
@@ -1358,7 +1367,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // land in the draft meanwhile; only the text that went out is cleared.
       // The session a split held back may write meanwhile too: that much
       // change still leaves the sent text to take out.
-      const unchanged = guardSentDraft(latest?.projectId);
+      const readStored = () =>
+        useTerminalInputStore.getState().getDraftInput(terminalId, latest?.projectId);
+      const unchanged = departed
+        ? draftUnchangedSince(readStored, readStored)
+        : guardSentDraft(latest?.projectId);
       const isDraftUnchanged = split
         ? () => unchanged() || (!editorAheadOfStore() && voiceRecordingService.holdsBackFrom(split))
         : unchanged;
@@ -1368,17 +1381,19 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // nothing.
       let refused = false;
       const intercepted = tryComposerFleetBroadcast(
-        isFocusedTerminal,
+        departed ? departed.fanOut : isFocusedTerminal,
         terminalId,
         text,
         () => {
           if (!isDraftUnchanged()) return;
-          if (keepDraft) {
-            keepDraft();
-            return;
+          if (keepDraft) keepDraft();
+          else {
+            clearDraftInput(terminalId, projectId);
+            resetEditorDoc();
           }
-          clearDraftInput(terminalId, projectId);
-          resetEditorDoc();
+          // Delivered after the departed send settled: a composer showing the
+          // draft since takes the store's word for what is left.
+          if (departed) useTerminalInputStore.getState().bumpExternalDraftRevision();
         },
         () => {
           refused = true;
@@ -1387,7 +1402,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       );
       if (intercepted) return !refused;
 
-      const imagePaths = readImageChipPaths(view);
+      // A chip whose path the text no longer spells is left out, as the editor's own are.
+      const imagePaths = departed
+        ? departed.imagePaths.filter((path) => text.includes(path))
+        : readImageChipPaths(view);
       return sendText(text, {
         imagePaths,
         isDraftUnchanged,
@@ -1395,6 +1413,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         keepDraft,
         dictationSessions: voiceSend?.sessions,
         dictated: voiceSend !== undefined,
+        ...(departed && { departed: true }),
         // Routed at its key press: through the route, in place of `submitText`.
         ...(route && {
           submit: notingRefusal(
@@ -1421,6 +1440,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       editableCompartmentRef,
       sendFromEditor,
       claimSendHandBack,
+      captureDeparture: () => ({
+        imagePaths: readImageChipPaths(editorViewRef.current),
+        fanOut: isFocusedTerminal && isArmed,
+      }),
       isDisabled: () => disabledRef.current,
       onSpokenSendTooShort: noteSpokenSendTooShort,
     });
@@ -2052,6 +2075,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       placeholder,
       editableCompartmentRef,
       disabled,
+      sendLocked: isVoiceSubmitting,
       chipCompartmentRef,
       commandMap,
       tooltipCompartmentRef,
