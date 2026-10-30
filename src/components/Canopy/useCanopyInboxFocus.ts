@@ -13,6 +13,7 @@ import { canopyCardDomId, type CanopyCardHandle, type CanopyPaneFocus } from "./
 import type { CanopyAssistantItem, CanopyRoleFilter } from "./canopyAssistants";
 import { canopyAssistantDomId, openAssistantItem } from "./openAssistantItem";
 import { placeOf } from "./canopyInboxPlace";
+import { mainViewFocusedAgentId } from "./canopyMainViewFocus";
 import { canopyResumeTarget, type CanopyResume } from "./canopyResume";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -202,8 +203,8 @@ export function useCanopyInboxFocus({
     };
   }, [shownRunId]);
 
-  // Land the keyboard in the search on open, with the top of the list selected —
-  // at once when the search is there, so nothing typed goes astray. Otherwise
+  // Land the keyboard in the search on open, with the agent the main view had
+  // focused selected, else the top of the list — at once when the search is there, so nothing typed goes astray. Otherwise
   // two frames, so it lands after the palette's own first-tabbable focus rather
   // than racing it, and cancelled on cleanup so a StrictMode replay schedules it afresh.
   const landedRef = useRef(false);
@@ -246,6 +247,13 @@ export function useCanopyInboxFocus({
       window.removeEventListener("keydown", touch, { capture: true });
     };
   }, [isOpen]);
+  // The agent the main view had focused as this opening began, read once: the
+  // landing goes to it while the list shows it, ahead of "Go to terminal"'s run
+  // and an assistant leading the list. Focus moving afterwards moves nothing.
+  const mainViewAgentRef = useRef<string | null>(null);
+  useEffect(() => {
+    mainViewAgentRef.current = isOpen ? mainViewFocusedAgentId() : null;
+  }, [isOpen]);
   // A dictated reply asked for is where this opening lands, once it is found;
   // only one that can't be shown leaves the opening to land as it would.
   const replyReveal = useCanopyStore((s) => s.replyReveal);
@@ -262,15 +270,29 @@ export function useCanopyInboxFocus({
     // The search it was left with is in force before the run is picked from it.
     const restore = restoreRef.current;
     if (restore !== null && appliedQuery !== restore.query) return;
-    const target = restore
-      ? canopyResumeTarget(
-          restore,
-          visible.map((item) => item.runId)
-        )
-      : // An assistant leading the list is the default pane: no worker is picked over it.
-        firstAssistant !== null
-        ? null
-        : (visible[0]?.runId ?? null);
+    // Only a row of this window's own host is that terminal: another host's
+    // runs can carry the same id.
+    const mainViewAgent = mainViewAgentRef.current;
+    const agentRow =
+      mainViewAgent === null
+        ? undefined
+        : visible.find((item) => {
+            const place = placeOf(item, hostId, ownHostId);
+            return place.hostId === null && place.runId === mainViewAgent;
+          });
+    const target = agentRow
+      ? agentRow.runId
+      : restore
+        ? canopyResumeTarget(
+            restore,
+            visible.map((item) => item.runId)
+          )
+        : // An assistant leading the list is the default pane: no worker is picked over it.
+          firstAssistant !== null
+          ? null
+          : (visible[0]?.runId ?? null);
+    // Anything but the top of the list may be scrolled out of view.
+    const scrollTo = agentRow !== undefined || restore !== null;
     const land = () => {
       landedRef.current = true;
       restoreRef.current = null;
@@ -281,7 +303,7 @@ export function useCanopyInboxFocus({
       if (search) {
         if (target !== null) {
           setFocusedId(target);
-          if (restore) {
+          if (scrollTo) {
             document.getElementById(canopyCardDomId(target))?.scrollIntoView({ block: "nearest" });
           }
         }
@@ -302,7 +324,18 @@ export function useCanopyInboxFocus({
       cancelAnimationFrame(outer);
       cancelAnimationFrame(inner);
     };
-  }, [isOpen, items, visible, focusCardNow, setQuery, appliedQuery, firstAssistant, replyReveal]);
+  }, [
+    isOpen,
+    items,
+    visible,
+    focusCardNow,
+    setQuery,
+    appliedQuery,
+    firstAssistant,
+    replyReveal,
+    hostId,
+    ownHostId,
+  ]);
 
   // The focused card left (trashed, answered into another section, exited):
   // put the keyboard on the card that took its place instead of dropping it on
