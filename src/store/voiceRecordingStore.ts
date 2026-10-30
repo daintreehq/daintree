@@ -294,6 +294,8 @@ export type VoiceMicSignal = "pending" | "live" | "silent";
  *   `builtIn` is the mic to switch to, when one other than this one is found.
  *   `appReplaced` marks a silence heard after the app's bundle was replaced
  *   under it (#14937), which no other mic fixes and a restart does.
+ * - fallback: the chosen mic wasn't available, so another one is recording
+ *   (#15512). `chosenLabel` is the chosen mic's saved name, when it has one.
  */
 export type VoiceMicNotice =
   | { kind: "lost"; target: VoiceRecordingTarget; deviceLabel: string | null }
@@ -304,6 +306,12 @@ export type VoiceMicNotice =
       bluetooth: boolean;
       builtIn: VoiceMicDevice | null;
       appReplaced?: true;
+    }
+  | {
+      kind: "fallback";
+      target: VoiceRecordingTarget;
+      deviceLabel: string | null;
+      chosenLabel: string | null;
     };
 
 interface VoiceAnnouncement {
@@ -808,9 +816,10 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       finishSession: ({ nextStatus = "idle", preserveLiveText = false, committedLiveText } = {}) =>
         set((state) => {
           const panelId = state.activeTarget?.panelId;
-          // A silent warning belongs to the session that was silent; the other
-          // notices outlive it until dismissed or the next session starts.
-          const micNotice = state.micNotice?.kind === "silent" ? null : state.micNotice;
+          // Silence and a stand-in mic belong to the session they were heard
+          // in; a lost mic says why it ended, so it stays until dismissed or
+          // the next session starts.
+          const micNotice = state.micNotice?.kind === "lost" ? state.micNotice : null;
           const errorPanelId = nextStatus === "error" ? (panelId ?? null) : null;
           if (!panelId) {
             return {

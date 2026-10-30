@@ -132,6 +132,19 @@ describe("buildOwnVoiceSessionDetails (#14920)", () => {
         })
       )!.micNotice
     ).toEqual({ kind: "silent", bluetooth: false, appReplaced: true });
+    // A stand-in mic is named by micLabel; it is no trouble to report.
+    expect(
+      buildOwnVoiceSessionDetails(
+        input({
+          micNotice: {
+            kind: "fallback",
+            target: { panelId: "p-1" },
+            deviceLabel: "AirPods Pro",
+            chosenLabel: "USB Mic",
+          },
+        })
+      )!.micNotice
+    ).toBeNull();
   });
 
   it("says the target is locked only when the lock is on it", () => {

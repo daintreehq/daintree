@@ -139,6 +139,7 @@ import {
   isBluetoothMicLabel,
   isMicPermissionDenial,
   openChosenMic,
+  stripPseudoDevicePrefix,
   type OpenedMic,
   type VoiceMicDevice,
 } from "@/services/voiceMicDevices";
@@ -729,8 +730,10 @@ interface CaptureAttempt {
   deviceId: string | null;
   // UI-only: device names never go into logs.
   deviceLabel: string | null;
-  // A working mic other than the chosen one opened: named once it hears, never a notice.
+  // A working mic other than the chosen one opened; the pane names both.
   substituted: boolean;
+  // The chosen mic's saved name, for that notice. UI-only, like deviceLabel.
+  chosenLabel: string | null;
   // The OS pulled the track ("ended"). Latched, so a lost attempt is never
   // promoted and a lost session is torn down once.
   lost: boolean;
@@ -795,6 +798,7 @@ class VoiceRecordingService {
   private stream: MediaStream | null = null;
   // The promoted attempt, whose track loss ends the session.
   private sessionCapture: CaptureAttempt | null = null;
+  private displacedFallbackNotice: VoiceMicNotice | null = null;
   private trackObserverDisposers = new WeakMap<MediaStream, () => void>();
   private isSwitchingMic = false;
   private elapsedTimer: ReturnType<typeof setInterval> | null = null;
@@ -2557,6 +2561,7 @@ class VoiceRecordingService {
       deviceId: null,
       deviceLabel: null,
       substituted: false,
+      chosenLabel: null,
       lost: false,
       frozen: false,
     };
@@ -2681,6 +2686,7 @@ class VoiceRecordingService {
     capture.deviceLabel = opened.label;
     capture.deviceId = opened.deviceId;
     capture.substituted = opened.substituted;
+    capture.chosenLabel = stripPseudoDevicePrefix(requestedDeviceLabel) || null;
     if (opened.relocatedId) void this.rememberRelocatedMic(requestedDeviceId, opened.relocatedId);
     if (opened.substituted) {
       logWarn(`${LOG_PREFIX} Microphone device mismatch`, {
@@ -2936,6 +2942,15 @@ class VoiceRecordingService {
     // announcing here would tell the user to speak into a mic still delivering
     // zeros.
     useVoiceRecordingStore.getState().setMicDeviceLabel(capture.deviceLabel);
+    this.displacedFallbackNotice = null;
+    if (capture.substituted) {
+      useVoiceRecordingStore.getState().setMicNotice({
+        kind: "fallback",
+        target,
+        deviceLabel: capture.deviceLabel,
+        chosenLabel: capture.chosenLabel,
+      });
+    }
 
     this.sessionStartedAt = Date.now();
     this.sessionProvider = this.transcriptionProvider;
@@ -5582,7 +5597,9 @@ class VoiceRecordingService {
     });
     state.setMicSignal("live");
     this.playCue("dictation-start");
-    if (state.micNotice?.kind === "silent") state.setMicNotice(null);
+    // The stand-in mic is still the one recording once it is heard.
+    if (state.micNotice?.kind === "silent") state.setMicNotice(this.displacedFallbackNotice);
+    this.displacedFallbackNotice = null;
     const capture = this.sessionCapture;
     const fallbackMic = capture?.substituted ? (capture.deviceLabel ?? "another microphone") : null;
     state.announce(
@@ -5649,6 +5666,7 @@ class VoiceRecordingService {
       const state = useVoiceRecordingStore.getState();
       if (isStale(state)) return;
       logWarn(`${LOG_PREFIX} Silent microphone after the app bundle was replaced`);
+      this.displaceFallbackNotice(state.micNotice);
       state.setMicNotice({
         kind: "silent",
         target,
@@ -5664,7 +5682,14 @@ class VoiceRecordingService {
     const builtIn = await builtInMic;
     const state = useVoiceRecordingStore.getState();
     if (isStale(state)) return;
+    this.displaceFallbackNotice(state.micNotice);
     state.setMicNotice({ kind: "silent", target, deviceLabel, bluetooth, builtIn });
+  }
+
+  // The silent warning takes the pane's one notice slot; a stand-in notice it
+  // covers comes back once the mic is heard, unless it was dismissed first.
+  private displaceFallbackNotice(notice: VoiceMicNotice | null): void {
+    if (notice?.kind === "fallback") this.displacedFallbackNotice = notice;
   }
 
   private async findOtherBuiltInMic(

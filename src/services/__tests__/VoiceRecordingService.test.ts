@@ -1376,7 +1376,7 @@ describe("VoiceRecordingService — microphone device selection", () => {
     expect(getUserMediaSpy).toHaveBeenCalledWith({ audio: true, video: false });
   });
 
-  it("passes ideal deviceId constraint when selectedDeviceId is set", async () => {
+  it("passes an exact deviceId constraint when selectedDeviceId is set", async () => {
     const electron = buildElectronStub();
     electron.voiceInput.getSettings.mockResolvedValue({
       enabled: true,
@@ -1400,7 +1400,7 @@ describe("VoiceRecordingService — microphone device selection", () => {
     await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Test" });
 
     expect(getUserMediaSpy).toHaveBeenCalledWith({
-      audio: { deviceId: { ideal: "preferred-mic-id" } },
+      audio: { deviceId: { exact: "preferred-mic-id" } },
       video: false,
     });
   });
