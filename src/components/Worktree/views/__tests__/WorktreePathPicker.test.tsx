@@ -43,13 +43,15 @@ describe("WorktreePathPicker placeholder", () => {
 });
 
 describe("WorktreePathPicker tail", () => {
-  const path = "/Users/someone/Projects/daintree-worktrees/feature-issue-15356-a-long-branch";
+  const path = "/Users/someone/My  Projects/daintree-worktrees/feature-issue-15356-a-long-branch";
 
-  it("paints the path behind a leading ellipsis over the input's own text", () => {
+  it("renders the path as a PathTail over the input's own text", () => {
     isWindowsMock.mockReturnValue(false);
     const input = renderPicker(path);
     const tail = input.parentElement!.querySelector(".path-tail")!;
     expect(tail.textContent).toBe(path);
+    // An input keeps runs of spaces; the painted copy has to as well.
+    expect(tail.classList.contains("whitespace-pre")).toBe(true);
     expect(tail.querySelector("bdi")?.getAttribute("dir")).toBe("ltr");
     // The input stays the accessible field; the painted copy is hidden from AT.
     expect(tail.closest("[aria-hidden='true']")).not.toBeNull();

@@ -91,24 +91,47 @@ describe("PathCaption", () => {
 });
 
 describe("SlottedInputField", () => {
-  it("renders the input bare unless asked to elide its start", () => {
-    render(<SlottedInputField data-testid="field" value="/a/b" onChange={() => {}} />);
+  it("keeps an ordinary input bare and its text visible", () => {
+    const { container } = render(
+      <SlottedInputField data-testid="field" value="/a/b" onChange={() => {}} />
+    );
     const input = screen.getByTestId("field");
-    expect(input.parentElement!.querySelector(".path-tail")).toBeNull();
+    expect(input.parentElement).toBe(container.firstElementChild);
+    expect(container.querySelector(".path-tail")).toBeNull();
     expect(input.className).toContain("text-text-primary");
     expect(input.className).not.toContain("text-transparent");
   });
 
-  it("hides the painted tail on focus and dims it with a disabled input", () => {
-    render(
+  it("wires focus hiding, disabled dimming and the forced-colours fallback for the painted tail", () => {
+    const { container } = render(
       <SlottedInputField data-testid="field" value="/a/b" onChange={() => {}} elideStart disabled />
     );
-    const input = screen.getByTestId("field");
-    const overlay = input.nextElementSibling!;
+    const input = screen.getByTestId("field") as HTMLInputElement;
+    const overlay = container.querySelector(".path-tail")!.closest("[aria-hidden='true']")!;
+    expect(input.disabled).toBe(true);
     expect(input.className).toContain("peer");
-    expect(overlay.getAttribute("aria-hidden")).toBe("true");
+    // `peer-*` only reaches a later sibling of the input.
+    expect(overlay.parentElement).toBe(input.parentElement);
+    expect(input.compareDocumentPosition(overlay) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
     expect(overlay.className).toContain("peer-focus:hidden");
     expect(overlay.className).toContain("peer-disabled:opacity-50");
+    expect(overlay.className).toContain("forced-colors:hidden");
     expect(overlay.className).toContain("pointer-events-none");
+  });
+
+  it("follows the value as it changes on the same field", () => {
+    const field = (value: string) => (
+      <SlottedInputField aria-label="Path" value={value} onChange={() => {}} elideStart />
+    );
+    const { container, rerender } = render(field(""));
+    const input = screen.getByRole("textbox", { name: "Path" }) as HTMLInputElement;
+
+    for (const value of ["/a/b", "/c/d", ""]) {
+      rerender(field(value));
+      expect(screen.getByRole("textbox", { name: "Path" })).toBe(input);
+      expect(input.value).toBe(value);
+      expect(container.querySelector(".path-tail")?.textContent ?? "").toBe(value);
+      expect(input.classList.contains("text-transparent")).toBe(value !== "");
+    }
   });
 });
