@@ -130,11 +130,7 @@ import type {
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
 import type { AgentState, AgentId, WaitingReason } from "../../shared/types/agent.js";
-import type {
-  PanelKind,
-  PanelTitleMode,
-  TerminalFirstPrompt,
-} from "../../shared/types/panel.js";
+import type { PanelKind, PanelTitleMode, TerminalFirstPrompt } from "../../shared/types/panel.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
 import type { PowerPolicyLevel } from "../../shared/types/powerPolicy.js";
 import type {

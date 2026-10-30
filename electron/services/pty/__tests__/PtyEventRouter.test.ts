@@ -270,7 +270,10 @@ describe("routeHostEvent", () => {
     const emit = vi.spyOn(emitter, "emit");
     const firstPrompt = { text: "Fix the login bug", via: "send" as const, at: 5 };
 
-    routeHostEvent({ type: "first-prompt-written", id: "t1", launchGeneration: 3, firstPrompt }, deps);
+    routeHostEvent(
+      { type: "first-prompt-written", id: "t1", launchGeneration: 3, firstPrompt },
+      deps
+    );
 
     expect(onFirstPromptWritten).toHaveBeenCalledWith("t1", 3, firstPrompt);
     expect(emit).not.toHaveBeenCalled();

@@ -70,7 +70,9 @@ function submitMessages(child: MockUtilityProcess): SubmitMessage[] {
 
 function spawnGenerations(child: MockUtilityProcess, id: string): number[] {
   return child.postMessage.mock.calls
-    .map((call: unknown[]) => call[0] as { type?: string; id?: string; options?: PtyHostSpawnOptions })
+    .map(
+      (call: unknown[]) => call[0] as { type?: string; id?: string; options?: PtyHostSpawnOptions }
+    )
     .filter((msg) => msg?.type === "spawn" && msg.id === id)
     .map((msg) => msg.options!.launchGeneration!);
 }
