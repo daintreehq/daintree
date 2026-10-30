@@ -178,6 +178,8 @@ export interface CanopyTerminalApi {
   terminalResize: ElectronCanopy["terminalResize"];
   terminalSubmit: ElectronCanopy["terminalSubmit"];
   terminalSendKey: ElectronCanopy["terminalSendKey"];
+  /** A reply by run, for one whose card and stream are gone by the time it goes. */
+  submitReply: ElectronCanopy["submitReply"];
   answer: ElectronCanopy["answer"];
   onTerminalData: ElectronCanopy["onTerminalData"];
   /** The link to the host came back: what the pane showed was dropped there, so it opens again. */
@@ -195,6 +197,7 @@ export const ownCanopyTerminalApi: CanopyTerminalApi = {
   terminalResize: (...args) => window.electron.canopy.terminalResize(...args),
   terminalSubmit: (...args) => window.electron.canopy.terminalSubmit(...args),
   terminalSendKey: (...args) => window.electron.canopy.terminalSendKey(...args),
+  submitReply: (...args) => window.electron.canopy.submitReply(...args),
   answer: (...args) => window.electron.canopy.answer(...args),
   onTerminalData: (callback) => window.electron.canopy.onTerminalData(callback),
   onResync: NO_RESYNC,
@@ -215,6 +218,7 @@ export function remoteCanopyTerminalApi(hostId: HostId): CanopyTerminalApi {
     terminalResize: on("canopy:terminal-resize"),
     terminalSubmit: on("canopy:terminal-submit"),
     terminalSendKey: on("canopy:terminal-send-key"),
+    submitReply: on("canopy:submit-reply"),
     answer: on("canopy:answer"),
     onTerminalData: (callback) =>
       canopyHostClient.onEvent((event) => {

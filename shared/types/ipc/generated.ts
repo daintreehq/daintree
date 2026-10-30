@@ -180,6 +180,7 @@ export interface GeneratedIpcInvokeMap {
         | "canopy:set-read"
         | "canopy:set-scope"
         | "canopy:set-shown"
+        | "canopy:submit-reply"
         | "canopy:terminal-input"
         | "canopy:terminal-resize"
         | "canopy:terminal-send-key"
@@ -435,6 +436,15 @@ export interface GeneratedIpcInvokeMap {
   };
   "canopy:set-shown": {
     args: [runIds: string[]];
+    result: void;
+  };
+  "canopy:submit-reply": {
+    args: [
+      runId: string,
+      target: import("./canopy.js").CanopyTarget,
+      text: string,
+      imagePaths?: string[] | undefined,
+    ];
     result: void;
   };
   "canopy:terminal-input": {

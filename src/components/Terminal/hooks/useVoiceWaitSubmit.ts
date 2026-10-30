@@ -18,6 +18,7 @@ import {
 import { takePendingComposerSelection } from "@/lib/composerCaret";
 import { makeDraftKey } from "@/lib/draftKey";
 import { replayLandedCorrection } from "../inputEditorExtensions/correctionReview";
+import { readImageChipPaths } from "../inputEditorExtensions/imageChip";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import {
   claimWaitingSend,
@@ -69,6 +70,21 @@ export interface VoiceSubmitOutcome {
   cleanup?: VoiceSendCleanup;
 }
 
+/**
+ * A send whose composer unmounted while it waited (#15510): it goes from the
+ * draft store, with the image chips the editor held at Enter.
+ */
+export interface DepartedComposerSend {
+  imagePaths: readonly string[];
+}
+
+type SendFromEditor = (
+  handBack?: SendHandBack,
+  voiceSend?: VoiceDraftSend,
+  route?: ComposerSendRoute,
+  departed?: DepartedComposerSend
+) => boolean | Promise<boolean> | void;
+
 interface UseVoiceWaitSubmitParams {
   terminalId: string;
   /**
@@ -88,13 +104,9 @@ interface UseVoiceWaitSubmitParams {
    * submission is awaited; a send held back (an upload still going) did not.
    * A dictated send passes what it takes: its sessions, and the words of any
    * that started after it, which stay behind. A send routed at its key
-   * press goes by that route.
+   * press goes by that route. One whose composer has unmounted says so.
    */
-  sendFromEditor: (
-    handBack?: SendHandBack,
-    voiceSend?: VoiceDraftSend,
-    route?: ComposerSendRoute
-  ) => boolean | Promise<boolean> | void;
+  sendFromEditor: SendFromEditor;
   /**
    * Claims the keyboard's hand-back for the send at the Enter that starts the
    * wait, not when the wait ends: a press during it calls the hand-back off.
@@ -123,6 +135,46 @@ interface VoiceWaitSubmitOptions {
 
 // A hand-back that hands nothing back, which also stops the send claiming its own.
 const STAY_PUT: SendHandBack = () => {};
+
+/** The composer a wait shows in: the one that started it, or one that took it over. */
+interface WaitSeat {
+  editorViewRef: React.RefObject<EditorView | null>;
+  editableCompartmentRef: React.RefObject<Compartment>;
+  sendFromEditorRef: React.RefObject<SendFromEditor>;
+  onSpokenSendTooShortRef: React.RefObject<(() => void) | undefined>;
+  attemptRef: React.RefObject<number>;
+  activeWaitRef: React.RefObject<WaitAttempt | null>;
+  setWait: (wait: VoiceSubmitWait | null) => void;
+  setOutcome: (outcome: VoiceSubmitOutcome) => void;
+}
+
+/** One Enter's send, from the press until it goes or is called off. */
+interface WaitAttempt {
+  attempt: number;
+  controller: AbortController;
+  /** Settled or called off: nothing of it touches a composer any more. */
+  over: boolean;
+  /** Null while no composer shows it. */
+  seat: WaitSeat | null;
+  /** The send of the composer that unmounted under it, which it goes through unseated. */
+  departed: SendFromEditor | null;
+  handBack: SendHandBack | undefined;
+  imagePaths: readonly string[];
+  wait: VoiceSubmitWait;
+  releaseKeys: () => void;
+  releaseObserved: () => void;
+}
+
+const isLive = (live: WaitAttempt, voiceId: string) =>
+  !live.over && useTerminalInputStore.getState().isVoiceSubmitting(voiceId);
+
+/**
+ * Sends whose composer unmounted mid-wait, by voice id. Once sent, a send is
+ * committed: it still goes when its cleanup lands or fails, and a composer for
+ * the same draft that mounts meanwhile takes the wait over, Enter and Escape
+ * with it (#15510).
+ */
+const unseatedWaits = new Map<string, WaitAttempt>();
 
 const isCopyOrSelectAll = (event: KeyboardEvent) =>
   (event.metaKey || event.ctrlKey) && !event.altKey && (event.key === "c" || event.key === "a");
@@ -224,33 +276,19 @@ export function useVoiceWaitSubmit({
   // the composer: after Escape and a second Enter, the first continuation
   // must do neither under the second.
   const attemptRef = useRef(0);
-  const activeAttemptRef = useRef<number | null>(null);
-  // The active attempt's way out of its wait, its hold on Enter and Escape, and
-  // its watch on the cleanup it owns.
-  const activeWaitRef = useRef<{
-    controller: AbortController;
-    releaseKeys: () => void;
-    releaseObserved: () => void;
-  } | null>(null);
+  const activeWaitRef = useRef<WaitAttempt | null>(null);
   const [voiceSubmitWait, setVoiceSubmitWait] = useState<VoiceSubmitWait | null>(null);
   const [voiceSubmitOutcome, setVoiceSubmitOutcome] = useState<VoiceSubmitOutcome | null>(null);
-
-  // A composer that unmounts, or moves to another terminal, mid-wait can't
-  // send what it no longer shows. The draft, and any correction still on its
-  // way to it, stay in the store.
-  useEffect(() => {
-    return () => {
-      if (activeAttemptRef.current === null) return;
-      activeAttemptRef.current = null;
-      const wait = activeWaitRef.current;
-      activeWaitRef.current = null;
-      wait?.releaseKeys();
-      wait?.releaseObserved();
-      wait?.controller.abort();
-      useTerminalInputStore.getState().setVoiceSubmitting(voiceId, false);
-      setVoiceSubmitWait(null);
-    };
-  }, [voiceId]);
+  const [seat] = useState<WaitSeat>(() => ({
+    editorViewRef,
+    editableCompartmentRef,
+    sendFromEditorRef,
+    onSpokenSendTooShortRef,
+    attemptRef,
+    activeWaitRef,
+    setWait: setVoiceSubmitWait,
+    setOutcome: setVoiceSubmitOutcome,
+  }));
 
   // Escape cancels the send, not the correction: it still lands in the draft.
   // `deferFocus` leaves handing the keyboard back to the caller.
@@ -258,16 +296,17 @@ export function useVoiceWaitSubmit({
     (options?: { deferFocus?: boolean }) => {
       const store = useTerminalInputStore.getState();
       if (!store.isVoiceSubmitting(voiceId)) return false;
-      const attempt = activeAttemptRef.current;
-      activeAttemptRef.current = null;
-      const wait = activeWaitRef.current;
+      const live = activeWaitRef.current;
       activeWaitRef.current = null;
-      wait?.releaseKeys();
-      wait?.releaseObserved();
-      wait?.controller.abort();
+      if (live) {
+        live.over = true;
+        live.releaseKeys();
+        live.releaseObserved();
+        live.controller.abort();
+      }
       store.setVoiceSubmitting(voiceId, false);
       setVoiceSubmitWait(null);
-      if (attempt !== null) setVoiceSubmitOutcome({ kind: "cancelled", attempt });
+      if (live) setVoiceSubmitOutcome({ kind: "cancelled", attempt: live.attempt });
       const view = editorViewRef.current;
       if (view) unlockAfterSend(view, editableCompartmentRef.current, !options?.deferFocus);
       return true;
@@ -275,35 +314,10 @@ export function useVoiceWaitSubmit({
     [voiceId, editorViewRef, editableCompartmentRef]
   );
 
-  const startVoiceWaitSubmit = useCallback(
-    (options?: VoiceWaitSubmitOptions) => {
-      const store = useTerminalInputStore.getState();
-      if (store.isVoiceSubmitting(voiceId)) return;
-
-      const attempt = ++attemptRef.current;
-      activeAttemptRef.current = attempt;
-      const isCurrentAttempt = () =>
-        activeAttemptRef.current === attempt &&
-        useTerminalInputStore.getState().isVoiceSubmitting(voiceId);
-
-      // Before the lock below, so a press during the wait counts against it.
-      const handBack = options?.stayPut ? STAY_PUT : claimSendHandBackRef.current?.();
-      // Read before the stop: a dictation started on this panel while the
-      // send waits is the next prompt's, and none of its words go with this
-      // one (#14804).
-      const target = voiceDraftNow();
-      const sessions = voiceRecordingService.sendSessions(target.panelId, target.projectId);
-      const releaseSend = claimWaitingSend(voiceId, sessions);
-      // From before the stop, so a stop-time cleanup that fails before any
-      // wait for it begins still counts.
-      const observed = voiceRecordingService.observeSendCorrections(voiceId, sessions);
-      store.setVoiceSubmitting(voiceId, true);
-      setVoiceSubmitWait({ attempt, phase: "finishing", startedAt: performance.now() });
-
-      // Aborted by a second Enter, the wait ends and the send goes with the
-      // text as it stands; by Escape or an unmount, the attempt is over too.
-      const controller = new AbortController();
-      const releaseKeys = claimVoiceWaitKeys({
+  // Enter and Escape belong to the wait while a composer shows it.
+  const claimKeys = useCallback(
+    (live: WaitAttempt) =>
+      claimVoiceWaitKeys({
         holds: (element) => {
           const view = editorViewRef.current;
           if (view?.dom.contains(element)) return true;
@@ -315,10 +329,10 @@ export function useVoiceWaitSubmit({
         editor: () => editorViewRef.current?.dom ?? null,
         isSelected: () => usePanelStore.getState().focusedId === terminalId,
         sendNow: () => {
-          if (isCurrentAttempt()) controller.abort();
+          if (isLive(live, voiceId)) live.controller.abort();
         },
         cancel: () => {
-          if (!isCurrentAttempt() || !cancelVoiceWaitSubmit({ deferFocus: true })) return;
+          if (!isLive(live, voiceId) || !cancelVoiceWaitSubmit({ deferFocus: true })) return;
           // Lifting the lock took the keyboard off the editor, or it was
           // already nowhere; it goes back to the text the user is now free to
           // edit. On the key's release, not its press: a held Escape's repeats
@@ -336,15 +350,114 @@ export function useVoiceWaitSubmit({
           };
           window.addEventListener("keyup", refocus, true);
         },
-      });
-      activeWaitRef.current = { controller, releaseKeys, releaseObserved: observed.release };
+      }),
+    [terminalId, voiceId, editorViewRef, cancelVoiceWaitSubmit]
+  );
 
+  // The wait shows in this composer: its editor locked, Enter and Escape its own.
+  const seatWait = useCallback(
+    (live: WaitAttempt) => {
+      live.seat = seat;
+      live.releaseKeys = claimKeys(live);
+      activeWaitRef.current = live;
+      setVoiceSubmitWait(live.wait);
       const view = editorViewRef.current;
       if (view) {
         view.dispatch({
           effects: editableCompartmentRef.current.reconfigure(LOCKED_FOR_SEND),
         });
       }
+    },
+    [seat, claimKeys, editorViewRef, editableCompartmentRef]
+  );
+  const seatWaitRef = useRef(seatWait);
+  useEffect(() => {
+    seatWaitRef.current = seatWait;
+  }, [seatWait]);
+
+  // Its cleanup runs before the one below, so that one can tell an unmount
+  // from a move to another draft.
+  const unmountedRef = useRef(false);
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+    };
+  }, []);
+
+  // A composer that unmounts mid-wait leaves the send to go without it, and
+  // one that mounts while a send for its draft waits shows that wait. One that
+  // moves to another terminal can't send what it no longer shows: the draft,
+  // and any correction still on its way to it, stay in the store.
+  useEffect(() => {
+    const waiting = unseatedWaits.get(voiceId);
+    if (waiting && isLive(waiting, voiceId)) {
+      unseatedWaits.delete(voiceId);
+      waiting.departed = null;
+      waiting.attempt = ++attemptRef.current;
+      waiting.wait = { ...waiting.wait, attempt: waiting.attempt };
+      seatWaitRef.current(waiting);
+    }
+    return () => {
+      const live = activeWaitRef.current;
+      if (!live) return;
+      activeWaitRef.current = null;
+      live.releaseKeys();
+      live.releaseKeys = () => {};
+      live.seat = null;
+      setVoiceSubmitWait(null);
+      if (unmountedRef.current) {
+        // Its hand-back is this composer's, which is gone.
+        live.handBack = STAY_PUT;
+        live.departed = sendFromEditorRef.current;
+        unseatedWaits.set(voiceId, live);
+        return;
+      }
+      live.over = true;
+      live.releaseObserved();
+      live.controller.abort();
+      useTerminalInputStore.getState().setVoiceSubmitting(voiceId, false);
+    };
+  }, [voiceId]);
+
+  const startVoiceWaitSubmit = useCallback(
+    (options?: VoiceWaitSubmitOptions) => {
+      const store = useTerminalInputStore.getState();
+      if (store.isVoiceSubmitting(voiceId)) return;
+
+      const attempt = ++attemptRef.current;
+      // Before the lock below, so a press during the wait counts against it.
+      const handBack = options?.stayPut ? STAY_PUT : claimSendHandBackRef.current?.();
+      // Read before the stop: a dictation started on this panel while the
+      // send waits is the next prompt's, and none of its words go with this
+      // one (#14804).
+      const target = voiceDraftNow();
+      const sessions = voiceRecordingService.sendSessions(target.panelId, target.projectId);
+      const releaseSend = claimWaitingSend(voiceId, sessions);
+      // From before the stop, so a stop-time cleanup that fails before any
+      // wait for it begins still counts.
+      const observed = voiceRecordingService.observeSendCorrections(voiceId, sessions);
+      store.setVoiceSubmitting(voiceId, true);
+
+      // Aborted by a second Enter, the wait ends and the send goes with the
+      // text as it stands; by Escape, the attempt is over too.
+      const live: WaitAttempt = {
+        attempt,
+        controller: new AbortController(),
+        over: false,
+        seat: null,
+        departed: null,
+        handBack,
+        // The draft store keeps the text but not its chips, which a send that
+        // outlives the editor still needs.
+        imagePaths: readImageChipPaths(editorViewRef.current),
+        wait: { attempt, phase: "finishing", startedAt: performance.now() },
+        releaseKeys: () => {},
+        releaseObserved: observed.release,
+      };
+      const { controller } = live;
+      const isCurrentAttempt = () => isLive(live, voiceId);
+      seatWait(live);
 
       void (async () => {
         let sent: boolean | Promise<boolean> = false;
@@ -372,14 +485,15 @@ export function useVoiceWaitSubmit({
             voiceRecordingService.hasPendingCorrection(voiceId, sessions)
           ) {
             const landing = voiceRecordingService.expectedCorrectionWindow(voiceId, sessions);
-            setVoiceSubmitWait({
-              attempt,
+            live.wait = {
+              attempt: live.attempt,
               phase: "polishing",
               startedAt: performance.now(),
               expectedAt: landing?.landsAt ?? null,
               beganAt: landing?.startedAt ?? null,
               sessions,
-            });
+            };
+            live.seat?.setWait(live.wait);
             await voiceRecordingService.waitForPendingCorrections(
               voiceId,
               controller.signal,
@@ -395,7 +509,7 @@ export function useVoiceWaitSubmit({
           // and not the pre-stop doc (#9172).
           const projectId = projectIdRef.current ?? useProjectStore.getState().currentProject?.id;
           const draft = useTerminalInputStore.getState().getDraftInput(terminalId, projectId);
-          const finalView = editorViewRef.current;
+          const finalView = live.seat?.editorViewRef.current;
           if (finalView) {
             // The same outside write the sync effect would make, correction
             // included, so a send held back afterwards leaves it undoable.
@@ -439,43 +553,49 @@ export function useVoiceWaitSubmit({
           // way is one the send drops.
           if (voiceRecordingService.hasPendingCorrection(voiceId, sessions)) cleanup = "skipped";
           else if (observed.failed()) cleanup = "failed";
-          sent = sendFromEditorRef.current(handBack, voiceSend, options?.route) ?? true;
+          if (live.seat) {
+            sent =
+              live.seat.sendFromEditorRef.current(live.handBack, voiceSend, options?.route) ?? true;
+          } else if (live.departed) {
+            sent =
+              live.departed(live.handBack, voiceSend, options?.route, {
+                imagePaths: live.imagePaths,
+              }) ?? true;
+          }
         } finally {
-          releaseKeys();
+          live.releaseKeys();
           releaseSend();
           observed.release();
-          if (activeWaitRef.current?.controller === controller) activeWaitRef.current = null;
-          if (activeAttemptRef.current === attempt) {
-            activeAttemptRef.current = null;
+          if (unseatedWaits.get(voiceId) === live) unseatedWaits.delete(voiceId);
+          if (!live.over) {
+            live.over = true;
             useTerminalInputStore.getState().setVoiceSubmitting(voiceId, false);
-            setVoiceSubmitWait(null);
-            const went = (kind: "sending" | "sent"): VoiceSubmitOutcome =>
-              cleanup ? { kind, attempt, cleanup } : { kind, attempt };
-            if (typeof sent === "boolean") {
-              setVoiceSubmitOutcome(sent ? went("sent") : { kind: "held", attempt });
-              if (tooShort) onSpokenSendTooShortRef.current?.();
-            } else {
-              setVoiceSubmitOutcome(went("sending"));
-              const settle = (taken: boolean) => {
-                if (attemptRef.current !== attempt) return;
-                setVoiceSubmitOutcome(taken ? went("sent") : { kind: "held", attempt });
-              };
-              sent.then(settle, () => settle(false));
+            const at = live.seat;
+            if (at) {
+              if (at.activeWaitRef.current === live) at.activeWaitRef.current = null;
+              at.setWait(null);
+              const shown = live.attempt;
+              const went = (kind: "sending" | "sent"): VoiceSubmitOutcome =>
+                cleanup ? { kind, attempt: shown, cleanup } : { kind, attempt: shown };
+              if (typeof sent === "boolean") {
+                at.setOutcome(sent ? went("sent") : { kind: "held", attempt: shown });
+                if (tooShort) at.onSpokenSendTooShortRef.current?.();
+              } else {
+                at.setOutcome(went("sending"));
+                const settle = (taken: boolean) => {
+                  if (at.attemptRef.current !== shown) return;
+                  at.setOutcome(taken ? went("sent") : { kind: "held", attempt: shown });
+                };
+                sent.then(settle, () => settle(false));
+              }
+              const v = at.editorViewRef.current;
+              if (v) unlockAfterSend(v, at.editableCompartmentRef.current);
             }
-            const v = editorViewRef.current;
-            if (v) unlockAfterSend(v, editableCompartmentRef.current);
           }
         }
       })();
     },
-    [
-      terminalId,
-      voiceId,
-      voiceDraftNow,
-      editorViewRef,
-      editableCompartmentRef,
-      cancelVoiceWaitSubmit,
-    ]
+    [terminalId, voiceId, voiceDraftNow, editorViewRef, seatWait]
   );
 
   useEffect(

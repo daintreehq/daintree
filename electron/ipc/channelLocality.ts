@@ -159,6 +159,7 @@ export const CHANNEL_LOCALITY = {
   "canopy:set-scope": "host",
   "canopy:set-shown": "host",
   "canopy:snapshot-updated": "host",
+  "canopy:submit-reply": "host",
   "canopy:terminal-data": "host",
   "canopy:terminal-input": "host",
   "canopy:terminal-resize": "host",

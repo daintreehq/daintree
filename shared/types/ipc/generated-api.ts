@@ -145,6 +145,9 @@ export interface GeneratedElectronAPI {
     setShown(
       ...args: IpcInvokeMap["canopy:set-shown"]["args"]
     ): Promise<IpcInvokeMap["canopy:set-shown"]["result"]>;
+    submitReply(
+      ...args: IpcInvokeMap["canopy:submit-reply"]["args"]
+    ): Promise<IpcInvokeMap["canopy:submit-reply"]["result"]>;
     terminalInput(
       ...args: IpcInvokeMap["canopy:terminal-input"]["args"]
     ): Promise<IpcInvokeMap["canopy:terminal-input"]["result"]>;

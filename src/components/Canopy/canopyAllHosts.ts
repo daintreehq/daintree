@@ -555,6 +555,11 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
       const watch = watchOf(mine);
       return watch ? terminalFor(watch.hostId).terminalSendKey(watch.raw, key) : Promise.resolve();
     },
+    submitReply: (key, target, text, imagePaths) => {
+      const parsed = parseAllHostsKey(key);
+      if (!parsed || !known.has(parsed.hostId)) return unknownRun();
+      return terminalFor(parsed.hostId).submitReply(parsed.id, target, text, imagePaths);
+    },
     answer: (key, target, label) => {
       const parsed = parseAllHostsKey(key);
       if (!parsed || !known.has(parsed.hostId)) return unknownRun();
