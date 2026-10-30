@@ -659,10 +659,11 @@ describe("WaitingContainer", () => {
 
       render(<WaitingContainer />);
       const rows = screen.getAllByTestId("waiting-single-item");
-      fireEvent.click(rows[0]!);
+      fireEvent.click(rows[1]!);
 
-      expect(setActiveTabMock).toHaveBeenCalledWith("g1", "t1");
-      expect(activateTerminalMock).toHaveBeenCalledWith("t1");
+      expect(setActiveTabMock).toHaveBeenCalledWith("g1", "t2");
+      expect(applyViewingModeMock).toHaveBeenCalledWith("grid", "t2");
+      expect(activateTerminalMock).toHaveBeenCalledWith("t2");
       // A group maximize resolves against the tab the row just selected.
       expect(callOrder).toEqual(["setActiveTab", "applyViewingMode", "activateTerminal"]);
     });

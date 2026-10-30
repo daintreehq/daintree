@@ -2305,6 +2305,7 @@ describe("TerminalFocusSlice - maximizePanel carries fullscreen (#15335)", () =>
       makePanel("legacy-1", undefined),
       makePanel("dock-1", "dock"),
       makePanel("trash-1", "trash"),
+      makePanel("bg-1", "background"),
       makePanel("other-wt-1", "grid", "worktree-2"),
     ];
     writes = 0;
@@ -2385,7 +2386,24 @@ describe("TerminalFocusSlice - maximizePanel carries fullscreen (#15335)", () =>
     expect(state.preMaximizeLayout).toBeNull();
   });
 
-  it.each(["dock-1", "trash-1", "other-wt-1", "missing"])(
+  it("drops a foreign snapshot even when the pane is already maximized", () => {
+    state.preMaximizeLayout = { ...snapshot, worktreeId: "worktree-2" };
+
+    state.maximizePanel("grid-1", getPanelGroup);
+
+    expect(state.preMaximizeLayout).toBeNull();
+  });
+
+  it("widens a maximized pane to its group once it has siblings", () => {
+    groups.set("group-a", { id: "group-a", panelIds: ["grid-1", "grid-2"] });
+
+    state.maximizePanel("grid-1", getPanelGroup);
+
+    expect(state.maximizedId).toBe("grid-1");
+    expect(state.maximizeTarget).toEqual({ type: "group", id: "group-a" });
+  });
+
+  it.each(["dock-1", "trash-1", "bg-1", "other-wt-1", "missing"])(
     "leaves fullscreen alone for %s, which the grid can't show",
     (id) => {
       state.maximizePanel(id, getPanelGroup);

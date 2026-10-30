@@ -63,13 +63,14 @@ function makeTerminal(id: string, worktreeId: string, location: "grid" | "dock" 
 const snapshot = { gridCols: 2, gridItemCount: 3, worktreeId: "wt-1" };
 
 /** What the pill row does, in its order, around the two helpers. */
-function pickRow(panelId: string, worktreeId: string) {
+function pickRow(panelId: string, worktreeId: string, groupId?: string) {
   const mode = readAgentRowViewingMode();
   const worktrees = useWorktreeSelectionStore.getState();
   if (worktreeId !== worktrees.activeWorktreeId) {
     worktrees.trackTerminalFocus(worktreeId, panelId);
     worktrees.selectWorktree(worktreeId);
   }
+  if (groupId) usePanelStore.getState().setActiveTab(groupId, panelId);
   applyAgentRowViewingMode(mode, panelId);
   usePanelStore.getState().activateTerminal(panelId);
 }
@@ -134,6 +135,16 @@ describe("agent row viewing mode (#15335)", () => {
     expect(usePanelStore.getState().focusedId).toBe("a-2");
   });
 
+  it("reads the grid after leaving fullscreen, whatever snapshot is left over", () => {
+    maximizeA1();
+    usePanelStore.getState().exitMaximize();
+
+    pickRow("a-2", "wt-1");
+
+    expect(maximized()).toEqual({ maximizedId: null, maximizeTarget: null });
+    expect(usePanelStore.getState().preMaximizeLayout).toBe(snapshot);
+  });
+
   it("returns to the layout the user maximized from, with the picked pane active", () => {
     maximizeA1();
     pickRow("a-2", "wt-1");
@@ -166,19 +177,21 @@ describe("agent row viewing mode (#15335)", () => {
             id: "g1",
             location: "grid",
             worktreeId: "wt-1",
-            activeTabId: "a-3",
+            activeTabId: "a-2",
             panelIds: ["a-2", "a-3"],
           },
         ],
       ]),
     });
 
-    pickRow("a-3", "wt-1");
+    pickRow("a-3", "wt-1", "g1");
 
     expect(maximized()).toEqual({
       maximizedId: "a-3",
       maximizeTarget: { type: "group", id: "g1" },
     });
+    expect(usePanelStore.getState().tabGroups.get("g1")?.activeTabId).toBe("a-3");
+    expect(usePanelStore.getState().focusedId).toBe("a-3");
   });
 
   it("leaves fullscreen behind a picked dock pane untouched", () => {
@@ -192,6 +205,21 @@ describe("agent row viewing mode (#15335)", () => {
     });
     expect(usePanelStore.getState().activeDockTerminalId).toBe("a-dock");
   });
+
+  it.each(["a-dock", "b-1", "missing"])(
+    "never takes fullscreen down for %s, which the grid isn't showing",
+    (id) => {
+      maximizeA1();
+
+      applyAgentRowViewingMode("grid", id);
+
+      expect(maximized()).toEqual({
+        maximizedId: "a-1",
+        maximizeTarget: { type: "panel", id: "a-1" },
+      });
+      expect(usePanelStore.getState().preMaximizeLayout).toBe(snapshot);
+    }
+  );
 
   it("carries fullscreen into another worktree and keeps the one it left parked", () => {
     maximizeA1();
@@ -236,6 +264,7 @@ describe("agent row viewing mode (#15335)", () => {
   });
 
   it("keeps a grid reader in the grid when the destination worktree had fullscreen parked", () => {
+    const wt2Layout = { gridCols: 1, gridItemCount: 2, worktreeId: "wt-2" };
     useWorktreeSelectionStore.setState({
       maximizeByWorktree: new Map([
         [
@@ -243,7 +272,7 @@ describe("agent row viewing mode (#15335)", () => {
           {
             maximizedId: "b-1",
             maximizeTarget: { type: "panel" as const, id: "b-1" },
-            preMaximizeLayout: null,
+            preMaximizeLayout: wt2Layout,
           },
         ],
       ]),
@@ -253,6 +282,8 @@ describe("agent row viewing mode (#15335)", () => {
 
     expect(maximized()).toEqual({ maximizedId: null, maximizeTarget: null });
     expect(usePanelStore.getState().focusedId).toBe("b-1");
+    // Leaving fullscreen, not dropping it: wt-2's grid still restores.
+    expect(usePanelStore.getState().preMaximizeLayout).toEqual(wt2Layout);
   });
 
   it("carries nothing inside fleet scope", () => {
