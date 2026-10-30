@@ -20,9 +20,9 @@
 }
 
 /* The list in the inbox and the pitch's demo alike, so turning reading on moves
-   nothing. However wide it is set, the pane keeps its minimum; a window too
-   narrow for both minimums splits evenly. The width it is set to stays put, and
-   comes back when the window grows. */
+   nothing. However wide it is set, the pane keeps its minimum, until that would
+   leave the list the narrower of the two and they split evenly. The width it is
+   set to stays put, and comes back when the window grows. */
 .canopy-list-column {
   width: var(--canopy-list-width);
   max-width: max(calc(100% - var(--canopy-pane-min-width, 0px)), 50%);

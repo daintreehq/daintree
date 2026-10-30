@@ -7,7 +7,7 @@ import { useCanopyStore } from "@/store/canopyStore";
 import {
   CANOPY_LIST_MAX_WIDTH,
   CANOPY_LIST_MIN_WIDTH,
-  canopyListAttainableWidth,
+  canopyListRoom,
   canopyListStyle,
 } from "./canopyListWidth";
 
@@ -19,7 +19,8 @@ interface ListDrag {
   startWidth: number;
   /** The width the user had chosen when the drag began, null for the default. */
   preference: number | null;
-  attainable: number;
+  /** The widest the list can show, past which the width kept doesn't move on screen. */
+  room: number;
   setDrag: (width: number | null) => void;
   /** Once, on whatever ends the drag: the width it reached, null if it never moved. */
   onEnd: (width: number | null) => void;
@@ -31,7 +32,7 @@ function beginListDrag({
   startX,
   startWidth,
   preference,
-  attainable,
+  room,
   setDrag,
   onEnd,
 }: ListDrag): () => void {
@@ -42,7 +43,7 @@ function beginListDrag({
       preference ?? startWidth,
       CANOPY_LIST_MIN_WIDTH,
       CANOPY_LIST_MAX_WIDTH,
-      attainable
+      room
     );
     setDrag(reached);
   };
@@ -122,27 +123,34 @@ export function CanopyListColumn({
   useEffect(() => () => endDragRef.current?.(), []);
 
   const shownWidth = shown.width > 0 ? shown.width : (listWidth ?? CANOPY_LIST_MIN_WIDTH);
-  const attainable = canopyListAttainableWidth(shown.split);
+  const room = canopyListRoom(shown.split);
+  // A window too narrow for both minimums has nowhere to move the edge to.
+  const resizable = room > CANOPY_LIST_MIN_WIDTH;
 
   const startDrag = (event: MouseEvent) => {
     if (event.button !== 0 || endDragRef.current) return;
-    event.preventDefault();
     const column = columnRef.current;
     const split = column?.parentElement;
     if (!column || !split) return;
+    const dragRoom = canopyListRoom(split.getBoundingClientRect().width);
+    if (dragRoom <= CANOPY_LIST_MIN_WIDTH) return;
+    event.preventDefault();
     const startWidth = column.getBoundingClientRect().width;
     setListDrag(Math.round(startWidth));
     endDragRef.current = beginListDrag({
       startX: event.clientX,
       startWidth,
       preference: listWidth,
-      attainable: canopyListAttainableWidth(split.getBoundingClientRect().width),
+      room: dragRoom,
       setDrag: setListDrag,
       onEnd: (reached) => {
         endDragRef.current = null;
         // Kept before the drag lets go, so no frame shows the old width between.
-        // A press that never moved leaves the default as the default.
-        if (reached !== null && reached !== listWidth) setListWidth(reached);
+        // A press that never moved leaves the default as the default. Against
+        // the width held now: a sibling view may have set another meanwhile.
+        if (reached !== null && reached !== useCanopyStore.getState().listWidth) {
+          setListWidth(reached);
+        }
         setListDrag(null);
       },
     });
@@ -151,20 +159,22 @@ export function CanopyListColumn({
   const onKeyDown = useSplitterKeys({
     growKey: "ArrowRight",
     value: shownWidth,
-    min: CANOPY_LIST_MIN_WIDTH,
-    max: Math.min(CANOPY_LIST_MAX_WIDTH, attainable),
+    min: Math.min(CANOPY_LIST_MIN_WIDTH, room),
+    max: Math.min(CANOPY_LIST_MAX_WIDTH, room),
     step: RESIZE_STEP,
     largeStep: RESIZE_STEP_LARGE,
-    onChange: (width) =>
+    onChange: (width) => {
+      if (!resizable) return;
       setListWidth(
         resizeCappedPreference(
           width,
           listWidth ?? shownWidth,
           CANOPY_LIST_MIN_WIDTH,
           CANOPY_LIST_MAX_WIDTH,
-          attainable
+          room
         )
-      ),
+      );
+    },
     onReset: () => setListWidth(null),
   });
 
@@ -180,8 +190,8 @@ export function CanopyListColumn({
         edge="right"
         label="Resize agent list"
         value={shownWidth}
-        min={CANOPY_LIST_MIN_WIDTH}
-        max={Math.min(CANOPY_LIST_MAX_WIDTH, attainable)}
+        min={Math.min(CANOPY_LIST_MIN_WIDTH, room)}
+        max={Math.min(CANOPY_LIST_MAX_WIDTH, room)}
         isResizing={listDrag !== null}
         className="z-10"
         data-testid="canopy-list-resize"

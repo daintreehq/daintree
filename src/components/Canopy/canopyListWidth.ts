@@ -4,11 +4,12 @@ import type { CSSProperties } from "react";
 export const CANOPY_LIST_MIN_WIDTH = 320;
 export const CANOPY_LIST_MAX_WIDTH = 960;
 /**
- * The room the pane beside the list keeps however wide the list is set: a
- * terminal at the default font still fits well past its 20 columns. A window
- * too narrow for both minimums shows the two halves alike.
+ * The room the pane beside the list keeps however wide the list is set: the
+ * terminal's 20 columns at the largest font (24px), with the pane's padding,
+ * the frame's inset and the scrollbar. Where that would leave the list
+ * narrower than the pane, the two split evenly instead.
  */
-export const CANOPY_PANE_MIN_WIDTH = 320;
+export const CANOPY_PANE_MIN_WIDTH = 360;
 
 /** A width the user can keep, or null for one that isn't a number at all. */
 export function clampCanopyListWidth(width: number): number | null {
@@ -16,10 +17,14 @@ export function clampCanopyListWidth(width: number): number | null {
   return Math.round(Math.min(Math.max(width, CANOPY_LIST_MIN_WIDTH), CANOPY_LIST_MAX_WIDTH));
 }
 
-/** The widest the list can show beside the pane's minimum in a split this wide, never below the list's own minimum. */
-export function canopyListAttainableWidth(splitWidth: number): number {
+/**
+ * The widest the list can show in a split this wide, as `.canopy-list-column`'s
+ * `max-width` works it out: all but the pane's minimum, or half the split,
+ * whichever is wider. Unmeasured, nothing narrows it.
+ */
+export function canopyListRoom(splitWidth: number): number {
   if (splitWidth <= 0) return CANOPY_LIST_MAX_WIDTH;
-  return Math.max(CANOPY_LIST_MIN_WIDTH, splitWidth - CANOPY_PANE_MIN_WIDTH);
+  return Math.max(splitWidth - CANOPY_PANE_MIN_WIDTH, splitWidth / 2);
 }
 
 /**

@@ -566,7 +566,7 @@ export const useCanopyStore = create<CanopyState>((set, get) => ({
   listWidth: loadListWidth(),
   setListWidth: (width) => {
     const next = width === null ? null : clampCanopyListWidth(width);
-    if (width !== null && next === null) return;
+    if ((width !== null && next === null) || next === get().listWidth) return;
     saveListWidth(next);
     set({ listWidth: next });
   },

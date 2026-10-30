@@ -470,6 +470,16 @@ describe("CanopyTerminal", () => {
       expect(terminalResize).toHaveBeenLastCalledWith(7, 74, 30);
     });
 
+    it("opened mid-drag, waits for the edge to land before asking for its grid", async () => {
+      act(() => useCanopyStore.getState().setListDrag(600));
+      await openSized();
+      expect(terminalResize).not.toHaveBeenCalled();
+      act(() => useCanopyStore.getState().setListDrag(null));
+      await settle();
+      expect(terminalResize).toHaveBeenCalledTimes(1);
+      expect(terminalResize).toHaveBeenCalledWith(7, 99, 30);
+    });
+
     it("puts its grid back to the PTY's when the size is refused", async () => {
       await openSized(async () => {
         throw new Error("rate limited");

@@ -3299,10 +3299,9 @@ describe("CanopyView", () => {
     // Under the list, in the same column, not over the pane beside it. The
     // column's edge handle sits out of flow, after it.
     const column = container.ownerDocument.querySelector("[data-canopy-list]")!.parentElement!;
-    const inFlow = [...column.children].filter(
-      (child) => child.getAttribute("role") !== "separator"
-    );
-    expect(inFlow.at(-1)).toBe(footer);
+    const handle = container.ownerDocument.querySelector("[data-testid=canopy-list-resize]");
+    expect(handle?.parentElement).toBe(column);
+    expect([...column.children].filter((child) => child !== handle).at(-1)).toBe(footer);
   });
 
   it("opens in the order it was left, or ranked before it shows when something was read meanwhile", async () => {
