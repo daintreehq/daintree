@@ -52,16 +52,13 @@ type TerminalScrollState = {
   isUserScrolledBack: boolean;
 };
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 /**
- * A context-menu item by its source label, matched case-sensitively. The
- * accessible name also carries the shortcut, so only the start is anchored.
+ * A context-menu item by its exact label. The shortcut column is aria-hidden,
+ * so the accessible name is the label alone, and a prefix match would also
+ * catch siblings like "Copy clean text".
  */
 function menuItem(page: Page, label: string): Locator {
-  return page.getByRole("menuitem", { name: new RegExp(`^${escapeRegExp(label)}\\b`) });
+  return page.getByRole("menuitem", { name: label, exact: true });
 }
 
 async function panelIdOf(panel: Locator): Promise<string> {
