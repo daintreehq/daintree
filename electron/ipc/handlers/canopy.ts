@@ -1914,7 +1914,7 @@ export const canopyNamespace = defineIpcNamespace({
         text: string,
         imagePaths?: string[]
       ): Promise<void> => {
-        requireActivated();
+        // The user's own words, as typed into the pane: no reading needed.
         checkRateLimit(CANOPY_METHOD_CHANNELS.submitReply, 30, 10_000);
         assertRunId(runId);
         assertTarget(target);

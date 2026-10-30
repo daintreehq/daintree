@@ -1907,6 +1907,12 @@ describe("canopy IPC", () => {
       expect(ptyClient.submit).toHaveBeenCalledWith("run-1", "navy");
     });
 
+    it("goes with Canopy's reading off, as the pane's own replies do", async () => {
+      state.mode = "unset";
+      expect((await reply("navy")).ok).toBe(true);
+      expect(state.submits).toEqual(["navy"]);
+    });
+
     it("hands its image chips over with the text", async () => {
       expect((await reply("look", ["/tmp/shot.png"])).ok).toBe(true);
       expect(ptyClient.submit).toHaveBeenCalledWith(
