@@ -13,7 +13,12 @@ const ALL_KNOWN: RowLayoutWidth = { widthKnownFrom: () => 0 };
 const NONE_KNOWN: RowLayoutWidth = { widthKnownFrom: (buffer: IBuffer) => buffer.length };
 
 async function render(cols: number, lines: string[]): Promise<HeadlessTerminal> {
-  const terminal = new HeadlessTerminal({ cols, rows: 30, scrollback: 100, allowProposedApi: true });
+  const terminal = new HeadlessTerminal({
+    cols,
+    rows: 30,
+    scrollback: 100,
+    allowProposedApi: true,
+  });
   await new Promise<void>((resolve) => terminal.write(lines.join("\r\n"), resolve));
   return terminal;
 }
@@ -130,7 +135,9 @@ describe("cleanTerminalSelection", () => {
 
   it("keeps a break where the next row starts deeper or further out than the hanging indent", async () => {
     const deeper = ["  A paragraph that runs right to the", "      indented example"];
-    expect(await cleanAll(40, deeper)).toBe("A paragraph that runs right to the\n    indented example");
+    expect(await cleanAll(40, deeper)).toBe(
+      "A paragraph that runs right to the\n    indented example"
+    );
     const outdented = ["    - A list item that runs to the edge", "  outer text resumes here"];
     expect(await cleanAll(40, outdented)).toBe(
       "  - A list item that runs to the edge\nouter text resumes here"
@@ -179,7 +186,10 @@ describe("cleanTerminalSelection", () => {
   });
 
   it("keeps a tool-output tree and a diff as drawn", async () => {
-    const tree = ["⏺ Read(src/services/terminal/types.ts)", "  ⎿  Read 120 lines from the file here"];
+    const tree = [
+      "⏺ Read(src/services/terminal/types.ts)",
+      "  ⎿  Read 120 lines from the file here",
+    ];
     expect(await cleanAll(40, tree)).toBe(
       "Read(src/services/terminal/types.ts)\n⎿  Read 120 lines from the file here"
     );
@@ -192,7 +202,9 @@ describe("cleanTerminalSelection", () => {
   it("keeps a row that ends at the margin, where a cut token and a whole word look alike", async () => {
     const lines = ["  Look in src/services/terminal/clean.ts", "  for the reader."];
     expect(lines[0]).toHaveLength(40);
-    expect(await cleanAll(40, lines)).toBe("Look in src/services/terminal/clean.ts\nfor the reader.");
+    expect(await cleanAll(40, lines)).toBe(
+      "Look in src/services/terminal/clean.ts\nfor the reader."
+    );
   });
 
   it("joins nothing on rows laid out at another width, or with no width to go by", async () => {
@@ -248,7 +260,9 @@ describe("cleanTerminalSelection", () => {
       endX: 20,
       text: "Copying agent outpu   \ngives you the text   ",
     });
-    expect(cleanTerminalSelection(column, ALL_KNOWN)).toBe("Copying agent outpu\ngives you the text");
+    expect(cleanTerminalSelection(column, ALL_KNOWN)).toBe(
+      "Copying agent outpu\ngives you the text"
+    );
   });
 
   it("cleans what the menu captured when the selection has changed since", async () => {

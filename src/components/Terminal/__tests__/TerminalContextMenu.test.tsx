@@ -589,8 +589,14 @@ describe("TerminalContextMenu — clean copy (#15525)", () => {
 
     await act(async () => row.click());
 
-    expect(writeText).toHaveBeenCalledWith("Release notes:\n- Added a clean copy\n  - next to Copy");
-    expect(dispatch).not.toHaveBeenCalledWith("terminal.copy", expect.anything(), expect.anything());
+    expect(writeText).toHaveBeenCalledWith(
+      "Release notes:\n- Added a clean copy\n  - next to Copy"
+    );
+    expect(dispatch).not.toHaveBeenCalledWith(
+      "terminal.copy",
+      expect.anything(),
+      expect.anything()
+    );
   });
 
   it("leaves Copy verbatim", async () => {
