@@ -35,7 +35,9 @@ describe("mainViewFocusedAgentId", () => {
     expect(mainViewFocusedAgentId()).toBeNull();
     focus("a", { detectedAgentId: undefined });
     expect(mainViewFocusedAgentId()).toBeNull();
-    focus("a", { detectedAgentId: undefined, everDetectedAgent: true });
+    focus("a", { detectedAgentId: undefined, launchAgentId: "claude", agentState: "exited" });
+    expect(mainViewFocusedAgentId()).toBeNull();
+    focus("a", { detectedAgentId: undefined, launchAgentId: "claude", everDetectedAgent: true });
     expect(mainViewFocusedAgentId()).toBeNull();
     focus("a", { kind: "browser" });
     expect(mainViewFocusedAgentId()).toBeNull();
