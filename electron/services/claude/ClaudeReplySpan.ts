@@ -152,7 +152,11 @@ function skeletonOf(text: string): Skeleton {
         open = { open: lines.length, close: null, marks: marks! };
         blocks.push(open);
         line.fence = true;
-      } else if (marks![0] === open.marks[0] && marks!.length >= open.marks.length && !rest!.trim()) {
+      } else if (
+        marks![0] === open.marks[0] &&
+        marks!.length >= open.marks.length &&
+        !rest!.trim()
+      ) {
         open.close = lines.length;
         open = null;
         line.fence = true;
@@ -171,7 +175,7 @@ function skeletonOf(text: string): Skeleton {
       if (/\s/u.test(prefix[0])) pending().space = true;
       const heading = line.block === null ? HEADING.exec(raw.slice(prefix[0].length)) : null;
       const headingEnd = line.contentStart + (heading ? heading[0].length : 0);
-      for (let i = line.contentStart; i < end; ) {
+      for (let i = line.contentStart; i < end;) {
         const ch = charAt(text, i);
         if (/\s/u.test(ch)) {
           pending().space = true;
@@ -309,7 +313,7 @@ function startsOf(
 
   let start = from;
   let wanted = edges.lead.length;
-  for (let i = from; i > Math.max(floor, line.contentStart) && wanted > 0; ) {
+  for (let i = from; i > Math.max(floor, line.contentStart) && wanted > 0;) {
     const ch = charBefore(source, i);
     i -= ch.length;
     if (ch === edges.lead[wanted - 1]) {
@@ -347,7 +351,7 @@ function endsOf(
   const atContentEnd = ceiling >= line.end;
   let end = from;
   let taken = 0;
-  for (let i = from; i < Math.min(ceiling, line.end) && taken < edges.trail.length; ) {
+  for (let i = from; i < Math.min(ceiling, line.end) && taken < edges.trail.length;) {
     const ch = charAt(source, i);
     i += ch.length;
     if (ch === edges.trail[taken]) {

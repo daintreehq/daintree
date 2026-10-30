@@ -793,7 +793,8 @@ export async function readClaudeRecentReplies(
       const record = parseSessionRecord(bytes.toString("utf8"));
       if (!record || record.type !== "assistant" || record.isSidechain || record.isMeta) continue;
       const content = record.message?.content;
-      const blocks = typeof content === "string" ? [content] : Array.isArray(content) ? content : [];
+      const blocks =
+        typeof content === "string" ? [content] : Array.isArray(content) ? content : [];
       // Newest first within the record too.
       for (const block of [...blocks].reverse()) {
         const text =

@@ -2,10 +2,7 @@ import { claudeClient } from "@/clients/claudeClient";
 import { captureCopyFlash } from "@/lib/copyFlash";
 import { copyWithToast } from "@/lib/copyWithToast";
 import { remoteHostOfView } from "@/services/terminal/remoteLoopbackLinks";
-import {
-  REPLY_SPAN_SELECTION_MAX_CHARS,
-  REPLY_SPAN_WAIT_MS,
-} from "@shared/config/replySpanLimits";
+import { REPLY_SPAN_SELECTION_MAX_CHARS, REPLY_SPAN_WAIT_MS } from "@shared/config/replySpanLimits";
 
 // The latest clean copy asked for. One still waiting on the host when another
 // is asked for writes nothing.

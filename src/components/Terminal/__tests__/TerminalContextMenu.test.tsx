@@ -123,7 +123,9 @@ const {
   restoreBackgroundTerminal: vi.fn(),
   activateTerminal: vi.fn(),
   pingTerminal: vi.fn(),
-  findReplySpan: vi.fn(async (_payload: { terminalId: string; selection: string }) => null as string | null),
+  findReplySpan: vi.fn(
+    async (_payload: { terminalId: string; selection: string }) => null as string | null
+  ),
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -602,7 +604,9 @@ describe("TerminalContextMenu — clean copy (#15525)", () => {
 
   it("copies a Claude Code reply as the agent wrote it when the host finds the selection (#15527)", async () => {
     liveSelection.current = "⏺ Run the build first, then npm test\n  before you push.";
-    findReplySpan.mockResolvedValueOnce("Run the **build** first, then `npm test` before you push.");
+    findReplySpan.mockResolvedValueOnce(
+      "Run the **build** first, then `npm test` before you push."
+    );
     openMenu({ hovered: null, launchAgentId: "claude" });
 
     await act(async () => cleanRow().click());
