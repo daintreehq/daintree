@@ -1,5 +1,163 @@
 # Changelog
 
+## [0.48.0] - 2026-10-30
+
+Dictation cleanup can run on Anthropic's Claude Haiku 5.5 or Sonnet 5.5, reasons briefly before it edits on every model, and reads the slash command a prompt opens with. Canopy opens as a full-window view, Codex panes find their own conversation after a crash or a busy quit, Copy clean text lifts a Claude Code reply as its original Markdown, remote host setup, update and switching dialogs lead with one verdict, and destructive confirms, dialogs and theme contrast get a design pass.
+
+### Breaking Changes
+
+- The composer's `❯` is a plain prompt marker and no longer opens a command picker, so the built-in `/github:create-issue` and `/github:work-issue` commands it ran are gone: start work on an issue from New worktree's Issue field (agents on the `full` tool set have `workflow.startWorkOnIssue`), and have an agent file issues with its own forge CLI, such as `gh issue create`. Plugin prompt templates move to the composer's `/` menu under "Prompt templates", after the agent's own commands and filtered by title, id or plugin, and picking one adds it after what you'd written instead of replacing the draft, with one undo to take it back out (#15501, #15257)
+- Start assistant, a starter prompt or the first-run agent choice no longer switches the Assistant to start on its own for good, and since that was how auto-start got turned on, upgrading turns it off for every install; to have the Assistant start whenever its panel opens, show Project and tick "Start when the panel opens" in the Assistant panel's More actions menu (#15395)
+
+### Features
+
+**Voice**
+
+- Dictation cleanup and spoken rewrite can run on Anthropic: Settings › Voice input › AI text correction › Cleanup provider offers OpenAI or Anthropic, with its own key row and Claude Haiku 5.5 (default) or Claude Sonnet 5.5, and Claude models clean up with rules of their own. OpenAI stays the default, existing installs keep their setting, and file references still run on OpenAI (#15244)
+- Cleanup reasons briefly before it edits (low effort on GPT-6.1 Terra, GPT-6 Luna and Claude Sonnet 5.5; medium on Claude Haiku 5.5, except a standalone passage under 60 characters), so fewer words go missing, at the cost of a slower slowest cleanup; on Claude models a phrase a later restatement corrects, trail-offs and abandoned questions drop out; a request with no answer after 4 s or a 408, 429 or 5xx is retried once, never after text has reached the composer, and the Polishing bar learns each model's landing time (#15287, #15511, #15513)
+- When a dictated prompt opens with a slash command or skill the target agent lists, cleanup is shown that command's description, argument hint and the start of its file, so the arguments dictated after it are spelled for that command; secret-shaped fields are screened out first, and panes on a remote host send the listing description only (#15532)
+- "Recover a recent dictation" shows the selected dictation in full beside the list, with the cleaned and original versions each offering Add and Copy, and says which draft Enter will add to (or why it can't) before you press it; the voice toolbar menu gains the same destination line, both versions and "View full dictation…" (#15406)
+
+**Terminals and agents**
+
+- Copy clean text, under Copy in the terminal context menu, removes shared indentation, Claude Code's ⏺ marker and trailing padding and rejoins lines an agent wrapped to the pane only where they read as prose; in a Claude Code pane on this machine, a selection that matches a recent reply copies the reply's original Markdown (markers, list items, fences, real line breaks) from the session transcript. Copy and the copy shortcuts are unchanged (#15533, #15541)
+- Codex panes keep their conversations: a running pane launched with a prompt learns its session from Codex during the first turn, so one that crashes or is force-quit reopens its own conversation even with many Codex panes in one folder; after a restart, a pane that lost its session id resumes on its own when its launch prompt and time match exactly one Codex thread no other pane could claim, with anything ambiguous held as before; and panes mid-turn at quit no longer reopen without their session (#15500, #15495, #15281)
+- The completion banner's Send to assistant and Send to agent put the agent's output in the target's composer as a headed context block, with nothing submitted, instead of pasting into the CLI; the Send to agent palette (also used by PR checks and terminal selections) drafts into agents with a composer and still pastes into plain shells (#15496)
+- The agent terminal context menu groups its less frequent rows into Fleet, Move and Session submenus, taking a Codex pane's menu from 22 rows to 15 (Copy clean text included) with nothing removed (#15530)
+- Move terminal left and Move terminal right (`Cmd+Shift+Option+Left`/`Right`, `Ctrl+Shift+Alt+Left`/`Right` on Windows and Linux) reorder dock chips, tab groups included, and picking a conversation from the Unread or Waiting pill while a pane is maximized shows the picked pane maximized instead of dropping back to the grid (#15478, #15518)
+
+**Canopy**
+
+- Canopy opens as an opaque full-window view with its title bar in the toolbar band, instead of a dialog over a blurred still of the app, and fills wide displays with the agent's pane taking the room beside the list; drag the list's right edge to resize it (arrow keys step it, double-click or Enter resets), and opening no longer stalls the app 30 to 40 ms or resizes the agent's terminal when a reading lands (#15499, #15508, #15531)
+- Canopy opens on the agent terminal focused in the main view, with its live terminal already in the pane, and with reading off a dismissible callout above the inbox offers Turn on reading (#15519, #15491)
+
+**Assistant**
+
+- Closing an Assistant session tab closes it at once with a toast whose Reopen resumes that exact conversation (Past sessions… for a Codex tab that hasn't learned its conversation yet); the confirm appears only for an assistant agent other than Claude Code or Codex, whose conversations Daintree can't resume, and Restart, Stop and Switch agent say the conversation stays in past sessions, while the global assistant's Stop no longer says it is discarded (#15419, #15506, #15318)
+- A paused Assistant tab offers Restart conversation to start fresh without paying for a resume first, and with Project shown the Global option carries the global run's state ("Global assistant waiting") (#15482, #15487)
+- The automation grant form in Settings › Daintree Assistant › Live session lists grantable tools by name with search instead of a raw id box, and says what approving does: no confirmation for those tools, the use count (failed calls count) and the 15-minute window capped at 30 minutes (#15469)
+
+**Remote Hosts**
+
+- Settings for another machine names it in the header (`studio-01 › Work settings` with Back to This Mac), shows the link's state with one Connect, Retry or Open host action, saves each row on its own instead of freezing the page, and keeps unsaved environment edits across a dropped link; Copy settings to a host opens on a review that leads with totals ("13 changes on studio-01: 8 overwrites, 5 new. 3 won't copy"), a partial failure no longer reads as success, and Copy to several hosts retries only the hosts that didn't finish (#15302, #15337)
+- A host's check and update dialog checks as soon as it opens and leads with one verdict (behind, ahead, up to date, not installed, unreachable), then the versions, a progress bar with named stages and one footer decision instead of up to three stacked confirms; Add host marks each step (Find, Check, Install, Host mode, Connect) as done, skipped with its reason or still to come, with Cancel on every step, Back from Check on, and Stop while an install runs (#15338, #15389)
+- The host switch screen names the host and project, shows the switch as three steps, stops on the one that failed with the full reason and a fitting next action, and fades over the destination; a switch that can't prepare the project offers Retry beside Switch host only; the clone form and Add a project on a host list what will be pushed, cloned and run, on which machine and with whose credentials, lead each git failure with its fix, and let Close and Escape cancel a running clone (#15295, #15447, #15349, #15473)
+- A window without control no longer repeats Take control in every terminal pane: the banner reads "Read-only · daintree on studio-01" and says taking control makes the project read-only on the other machine, a pane shows its strip only where you tried to type, and the host connection banner says which side runs the older Daintree with an Update button (#15298, #15486)
+- The Hosts overview card's "Add agents to fleet" lists each agent with its project and observed state, a single agent on another host can be messaged from the fleet ribbon, and the ribbon's composer is a multi-line field (`Shift+Enter` for a new line) that stays editable through a send and keeps a draft that reached nobody (#15331)
+- The phone page for answering agents from another device keeps an answer on screen as a receipt, opens the terminal excerpt at the prompt, names the project, machine and agent on each card, marks cards "Not current" when a read fails, holds their options after the phone wakes until a fresh read lands, and confirms Unpair (#15299)
+
+**Dev preview**
+
+- The Element Picker composer shows what Send hands the agent before it goes: an Includes row (route, files, selector, markup, styles, components, screenshot) that opens to the exact prompt text and a larger screenshot, a Target control naming the file it points the agent at, and one note under Send saying why it's off or what it will do (#15409, #15475)
+- Element Picker's page overlay tells hover from selection: hover is a thin dashed outline, a selection a solid blue (element) or violet (component) outline with a tag naming it, a multi-root component outlines as one group, and the old fills no longer show up in the agent's screenshot (#15348)
+
+**Worktrees and files**
+
+- Review Hub's Since review is anchored on the mark ("Since your review at 1a2b3c4, 2h ago"), lists new commits apart from rebased copies, gives files that changed only because `main` moved their own band, and confirms before updating or clearing a mark; run context is its own scrolling Context section with each run named by its agent icon and pane title, and a run launched without a prompt shows the first one Daintree sent it as "First sent" (#15435, #15388, #15522)
+- Discard changes and Trash file (formerly Delete file) confirms say what will happen to that file before asking: staged and unstaged changes with line counts and the hunks themselves, new files, copies and renames going to the Trash (Recycle Bin on Windows), deleted files coming back, and the discard refuses to run if the file changed after the preview was shown (#15310)
+- Raster images in file panels zoom and pan like the File Browser viewer (wheel, drag, arrow keys, `+`, `-` and `0`, with a scale readout), and the File Browser viewer has Open as panel to open a file as its own grid panel (#15497, #15477)
+- Sending diff notes to an agent raises a 5-second Undo that brings the notes back with their line anchors, and the Send notes menu names each agent's worktree, listing the diff's own first (#15480, #15485)
+
+**MCP Server**
+
+- At the default `core` tool set, agents and the Assistant can read issues, issue comments, pull requests and CI checks: `forge.listIssues`, `forge.getIssue`, `forge.listPRs`, `forge.getPR` and `forge.getCIStatus` move down from `full`, `forge.listIssueComments`, `forge.getPRs` and `forge.getChecks`, which were on no tool set, join them, and a host with no window open answers them too (#15471)
+- Approval prompts name the pane or Assistant tab asking ("Orchestrator · Claude · feature/auth"), Show pane steps aside to look without answering, and each prompt gets two minutes from when it appears instead of a 30-second clock that started when it was queued, so one waiting behind another no longer expires unseen; a prompt that runs out while on screen stays up with Approve off and says nothing ran (#15493, #15413)
+
+**Plugins**
+
+- Opening a `.dntr` for a plugin that's already installed shows the installed version and says whether it's an update, a reinstall or a downgrade, with a warning for an older archive, and a disabled plugin installed this session can be switched on without a restart (#15492)
+
+**Appearance**
+
+- Destructive confirms are redesigned: the button is a deeper red derived from each theme's danger colour with its label at 4.5:1 or better at rest, hover and press, a confirm whose other action is Discard opens with Cancel focused, and worktree delete dialogs total what will be thrown away; themes can set `destructive-fill`, `destructive-fill-hover`, `destructive-fill-active` and `destructive-foreground`, derived when they don't (#15523, #15442)
+- Dialogs drop their tinted header and footer bands: the title sits on the dialog surface, the rules show only while the body scrolls beneath them, a wrapped title keeps its icon and close button on the first line, and footer actions on the left line up with the title (#15524, #15450, #15379)
+
+### Bug Fixes
+
+**Voice**
+
+- Dictation's OpenAI requests (cleanup, spoken rewrite, file-link detection and rerank) are sent with `store: false`, so OpenAI no longer keeps them as stored responses for 30 days (#15245)
+- Dictation says when something didn't happen: a cleanup that keeps failing on a rejected key, spent balance or refused region raises one "Dictation cleanup unavailable" toast with Open voice settings instead of quietly leaving every passage raw, a send's receipt reads "Sent · cleanup skipped" or "Sent · cleanup failed", a spoken file reference that finds nothing says so on the composer's border, and "send it" on a reply too short or a "scratch that" with nothing to remove explain themselves (#15344, #15431, #15441, #15323, #15328)
+- Dictation records from the microphone chosen in Voice input settings instead of following the system input to AirPods, turning Dictation off stops a running session and releases the mic, Test microphone no longer types its phrase into an agent's draft during a dictation, Grok notices a half-open connection within seconds and replays the unanswered audio, and on macOS a mic silenced by Daintree.app being replaced while running offers Restart Daintree (#15515, #15251, #15259, #15285, #15286)
+- Accepting a correction like "run just" to "run Jest" no longer teaches a rewrite of the everyday word, which turned every "just" into "Jest" in every project, and existing learned forms like it are removed once, leaving typed ones alone; a heard-as phrase now belongs to one dictionary entry, with Move phrase or Cancel when another term has it (#15297, #15374)
+- A dictated send waiting on cleanup still goes to the agent it was sent from when you switch worktree or agent mid-wait, "Lock dictation to this panel" offers only panes with a composer, `Cmd+Shift+Enter` (`Ctrl+Shift+Enter` on Windows and Linux) claims the key only while dictating so the Review Hub commit shortcut works again, cleanup review stops underlining a word that only gained a capital or full stop, and a long dictation keeps a list's introduction with its first item (#15514, #15322, #15242, #15466, #15330)
+
+**Terminals and agents**
+
+- Restart to update, from the menu or the update toast, asks first when agents are working, with the same count Quit shows, instead of killing an agent mid-task (#15248)
+- Launching with a preset from the agent button's "Launch with preset" submenu or the launcher starts it once and leaves the worktree's default alone, with "Set as default" (`Option+D`, `Alt+D` on Windows and Linux) to keep it; Agent default in a worktree's preset menu no longer clears the preset chosen in Settings for every other worktree; a saved preset from `.daintree/presets` or a CCR route is no longer lost when an agent launches before presets load (`agent.launch` answers `spawnStatus: "presets-loading"` meanwhile); and Add preset › Clone current keeps the fallback chain and description (#15329, #15280, #15291, #15414)
+- Fleet sends keep your drafts: Enter clears the armed composer only when an agent took the send and keeps what you typed meanwhile, arming sets each pane's own draft aside and gives it back, an input-locked pane receives nothing the fleet sends, the pane you type in says which other-host agents raw keystrokes skip, and Save fleet names the agents a snapshot leaves out (#15258, #15263, #15253, #15303, #15339)
+- Fleet sends expand `@diff`, `@terminal` and `@selection` from each agent's own worktree and screen, and plugin context once for all of them, instead of delivering the literal token; a slash command run from the composer's menu reaches every armed pane, All waiting and All working arm plugin and custom agents too, and the fleet ribbon's amber band stands out on light themes (#15433, #15436, #15359, #15463)
+- A send a terminal refuses keeps the draft and says "Not sent", the composer's `@` menu stays inside its pane instead of sliding it sideways, draft text holds 4.5:1 on light terminal palettes such as Solarized Light, and typing `/` in an Antigravity terminal lists agy's commands and skills instead of an empty menu (#15255, #15437, #15249)
+- Restarting a pane moved to another worktree starts it in the worktree it's filed under, moving a panel no longer takes focus from the pane you're typing in, a docked panel stays docked, and a tab group dragged by its header or dock chip moves to a worktree card as one (#15324, #15351, #15352, #15305)
+- `Cmd+Click` (`Ctrl+Click` on Windows and Linux) on a localhost link reuses the most recently used browser pane instead of the oldest, which could be trashed or in the background, and Open link in the terminal context menu opens the link it was opened on (#15296, #15412)
+- Daintree started from inside a Claude Code session no longer passes that session's markers to its terminals, which ran every Claude Code agent with transcript saving off and missing from `--resume` (#15507)
+- Cancel on a memory-pressure hold sends the pane to the trash instead of discarding it, Restart on preset names each pane it couldn't restart and why, notifications name agents by display name, Enter accepting a Japanese, Chinese or Korean IME candidate in the New panel palette no longer launches the panel, and `D` on a Launch in worktree row launches into the dock (#15279, #15342, #15479)
+
+**Canopy**
+
+- A selected agent leaves the Needs you band once it goes back to work, rows use a pane's custom title, Assistant rows match the agent rows beside them, Canopy's live terminal opens links and file paths and supports Find and the context menu like a grid terminal, and settings search no longer describes Canopy as sending terminal output to Daintree's servers (#15364, #15404, #15488, #15381, #15246)
+
+**Assistant**
+
+- Revoke access ends only the approval it names instead of every approval and automation grant on the session, an approved tool's countdown follows each use that extends it, and after Allow this tool or Set project default the assistant retries on its own instead of sitting idle (#15346, #15283, #15383)
+- The global Assistant shows why it refused a message or key and keeps the draft, the past sessions picker says when a store couldn't be read instead of "No past sessions yet" and lists up to 50 Codex conversations, the Live session card names the conversation it describes, and Settings names the only installed supported agent instead of saying the assistant can't start (#15292, #15336, #15476, #15462)
+
+**Remote Hosts**
+
+- New worktree with another host chosen had a dead Create worktree button, showed this machine's path and quietly dropped the issue, environment, agent and prompt; the primary now reads "Create on studio-01" (`Cmd+Enter`, `Ctrl+Enter` on Windows and Linux), Path shows where it lands on that host, rows that host won't apply are disabled with a note, and the Recipe field shows what the host will run (#15289, #15345, #15398)
+- On a headless host, "Restart Daintree with a window?" defaults to Cancel, so Enter no longer stops the host and everything running in it; quit and update warnings tell apart machines with the same name, a transferred setup recipe's confirm hides env values, "Answer from another device" copies a tunnel command with this machine's real `user@hostname`, and project names on a Hosts overview card line up when only some have an emoji (#15261, #15446)
+- The missing-plugins notice for a host keeps one inbox row and posts again only when the set changes, a host plugin view this computer blocked offers Open plugin views instead of a Try again that came straight back blocked, and in a remote window an image pasted into a terminal shows the upload chip and a rejected Replace says "Couldn't send" (#15438, #15489, #15408)
+
+**MCP Server**
+
+- `terminal.restart` on a pane held for recovery fails with the hold's reason instead of reporting success while nothing started (an assistant launched 13 duplicates on that answer), and on the `full` tool set the project Assistant can start a held pane in place with `terminal.startHeld`, behind a confirm saying whether it resumes the recorded conversation or starts fresh (#15316)
+
+**Dev preview**
+
+- Closing the Element Picker keeps the request draft and requests waiting for their agent, `Option+Up` (`Alt+Up` on Windows and Linux) and the component crumbs work on React, Vue and Angular pages, outer layouts fold into a "More components" menu, and a failed page connection reads "Couldn't connect to the page" with Retry (#15254, #15428, #15307)
+- Picking a script in the dev preview header changes what that preview runs instead of reverting on the next start, a preview moved to another worktree runs there instead of serving the old worktree's code, a failed worktree delete restarts the dev servers it stopped, and an `alert()`, `confirm()` or `prompt()` from a page keeps the keyboard only inside its pane (#15308, #15367, #15350, #15275)
+
+**Worktrees and files**
+
+- Review Hub's PR merge row always says where the merge stands with Open pull request or Retry and explains a rejected merge in plain words, a commit message survives closing Review & commit until it's committed, conflict counts update when a conflict is fixed inside Daintree, and Down and `Shift+Up`/`Down` in the commit message move and select text instead of paging message history (#15373, #15260, #15341, #15405, #15411)
+- Compare worktrees keeps the file you're reading when either worktree updates instead of starting over every few seconds while an agent works (#15288)
+- New worktree remembers recipe and agent only on Create, its pickers open on the checked option so Enter no longer changes your pick, the GitHub issue picker loads past the first 20 issues and no longer links the previous search's top issue when you press Enter right after typing, and Quick create no longer lists recipes that the dialog then swapped (#15393, #15434, #15312, #15380, #15365)
+- Resource environments: one still used by worktrees can't be removed, the last one can, removing the default moves new worktrees to Local, an environment can't be named `local`, and switching a worktree's environment no longer carries over the old one's ready status, endpoint and ssh target (#15321, #15421, #15382, #15371)
+- Recipes: running one from the canvas or dock asks first when a prompt uses a built-in variable with no value (`{{issue_number}}` with no linked issue), import lists terminals it can't accept instead of dropping them, Save Layout captures up to 10 terminals and dev previews wherever they sit, the editor keeps a step's prompt across a type switch and an edit across a cancelled save conflict, the step picker offers every built-in agent, and the scope picker reads Team and Global (#15387, #15293, #15266, #15247, #15265, #15282, #15311)
+- A malformed SVG shows "Can't preview this SVG" with Retry instead of a blank box, wheel zoom in the File Browser keeps the point under the pointer still, a failed Save in a file panel's close prompt says why with Review draft, and the worktree sidebar's empty list says why it's empty with one way out (#15347, #15468, #15276, #15358, #15426)
+
+**Projects and settings**
+
+- Closing Settings no longer throws away an invalid or failed edit (a bad env var name, a bad worktree path pattern): it stays open on the field in error so you can fix it or Discard; opening Settings no longer closes the Portal; the panel limit fields take what you type instead of clamping each keystroke; and Run history says when it couldn't load (#15262, #15386, #15427, #15301)
+- The default Codex row in account quota reads the `CODEX_HOME` set in Codex's own environment variables instead of the app's, and setup's last step counts agents with no credentials detected apart instead of calling them ready (#15375, #15451)
+- "Stop all agents" is "Stop project", with a confirm that says shells and dev servers end too; Stop clone stops only that window's clone; and after Save scratch as project the follow-up offers to open the saved project instead of deleting the scratch (#15264, #15277, #15313)
+- Settings › Toolbar gains "Use this project's toolbar", reachable by keyboard and on Windows; Set up repository stays on its `.gitignore` secrets warning until you click Open project instead of moving on after two seconds, Quick Run pins show "Couldn't pin" with Retry, the crash recovery screen shows why Open log file failed, the Window Not Responding box closes when the window recovers, and on macOS the Window menu lists open windows (#15274, #15420, #15326, #15432)
+
+**Notifications and panels**
+
+- The X on the Portal toolbar hides the Portal and keeps its tabs instead of closing them all, a tab that can't be restored shows "Couldn't restore this page" with Retry instead of an endless skeleton, and Back and Forward are disabled when there's nowhere to go (#15256, #15290, #15464)
+- Opening a notification's source marks it read, Needs attention lets go of a thread whose newest unread entry is over a day old, and rows from another project on this machine open their source, reopening the project if it's closed (#15320, #15366, #15494)
+- Layout undo keeps working when a panel it captured is gone and records tab reorders within a group, tabs drag past their neighbours with animations on, and dropping a panel on the Trash pill asks about unsaved changes (#15392, #15418, #15284, #15250)
+
+**Plugins**
+
+- Turning a plugin off or retrying it stops at Discard changes / Cancel naming each panel with unsaved work instead of losing it, and the uninstall and update confirms name those panels too; uninstall's "Also delete its settings, connected accounts, and stored data" removes the same things for every plugin; and Update all shows "Update 2 of 5" with Stop updates (#15278, #15252, #15407)
+- A plugin panel whose plugin is off or gone says why with a button to switch it back on, setting badges say where a value is kept, a secret field shows its reveal eye as soon as you type, plugin setup and task failures show with Retry, and the UI kit reports what used to fail silently, with `onReject` on `FileDropzone` and `Composer` (#15470, #15443, #15490, #15415, #15455, #15273)
+
+**Appearance**
+
+- Text field borders reach 3:1 on every built-in theme, diff counts and git status letters reach 4.5:1 on every surface (imported and plugin themes get derived `diff-text-insert`, `diff-text-delete` and `status-*-text` tokens), unselected radios draw as an empty ring on dark themes, search fields stop underlining queries as misspellings, and truncated button labels no longer clip descenders (#15445, #15454, #15465, #15453, #15444, #15440, #15458, #15449, #15459)
+- With macOS Increase Contrast on, buttons, selects and text fields draw a visible frame, and under Windows high contrast destructive ghost buttons no longer look like Cancel; in the theme browser a filter that hides the previewed theme reverts the preview, and a Set theme that can't save says so with Retry (#15448, #15457, #15416, #15315)
+
+**Windows**
+
+- Live Claude Code panes are no longer demoted to plain terminals mid-turn after a tool call, and most new panes, which until now never got agent detection, get it (#15516)
+
+### Performance
+
+- Launching a batch of agents no longer waits 2.5 s per pane on panes that aren't on screen (13 through `agent.launch` took about 40 s) (#15368)
+
 ## [0.47.1] - 2026-10-29
 
 A patch for three rough edges in 0.47.0: a dictation cleanup that wrote an agent command or skill streamed in and then snapped back to the raw words, the dictation caret took width and pushed the text after it aside, and Canopy's All hosts view warned about every host that was simply off.
