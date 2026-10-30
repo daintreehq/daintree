@@ -34,14 +34,6 @@ export type ClosedSessionRecovery =
   // lane): the conversation is in past sessions, but not addressable from here.
   | { kind: "past-sessions" };
 
-export interface ClosedSessionNotice {
-  /** New per close, so a second close restarts the notice instead of editing it. */
-  id: number;
-  workspaceId: string;
-  label: string;
-  recovery: ClosedSessionRecovery;
-}
-
 export const CLOSED_SESSION_REOPEN_LABEL = "Reopen";
 export const CLOSED_SESSION_FIND_LABEL = "Past sessions…";
 
@@ -102,13 +94,11 @@ export function useHelpSessionLanes({
   // the dialog resolves it after its exit animation, once the pending slot is
   // already cleared.
   const restartFocusSlotRef = useRef<number | null>(null);
-  // The lane a tab's close is waiting on confirmation for (#12108). Only a working
-  // agent or a conversation the app can't bring back asks (#15385); every other
-  // close acts at once and offers the way back instead.
+  // The lane a tab's close is waiting on confirmation for (#12108). Only a
+  // conversation the app can't bring back asks (#15385); every other close acts
+  // at once and offers the way back instead.
   const [pendingCloseSlot, setPendingCloseSlot] = useState<number | null>(null);
   const [pendingCloseCost, setPendingCloseCost] = useState<PendingCloseCost | null>(null);
-  const [closedNotice, setClosedNotice] = useState<ClosedSessionNotice | null>(null);
-  const closedNoticeSeqRef = useRef(0);
   // The lane focus should land on once a confirmed close removes a background
   // lane: its neighbour, the following one first. Null when the lane being
   // closed is the selected one — focus then follows the store's new selection.
@@ -300,9 +290,11 @@ export function useHelpSessionLanes({
           ? state.hibernateSessions[assistantSlotKey(activeWorkspaceId, slot)]
           : undefined;
       const agentId = lane.agentId ?? captured?.agentId ?? null;
-      const hasConversation = lane.conversationTouched || Boolean(captured);
       const working =
         pty?.agentState !== undefined && CLOSE_CONFIRM_AGENT_STATES.has(pty.agentState);
+      // A working agent has a conversation even when the touched latch, which
+      // only watches the lane on screen, never saw it start.
+      const hasConversation = lane.conversationTouched || Boolean(captured) || working;
       const conversationId = pty?.agentSessionId || captured?.sessionId || null;
       const recovery: ClosedSessionRecovery | null =
         hasConversation && isListedAssistantAgent(agentId)
@@ -314,8 +306,11 @@ export function useHelpSessionLanes({
         agentId,
         working,
         dormant: Boolean(captured),
-        // Ending it costs something the app can't give back.
-        needsConfirm: working || (hasConversation && recovery === null),
+        // Ending it costs something the app can't give back. A working agent
+        // alone doesn't ask: Reopen brings its conversation back, and "working"
+        // is a guess from PTY output that a resume's transcript redraw also
+        // trips, which made the same close ask one time and not the next.
+        needsConfirm: hasConversation && recovery === null,
         recovery,
       };
     },
@@ -323,7 +318,6 @@ export function useHelpSessionLanes({
   );
 
   const reopenClosedSession = useCallback((recovery: ClosedSessionRecovery) => {
-    setClosedNotice(null);
     void (async () => {
       if (recovery.kind === "reopen") {
         const result = await actionService.dispatch<{ outcome: HelpPastSessionPickOutcome }>(
@@ -338,8 +332,6 @@ export function useHelpSessionLanes({
       await actionService.dispatch("help.resumePastSession", undefined, { source: "user" });
     })();
   }, []);
-
-  const dismissClosedNotice = useCallback(() => setClosedNotice(null), []);
 
   const closeSlotNow = useCallback(
     (slot: number) => {
@@ -378,33 +370,26 @@ export function useHelpSessionLanes({
       state.closeSlot(slot);
 
       if (!recovery || !activeWorkspaceId) return;
-      const title = `${label} closed`;
-      if (isLastLane) {
-        // The panel just slid away, so a notice inside it would never be seen.
-        // The toaster stands in, with the same window and the same way back.
-        notify({
-          type: "info",
-          title,
-          message: "Its conversation stays in past sessions",
-          transient: true,
-          duration: UNDO_TOAST_DURATION_MS,
-          // A way back held behind quiet hours would expire unseen, the same
-          // reason an Undo toast is urgent by default.
-          urgent: true,
-          action: {
-            label:
-              recovery.kind === "reopen" ? CLOSED_SESSION_REOPEN_LABEL : CLOSED_SESSION_FIND_LABEL,
-            onClick: () => reopenClosedSession(recovery),
-          },
-        });
-        return;
-      }
-      closedNoticeSeqRef.current += 1;
-      setClosedNotice({
-        id: closedNoticeSeqRef.current,
-        workspaceId: activeWorkspaceId,
-        label,
-        recovery,
+      // A toast for every close, not a strip inside the panel: the strip sat
+      // under the terminal where it went unseen, and the last lane's close slides
+      // the panel away with it, so the way back needs one place that is always
+      // in view.
+      notify({
+        type: "info",
+        title: `${label} closed`,
+        message: "Its conversation stays in past sessions",
+        priority: "high",
+        transient: true,
+        duration: UNDO_TOAST_DURATION_MS,
+        // A way back held behind quiet hours would expire unseen, the same
+        // reason an Undo toast is urgent by default.
+        urgent: true,
+        context: { eventKind: "uiFeedback" },
+        action: {
+          label:
+            recovery.kind === "reopen" ? CLOSED_SESSION_REOPEN_LABEL : CLOSED_SESSION_FIND_LABEL,
+          onClick: () => reopenClosedSession(recovery),
+        },
       });
     },
     [activeWorkspaceId, readLaneForClose, sessionTabs, reopenClosedSession]
@@ -576,9 +561,5 @@ export function useHelpSessionLanes({
     handleConfirmCloseSlot,
     handleCancelCloseSlot,
     resolveCloseFocusTarget,
-    // The notice belongs to the project it was raised in; a view switch drops it.
-    closedNotice: closedNotice?.workspaceId === activeWorkspaceId ? closedNotice : null,
-    reopenClosedSession,
-    dismissClosedNotice,
   };
 }

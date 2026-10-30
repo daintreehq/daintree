@@ -38,10 +38,8 @@ export interface PendingCloseCost {
 }
 
 /**
- * The close confirm's body (#15385). Only two closes still ask: a lane whose agent
- * is working, and a conversation the app has no way to bring back. Each says which
- * of those it is, since that is the whole reason this close stopped when others
- * don't.
+ * The close confirm's body (#15385). Only a conversation the app has no way to
+ * bring back asks, so the body says that is why, after what the close ends.
  */
 export function closeSessionDescription({ working, agentId, dormant, sole }: PendingCloseCost) {
   const agentName = agentId ? (getAgentConfig(agentId)?.name ?? agentId) : "The agent";
@@ -50,10 +48,7 @@ export function closeSessionDescription({ working, agentId, dormant, sole }: Pen
     : dormant
       ? "This tab closes."
       : `${agentName} stops and this tab closes.`;
-  const after = isListedAssistantAgent(agentId)
-    ? "The current conversation stays in past sessions."
-    : "You can't resume this conversation in Daintree.";
-  return `${ends} ${after}${sole ? " The assistant panel closes too." : ""}`;
+  return `${ends} You can't resume this conversation in Daintree.${sole ? " The assistant panel closes too." : ""}`;
 }
 
 /**

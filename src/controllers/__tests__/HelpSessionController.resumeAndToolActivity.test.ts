@@ -380,6 +380,7 @@ describe("HelpSessionController — resume banner gating (#10057)", () => {
     expect(ctrl.getSnapshot().showResumeBanner).toBe(false);
     expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1", 0);
     expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+    expect(helpPanelState.markConversationStarted).not.toHaveBeenCalled();
     ctrl.stop();
   });
 
@@ -403,6 +404,9 @@ describe("HelpSessionController — resume banner gating (#10057)", () => {
     expect(ctrl.getSnapshot().phase).toBe("live");
     expect(ctrl.getSnapshot().showResumeBanner).toBe(true);
     expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1", 0);
+    // Resumed history counts as a used conversation from the bind, or a lane
+    // resumed in the background would close with no way back.
+    expect(helpPanelState.markConversationStarted).toHaveBeenCalledWith(0);
     // The resumed panel carries the id it reopened, so main re-records it at
     // spawn and the lane stays recoverable after another quit (#13205).
     expect(panelStoreState.addPanel).toHaveBeenCalledWith(

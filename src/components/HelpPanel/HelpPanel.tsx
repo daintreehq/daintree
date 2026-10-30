@@ -48,7 +48,6 @@ import {
   useLatchedWhileOpen,
   usePastSessionsNote,
 } from "./pastSessionsNote";
-import { HelpClosedSessionNotice } from "./HelpClosedSessionNotice";
 import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
 import { HelpAssistantAgentChooser } from "./HelpAssistantAgentChooser";
 import { HelpLaunchingState } from "./HelpLaunchingState";
@@ -826,9 +825,6 @@ export function HelpPanel({
     handleConfirmCloseSlot,
     handleCancelCloseSlot,
     resolveCloseFocusTarget,
-    closedNotice,
-    reopenClosedSession,
-    dismissClosedNotice,
   } = useHelpSessionLanes({ panelRef, activeSlot, activeWorkspaceId, terminalId, pausedLane });
   // A restart can target a background lane, whose agent may not be the one on
   // screen: read from the same lane record the confirm gate reads. A paused lane
@@ -1576,13 +1572,6 @@ export function HelpPanel({
         )}
       </div>
 
-      {!globalSelected && closedNotice && (
-        <HelpClosedSessionNotice
-          notice={closedNotice}
-          onReopen={reopenClosedSession}
-          onDismiss={dismissClosedNotice}
-        />
-      )}
       {!globalSelected && showTerminal && agentConfig && agentId && !isMissingCli && (
         <HelpPanelFooter
           sessionId={sessionId}

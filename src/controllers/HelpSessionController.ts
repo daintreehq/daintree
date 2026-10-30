@@ -1742,6 +1742,11 @@ export class HelpSessionController {
             useHelpPanelStore
               .getState()
               .setTerminal(this.slot, resumed.panelId, launchAgentId, session.sessionId);
+            // A resumed conversation has history from its first frame. Left to
+            // the on-screen activity latch, a lane resumed in the background
+            // that settles idle would read as never used, and closing it would
+            // offer no way back.
+            useHelpPanelStore.getState().markConversationStarted(this.slot);
             this._pendingSessionId = null;
             window.electron.help.markTerminal(resumed.panelId).catch((err) => {
               logError("Failed to mark help terminal", err);

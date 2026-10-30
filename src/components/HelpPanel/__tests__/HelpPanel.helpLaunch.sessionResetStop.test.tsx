@@ -737,16 +737,14 @@ function expectNoPastSessionsNote(description: string | null) {
 }
 
 /**
- * Closing a working lane names its agent and the turn it cuts short, then says
- * whether the conversation can come back from inside the app (#15385).
+ * Closing a working lane whose conversation can't come back names its agent and the
+ * turn it cuts short, then says why it asked (#15385).
  */
-function expectWorkingCloseConfirm(description: string | null, agentName: string, listed: boolean) {
+function expectWorkingCloseConfirm(description: string | null, agentName: string) {
   expect(description).toMatch(
     new RegExp(`^${agentName} is working\\. Closing stops its current turn and closes this tab\\. `)
   );
-  expect(description).toMatch(
-    listed ? /stays in past sessions\.$/ : /can't resume this conversation in Daintree\.$/
-  );
+  expect(description).toMatch(/can't resume this conversation in Daintree\.$/);
   expect(description).not.toMatch(/discard|delet/i);
 }
 
@@ -1584,8 +1582,121 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     expect(helpPanelState.setOpen).not.toHaveBeenCalledWith(false);
   });
 
-  it("confirms before closing a lane whose agent is working, gated on THAT lane", () => {
+  /** Asserts the last toast offers `label` as the way back, and runs it. */
+  function runLastToastAction(title: string, label: string) {
+    let onClick: unknown;
+    expect(mockNotify).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        title,
+        action: expect.objectContaining({
+          label,
+          onClick: expect.toSatisfy((fn: unknown) => {
+            onClick = fn;
+            return typeof fn === "function";
+          }),
+        }),
+      })
+    );
+    if (typeof onClick === "function") onClick();
+  }
+
+  /** Both lanes on an agent "Resume a past session…" can't list. */
+  function onUnlistedAgent() {
+    helpPanelState.agentId = "gemini";
+    helpPanelState.sessions[0]!.agentId = "gemini";
+    helpPanelState.sessions[1]!.agentId = "gemini";
+  }
+
+  it("closes a working lane at once when Reopen can bring its conversation back", () => {
+    // A resumed lane's transcript redraw reads as "working", so gating on it made
+    // the same close ask one time and not the next.
     setupTwoLanes({ backgroundAgentState: "working" });
+    Object.assign(panelStoreState.panelsById["term-2"]!, { agentSessionId: "conv-back" });
+
+    const { container, queryByTestId } = render(<HelpPanel width={380} />);
+    fireEvent.click(closeButtonFor(container, "Session 2"));
+
+    expect(queryByTestId("confirm-dialog")).toBeNull();
+    expect(mockRevokeSession).toHaveBeenCalledWith("sess-back");
+    expect(helpPanelState.closeSlot).toHaveBeenCalledWith(1);
+    // The way back is a toast even while other lanes keep the panel open.
+    expect(helpPanelState.setOpen).not.toHaveBeenCalledWith(false);
+    runLastToastAction("Session 2 closed", "Reopen");
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "help.resumePastSession",
+      { agentId: "claude", sessionId: "conv-back" },
+      { source: "user" }
+    );
+  });
+
+  it("offers the past-sessions picker for a lane that never learned its conversation id", () => {
+    // A fresh Codex lane has no id until a capture, so Reopen couldn't keep its promise.
+    setupTwoLanes({ backgroundAgentState: "working" });
+    helpPanelState.sessions[1]!.agentId = "codex";
+
+    const { container, queryByTestId } = render(<HelpPanel width={380} />);
+    fireEvent.click(closeButtonFor(container, "Session 2 — Codex"));
+
+    expect(queryByTestId("confirm-dialog")).toBeNull();
+    runLastToastAction("Session 2 closed", "Past sessions…");
+    expect(mockDispatch).toHaveBeenCalledWith("help.resumePastSession", undefined, {
+      source: "user",
+    });
+  });
+
+  it("offers Reopen for a dormant tab's captured conversation after discarding its pointers", () => {
+    setupTwoLanes();
+    helpPanelState.sessions[1] = {
+      ...helpPanelState.sessions[1]!,
+      terminalId: null,
+      agentId: null,
+      sessionId: null,
+    };
+    helpPanelState.hibernateSessions = {
+      [assistantSlotKey("proj-1", 1)]: {
+        sessionId: "conv-dormant",
+        cwd: "/help",
+        agentId: "claude",
+      },
+    };
+
+    const { container, queryByTestId } = render(<HelpPanel width={380} />);
+    fireEvent.click(closeButtonFor(container, "Session 2"));
+
+    expect(queryByTestId("confirm-dialog")).toBeNull();
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 1);
+    expect(mockDiscardConversation).toHaveBeenCalledWith("proj-1", 1);
+    runLastToastAction("Session 2 closed", "Reopen");
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "help.resumePastSession",
+      { agentId: "claude", sessionId: "conv-dormant" },
+      { source: "user" }
+    );
+  });
+
+  it("toasts the way back when the last lane closes and the panel slides away", () => {
+    setupTwoLanes();
+    helpPanelState.openSlots = [0];
+    delete helpPanelState.sessions[1];
+    // The active lane is the flat fixture in this harness.
+    helpPanelState.conversationTouched = true;
+    Object.assign(panelStoreState.panelsById["term-1"]!, { agentSessionId: "conv-front" });
+
+    const { container } = render(<HelpPanel width={380} />);
+    fireEvent.click(closeButtonFor(container, "Session 1"));
+
+    expect(helpPanelState.closeSlot).toHaveBeenCalledWith(0);
+    runLastToastAction("Session 1 closed", "Reopen");
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "help.resumePastSession",
+      { agentId: "claude", sessionId: "conv-front" },
+      { source: "user" }
+    );
+  });
+
+  it("confirms before closing a working lane whose conversation can't come back", () => {
+    setupTwoLanes({ backgroundAgentState: "working" });
+    onUnlistedAgent();
 
     const { container, getByTestId } = render(<HelpPanel width={380} />);
     fireEvent.click(closeButtonFor(container, "Session 2"));
@@ -1595,21 +1706,21 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     expect(helpPanelState.closeSlot).not.toHaveBeenCalled();
     expect(getByTestId("dialog-title").textContent).toBe("Close Session 2?");
     expect(getByTestId("dialog-confirm").textContent).toBe("Close session");
-    expectWorkingCloseConfirm(getByTestId("dialog-description").textContent, "Claude", true);
+    expectWorkingCloseConfirm(getByTestId("dialog-description").textContent, "Gemini");
 
     fireEvent.click(getByTestId("dialog-confirm"));
     expect(mockRevokeSession).toHaveBeenCalledWith("sess-back");
     expect(helpPanelState.closeSlot).toHaveBeenCalledWith(1);
   });
 
-  it("says what holds for the closed lane's agent, not the one on screen", () => {
+  it("gates the close on the closed lane's agent, not the one on screen", () => {
     setupTwoLanes({ backgroundAgentState: "working" });
     helpPanelState.sessions[1]!.agentId = "gemini";
 
     // Lanes on different agents name theirs in the tab.
     const first = render(<HelpPanel width={380} />);
     fireEvent.click(closeButtonFor(first.container, "Session 2 — Gemini"));
-    expectWorkingCloseConfirm(first.getByTestId("dialog-description").textContent, "Gemini", false);
+    expectWorkingCloseConfirm(first.getByTestId("dialog-description").textContent, "Gemini");
     first.unmount();
 
     // And the other way round: an unlisted agent in front, a listed one behind.
@@ -1618,7 +1729,8 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     helpPanelState.sessions[0]!.agentId = "gemini";
     const second = render(<HelpPanel width={380} />);
     fireEvent.click(closeButtonFor(second.container, "Session 2 — Codex"));
-    expectWorkingCloseConfirm(second.getByTestId("dialog-description").textContent, "Codex", true);
+    expect(second.queryByTestId("confirm-dialog")).toBeNull();
+    expect(helpPanelState.closeSlot).toHaveBeenCalledWith(1);
   });
 
   it("names a lane after the task its agent reports, and falls back to its number otherwise", () => {
@@ -1692,6 +1804,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
 
   it("names the task in the close confirm, quoted as the entity being closed", () => {
     setupTwoLanes({ backgroundAgentState: "working" });
+    onUnlistedAgent();
     Object.assign(panelStoreState.panelsById["term-2"]!, {
       detectedAgentId: "claude",
       lastObservedTitle: "fix auth tests",
@@ -1705,6 +1818,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
 
   it("keeps the lane when the close confirm is cancelled", () => {
     setupTwoLanes({ backgroundAgentState: "working" });
+    onUnlistedAgent();
 
     const { container, getByTestId, queryByTestId } = render(<HelpPanel width={380} />);
     fireEvent.click(closeButtonFor(container, "Session 2"));
