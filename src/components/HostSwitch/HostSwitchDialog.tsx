@@ -1280,7 +1280,7 @@ export function HostSwitchDialog({
       initialFocus="surface"
       focusResetKey={prepareAttempt}
     >
-      <AppDialog.Header className="py-3">
+      <AppDialog.Header>
         <AppDialog.Title icon={<Server className="h-4 w-4 text-text-secondary" />}>
           {title}
         </AppDialog.Title>

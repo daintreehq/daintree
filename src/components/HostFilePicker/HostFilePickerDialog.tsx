@@ -625,7 +625,7 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
 
   return (
     <AppDialog isOpen onClose={() => onResolve(null)} size="lg" initialFocus="none">
-      <AppDialog.Header className="py-3">
+      <AppDialog.Header>
         <AppDialog.Title icon={<FolderOpen className="h-4 w-4 text-text-secondary" />}>
           {request.title}
         </AppDialog.Title>

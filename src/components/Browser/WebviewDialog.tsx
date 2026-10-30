@@ -249,7 +249,7 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
             id={titleId}
             className="items-start"
             icon={
-              <Globe className="mt-1.5 size-4 shrink-0 text-text-secondary" aria-hidden="true" />
+              <Globe className="mt-0.5 size-4 shrink-0 text-text-secondary" aria-hidden="true" />
             }
           >
             {/* One flex item, so the words and the host wrap as a sentence rather than

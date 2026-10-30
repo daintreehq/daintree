@@ -346,7 +346,6 @@ export const theme: BuiltInThemeSource = {
     "dock-bg": "#070605",
     "dock-border": "rgba(201,183,154,0.12)",
 
-    "dialog-header-bg": "rgba(7,6,5,0.60)",
     "settings-dialog-bg": "#0E0C0B",
     "settings-card-bg": "#15120F",
     "settings-list-item-bg": "#15120F",

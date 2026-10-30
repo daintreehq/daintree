@@ -44,7 +44,7 @@ A pane's title bar and status strip are one frame, and every pane, side panel an
 
 Three families sit outside this on purpose:
 
-- **Dialog headers** use the comfortable density (`px-6 py-4 border-border-strong`), and a toolbar row directly under one keeps the dialog's `px-6` inset with a `border-divider` separator (Compare worktrees).
+- **Dialog headers** use the comfortable density: a 44px row (`min-h-11 px-6 py-2`) on the dialog's own surface with a `text-sm font-semibold` title. Its `border-divider` rule, and the footer's, show only while `AppDialog.Body` reports content running past that edge; a dialog that lays out its own scroller keeps both rules. A toolbar row directly under the header keeps the dialog's `px-6` inset with a `border-divider` separator (Compare worktrees).
 - **Full-window views** that cover the main toolbar (the plugin manager) take the toolbar's own chrome: `h-12 px-4 border-b border-divider`, with room for the traffic lights.
 - **Bottom drawers** (the Dev Preview output drawer and the Diagnostics dock, #12948) keep their 32px strips on `border-overlay`, including the session-diagnostics strip inside the drawer.
 

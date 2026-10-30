@@ -22,6 +22,7 @@ import {
 } from "@/lib/accessibility";
 import { logError } from "@/utils/logger";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
+import { useVerticalScrollShadows } from "@/hooks/useVerticalScrollShadows";
 import { useOverlayState } from "@/hooks/useOverlayState";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import {
@@ -127,6 +128,18 @@ interface AppDialogContextValue {
   /** `AppDialog.Description` announces itself, so the dialog never points at a missing id. */
   registerDescription: () => () => void;
   placement: DialogPlacement;
+  /**
+   * Whether the body's content continues past its top or bottom edge, reported
+   * by `Body` / `BodyScroll`. `null` while no body reports — a dialog that lays
+   * out its own scroller — and then the header and footer keep their rules.
+   */
+  bodyEdges: BodyEdges | null;
+  reportBodyEdges: (edges: BodyEdges | null) => void;
+}
+
+interface BodyEdges {
+  up: boolean;
+  down: boolean;
 }
 
 const AppDialogContext = createContext<AppDialogContextValue | null>(null);
@@ -317,6 +330,12 @@ export function AppDialog({
   const registerDescription = useCallback(() => {
     setDescriptionCount((count) => count + 1);
     return () => setDescriptionCount((count) => count - 1);
+  }, []);
+  const [bodyEdges, setBodyEdges] = useState<BodyEdges | null>(null);
+  const reportBodyEdges = useCallback((edges: BodyEdges | null) => {
+    setBodyEdges((prev) =>
+      prev && edges && prev.up === edges.up && prev.down === edges.down ? prev : edges
+    );
   }, []);
 
   const { isOpen: portalOpen, width: portalWidth } = usePortalStore(
@@ -705,6 +724,8 @@ export function AppDialog({
         dismissible,
         registerDescription,
         placement,
+        bodyEdges,
+        reportBodyEdges,
       }}
     >
       <div
@@ -830,6 +851,24 @@ interface AppDialogHeaderProps {
 const DIALOG_INSET = "px-6";
 
 /**
+ * The header and footer sit on the dialog's own surface, so their rules are
+ * only drawn where the body's content runs on under them: a short dialog is one
+ * surface with no lines across it, and a scrolled one shows exactly the edge it
+ * is cut at. The border is always there and only its colour changes, so the
+ * rule appearing never moves the content. Increased contrast draws it at the
+ * strong step; forced colours repaints even a transparent border, so there both
+ * rules always show. The generated `border-border-divider`, not the hand-written
+ * `.border-divider`: that rule is declared after the generated utilities, so it
+ * would outrank the `contrast-more:` step.
+ */
+function dialogRuleClass(visible: boolean): string {
+  return cn(
+    "transition-[border-color] duration-150 ease-out",
+    visible ? "border-border-divider contrast-more:border-border-strong" : "border-transparent"
+  );
+}
+
+/**
  * Puts the footer's leading action on the column. It is a ghost, so nothing
  * marks its box at rest and the eye lines up its label, which the default
  * size's `px-4` sat 1rem inside the title and body. Hanging the button by that
@@ -859,7 +898,12 @@ AppDialog.Header = function AppDialogHeader({ children, className }: AppDialogHe
   }
   // `density` is deliberately not forwarded: every dialog header is comfortable,
   // and exposing it would widen AppDialog's public surface for no caller.
-  return <SurfaceHeader className={cn(DIALOG_INSET, className)}>{children}</SurfaceHeader>;
+  const edges = context?.bodyEdges;
+  return (
+    <SurfaceHeader className={cn(DIALOG_INSET, dialogRuleClass(!edges || edges.up), className)}>
+      {children}
+    </SurfaceHeader>
+  );
 };
 
 /**
@@ -924,10 +968,11 @@ AppDialog.Title = function AppDialogTitle({ children, icon, className, as }: App
       as={as}
       id={context?.titleId}
       icon={slot}
-      // A window's title is its title bar's, set at the toolbar's scale rather
-      // than as a heading over the content.
+      // `py-1` makes a one-line title as tall as the close button, so a title
+      // that wraps keeps its first line level with the X. A window's title is
+      // its title bar's, one line centred in a fixed band.
       className={cn(
-        context?.placement === "window" && "shrink-0 text-sm leading-5 whitespace-nowrap",
+        context?.placement === "window" ? "shrink-0 whitespace-nowrap" : "py-1",
         className
       )}
     >
@@ -958,7 +1003,15 @@ AppDialog.CloseButton = function AppDialogCloseButton({
       // tall as this button, so on one line the row is the button's own height
       // and nothing moves. A window's header is a fixed band the title can't
       // wrap in, so there the X sits in its middle like the toolbar's buttons.
-      className={cn(context?.placement === "window" ? "self-center" : "self-start", className)}
+      // Hung by its padding so the glyph, not the empty box around it, ends on
+      // the column the buttons and fields end on; framed buttons line up by
+      // their frame instead.
+      className={cn(
+        context?.placement === "window"
+          ? "self-center"
+          : "self-start -mr-1.5 contrast-more:mr-0 forced-colors:mr-0",
+        className
+      )}
       aria-label={ariaLabel}
     />
   );
@@ -979,21 +1032,36 @@ interface AppDialogBodyProps {
    * Omit it and nothing changes.
    */
   resetScrollKey?: string | number;
-  /**
-   * The 16px scroll fade rather than the 32px one, for a body that is a list
-   * of short rows: the full fade covers most of a row, so a live row at the
-   * edge reads as disabled.
-   */
-  compactShadow?: boolean;
 }
+
+/**
+ * Claims the header and footer rules for this body: none on the first paint,
+ * then whichever edges its content actually runs past.
+ */
+function useBodyEdgesReport(): ((edges: BodyEdges) => void) | undefined {
+  const report = useContext(AppDialogContext)?.reportBodyEdges;
+  useLayoutEffect(() => {
+    if (!report) return;
+    report({ up: false, down: false });
+    return () => report(null);
+  }, [report]);
+  return report;
+}
+
+/**
+ * The body's own column. The header's row already ends 12px under the title's
+ * line, so the body adds 8px for a 20px gap from title to content, and its
+ * 12px foot plus the footer's 12px sets the answers 24px below it.
+ */
+const DIALOG_BODY_PADDING = "pt-2 pb-3";
 
 AppDialog.Body = function AppDialogBody({
   children,
   className,
   resetScrollKey,
-  compactShadow,
 }: AppDialogBodyProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const reportEdges = useBodyEdgesReport();
 
   // Layout effect, not passive: the reset has to land before paint, or the
   // promoted request is briefly visible at the old offset.
@@ -1019,8 +1087,12 @@ AppDialog.Body = function AppDialogBody({
     <ScrollShadow
       ref={scrollRef}
       className="flex-1 min-h-0"
-      scrollClassName={cn("py-6 dialog-body-inset", className)}
-      compact={compactShadow}
+      scrollClassName={cn(DIALOG_BODY_PADDING, "dialog-body-inset", className)}
+      onEdgesChange={reportEdges}
+      // The header and footer rules mark the edges once they are listening. A
+      // body composed outside an `AppDialog` (the webview's card) has static
+      // rules, so it keeps the fade as its "there is more" cue.
+      edgeFade={!reportEdges}
     >
       <InsetSurface>{children}</InsetSurface>
     </ScrollShadow>
@@ -1041,8 +1113,22 @@ AppDialog.BodyScroll = function AppDialogBodyScroll({
   // plain element, not this: `scrollbar-gutter` reserves its space on an
   // `overflow: hidden` box too, so a `p-0` here would cancel the padding and
   // leave the reservation behind as dead inset.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const reportEdges = useBodyEdgesReport();
+  const { canScrollUp, canScrollDown } = useVerticalScrollShadows(scrollRef);
+  useEffect(() => {
+    reportEdges?.({ up: canScrollUp, down: canScrollDown });
+  }, [reportEdges, canScrollUp, canScrollDown]);
   return (
-    <div className={cn("flex-1 overflow-auto min-h-0 py-6 dialog-body-inset", className)}>
+    <div
+      ref={scrollRef}
+      className={cn(
+        "flex-1 overflow-auto min-h-0",
+        DIALOG_BODY_PADDING,
+        "dialog-body-inset",
+        className
+      )}
+    >
       <InsetSurface>{children}</InsetSurface>
     </div>
   );
@@ -1131,7 +1217,10 @@ AppDialog.Footer = function AppDialogFooter({
     <div
       className={cn(
         DIALOG_INSET,
-        "py-4 border-t border-border-strong bg-surface-panel flex items-center gap-3 shrink-0",
+        // 16px under the buttons, against the 12px over the title's line box: the
+        // buttons' own boxes carry no ink at their edges, so this lands level.
+        "pt-3 pb-4 border-t flex items-center gap-2 shrink-0",
+        dialogRuleClass(!context?.bodyEdges || context.bodyEdges.down),
         hint && hintPlacement === "above" && "flex-wrap",
         hint || leadingAction ? "justify-between" : "justify-end",
         className
@@ -1176,7 +1265,7 @@ AppDialog.Footer = function AppDialogFooter({
       {!children && (
         <div
           className={cn(
-            "flex shrink-0 items-center gap-3",
+            "flex shrink-0 items-center gap-2",
             // Wrapped under a leading action or a hint, the answers stay on the trailing edge.
             (hintAbove || leadingAction) && "ml-auto"
           )}
