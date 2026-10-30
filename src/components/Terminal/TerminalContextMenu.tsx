@@ -82,7 +82,11 @@ import {
   useMovePickerCoordination,
 } from "./contextMenu/useMovePickerCoordination";
 import { useFleetRunMenuState } from "./contextMenu/useFleetRunMenuState";
-import { LayoutMenuItems, MoveToWorktreeSubmenu } from "./contextMenu/LayoutMenuItems";
+import {
+  LayoutMenuItems,
+  MoveToWorktreeSubmenu,
+  TerminalLayoutMenuItems,
+} from "./contextMenu/LayoutMenuItems";
 import {
   GenericPanelMenuItems,
   PluginOwnedMenuItems,
@@ -711,19 +715,18 @@ function TerminalContextMenuBody({
     />
   );
 
-  const layoutItems = (
-    <LayoutMenuItems
-      moveToWorktreeSubmenu={canMoveToWorktree && renderMoveToWorktreeSubmenu("Move to worktree")}
-      canMoveToNewWorktree={Boolean(terminalPty?.launchAgentId) && !isBackgrounded}
-      isBackgrounded={isBackgrounded}
-      currentLocation={currentLocation}
-      isDockable={structuralCapabilities.isDockable}
-      isInActiveWorktree={isInActiveWorktree}
-      isMaximized={isMaximized}
-      onMoveToNewWorktree={handleMoveToNewWorktree}
-      onAction={handleAction}
-    />
-  );
+  const layoutProps = {
+    moveToWorktreeSubmenu: canMoveToWorktree && renderMoveToWorktreeSubmenu("Move to worktree"),
+    canMoveToNewWorktree: Boolean(terminalPty?.launchAgentId) && !isBackgrounded,
+    isBackgrounded,
+    currentLocation,
+    isDockable: structuralCapabilities.isDockable,
+    isInActiveWorktree,
+    isMaximized,
+    onMoveToNewWorktree: handleMoveToNewWorktree,
+    onAction: handleAction,
+  };
+  const layoutItems = <LayoutMenuItems {...layoutProps} />;
 
   // Every branch draws the same menu around its own items.
   // Takes a flag, not the handler: the compiler reads a ref-writing callback
@@ -870,10 +873,12 @@ function TerminalContextMenuBody({
             isArmed={isArmed}
             fleetSize={fleetSize}
             fleetRun={fleetRun}
+            detectedAgentId={terminal.detectedAgentId}
+            isWatched={isWatched}
             onRequestPark={handleRequestPark}
             onAction={handleAction}
           />
-          {layoutItems}
+          <TerminalLayoutMenuItems {...layoutProps} />
           <ContextMenuSeparator />
           <TerminalSessionMenuItems
             terminalId={terminalId}
@@ -888,8 +893,6 @@ function TerminalContextMenuBody({
               panelHasComposer(terminal, { hybridInputEnabled, isFleetArmed: isArmed, fleetSize })
             }
             liveRecentVoiceTargets={liveRecentVoiceTargets}
-            detectedAgentId={terminal.detectedAgentId}
-            isWatched={isWatched}
             orchestratorCandidateIds={orchestratorCandidateIds}
             onRequestHandOver={handleRequestHandOver}
             onRequestRestartOnPreset={setRestartOnPresetRequest}
@@ -904,7 +907,6 @@ function TerminalContextMenuBody({
             canDuplicate={canDuplicatePanelKind(kind)}
             pluginMenuItems={pluginMenuItems}
             kindOwnedItems={kindOwnedItems}
-            isBackgrounded={isBackgrounded}
             onAction={handleAction}
           />
         </>,
