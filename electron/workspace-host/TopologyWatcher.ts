@@ -110,6 +110,9 @@ export class TopologyWatcher {
   // watch, and parcel's own removal of that watch then fails with EINVAL.
   private rootTeardown: Promise<unknown> = Promise.resolve();
   private pendingArm: Promise<unknown> = Promise.resolve();
+  // The sentinel's first read can precede inotify's recursive subscription;
+  // re-read once it is live to cover changes made during that blind interval.
+  private reconcileAfterArm = false;
   // No constructor `timeout` here: this queue's task wraps runReconcile in
   // withTimeout itself (and always resolves via its own try/catch/finally),
   // so it can never pin the single slot. A p-queue constructor timeout would
@@ -335,6 +338,10 @@ export class TopologyWatcher {
             this.rootTeardown = subscription.unsubscribe();
           },
         };
+        if (this.reconcileAfterArm) {
+          this.reconcileAfterArm = false;
+          this.scheduleReconcile();
+        }
       })
       .catch((err) => {
         if (generation !== this.generation) {
@@ -388,6 +395,7 @@ export class TopologyWatcher {
           this.scheduleReconcile();
           return;
         }
+        this.reconcileAfterArm = true;
         void this.startWatcher();
         this.scheduleReconcile();
       });
@@ -443,6 +451,7 @@ export class TopologyWatcher {
     // renderer indicator on with nothing left to clear it.
     this.handleRecovered();
     this.generation++;
+    this.reconcileAfterArm = false;
     this.subscription.value = undefined;
     this.releaseMetadataRoot();
     this.disarmMetadataSentinel();
