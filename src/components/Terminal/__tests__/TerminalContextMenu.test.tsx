@@ -1226,6 +1226,7 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
     const tree = menuTree();
     expect(level(tree)).toEqual([
       "Copy",
+      "Copy clean text",
       "Paste",
       "Send to agent",
       "---",
