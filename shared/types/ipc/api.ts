@@ -19,6 +19,7 @@ import type { ChecklistState, HelpAssistantTier, IpcEventBusMap, IpcInvokeMap } 
 import type { GeneratedElectronAPI } from "./generated-api.js";
 import type { AgentSettings, AgentSettingsEntry, ResumeOnRestart } from "../agentSettings.js";
 import type { AgentPreset } from "../../config/agentRegistry.js";
+import type { VoiceReasoningEffort } from "../../config/voiceCorrection.js";
 import type {
   VoiceInputError,
   VoiceInputStatus,
@@ -2328,6 +2329,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       /** Why the passage came back as it did: a code, never text. */
       verdict?: VoiceCorrectionVerdict;
       timing?: VoiceCorrectionTiming;
+      /** A streamed reply that came back whole; a retried request's stall left out. */
+      pace?: VoiceCorrectionPace;
       /** What became of a pause's prefetch of the passage; only for a passage with a session. */
       prefetch?: VoicePrefetchMatch;
       /** A failure that will recur, on the one reply of its outage that should say so. */
@@ -3008,6 +3011,19 @@ export type VoiceTranscriptionProvider = "openai" | "deepgram" | "grok";
  */
 export type VoiceCorrectionModel =
   "gpt-6.1-terra" | "gpt-6-luna" | "claude-haiku-5-5" | "claude-sonnet-5-5";
+
+/**
+ * How long one passage's cleanup took, in its two parts, and what it ran on:
+ * timings only, nothing of the passage.
+ */
+export interface VoiceCorrectionPace {
+  model: VoiceCorrectionModel;
+  effort: VoiceReasoningEffort;
+  /** From main taking the request to the reply's first text: the request and its thinking. */
+  firstTextMs: number;
+  /** From the reply's first text to its last. */
+  outputMs: number;
+}
 
 /**
  * The API cleanup and spoken rewrite go to. Each has its own models

@@ -284,6 +284,12 @@ export interface VoiceCorrectionResult {
    * and the tokens it was billed for when the reply said; absent when none went out.
    */
   roundTrip?: { sentAt: number; ms: number; usage?: VoiceCorrectionUsage };
+  /**
+   * For a streamed reply that came back whole: how long from this call until
+   * its first text, leaving out an attempt given up for a retry, how long the
+   * text then took to finish, and the effort it was asked for.
+   */
+  phases?: { untilOutputMs: number; outputMs: number; effort: VoiceReasoningEffort };
 }
 
 /** Reasoning tokens are part of `outputTokens`, and cached ones part of `inputTokens`. */
@@ -318,6 +324,9 @@ function readUsage(usage: ResponsesUsage | undefined): VoiceCorrectionUsage | un
 /** Filled in as a correction's one request goes out and settles. */
 interface RequestTrace {
   sentAt?: number;
+  /** When the attempt that answered went out, and when its first text came. */
+  attemptSentAt?: number;
+  firstOutputAt?: number;
   settledAt?: number;
   usage?: VoiceCorrectionUsage;
 }
@@ -444,6 +453,10 @@ function takeStreamEvents(buffer: string): { events: unknown[]; rest: string } {
 /** Room in OpenAI's output cap for reasoning, which counts toward it. */
 function reasoningHeadroom(effort: VoiceReasoningEffort): number {
   return effort === "none" ? 0 : THINKING_HEADROOM_TOKENS;
+}
+
+function cleanupEffortOf(settings: VoiceCorrectionSettings): VoiceReasoningEffort {
+  return settings.reasoningEffort ?? cleanupReasoningEffortFor(settings.model);
 }
 
 /**
@@ -676,12 +689,24 @@ export class VoiceCorrectionService {
     signal?: AbortSignal,
     onText?: (text: string) => void
   ): Promise<VoiceCorrectionResult> {
+    const calledAt = performance.now();
     const trace: RequestTrace = {};
     const result = await this.correctPassage(request, settings, trace, signal, onText);
-    if (trace.sentAt === undefined) return result;
-    const ms = (trace.settledAt ?? performance.now()) - trace.sentAt;
+    const { sentAt, attemptSentAt, firstOutputAt } = trace;
+    if (sentAt === undefined) return result;
+    const settledAt = trace.settledAt ?? performance.now();
     const usage = trace.usage ? { usage: trace.usage } : {};
-    return { ...result, roundTrip: { sentAt: trace.sentAt, ms, ...usage } };
+    const phases =
+      !result.failed && attemptSentAt !== undefined && firstOutputAt !== undefined
+        ? {
+            phases: {
+              untilOutputMs: sentAt - calledAt + (firstOutputAt - attemptSentAt),
+              outputMs: settledAt - firstOutputAt,
+              effort: cleanupEffortOf(settings),
+            },
+          }
+        : {};
+    return { ...result, roundTrip: { sentAt, ms: settledAt - sentAt, ...usage }, ...phases };
   }
 
   private async correctPassage(
@@ -1005,7 +1030,7 @@ export class VoiceCorrectionService {
     if (!selectedText.trim() || !instruction) return { status: "no_change" };
 
     const maxOutputTokens = this.getMaxOutputTokens({ rawText: selectedText });
-    const effort = settings.reasoningEffort ?? cleanupReasoningEffortFor(settings.model);
+    const effort = cleanupEffortOf(settings);
     const timeoutMs = Math.max(
       MIN_REWRITE_TIMEOUT_MS,
       this.getCorrectionTimeoutMs({ rawText: selectedText, segmentCount: 2 }, effort)
@@ -1266,10 +1291,7 @@ export class VoiceCorrectionService {
     });
 
     return await withTimeoutSignal(
-      this.getCorrectionTimeoutMs(
-        request,
-        settings.reasoningEffort ?? cleanupReasoningEffortFor(settings.model)
-      ),
+      this.getCorrectionTimeoutMs(request, cleanupEffortOf(settings)),
       (deadline) =>
         this.requestCorrection(
           request,
@@ -1335,7 +1357,7 @@ export class VoiceCorrectionService {
     userMessage: UserTurn,
     maxOutputTokens: number
   ): object {
-    const effort = settings.reasoningEffort ?? cleanupReasoningEffortFor(settings.model);
+    const effort = cleanupEffortOf(settings);
     if (voiceCleanupProviderOf(settings.model) === "anthropic") {
       return claudeRequestBody({
         model: settings.model,
@@ -1509,6 +1531,9 @@ export class VoiceCorrectionService {
     trace.sentAt = sentAt;
     try {
       for (let attempt = 1; ; attempt++) {
+        // A retried request's wait on the one it gave up is no time the model spent.
+        trace.attemptSentAt = attempt === 1 ? sentAt : performance.now();
+        trace.firstOutputAt = undefined;
         // Only a streamed reply answers before it's written, so only its
         // silence means a stall; a whole reply's headers wait for all of it.
         const stall = onText ? createTimeoutSignal(STALL_MS) : null;
@@ -1579,7 +1604,7 @@ export class VoiceCorrectionService {
       throw await CleanupRequestError.fromResponse(response, provider);
     }
 
-    const reply = await this.readReply(response, provider, onText, marked);
+    const reply = await this.readReply(response, provider, onText, marked, trace);
     // A reply thrown away below was still billed.
     trace.usage = reply.usage;
     // A cut-off reply can still parse, so check the status before the body:
@@ -1624,7 +1649,8 @@ export class VoiceCorrectionService {
     response: Response,
     provider: VoiceCorrectionProvider,
     onText: ((text: string) => void) | undefined,
-    stripMarks: boolean
+    stripMarks: boolean,
+    trace: RequestTrace
   ): Promise<SettledReply> {
     if (provider === "anthropic") {
       return settleClaudeReply(
@@ -1633,7 +1659,8 @@ export class VoiceCorrectionService {
               response,
               onText,
               stripMarks,
-              claudeStreamReader(response.status)
+              claudeStreamReader(response.status),
+              trace
             )
           : ((await response.json()) as ClaudeMessage)
       );
@@ -1644,7 +1671,8 @@ export class VoiceCorrectionService {
             response,
             onText,
             stripMarks,
-            openAIStreamReader(response.status)
+            openAIStreamReader(response.status),
+            trace
           )
         : ((await response.json()) as CorrectionReply)
     );
@@ -1655,13 +1683,15 @@ export class VoiceCorrectionService {
    * would have returned whole, with the text its deltas wrote. Meanwhile
    * `onText` hears the corrected text so far, once it has grown and at most
    * every STREAM_PROGRESS_INTERVAL_MS. A stream that ends before its last
-   * event is a cut-off reply.
+   * event is a cut-off reply. `trace` notes when its first text came, which
+   * is when the model stopped thinking.
    */
   private async readCorrectionStream<Reply>(
     response: Response,
     onText: (text: string) => void,
     stripMarks: boolean,
-    events: StreamReader<Reply>
+    events: StreamReader<Reply>,
+    trace: RequestTrace
   ): Promise<Reply> {
     const reader = response.body?.getReader();
     if (!reader) throw new CorrectionDiscardedError("malformed");
@@ -1679,7 +1709,9 @@ export class VoiceCorrectionService {
         buffer = rest;
         for (const event of taken) {
           const delta = events.take(event);
-          if (delta !== null) text += delta;
+          if (!delta) continue;
+          trace.firstOutputAt ??= performance.now();
+          text += delta;
         }
         reply = events.settled(text);
         if (done) break;

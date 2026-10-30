@@ -36,6 +36,7 @@ import type {
   MicPermissionStatus,
   NotificationSettings,
   VoiceCleanupFailure,
+  VoiceCorrectionPace,
   VoiceInputSettings,
   VoiceInputSettingsPatch,
 } from "./api.js";
@@ -1338,6 +1339,8 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
       /** Why the passage came back as it did: a code, never text. */
       verdict?: VoiceCorrectionVerdict;
       timing?: VoiceCorrectionTiming;
+      /** A streamed reply that came back whole; a retried request's stall left out. */
+      pace?: VoiceCorrectionPace;
       /** What became of a pause's prefetch of the passage; only for a passage with a session. */
       prefetch?: VoicePrefetchMatch;
       /** A failure that will recur, on the one reply of its outage that should say so. */
