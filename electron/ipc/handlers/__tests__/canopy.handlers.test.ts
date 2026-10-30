@@ -1919,6 +1919,37 @@ describe("canopy IPC", () => {
       );
     });
 
+    it("reaches the run it names, in the incarnation it names, among several", async () => {
+      state.runs = [...state.runs, { runId: "run-2", spawnedAt: 300, workspaceId: "project-1" }];
+      ptyClient.getTerminalAsync.mockImplementation((async (runId: string) => ({
+        spawnedAt: runId === "run-2" ? 300 : 100,
+      })) as unknown as () => Promise<typeof state.record>);
+      const to = (runId: string, spawnedAt: number, text: string) =>
+        outcome(
+          invoke(CANOPY_METHOD_CHANNELS.submitReply, fakeSender(4), runId, { spawnedAt }, text)
+        );
+
+      expect((await to("run-2", 300, "for two")).ok).toBe(true);
+      expect((await to("run-1", 100, "for one")).ok).toBe(true);
+      // The other run's incarnation is not this one's.
+      expect((await to("run-2", 100, "stale")).ok).toBe(false);
+
+      expect(ptyClient.submit.mock.calls.map(([runId, text]) => [runId, text])).toEqual([
+        ["run-2", "for two"],
+        ["run-1", "for one"],
+      ]);
+      ptyClient.getTerminalAsync.mockImplementation(async () => state.record);
+    });
+
+    it("never reaches a terminal respawned while the host was asked", async () => {
+      ptyClient.getTerminalAsync.mockImplementationOnce(async () => {
+        state.generation = 2;
+        return state.record;
+      });
+      expect((await reply("navy")).ok).toBe(false);
+      expect(state.submits).toEqual([]);
+    });
+
     it("never reaches a terminal respawned under the run's id, or one that exited", async () => {
       state.record = { spawnedAt: 200 };
       expect((await reply("navy")).ok).toBe(false);

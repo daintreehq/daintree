@@ -315,6 +315,28 @@ describe("CanopyCard", () => {
       expect(h.onSent).toHaveBeenCalledWith(item, undefined);
     });
 
+    it("goes by the run even when the stream had dropped before the card went", async () => {
+      const submitReply = replyByRun();
+      const view = render(<CanopyCard item={itemFor("question")} {...PROPS} {...handlers()} />);
+      await streamOpens({ watchId: 7 });
+      await streamOpens({ watchId: null });
+      const bar = await composer();
+      view.unmount();
+
+      let took: boolean | undefined;
+      await act(async () => {
+        took = await bar.submitText!("still mine", []);
+      });
+
+      expect(took).toBe(true);
+      expect(submitReply).toHaveBeenCalledWith(
+        "run-1",
+        { spawnedAt: NOW - 3_600_000 },
+        "still mine",
+        undefined
+      );
+    });
+
     it("sends each of several to its own run, whatever order their cleanups land in", async () => {
       const submitReply = replyByRun();
       const sends = new Map<string, (text: string, imagePaths: string[]) => Promise<boolean>>();

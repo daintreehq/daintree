@@ -31,6 +31,8 @@ export interface CompartmentConfig {
 // view is created (mount, StrictMode replay, terminalId change) diffs against
 // that instead of rebuilding every compartment.
 const appliedConfigs = new WeakMap<EditorView, CompartmentConfig>();
+// Views a voice send has locked, as the driver last saw them.
+const sendLockedViews = new WeakSet<EditorView>();
 
 export function recordBuiltCompartmentConfig(view: EditorView, config: CompartmentConfig): void {
   appliedConfigs.set(view, config);
@@ -44,6 +46,11 @@ interface UseCompartmentDriverParams {
   placeholder: string;
   editableCompartmentRef: React.RefObject<Compartment>;
   disabled: boolean;
+  /**
+   * A voice send holds the editable compartment while it waits, and lifts the
+   * lock itself; the editor then takes whatever `disabled` has become.
+   */
+  sendLocked?: boolean;
   chipCompartmentRef: React.RefObject<Compartment>;
   commandMap: Map<string, SlashCommand>;
   tooltipCompartmentRef: React.RefObject<Compartment>;
@@ -66,6 +73,7 @@ export function useCompartmentDriver({
   placeholder,
   editableCompartmentRef,
   disabled,
+  sendLocked = false,
   chipCompartmentRef,
   commandMap,
   tooltipCompartmentRef,
@@ -108,7 +116,10 @@ export function useCompartmentDriver({
     if (placeholderChanged) {
       effects.push(placeholderCompartmentRef.current.reconfigure(createPlaceholder(placeholder)));
     }
-    if (disabledChanged) {
+    const sendLockLifted = !sendLocked && sendLockedViews.has(view);
+    if (sendLocked) sendLockedViews.add(view);
+    else sendLockedViews.delete(view);
+    if ((disabledChanged || sendLockLifted) && !sendLocked) {
       effects.push(
         editableCompartmentRef.current.reconfigure(EditorViewFacet.editable.of(!disabled))
       );
@@ -145,6 +156,7 @@ export function useCompartmentDriver({
     effectiveTheme,
     placeholder,
     disabled,
+    sendLocked,
     commandMap,
     isAutocompleteOpen,
     themeCompartmentRef,

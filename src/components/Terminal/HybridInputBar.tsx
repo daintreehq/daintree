@@ -1381,7 +1381,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // nothing.
       let refused = false;
       const intercepted = tryComposerFleetBroadcast(
-        isFocusedTerminal,
+        departed ? departed.fanOut : isFocusedTerminal,
         terminalId,
         text,
         () => {
@@ -1411,6 +1411,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         keepDraft,
         dictationSessions: voiceSend?.sessions,
         dictated: voiceSend !== undefined,
+        ...(departed && { departed: true }),
         // Routed at its key press: through the route, in place of `submitText`.
         ...(route && {
           submit: notingRefusal(
@@ -1437,6 +1438,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       editableCompartmentRef,
       sendFromEditor,
       claimSendHandBack,
+      captureDeparture: () => ({
+        imagePaths: readImageChipPaths(editorViewRef.current),
+        fanOut: isFocusedTerminal && isArmed,
+      }),
       isDisabled: () => disabledRef.current,
       onSpokenSendTooShort: noteSpokenSendTooShort,
     });
@@ -2068,6 +2073,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       placeholder,
       editableCompartmentRef,
       disabled,
+      sendLocked: isVoiceSubmitting,
       chipCompartmentRef,
       commandMap,
       tooltipCompartmentRef,

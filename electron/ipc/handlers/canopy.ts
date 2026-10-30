@@ -1920,8 +1920,15 @@ export const canopyNamespace = defineIpcNamespace({
         assertTarget(target);
         assertSubmission(ctx, text, imagePaths);
         assertDrivesRun(ctx, runId);
+        // Taken before validating, so a respawn while the host is asked can't
+        // take the reply its predecessor was sent.
+        const ptyClient = requirePtyClient();
+        const generation = ptyClient.getLiveGeneration(runId);
         await assertNotGlobalAssistant(runId);
         await assertSameTerminal(runId, target);
+        if (generation !== null && !ptyClient.isLiveGeneration(runId, generation)) {
+          throw new Error("That agent isn't running any more.");
+        }
         // Control can move to another screen while the host answered.
         assertDrivesRun(ctx, runId);
         submitTo(runId, text, imagePaths);

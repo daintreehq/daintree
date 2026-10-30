@@ -556,6 +556,7 @@ describe("CanopyTerminal", () => {
         terminalResize: vi.fn(async () => {}),
         terminalSubmit: vi.fn(async () => {}),
         terminalSendKey: vi.fn(async () => {}),
+        submitReply: vi.fn(async () => {}),
         answer: vi.fn(async () => {}),
         onTerminalData: (callback) => {
           push = callback;

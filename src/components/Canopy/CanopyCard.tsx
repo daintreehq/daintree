@@ -714,10 +714,10 @@ export function CanopyCard({
     moveOnTo?: string
   ): Promise<boolean> => {
     const watchId = stream.watchId;
-    if (watchId === null) return false;
+    if (watchId === null && mountedRef.current) return false;
     const images = imagePaths && imagePaths.length > 0 ? [...imagePaths] : undefined;
     try {
-      if (mountedRef.current) {
+      if (mountedRef.current && watchId !== null) {
         await terminalApi.terminalSubmit(watchId, text, images);
       } else {
         await terminalApi.submitReply(item.runId, { spawnedAt: run.spawnedAt }, text, images);

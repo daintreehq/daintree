@@ -18,7 +18,6 @@ import {
 import { takePendingComposerSelection } from "@/lib/composerCaret";
 import { makeDraftKey } from "@/lib/draftKey";
 import { replayLandedCorrection } from "../inputEditorExtensions/correctionReview";
-import { readImageChipPaths } from "../inputEditorExtensions/imageChip";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import {
   claimWaitingSend,
@@ -71,12 +70,16 @@ export interface VoiceSubmitOutcome {
 }
 
 /**
- * A send whose composer unmounted while it waited (#15510): it goes from the
- * draft store, with the image chips the editor held at Enter.
+ * What a send needs from its composer if the composer unmounts while it waits
+ * (#15510), taken at Enter: it then goes from the draft store, with the image
+ * chips the editor held, and fans out to the fleet only if it was going to.
  */
 export interface DepartedComposerSend {
   imagePaths: readonly string[];
+  fanOut: boolean;
 }
+
+const NO_DEPARTURE: DepartedComposerSend = { imagePaths: [], fanOut: false };
 
 type SendFromEditor = (
   handBack?: SendHandBack,
@@ -112,6 +115,8 @@ interface UseVoiceWaitSubmitParams {
    * wait, not when the wait ends: a press during it calls the hand-back off.
    */
   claimSendHandBack?: ClaimSendHandBack;
+  /** Taken at Enter, for a send that outlives the composer. */
+  captureDeparture?: () => DepartedComposerSend;
   /** A disabled composer ignores a spoken "send it" the way it ignores Enter. */
   isDisabled?: () => boolean;
   /**
@@ -156,10 +161,14 @@ interface WaitAttempt {
   over: boolean;
   /** Null while no composer shows it. */
   seat: WaitSeat | null;
-  /** The send of the composer that unmounted under it, which it goes through unseated. */
+  /**
+   * The send of the composer that unmounted under it. Once set, the send goes
+   * through it, even shown again in another composer: that one's editor
+   * never held the chips, and its terminal stream may not be open yet.
+   */
   departed: SendFromEditor | null;
   handBack: SendHandBack | undefined;
-  imagePaths: readonly string[];
+  departure: DepartedComposerSend;
   wait: VoiceSubmitWait;
   releaseKeys: () => void;
   releaseObserved: () => void;
@@ -238,6 +247,7 @@ export function useVoiceWaitSubmit({
   editableCompartmentRef,
   sendFromEditor,
   claimSendHandBack,
+  captureDeparture,
   isDisabled,
   onSpokenSendTooShort,
 }: UseVoiceWaitSubmitParams) {
@@ -253,9 +263,11 @@ export function useVoiceWaitSubmit({
     onSpokenSendTooShortRef.current = onSpokenSendTooShort;
   }, [sendFromEditor, isDisabled, onSpokenSendTooShort]);
   const claimSendHandBackRef = useRef(claimSendHandBack);
+  const captureDepartureRef = useRef(captureDeparture);
   useEffect(() => {
     claimSendHandBackRef.current = claimSendHandBack;
-  }, [claimSendHandBack]);
+    captureDepartureRef.current = captureDeparture;
+  }, [claimSendHandBack, captureDeparture]);
   const projectIdRef = useRef(projectId);
   useEffect(() => {
     projectIdRef.current = projectId;
@@ -393,7 +405,6 @@ export function useVoiceWaitSubmit({
     const waiting = unseatedWaits.get(voiceId);
     if (waiting && isLive(waiting, voiceId)) {
       unseatedWaits.delete(voiceId);
-      waiting.departed = null;
       waiting.attempt = ++attemptRef.current;
       waiting.wait = { ...waiting.wait, attempt: waiting.attempt };
       seatWaitRef.current(waiting);
@@ -448,9 +459,7 @@ export function useVoiceWaitSubmit({
         seat: null,
         departed: null,
         handBack,
-        // The draft store keeps the text but not its chips, which a send that
-        // outlives the editor still needs.
-        imagePaths: readImageChipPaths(editorViewRef.current),
+        departure: captureDepartureRef.current?.() ?? NO_DEPARTURE,
         wait: { attempt, phase: "finishing", startedAt: performance.now() },
         releaseKeys: () => {},
         releaseObserved: observed.release,
@@ -553,14 +562,21 @@ export function useVoiceWaitSubmit({
           // way is one the send drops.
           if (voiceRecordingService.hasPendingCorrection(voiceId, sessions)) cleanup = "skipped";
           else if (observed.failed()) cleanup = "failed";
-          if (live.seat) {
+          if (live.departed) {
+            const departed = live.departed(
+              live.handBack,
+              voiceSend,
+              options?.route,
+              live.departure
+            );
+            sent = departed ?? true;
+            // It cleared the store, not an editor: one showing this draft
+            // meanwhile takes the store's word for what is left.
+            const settled = () => useTerminalInputStore.getState().bumpExternalDraftRevision();
+            void Promise.resolve(departed).then(settled, settled);
+          } else if (live.seat) {
             sent =
               live.seat.sendFromEditorRef.current(live.handBack, voiceSend, options?.route) ?? true;
-          } else if (live.departed) {
-            sent =
-              live.departed(live.handBack, voiceSend, options?.route, {
-                imagePaths: live.imagePaths,
-              }) ?? true;
           }
         } finally {
           live.releaseKeys();
@@ -595,7 +611,7 @@ export function useVoiceWaitSubmit({
         }
       })();
     },
-    [terminalId, voiceId, voiceDraftNow, editorViewRef, seatWait]
+    [terminalId, voiceId, voiceDraftNow, seatWait]
   );
 
   useEffect(

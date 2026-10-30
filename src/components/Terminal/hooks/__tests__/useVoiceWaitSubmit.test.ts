@@ -737,11 +737,23 @@ describe("useVoiceWaitSubmit", () => {
     );
     useTerminalInputStore.getState().setDraftInput(PANEL_ID, "fix the login bug");
     const handBack = vi.fn();
+    const atEnter = { imagePaths: ["/tmp/shot.png"], fanOut: true };
+    const captureDeparture = vi.fn(() => atEnter);
 
-    const { result, unmount } = renderWaitSubmit(undefined, () => handBack);
+    const { result, unmount } = renderHook(() =>
+      useVoiceWaitSubmit({
+        terminalId: PANEL_ID,
+        editorViewRef: { current: null },
+        editableCompartmentRef: { current: new Compartment() },
+        sendFromEditor,
+        claimSendHandBack: () => handBack,
+        captureDeparture,
+      })
+    );
     await act(async () => {
       result.current.startVoiceWaitSubmit();
     });
+    expect(captureDeparture).toHaveBeenCalledTimes(1);
     unmount();
     expect(waitMock.mock.calls[0]![1]!.aborted).toBe(false);
     // Still waiting: another composer for this draft can't start a second send.
@@ -760,7 +772,9 @@ describe("useVoiceWaitSubmit", () => {
     expect(sentHandBack).not.toBe(handBack);
     expect(voiceSend).toMatchObject({ draft: "fix the login bug", text: "fix the login bug" });
     expect(route).toBeUndefined();
-    expect(departed).toEqual({ imagePaths: [] });
+    // As the composer had it at Enter, not as anything reads after it left.
+    expect(departed).toBe(atEnter);
+    expect(captureDeparture).toHaveBeenCalledTimes(1);
     expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
   });
 
@@ -1294,8 +1308,15 @@ describe("useVoiceWaitSubmit keys during the wait (#14780)", () => {
     expect(sendAgain).not.toHaveBeenCalled();
   });
 
-  it("sends what stands through the composer that took the wait over, at its second Enter", async () => {
-    const first = renderWaitSubmit();
+  it("sends what stands at the second Enter of the composer that took the wait over, as the one that left would", async () => {
+    let accept!: (taken: boolean) => void;
+    const sendFirst = vi.fn(
+      (..._args: unknown[]) =>
+        new Promise<boolean>((resolve) => {
+          accept = resolve;
+        })
+    );
+    const first = renderWaitSubmit(PANEL_ID, sendFirst);
     await act(async () => {
       first.result.current.startVoiceWaitSubmit();
     });
@@ -1307,12 +1328,19 @@ describe("useVoiceWaitSubmit keys during the wait (#14780)", () => {
       pressKey("Enter");
     });
 
-    expect(sendFromEditor).not.toHaveBeenCalled();
-    expect(sendAgain).toHaveBeenCalledTimes(1);
-    // Shown in this composer: no departed send, and no hand-back from the one that left.
-    expect(sendAgain.mock.calls[0]).toHaveLength(3);
+    // Through the departed composer's send: this one's editor never held its
+    // chips, and its terminal may not take input yet.
+    expect(sendAgain).not.toHaveBeenCalled();
+    expect(sendFirst).toHaveBeenCalledTimes(1);
+    expect(sendFirst.mock.calls[0]).toHaveLength(4);
     expect(again.result.current.voiceSubmitPhase).toBeNull();
-    expect(again.result.current.voiceSubmitOutcome).toMatchObject({ kind: "sent" });
+    expect(again.result.current.voiceSubmitOutcome).toMatchObject({ kind: "sending" });
+
+    // Its outcome settles in the composer showing it.
+    await act(async () => {
+      accept(true);
+    });
+    expect(again.result.current.voiceSubmitOutcome?.kind).toBe("sent");
     expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
   });
 

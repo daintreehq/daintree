@@ -24,6 +24,7 @@ function makeView() {
 
 interface Props {
   disabled: boolean;
+  sendLocked?: boolean;
   isAutocompleteOpen: boolean;
   effectiveTheme: ITheme;
   placeholder: string;
@@ -96,6 +97,22 @@ describe("useCompartmentDriver", () => {
   function dispatchedEffects(call = -1): Array<{ name: string; ext: unknown }> {
     return view.dispatch.mock.calls.at(call)?.[0].effects ?? [];
   }
+
+  it("leaves the editable compartment to a voice send's lock, and catches up once it lifts", () => {
+    const names = () =>
+      view.dispatch.mock.calls.flatMap(([tx]) => tx.effects.map((e: { name: string }) => e.name));
+    const hook = render({ disabled: true });
+    hook.rerender({ ...baseProps, disabled: true, sendLocked: true });
+    // A Canopy reply's stream opening mid-wait must not unlock the editor.
+    hook.rerender({ ...baseProps, disabled: false, sendLocked: true });
+    expect(names()).not.toContain("editable");
+
+    hook.rerender({ ...baseProps, disabled: false, sendLocked: false });
+    expect(dispatchedEffects().map((e) => e.name)).toContain("editable");
+    view.dispatch.mockClear();
+    hook.rerender({ ...baseProps, disabled: false, sendLocked: false });
+    expect(view.dispatch).not.toHaveBeenCalled();
+  });
 
   it("does not reconfigure what the factory just built on mount", () => {
     render();
