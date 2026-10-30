@@ -190,6 +190,20 @@ export function describeBulkRemoveLosses(target: BulkRemoveTarget): string[] {
 }
 
 /**
+ * How many files an eligible target's delete discards: tracked changes,
+ * untracked files and the files inside its submodules, counted the same way
+ * as {@link describeBulkRemoveLosses} so the batch total and the rows agree.
+ */
+export function bulkRemoveDiscardedFileCount(target: BulkRemoveTarget): number {
+  const status = target.status;
+  if (status.state !== "verified") return 0;
+  const { changes, rootPath, submodules } = status.preview;
+  const { files } = splitDisplayChanges(changes, rootPath, submodules);
+  const { trackedChangeCount, untrackedFileCount } = summarizeWorktreeChanges(files);
+  return trackedChangeCount + untrackedFileCount + submoduleFileCount(submodules);
+}
+
+/**
  * Everything a target's row states, as one comparable value: whether it is in
  * the batch, why not, the files and nested files it would discard, the
  * commits it holds, and the teardown it runs. Two reads with the same key

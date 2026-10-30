@@ -1,5 +1,6 @@
 import {
   STATUS_TEXT_INKS,
+  deriveDestructiveAction,
   deriveDiffTextInks,
   deriveStatusTextInks,
   getAppThemeById,
@@ -32,6 +33,15 @@ const LIFTED_TEXT_INKS: ReadonlyArray<readonly [AppThemeTokenKey, AppThemeTokenK
   ),
 ];
 
+// Written only alongside a scheme (see `getColorVisionWrites`), so they are not in
+// the static maps' key set and are restored only when there is a scheme to read.
+const DESTRUCTIVE_CVD_TOKENS = [
+  "--theme-destructive-fill",
+  "--theme-destructive-fill-hover",
+  "--theme-destructive-fill-active",
+  "--theme-destructive-foreground",
+] as const;
+
 /**
  * Everything a colour-vision mode writes over `scheme`. A text ink whose status
  * ink the mode replaced is that override lifted to read as text on this theme's
@@ -58,6 +68,13 @@ function getColorVisionWrites(
   for (const [token, status] of LIFTED_TEXT_INKS) {
     const ink = inks[token];
     if (`--theme-${status}` in overrides && ink !== undefined) writes[`--theme-${token}`] = ink;
+  }
+  // The destructive button's fills are derived from the danger ink too, so a mode
+  // that swaps the danger hue re-derives them rather than leaving the old red.
+  if ("--theme-status-danger" in overrides) {
+    for (const [token, value] of Object.entries(deriveDestructiveAction(effective, scheme.type))) {
+      if (value !== undefined) writes[`--theme-${token}`] = value;
+    }
   }
   return writes;
 }
@@ -100,6 +117,10 @@ export function applyColorVisionMode(
   // diff fills derived from them, which a bare removeProperty would erase). Fall
   // back to removeProperty when no scheme is supplied.
   const baseVariables = scheme ? getAppThemeCssVariables(scheme) : null;
+  for (const token of DESTRUCTIVE_CVD_TOKENS) {
+    const baseValue = baseVariables?.[token];
+    if (baseValue != null) root.style.setProperty(token, baseValue);
+  }
   for (const token of ALL_CVD_TOKENS) {
     const baseValue = baseVariables?.[token];
     if (baseValue != null) {

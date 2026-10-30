@@ -41,21 +41,26 @@ export const ACCENT_CONTRAST_PAIR = {
   minimum: 4.5,
 } as const;
 
-// The destructive Button variant (`src/components/ui/button.tsx`) paints `text-inverse`
-// on a solid `status-danger` fill: the label read right before pushing, merging or
-// deleting a worktree (#15363). Its hover and press cues are `filter: brightness()` on
-// the whole button, so the label scales with the fill. Filter functions multiply
-// gamma-encoded sRGB and clamp (Filter Effects 1 §5), so a near-white label cannot
-// brighten with its fill on hover, and the ratio's fixed 0.05 flare term keeps a
-// near-black label from tracking its fill down on press. A pair just over the floor at
-// rest dips under it in one state or the other: bali measured 4.99:1 at rest and 4.30:1
-// hovered. Exported so the button's own suite holds the variant's classes to the pair
-// and states measured here.
+// The destructive Button variant (`src/components/ui/button.tsx`) paints
+// `destructive-foreground` on a solid `destructive-fill`: the label read right before
+// pushing, merging or deleting a worktree (#15363). Its hover and press are fills of
+// their own rather than a `brightness()` filter on the whole button, so every state is
+// a hex this gate measures directly. The fills are derived (`deriveDestructiveAction`)
+// from `status-danger` at its own hue, with at least `minChroma`, stepped along OKLCH
+// lightness by `lightnessStep` for hover and press. Exported so the button's own suite
+// holds the variant's classes to the pair and states measured here.
 export const DESTRUCTIVE_BUTTON_CONTRAST = {
-  foreground: "text-inverse",
-  background: "status-danger",
+  foreground: "destructive-foreground",
+  fills: {
+    rest: "destructive-fill",
+    hover: "destructive-fill-hover",
+    press: "destructive-fill-active",
+  },
   minimum: 4.5,
-  brightness: { hover: 1.1, press: 0.95 },
+  lightnessStep: { hover: 0.05, press: -0.03 },
+  // The least OKLCH chroma the fill carries. Dark themes keep a dusty danger ink,
+  // right for a status dot, but darkened for a fill it read as brick or brown.
+  minChroma: 0.15,
 } as const;
 
 // Git status letters (A, M, D…) are small text in a status hue, drawn bare or on a
@@ -1048,55 +1053,42 @@ function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidation
   return warnings;
 }
 
-// The relative luminance an opaque colour paints under `filter: brightness(amount)`:
-// each sRGB channel scaled and clamped before it is linearised, the same per-channel
-// matrix Chromium applies.
-function filteredLuminance(hex: string, amount: number): number {
-  const [red, green, blue] = hexToRgb(hex).map((channel) =>
-    hexToLinear(Math.min(255, channel * amount))
-  );
-  return 0.2126 * red! + 0.7152 * green! + 0.0722 * blue!;
-}
-
 function getDestructiveButtonWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
-  const { foreground, background, minimum, brightness } = DESTRUCTIVE_BUTTON_CONTRAST;
+  const { foreground, fills, minimum } = DESTRUCTIVE_BUTTON_CONTRAST;
   const label = scheme.tokens[foreground];
-  const fill = scheme.tokens[background];
-  // A non-hex value for either token is already reported as unevaluable by the
-  // CONTRAST_PAIRS entries that read it; a second notice would only repeat it.
-  if (!isHexColor(label) || !isHexColor(fill)) return [];
-
+  // A non-hex label or fill is already reported as unevaluable by the CONTRAST_PAIRS
+  // entries that read the tokens it derives from; a second notice would only repeat it.
+  if (!isHexColor(label)) return [];
   const warnings: AppThemeValidationWarning[] = [];
-  // Those pairs read `#RGBA`/`#RRGGBBAA` as opaque. A translucent label or fill
-  // composites over whatever the button sits on, so measuring it here as opaque
-  // would pass a label that has all but vanished.
-  for (const [token, value] of [
-    [foreground, label],
-    [background, fill],
+  // A translucent label or fill composites over whatever the button sits on, so
+  // measuring it here as opaque would pass a label that has all but vanished.
+  if ((splitHexAlpha(label)?.opacity ?? 1) < 1) {
+    return [
+      {
+        kind: "unevaluable",
+        message: `Cannot evaluate destructive button contrast: ${foreground}="${label}" is translucent`,
+      },
+    ];
+  }
+  for (const [state, token] of [
+    ["at rest", fills.rest],
+    ["hovered", fills.hover],
+    ["pressed", fills.press],
   ] as const) {
-    if ((splitHexAlpha(value)?.opacity ?? 1) < 1) {
+    const fill = scheme.tokens[token];
+    if (!isHexColor(fill)) continue;
+    if ((splitHexAlpha(fill)?.opacity ?? 1) < 1) {
       warnings.push({
         kind: "unevaluable",
-        message: `Cannot evaluate destructive button contrast: ${token}="${value}" is translucent`,
+        message: `Cannot evaluate destructive button contrast: ${token}="${fill}" is translucent`,
       });
+      continue;
     }
-  }
-  if (warnings.length > 0) return warnings;
-
-  for (const [state, amount] of [
-    ["at rest", 1],
-    ["hovered", brightness.hover],
-    ["pressed", brightness.press],
-  ] as const) {
-    const labelLuminance = filteredLuminance(label, amount);
-    const fillLuminance = filteredLuminance(fill, amount);
-    const ratio =
-      (Math.max(labelLuminance, fillLuminance) + 0.05) /
-      (Math.min(labelLuminance, fillLuminance) + 0.05);
+    const ratio = contrastRatio(label, fill);
     if (ratio < minimum) {
       warnings.push({
         kind: "low-contrast",
-        message: `${foreground} on ${background} (destructive button, ${state}) is ${ratio.toFixed(2)}:1; target is ${minimum.toFixed(1)}:1`,
+        message: `${foreground} on ${token} (destructive button, ${state}) is ${ratio.toFixed(2)}:1; target is ${minimum.toFixed(1)}:1`,
       });
     }
   }

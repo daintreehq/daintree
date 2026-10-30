@@ -143,6 +143,15 @@ Fixed hue families across all themes. Each theme tunes brightness/saturation.
 
 The plain status inks are graphical colours held to 3:1 for dots, icons and borders; painted as small text they fall under AA on most themes, which is what the four `*-text` inks are for. They are lifted the same way as the churn inks below, from the same final tokens, against the same row backdrops plus the letter's own wash. A theme that names one keeps it, and the contrast gate reports it if it falls short. Colour-vision modes lift them again from the hues they swap in.
 
+| Token | Purpose | Derivation |
+| --- | --- | --- |
+| `destructive-fill` | Solid fill of the destructive Button (the final commit of a destructive confirm) | Derived: `status-danger` moved along OKLCH lightness, at its hue and as much chroma as sRGB allows, until `destructive-foreground` holds 4.5:1 on it and on both state fills |
+| `destructive-fill-hover` | Hover fill of the destructive Button | Derived: `destructive-fill` lightened 0.04 in OKLCH lightness |
+| `destructive-fill-active` | Press fill of the destructive Button | Derived: `destructive-fill` darkened 0.03 in OKLCH lightness |
+| `destructive-foreground` | Label on all three destructive fills | Derived: `text-primary` on dark themes, `text-inverse` on light ones, so the label is always the near-white end of the theme |
+
+The destructive fill used to be `status-danger` itself with `text-inverse` on it. On every dark theme that ink is a light coral, which forced a dark label onto a pastel fill, the pattern that reads as a cheap web app. Deriving a deeper fill from the same hue keeps the theme's own red and puts the near-white label on it. The states are fills rather than a `brightness()` filter so each one is a hex the contrast gate can measure. A theme that names any of the four keeps it, and the gate reports a pair that falls short.
+
 The four `*-surface` washes are built with `withAlpha` (plain `rgba` for a hex input) rather than `color-mix(…, transparent)` — the `color-mix` form black-shifts on light backgrounds in oklab under Chromium.
 
 ## Activity Tokens

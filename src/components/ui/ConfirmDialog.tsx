@@ -25,7 +25,7 @@ const CANNOT_BE_UNDONE_BODY_RE = /cannot be undone|can['’]t be undone/i;
  * either — in a long body the gate can sit below the fold, where "above" is
  * a pointer to nothing on screen.
  */
-const TYPED_GATE_HINT = "Type the confirmation phrase to enable";
+export const TYPED_GATE_HINT = "Type the confirmation phrase to continue";
 
 const devWarnedKeys = new Set<string>();
 
@@ -302,7 +302,12 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
       variant={variant}
       hasPreview={hasPreview}
       zIndex={zIndex}
-      initialFocus={initialFocus}
+      // A destructive leading action is the first tabbable control in the
+      // footer, so the default "first" focus would open a Save / Discard
+      // confirm with Discard already focused, one Enter from losing the work.
+      initialFocus={
+        initialFocus ?? (leadingAction?.intent === "destructive" ? "cancel" : undefined)
+      }
       focusResetKey={focusResetKey}
       restoreFocusTo={restoreFocusTo}
       preferRestoreFocusTo={preferRestoreFocusTo}

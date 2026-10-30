@@ -173,8 +173,8 @@
   --secondary-foreground: var(--theme-text-primary);
   --muted: var(--theme-surface-panel);
   --muted-foreground: var(--theme-text-secondary);
-  --destructive: var(--theme-status-danger);
-  --destructive-foreground: var(--theme-text-inverse);
+  --destructive: var(--theme-destructive-fill);
+  --destructive-foreground: var(--theme-destructive-foreground);
   --border: var(--theme-border-default);
   --input: var(--theme-surface-input);
   --ring: var(--theme-focus-ring);

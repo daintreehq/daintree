@@ -18,6 +18,7 @@ import {
 } from "./worktreeDeletePreview";
 import {
   bulkRemoveAheadCount,
+  bulkRemoveDiscardedFileCount,
   bulkRemoveExclusion,
   describeBulkRemoveLosses,
   isBulkRemoveEligible,
@@ -448,6 +449,9 @@ export function WorktreeBulkRemoveDialog({
     const exclusion = bulkRemoveExclusion(target);
     return exclusion ? [{ target, exclusion }] : [];
   });
+  const goneTargets = excluded.flatMap(({ target, exclusion }) =>
+    exclusion.kind === "gone" ? [target] : []
+  );
   const retryableCount = targets.filter(isBulkRemoveRetryable).length;
   // Everything the user selected that will NOT be removed — the main worktrees
   // filtered out before the dialog opened, plus the targets their own preview
@@ -503,24 +507,53 @@ export function WorktreeBulkRemoveDialog({
 
   // The typed attestation is for the work listed above it, so it names that
   // work rather than repeating that the action is irreversible.
-  const discardsWork = eligible.some(
-    (target) =>
-      describeBulkRemoveLosses(target).length > 0 ||
-      (target.branch === null && bulkRemoveAheadCount(target) > 0)
+  // A detached worktree's unpushed commits are committed work, so they are
+  // named as commits rather than folded into "uncommitted work".
+  const discardsFiles = eligible.some((target) => describeBulkRemoveLosses(target).length > 0);
+  const discardsCommits = eligible.some(
+    (target) => target.branch === null && bulkRemoveAheadCount(target) > 0
   );
-  const preamble = discardsWork
-    ? `Deleting ${eligibleCount === 1 ? "this worktree" : `these ${eligibleCount} worktrees`} permanently discards the uncommitted work listed above.`
-    : undefined;
+  const lostWork =
+    discardsFiles && discardsCommits
+      ? "the uncommitted work and unpushed commits"
+      : discardsCommits
+        ? "the unpushed commits"
+        : "the uncommitted work";
+  const preamble =
+    discardsFiles || discardsCommits
+      ? `Deleting ${eligibleCount === 1 ? "this worktree" : `these ${eligibleCount} worktrees`} permanently discards ${lostWork} listed above.`
+      : undefined;
 
   // One polite line for the whole batch as it settles, so the scope change is
   // heard without walking the list. Row skeletons carry `aria-busy`, so this
-  // sits outside them. Shown as well as spoken only when the batch is split:
-  // that is when the Excluded group can sit below the fold while the button
-  // names a smaller number than the selection.
+  // sits outside them.
+  //
+  // It also totals what the batch throws away. Each row lists its own files, but
+  // across twenty rows nobody adds them up, and the total is the number the
+  // decision turns on; the gate's preamble says what the loss is, not how much.
+  // Shown as well as spoken when the batch is split, where the Excluded group can
+  // sit below the fold while the button names a smaller number than the
+  // selection, or when it discards anything.
+  const discardedFiles = eligible.reduce(
+    (sum, target) => sum + bulkRemoveDiscardedFileCount(target),
+    0
+  );
+  const discardedCommits = eligible.reduce(
+    (sum, target) => sum + (target.branch === null ? bulkRemoveAheadCount(target) : 0),
+    0
+  );
   const scopeStatus = isPreviewPending
     ? `Checking ${pluralize(targets.length, "worktree")}`
-    : `${eligibleCount} will be deleted · ${excludedTotal} excluded`;
-  const scopeVisible = settled && eligibleCount > 0 && excludedTotal > 0;
+    : [
+        `${eligibleCount} will be deleted`,
+        discardedFiles > 0 ? `${pluralize(discardedFiles, "uncommitted file")} discarded` : null,
+        discardedCommits > 0 ? `${pluralize(discardedCommits, "unpushed commit")} discarded` : null,
+        excludedTotal > 0 ? `${excludedTotal} excluded` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+  const scopeVisible =
+    settled && eligibleCount > 0 && (excludedTotal > 0 || discardedFiles + discardedCommits > 0);
 
   return (
     <ConfirmDialog
@@ -655,12 +688,42 @@ export function WorktreeBulkRemoveDialog({
           >
             {(excluded.length > 0 || excludedMainCount > 0) && (
               <ul aria-labelledby="bulk-remove-excluded-heading" className={TARGET_LIST}>
-                {excluded.map(({ target, exclusion }) => (
-                  <li key={target.id} data-testid="bulk-remove-target" className={TARGET_ROW}>
-                    <TargetName target={target} />
-                    <ExcludedBody target={target} exclusion={exclusion} />
+                {excluded.map(({ target, exclusion }) =>
+                  exclusion.kind === "gone" ? null : (
+                    <li key={target.id} data-testid="bulk-remove-target" className={TARGET_ROW}>
+                      <TargetName target={target} />
+                      <ExcludedBody target={target} exclusion={exclusion} />
+                    </li>
+                  )
+                )}
+                {goneTargets.length > 0 && (
+                  // One row for every worktree that is already off disk. Each
+                  // needs nothing and says the same thing, so a row apiece let a
+                  // selection of leftovers outweigh the worktrees actually being
+                  // deleted, which is the list the consent is for.
+                  <li className={TARGET_ROW} data-testid="bulk-remove-excluded-gone">
+                    <p className="text-sm text-text-primary">
+                      Already deleted
+                      <span className="ml-1.5 text-text-secondary tabular-nums">
+                        {goneTargets.length}
+                      </span>
+                    </p>
+                    <ul
+                      aria-label="Already deleted worktrees"
+                      className="mt-1 space-y-0.5 font-mono text-xs text-text-secondary"
+                    >
+                      {goneTargets.map((target) => (
+                        <li
+                          key={target.id}
+                          data-testid="bulk-remove-target"
+                          className="[overflow-wrap:anywhere]"
+                        >
+                          <PathText value={targetLabel(target)} />
+                        </li>
+                      ))}
+                    </ul>
                   </li>
-                ))}
+                )}
                 {excludedMainNames.map((name) => (
                   <li
                     key={`main:${name}`}
