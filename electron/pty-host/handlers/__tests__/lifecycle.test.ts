@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createPtyHostMessageDispatcher } from "../index.js";
 import type { HostContext } from "../types.js";
+import { PID_RETRY_INTERVAL_MS, PID_RETRY_MAX_ATTEMPTS } from "../lifecycle.js";
 import type { SerializedTerminalSnapshot } from "../../../../shared/types/terminal.js";
 import {
   resetAgentSessionCaptureDeliveryForTests,
@@ -453,8 +454,43 @@ describe("lifecycle spawn — terminal-pid gating and deferred retry (#10787)", 
       expect.objectContaining({ type: "terminal-pid" })
     );
     expect(ctx.ptyManager.startProcessDetectorForTerminal).not.toHaveBeenCalled();
-    // Bounded: spawn read + at most PID_RETRY_MAX_ATTEMPTS (20) polls.
-    expect(getMock(ctx).mock.calls.length).toBeLessThanOrEqual(21);
+    // Bounded: the synchronous spawn read plus at most the capped polls.
+    expect(getMock(ctx).mock.calls.length).toBeLessThanOrEqual(1 + PID_RETRY_MAX_ATTEMPTS);
+  });
+
+  it.each([150, 2_000])(
+    "keeps waiting through a ConPTY connect that takes %i ms (#15481)",
+    async (connectMs) => {
+      vi.useFakeTimers();
+      const ctx = makeCtx();
+      const spawnedAt = Date.now();
+      // node-pty on Windows measured 65-150 ms to resolve the PID on an idle
+      // machine: far more event-loop turns than any turn-counted budget allows.
+      getMock(ctx).mockImplementation(() =>
+        termInfo(Date.now() - spawnedAt >= connectMs ? 4321 : 0)
+      );
+      const dispatch = createPtyHostMessageDispatcher(ctx);
+
+      dispatch({ type: "spawn", id: "t1", options: {} });
+      await vi.runAllTimersAsync();
+
+      expect(ctx.sendEvent).toHaveBeenCalledWith({ type: "terminal-pid", id: "t1", pid: 4321 });
+      expect(ctx.ptyManager.startProcessDetectorForTerminal).toHaveBeenCalledWith("t1");
+    }
+  );
+
+  it("polls on a wall-clock interval, not on event-loop turns", async () => {
+    vi.useFakeTimers();
+    const ctx = makeCtx();
+    getMock(ctx).mockReturnValue(termInfo(0));
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: {} });
+    const spawnReads = getMock(ctx).mock.calls.length;
+    await vi.advanceTimersByTimeAsync(PID_RETRY_INTERVAL_MS - 1);
+    expect(getMock(ctx).mock.calls.length).toBe(spawnReads);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(getMock(ctx).mock.calls.length).toBe(spawnReads + 1);
   });
 });
 

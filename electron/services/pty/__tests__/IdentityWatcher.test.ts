@@ -24,6 +24,7 @@ interface FakeDelegateState {
   recentOutput: string;
   lastCommand: string | undefined;
   ptyDescendantCount: number | undefined;
+  agentProcessPresent: boolean | undefined;
   foreground: { shellPgid: number; foregroundPgid: number } | null;
   detectionCalls: Array<{ agentType?: string; processIconId?: string; isBusy: boolean }>;
 }
@@ -45,6 +46,7 @@ function createFakeDelegate(overrides: Partial<FakeDelegateState> = {}): {
     recentOutput: "",
     lastCommand: undefined,
     ptyDescendantCount: 0,
+    agentProcessPresent: undefined,
     foreground: null,
     detectionCalls: [],
     ...overrides,
@@ -78,6 +80,7 @@ function createFakeDelegate(overrides: Partial<FakeDelegateState> = {}): {
     getRecentOutput: () => state.recentOutput,
     getLastCommand: () => state.lastCommand,
     getPtyDescendantCount: () => state.ptyDescendantCount,
+    hasAgentProcess: () => state.agentProcessPresent,
     readForegroundProcessGroupSnapshot: () => state.foreground,
     handleAgentDetection: (result) => {
       state.detectionCalls.push({
@@ -944,7 +947,7 @@ describe("IdentityWatcher", () => {
       expect(state.detectionCalls).toHaveLength(0);
     });
 
-    it("clears shell evidence on non-POSIX child exit even when no prompt text is visible", async () => {
+    it("clears shell evidence on non-POSIX agent process exit even when no prompt text is visible", async () => {
       const inject = vi.fn();
       const clear = vi.fn();
       const fakeDetector = {
@@ -956,6 +959,7 @@ describe("IdentityWatcher", () => {
         visibleLines: ["& 'C:\\npm\\prefix\\claude.cmd'", "FAKE_CLAUDE_READY"],
         cursorLine: "FAKE_CLAUDE_READY",
         ptyDescendantCount: 2,
+        agentProcessPresent: true,
         foreground: null,
       });
       const watcher = new IdentityWatcher(delegate);
@@ -967,10 +971,140 @@ describe("IdentityWatcher", () => {
       state.visibleLines = ["FAKE_CLAUDE_READY", "FAKE_CLAUDE_EXIT"];
       state.cursorLine = "";
       state.ptyDescendantCount = 0;
+      state.agentProcessPresent = false;
       await vi.advanceTimersByTimeAsync(600);
 
       expect(clear).toHaveBeenCalledWith("prompt-return");
       expect(state.detectionCalls).toHaveLength(0);
+    });
+
+    describe("Windows claude.exe running alone under the shell (#15481)", () => {
+      const RULE = "─".repeat(60);
+      // The bottom of a live Claude Code pane mid-turn, as captured on Windows:
+      // a draft in the composer leaves no bare `>` line to recognise.
+      const DRAFT_TAIL = [RULE, "> next step", RULE, "  ⏵⏵ auto mode on (shift+tab to cycle)"];
+
+      async function launchClaude(overrides: Partial<FakeDelegateState> = {}) {
+        const clear = vi.fn();
+        const fakeDetector = {
+          injectShellCommandEvidence: vi.fn(),
+          clearShellCommandEvidence: clear,
+        } as unknown as ProcessDetector;
+        const { delegate, state } = createFakeDelegate({
+          processDetector: fakeDetector,
+          visibleLines: DRAFT_TAIL,
+          cursorLine: "",
+          ptyDescendantCount: 1,
+          agentProcessPresent: true,
+          foreground: null,
+          ...overrides,
+        });
+        const watcher = new IdentityWatcher(delegate);
+        watcher.seed("claude");
+        await vi.advanceTimersByTimeAsync(2_000);
+        state.detectedAgentId = "claude";
+        return { state, clear, watcher };
+      }
+
+      it("keeps a live agent when a tool call's child exits", async () => {
+        const { state, clear, watcher } = await launchClaude();
+
+        // claude.exe -> bash.exe -> ping.exe, then back to claude.exe alone.
+        state.ptyDescendantCount = 3;
+        await vi.advanceTimersByTimeAsync(600);
+        state.ptyDescendantCount = 1;
+        await vi.advanceTimersByTimeAsync(2_000);
+
+        expect(clear).not.toHaveBeenCalledWith("prompt-return");
+        watcher.dispose();
+      });
+
+      it("keeps a live agent while the census reads no tree for the terminal", async () => {
+        const { state, clear, watcher } = await launchClaude();
+
+        state.ptyDescendantCount = 0;
+        state.agentProcessPresent = undefined;
+        await vi.advanceTimersByTimeAsync(2_000);
+
+        expect(clear).not.toHaveBeenCalledWith("prompt-return");
+        watcher.dispose();
+      });
+
+      it("falls back to the descendant count for an agent the census never names", async () => {
+        const { state, clear, watcher } = await launchClaude({ agentProcessPresent: false });
+
+        state.ptyDescendantCount = 3;
+        await vi.advanceTimersByTimeAsync(600);
+        expect(clear).not.toHaveBeenCalledWith("prompt-return");
+
+        state.ptyDescendantCount = 0;
+        await vi.advanceTimersByTimeAsync(2_000);
+
+        expect(clear).toHaveBeenCalledWith("prompt-return");
+        watcher.dispose();
+      });
+
+      it("reads the exit even when helpers outlive the agent", async () => {
+        const { state, clear } = await launchClaude();
+
+        state.agentProcessPresent = false;
+        state.ptyDescendantCount = 3;
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(clear).toHaveBeenCalledWith("prompt-return");
+      });
+
+      it("still takes a returned shell prompt while the census lags behind the exit", async () => {
+        const { state, clear } = await launchClaude();
+        const prompt = "PS C:\\dev\\wintest-1028>";
+
+        state.visibleLines = ["Resume this session with:", "claude --resume abc", prompt];
+        state.cursorLine = prompt;
+        state.ptyDescendantCount = 2;
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(clear).toHaveBeenCalledWith("prompt-return");
+      });
+
+      it("asks the census about the agent it launched, by id", async () => {
+        const { state, watcher } = await launchClaude();
+        const spy = vi.fn(() => state.agentProcessPresent);
+        (watcher as unknown as { delegate: IdentityWatcherDelegate }).delegate.hasAgentProcess =
+          spy;
+
+        await vi.advanceTimersByTimeAsync(600);
+
+        expect(spy).toHaveBeenCalledWith("claude");
+        watcher.dispose();
+      });
+
+      it("forgets the agent it saw when the next command is submitted", async () => {
+        const { state, clear, watcher } = await launchClaude();
+        await vi.advanceTimersByTimeAsync(600);
+
+        // The pane is back at a shell and runs a second agent whose process the
+        // census never shows: the first command's sighting must not vouch for
+        // its exit.
+        state.detectedAgentId = undefined;
+        watcher.onShellSubmit("codex");
+        state.agentProcessPresent = false;
+        state.ptyDescendantCount = 1;
+        await vi.advanceTimersByTimeAsync(3_000);
+
+        expect(watcher.isFallbackCommitted).toBe(true);
+        expect(clear).not.toHaveBeenCalledWith("prompt-return");
+        watcher.dispose();
+      });
+
+      it("reads the exit once the agent's own process is gone", async () => {
+        const { state, clear } = await launchClaude();
+
+        state.agentProcessPresent = false;
+        state.ptyDescendantCount = 0;
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(clear).toHaveBeenCalledWith("prompt-return");
+      });
     });
 
     it("ignores stale agent trust text when the current Windows prompt has returned", async () => {
@@ -2330,6 +2464,45 @@ describe("IdentityWatcher", () => {
       await vi.advanceTimersByTimeAsync(6 * SHELL_IDENTITY_FALLBACK_POLL_MS);
 
       expect(clear).toHaveBeenCalledWith("prompt-return");
+    });
+
+    it("reads a late-recovered agent's exit from its own process, not a count (no probe)", async () => {
+      const { state, watcher, clear } = makeCommittedAgent({
+        visibleLines: ["", ""],
+        cursorLine: "",
+        lastCommand: undefined,
+        ptyDescendantCount: 2,
+        agentProcessPresent: true,
+        foreground: null,
+      });
+      watcher.onShellSubmit(undefined);
+      await vi.advanceTimersByTimeAsync(4 * SHELL_IDENTITY_FALLBACK_POLL_MS);
+
+      // Recovered while the agent still runs: the census vouches for it.
+      state.lastCommand = "codex";
+      state.lastOutputTime = Date.now();
+      await vi.advanceTimersByTimeAsync(4 * SHELL_IDENTITY_FALLBACK_POLL_MS);
+      expect(clear).not.toHaveBeenCalledWith("prompt-return");
+
+      // A descendant count falling to the shell's own is not an exit (#15481).
+      state.ptyDescendantCount = 1;
+      await vi.advanceTimersByTimeAsync(6 * SHELL_IDENTITY_FALLBACK_POLL_MS);
+      expect(clear).not.toHaveBeenCalledWith("prompt-return");
+
+      state.agentProcessPresent = false;
+      await vi.advanceTimersByTimeAsync(6 * SHELL_IDENTITY_FALLBACK_POLL_MS);
+      expect(clear).toHaveBeenCalledWith("prompt-return");
+    });
+
+    it("never consults the census while the foreground probe answers (POSIX)", async () => {
+      const { delegate, watcher } = makeCommittedAgent();
+      const spy = vi.spyOn(delegate, "hasAgentProcess");
+
+      await commit(watcher);
+      await vi.advanceTimersByTimeAsync(10 * SHELL_IDENTITY_FALLBACK_POLL_MS);
+
+      expect(spy).not.toHaveBeenCalled();
+      watcher.dispose();
     });
 
     it("does not count the shell itself as a child when there is no probe", async () => {

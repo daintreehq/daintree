@@ -179,6 +179,7 @@ const FOREGROUND_SHELL_BUSY: ForegroundShellIdleReading = Object.freeze({
 interface CommittedPollSignals {
   readonly identity: CommandIdentity;
   readonly ptyDescendantCount: number | undefined;
+  readonly agentProcessPresent: boolean | undefined;
   readonly promptVisible: boolean;
   readonly unambiguousShellPromptVisible: boolean;
   readonly hasRecentCommandFailureOutput: boolean;
@@ -213,6 +214,8 @@ export interface IdentityWatcherDelegate {
   getRecentOutput?(): string;
   getLastCommand(): string | undefined;
   getPtyDescendantCount(): number | undefined;
+  /** Whether the agent's own process is under the PTY root; `undefined` when the census can't say. */
+  hasAgentProcess(agentId: string): boolean | undefined;
   readForegroundProcessGroupSnapshot(): {
     shellPgid: number;
     foregroundPgid: number;
@@ -249,6 +252,9 @@ export class IdentityWatcher {
   private committed = false;
   private promptStreak = 0;
   private sawPtyDescendant = false;
+  // Latched once the census has shown the agent's own process, so its later
+  // absence reads as an exit rather than a census that never matched it.
+  private sawAgentProcess = false;
   // A prompt already on screen when the next command is submitted is stale.
   // Only a prompt emitted afterward can cancel an uncommitted process badge.
   private sawPromptAfterSubmit = false;
@@ -417,6 +423,7 @@ export class IdentityWatcher {
     this.committed = false;
     this.promptStreak = 0;
     this.sawPtyDescendant = false;
+    this.sawAgentProcess = false;
     this.sawPromptAfterSubmit = false;
     this.sawReturnedShellPromptOutput = false;
     this.resetForegroundCandidate();
@@ -648,6 +655,7 @@ export class IdentityWatcher {
     this.committed = false;
     this.promptStreak = 0;
     this.sawPtyDescendant = false;
+    this.sawAgentProcess = false;
     this.sawPromptAfterSubmit = false;
     this.sawReturnedShellPromptOutput = false;
   }
@@ -853,6 +861,17 @@ export class IdentityWatcher {
       }
     }
 
+    // Without a foreground probe (Windows), whether the agent still runs is
+    // read from its own process in the census, never from a descendant count.
+    const agentType = this.identity?.agentType;
+    const agentProcessPresent =
+      agentType && foregroundShellIdle?.supported === false
+        ? this.delegate.hasAgentProcess(agentType)
+        : undefined;
+    if (agentProcessPresent) {
+      this.sawAgentProcess = true;
+    }
+
     const agentCommitted = agentIdentity || Boolean(this.delegate.detectedAgentId);
     const unambiguousShellPromptVisible = this.hasUnambiguousShellPromptVisible(agentCommitted);
     // A plain process command may leave the prior shell prompt in scrollback.
@@ -958,6 +977,7 @@ export class IdentityWatcher {
     const signals: CommittedPollSignals = {
       identity: this.identity,
       ptyDescendantCount,
+      agentProcessPresent,
       // An icon-only command can inherit the previous shell prompt in the
       // visible buffer. Do not treat it as this command's return until a new
       // prompt has arrived in output since submission.
@@ -1066,6 +1086,7 @@ export class IdentityWatcher {
     const {
       identity,
       ptyDescendantCount,
+      agentProcessPresent,
       promptVisible,
       unambiguousShellPromptVisible,
       hasRecentCommandFailureOutput,
@@ -1082,14 +1103,20 @@ export class IdentityWatcher {
       // observed during the hand-off instead of pinning identity indefinitely.
       (ptyDescendantCount === 0 || this.sawReturnedShellPromptOutput) &&
       !hasRecentCommandFailureOutput;
-    // Windows has no foreground-PGID probe. If the agent command had an observed
-    // child and that child is now gone, treat that as the same lifecycle signal
-    // as a returned prompt, unless the visible tail still looks like agent UI.
-    const nonPosixObservedChildExitedAfterAgent =
+    // Windows has no foreground-PGID probe. Once the census has shown the
+    // agent's own process, its disappearance is the same lifecycle signal as a
+    // returned prompt, unless the visible tail still looks like agent UI. A
+    // descendant count can't stand in for it: `claude.exe` runs alone under the
+    // shell, so the count falls back to its idle value whenever a tool call
+    // ends, and a census that hasn't caught up reads that way mid-tool (#15481).
+    // An agent the census never names (a Node-hosted CLI whose Windows command
+    // line the parser can't read) keeps the count as its only exit signal.
+    const nonPosixAgentExited =
       isAgent &&
-      this.sawPtyDescendant &&
       !foreground.supported &&
-      (ptyDescendantCount ?? 0) <= 1 &&
+      (this.sawAgentProcess
+        ? agentProcessPresent === false
+        : this.sawPtyDescendant && (ptyDescendantCount ?? 0) <= 1) &&
       !hasRecentCommandFailureOutput &&
       !this.hasAgentUiPromptFalsePositive(false);
 
@@ -1103,7 +1130,7 @@ export class IdentityWatcher {
       return ADVANCE_PROMPT_STREAK;
     }
 
-    if (!promptVisible && !posixShellOwnsPtyAfterAgent && !nonPosixObservedChildExitedAfterAgent) {
+    if (!promptVisible && !posixShellOwnsPtyAfterAgent && !nonPosixAgentExited) {
       return RESET_PROMPT_STREAK;
     }
 
