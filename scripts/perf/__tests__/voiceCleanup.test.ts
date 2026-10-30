@@ -1142,7 +1142,11 @@ describe("prompt variants", () => {
     expect(PROMPT_VARIANTS.luna!.instructionsFor("gpt-6-luna")).toEqual(
       withRecentPrompts(PROMPT_VARIANTS.v11!.instructionsFor("gpt-6-luna"))
     );
+    // #15529 told both models about the command the prompt opens with.
     expect(production.instructionsFor("gpt-6-luna")).toEqual(
+      PROMPT_VARIANTS["luna-opening"]!.instructionsFor("gpt-6-luna")
+    );
+    expect(production.instructionsFor("gpt-6-luna")).not.toEqual(
       PROMPT_VARIANTS["luna-following"]!.instructionsFor("gpt-6-luna")
     );
     // What Terra cleaned up with from #14855 until #14873 chose names6 over it.
@@ -1154,6 +1158,9 @@ describe("prompt variants", () => {
     // following told agentreply (#14899); replaying a measured variant must
     // keep its measured rules.
     expect(production.instructionsFor("gpt-6.1-terra")).toEqual(
+      PROMPT_VARIANTS["intent-opening"]!.instructionsFor("gpt-6.1-terra")
+    );
+    expect(production.instructionsFor("gpt-6.1-terra")).not.toEqual(
       PROMPT_VARIANTS["intent-spoken"]!.instructionsFor("gpt-6.1-terra")
     );
     expect(production.instructionsFor("gpt-6.1-terra")).not.toEqual(
