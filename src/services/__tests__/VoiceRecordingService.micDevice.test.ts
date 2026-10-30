@@ -518,6 +518,10 @@ describe("VoiceRecordingService — chosen mic not available (#14606)", () => {
       deviceId: "usb-mic",
       tracks: [{ label: "Default - MacBook Pro Microphone", deviceId: "builtin" }],
     });
+    // Nothing listed to vouch for it, so it is asked for and isn't found.
+    harness.getUserMedia.mockRejectedValueOnce(
+      new DOMException("deviceId", "OverconstrainedError")
+    );
     const { store, service } = await load();
 
     await service.start(TARGET);
@@ -917,16 +921,18 @@ describe("VoiceRecordingService — silent mic (#14606)", () => {
   describe("a stand-in for a chosen mic that isn't connected (#15512)", () => {
     const RODE = "RØDE NT-USB Mini (19f7:0015)";
 
-    async function startOnStandIn() {
+    async function startOnStandIn(appReplaced = false) {
       const harness = setupGlobals({
         deviceId: "rode",
         deviceLabel: RODE,
         tracks: [{ label: "Default - Greg's AirPods Pro", deviceId: "default" }],
         devices: [AIRPODS, BUILT_IN],
       });
+      harness.voiceInput.isAppReplaced.mockResolvedValue(appReplaced);
       const loaded = await load();
       await loaded.service.start(TARGET);
       harness.status.emit("recording");
+      expect(loaded.store.getState().micNotice?.kind).toBe("fallback");
       return { harness, ...loaded };
     }
 
@@ -943,15 +949,57 @@ describe("VoiceRecordingService — silent mic (#14606)", () => {
       });
     });
 
-    it("brings the stand-in notice back once a silence it gave way to ends", async () => {
-      const { harness, store } = await startOnStandIn();
+    it.each([
+      ["a silence", false],
+      ["a silence after the app was replaced", true],
+    ])("brings the stand-in notice back once %s it gave way to ends", async (_case, replaced) => {
+      const { harness, store } = await startOnStandIn(replaced);
       const fallback = store.getState().micNotice;
 
       await vi.advanceTimersByTimeAsync(3_000);
-      expect(store.getState().micNotice?.kind).toBe("silent");
+      expect(store.getState().micNotice).toMatchObject({ kind: "silent" });
+      expect(Boolean((store.getState().micNotice as { appReplaced?: true }).appReplaced)).toBe(
+        replaced
+      );
 
       sendChunk(harness.workletNodes[0]!, 3000);
       expect(store.getState().micNotice).toBe(fallback);
+    });
+
+    it("never brings a past session's stand-in notice back", async () => {
+      const harness = setupGlobals({
+        deviceId: "rode",
+        deviceLabel: RODE,
+        tracks: [
+          { label: "Default - Greg's AirPods Pro", deviceId: "default" },
+          { label: RODE, deviceId: "rode" },
+        ],
+        devices: [AIRPODS, BUILT_IN],
+      });
+      const { service, store } = await load();
+      await service.start(TARGET);
+      harness.status.emit("recording");
+      expect(store.getState().micNotice?.kind).toBe("fallback");
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(store.getState().micNotice?.kind).toBe("silent");
+      await service.stop();
+
+      // The RØDE is back for the next session, which is silent and then heard.
+      harness.enumerateDevices.mockResolvedValue(
+        [AIRPODS, BUILT_IN, { deviceId: "rode", label: RODE }].map((device) => ({
+          ...device,
+          kind: "audioinput",
+          groupId: "",
+        }))
+      );
+      await service.start(TARGET);
+      harness.status.emit("recording");
+      expect(store.getState().micNotice).toBeNull();
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(store.getState().micNotice?.kind).toBe("silent");
+
+      sendChunk(harness.workletNodes[1]!, 3000);
+      expect(store.getState().micNotice).toBeNull();
     });
 
     it("leaves a dismissed stand-in notice dismissed", async () => {

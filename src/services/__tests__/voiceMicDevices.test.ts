@@ -390,7 +390,12 @@ describe("openChosenMic (#14850)", () => {
     // Chromium's own choice: a soft deviceId can still bind the "default"
     // alias, which follows the system input to the AirPods; only `exact`
     // opens the device asked for, and an unknown exact id is overconstrained.
-    function stubChromium(inputs: Array<{ deviceId: string; groupId: string; label: string }>) {
+    // `listed` is what enumeration shows, when that isn't every connected
+    // input: nothing at all, or blank entries before permission.
+    function stubChromium(
+      inputs: Array<{ deviceId: string; groupId: string; label: string }>,
+      listed: Array<{ deviceId: string; groupId: string; label: string }> = inputs
+    ) {
       const opened: string[] = [];
       const getUserMedia = vi.fn(async (constraints: MediaStreamConstraints) => {
         const audio = constraints.audio;
@@ -408,7 +413,7 @@ describe("openChosenMic (#14850)", () => {
       });
       const enumerateDevices = vi
         .fn()
-        .mockResolvedValue(inputs.map((input) => ({ kind: "audioinput", ...input })));
+        .mockResolvedValue(listed.map((input) => ({ kind: "audioinput", ...input })));
       vi.stubGlobal("navigator", { mediaDevices: { getUserMedia, enumerateDevices } });
       return { getUserMedia, opened };
     }
@@ -460,6 +465,55 @@ describe("openChosenMic (#14850)", () => {
       expect(getUserMedia).toHaveBeenCalledTimes(1);
       expect(opened).toEqual(["g-airpods"]);
       expect(mic).toMatchObject({ label: AIRPODS, substituted: true, chosenFailure: null });
+    });
+
+    it.each([
+      ["lists nothing", []],
+      [
+        "comes back blank before permission",
+        [
+          { deviceId: "", groupId: "", label: "" },
+          { deviceId: "", groupId: "", label: "" },
+        ],
+      ],
+      ["leaves a mic unnamed", [AIRPODS_MIC, { deviceId: "other", groupId: "g-x", label: "" }]],
+    ])("still asks for the chosen mic when the listing %s", async (_case, listed) => {
+      const { opened } = stubChromium([DEFAULT_AIRPODS, AIRPODS_MIC, RODE_MIC], listed);
+
+      const mic = await openChosenMic("rode", { chosenLabel: RODE });
+
+      expect(opened).toEqual(["g-rode"]);
+      expect(mic).toMatchObject({ deviceId: "rode", substituted: false });
+    });
+
+    it("calls a default opened in place of a missing mic a substitution even when its track won't say", async () => {
+      stubChromium([DEFAULT_AIRPODS, AIRPODS_MIC]);
+      const silentTrack = { label: "", stop: vi.fn(), getSettings: () => ({}) };
+      vi.mocked(navigator.mediaDevices.getUserMedia).mockResolvedValueOnce({
+        getAudioTracks: () => [silentTrack],
+        getTracks: () => [silentTrack],
+      } as unknown as MediaStream);
+
+      const mic = await openChosenMic("rode", { chosenLabel: RODE });
+
+      expect(mic).toMatchObject({ deviceId: null, substituted: true });
+    });
+
+    it("trusts an exact open whose track won't say which mic it is", async () => {
+      stubChromium([DEFAULT_AIRPODS, AIRPODS_MIC, RODE_MIC]);
+      const silentTrack = { label: "", stop: vi.fn(), getSettings: () => ({}) };
+      vi.mocked(navigator.mediaDevices.getUserMedia).mockResolvedValueOnce({
+        getAudioTracks: () => [silentTrack],
+        getTracks: () => [silentTrack],
+      } as unknown as MediaStream);
+
+      const mic = await openChosenMic("rode", { chosenLabel: RODE });
+
+      expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledWith({
+        audio: { deviceId: { exact: "rode" } },
+        video: false,
+      });
+      expect(mic).toMatchObject({ deviceId: null, substituted: false });
     });
   });
 
