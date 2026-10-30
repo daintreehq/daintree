@@ -526,8 +526,13 @@ describe("VoiceRecordingService — chosen mic not available (#14606)", () => {
       audio: { deviceId: { exact: "usb-mic" } },
       video: false,
     });
-    // A working stand-in is named, never raised as a notice.
-    expect(store.getState().micNotice).toBeNull();
+    // The stand-in is named in the pane, beside the mic it stands in for (#15512).
+    expect(store.getState().micNotice).toEqual({
+      kind: "fallback",
+      target: expect.objectContaining({ panelId: PANEL_ID }),
+      deviceLabel: "MacBook Pro Microphone",
+      chosenLabel: null,
+    });
     expect(store.getState().micDeviceLabel).toBe("MacBook Pro Microphone");
 
     sendChunk(harness.workletNodes[0]!, 3000);
@@ -619,8 +624,10 @@ describe("VoiceRecordingService — chosen mic that won't open (#14850)", () => 
     expect(harness.getUserMedia).toHaveBeenNthCalledWith(2, { audio: true, video: false });
     expect(harness.voiceInput.start).toHaveBeenCalledTimes(1);
     expect(store.getState().lastError).toBeNull();
-    // A working stand-in is named, never raised as a notice.
-    expect(store.getState().micNotice).toBeNull();
+    expect(store.getState().micNotice).toMatchObject({
+      kind: "fallback",
+      deviceLabel: "MacBook Pro Microphone",
+    });
     // A fallback never rewrites the choice.
     expect(harness.voiceInput.setSettings).not.toHaveBeenCalled();
     expect(harness.settings.deviceId).toBe("usb-mic");
@@ -905,6 +912,66 @@ describe("VoiceRecordingService — silent mic (#14606)", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(store.getState().micNotice).toBeNull();
+  });
+
+  describe("a stand-in for a chosen mic that isn't connected (#15512)", () => {
+    const RODE = "RØDE NT-USB Mini (19f7:0015)";
+
+    async function startOnStandIn() {
+      const harness = setupGlobals({
+        deviceId: "rode",
+        deviceLabel: RODE,
+        tracks: [{ label: "Default - Greg's AirPods Pro", deviceId: "default" }],
+        devices: [AIRPODS, BUILT_IN],
+      });
+      const loaded = await load();
+      await loaded.service.start(TARGET);
+      harness.status.emit("recording");
+      return { harness, ...loaded };
+    }
+
+    it("names both mics in the pane before any audio arrives", async () => {
+      const { harness, store } = await startOnStandIn();
+
+      // Listed as absent, so the system default opens without trying the RØDE.
+      expect(harness.getUserMedia.mock.calls).toEqual([[{ audio: true, video: false }]]);
+      expect(store.getState().micNotice).toEqual({
+        kind: "fallback",
+        target: expect.objectContaining({ panelId: PANEL_ID }),
+        deviceLabel: "Greg's AirPods Pro",
+        chosenLabel: RODE,
+      });
+    });
+
+    it("brings the stand-in notice back once a silence it gave way to ends", async () => {
+      const { harness, store } = await startOnStandIn();
+      const fallback = store.getState().micNotice;
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(store.getState().micNotice?.kind).toBe("silent");
+
+      sendChunk(harness.workletNodes[0]!, 3000);
+      expect(store.getState().micNotice).toBe(fallback);
+    });
+
+    it("leaves a dismissed stand-in notice dismissed", async () => {
+      const { harness, store } = await startOnStandIn();
+      store.getState().dismissMicNotice(store.getState().micNotice!);
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(store.getState().micNotice?.kind).toBe("silent");
+
+      sendChunk(harness.workletNodes[0]!, 3000);
+      expect(store.getState().micNotice).toBeNull();
+    });
+
+    it("drops the notice with the session", async () => {
+      const { service, store } = await startOnStandIn();
+
+      await service.stop();
+
+      expect(store.getState().micNotice).toBeNull();
+    });
   });
 
   describe("after the app bundle was replaced under it (#14937)", () => {

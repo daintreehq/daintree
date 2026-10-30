@@ -94,6 +94,31 @@ describe("VoiceMicNoticeBanner", () => {
     expect(text()).toContain("The microphone disconnected, so dictation stopped");
   });
 
+  it("names the stand-in mic and the one it stands in for (#15512)", () => {
+    renderNotice({
+      kind: "fallback",
+      target: TARGET,
+      deviceLabel: "Greg's AirPods Pro",
+      chosenLabel: "RØDE NT-USB Mini (19f7:0015)",
+    });
+
+    expect(text()).toContain("Using Greg's AirPods Pro instead of RØDE NT-USB Mini (19f7:0015)");
+    expect(text()).toContain("RØDE NT-USB Mini (19f7:0015) isn't available");
+    fireEvent.click(screen.getByRole("button", { name: "Open Voice settings" }));
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "voice" },
+      { source: "user" }
+    );
+  });
+
+  it("says which mics it means even without their names", () => {
+    renderNotice({ kind: "fallback", target: TARGET, deviceLabel: null, chosenLabel: null });
+
+    expect(text()).toContain("Using another microphone instead of the selected microphone");
+    expect(text()).toContain("The selected microphone isn't available");
+  });
+
   it("offers the built-in mic for a silent Bluetooth one", async () => {
     const notice: VoiceMicNotice = {
       kind: "silent",

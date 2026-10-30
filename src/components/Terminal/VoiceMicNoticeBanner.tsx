@@ -114,10 +114,10 @@ function AppReplacedMicNotice({
 
 /**
  * What the microphone did to this pane's dictation (#14606): it went away
- * mid-session, or it is delivering silence. Only a mic that isn't working
- * raises one; a working stand-in for the chosen mic is named in the
- * announcement and the session's details, not here. The device is named because "the microphone" is
- * ambiguous with AirPods, a dock and a laptop all connected.
+ * mid-session, it is delivering silence, or the chosen mic wasn't available
+ * and another is recording in its place (#15512). The device is named because
+ * "the microphone" is ambiguous with AirPods, a dock and a laptop all
+ * connected.
  *
  * The service already speaks each of these through the dictation live region,
  * so the banner stays out of the accessibility announcements rather than
@@ -141,6 +141,22 @@ export function VoiceMicNoticeBanner({ notice }: VoiceMicNoticeBannerProps) {
         severity="warning"
         title="Microphone lost"
         description={`${notice.deviceLabel ?? "The microphone"} disconnected, so dictation stopped`}
+      />
+    );
+  }
+
+  if (notice.kind === "fallback") {
+    return (
+      <InlineStatusBanner
+        {...shared}
+        severity="info"
+        title={`Using ${notice.deviceLabel ?? "another microphone"} instead of ${notice.chosenLabel ?? "the selected microphone"}`}
+        description={`${notice.chosenLabel ?? "The selected microphone"} isn't available, so dictation is using the system default`}
+        action={{
+          id: "open-voice-settings",
+          label: "Open Voice settings",
+          onClick: openVoiceSettings,
+        }}
       />
     );
   }
