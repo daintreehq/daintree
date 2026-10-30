@@ -340,6 +340,11 @@ export interface TerminalInputNotice {
   answer: TerminalAnswer;
 }
 
+/** An agent run with no first-prompt record yet (#15521). */
+function takesFirstSend(options: PtyHostSpawnOptions | undefined): boolean {
+  return options?.launchAgentId !== undefined && options.hasFirstPrompt !== true;
+}
+
 export class PtyClient extends EventEmitter {
   private config: ResolvedPtyClientConfig;
   private isDisposed = false;
@@ -408,13 +413,6 @@ export class PtyClient extends EventEmitter {
    * replay (#12498). Keyed by id, tagged with the displacing generation.
    */
   private displacedSpawns = new Map<string, { byGeneration: number; entry: PtyHostSpawnOptions }>();
-  /**
-   * Agent runs with no first-prompt record yet (#15521), by the launch
-   * generation that started each. A run launched with its prompt or carrying
-   * its record is never here, and one leaves at its first written send, so a
-   * send to any other terminal costs this lookup and nothing more.
-   */
-  private firstPromptOpen = new Map<string, number>();
   /** Terminals the host mirrors to Main: an explicit enable or any live lease. */
   private ipcDataMirrorIds = new Set<string>();
   private ipcDataMirrorExplicit = new Set<string>();
@@ -832,9 +830,6 @@ export class PtyClient extends EventEmitter {
         // closes its own incarnation, never the successor.
         onTerminalExit: (id, exitCode, launchGeneration) => {
           terminalCrashReapService.detachTerminal(id, launchGeneration);
-          if (launchGeneration !== undefined && this.firstPromptOpen.get(id) === launchGeneration) {
-            this.firstPromptOpen.delete(id);
-          }
           const ledger = getLifecycleLedger();
           const generation = launchGeneration ?? ledger.currentGeneration(id);
           if (generation !== undefined && ledger.currentGeneration(id) !== undefined) {
@@ -1494,11 +1489,6 @@ export class PtyClient extends EventEmitter {
       this.displacedSpawns.delete(id);
     }
     this.pendingSpawns.set(id, resolvedOptions);
-    if (resolvedOptions.launchAgentId !== undefined && resolvedOptions.hasFirstPrompt !== true) {
-      this.firstPromptOpen.set(id, generation);
-    } else {
-      this.firstPromptOpen.delete(id);
-    }
     this.recovery.sendSpawnWithPostInput(shard, id, resolvedOptions);
   }
 
@@ -1593,7 +1583,9 @@ export class PtyClient extends EventEmitter {
 
   /**
    * What a submit offers as its run's first prompt (#15521), held by the host
-   * until the submission's Enter is written. Nothing once the run has one.
+   * until the submission's Enter is written. Nothing once the run has one: the
+   * check reads the spawn entry of the incarnation running now, so a send to
+   * any terminal with a record costs that lookup and nothing more.
    */
   private firstPromptCandidate(
     id: string,
@@ -1601,9 +1593,10 @@ export class PtyClient extends EventEmitter {
     handbackCode: string | undefined,
     promptAsWritten: string | null | undefined
   ): FirstPromptCandidate | undefined {
-    const open = this.firstPromptOpen.get(id);
-    if (open === undefined || promptAsWritten === null) return undefined;
-    if (this.pendingSpawns.get(id)?.launchGeneration !== open) return undefined;
+    if (promptAsWritten === null) return undefined;
+    // While a duplicate spawn awaits its answer, the one it displaced is running.
+    const live = this.displacedSpawns.get(id)?.entry ?? this.pendingSpawns.get(id);
+    if (!takesFirstSend(live)) return undefined;
     const asWritten =
       promptAsWritten ??
       (handbackCode !== undefined ? withoutHandbackInstruction(text, handbackCode) : text);
@@ -1622,10 +1615,16 @@ export class PtyClient extends EventEmitter {
     launchGeneration: number | undefined,
     firstPrompt: TerminalFirstPrompt
   ): void {
-    if (launchGeneration === undefined || this.firstPromptOpen.get(id) !== launchGeneration) return;
+    if (launchGeneration === undefined) return;
+    const displaced = this.displacedSpawns.get(id)?.entry;
+    const entry =
+      displaced?.launchGeneration === launchGeneration ? displaced : this.pendingSpawns.get(id);
+    if (entry?.launchGeneration !== launchGeneration || !takesFirstSend(entry)) return;
     const record = sanitizeFirstPrompt(firstPrompt);
     if (record?.via !== "send") return;
-    this.firstPromptOpen.delete(id);
+    // Claimed on the entry itself, so everything that keeps, restores or
+    // replays the entry keeps the claim with it.
+    entry.hasFirstPrompt = true;
     this.emit("first-prompt", id, record);
   }
 
@@ -1725,7 +1724,6 @@ export class PtyClient extends EventEmitter {
     const wasKnown = this.pendingSpawns.has(id);
     this.pendingSpawns.delete(id);
     this.displacedSpawns.delete(id);
-    this.firstPromptOpen.delete(id);
     this.ipcDataMirrorIds.delete(id);
     this.ipcDataMirrorExplicit.delete(id);
     this.ipcDataMirrorLeases.delete(id);
@@ -3078,7 +3076,6 @@ export class PtyClient extends EventEmitter {
 
     this.pendingSpawns.clear();
     this.displacedSpawns.clear();
-    this.firstPromptOpen.clear();
     this.pendingKillCount.clear();
     this.restartExitSuppression.clear();
     this.windowProjectContexts.clear();

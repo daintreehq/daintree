@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IPty } from "node-pty";
 import type { PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
+import type { TerminalFirstPrompt } from "../../../shared/types/panel.js";
 
 const shared = vi.hoisted(() => ({
   terminals: new Map<string, MockTerminalProcess>(),
@@ -26,6 +27,7 @@ interface TerminalCallbacks {
   openGracefulCapture?: (
     id: string
   ) => { shouldDiscard(data: string): boolean; close(): void } | null;
+  onFirstPromptWritten?: (id: string, firstPrompt: TerminalFirstPrompt) => void;
 }
 
 type MockPtyProcess = Pick<IPty, "kill" | "pid" | "cols" | "rows" | "process">;
@@ -344,6 +346,24 @@ describe("PtyManager adversarial", () => {
 
     expect(newTerminal.callbacks.openGracefulCapture?.("t1")).toBe(lease);
     expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it("FIRST_PROMPT_REPORTS_ONLY_FOR_THE_CURRENT_INCARNATION (#15521)", () => {
+    const manager = new PtyManager();
+    const reported: unknown[][] = [];
+    manager.on("first-prompt-written", (...args: unknown[]) => reported.push(args));
+    const record: TerminalFirstPrompt = { text: "Fix the login bug", via: "send", at: 5 };
+
+    manager.spawn("t1", spawnOptions({ projectId: "project-a", launchGeneration: 1 }));
+    const oldTerminal = shared.created[0]!;
+    oldTerminal.info.wasKilled = true;
+    manager.spawn("t1", spawnOptions({ projectId: "project-a", launchGeneration: 2 }));
+    const newTerminal = shared.created[1]!;
+
+    oldTerminal.callbacks.onFirstPromptWritten?.("t1", record);
+    newTerminal.callbacks.onFirstPromptWritten?.("t1", record);
+
+    expect(reported).toEqual([["t1", 2, record]]);
   });
 
   it("ACTIVE_PROJECT_FILTER_GATES_DATA_EMISSION", () => {

@@ -2298,6 +2298,18 @@ describe("restartTerminal and the run's first prompt (#14592)", () => {
     expect(mockSpawn.mock.calls[0]![0].hasFirstPrompt).toBe(true);
   });
 
+  it("keeps a sent record, and offers none of the resumed run's sends (#15521)", async () => {
+    const { buildResumeCommand } = await import("@shared/types");
+    vi.mocked(buildResumeCommand).mockReturnValue("claude --resume abc");
+    const sent = { ...firstPrompt, via: "send" as const };
+    show({ ...launched, agentSessionId: "abc", firstPrompt: sent });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(paneAfterRestart().firstPrompt).toEqual(sent);
+    expect(mockSpawn.mock.calls[0]![0].hasFirstPrompt).toBe(true);
+  });
+
   it("keeps the record when the restart resumes the latest conversation", async () => {
     const { buildResumeLatestCommand } = await import("@shared/types");
     vi.mocked(buildResumeLatestCommand).mockReturnValue("claude --continue");

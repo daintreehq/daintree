@@ -119,7 +119,8 @@ export interface PtyHostSpawnOptions {
   /**
    * The run already has its first-prompt record, or launches with the prompt
    * that becomes it (#15521). Main reads it to stop offering the run's sends as
-   * that record; the pty-host ignores it.
+   * that record, and sets it on its tracked copy once one is recorded; the
+   * pty-host ignores it.
    */
   hasFirstPrompt?: boolean;
   /**

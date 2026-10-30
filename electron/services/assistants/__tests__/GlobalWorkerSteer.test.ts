@@ -100,6 +100,18 @@ describe("GlobalWorkerSteer (#14551)", () => {
   });
 
   describe("an agent worker it didn't launch", () => {
+    it("offers the brief alone as the run's first prompt when it asks for a handback (#15521)", async () => {
+      await steer.prompt(target(), {
+        command: "Rebase onto develop",
+        handback: true,
+        machineName: "studio-01",
+      });
+
+      expect(submits[0]!.handback).toBeDefined();
+      expect(submits[0]!.text).toContain(`DAINTREE-DONE-${submits[0]!.handback}`);
+      expect(submits[0]!.promptAsWritten).toBe("Rebase onto develop");
+    });
+
     it("is prompted under the strict guard, stamped with where it came from", async () => {
       const receipt = await steer.prompt(target(), {
         command: "Rebase onto develop",

@@ -558,6 +558,17 @@ describe("TerminalProcess first prompt (#15521)", () => {
     expect(offered).toEqual([]);
   });
 
+  it("offers nothing to the shell a launched agent has exited to", async () => {
+    const terminal = createAgentTerminal();
+    // Launch affinity alone would still call this an agent.
+    terminal.getInfo().agentState = "exited";
+    terminal.submit("ls", undefined, undefined, undefined, undefined, candidate);
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(ptyWriteMock).toHaveBeenLastCalledWith("\r");
+    expect(offered).toEqual([]);
+  });
+
   it("offers nothing to a shell, or for a send that carried no candidate", async () => {
     const shell = createAgentTerminal({ launchAgentId: undefined });
     shell.submit("ls", undefined, undefined, undefined, undefined, candidate);

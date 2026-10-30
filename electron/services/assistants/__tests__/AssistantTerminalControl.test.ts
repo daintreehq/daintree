@@ -5,6 +5,7 @@ import {
   type AssistantCaller,
   type AssistantTerminalControlDeps,
   type AssistantTerminalRecord,
+  liveAssistantTerminalControl,
 } from "../AssistantTerminalControl.js";
 import { MAX_ASSISTANT_SLOTS } from "../../../../shared/config/assistantSlots.js";
 import type { RunningLane, RunningLaneSession } from "../../HelpSessionService.js";
@@ -747,5 +748,44 @@ describe("AssistantTerminalControl (#13496)", () => {
         message: expect.stringMatching(/Slot 2 already runs an assistant/),
       });
     });
+  });
+});
+
+describe("liveAssistantTerminalControl (#15521)", () => {
+  it("submits under the strict guard and offers the brief alone as the run's first prompt", async () => {
+    const pty = {
+      getTerminalAsync: async () => atPrompt(),
+      getLiveGeneration: () => 3,
+      submit: vi.fn(),
+    };
+    const control = liveAssistantTerminalControl({
+      help: {
+        listRunningLanes: () => [{ projectId: PROJECT, slot: 1, agentId: "codex", attached: true }],
+        getRunningLaneSession: () => ({
+          sessionId: "session-1",
+          terminalId: "t-one",
+          projectViewWebContentsId: 7,
+        }),
+        revokeSession: async () => {},
+      },
+      pty: () => pty as never,
+      extractReply: () => ({ reply: null, reachedHandback: false }),
+    });
+
+    await control.submit(LOCAL, control.require(LOCAL, "t-one"), {
+      command: "Hello",
+      generation: 3,
+      handback: false,
+    });
+
+    expect(pty.submit).toHaveBeenCalledWith(
+      "t-one",
+      expect.stringContaining("\n\nHello"),
+      expect.any(String),
+      undefined,
+      "settled-prompt-strict",
+      undefined,
+      "Hello"
+    );
   });
 });

@@ -7,26 +7,22 @@ import type { ProjectState } from "../../../shared/types/project.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 
 /**
- * Hand a run's first sent prompt (#15521) to whoever keeps its pane: this
- * machine's views of the owning project, whose store records and saves it, or
- * with none open, the project's saved state, which the next view hydrates
- * from. Never a remote view or the event bus, since the record stays on this
- * machine.
+ * Hand a run's first sent prompt (#15521) to whoever keeps its pane: the
+ * project's saved state, which a view still loading hydrates from, and this
+ * machine's live views of the project, whose stores record it and save it
+ * with the rest of the pane. Main claimed the run's record before this, so
+ * this is the only delivery. Never a remote view or the event bus, since the
+ * record stays on this machine.
  */
 export function deliverFirstPrompt(
   projectId: string,
   terminalId: string,
   firstPrompt: TerminalFirstPrompt
 ): void {
+  void recordFirstPromptInProjectState(projectId, terminalId, firstPrompt);
   const envelope = { name: "terminal:first-prompt", payload: { id: terminalId, firstPrompt } };
-  const views = getWebContentsForProject(projectId).filter(
-    (wc) => !isWithheldFromView(wc.id, CHANNELS.EVENTS_PUSH, [envelope])
-  );
-  if (views.length === 0) {
-    void recordFirstPromptInProjectState(projectId, terminalId, firstPrompt);
-    return;
-  }
-  for (const wc of views) {
+  for (const wc of getWebContentsForProject(projectId)) {
+    if (isWithheldFromView(wc.id, CHANNELS.EVENTS_PUSH, [envelope])) continue;
     try {
       wc.send(CHANNELS.EVENTS_PUSH, envelope);
     } catch {

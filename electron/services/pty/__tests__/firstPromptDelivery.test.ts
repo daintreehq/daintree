@@ -24,7 +24,13 @@ import { deliverFirstPrompt, withFirstPrompt } from "../firstPromptDelivery.js";
 const record: TerminalFirstPrompt = { text: "Fix the login bug", via: "send", at: 5 };
 
 function pane(overrides: Partial<TerminalSnapshot> = {}): TerminalSnapshot {
-  return { id: "t1", kind: "terminal", title: "Claude", launchAgentId: "claude", ...overrides };
+  const base: TerminalSnapshot = {
+    id: "t1",
+    kind: "terminal",
+    title: "Claude",
+    launchAgentId: "claude",
+  };
+  return { ...base, ...overrides };
 }
 
 function stateWith(...terminals: TerminalSnapshot[]): ProjectState {
@@ -38,10 +44,12 @@ beforeEach(() => {
 });
 
 describe("deliverFirstPrompt (#15521)", () => {
-  it("sends the record to the project's views on this machine, and saves nothing itself", () => {
+  it("sends the record to the project's views on this machine only", () => {
     const view = { id: 1, send: vi.fn() };
+    const withheldView = { id: 3, send: vi.fn() };
     const other = { id: 2, send: vi.fn() };
-    views.set("p1", [view]);
+    withheld.add(3);
+    views.set("p1", [view, withheldView]);
     views.set("p2", [other]);
 
     deliverFirstPrompt("p1", "t1", record);
@@ -50,19 +58,30 @@ describe("deliverFirstPrompt (#15521)", () => {
       name: "terminal:first-prompt",
       payload: { id: "t1", firstPrompt: record },
     });
+    expect(withheldView.send).not.toHaveBeenCalled();
     expect(other.send).not.toHaveBeenCalled();
-    expect(enqueueProjectStateUpdate).not.toHaveBeenCalled();
   });
 
-  it("saves the record into project state when no view of the project is open", async () => {
-    const withheldView = { id: 3, send: vi.fn() };
-    withheld.add(3);
-    views.set("p1", [withheldView]);
+  it.each([
+    ["no view of the project is open", []],
+    ["a view is open but may not have its panes yet", [{ id: 1, send: vi.fn() }]],
+    [
+      "the only view throws as it closes",
+      [
+        {
+          id: 1,
+          send: vi.fn(() => {
+            throw new Error("destroyed");
+          }),
+        },
+      ],
+    ],
+  ])("saves the record into project state when %s", async (_when, open) => {
+    views.set("p1", open);
 
     deliverFirstPrompt("p1", "t1", record);
     await vi.waitFor(() => expect(enqueueProjectStateUpdate).toHaveBeenCalledTimes(1));
 
-    expect(withheldView.send).not.toHaveBeenCalled();
     const [projectId, updater] = enqueueProjectStateUpdate.mock.calls[0]!;
     expect(projectId).toBe("p1");
     const next = updater(stateWith(pane(), pane({ id: "t2" })));

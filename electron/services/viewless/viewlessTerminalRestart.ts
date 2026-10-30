@@ -108,9 +108,9 @@ export async function restartTerminalWithoutView(
   // The first prompt stays with the run it was handed to (#14592), as a view's
   // restart keeps it: a resume goes on with that run, and a start-over replays
   // the stored command, which carries a launch prompt but never a sent one.
+  const startsOver = resumedSessionId === undefined;
   const keepsFirstPrompt =
-    snapshot.firstPrompt !== undefined &&
-    (resumedSessionId !== undefined || snapshot.firstPrompt.via === "launch");
+    snapshot.firstPrompt !== undefined && (!startsOver || snapshot.firstPrompt.via === "launch");
 
   const layers = await deps.getLaunchEnvLayers(projectId).catch(() => null);
   const env = mergeTerminalLaunchEnv(layers?.global, layers?.project, snapshot.env);
@@ -185,17 +185,22 @@ export async function restartTerminalWithoutView(
     // conversation just resumed for an agent whose id Daintree assigns, and
     // otherwise nothing until the next teardown captures one.
     const nextSessionId = supportsSessionIdAssignment(agentId) ? resumedSessionId : undefined;
-    await recordAgentSession(deps, projectId, terminalId, nextSessionId, !keepsFirstPrompt);
+    await recordAgentSession(deps, projectId, terminalId, nextSessionId, startsOver);
   }
   return "restarted";
 }
 
+/**
+ * `startedOver` drops a sent first prompt from the saved pane, read when the
+ * write runs: one the old run took while it was being stopped is its record,
+ * never the new conversation's.
+ */
 async function recordAgentSession(
   deps: ViewlessDeps,
   projectId: string,
   terminalId: string,
   agentSessionId: string | undefined,
-  dropFirstPrompt = false
+  startedOver = false
 ): Promise<void> {
   await deps.stateWriter
     .enqueueProjectStateUpdate(projectId, (existing) =>
@@ -204,7 +209,9 @@ async function recordAgentSession(
             ...existing,
             terminals: existing.terminals.map((terminal) => {
               if (terminal.id !== terminalId) return terminal;
-              if (!dropFirstPrompt) return { ...terminal, agentSessionId };
+              if (!startedOver || terminal.firstPrompt?.via !== "send") {
+                return { ...terminal, agentSessionId };
+              }
               const { firstPrompt: _dropped, ...rest } = terminal;
               return { ...rest, agentSessionId };
             }),

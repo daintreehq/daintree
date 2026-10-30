@@ -32,6 +32,7 @@ import {
   beginBatch,
   consumeBatch,
   resetBatchState,
+  takeDeferredPersist,
 } from "@/store/slices/panelRegistry/hydrationBatch";
 import { recordSentFirstPrompt, setupFirstPromptListeners } from "../firstPrompt";
 
@@ -74,6 +75,19 @@ describe("recordSentFirstPrompt (#15521)", () => {
 
     expect(firstPromptOf("t1")).toEqual(sent);
     expect(saveNormalized).toHaveBeenCalledTimes(1);
+    const [savedById, savedIds] = saveNormalized.mock.calls[0]!;
+    expect(savedById.t1.firstPrompt).toEqual(sent);
+    expect(savedIds).toEqual(["t1"]);
+  });
+
+  it("never lets a later send replace the record", () => {
+    seed();
+
+    recordSentFirstPrompt("t1", sent);
+    recordSentFirstPrompt("t1", { ...sent, text: "Also the signup form", at: 9 });
+
+    expect(firstPromptOf("t1")).toEqual(sent);
+    expect(saveNormalized).toHaveBeenCalledTimes(1);
   });
 
   it("keeps a record the pane already has", () => {
@@ -91,6 +105,8 @@ describe("recordSentFirstPrompt (#15521)", () => {
       { isRestarting: true },
       { launchAgentId: undefined },
       { location: "trash" },
+      // Not a PTY pane, whatever it says it launched.
+      { kind: "browser" },
     ]) {
       seed(overrides);
       recordSentFirstPrompt("t1", sent);
@@ -118,6 +134,7 @@ describe("recordSentFirstPrompt (#15521)", () => {
     expect(firstPromptOf("t1")).toEqual(sent);
     expect(saveNormalized).not.toHaveBeenCalled();
     consumeBatch(token);
+    expect(takeDeferredPersist()).toBe(true);
   });
 });
 

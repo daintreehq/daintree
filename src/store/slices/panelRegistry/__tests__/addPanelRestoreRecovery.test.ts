@@ -546,6 +546,17 @@ describe("addPanel — the run's first prompt on an existing record (#14592)", (
     expect(spawn.mock.calls.at(-1)?.[0].hasFirstPrompt).toBe(true);
   });
 
+  it("seeds a carried sent record the same as a launch one (#15521)", async () => {
+    await holdWithPrompt("held-1");
+    const carried = { text: "Port the parser", via: "send" as const, at: 2_000 };
+
+    await expect(startHeld("held-1", carried)).resolves.toBe("held-1");
+    await drainMicrotasks();
+
+    expect(ptyPanel("held-1")?.firstPrompt).toEqual(carried);
+    expect(spawn.mock.calls.at(-1)?.[0].hasFirstPrompt).toBe(true);
+  });
+
   it.each([
     ["has none", undefined],
     ["has an older one", { text: "stale snapshot", via: "launch" as const, at: 500 }],

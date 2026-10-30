@@ -883,8 +883,12 @@ describe("terminal event handlers — submit-status forwarding (#11875)", () => 
 
   it("hands a run's first prompt to its owning project, never a broadcast (#15521)", () => {
     const firstPrompt = { text: "Fix the login bug", via: "send" as const, at: 5 };
+    const busEmit = vi.spyOn(events, "emit");
 
     ptyClient.emit("first-prompt", "t1", firstPrompt);
+
+    expect(JSON.stringify(busEmit.mock.calls)).not.toContain("Fix the login bug");
+    busEmit.mockRestore();
 
     expect(deliverFirstPrompt).toHaveBeenCalledWith("project-for-t1", "t1", firstPrompt);
     const leaked = [...broadcastToRenderer.mock.calls, ...broadcastToProjectRenderers.mock.calls];

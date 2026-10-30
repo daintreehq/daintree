@@ -120,6 +120,36 @@ describe("restartTerminalWithoutView", () => {
     expect(store.read()?.terminals[0]).not.toHaveProperty("firstPrompt");
   });
 
+  it.each([
+    ["keeps it when the restart resumes that run", "sess-123", true],
+    ["drops it when the restart starts a new conversation", null, false],
+  ])(
+    "for a first prompt the old run took while being stopped, %s (#15521)",
+    async (_when, captured, kept) => {
+      const firstPrompt = { text: "Fix the login bug", via: "send" as const, at: 5 };
+      const { deps, invoke, store } = setup(
+        { id: "t1", launchAgentId: "claude", command: "claude" },
+        { agentState: "working" },
+        captured
+      );
+      // Its Enter lands, and main saves the record, while the quit is under way.
+      const quit = invoke.getMockImplementation()!;
+      invoke.mockImplementation(async (projectId, channel, args) => {
+        if (channel === CHANNELS.TERMINAL_GRACEFUL_KILL) {
+          await store.enqueueProjectStateUpdate(projectId, (state) => ({
+            ...state!,
+            terminals: state!.terminals.map((t) => ({ ...t, firstPrompt })),
+          }));
+        }
+        return quit(projectId, channel, args);
+      });
+
+      await restartTerminalWithoutView(PROJECT.id, "t1", deps);
+
+      expect(store.read()?.terminals[0]?.firstPrompt).toEqual(kept ? firstPrompt : undefined);
+    }
+  );
+
   it("keeps a launch prompt when the restart replays the command that carries it", async () => {
     const firstPrompt = { text: "Fix the login bug", via: "launch" as const, at: 5 };
     const { deps, invoke, store } = setup(
