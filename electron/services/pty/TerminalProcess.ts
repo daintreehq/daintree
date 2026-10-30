@@ -2,11 +2,12 @@ import { createHash } from "node:crypto";
 import { z } from "zod/mini";
 import type * as pty from "node-pty";
 import type {
+  FirstPromptCandidate,
   TerminalResizeResult,
   TerminalSubmitGuard,
   TerminalSubmitStatusState,
 } from "../../../shared/types/pty-host.js";
-import type { PanelTitleMode } from "../../../shared/types/panel.js";
+import type { PanelTitleMode, TerminalFirstPrompt } from "../../../shared/types/panel.js";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { PLAIN_SHELL_SCROLLBACK_MAX } from "../../../shared/config/scrollback.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -117,6 +118,12 @@ export interface TerminalProcessCallbacks {
    * submits, which complete well inside the threshold and report nothing.
    */
   onSubmitStatus?: (id: string, state: TerminalSubmitStatusState) => void;
+  /**
+   * A submission carrying a first-prompt candidate had its Enter written while
+   * an agent ran here (#15521). The record holds prompt text: it goes to Main
+   * and nowhere else.
+   */
+  onFirstPromptWritten?: (id: string, firstPrompt: TerminalFirstPrompt) => void;
   /**
    * Opens this terminal's graceful-shutdown capture window (#12432), at most
    * once per teardown. The owner keeps the PTY's reads flowing past its memory
@@ -1095,13 +1102,18 @@ export class TerminalProcess {
    * A submission that reaches the pty drops the last handback: it answered an
    * earlier prompt, and the assistant's close reads its presence as the agent
    * having finished the latest one (#13128).
+   *
+   * `firstPrompt` is offered as the run's first-prompt record (#15521) once
+   * the Enter is written, and only to an agent: a send to the shell an agent
+   * left behind was never its prompt.
    */
   submit(
     text: string,
     token?: string,
     handbackCode?: string,
     guard?: TerminalSubmitGuard,
-    imagePaths?: readonly string[]
+    imagePaths?: readonly string[],
+    firstPrompt?: FirstPromptCandidate
   ): void {
     const tracker =
       handbackCode !== undefined ? this.ensureHandbackTracker() : this.terminalInfo.handbackTracker;
@@ -1110,6 +1122,13 @@ export class TerminalProcess {
       this.terminalInfo.lastHandback = undefined;
       this.terminalInfo.lastHandbackUnpublished = false;
       onTrackerWritten?.();
+      if (firstPrompt !== undefined && this.isAgentLive) {
+        this.callbacks.onFirstPromptWritten?.(this.id, {
+          ...firstPrompt,
+          via: "send",
+          at: Date.now(),
+        });
+      }
     };
     this.inputController.submit(text, token, onPtyWritten, guard, imagePaths);
   }

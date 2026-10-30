@@ -1365,6 +1365,7 @@ export const EVENT_LOCALITY: Readonly<Record<string, ChannelLocality>> = {
   "terminal:resize-result": "host",
   "terminal:spawn-result": "host",
   "terminal:submit-status": "host",
+  "terminal:first-prompt": "host",
   "terminal:notify-state": "host",
   "watchdog:active": "host",
   "watchdog:disabled": "host",

@@ -120,6 +120,7 @@ import type {
   TrimStateSummary,
   TerminalSubmitGuard,
   PtyHostDriveLease,
+  FirstPromptCandidate,
 } from "../../shared/types/pty-host.js";
 import type {
   ClosedProcessKillResult,
@@ -129,7 +130,11 @@ import type {
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
 import type { AgentState, AgentId, WaitingReason } from "../../shared/types/agent.js";
-import type { PanelKind, PanelTitleMode } from "../../shared/types/panel.js";
+import type {
+  PanelKind,
+  PanelTitleMode,
+  TerminalFirstPrompt,
+} from "../../shared/types/panel.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
 import type { PowerPolicyLevel } from "../../shared/types/powerPolicy.js";
 import type {
@@ -140,6 +145,8 @@ import type { BuiltInAgentId } from "../../shared/config/agentIds.js";
 import type { TerminalSubmissionRecord } from "../../shared/types/terminalSubmission.js";
 import { terminalAnswerOf, type TerminalAnswer } from "../../shared/utils/terminalSubmission.js";
 import type { TerminalHandback } from "../../shared/types/handback.js";
+import { withoutHandbackInstruction } from "../../shared/utils/handback.js";
+import { buildFirstPrompt, sanitizeFirstPrompt } from "../../shared/utils/firstPrompt.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -405,6 +412,13 @@ export class PtyClient extends EventEmitter {
    * replay (#12498). Keyed by id, tagged with the displacing generation.
    */
   private displacedSpawns = new Map<string, { byGeneration: number; entry: PtyHostSpawnOptions }>();
+  /**
+   * Agent runs with no first-prompt record yet (#15521), by the launch
+   * generation that started each. A run launched with its prompt or carrying
+   * its record is never here, and one leaves at its first written send, so a
+   * send to any other terminal costs this lookup and nothing more.
+   */
+  private firstPromptOpen = new Map<string, number>();
   /** Terminals the host mirrors to Main: an explicit enable or any live lease. */
   private ipcDataMirrorIds = new Set<string>();
   private ipcDataMirrorExplicit = new Set<string>();
@@ -822,6 +836,9 @@ export class PtyClient extends EventEmitter {
         // closes its own incarnation, never the successor.
         onTerminalExit: (id, exitCode, launchGeneration) => {
           terminalCrashReapService.detachTerminal(id, launchGeneration);
+          if (launchGeneration !== undefined && this.firstPromptOpen.get(id) === launchGeneration) {
+            this.firstPromptOpen.delete(id);
+          }
           const ledger = getLifecycleLedger();
           const generation = launchGeneration ?? ledger.currentGeneration(id);
           if (generation !== undefined && ledger.currentGeneration(id) !== undefined) {
@@ -861,6 +878,8 @@ export class PtyClient extends EventEmitter {
           if (result.launchGeneration === null) return false;
           return getLifecycleLedger().isCurrent(id, result.launchGeneration);
         },
+        onFirstPromptWritten: (id, launchGeneration, firstPrompt) =>
+          this.acceptFirstPrompt(id, launchGeneration, firstPrompt),
       },
       logWarn: (message) => console.warn(message),
     };
@@ -1479,6 +1498,11 @@ export class PtyClient extends EventEmitter {
       this.displacedSpawns.delete(id);
     }
     this.pendingSpawns.set(id, resolvedOptions);
+    if (resolvedOptions.launchAgentId !== undefined && resolvedOptions.hasFirstPrompt !== true) {
+      this.firstPromptOpen.set(id, generation);
+    } else {
+      this.firstPromptOpen.delete(id);
+    }
     this.recovery.sendSpawnWithPostInput(shard, id, resolvedOptions);
   }
 
@@ -1538,14 +1562,22 @@ export class PtyClient extends EventEmitter {
     if (answer !== null) this.emit("terminal-input", id, { answer } satisfies TerminalInputNotice);
   }
 
+  /**
+   * `promptAsWritten` is the text as its caller wrote it, before Daintree added
+   * anything of its own (a provenance stamp), for the run's first-prompt record
+   * (#15521). Absent, it is `text` without the handback instruction for
+   * `handbackCode`. `null` marks a submission that is nobody's prompt.
+   */
   submit(
     id: string,
     text: string,
     submissionToken?: string,
     handbackCode?: string,
     guard?: TerminalSubmitGuard,
-    imagePaths?: readonly string[]
+    imagePaths?: readonly string[],
+    promptAsWritten?: string | null
   ): void {
+    const firstPrompt = this.firstPromptCandidate(id, text, handbackCode, promptAsWritten);
     this.shardForTerminal(id).send({
       type: "submit",
       id,
@@ -1554,12 +1586,51 @@ export class PtyClient extends EventEmitter {
       handbackCode,
       ...(guard !== undefined ? { guard } : {}),
       ...(imagePaths !== undefined && imagePaths.length > 0 ? { imagePaths: [...imagePaths] } : {}),
+      ...(firstPrompt !== undefined ? { firstPrompt } : {}),
     });
     // A guarded submission is Daintree waking an idle agent, not anyone
     // answering it, and the host may yet refuse it.
     if (guard === undefined) {
       this.emit("terminal-input", id, { answer: "submit" } satisfies TerminalInputNotice);
     }
+  }
+
+  /**
+   * What a submit offers as its run's first prompt (#15521), held by the host
+   * until the submission's Enter is written. Nothing once the run has one.
+   */
+  private firstPromptCandidate(
+    id: string,
+    text: string,
+    handbackCode: string | undefined,
+    promptAsWritten: string | null | undefined
+  ): FirstPromptCandidate | undefined {
+    const open = this.firstPromptOpen.get(id);
+    if (open === undefined || promptAsWritten === null) return undefined;
+    if (this.pendingSpawns.get(id)?.launchGeneration !== open) return undefined;
+    const asWritten =
+      promptAsWritten ??
+      (handbackCode !== undefined ? withoutHandbackInstruction(text, handbackCode) : text);
+    const record = buildFirstPrompt(asWritten, "send", 0);
+    if (!record) return undefined;
+    return { text: record.text, ...(record.truncated && { truncated: true as const }) };
+  }
+
+  /**
+   * A first-prompt candidate's Enter was written (#15521). The first one the
+   * run still has no record for becomes it; any other, including one written
+   * to a predecessor after a respawn, is dropped.
+   */
+  private acceptFirstPrompt(
+    id: string,
+    launchGeneration: number | undefined,
+    firstPrompt: TerminalFirstPrompt
+  ): void {
+    if (launchGeneration === undefined || this.firstPromptOpen.get(id) !== launchGeneration) return;
+    const record = sanitizeFirstPrompt(firstPrompt);
+    if (record?.via !== "send") return;
+    this.firstPromptOpen.delete(id);
+    this.emit("first-prompt", id, record);
   }
 
   /**
@@ -1658,6 +1729,7 @@ export class PtyClient extends EventEmitter {
     const wasKnown = this.pendingSpawns.has(id);
     this.pendingSpawns.delete(id);
     this.displacedSpawns.delete(id);
+    this.firstPromptOpen.delete(id);
     this.ipcDataMirrorIds.delete(id);
     this.ipcDataMirrorExplicit.delete(id);
     this.ipcDataMirrorLeases.delete(id);
@@ -3010,6 +3082,7 @@ export class PtyClient extends EventEmitter {
 
     this.pendingSpawns.clear();
     this.displacedSpawns.clear();
+    this.firstPromptOpen.clear();
     this.pendingKillCount.clear();
     this.restartExitSuppression.clear();
     this.windowProjectContexts.clear();

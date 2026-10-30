@@ -226,6 +226,7 @@ import type { PaneNotifyState } from "../shared/types/terminalNotify.js";
 import type {
   TerminalStatusPayload,
   TerminalSubmitStatusPayload,
+  TerminalFirstPromptPayload,
   SpawnResult,
   TerminalResourceBatchPayload,
   BroadcastWriteResultPayload,
@@ -1000,6 +1001,9 @@ function buildElectronApi(): ElectronAPI {
 
       onSubmitStatus: (callback: (data: TerminalSubmitStatusPayload) => void): (() => void) =>
         _eventBusOn("terminal:submit-status", callback),
+
+      onFirstPrompt: (callback: (data: TerminalFirstPromptPayload) => void): (() => void) =>
+        _eventBusOn("terminal:first-prompt", callback),
 
       onNotifyState: (callback: (data: PaneNotifyState) => void): (() => void) =>
         _eventBusOn("terminal:notify-state", callback),

@@ -407,6 +407,12 @@ export async function runAgentLaunch(
         }
       : undefined;
 
+  // Only an agent is handed the prompt as its launch argument, recorded as the
+  // caller wrote it (#14592), and a run that has it never offers a send as its
+  // first prompt (#15521).
+  const firstPrompt =
+    launchAgentId !== undefined ? buildFirstPrompt(args.prompt, "launch", Date.now()) : undefined;
+
   try {
     await deps.invoke<string>(project.id, CHANNELS.TERMINAL_SPAWN, [
       {
@@ -433,6 +439,7 @@ export async function runAgentLaunch(
             }
           : {}),
         ...(handbackCode !== undefined ? { handbackCode } : {}),
+        ...(firstPrompt !== undefined ? { hasFirstPrompt: true } : {}),
         ...(actionContext !== undefined ? { actionContext } : {}),
       },
     ]);
@@ -444,10 +451,7 @@ export async function runAgentLaunch(
   // What a view's persistence would write for this panel the moment it was
   // added: the shared base fields, then the PTY fragment through the same
   // serializer. Never fatal — the agent is running either way, and hydration
-  // still finds it through the pty-host. Only an agent is handed the prompt as
-  // its launch argument, recorded as the caller wrote it (#14592).
-  const firstPrompt =
-    launchAgentId !== undefined ? buildFirstPrompt(args.prompt, "launch", Date.now()) : undefined;
+  // still finds it through the pty-host.
   const panel: PtySnapshotSource = {
     cwd,
     launchAgentId,

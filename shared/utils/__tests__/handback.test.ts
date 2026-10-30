@@ -4,6 +4,7 @@ import {
   buildHandbackInstruction,
   isHandbackCode,
   mintHandbackCode,
+  withoutHandbackInstruction,
 } from "../handback.js";
 import { HANDBACK_CODE_TOKEN } from "../../types/handback.js";
 
@@ -47,6 +48,21 @@ describe("appendHandbackInstruction", () => {
   it("leaves interior text untouched", () => {
     const text = "line one\n\n  indented line two  ";
     expect(appendHandbackInstruction(text, "k7f3qa").startsWith(`${text}\n\n`)).toBe(true);
+  });
+});
+
+describe("withoutHandbackInstruction", () => {
+  it("gives back the caller's text from what was submitted", () => {
+    const text = "line one\n\n  indented line two  ";
+    expect(withoutHandbackInstruction(appendHandbackInstruction(text, "k7f3qa"), "k7f3qa")).toBe(
+      text
+    );
+  });
+
+  it("leaves text that doesn't end with this code's instruction as it is", () => {
+    const other = appendHandbackInstruction("Fix the bug", "zzzzzz");
+    expect(withoutHandbackInstruction(other, "k7f3qa")).toBe(other);
+    expect(withoutHandbackInstruction("Fix the bug", "k7f3qa")).toBe("Fix the bug");
   });
 });
 

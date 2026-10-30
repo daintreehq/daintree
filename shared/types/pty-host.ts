@@ -9,7 +9,12 @@
 
 import type { HostLogEvent } from "./host-log.js";
 import type { AgentState, AgentId, WaitingReason } from "./agent.js";
-import type { PanelKind, TerminalFlowStatus, PanelTitleMode } from "./panel.js";
+import type {
+  PanelKind,
+  TerminalFlowStatus,
+  PanelTitleMode,
+  TerminalFirstPrompt,
+} from "./panel.js";
 import type { ResourceProfile } from "./resourceProfile.js";
 import type { PowerPolicyLevel } from "./powerPolicy.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
@@ -111,6 +116,12 @@ export interface PtyHostSpawnOptions {
   agentPresetColor?: string;
   /** Original user-selected preset ID; unchanged across fallback hops for revert UX. */
   originalAgentPresetId?: string;
+  /**
+   * The run already has its first-prompt record, or launches with the prompt
+   * that becomes it (#15521). Main reads it to stop offering the run's sends as
+   * that record; the pty-host ignores it.
+   */
+  hasFirstPrompt?: boolean;
   /**
    * Launch generation minted by Main's lifecycle ledger (see
    * `shared/utils/agentLifecycleLedger.ts`). Monotonic per terminal id;
@@ -280,6 +291,11 @@ export type PtyHostRequest =
       guard?: TerminalSubmitGuard;
       /** Absolute paths of images attached in the composer, in order (#12792). */
       imagePaths?: string[];
+      /**
+       * The run's first-prompt record if this submission is the first one
+       * written (#15521), already capped. Present only while the run has none.
+       */
+      firstPrompt?: FirstPromptCandidate;
     }
   | { type: "stage"; id: string; text: string }
   /** Take back a guarded submission before its Enter (#12491). Ordinary ones are unaffected. */
@@ -705,6 +721,15 @@ export type PtyHostEvent =
   // renderer needs a closed state union it can drive a pill/banner from rather
   // than a free-form string it would have to pattern-match.
   | { type: "submit-status"; id: string; state: TerminalSubmitStatusState }
+  // A submission carrying a first-prompt candidate had its Enter written to an
+  // agent (#15521). Carries prompt text, so it never reaches a log or the
+  // event bus.
+  | {
+      type: "first-prompt-written";
+      id: string;
+      launchGeneration?: number;
+      firstPrompt: TerminalFirstPrompt;
+    }
   | { type: "spawn-result"; id: string; result: SpawnResult }
   | { type: "resize-result"; id: string; result: TerminalResizeResult }
   | { type: "kill-by-project-result"; requestId: string; killed: number }
@@ -1374,9 +1399,18 @@ export type TerminalSubmitStatusState = "slow" | "stalled" | "settled" | "failed
  */
 export type TerminalSubmitGuard = "settled-prompt" | "settled-prompt-strict";
 
+/** A submission's text as a run's first-prompt record, before it was written (#15521). */
+export type FirstPromptCandidate = Omit<TerminalFirstPrompt, "via" | "at">;
+
 export interface TerminalSubmitStatusPayload {
   id: string;
   state: TerminalSubmitStatusState;
+}
+
+/** The first send written to an agent run that had no first prompt (#15521). */
+export interface TerminalFirstPromptPayload {
+  id: string;
+  firstPrompt: TerminalFirstPrompt;
 }
 
 /**

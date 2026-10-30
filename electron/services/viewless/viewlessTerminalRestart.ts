@@ -105,6 +105,12 @@ export async function restartTerminalWithoutView(
       command = stripAssignedSessionIdArgs(command, agentId);
     }
   }
+  // The first prompt stays with the run it was handed to (#14592), as a view's
+  // restart keeps it: a resume goes on with that run, and a start-over replays
+  // the stored command, which carries a launch prompt but never a sent one.
+  const keepsFirstPrompt =
+    snapshot.firstPrompt !== undefined &&
+    (resumedSessionId !== undefined || snapshot.firstPrompt.via === "launch");
 
   const layers = await deps.getLaunchEnvLayers(projectId).catch(() => null);
   const env = mergeTerminalLaunchEnv(layers?.global, layers?.project, snapshot.env);
@@ -154,6 +160,7 @@ export async function restartTerminalWithoutView(
               agentPresetId: snapshot.agentPresetId,
               agentPresetColor: snapshot.agentPresetColor,
               originalAgentPresetId: snapshot.originalPresetId,
+              ...(keepsFirstPrompt ? { hasFirstPrompt: true } : {}),
             }
           : {}),
         ...(actionContext !== undefined ? { actionContext } : {}),
@@ -178,7 +185,7 @@ export async function restartTerminalWithoutView(
     // conversation just resumed for an agent whose id Daintree assigns, and
     // otherwise nothing until the next teardown captures one.
     const nextSessionId = supportsSessionIdAssignment(agentId) ? resumedSessionId : undefined;
-    await recordAgentSession(deps, projectId, terminalId, nextSessionId);
+    await recordAgentSession(deps, projectId, terminalId, nextSessionId, !keepsFirstPrompt);
   }
   return "restarted";
 }
@@ -187,16 +194,20 @@ async function recordAgentSession(
   deps: ViewlessDeps,
   projectId: string,
   terminalId: string,
-  agentSessionId: string | undefined
+  agentSessionId: string | undefined,
+  dropFirstPrompt = false
 ): Promise<void> {
   await deps.stateWriter
     .enqueueProjectStateUpdate(projectId, (existing) =>
       existing
         ? {
             ...existing,
-            terminals: existing.terminals.map((terminal) =>
-              terminal.id === terminalId ? { ...terminal, agentSessionId } : terminal
-            ),
+            terminals: existing.terminals.map((terminal) => {
+              if (terminal.id !== terminalId) return terminal;
+              if (!dropFirstPrompt) return { ...terminal, agentSessionId };
+              const { firstPrompt: _dropped, ...rest } = terminal;
+              return { ...rest, agentSessionId };
+            }),
           }
         : existing
     )

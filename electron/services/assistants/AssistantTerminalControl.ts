@@ -91,7 +91,17 @@ export interface AssistantTerminalControlDeps {
     options?: { tailRows: number }
   ): Promise<{ data: string; partial?: true } | null>;
   /** Under the strict settled-prompt guard, so the lane admits it only while the gate still holds. */
-  submit(terminalId: string, text: string, submissionToken: string, handbackCode?: string): void;
+  /**
+   * `promptAsWritten` is the brief before its provenance stamp and handback
+   * instruction, for the run's first-prompt record (#15521).
+   */
+  submit(
+    terminalId: string,
+    text: string,
+    submissionToken: string,
+    handbackCode: string | undefined,
+    promptAsWritten: string
+  ): void;
   doubleEscape(terminalId: string): void;
   /** Raw bytes, as a person's keystrokes arrive. */
   write(terminalId: string, data: string): void;
@@ -406,10 +416,11 @@ export class AssistantTerminalControl {
         target.terminalId,
         appendHandbackInstruction(stamped, handbackCode),
         submissionToken,
-        handbackCode
+        handbackCode,
+        request.command
       );
     } else {
-      this.deps.submit(target.terminalId, stamped, submissionToken);
+      this.deps.submit(target.terminalId, stamped, submissionToken, undefined, request.command);
     }
     return buildTerminalSendCommandReceipt(target.terminalId, request.command, submissionToken);
   }
@@ -660,8 +671,18 @@ export function liveAssistantTerminalControl(deps: {
     getLiveGeneration: (terminalId) => deps.pty()?.getLiveGeneration(terminalId) ?? null,
     serializedState: (terminalId, options) =>
       deps.pty()?.getSerializedStateAsync(terminalId, options) ?? Promise.resolve(null),
-    submit: (terminalId, text, submissionToken, handbackCode) =>
-      deps.pty()?.submit(terminalId, text, submissionToken, handbackCode, "settled-prompt-strict"),
+    submit: (terminalId, text, submissionToken, handbackCode, promptAsWritten) =>
+      deps
+        .pty()
+        ?.submit(
+          terminalId,
+          text,
+          submissionToken,
+          handbackCode,
+          "settled-prompt-strict",
+          undefined,
+          promptAsWritten
+        ),
     doubleEscape: (terminalId) => deps.pty()?.batchDoubleEscape([terminalId]),
     write: (terminalId, data) => deps.pty()?.write(terminalId, data),
     launch: async (request) => {

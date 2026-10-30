@@ -129,6 +129,7 @@ import type {
   TerminalReliabilityMetricPayload,
   TerminalResizeResult,
   TerminalSubmitStatusPayload,
+  TerminalFirstPromptPayload,
   TerminalStatusPayload,
   TerminalResourceBatchPayload,
   BroadcastWriteResultPayload,
@@ -1593,6 +1594,9 @@ export interface IpcEventMap {
   };
   "terminal:status": TerminalStatusPayload;
   "terminal:submit-status": TerminalSubmitStatusPayload;
+  // Carries prompt text (#15521): sent only to this machine's views of the
+  // owning project, never relayed off the bus or to a remote view.
+  "terminal:first-prompt": TerminalFirstPromptPayload;
   // Every terminal currently handed to an orchestrating pane (#12490). The
   // whole list on each change: it is small and rarely changes.
   "terminal:adoptions-changed": import("./mcpServer.js").TerminalAdoptionEntry[];
@@ -2722,6 +2726,7 @@ export type IpcEventBusMap = Pick<
   | "terminal:reliability-metric"
   | "terminal:status"
   | "terminal:submit-status"
+  | "terminal:first-prompt"
   // Terminals handed to an orchestrating pane (global broadcast)
   | "terminal:adoptions-changed"
   | "terminal:canopy-size-holds-changed"
