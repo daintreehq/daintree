@@ -215,7 +215,8 @@ export function SlottedInputField({
               aria-hidden="true"
               className="pointer-events-none absolute inset-0 flex items-center px-2.5 text-text-primary peer-focus:hidden peer-disabled:opacity-50 forced-colors:hidden"
             >
-              <PathTail className={cn("min-w-0", className)}>{tail}</PathTail>
+              {/* `pre`: an input keeps runs of spaces, and the copy must match it. */}
+              <PathTail className={cn("min-w-0 whitespace-pre", className)}>{tail}</PathTail>
             </span>
           )}
         </span>
