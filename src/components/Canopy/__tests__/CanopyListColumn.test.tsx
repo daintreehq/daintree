@@ -151,6 +151,37 @@ describe("CanopyListColumn", () => {
     expect(useCanopyStore.getState().listWidth).toBe(layout.column - 10);
   });
 
+  it("lets a sibling's width stand when a gesture here moved nothing on screen", () => {
+    act(() => useCanopyStore.getState().setListWidth(900));
+    layout.split = 1000;
+    layout.column = 1000 - CANOPY_PANE_MIN_WIDTH;
+    const { handle } = mount();
+    // A sibling stored its width; its event hasn't reached this view yet.
+    window.localStorage.setItem(KEY, "700");
+    fireEvent.keyDown(handle, { key: "End" });
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+    fireEvent.mouseDown(handle, { button: 0, clientX: layout.column });
+    fireEvent.mouseMove(document, { clientX: layout.column + 200 });
+    fireEvent.mouseUp(document);
+    expect(window.localStorage.getItem(KEY)).toBe("700");
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: KEY }));
+    });
+    expect(useCanopyStore.getState().listWidth).toBe(700);
+  });
+
+  it("leaves the default as the default when its edge is pushed against the cap", () => {
+    layout.split = 800;
+    layout.column = 800 - CANOPY_PANE_MIN_WIDTH;
+    const { handle } = mount();
+    fireEvent.keyDown(handle, { key: "End" });
+    fireEvent.mouseDown(handle, { button: 0, clientX: layout.column });
+    fireEvent.mouseMove(document, { clientX: layout.column + 100 });
+    fireEvent.mouseUp(document);
+    expect(useCanopyStore.getState().listWidth).toBeNull();
+    expect(window.localStorage.getItem(KEY)).toBeNull();
+  });
+
   it("can't be moved in a window too narrow for both minimums, and says so in its range", () => {
     layout.split = 500;
     layout.column = 250;

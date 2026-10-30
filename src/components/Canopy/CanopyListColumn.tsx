@@ -22,8 +22,13 @@ interface ListDrag {
   /** The widest the list can show, past which the width kept doesn't move on screen. */
   room: number;
   setDrag: (width: number | null) => void;
-  /** Once, on whatever ends the drag: the width it reached, null if it never moved. */
+  /** Once, on whatever ends the drag: the width it reached, null if the edge never moved on screen. */
   onEnd: (width: number | null) => void;
+}
+
+/** Whether a width the list is set to shows as `shown` does, once the window's cap has had its say. */
+function sameOnScreen(width: number, shown: number, room: number): boolean {
+  return Math.round(Math.min(width, room)) === Math.round(shown);
 }
 
 // Outside the component, as the assistant panel's is: document listeners and
@@ -37,6 +42,9 @@ function beginListDrag({
   onEnd,
 }: ListDrag): () => void {
   let reached: number | null = null;
+  // Pushing against the cap moves nothing on screen, and a drag that never
+  // moved the edge keeps nothing. One that moved and came back still does.
+  let moved = false;
   const onMouseMove = (event: globalThis.MouseEvent) => {
     reached = resizeCappedPreference(
       startWidth + event.clientX - startX,
@@ -45,6 +53,7 @@ function beginListDrag({
       CANOPY_LIST_MAX_WIDTH,
       room
     );
+    if (!sameOnScreen(reached, startWidth, room)) moved = true;
     setDrag(reached);
   };
 
@@ -61,7 +70,7 @@ function beginListDrag({
     window.removeEventListener("blur", end);
     document.body.style.userSelect = prevUserSelect;
     document.body.style.cursor = prevCursor;
-    onEnd(reached);
+    onEnd(moved ? reached : null);
   };
 
   document.addEventListener("mousemove", onMouseMove);
@@ -146,9 +155,8 @@ export function CanopyListColumn({
       onEnd: (reached) => {
         endDragRef.current = null;
         // Kept before the drag lets go, so no frame shows the old width between.
-        // A press that never moved leaves the default as the default; one that
-        // did is kept even where it came back to this view's width, since a
-        // sibling view may have stored another meanwhile.
+        // A drag that moved is kept even where it came back to this view's
+        // width, since a sibling view may have stored another meanwhile.
         if (reached !== null) setListWidth(reached);
         setListDrag(null);
       },
@@ -164,15 +172,15 @@ export function CanopyListColumn({
     largeStep: RESIZE_STEP_LARGE,
     onChange: (width) => {
       if (!resizable) return;
-      setListWidth(
-        resizeCappedPreference(
-          width,
-          listWidth ?? shownWidth,
-          CANOPY_LIST_MIN_WIDTH,
-          CANOPY_LIST_MAX_WIDTH,
-          room
-        )
+      const next = resizeCappedPreference(
+        width,
+        listWidth ?? shownWidth,
+        CANOPY_LIST_MIN_WIDTH,
+        CANOPY_LIST_MAX_WIDTH,
+        room
       );
+      // A step at a bound or the cap moves nothing on screen, so keeps nothing.
+      if (!sameOnScreen(next, shownWidth, room)) setListWidth(next);
     },
     onReset: () => setListWidth(null),
   });
