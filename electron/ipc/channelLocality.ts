@@ -174,6 +174,7 @@ export const CHANNEL_LOCALITY = {
   "canopy:watch-terminal": "host",
   "claude:list-subagents": "host",
   "claude:read-subagent-transcript": "host",
+  "claude:find-reply-span": "host",
   "cli:get-status": "shell",
   "cli:install": "shell",
   "clipboard:pick-attachments": "hybrid",

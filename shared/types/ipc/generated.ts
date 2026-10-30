@@ -496,6 +496,10 @@ export interface GeneratedIpcInvokeMap {
     args: [runId: string, target: import("./canopy.js").CanopyTarget];
     result: import("./canopy.js").CanopyTerminalView;
   };
+  "claude:find-reply-span": {
+    args: [__1: { terminalId: string; selection: string }];
+    result: string | null;
+  };
   "claude:list-subagents": {
     args: [__0: { terminalId: string }];
     result: import("./agentSubagents.js").AgentSubagentsResult;

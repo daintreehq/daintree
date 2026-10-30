@@ -28,6 +28,7 @@ vi.mock("fs/promises", async (importOriginal) => {
 import {
   fitWithinResponseCap,
   readClaudeLastMessage,
+  readClaudeRecentReplies,
   tailWithinJsonBytes,
 } from "../ClaudeSessionReader.js";
 import { deriveProjectSlug } from "../ClaudeSubagentReader.js";
@@ -1100,5 +1101,78 @@ describe("fitWithinResponseCap", () => {
 
     expect(Buffer.byteLength(JSON.stringify(fitted))).toBeLessThanOrEqual(300);
     expect(fitted.message?.truncated).toBe(true);
+  });
+});
+
+describe("readClaudeRecentReplies", () => {
+  const recent = (options: Parameters<typeof readClaudeRecentReplies>[1] = {}) =>
+    readClaudeRecentReplies({ projectsRoot, cwd: CWD, sessionId: SESSION }, options);
+
+  it("returns each text block of the main chain's replies, newest first and untrimmed", async () => {
+    await seed([
+      prompt("go"),
+      assistant("msg_1", [text("First reply.")]),
+      assistant("msg_2", [text("  indented\n\n- item\n"), toolUse("t1", "Bash")]),
+      toolResult("t1", "tool output"),
+      assistant("msg_3", [thinking("hmm"), text("Second block."), text("Third block.")]),
+    ]);
+
+    expect(await recent()).toEqual([
+      "Third block.",
+      "Second block.",
+      "  indented\n\n- item\n",
+      "First reply.",
+    ]);
+  });
+
+  it("leaves out sidechain, meta and empty records, prompts and tool results", async () => {
+    await seed([
+      assistant("msg_1", [text("Kept.")]),
+      assistant("msg_2", [text("Subagent.")], { isSidechain: true }),
+      assistant("msg_3", [text("Injected.")], { isMeta: true }),
+      assistant("msg_4", [text("   ")]),
+      prompt("a prompt"),
+      toolResult("t1", [text("result text")]),
+    ]);
+
+    expect(await recent()).toEqual(["Kept."]);
+  });
+
+  it("stops at the block limit and at the character budget", async () => {
+    await seed([
+      assistant("msg_1", [text("one")]),
+      assistant("msg_2", [text("two")]),
+      assistant("msg_3", [text("three")]),
+    ]);
+
+    expect(await recent({ limit: 2 })).toEqual(["three", "two"]);
+    expect(await recent({ maxChars: 8 })).toEqual(["three", "two"]);
+    expect(await recent({ maxChars: 4 })).toEqual([]);
+  });
+
+  it("has nothing for a session with no transcript or an unsafe id", async () => {
+    expect(await recent()).toEqual([]);
+    await seed([assistant("msg_1", [text("Kept.")])]);
+    expect(
+      await readClaudeRecentReplies({ projectsRoot, cwd: CWD, sessionId: "../escape" })
+    ).toEqual([]);
+  });
+
+  it("refuses a transcript planted as a symlink", async () => {
+    const real = path.join(root, "elsewhere.jsonl");
+    await writeFile(real, assistant("msg_1", [text("Not this session's.")]) + "\n", "utf8");
+    const dir = path.join(projectsRoot, deriveProjectSlug(CWD));
+    await mkdir(dir, { recursive: true });
+    await symlink(real, path.join(dir, `${SESSION}.jsonl`));
+
+    expect(await recent()).toEqual([]);
+  });
+
+  it("throws once aborted rather than answering", async () => {
+    await seed([assistant("msg_1", [text("Kept.")])]);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(recent({ signal: controller.signal })).rejects.toThrow();
   });
 });

@@ -127,6 +127,7 @@ export const CHANNEL_LEASE_POLICY = {
   "canopy:watch-terminal": "free",
   "claude:list-subagents": "free",
   "claude:read-subagent-transcript": "free",
+  "claude:find-reply-span": "free",
   "clipboard:pick-attachments": "free",
   "clipboard:save-image": "free",
   "clipboard:thumbnail-from-path": "free",

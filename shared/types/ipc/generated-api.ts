@@ -206,6 +206,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["canopy-host:watch-assistant"]["result"]>;
   };
   claude: {
+    findReplySpan(
+      ...args: IpcInvokeMap["claude:find-reply-span"]["args"]
+    ): Promise<IpcInvokeMap["claude:find-reply-span"]["result"]>;
     listSubagents(
       ...args: IpcInvokeMap["claude:list-subagents"]["args"]
     ): Promise<IpcInvokeMap["claude:list-subagents"]["result"]>;
