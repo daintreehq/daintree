@@ -2,6 +2,7 @@ import { Fragment, useState, useEffect, useRef } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { TypedNameConfirmInput } from "@/components/ui/TypedNameConfirmInput";
+import { TYPED_GATE_HINT } from "@/components/ui/ConfirmDialog";
 import { TitleEntity } from "@/components/ui/TitleEntity";
 import { AlertTriangle, Trash2 } from "lucide-react";
 import { PathText } from "@/components/Worktree/PathText";
@@ -234,9 +235,11 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const confirmTarget = worktree.branch || worktree.name;
   // Gated on the name alone, whatever the tree holds.
   const isNameGated = isProtectedBranch || worktree.isMainWorktree === true;
-  // Names the reason the gate is actually up.
-  // A failed status fetch forces `hasTrackedChanges` for the tier; the words
-  // must not turn that assumption into an observed fact.
+  // Names the reason the gate is up when nothing above it does. A verified
+  // dirty tree already has its loss stated, with the counts, as the danger row
+  // in "What will happen" directly above the gate, so a preamble there only
+  // paraphrased it. A failed status fetch forces `hasTrackedChanges` for the
+  // tier; the words must not turn that assumption into an observed fact.
   const highTierPreamble =
     worktree.isMainWorktree === true
       ? "This is the main worktree — force-deleting it is irreversible."
@@ -244,11 +247,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
         ? "This worktree is on a protected branch — force-deleting it is irreversible."
         : verifyFailed
           ? "This worktree's uncommitted work couldn't be checked — force-deleting it may permanently discard that work."
-          : fileSummary.hasTrackedChanges
-            ? "Force-deleting this worktree permanently discards the uncommitted work listed above."
-            : nestedFileCount > 0
-              ? "Force-deleting this worktree permanently discards the uncommitted work inside its submodules listed above."
-              : "Force-deleting this worktree discards an uncommitted submodule change — this is irreversible.";
+          : undefined;
   // Never gate a delete that cannot proceed. A typed-name input on a blocked
   // state asks for the most emphatic consent the app has and then refuses
   // anyway; blocked is a different thing from D3, and this is where they part.
@@ -829,6 +828,19 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
         </>
       ),
     });
+  } else if (worktree.branch) {
+    // Said outright rather than left to an unticked option: keeping the branch
+    // is what makes a plain delete recoverable, and it is the outcome people ask
+    // about first.
+    consequences.push({
+      key: "branch-kept",
+      tone: "neutral",
+      content: (
+        <span className="text-text-secondary">
+          Branch <span className="font-mono break-all">{worktree.branch}</span> is kept
+        </span>
+      ),
+    });
   }
 
   // Fail-closed disclosure only. The option-driven consequences live in the
@@ -957,9 +969,18 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   const submodulesHeadingId = "worktree-delete-submodules-heading";
   const submoduleCommitsHeadingId = "worktree-delete-submodule-commits-heading";
 
-  const changeCountLabel = [fileChangeLabel, submoduleEntryCount > 0 ? submoduleEntryLabel : null]
-    .filter(Boolean)
-    .join(", ");
+  // A tally beside the heading, not a sentence: the list under it is the
+  // evidence and the "What will happen" row is where the loss is stated, so the
+  // heading only has to say how much is listed.
+  const changeCountLabel = verifyFailed
+    ? fileChangeLabel
+    : [
+        trackedChangeCount > 0 ? `${trackedChangeCount} tracked` : null,
+        untrackedFileCount > 0 ? `${untrackedFileCount} untracked` : null,
+        submoduleEntryCount > 0 ? submoduleEntryLabel : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
   const nestedCountLabel = [
     nestedFileCount > 0 ? nestedFileLabel : null,
     atRiskCommitCount > 0
@@ -1250,7 +1271,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                           at the price of work nobody could list. */}
                       {verifyFailed
                         ? "May be needed — but it would also discard any work the failed check couldn't list"
-                        : `Required to delete this worktree — ${atStakeLabel}`}
+                        : hasFileChanges && nestedFileCount === 0
+                          ? "Required to delete a worktree with uncommitted work"
+                          : `Required to delete this worktree — ${atStakeLabel}`}
                     </span>
                   )}
                 </span>
@@ -1325,7 +1348,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                     data-tone={row.tone}
                     className={cn(
                       "text-sm flex items-start gap-1.5",
-                      row.tone === "danger" ? "text-status-error font-medium" : "text-text-primary"
+                      row.tone === "danger"
+                        ? "text-status-danger-text font-medium"
+                        : "text-text-primary"
                     )}
                   >
                     {row.tone === "danger" && (
@@ -1385,7 +1410,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           isDeleting
             ? SUBMIT_CHECK_LABEL
             : isHighTier && !isConfirmMatched
-              ? "Confirm the name above to enable"
+              ? TYPED_GATE_HINT
               : (blockedHint ?? undefined)
         }
         secondaryAction={{ label: "Cancel", onClick: onClose }}

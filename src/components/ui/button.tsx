@@ -5,6 +5,20 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 import { Spinner, SPINNER_SIZE_CLASSES } from "@/components/ui/Spinner";
 
+/**
+ * The filled dialog primaries while their action is unavailable. Fading the fill
+ * to half opacity left a muddy maroon with a dark label on dark themes and a
+ * washed-out salmon on light ones: a button that looked broken rather than not
+ * yet ready. Unavailable is one neutral look for both fills instead: a flat,
+ * frameless chip with a secondary label that neither hovers nor presses, so it
+ * reads as a step still to come, never as a second, weaker red, and never as
+ * the framed outline button an enabled secondary action wears. Keyed on
+ * `data-unavailable`, which the Button sets only when the action is unavailable
+ * and not merely busy: a loading button keeps its fill under the spinner.
+ */
+const FILLED_UNAVAILABLE =
+  "data-unavailable:bg-overlay-soft data-unavailable:text-text-secondary data-unavailable:ring-transparent data-unavailable:shadow-none data-unavailable:cursor-not-allowed data-unavailable:hover:bg-overlay-soft data-unavailable:active:bg-overlay-soft data-unavailable:active:scale-100";
+
 // Every paint property `transition` covers except the spatial ones: `scale`
 // stays out so the press snaps back as well as in, and `press-scale` is what
 // removes it under reduced motion.
@@ -20,8 +34,12 @@ const buttonVariants = cva(
         // smudge a dark label on a light accent.
         default:
           "bg-primary text-primary-foreground ring-1 ring-tint/20 shadow-[var(--theme-shadow-ambient)] inset-shadow-[0_1px_0_rgba(255,255,255,0.15)] hover:brightness-110 active:brightness-95 active:inset-shadow-none",
-        destructive:
-          "bg-destructive text-text-inverse [text-shadow:0_1px_0_rgba(255,255,255,0.15)] ring-1 ring-tint/20 shadow-[var(--theme-shadow-ambient)] inset-shadow-[0_1px_0_rgba(255,255,255,0.15)] hover:brightness-110 active:brightness-95 active:inset-shadow-none",
+        // A solid fill derived per theme from the danger ink, deep enough that the
+        // theme's near-white end reads on it (`deriveDestructiveAction`), with
+        // hover and press as fills of their own so the gate measures every state
+        // the button paints. Flat like `contrast`: no emboss or top highlight,
+        // which read as a raised plastic plaque against the app's flat chrome.
+        destructive: `bg-destructive text-destructive-foreground ring-1 ring-tint/15 shadow-[var(--theme-shadow-ambient)] hover:bg-destructive-hover active:bg-destructive-active active:shadow-none ${FILLED_UNAVAILABLE}`,
         outline:
           "ring-1 ring-border-strong bg-surface-panel-elevated/95 backdrop-blur-md text-text-primary shadow-[var(--theme-shadow-ambient)] inset-shadow-[0_1px_0_var(--color-overlay-soft)] hover:bg-surface-panel-elevated hover:ring-border-default hover:text-text-primary active:bg-overlay-soft active:shadow-none",
         // High-contrast INVERSE CTA: a near-white fill + off-black text on dark
@@ -36,8 +54,7 @@ const buttonVariants = cva(
         // press cue that reads correctly in both polarities (darkens the white
         // fill / lightens the black fill). Not opacity, which would fade the
         // label and let the surface bleed through.
-        contrast:
-          "bg-text-primary text-text-inverse ring-1 ring-tint/15 shadow-[var(--theme-shadow-ambient)] hover:bg-[color-mix(in_oklab,var(--color-text-primary)_90%,var(--color-text-inverse))] active:bg-[color-mix(in_oklab,var(--color-text-primary)_82%,var(--color-text-inverse))] active:shadow-none",
+        contrast: `bg-text-primary text-text-inverse ring-1 ring-tint/15 shadow-[var(--theme-shadow-ambient)] hover:bg-[color-mix(in_oklab,var(--color-text-primary)_90%,var(--color-text-inverse))] active:bg-[color-mix(in_oklab,var(--color-text-primary)_82%,var(--color-text-inverse))] active:shadow-none ${FILLED_UNAVAILABLE}`,
         secondary:
           "bg-secondary text-secondary-foreground ring-1 ring-tint/[0.08] shadow-[var(--theme-shadow-ambient)] hover:bg-secondary/90 active:shadow-none",
         // `overlay-hover`, not `overlay-soft`: it is the one fill in the ladder
@@ -53,8 +70,9 @@ const buttonVariants = cva(
         subtle:
           "bg-surface-panel text-text-secondary ring-1 ring-border-strong hover:bg-surface-panel-elevated hover:ring-border-default hover:text-text-primary",
         pill: "rounded-full bg-surface-panel backdrop-blur-md ring-1 ring-border-strong text-text-secondary hover:bg-surface-panel-elevated hover:ring-border-default hover:text-text-primary",
-        "ghost-danger":
-          "text-status-error hover:bg-status-error/10 focus-visible:outline-status-error",
+        // The text-grade danger ink: the graphical one fell under 4.5:1 on its
+        // own hover wash. The focus ring stays the app's one focus colour.
+        "ghost-danger": "text-status-danger-text hover:bg-status-error/10",
         "ghost-info": "text-status-info hover:bg-status-info/10",
         info: "bg-status-info text-text-inverse [text-shadow:0_1px_0_rgba(255,255,255,0.15)] ring-1 ring-tint/20 shadow-[var(--theme-shadow-ambient)] inset-shadow-[0_1px_0_rgba(255,255,255,0.15)] hover:brightness-110 active:brightness-95 active:inset-shadow-none",
         glow: "bg-primary text-primary-foreground shadow-[0_0_15px_rgb(from_var(--theme-accent-primary)_r_g_b/0.3)] ring-1 ring-tint/25 hover:shadow-[0_0_25px_rgb(from_var(--theme-accent-primary)_r_g_b/0.45)] hover:brightness-110 active:shadow-[var(--shadow-inset)] active:brightness-95",
@@ -209,6 +227,8 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     // the inline one rather than the default's 32px padded frame.
     const resolvedSize: ButtonSize = size ?? (variant === "link" ? "inline" : "default");
     const resolvedAriaDisabled = loading || disabled ? true : ariaDisabled || undefined;
+    const unavailable =
+      !loading && (Boolean(disabled) || ariaDisabled === true || ariaDisabled === "true");
     const labelledShift =
       loadingPresentation === "labelled" && !asChild
         ? LABELLED_IDLE_SHIFT_CLASS_MAP[resolvedSize]
@@ -245,7 +265,12 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
           className,
           // Busy outranks unavailable: a caller's own disabled dimming (the
           // `disabled:`/`aria-disabled:` 50%) would fade the spinner it overlays.
-          loading && "disabled:opacity-100 aria-disabled:opacity-100"
+          loading && "disabled:opacity-100 aria-disabled:opacity-100",
+          // The filled primaries draw their own unavailable look, which a caller's
+          // stock half-opacity dimming would wash out again.
+          unavailable &&
+            (variant === "destructive" || variant === "contrast") &&
+            "disabled:opacity-100 aria-disabled:opacity-100"
         )}
         ref={ref}
         // Never natively disabled while busy — that would drop keyboard focus to
@@ -264,6 +289,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         aria-busy={loading || ariaBusy || undefined}
         aria-disabled={resolvedAriaDisabled}
         data-loading={loading || undefined}
+        data-unavailable={unavailable || undefined}
         // A durable hook for the forced-colors rule in index.css. In
         // forced-colors the UA replaces every button's background with a system
         // colour, so `bg-destructive` stops distinguishing this button from

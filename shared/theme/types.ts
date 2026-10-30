@@ -82,6 +82,13 @@ export const APP_THEME_TOKEN_KEYS = [
   "status-success-text",
   "status-warning-text",
   "status-info-text",
+  // Filled destructive action: the solid fill a destructive Button paints, its
+  // hover and press steps, and the label drawn on all three. Derived by
+  // deriveDestructiveAction (themes.ts) from status-danger.
+  "destructive-fill",
+  "destructive-fill-hover",
+  "destructive-fill-active",
+  "destructive-foreground",
 
   // Activity (real-time agent states)
   "activity-active",
