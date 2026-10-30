@@ -6,6 +6,7 @@ import {
   EMPTY_VOICE_COMMAND_VOCABULARY,
   buildVoiceCommandVocabulary,
   classifySpokenCommandOpening,
+  openingVoiceCommandToken,
   opensWithVoiceCommand,
   planSpokenCommand,
   rewriteSpokenCommand,
@@ -85,6 +86,19 @@ describe("buildVoiceCommandVocabulary", () => {
     const scopes = claude.entries.map((entry) => entry.scope);
     expect(scopes.slice(0, 3)).toEqual(["project", "project", "user"]);
     expect(scopes.indexOf("built-in")).toBeGreaterThan(scopes.lastIndexOf("user"));
+  });
+
+  it("keeps the file discovery read a command from, and none for a built-in", () => {
+    const vocabulary = buildVoiceCommandVocabulary(
+      [
+        custom("claude", "/ship-it", { sourcePath: "/home/dev/.claude/skills/ship-it/SKILL.md" }),
+        ...getBuiltinSlashCommands("claude"),
+      ],
+      sourcesOf("claude")
+    );
+    const byToken = new Map(vocabulary.entries.map((entry) => [entry.token, entry]));
+    expect(byToken.get("/ship-it")!.sourcePath).toBe("/home/dev/.claude/skills/ship-it/SKILL.md");
+    expect(byToken.get("/compact")).not.toHaveProperty("sourcePath");
   });
 
   it("leaves out a command no declared prefix opens", () => {
@@ -267,5 +281,22 @@ describe("opensWithVoiceCommand", () => {
     ["fix it", false],
   ])("%j: %s", (text, expected) => {
     expect(opensWithVoiceCommand(text)).toBe(expected);
+  });
+});
+
+describe("openingVoiceCommandToken", () => {
+  it.each([
+    ["/compact", "/compact"],
+    ["  $plugin-creator on the repo", "$plugin-creator"],
+    ["/prompts:deploy\nnow", "/prompts:deploy"],
+    // The agent would read the punctuation as part of the name.
+    ["/review, then ship it", null],
+    ["/etc/hosts is wrong", null],
+    ["$PATH is empty", null],
+    ["/ alone", null],
+    ["please /review it", null],
+    ["", null],
+  ])("%j: %s", (text, expected) => {
+    expect(openingVoiceCommandToken(text)).toBe(expected);
   });
 });
