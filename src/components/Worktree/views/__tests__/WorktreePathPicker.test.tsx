@@ -11,11 +11,11 @@ vi.mock("@/hooks/useHostPlatform", async (importOriginal) => ({
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorktreePathPicker } from "../WorktreePathPicker";
 
-function renderPicker(): HTMLInputElement {
+function renderPicker(value = ""): HTMLInputElement {
   render(
     <TooltipProvider>
       <WorktreePathPicker
-        value=""
+        value={value}
         onChange={() => {}}
         isGeneratingPath={false}
         onBrowseClick={() => {}}
@@ -39,5 +39,29 @@ describe("WorktreePathPicker placeholder", () => {
   it("shows a POSIX path elsewhere", () => {
     isWindowsMock.mockReturnValue(false);
     expect(renderPicker().placeholder).toMatch(/^\/[^\\]+$/);
+  });
+});
+
+describe("WorktreePathPicker tail", () => {
+  const path = "/Users/someone/Projects/daintree-worktrees/feature-issue-15356-a-long-branch";
+
+  it("paints the path behind a leading ellipsis over the input's own text", () => {
+    isWindowsMock.mockReturnValue(false);
+    const input = renderPicker(path);
+    const tail = input.parentElement!.querySelector(".path-tail")!;
+    expect(tail.textContent).toBe(path);
+    expect(tail.querySelector("bdi")?.getAttribute("dir")).toBe("ltr");
+    // The input stays the accessible field; the painted copy is hidden from AT.
+    expect(tail.closest("[aria-hidden='true']")).not.toBeNull();
+    expect(input.value).toBe(path);
+    expect(input.className).toContain("text-transparent");
+    expect(input.className).toContain("focus:text-text-primary");
+  });
+
+  it("leaves an empty field to its placeholder", () => {
+    isWindowsMock.mockReturnValue(false);
+    const input = renderPicker();
+    expect(input.parentElement!.querySelector(".path-tail")).toBeNull();
+    expect(input.className).not.toContain("text-transparent");
   });
 });

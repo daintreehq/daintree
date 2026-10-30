@@ -11,7 +11,7 @@ import {
 } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { PathCaption } from "../projectDialogFields";
+import { PathCaption, SlottedInputField } from "../projectDialogFields";
 
 afterEach(() => {
   cleanup();
@@ -87,5 +87,28 @@ describe("PathCaption", () => {
     expect(container.querySelectorAll("[title]")).toHaveLength(0);
     fireEvent.focus(captionSpans(container)[0]!);
     expect((await screen.findByRole("tooltip")).textContent).toBe(path);
+  });
+});
+
+describe("SlottedInputField", () => {
+  it("renders the input bare unless asked to elide its start", () => {
+    render(<SlottedInputField data-testid="field" value="/a/b" onChange={() => {}} />);
+    const input = screen.getByTestId("field");
+    expect(input.parentElement!.querySelector(".path-tail")).toBeNull();
+    expect(input.className).toContain("text-text-primary");
+    expect(input.className).not.toContain("text-transparent");
+  });
+
+  it("hides the painted tail on focus and dims it with a disabled input", () => {
+    render(
+      <SlottedInputField data-testid="field" value="/a/b" onChange={() => {}} elideStart disabled />
+    );
+    const input = screen.getByTestId("field");
+    const overlay = input.nextElementSibling!;
+    expect(input.className).toContain("peer");
+    expect(overlay.getAttribute("aria-hidden")).toBe("true");
+    expect(overlay.className).toContain("peer-focus:hidden");
+    expect(overlay.className).toContain("peer-disabled:opacity-50");
+    expect(overlay.className).toContain("pointer-events-none");
   });
 });

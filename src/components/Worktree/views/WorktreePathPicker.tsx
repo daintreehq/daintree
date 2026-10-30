@@ -44,7 +44,9 @@ export function WorktreePathPicker({
 
   // A generated path differs from its siblings only in the last segment, which
   // is exactly what a left-anchored input clips. While the field isn't being
-  // edited, show the tail; the user's own caret wins once they're in it.
+  // edited, `elideStart` paints the tail; the user's own caret wins once they're
+  // in it. The input is kept scrolled to its end beneath that, so a click lands
+  // on the character the tail showed there.
   const inputRef = useRef<HTMLInputElement>(null);
   useLayoutEffect(() => {
     const input = inputRef.current;
@@ -68,6 +70,7 @@ export function WorktreePathPicker({
       autoCorrect="off"
       autoCapitalize="off"
       className="font-mono text-xs"
+      elideStart
       disabled={isPending}
       invalid={hasError}
       aria-describedby={
