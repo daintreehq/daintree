@@ -78,10 +78,10 @@ const listVar = (container: HTMLElement) =>
 
 const storageWrites = () => vi.spyOn(Storage.prototype, "setItem");
 
-const ariaRange = (handle: HTMLElement) =>
-  ["aria-valuemin", "aria-valuenow", "aria-valuemax"].map((name) =>
-    Number(handle.getAttribute(name))
-  );
+const ariaRange = (handle: HTMLElement) => {
+  const read = (name: string) => Number(handle.getAttribute(name));
+  return { min: read("aria-valuemin"), now: read("aria-valuenow"), max: read("aria-valuemax") };
+};
 
 describe("CanopyListColumn", () => {
   it("follows the pointer while dragged, and keeps the width only once it lands", () => {
@@ -155,7 +155,7 @@ describe("CanopyListColumn", () => {
     layout.split = 500;
     layout.column = 250;
     const { handle } = mount();
-    const [min, now, max] = ariaRange(handle);
+    const { min, now, max } = ariaRange(handle);
     expect(min).toBeLessThanOrEqual(now);
     expect(now).toBeLessThanOrEqual(max);
 
@@ -205,6 +205,22 @@ describe("CanopyListColumn", () => {
     expect(useCanopyStore.getState().listWidth).toBe(600);
     expect(window.localStorage.getItem(KEY)).toBe("600");
     expect(listVar(container)).toBe("600px");
+  });
+
+  it("keeps a drag that came back to this view's width over a sibling's still on its way", () => {
+    act(() => useCanopyStore.getState().setListWidth(600));
+    layout.column = 600;
+    const { handle } = mount();
+    fireEvent.mouseDown(handle, { button: 0, clientX: 600 });
+    fireEvent.mouseMove(document, { clientX: 650 });
+    window.localStorage.setItem(KEY, "700");
+    fireEvent.mouseMove(document, { clientX: 600 });
+    fireEvent.mouseUp(document);
+    expect(window.localStorage.getItem(KEY)).toBe("600");
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: KEY }));
+    });
+    expect(useCanopyStore.getState().listWidth).toBe(600);
   });
 
   it("lands the drag when the window loses focus, and puts the page's own styles back", () => {

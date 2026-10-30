@@ -498,6 +498,15 @@ describe("the list's width", () => {
     }
   });
 
+  it("resets past a sibling's width whose news hasn't reached this view yet", async () => {
+    const store = await reload();
+    window.localStorage.setItem(KEY, "700");
+    store.getState().setListWidth(null);
+    expect(window.localStorage.getItem(KEY)).toBeNull();
+    window.dispatchEvent(new StorageEvent("storage", { key: KEY }));
+    expect(store.getState().listWidth).toBeNull();
+  });
+
   it("follows a sibling view's width as soon as that view sets it", async () => {
     const store = await reload();
     window.localStorage.setItem(KEY, "700");

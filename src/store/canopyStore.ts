@@ -566,7 +566,10 @@ export const useCanopyStore = create<CanopyState>((set, get) => ({
   listWidth: loadListWidth(),
   setListWidth: (width) => {
     const next = width === null ? null : clampCanopyListWidth(width);
-    if ((width !== null && next === null) || next === get().listWidth) return;
+    if (width !== null && next === null) return;
+    // Unchanged only if storage agrees: a sibling's write whose event hasn't
+    // landed yet would otherwise outlive a reset made here first.
+    if (next === get().listWidth && next === loadListWidth()) return;
     saveListWidth(next);
     set({ listWidth: next });
   },

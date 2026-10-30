@@ -146,11 +146,10 @@ export function CanopyListColumn({
       onEnd: (reached) => {
         endDragRef.current = null;
         // Kept before the drag lets go, so no frame shows the old width between.
-        // A press that never moved leaves the default as the default. Against
-        // the width held now: a sibling view may have set another meanwhile.
-        if (reached !== null && reached !== useCanopyStore.getState().listWidth) {
-          setListWidth(reached);
-        }
+        // A press that never moved leaves the default as the default; one that
+        // did is kept even where it came back to this view's width, since a
+        // sibling view may have stored another meanwhile.
+        if (reached !== null) setListWidth(reached);
         setListDrag(null);
       },
     });
