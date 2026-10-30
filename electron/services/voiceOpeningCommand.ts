@@ -53,7 +53,15 @@ async function readPrefixOnce(filePath: string, deadline: number): Promise<strin
     const pending = inFlightReads.get(filePath);
     if (pending) return pending;
     if (inFlightReads.size < MAX_PENDING_READS) break;
-    await Promise.race(inFlightReads.values());
+    // Its own deadline races too, so a waiter behind reads that never settle
+    // ends with its caller rather than staying suspended.
+    let timer: NodeJS.Timeout | undefined;
+    const expired = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, Math.max(0, deadline - performance.now()));
+      timer.unref();
+    });
+    await Promise.race([...inFlightReads.values(), expired]);
+    clearTimeout(timer);
     // A turn that comes after the caller gave up starts no read: none would wait for it.
     if (performance.now() >= deadline) return null;
   }

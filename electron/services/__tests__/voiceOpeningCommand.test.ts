@@ -432,7 +432,9 @@ describe("readVoiceOpeningCommand", () => {
 
     expect(reads.map((read) => read?.excerpt)).toEqual([undefined, undefined, undefined]);
     expect(fsp.open).toHaveBeenCalledTimes(2);
+    // The third gave up with its caller, so the reads settling later starts it nothing.
     await hung.release();
+    expect(fsp.open).toHaveBeenCalledTimes(2);
   });
 
   it("gives a third file its turn once a read settles, within its budget", async () => {
