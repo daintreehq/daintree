@@ -1083,7 +1083,7 @@ export function CanopyCard({
         </div>
         {canReply && voiceMicNotice && <VoiceMicNoticeBanner notice={voiceMicNotice} />}
         {canReply ? (
-          <div ref={replyHostRef} data-keybindings-isolated="" className="contents">
+          <div key="reply" ref={replyHostRef} data-keybindings-isolated="" className="contents">
             <Suspense fallback={null}>
               <LazyHybridInputBar
                 ref={composerRef}
@@ -1120,7 +1120,9 @@ export function CanopyCard({
             </p>
           </div>
         ) : (
-          <div className="flex shrink-0 flex-col">
+          // Keyed apart from the reply's host, so the reply unmounts whole and
+          // its ref still sees whether its editor held the keyboard.
+          <div key="secret" className="flex shrink-0 flex-col">
             {/* The composer's footprint and the line under it, so a reading that
                 finds a secret prompt doesn't resize the agent either. */}
             <p className="flex h-15 items-center gap-1.5 px-3.5 text-xs text-text-secondary">
