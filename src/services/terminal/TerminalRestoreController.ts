@@ -196,8 +196,6 @@ export class TerminalRestoreController {
     const target = managed.pendingRestoreGeometry;
     managed.pendingRestoreGeometry = undefined;
     managed.isSerializedRestoreInProgress = false;
-    // A snapshot keeps no record of the widths its rows were laid out at.
-    managed.commandLinksDisposable?.markRowsStale();
     if (!target) return;
     // Below the bookkeeping above on purpose: the write gate and the restore
     // flag must be released on every exit, so a refused grid can never leave
@@ -324,6 +322,9 @@ export class TerminalRestoreController {
           const current = this.deps.getInstance(id);
           if (current !== managed || managed.restoreGeneration !== restoreGeneration) return;
 
+          // A snapshot keeps no record of the widths its rows were laid out at.
+          current.commandLinksDisposable?.markRowsStale();
+
           // Closed only now: the deferred chunks below were produced for the
           // live grid, so they must not be written while the pane is still
           // parked at the capture width.
@@ -371,6 +372,7 @@ export class TerminalRestoreController {
     managed.lastScrollbackRestoreError = undefined;
 
     let replayed = false;
+    let wrote = false;
     const task = async (): Promise<boolean> => {
       const scrollBackOffset = managed.isUserScrolledBack
         ? managed.terminal.buffer.active.baseY - managed.terminal.buffer.active.viewportY
@@ -384,6 +386,7 @@ export class TerminalRestoreController {
         }
 
         managed.terminal.reset();
+        wrote = true;
         this.alignToCaptureGeometry(managed, captureGeometry);
 
         // CAN rides the first chunk and the tail the last, so chunking and
@@ -455,6 +458,8 @@ export class TerminalRestoreController {
           // is fully laid out at the capture grid by now and this reflow sees
           // the whole payload. A superseded generation never reaches here — its
           // successor is mid-replay at its own capture width and owns the grid.
+          // Even part of a snapshot keeps no record of the widths its rows were laid out at.
+          if (wrote) managed.commandLinksDisposable?.markRowsStale();
           this.endRestoreWindow(managed, restoreWindow);
 
           if (scrollBackOffset > 0) {

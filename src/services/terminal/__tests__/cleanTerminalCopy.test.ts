@@ -205,12 +205,19 @@ describe("cleanTerminalSelection", () => {
       ["  from collections import defaultdict", "  import sys"],
       ["  git fetch origin feature/clean-copy", "  git status"],
       ["  description: Read the terminal output", "  summary: Ships the clean copy."],
-      ["  Component | Changes in this release", "  Terminal | Adds clean copy"],
+      ["  Component | Changes in this release", "  Terminal | Adds clean copy."],
+      ["  git fetch origin feature/clean-copy", "  git diff ."],
       ["  The implementation is complete now.", "  Documentation remains unchanged."],
     ];
     for (const pair of pairs) {
       expect(await cleanAll(40, pair)).toBe(pair.map((line) => line.trim()).join("\n"));
     }
+  });
+
+  it("rejoins a message's first paragraph however it ends", async () => {
+    expect(
+      await cleanAll(40, ["⏺ Copying agent output from a terminal", "  requires xterm (see notes)"])
+    ).toBe("Copying agent output from a terminal requires xterm (see notes)");
   });
 
   it("looks for code in the whole row, not just the part selected", async () => {
@@ -318,6 +325,10 @@ describe("cleanTerminalSelection", () => {
     ]);
     expect(cleanTerminalSelection(selecting(terminal, 0, 1, { endX: 11 }), ALL_KNOWN)).toBe(
       "Copying agent output from a terminal gives you"
+    );
+    // A drag past the end of a row ends at the start of the next one.
+    expect(cleanTerminalSelection(selecting(terminal, 0, 2, { endX: 0 }), ALL_KNOWN)).toBe(
+      "Copying agent output from a terminal gives you the text exactly as the TUI"
     );
   });
 
