@@ -2294,6 +2294,8 @@ describe("restartTerminal and the run's first prompt (#14592)", () => {
 
     expect(mockSpawn.mock.calls[0]![0].command).toBe("claude --resume abc");
     expect(paneAfterRestart().firstPrompt).toEqual(firstPrompt);
+    // The run keeps its record, so main offers none of its sends (#15521).
+    expect(mockSpawn.mock.calls[0]![0].hasFirstPrompt).toBe(true);
   });
 
   it("keeps the record when the restart resumes the latest conversation", async () => {
@@ -2314,6 +2316,8 @@ describe("restartTerminal and the run's first prompt (#14592)", () => {
 
     expect(mockSpawn.mock.calls[0]![0].command).toBe("claude --flag");
     expect(paneAfterRestart().firstPrompt).toBeUndefined();
+    // The new conversation's first send written becomes its record (#15521).
+    expect(mockSpawn.mock.calls[0]![0]).not.toHaveProperty("hasFirstPrompt");
   });
 
   it("keeps the record when the stored launch command, prompt included, runs again", async () => {
@@ -2356,6 +2360,7 @@ describe("restartTerminal and the run's first prompt (#14592)", () => {
 
     expect(mockSpawn.mock.calls[0]![0].command).toBe(launched.command);
     expect(paneAfterRestart().firstPrompt).toBeUndefined();
+    expect(mockSpawn.mock.calls[0]![0]).not.toHaveProperty("hasFirstPrompt");
   });
 
   it("drops the record when a demoted pane restarts as a bare shell", async () => {

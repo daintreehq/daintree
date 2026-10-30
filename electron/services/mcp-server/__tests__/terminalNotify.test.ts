@@ -53,6 +53,7 @@ interface Submitted {
   text: string;
   token?: string;
   guard?: string;
+  promptAsWritten?: string | null;
 }
 
 class FakePtyClient implements TerminalNotifyPtyClient {
@@ -75,8 +76,16 @@ class FakePtyClient implements TerminalNotifyPtyClient {
     return { ...info, submission: { token: submissionToken, ...record } };
   }
 
-  submit(id: string, text: string, token?: string, _handback?: string, guard?: string) {
-    this.submitted.push({ id, text, token, guard });
+  submit(
+    id: string,
+    text: string,
+    token?: string,
+    _handback?: string,
+    guard?: string,
+    _imagePaths?: readonly string[],
+    promptAsWritten?: string | null
+  ) {
+    this.submitted.push({ id, text, token, guard, promptAsWritten });
   }
 
   withdrawGuardedSubmission(id: string, token: string) {
@@ -320,7 +329,12 @@ describe("TerminalNotifyService", () => {
       await flushNotice();
 
       expect(h.client.submitted).toHaveLength(1);
-      expect(h.client.submitted[0]).toMatchObject({ id: OWN, guard: "settled-prompt" });
+      // A notice is nobody's prompt, so it never becomes the pane's first one (#15521).
+      expect(h.client.submitted[0]).toMatchObject({
+        id: OWN,
+        guard: "settled-prompt",
+        promptAsWritten: null,
+      });
       expect(h.client.submitted[0].text).toBe(
         'Daintree: terminal t-a stopped working, now waiting at its prompt. Your note: "run the reviewer next". Check it with terminal.getStatus.'
       );

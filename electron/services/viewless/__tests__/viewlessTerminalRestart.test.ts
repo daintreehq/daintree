@@ -88,6 +88,51 @@ describe("restartTerminalWithoutView", () => {
     expect(spawned(invoke).command).toBe("claude --model opus");
   });
 
+  it("keeps the run's first prompt across a resume (#15521)", async () => {
+    const firstPrompt = { text: "Fix the login bug", via: "send" as const, at: 5 };
+    const { deps, invoke, store } = setup(
+      { id: "t1", launchAgentId: "claude", command: "claude", firstPrompt },
+      { agentState: "working" },
+      "sess-123"
+    );
+
+    await restartTerminalWithoutView(PROJECT.id, "t1", deps);
+
+    expect(spawned(invoke).hasFirstPrompt).toBe(true);
+    expect(store.read()?.terminals[0]?.firstPrompt).toEqual(firstPrompt);
+  });
+
+  it("drops a sent first prompt when the restart starts a new conversation (#15521)", async () => {
+    const { deps, invoke, store } = setup(
+      {
+        id: "t1",
+        launchAgentId: "claude",
+        command: "claude",
+        firstPrompt: { text: "Fix the login bug", via: "send", at: 5 },
+      },
+      { agentState: "working" }
+    );
+
+    await restartTerminalWithoutView(PROJECT.id, "t1", deps);
+
+    // The new run offers its own first send instead.
+    expect(spawned(invoke)).not.toHaveProperty("hasFirstPrompt");
+    expect(store.read()?.terminals[0]).not.toHaveProperty("firstPrompt");
+  });
+
+  it("keeps a launch prompt when the restart replays the command that carries it", async () => {
+    const firstPrompt = { text: "Fix the login bug", via: "launch" as const, at: 5 };
+    const { deps, invoke, store } = setup(
+      { id: "t1", launchAgentId: "claude", command: "claude 'Fix the login bug'", firstPrompt },
+      { agentState: "working" }
+    );
+
+    await restartTerminalWithoutView(PROJECT.id, "t1", deps);
+
+    expect(spawned(invoke).hasFirstPrompt).toBe(true);
+    expect(store.read()?.terminals[0]?.firstPrompt).toEqual(firstPrompt);
+  });
+
   it("kills and respawns a plain terminal with its command", async () => {
     const { deps, invoke } = setup({ id: "t2", title: "Dev", command: "npm run dev" }, {});
 
