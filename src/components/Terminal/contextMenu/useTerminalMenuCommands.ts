@@ -19,6 +19,8 @@ import { isBrowserPanel } from "@shared/types/panel";
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import type { TerminalLink } from "@/services/terminal/types";
 import { cleanTerminalSelection } from "@/services/terminal/cleanTerminalCopy";
+import { copyCleanSelection } from "@/services/terminal/copyCleanSelection";
+import { getBuiltInRuntimeAgentId } from "@/utils/terminalType";
 import type { WorktreeScope } from "@shared/utils/path";
 import { closeAndAnnounce } from "@/lib/accessibility";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
@@ -182,8 +184,11 @@ export function useTerminalMenuCommands({
         case "copy-clean": {
           const managed = peekTerminalService()?.get(terminalId);
           if (!managed?.terminal) break;
-          const text = cleanTerminalSelection(managed.terminal, managed.commandLinksDisposable);
-          if (text) copyWithToast("Selection", text);
+          copyCleanSelection(
+            managed.terminal.getSelection(),
+            cleanTerminalSelection(managed.terminal, managed.commandLinksDisposable),
+            getBuiltInRuntimeAgentId(terminal) === "claude" ? terminalId : null
+          );
           break;
         }
         case "paste":

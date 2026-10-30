@@ -934,6 +934,41 @@ describe("CanopyTerminal links, as the run's grid pane opens them (#15332)", () 
     expect(writeText).toHaveBeenLastCalledWith("Release notes:\n- Added a clean copy");
   });
 
+  it("asks this machine's host for the reply a local run's selection shows (#15527)", async () => {
+    const writeText = vi.fn(async (_text: string) => {});
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    const findReplySpan = vi.fn(async () => "Run the **build** first.");
+    (window.electron as unknown as Record<string, unknown>).claude = { findReplySpan };
+    const { frame } = mount();
+    xterm.current!.selection = "⏺ Run the build first.";
+
+    openMenu(frame);
+    xterm.current!.selection = "  something else";
+    await act(async () => screen.getByText("Copy clean text").click());
+
+    expect(findReplySpan).toHaveBeenCalledWith({
+      terminalId: "run-1",
+      selection: "⏺ Run the build first.",
+    });
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(writeText).toHaveBeenCalledWith("Run the **build** first.");
+  });
+
+  it("copies another host's run as drawn, without asking (#15527)", async () => {
+    const writeText = vi.fn(async (_text: string) => {});
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    const findReplySpan = vi.fn(async () => "Run the **build** first.");
+    (window.electron as unknown as Record<string, unknown>).claude = { findReplySpan };
+    const { container } = render(<CanopyTerminal runId="r" spawnedAt={1} api={otherHostApi()} />);
+    xterm.current!.selection = "⏺ Run the build first.";
+
+    openMenu(container.querySelector("[data-canopy-terminal]")!);
+    await act(async () => screen.getByText("Copy clean text").click());
+
+    expect(findReplySpan).not.toHaveBeenCalled();
+    expect(writeText).toHaveBeenCalledWith("Run the build first.");
+  });
+
   it("pastes from its menu through the open stream", async () => {
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,

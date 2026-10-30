@@ -29,6 +29,7 @@ import {
 import { reportFileLinkFailure } from "@/services/terminal/FileLinksAddon";
 import { resolveSelectedFilePath } from "@/services/terminal/filePathDetection";
 import { cleanTerminalSelection } from "@/services/terminal/cleanTerminalCopy";
+import { copyCleanSelection } from "@/services/terminal/copyCleanSelection";
 import { TerminalLinkHandler } from "@/services/terminal/TerminalLinkHandler";
 import { remoteHostOfView } from "@/services/terminal/remoteLoopbackLinks";
 import {
@@ -602,10 +603,14 @@ export function CanopyTerminal({
       },
       openLink: (url, options) => links.openLink(url, undefined, options),
       copy: (text) => copyWithToast("Selection", text),
-      copyClean: (captured) => {
-        const text = cleanTerminalSelection(terminal, linkSlots.commandLinksDisposable, captured);
-        if (text) copyWithToast("Selection", text);
-      },
+      // A run on this machine may be Claude Code's, whose reply the host can
+      // find as written; the host decides, since this view needn't hold its panel.
+      copyClean: (captured) =>
+        copyCleanSelection(
+          captured,
+          cleanTerminalSelection(terminal, linkSlots.commandLinksDisposable, captured),
+          localId !== null && isLocalHostId(hostId) ? localId : null
+        ),
       // Chosen from the menu, so the user's own input: sent through the stream
       // like a typed paste, formatted as the grid's paste is.
       paste: () => {
