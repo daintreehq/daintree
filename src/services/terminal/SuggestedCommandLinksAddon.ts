@@ -37,6 +37,8 @@ export interface SuggestedCommandLinks extends IDisposable {
    * `buffer.length` when none is.
    */
   widthKnownFrom(buffer: IBuffer): number;
+  /** Every row the buffer holds now was laid out at a width it never saw, as a replayed snapshot's were. */
+  markRowsStale(): void;
 }
 
 export interface SuggestedCommand {
@@ -356,6 +358,10 @@ export class SuggestedCommandLinksAddon implements ILinkProvider {
         if (this._staleOnReturn && this._isNormalActive()) this._markAllStale();
       }),
     ];
+  }
+
+  markRowsStale(): void {
+    this._markAllStale();
   }
 
   private _isNormalActive(): boolean {

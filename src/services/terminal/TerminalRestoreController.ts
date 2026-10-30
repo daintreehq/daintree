@@ -196,6 +196,8 @@ export class TerminalRestoreController {
     const target = managed.pendingRestoreGeometry;
     managed.pendingRestoreGeometry = undefined;
     managed.isSerializedRestoreInProgress = false;
+    // A snapshot keeps no record of the widths its rows were laid out at.
+    managed.commandLinksDisposable?.markRowsStale();
     if (!target) return;
     // Below the bookkeeping above on purpose: the write gate and the restore
     // flag must be released on every exit, so a refused grid can never leave

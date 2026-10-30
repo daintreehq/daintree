@@ -243,6 +243,7 @@ export function createSuggestedCommandLinksAddon(
       addon.dispose();
     },
     widthKnownFrom: (buffer) => addon.widthKnownFrom(buffer),
+    markRowsStale: () => addon.markRowsStale(),
   };
 }
 

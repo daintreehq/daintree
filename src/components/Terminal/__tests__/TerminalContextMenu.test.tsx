@@ -10,6 +10,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, act } from "@testing-library/react";
 import type React from "react";
+import { Terminal as HeadlessTerminal } from "@xterm/headless";
 
 vi.mock("@/components/ui/context-menu", () => {
   const Passthrough = ({ children }: { children?: React.ReactNode }) => <div>{children}</div>;
@@ -58,6 +59,8 @@ const {
   hoveredUrlPlugin,
   liveHoveredLink,
   liveSelection,
+  liveTerminal,
+  liveLayout,
   openLink,
   hoveredFilePath,
   hoveredFileKind,
@@ -83,6 +86,9 @@ const {
   hoveredUrlPlugin: { current: null as string | null },
   liveHoveredLink: { current: null as Record<string, unknown> | null },
   liveSelection: { current: "" },
+  // A terminal with real rows behind its selection, and the width they were laid out at.
+  liveTerminal: { current: null as Record<string, unknown> | null },
+  liveLayout: { current: null as Record<string, unknown> | null },
   openLink: vi.fn(),
   hoveredFilePath: { current: null as string | null },
   hoveredFileKind: { current: "file" as "file" | "directory" | null },
@@ -127,7 +133,8 @@ vi.mock("@/services/TerminalInstanceService", () => {
     // A live xterm is what unlocks the hovered-path branch; without it
     // `handleContextMenu` bails and clears every hover field.
     get: () => ({
-      terminal: { getSelection: () => liveSelection.current },
+      terminal: liveTerminal.current ?? { getSelection: () => liveSelection.current },
+      commandLinksDisposable: liveLayout.current,
       hoveredLink: liveHoveredLink.current,
     }),
     getTerminal: () => undefined,
@@ -573,18 +580,19 @@ describe("TerminalContextMenu — clean copy (#15525)", () => {
 
   afterEach(() => {
     liveSelection.current = "";
+    liveTerminal.current = null;
+    liveLayout.current = null;
   });
 
-  function rowAfterCopy(): HTMLElement {
-    const copy = screen.getByText("Copy").closest("button")!;
-    return copy.nextElementSibling as HTMLElement;
+  function cleanRow(): HTMLButtonElement {
+    return screen.getByText("Copy clean text").closest("button")!;
   }
 
   it("sits right after Copy and copies the selection cleaned", async () => {
     liveSelection.current = "⏺ Release notes:   \n  - Added a clean copy\n    - next to Copy";
     openMenu({ hovered: null });
-    const row = rowAfterCopy();
-    expect(row.textContent).toBe("Copy clean text");
+    const row = cleanRow();
+    expect(screen.getByText("Copy").closest("button")!.nextElementSibling).toBe(row);
     expect(row.getAttribute("aria-disabled")).toBeNull();
 
     await act(async () => row.click());
@@ -614,7 +622,47 @@ describe("TerminalContextMenu — clean copy (#15525)", () => {
   it("is disabled with Copy when nothing is selected", () => {
     openMenu({ hovered: null });
     expect(screen.getByText("Copy").closest("button")!.getAttribute("aria-disabled")).toBe("true");
-    expect(rowAfterCopy().getAttribute("aria-disabled")).toBe("true");
+    expect(cleanRow().getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("copies the selection as it is when chosen, the way Copy does", async () => {
+    liveSelection.current = "  first";
+    openMenu({ hovered: null });
+    liveSelection.current = "  second  ";
+    await act(async () => cleanRow().click());
+    expect(writeText).toHaveBeenCalledWith("second");
+  });
+
+  it("rejoins rows the agent wrapped, by the pane's own record of their width", async () => {
+    const rows = [
+      "⏺ Copying agent output from a terminal",
+      "  gives you the text exactly as the TUI",
+      "  drew it, padding and all.",
+    ];
+    const headless = new HeadlessTerminal({ cols: 40, rows: 10, allowProposedApi: true });
+    await new Promise<void>((resolve) => headless.write(rows.join("\r\n"), resolve));
+    liveTerminal.current = {
+      cols: 40,
+      buffer: headless.buffer,
+      getSelection: () => rows.join("\n"),
+      getSelectionPosition: () => ({ start: { x: 0, y: 0 }, end: { x: 40, y: 2 } }),
+    };
+    const known = { widthKnownFrom: () => 0, markRowsStale: () => {} };
+    liveLayout.current = known;
+    openMenu({ hovered: null });
+    await act(async () => cleanRow().click());
+    expect(writeText).toHaveBeenLastCalledWith(
+      "Copying agent output from a terminal gives you the text exactly as the TUI drew it, padding and all."
+    );
+
+    cleanup();
+    liveLayout.current = {
+      ...known,
+      widthKnownFrom: (buffer: { length: number }) => buffer.length,
+    };
+    openMenu({ hovered: null });
+    await act(async () => cleanRow().click());
+    expect(writeText).toHaveBeenLastCalledWith(rows.map((row) => row.slice(2)).join("\n"));
   });
 });
 

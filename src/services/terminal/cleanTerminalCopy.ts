@@ -47,11 +47,12 @@ const LIST_MARKER = /^(?:[-*+•◦▪‣⏺]|\d{1,3}[.)]) +(?=\S)/;
 // Lines that stand on their own: headings, quotes, tables, rules.
 const STRUCTURAL = /^\s*(?:#{1,6}\s|>|\||([-*_])(?:\s*\1){2,}\s*$)/;
 
-// Anything code-, diff- or tree-shaped. One such line keeps its whole block
-// as it was drawn, since the lines of code around it can look like prose.
+const FENCE = /^\s*(`{3,}|~{3,})(.*)$/;
+
+// Anything code-, diff-, table- or tree-shaped. One such line keeps its whole
+// block as it was drawn, since the lines of code around it can look like prose.
 const CODE_EVIDENCE = [
   /[─-╿⎿]/, // box drawing, tool-output trees, Claude Code's ⎿
-  /^\s*(?:```|~~~)/,
   /[{;]\s*$/,
   /^\s*[}\])]/,
   /^\s*(?:\/\/|\/\*|\*\/|<\/?[A-Za-z!])/,
@@ -59,15 +60,23 @@ const CODE_EVIDENCE = [
   /^\s*\d+ +[+-]/, // a diff's line-number gutter
   /^\s*[$%❯›] /, // shell prompts
   /^\s*(?:[\w$]+\s+)?[A-Za-z_$][\w$.[\]]*\s*[-+*/|&]?=[^=>]/, // an assignment or declaration
-  /\S {2,}\S/, // columns aligned with runs of spaces
+  / \| /, // table cells
 ];
+// Columns lined up with runs of spaces; on one row it's as likely a double space after a full stop.
+const ALIGNED = /\S {2,}\S/;
 
 // A wrap never follows a row that ends like this, or lands on one that starts with anything but prose.
 const UPPER_STOPS = /[:;{[(\\=|&]$/;
 const LOWER_STARTS = /^[\p{L}\p{N}("'“‘`[#@~/.$—–-]/u;
+// `key: value`, as YAML and front matter have it.
+const KEY_VALUE = /^[\w.-]+:(?:\s|$)/;
+// A break after a sentence may be one sentence per line, so it's kept.
+const SENTENCE_END = /[.!?…。！？]["'”’)\]]*$/;
+// How a paragraph's last row ends. Code, commands and config rarely do.
+const PROSE_END = /[.!?:…。！？]["'”’)\]]*$/;
 
 function normalize(text: string): string {
-  return text.replace(/\r\n/g, "\n").replace(/ /g, " ");
+  return text.replace(/\r\n/g, "\n").replace(/\u00a0/g, " ");
 }
 
 function readRow(buffer: IBuffer, y: number, cols: number): Row | undefined {
@@ -145,11 +154,17 @@ function rowWidth(row: Row): number {
   return last ? last.col + last.width : 0;
 }
 
-/** The column a wrapped row of this paragraph or list item resumes at. */
-function hangingIndent(row: Row): number {
+/**
+ * Where a wrapped row of this paragraph or list item resumes, and whether it
+ * opens a list item (Claude Code's marker opens a message, not an item).
+ */
+function headOf(row: Row): { hang: number; list: boolean } {
   const index = firstContent(row);
   const marker = LIST_MARKER.exec(rowText(row).slice(index));
-  return row.cells[index + (marker ? marker[0].length : 0)]!.col;
+  return {
+    hang: row.cells[index + (marker ? marker[0].length : 0)]!.col,
+    list: marker !== null && !marker[0].startsWith("⏺"),
+  };
 }
 
 /**
@@ -162,14 +177,22 @@ function couldWrapOnto(upper: Row, lower: Row, hang: number, cols: number): bool
   const index = firstContent(lower);
   if (index < 0 || lower.cells[index]!.col !== hang) return false;
   const text = rowText(lower).slice(index);
-  if (LIST_MARKER.test(text) || !LOWER_STARTS.test(text)) return false;
-  if (UPPER_STOPS.test(rowText(upper))) return false;
+  if (LIST_MARKER.test(text) || KEY_VALUE.test(text) || !LOWER_STARTS.test(text)) return false;
+  const upperText = rowText(upper);
+  if (UPPER_STOPS.test(upperText) || SENTENCE_END.test(upperText)) return false;
   let word = 0;
   for (let i = index; i < lower.cells.length && lower.cells[i]!.ch !== " "; i++) {
     word += lower.cells[i]!.width;
+    // Text without spaces (CJK) can break after any wide character.
+    if (lower.cells[i]!.width > 1) break;
   }
   const upperWidth = rowWidth(upper);
   return upperWidth + 1 + word > cols && upperWidth + lower.cells[index]!.width <= cols;
+}
+
+/** The whole of a line's rows, the parts the selection left out included. */
+function fullText(line: Line): string {
+  return line.rows ? line.rows.map(rowText).join("") : line.text;
 }
 
 /** Which lines sit in a block that holds code, a diff or a tree. Blank lines bound a block, except inside a fence. */
@@ -177,30 +200,79 @@ function protectedLines(lines: readonly Line[]): boolean[] {
   const result = new Array<boolean>(lines.length).fill(false);
   let blockStart = 0;
   let evidence = false;
-  let inFence = false;
+  let aligned = 0;
+  let fence: string | null = null;
   const close = (endExclusive: number) => {
     if (evidence) result.fill(true, blockStart, endExclusive);
     blockStart = endExclusive;
     evidence = false;
+    aligned = 0;
   };
   lines.forEach((line, i) => {
-    if (/^\s*(?:```|~~~)/.test(line.text)) inFence = !inFence;
-    if (!inFence && line.text.trim() === "") {
+    const text = fullText(line);
+    const delimiter = FENCE.exec(text);
+    if (delimiter) {
+      const [, marks, rest] = delimiter;
+      if (fence === null) fence = marks!;
+      else if (marks![0] === fence[0] && marks!.length >= fence.length && rest!.trim() === "") {
+        fence = null;
+      }
+      evidence = true;
+      return;
+    }
+    if (fence === null && text.trim() === "") {
       close(i);
       blockStart = i + 1;
       return;
     }
-    if (inFence || CODE_EVIDENCE.some((pattern) => pattern.test(line.text))) evidence = true;
+    if (ALIGNED.test(text)) aligned++;
+    if (fence !== null || aligned > 1 || CODE_EVIDENCE.some((pattern) => pattern.test(text))) {
+      evidence = true;
+    }
   });
   close(lines.length);
   return result;
 }
 
-/** Rejoin the rows an agent wrapped to fit the pane, where nothing else could explain the break. */
-function rejoinWraps(lines: Line[], cols: number, knownFrom: number): Line[] {
+/**
+ * Rejoin the rows an agent wrapped to fit the pane, where nothing else could
+ * explain the breaks. Each run of rows that could be one wrapped paragraph is
+ * joined only when it reads as one: a list item, or a run that ends the way
+ * prose does or carries on past the selection. Lines of code, commands and
+ * config can chain by chance, but rarely end on a full stop.
+ */
+function rejoinWraps(
+  lines: Line[],
+  cols: number,
+  knownFrom: number,
+  rowAt: (y: number) => Row | undefined
+): Line[] {
   const locked = protectedLines(lines);
   const out: Line[] = [];
-  let hang = -1;
+  let run: Line[] = [];
+  let head = { hang: -1, list: false };
+  const flush = (endsSelection: boolean) => {
+    const last = run[run.length - 1]?.rows?.[0];
+    if (run.length > 1 && last) {
+      const next = endsSelection ? rowAt(last.y + 1) : undefined;
+      const continues =
+        next !== undefined &&
+        next.y >= knownFrom &&
+        !STRUCTURAL.test(rowText(next)) &&
+        couldWrapOnto(last, next, head.hang, cols);
+      if (head.list || PROSE_END.test(rowText(last)) || continues) {
+        out.push({
+          text: run.map((line, i) => (i === 0 ? line.text.trimEnd() : line.text.trim())).join(" "),
+          from: run[0]!.from,
+          rows: run.map((line) => line.rows![0]!),
+        });
+        run = [];
+        return;
+      }
+    }
+    out.push(...run);
+    run = [];
+  };
   lines.forEach((line, i) => {
     const row = line.rows?.length === 1 ? line.rows[0] : undefined;
     const joinable =
@@ -208,17 +280,21 @@ function rejoinWraps(lines: Line[], cols: number, knownFrom: number): Line[] {
       row.y >= knownFrom &&
       !locked[i] &&
       line.text.trim() !== "" &&
-      !STRUCTURAL.test(line.text);
-    const previous = out[out.length - 1];
-    const upper = previous?.rows?.[previous.rows.length - 1];
-    if (joinable && upper && hang >= 0 && couldWrapOnto(upper, row, hang, cols)) {
-      previous!.text = `${previous!.text.trimEnd()} ${line.text.trimStart()}`;
-      previous!.rows!.push(row);
+      !STRUCTURAL.test(rowText(row));
+    const upper = run[run.length - 1]?.rows?.[0];
+    if (joinable && upper && couldWrapOnto(upper, row, head.hang, cols)) {
+      run.push(line);
       return;
     }
-    out.push({ ...line, rows: line.rows && [...line.rows] });
-    hang = joinable ? hangingIndent(row) : -1;
+    flush(false);
+    if (joinable) {
+      run = [line];
+      head = headOf(row);
+    } else {
+      out.push(line);
+    }
   });
+  flush(true);
   return out;
 }
 
@@ -226,11 +302,16 @@ function leadingSpaces(text: string): number {
   return text.length - text.trimStart().length;
 }
 
-function cleanLines(lines: Line[], cols: number, knownFrom: number | null): string {
+function cleanLines(
+  lines: Line[],
+  cols: number,
+  knownFrom: number | null,
+  rowAt: (y: number) => Row | undefined = () => undefined
+): string {
   for (const line of lines) {
     if (line.from === 0) line.text = line.text.replace(MESSAGE_MARKER, "  ");
   }
-  const joined = knownFrom === null ? lines : rejoinWraps(lines, cols, knownFrom);
+  const joined = knownFrom === null ? lines : rejoinWraps(lines, cols, knownFrom, rowAt);
 
   // A selection that starts in the indent (or just past the marker) counts
   // from the left edge; one that starts partway through the text has no
@@ -312,5 +393,6 @@ export function cleanTerminalSelection(
   const lines = readSelectedLines(buffer, terminal.cols, range, text);
   if (!lines) return cleanCopyText(text);
   const knownFrom = layout ? layout.widthKnownFrom(buffer) : null;
-  return withLineEnding(text, cleanLines(lines, terminal.cols, knownFrom));
+  const rowAt = (y: number) => readRow(buffer, y, terminal.cols);
+  return withLineEnding(text, cleanLines(lines, terminal.cols, knownFrom, rowAt));
 }

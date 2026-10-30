@@ -144,59 +144,129 @@ describe("cleanTerminalSelection", () => {
     );
   });
 
-  it("never joins onto a new list item, heading or quote", async () => {
+  it("never joins onto a new list item or heading, or onto a quote", async () => {
+    // At 37 columns the next row's first word wouldn't fit, so only the shape keeps them apart.
     expect(
-      await cleanAll(40, [
+      await cleanAll(37, [
         "  A paragraph that runs right to the",
-        "  - first item",
+        "  - first item.",
         "  A paragraph that runs right to the",
-        "  # Heading",
-        "  A paragraph that runs right to the",
-        "  > quoted",
+        "  # Heading.",
       ])
     ).toBe(
       [
         "A paragraph that runs right to the",
-        "- first item",
+        "- first item.",
         "A paragraph that runs right to the",
-        "# Heading",
-        "A paragraph that runs right to the",
-        "> quoted",
+        "# Heading.",
       ].join("\n")
     );
+    expect(
+      await cleanAll(40, ["  > A quoted line that runs to the edge", "  and carries on here."])
+    ).toBe("> A quoted line that runs to the edge\nand carries on here.");
   });
 
   it("keeps every line of a block that holds code", async () => {
     expect(
       await cleanAll(40, [
-        "  const value = computeIt(alpha, beta)",
-        "  return value",
+        "  const total = items.length;",
+        "  The next line runs right up to the",
+        "  edge of the pane.",
         "",
         "  Prose after the code still wraps when",
         "  it runs to the edge of the pane.",
       ])
     ).toBe(
       [
-        "const value = computeIt(alpha, beta)",
-        "return value",
+        "const total = items.length;",
+        "The next line runs right up to the",
+        "edge of the pane.",
         "",
         "Prose after the code still wraps when it runs to the edge of the pane.",
       ].join("\n")
     );
   });
 
+  it("keeps a fenced block whole, inner fences and blank lines included", async () => {
+    const lines = [
+      "  ````markdown",
+      "  ```",
+      "",
+      "  A line inside the fence that runs to",
+      "  the edge of the pane.",
+      "",
+      "  ````",
+    ];
+    expect(await cleanAll(40, lines)).toBe(lines.map((line) => line.slice(2)).join("\n"));
+  });
+
+  it("keeps lines of code, commands, config, tables and one sentence per line apart", async () => {
+    const pairs = [
+      ["  from collections import defaultdict", "  import sys"],
+      ["  git fetch origin feature/clean-copy", "  git status"],
+      ["  description: Read the terminal output", "  summary: Ships the clean copy."],
+      ["  Component | Changes in this release", "  Terminal | Adds clean copy"],
+      ["  The implementation is complete now.", "  Documentation remains unchanged."],
+    ];
+    for (const pair of pairs) {
+      expect(await cleanAll(40, pair)).toBe(pair.map((line) => line.trim()).join("\n"));
+    }
+  });
+
+  it("looks for code in the whole row, not just the part selected", async () => {
+    const terminal = await render(40, [
+      "  const value = computeIt(alpha, beta)",
+      "  return value.",
+    ]);
+    expect(cleanTerminalSelection(selecting(terminal, 0, 1, { startX: 16 }), ALL_KNOWN)).toBe(
+      "computeIt(alpha, beta)\nreturn value."
+    );
+  });
+
+  it("rejoins a paragraph with a double space after a full stop", async () => {
+    expect(
+      await cleanAll(40, [
+        "  Copying agent output from a terminal",
+        "  gives you the text exactly as the TUI",
+        "  drew it.  Keep the spacing.",
+      ])
+    ).toBe(
+      "Copying agent output from a terminal gives you the text exactly as the TUI drew it.  Keep the spacing."
+    );
+  });
+
+  it("measures a word of CJK text to its first character", async () => {
+    expect(await cleanAll(30, ["  第一段说明", "  这是独立的一行中文说明。"])).toBe(
+      "第一段说明\n这是独立的一行中文说明。"
+    );
+  });
+
   it("keeps a tool-output tree and a diff as drawn", async () => {
-    const tree = [
+    expect(await cleanAll(30, ["  └ Read the source file here", "  continuing output."])).toBe(
+      "└ Read the source file here\ncontinuing output."
+    );
+    const diff = [
+      "    12 - an old line of the file here",
+      "    12 + a new line of the file there.",
+    ];
+    expect(await cleanAll(39, diff)).toBe(diff.map((line) => line.trim()).join("\n"));
+    const claude = [
       "⏺ Read(src/services/terminal/types.ts)",
       "  ⎿  Read 120 lines from the file here",
     ];
-    expect(await cleanAll(40, tree)).toBe(
+    expect(await cleanAll(40, claude)).toBe(
       "Read(src/services/terminal/types.ts)\n⎿  Read 120 lines from the file here"
     );
-    const diff = ["    12 - an old line of the file here", "    12 + a new line of the file there"];
-    expect(await cleanAll(40, diff)).toBe(
-      "12 - an old line of the file here\n12 + a new line of the file there"
-    );
+  });
+
+  it("keeps a break after a row that leads into what follows, or before one that isn't prose", async () => {
+    const colon = ["  The change touches three files here:", "  each one gets its own test."];
+    expect(await cleanAll(40, colon)).toBe(colon.map((line) => line.trim()).join("\n"));
+    const caret = [
+      "  print(value) raised an error at line",
+      "  ^^^^ marks the failing column there.",
+    ];
+    expect(await cleanAll(40, caret)).toBe(caret.map((line) => line.trim()).join("\n"));
   });
 
   it("keeps a row that ends at the margin, where a cut token and a whole word look alike", async () => {
@@ -218,11 +288,11 @@ describe("cleanTerminalSelection", () => {
   });
 
   it("joins nothing across a row xterm wrapped itself, and keeps that row's text whole", async () => {
-    const long = `  ${"x".repeat(50)}`;
-    const terminal = await render(40, [long, "  more text"]);
+    const long = `  ${"x".repeat(75)}`;
+    const terminal = await render(40, [long, "more text."]);
     expect(terminal.buffer.active.getLine(1)?.isWrapped).toBe(true);
     expect(cleanTerminalSelection(selecting(terminal, 0, 2), ALL_KNOWN)).toBe(
-      `${"x".repeat(50)}\nmore text`
+      `${long}\nmore text.`
     );
   });
 
@@ -240,10 +310,11 @@ describe("cleanTerminalSelection", () => {
     );
   });
 
-  it("stops where the selection stops", async () => {
+  it("stops where the selection stops, joining a paragraph that carries on past it", async () => {
     const terminal = await render(40, [
       "⏺ Copying agent output from a terminal",
       "  gives you the text exactly as the TUI",
+      "  drew it, padding and all.",
     ]);
     expect(cleanTerminalSelection(selecting(terminal, 0, 1, { endX: 11 }), ALL_KNOWN)).toBe(
       "Copying agent output from a terminal gives you"
@@ -286,7 +357,7 @@ describe("cleanCopyText", () => {
   });
 
   it("keeps CRLF line endings and converts NBSP the way xterm does", () => {
-    expect(cleanCopyText("  one two  \r\n  three\r\n")).toBe("one two\r\nthree");
+    expect(cleanCopyText("  one\u00a0two  \r\n  three\r\n")).toBe("one two\r\nthree");
   });
 
   it("keeps a bullet that isn't Claude Code's marker", () => {

@@ -352,8 +352,14 @@ describe("SuggestedCommandLinksAddon", () => {
     await write(terminal, "\r\n  written since");
     expect(addon.widthKnownFrom(buffer)).toBe(2);
 
-    terminal.resize(100, 30);
+    // A replayed snapshot: nothing says what width its rows were laid out at.
+    addon.markRowsStale();
     expect(addon.widthKnownFrom(buffer)).toBe(3);
+
+    await write(terminal, "\r\n  and after it");
+    expect(addon.widthKnownFrom(buffer)).toBe(3);
+    terminal.resize(100, 30);
+    expect(addon.widthKnownFrom(buffer)).toBe(4);
 
     addon.dispose();
     expect(addon.widthKnownFrom(buffer)).toBe(buffer.length);

@@ -892,6 +892,12 @@ describe("CanopyTerminal links, as the run's grid pane opens them (#15332)", () 
     openMenu(frame);
     await act(async () => screen.getByText("Copy").click());
     expect(writeText).toHaveBeenLastCalledWith("⏺ Release notes:   \n  - Added a clean copy");
+
+    // What the menu opened on, as its Copy does, even once the selection has moved.
+    openMenu(frame);
+    xterm.current!.selection = "  something else";
+    await act(async () => screen.getByText("Copy clean text").click());
+    expect(writeText).toHaveBeenLastCalledWith("Release notes:\n- Added a clean copy");
   });
 
   it("pastes from its menu through the open stream", async () => {

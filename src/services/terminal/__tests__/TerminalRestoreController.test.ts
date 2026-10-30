@@ -5,6 +5,7 @@ import { TerminalRestoreController, safeChunkSlice } from "../TerminalRestoreCon
 import { TerminalWriteController } from "../TerminalWriteController";
 import { INCREMENTAL_RESTORE_CONFIG, type ManagedTerminal } from "../types";
 import { streamRangeOf, utf8Length } from "../streamFence";
+import type { SuggestedCommandLinks } from "../SuggestedCommandLinksAddon";
 import type { SerializedTerminalSnapshot } from "@shared/types/terminal";
 import { PARSER_GROUND, PartialEscapeTracker } from "@shared/utils/terminalPartialEscapeTail";
 import { terminalClient } from "@/clients";
@@ -181,6 +182,22 @@ describe("TerminalRestoreController", () => {
         PARSER_GROUND + smallState,
         expect.any(Function)
       );
+    });
+
+    it("tells the pane its replayed rows were laid out at a width it never saw", async () => {
+      const markRowsStale = vi.fn();
+      const commandLinksDisposable: SuggestedCommandLinks = {
+        dispose: vi.fn(),
+        widthKnownFrom: vi.fn(() => 0),
+        markRowsStale,
+      };
+      instances.set("t1", makeManagedTerminal({ commandLinksDisposable }));
+
+      controller.restoreFromSerialized("t1", "small-state");
+      expect(markRowsStale).not.toHaveBeenCalled();
+      await flushMicrotasks();
+
+      expect(markRowsStale).toHaveBeenCalledTimes(1);
     });
 
     it("flushes deferred output after restore", async () => {

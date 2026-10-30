@@ -727,7 +727,11 @@ export function CanopyTerminal({
       // The escape sequence the host's parser was inside, so the chunks
       // after the fence land in the same parser state they were written in.
       const tail = fence !== undefined ? (continuation?.pendingEscapeTail ?? "") : "";
-      terminal.write(snapshot.data + tail, checkSecret);
+      terminal.write(snapshot.data + tail, () => {
+        // A snapshot keeps no record of the widths its rows were laid out at.
+        linkSlots.commandLinksDisposable?.markRowsStale();
+        checkSecret();
+      });
       requestAnimationFrame(() => {
         if (!disposed) fit();
       });
