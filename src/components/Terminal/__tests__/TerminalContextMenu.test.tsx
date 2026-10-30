@@ -3,8 +3,9 @@
  * TerminalContextMenu with the menu primitives rendered inline, so each test reads
  * which branch the component chose rather than what Radix mounted behind a real
  * right-click. Covers a backgrounded or off-worktree panel, "Open in file browser"
- * on a hovered path (#11483), and the fleet's Park/Unpark (#13236) and Snooze
- * (#11783) items.
+ * on a hovered path (#11483), the fleet's Park/Unpark (#13236) and Snooze
+ * (#11783) items, and which rows sit at the top level and which in a submenu
+ * (#15526).
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, act } from "@testing-library/react";
@@ -18,20 +19,26 @@ vi.mock("@/components/ui/context-menu", () => {
   return {
     ContextMenu: Passthrough,
     ContextMenuTrigger: Passthrough,
-    ContextMenuContent: Passthrough,
+    ContextMenuContent: ({ children }: { children?: React.ReactNode }) => (
+      <div data-testid="context-menu-content">{children}</div>
+    ),
     ContextMenuItem: Item,
     ContextMenuActionItem: Item,
     ContextMenuCheckboxItem: Item,
     ContextMenuRadioGroup: Passthrough,
     ContextMenuRadioItem: Item,
-    ContextMenuSeparator: () => null,
+    ContextMenuSeparator: () => <hr />,
     ContextMenuLabel: Passthrough,
     ContextMenuShortcut: Passthrough,
     ContextMenuGroup: Passthrough,
     ContextMenuPortal: Passthrough,
     ContextMenuSub: Passthrough,
-    ContextMenuSubContent: Passthrough,
-    ContextMenuSubTrigger: Passthrough,
+    ContextMenuSubContent: ({ children }: { children?: React.ReactNode }) => (
+      <div data-submenu>{children}</div>
+    ),
+    ContextMenuSubTrigger: ({ children }: { children?: React.ReactNode }) => (
+      <div data-subtrigger>{children}</div>
+    ),
   };
 });
 
@@ -991,5 +998,166 @@ describe("TerminalContextMenu — dictation lock and recent targets (#14955)", (
     armed.armedIds = new Set(["panel-1", "agent-3"]);
     openOn(agentPanel, [fleetShell]);
     expect(screen.queryByText("Bash")).toBeNull();
+  });
+});
+
+type MenuRow = string | { submenu: string; rows: MenuRow[] };
+
+/** The menu as drawn: its rows in order, each submenu's own rows under its trigger. */
+function menuTree(root: Element = screen.getByTestId("context-menu-content")): MenuRow[] {
+  const rows: MenuRow[] = [];
+  for (const child of Array.from(root.children)) {
+    if (child.tagName === "HR") rows.push("---");
+    else if (child.tagName === "BUTTON") rows.push(child.textContent!.trim());
+    else if (child.hasAttribute("data-subtrigger")) {
+      rows.push({ submenu: child.textContent!.trim(), rows: menuTree(child.nextElementSibling!) });
+    } else if (!child.hasAttribute("data-submenu")) rows.push(...menuTree(child));
+  }
+  return rows;
+}
+
+/** One level's rows, a submenu standing for itself by its label. */
+function level(rows: MenuRow[]): string[] {
+  return rows.map((row) => (typeof row === "string" ? row : `${row.submenu} ›`));
+}
+
+function submenu(rows: MenuRow[], label: string): MenuRow[] {
+  const found = rows.find((row) => typeof row !== "string" && row.submenu === label);
+  if (!found || typeof found === "string") throw new Error(`no ${label} submenu`);
+  return found.rows;
+}
+
+/** Every level starts and ends on a row, never doubles a separator, and no submenu is empty. */
+function expectTidy(rows: MenuRow[], path = "root"): void {
+  const labels = level(rows);
+  expect(labels.length, `${path} has rows`).toBeGreaterThan(0);
+  expect(labels[0], `${path} leads with a row`).not.toBe("---");
+  expect(labels.at(-1), `${path} ends on a row`).not.toBe("---");
+  labels.forEach((label, i) => {
+    if (label === "---") expect(labels[i + 1], `${path} doubles a separator`).not.toBe("---");
+  });
+  for (const row of rows) {
+    if (typeof row !== "string") expectTidy(row.rows, `${path} › ${row.submenu}`);
+  }
+}
+
+describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
+  const agentPane = {
+    ...agentPanel,
+    detectedAgentId: "claude",
+    location: "grid",
+    hasPty: true,
+  };
+
+  beforeEach(() => {
+    worktreeList.current = [
+      { id: "wt-1", name: "one", path: "/one", branch: "one" },
+      { id: "wt-2", name: "two", path: "/two", branch: "two" },
+    ];
+  });
+
+  it("keeps an agent pane's top level short, with everyday rows a click away", () => {
+    fleetEligible.current = true;
+    snapshotState.current = { runs: [{ runId: "panel-1", handBack: {} }] };
+    renderMenu(agentPane);
+
+    const tree = menuTree();
+    expect(level(tree)).toEqual([
+      "Copy",
+      "Paste",
+      "Send to agent",
+      "---",
+      "Watch terminal",
+      "Fleet ›",
+      "---",
+      "Move ›",
+      "Maximize",
+      "---",
+      "Restart terminal",
+      "Session ›",
+      "---",
+      "Rename terminal",
+      "Duplicate terminal",
+      "View terminal info",
+      "---",
+      "Trash terminal",
+      "Kill terminal",
+    ]);
+    expect(level(submenu(tree, "Fleet"))).toEqual([
+      "Add to fleet",
+      "Arm all in this worktree",
+      "---",
+      "Snooze ›",
+      "Park…",
+      "Mark as read",
+    ]);
+    expect(level(submenu(tree, "Move"))).toEqual([
+      "Move to worktree ›",
+      "Move to new worktree…",
+      "Move to dock",
+      "---",
+      "Send to background",
+    ]);
+    expect(level(submenu(tree, "Session"))).toEqual(
+      expect.arrayContaining(["Redraw terminal", "---", "Lock input"])
+    );
+    expectTidy(tree);
+  });
+
+  it("still dispatches a row from inside a submenu", () => {
+    renderMenu(agentPane);
+    fireEvent.click(screen.getByText("Lock input"));
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "terminal.toggleInputLock",
+      { terminalId: "panel-1" },
+      expect.anything()
+    );
+  });
+
+  it("puts a paused session's Force resume beside Restart, not inside Session", () => {
+    renderMenu({ ...agentPane, flowStatus: "paused-backpressure" });
+
+    const root = level(menuTree());
+    expect(root.indexOf("Force resume (paused)")).toBe(root.indexOf("Restart terminal") + 1);
+  });
+
+  it("gives a backgrounded pane its way back inline, with no Move submenu", () => {
+    renderMenu({ ...agentPane, location: "background" });
+
+    const tree = menuTree();
+    expect(level(tree)).toContain("Restore from background");
+    expect(level(tree)).not.toContain("Move ›");
+    expectTidy(tree);
+  });
+
+  it("keeps Park under Fleet on an agent the fleet can't broadcast to", () => {
+    snapshotState.current = { runs: [{ runId: "panel-1", park: { parkedAt: 1 } }] };
+    renderMenu({ ...agentPane, location: "dock" });
+
+    const tree = menuTree();
+    expect(level(submenu(tree, "Fleet"))).toEqual(["Park…", "Unpark"]);
+    expect(level(tree)).not.toContain("Park…");
+    expectTidy(tree);
+  });
+
+  it.each([
+    ["a plain shell the fleet can take", { ...terminal, location: "grid" }, true],
+    ["a plain shell the fleet can't take", { ...terminal, location: "dock" }, false],
+    ["a docked agent", { ...agentPane, location: "dock" }, false],
+    ["an agent in another worktree", { ...agentPane, worktreeId: "wt-2" }, true],
+  ])("leaves no orphan separator or empty submenu on %s", (_name, panel, eligible) => {
+    fleetEligible.current = eligible;
+    renderMenu(panel);
+
+    const tree = menuTree();
+    expectTidy(tree);
+    expect(level(tree).slice(-2)).toEqual(["Trash terminal", "Kill terminal"]);
+  });
+
+  it("offers no Fleet submenu when there is nothing to put in it", () => {
+    renderMenu({ ...terminal, location: "dock" });
+
+    expect(level(menuTree())).not.toContain("Fleet ›");
   });
 });

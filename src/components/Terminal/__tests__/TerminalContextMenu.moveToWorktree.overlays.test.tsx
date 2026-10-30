@@ -147,13 +147,25 @@ function renderPane() {
   return screen.getByTestId("pane");
 }
 
-/** Right-click `target`, then walk into the submenu and pick More from the keyboard. */
-async function openPickerFromMenu(target: HTMLElement, submenuName = "Move to worktree") {
+/** Arrow into a submenu from its trigger, as the keyboard does. */
+async function openSubmenu(name: string) {
+  const trigger = await screen.findByRole("menuitem", { name });
+  act(() => trigger.focus());
+  fireEvent.keyDown(trigger, { key: "ArrowRight" });
+  await screen.findByRole("menu", { name });
+}
+
+/**
+ * Right-click `target`, walk the submenus down to the worktree list, and pick
+ * More from the keyboard. A terminal keeps its worktree list under Move.
+ */
+async function openPickerFromMenu(
+  target: HTMLElement,
+  submenuPath: readonly string[] = ["Move", "Move to worktree"]
+) {
   act(() => target.focus());
   fireEvent.contextMenu(target, { clientX: 24, clientY: 24 });
-  const submenu = await screen.findByRole("menuitem", { name: submenuName });
-  act(() => submenu.focus());
-  fireEvent.keyDown(submenu, { key: "ArrowRight" });
+  for (const name of submenuPath) await openSubmenu(name);
   const more = await screen.findByRole("menuitem", { name: "More worktrees…" });
   expect(more.getAttribute("aria-haspopup")).toBe("dialog");
   fireEvent.keyDown(more, { key: "Enter" });
@@ -192,10 +204,11 @@ describe("TerminalContextMenu worktree list, through the real menu", () => {
     expect(orderEnabled.current.every((enabled) => !enabled)).toBe(true);
 
     fireEvent.contextMenu(pane, { clientX: 24, clientY: 24 });
+    await openSubmenu("Move");
     await screen.findByRole("menuitem", { name: "Move to worktree" });
     expect(orderEnabled.current.at(-1)).toBe(true);
 
-    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    fireEvent.keyDown(screen.getByRole("menu", { name: "Move" }), { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
     await settle();
     expect(orderEnabled.current.at(-1)).toBe(false);
@@ -204,14 +217,16 @@ describe("TerminalContextMenu worktree list, through the real menu", () => {
   it("keeps the list when the menu reopens before the last close's focus return", async () => {
     const pane = renderPane();
     fireEvent.contextMenu(pane, { clientX: 24, clientY: 24 });
+    await openSubmenu("Move");
     await screen.findByRole("menuitem", { name: "Move to worktree" });
 
     // Radix returns focus on a zero-delay timer after the content unmounts;
     // reopening inside that window must not let the stale close clear the list.
-    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    fireEvent.keyDown(screen.getByRole("menu", { name: "Move" }), { key: "Escape" });
     expect(screen.queryByRole("menu")).toBeNull();
     fireEvent.contextMenu(pane, { clientX: 24, clientY: 24 });
     await settle();
+    await openSubmenu("Move");
 
     expect(screen.getByRole("menuitem", { name: "Move to worktree" })).toBeTruthy();
   });
@@ -281,7 +296,7 @@ describe("TerminalContextMenu More worktrees…, through the real overlays", () 
       .find((command) => command.id === "move-to-worktree")!;
     const pane = renderPane();
 
-    await openPickerFromMenu(pane, moveCommand.label);
+    await openPickerFromMenu(pane, [moveCommand.label]);
     await waitFor(() => expect(document.activeElement).toBe(searchField()));
     fireEvent.keyDown(searchField()!, { key: "Enter" });
 

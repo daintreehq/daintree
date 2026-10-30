@@ -8,6 +8,7 @@ import {
   waitForTerminalText,
   waitForTerminalTextIgnoringLineBreaks,
   runTerminalCommand,
+  openContextSubmenu,
 } from "../../helpers/terminal";
 import {
   getDockPanelCount,
@@ -487,7 +488,8 @@ test.describe("Core: Panel Tab Groups & Layout", () => {
             .locator("[data-pane-chrome]")
             .first()
             .click({ button: "right", position: { x: 40, y: 10 } });
-          await window.getByRole("menuitem", { name: "Move to dock" }).click();
+          const moveMenu = await openContextSubmenu(window, "Move");
+          await moveMenu.getByRole("menuitem", { name: "Move to dock" }).click();
           await expect(window.locator('[role="menu"]')).toHaveCount(0, { timeout: T_SHORT });
           await expect
             .poll(() => getDockPanelIds(window), { timeout: T_MEDIUM })
