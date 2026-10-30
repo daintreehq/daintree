@@ -740,3 +740,81 @@ export async function readClaudeLastMessage(
     await handle?.close();
   }
 }
+
+/** Text blocks kept by {@link readClaudeRecentReplies}, newest first. */
+const RECENT_REPLY_BLOCKS = 40;
+/** Characters of them kept in total; an older block that would pass this ends the read. */
+const RECENT_REPLY_MAX_CHARS = 2 * 1024 * 1024;
+
+export interface ClaudeRecentRepliesOptions {
+  signal?: AbortSignal;
+  limit?: number;
+  maxChars?: number;
+  chunkBytes?: number;
+  maxScanBytes?: number;
+}
+
+/**
+ * The text blocks of the session's recent replies, newest first, each exactly
+ * as the agent wrote it, for a clean copy to find a selection in (#15527).
+ *
+ * Blocks, not messages: the TUI draws each one as its own entry, so a
+ * selection spanning two crossed something drawn between them, and joining
+ * them would put a separator into the text the agent never wrote. Main-chain
+ * replies only, inside the same bounded read from the end as the last message,
+ * and a transcript that isn't there or can't be trusted has none.
+ */
+export async function readClaudeRecentReplies(
+  location: ClaudeSessionLocation,
+  options: ClaudeRecentRepliesOptions = {}
+): Promise<string[]> {
+  const { signal } = options;
+  const limit = options.limit ?? RECENT_REPLY_BLOCKS;
+  const maxChars = options.maxChars ?? RECENT_REPLY_MAX_CHARS;
+  if (!isSafeSessionId(location.sessionId)) return [];
+
+  let handle: FileHandle | null = null;
+  try {
+    signal?.throwIfAborted();
+    const transcript = await findTranscript(location, signal);
+    if (!transcript) return [];
+    const opened = await openVerified(transcript.file, transcript.rootReal);
+    if (!opened) return [];
+    handle = opened.handle;
+
+    const replies: string[] = [];
+    let chars = 0;
+    const state: ScanState = { partialTail: false, capReached: false };
+    for await (const bytes of linesFromEnd(handle, opened.stats.size, state, {
+      chunkBytes: options.chunkBytes ?? CHUNK_BYTES,
+      maxScanBytes: options.maxScanBytes ?? MAX_SCAN_BYTES,
+      signal,
+    })) {
+      const record = parseSessionRecord(bytes.toString("utf8"));
+      if (!record || record.type !== "assistant" || record.isSidechain || record.isMeta) continue;
+      const content = record.message?.content;
+      const blocks =
+        typeof content === "string" ? [content] : Array.isArray(content) ? content : [];
+      // Newest first within the record too.
+      for (const block of [...blocks].reverse()) {
+        const text =
+          typeof block === "string"
+            ? block
+            : block && typeof block === "object" && (block as { type?: unknown }).type === "text"
+              ? (block as { text?: unknown }).text
+              : null;
+        if (typeof text !== "string" || !text.trim()) continue;
+        if (chars + text.length > maxChars) return replies;
+        chars += text.length;
+        replies.push(text);
+        if (replies.length >= limit) return replies;
+      }
+    }
+    return replies;
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return [];
+  } finally {
+    await handle?.close();
+  }
+}

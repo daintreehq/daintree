@@ -12,6 +12,7 @@ import {
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ILinkHandler } from "@xterm/xterm";
 import type { CanopyTerminalData, CanopyTerminalView } from "@shared/types/ipc/canopy";
+import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import type { FileLinkRoute } from "@/services/terminal/FileLinksAddon";
 
 /** The OSC 8 link the mock terminal holds: Claude Code prints issue links this way. */
@@ -932,6 +933,78 @@ describe("CanopyTerminal links, as the run's grid pane opens them (#15332)", () 
     xterm.current!.selection = "  something else";
     await act(async () => screen.getByText("Copy clean text").click());
     expect(writeText).toHaveBeenLastCalledWith("Release notes:\n- Added a clean copy");
+  });
+
+  describe("clean copy of a Claude Code run (#15527)", () => {
+    const answer = "Run the **build** first.";
+    let findReplySpan: ReturnType<typeof vi.fn<(payload: unknown) => Promise<string | null>>>;
+    let writeText: ReturnType<typeof vi.fn<(text: string) => Promise<void>>>;
+
+    beforeEach(() => {
+      writeText = vi.fn(async (_text: string) => {});
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+      findReplySpan = vi.fn(async (_payload: unknown) => answer);
+      Object.assign(window.electron, { claude: { findReplySpan } });
+    });
+
+    afterEach(() => {
+      delete window.__DAINTREE_HOST_ID__;
+    });
+
+    async function copyClean(frame: Element) {
+      xterm.current!.selection = "⏺ Run the build first.";
+      openMenu(frame);
+      // What the menu opened on is what's asked about, even once the selection has moved.
+      xterm.current!.selection = "  something else";
+      await act(async () => screen.getByText("Copy clean text").click());
+    }
+
+    it("asks this machine's host for the reply the selection shows", async () => {
+      await copyClean(mount().frame);
+
+      expect(findReplySpan).toHaveBeenCalledWith({
+        terminalId: "run-1",
+        selection: "⏺ Run the build first.",
+      });
+      expect(writeText).toHaveBeenCalledTimes(1);
+      expect(writeText).toHaveBeenCalledWith(answer);
+    });
+
+    it("names the local terminal, not the routed run, for a run on this machine", async () => {
+      const routed: CanopyTerminalApi = {
+        ...otherHostApi(),
+        hostOf: () => LOCAL_HOST_ID,
+        ownSizedId: (runId) => (runId === "local:run-1" ? "pty-7" : null),
+      };
+      const { container } = render(
+        <CanopyTerminal runId="local:run-1" spawnedAt={1} api={routed} />
+      );
+
+      await copyClean(container.querySelector("[data-canopy-terminal]")!);
+
+      expect(findReplySpan).toHaveBeenCalledWith({
+        terminalId: "pty-7",
+        selection: "⏺ Run the build first.",
+      });
+    });
+
+    it("copies another host's run as drawn, without asking", async () => {
+      const { container } = render(<CanopyTerminal runId="r" spawnedAt={1} api={otherHostApi()} />);
+
+      await copyClean(container.querySelector("[data-canopy-terminal]")!);
+
+      expect(findReplySpan).not.toHaveBeenCalled();
+      expect(writeText).toHaveBeenCalledWith("Run the build first.");
+    });
+
+    it("copies as drawn in a window bound to another machine", async () => {
+      window.__DAINTREE_HOST_ID__ = { id: "host-2" };
+
+      await copyClean(mount().frame);
+
+      expect(findReplySpan).not.toHaveBeenCalled();
+      expect(writeText).toHaveBeenCalledWith("Run the build first.");
+    });
   });
 
   it("pastes from its menu through the open stream", async () => {

@@ -80,6 +80,7 @@ const {
   restoreBackgroundTerminal,
   activateTerminal,
   pingTerminal,
+  findReplySpan,
 } = vi.hoisted(() => ({
   dispatch: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
   hoveredUrl: { current: null as string | null },
@@ -122,6 +123,9 @@ const {
   restoreBackgroundTerminal: vi.fn(),
   activateTerminal: vi.fn(),
   pingTerminal: vi.fn(),
+  findReplySpan: vi.fn(
+    async (_payload: { terminalId: string; selection: string }) => null as string | null
+  ),
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -155,6 +159,13 @@ vi.mock("@/services/TerminalInstanceService", () => {
 });
 
 vi.mock("@/services/terminal/FileLinksAddon", () => ({ reportFileLinkFailure }));
+
+vi.mock("@/clients/claudeClient", async (importOriginal) => ({
+  claudeClient: {
+    ...(await importOriginal<typeof import("@/clients/claudeClient")>()).claudeClient,
+    findReplySpan,
+  },
+}));
 
 vi.mock("@/hooks/useSidebarWorktreeOrder", () => ({
   useSidebarWorktreeOrder: () => worktreeList.current,
@@ -366,6 +377,7 @@ function openMenu(options: {
   kind?: "file" | "directory";
   worktrees?: Array<{ id: string; path: string; name: string }>;
   panelWorktreeId?: string;
+  launchAgentId?: string;
 }) {
   hoveredFilePath.current = options.hovered;
   hoveredFileKind.current = options.kind ?? "file";
@@ -377,6 +389,7 @@ function openMenu(options: {
       kind: "terminal",
       worktreeId: options.panelWorktreeId ?? "wt-1",
       cwd: "/repo",
+      ...(options.launchAgentId ? { launchAgentId: options.launchAgentId } : {}),
     },
   };
   const result = render(
@@ -582,11 +595,52 @@ describe("TerminalContextMenu — clean copy (#15525)", () => {
     liveSelection.current = "";
     liveTerminal.current = null;
     liveLayout.current = null;
+    findReplySpan.mockReset().mockResolvedValue(null);
   });
 
   function cleanRow(): HTMLButtonElement {
     return screen.getByText("Copy clean text").closest("button")!;
   }
+
+  it("copies a Claude Code reply as the agent wrote it when the host finds the selection (#15527)", async () => {
+    liveSelection.current = "⏺ Run the build first, then npm test\n  before you push.";
+    findReplySpan.mockResolvedValueOnce(
+      "Run the **build** first, then `npm test` before you push."
+    );
+    openMenu({ hovered: null, launchAgentId: "claude" });
+
+    await act(async () => cleanRow().click());
+
+    expect(findReplySpan).toHaveBeenCalledWith({
+      terminalId: "panel-1",
+      selection: "⏺ Run the build first, then npm test\n  before you push.",
+    });
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(writeText).toHaveBeenCalledWith(
+      "Run the **build** first, then `npm test` before you push."
+    );
+  });
+
+  it("copies the rebuilt text for a Claude Code selection the host can't place (#15527)", async () => {
+    liveSelection.current = "  ⎿  Read 12 lines   ";
+    openMenu({ hovered: null, launchAgentId: "claude" });
+
+    await act(async () => cleanRow().click());
+
+    expect(findReplySpan).toHaveBeenCalledTimes(1);
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(writeText).toHaveBeenCalledWith("⎿  Read 12 lines");
+  });
+
+  it("never asks the host for a pane running another agent (#15527)", async () => {
+    liveSelection.current = "  - Added a clean copy   ";
+    openMenu({ hovered: null, launchAgentId: "codex" });
+
+    await act(async () => cleanRow().click());
+
+    expect(findReplySpan).not.toHaveBeenCalled();
+    expect(writeText).toHaveBeenCalledWith("- Added a clean copy");
+  });
 
   it("sits right after Copy and copies the selection cleaned", async () => {
     liveSelection.current = "⏺ Release notes:   \n  - Added a clean copy\n    - next to Copy";

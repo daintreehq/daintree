@@ -19,4 +19,9 @@ export const claudeClient = {
   }): Promise<AgentSubagentTranscriptResult> => {
     return window.electron.claude.readSubagentTranscript(payload);
   },
+
+  /** The stretch of a recent reply `selection` shows, as the agent wrote it, or null. */
+  findReplySpan: (payload: { terminalId: string; selection: string }): Promise<string | null> => {
+    return window.electron.claude.findReplySpan(payload);
+  },
 } as const;
