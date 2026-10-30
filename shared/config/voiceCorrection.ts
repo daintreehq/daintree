@@ -100,10 +100,12 @@ export interface CleanupPassage {
 
 /**
  * Haiku cleans up a standalone passage shorter than this without reasoning
- * (#15504): on the cleanup benchmark it came back faster below it and lost
- * nothing it didn't lose at medium.
+ * (#15504). On the cleanup benchmark (2026-10-30) those came back with a p95
+ * of 1.95 s against 3.38 s at medium, and lost no ground on ready text, words
+ * lost or risky trials; from 70 characters a retraction ("run it, no wait")
+ * began to lose words without it.
  */
-export const CLEANUP_REASONING_MIN_CHARS = 120;
+export const CLEANUP_REASONING_MIN_CHARS = 60;
 
 /**
  * The reasoning effort cleanup, its warm-up and rewrite ask each model for,
