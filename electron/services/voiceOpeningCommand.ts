@@ -30,6 +30,9 @@ const SCREEN_MARGIN_CHARS = 256;
 // A cleanup waits no longer than this for a skill's file; a dead mount
 // leaves it its listing.
 const READ_BUDGET_MS = 200;
+// Reads of different files at once, so skills on a dead mount can't take the
+// whole fs pool between them. A normal read settles in well under a millisecond.
+const MAX_PENDING_READS = 2;
 
 interface CommandFileText {
   description?: string;
@@ -47,6 +50,7 @@ const inFlightReads = new Map<string, Promise<string | null>>();
 function readPrefixOnce(filePath: string): Promise<string | null> {
   const pending = inFlightReads.get(filePath);
   if (pending) return pending;
+  if (inFlightReads.size >= MAX_PENDING_READS) return Promise.resolve(null);
   const started = readPrefix(filePath).finally(() => {
     if (inFlightReads.get(filePath) === started) inFlightReads.delete(filePath);
   });
@@ -101,8 +105,10 @@ function stringField(record: Record<string, unknown>, ...keys: string[]): string
 }
 
 // A fence is a line of exactly three dashes: `----` is a rule and `---x:` a key.
-const OPENING_FENCE_RE = /^---[^\S\n]*\n/;
-const CLOSING_FENCE_RE = /^---[^\S\n]*$/m;
+// Lines end at a line feed alone, as YAML's do: a JavaScript `m` anchor would
+// also end one at U+2028 inside a quoted value.
+const OPENING_FENCE_RE = /^---[ \t]*\n/;
+const CLOSING_FENCE_RE = /(?:^|\n)---[ \t]*(?:\n|$)/;
 
 // Claude Code commands and every agent's SKILL.md: YAML frontmatter, then the
 // text the agent reads. A file without frontmatter is all body; one whose
@@ -119,7 +125,6 @@ function markdownCommand(text: string): CommandFileText {
   } catch {
     record = null;
   }
-  const bodyStart = rest.indexOf("\n", closing.index);
   return {
     ...(record
       ? {
@@ -127,7 +132,7 @@ function markdownCommand(text: string): CommandFileText {
           argumentHint: stringField(record, "argument-hint", "argument_hint"),
         }
       : {}),
-    body: bodyStart === -1 ? "" : rest.slice(bodyStart + 1),
+    body: rest.slice(closing.index + closing[0].length),
   };
 }
 
@@ -186,7 +191,8 @@ function clip(text: string, max: number): string {
 // a `.netrc` line counts only at the start of one.
 function holdsAnyCredential(text: string): boolean {
   return (
-    holdsCredential(text, true) || text.split("\n").some((line) => holdsCredential(line, true))
+    holdsCredential(text, true) ||
+    text.split(/[\n\u2028\u2029]/).some((line) => holdsCredential(line, true))
   );
 }
 
@@ -196,8 +202,11 @@ function screenedClip(text: string, max: number): string | undefined {
   return clip(text, max);
 }
 
+// Screened whole and before its lines are joined, which would hide where each starts.
 function oneLine(text: string | undefined, max: number): string | undefined {
-  return screenedClip(text?.replace(/\s+/g, " ").trim() ?? "", max);
+  if (!text || holdsAnyCredential(text)) return undefined;
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat ? clip(flat, max) : undefined;
 }
 
 function excerptOf(body: string | undefined): string | undefined {

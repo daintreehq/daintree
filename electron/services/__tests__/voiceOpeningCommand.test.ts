@@ -1,5 +1,6 @@
 import { execFileSync } from "child_process";
 import { promises as fsp } from "fs";
+import type { FileHandle } from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -21,6 +22,21 @@ beforeAll(async () => {
 afterAll(async () => {
   await fsp.rm(root, { recursive: true, force: true });
 });
+
+// An open that hangs until the test lets it fail, so no read outlives its test.
+function hungOpen(): { release: () => Promise<void> } {
+  let fail!: (error: Error) => void;
+  const pending = new Promise<FileHandle>((_resolve, reject) => {
+    fail = reject;
+  });
+  vi.spyOn(fsp, "open").mockReturnValue(pending);
+  return {
+    release: async () => {
+      fail(new Error("EIO"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    },
+  };
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -310,6 +326,19 @@ describe("readVoiceOpeningCommand", () => {
     });
   });
 
+  it("screens a description's lines before joining them, so a .netrc line under a heading is caught", async () => {
+    const skill = await write(
+      "claude/skills/netrc-description/SKILL.md",
+      "---\ndescription: |\n  # Fetch\n  machine api.example.com login dev password hunter2\n---\nFetch it.\n"
+    );
+    const entries = entriesFor("claude", [discovered("claude", "/netrc-description", skill)]);
+
+    expect(await readVoiceOpeningCommand(entries, "/netrc-description")).toEqual({
+      token: "/netrc-description",
+      excerpt: "Fetch it.",
+    });
+  });
+
   it("screens a credential the excerpt's cut runs through", async () => {
     const key = "sk-proj-" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0";
     const skill = await write(
@@ -337,7 +366,7 @@ describe("readVoiceOpeningCommand", () => {
 
   it("gives up on a file it can't open in time, with one open however many cleanups ask, then or later", async () => {
     const skill = await write("claude/skills/slow/SKILL.md", "---\ndescription: Slow\n---\nBody\n");
-    const open = vi.spyOn(fsp, "open").mockReturnValue(new Promise(() => {}));
+    const hung = hungOpen();
     const entries = entriesFor("claude", [discovered("claude", "/slow", skill)]);
 
     const reads = await Promise.all([
@@ -354,7 +383,50 @@ describe("readVoiceOpeningCommand", () => {
       token: "/slow",
       description: "Listing description",
     });
-    expect(open).toHaveBeenCalledTimes(1);
+    expect(fsp.open).toHaveBeenCalledTimes(1);
+
+    // Once it settles, the next cleanup reads the file afresh.
+    await hung.release();
+    vi.mocked(fsp.open).mockRestore();
+    expect((await readVoiceOpeningCommand(entries, "/slow"))!.excerpt).toBe("Body");
+  });
+
+  it("reads no more than two different files at once", async () => {
+    const hung = hungOpen();
+    const names = ["a", "b", "c"];
+    const entries = entriesFor(
+      "claude",
+      names.map((name) =>
+        discovered("claude", `/cap-${name}`, path.join(root, `claude/skills/cap-${name}/SKILL.md`))
+      )
+    );
+
+    const reads = await Promise.all(
+      names.map((name) => readVoiceOpeningCommand(entries, `/cap-${name}`))
+    );
+
+    expect(reads.map((read) => read?.excerpt)).toEqual([undefined, undefined, undefined]);
+    expect(fsp.open).toHaveBeenCalledTimes(2);
+    await hung.release();
+  });
+
+  it("turns away anything that isn't a file without reading it", async () => {
+    const handle = {
+      stat: vi.fn(async () => ({ isFile: () => false })),
+      read: vi.fn(),
+      close: vi.fn(async () => {}),
+    };
+    vi.spyOn(fsp, "open").mockResolvedValue(handle as unknown as FileHandle);
+    const entries = entriesFor("claude", [
+      discovered("claude", "/dir", path.join(root, "claude/skills/dir/SKILL.md")),
+    ]);
+
+    expect(await readVoiceOpeningCommand(entries, "/dir")).toEqual({
+      token: "/dir",
+      description: "Listing description",
+    });
+    expect(handle.read).not.toHaveBeenCalled();
+    expect(handle.close).toHaveBeenCalledTimes(1);
   });
 
   it.skipIf(process.platform === "win32")(
@@ -396,6 +468,21 @@ describe("readVoiceOpeningCommand", () => {
     expect(await readVoiceOpeningCommand(entries, "/key")).toEqual({
       token: "/key",
       description: "Keyed",
+      argumentHint: "<env>",
+      excerpt: "Body",
+    });
+  });
+
+  it("ends a frontmatter line only at a line feed, not at a separator inside a value", async () => {
+    const skill = await write(
+      "claude/skills/separator/SKILL.md",
+      '---\ndescription: "Alpha\u2028---\u2028Omega"\nargument-hint: <env>\n---\nBody\n'
+    );
+    const entries = entriesFor("claude", [discovered("claude", "/separator", skill)]);
+
+    expect(await readVoiceOpeningCommand(entries, "/separator")).toEqual({
+      token: "/separator",
+      description: "Alpha --- Omega",
       argumentHint: "<env>",
       excerpt: "Body",
     });

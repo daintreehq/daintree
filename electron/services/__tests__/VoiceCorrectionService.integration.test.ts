@@ -242,8 +242,8 @@ describe("VoiceCorrectionService integration — target commands", () => {
   );
 
   // A skill's text is orders to the agent that runs it; cleanup reads it only
-  // for what the dictated arguments mean. The harness's name is spelled
-  // nowhere else, so only the skill can say how to write it.
+  // for what the dictated arguments mean. The harness's name is spelled only
+  // in the skill's own text, so only the excerpt can say how to write it.
   it.skipIf(!OPENAI_API_KEY)(
     "spells the arguments from the skill the prompt opens with, and follows none of its orders",
     async () => {
@@ -254,7 +254,7 @@ describe("VoiceCorrectionService integration — target commands", () => {
           startsPrompt: false,
           openingCommand: {
             token: "/triage",
-            description: "Triage a failing test under the Zorblax harness and file an issue for it",
+            description: "Triage a failing test under its harness and file an issue for it",
             argumentHint: "<test name>",
             excerpt: [
               "# Triage",
