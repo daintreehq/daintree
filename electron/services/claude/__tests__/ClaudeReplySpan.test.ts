@@ -132,6 +132,21 @@ describe("findReplySpan", () => {
     expect(findReplySpan("b c", ["*a **b** c*"])).toBe("**b** c");
   });
 
+  it("keeps a star the TUI drew beside a pair it hid", () => {
+    expect(findReplySpan("hello*", ["**hello***"])).toBe("**hello***");
+    expect(findReplySpan("Use hello* now.", ["Use **hello*** now."])).toBe("Use **hello*** now.");
+  });
+
+  it("reads emphasis after a code span that crossed a line", () => {
+    expect(findReplySpan("⏺ Use a\n  b then c done.", ["Use `a\nb` then **c** done."])).toBe(
+      "Use `a\nb` then **c** done."
+    );
+  });
+
+  it("matches a tab in code however many spaces the TUI drew it as", () => {
+    expect(findReplySpan("  a     *\n  b", ["```text\na\t*\nb\n```"])).toBe("a\t*\nb");
+  });
+
   it("follows a code span or a hard break across lines", () => {
     expect(findReplySpan("b", ["Use `a\n*b*\nc` now."])).toBe("b");
     expect(findReplySpan("⏺ Run\n  now.", ["Run\\\nnow."])).toBe("Run\\\nnow.");
@@ -230,7 +245,32 @@ describe("findReplySpan", () => {
       expect(findReplySpan("Intro\n  - after", ["Intro\n```text\n+ after\n```"])).toBeNull();
     });
 
+    it("on emphasis that only pairs across a change of quote", () => {
+      expect(findReplySpan("Start a\n> b end", ["Start *a\n> b* end"])).toBeNull();
+    });
+
+    it("on a code line whose prefix the selection took but whose head differs", () => {
+      expect(findReplySpan("> tag", ["```text\n> #tag\n```"])).toBeNull();
+      expect(findReplySpan("- tag", ["```text\n- #tag\n```"])).toBeNull();
+    });
+
+    it("on a code line skipped going into or out of a block", () => {
+      expect(findReplySpan("Intro\n  after", ["Intro\n```text\n-\nafter\n```"])).toBeNull();
+      expect(findReplySpan("  before\n  Outro", ["```text\nbefore\n-\n```\nOutro"])).toBeNull();
+    });
+
+    it("on code wrapped at the margin with its whitespace moved", () => {
+      expect(findReplySpan("  a *\n  b", ["```text\na* b\n```"])).toBeNull();
+    });
+
+    it("on tab-indented code, whose shift can't be pinned down", () => {
+      expect(
+        findReplySpan("  if ready:\n  run()", ["```py\n\tif ready:\n\t\trun()\n```"])
+      ).toBeNull();
+    });
+
     it("on whole lines selected beyond what matched", () => {
+      expect(findReplySpan("  before\n  │", ["```text\nbefore\n│\n```"])).toBeNull();
       expect(findReplySpan("---\n  after", ["```text\nafter\n```"])).toBeNull();
       expect(findReplySpan("after\n---", ["```text\nafter\n```"])).toBeNull();
     });

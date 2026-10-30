@@ -77,7 +77,7 @@ interface Gap {
   space: string;
   /** Markers and chrome, in order. */
   marks: string;
-  /** Per mark, "1" where the TUI draws it. */
+  /** Per mark, as {@link Skeleton.shown} has it. */
   shown: string;
   /** A list marker or quote marks open the line it ends on. */
   marker: boolean;
@@ -93,7 +93,12 @@ interface Skeleton {
   at: number[];
   /** Per UTF-16 unit of `text`, the gap before it; null when there is none. */
   gaps: (Gap | null)[];
-  /** Per offset of the original, 1 where a marker is drawn as it is. Only a reply's is filled in. */
+  /**
+   * Per offset of the original, whether the TUI draws a marker there: 0 never
+   * (a pair of emphasis or code-span delimiters, an escape, a heading's hashes),
+   * 1 as it is, 2 as it is or redrawn (a table's pipes, a rule). Only a reply's
+   * is filled in.
+   */
   shown: Uint8Array;
   /** Per offset, 1 + the index in `pairs` of the delimiter pair a hidden marker belongs to. */
   pair: Int32Array;
@@ -199,11 +204,13 @@ function markInline(text: string, skeleton: Skeleton): void {
   const prose = (line: ParsedLine) =>
     line.block === null && !line.fence && !line.rule && content(line).trim() !== "";
   const alone = (line: ParsedLine) => HEADING.test(content(line)) || content(line).startsWith("|");
+  const quotes = (line: ParsedLine) => line.prefix.replace(/[^>]/g, "");
   const continues = (n: number) =>
     n > 0 &&
     n < lines.length &&
     prose(lines[n]!) &&
     prose(lines[n - 1]!) &&
+    quotes(lines[n]!) === quotes(lines[n - 1]!) &&
     lines[n]!.marker === null &&
     !alone(lines[n]!) &&
     !alone(lines[n - 1]!);
@@ -304,7 +311,7 @@ function markInline(text: string, skeleton: Skeleton): void {
         continue;
       }
       if (ch === "#") shown[i] = i >= headingEnd ? 1 : 0;
-      else if (ch === "|") shown[i] = table ? 0 : 1;
+      else if (ch === "|") shown[i] = table ? 2 : 1;
       else if (isChrome(ch)) shown[i] = 1;
       i++;
     }
@@ -332,6 +339,7 @@ function skeletonOf(text: string, reply: boolean): Skeleton {
   if (reply) {
     for (const line of lines) {
       if (line.block !== null) skeleton.shown.fill(1, line.start, line.end);
+      else if (line.rule) skeleton.shown.fill(2, line.start, line.end);
     }
     markInline(text, skeleton);
   }
@@ -354,7 +362,7 @@ function skeletonOf(text: string, reply: boolean): Skeleton {
         if (isWhitespace(text[i]!)) continue;
         const next = pending();
         next.marks += text[i];
-        next.shown += shown[i] ? "1" : "0";
+        next.shown += String(shown[i] ?? 0);
       }
       return;
     }
@@ -366,7 +374,7 @@ function skeletonOf(text: string, reply: boolean): Skeleton {
       } else if (isDropped(ch)) {
         const next = pending();
         next.marks += ch;
-        next.shown += shown[i] ? "1" : "0";
+        next.shown += String(shown[i] ?? 0);
       } else {
         chars += ch;
         for (let unit = 0; unit < ch.length; unit++) {
@@ -396,19 +404,18 @@ function gapsAgree(reply: Gap | null, selected: Gap | null): boolean {
   if (replySpace && !selectedSpace) return false;
   if (!replySpace && selectedSpace && s.newlines === 0) return false;
   if (s.marker !== r.marker || (s.quote && !r.quote)) return false;
-  let i = 0;
+  // A drawn mark answers one the TUI draws, never a delimiter it hid; its own
+  // chrome may sit between them.
   let j = 0;
-  while (i < r.marks.length || j < s.marks.length) {
-    if (i < r.marks.length && j < s.marks.length && r.marks[i] === s.marks[j]) {
-      i++;
-      j++;
-    } else if (j < s.marks.length && isChrome(s.marks[j]!)) {
-      j++;
-    } else if (i < r.marks.length && r.shown[i] === "0") {
-      i++;
-    } else {
-      return false;
-    }
+  for (let i = 0; i < r.marks.length; i++) {
+    if (r.shown[i] === "0") continue;
+    let k = j;
+    while (k < s.marks.length && s.marks[k] !== r.marks[i] && isChrome(s.marks[k]!)) k++;
+    if (k < s.marks.length && s.marks[k] === r.marks[i]) j = k + 1;
+    else if (r.shown[i] === "1") return false;
+  }
+  for (; j < s.marks.length; j++) {
+    if (!isChrome(s.marks[j]!)) return false;
   }
   return true;
 }
@@ -430,40 +437,58 @@ function shiftedAlike(
   const replyIndent = reply.length - reply.trimStart().length;
   const selectedIndent = selected.length - selected.trimStart().length;
   if (reply.slice(replyIndent) !== selected.slice(selectedIndent)) return false;
-  // A tab is drawn as however many columns reach the next stop.
-  if (reply.slice(0, replyIndent).includes("\t")) return true;
+  // A tab is drawn as however many columns reach a stop the TUI's own indent
+  // moves, so a tab-indented line can't be held to a shift.
+  if (reply.slice(0, replyIndent).includes("\t")) return false;
   const delta = selectedIndent - replyIndent;
   if (delta < 0) return false;
   shift.value ??= delta;
   return shift.value === delta;
 }
 
+/** The same text, a tab drawn as however many spaces it took. */
+function sameRun(reply: string, selected: string): boolean {
+  return reply.includes("\t")
+    ? reply.replace(/\s+/gu, " ") === selected.replace(/\s+/gu, " ")
+    : reply === selected;
+}
+
+/**
+ * Whether a gap within one row of code was drawn as `selected`, which may have
+ * wrapped at the margin: what lies either side of each wrap must sit in the
+ * reply in that order, with only whitespace where the row broke.
+ */
+function wrappedAlike(reply: string, selected: string): boolean {
+  const pieces = selected.split("\n").map((piece, i, all) => {
+    const trimmed = i === 0 ? piece : piece.trimStart();
+    return i === all.length - 1 ? trimmed : trimmed.trimEnd();
+  });
+  const escape = (piece: string) => piece.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${pieces.map(escape).join("\\s*")}$`, "u").test(reply);
+}
+
 /**
  * Whether the selection's gap beside code is the reply's as the TUI draws
- * code: within one block, line for line; leaving a block, the rest of its last
- * line; entering one, the head of its first.
+ * code, line for line under one indent shift: within one block, every line it
+ * crosses; leaving a block, the rest of its row and every code line after it;
+ * entering one, every code line before the next character and that line's
+ * head. `leaving` and `entering` count those lines.
  */
 function codeGapAgrees(
   reply: string,
   selected: string,
-  leaving: boolean,
-  entering: boolean,
+  leaving: number,
+  entering: number,
   within: boolean,
   shift: { value: number | null }
 ): boolean {
   const replyLines = reply.split("\n");
   const selectedLines = selected.split("\n");
   // The terminal keeps no blanks at the end of a row.
-  const restAgrees = () => replyLines[0]!.trimEnd() === selectedLines[0]!.trimEnd();
+  const restAgrees = () => sameRun(replyLines[0]!.trimEnd(), selectedLines[0]!.trimEnd());
   if (within) {
     if (replyLines.length === 1) {
-      if (selectedLines.length > 1) {
-        // Wrapped at the margin.
-        return reply.replace(/\s/gu, "") === selected.replace(/\s/gu, "");
-      }
-      return reply.includes("\t")
-        ? reply.replace(/\s+/gu, " ") === selected.replace(/\s+/gu, " ")
-        : reply === selected;
+      return selectedLines.length > 1 ? wrappedAlike(reply, selected) : sameRun(reply, selected);
     }
     if (selectedLines.length !== replyLines.length || !restAgrees()) return false;
     for (let i = 1; i < replyLines.length - 1; i++) {
@@ -471,8 +496,17 @@ function codeGapAgrees(
     }
     return shiftedAlike(replyLines.at(-1)!, selectedLines.at(-1)!, shift, false);
   }
-  if (leaving && !restAgrees()) return false;
-  return !entering || shiftedAlike(replyLines.at(-1)!, selectedLines.at(-1)!, shift, false);
+  if (selectedLines.length < leaving + entering) return false;
+  if (leaving > 0 && !restAgrees()) return false;
+  for (let i = 1; i < leaving; i++) {
+    if (!shiftedAlike(replyLines[i]!, selectedLines[i]!, shift, true)) return false;
+  }
+  for (let i = 1; i <= entering; i++) {
+    const code = replyLines[replyLines.length - i]!;
+    const drawn = selectedLines[selectedLines.length - i]!;
+    if (!shiftedAlike(code, drawn, shift, i > 1)) return false;
+  }
+  return true;
 }
 
 function lineIndexOf(lines: readonly ParsedLine[], offset: number): number {
@@ -502,6 +536,9 @@ interface SelectionEdges {
   /** Markers the selection took before its first kept character and after its last. */
   lead: string;
   trail: string;
+  /** It took chrome on rows before its first kept character, or after its last. */
+  linesBefore: boolean;
+  linesAfter: boolean;
 }
 
 function selectedMarks(text: string): string {
@@ -521,9 +558,15 @@ function selectionEdges(selection: string): SelectionEdges | null {
   const last = parsed.lines[lineIndexOf(parsed.lines, lastAt)]!;
   // Whole lines selected before or after it, a rule or a fence the TUI drew,
   // would have nothing in the span to answer for them.
-  for (const ch of selection.slice(0, first.start) + selection.slice(last.end)) {
-    if (!isWhitespace(ch) && !isChrome(ch)) return null;
-  }
+  const outside = (text: string) => {
+    for (const ch of text) {
+      if (!isWhitespace(ch) && !isChrome(ch)) return null;
+    }
+    return /\S/u.test(text);
+  };
+  const linesBefore = outside(selection.slice(0, first.start));
+  const linesAfter = outside(selection.slice(last.end));
+  if (linesBefore === null || linesAfter === null) return null;
   const lastEnd = lastAt + charAt(selection, lastAt).length;
   return {
     source: selection,
@@ -536,12 +579,19 @@ function selectionEdges(selection: string): SelectionEdges | null {
     prefix: first.prefix,
     lead: selectedMarks(selection.slice(first.contentStart, firstAt)),
     trail: selectedMarks(selection.slice(lastEnd, last.end)),
+    linesBefore,
+    linesAfter,
   };
 }
 
 /** A marker the TUI draws nothing for. */
-function isHidden(reply: Skeleton, index: number): boolean {
+function isNeverDrawn(reply: Skeleton, index: number): boolean {
   return MARKERS.has(reply.source.charAt(index)) && reply.shown[index] === 0;
+}
+
+/** A marker the TUI may draw nothing for, or draw as something else. */
+function isHidden(reply: Skeleton, index: number): boolean {
+  return MARKERS.has(reply.source.charAt(index)) && reply.shown[index] !== 1;
 }
 
 function onlyHidden(reply: Skeleton, from: number, to: number): boolean {
@@ -588,10 +638,11 @@ function startsOf(
   for (let i = from; i > Math.max(floor, line.contentStart) && wanted > 0;) {
     const ch = charBefore(source, i);
     i -= ch.length;
+    if (isWhitespace(ch) || isNeverDrawn(reply, i)) continue;
     if (ch === edges.lead[wanted - 1]) {
       wanted--;
       start = i;
-    } else if (!isWhitespace(ch) && !isHidden(reply, i)) {
+    } else if (!isHidden(reply, i)) {
       break;
     }
   }
@@ -631,10 +682,14 @@ function endsOf(
   let taken = 0;
   for (let i = from; i < Math.min(ceiling, line.end) && taken < edges.trail.length;) {
     const ch = charAt(source, i);
+    if (isWhitespace(ch) || isNeverDrawn(reply, i)) {
+      i += ch.length;
+      continue;
+    }
     if (ch === edges.trail[taken]) {
       taken++;
       end = i + ch.length;
-    } else if (!isWhitespace(ch) && !isHidden(reply, i)) {
+    } else if (!isHidden(reply, i)) {
       break;
     }
     i += ch.length;
@@ -669,18 +724,20 @@ function gapsMatch(
   edges: SelectionEdges,
   shift: { value: number | null }
 ): boolean {
-  const { source, at, lines } = reply;
+  const { source, at, lines, blocks } = reply;
   let line = lineIndexOf(lines, at[first]!);
   for (let k = first + 1; k <= last; k++) {
     const before = at[k - 1]! + 1;
     const after = at[k]!;
-    const previous = lines[line]!;
+    const from = line;
+    const previous = lines[from]!;
     while (line + 1 < lines.length && lines[line + 1]!.start <= after) line++;
     const next = lines[line]!;
-    const leaving = previous.block !== null;
-    const entering = next.block !== null;
-    if (leaving || entering) {
-      const within = leaving && previous.block === next.block;
+    if (previous.block !== null || next.block !== null) {
+      const within = previous.block !== null && previous.block === next.block;
+      const closing = previous.block === null ? null : blocks[previous.block]!.close;
+      const leaving = previous.block === null ? 0 : (closing ?? lines.length) - from;
+      const entering = next.block === null ? 0 : line - blocks[next.block]!.open;
       const drawn = edges.source.slice(edges.at[k - first - 1]! + 1, edges.at[k - first]!);
       if (!codeGapAgrees(source.slice(before, after), drawn, leaving, entering, within, shift)) {
         return false;
@@ -710,11 +767,25 @@ function spanText(
   const floor = first > 0 ? Math.max(at[first - 1]! + 1, startLine.start) : startLine.start;
   const ceiling = last + 1 < at.length ? Math.min(at[last + 1]!, endLine.end) : endLine.end;
 
+  // In code, box drawing can be what the agent wrote, so rows of it
+  // selected beside the span have nothing to answer for them.
+  if (
+    (edges.linesBefore && startLine.block !== null) ||
+    (edges.linesAfter && endLine.block !== null)
+  ) {
+    return null;
+  }
   const shift = { value: null as number | null };
-  // Code the selection picks up from the start of its row sets the indent shift.
+  // Code the selection picks up from the start of its row sets the indent
+  // shift, and code taken with its line's prefix must match all of its head.
   const head = edges.source.slice(edges.firstLineStart, edges.at[0]!);
-  if (startLine.block !== null && floor <= startLine.start && /^\s/u.test(head)) {
-    if (!shiftedAlike(source.slice(startLine.start, from), head, shift, false)) return null;
+  const codeHead = source.slice(startLine.start, from);
+  if (startLine.block !== null && floor <= startLine.start) {
+    if (
+      /^\s/u.test(head) ? !shiftedAlike(codeHead, head, shift, false) : !codeHead.endsWith(head)
+    ) {
+      return null;
+    }
   }
   if (!gapsMatch(reply, first, last, edges, shift)) return null;
 
