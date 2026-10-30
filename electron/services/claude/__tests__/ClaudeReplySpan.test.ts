@@ -105,12 +105,48 @@ describe("findReplySpan", () => {
     expect(findReplySpan("written in C", [reply])).toBe("written in C");
   });
 
+  it("takes back the marks the selection carries at either end", () => {
+    expect(findReplySpan("#tag rest", ["see #tag rest"])).toBe("#tag rest");
+    expect(findReplySpan("use C#", ["I use C# daily"])).toBe("use C#");
+  });
+
+  it("never widens over a mark the TUI draws but the selection left out", () => {
+    expect(findReplySpan("C", ["C#"])).toBe("C");
+    expect(findReplySpan("tag", ["#tag"])).toBe("tag");
+  });
+
   it("leaves off a marker that would leave emphasis half open", () => {
     const reply = "She said **hello world** and left.";
 
     expect(findReplySpan("world", [reply])).toBe("world");
     expect(findReplySpan("hello", [reply])).toBe("hello");
     expect(findReplySpan("hello world", [reply])).toBe("**hello world**");
+  });
+
+  it("does the same for single-character emphasis", () => {
+    const reply = "She said *hello world* and left.";
+
+    expect(findReplySpan("world", [reply])).toBe("world");
+    expect(findReplySpan("hello world", [reply])).toBe("*hello world*");
+  });
+
+  it("matches what the TUI draws inside a code span and of an escape", () => {
+    expect(findReplySpan("Use a*b now.", ["Use `a*b` now."])).toBe("Use `a*b` now.");
+    expect(findReplySpan("Use *x* now.", ["Use \\*x\\* now."])).toBe("Use \\*x\\* now.");
+  });
+
+  it("keeps a quote's marks when the selection took them", () => {
+    expect(findReplySpan("> Quoted line", ["> Quoted line here."])).toBe("> Quoted line");
+  });
+
+  it("removes only the indent every selected line shares", () => {
+    expect(findReplySpan("    - a\n    - b", ["- top\n  - a\n  - b"])).toBe("- a\n- b");
+  });
+
+  it("keeps code's indentation when the span starts partway through a line", () => {
+    expect(findReplySpan("ready:\n      run()", ["```py\nif ready:\n    run()\n```"])).toBe(
+      "ready:\n    run()"
+    );
   });
 
   it("rejoins a token the TUI broke at the margin", () => {
@@ -136,6 +172,35 @@ describe("findReplySpan", () => {
       expect(findReplySpan("ranscript when the", [PARAGRAPH])).toBeNull();
       expect(findReplySpan("the pane runs Clau", [PARAGRAPH])).toBeNull();
       expect(findReplySpan("cript", ["see `transcript_id` here"])).toBeNull();
+      expect(findReplySpan("transcript", ["see `transcript_id` here"])).toBeNull();
+      expect(findReplySpan("id", ["see `transcript_id` here"])).toBeNull();
+      // A decomposed é: the combining accent belongs to the word.
+      expect(findReplySpan("clair", ["e\u0301clair"])).toBeNull();
+    });
+
+    it("on a selection that leaves out a line, prefix or mark the code has", () => {
+      for (const reply of [
+        "```text\nbefore\n---\nafter\n```",
+        "````text\nbefore\n```literal\nafter\n````",
+        "```text\nbefore\n+ after\n```",
+      ]) {
+        expect(findReplySpan("before\n  after", [reply])).toBeNull();
+      }
+      expect(findReplySpan("a b", ["```text\na  b\n```"])).toBeNull();
+      expect(findReplySpan("a b", ["```text\na\nb\n```"])).toBeNull();
+      expect(findReplySpan("a│b", ["```text\nab\n```"])).toBeNull();
+    });
+
+    it("on a selection that leaves out what the TUI draws in prose", () => {
+      expect(
+        findReplySpan("written in C today", ["Most of it is written in C# today."])
+      ).toBeNull();
+      expect(findReplySpan("Use ab now.", ["Use `a*b` now."])).toBeNull();
+      expect(findReplySpan("Use x now.", ["Use \\*x\\* now."])).toBeNull();
+    });
+
+    it("on a list item the reply doesn't have", () => {
+      expect(findReplySpan("Keep\n  - delete", ["Keep delete"])).toBeNull();
     });
 
     it("where the reply spaces or marks its words differently", () => {
@@ -160,13 +225,22 @@ describe("findReplySpan", () => {
       );
     });
 
-    it("when a list marker the selection took isn't one in the reply", () => {
+    it("when the reply holds it twice, written differently", () => {
+      expect(
+        findReplySpan("run the tests", ["First run the tests, then **run** the tests."])
+      ).toBeNull();
+    });
+
+    it("when a list marker or quote the selection took isn't one in the reply", () => {
       // "a. " opens the selection as a nested item would, but sits mid-sentence in the reply.
-      expect(findReplySpan("a. The rest", ["Keep the data. The rest goes."])).toBeNull();
+      expect(findReplySpan("a. The rest", ["1. Keep the data. The rest goes."])).toBeNull();
+      expect(findReplySpan("- The rest", ["The rest goes."])).toBeNull();
+      expect(findReplySpan("> Quoted line", ["Quoted line here."])).toBeNull();
     });
 
     it("on a span left with emphasis open whichever way it is cut", () => {
       expect(findReplySpan("world and", ["She said **hello world** and left."])).toBeNull();
+      expect(findReplySpan("world and", ["She said *hello world* and left."])).toBeNull();
     });
   });
 });

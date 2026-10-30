@@ -9,6 +9,7 @@ import path from "path";
 const fsHook = vi.hoisted(() => ({
   beforeLstat: null as null | ((target: string) => Promise<void>),
   beforeOpen: null as null | ((target: string) => Promise<void>),
+  opened: [] as { fd: number }[],
 }));
 
 vi.mock("fs/promises", async (importOriginal) => {
@@ -21,7 +22,9 @@ vi.mock("fs/promises", async (importOriginal) => {
     },
     open: async (target: string, flags?: string | number, mode?: number) => {
       await fsHook.beforeOpen?.(target);
-      return actual.open(target, flags, mode);
+      const handle = await actual.open(target, flags, mode);
+      fsHook.opened.push(handle);
+      return handle;
     },
   };
 });
@@ -58,6 +61,7 @@ beforeEach(async () => {
 afterEach(async () => {
   fsHook.beforeLstat = null;
   fsHook.beforeOpen = null;
+  fsHook.opened.length = 0;
   await rm(root, { recursive: true, force: true });
 });
 
@@ -1150,12 +1154,23 @@ describe("readClaudeRecentReplies", () => {
     expect(await recent({ maxChars: 4 })).toEqual([]);
   });
 
-  it("has nothing for a session with no transcript or an unsafe id", async () => {
+  it("has nothing for a session with no transcript", async () => {
     expect(await recent()).toEqual([]);
+  });
+
+  it("never looks up an id shaped to climb out of its project's directory", async () => {
     await seed([assistant("msg_1", [text("Kept.")])]);
+    // Where `<slug>/../escape.jsonl` lands, inside the store, so only the id check stops it.
+    await writeFile(
+      path.join(projectsRoot, "escape.jsonl"),
+      assistant("msg_2", [text("Decoy.")]) + "\n",
+      "utf8"
+    );
+
     expect(
       await readClaudeRecentReplies({ projectsRoot, cwd: CWD, sessionId: "../escape" })
     ).toEqual([]);
+    expect(fsHook.opened).toHaveLength(0);
   });
 
   it("refuses a transcript planted as a symlink", async () => {
@@ -1174,5 +1189,24 @@ describe("readClaudeRecentReplies", () => {
     controller.abort();
 
     await expect(recent({ signal: controller.signal })).rejects.toThrow();
+  });
+
+  it("stops at the scan ceiling rather than reading past a huge record", async () => {
+    await seed([assistant("msg_1", [text("Older.")]), toolResult("t1", "x".repeat(4096))]);
+
+    expect(await recent({ maxScanBytes: 1024, chunkBytes: 256 })).toEqual([]);
+    expect(await recent({ maxScanBytes: 64 * 1024, chunkBytes: 256 })).toEqual(["Older."]);
+  });
+
+  it("closes the transcript however the read ends", async () => {
+    await seed([assistant("msg_1", [text("one")]), assistant("msg_2", [text("two")])]);
+    await recent();
+    await recent({ limit: 1 });
+    const controller = new AbortController();
+    fsHook.beforeOpen = async () => controller.abort();
+    await expect(recent({ signal: controller.signal })).rejects.toThrow();
+
+    expect(fsHook.opened).toHaveLength(3);
+    for (const handle of fsHook.opened) expect(handle.fd).toBe(-1);
   });
 });

@@ -42,7 +42,7 @@ export function copyCleanSelection(
     settled = true;
     clearTimeout(timer);
     if (gesture !== latest) return;
-    const text = span && selection.includes("\r\n") ? span.replace(/\n/g, "\r\n") : span;
+    const text = span && selection.includes("\r\n") ? span.replace(/\r?\n/g, "\r\n") : span;
     copyWithToast("Selection", text || cleaned, { flash });
   };
   const timer = setTimeout(() => settle(null), REPLY_SPAN_WAIT_MS);

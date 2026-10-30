@@ -14,6 +14,12 @@ vi.mock("../ClaudeSubagentService.js", () => ({
 vi.mock("../ClaudeSessionStore.js", () => ({
   getClaudePaneProjectsRoot: host.getClaudePaneProjectsRoot,
 }));
+const reader = vi.hoisted(() => ({ read: vi.fn() }));
+vi.mock("../ClaudeSessionReader.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../ClaudeSessionReader.js")>();
+  reader.read.mockImplementation(actual.readClaudeRecentReplies);
+  return { ...actual, readClaudeRecentReplies: reader.read };
+});
 
 import { findClaudeReplySpan } from "../ClaudeReplyCopy.js";
 import { deriveProjectSlug } from "../ClaudeSubagentReader.js";
@@ -42,7 +48,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  vi.clearAllMocks();
+  host.resolveClaudeTerminal.mockReset();
+  host.getClaudePaneProjectsRoot.mockReset();
+  reader.read.mockClear();
   await rm(root, { recursive: true, force: true });
 });
 
@@ -77,12 +85,14 @@ describe("findClaudeReplySpan", () => {
 
     expect(await findClaudeReplySpan("t-1", "Run the build first", live())).toBeNull();
     expect(host.getClaudePaneProjectsRoot).not.toHaveBeenCalled();
+    expect(reader.read).not.toHaveBeenCalled();
   });
 
   it("reads nothing when the pane's store was never pinned down", async () => {
     host.getClaudePaneProjectsRoot.mockReturnValue(null);
 
     expect(await findClaudeReplySpan("t-1", "Run the build first", live())).toBeNull();
+    expect(reader.read).not.toHaveBeenCalled();
   });
 
   it("gives up once the deadline has passed", async () => {

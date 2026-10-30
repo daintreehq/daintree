@@ -2,12 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IpcContext } from "../../types.js";
 
 const replyCopyMock = vi.hoisted(() => ({
-  findClaudeReplySpan: vi.fn(async (): Promise<string | null> => "**the reply**"),
+  findClaudeReplySpan: vi.fn(
+    async (_terminalId: string, _selection: string, _signal: AbortSignal): Promise<string | null> =>
+      "**the reply**"
+  ),
 }));
 
 vi.mock("../../../services/claude/ClaudeReplyCopy.js", () => replyCopyMock);
 
 import { claudeNamespace } from "../claude.js";
+import { REPLY_SPAN_HOST_TIMEOUT_MS } from "../../../../shared/config/replySpanLimits.js";
 
 function ctx(client: "local" | "remote", endpoint: "local-view" | "remote-view"): IpcContext {
   return {
@@ -32,17 +36,38 @@ describe("claude.findReplySpan", () => {
     vi.restoreAllMocks();
   });
 
-  it("answers a local view with the span the host found, under a deadline", async () => {
+  it("answers a local view with the span the host found", async () => {
     const result = await find(ctx("local", "local-view"), {
       terminalId: "t-1",
       selection: "the reply",
     });
 
     expect(result).toBe("**the reply**");
-    const [terminalId, selection, signal] = replyCopyMock.findClaudeReplySpan.mock
-      .calls[0] as unknown as [string, string, AbortSignal];
-    expect([terminalId, selection]).toEqual(["t-1", "the reply"]);
-    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(replyCopyMock.findClaudeReplySpan).toHaveBeenCalledWith(
+      "t-1",
+      "the reply",
+      expect.any(AbortSignal)
+    );
+  });
+
+  it("gives up with null, quietly, once the host's deadline passes mid-read", async () => {
+    const deadline = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    replyCopyMock.findClaudeReplySpan.mockImplementationOnce(
+      (_terminalId, _selection, signal: AbortSignal) =>
+        new Promise<string | null>((_resolve, reject) =>
+          signal.addEventListener("abort", () => reject(signal.reason))
+        )
+    );
+
+    const pending = find(ctx("local", "local-view"), { terminalId: "t-1", selection: "x" });
+    await vi.waitFor(() => expect(replyCopyMock.findClaudeReplySpan).toHaveBeenCalled());
+    deadline.abort(new DOMException("timed out", "TimeoutError"));
+
+    await expect(pending).resolves.toBeNull();
+    expect(timeout).toHaveBeenCalledWith(REPLY_SPAN_HOST_TIMEOUT_MS);
+    expect(error).not.toHaveBeenCalled();
   });
 
   it.each([

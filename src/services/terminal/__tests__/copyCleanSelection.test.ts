@@ -49,13 +49,18 @@ describe("copyCleanSelection", () => {
     expect(copyWithToast).toHaveBeenCalledWith("Selection", ORIGINAL, { flash: "ticket" });
   });
 
-  it("keeps the selection's line endings", async () => {
-    findReplySpan.mockResolvedValue("- one\n- two");
+  it.each([
+    ["written with LF", "- **one**\n- two"],
+    ["already written with CRLF", "- **one**\r\n- two"],
+  ])("keeps the selection's line endings for a reply %s", async (_label, span) => {
+    findReplySpan.mockResolvedValue(span);
 
     copyCleanSelection("  - one\r\n  - two", "- one\r\n- two", "t-1");
     await vi.runAllTimersAsync();
 
-    expect(copyWithToast).toHaveBeenCalledWith("Selection", "- one\r\n- two", { flash: "ticket" });
+    expect(copyWithToast).toHaveBeenCalledWith("Selection", "- **one**\r\n- two", {
+      flash: "ticket",
+    });
   });
 
   it.each([

@@ -15,7 +15,7 @@ import {
   hasPanelCloseGuard,
   isPanelClosePending,
 } from "@/services/panelCloseGuard";
-import { isBrowserPanel } from "@shared/types/panel";
+import { isBrowserPanel, isPtyPanel } from "@shared/types/panel";
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import type { TerminalLink } from "@/services/terminal/types";
 import { cleanTerminalSelection } from "@/services/terminal/cleanTerminalCopy";
@@ -187,7 +187,9 @@ export function useTerminalMenuCommands({
           copyCleanSelection(
             managed.terminal.getSelection(),
             cleanTerminalSelection(managed.terminal, managed.commandLinksDisposable),
-            getBuiltInRuntimeAgentId(terminal) === "claude" ? terminalId : null
+            terminal && isPtyPanel(terminal) && getBuiltInRuntimeAgentId(terminal) === "claude"
+              ? terminalId
+              : null
           );
           break;
         }
