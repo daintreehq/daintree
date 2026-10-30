@@ -8,7 +8,11 @@ import { getLoadedXtermCore, loadXtermCore } from "./xtermCore";
 import { systemClient } from "@/clients/systemClient";
 import { FileLinksAddon, HoverCallback, type FileLinkRoute } from "./FileLinksAddon";
 import { ImageLinksAddon, OnActivateFigure } from "./ImageLinksAddon";
-import { SuggestedCommandLinksAddon, OnRunSuggestedCommand } from "./SuggestedCommandLinksAddon";
+import {
+  SuggestedCommandLinksAddon,
+  type OnRunSuggestedCommand,
+  type SuggestedCommandLinks,
+} from "./SuggestedCommandLinksAddon";
 import {
   PluginTerminalLinksAddon,
   type PluginTerminalLinkHandlers,
@@ -95,7 +99,7 @@ export interface TerminalAddons {
   searchAddon: SearchAddon | null;
   fileLinksDisposable: IDisposable | null;
   imageLinksDisposable: IDisposable | null;
-  commandLinksDisposable: IDisposable | null;
+  commandLinksDisposable: SuggestedCommandLinks | null;
   pluginLinksDisposable: IDisposable | null;
   webLinksAddon: WebLinksAddon | null;
 }
@@ -228,7 +232,7 @@ export function createSuggestedCommandLinksAddon(
   terminal: Terminal,
   isEnabled: () => boolean,
   onRun: OnRunSuggestedCommand
-): IDisposable {
+): SuggestedCommandLinks {
   const addon = new SuggestedCommandLinksAddon(terminal, isEnabled, onRun);
   const registration = terminal.registerLinkProvider(addon);
   // Composed for the same reason as the file links: dropping the registration
@@ -238,6 +242,8 @@ export function createSuggestedCommandLinksAddon(
       registration.dispose();
       addon.dispose();
     },
+    widthKnownFrom: (buffer) => addon.widthKnownFrom(buffer),
+    markRowsStale: () => addon.markRowsStale(),
   };
 }
 

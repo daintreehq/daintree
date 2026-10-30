@@ -28,6 +28,7 @@ import {
 } from "@/services/terminal/TerminalAddonManager";
 import { reportFileLinkFailure } from "@/services/terminal/FileLinksAddon";
 import { resolveSelectedFilePath } from "@/services/terminal/filePathDetection";
+import { cleanTerminalSelection } from "@/services/terminal/cleanTerminalCopy";
 import { TerminalLinkHandler } from "@/services/terminal/TerminalLinkHandler";
 import { remoteHostOfView } from "@/services/terminal/remoteLoopbackLinks";
 import {
@@ -601,6 +602,10 @@ export function CanopyTerminal({
       },
       openLink: (url, options) => links.openLink(url, undefined, options),
       copy: (text) => copyWithToast("Selection", text),
+      copyClean: (captured) => {
+        const text = cleanTerminalSelection(terminal, linkSlots.commandLinksDisposable, captured);
+        if (text) copyWithToast("Selection", text);
+      },
       // Chosen from the menu, so the user's own input: sent through the stream
       // like a typed paste, formatted as the grid's paste is.
       paste: () => {
@@ -730,7 +735,11 @@ export function CanopyTerminal({
       // The escape sequence the host's parser was inside, so the chunks
       // after the fence land in the same parser state they were written in.
       const tail = fence !== undefined ? (continuation?.pendingEscapeTail ?? "") : "";
-      terminal.write(snapshot.data + tail, checkSecret);
+      terminal.write(snapshot.data + tail, () => {
+        // A snapshot keeps no record of the widths its rows were laid out at.
+        linkSlots.commandLinksDisposable?.markRowsStale();
+        checkSecret();
+      });
       requestAnimationFrame(() => {
         if (!disposed) fit();
       });

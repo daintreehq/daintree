@@ -281,6 +281,7 @@ export class TerminalRestoreController {
     // terminal that has never restored, and the catch below must not close a
     // window this call never took.
     let restoreWindow = -1;
+    let wrote = false;
     try {
       if (serializedState.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes) {
         void this.restoreFromSerializedIncremental(
@@ -308,6 +309,7 @@ export class TerminalRestoreController {
       // the last live chunk stopped (xterm.js #5019): mid-sequence, it would
       // eat the head of the snapshot.
       managed.terminal.reset();
+      wrote = true;
       this.alignToCaptureGeometry(managed, captureGeometry);
       const payload = PARSER_GROUND + serializedState + this.restoreTail(continuation);
       managed.parserTail?.feed(payload);
@@ -321,6 +323,9 @@ export class TerminalRestoreController {
         queueMicrotask(() => {
           const current = this.deps.getInstance(id);
           if (current !== managed || managed.restoreGeneration !== restoreGeneration) return;
+
+          // A snapshot keeps no record of the widths its rows were laid out at.
+          current.commandLinksDisposable?.markRowsStale();
 
           // Closed only now: the deferred chunks below were produced for the
           // live grid, so they must not be written while the pane is still
@@ -342,6 +347,7 @@ export class TerminalRestoreController {
       // The restore died synchronously (reset/resize/write threw). Put the pane
       // back on its live grid before releasing output — replaying live chunks
       // into a terminal parked at the capture width would corrupt them too.
+      if (wrote) managed.commandLinksDisposable?.markRowsStale();
       this.endRestoreWindow(managed, restoreWindow);
       managed.lastScrollbackRestoreError = classifyRestoreError(error);
       logError(`Failed to restore terminal ${id}`, error);
@@ -369,6 +375,7 @@ export class TerminalRestoreController {
     managed.lastScrollbackRestoreError = undefined;
 
     let replayed = false;
+    let wrote = false;
     const task = async (): Promise<boolean> => {
       const scrollBackOffset = managed.isUserScrolledBack
         ? managed.terminal.buffer.active.baseY - managed.terminal.buffer.active.viewportY
@@ -382,6 +389,7 @@ export class TerminalRestoreController {
         }
 
         managed.terminal.reset();
+        wrote = true;
         this.alignToCaptureGeometry(managed, captureGeometry);
 
         // CAN rides the first chunk and the tail the last, so chunking and
@@ -453,6 +461,8 @@ export class TerminalRestoreController {
           // is fully laid out at the capture grid by now and this reflow sees
           // the whole payload. A superseded generation never reaches here — its
           // successor is mid-replay at its own capture width and owns the grid.
+          // Even part of a snapshot keeps no record of the widths its rows were laid out at.
+          if (wrote) managed.commandLinksDisposable?.markRowsStale();
           this.endRestoreWindow(managed, restoreWindow);
 
           if (scrollBackOffset > 0) {

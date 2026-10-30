@@ -106,6 +106,10 @@ export function TerminalSelectionMenuItems({
         Copy
         <ContextMenuShortcut shortcut={clipboardCombos.copy} />
       </ContextMenuItem>
+      <ContextMenuItem disabled={!hasSelection} onSelect={() => onAction("copy-clean")}>
+        <Copy className={ICON_CLASS} aria-hidden="true" />
+        Copy clean text
+      </ContextMenuItem>
       <ContextMenuItem
         onSelect={() => onAction("paste")}
         aria-keyshortcuts={comboToAriaKeyshortcuts(clipboardCombos.paste, mac)}
