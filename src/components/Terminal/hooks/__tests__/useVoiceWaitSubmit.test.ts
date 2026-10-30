@@ -975,7 +975,10 @@ describe("useVoiceWaitSubmit keys during the wait (#14780)", () => {
     document.body.replaceChildren();
   });
 
-  function renderWaitSubmit(terminalId = PANEL_ID, send = sendFromEditor) {
+  function renderWaitSubmit(
+    terminalId = PANEL_ID,
+    send: Parameters<typeof useVoiceWaitSubmit>[0]["sendFromEditor"] = sendFromEditor
+  ) {
     return renderHook(() =>
       useVoiceWaitSubmit({
         terminalId,

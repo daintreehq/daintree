@@ -200,7 +200,10 @@ describe("the composer's send", () => {
     // outside the send path.
     expect(end).toBeGreaterThan(start);
     const body = source.slice(start, end);
-    expect(body).toMatch(/tryComposerFleetBroadcast\(\s*isFocusedTerminal,\s*terminalId,\s*text,/);
+    // A send whose composer unmounted mid-wait goes by the fan-out it had at Enter (#15510).
+    expect(body).toMatch(
+      /tryComposerFleetBroadcast\(\s*departed \? departed\.fanOut : isFocusedTerminal,\s*terminalId,\s*text,/
+    );
     expect(body).not.toMatch(/armedIds\.size/);
   });
 });
