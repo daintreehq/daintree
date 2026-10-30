@@ -143,6 +143,10 @@ describe("findReplySpan", () => {
     );
   });
 
+  it("takes a row break as a wrap where the reply has a space or nothing", () => {
+    expect(findReplySpan("Use a\n  # b now.", ["Use a#\nb now."])).toBe("Use a#\nb now.");
+  });
+
   it("reads the message marker on a code line as two columns of its indent", () => {
     expect(findReplySpan("⏺ a\n  b", ["```text\na\nb\n```"])).toBe("a\nb");
   });
@@ -277,6 +281,7 @@ describe("findReplySpan", () => {
 
     it("on a drawn mark that sits the other side of a space in the reply", () => {
       expect(findReplySpan("Use a *b now.", ["Use a* b now."])).toBeNull();
+      expect(findReplySpan("Use a *\n  b now.", ["Use a* b now."])).toBeNull();
     });
 
     it("on code wrapped at the margin with its whitespace moved", () => {

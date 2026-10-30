@@ -97,7 +97,7 @@ const NO_GAP: Gap = {
 };
 
 function spaced(layout: string): string {
-  return layout.endsWith(" ") ? layout : `${layout} `;
+  return /[ \n]$/u.test(layout) ? layout : `${layout} `;
 }
 
 interface Skeleton {
@@ -367,7 +367,7 @@ function skeletonOf(text: string, reply: boolean): Skeleton {
       const next = pending();
       next.newlines++;
       next.space = "";
-      next.layout = spaced(next.layout);
+      next.layout = reply ? spaced(next.layout) : `${next.layout.replace(/ $/u, "")}\n`;
       next.marker = false;
       next.quote = false;
     }
@@ -437,15 +437,16 @@ function gapsAgree(reply: Gap | null, selected: Gap | null): boolean {
     if (!isChrome(s.marks[j]!)) return false;
   }
   // And in the same order around the whitespace, leaving out what the TUI may
-  // redraw and its own chrome. A wrap the reply hasn't got moves only space.
+  // redraw and its own chrome.
   const redrawn = new Set([...r.marks].filter((_, i) => r.shown[i] === "2"));
   const layout = [...s.layout]
     .filter((ch) => !redrawn.has(ch) && !(isChrome(ch) && !r.layout.includes(ch)))
     .join("")
+    .replace(/ *\n[ \n]*/g, "\n")
     .replace(/ {2,}/g, " ");
-  return s.newlines > r.newlines
-    ? layout.replace(/ /g, "") === r.layout.replace(/ /g, "")
-    : layout === r.layout;
+  // A row break in the selection may be a wrap, where the reply has a space or nothing.
+  const pattern = [...layout].map((ch) => (ch === "\n" ? " ?" : escapeRegExp(ch))).join("");
+  return new RegExp(`^${pattern}$`, "u").test(r.layout);
 }
 
 /**
