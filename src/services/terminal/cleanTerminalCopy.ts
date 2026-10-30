@@ -72,9 +72,9 @@ const LOWER_STARTS = /^[\p{L}\p{N}("'“‘`[#@~/.$—–-]/u;
 const KEY_VALUE = /^[\w.-]+:(?:\s|$)/;
 // A break after a sentence may be one sentence per line, so it's kept.
 const SENTENCE_END = /[.!?…。！？]["'”’)\]]*$/;
-// How a paragraph's last row ends: punctuation straight after a word. Code,
-// commands and config rarely end that way (`git add .` doesn't).
-const PROSE_END = /[\p{L}\p{N}"'”’)\]`][.!?:…。！？]["'”’)\]]*$/u;
+// How a paragraph's last row ends: punctuation straight after a word or a URL.
+// Code, commands and config rarely end that way (`git add .` doesn't).
+const PROSE_END = /[\p{L}\p{N}"'”’)\]`/][.!?:…。！？]["'”’)\]]*$/u;
 
 function normalize(text: string): string {
   return text.replace(/\r\n/g, "\n").replace(/\u00a0/g, " ");
@@ -157,13 +157,15 @@ function rowWidth(row: Row): number {
 
 /**
  * Where a wrapped row of this paragraph or list item resumes, and whether it
- * opens with a marker: a list item, or the first paragraph of a Claude Code or
- * Codex message, which is prose however it ends.
+ * opens a list item (Claude Code's marker opens a message, not an item).
  */
-function headOf(row: Row): { hang: number; marked: boolean } {
+function headOf(row: Row): { hang: number; list: boolean } {
   const index = firstContent(row);
   const marker = LIST_MARKER.exec(rowText(row).slice(index));
-  return { hang: row.cells[index + (marker ? marker[0].length : 0)]!.col, marked: marker !== null };
+  return {
+    hang: row.cells[index + (marker ? marker[0].length : 0)]!.col,
+    list: marker !== null && !marker[0].startsWith("⏺"),
+  };
 }
 
 /**
@@ -236,10 +238,9 @@ function protectedLines(lines: readonly Line[]): boolean[] {
 /**
  * Rejoin the rows an agent wrapped to fit the pane, where nothing else could
  * explain the breaks. Each run of rows that could be one wrapped paragraph is
- * joined only when it reads as one: it opens with a list or message marker,
- * ends the way prose does, or carries on into the row after it (past the
- * selection, say). Lines of code, commands and config can chain by chance, but
- * rarely end on a full stop.
+ * joined only when it reads as one: a list item, or a run that ends the way
+ * prose does or carries on past the selection. Lines of code, commands and
+ * config can chain by chance, but rarely end on a full stop.
  */
 function rejoinWraps(
   lines: Line[],
@@ -250,17 +251,17 @@ function rejoinWraps(
   const locked = protectedLines(lines);
   const out: Line[] = [];
   let run: Line[] = [];
-  let head = { hang: -1, marked: false };
-  const flush = () => {
+  let head = { hang: -1, list: false };
+  const flush = (endsSelection: boolean) => {
     const last = run[run.length - 1]?.rows?.[0];
     if (run.length > 1 && last) {
-      const next = rowAt(last.y + 1);
+      const next = endsSelection ? rowAt(last.y + 1) : undefined;
       const continues =
         next !== undefined &&
         next.y >= knownFrom &&
         !STRUCTURAL.test(rowText(next)) &&
         couldWrapOnto(last, next, head.hang, cols);
-      if (head.marked || PROSE_END.test(rowText(last)) || continues) {
+      if (head.list || PROSE_END.test(rowText(last)) || continues) {
         out.push({
           text: run.map((line, i) => (i === 0 ? line.text.trimEnd() : line.text.trim())).join(" "),
           from: run[0]!.from,
@@ -286,7 +287,8 @@ function rejoinWraps(
       run.push(line);
       return;
     }
-    flush();
+    // A drag past the end of a row ends at the start of the next, selecting none of it.
+    flush(i === lines.length - 1 && line.text === "");
     if (joinable) {
       run = [line];
       head = headOf(row);
@@ -294,7 +296,7 @@ function rejoinWraps(
       out.push(line);
     }
   });
-  flush();
+  flush(true);
   return out;
 }
 

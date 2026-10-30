@@ -214,10 +214,28 @@ describe("cleanTerminalSelection", () => {
     }
   });
 
-  it("rejoins a message's first paragraph however it ends", async () => {
+  it("rejoins a paragraph that ends on a URL", async () => {
     expect(
-      await cleanAll(40, ["⏺ Copying agent output from a terminal", "  requires xterm (see notes)"])
-    ).toBe("Copying agent output from a terminal requires xterm (see notes)");
+      await cleanAll(40, [
+        "  Copying agent output from a terminal",
+        "  needs https://example.com/.",
+      ])
+    ).toBe("Copying agent output from a terminal needs https://example.com/.");
+  });
+
+  it("keeps commands apart under a message marker, and next to a line xterm wrapped", async () => {
+    const marked = ["⏺ git fetch origin feature/clean-copy", "  git diff ."];
+    expect(await cleanAll(40, marked)).toBe("git fetch origin feature/clean-copy\ngit diff .");
+    const beforeSoft = [
+      "  git fetch origin feature/clean-copy",
+      "  git checkout feature/clean-copy-copy",
+      "  npm run build -- --output-directory some-long-output-directory",
+    ];
+    const terminal = await render(40, beforeSoft);
+    expect(terminal.buffer.active.getLine(3)?.isWrapped).toBe(true);
+    expect(cleanTerminalSelection(selecting(terminal, 0, 3), ALL_KNOWN)).toBe(
+      beforeSoft.map((line) => line.trim()).join("\n")
+    );
   });
 
   it("looks for code in the whole row, not just the part selected", async () => {

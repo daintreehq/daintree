@@ -281,6 +281,7 @@ export class TerminalRestoreController {
     // terminal that has never restored, and the catch below must not close a
     // window this call never took.
     let restoreWindow = -1;
+    let wrote = false;
     try {
       if (serializedState.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes) {
         void this.restoreFromSerializedIncremental(
@@ -308,6 +309,7 @@ export class TerminalRestoreController {
       // the last live chunk stopped (xterm.js #5019): mid-sequence, it would
       // eat the head of the snapshot.
       managed.terminal.reset();
+      wrote = true;
       this.alignToCaptureGeometry(managed, captureGeometry);
       const payload = PARSER_GROUND + serializedState + this.restoreTail(continuation);
       managed.parserTail?.feed(payload);
@@ -345,6 +347,7 @@ export class TerminalRestoreController {
       // The restore died synchronously (reset/resize/write threw). Put the pane
       // back on its live grid before releasing output — replaying live chunks
       // into a terminal parked at the capture width would corrupt them too.
+      if (wrote) managed.commandLinksDisposable?.markRowsStale();
       this.endRestoreWindow(managed, restoreWindow);
       managed.lastScrollbackRestoreError = classifyRestoreError(error);
       logError(`Failed to restore terminal ${id}`, error);

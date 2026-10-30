@@ -200,6 +200,22 @@ describe("TerminalRestoreController", () => {
       expect(markRowsStale).toHaveBeenCalledTimes(1);
     });
 
+    it("marks the rows a restore wrote before it failed", () => {
+      const markRowsStale = vi.fn();
+      const commandLinksDisposable: SuggestedCommandLinks = {
+        dispose: vi.fn(),
+        widthKnownFrom: vi.fn(() => 0),
+        markRowsStale,
+      };
+      instances.set("t1", makeManagedTerminal({ commandLinksDisposable }));
+      mockTerminal.write.mockImplementationOnce(() => {
+        throw new Error("parse failed");
+      });
+
+      expect(controller.restoreFromSerialized("t1", "small-state")).toBe(false);
+      expect(markRowsStale).toHaveBeenCalledTimes(1);
+    });
+
     it("leaves the pane's rows alone when a restore replays nothing", async () => {
       const markRowsStale = vi.fn();
       const commandLinksDisposable: SuggestedCommandLinks = {
