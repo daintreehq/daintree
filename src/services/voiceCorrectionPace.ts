@@ -35,6 +35,8 @@ const PRIOR_POINTS = [60, 300];
 const PRIOR_WEIGHT = 0.5;
 const MAX_MS_PER_CHAR = 20;
 const MAX_SAMPLE_MS = 30_000;
+// Lengths closer together than a character apart say nothing about the slope.
+const MIN_LENGTH_VARIANCE = 1;
 
 interface Line {
   baseMs: number;
@@ -86,15 +88,26 @@ function decay(sums: PaceSums): void {
   for (const key of ["w", "x", "y", "xx", "xy"] as const) sums[key] *= DECAY;
 }
 
-/** The fitted line at `chars`; a run of equal lengths keeps the prior's slope. */
+/**
+ * The fitted line at `chars`, drawn through the weighted mean of what was
+ * seen, so a run of equal lengths still lands where they did, on the prior's
+ * slope.
+ */
 function fitAt(s: PaceSums, prior: Line, chars: number): number {
-  const variance = s.w * s.xx - s.x * s.x;
+  const meanX = s.x / s.w;
+  const meanY = s.y / s.w;
+  const variance = s.xx / s.w - meanX * meanX;
   const slope =
-    variance > 0
-      ? Math.min(MAX_MS_PER_CHAR, Math.max(0, (s.w * s.xy - s.x * s.y) / variance))
+    variance >= MIN_LENGTH_VARIANCE
+      ? Math.min(MAX_MS_PER_CHAR, Math.max(0, (s.xy / s.w - meanX * meanY) / variance))
       : prior.msPerChar;
-  const base = Math.max(0, (s.y - slope * s.x) / s.w);
-  return base + slope * Math.max(0, chars);
+  return Math.max(0, meanY + slope * (Math.max(0, chars) - meanX));
+}
+
+function paceAt(pace: Pace, effort: VoiceReasoningEffort, chars: number): number {
+  return (
+    fitAt(pace.firstText, firstTextPrior(effort), chars) + fitAt(pace.output, PRIOR_OUTPUT, chars)
+  );
 }
 
 function isPaceSums(value: unknown): value is PaceSums {
@@ -103,7 +116,8 @@ function isPaceSums(value: unknown): value is PaceSums {
     const field: unknown = Reflect.get(value, key);
     return typeof field === "number" && Number.isFinite(field);
   });
-  return finite && (value as PaceSums).w > 0;
+  // No fit this module writes weighs less than its prior.
+  return finite && (value as PaceSums).w >= PRIOR_WEIGHT;
 }
 
 function isPace(value: unknown): value is Pace {
@@ -117,18 +131,21 @@ function isPace(value: unknown): value is Pace {
 
 // Every project view reads and writes the one stored fit for each model and
 // effort, so a cleanup one view records reaches the next estimate in all of
-// them. These copies only stand in when the store is blocked.
-const fallback = new Map<string, Pace>();
+// them. A fit this view couldn't store stands in for the stored one until a
+// write goes through.
+const unsaved = new Map<string, Pace>();
 
 function readPace(key: string, effort: VoiceReasoningEffort): Pace {
+  const kept = unsaved.get(key);
+  if (kept) return kept;
   try {
     const raw = window.localStorage.getItem(STORAGE_PREFIX + key);
     const parsed: unknown = raw === null ? null : JSON.parse(raw);
     if (isPace(parsed)) return parsed;
   } catch {
-    // Blocked or corrupt: the copy this view kept, else the prior.
+    // Blocked or corrupt: the prior.
   }
-  return fallback.get(key) ?? priorPace(effort);
+  return priorPace(effort);
 }
 
 /** The expected time for a cleanup at `effort` on `model` of a passage `chars` long. */
@@ -137,10 +154,9 @@ export function estimateCorrectionMs(
   effort: VoiceReasoningEffort,
   chars: number
 ): number {
-  const pace = readPace(`${model}:${effort}`, effort);
-  return (
-    fitAt(pace.firstText, firstTextPrior(effort), chars) + fitAt(pace.output, PRIOR_OUTPUT, chars)
-  );
+  const ms = paceAt(readPace(`${model}:${effort}`, effort), effort, chars);
+  // Sums that parse but can't have come from real cleanups read as the prior.
+  return Number.isFinite(ms) ? ms : paceAt(priorPace(effort), effort, chars);
 }
 
 /** Counts a passage `chars` long whose cleanup came back, by what it ran on and how long each part took. */
@@ -155,11 +171,12 @@ export function recordCorrectionPace(chars: number, sample: VoiceCorrectionPace)
   decay(pace.output);
   addSample(pace.firstText, chars, firstTextMs, 1);
   addSample(pace.output, chars, outputMs, 1);
-  fallback.set(key, pace);
   try {
     window.localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(pace));
+    unsaved.delete(key);
     window.localStorage.removeItem(RETIRED_STORAGE_KEY);
   } catch {
     // Quota or blocked storage: the fit still holds for this session.
+    unsaved.set(key, pace);
   }
 }

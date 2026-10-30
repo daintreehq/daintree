@@ -44,7 +44,11 @@ const shared = vi.hoisted(() => ({
     rawText: string;
     signal: AbortSignal | undefined;
     onText: ((text: string) => void) | undefined;
-    finish: (text: string) => void;
+    /** Settles it as replaced, with the parts of the wait a streamed reply reports. */
+    finish: (
+      text: string,
+      phases?: { untilOutputMs: number; outputMs: number; effort: string }
+    ) => void;
     /** Settles it as a request that failed, without its signal aborting. */
     fail: () => void;
     /** Settles it as refused by the account, a failure every passage will meet. */
@@ -133,8 +137,13 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
           rawText: request.rawText,
           signal,
           onText,
-          finish: (text) =>
-            resolve({ action: "replace", confirmedText: text, verdict: "replaced" }),
+          finish: (text, phases) =>
+            resolve({
+              action: "replace",
+              confirmedText: text,
+              verdict: "replaced",
+              ...(phases ? { phases } : {}),
+            }),
           fail,
           refuse: (reason) =>
             resolve({
@@ -1359,6 +1368,45 @@ describe("voiceInput — session identity", () => {
       await expect(reply).resolves.toMatchObject({
         correctedText: "Run the tests.",
         prefetch: "prefetch_failed",
+      });
+    });
+
+    it("keeps a taken prefetch's own pace, and leaves a failed one's wait out of the stop's", async () => {
+      let clock = 1_000;
+      vi.spyOn(performance, "now").mockImplementation(() => clock);
+      await start(ownerA, "a");
+      await prefetch(ownerA, "a", "run the tests");
+      const prefetched = await requestFor("run the tests");
+      await stop(ownerA, "a");
+      const adopted = ask(ownerA, "a", "run the tests");
+      await settle();
+      clock += 3_000;
+      prefetched.finish("Run the tests.", { untilOutputMs: 700, outputMs: 90, effort: "low" });
+      await expect(adopted).resolves.toMatchObject({
+        prefetch: "adopted",
+        pace: { effort: "low", firstTextMs: 700, outputMs: 90 },
+      });
+
+      await start(ownerA, "b");
+      await prefetch(ownerA, "b", "ship it");
+      const failing = await requestFor("ship it");
+      await stop(ownerA, "b");
+      const fallback = ask(ownerA, "b", "ship it");
+      await settle();
+      // The stop read its context at once, then waited on the pause's run.
+      clock += 9_000;
+      failing.fail();
+      await vi.waitFor(() =>
+        expect(shared.cleanups.filter((c) => c.rawText === "ship it")).toHaveLength(2)
+      );
+      shared.cleanups.at(-1)!.finish("Ship it.", {
+        untilOutputMs: 650,
+        outputMs: 40,
+        effort: "low",
+      });
+      await expect(fallback).resolves.toMatchObject({
+        prefetch: "prefetch_failed",
+        pace: { firstTextMs: 650, outputMs: 40 },
       });
     });
 

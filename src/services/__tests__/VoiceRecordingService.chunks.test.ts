@@ -483,7 +483,9 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
   });
 
   it("estimates each pass on the cleanup model, and learns only from a reply that came back", async () => {
-    const estimateCorrectionMs = vi.fn(() => 2_000);
+    const estimateCorrectionMs = vi.fn(
+      (_model: string, _effort: string, chars: number) => 3 * chars
+    );
     const recordCorrectionPace = vi.fn();
     vi.doMock("../voiceCorrectionPace", () => ({ estimateCorrectionMs, recordCorrectionPace }));
     try {
@@ -501,9 +503,12 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
       pause();
       say(NEXT);
       const chunk = service.expectedCorrectionWindow(PANEL)!;
-      expect(chunk.landsAt - chunk.startedAt).toBe(2_000);
+      const chunkChars = correct.mock.calls[0]![0].rawText.length;
+      expect(chunk.landsAt - chunk.startedAt).toBe(3 * chunkChars);
       await flush();
       await service.stop();
+      const tail = service.expectedCorrectionWindow(PANEL)!;
+      expect(tail.landsAt - tail.startedAt).toBe(3 * correct.mock.calls[1]![0].rawText.length);
       await flush();
 
       expect(estimateCorrectionMs).toHaveBeenCalledWith(

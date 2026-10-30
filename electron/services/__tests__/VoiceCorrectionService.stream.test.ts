@@ -523,22 +523,21 @@ describe("VoiceCorrectionService streaming", () => {
 describe("VoiceCorrectionService reply phases", () => {
   let clock = 0;
 
-  /** Each frame read when asked for: the first after `thinkMs`, the rest `perFrameMs` apart. */
-  function paced(frames: Frame[], thinkMs: number, perFrameMs: number): Response {
+  /** Each frame read only when asked for, `afterMs` after the one before. */
+  function paced(frames: Array<{ frame: Frame; afterMs: number }>): Response {
     const encoder = new TextEncoder();
     let i = 0;
     const body = new ReadableStream<Uint8Array>(
       {
         pull(controller) {
-          const frame = frames[i];
-          if (!frame) {
+          const next = frames[i++];
+          if (!next) {
             controller.close();
             return;
           }
-          clock += i === 0 ? thinkMs : perFrameMs;
-          i++;
+          clock += next.afterMs;
           controller.enqueue(
-            encoder.encode(`event: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`)
+            encoder.encode(`event: ${next.frame.type}\ndata: ${JSON.stringify(next.frame)}\n\n`)
           );
         },
       },
@@ -547,9 +546,17 @@ describe("VoiceCorrectionService reply phases", () => {
     return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
   }
 
-  /** The reply as one text delta, then its terminal event. */
-  function twoFrames(json: string): Frame[] {
-    return [{ type: "response.output_text.delta", delta: json }, completed(json)];
+  /** An empty delta while the model thinks, the reply in `parts` deltas `gapMs` apart, then its end. */
+  function thinkThenWrite(json: string, thinkMs: number, parts: number, gapMs: number) {
+    const size = Math.ceil(json.length / parts);
+    return [
+      { frame: { type: "response.output_text.delta", delta: "" }, afterMs: thinkMs / 2 },
+      ...Array.from({ length: parts }, (_, i) => ({
+        frame: { type: "response.output_text.delta", delta: json.slice(i * size, (i + 1) * size) },
+        afterMs: i === 0 ? thinkMs / 2 : gapMs,
+      })),
+      { frame: completed(json), afterMs: gapMs },
+    ];
   }
 
   beforeEach(() => {
@@ -564,16 +571,16 @@ describe("VoiceCorrectionService reply phases", () => {
 
   it("splits a streamed reply into the wait for its first text and the text", async () => {
     const json = reply("Run the tests.");
-    stubFetch(paced(twoFrames(json), 800, 150));
+    stubFetch(paced(thinkThenWrite(json, 800, 3, 150)));
 
     const result = await new VoiceCorrectionService().correct(
       { rawText: "run the tests" },
-      SETTINGS,
+      { ...SETTINGS, reasoningEffort: "medium" },
       undefined,
       () => {}
     );
 
-    expect(result.phases).toEqual({ untilOutputMs: 800, outputMs: 150, effort: "low" });
+    expect(result.phases).toEqual({ untilOutputMs: 800, outputMs: 450, effort: "medium" });
   });
 
   it("leaves a stalled first attempt out of the wait for the first text", async () => {
@@ -593,7 +600,7 @@ describe("VoiceCorrectionService reply phases", () => {
             )
           )
       )
-      .mockResolvedValueOnce(paced(twoFrames(json), 800, 150));
+      .mockResolvedValueOnce(paced(thinkThenWrite(json, 600, 2, 90)));
     vi.stubGlobal("fetch", fetchMock);
 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -607,8 +614,8 @@ describe("VoiceCorrectionService reply phases", () => {
       await vi.advanceTimersByTimeAsync(4_000);
       const result = await pending;
       expect(fetchMock).toHaveBeenCalledTimes(2);
-      expect(result.roundTrip?.ms).toBe(4_950);
-      expect(result.phases).toEqual({ untilOutputMs: 800, outputMs: 150, effort: "low" });
+      expect(result.roundTrip?.ms).toBe(4_780);
+      expect(result.phases).toEqual({ untilOutputMs: 600, outputMs: 180, effort: "low" });
     } finally {
       vi.useRealTimers();
     }
