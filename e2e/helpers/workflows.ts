@@ -19,10 +19,13 @@ export async function openProjectSwitcherPalette(window: Page): Promise<Locator>
   const trigger = window.locator(SEL.toolbar.projectSwitcherTrigger);
   await expect(trigger).toBeVisible({ timeout: T_MEDIUM });
   const palette = window.locator(SEL.projectSwitcher.palette);
+  // Windows view swaps can keep the toolbar animating. Elsewhere, retain
+  // actionability waits: a forced click fails if it becomes hidden mid-action.
+  const force = process.platform === "win32";
 
   let opened = false;
   for (let attempt = 0; attempt < 3 && !opened; attempt++) {
-    await trigger.click({ force: true });
+    await trigger.click({ force });
     try {
       await expect(palette).toBeVisible({ timeout: T_SHORT });
       opened = true;
@@ -31,7 +34,7 @@ export async function openProjectSwitcherPalette(window: Page): Promise<Locator>
     }
   }
   if (!opened) {
-    await trigger.click({ force: true });
+    await trigger.click({ force });
     await expect(palette).toBeVisible({ timeout: T_MEDIUM });
   }
 

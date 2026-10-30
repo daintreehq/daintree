@@ -110,7 +110,7 @@ describe("VoiceMicNoticeBanner", () => {
       fireEvent.click(screen.getByRole("button", { name: "Use MacBook Pro Microphone" }));
     });
 
-    expect(mocks.switchToMicFromNotice).toHaveBeenCalledWith(notice);
+    await waitFor(() => expect(mocks.switchToMicFromNotice).toHaveBeenCalledWith(notice));
     expect(mocks.dispatch).not.toHaveBeenCalled();
   });
 

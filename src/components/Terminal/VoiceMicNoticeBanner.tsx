@@ -14,11 +14,11 @@ function openVoiceSettings(): void {
   void actionService.dispatch("app.settings.openTab", { tab: "voice" }, { source: "user" });
 }
 
-// Loaded on use: the service is already in the app's first chunk, and a static
-// import would tie every host of this banner to the whole dictation graph.
 async function switchToMicFromNotice(notice: VoiceMicNotice): Promise<void> {
-  const { voiceRecordingService } = await import("@/services/VoiceRecordingService");
-  await voiceRecordingService.switchToMicFromNotice(notice);
+  // Keep incidental hosts lazy without making the eager service itself a
+  // dynamic entry: Rolldown gives that entry a circular initialization facade.
+  const { switchVoiceMicFromNotice } = await import("@/services/switchVoiceMicFromNotice");
+  await switchVoiceMicFromNotice(notice);
 }
 
 type SharedBannerProps = {

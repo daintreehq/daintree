@@ -512,7 +512,9 @@ test.describe.serial("MCP: consent dialogs and project tiers, end to end", () =>
     await expect(dialog).toBeVisible({ timeout: T_LONG });
     await expect(approvalDialog(pageB, FULL_ONLY_TOOL_TITLE)).toHaveCount(0);
     await expect(dialog).toContainText("Above this project's MCP tier, so it needs your approval");
-    await expect(dialog).toContainText("Agent in a terminal pane");
+    await expect(dialog).toContainText("tier-core");
+    await expect(dialog).toContainText("Claude");
+    await expect(dialog.getByRole("button", { name: "Show pane", exact: true })).toBeVisible();
     await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
     expect(toolErrorCode(await declined)).toBe("USER_REJECTED");
     await expect(dialog).toHaveCount(0);
