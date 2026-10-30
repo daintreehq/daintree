@@ -519,3 +519,121 @@ describe("VoiceCorrectionService streaming", () => {
     });
   });
 });
+
+describe("VoiceCorrectionService reply phases", () => {
+  let clock = 0;
+
+  /** Each frame read when asked for: the first after `thinkMs`, the rest `perFrameMs` apart. */
+  function paced(frames: Frame[], thinkMs: number, perFrameMs: number): Response {
+    const encoder = new TextEncoder();
+    let i = 0;
+    const body = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          const frame = frames[i];
+          if (!frame) {
+            controller.close();
+            return;
+          }
+          clock += i === 0 ? thinkMs : perFrameMs;
+          i++;
+          controller.enqueue(
+            encoder.encode(`event: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`)
+          );
+        },
+      },
+      { highWaterMark: 0 }
+    );
+    return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+  }
+
+  /** The reply as one text delta, then its terminal event. */
+  function twoFrames(json: string): Frame[] {
+    return [{ type: "response.output_text.delta", delta: json }, completed(json)];
+  }
+
+  beforeEach(() => {
+    clock = 1_000;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("splits a streamed reply into the wait for its first text and the text", async () => {
+    const json = reply("Run the tests.");
+    stubFetch(paced(twoFrames(json), 800, 150));
+
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "run the tests" },
+      SETTINGS,
+      undefined,
+      () => {}
+    );
+
+    expect(result.phases).toEqual({ untilOutputMs: 800, outputMs: 150, effort: "low" });
+  });
+
+  it("leaves a stalled first attempt out of the wait for the first text", async () => {
+    const json = reply("Run the tests.");
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(
+        (_url: string, init: RequestInit) =>
+          new Promise<Response>((_resolve, reject) =>
+            init.signal!.addEventListener(
+              "abort",
+              () => {
+                clock += 4_000;
+                reject(init.signal!.reason);
+              },
+              { once: true }
+            )
+          )
+      )
+      .mockResolvedValueOnce(paced(twoFrames(json), 800, 150));
+    vi.stubGlobal("fetch", fetchMock);
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const pending = new VoiceCorrectionService().correct(
+        { rawText: "run the tests" },
+        SETTINGS,
+        undefined,
+        () => {}
+      );
+      await vi.advanceTimersByTimeAsync(4_000);
+      const result = await pending;
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(result.roundTrip?.ms).toBe(4_950);
+      expect(result.phases).toEqual({ untilOutputMs: 800, outputMs: 150, effort: "low" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives no phases for a reply thrown away or one that didn't stream", async () => {
+    const json = reply("Run the tests.");
+    stubFetch(streamed(replyFrames(json, completed(json, "incomplete"))));
+    const cutOff = await new VoiceCorrectionService().correct(
+      { rawText: "run the tests" },
+      SETTINGS,
+      undefined,
+      () => {}
+    );
+    expect(cutOff.failed).toBe(true);
+    expect(cutOff.phases).toBeUndefined();
+
+    stubFetch(
+      new Response(JSON.stringify({ status: "completed", output: [{ content: [{ text: json }] }] }))
+    );
+    const whole = await new VoiceCorrectionService().correct(
+      { rawText: "run the tests" },
+      SETTINGS
+    );
+    expect(whole.action).toBe("replace");
+    expect(whole.phases).toBeUndefined();
+  });
+});

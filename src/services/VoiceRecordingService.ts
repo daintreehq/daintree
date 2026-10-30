@@ -64,6 +64,7 @@ import {
   VOICE_REPLAY_AUDIO_LOST_CODE,
   VOICE_STOP_AUDIO_LOST_CODE,
   type VoiceCleanupFailure,
+  type VoiceCorrectionModel,
   type VoiceInputStatus,
   type VoiceRecordingMode,
   type VoiceSessionElsewhere,
@@ -172,6 +173,8 @@ import { getHostListSnapshot } from "@/components/Hosts/hostList";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import {
+  cleanupReasoningEffortFor,
+  VOICE_CLEANUP_AI_MODEL,
   VOICE_REWRITE_MAX_INSTRUCTION_CHARS,
   VOICE_REWRITE_MAX_SELECTION_CHARS,
 } from "@shared/config/voiceCorrection";
@@ -519,10 +522,6 @@ interface ChunkBreak {
   paragraph: boolean;
   /** What has been said since. */
   after: string;
-}
-
-function longestPassage(passages: CorrectionPassage[]): number {
-  return passages.reduce((longest, passage) => Math.max(longest, passage.text.length), 0);
 }
 
 /**
@@ -935,6 +934,8 @@ class VoiceRecordingService {
   // reports a missing key.
   private hasCleanupKey: boolean | null = null;
   private cleanupKeyIssuer = "OpenAI";
+  // Until the settings have been read, the default's pace.
+  private cleanupModel: VoiceCorrectionModel = VOICE_CLEANUP_AI_MODEL;
   // Each session's summary until its line is logged, by session id (#14617).
   private timelines = new Map<string, VoiceSessionTimeline>();
   // The in-flight start's summary, until its capture is promoted.
@@ -1642,6 +1643,7 @@ class VoiceRecordingService {
     this.recordingMode = settings.recordingMode ?? "tap-or-hold";
     this.hasCleanupKey = hasCleanupKey(settings);
     this.cleanupKeyIssuer = cleanupKeyIssuer(settings.correctionProvider);
+    this.cleanupModel = settings.correctionModel;
     this.transcriptionProvider = settings.transcriptionProvider;
     this.heardAsRules = createHeardAsRewriter(collectHeardAsRules(settings.dictionary ?? []));
     this.dropHesitations = normalizeVoiceLanguage(settings.language) === "en";
@@ -3619,7 +3621,17 @@ class VoiceRecordingService {
       replied: false,
       counted: false,
       startedAt: performance.now(),
-      expectedMs: estimateCorrectionMs(longestPassage(passages)),
+      // The passages go out together, so the pass lands with its slowest.
+      expectedMs: Math.max(
+        0,
+        ...passages.map((passage) =>
+          estimateCorrectionMs(
+            this.cleanupModel,
+            cleanupReasoningEffortFor(this.cleanupModel),
+            passage.text.length
+          )
+        )
+      ),
     };
     cleanup.passes.push(correction);
     if (kind === "stop") timeline?.beginCorrection();
@@ -3993,14 +4005,6 @@ class VoiceRecordingService {
     if (correction.kind === "stop") {
       correction.timeline?.noteCorrectionReplies(last?.timing ?? null, last?.prefetch ?? null);
     }
-    // Timed whether or not its draft is still there to take it: the call cost
-    // the same either way.
-    if (results.every((result) => !result.failed)) {
-      recordCorrectionPace(
-        longestPassage(correction.passages),
-        performance.now() - correction.startedAt
-      );
-    }
     correction.passages.forEach((passage, i) => {
       cleanup.results.set(passage, results[i]?.text ?? null);
       if (results[i]?.failed) cleanup.failed.add(passage);
@@ -4182,6 +4186,9 @@ class VoiceRecordingService {
       });
       // Told whatever became of the draft: the account fails the next passage too.
       if (result.cleanupFailure) this.reportCleanupFailure(result.cleanupFailure);
+      // Timed whether or not its draft is still there to take it: the call cost
+      // the same either way.
+      if (!result.failed && result.pace) recordCorrectionPace(passage.text.length, result.pace);
       // The passage runs from its first word to its last; its separators and
       // paragraph breaks either side stay the session's, not the model's.
       text = result.action === "replace" ? result.correctedText.trim() || null : null;

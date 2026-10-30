@@ -431,6 +431,12 @@ function toTrial(
     ...(firstTextAt !== null && result.roundTrip
       ? { firstTextMs: Math.round(firstTextAt - result.roundTrip.sentAt) }
       : {}),
+    ...(result.phases
+      ? {
+          untilOutputMs: Math.round(result.phases.untilOutputMs),
+          outputMs: Math.round(result.phases.outputMs),
+        }
+      : {}),
     totalMs: Math.round(totalMs),
     ...(usage ? { usage } : {}),
     costUsd: requestCost(variant.model, usage),

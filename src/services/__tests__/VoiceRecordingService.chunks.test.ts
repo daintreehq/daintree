@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { VoiceCorrectionPace } from "@shared/types/ipc/api";
 
 // Drives the real voice, draft and dictation-range stores through the IPC
 // callbacks to prove a long dictation is cleaned up in chunks while it runs
@@ -56,6 +57,7 @@ type CorrectResult = {
   correctedText: string;
   failed?: true;
   verdict?: "unchanged" | "failed" | "timed_out";
+  pace?: VoiceCorrectionPace;
 };
 type CorrectRequest = { rawText: string; recentContext?: string[]; sessionId?: string };
 type Listener = (payload: never) => void;
@@ -115,6 +117,7 @@ function stubElectron() {
           enabled: true,
           openaiApiKey: "sk-key",
           correctionEnabled: true,
+          correctionModel: "claude-haiku-5-5",
           dictionary: [],
         })),
         stop: vi.fn().mockResolvedValue(undefined),
@@ -477,6 +480,45 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     tail.resolve({ action: "no_change", correctedText: NEXT });
     await flush();
     expect(service.expectedCorrectionWindow(PANEL)).toBeNull();
+  });
+
+  it("estimates each pass on the cleanup model, and learns only from a reply that came back", async () => {
+    const estimateCorrectionMs = vi.fn(() => 2_000);
+    const recordCorrectionPace = vi.fn();
+    vi.doMock("../voiceCorrectionPace", () => ({ estimateCorrectionMs, recordCorrectionPace }));
+    try {
+      const { service, say, pause, flush } = await setup();
+      const pace: VoiceCorrectionPace = {
+        model: "claude-haiku-5-5",
+        effort: "medium",
+        firstTextMs: 1_800,
+        outputMs: 300,
+      };
+      correct
+        .mockResolvedValueOnce({ action: "replace", correctedText: CLEANED_OPENING, pace })
+        .mockResolvedValueOnce({ action: "no_change", correctedText: NEXT, failed: true, pace });
+      for (const sentence of OPENING) say(sentence);
+      pause();
+      say(NEXT);
+      const chunk = service.expectedCorrectionWindow(PANEL)!;
+      expect(chunk.landsAt - chunk.startedAt).toBe(2_000);
+      await flush();
+      await service.stop();
+      await flush();
+
+      expect(estimateCorrectionMs).toHaveBeenCalledWith(
+        "claude-haiku-5-5",
+        "medium",
+        correct.mock.calls[0]![0].rawText.length
+      );
+      expect(recordCorrectionPace).toHaveBeenCalledTimes(1);
+      expect(recordCorrectionPace).toHaveBeenCalledWith(
+        correct.mock.calls[0]![0].rawText.length,
+        pace
+      );
+    } finally {
+      vi.doUnmock("../voiceCorrectionPace");
+    }
   });
 
   it("lets Restore on a chunk that landed while recording move it within the stop's baseline", async () => {

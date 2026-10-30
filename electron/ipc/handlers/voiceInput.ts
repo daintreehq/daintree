@@ -15,6 +15,7 @@ import {
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import type {
   VoiceCleanupFailure,
+  VoiceCorrectionPace,
   VoiceDictionaryEntry,
   VoiceInputSettings,
   VoiceInputSettingsPatch,
@@ -546,6 +547,7 @@ interface CorrectReply {
   failed?: true;
   verdict?: VoiceCorrectionVerdict;
   timing?: VoiceCorrectionTiming;
+  pace?: VoiceCorrectionPace;
   prefetch?: VoicePrefetchMatch;
   cleanupFailure?: VoiceCleanupFailure;
 }
@@ -581,6 +583,8 @@ function askerStillThere(ctx: IpcContext): () => boolean {
 interface PreparedCleanup {
   request: VoiceCorrectionRequest;
   settings: VoiceCorrectionSettings;
+  /** How long the reads took, timed alone: a stop waiting on a pause's run meanwhile adds nothing. */
+  prepMs: number;
 }
 
 /** A cleanup a pause started: what it sent, once read, and its reply. */
@@ -2797,6 +2801,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     request: VoiceInputCorrectPayload,
     settings: VoiceInputSettings
   ): Promise<PreparedCleanup> => {
+    const readStartedAt = performance.now();
     const outsideView = request.outsideView === true;
     // Read while the dictation ran, for a passage that names its session. One
     // that doesn't, or a session cleanup was off for at its start, reads now.
@@ -2869,6 +2874,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         context,
         prep?.transcriber ?? sessionRecord?.transcriber
       ),
+      prepMs: performance.now() - readStartedAt,
     };
   };
 
@@ -2939,6 +2945,16 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           prepMs: Math.max(0, sentAt - startedAt),
           requestMs: result.roundTrip ? result.roundTrip.ms : null,
         },
+        ...(result.phases
+          ? {
+              pace: {
+                model: settings.correctionModel,
+                effort: result.phases.effort,
+                firstTextMs: prepared.prepMs + result.phases.untilOutputMs,
+                outputMs: result.phases.outputMs,
+              },
+            }
+          : {}),
       };
     } finally {
       unwatchSender?.();

@@ -674,6 +674,9 @@ export interface Trial {
   roundTripMs: number | null;
   /** Request out to the first corrected text a streamed reply showed; absent when it didn't stream or showed none. */
   firstTextMs?: number | null;
+  /** `correct()` to the reply's first text, a retried request's stall left out, and on to its last; absent unless it streamed back whole. */
+  untilOutputMs?: number;
+  outputMs?: number;
   /** All of `correct()`, the wait for a preconnect and the checks included. */
   totalMs: number;
   usage?: TokenUsage & { cacheWriteTokens: number; reasoningTokens: number };
