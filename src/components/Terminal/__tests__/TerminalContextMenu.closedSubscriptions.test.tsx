@@ -183,6 +183,14 @@ function openMenu(i: number): void {
   fireEvent.contextMenu(screen.getByTestId(`pane-${i}`), { clientX: 10, clientY: 10 });
 }
 
+/** Arrow into one of the open menu's submenus, as the keyboard does. */
+async function openSubmenu(name: string): Promise<void> {
+  const trigger = screen.getByRole("menuitem", { name });
+  act(() => trigger.focus());
+  fireEvent.keyDown(trigger, { key: "ArrowRight" });
+  await screen.findByRole("menu", { name });
+}
+
 beforeAll(async () => {
   await primeRadix();
 });
@@ -239,7 +247,7 @@ describe("TerminalContextMenu while closed", () => {
 
   // Every closed menu would otherwise re-render on the hybrid-input setting,
   // which only the open menu's dictation lock reads (#14955).
-  it("skips hybrid-input toggles, and opens by the setting as it stands", () => {
+  it("skips hybrid-input toggles, and opens by the setting as it stands", async () => {
     renderMenus();
     counters.bodyRenders = 0;
 
@@ -249,6 +257,8 @@ describe("TerminalContextMenu while closed", () => {
     expect(counters.bodyRenders).toBe(0);
 
     openMenu(1);
+    await openSubmenu("Session");
+    expect(screen.getByRole("menuitem", { name: "Lock input" })).toBeTruthy();
     expect(screen.queryByRole("menuitem", { name: "Lock dictation to this panel" })).toBeNull();
   });
 
@@ -284,9 +294,8 @@ describe("TerminalContextMenu while closed", () => {
     pushFleet([{ runId: "panel-2", snooze: { snoozedAt: 1, snoozedUntil: Date.now() + 60_000 } }]);
 
     openMenu(2);
-    const snooze = screen.getByRole("menuitem", { name: /Snooze/ });
-    act(() => snooze.focus());
-    fireEvent.keyDown(snooze, { key: "ArrowRight" });
+    await openSubmenu("Fleet");
+    await openSubmenu("Snooze");
 
     expect(await screen.findByRole("menuitem", { name: /Wake now/ })).toBeTruthy();
   });
@@ -294,8 +303,9 @@ describe("TerminalContextMenu while closed", () => {
   // One body render, with live data, is the proof the first commit is current:
   // were the right-click not to raise the menu, Radix would mount the content
   // from the closed render's elements and the content's signal would correct
-  // it in a second render.
-  it("renders what changed while closed on the first open frame", () => {
+  // it in a second render. Opening the submenus renders nothing more, so their
+  // rows are that same first render's.
+  it("renders what changed while closed on the first open frame", async () => {
     renderMenus();
     setWorktree(1);
     patchPanel("panel-2", { isInputLocked: true });
@@ -303,25 +313,32 @@ describe("TerminalContextMenu while closed", () => {
     counters.bodyRenders = 0;
 
     openMenu(2);
-
     expect(counters.bodyRenders).toBe(1);
+
+    await openSubmenu("Move");
     expect(screen.getByRole("menuitem", { name: "Move to worktree" })).toBeTruthy();
+    await openSubmenu("Session");
     expect(screen.getByRole("menuitem", { name: "Unlock input" })).toBeTruthy();
-    expect(screen.getByRole("menuitem", { name: /Snooze/ })).toBeTruthy();
     expect(screen.getByRole("menuitem", { name: "Lock dictation to this panel" })).toBeTruthy();
+    await openSubmenu("Fleet");
+    expect(screen.getByRole("menuitem", { name: /Snooze/ })).toBeTruthy();
+    expect(counters.bodyRenders).toBe(1);
   });
 
-  it("follows writes while open, and stops once the menu closes", () => {
+  it("follows writes while open, and stops once the menu closes", async () => {
     renderMenus();
     openMenu(1);
+    await openSubmenu("Move");
     expect(screen.queryByRole("menuitem", { name: "Move to worktree" })).toBeNull();
 
     setWorktree(1);
     expect(screen.getByRole("menuitem", { name: "Move to worktree" })).toBeTruthy();
+    await openSubmenu("Session");
+    expect(screen.getByRole("menuitem", { name: "Lock input" })).toBeTruthy();
     patchPanel("panel-1", { isInputLocked: true });
     expect(screen.getByRole("menuitem", { name: "Unlock input" })).toBeTruthy();
 
-    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    fireEvent.keyDown(screen.getByRole("menu", { name: "Session" }), { key: "Escape" });
     expect(screen.queryByRole("menu")).toBeNull();
     counters.bodyRenders = 0;
     counters.orderCalls = 0;

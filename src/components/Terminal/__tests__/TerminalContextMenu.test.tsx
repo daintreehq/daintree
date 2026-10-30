@@ -3,8 +3,9 @@
  * TerminalContextMenu with the menu primitives rendered inline, so each test reads
  * which branch the component chose rather than what Radix mounted behind a real
  * right-click. Covers a backgrounded or off-worktree panel, "Open in file browser"
- * on a hovered path (#11483), and the fleet's Park/Unpark (#13236) and Snooze
- * (#11783) items.
+ * on a hovered path (#11483), the fleet's Park/Unpark (#13236) and Snooze
+ * (#11783) items, and which rows sit at the top level and which in a submenu
+ * (#15526).
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, act } from "@testing-library/react";
@@ -18,20 +19,26 @@ vi.mock("@/components/ui/context-menu", () => {
   return {
     ContextMenu: Passthrough,
     ContextMenuTrigger: Passthrough,
-    ContextMenuContent: Passthrough,
+    ContextMenuContent: ({ children }: { children?: React.ReactNode }) => (
+      <div data-testid="context-menu-content">{children}</div>
+    ),
     ContextMenuItem: Item,
     ContextMenuActionItem: Item,
     ContextMenuCheckboxItem: Item,
     ContextMenuRadioGroup: Passthrough,
     ContextMenuRadioItem: Item,
-    ContextMenuSeparator: () => null,
+    ContextMenuSeparator: () => <hr />,
     ContextMenuLabel: Passthrough,
     ContextMenuShortcut: Passthrough,
     ContextMenuGroup: Passthrough,
     ContextMenuPortal: Passthrough,
     ContextMenuSub: Passthrough,
-    ContextMenuSubContent: Passthrough,
-    ContextMenuSubTrigger: Passthrough,
+    ContextMenuSubContent: ({ children }: { children?: React.ReactNode }) => (
+      <div data-submenu>{children}</div>
+    ),
+    ContextMenuSubTrigger: ({ children }: { children?: React.ReactNode }) => (
+      <div data-subtrigger>{children}</div>
+    ),
   };
 });
 
@@ -50,6 +57,10 @@ const {
   panelsById,
   voiceState,
   armed,
+  collectEligibleIds,
+  watchedIds,
+  presetChoices,
+  handOverCandidates,
   selectWorktree,
   trackTerminalFocus,
   restoreBackgroundTerminal,
@@ -78,7 +89,16 @@ const {
     lockedTarget: null as { panelId: string } | null,
     recentTargets: [] as Array<Record<string, unknown>>,
   },
-  armed: { armedIds: new Set<string>() },
+  armed: {
+    armedIds: new Set<string>(),
+    armId: vi.fn(),
+    armIds: vi.fn(),
+    toggleId: vi.fn(),
+  },
+  collectEligibleIds: vi.fn((): string[] => []),
+  watchedIds: { current: new Set<string>() },
+  presetChoices: { current: [] as Array<{ id: string; name: string }> },
+  handOverCandidates: { current: [] as string[] },
   selectWorktree: vi.fn(),
   trackTerminalFocus: vi.fn(),
   restoreBackgroundTerminal: vi.fn(),
@@ -133,6 +153,7 @@ vi.mock("@/store/fleetArmingStore", () => ({
     { getState: () => armed }
   ),
   isFleetArmEligible: () => fleetEligible.current,
+  collectEligibleIds,
 }));
 
 vi.mock("@/store/fleetSnapshotStore", () => ({
@@ -153,7 +174,7 @@ vi.mock("@/store", () => {
     panelsById: panelsById.current,
     maximizeTarget: null,
     getPanelGroup: () => undefined,
-    watchedPanels: new Set<string>(),
+    watchedPanels: watchedIds.current,
     restoreBackgroundTerminal,
     activateTerminal,
     pingTerminal,
@@ -164,6 +185,21 @@ vi.mock("@/store", () => {
   usePanelStore.getState = state;
   return { usePanelStore };
 });
+
+// The real choices come from the agent's saved presets; these tests only ask
+// where the submenu lands when there are some.
+vi.mock("@/components/Terminal/restartOnPresetChoices", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/Terminal/restartOnPresetChoices")>()),
+  useRestartPresetChoices: () => presetChoices.current,
+}));
+
+vi.mock("@/components/Terminal/TerminalHandOver", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/Terminal/TerminalHandOver")>()),
+  useOrchestratorCandidates: () => ({
+    candidateIds: handOverCandidates.current,
+    refresh: () => {},
+  }),
+}));
 
 import { TerminalContextMenu } from "../TerminalContextMenu";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
@@ -991,5 +1027,291 @@ describe("TerminalContextMenu — dictation lock and recent targets (#14955)", (
     armed.armedIds = new Set(["panel-1", "agent-3"]);
     openOn(agentPanel, [fleetShell]);
     expect(screen.queryByText("Bash")).toBeNull();
+  });
+});
+
+type MenuRow = string | { submenu: string; rows: MenuRow[] };
+
+/** The menu as drawn: its rows in order, each submenu's own rows under its trigger. */
+function menuTree(root: Element = screen.getByTestId("context-menu-content")): MenuRow[] {
+  const rows: MenuRow[] = [];
+  for (const child of Array.from(root.children)) {
+    if (child.tagName === "HR") rows.push("---");
+    else if (child.tagName === "BUTTON") rows.push(child.textContent!.trim());
+    else if (child.hasAttribute("data-subtrigger")) {
+      rows.push({ submenu: child.textContent!.trim(), rows: menuTree(child.nextElementSibling!) });
+    } else if (child.hasAttribute("data-submenu")) {
+      if (!child.previousElementSibling?.hasAttribute("data-subtrigger")) {
+        throw new Error("submenu content without its trigger");
+      }
+    } else rows.push(...menuTree(child));
+  }
+  return rows;
+}
+
+/** One level's rows, a submenu standing for itself by its label. */
+function level(rows: MenuRow[]): string[] {
+  return rows.map((row) => (typeof row === "string" ? row : `${row.submenu} ›`));
+}
+
+function submenu(rows: MenuRow[], label: string): MenuRow[] {
+  const found = rows.find((row) => typeof row !== "string" && row.submenu === label);
+  if (!found || typeof found === "string") throw new Error(`no ${label} submenu`);
+  return found.rows;
+}
+
+/** Every level starts and ends on a row, never doubles a separator, and no submenu is empty. */
+function expectTidy(rows: MenuRow[], path = "root"): void {
+  const labels = level(rows);
+  expect(labels.length, `${path} has rows`).toBeGreaterThan(0);
+  expect(labels[0], `${path} leads with a row`).not.toBe("---");
+  expect(labels.at(-1), `${path} ends on a row`).not.toBe("---");
+  labels.forEach((label, i) => {
+    if (label === "---") expect(labels[i + 1], `${path} doubles a separator`).not.toBe("---");
+  });
+  for (const row of rows) {
+    if (typeof row !== "string") expectTidy(row.rows, `${path} › ${row.submenu}`);
+  }
+}
+
+describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
+  const agentPane = {
+    ...agentPanel,
+    detectedAgentId: "claude",
+    location: "grid",
+    hasPty: true,
+  };
+
+  beforeEach(() => {
+    worktreeList.current = [
+      { id: "wt-1", name: "one", path: "/one", branch: "one" },
+      { id: "wt-2", name: "two", path: "/two", branch: "two" },
+    ];
+  });
+
+  afterEach(() => {
+    watchedIds.current.clear();
+    armed.armedIds = new Set();
+    presetChoices.current = [];
+    handOverCandidates.current = [];
+    voiceState.recentTargets = [];
+    armed.armIds.mockClear();
+    armed.toggleId.mockClear();
+    collectEligibleIds.mockClear();
+  });
+
+  it("keeps an agent pane's top level short, with everyday rows a click away", () => {
+    fleetEligible.current = true;
+    snapshotState.current = { runs: [{ runId: "panel-1", handBack: {} }] };
+    renderMenu(agentPane);
+
+    const tree = menuTree();
+    expect(level(tree)).toEqual([
+      "Copy",
+      "Paste",
+      "Send to agent",
+      "---",
+      "Watch terminal",
+      "Fleet ›",
+      "---",
+      "Move ›",
+      "Maximize",
+      "---",
+      "Restart terminal",
+      "Session ›",
+      "---",
+      "Rename terminal",
+      "Duplicate terminal",
+      "View terminal info",
+      "---",
+      "Trash terminal",
+      "Kill terminal",
+    ]);
+    expect(level(submenu(tree, "Fleet"))).toEqual([
+      "Add to fleet",
+      "Arm all in this worktree",
+      "---",
+      "Snooze ›",
+      "Park…",
+      "Mark as read",
+    ]);
+    expect(level(submenu(tree, "Move"))).toEqual([
+      "Move to worktree ›",
+      "Move to new worktree…",
+      "Move to dock",
+      "---",
+      "Send to background",
+    ]);
+    expect(level(submenu(tree, "Session"))).toEqual([
+      "Redraw terminal",
+      "---",
+      "Lock input",
+      "Lock dictation to this panel",
+    ]);
+    expectTidy(tree);
+  });
+
+  it("keeps everything a session can offer under Session", () => {
+    presetChoices.current = [{ id: "work", name: "Work" }];
+    handOverCandidates.current = ["orchestrator-1"];
+    voiceState.recentTargets = [{ panelId: "agent-2", panelTitle: "Codex" }];
+    panelsById.current = {
+      "panel-1": agentPane,
+      "agent-2": { id: "agent-2", title: "Codex", kind: "terminal", launchAgentId: "codex" },
+      "orchestrator-1": { id: "orchestrator-1", title: "Lead", kind: "terminal" },
+    };
+    const { container } = render(
+      <TerminalContextMenu terminalId="panel-1">
+        <div>Panel body</div>
+      </TerminalContextMenu>
+    );
+    // Recent targets are resolved by the right-click itself.
+    act(() => {
+      container
+        .querySelector('[data-context-trigger="panel-1"]')!
+        .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+    });
+
+    const tree = menuTree();
+    expect(level(submenu(tree, "Session"))).toEqual([
+      "Redraw terminal",
+      "Restart on preset ›",
+      "---",
+      "Lock input",
+      "Lock dictation to this panel",
+      "Recent dictation targets ›",
+      "Hand to orchestrator ›",
+    ]);
+    expect(level(tree)).not.toContain("Restart on preset ›");
+    expect(level(tree)).not.toContain("Hand to orchestrator ›");
+    expectTidy(tree);
+  });
+
+  it.each([
+    ["an agent the user is watching", "Cancel watch", "Watch terminal"],
+    ["an agent nobody is watching", "Watch terminal", "Cancel watch"],
+  ])("draws the watch toggle for %s at the top level", (_name, shown, hidden) => {
+    fleetEligible.current = true;
+    if (shown === "Cancel watch") watchedIds.current.add("panel-1");
+    renderMenu(agentPane);
+
+    const root = level(menuTree());
+    expect(root.indexOf(shown)).toBe(root.indexOf("Fleet ›") - 1);
+    expect(root).not.toContain(hidden);
+  });
+
+  it("runs the watch and fleet rows from where they now sit", () => {
+    fleetEligible.current = true;
+    armed.armedIds = new Set(["panel-1", "panel-2"]);
+    collectEligibleIds.mockReturnValueOnce(["panel-1", "panel-3"]);
+    renderMenu(agentPane);
+
+    fireEvent.click(screen.getByText("Watch terminal"));
+    expect(dispatch).toHaveBeenCalledWith(
+      "terminal.watch",
+      { terminalId: "panel-1" },
+      expect.anything()
+    );
+    fireEvent.click(screen.getByText("Remove from fleet"));
+    expect(armed.toggleId).toHaveBeenCalledWith("panel-1");
+    fireEvent.click(screen.getByText("Arm all in this worktree"));
+    expect(collectEligibleIds).toHaveBeenCalledWith("current", "wt-1");
+    expect(armed.armIds).toHaveBeenCalledWith(["panel-1", "panel-3"]);
+    fireEvent.click(screen.getByText("Clear fleet"));
+    expect(dispatch).toHaveBeenCalledWith("terminal.disarmAll", undefined, expect.anything());
+  });
+
+  it.each([
+    ["alone", ["panel-1"], ["Remove from fleet", "Arm all in this worktree"]],
+    [
+      "in a fleet of two",
+      ["panel-1", "panel-2"],
+      ["Remove from fleet", "Arm all in this worktree", "Clear fleet"],
+    ],
+  ])("lists an armed pane's membership rows %s", (_name, armedIds, rows) => {
+    fleetEligible.current = true;
+    armed.armedIds = new Set(armedIds);
+    renderMenu(agentPane);
+
+    expect(level(submenu(menuTree(), "Fleet"))).toEqual(rows);
+  });
+
+  it.each([
+    ["unseen", {}, "Mark as read", "markRunRead"],
+    ["seen", { seenAt: 1 }, "Mark as unread", "markRunUnread"],
+  ] as const)("toggles an %s hand-back from inside Fleet", (_name, handBack, label, call) => {
+    const fleet = {
+      markRunRead: vi.fn(() => Promise.resolve()),
+      markRunUnread: vi.fn(() => Promise.resolve()),
+    };
+    Object.defineProperty(window, "electron", {
+      value: { fleet },
+      writable: true,
+      configurable: true,
+    });
+    fleetEligible.current = true;
+    snapshotState.current = { runs: [{ runId: "panel-1", handBack }] };
+    renderMenu(agentPane);
+
+    expect(level(submenu(menuTree(), "Fleet")).at(-1)).toBe(label);
+    fireEvent.click(screen.getByText(label));
+    expect(fleet[call]).toHaveBeenCalledWith("panel-1");
+  });
+
+  it("still dispatches a row from inside a submenu", () => {
+    renderMenu(agentPane);
+    fireEvent.click(screen.getByText("Lock input"));
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "terminal.toggleInputLock",
+      { terminalId: "panel-1" },
+      expect.anything()
+    );
+  });
+
+  it("puts a paused session's Force resume beside Restart, not inside Session", () => {
+    renderMenu({ ...agentPane, flowStatus: "paused-backpressure" });
+
+    const root = level(menuTree());
+    expect(root.indexOf("Force resume (paused)")).toBe(root.indexOf("Restart terminal") + 1);
+  });
+
+  it("gives a backgrounded pane its way back inline, with no Move submenu", () => {
+    renderMenu({ ...agentPane, location: "background" });
+
+    const tree = menuTree();
+    expect(level(tree)).toContain("Restore from background");
+    expect(level(tree)).not.toContain("Move ›");
+    expectTidy(tree);
+  });
+
+  it("keeps Park under Fleet on an agent the fleet can't broadcast to", () => {
+    snapshotState.current = { runs: [{ runId: "panel-1", park: { parkedAt: 1 } }] };
+    renderMenu({ ...agentPane, location: "dock" });
+
+    const tree = menuTree();
+    expect(level(submenu(tree, "Fleet"))).toEqual(["Park…", "Unpark"]);
+    expect(level(tree)).not.toContain("Park…");
+    expectTidy(tree);
+  });
+
+  it.each([
+    ["a plain shell the fleet can take", { ...terminal, location: "grid" }, true],
+    ["a plain shell the fleet can't take", { ...terminal, location: "dock" }, false],
+    ["a docked agent", { ...agentPane, location: "dock" }, false],
+    ["an agent in another worktree", { ...agentPane, worktreeId: "wt-2" }, true],
+  ])("leaves no orphan separator or empty submenu on %s", (_name, panel, eligible) => {
+    fleetEligible.current = eligible;
+    renderMenu(panel);
+
+    const tree = menuTree();
+    expectTidy(tree);
+    expect(level(tree).slice(-2)).toEqual(["Trash terminal", "Kill terminal"]);
+  });
+
+  it("offers no Fleet submenu when there is nothing to put in it", () => {
+    renderMenu({ ...terminal, location: "dock" });
+
+    expect(level(menuTree())).not.toContain("Fleet ›");
   });
 });

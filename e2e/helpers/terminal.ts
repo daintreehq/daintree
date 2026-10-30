@@ -592,6 +592,19 @@ export async function openTerminalContextMenu(
   await expect(menu).toBeVisible({ timeout: T_SHORT });
 }
 
+/**
+ * Open a submenu of the context menu already on screen and hand it back. A
+ * click opens a Radix submenu at once, where a hover waits out its open delay.
+ */
+export async function openContextSubmenu(page: Page, name: string): Promise<Locator> {
+  const trigger = page.getByRole("menuitem", { name, exact: true });
+  await trigger.click();
+  await expect(trigger).toHaveAttribute("aria-expanded", "true", { timeout: T_SHORT });
+  const submenu = page.getByRole("menu", { name, exact: true });
+  await expect(submenu).toBeVisible({ timeout: T_SHORT });
+  return submenu;
+}
+
 export async function clickTerminalContextMenuItem(
   panelLocator: Locator,
   name: string

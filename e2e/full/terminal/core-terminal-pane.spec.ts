@@ -15,6 +15,7 @@ import {
   runTerminalCommand,
   typeTerminalCommand,
   openTerminalContextMenu,
+  openContextSubmenu,
   clickTerminalContextMenuItem,
   triggerTerminalLink,
   waitForTerminalReady,
@@ -228,6 +229,13 @@ async function clickMenuItem(page: Page, label: string): Promise<void> {
   await expect(page.locator(SEL.contextMenu.content)).not.toBeVisible({ timeout: T_SHORT });
 }
 
+/** Pick a row from one of the context menu's submenus. */
+async function clickSubmenuItem(page: Page, submenu: string, label: string): Promise<void> {
+  const menu = await openContextSubmenu(page, submenu);
+  await menu.getByRole("menuitem", { name: label, exact: true }).click();
+  await expect(page.locator(SEL.contextMenu.content)).toHaveCount(0, { timeout: T_SHORT });
+}
+
 /** Page coordinates of the visible row that reads exactly `text`, a few cells in. */
 async function visibleRowPoint(
   page: Page,
@@ -314,7 +322,9 @@ test.describe("Core: Terminal pane", () => {
       for (const name of [
         "Copy",
         "Paste",
+        "Move",
         "Restart terminal",
+        "Session",
         "Rename terminal",
         "Kill terminal",
       ]) {
@@ -508,9 +518,13 @@ test.describe("Core: Terminal pane", () => {
         );
 
         await rightClickPane(window, panel);
-        await clickMenuItem(window, "Lock input");
+        await clickSubmenuItem(window, "Session", "Lock input");
         await rightClickPane(window, panel);
+        await openContextSubmenu(window, "Session");
         await expect(menuItem(window, "Unlock input")).toBeVisible({ timeout: T_SHORT });
+        await window.keyboard.press("Escape");
+        await expect(window.locator(SEL.contextMenu.content)).toHaveCount(0, { timeout: T_SHORT });
+        await rightClickPane(window, panel);
         await clickMenuItem(window, "Paste");
 
         await focusXtermInput(panel);
@@ -524,7 +538,7 @@ test.describe("Core: Terminal pane", () => {
         );
 
         await rightClickPane(window, panel);
-        await clickMenuItem(window, "Unlock input");
+        await clickSubmenuItem(window, "Session", "Unlock input");
         await typeTerminalCommand(window, panelId, "open", { submit: false });
         // Keys reach the PTY in order, so exact equality also proves none of the
         // locked-phase input was queued and released by the unlock.
