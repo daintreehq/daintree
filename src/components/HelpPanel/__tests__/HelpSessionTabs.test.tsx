@@ -261,7 +261,8 @@ describe("HelpSessionTabs", () => {
   });
 
   it("survives a lane changing state while a close is still being confirmed", () => {
-    // Closing a lane with a live agent raises a confirm dialog, so the close is deferred.
+    // Closing a lane whose conversation can't come back raises a confirm dialog, so the
+    // close is deferred.
     // Meanwhile `tabs` is rebuilt on every agentState transition, not only on a close —
     // so keyed on the array alone, a working lane ticking over during the dialog looks
     // exactly like the close landing, spends the focus handoff early, and leaves the real
