@@ -20,6 +20,7 @@ vi.mock("@/store/resourceMonitoringStore", () => ({
 }));
 
 const { setupResourceListeners } = await import("../resource");
+const { __resetProjectViewCacheStateForTests } = await import("@/lib/viewCacheState");
 
 function setHidden(hidden: boolean): void {
   Object.defineProperty(document, "hidden", { configurable: true, value: hidden });
@@ -99,5 +100,82 @@ describe("setupResourceListeners — persistence flush on hide (#9914)", () => {
     expect(stopLiveSyncMock).not.toHaveBeenCalled();
     d.dispose();
     expect(stopLiveSyncMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Mirrors preload: `isViewCached` is the latch, and main's cached edge runs
+// every registered flusher and settles once they all have.
+function installViewLifecycle(latchedCached = false) {
+  const flushers = new Set<() => unknown>();
+  let latched = latchedCached;
+  (globalThis as unknown as { window: Window }).window.electron = {
+    terminal: { onResourceMetrics: vi.fn(() => () => {}) },
+    app: {
+      isViewCached: () => latched,
+      onViewCached: () => () => {},
+      onViewCachedFlush: (cb: () => unknown) => {
+        const flush = () => cb();
+        flushers.add(flush);
+        return () => flushers.delete(flush);
+      },
+      onViewWarmActivated: () => () => {},
+      onViewRevealed: () => () => {},
+    },
+  } as unknown as Window["electron"];
+  return {
+    cache: () => {
+      latched = true;
+      return Promise.allSettled(Array.from(flushers, (flush) => flush()));
+    },
+    flusherCount: () => flushers.size,
+  };
+}
+
+// A cached view never gets `visibilitychange`: it keeps reporting "visible",
+// so main's cached edge is the only cue a project switch gives (#15651).
+describe("setupResourceListeners — persistence flush when the view is cached (#15651)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __resetProjectViewCacheStateForTests();
+    setHidden(false);
+  });
+
+  afterEach(() => {
+    setHidden(false);
+    __resetProjectViewCacheStateForTests();
+  });
+
+  it("flushes panel and draft persistence on the cached edge, with the document still visible", async () => {
+    const view = installViewLifecycle();
+    const d = setupResourceListeners();
+    expect(flushPanelPersistenceMock).not.toHaveBeenCalled();
+
+    await view.cache();
+
+    expect(document.hidden).toBe(false);
+    expect(flushPanelPersistenceMock).toHaveBeenCalledTimes(1);
+    expect(flushDraftsMock).toHaveBeenCalledTimes(1);
+    d.dispose();
+  });
+
+  it("flushes both immediately when the view is already cached at registration", () => {
+    installViewLifecycle(true);
+    const d = setupResourceListeners();
+
+    expect(flushPanelPersistenceMock).toHaveBeenCalledTimes(1);
+    expect(flushDraftsMock).toHaveBeenCalledTimes(1);
+    d.dispose();
+  });
+
+  it("unregisters the cached-edge flusher on dispose", async () => {
+    const view = installViewLifecycle();
+    const d = setupResourceListeners();
+    expect(view.flusherCount()).toBe(1);
+    d.dispose();
+
+    expect(view.flusherCount()).toBe(0);
+    await view.cache();
+    expect(flushPanelPersistenceMock).not.toHaveBeenCalled();
+    expect(flushDraftsMock).not.toHaveBeenCalled();
   });
 });

@@ -78,6 +78,7 @@ type LifecyclePhase = "cached" | "active" | "revealed";
 const viewCache = vi.hoisted(() => ({
   cached: false,
   listeners: new Set<(phase: "cached" | "active" | "revealed") => void>(),
+  flushers: new Set<() => unknown>(),
 }));
 vi.mock("@/lib/viewCacheState", () => ({
   isProjectViewCached: () => viewCache.cached,
@@ -85,10 +86,20 @@ vi.mock("@/lib/viewCacheState", () => ({
     viewCache.listeners.add(listener);
     return () => viewCache.listeners.delete(listener);
   },
+  subscribeProjectViewCachedFlush: (flush: () => unknown) => {
+    viewCache.flushers.add(flush);
+    return () => viewCache.flushers.delete(flush);
+  },
   __resetProjectViewCacheStateForTests: vi.fn(),
 }));
 function emitPhase(phase: LifecyclePhase): void {
   for (const listener of Array.from(viewCache.listeners)) listener(phase);
+}
+// Mirrors preload on main's cached edge: run every flusher and hand back what
+// main waits on before it may freeze or evict the view.
+function cacheView(): unknown[] {
+  viewCache.cached = true;
+  return Array.from(viewCache.flushers, (flush) => flush());
 }
 
 const { initStoreOrchestrator, destroyStoreOrchestrator } =
@@ -136,6 +147,7 @@ describe("rendererStoreOrchestrator — focus-follow release while hidden (#1237
     setHidden(false);
     viewCache.cached = false;
     viewCache.listeners.clear();
+    viewCache.flushers.clear();
   });
 
   it("holds the release while the view is cached and runs it on reveal", () => {
@@ -199,6 +211,9 @@ describe("rendererStoreOrchestrator — MRU flush on hide (#9914)", () => {
   afterEach(() => {
     destroyStoreOrchestrator();
     setHidden(false);
+    viewCache.cached = false;
+    viewCache.listeners.clear();
+    viewCache.flushers.clear();
   });
 
   it("flushes the MRU debounce when the document becomes hidden", () => {
@@ -231,5 +246,43 @@ describe("rendererStoreOrchestrator — MRU flush on hide (#9914)", () => {
     initStoreOrchestrator();
 
     expect(flushSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // A cached view never gets `visibilitychange`: it keeps reporting "visible",
+  // so main's cached edge is the only cue a project switch gives (#15651).
+  it("flushes the MRU debounce when main caches the view, with the document still visible", async () => {
+    setHidden(false);
+    let settle!: () => void;
+    flushSpy.mockReturnValueOnce(new Promise<void>((resolve) => (settle = resolve)));
+
+    const [held] = cacheView();
+
+    expect(document.hidden).toBe(false);
+    expect(flushSpy).toHaveBeenCalledTimes(1);
+    // Main keeps the view unfrozen and resident until the persist settles.
+    let released = false;
+    void (held as Promise<unknown>).then(() => (released = true));
+    await Promise.resolve();
+    expect(released).toBe(false);
+    settle();
+    await vi.waitFor(() => expect(released).toBe(true));
+  });
+
+  it("flushes immediately when the view is already cached at init", () => {
+    destroyStoreOrchestrator();
+    setHidden(false);
+    viewCache.cached = true;
+    initStoreOrchestrator();
+
+    expect(flushSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops flushing on the cached edge after destroy", () => {
+    destroyStoreOrchestrator();
+
+    cacheView();
+
+    expect(viewCache.flushers.size).toBe(0);
+    expect(flushSpy).not.toHaveBeenCalled();
   });
 });
