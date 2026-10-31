@@ -8,6 +8,7 @@ vi.mock("electron", () => ({
   },
 }));
 
+import { getViewlessHelpBaseManifest } from "../baseManifest.js";
 import { createSessionServer } from "../sessionServer.js";
 import type { SessionServerDeps } from "../sessionServer.js";
 import { SessionStore } from "../sessionStore.js";
@@ -232,6 +233,18 @@ describe("agent.launchInNewWorktree through the session server (#15738)", () => 
     });
     expect(store.resourceOwnership.owns("s-1", "worktree", WORKTREE)).toBe(true);
     expect(store.resourceOwnership.list("s-1").filter((r) => r.kind === "terminal")).toEqual([]);
+  });
+
+  it("is listed to a session on a host with no window, where its steps run viewless", () => {
+    const entry = getViewlessHelpBaseManifest().find(
+      (candidate) => candidate.id === "agent.launchInNewWorktree"
+    );
+    const properties = (entry?.inputSchema as { properties?: Record<string, unknown> } | undefined)
+      ?.properties;
+    expect(Object.keys(properties ?? {})).toEqual(
+      expect.arrayContaining(["source", "agentId", "setupTimeoutMs", "notify", "model"])
+    );
+    expect(properties).not.toHaveProperty("worktreeId");
   });
 
   it("is not on the external tier, where setup can't be waited on", async () => {
