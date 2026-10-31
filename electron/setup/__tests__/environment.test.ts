@@ -937,8 +937,8 @@ describe("reset-data", () => {
 });
 
 describe("kickOffEarlyPathRefresh", () => {
-  let shellEnvCallCount = 0;
-  let shellEnvMode: "path" | "throw" | "empty" = "path";
+  let shellReadCount = 0;
+  let shellReadMode: "path" | "throw" | "timeout" = "path";
   let savedPath: string | undefined;
 
   beforeEach(() => {
@@ -947,20 +947,20 @@ describe("kickOffEarlyPathRefresh", () => {
     Object.defineProperty(process, "platform", { value: "darwin", writable: true });
     process.argv = ["electron", "main.js"];
     fsMock.existsSync.mockReturnValue(false);
-    shellEnvCallCount = 0;
-    shellEnvMode = "path";
+    shellReadCount = 0;
+    shellReadMode = "path";
     savedPath = process.env.PATH;
     process.env.PATH = "/old/path";
-    vi.doMock("shell-env", () => ({
-      shellEnv: vi.fn(async () => {
-        shellEnvCallCount += 1;
-        if (shellEnvMode === "throw") {
-          throw new Error("broken .zshrc");
+    vi.doMock("../loginShellEnvironment.js", () => ({
+      readLoginShellEnvironment: vi.fn(async () => {
+        shellReadCount += 1;
+        if (shellReadMode === "throw") {
+          throw new Error("unexpected");
         }
-        if (shellEnvMode === "empty") {
-          return {};
+        if (shellReadMode === "timeout") {
+          return null;
         }
-        return { PATH: "/from/shell-env" };
+        return { env: { PATH: "/from/login-shell" } };
       }),
     }));
   });
@@ -970,14 +970,14 @@ describe("kickOffEarlyPathRefresh", () => {
     electronMock.app.isPackaged = false;
     Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
     process.argv = originalArgv;
-    vi.doUnmock("shell-env");
+    vi.doUnmock("../loginShellEnvironment.js");
   });
 
   it("kick-off runs refreshPath and updates PATH", async () => {
     const env = await import("../environment.js");
     await env.kickOffEarlyPathRefresh();
-    expect(shellEnvCallCount).toBe(1);
-    expect(process.env.PATH).toContain("/from/shell-env");
+    expect(shellReadCount).toBe(1);
+    expect(process.env.PATH).toContain("/from/login-shell");
   });
 
   it("kick-off is idempotent — repeat calls share the same promise", async () => {
@@ -986,18 +986,25 @@ describe("kickOffEarlyPathRefresh", () => {
     const p2 = env.kickOffEarlyPathRefresh();
     expect(p1).toBe(p2);
     await Promise.all([p1, p2]);
-    // shellEnv must only be invoked once even with two concurrent kick-offs.
-    expect(shellEnvCallCount).toBe(1);
+    // The shell must only be read once even with two concurrent kick-offs.
+    expect(shellReadCount).toBe(1);
   });
 
-  it("concurrent refreshPath callers share one in-flight shell-env probe", async () => {
+  it("concurrent refreshPath callers share one in-flight login shell read", async () => {
     const env = await import("../environment.js");
     await Promise.all([env.refreshPath(), env.refreshPath(), env.refreshPath()]);
-    expect(shellEnvCallCount).toBe(1);
+    expect(shellReadCount).toBe(1);
   });
 
-  it("kick-off swallows shell-env rejection and leaves PATH unchanged", async () => {
-    shellEnvMode = "throw";
+  it("kick-off leaves PATH unchanged when the login shell read gives nothing", async () => {
+    shellReadMode = "timeout";
+    const env = await import("../environment.js");
+    await expect(env.kickOffEarlyPathRefresh()).resolves.toBeUndefined();
+    expect(process.env.PATH).toBe("/old/path");
+  });
+
+  it("kick-off swallows a login shell read rejection and leaves PATH unchanged", async () => {
+    shellReadMode = "throw";
     process.env.PATH = "/old/path";
     const env = await import("../environment.js");
     await expect(env.kickOffEarlyPathRefresh()).resolves.toBeUndefined();
