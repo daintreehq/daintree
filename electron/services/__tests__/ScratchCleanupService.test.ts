@@ -440,9 +440,9 @@ describe("runScratchCleanup — scratches the app still holds (#15614)", () => {
     expect(store.rows[0]!.lastOpened).toBe(lastSeen);
 
     held = [];
-    expect((await runScratchCleanup(lastSeen + SCRATCH_TTL_MS, store, ALWAYS_SAFE)).tombstoned).toBe(
-      0
-    );
+    expect(
+      (await runScratchCleanup(lastSeen + SCRATCH_TTL_MS, store, ALWAYS_SAFE)).tombstoned
+    ).toBe(0);
     expect(
       (await runScratchCleanup(lastSeen + SCRATCH_TTL_MS + 1, store, ALWAYS_SAFE)).tombstoned
     ).toBe(1);

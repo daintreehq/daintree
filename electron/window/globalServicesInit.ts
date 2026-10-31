@@ -46,10 +46,7 @@ import { getSharedTerminalSnapshot } from "../services/sharedTerminalSnapshot.js
 import { withTimeout } from "../utils/withTimeout.js";
 
 import { startDiskSpaceMonitor } from "../services/DiskSpaceMonitor.js";
-import {
-  runScratchCleanup,
-  setHeldWorkspaceIdsReader,
-} from "../services/ScratchCleanupService.js";
+import { runScratchCleanup, setHeldWorkspaceIdsReader } from "../services/ScratchCleanupService.js";
 import {
   initializeAgentCompileCacheCleanup,
   requestAgentCompileCacheCleanup,
