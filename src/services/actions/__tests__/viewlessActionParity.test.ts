@@ -125,7 +125,11 @@ describe("viewless argument schemas", () => {
     if (!isZodSchema(rendererSchema)) throw new Error("createWithRecipe has no args schema");
 
     const rendererArms = sourceArmKeys(rendererSchema);
-    expect(Object.keys(rendererArms).sort()).toEqual(["existingBranch", "newBranch", "pullRequest"]);
+    expect(Object.keys(rendererArms).sort()).toEqual([
+      "existingBranch",
+      "newBranch",
+      "pullRequest",
+    ]);
     expect(sourceArmKeys(WorktreeCreateWithRecipeArgsSchema)).toEqual(rendererArms);
   });
 });

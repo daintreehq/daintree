@@ -1675,7 +1675,9 @@ describe("WorkspaceService.createWorktree", () => {
         expect.objectContaining({
           type: "create-worktree-result",
           success: false,
-          error: expect.stringContaining("doesn't name a branch on any of this repository's remotes"),
+          error: expect.stringContaining(
+            "doesn't name a branch on any of this repository's remotes"
+          ),
         })
       );
       expect(lastWorktreeAddCall(mockSimpleGit.raw)).toBeUndefined();

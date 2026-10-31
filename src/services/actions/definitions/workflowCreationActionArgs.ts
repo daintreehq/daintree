@@ -89,9 +89,7 @@ const WorktreeCreationSourceSchema = z
           .string()
           .trim()
           .min(1)
-          .describe(
-            "Existing local branch, used verbatim: never suffixed or created."
-          ),
+          .describe("Existing local branch, used verbatim: never suffixed or created."),
         issueNumber: z
           .number()
           .int()
@@ -119,9 +117,7 @@ const WorktreeCreationSourceSchema = z
           .number()
           .int()
           .positive()
-          .describe(
-            "Pull request to check out; its head branch is fetched for you."
-          ),
+          .describe("Pull request to check out; its head branch is fetched for you."),
       })
       .strict(),
   ])
