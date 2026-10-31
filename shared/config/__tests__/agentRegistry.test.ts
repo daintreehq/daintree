@@ -551,13 +551,12 @@ describe("kimi detection patterns", () => {
     }
   );
 
-  it("matches the kimi-cli welcome banner as boot-complete", () => {
+  it("matches the Kimi Code welcome panel as boot-complete", () => {
     const patterns = compilePatterns("bootCompletePatterns");
-    // Bare banner line (Rich Console.print output before Panel wrapping)
-    expect(patterns.some((p) => p.test("Welcome to Kimi Code CLI!"))).toBe(true);
-    // Banner wrapped in the Rich Panel box-drawing characters rendered in
-    // the live terminal — a literal substring match must still fire here.
-    expect(patterns.some((p) => p.test("╭─ Welcome to Kimi Code CLI! ─╮"))).toBe(true);
+    // Narrow terminals print the bare title line.
+    expect(patterns.some((p) => p.test("Welcome to Kimi Code!"))).toBe(true);
+    // The full panel puts the title beside the logo inside the box border.
+    expect(patterns.some((p) => p.test("│  ▐█▛█▛█▌  Welcome to Kimi Code!          │"))).toBe(true);
   });
 
   it("matches braille dots spinner with task description in fallback", () => {

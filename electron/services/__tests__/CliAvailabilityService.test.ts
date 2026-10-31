@@ -852,6 +852,112 @@ describe("CliAvailabilityService", () => {
     });
   });
 
+  // Kimi Code keeps config and OAuth credentials under ~/.kimi-code/, which
+  // KIMI_CODE_HOME relocates. The archived Python client used ~/.kimi/ and
+  // read KIMI_API_KEY from the shell; the current client does neither.
+  describe("Kimi Code auth discovery (#15566)", () => {
+    const kimiOnPath = () =>
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (cmdOf(args) === "kimi") return Buffer.from("");
+        throw new Error("not found");
+      });
+
+    const withEnv = async (key: string, value: string, run: () => Promise<void>) => {
+      const prev = process.env[key];
+      process.env[key] = value;
+      try {
+        await run();
+      } finally {
+        if (prev === undefined) delete process.env[key];
+        else process.env[key] = prev;
+      }
+    };
+
+    const kimiProbedPaths = (calls: unknown[][]) =>
+      calls.map((call) => String(call[0])).filter((p) => /kimi/i.test(p));
+
+    it("reaches 'ready' when the Kimi Code OAuth credential exists under ~/.kimi-code", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      kimiOnPath();
+
+      const oauthCredential = join(homedir(), ".kimi-code", "credentials", "kimi-code.json");
+      mockedAccess.mockImplementation(async (path) => {
+        if (String(path) === oauthCredential) return;
+        throw new Error("ENOENT");
+      });
+
+      const result = await service.checkAvailability();
+      expect(result.kimi).toBe("ready");
+      expect(service.getDetails()!.kimi?.authConfirmed).toBe(true);
+    });
+
+    it("reaches 'ready' when ~/.kimi-code/config.toml exists", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      kimiOnPath();
+
+      const configToml = join(homedir(), ".kimi-code", "config.toml");
+      mockedAccess.mockImplementation(async (path) => {
+        if (String(path) === configToml) return;
+        throw new Error("ENOENT");
+      });
+
+      const result = await service.checkAvailability();
+      expect(result.kimi).toBe("ready");
+    });
+
+    it("probes KIMI_CODE_HOME instead of ~/.kimi-code when it is set", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      kimiOnPath();
+
+      const customHome = join("/opt", "kimi-home");
+      const relocatedCredential = join(customHome, "credentials", "kimi-code.json");
+      mockedAccess.mockImplementation(async (path) => {
+        if (String(path) === relocatedCredential) return;
+        throw new Error("ENOENT");
+      });
+
+      await withEnv("KIMI_CODE_HOME", customHome, async () => {
+        const result = await service.checkAvailability();
+        expect(result.kimi).toBe("ready");
+      });
+
+      const probed = kimiProbedPaths(mockedAccess.mock.calls);
+      expect(probed).toContain(relocatedCredential);
+      expect(probed.some((p) => p.startsWith(join(homedir(), ".kimi-code")))).toBe(false);
+    });
+
+    it("does not treat a shell KIMI_API_KEY as authenticated", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      kimiOnPath();
+      mockedAccess.mockRejectedValue(new Error("ENOENT"));
+
+      await withEnv("KIMI_API_KEY", "sk-test", async () => {
+        const result = await service.checkAvailability();
+        expect(result.kimi).toBe("unauthenticated");
+        expect(service.getDetails()!.kimi?.authConfirmed).toBe(false);
+      });
+    });
+
+    it("never probes the archived Python client's ~/.kimi paths", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      kimiOnPath();
+      mockedAccess.mockRejectedValue(new Error("ENOENT"));
+
+      await service.checkAvailability();
+
+      const probed = kimiProbedPaths(mockedAccess.mock.calls);
+      expect(probed).toEqual([
+        join(homedir(), ".kimi-code", "credentials", "kimi-code.json"),
+        join(homedir(), ".kimi-code", "config.toml"),
+      ]);
+    });
+  });
+
   describe("diagnostic logging for auth discovery", () => {
     let savedLogOverrides: Record<string, string>;
 
