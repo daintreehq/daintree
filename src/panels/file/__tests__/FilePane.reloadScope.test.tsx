@@ -261,7 +261,9 @@ describe("FilePane re-reads on worktree ticks and window focus", () => {
     await waitFor(() => expect(readMock).toHaveBeenCalledTimes(3));
   });
 
-  it("does not scope a markdown file, whose embedded images live elsewhere", async () => {
+  // Its embedded images scope their own refreshes (#15678), so the document's
+  // read answers only to the directories that could hold the document.
+  it("scopes a markdown file's read like any other file's", async () => {
     panelsById["file-0"] = {
       id: "file-0",
       kind: "file",
@@ -274,6 +276,13 @@ describe("FilePane re-reads on worktree ticks and window focus", () => {
     await act(async () => {});
 
     seed(101, ["docs/img"]);
+    await act(async () => {
+      view.rerender(panes(1, 0));
+    });
+    await act(async () => {});
+    expect(readMock).toHaveBeenCalledTimes(1);
+
+    seed(102, ["docs"]);
     await act(async () => {
       view.rerender(panes(1, 0));
     });

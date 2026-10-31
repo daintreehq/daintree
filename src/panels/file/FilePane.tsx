@@ -10,6 +10,10 @@ import { FolderTree } from "@/components/icons";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { MarkdownViewer, type MarkdownViewerHandle } from "@/components/Markdown/MarkdownViewer";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
+import {
+  MarkdownImageTrackingContext,
+  type MarkdownImageTracking,
+} from "@/components/Markdown/markdownImageRefresh";
 import { isProseFilePath } from "@/components/FileViewer/isProseFile";
 import { useRemoteFileContext } from "@/components/FileViewer/hostFileActions";
 import { saveHostFile } from "@/services/hostFileSave";
@@ -499,7 +503,7 @@ export function FilePane({
     loadFile("explicit");
   }, [loadFile]);
 
-  const { refreshing, handleToolbarRefresh } = useFileRefresh({
+  const { refreshing, handleToolbarRefresh, imageRefreshEpoch } = useFileRefresh({
     panelId: id,
     location,
     isFocused,
@@ -507,7 +511,6 @@ export function FilePane({
     effectiveRootPath,
     diffWorktreePath,
     relativeFilePath,
-    isMarkdown,
     viewMode,
     changeTick,
     worktreeChangeTick,
@@ -521,6 +524,17 @@ export function FilePane({
     diffContent,
     retryDiff,
   });
+
+  // The worktree signal the rendered document's images scope their own
+  // refreshes to, so a write elsewhere refetches none of them (#15678).
+  const markdownImageTracking = useMemo<MarkdownImageTracking>(
+    () => ({
+      trigger: changeTick,
+      signal: { tick: worktreeChangeTick, gitTick: gitChangeTick, changedDirs },
+      worktreePath: diffWorktreePath,
+    }),
+    [changeTick, worktreeChangeTick, gitChangeTick, changedDirs, diffWorktreePath]
+  );
 
   const remoteFile = useRemoteFileContext();
 
@@ -994,19 +1008,21 @@ export function FilePane({
             loadState === "loaded" &&
             content !== null &&
             (viewMode === "rendered" && isMarkdown ? (
-              <MarkdownViewer
-                ref={markdownViewerRef}
-                // The draft is document state, so Rendered previews it while one
-                // exists and the disk text otherwise (#12323).
-                content={draftText ?? content}
-                filePath={filePath}
-                rootPath={effectiveRootPath}
-                viewMode="rendered"
-                wrapLines={markdownWrapLines}
-                fontSize={markdownFontSize}
-                cacheBust={String(reloadNonce)}
-                onRendered={handleHeightHoldRendered}
-              />
+              <MarkdownImageTrackingContext value={markdownImageTracking}>
+                <MarkdownViewer
+                  ref={markdownViewerRef}
+                  // The draft is document state, so Rendered previews it while one
+                  // exists and the disk text otherwise (#12323).
+                  content={draftText ?? content}
+                  filePath={filePath}
+                  rootPath={effectiveRootPath}
+                  viewMode="rendered"
+                  wrapLines={markdownWrapLines}
+                  fontSize={markdownFontSize}
+                  cacheBust={String(imageRefreshEpoch)}
+                  onRendered={handleHeightHoldRendered}
+                />
+              </MarkdownImageTrackingContext>
             ) : viewMode === "rendered" && isHtml ? (
               // Rendered HTML fills the pane in a sandboxed iframe rather than the
               // min-h-full source column; the frame owns its own scrolling.
