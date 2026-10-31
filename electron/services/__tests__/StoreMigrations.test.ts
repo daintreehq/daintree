@@ -380,9 +380,14 @@ describe("MigrationRunner", () => {
       "config.json.corrupted.1700000000000",
       "config.json.failed-2024-01-01T00-00-00-000Z",
       "config.json.backup-notes",
-      "other.json.backup-2024-01-01T00-00-00-000Z",
+      // Same length as "config.json", so only the prefix check keeps it out.
+      "window.json.backup-2024-01-01T00-00-00-000Z",
     ];
     const noop: Migration = { version: 4, description: "noop", up: () => {} };
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
 
     function seed(names: string[]): void {
       for (const name of names) fs.writeFileSync(path.join(tempDir, name), "{}", "utf8");
@@ -443,6 +448,26 @@ describe("MigrationRunner", () => {
       expect(backups()).toEqual([...SEEDED_BACKUPS].sort());
     });
 
+    it("deletes no backups when post-migration validation rejects the result", async () => {
+      seed(SEEDED_BACKUPS);
+      const store = createMockStore(storePath, { _schemaVersion: 3 });
+      const realGet = store.get;
+      const realSet = store.set;
+      let versionWritten = false;
+      store.set = (key, value) => {
+        if (key === "_schemaVersion") versionWritten = true;
+        realSet(key, value);
+      };
+      store.get = (key, defaultValue) =>
+        key === "_schemaVersion" && versionWritten ? "corrupted" : realGet(key, defaultValue);
+
+      await expect(new MigrationRunner(store as never).runMigrations([noop])).rejects.toThrow(
+        /Post-migration sanity check failed/
+      );
+
+      expect(backups()).toEqual([...SEEDED_BACKUPS].sort());
+    });
+
     it("deletes no backups when no migration is pending", async () => {
       seed(SEEDED_BACKUPS);
       const store = createMockStore(storePath, { _schemaVersion: 4 });
@@ -498,7 +523,6 @@ describe("MigrationRunner", () => {
         ].sort()
       );
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(stuck), expect.any(Error));
-      warnSpy.mockRestore();
     });
 
     it("still succeeds when the store directory cannot be listed", async () => {
@@ -506,7 +530,7 @@ describe("MigrationRunner", () => {
       const readdirSpy = vi.spyOn(fs, "readdirSync").mockImplementation((() => {
         throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
       }) as typeof fs.readdirSync);
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.spyOn(console, "warn").mockImplementation(() => {});
       const store = createMockStore(storePath, { _schemaVersion: 3 });
 
       try {
@@ -521,26 +545,34 @@ describe("MigrationRunner", () => {
       expect(backups()).toEqual(
         ["config.json.backup-v3-2025-02-10T10-00-00-000Z", ...SEEDED_BACKUPS].sort()
       );
-      warnSpy.mockRestore();
     });
 
-    it("deletes no backups when this run could not write its own", async () => {
+    it("keeps the newest existing backups when this run could not write its own", async () => {
       seed(SEEDED_BACKUPS);
       const copySpy = vi.spyOn(fs, "copyFileSync").mockImplementation(() => {
         throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
       });
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.spyOn(console, "warn").mockImplementation(() => {});
       const store = createMockStore(storePath, { _schemaVersion: 3 });
 
       try {
         await new MigrationRunner(store as never).runMigrations([noop]);
       } finally {
         copySpy.mockRestore();
-        warnSpy.mockRestore();
       }
 
       expect(store.data._schemaVersion).toBe(4);
-      expect(backups()).toEqual([...SEEDED_BACKUPS].sort());
+      expect(backups()).toEqual([...NEWEST_SEEDED, SEEDED_BACKUPS[2]].sort());
+    });
+
+    it("never lists a directory for the in-memory store, which has no file path", async () => {
+      const readdirSpy = vi.spyOn(fs, "readdirSync");
+      const store = createMockStore("", { _schemaVersion: 3 });
+
+      await new MigrationRunner(store as never).runMigrations([noop]);
+
+      expect(store.data._schemaVersion).toBe(4);
+      expect(readdirSpy).not.toHaveBeenCalled();
     });
 
     it.skipIf(process.platform === "win32")(

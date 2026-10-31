@@ -198,15 +198,17 @@ export class MigrationRunner {
   /**
    * Deletes all but the newest pre-migration backups next to the store: the
    * versioned `<store>.backup-v<N>-<ts>` files and the unversioned
-   * `<store>.backup-<ts>` files written by older builds. `currentBackupPath` is
-   * always kept, whatever its timestamp, so clock skew can never delete the
-   * backup this run just wrote. Never throws.
+   * `<store>.backup-<ts>` files written by older builds. When this run wrote a
+   * backup it is always kept, whatever its timestamp, so clock skew can never
+   * delete it. Never throws.
    */
-  private pruneOldBackups(currentBackupPath: string): void {
+  private pruneOldBackups(currentBackupPath: string | null): void {
+    const storePath = this.store.path;
+    // The in-memory recovery store has no file, and dirname("") is the cwd.
+    if (!storePath) return;
     try {
-      const storePath = this.store.path;
       const dir = path.dirname(storePath);
-      const currentName = path.basename(currentBackupPath);
+      const currentName = currentBackupPath ? path.basename(currentBackupPath) : null;
       const prefix = `${path.basename(storePath)}.backup-`;
       const older: Array<{ name: string; sortKey: string }> = [];
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -220,7 +222,7 @@ export class MigrationRunner {
       // Newest first.
       older.sort((a, b) => (a.sortKey < b.sortKey ? 1 : a.sortKey > b.sortKey ? -1 : 0));
 
-      const keepOlder = PRE_MIGRATION_BACKUPS_TO_KEEP - 1;
+      const keepOlder = PRE_MIGRATION_BACKUPS_TO_KEEP - (currentName ? 1 : 0);
       for (const { name } of older.slice(0, keepOlder)) {
         // Backups written by older builds may still carry 0o644.
         tightenFilePermissions(path.join(dir, name));
@@ -354,9 +356,7 @@ export class MigrationRunner {
         }
         this.store.clear();
         this.store.set("_schemaVersion", floorVersion);
-        if (backupPath) {
-          this.pruneOldBackups(backupPath);
-        }
+        this.pruneOldBackups(backupPath);
         return;
       }
     }
@@ -452,8 +452,6 @@ export class MigrationRunner {
       });
     }
 
-    if (backupPath) {
-      this.pruneOldBackups(backupPath);
-    }
+    this.pruneOldBackups(backupPath);
   }
 }
