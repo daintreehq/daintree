@@ -231,9 +231,9 @@ describe("createAutoSize integration", () => {
       onTestFinished(() => view.destroy());
       const preview = (pos: number) => setInterimText.of({ text: "next words", pos });
       view.dispatch({ effects: preview(312) });
-      expect(view.state.field(interimWidgetField).pos).toBeNull();
+      expect(view.state.field(interimWidgetField)).toEqual({ text: "next words", pos: null });
       view.dispatch({ effects: preview(-1) });
-      expect(view.state.field(interimWidgetField).pos).toBeNull();
+      expect(view.state.field(interimWidgetField)).toEqual({ text: "next words", pos: null });
 
       // Measured against the text the same transaction writes, its end included.
       view.dispatch({ changes: { from: 0, insert: "so " }, effects: preview(3) });
