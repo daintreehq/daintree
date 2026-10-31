@@ -137,14 +137,11 @@ export const config: AgentConfig = {
       installUrl: "https://github.com/mistralai/mistral-vibe",
     },
   ],
+  // No Plan preset: Vibe 3.0 removed the `plan` agent, and `--agent plan` fails
+  // at startup unless the user wrote their own, whose permissions Daintree can't
+  // vouch for.
   presets: [
     { id: "default", name: "Default" },
-    {
-      id: "plan",
-      name: "Plan",
-      args: ["--agent", "plan"],
-      description: "Read-only exploration",
-    },
     {
       id: "accept-edits",
       name: "Accept edits",

@@ -87,6 +87,23 @@ describe("buildAgentLaunchPlan", () => {
     expect(onStalePreset).toHaveBeenCalledExactlyOnceWith("agent");
   });
 
+  it("drops a saved Vibe Plan default, whose agent Vibe 3 removed, instead of launching it (#15568)", async () => {
+    const onStalePreset = vi.fn();
+    const plan = await buildAgentLaunchPlan(
+      input({
+        agentId: "mistral",
+        agentConfig: getEffectiveAgentConfig("mistral"),
+        settings: { agents: { mistral: { presetId: "plan" } } } as unknown as AgentSettings,
+        onStalePreset,
+      })
+    );
+
+    expect(plan.preset).toBeUndefined();
+    expect(plan.command).toBeDefined();
+    expect(plan.command).not.toContain("--agent");
+    expect(onStalePreset).toHaveBeenCalledExactlyOnceWith("agent");
+  });
+
   describe("a preset whose inventory hasn't loaded (#15025)", () => {
     const TEAM = { id: "team", name: "Team", env: { WHO: "team" } };
 
@@ -208,13 +225,15 @@ describe("buildAgentLaunchPlan", () => {
           input({
             agentId: "mistral",
             agentConfig: getEffectiveAgentConfig("mistral"),
-            settings: { agents: { mistral: { presetId: "plan" } } } as unknown as AgentSettings,
+            settings: {
+              agents: { mistral: { presetId: "accept-edits" } },
+            } as unknown as AgentSettings,
             presetInventory: { ccr: true, project },
           })
         );
 
-      expect((await mistral(false)).unloadedPresetId).toBe("plan");
-      expect((await mistral(true)).preset?.id).toBe("plan");
+      expect((await mistral(false)).unloadedPresetId).toBe("accept-edits");
+      expect((await mistral(true)).preset?.id).toBe("accept-edits");
     });
 
     it("never holds a custom match, which nothing unread can outrank", async () => {
