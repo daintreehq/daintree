@@ -85,7 +85,7 @@ export const config: AgentConfig = {
       "Restart Daintree after installation to update PATH",
       "Ensure Node.js is installed for npm-based installation",
       "Verify installation with: opencode --version",
-      "Daintree targets OpenCode 1 (1.x); OpenCode 2 uses the same 'opencode' command but is not supported. If 'opencode --version' reports 2.x (e.g. from 'brew install opencode'), reinstall with 'brew install anomalyco/tap/opencode' or 'npm install -g opencode-ai@latest'",
+      "Daintree targets OpenCode 1 (1.x); OpenCode 2 uses the same 'opencode' command but is not supported. If 'opencode --version' reports 2.x (e.g. from 'brew install opencode'), run 'brew uninstall opencode' and then 'brew install anomalyco/tap/opencode', or use 'npm install -g opencode-ai@latest'",
       "Run '/connect' in OpenCode to configure LLM provider",
       "For provider setup, authenticate at opencode.ai/auth",
     ],

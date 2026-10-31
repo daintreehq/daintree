@@ -1613,31 +1613,46 @@ describe("UserAgentConfigSchema supports field", () => {
 
 describe("opencode install targets OpenCode 1", () => {
   const config = getAgentConfig("opencode")!;
-  const installCommands = Object.values(config.install?.byOs ?? {}).flatMap((methods) =>
-    (methods ?? []).flatMap((m) => m.commands)
-  );
-  const allCommands = [...installCommands, ...Object.values(config.update ?? {})];
+  const byOs = config.install?.byOs ?? {};
+  const commandsFor = (os: "macos" | "linux" | "windows", label: string) =>
+    byOs[os]?.find((m) => m.label === label)?.commands;
 
-  it("never uses the unqualified homebrew-core formula (OpenCode 2)", () => {
-    const brew = allCommands.filter((c) => /\bbrew\s+(install|upgrade)\b/.test(c));
-    expect(brew.length).toBeGreaterThan(0);
+  // Unqualified `brew install opencode` is homebrew-core's OpenCode 2, and
+  // Scoop's extras/opencode manifest is deprecated; the entry targets V1.
+  it("installs OpenCode 1 through the anomalyco tap on macOS and Linux Homebrew", () => {
+    expect(commandsFor("macos", "Homebrew")).toEqual(["brew install anomalyco/tap/opencode"]);
+    expect(commandsFor("linux", "Homebrew")).toEqual(["brew install anomalyco/tap/opencode"]);
+  });
+
+  it("upgrades the same tapped formula", () => {
+    expect(config.update?.brew).toBe("brew upgrade anomalyco/tap/opencode");
+  });
+
+  it("installs from the Scoop main bucket, not the deprecated extras bucket", () => {
+    expect(commandsFor("windows", "Scoop")).toEqual(["scoop install main/opencode"]);
+  });
+
+  it("offers no unqualified Homebrew command anywhere", () => {
+    const all = [
+      ...Object.values(byOs).flatMap((methods) => (methods ?? []).flatMap((m) => m.commands ?? [])),
+      ...Object.values(config.update ?? {}).filter((c): c is string => typeof c === "string"),
+    ];
+    const brew = all.filter((c) => /\bbrew\b/.test(c));
+    expect(brew).toHaveLength(3);
     for (const c of brew) {
-      expect(c).toMatch(/\banomalyco\/tap\/opencode\b/);
+      expect(c).not.toMatch(/\bbrew\s+(install|upgrade)\s+opencode\b/);
     }
   });
 
-  it("never references the deprecated Scoop extras manifest", () => {
-    const scoop = allCommands.filter((c) => c.startsWith("scoop "));
-    expect(scoop.length).toBeGreaterThan(0);
-    expect(scoop.join("\n")).not.toMatch(/\bextras\b/);
-  });
-
-  it("points version metadata at the active upstream repository", () => {
+  it("reads versions from the active upstream repository", () => {
     expect(config.version?.githubRepo).toBe("anomalyco/opencode");
-    expect(config.version?.releaseNotesUrl).toContain("anomalyco/opencode");
+    expect(config.version?.releaseNotesUrl).toBe("https://github.com/anomalyco/opencode/releases");
   });
 
-  it("explains that OpenCode 2 is not the integration target", () => {
-    expect(config.install?.troubleshooting?.join("\n")).toMatch(/OpenCode 2/);
+  it("tells users OpenCode 2 is unsupported and how to replace it", () => {
+    const notes = config.install?.troubleshooting?.find((t) => t.includes("OpenCode 2"));
+    expect(notes).toMatch(/not supported/);
+    expect(notes).toContain("brew uninstall opencode");
+    expect(notes).toContain("brew install anomalyco/tap/opencode");
   });
 });

@@ -642,21 +642,29 @@ describe("AgentVersionService resilience", () => {
       const { config } = await import("../../../shared/config/agents/opencode.js");
       (registryMock.getEffectiveAgentConfig as Mock).mockReturnValue(config);
 
-      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({ tag_name: "v1.19.5" }),
-        headers: new Headers(),
-      } as Response);
-      setSpawnSuccess("1.19.5\n");
+      // The archived repo still answers releases/latest with v0.0.55.
+      const tags: Record<string, string> = {
+        "https://api.github.com/repos/anomalyco/opencode/releases/latest": "v1.19.5",
+        "https://api.github.com/repos/opencode-ai/opencode/releases/latest": "v0.0.55",
+      };
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((async (
+        input: RequestInfo | URL
+      ) => {
+        const tag = tags[String(input)];
+        return tag
+          ? { ok: true, status: 200, json: async () => ({ tag_name: tag }), headers: new Headers() }
+          : { ok: false, status: 404, json: async () => ({}), headers: new Headers() };
+      }) as typeof fetch);
+      setSpawnSuccess("1.18.0\n");
 
       const { service } = createService(async () => ({ opencode: "ready" }));
       const result = await service.getVersion("opencode" as AgentId);
 
+      expect(result.installedVersion).toBe("1.18.0");
       expect(result.latestVersion).toBe("1.19.5");
-      expect(fetchSpy).toHaveBeenCalledWith(
-        "https://api.github.com/repos/anomalyco/opencode/releases/latest",
-        expect.anything()
+      expect(result.updateAvailable).toBe(true);
+      expect(fetchSpy.mock.calls.map(([url]) => String(url))).not.toContain(
+        "https://api.github.com/repos/opencode-ai/opencode/releases/latest"
       );
       fetchSpy.mockRestore();
     });
