@@ -150,10 +150,11 @@ export function planChoice(screen: string, label: string): ChoicePlan {
   // A dialog the strict parser reads knows its option rows; any other list
   // only has its highlighted row told apart, so only that row's marker goes.
   const strict = readChoiceList(raw, true);
-  const targetLabel = labelOf(rows(target)).toLowerCase();
-  const question = strict?.labels.some((option) => option.toLowerCase() === targetLabel)
-    ? strict.question
-    : questionText(raw, lines, last, (row, i) => (i === cursor ? unhighlighted(row) : row));
+  // Only when it is this very list: an older dialog above can offer the label too.
+  const question =
+    strict?.rows.includes(target) && strict.rows[strict.cursor] === cursor
+      ? strict.question
+      : questionText(raw, lines, last, (row, i) => (i === cursor ? unhighlighted(row) : row));
   return { ok: true, keys: [...Array<string>(steps).fill(move), "Enter"], question };
 }
 
@@ -174,6 +175,8 @@ export interface ChoiceList {
   cursor: number;
   /** What it asks, the same wherever its highlight is; see `questionText`. */
   question: string;
+  /** The screen row each label is drawn on. */
+  rows: number[];
 }
 
 function labelOf(row: string): string {
@@ -275,6 +278,7 @@ function readChoiceList(rawLines: readonly string[], requireHint: boolean): Choi
     question: questionText(rawLines, lines, bottom, (row, i) =>
       i >= rows[0]! ? row.replace(HIGHLIGHT_MARKER, "").trim() : row
     ),
+    rows,
   };
 }
 

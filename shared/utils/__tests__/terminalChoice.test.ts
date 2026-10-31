@@ -455,6 +455,10 @@ describe("the question a list asks", () => {
       question(heredoc("    hello", 2), "Yes")
     );
     expect(question(heredoc("   hello", 1), "Yes")).toBe(question(heredoc("   hello", 2), "Yes"));
+    // A newer list below an older numbered dialog is asked about on its own words.
+    const below = (command: string) =>
+      ["Old?", "❯ 1. No", "  2. Yes", "", HINT, "", ` Run ${command}?`, " No", " Yes"].join("\n");
+    expect(question(below("safe-command"), "Yes")).not.toBe(question(below("rm -rf ~"), "Yes"));
     // Options a blank row apart: the highlight leaving one is still no other question.
     const apart = (onNo: boolean) =>
       [
