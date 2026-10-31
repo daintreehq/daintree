@@ -15,6 +15,12 @@ const PATHS: Record<string, string> = {
   "hello-web": "/home/u/projects/hello-web",
 };
 
+const SCRATCH = "3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e";
+const OTHER_SCRATCH = "0a1b2c3d-4e5f-4a6b-9c7d-8e9f0a1b2c3d";
+const HOST_PROJECT = "a".repeat(64);
+const ON_BUILD_BOX = `build-box:${HOST_PROJECT}`;
+const ON_GPU_BOX = `gpu-box:${HOST_PROJECT}`;
+
 function appWindow(id: number, activeProjectId: string | null, bounds = { x: 0, y: 0 }) {
   return {
     windowId: id,
@@ -50,9 +56,26 @@ describe("resolveBoundsProjectPath", () => {
     expect(readProjectPathSync).not.toHaveBeenCalled();
   });
 
-  it("has no folder for a picker or a workspace without a project row", () => {
+  it("has no key for a picker or a project whose row is gone", () => {
     expect(resolveBoundsProjectPath(null, undefined)).toBeNull();
-    expect(resolveBoundsProjectPath(undefined, "scratch-1")).toBeNull();
+    expect(resolveBoundsProjectPath(undefined, "b".repeat(64))).toBeNull();
+  });
+
+  it("keys a scratch and a host's project apart from each other and from every folder", () => {
+    const keys = [SCRATCH, OTHER_SCRATCH, ON_BUILD_BOX, ON_GPU_BOX].map((id) =>
+      resolveBoundsProjectPath(undefined, id)
+    );
+
+    expect(keys.every((key) => typeof key === "string" && key.length > 0)).toBe(true);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys.some((key) => Object.values(PATHS).includes(key!))).toBe(false);
+  });
+
+  it("never looks a scratch or a host's project up as a local project", () => {
+    resolveBoundsProjectPath(undefined, SCRATCH);
+    resolveBoundsProjectPath(undefined, ON_BUILD_BOX);
+
+    expect(readProjectPathSync).not.toHaveBeenCalled();
   });
 });
 
@@ -77,6 +100,22 @@ describe("appWindowStateTracking", () => {
     expect(
       appWindowStateTracking.getShownProjectPath(appWindow(9, "daintree").browserWindow as never)
     ).toBeNull();
+  });
+
+  it("saves a scratch or host window under the key it is reopened with", () => {
+    const windows = [appWindow(1, SCRATCH), appWindow(2, ON_BUILD_BOX), appWindow(3, ON_GPU_BOX)];
+    useWindows(...windows);
+
+    for (const w of windows) {
+      const shown = appWindowStateTracking.getShownProjectPath(w.browserWindow as never);
+      expect(shown).not.toBeNull();
+      expect(shown).toBe(
+        resolveBoundsProjectPath(
+          undefined,
+          w.services.projectViewManager.getActiveProjectId() ?? undefined
+        )
+      );
+    }
   });
 
   it("reports where the other open windows sit, skipping destroyed ones", () => {
