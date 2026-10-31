@@ -155,7 +155,7 @@ test.describe.serial("Panels: Forge stats pill lifecycle", () => {
     await expect(pill).toHaveCount(0, { timeout: T_MEDIUM });
     // Issue/PR segments are forge data and collapse with the plugin; the
     // commit count is local git, so the commits-only pill stays.
-    await expectForgeSegmentRegistered(window.locator(SEL.github.statPillCommits), /commits/i);
+    await expectForgeSegmentRegistered(window.locator(SEL.github.statPillCommits), /commits?/i);
 
     await openPluginManager(window);
     await toggle.click();
@@ -422,7 +422,7 @@ test.describe.serial("Panels: Forge stats pill lifecycle", () => {
     ctx!.window = await addAndSwitchToProject(ctx!.app, ctx!.window, dir, "no-forge");
     const window = ctx!.window;
 
-    await expectForgeSegmentRegistered(window.locator(SEL.github.statPillCommits), /commits/i);
+    await expectForgeSegmentRegistered(window.locator(SEL.github.statPillCommits), /commits?/i);
     await expect(window.locator(SEL.github.statPillIssues)).toHaveCount(0);
     await expect(window.locator(SEL.github.statPillPrs)).toHaveCount(0);
   });
