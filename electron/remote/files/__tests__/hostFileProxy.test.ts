@@ -12,12 +12,19 @@ const SCRIPT = new TextEncoder().encode("<script>alert(1)</script>");
 function proxyFor(answer: FileResponse, chunks: Uint8Array[] = [SCRIPT]) {
   const queue = [...chunks];
   const cancelStream = vi.fn(async () => {});
-  const transport = {
-    request: async () => answer,
-    pull: async () => {
+  const cancelBody = vi.fn();
+  const openBody = vi.fn(() => ({
+    read: async () => {
       const bytes = queue.shift() ?? new Uint8Array();
       return { bytes, done: queue.length === 0 };
     },
+    cancel: cancelBody,
+    bufferedBytes: 0,
+    peakBufferedBytes: 0,
+  }));
+  const transport = {
+    request: async () => answer,
+    openBody,
     cancelStream,
   } as unknown as ClientFileTransport;
   const proxy = createHostFileProxy(transport, {
@@ -37,7 +44,7 @@ function proxyFor(answer: FileResponse, chunks: Uint8Array[] = [SCRIPT]) {
         init
       )
     );
-  return { ask, cancelStream };
+  return { ask, cancelStream, cancelBody, openBody };
 }
 
 const streamed = (status: number, headers: Record<string, string>): FileResponse => ({
@@ -211,12 +218,25 @@ describe("host file previews", () => {
     await expect(unannounced.arrayBuffer()).rejects.toThrow();
   });
 
+  it("reads the body as deep as the host allows, never past its announced length", async () => {
+    const { ask, openBody } = proxyFor({
+      ...streamed(200, { "content-length": String(SCRIPT.byteLength) }),
+      pullDepth: 2,
+    });
+    const response = await ask("daintree-file", "/p/a.png");
+    expect(await response.text()).toBe("<script>alert(1)</script>");
+    expect(openBody).toHaveBeenCalledWith(HOST, STREAM, {
+      pullDepth: 2,
+      expectedBytes: SCRIPT.byteLength,
+    });
+  });
+
   it("never passes on more or fewer bytes than the host announced", async () => {
-    const more = await proxyFor(streamed(200, { "content-length": "4" })).ask(
-      "daintree-file",
-      "/p/a.png"
-    );
+    const tooMany = proxyFor(streamed(200, { "content-length": "4" }));
+    const more = await tooMany.ask("daintree-file", "/p/a.png");
     await expect(more.arrayBuffer()).rejects.toThrow();
+    // Read past what was announced: the host is told to stop sending.
+    expect(tooMany.cancelBody).toHaveBeenCalled();
     const fewer = await proxyFor(streamed(200, { "content-length": "100" })).ask(
       "daintree-file",
       "/p/a.png"

@@ -21,12 +21,20 @@ import {
   openSessionPair,
   removeTempDir,
   waitFor,
+  type LinkConditions,
 } from "../../link/__tests__/linkTestUtils.js";
-import { ClientFileTransport } from "../ClientFileTransport.js";
+import { ClientFileTransport, type HostFileBody } from "../ClientFileTransport.js";
 import { createHostFileProxy } from "../hostFileProxy.js";
 import { serveOpenedContainedFile } from "../../../setup/protocols.js";
 import { HostFileService, type HostFileEndpoint } from "../HostFileService.js";
-import { DOWNLOAD_SINK_PREFIX, FileDownloadPayloadSchema, FileLinkMethod } from "../linkMethods.js";
+import {
+  DOWNLOAD_SINK_PREFIX,
+  FileDownloadPayloadSchema,
+  FileLinkMethod,
+  PULL_MAX_BYTES,
+  type FileRequestPayload,
+  type FileResponse,
+} from "../linkMethods.js";
 import { ViewFileCapabilities } from "../viewCapabilities.js";
 import { expectClientBundle } from "../../projects/bundleSinks.js";
 import { BUNDLE_SINK_PREFIX } from "../../projects/linkMethods.js";
@@ -94,12 +102,37 @@ async function setup(
     bundleTtlMs?: number;
     uploadTtlMs?: number;
     clickedTtlMs?: number;
+    streamIdleMs?: number;
     /** Project p1's roots as configured; the real project folder by default. */
     roots?: string[];
+    /** The link between the two, emulated; a plain socket when absent. */
+    conditions?: LinkConditions;
+    clientPullDepth?: number;
+    /** Answer as a host from before pull depths: never sees the Shell's ask, never grants one. */
+    legacyHost?: boolean;
   } = {}
 ) {
-  const { host, client } = await openSessionPair(socketDir);
+  const { host, client } = await openSessionPair(socketDir, {}, {}, options.conditions);
   sessions.push(host, client);
+  if (options.legacyHost) {
+    const register = host.registerCallHandler.bind(host);
+    vi.spyOn(host, "registerCallHandler").mockImplementation(((
+      method: string,
+      schema: Parameters<typeof register>[1],
+      handler: (payload: unknown) => unknown
+    ) =>
+      register(
+        method,
+        schema,
+        method === FileLinkMethod.REQUEST
+          ? async (payload: unknown) => {
+              const { pullDepth: _asked, ...asked } = payload as FileRequestPayload;
+              const { pullDepth: _granted, ...answer } = (await handler(asked)) as FileResponse;
+              return answer;
+            }
+          : handler
+      )) as typeof host.registerCallHandler);
+  }
   const endpoint = new FakeEndpoint();
   const service = new HostFileService({
     rootsFor: async (projectId) =>
@@ -113,10 +146,14 @@ async function setup(
     bundleTtlMs: options.bundleTtlMs,
     uploadTtlMs: options.uploadTtlMs,
     clickedTtlMs: options.clickedTtlMs,
+    streamIdleMs: options.streamIdleMs,
   });
   services.push(service);
   service.attach(host, endpoint);
-  const transport = new ClientFileTransport({ maxConcurrentPulls: options.clientPulls });
+  const transport = new ClientFileTransport({
+    maxConcurrentPulls: options.clientPulls,
+    pullDepth: options.clientPullDepth,
+  });
   transport.noteEndpointOpened(HOST, { session: client, webContentsId: 7, endpointId: "view-7" });
   const capabilities = new ViewFileCapabilities(() => () => {});
   const cap = capabilities.capabilityFor(7);
@@ -323,7 +360,7 @@ describe("previews over the link", () => {
       })
     );
     const { proxy, transport } = await setup({ hostPulls: 1, clientPulls: 1 });
-    const pull = vi.spyOn(transport, "pull");
+    const pull = vi.spyOn(transport, "openBody");
     const bodies = await Promise.all(
       files.map(async ({ file }) => {
         const response = await proxy(
@@ -435,6 +472,240 @@ describe("revocation", () => {
     const { service, response } = await openStream();
     await response.body!.cancel();
     await waitFor(() => service.openStreams === 0);
+  });
+});
+
+describe("previews pulled ahead", () => {
+  const MiB = PULL_MAX_BYTES;
+
+  /** Host transfers in flight at once, and host body reads in flight at once. */
+  function observeHost(host: LinkSession) {
+    const stats = { sends: 0, maxSends: 0, reading: 0, maxReading: 0, bytesRead: 0 };
+    const send = host.transfers.send.bind(host.transfers);
+    vi.spyOn(host.transfers, "send").mockImplementation(async (source, options) => {
+      stats.sends++;
+      stats.maxSends = Math.max(stats.maxSends, stats.sends);
+      try {
+        return await send(source, options);
+      } finally {
+        stats.sends--;
+      }
+    });
+    const serve: typeof serveOpenedContainedFile = async (...args) => {
+      const response = await serveOpenedContainedFile(...args);
+      const body = response.body;
+      if (!body) return response;
+      const getReader = body.getReader.bind(body) as () => ReadableStreamDefaultReader<Uint8Array>;
+      body.getReader = (() => {
+        const reader = getReader();
+        const read = reader.read.bind(reader);
+        reader.read = async () => {
+          stats.reading++;
+          stats.maxReading = Math.max(stats.maxReading, stats.reading);
+          try {
+            const next = await read();
+            stats.bytesRead += next.value?.byteLength ?? 0;
+            return next;
+          } finally {
+            stats.reading--;
+          }
+        };
+        return reader;
+      }) as typeof body.getReader;
+      return response;
+    };
+    return { stats, serve };
+  }
+
+  async function pipelined(options: Parameters<typeof setup>[0] = {}) {
+    let observed: ReturnType<typeof observeHost> | null = null;
+    const ctx = await setup({
+      ...options,
+      serve: (...args) => observed!.serve(...args),
+    });
+    observed = observeHost(ctx.host);
+    const bodies: HostFileBody[] = [];
+    const openBody = ctx.transport.openBody.bind(ctx.transport);
+    vi.spyOn(ctx.transport, "openBody").mockImplementation((...args) => {
+      const body = openBody(...args);
+      bodies.push(body);
+      return body;
+    });
+    return { ...ctx, stats: observed.stats, bodies };
+  }
+
+  async function write(name: string, size: number): Promise<{ file: string; bytes: Buffer }> {
+    const bytes = crypto.randomBytes(size);
+    const file = path.join(project, name);
+    await fs.writeFile(file, bytes);
+    return { file, bytes };
+  }
+
+  it("sends the next slice while the last one waits for its acknowledgement, reading one at a time", async () => {
+    const ctx = await pipelined({ conditions: { oneWayDelayMs: 10 } });
+    const { file, bytes } = await write("clip.mp4", 6 * MiB + 17);
+    const response = await ctx.proxy(
+      "daintree-media",
+      new Request(url("daintree-media", file, project))
+    );
+    expect(sha256(new Uint8Array(await response.arrayBuffer()))).toBe(sha256(bytes));
+    expect(ctx.stats.maxSends).toBe(2);
+    expect(ctx.stats.maxReading).toBe(1);
+    expect(ctx.bodies[0]!.peakBufferedBytes).toBeLessThanOrEqual(2 * MiB);
+    // Read to its end: the Shell lets the host go of the stream it kept.
+    await waitFor(() => ctx.service.openStreams === 0);
+  });
+
+  it.each([
+    ["one byte", 1],
+    ["exactly one slice", MiB],
+    ["exactly three slices", 3 * MiB],
+    ["a slice and a bit", MiB + 1],
+  ])("delivers exactly the file's bytes for %s, whatever order slices finish in", async (_label, size) => {
+    const ctx = await pipelined({ conditions: { oneWayDelayMs: 5 } });
+    const { file, bytes } = await write("exact.mp4", size);
+    const response = await ctx.proxy(
+      "daintree-media",
+      new Request(url("daintree-media", file, project))
+    );
+    expect(Number(response.headers.get("content-length"))).toBe(size);
+    expect(sha256(new Uint8Array(await response.arrayBuffer()))).toBe(sha256(bytes));
+    await waitFor(() => ctx.service.openStreams === 0);
+  });
+
+  it("answers a range with exactly its bytes when the range spans slices", async () => {
+    const ctx = await pipelined({ conditions: { oneWayDelayMs: 5 } });
+    const { file, bytes } = await write("range.mp4", 5 * MiB);
+    const start = MiB - 3;
+    const end = 3 * MiB + 9;
+    const response = await ctx.proxy(
+      "daintree-media",
+      new Request(url("daintree-media", file, project), {
+        headers: { range: `bytes=${start}-${end}` },
+      })
+    );
+    expect(response.status).toBe(206);
+    const body = new Uint8Array(await response.arrayBuffer());
+    expect(body.byteLength).toBe(end - start + 1);
+    expect(sha256(body)).toBe(sha256(bytes.subarray(start, end + 1)));
+  });
+
+  it("stops reading on the host within a slice of a cancel, read-ahead included", async () => {
+    const ctx = await pipelined({ conditions: { oneWayDelayMs: 5 } });
+    const { file } = await write("long.mp4", 32 * MiB);
+    const response = await ctx.proxy(
+      "daintree-media",
+      new Request(url("daintree-media", file, project))
+    );
+    const reader = response.body!.getReader();
+    const first = await reader.read();
+    expect(first.value!.byteLength).toBe(MiB);
+    await reader.cancel();
+    await waitFor(() => ctx.service.openStreams === 0);
+    const readAtClose = ctx.stats.bytesRead;
+    // At most the slices in flight when the cancel landed, plus the one being read.
+    expect(readAtClose).toBeLessThanOrEqual(4 * MiB);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(ctx.stats.bytesRead).toBe(readAtClose);
+    expect(ctx.bodies[0]!.bufferedBytes).toBe(0);
+  });
+
+  it("drops a slice read ahead the moment the host revokes the stream", async () => {
+    const ctx = await pipelined();
+    const { file } = await write("long.mp4", 8 * MiB);
+    const response = await ctx.proxy(
+      "daintree-media",
+      new Request(url("daintree-media", file, project))
+    );
+    const reader = response.body!.getReader();
+    await reader.read();
+    const body = ctx.bodies[0]!;
+    await waitFor(() => body.bufferedBytes >= MiB);
+    ctx.endpoint.projectId = "p2";
+    ctx.service.onEndpointsChanged();
+    expect(ctx.service.openStreams).toBe(0);
+    await waitFor(() => body.bufferedBytes === 0);
+    await expect(reader.read()).rejects.toBeDefined();
+  });
+
+  it("drops what it read ahead when the host idles out a stream nobody reads", async () => {
+    const ctx = await pipelined({ streamIdleMs: 100 });
+    const { file } = await write("paused.mp4", 8 * MiB);
+    const response = await ctx.proxy(
+      "daintree-media",
+      new Request(url("daintree-media", file, project))
+    );
+    const reader = response.body!.getReader();
+    await reader.read();
+    const body = ctx.bodies[0]!;
+    await waitFor(() => body.bufferedBytes >= MiB);
+    await waitFor(() => ctx.service.openStreams === 0);
+    await waitFor(() => body.bufferedBytes === 0);
+    await expect(reader.read()).rejects.toBeDefined();
+  });
+
+  it("reads ahead only on pull slots nobody else is waiting for", async () => {
+    const ctx = await pipelined({ clientPulls: 1, conditions: { oneWayDelayMs: 2 } });
+    const { file, bytes } = await write("solo.mp4", 3 * MiB + 5);
+    const response = await ctx.proxy(
+      "daintree-media",
+      new Request(url("daintree-media", file, project))
+    );
+    expect(sha256(new Uint8Array(await response.arrayBuffer()))).toBe(sha256(bytes));
+    expect(ctx.stats.maxSends).toBe(1);
+  });
+
+  it("pulls one slice at a time from a host that grants no depth", async () => {
+    const ctx = await pipelined({ legacyHost: true, conditions: { oneWayDelayMs: 2 } });
+    const { file, bytes } = await write("old-host.mp4", 3 * MiB + 5);
+    const response = await ctx.proxy(
+      "daintree-media",
+      new Request(url("daintree-media", file, project))
+    );
+    expect(sha256(new Uint8Array(await response.arrayBuffer()))).toBe(sha256(bytes));
+    expect(ctx.stats.maxSends).toBe(1);
+    // The host closed the stream itself at the end, as it always has.
+    expect(ctx.service.openStreams).toBe(0);
+  });
+
+  it("serves a Shell that asks for no depth one slice at a time, closing at the end", async () => {
+    const ctx = await pipelined({ clientPullDepth: 1, conditions: { oneWayDelayMs: 2 } });
+    const answered = vi.spyOn(ctx.transport, "request");
+    const { file, bytes } = await write("old-shell.mp4", 3 * MiB + 5);
+    const response = await ctx.proxy(
+      "daintree-media",
+      new Request(url("daintree-media", file, project))
+    );
+    expect((await answered.mock.results[0]!.value) as FileResponse).not.toHaveProperty(
+      "pullDepth"
+    );
+    expect(sha256(new Uint8Array(await response.arrayBuffer()))).toBe(sha256(bytes));
+    expect(ctx.stats.maxSends).toBe(1);
+    expect(ctx.service.openStreams).toBe(0);
+  });
+
+  it("refuses a pull out of sequence on a pipelined stream, and closes it", async () => {
+    const { client, service } = await setup();
+    const { file } = await write("order.mp4", 3 * MiB);
+    const answer = (await client.call(FileLinkMethod.REQUEST, {
+      endpointId: "view-7",
+      scheme: "daintree-media",
+      path: file,
+      root: project,
+      method: "GET",
+      range: null,
+      pullDepth: 2,
+    })) as FileResponse;
+    expect(answer.pullDepth).toBe(2);
+    await expect(
+      client.call(FileLinkMethod.PULL, {
+        streamId: answer.streamId,
+        token: "c".repeat(32),
+        maxBytes: MiB,
+        sequence: 1,
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(service.openStreams).toBe(0);
   });
 });
 
