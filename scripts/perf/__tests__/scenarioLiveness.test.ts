@@ -91,7 +91,7 @@ const DRIVER = path.join(HERE, "scenarioSmokeDriver.ts");
 /**
  * Scenarios this guard deliberately does NOT run, and why.
  *
- * EIGHT are excluded on cost: a single `run()` costing more than ~12 seconds on
+ * NINE are excluded on cost: a single `run()` costing more than ~12 seconds on
  * the reference machine (M-series macOS, serial). Each is expensive BY DESIGN —
  * it idles for a fixed wall-clock window, or builds real multi-worktree git
  * topologies — so no amount of harness work makes it cheap, and a guard that
@@ -100,12 +100,12 @@ const DRIVER = path.join(HERE, "scenarioSmokeDriver.ts");
  * re-judge the trade rather than inherit it, and so an entry that stops being
  * expensive is visible rather than permanent.
  *
- * The NINTH, PERF-004, is not a cost exclusion at all: it launches the
+ * The TENTH, PERF-004, is not a cost exclusion at all: it launches the
  * packaged binary, so it cannot run without a `npm run package` build under
  * `release/` that no test environment has. Cheap or not, there is nothing here
  * for it to drive.
  *
- * All nine are a REAL GAP, and exactly as capable of dying silently as the
+ * All ten are a REAL GAP, and exactly as capable of dying silently as the
  * thirteen that did. Run them by hand after touching `lib/idleWindow*`,
  * `lib/gitPipeline*`, `lib/worktreeSidebar*` or `pty/ImagePathProbe`:
  *   npx tsx scripts/perf/__tests__/scenarioSmokeDriver.ts PERF-092
@@ -123,6 +123,11 @@ const EXPENSIVE_SCENARIOS: Readonly<Record<string, string>> = {
     "would nest one vitest run in another. Its subject is covered directly instead, by " +
     "`scripts/perf/renderer/__tests__/reviewListsBench.test.tsx`, which runs here every time " +
     "and asserts the same windowing oracle at a size cheap enough to afford.",
+  "PERF-248":
+    "~15s — spawns vitest to mount four 5,000-row diff tables, so driving it from inside " +
+    "`npm test` would nest one vitest run in another. Its subject is covered directly instead, " +
+    "by `scripts/perf/renderer/__tests__/diffViewerBench.test.tsx`, which runs here every time " +
+    "and asserts the same staging oracle, negative control included, at 1,200 rows.",
   "PERF-405":
     "~62s — the 40 reads a 1500ms poll makes in a minute, against a failing PID, plus a drain for the last arm's children; a shorter window cannot show the backoff ladder still spacing retries in its back half",
 };

@@ -177,7 +177,7 @@ async function buildTreeRows(
 let mutationToken = 0;
 
 /**
- * PERF-247 measures REACT, which this harness's own process cannot do.
+ * PERF-247 and PERF-248 measure REACT, which this harness's own process cannot do.
  *
  * The runner is `node --import tsx`, and the Review Hub's and the diff shelf's
  * real module graph reaches `import.meta.glob` (the agent-icon registry),
@@ -193,10 +193,9 @@ let mutationToken = 0;
  * the reason is worth stating: it is the build pipeline that is needed, not the
  * isolation.
  */
-async function runRendererBenchmark(): Promise<Record<string, number>> {
-  const dir = mkdtempSync(path.join(tmpdir(), "daintree-perf-247-"));
+async function runRendererBenchmark(id: string, spec: string): Promise<Record<string, number>> {
+  const dir = mkdtempSync(path.join(tmpdir(), `daintree-${id.toLowerCase()}-`));
   const outPath = path.join(dir, "metrics.json");
-  const spec = "scripts/perf/renderer/__tests__/reviewListsBench.measure.test.tsx";
   try {
     await new Promise<void>((resolve, reject) => {
       const child = spawn(
@@ -923,7 +922,10 @@ export const panelScenarios: PerfScenario[] = [
     correctness: ["windowingMisses", "selectionMisses", "controlMisses"],
     workloadFloors: { workingTree2000FileCount: 2000, shelf2000FileCount: 2000 },
     async run() {
-      const m = await runRendererBenchmark();
+      const m = await runRendererBenchmark(
+        "PERF-247",
+        "scripts/perf/renderer/__tests__/reviewListsBench.measure.test.tsx"
+      );
 
       const windowed = [
         "windowedWorkingTree420",
@@ -997,6 +999,99 @@ export const panelScenarios: PerfScenario[] = [
           controlShelf2000SelectionChangeMs: requireMetric(m, "staticShelf2000SelectionChangeMs"),
           windowingMisses,
           selectionMisses,
+          controlMisses,
+        },
+      };
+    },
+  },
+  {
+    id: "PERF-248",
+    name: "Diff Table - Giant Hunk Mount and Token Pass",
+    description:
+      "What a 5,000-row single hunk costs the diff table per COMMIT (#15677): a newly added " +
+      "TypeScript file under the 256 KiB soft-collapse gate, and a 5,000-line modified file " +
+      "expanded by full-file view into one merged hunk. Real DiffViewer, real react-diff-view, " +
+      "real refractor tokens, real React 19 reconciliation, under jsdom — so there is no " +
+      "compositor, no paint and no Chromium layout, which is where most of the original stall " +
+      "was; these are JS-thread commit costs, not frames. Frames are driven by hand and the " +
+      "token pass is computed up front and delivered on cue, so the plain mount and the token " +
+      "pass are timed separately and the worker's compute and transport (PERF-160..164) are " +
+      "excluded. Rows are counted as table rows that exist, highlighted rows as rows holding a " +
+      "token span. stagingMisses is nonzero when any commit mounted or highlighted more than " +
+      "1,000 rows (an independent ceiling, not the viewer's own batch), when nothing rendered, " +
+      "or when the table ended short of the fixture; tokenMisses when a row with code in it " +
+      "never got its tokens. Each run carries its own negative control: the same tables with " +
+      "staging switched off, and controlMisses is nonzero unless that arm mounted every row " +
+      "in its first commit and was scored as unstaged.",
+    tier: "heavy",
+    modes: ["ci", "nightly"],
+    iterations: { ci: 3, nightly: 5 },
+    warmups: 0,
+    correctness: ["stagingMisses", "tokenMisses", "controlMisses"],
+    workloadFloors: { added5000FinalRows: 5000, fullFile5000FinalRows: 5000 },
+    async run() {
+      const m = await runRendererBenchmark(
+        "PERF-248",
+        "scripts/perf/renderer/__tests__/diffViewerBench.measure.test.tsx"
+      );
+
+      const staged = ["stagedAdded5000", "stagedFullFile5000"];
+      const stagingMisses = staged.reduce(
+        (sum, key) => sum + requireMetric(m, `${key}StagingMisses`),
+        0
+      );
+      const tokenMisses = staged.reduce(
+        (sum, key) => sum + requireMetric(m, `${key}TokenMisses`),
+        0
+      );
+      // Inverted on purpose: the control arm is SUPPOSED to commit every row at
+      // once and be caught doing it. A control that quietly staged would make
+      // every "before" number below a fiction.
+      const controlMisses = ["unstagedAdded5000", "unstagedFullFile5000"].reduce(
+        (sum, key) =>
+          sum +
+          (requireMetric(m, `${key}InitialMountedRows`) === requireMetric(m, `${key}ExpectedRows`)
+            ? 0
+            : 1) +
+          (requireMetric(m, `${key}StagingMisses`) > 0 ? 0 : 1),
+        0
+      );
+
+      // The headline is the worst single commit a user would sit through: the
+      // first one plus the slowest slice after it, per table.
+      const durationMs = staged.reduce(
+        (sum, key) =>
+          sum + requireMetric(m, `${key}InitialRenderMs`) + requireMetric(m, `${key}MaxSliceMs`),
+        0
+      );
+
+      const report = (prefix: string, key: string) => ({
+        [`${prefix}InitialMountedRows`]: requireMetric(m, `${key}InitialMountedRows`),
+        [`${prefix}InitialRenderMs`]: requireMetric(m, `${key}InitialRenderMs`),
+        [`${prefix}MaxSliceRows`]: requireMetric(m, `${key}MaxSliceRows`),
+        [`${prefix}MaxSliceTokenizedRows`]: requireMetric(m, `${key}MaxSliceTokenizedRows`),
+        [`${prefix}MaxSliceMs`]: requireMetric(m, `${key}MaxSliceMs`),
+        [`${prefix}CompleteMs`]: requireMetric(m, `${key}CompleteMs`),
+      });
+
+      return {
+        durationMs,
+        metrics: {
+          ...report("added5000", "stagedAdded5000"),
+          added5000Slices: requireMetric(m, "stagedAdded5000Slices"),
+          added5000FinalRows: requireMetric(m, "stagedAdded5000FinalRows"),
+          added5000TokenRequests: requireMetric(m, "stagedAdded5000TokenRequests"),
+          ...report("fullFile5000", "stagedFullFile5000"),
+          fullFile5000Slices: requireMetric(m, "stagedFullFile5000Slices"),
+          fullFile5000FinalRows: requireMetric(m, "stagedFullFile5000FinalRows"),
+          fullFile5000TokenRequests: requireMetric(m, "stagedFullFile5000TokenRequests"),
+          // The control arm, reported rather than discarded: it is what a
+          // before/after reading of this change is made of, measured in the
+          // same process on the same machine as the numbers above it.
+          ...report("controlAdded5000", "unstagedAdded5000"),
+          ...report("controlFullFile5000", "unstagedFullFile5000"),
+          stagingMisses,
+          tokenMisses,
           controlMisses,
         },
       };
