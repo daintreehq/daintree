@@ -56,7 +56,8 @@ describe("WorktreeCreatePayloadSchema", () => {
         rootPath: "/home/user/repo",
         options: { ...validOptions, fetchBase },
       });
-      expect(result.success && result.data.options.fetchBase).toBe(fetchBase);
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data.options.fetchBase).toBe(fetchBase);
     }
     expect(
       WorktreeCreatePayloadSchema.safeParse({
