@@ -52,6 +52,7 @@ vi.mock("../../services/issueExtractor.js", () => ({
 }));
 
 import { readFile } from "fs/promises";
+import { categorizeWorktree } from "../../services/worktree/mood.js";
 import { GitStatusPass, type GitStatusPassHost } from "../GitStatusPass.js";
 import { StatPrecheck } from "../StatPrecheck.js";
 import { BaseDivergence } from "../BaseDivergence.js";
@@ -250,7 +251,7 @@ function makePass(
     pollingStrategy,
     noteReader
   );
-  return { pass, host, statPrecheck, watcherController };
+  return { pass, host, statPrecheck, watcherController, pollingStrategy, noteReader };
 }
 
 describe("GitStatusPass", () => {
@@ -716,5 +717,210 @@ describe("GitStatusPass", () => {
     expect(host.clearLinked).toHaveBeenCalledTimes(1);
     expect(host.onBranchChanged).toHaveBeenCalledWith("feature/y");
     vi.mocked(readFile).mockRejectedValue(new Error("ENOENT"));
+  });
+
+  describe("a pass that outlives its lifecycle (#15630)", () => {
+    type NoteRead = Awaited<ReturnType<NoteFileReader["read"]>>;
+    type Divergence = Awaited<ReturnType<BaseDivergence["compute"]>>;
+
+    function deferred<T>() {
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>((res) => (resolve = res));
+      return { promise, resolve };
+    }
+
+    const dirty = (file: string) =>
+      makeChanges({
+        changes: [
+          { path: `/test/worktree/${file}`, status: "modified", insertions: 1, deletions: 0 },
+        ],
+        changedFileCount: 1,
+      });
+
+    function setUp() {
+      mockGetGitDir.mockResolvedValue("/test/worktree/.git");
+      mockGetWorktreeChangesWithStats.mockResolvedValue(dirty("a.ts"));
+      const controller = new AbortController();
+      const made = makePass({ abortSignal: controller.signal });
+      const recordFullPass = vi.spyOn(made.statPrecheck, "recordFullPass");
+      const dropBaseline = vi.spyOn(made.statPrecheck, "dropBaseline");
+      return { ...made, controller, recordFullPass, dropBaseline };
+    }
+
+    // The host side of WorktreeMonitor.stop(): not running, lifecycle signal aborted.
+    function stopHost(made: ReturnType<typeof setUp>) {
+      (made.host as { isRunning: boolean }).isRunning = false;
+      made.controller.abort();
+    }
+
+    function expectNothingPublished(made: ReturnType<typeof setUp>) {
+      expect(made.host.emitUpdate).not.toHaveBeenCalled();
+      expect(made.host.worktreeChanges).toBeNull();
+      expect(made.host.hasInitialStatus).toBe(false);
+      expect(made.host.summary).toBeUndefined();
+      expect(made.host.mood).toBe("stable");
+      expect(made.host.lastGitStatusCompletedAt).toBe(0);
+      expect(made.watcherController.setUpstreamRef).not.toHaveBeenCalled();
+      expect(made.watcherController.flushPendingIfReady).not.toHaveBeenCalled();
+      expect(made.pollingStrategy.recordStateChange).not.toHaveBeenCalled();
+      expect(made.recordFullPass).not.toHaveBeenCalled();
+      expect(made.host.isUpdating).toBe(false);
+    }
+
+    it("drops a pass stopped during the HEAD read", async () => {
+      const made = setUp();
+      const head = deferred<string>();
+      let reading = false;
+      vi.mocked(readFile).mockImplementation((async (path: unknown) => {
+        if (!String(path).endsWith("HEAD")) throw new Error("ENOENT");
+        reading = true;
+        return head.promise;
+      }) as unknown as typeof readFile);
+      try {
+        const running = made.pass.run(true);
+        await vi.waitFor(() => expect(reading).toBe(true));
+
+        stopHost(made);
+        head.resolve("0123456789abcdef0123456789abcdef01234567\n");
+        await running;
+
+        expectNothingPublished(made);
+        expect(made.host.isDetached).toBe(false);
+        expect(made.host.head).toBeUndefined();
+      } finally {
+        vi.mocked(readFile).mockRejectedValue(new Error("ENOENT"));
+      }
+    });
+
+    it("drops a pass stopped during the note read", async () => {
+      const made = setUp();
+      const note = deferred<NoteRead>();
+      vi.mocked(made.noteReader.read).mockReturnValueOnce(note.promise);
+
+      const running = made.pass.run(true);
+      await vi.waitFor(() => expect(made.noteReader.read).toHaveBeenCalled());
+
+      stopHost(made);
+      note.resolve({ content: "late", timestamp: 1 });
+      await running;
+
+      expectNothingPublished(made);
+      expect(made.pass.aiNote).toBeUndefined();
+    });
+
+    it("drops a pass stopped during base divergence", async () => {
+      const made = setUp();
+      const divergence = deferred<Divergence>();
+      const compute = vi
+        .spyOn(BaseDivergence.prototype, "compute")
+        .mockReturnValue(divergence.promise);
+      try {
+        const running = made.pass.run(true);
+        await vi.waitFor(() => expect(compute).toHaveBeenCalled());
+
+        stopHost(made);
+        divergence.resolve({
+          baseBranchName: "main",
+          aheadCount: 1,
+          behindCount: 0,
+          matchesUpstream: false,
+          baseCompareRef: "origin/main",
+          upstreamRef: "origin/feature/x",
+          upstreamHeadSha: "abc",
+        } as Divergence);
+        await running;
+
+        expectNothingPublished(made);
+        expect(made.pass.baseBranchName).toBeUndefined();
+      } finally {
+        compute.mockRestore();
+      }
+    });
+
+    it("drops a pass stopped during categorisation", async () => {
+      const made = setUp();
+      const mood = deferred<"active">();
+      vi.mocked(categorizeWorktree).mockClear().mockReturnValueOnce(mood.promise);
+
+      const running = made.pass.run(true);
+      await vi.waitFor(() => expect(categorizeWorktree).toHaveBeenCalled());
+
+      stopHost(made);
+      mood.resolve("active");
+      await running;
+
+      expectNothingPublished(made);
+    });
+
+    it("drops a stopped lifecycle's result and publishes the restarted one's", async () => {
+      const made = setUp();
+      const oldNote = deferred<NoteRead>();
+      vi.mocked(made.noteReader.read)
+        .mockReturnValueOnce(oldNote.promise)
+        .mockResolvedValueOnce({ content: "new", timestamp: 2 });
+      mockGetWorktreeChangesWithStats
+        .mockResolvedValueOnce(dirty("old.ts"))
+        .mockResolvedValueOnce(dirty("new.ts"));
+
+      const old = made.pass.run(true);
+      await vi.waitFor(() => expect(made.noteReader.read).toHaveBeenCalledTimes(1));
+
+      stopHost(made);
+      made.pass.abandon();
+      (made.host as { isRunning: boolean }).isRunning = true;
+      (made.host as { abortSignal: AbortSignal }).abortSignal = new AbortController().signal;
+
+      await made.pass.run(true);
+      expect(made.host.emitUpdate).toHaveBeenCalledTimes(1);
+      expect(made.host.worktreeChanges?.changes[0]?.path).toBe("/test/worktree/new.ts");
+
+      oldNote.resolve({ content: "old", timestamp: 1 });
+      await old;
+
+      expect(made.host.emitUpdate).toHaveBeenCalledTimes(1);
+      expect(made.host.worktreeChanges?.changes[0]?.path).toBe("/test/worktree/new.ts");
+      expect(made.pass.aiNote).toBe("new");
+      expect(made.host.isUpdating).toBe(false);
+    });
+
+    it("leaves a newer pass alone when an abandoned pass settles late", async () => {
+      const made = setUp();
+      const staleNote = deferred<NoteRead>();
+      const freshNote = deferred<NoteRead>();
+      vi.mocked(made.noteReader.read)
+        .mockReturnValueOnce(staleNote.promise)
+        .mockReturnValueOnce(freshNote.promise);
+      mockGetWorktreeChangesWithStats
+        .mockResolvedValueOnce(dirty("stale.ts"))
+        .mockResolvedValueOnce(dirty("fresh.ts"));
+
+      const stale = made.pass.run(true);
+      await vi.waitFor(() => expect(made.noteReader.read).toHaveBeenCalledTimes(1));
+
+      // The poll watchdog gives up on it.
+      made.pass.abandon();
+      const fresh = made.pass.run(true);
+      await vi.waitFor(() => expect(made.noteReader.read).toHaveBeenCalledTimes(2));
+      made.dropBaseline.mockClear();
+
+      staleNote.resolve({ content: "stale", timestamp: 1 });
+      await stale;
+
+      expect(made.host.isUpdating).toBe(true);
+      expect(made.recordFullPass).not.toHaveBeenCalled();
+      expect(made.dropBaseline).not.toHaveBeenCalled();
+      expect(made.watcherController.flushPendingIfReady).not.toHaveBeenCalled();
+      expect(made.host.emitUpdate).not.toHaveBeenCalled();
+      expect(made.host.worktreeChanges).toBeNull();
+
+      freshNote.resolve({ content: "fresh", timestamp: 2 });
+      await fresh;
+
+      expect(made.host.emitUpdate).toHaveBeenCalledTimes(1);
+      expect(made.host.worktreeChanges?.changes[0]?.path).toBe("/test/worktree/fresh.ts");
+      expect(made.pass.aiNote).toBe("fresh");
+      expect(made.host.isUpdating).toBe(false);
+      expect(made.recordFullPass).toHaveBeenCalledTimes(1);
+    });
   });
 });
