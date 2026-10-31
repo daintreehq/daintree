@@ -33,14 +33,14 @@ function cancelDrag(data: Record<string, unknown>) {
   act(() => onDragCancel(event));
 }
 
-function startDrag() {
+function startDrag(data?: Record<string, unknown>) {
   const onDragStart = dndListener?.onDragStart;
   if (!onDragStart) throw new Error("useDndMonitor received no onDragStart listener");
   act(() =>
     onDragStart({
       active: {
         id: "drag",
-        data: { current: undefined },
+        data: { current: data },
         rect: { current: { initial: null, translated: null } },
       },
       activatorEvent: new Event("keydown"),
@@ -48,14 +48,14 @@ function startDrag() {
   );
 }
 
-function endDrag() {
+function endDrag(data?: Record<string, unknown>) {
   const onDragEnd = dndListener?.onDragEnd;
   if (!onDragEnd) throw new Error("useDndMonitor received no onDragEnd listener");
   act(() =>
     onDragEnd({
       active: {
         id: "drag",
-        data: { current: undefined },
+        data: { current: data },
         rect: { current: { initial: null, translated: null } },
       },
       activatorEvent: new Event("pointerdown"),
@@ -297,26 +297,21 @@ describe("useSidebarReorderSession — drag cancel", () => {
 // The sidebar hides its scroll pills' bands for the length of a drag, since a
 // band covers rows a drop can still land on.
 describe("useSidebarReorderSession — drag in flight", () => {
-  it("is active from pickup until the drop", () => {
+  it.each([
+    ["a worktree sort", { type: "worktree-sort", worktreeId: "a" }],
+    ["anything else", { type: "terminal", terminalId: "t1" }],
+  ])("is active for %s from pickup until the drop or a cancel", (_label, data) => {
     const { result } = renderSession();
     expect(result.current.isDragActive).toBe(false);
 
-    startDrag();
+    startDrag(data);
     expect(result.current.isDragActive).toBe(true);
-
-    endDrag();
-    expect(result.current.isDragActive).toBe(false);
-  });
-
-  it("ends on a cancel, whatever was being dragged", () => {
-    const { result } = renderSession();
-
-    startDrag();
-    cancelDrag({ type: "terminal", terminalId: "t1" });
+    endDrag(data);
     expect(result.current.isDragActive).toBe(false);
 
-    startDrag();
-    cancelDrag({ type: "worktree-sort", worktreeId: "a" });
+    startDrag(data);
+    expect(result.current.isDragActive).toBe(true);
+    cancelDrag(data);
     expect(result.current.isDragActive).toBe(false);
   });
 });

@@ -36,6 +36,10 @@ export interface BandInsets {
 // event. Matches Chromium's own per-line scroll step.
 const WHEEL_LINE_PX = 40;
 
+// A list shorter than this many band heights has no room to give two of them
+// up and still show a row between, so the pills step aside instead.
+const MIN_VIEWPORT_IN_BANDS = 3;
+
 /**
  * Per-index classification of the list against the viewport, plus the rows a
  * click on each pill should reveal. Computed fresh on every read so a jump
@@ -201,8 +205,9 @@ interface UseScrollIndicatorReturn {
 
 // The space between the bands when both are up, so a step through a card
 // taller than the view shows what was behind the far band next, not past it.
+// Always positive: `classify` drops the bands from a list too short for them.
 function pageStep(scroller: HTMLElement, band: number): number {
-  return Math.max(scroller.clientHeight - 2 * band, scroller.clientHeight / 2);
+  return scroller.clientHeight - 2 * band;
 }
 
 function sameSide(a: HiddenSide, b: HiddenSide): boolean {
@@ -279,6 +284,8 @@ function useScrollIndicator({
     }
 
     const { scrollTop, clientHeight } = scroller;
+    const band = bandHeightRef.current;
+    if (band > 0 && clientHeight < band * MIN_VIEWPORT_IN_BANDS) return emptyClassification();
     const attention = attentionRef.current;
     const physical = classifyBetween(
       items,
@@ -293,7 +300,6 @@ function useScrollIndicator({
     // and reveal is measured inside the bands. Fed back, a short first row
     // sitting wholly behind the top band would keep that band up even with
     // the list scrolled to the very top.
-    const band = bandHeightRef.current;
     const top = physical.above.count > 0 ? band : 0;
     const bottom = physical.below.count > 0 ? band : 0;
     if (top === 0 && bottom === 0) return physical;

@@ -151,27 +151,34 @@ describe("ScrollIndicator", () => {
     expect(event.defaultPrevented).toBe(true);
   });
 
-  // The band covers rows that are past the list's edge, so nothing pressed on
-  // it may reach them: not a click, not a press that would start a row drag
-  // or move focus. Only the pill acts, and a wheel scrolls the list (#15805).
+  // The band covers rows that are past the list's edge, so a press on it acts
+  // on nothing beneath and doesn't move focus, but still reads as an outside
+  // press to an open popover. Only the pill acts; a wheel scrolls the list.
   describe("the band the pill sits in", () => {
     const band = () => document.querySelector<HTMLElement>("[data-sidebar-scroll-indicator]")!;
 
-    it("keeps a press on its empty part from reaching what lies beneath", () => {
-      const onAncestorPointerDown = vi.fn();
-      render(
-        <div onPointerDown={onAncestorPointerDown}>
-          <ScrollIndicator direction="below" count={2} onClick={onClick} />
-        </div>
-      );
-      fireEvent.pointerDown(band());
+    it("takes a press on its empty part without acting or taking focus", () => {
+      render(<ScrollIndicator direction="below" count={2} onClick={onClick} />);
       const press = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
       band().dispatchEvent(press);
       fireEvent.click(band());
 
-      expect(onAncestorPointerDown).not.toHaveBeenCalled();
       expect(press.defaultPrevented).toBe(true);
       expect(onClick).not.toHaveBeenCalled();
+    });
+
+    // Radix dismisses an open popover from a document-level pointerdown.
+    it("lets a press reach the document, so an open popover closes", () => {
+      const onDocumentPointerDown = vi.fn();
+      document.addEventListener("pointerdown", onDocumentPointerDown);
+      try {
+        render(<ScrollIndicator direction="below" count={2} onClick={onClick} />);
+        fireEvent.pointerDown(band());
+        fireEvent.pointerDown(screen.getByRole("button"));
+        expect(onDocumentPointerDown).toHaveBeenCalledTimes(2);
+      } finally {
+        document.removeEventListener("pointerdown", onDocumentPointerDown);
+      }
     });
 
     it("hands a wheel anywhere over it to the list", () => {
@@ -180,6 +187,21 @@ describe("ScrollIndicator", () => {
       fireEvent.wheel(band(), { deltaY: 40 });
       fireEvent.wheel(screen.getByRole("button"), { deltaY: -40 });
       expect(onWheel.mock.calls.map(([event]) => event.deltaY)).toEqual([40, -40]);
+    });
+
+    // Once the count drops, the rows it is uncovering are back on screen.
+    it("goes inert while it fades out", () => {
+      const onWheel = vi.fn();
+      const { rerender } = render(
+        <ScrollIndicator direction="below" count={2} onClick={onClick} onWheel={onWheel} />
+      );
+      mockUseAnimatedPresence.mockReturnValue({ isVisible: false, shouldRender: true });
+      rerender(<ScrollIndicator direction="below" count={0} onClick={onClick} onWheel={onWheel} />);
+
+      fireEvent.click(screen.getByRole("button"));
+      fireEvent.wheel(band(), { deltaY: 40 });
+      expect(onClick).not.toHaveBeenCalled();
+      expect(onWheel).not.toHaveBeenCalled();
     });
 
     it("leaves with the pill", () => {

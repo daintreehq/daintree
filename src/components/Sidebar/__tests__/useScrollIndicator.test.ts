@@ -585,15 +585,23 @@ describe("useScrollIndicator with the pills' bands (issue #15805)", () => {
 
   function setup(
     scrollTop: number,
-    overrides: { bandHeightPx?: number; paused?: boolean } = { bandHeightPx: BAND }
+    overrides: { bandHeightPx?: number; paused?: boolean } = { bandHeightPx: BAND },
+    { waiting = [], clientHeight = 300 }: { waiting?: string[]; clientHeight?: number } = {}
   ) {
     const scrollToIndex = vi.fn<VirtuosoHandle["scrollToIndex"]>();
-    const scroller = makeScroller({ scrollTop, clientHeight: 300, scrollHeight: 600 });
+    const scroller = makeScroller({ scrollTop, clientHeight, scrollHeight: 600 });
     const scrollBy = vi.fn();
     Object.defineProperty(scroller, "scrollBy", { value: scrollBy });
+    const attentionWorktreeIds: ReadonlySet<string> = new Set(waiting);
     const hook = renderHook(
       (props: { bandHeightPx?: number; paused?: boolean }) =>
-        useScrollIndicator(params(rows, { virtuosoRef: { current: { scrollToIndex } }, ...props })),
+        useScrollIndicator(
+          params(rows, {
+            virtuosoRef: { current: { scrollToIndex } },
+            attentionWorktreeIds,
+            ...props,
+          })
+        ),
       { initialProps: overrides }
     );
     act(() => hook.result.current.scrollerRef(scroller));
@@ -635,6 +643,54 @@ describe("useScrollIndicator with the pills' bands (issue #15805)", () => {
     scrollTo(scroller, result, 0);
     expect(result.current.hiddenAbove.count).toBe(0);
     expect(result.current.bandInsets.top).toBe(0);
+
+    // The same at the bottom: at the end of the list row 19 (570-600) would
+    // sit behind a held-over bottom band.
+    scrollTo(scroller, result, 300);
+    expect(result.current.hiddenBelow.count).toBe(0);
+    expect(result.current.hiddenAbove.count).toBe(11);
+    expect(result.current.bandInsets).toEqual({ top: BAND, bottom: 0 });
+  });
+
+  // Rows 3 and 12 are on screen bare and behind the bands with them.
+  it("counts and reveals a waiting worktree that only a band hides", () => {
+    const { result, scrollToIndex } = setup(95, { bandHeightPx: BAND }, { waiting: ["w3", "w12"] });
+    expect(result.current.hiddenAbove).toEqual({ count: 4, attention: 1 });
+    expect(result.current.hiddenBelow).toEqual({ count: 8, attention: 1 });
+
+    act(() => result.current.revealBelow());
+    expect(scrollToIndex).toHaveBeenLastCalledWith({
+      index: 12,
+      align: "center",
+      behavior: "smooth",
+    });
+    act(() => result.current.revealAbove());
+    expect(scrollToIndex).toHaveBeenLastCalledWith({
+      index: 3,
+      align: "center",
+      behavior: "smooth",
+    });
+  });
+
+  // Bare viewport [95, 395] with 66px bands: edges at 161 and 329.
+  it("re-measures when the band height changes", () => {
+    const { result, rerender, scrollToIndex } = setup(95);
+    rerender({ bandHeightPx: 66 });
+    expect(result.current.hiddenAbove.count).toBe(5);
+    expect(result.current.hiddenBelow.count).toBe(9);
+    expect(result.current.bandInsets).toEqual({ top: 66, bottom: 66 });
+
+    act(() => result.current.revealBelow());
+    expect(scrollToIndex).toHaveBeenLastCalledWith(
+      expect.objectContaining({ index: 11, align: "start", offset: -66 })
+    );
+  });
+
+  it("steps aside in a list too short to give up two bands", () => {
+    const { result } = setup(95, { bandHeightPx: BAND }, { clientHeight: 100 });
+    expect(result.current.hiddenAbove.count).toBe(0);
+    expect(result.current.hiddenBelow.count).toBe(0);
+    expect(result.current.bandInsets).toEqual({ top: 0, bottom: 0 });
   });
 
   it("gives only the edge with something past it a band", () => {
@@ -670,8 +726,25 @@ describe("useScrollIndicator with the pills' bands (issue #15805)", () => {
     expect(result.current.bandInsets).toEqual({ top: BAND, bottom: BAND });
   });
 
+  it("clears both pills the moment a drag starts, even with a scroll frame pending", () => {
+    const { result, rerender, scroller } = setup(95);
+    expect(result.current.hiddenAbove.count).toBe(4);
+
+    scroller.scrollTop = 120;
+    act(() => result.current.handleScroll());
+    rerender({ bandHeightPx: BAND, paused: true });
+    const cleared = { count: 0, attention: 0 };
+    expect(result.current.hiddenAbove).toEqual(cleared);
+    expect(result.current.hiddenBelow).toEqual(cleared);
+    expect(result.current.bandInsets).toEqual({ top: 0, bottom: 0 });
+
+    flushFrames();
+    expect(result.current.hiddenAbove).toEqual(cleared);
+    expect(result.current.hiddenBelow).toEqual(cleared);
+  });
+
   it("hands a wheel over a band on to the list", () => {
-    const { result, scrollBy } = setup(95);
+    const { result, scrollBy, scroller } = setup(95);
     const wheel = (deltaY: number, deltaMode = 0, ctrlKey = false) =>
       result.current.handleBandWheel({ deltaY, deltaMode, ctrlKey });
 
@@ -679,8 +752,9 @@ describe("useScrollIndicator with the pills' bands (issue #15805)", () => {
     expect(scrollBy).toHaveBeenLastCalledWith({ top: 120 });
     wheel(-3, WheelEvent.DOM_DELTA_LINE);
     expect(scrollBy).toHaveBeenLastCalledWith({ top: -120 });
-    wheel(1, WheelEvent.DOM_DELTA_PAGE);
-    expect(scrollBy).toHaveBeenLastCalledWith({ top: 300 });
+    Object.defineProperty(scroller, "clientHeight", { value: 240, configurable: true });
+    wheel(-2, WheelEvent.DOM_DELTA_PAGE);
+    expect(scrollBy).toHaveBeenLastCalledWith({ top: -480 });
 
     scrollBy.mockClear();
     wheel(120, 0, true);

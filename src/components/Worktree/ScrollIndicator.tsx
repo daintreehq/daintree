@@ -82,6 +82,9 @@ export function ScrollIndicator({
 
   if (!shouldRender) return null;
 
+  // A band on its way out is already gone as far as the list is concerned:
+  // the rows it is uncovering are back on screen and must take their presses.
+  const live = count > 0;
   const Icon = direction === "above" ? ChevronUp : ChevronDown;
   const description = describe(direction, shown);
   const action = describeAction(shown);
@@ -91,21 +94,22 @@ export function ScrollIndicator({
     // keep their menu, chevron and alarm pills in the trailing corner, so a
     // bare pill covered the edge row's controls and took their clicks
     // (#15805), and centred it covered titles (#12010). A row behind the band
-    // is past the edge, and the list counts it so. The band takes every press,
-    // so its empty part can't click a row nobody can see, and it hands wheel
-    // scrolling on to the list. `pr-4` matches the card content column's gutter.
+    // is past the edge, and the list counts it so. The band is hit-testable, so
+    // its empty part can't click a row nobody can see, and it hands wheel
+    // scrolling on to the list. Presses still bubble, so an open popover sees
+    // one as an outside click. `pr-4` matches the card content column's gutter.
     <div
       aria-hidden={ariaHidden || undefined}
       data-sidebar-scroll-indicator={direction}
-      onWheel={onWheel}
-      onPointerDown={(e) => e.stopPropagation()}
+      onWheel={live ? onWheel : undefined}
       // A pointer shortcut, not a focus stop: without this a click leaves
       // focus on a button the accessibility tree has been told is absent.
       onMouseDown={(e) => e.preventDefault()}
       style={{ height: SCROLL_INDICATOR_BAND_HEIGHT_PX }}
       className={cn(
         "absolute inset-x-0 z-20 flex items-center justify-end pr-4",
-        direction === "above" ? "top-0" : "bottom-0"
+        direction === "above" ? "top-0" : "bottom-0",
+        !live && "pointer-events-none"
       )}
     >
       {/* The sidebar's own fill and grain, so the band reads as the list's
@@ -128,10 +132,13 @@ export function ScrollIndicator({
           <ScrollPill
             isVisible={isVisible}
             translateDirection={direction === "above" ? "up" : "down"}
-            onClick={onClick}
+            onClick={live ? onClick : undefined}
             tabIndex={tabIndex}
             aria-label={`${description}. ${action}`}
-            className="relative flex items-center gap-1.5 px-2.5 py-1"
+            className={cn(
+              "relative flex items-center gap-1.5 px-2.5 py-1",
+              !live && "pointer-events-none"
+            )}
           >
             <Icon className="h-3 w-3" />
             <span className="font-medium tabular-nums">{shown.count}</span>
