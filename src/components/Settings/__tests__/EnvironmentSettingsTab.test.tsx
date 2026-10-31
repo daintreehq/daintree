@@ -79,10 +79,10 @@ describe("EnvironmentSettingsTab", () => {
     renderTab();
 
     await waitFor(() => {
-      expect(screen.getAllByLabelText("Environment variable name")).toHaveLength(1);
+      expect(screen.getAllByLabelText(/^Name of variable \d+$/)).toHaveLength(1);
     });
 
-    const valueInput = screen.getByLabelText("Environment variable value");
+    const valueInput = screen.getByLabelText(/^Value of /);
     fireEvent.change(valueInput, { target: { value: "new-value" } });
 
     const saveButton = screen.getByRole("button", { name: /save/i });
@@ -137,7 +137,7 @@ describe("EnvironmentSettingsTab", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
 
     await waitFor(() => {
-      expect(screen.getAllByLabelText("Environment variable name")).toHaveLength(1);
+      expect(screen.getAllByLabelText(/^Name of variable \d+$/)).toHaveLength(1);
     });
     expect(get).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
@@ -160,8 +160,8 @@ describe("EnvironmentSettingsTab", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /add variable/i }));
 
-    const nameInput = screen.getByLabelText("Environment variable name");
-    const valueInput = screen.getByLabelText("Environment variable value");
+    const nameInput = screen.getByLabelText(/^Name of variable \d+$/);
+    const valueInput = screen.getByLabelText(/^Value of /);
     fireEvent.change(nameInput, { target: { value: "1BAD-NAME" } });
     fireEvent.change(valueInput, { target: { value: "anything" } });
 
@@ -201,8 +201,8 @@ describe("EnvironmentSettingsTab", () => {
     const addButton = screen.getByRole("button", { name: /add variable/i });
     fireEvent.click(addButton);
 
-    const nameInput = screen.getByLabelText("Environment variable name");
-    const valueInput = screen.getByLabelText("Environment variable value");
+    const nameInput = screen.getByLabelText(/^Name of variable \d+$/);
+    const valueInput = screen.getByLabelText(/^Value of /);
 
     fireEvent.change(nameInput, { target: { value: "NEW_VAR" } });
     fireEvent.change(valueInput, { target: { value: "new_value" } });
@@ -221,11 +221,11 @@ describe("EnvironmentSettingsTab close-time save", () => {
     window.electron.globalEnv.get = vi.fn().mockResolvedValue({ GOOD: "1" });
     renderTabInDialog();
     await waitFor(() => {
-      expect(screen.getAllByLabelText("Environment variable name")).toHaveLength(1);
+      expect(screen.getAllByLabelText(/^Name of variable \d+$/)).toHaveLength(1);
     });
 
     fireEvent.click(screen.getByRole("button", { name: /add variable/i }));
-    const badName = screen.getAllByLabelText<HTMLInputElement>("Environment variable name")[1]!;
+    const badName = screen.getAllByLabelText<HTMLInputElement>(/^Name of variable \d+$/)[1]!;
     fireEvent.change(badName, { target: { value: "1BAD" } });
 
     const failed = await closeFlush();
@@ -234,7 +234,7 @@ describe("EnvironmentSettingsTab close-time save", () => {
     expect(failed[0]!.tab).toBe("environment");
     const landing = document.getElementById(failed[0]!.landOn);
     expect(landing?.contains(badName)).toBe(true);
-    expect(landing?.contains(screen.getAllByLabelText("Environment variable name")[0]!)).toBe(
+    expect(landing?.contains(screen.getAllByLabelText(/^Name of variable \d+$/)[0]!)).toBe(
       false
     );
     // The reason is on screen once the close has tried to save.
@@ -248,9 +248,9 @@ describe("EnvironmentSettingsTab close-time save", () => {
     window.electron.globalEnv.set = vi.fn().mockRejectedValue(new Error("disk full"));
     renderTabInDialog();
     await waitFor(() => {
-      expect(screen.getAllByLabelText("Environment variable name")).toHaveLength(1);
+      expect(screen.getAllByLabelText(/^Name of variable \d+$/)).toHaveLength(1);
     });
-    const value = screen.getByLabelText("Environment variable value") as HTMLInputElement;
+    const value = screen.getByLabelText(/^Value of /) as HTMLInputElement;
     fireEvent.change(value, { target: { value: "2" } });
 
     const failed = await closeFlush();
@@ -267,9 +267,9 @@ describe("EnvironmentSettingsTab close-time save", () => {
     window.electron.globalEnv.get = vi.fn().mockResolvedValue({ GOOD: "1" });
     renderTabInDialog();
     await waitFor(() => {
-      expect(screen.getAllByLabelText("Environment variable name")).toHaveLength(1);
+      expect(screen.getAllByLabelText(/^Name of variable \d+$/)).toHaveLength(1);
     });
-    fireEvent.change(screen.getByLabelText("Environment variable value"), {
+    fireEvent.change(screen.getByLabelText(/^Value of /), {
       target: { value: "2" },
     });
 
@@ -285,9 +285,9 @@ describe("EnvironmentSettingsTab close-time save", () => {
     );
     renderTabInDialog();
     await waitFor(() => {
-      expect(screen.getAllByLabelText("Environment variable name")).toHaveLength(1);
+      expect(screen.getAllByLabelText(/^Name of variable \d+$/)).toHaveLength(1);
     });
-    fireEvent.change(screen.getByLabelText("Environment variable value"), {
+    fireEvent.change(screen.getByLabelText(/^Value of /), {
       target: { value: "2" },
     });
     await act(async () => {
@@ -316,14 +316,14 @@ async function renderWith(vars: Record<string, string>) {
   window.electron.globalEnv.get = vi.fn().mockResolvedValue(vars);
   renderTab();
   await waitFor(() => {
-    expect(screen.getAllByLabelText("Environment variable name")).toHaveLength(
+    expect(screen.getAllByLabelText(/^Name of variable \d+$/)).toHaveLength(
       Object.keys(vars).length
     );
   });
 }
 
-const nameInputs = () => screen.getAllByLabelText<HTMLInputElement>("Environment variable name");
-const valueInputs = () => screen.getAllByLabelText<HTMLInputElement>("Environment variable value");
+const nameInputs = () => screen.getAllByLabelText<HTMLInputElement>(/^Name of variable \d+$/);
+const valueInputs = () => screen.getAllByLabelText<HTMLInputElement>(/^Value of /);
 const revealToggle = (name: string) =>
   screen.queryByRole("button", { name: `Show value of ${name}` });
 

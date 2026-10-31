@@ -54,7 +54,7 @@ describe("EnvVarRow", () => {
 
   it("points the name field at its error, so the problem is announced with the field", () => {
     renderRow({ error: "Broken name" });
-    const input = screen.getByLabelText("Environment variable name");
+    const input = screen.getByLabelText(/^Name of variable \d+$/);
     expect(input.getAttribute("aria-invalid")).toBe("true");
     const ids = (input.getAttribute("aria-describedby") ?? "").split(" ").filter(Boolean);
     const described = ids.map((id) => document.getElementById(id)?.textContent ?? "").join(" ");
@@ -63,7 +63,7 @@ describe("EnvVarRow", () => {
 
   it("describes nothing and claims nothing invalid when there is no error", () => {
     renderRow();
-    const input = screen.getByLabelText("Environment variable name");
+    const input = screen.getByLabelText(/^Name of variable \d+$/);
     expect(input.getAttribute("aria-invalid")).not.toBe("true");
     expect(input.getAttribute("aria-describedby")).toBeNull();
   });
@@ -82,16 +82,50 @@ describe("EnvVarRow", () => {
   it("keeps the storage badge inside the name field rather than ahead of it", () => {
     const { container } = renderRow({ storageBadge: <span data-testid="badge" /> });
     const badge = screen.getByTestId("badge");
-    const nameField = screen.getByLabelText("Environment variable name");
+    const nameField = screen.getByLabelText(/^Name of variable \d+$/);
     // Same positioned wrapper as the input, so the row's grid columns never move.
     expect(badge.closest("div")).toBe(nameField.parentElement);
     const gridColumns = container.querySelector("[data-env-row] > div")!.children;
     expect(gridColumns[0]).toBe(nameField.parentElement);
   });
 
+  it("names both fields after their row, falling back to the row number for an unnamed row", () => {
+    const { unmount } = renderRow({ position: 3 });
+    expect(screen.getByLabelText("Name of variable 3")).toBeTruthy();
+    expect(screen.getByLabelText("Value of API_TOKEN (row 3)")).toBeTruthy();
+    unmount();
+    renderRow({ row: row("r2", "  ", ""), position: 2 });
+    expect(screen.getByLabelText("Name of variable 2")).toBeTruthy();
+    expect(screen.getByLabelText("Value of variable 2")).toBeTruthy();
+  });
+
+  it("keeps two rows with the same name distinguishable", () => {
+    render(
+      <>
+        {[1, 2].map((position) => (
+          <EnvVarRow
+            key={position}
+            row={row(`r${position}`, "DUP", "x")}
+            position={position}
+            sensitive={false}
+            revealed={false}
+            onToggleReveal={noop}
+            onKeyChange={noop}
+            onValueChange={noop}
+            onDelete={noop}
+          />
+        ))}
+      </>
+    );
+    expect(screen.getByLabelText("Value of DUP (row 1)")).toBeTruthy();
+    expect(screen.getByLabelText("Value of DUP (row 2)")).toBeTruthy();
+    expect(screen.getByLabelText("Name of variable 1")).toBeTruthy();
+    expect(screen.getByLabelText("Name of variable 2")).toBeTruthy();
+  });
+
   it("masks a sensitive value until it is revealed", () => {
     const { rerender } = renderRow({ sensitive: true });
-    const value = screen.getByLabelText<HTMLInputElement>("Environment variable value");
+    const value = screen.getByLabelText<HTMLInputElement>(/^Value of /);
     expect(value.type).toBe("password");
     rerender(
       <EnvVarRow
@@ -105,6 +139,6 @@ describe("EnvVarRow", () => {
         onDelete={noop}
       />
     );
-    expect(screen.getByLabelText<HTMLInputElement>("Environment variable value").type).toBe("text");
+    expect(screen.getByLabelText<HTMLInputElement>(/^Value of /).type).toBe("text");
   });
 });

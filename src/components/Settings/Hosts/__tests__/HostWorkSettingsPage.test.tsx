@@ -245,7 +245,7 @@ describe("HostWorkSettingsPage (#14167, #14706)", () => {
     // Unavailable, not disabled: pressing Save makes the group clean, and focus has to stay.
     const save = screen.getByRole("button", { name: "Save" });
     expect(save.getAttribute("aria-disabled")).toBe("true");
-    fireEvent.change(screen.getByRole("textbox", { name: "Environment variable value" }), {
+    fireEvent.change(screen.getByRole("textbox", { name: /^Value of / }), {
       target: { value: "C.UTF-8" },
     });
     await act(async () => {
@@ -269,8 +269,8 @@ async function renderWith(env: Record<string, string>) {
   await renderSection();
 }
 
-const nameInputs = () => screen.getAllByLabelText<HTMLInputElement>("Environment variable name");
-const valueInputs = () => screen.getAllByLabelText<HTMLInputElement>("Environment variable value");
+const nameInputs = () => screen.getAllByLabelText<HTMLInputElement>(/^Name of variable \d+$/);
+const valueInputs = () => screen.getAllByLabelText<HTMLInputElement>(/^Value of /);
 const revealToggle = (name: string) =>
   screen.queryByRole("button", { name: `Show value of ${name}` });
 

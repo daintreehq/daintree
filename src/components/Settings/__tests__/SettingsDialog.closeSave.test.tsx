@@ -53,7 +53,7 @@ async function openOnEnvironment() {
   const onClose = vi.fn();
   render(<SettingsDialog isOpen onClose={onClose} defaultTab="environment" />);
   await waitFor(() => {
-    expect(screen.getAllByLabelText("Environment variable name")).toHaveLength(1);
+    expect(screen.getAllByLabelText(/^Name of variable \d+$/)).toHaveLength(1);
   });
   return onClose;
 }
@@ -72,7 +72,7 @@ describe("SettingsDialog close with a draft that didn't save", () => {
   it("stays open on the page that failed, with focus on the field in error", async () => {
     const onClose = await openOnEnvironment();
     fireEvent.click(screen.getByRole("button", { name: /add variable/i }));
-    const badName = screen.getAllByLabelText<HTMLInputElement>("Environment variable name")[1]!;
+    const badName = screen.getAllByLabelText<HTMLInputElement>(/^Name of variable \d+$/)[1]!;
     fireEvent.change(badName, { target: { value: "1BAD" } });
 
     // Leave the page, so the close has to bring it back.
@@ -94,7 +94,7 @@ describe("SettingsDialog close with a draft that didn't save", () => {
   it("closes once the draft is discarded", async () => {
     const onClose = await openOnEnvironment();
     fireEvent.click(screen.getByRole("button", { name: /add variable/i }));
-    fireEvent.change(screen.getAllByLabelText("Environment variable name")[1]!, {
+    fireEvent.change(screen.getAllByLabelText(/^Name of variable \d+$/)[1]!, {
       target: { value: "1BAD" },
     });
 
@@ -110,7 +110,7 @@ describe("SettingsDialog close with a draft that didn't save", () => {
 
   it("saves a valid draft and closes, as before", async () => {
     const onClose = await openOnEnvironment();
-    fireEvent.change(screen.getByLabelText("Environment variable value"), {
+    fireEvent.change(screen.getByLabelText(/^Value of /), {
       target: { value: "2" },
     });
 
@@ -123,7 +123,7 @@ describe("SettingsDialog close with a draft that didn't save", () => {
   it("lets a hide flush through without holding anything open", async () => {
     const onClose = await openOnEnvironment();
     fireEvent.click(screen.getByRole("button", { name: /add variable/i }));
-    const badName = screen.getAllByLabelText("Environment variable name")[1]!;
+    const badName = screen.getAllByLabelText(/^Name of variable \d+$/)[1]!;
     fireEvent.change(badName, { target: { value: "1BAD" } });
     await act(async () => {
       fireEvent.click(document.getElementById("settings-tab-general")!);
@@ -191,7 +191,7 @@ describe("SettingsDialog when main caches its project view (#15633)", () => {
       () => new Promise<void>((resolve) => (finishProjectSave = resolve))
     );
     const onClose = await openOnEnvironment();
-    fireEvent.change(screen.getByLabelText("Environment variable value"), {
+    fireEvent.change(screen.getByLabelText(/^Value of /), {
       target: { value: "2" },
     });
 
@@ -218,7 +218,7 @@ describe("SettingsDialog when main caches its project view (#15633)", () => {
   it("joins a close that is already saving rather than saving again", async () => {
     const finishEnvSave = deferEnvSave();
     const onClose = await openOnEnvironment();
-    fireEvent.change(screen.getByLabelText("Environment variable value"), {
+    fireEvent.change(screen.getByLabelText(/^Value of /), {
       target: { value: "2" },
     });
     await pressEscape();

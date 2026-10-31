@@ -66,11 +66,11 @@ test.describe.serial("Full: Global Environment Variable Inheritance", () => {
     await window.locator("button", { hasText: "Add Variable" }).click();
 
     // Fill in the key
-    const nameInputs = window.locator('[aria-label="Environment variable name"]');
+    const nameInputs = window.locator('[aria-label^="Name of variable "]');
     await nameInputs.last().fill("TEST_GLOBAL_KEY");
 
     // Fill in the value
-    const valueInputs = window.locator('[aria-label="Environment variable value"]');
+    const valueInputs = window.locator('[aria-label^="Value of "]');
     await valueInputs.last().fill("test_global_value");
 
     const envSection = window.locator("#environment-variables");
@@ -127,10 +127,10 @@ test.describe.serial("Full: Global Environment Variable Inheritance", () => {
     // Add a project variable with the same key.
     await window.locator("button", { hasText: "Add Variable" }).click();
 
-    const nameInputs = window.locator('[aria-label="Environment variable name"]');
+    const nameInputs = window.locator('[aria-label^="Name of variable "]');
     await nameInputs.last().fill("TEST_GLOBAL_KEY");
 
-    const valueInputs = window.locator('[aria-label="Environment variable value"]');
+    const valueInputs = window.locator('[aria-label^="Value of "]');
     await valueInputs.last().fill("project_override");
 
     const variablesPanel = window.locator("#settings-panel-project\\:variables");

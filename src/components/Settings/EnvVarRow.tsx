@@ -95,6 +95,8 @@ export function EnvVarRow({
 }: EnvVarRowProps) {
   const errorId = `${row.id}-error`;
   const name = row.key.trim();
+  // The row number keeps two rows holding the same name distinguishable.
+  const valueLabel = name ? `Value of ${name} (row ${position})` : `Value of variable ${position}`;
   return (
     // The id is what a close blocked on this row's error lands on.
     <div id={row.id} className="px-4 py-2.5" data-env-row="">
@@ -113,7 +115,7 @@ export function EnvVarRow({
             aria-describedby={error ? errorId : undefined}
             className={cn("font-mono", storageBadge && "pr-8")}
             placeholder="VARIABLE_NAME"
-            aria-label="Environment variable name"
+            aria-label={`Name of variable ${position}`}
           />
           {storageBadge && (
             <span className="absolute right-2.5 top-1/2 -translate-y-1/2 flex">{storageBadge}</span>
@@ -133,7 +135,7 @@ export function EnvVarRow({
             autoComplete={sensitive ? "new-password" : "off"}
             className={cn("font-mono", sensitive && "pr-9")}
             placeholder={valuePlaceholder}
-            aria-label="Environment variable value"
+            aria-label={valueLabel}
             aria-describedby={error ? errorId : undefined}
           />
           {sensitive && (
