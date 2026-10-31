@@ -373,8 +373,11 @@ export function useSidebarWorktreeModel({
   // every fleet push, and a fresh prop here would re-render the main card
   // through its memoized row even when no count moved.
   const nonMainCount = nonMainWorktrees.length;
-  const { working: workingCount, waiting: waitingCount, finished: finishedCount } =
-    quickStateCounts;
+  const {
+    working: workingCount,
+    waiting: waitingCount,
+    finished: finishedCount,
+  } = quickStateCounts;
   const mainWorktreeAggregateCounts = useMemo(() => {
     if (nonMainCount === 0 && workingCount === 0 && waitingCount === 0 && finishedCount === 0) {
       return undefined;
