@@ -890,6 +890,83 @@ describe("WorktreeLifecycleService", () => {
         expect(capped.endsWith("…")).toBe(true);
       });
 
+      it("scrubs a token that dropping a control character would join to the word before it", async () => {
+        const token = `ghp_${"b".repeat(36)}`;
+        mockSpawn.mockReturnValue(
+          makeFakeProcessWithOutput(`DAINTREE_SETUP_ERROR: token\u0007${token}\n`, 1)
+        );
+
+        const summary = (await run(["node check.mjs"])).failureSummary ?? "";
+
+        expect(summary.startsWith("token")).toBe(true);
+        expect(summary).not.toContain(token);
+      });
+
+      it("caps by code point, never splitting an emoji", async () => {
+        mockSpawn.mockReturnValue(
+          makeFakeProcessWithOutput(`DAINTREE_SETUP_ERROR: ${"🙂".repeat(600)}\n`, 1)
+        );
+
+        const summary = (await run(["node check.mjs"])).failureSummary ?? "";
+
+        expect(Array.from(summary)).toHaveLength(500);
+        expect(summary).toBe(`${"🙂".repeat(499)}…`);
+      });
+
+      it("ignores a prefix that only looks like a line start because the scan window cut there", async () => {
+        const prefix = "DAINTREE_SETUP_ERROR:";
+        mockSpawn.mockReturnValue(
+          // The last 4096 characters are exactly the prefix, the x's and the newline.
+          makeFakeProcessWithOutput(`junk${prefix}${"x".repeat(4096 - prefix.length - 1)}\n`, 1)
+        );
+
+        expect((await run(["node check.mjs"])).failureSummary).toBeUndefined();
+      });
+
+      it("ignores what a timed-out command prints after the timeout marker", async () => {
+        const originalPlatform = process.platform;
+        // The Windows kill path is mocked, so no real signal goes anywhere.
+        Object.defineProperty(process, "platform", { value: "win32" });
+        vi.useFakeTimers();
+        try {
+          const listeners: Record<string, ((...args: unknown[]) => void)[]> = {};
+          let onStdout: ((chunk: Buffer) => void) | undefined;
+          mockSpawn.mockReturnValue({
+            pid: 12345,
+            stdout: {
+              on: vi.fn((event: string, cb: (chunk: Buffer) => void) => {
+                if (event === "data") onStdout = cb;
+              }),
+            },
+            stderr: { on: vi.fn() },
+            on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+              listeners[event] ??= [];
+              listeners[event].push(cb);
+            }),
+            kill: vi.fn(),
+          });
+
+          const resultPromise = service.runCommands(["node slow.mjs"], {
+            cwd: "/wt",
+            env: {},
+            timeoutMs: 1000,
+            onProgress: vi.fn(),
+            readFailureSummary: true,
+          });
+          vi.advanceTimersByTime(1001);
+          onStdout?.(Buffer.from("DAINTREE_SETUP_ERROR: late\n"));
+          listeners["close"]?.forEach((cb) => cb(1, null));
+          const result = await resultPromise;
+
+          expect(result.timedOut).toBe(true);
+          expect(result.output).toContain("DAINTREE_SETUP_ERROR: late");
+          expect(result.failureSummary).toBeUndefined();
+        } finally {
+          vi.useRealTimers();
+          Object.defineProperty(process, "platform", { value: originalPlatform });
+        }
+      });
+
       it("reads nothing from a marker with no summary after it", async () => {
         mockSpawn.mockReturnValue(makeFakeProcessWithOutput("DAINTREE_SETUP_ERROR:   \n", 1));
 
@@ -1615,9 +1692,13 @@ describe("WorktreeLifecycleService", () => {
         phase: "setup",
         state: "failed",
         error:
-          "Command exited with code 1: node scripts/link-shared-node-modules.mjs — Run `npm ci` in /root.",
+          "Run `npm ci` in /root. (Command exited with code 1: node scripts/link-shared-node-modules.mjs)",
       });
       // The summary is command output, so it stays out of the log.
+      expect(warn).toHaveBeenCalledWith(
+        "[WorktreeLifecycle] Setup failed for worktree wt-1:",
+        "Command exited with code 1: node scripts/link-shared-node-modules.mjs"
+      );
       expect(JSON.stringify(warn.mock.calls)).not.toContain("npm ci");
       warn.mockRestore();
     });

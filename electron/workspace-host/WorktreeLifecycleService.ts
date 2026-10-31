@@ -579,9 +579,12 @@ export class WorktreeLifecycleService {
 
       if (!result.success) {
         const logPath = await this.persistRunLog(outputChunks, logDir);
-        const failureSummary = readFailureSummary
-          ? readSetupFailureSummary(outputChunks.slice(commandOutputStart))
-          : undefined;
+        // A timed-out command can still print after the timeout marker, while
+        // it is being killed; its summary would describe a run that didn't end.
+        const failureSummary =
+          readFailureSummary && !result.timedOut
+            ? readSetupFailureSummary(outputChunks.slice(commandOutputStart))
+            : undefined;
         return {
           success: false,
           output: tailOutput(outputChunks, logPath),
@@ -1178,9 +1181,11 @@ export class WorktreeLifecycleService {
         state: result.timedOut ? "timed-out" : result.success ? "success" : "failed",
         totalCommands: commands.length,
         output: result.output,
+        // The summary first: the setup status keeps only the first
+        // WORKTREE_SETUP_ERROR_MAX_LENGTH characters of this.
         error:
           result.error !== undefined && result.failureSummary !== undefined
-            ? `${result.error} — ${result.failureSummary}`
+            ? `${result.failureSummary} (${result.error})`
             : result.error,
         startedAt: finalMonitor.lifecycleStatus?.startedAt ?? Date.now(),
         completedAt: Date.now(),
@@ -1665,27 +1670,37 @@ function buildSpawnEnv(customEnv: Record<string, string>): Record<string, string
  */
 function readSetupFailureSummary(chunks: string[]): string | undefined {
   const full = chunks.join("");
-  // A last line longer than this isn't a one-line summary.
-  const end =
-    full.length > FAILURE_SUMMARY_SCAN_CHARS ? full.slice(-FAILURE_SUMMARY_SCAN_CHARS) : full;
+  let end = full;
+  if (full.length > FAILURE_SUMMARY_SCAN_CHARS) {
+    // Start at a line boundary, so a window cut mid-line can't put the prefix
+    // at what looks like a line start. A last line longer than the window
+    // isn't a one-line summary.
+    const window = full.slice(-FAILURE_SUMMARY_SCAN_CHARS);
+    const newline = window.indexOf("\n");
+    if (newline === -1) return undefined;
+    end = window.slice(newline + 1);
+  }
   const lastLine = end
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
     .at(-1);
   if (!lastLine?.startsWith(SETUP_FAILURE_SUMMARY_PREFIX)) return undefined;
-  // Without a control-character regex literal, which lint refuses.
-  const printable = Array.from(lastLine.slice(SETUP_FAILURE_SUMMARY_PREFIX.length))
+  // Scrubbed before and after: dropping a control character can join a token
+  // to the word before it, hiding the boundary a pattern needs, or join the
+  // halves of one. Filtered without a control-character regex, which lint refuses.
+  const printable = Array.from(scrubSecrets(lastLine.slice(SETUP_FAILURE_SUMMARY_PREFIX.length)))
     .filter((ch) => {
       const code = ch.codePointAt(0) ?? 0;
       return code > 0x1f && code !== 0x7f && !(code >= 0x80 && code <= 0x9f);
     })
     .join("");
-  const summary = scrubSecrets(printable).trim();
+  const summary = Array.from(scrubSecrets(printable).trim());
   if (summary.length === 0) return undefined;
+  // By code point, so the cut never splits a surrogate pair.
   return summary.length > MAX_FAILURE_SUMMARY_CHARS
-    ? `${summary.slice(0, MAX_FAILURE_SUMMARY_CHARS - 1)}…`
-    : summary;
+    ? `${summary.slice(0, MAX_FAILURE_SUMMARY_CHARS - 1).join("")}…`
+    : summary.join("");
 }
 
 function tailOutput(chunks: string[], logPath?: string): string {

@@ -75,13 +75,14 @@ function listDrift(drift) {
 
 /**
  * One line naming the drift in the shared install and what fixes it. It is the
- * setup error a caller sees, so it has to read whole on its own.
+ * setup error a caller sees, which is cut to its first 200 characters, so the
+ * fix comes before the packages.
  */
 export function describeSharedDrift(drift, projectRoot, lockfilesMatch) {
   const fix = lockfilesMatch
     ? `Run \`npm ci\` in ${projectRoot}.`
-    : `Its package-lock.json differs from this worktree's: update the main checkout (or this branch) so they match, then run \`npm ci\` in ${projectRoot}.`;
-  return `The shared install at ${path.join(projectRoot, "node_modules")} doesn't match this worktree's package-lock.json: ${listDrift(drift)}. ${fix}`;
+    : `${projectRoot} has a different package-lock.json: update whichever is behind, then run \`npm ci\` there.`;
+  return `Shared node_modules doesn't match package-lock.json. ${fix} Differs: ${listDrift(drift)}.`;
 }
 
 function readFileOrNull(file, fsImpl) {
@@ -89,6 +90,17 @@ function readFileOrNull(file, fsImpl) {
     return fsImpl.readFileSync(file, "utf8");
   } catch {
     return null;
+  }
+}
+
+/** Whether two paths reach the same directory, whatever their spelling or case. */
+function isSameDirectory(a, b, fsImpl) {
+  try {
+    const left = fsImpl.statSync(a, { bigint: true });
+    const right = fsImpl.statSync(b, { bigint: true });
+    return left.dev === right.dev && left.ino === right.ino;
+  } catch {
+    return false;
   }
 }
 
@@ -123,7 +135,9 @@ export function linkAndCheck(
   const fail = (reason) => ({ ok: false, lines, reason });
   const linkPath = path.join(worktreePath, "node_modules");
   const sharedPath = path.join(projectRoot, "node_modules");
-  const isMainCheckout = path.resolve(worktreePath) === path.resolve(projectRoot);
+  const isMainCheckout =
+    path.resolve(worktreePath) === path.resolve(projectRoot) ||
+    isSameDirectory(worktreePath, projectRoot, fsImpl);
 
   if (!isMainCheckout && lstatOrNull(linkPath, fsImpl) === null) {
     if (!isDirectory(sharedPath, fsImpl)) {
@@ -170,9 +184,9 @@ export function linkAndCheck(
     lines.push(`node_modules (${resolved}) matches package-lock.json.`);
     return { ok: true, lines };
   }
-  if (!isMainCheckout && realpathOrNull(sharedPath, fsImpl) !== resolved) {
+  if (!isMainCheckout && !isSameDirectory(linkPath, sharedPath, fsImpl)) {
     return fail(
-      `This worktree's node_modules (${resolved}) isn't the shared install and doesn't match its package-lock.json: ${listDrift(drift)}. Remove it and run setup again to link ${sharedPath}.`
+      `node_modules here (${resolved}) isn't the shared install and doesn't match package-lock.json. Remove it and run setup again to link ${sharedPath}. Differs: ${listDrift(drift)}.`
     );
   }
   const sharedLock = readFileOrNull(path.join(projectRoot, "package-lock.json"), fsImpl);

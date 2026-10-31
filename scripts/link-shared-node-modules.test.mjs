@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WorktreeLifecycleService } from "../electron/workspace-host/WorktreeLifecycleService.ts";
 import {
   SETUP_ERROR_PREFIX,
   describeSharedDrift,
@@ -36,6 +37,7 @@ const LOCKED = {
   "node_modules/react": { version: "19.0.0" },
   "node_modules/typescript7": { version: "7.0.0", dev: true },
 };
+const INSTALLED = { "node_modules/react": "19.0.0", "node_modules/typescript7": "7.0.0" };
 
 beforeEach(() => {
   tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "link-shared-node-modules-")));
@@ -51,7 +53,7 @@ afterEach(() => {
 
 describe("linkAndCheck", () => {
   it("links a new worktree to the main checkout's install and passes when it matches", () => {
-    install(root, { "node_modules/react": "19.0.0", "node_modules/typescript7": "7.0.0" });
+    install(root, INSTALLED);
 
     const result = linkAndCheck({ worktreePath: worktree, projectRoot: root });
 
@@ -62,18 +64,20 @@ describe("linkAndCheck", () => {
     expect(result.lines[0]).toBe(`Linked node_modules to ${path.join(root, "node_modules")}.`);
   });
 
-  it("fails on drift with the fix to run in the main checkout, and installs nothing", () => {
+  it("fails on drift with the fix to run in the main checkout first, and installs nothing", () => {
     install(root, { "node_modules/react": "18.3.1" });
-    const before = fs.readdirSync(path.join(root, "node_modules")).sort();
+    const manifest = path.join(root, "node_modules", "react", "package.json");
+    const before = fs.readFileSync(manifest, "utf8");
 
     const result = linkAndCheck({ worktreePath: worktree, projectRoot: root });
 
     expect(result.ok).toBe(false);
     expect(result.reason).toBe(
-      `The shared install at ${path.join(root, "node_modules")} doesn't match this worktree's package-lock.json: ` +
-        `react 18.3.1 installed, 19.0.0 locked; typescript7 missing. Run \`npm ci\` in ${root}.`
+      `Shared node_modules doesn't match package-lock.json. Run \`npm ci\` in ${root}. ` +
+        "Differs: react 18.3.1 installed, 19.0.0 locked; typescript7 missing."
     );
-    expect(fs.readdirSync(path.join(root, "node_modules")).sort()).toEqual(before);
+    expect(fs.readdirSync(path.join(root, "node_modules"))).toEqual(["react"]);
+    expect(fs.readFileSync(manifest, "utf8")).toBe(before);
   });
 
   it("says the main checkout's lockfile differs when it does", () => {
@@ -82,15 +86,14 @@ describe("linkAndCheck", () => {
 
     const result = linkAndCheck({ worktreePath: worktree, projectRoot: root });
 
-    expect(result.ok).toBe(false);
-    expect(result.reason).toContain("typescript7 missing.");
-    expect(result.reason).toContain(
-      `Its package-lock.json differs from this worktree's: update the main checkout (or this branch) so they match, then run \`npm ci\` in ${root}.`
+    expect(result.reason).toBe(
+      `Shared node_modules doesn't match package-lock.json. ${root} has a different package-lock.json: ` +
+        "update whichever is behind, then run `npm ci` there. Differs: typescript7 missing."
     );
   });
 
   it("leaves an existing node_modules in place and checks it", () => {
-    install(worktree, { "node_modules/react": "19.0.0", "node_modules/typescript7": "7.0.0" });
+    install(worktree, INSTALLED);
     fs.mkdirSync(path.join(root, "node_modules"));
 
     const result = linkAndCheck({ worktreePath: worktree, projectRoot: root });
@@ -105,11 +108,26 @@ describe("linkAndCheck", () => {
 
     const result = linkAndCheck({ worktreePath: worktree, projectRoot: root });
 
-    expect(result.ok).toBe(false);
     expect(result.reason).toBe(
-      `This worktree's node_modules (${path.join(worktree, "node_modules")}) isn't the shared install and doesn't match its package-lock.json: typescript7 missing. ` +
-        `Remove it and run setup again to link ${path.join(root, "node_modules")}.`
+      `node_modules here (${path.join(worktree, "node_modules")}) isn't the shared install and doesn't match package-lock.json. ` +
+        `Remove it and run setup again to link ${path.join(root, "node_modules")}. Differs: typescript7 missing.`
     );
+  });
+
+  it("recognises the shared install by identity, whatever spelling its link resolves to", () => {
+    install(root, { "node_modules/react": "19.0.0" });
+    fs.symlinkSync(path.join(root, "node_modules"), path.join(worktree, "node_modules"));
+    // A case-insensitive volume can hand back another casing than the project root's.
+    const linkPath = path.join(worktree, "node_modules");
+    const realpathSync = (target) =>
+      target === linkPath ? linkPath.toUpperCase() : fs.realpathSync(target);
+
+    const result = linkAndCheck(
+      { worktreePath: worktree, projectRoot: root },
+      { ...fs, realpathSync }
+    );
+
+    expect(result.reason).toContain(`Shared node_modules doesn't match package-lock.json.`);
   });
 
   it("fails without linking when the main checkout has no install", () => {
@@ -132,18 +150,23 @@ describe("linkAndCheck", () => {
     expect(fs.lstatSync(path.join(worktree, "node_modules")).isSymbolicLink()).toBe(true);
   });
 
-  it("checks the main checkout itself without linking it to itself", () => {
+  it("checks the main checkout itself, by any path that reaches it, without linking it to itself", () => {
+    const alias = path.join(tmp, "app-alias");
+    fs.symlinkSync(root, alias);
+
+    expect(linkAndCheck({ worktreePath: alias, projectRoot: root }).reason).toBe(
+      `${root} has no node_modules. Run \`npm ci\` there.`
+    );
+    expect(fs.existsSync(path.join(root, "node_modules"))).toBe(false);
+
     install(root, { "node_modules/react": "19.0.0" });
-
     const result = linkAndCheck({ worktreePath: root, projectRoot: root });
-
-    expect(result.ok).toBe(false);
-    expect(result.reason).toContain("typescript7 missing. Run `npm ci` in");
+    expect(result.reason).toContain(`Run \`npm ci\` in ${root}. Differs: typescript7 missing.`);
     expect(fs.lstatSync(path.join(root, "node_modules")).isSymbolicLink()).toBe(false);
   });
 
   it("creates a junction on Windows, which needs no elevation", () => {
-    install(root, { "node_modules/react": "19.0.0", "node_modules/typescript7": "7.0.0" });
+    install(root, INSTALLED);
     const symlinkSync = vi.fn(fs.symlinkSync);
 
     linkAndCheck(
@@ -158,8 +181,8 @@ describe("linkAndCheck", () => {
     );
   });
 
-  it("accepts a link another setup run created first", () => {
-    install(root, { "node_modules/react": "19.0.0", "node_modules/typescript7": "7.0.0" });
+  it("accepts and checks a link another setup run created first", () => {
+    install(root, { "node_modules/react": "19.0.0" });
     const symlinkSync = (target, linkPath, type) => {
       fs.symlinkSync(target, linkPath, type);
       throw Object.assign(new Error("EEXIST: file already exists"), { code: "EEXIST" });
@@ -170,7 +193,18 @@ describe("linkAndCheck", () => {
       { ...fs, symlinkSync }
     );
 
-    expect(result.ok).toBe(true);
+    expect(result.reason).toContain("Differs: typescript7 missing.");
+  });
+
+  it("lets any other link failure through", () => {
+    install(root, INSTALLED);
+    const symlinkSync = () => {
+      throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" });
+    };
+
+    expect(() =>
+      linkAndCheck({ worktreePath: worktree, projectRoot: root }, { ...fs, symlinkSync })
+    ).toThrow("EPERM");
   });
 
   it("refuses a lockfile it can't check against", () => {
@@ -260,61 +294,86 @@ describe("findLockfileDrift", () => {
 });
 
 describe("describeSharedDrift", () => {
-  it("lists three packages and counts the rest", () => {
-    const line = describeSharedDrift(
-      ["a missing", "b missing", "c missing", "d missing"],
-      "/r",
-      true
+  it("lists three packages after the fix and counts the rest", () => {
+    expect(
+      describeSharedDrift(["a missing", "b missing", "c missing", "d missing"], "/r", true)
+    ).toBe(
+      "Shared node_modules doesn't match package-lock.json. Run `npm ci` in /r. " +
+        "Differs: a missing; b missing; c missing (+1 more)."
     );
-
-    expect(line).toContain(": a missing; b missing; c missing (+1 more). Run `npm ci` in /r.");
   });
 });
 
 describe("as setup", () => {
-  const run = (env) => {
+  const run = () => {
+    const env = {
+      PATH: process.env.PATH,
+      DAINTREE_PROJECT_ROOT: root,
+      DAINTREE_WORKTREE_PATH: worktree,
+    };
     try {
-      return {
-        status: 0,
-        out: execFileSync(process.execPath, [SCRIPT], { env, encoding: "utf8", stdio: "pipe" }),
-      };
+      const stdout = execFileSync(process.execPath, [SCRIPT], {
+        env,
+        encoding: "utf8",
+        stdio: "pipe",
+      });
+      return { status: 0, stdout, stderr: "" };
     } catch (err) {
-      return { status: err.status, out: `${err.stdout}${err.stderr}` };
+      return { status: err.status, stdout: err.stdout, stderr: err.stderr };
     }
   };
-  const lifecycleEnv = () => ({
-    PATH: process.env.PATH,
-    DAINTREE_PROJECT_ROOT: root,
-    DAINTREE_WORKTREE_PATH: worktree,
-  });
 
-  it("ends a failure on the line Daintree reads as the setup error", () => {
+  it("prints a failure on stderr alone, ending on the line Daintree reads as the setup error", () => {
     install(root, { "node_modules/react": "19.0.0" });
 
-    const { status, out } = run(lifecycleEnv());
+    const { status, stdout, stderr } = run();
 
     expect(status).toBe(1);
-    const lastLine = out.trim().split("\n").at(-1);
-    expect(lastLine.startsWith(SETUP_ERROR_PREFIX)).toBe(true);
-    expect(lastLine).toContain("typescript7 missing. Run `npm ci` in");
+    expect(stdout).toBe("");
+    const lines = stderr.trim().split("\n");
+    expect(lines[0]).toBe(`Linked node_modules to ${path.join(root, "node_modules")}.`);
+    expect(lines.at(-1)).toBe(
+      `${SETUP_ERROR_PREFIX}Shared node_modules doesn't match package-lock.json. Run \`npm ci\` in ${root}. Differs: typescript7 missing.`
+    );
   });
 
-  it("exits 0 once linked and matching", () => {
-    install(root, { "node_modules/react": "19.0.0", "node_modules/typescript7": "7.0.0" });
+  it("links and exits 0 when the install matches", () => {
+    install(root, INSTALLED);
 
-    expect(run(lifecycleEnv()).status).toBe(0);
+    const { status, stdout } = run();
+
+    expect(status).toBe(0);
+    expect(stdout).toContain(`Linked node_modules to ${path.join(root, "node_modules")}.`);
+    expect(fs.lstatSync(path.join(worktree, "node_modules")).isSymbolicLink()).toBe(true);
   });
 
-  it("uses the prefix WorktreeLifecycleService reads", () => {
-    // SETUP_FAILURE_SUMMARY_PREFIX in electron/workspace-host/WorktreeLifecycleService.ts.
-    expect(SETUP_ERROR_PREFIX.trimEnd()).toBe("DAINTREE_SETUP_ERROR:");
-  });
-
-  it("is what this repo's worktree setup runs", () => {
-    const config = JSON.parse(
+  it("runs from this repo's setup config, and Daintree reads its reason into the setup error", async () => {
+    // Setup runs the config's commands in the worktree, which has its own copy of the script.
+    const { setup } = JSON.parse(
       fs.readFileSync(path.join(REPO_ROOT, ".daintree", "config.json"), "utf8")
     );
+    fs.mkdirSync(path.join(worktree, "scripts"));
+    fs.copyFileSync(SCRIPT, path.join(worktree, "scripts", path.basename(SCRIPT)));
+    install(root, { "node_modules/react": "19.0.0" });
+    const service = new WorktreeLifecycleService(tmp, {
+      isApproved: async () => true,
+      approve: async () => {},
+    });
+    const runSetup = () =>
+      service.runCommands(setup, {
+        cwd: worktree,
+        env: { DAINTREE_PROJECT_ROOT: root, DAINTREE_WORKTREE_PATH: worktree },
+        onProgress: () => {},
+        readFailureSummary: true,
+      });
 
-    expect(config.setup).toEqual(["node scripts/link-shared-node-modules.mjs"]);
+    const failed = await runSetup();
+    expect(failed.success).toBe(false);
+    expect(failed.failureSummary).toBe(
+      `Shared node_modules doesn't match package-lock.json. Run \`npm ci\` in ${root}. Differs: typescript7 missing.`
+    );
+
+    install(root, INSTALLED);
+    expect((await runSetup()).success).toBe(true);
   });
 });
