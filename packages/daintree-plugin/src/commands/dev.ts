@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import { randomUUID } from "node:crypto";
 import type { ResultPromise } from "execa";
 import { runValidate } from "./validate.js";
 import { resolveVitePlan, runVitePlanBuild, spawnViteWatch } from "../lib/viteBuild.js";
@@ -36,7 +37,18 @@ export interface DevOptions {
 
 export interface DevLink {
   linkPath: string;
+  /** The plugin directory this session serves, resolved. */
+  pluginDir: string;
+  /**
+   * This session's marker, in its own plugin directory. Never reached through
+   * the link: a newer session for the same plugin id may have retargeted it.
+   */
   markerPath: string;
+  /**
+   * Stamped into the marker and sent with `plugin.dev.start`/`stop`, so cleanup
+   * and Daintree act only on what this session still owns.
+   */
+  sessionId: string;
   /**
    * True when this invocation created the symlink, so cleanup may remove it. A
    * pre-existing symlink already pointing at this plugin dir is reused and left
@@ -45,74 +57,192 @@ export interface DevLink {
   createdSymlink: boolean;
 }
 
+interface DevMarker {
+  sessionId: string;
+  pid: number;
+}
+
 function defaultPluginsRoot(): string {
   return path.join(os.homedir(), ".daintree", "plugins");
 }
 
 /**
- * Symlink the plugin dir into the plugins root and write the `.dev-marker`
- * through the link. The CLI owns this symlink directly (it isn't a real install,
- * so it bypasses `PluginInstaller` and its content-mutation invariant, #9292).
- * Never removes a real directory at the link path — that would be an installed
- * plugin, not ours to delete.
+ * The session stamped in a marker, or null when there is none to honour: no
+ * file, or the empty marker an older CLI writes.
+ */
+async function readDevMarker(markerPath: string): Promise<DevMarker | null> {
+  let text: string;
+  try {
+    text = await fs.readFile(markerPath, "utf8");
+  } catch {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(text) as Partial<DevMarker> | null;
+    if (typeof parsed?.sessionId === "string" && Number.isInteger(parsed.pid)) {
+      return { sessionId: parsed.sessionId, pid: parsed.pid as number };
+    }
+  } catch {
+    // Not ours to interpret.
+  }
+  return null;
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // EPERM is a live process we may not signal. Anything but ESRCH is treated
+    // as live too: a false conflict is recoverable, deleting a live session's
+    // artifacts is not.
+    return (err as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+/**
+ * Two sessions in one directory would share a marker and a link, and the first
+ * to exit would tear both down, so the second is refused up front. A marker
+ * whose process has exited (a crashed session) is stale and can be replaced.
+ */
+async function assertNoLiveSession(pluginId: string, markerPath: string): Promise<void> {
+  const marker = await readDevMarker(markerPath);
+  if (marker && isProcessAlive(marker.pid)) {
+    throw new Error(
+      `A dev session for "${pluginId}" is already running from ${path.dirname(markerPath)} (pid ${marker.pid}). Stop it first, or delete ${markerPath} if that process isn't a dev session.`
+    );
+  }
+}
+
+async function claimDevMarker(
+  pluginId: string,
+  markerPath: string,
+  sessionId: string
+): Promise<void> {
+  const contents = JSON.stringify({ sessionId, pid: process.pid } satisfies DevMarker);
+  try {
+    // Exclusive, so of two sessions starting together in one directory only
+    // one gets past here.
+    await fs.writeFile(markerPath, contents, { flag: "wx" });
+    return;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+  }
+  await assertNoLiveSession(pluginId, markerPath);
+  await fs.writeFile(markerPath, contents);
+}
+
+async function removeOwnMarker(markerPath: string, sessionId: string): Promise<void> {
+  if ((await readDevMarker(markerPath))?.sessionId !== sessionId) return;
+  await fs.unlink(markerPath);
+}
+
+/**
+ * Whether two paths reach the same directory. Compared by identity rather than
+ * by spelling: a junction's readlink, a case-insensitive volume or a symlinked
+ * tmpdir can all spell one directory differently.
+ */
+async function isSameDirectory(a: string, b: string): Promise<boolean> {
+  try {
+    const [statA, statB] = await Promise.all([
+      fs.stat(a, { bigint: true }),
+      fs.stat(b, { bigint: true }),
+    ]);
+    if (statA.ino === 0n || statB.ino === 0n) {
+      // No usable file identity (some network filesystems).
+      return (await fs.realpath(a)) === (await fs.realpath(b));
+    }
+    return statA.dev === statB.dev && statA.ino === statB.ino;
+  } catch {
+    return false;
+  }
+}
+
+/** Whether the link is still a symlink into this session's plugin directory. */
+async function linkTargetsSession(link: DevLink): Promise<boolean> {
+  try {
+    if (!(await fs.lstat(link.linkPath)).isSymbolicLink()) return false;
+  } catch {
+    return false;
+  }
+  return isSameDirectory(link.linkPath, link.pluginDir);
+}
+
+/**
+ * Stamp this session's `.dev-marker` into the plugin dir, then symlink the dir
+ * into the plugins root. The CLI owns this symlink directly (it isn't a real
+ * install, so it bypasses `PluginInstaller` and its content-mutation invariant,
+ * #9292). Never removes a real directory at the link path — that would be an
+ * installed plugin, not ours to delete.
  */
 export async function linkDevPlugin(args: {
   pluginDir: string;
   pluginsRoot: string;
   pluginId: string;
 }): Promise<DevLink> {
-  const { pluginDir, pluginsRoot, pluginId } = args;
+  const { pluginsRoot, pluginId } = args;
+  const pluginDir = path.resolve(args.pluginDir);
   const linkPath = path.join(pluginsRoot, pluginId);
+  const markerPath = path.join(pluginDir, DEV_MARKER_FILENAME);
+  const sessionId = randomUUID();
   const symlinkType = process.platform === "win32" ? "junction" : undefined;
 
-  await fs.mkdir(pluginsRoot, { recursive: true });
+  // The marker goes first, so a link that can't be made leaves nothing behind
+  // but the marker this session can still take back.
+  await claimDevMarker(pluginId, markerPath, sessionId);
 
   let createdSymlink: boolean;
   try {
-    await fs.symlink(pluginDir, linkPath, symlinkType);
-    createdSymlink = true;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-    const stat = await fs.lstat(linkPath);
-    if (!stat.isSymbolicLink()) {
-      throw new Error(
-        `Can't dev-link "${pluginId}": ${linkPath} already exists and isn't a symlink. Remove it (or uninstall the plugin) and try again.`,
-        { cause: err }
-      );
-    }
-    const existingTarget = await fs.readlink(linkPath);
-    const resolvedExisting = path.resolve(path.dirname(linkPath), existingTarget);
-    if (resolvedExisting === path.resolve(pluginDir)) {
-      // Already linked to this plugin — reuse without claiming ownership.
-      createdSymlink = false;
-    } else {
-      await fs.unlink(linkPath);
+    await fs.mkdir(pluginsRoot, { recursive: true });
+    try {
       await fs.symlink(pluginDir, linkPath, symlinkType);
       createdSymlink = true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      const stat = await fs.lstat(linkPath);
+      if (!stat.isSymbolicLink()) {
+        throw new Error(
+          `Can't dev-link "${pluginId}": ${linkPath} already exists and isn't a symlink. Remove it (or uninstall the plugin) and try again.`,
+          { cause: err }
+        );
+      }
+      if (await isSameDirectory(linkPath, pluginDir)) {
+        // Already linked to this plugin — reuse without claiming ownership.
+        createdSymlink = false;
+      } else {
+        // Another directory's link (an older session, or one that crashed). That
+        // session's exit leaves this link alone once it no longer points there.
+        await fs.unlink(linkPath);
+        await fs.symlink(pluginDir, linkPath, symlinkType);
+        createdSymlink = true;
+      }
     }
+  } catch (err) {
+    await removeOwnMarker(markerPath, sessionId).catch(() => {});
+    throw err;
   }
 
-  const markerPath = path.join(linkPath, DEV_MARKER_FILENAME);
-  await fs.writeFile(markerPath, "");
-
-  return { linkPath, markerPath, createdSymlink };
+  return { linkPath, pluginDir, markerPath, sessionId, createdSymlink };
 }
 
 /**
- * Remove the dev artifacts. Idempotent and per-step best-effort (one failing
- * step must not strand the others, lesson #9322): the marker comes off first so
- * a half-torn-down state can never leave a dangling marker that reroutes a
- * future load through the dev worker.
+ * Remove what this session still owns. Idempotent and per-step best-effort (one
+ * failing step must not strand the others, lesson #9322): the marker comes off
+ * first so a half-torn-down state can never leave a dangling marker that
+ * reroutes a future load through the dev worker. A link a newer session has
+ * retargeted, and that session's marker, are left alone.
  */
 export async function cleanupDevLink(link: DevLink): Promise<void> {
   try {
-    await fs.unlink(link.markerPath);
+    await removeOwnMarker(link.markerPath, link.sessionId);
   } catch {
     // best-effort — marker may already be gone
   }
   if (link.createdSymlink) {
     try {
-      await fs.unlink(link.linkPath);
+      // Checked as late as possible: a newer session may have retargeted the
+      // link while this one waited on Daintree.
+      if (await linkTargetsSession(link)) await fs.unlink(link.linkPath);
     } catch {
       // best-effort — symlink may already be gone
     }
@@ -120,9 +250,9 @@ export async function cleanupDevLink(link: DevLink): Promise<void> {
 }
 
 /** Best-effort unload request — Daintree may have been closed first. */
-async function sendDevStop(pluginId: string): Promise<void> {
+async function sendDevStop(pluginId: string, sessionId: string): Promise<void> {
   try {
-    await sendCliRequest("plugin.dev.stop", { pluginId });
+    await sendCliRequest("plugin.dev.stop", { pluginId, sessionId });
   } catch {
     // Daintree gone or unreachable — local fs cleanup still proceeds.
   }
@@ -139,20 +269,24 @@ function killWatchers(watchers: readonly ResultPromise[]): void {
   }
 }
 
-/** Stop the build watchers, ask Daintree to unload, and remove the dev artifacts. */
+/**
+ * Stop the build watchers, ask Daintree to unload, and remove the dev artifacts.
+ * Once a newer session from another directory has taken the link over, the
+ * plugin Daintree has loaded is that session's, so only the local marker goes.
+ */
 async function stopDev(
   pluginId: string,
   link: DevLink,
   watchers: readonly ResultPromise[]
 ): Promise<void> {
   killWatchers(watchers);
-  await sendDevStop(pluginId);
+  if (await linkTargetsSession(link)) await sendDevStop(pluginId, link.sessionId);
   await cleanupDevLink(link);
 }
 
 /**
- * Run the hot-reload dev loop for the plugin in `dir`: build once, symlink it
- * into the plugins root with a `.dev-marker`, tell the running Daintree to load
+ * Run the hot-reload dev loop for the plugin in `dir`: build once, stamp a
+ * `.dev-marker` and symlink it into the plugins root, tell the running Daintree to load
  * + activate it, then keep `vite build --watch` alive so saves rebuild `dist/`
  * (Daintree's dev worker watches `dist/` and reloads). A plugin with a Node
  * server entry gets a watcher per config, so worker sources rebuild too.
@@ -176,6 +310,9 @@ export async function runDev(opts: DevOptions = {}): Promise<void> {
   const pluginId = manifest.name;
   const pluginsRoot = opts.pluginsRoot ?? defaultPluginsRoot();
 
+  // Before the build too, which would rewrite dist/ under the running session.
+  await assertNoLiveSession(pluginId, path.join(dir, DEV_MARKER_FILENAME));
+
   const plan = resolveVitePlan(dir);
 
   // Build once so dist/<main> exists before Daintree loads the plugin —
@@ -187,7 +324,7 @@ export async function runDev(opts: DevOptions = {}): Promise<void> {
   const link = await linkDevPlugin({ pluginDir: dir, pluginsRoot, pluginId });
 
   try {
-    await sendCliRequest("plugin.dev.start", { pluginId });
+    await sendCliRequest("plugin.dev.start", { pluginId, sessionId: link.sessionId });
   } catch (err) {
     await cleanupDevLink(link);
     throw err;
@@ -212,9 +349,7 @@ export async function runDev(opts: DevOptions = {}): Promise<void> {
       watchers.push(watch);
     }
   } catch (err) {
-    killWatchers(watchers);
-    await sendDevStop(pluginId);
-    await cleanupDevLink(link);
+    await stopDev(pluginId, link, watchers);
     throw err;
   }
 
