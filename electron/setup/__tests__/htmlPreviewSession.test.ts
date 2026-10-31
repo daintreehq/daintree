@@ -219,11 +219,19 @@ describe("htmlPreviewSession", () => {
     });
 
     it("refuses previews until the proxy is confirmed, which the setup promise marks", async () => {
-      const ready = setupHtmlPreviewSession();
+      let settled = false;
+      const ready = setupHtmlPreviewSession().then(() => {
+        settled = true;
+      });
+      // Startup awaits this promise before creating windows, so it must not
+      // settle while the proxy is still pending.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(settled).toBe(false);
       expect(gateHtmlPreviewWebviewAttach({}, previewParams())).toBe("refused");
 
       proxyControl.resolve();
       await ready;
+      expect(settled).toBe(true);
       expect(gateHtmlPreviewWebviewAttach({}, previewParams())).toBe("allowed");
     });
 
