@@ -80,6 +80,12 @@ export class RecentTerminalExits {
     return latest;
   }
 
+  /** Every id with an exit kept: panels that may still show after their process ended. */
+  terminalIds(): string[] {
+    this.prune();
+    return [...new Set([...this.exits.values()].map((exit) => exit.terminalId))];
+  }
+
   onExit(listener: (exit: RecentTerminalExit) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);

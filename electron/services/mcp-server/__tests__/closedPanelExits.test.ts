@@ -616,6 +616,19 @@ describe("resolveClosedTerminalGeneration (#15728)", () => {
     ).toBe(3);
   });
 
+  it("names the exit it kept when the ledger has forgotten the terminal", () => {
+    expect(resolveClosedTerminalGeneration("t1", sources(null, 3))).toBe(3);
+  });
+
+  it("names none when a launch ran between the exit it kept and a refused one", () => {
+    expect(
+      resolveClosedTerminalGeneration(
+        "t1",
+        sources(null, 1, { generation: 3, closeReason: "spawn-failed:TERMINAL_ALREADY_LIVE" })
+      )
+    ).toBeUndefined();
+  });
+
   it("passes over a later launch the host refused, which ran nothing", () => {
     expect(
       resolveClosedTerminalGeneration(

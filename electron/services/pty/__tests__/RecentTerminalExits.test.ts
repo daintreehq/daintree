@@ -32,6 +32,7 @@ describe("RecentTerminalExits (#15728)", () => {
 
     expect(exits.latestGeneration("t1")).toBe(3);
     expect(exits.latestGeneration("t3")).toBeUndefined();
+    expect(exits.terminalIds().sort()).toEqual(["t1", "t2"]);
   });
 
   it("forgets exits older than its window", () => {

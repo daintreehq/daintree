@@ -509,7 +509,13 @@ export class McpServerService {
           ledgerEntry: (id) => getLifecycleLedger().getEntry(id),
         });
       },
-      trackedTerminalIds: () => getPtyClient()?.getTrackedTerminalIds() ?? [],
+      // Running ones, and ones whose exit main kept, which a panel may still show.
+      trackedTerminalIds: () => {
+        const client = getPtyClient();
+        return client
+          ? [...new Set([...client.getTrackedTerminalIds(), ...client.recentExits.terminalIds()])]
+          : [];
+      },
       // From exits main kept and the host's own records, never a guess: a
       // record gone with no exit seen, or a host that never answered, is
       // unknown.

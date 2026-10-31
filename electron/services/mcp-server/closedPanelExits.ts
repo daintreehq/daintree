@@ -67,7 +67,11 @@ export function resolveClosedTerminalGeneration(
   if (live !== null) return live;
   const entry = sources.ledgerEntry(terminalId);
   const exited = sources.latestExitGeneration(terminalId);
-  const refused = entry?.closeReason?.startsWith("spawn-failed") === true;
+  // Refused right after the exited one, so no other launch ran in between.
+  const refused =
+    entry?.closeReason?.startsWith("spawn-failed") === true &&
+    exited !== undefined &&
+    entry.generation === exited + 1;
   if (exited !== undefined && (entry === undefined || entry.generation <= exited || refused)) {
     return exited;
   }
