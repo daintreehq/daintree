@@ -640,8 +640,9 @@ describe("registerDiagnosticsHandlers", () => {
       });
 
       registerDiagnosticsHandlers(deps);
-      const result = (await getHandlerFn("system:collect-diagnostics-for-review")()) as
-        DiagnosticsReviewPayload;
+      const result = (await getHandlerFn(
+        "system:collect-diagnostics-for-review"
+      )()) as DiagnosticsReviewPayload;
 
       expect(result.collectedAtMs).toBeGreaterThanOrEqual(now);
       expect(result.logMembers["30m"]).toEqual([

@@ -4,10 +4,7 @@
  * saved output.
  */
 
-import type {
-  DiagnosticsReviewPayload,
-  DiagnosticsTimeWindowId,
-} from "../types/ipc/system.js";
+import type { DiagnosticsReviewPayload, DiagnosticsTimeWindowId } from "../types/ipc/system.js";
 
 export interface ReplacementRule {
   /**

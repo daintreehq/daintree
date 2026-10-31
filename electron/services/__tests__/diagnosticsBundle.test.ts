@@ -194,7 +194,9 @@ describe("parseLogEntries", () => {
   });
 
   it("opens an entry at the rule above a dated header, and only there", () => {
-    const entries = parseLogEntries(`[${OLD}] [START] pid=1\n====\n[${RECENT}] [FATAL] pid=1\n====\n`);
+    const entries = parseLogEntries(
+      `[${OLD}] [START] pid=1\n====\n[${RECENT}] [FATAL] pid=1\n====\n`
+    );
     expect(entries).toEqual([
       { timestamp: Date.parse(OLD), text: `[${OLD}] [START] pid=1\n` },
       { timestamp: Date.parse(RECENT), text: `====\n[${RECENT}] [FATAL] pid=1\n====\n` },
