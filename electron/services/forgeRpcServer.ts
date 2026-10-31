@@ -18,7 +18,7 @@ import type {
   RepoRef,
 } from "../../shared/types/forge.js";
 import { makeForgeProviderId } from "../../shared/utils/forgeProviderIds.js";
-import { getForgeProviderImpl } from "./forgeProviderRegistry.js";
+import { getForgeProviderImpl, getForgeProviderUnavailableError } from "./forgeProviderRegistry.js";
 import { resolveForgeProvider } from "./forgeProviderResolver.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { normalizeIssueBranchKeys } from "./issueBranchClaim.js";
@@ -218,6 +218,10 @@ async function invoke(req: ForgeRpcRequest): Promise<unknown> {
   if (!req.namespacedId) {
     throw new Error(`Forge RPC ${req.method} requires a namespacedId`);
   }
+  // An installed plugin's provider never binds an impl; say so instead of
+  // starting its worker for nothing.
+  const unavailable = getForgeProviderUnavailableError(req.namespacedId);
+  if (unavailable) throw new Error(unavailable);
   // Implicit activation: force the owning plugin's `activate()` to run before
   // we try to resolve its impl, so a plugin that only binds during activate()
   // is reachable on first use without a startup activation gate.
@@ -284,6 +288,9 @@ async function invokeResolveProvider(args: unknown[]): Promise<ForgeResolveProvi
 
   const { pluginId, contribution } = resolved.entry;
   const namespacedId = makeForgeProviderId(pluginId, contribution.id);
+  // The workspace host polls through here: an installed plugin's provider
+  // can't serve it, so miss without starting that plugin's worker each poll.
+  if (resolved.entry.unavailableReason) return miss;
   // Implicit activation before impl lookup — see `invoke` above for rationale.
   await pluginService.activatePluginForForgeProvider(namespacedId);
   const impl = getForgeProviderImpl(namespacedId);

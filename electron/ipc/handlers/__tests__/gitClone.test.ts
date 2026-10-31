@@ -251,6 +251,24 @@ describe("gitClone — forge provider clone path", () => {
     cleanup();
   });
 
+  it("doesn't reach for an installed plugin's provider, which can never run (#15583)", async () => {
+    getActiveProviderMock.mockReturnValue({
+      pluginId: "acme.gitea",
+      contribution: { id: "gitea", name: "Gitea", matches: ["gitea.example.com"] },
+      unavailableReason: "Forge providers currently run only as built-in plugins",
+    });
+
+    const cleanup = registerGitCloneHandlers();
+    const handler = getInvokeHandler(CHANNELS.PROJECT_CLONE_REPO);
+
+    await handler(makeCtxEvent(), makeOptions({ url: "https://gitea.example.com/owner/repo" }));
+
+    expect(getForgeProviderImplMock).not.toHaveBeenCalled();
+    expect(createAuthenticatedGitMock).toHaveBeenCalledOnce();
+
+    cleanup();
+  });
+
   it("uses simple-git when the matching provider has no clone capability", async () => {
     setProvider(undefined);
 

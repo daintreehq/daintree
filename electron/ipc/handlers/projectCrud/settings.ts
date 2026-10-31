@@ -29,6 +29,8 @@ import { validateFolderName } from "../../../../shared/utils/folderName.js";
 import type { ProjectTemplateSelection } from "../../../../shared/types/plugin.js";
 import { defineIpcNamespace, opValidated } from "../../define.js";
 import { ProjectSettingsSaveSchema } from "../../../services/projectSettingsCodec.js";
+import { getForgeProviderUnavailableError } from "../../../services/forgeProviderRegistry.js";
+import { normalizeProviderId } from "../../../../shared/utils/forgeProviderIds.js";
 import type { ProjectSettings } from "../../../types/index.js";
 import type { HandlerDependencies } from "../../types.js";
 
@@ -71,6 +73,18 @@ export function registerProjectSettingsHandlers(deps: HandlerDependencies = {}):
   ): Promise<void> => {
     const { projectId, settings } = payload;
     const previousSettings = await projectStore.getProjectSettings(projectId);
+    // Refuse a newly picked provider that can never run (an installed plugin's).
+    // Only a changed binding is checked, so a stored one doesn't block saving
+    // unrelated settings, and clearing it always works.
+    for (const [key, role] of [
+      ["forgeProviderOverride", "code"],
+      ["issueProviderOverride", "issues"],
+    ] as const) {
+      const next = normalizeProviderId(settings[key]);
+      if (next === null || next === normalizeProviderId(previousSettings[key])) continue;
+      const unavailable = getForgeProviderUnavailableError(next, role);
+      if (unavailable) throw new Error(unavailable);
+    }
     await projectStore.saveProjectSettings(projectId, settings as ProjectSettings);
     const project = projectStore.getProjectById(projectId);
     if (project?.inRepoSettings) {

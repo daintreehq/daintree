@@ -5,6 +5,7 @@ import { store } from "../../store.js";
 import { checkRateLimit, typedHandle } from "../utils.js";
 import {
   getForgeProviderBaseImpl,
+  getForgeProviderUnavailableError,
   getRegisteredForgeProviders,
 } from "../../services/forgeProviderRegistry.js";
 import { resolveForgeProvider } from "../../services/forgeProviderResolver.js";
@@ -335,6 +336,12 @@ export function registerForgeSettingsHandlers(): () => void {
       // "Unknown provider" flash in the renderer (#8451).
       const next = normalizeProviderId(providerId);
       const previous = readDefaultProviderId();
+      // A new default that can never run is refused; one already stored stays
+      // as it is, so re-saving it or clearing it still works.
+      if (next !== null && next !== previous) {
+        const unavailable = getForgeProviderUnavailableError(next, "code");
+        if (unavailable) throw new Error(unavailable);
+      }
       store.set("forgeDefaultProviderId", next);
       // A live host reads the default only at load-project, and a retained one
       // can live for as long as its project's view stays cached (#12519).

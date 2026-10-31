@@ -18,6 +18,28 @@ import type { SettingsSelectOption } from "@/components/Settings/SettingsSelect"
 const AUTO_DETECT = "__auto__";
 const USE_CODE_FORGE = "__code__";
 
+// A provider that can't run (an installed plugin's) stays listed so a stored
+// choice still reads correctly, but can't be picked again.
+function providerOption(p: RegisteredForgeProvider): SettingsSelectOption {
+  const value = makeForgeProviderId(p.pluginId, p.contribution.id);
+  return p.unavailableReason
+    ? {
+        value,
+        label: `${p.contribution.name} (unavailable)`,
+        description: p.unavailableReason,
+        disabled: true,
+      }
+    : { value, label: p.contribution.name };
+}
+
+function findProvider(
+  providers: RegisteredForgeProvider[],
+  id: string | null
+): RegisteredForgeProvider | undefined {
+  if (id === null) return undefined;
+  return providers.find((p) => makeForgeProviderId(p.pluginId, p.contribution.id) === id);
+}
+
 interface CodeForgeTabProps {
   forgeRemote: string | undefined;
   onForgeRemoteChange: (remote: string | undefined) => void;
@@ -124,17 +146,12 @@ export function CodeForgeTab({
   const codeProviders = providers.filter((p) => forgeProviderServesRole(p.contribution, "code"));
   const issueProviders = providers.filter((p) => forgeProviderServesRole(p.contribution, "issues"));
 
-  const savedProviderKnown =
-    forgeProviderOverride === null ||
-    codeProviders.some(
-      (p) => makeForgeProviderId(p.pluginId, p.contribution.id) === forgeProviderOverride
-    );
+  const savedProvider = findProvider(codeProviders, forgeProviderOverride);
+  const savedProviderKnown = forgeProviderOverride === null || savedProvider !== undefined;
 
+  const savedIssueProvider = findProvider(issueProviders, issueProviderOverride);
   const savedIssueProviderKnown =
-    issueProviderOverride === null ||
-    issueProviders.some(
-      (p) => makeForgeProviderId(p.pluginId, p.contribution.id) === issueProviderOverride
-    );
+    issueProviderOverride === null || savedIssueProvider !== undefined;
 
   const remoteOptions: SettingsSelectOption[] = [
     { value: AUTO_DETECT, label: "Auto-detect" },
@@ -149,10 +166,7 @@ export function CodeForgeTab({
 
   const providerOptions: SettingsSelectOption[] = [
     { value: AUTO_DETECT, label: "Auto-detect" },
-    ...codeProviders.map((p) => ({
-      value: makeForgeProviderId(p.pluginId, p.contribution.id),
-      label: p.contribution.name,
-    })),
+    ...codeProviders.map(providerOption),
     ...(!savedProviderKnown && forgeProviderOverride !== null
       ? [{ value: forgeProviderOverride, label: `${forgeProviderOverride} (unavailable)` }]
       : []),
@@ -160,10 +174,7 @@ export function CodeForgeTab({
 
   const issueProviderOptions: SettingsSelectOption[] = [
     { value: USE_CODE_FORGE, label: "Use forge provider" },
-    ...issueProviders.map((p) => ({
-      value: makeForgeProviderId(p.pluginId, p.contribution.id),
-      label: p.contribution.name,
-    })),
+    ...issueProviders.map(providerOption),
     ...(!savedIssueProviderKnown && issueProviderOverride !== null
       ? [{ value: issueProviderOverride, label: `${issueProviderOverride} (unavailable)` }]
       : []),
@@ -258,6 +269,7 @@ export function CodeForgeTab({
               onForgeProviderOverrideChange(value === AUTO_DETECT ? null : value)
             }
             options={providerOptions}
+            error={savedProvider?.unavailableReason}
             isModified={forgeProviderOverride !== null}
             onReset={() => onForgeProviderOverrideChange(null)}
           />
@@ -275,6 +287,7 @@ export function CodeForgeTab({
               onIssueProviderOverrideChange(value === USE_CODE_FORGE ? null : value)
             }
             options={issueProviderOptions}
+            error={savedIssueProvider?.unavailableReason}
             isModified={issueProviderOverride !== null}
             onReset={() => onIssueProviderOverrideChange(null)}
           />

@@ -5,6 +5,7 @@ import {
   getForgeIssueProviderImpl,
   getForgeProviderBaseImpl,
   getForgeProviderImpl,
+  getForgeProviderUnavailableError,
   listMatchingProviders,
 } from "../../services/forgeProviderRegistry.js";
 import { resolveForgeProvider } from "../../services/forgeProviderResolver.js";
@@ -418,6 +419,9 @@ export async function resolveForCwd(
   }
 
   const namespaceId = makeForgeProviderId(resolved.entry.pluginId, resolved.entry.contribution.id);
+  // Before implicit activation: an installed plugin's provider never binds an
+  // impl, so activating would only start its worker to fail the same way.
+  throwIfForgeProviderUnavailable(namespaceId);
   let impl = getForgeProviderImpl(namespaceId);
   if (!impl) {
     // Implicit activation, mirroring the forge RPC server: lazy plugins
@@ -687,6 +691,7 @@ async function resolveIssueOverride(
   }
 
   const namespaceId = makeForgeProviderId(entry.pluginId, entry.contribution.id);
+  throwIfForgeProviderUnavailable(namespaceId);
   let impl = getForgeIssueProviderImpl(namespaceId);
   if (!impl) {
     const pluginService = await getPluginService();
@@ -730,9 +735,20 @@ async function resolveIssueOverride(
   };
 }
 
+/**
+ * Throws the accurate error for a provider that can't run at all (an installed
+ * plugin's), where "not activated. Activate it in Settings." would send the
+ * user after a fix that doesn't exist.
+ */
+function throwIfForgeProviderUnavailable(namespaceId: string): void {
+  const unavailable = getForgeProviderUnavailableError(namespaceId);
+  if (unavailable) throw new Error(unavailable);
+}
+
 export function getImplForNamespace(namespaceId: string): ForgeProviderImpl {
   const impl = getForgeProviderImpl(namespaceId);
   if (!impl) {
+    throwIfForgeProviderUnavailable(namespaceId);
     throw new Error(`Forge provider "${namespaceId}" not activated. Activate it in Settings.`);
   }
   return impl;
@@ -742,6 +758,7 @@ export function getImplForNamespace(namespaceId: string): ForgeProviderImpl {
 export function getIssueImplForNamespace(namespaceId: string): ForgeIssueProviderImpl {
   const impl = getForgeIssueProviderImpl(namespaceId);
   if (!impl) {
+    throwIfForgeProviderUnavailable(namespaceId);
     throw new Error(`Forge provider "${namespaceId}" not activated. Activate it in Settings.`);
   }
   return impl;
@@ -761,6 +778,8 @@ export async function getImplForNamespaceActivating(
 ): Promise<ForgeProviderBaseImpl | undefined> {
   const existing = getForgeProviderBaseImpl(namespaceId);
   if (existing) return existing;
+  // Nothing to activate: an installed plugin's provider never binds an impl.
+  if (getForgeProviderUnavailableError(namespaceId)) return undefined;
   const pluginService = await getPluginService();
   await pluginService.activatePluginForForgeProvider(namespaceId);
   return getForgeProviderBaseImpl(namespaceId);

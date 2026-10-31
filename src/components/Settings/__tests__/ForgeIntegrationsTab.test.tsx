@@ -2,7 +2,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import fs from "fs/promises";
 import path from "path";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ForgeIntegrationsTab } from "../ForgeIntegrationsTab";
 import { useProjectStore } from "@/store/projectStore";
 import type {
@@ -352,6 +352,63 @@ describe("ForgeIntegrationsTab", () => {
     await waitFor(() => {
       expect(screen.getByText("Gitea")).toBeTruthy();
       expect(screen.getByText("by project setting")).toBeTruthy();
+    });
+  });
+});
+
+describe("ForgeIntegrationsTab — installed plugins' providers (#15583)", () => {
+  const REASON = "Forge providers currently run only as built-in plugins";
+  const github = makeProvider("daintree.github", "github", "GitHub", ["github.com"]);
+  const gitea: ForgeProviderEntry = {
+    ...makeProvider("acme.gitea", "gitea", "Gitea", ["gitea.example.com"]),
+    unavailableReason: REASON,
+  };
+
+  it("offers a built-in as the default but not an installed plugin's provider", async () => {
+    installForgeMocks({ providers: [github, gitea] });
+    render(<ForgeIntegrationsTab />);
+
+    const trigger = await waitFor(() => {
+      const combobox = screen.getByRole("combobox") as HTMLButtonElement;
+      expect(combobox.disabled).toBe(false);
+      return combobox;
+    });
+    // No reason beside the row while the stored default is fine.
+    expect(screen.queryByText(REASON)).toBeNull();
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+
+    const options = await screen.findAllByRole("option");
+    const byText = (text: string) => options.find((o) => o.textContent?.includes(text));
+    expect(byText("Gitea (unavailable)")?.getAttribute("aria-disabled")).toBe("true");
+    expect(byText("Gitea (unavailable)")?.textContent).toContain(REASON);
+    const builtin = byText("GitHub");
+    expect(builtin).toBeDefined();
+    expect(builtin?.getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("shows a stored default naming one as unavailable, with the reason", async () => {
+    installForgeMocks({ providers: [github, gitea], defaultProviderId: "acme.gitea.gitea" });
+    render(<ForgeIntegrationsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("combobox").textContent).toContain("Gitea (unavailable)");
+      expect(screen.getByText(REASON)).toBeTruthy();
+    });
+  });
+
+  it("marks a remote routed to one as unavailable", async () => {
+    const url = "https://gitea.example.com/o/r.git";
+    installForgeMocks({
+      providers: [github, gitea],
+      remotes: [makeRemote("origin", url)],
+      resolveByRemote: { [url]: { entry: gitea, resolvedVia: "hostname" } },
+    });
+    setProject({ id: "proj-gitea", path: "/gitea", name: "Gitea repo" } as Project);
+
+    render(<ForgeIntegrationsTab />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/by hostname\s*· unavailable/)).toBeTruthy();
     });
   });
 });
