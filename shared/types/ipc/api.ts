@@ -1619,8 +1619,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onWatchNavigate(
       callback: (context: { panelId: string; panelTitle: string; worktreeId?: string }) => void
     ): () => void;
-    /** Sync the renderer's watched panel set to main so AgentNotificationService can gate on it */
-    syncWatchedPanels(panelIds: string[]): void;
+    /**
+     * Sync the renderer's watched panel set to main so AgentNotificationService
+     * can gate on it, with the view's selected worktree when given (left as last
+     * reported when omitted), so alert suppression judges this view's selection.
+     */
+    syncWatchedPanels(panelIds: string[], context?: { activeWorktreeId: string | null }): void;
     /** Acknowledge a waiting agent escalation (cancels pending escalation timer) */
     acknowledgeWaiting(terminalId: string): void;
     /** Acknowledge working pulse (cancels periodic pulse sound for the terminal) */
