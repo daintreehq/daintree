@@ -31,6 +31,35 @@ const QUICK_CHECK_DRAIN_TIMEOUT_MS = 2000;
 // backup and keep the last good one.
 const MAX_BACKUP_VERIFY_FAILURES = 3;
 
+export type BackupFileState =
+  { kind: "saved"; writtenAt: number } | { kind: "missing" } | { kind: "unreadable" };
+
+/**
+ * Backups stopped mid-session. `corruption`: the live database failed its full
+ * check, so the next launch will attempt recovery. `verification`: backup
+ * candidates kept failing their check while the live database was never found
+ * corrupt, so nothing is recovered. `backup` is the preserved file as found
+ * when the latch was set.
+ */
+export interface BackupSuspensionNotice {
+  reason: "corruption" | "verification";
+  backup: BackupFileState;
+}
+
+type BackupSuspensionListener = (notice: BackupSuspensionNotice) => void;
+
+function readBackupFileState(backupPath: string): BackupFileState {
+  try {
+    return { kind: "saved", writtenAt: fs.statSync(backupPath).mtimeMs };
+  } catch (error) {
+    // Only a confirmed absence may be reported as "no backup": a file that
+    // exists but can't be read is still what the next launch will try.
+    return (error as NodeJS.ErrnoException | null)?.code === "ENOENT"
+      ? { kind: "missing" }
+      : { kind: "unreadable" };
+  }
+}
+
 class DatabaseMaintenanceService {
   private timer: ReturnType<typeof setInterval> | null = null;
   private removeSuspendListener: (() => void) | null = null;
@@ -48,6 +77,8 @@ class DatabaseMaintenanceService {
   // proof the live DB is bad, so they never force the next boot to recover.
   private backupsSuspended = false;
   private consecutiveVerifyFailures = 0;
+  private readonly suspensionListeners = new Set<BackupSuspensionListener>();
+  private readonly suspensionsAnnounced = new Set<BackupSuspensionNotice["reason"]>();
 
   initialize(wasCleanExit = false): void {
     if (this.initialized) return;
@@ -147,6 +178,37 @@ class DatabaseMaintenanceService {
    */
   restoreRecovery(recovery: DatabaseRecovery): void {
     this.pendingRecovery ??= recovery;
+  }
+
+  /**
+   * Told once per reason when backups stop mid-session. Boot-time suspensions
+   * are not reported here: they precede any renderer, and a recovery that ran
+   * reaches the user through `consumeRecovery()`.
+   */
+  onBackupsSuspended(listener: BackupSuspensionListener): () => void {
+    this.suspensionListeners.add(listener);
+    return () => {
+      this.suspensionListeners.delete(listener);
+    };
+  }
+
+  private announceSuspension(reason: BackupSuspensionNotice["reason"]): void {
+    // A latch reached while dispose() drains belongs to the next launch, whose
+    // recovery (or deferred check) reports it there.
+    if (this.disposed || this.suspensionsAnnounced.has(reason)) return;
+    // Corruption is the stronger claim; a later "backups stopped" would only
+    // muddy it.
+    if (reason === "verification" && this.suspensionsAnnounced.has("corruption")) return;
+    this.suspensionsAnnounced.add(reason);
+
+    const notice: BackupSuspensionNotice = { reason, backup: readBackupFileState(getBackupPath()) };
+    for (const listener of this.suspensionListeners) {
+      try {
+        listener(notice);
+      } catch (error) {
+        console.warn("[DatabaseMaintenance] Backup suspension listener failed:", error);
+      }
+    }
   }
 
   startMaintenance(): void {
@@ -298,6 +360,7 @@ class DatabaseMaintenanceService {
           `[DatabaseMaintenance] Deferred quick_check reported corruption in ${getDbPath()} — backups suspended to preserve the existing backup:`,
           result
         );
+        this.announceSuspension("corruption");
         return false;
       })
       .catch((error: unknown) => {
@@ -427,6 +490,7 @@ class DatabaseMaintenanceService {
       console.error(
         `[DatabaseMaintenance] ${this.consecutiveVerifyFailures} backups in a row failed verification — suspending backups to preserve the existing backup at ${backupPath}`
       );
+      this.announceSuspension("verification");
     }
   }
 

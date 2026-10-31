@@ -163,6 +163,10 @@ vi.mock("../../window/deferredInitQueue.js", () => ({
   signalFirstInteractive: vi.fn(),
 }));
 
+vi.mock("../../services/databaseBackupNotice.js", () => ({
+  noteDatabaseNoticeRendererReady: vi.fn(),
+}));
+
 vi.mock("../../utils/performance.js", () => ({
   markPerformance: vi.fn(),
   isPerformanceCaptureEnabled: vi.fn(() => false),
@@ -199,6 +203,7 @@ vi.mock("../../ipc/utils.js", async (importOriginal) => {
 });
 
 import { registerAppStateHandlers } from "../handlers/app/state.js";
+import { noteDatabaseNoticeRendererReady } from "../../services/databaseBackupNotice.js";
 import { CHANNELS } from "../channels.js";
 import { consumePrefetchedHydrateResult } from "../../services/prefetchHydrateCache.js";
 import {
@@ -2481,5 +2486,20 @@ describe("app:set-state grid layout patch (#14700)", () => {
     await pending;
 
     expect(stored.panelGridConfig).toEqual({ strategy: "fixed-rows", value: 7 });
+  });
+});
+
+describe("app:first-interactive handler", () => {
+  it("marks the sender ready for a held database backup notice", async () => {
+    vi.mocked(noteDatabaseNoticeRendererReady).mockClear();
+    ipcHandlers.clear();
+    const cleanup = registerAppStateHandlers();
+    const handler = ipcHandlers.get(CHANNELS.APP_FIRST_INTERACTIVE);
+    if (!handler) throw new Error("app:first-interactive handler not registered");
+
+    await handler(makeInvokeEvent(7));
+    cleanup();
+
+    expect(noteDatabaseNoticeRendererReady).toHaveBeenCalledExactlyOnceWith(7);
   });
 });

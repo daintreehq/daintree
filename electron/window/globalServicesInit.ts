@@ -20,6 +20,7 @@ import {
 import { initializeSystemSleepService } from "../services/SystemSleepService.js";
 import { initializeOsDndService } from "../services/OsDndService.js";
 import { getDatabaseMaintenanceService } from "../services/DatabaseMaintenanceService.js";
+import { installDatabaseBackupNotice } from "../services/databaseBackupNotice.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 // Free for eager import: PtyClient already value-imports HelpSessionService,
 // so this static edge adds zero boot cost — keep it that way.
@@ -683,6 +684,7 @@ export async function initGlobalServices(
   registerDeferredTask({
     name: "database-maintenance",
     run: () => {
+      installDatabaseBackupNotice();
       getDatabaseMaintenanceService().startMaintenance();
     },
   });
