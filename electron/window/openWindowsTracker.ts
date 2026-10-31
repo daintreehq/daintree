@@ -245,7 +245,11 @@ export function buildOpenWindowRecords(
   excludeWindowId?: number,
   liveWorkspaceIds?: ReadonlySet<string>
 ): OpenWindowRecord[] {
-  const { entries, claimed } = collectWindowRecords(registry, excludeWindowId, MAX_RESTORED_WINDOWS);
+  const { entries, claimed } = collectWindowRecords(
+    registry,
+    excludeWindowId,
+    MAX_RESTORED_WINDOWS
+  );
   return attachOrphanedLiveWorkspaces(
     entries.map((entry) => entry.record),
     claimed,

@@ -243,7 +243,14 @@ describe("OOM recreation records (#15564)", () => {
   it("captures the window's record as the manifest holds it, without orphaned live workspaces", () => {
     const registry = makeRegistry([
       { windowId: 1, projectId: "a", views: [["a", 3]] },
-      { windowId: 2, projectId: "b", views: [["b", 2], ["c", 1]] },
+      {
+        windowId: 2,
+        projectId: "b",
+        views: [
+          ["b", 2],
+          ["c", 1],
+        ],
+      },
     ]);
     setPendingBackgroundRestores(2, ["a", "d"]);
     initOpenWindowsTracker({
