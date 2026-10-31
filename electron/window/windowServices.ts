@@ -64,7 +64,7 @@ import {
 } from "./openDirHandler.js";
 import { holdWindowForOpen, isWindowBound } from "./windowOpenState.js";
 import { readOpenFoldersInNewWindow } from "./windowOpeningConfig.js";
-import { resetDeferredQueue } from "./deferredInitQueue.js";
+import { resetDeferredQueueForNextWindow } from "./deferredInitQueue.js";
 import { ensureGlobalServicesInitialized } from "./globalServicesInit.js";
 import {
   createWindowDepsAdopter,
@@ -942,18 +942,20 @@ export async function setupWindowServices(
   // in-flight async teardown of the global singletons. Keeping globals alive
   // makes the dock-reactivation path a no-op past `initGlobalServices()`.
   //
-  // We still reset the deferred init queue so a future window can re-register
-  // per-window-context deferred tasks. The `globalServicesInitialized` guard
-  // stays true, so `initGlobalServices()` itself does NOT re-run.
+  // We still reset the deferred init queue so a future window's per-window
+  // tasks wait for its own first-interactive. The `globalServicesInitialized`
+  // guard stays true, so `initGlobalServices()` itself does NOT re-run — which
+  // is why the reset waits until the global tasks still queued have drained.
   win.on("closed", () => {
     if (windowRegistry && windowRegistry.size > 0) {
       // Other windows still open — nothing to do at this level.
       return;
     }
-    // A Host owns the queue: it drained it for the process, and a reset while
-    // that drain is still running would abandon the global tasks it had left.
+    // A Host owns the queue: it released the drain for the process with no
+    // renderer to wait on, so later windows join it rather than starting a
+    // cycle of their own.
     if (isHostRuntimeActive()) return;
-    resetDeferredQueue();
+    resetDeferredQueueForNextWindow();
   });
 
   return "ok";

@@ -111,6 +111,9 @@ export async function initPerWindowServices(
   registerDeferredTask({
     name: `cli-availability-check:${win.id}`,
     run: async () => {
+      // The last-window close leaves queued tasks to drain (#15562), so a
+      // window can be gone before its own task starts.
+      if (win.isDestroyed()) return;
       if (
         reusableAvailability &&
         cliService.getFreshAvailability(CLI_AVAILABILITY_REUSE_MS) === reusableAvailability
@@ -144,6 +147,9 @@ export async function initPerWindowServices(
     registerDeferredTask({
       name: `plugin-menu-rebuild:${win.id}`,
       run: async () => {
+        // Leaves `pluginMenuInitSettled` unset, so a replacement window opened
+        // before plugin init settles still queues its own rebuild.
+        if (win.isDestroyed()) return;
         try {
           const { pluginService } = await import("../services/PluginService.js");
           await pluginService.waitForCatalog();
