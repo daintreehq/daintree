@@ -33,7 +33,7 @@ const ENV_OVERRIDES = {
 // execa's default maxBuffer, past which shell-env treated the shell as failed.
 const MAX_STDOUT_LENGTH = 100_000_000;
 
-// strip-ansi 7 (ansi-regex 6): OSC sequences, then CSI and related.
+// strip-ansi 7 (ansi-regex 6.3): OSC sequences, then CSI and related.
 const ANSI_PATTERN =
   /(?:\u001B\][^\u0007\u001B\u009C]*(?:\u0007|\u001B\|\u009C))|[\u001B\u009B][[\]()#;?]*(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]/g;
 
@@ -47,58 +47,63 @@ export interface LoginShellEnvironment {
 export interface LoginShellReadOptions {
   /** Budget for the whole read, named shell and fallbacks together. */
   timeoutMs: number;
-  /** How long a shell gets after SIGTERM before its process group is sent SIGKILL. */
+  /** How long a shell's process group gets after SIGTERM before SIGKILL. */
   killGraceMs: number;
 }
 
-interface ActiveRead {
-  result: Promise<LoginShellEnvironment | null>;
-}
-
-let activeRead: ActiveRead | null = null;
+let activeRead: Promise<LoginShellEnvironment | null> | null = null;
+// shell-env settled these once, when it was first imported.
+let unnamedShells: string[] | null = null;
 
 /**
  * Runs the named shell, then shell-env's unnamed chain if it fails, all inside
- * one deadline. Resolves `null` once the deadline passes; the shell then running
- * has its whole process group terminated, and nothing it prints afterwards is
- * used. One read at a time: a caller arriving while a read is in flight, or
- * while a timed-out shell has not yet exited, shares that read rather than
- * starting another shell next to it.
+ * one deadline. Resolves `null` once the deadline passes: the shell then running
+ * has its process group terminated, and nothing it prints afterwards is used.
+ * One read at a time: a caller arriving while a read is in flight, or while a
+ * timed-out shell has not yet exited, shares that read instead of starting
+ * another shell next to it.
  */
 export function readLoginShellEnvironment(
   namedShell: string | undefined,
   options: LoginShellReadOptions
 ): Promise<LoginShellEnvironment | null> {
-  if (activeRead) return activeRead.result;
-  activeRead = startRead(namedShell, options);
-  return activeRead.result;
+  activeRead ??= startRead(namedShell, options, (read) => {
+    if (activeRead === read) activeRead = null;
+  });
+  return activeRead;
 }
 
 function startRead(
   namedShell: string | undefined,
-  { timeoutMs, killGraceMs }: LoginShellReadOptions
-): ActiveRead {
+  { timeoutMs, killGraceMs }: LoginShellReadOptions,
+  release: (read: Promise<LoginShellEnvironment | null>) => void
+): Promise<LoginShellEnvironment | null> {
   let finished = false;
   // The shell currently running, until it has exited.
   let liveShell: ChildProcess | null = null;
-  // Set from the deadline until the group has been sent SIGKILL.
+  // The shell being read, until its output has closed: a child it left behind
+  // can hold that open after the shell itself is gone.
+  let attempt: ChildProcess | null = null;
+  // The timed-out shell whose group is still owed SIGKILL.
+  let killTarget: ChildProcess | null = null;
   let killTimer: NodeJS.Timeout | undefined;
   let resolveResult!: (value: LoginShellEnvironment | null) => void;
   const result = new Promise<LoginShellEnvironment | null>((resolve) => {
     resolveResult = resolve;
   });
-  const self: ActiveRead = { result };
 
-  // execa's `cleanup`: a shell still running when Daintree exits goes with it.
+  // Stands in for execa's `cleanup`: a shell still running when Daintree exits
+  // goes with it.
   const onAppExit = () => {
     if (liveShell) signalGroup(liveShell, "SIGKILL");
+    if (killTarget && killTarget !== liveShell) signalGroup(killTarget, "SIGKILL");
   };
   process.on("exit", onAppExit);
 
   const releaseIfIdle = () => {
-    if (!finished || liveShell || killTimer !== undefined) return;
+    if (!finished || liveShell || killTarget) return;
     process.off("exit", onAppExit);
-    if (activeRead === self) activeRead = null;
+    release(result);
   };
 
   const finish = (value: LoginShellEnvironment | null) => {
@@ -110,17 +115,20 @@ function startRead(
   };
 
   const deadline = setTimeout(() => {
-    const shellToKill = liveShell;
+    const shell = attempt;
     finish(null);
-    if (!shellToKill) return;
+    if (!shell) return;
     // The group, not just the shell: whatever the profile was blocked on would
-    // otherwise outlive it and keep running.
-    signalGroup(shellToKill, "SIGTERM");
+    // otherwise outlive it. The shell exiting early cancels nothing, since what
+    // it started may still be running.
+    killTarget = shell;
+    signalGroup(shell, "SIGTERM");
     killTimer = setTimeout(() => {
-      killTimer = undefined;
-      signalGroup(shellToKill, "SIGKILL");
+      signalGroup(shell, "SIGKILL");
+      killTarget = null;
       releaseIfIdle();
     }, killGraceMs);
+    killTimer.unref?.();
   }, timeoutMs);
 
   const runShell = (shell: string): Promise<Record<string, string> | null> =>
@@ -144,6 +152,7 @@ function startRead(
         return;
       }
       liveShell = child;
+      attempt = child;
 
       let stdout = "";
       let overflowed = false;
@@ -159,6 +168,8 @@ function startRead(
         releaseIfIdle();
       };
 
+      child.stdin?.on("error", () => {});
+      child.stdout?.on("error", () => {});
       child.stdout?.setEncoding("utf8");
       child.stdout?.on("data", (chunk: string | Buffer) => {
         if (overflowed) return;
@@ -170,12 +181,16 @@ function startRead(
         }
       });
       child.on("error", () => {
-        // A shell that never started has no `exit` to wait for.
-        if (child.pid === undefined) exited();
+        // A shell that never started has no `exit` to wait for. One that did
+        // settles on `close`, so the next shell never runs beside it.
+        if (child.pid !== undefined) return;
+        if (attempt === child) attempt = null;
+        exited();
         settle(null);
       });
       child.on("exit", exited);
       child.on("close", (code: number | null) => {
+        if (attempt === child) attempt = null;
         exited();
         settle(code === 0 && !overflowed ? parseEnv(stdout) : null);
       });
@@ -186,28 +201,30 @@ function startRead(
       const env = await runShell(namedShell);
       if (env) return { env, namedShell };
     }
-    for (const shell of unnamedShells()) {
+    for (const shell of getUnnamedShells()) {
       const env = await runShell(shell);
       if (env) return { env };
     }
     return { env: ownEnvironment() };
   })().then(finish, () => finish(null));
 
-  return self;
+  return result;
 }
 
 function signalGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+  const pid = child.pid;
+  // A negative 0 or 1 would signal Daintree's own group, or every process.
+  if (pid === undefined || !Number.isInteger(pid) || pid <= 1) return;
   try {
-    if (child.pid !== undefined) process.kill(-child.pid, signal);
-    else child.kill(signal);
+    process.kill(-pid, signal);
   } catch {
     // Already gone.
   }
 }
 
-/** shell-env's parse: the text between the first two delimiters, one `KEY=value` per line. */
+/** shell-env's parse: the text after the first delimiter, one `KEY=value` per line. */
 function parseEnv(stdout: string): Record<string, string> | null {
-  const section = stdout.split(DELIMITER)[1];
+  const section = stripFinalNewline(stdout).split(DELIMITER)[1];
   if (section === undefined) return null;
   const env: Record<string, string> = {};
   for (const line of section.replace(ANSI_PATTERN, "").split("\n").filter(Boolean)) {
@@ -217,10 +234,22 @@ function parseEnv(stdout: string): Record<string, string> | null {
   return env;
 }
 
+// execa's `stripFinalNewline`: one trailing LF, then one trailing CR.
+function stripFinalNewline(text: string): string {
+  const withoutLf = text.endsWith("\n") ? text.slice(0, -1) : text;
+  return withoutLf.endsWith("\r") ? withoutLf.slice(0, -1) : withoutLf;
+}
+
 /** default-shell 2.2, then shell-env's fallbacks without it. */
-function unnamedShells(): string[] {
-  const defaultShell = detectDefaultShell();
-  return [defaultShell, ...["/bin/zsh", "/bin/bash"].filter((shell) => shell !== defaultShell)];
+function getUnnamedShells(): string[] {
+  if (!unnamedShells) {
+    const defaultShell = detectDefaultShell();
+    unnamedShells = [
+      defaultShell,
+      ...["/bin/zsh", "/bin/bash"].filter((shell) => shell !== defaultShell),
+    ];
+  }
+  return unnamedShells;
 }
 
 function detectDefaultShell(): string {
