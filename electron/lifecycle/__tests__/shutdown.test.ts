@@ -617,21 +617,29 @@ describe("registerShutdownHandler", () => {
 
   describe("termination while the quit warning is open (#15563)", () => {
     async function setupOpenWarning() {
-      let answer: (confirmed: boolean) => void = () => {};
+      const warning = {
+        answer: (_confirmed: boolean) => {},
+        fail: (_err: Error) => {},
+      };
       quitWarningMock.getActiveAgentCount.mockReturnValue(1);
       quitWarningMock.showQuitWarning.mockImplementationOnce(
-        () => new Promise<boolean>((resolve) => (answer = resolve))
+        () =>
+          new Promise<boolean>((resolve, reject) => {
+            warning.answer = resolve;
+            warning.fail = reject;
+          })
       );
+      const coordinator = await import("../shutdownCoordinator.js");
+      const startShutdown = vi.spyOn(coordinator, "startShutdown");
       const ctx = await setup({
         windowRegistry: {
           getPrimary: () => ({ browserWindow: {} as Electron.BrowserWindow }),
         } as unknown as ShutdownDeps["windowRegistry"],
       });
-      const coordinator = await import("../shutdownCoordinator.js");
       const userQuit = ctx.beforeQuitCb(makeEvent());
       expect(quitWarningMock.showQuitWarning).toHaveBeenCalledOnce();
       expect(coordinator.getActiveShutdown()).toBeNull();
-      return { ...ctx, coordinator, userQuit, answer: (confirmed: boolean) => answer(confirmed) };
+      return { ...ctx, coordinator, startShutdown, userQuit, warning };
     }
 
     function nextExit() {
@@ -643,34 +651,64 @@ describe("registerShutdownHandler", () => {
     it.each([
       ["Quit Anyway", true],
       ["Cancel", false],
+      ["a failed dialog", new Error("message box failed")],
     ])(
-      "lets a signal claim the shutdown at once, and the warning's late %s adds no second chain",
-      async (_answer, confirmed) => {
-        const { beforeQuitCb, coordinator, userQuit, answer } = await setupOpenWarning();
-        const exited = nextExit();
+      "lets a signal claim the shutdown at once, and the warning's late %s adds no second request",
+      async (_answer, outcome) => {
+        const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        try {
+          const { beforeQuitCb, coordinator, startShutdown, userQuit, warning } =
+            await setupOpenWarning();
+          const { isExitConfirmationPending } = await import("../attachedShells.js");
+          const exited = nextExit();
 
-        signalShutdownMock.isSignalShutdown.mockReturnValue(true);
-        const signalQuit = makeEvent();
-        void beforeQuitCb(signalQuit);
+          signalShutdownMock.isSignalShutdown.mockReturnValue(true);
+          const signalQuit = makeEvent();
+          void beforeQuitCb(signalQuit);
 
-        // Claimed inside the signal's own app.quit(), with the warning still open.
-        expect(signalQuit.preventDefault).toHaveBeenCalled();
-        expect(coordinator.getActiveShutdown()).toMatchObject({
-          initiator: "app-quit",
-          phase: "cleaning",
-        });
-        expect(deferredInitQueueMock.haltDeferredQueue).toHaveBeenCalledOnce();
+          // Claimed inside the signal's own app.quit(), with the warning still open.
+          expect(signalQuit.preventDefault).toHaveBeenCalled();
+          expect(coordinator.getActiveShutdown()).toMatchObject({
+            initiator: "app-quit",
+            phase: "cleaning",
+          });
+          expect(startShutdown).toHaveBeenCalledExactlyOnceWith("app-quit", expect.any(Function));
+          expect(crashRecoveryMock.takeBackup).toHaveBeenCalledOnce();
 
-        answer(confirmed);
-        await userQuit;
-        await exited;
+          if (typeof outcome === "boolean") warning.answer(outcome);
+          else warning.fail(outcome);
+          await userQuit;
+          expect(isExitConfirmationPending()).toBe(false);
+          await exited;
 
-        expect(deferredInitQueueMock.haltDeferredQueue).toHaveBeenCalledOnce();
-        expect(openWindowsTrackerMock.freezeAndSnapshotOpenWindows).toHaveBeenCalledOnce();
-        expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledOnce();
-        expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(0);
+          expect(startShutdown).toHaveBeenCalledOnce();
+          expect(deferredInitQueueMock.haltDeferredQueue).toHaveBeenCalledOnce();
+          expect(openWindowsTrackerMock.freezeAndSnapshotOpenWindows).toHaveBeenCalledOnce();
+          expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledOnce();
+          expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(0);
+        } finally {
+          consoleSpy.mockRestore();
+        }
       }
     );
+
+    it("finishes a signal's shutdown with the warning never answered", async () => {
+      const { beforeQuitCb, startShutdown, userQuit, warning } = await setupOpenWarning();
+      const exited = nextExit();
+
+      signalShutdownMock.isSignalShutdown.mockReturnValue(true);
+      void beforeQuitCb(makeEvent());
+      await exited;
+
+      expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(0);
+      expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalledOnce();
+      expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledOnce();
+
+      warning.answer(true);
+      await userQuit;
+      expect(startShutdown).toHaveBeenCalledOnce();
+      expect(appMock.exit).toHaveBeenCalledOnce();
+    });
 
     it("does the same for a Windows session-end", async () => {
       const originalPlatform = process.platform;
@@ -685,7 +723,8 @@ describe("registerShutdownHandler", () => {
       }));
 
       try {
-        const { beforeQuitCb, coordinator, userQuit, answer } = await setupOpenWarning();
+        const { beforeQuitCb, coordinator, startShutdown, userQuit, warning } =
+          await setupOpenWarning();
         const { registerWindowSessionEndHandler } = await import("../appLifecycle.js");
         const win = { on: vi.fn() };
         Object.defineProperty(process, "platform", { value: "win32" });
@@ -694,7 +733,9 @@ describe("registerShutdownHandler", () => {
         } finally {
           Object.defineProperty(process, "platform", { value: originalPlatform });
         }
-        const sessionEnd = win.on.mock.calls.find(([name]) => name === "session-end")![1] as () => void;
+        const sessionEnd = win.on.mock.calls.find(
+          ([name]) => name === "session-end"
+        )![1] as () => void;
 
         signalShutdownMock.setSignalShutdown.mockImplementationOnce(() => {
           signalShutdownMock.isSignalShutdown.mockReturnValue(true);
@@ -707,12 +748,13 @@ describe("registerShutdownHandler", () => {
 
         expect(sessionEndQuit.preventDefault).toHaveBeenCalled();
         expect(coordinator.getActiveShutdown()?.initiator).toBe("app-quit");
-        expect(deferredInitQueueMock.haltDeferredQueue).toHaveBeenCalledOnce();
+        expect(startShutdown).toHaveBeenCalledOnce();
 
-        answer(false);
+        warning.answer(false);
         await userQuit;
         await exited;
 
+        expect(startShutdown).toHaveBeenCalledOnce();
         expect(deferredInitQueueMock.haltDeferredQueue).toHaveBeenCalledOnce();
         expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(0);
       } finally {
@@ -723,21 +765,29 @@ describe("registerShutdownHandler", () => {
     });
 
     it("still absorbs a second quit without a signal, and Cancel leaves the app running", async () => {
-      const { beforeQuitCb, coordinator, userQuit, answer } = await setupOpenWarning();
+      const { beforeQuitCb, startShutdown, userQuit, warning } = await setupOpenWarning();
 
       const secondQuit = makeEvent();
       await beforeQuitCb(secondQuit);
 
       expect(secondQuit.preventDefault).toHaveBeenCalled();
       expect(quitWarningMock.showQuitWarning).toHaveBeenCalledOnce();
-      expect(coordinator.getActiveShutdown()).toBeNull();
+      expect(startShutdown).not.toHaveBeenCalled();
 
-      answer(false);
+      warning.answer(false);
       await userQuit;
 
-      expect(coordinator.getActiveShutdown()).toBeNull();
+      expect(startShutdown).not.toHaveBeenCalled();
       expect(deferredInitQueueMock.haltDeferredQueue).not.toHaveBeenCalled();
       expect(appMock.exit).not.toHaveBeenCalled();
+
+      // The next quit asks again, and a confirmation shuts down.
+      const exited = nextExit();
+      await beforeQuitCb(makeEvent());
+      await exited;
+      expect(quitWarningMock.showQuitWarning).toHaveBeenCalledTimes(2);
+      expect(startShutdown).toHaveBeenCalledExactlyOnceWith("app-quit", expect.any(Function));
+      expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(0);
     });
   });
 

@@ -193,7 +193,9 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           setExitConfirmationPending(false);
         }
 
-        if (!confirmed) {
+        // A signal claimed the shutdown while the warning was open, so its
+        // answer no longer decides anything.
+        if (!confirmed || getActiveShutdown()) {
           return;
         }
       }
