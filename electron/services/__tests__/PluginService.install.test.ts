@@ -1785,6 +1785,112 @@ describe("dev sessions — full-artifact reconcile (#12277)", () => {
     service.dispose();
   });
 
+  describe("overlapping CLI sessions (#15616)", () => {
+    function isLoaded(service: PluginService): boolean {
+      return service.listPlugins().some((p) => p.manifest.name === DEV_ID);
+    }
+
+    it("ignores a stop from a session another one has since started", async () => {
+      await writeDevPlugin();
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      await service.loadDevPlugin(DEV_ID, "older");
+      await service.loadDevPlugin(DEV_ID, "newer");
+
+      await service.stopDevSession(DEV_ID, "older");
+      expect(devStatus(service)).toBeDefined();
+      expect(isLoaded(service)).toBe(true);
+
+      await service.stopDevSession(DEV_ID, "newer");
+      expect(devStatus(service)).toBeUndefined();
+      expect(isLoaded(service)).toBe(false);
+
+      service.dispose();
+    });
+
+    it("ignores the older session's stop even when it is queued behind the newer start", async () => {
+      await writeDevPlugin();
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      await service.loadDevPlugin(DEV_ID, "older");
+
+      await Promise.all([
+        service.loadDevPlugin(DEV_ID, "newer"),
+        service.stopDevSession(DEV_ID, "older"),
+      ]);
+
+      expect(devStatus(service)).toBeDefined();
+      expect(isLoaded(service)).toBe(true);
+
+      service.dispose();
+    });
+
+    it("lets an untagged stop from an older CLI end any session, as before", async () => {
+      await writeDevPlugin();
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      await service.loadDevPlugin(DEV_ID, "newer");
+
+      await service.stopDevSession(DEV_ID);
+
+      expect(devStatus(service)).toBeUndefined();
+      expect(isLoaded(service)).toBe(false);
+
+      service.dispose();
+    });
+
+    it("lets a tagged stop end a session no CLI session has claimed", async () => {
+      await writeDevPlugin();
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      // An older CLI's start, or a session adopted from a marker at startup.
+      await service.loadDevPlugin(DEV_ID);
+
+      await service.stopDevSession(DEV_ID, "only-session");
+
+      expect(devStatus(service)).toBeUndefined();
+      expect(isLoaded(service)).toBe(false);
+
+      service.dispose();
+    });
+
+    it("re-arms the artifact watcher on the directory a takeover links", async () => {
+      async function writeWorktree(name: string): Promise<string> {
+        const dir = path.join(tmpDir, name);
+        await fs.mkdir(path.join(dir, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(dir, "plugin.json"),
+          JSON.stringify({ name: DEV_ID, version: "1.0.0", main: "dist/index.js" })
+        );
+        await fs.writeFile(path.join(dir, "dist", "index.js"), "module.exports = {};");
+        await fs.writeFile(path.join(dir, ".dev-marker"), "");
+        return fs.realpath(dir);
+      }
+      const older = await writeWorktree("worktree-a");
+      const newer = await writeWorktree("worktree-b");
+      const linkPath = path.join(pluginsRoot, DEV_ID);
+      await fs.mkdir(pluginsRoot, { recursive: true });
+      await fs.symlink(older, linkPath);
+
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      const watchedDir = (): string | undefined =>
+        (
+          service as unknown as {
+            devArtifactWatcherRegistry: { states: Map<string, { realDir: string }> } | null;
+          }
+        ).devArtifactWatcherRegistry?.states.get(DEV_ID)?.realDir;
+
+      await service.loadDevPlugin(DEV_ID, "older");
+      await vi.waitFor(() => expect(watchedDir()).toBe(older));
+
+      await fs.unlink(linkPath);
+      await fs.symlink(newer, linkPath);
+      await service.loadDevPlugin(DEV_ID, "newer");
+
+      // Still on the older directory, the newer session's rebuilds would never
+      // reach Daintree once the older one's watcher stopped producing events.
+      await vi.waitFor(() => expect(watchedDir()).toBe(newer));
+
+      service.dispose();
+    });
+  });
+
   describe("running agents' credentials", () => {
     const TERMINAL = "term-dev-rebuild";
 
