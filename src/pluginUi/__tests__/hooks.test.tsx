@@ -742,7 +742,7 @@ describe("useDisclosure", () => {
     expect(onOpenChange.mock.calls).toEqual([[true], [true]]);
   });
 
-  it("asks again once the handler that was declined has returned, without a re-render", async () => {
+  it("asks again after a microtask, without a rerender", async () => {
     const onOpenChange = vi.fn();
     const { result } = renderHook(() => useDisclosure({ open: false, onOpenChange }));
     act(() => result.current.onOpen());
@@ -750,9 +750,6 @@ describe("useDisclosure", () => {
     act(() => result.current.onOpen());
     await act(async () => {});
     act(() => result.current.onToggle());
-    await act(async () => {});
-    // Still rendered closed, so a close is no change.
-    act(() => result.current.onClose());
     expect(onOpenChange.mock.calls).toEqual([[true], [true], [true]]);
 
     const onClosed = vi.fn();
@@ -763,7 +760,25 @@ describe("useDisclosure", () => {
     expect(onClosed.mock.calls).toEqual([[false], [false]]);
   });
 
-  it("keeps a controlled request made after a commit when an older one lapses", async () => {
+  it("lets a request undo one a controlled owner hasn't rendered yet", async () => {
+    const onOpenChange = vi.fn();
+    const { result, rerender } = renderHook(() => useDisclosure({ open: false, onOpenChange }));
+    // An owner accepting on a later lane renders after the request lapses,
+    // whether at an unrelated commit or a microtask.
+    act(() => result.current.onOpen());
+    rerender();
+    act(() => result.current.onClose());
+    await act(async () => {});
+    act(() => result.current.onOpen());
+    await act(async () => {});
+    act(() => result.current.onClose());
+    await act(async () => {});
+    // Back on what is rendered, a close is no change.
+    act(() => result.current.onClose());
+    expect(onOpenChange.mock.calls).toEqual([[true], [false], [true], [false]]);
+  });
+
+  it("keeps a controlled request made after a commit live when an older one lapses", async () => {
     const onOpenChange = vi.fn();
     const { result, rerender } = renderHook(({ open }) => useDisclosure({ open, onOpenChange }), {
       initialProps: { open: false },
@@ -783,13 +798,16 @@ describe("useDisclosure", () => {
   it("keeps an uncontrolled open queued behind an unrelated commit", () => {
     const onOpenChange = vi.fn();
     const { result } = renderHook(() => {
-      const [, setTick] = useState(0);
-      return { disclosure: useDisclosure({ onOpenChange }), setTick };
+      const [tick, setTick] = useState(0);
+      return { disclosure: useDisclosure({ onOpenChange }), tick, setTick };
     });
     act(() => {
       startTransition(() => result.current.disclosure.onOpen());
       flushSync(() => result.current.setTick(1));
-      result.current.disclosure.onClose();
+      expect(result.current.tick).toBe(1);
+      expect(result.current.disclosure.open).toBe(false);
+      result.current.disclosure.onOpen();
+      result.current.disclosure.onToggle();
     });
     expect(result.current.disclosure.open).toBe(false);
     expect(onOpenChange.mock.calls).toEqual([[true], [false]]);
@@ -812,16 +830,17 @@ describe("useDisclosure", () => {
     expect(onOpenChange.mock.calls).toEqual([[true], [false]]);
   });
 
-  it("follows an owner that accepts, then compares against the new value", () => {
+  it("follows an owner that accepts, then compares callbacks it kept against the new value", () => {
     const onOpenChange = vi.fn();
     const { result, rerender } = renderHook(({ open }) => useDisclosure({ open, onOpenChange }), {
       initialProps: { open: false },
     });
-    act(() => result.current.onOpen());
+    const { onOpen, onToggle } = result.current;
+    act(() => onOpen());
     rerender({ open: true });
     expect(result.current.open).toBe(true);
-    act(() => result.current.onOpen());
-    act(() => result.current.onToggle());
+    act(() => onOpen());
+    act(() => onToggle());
     expect(onOpenChange.mock.calls).toEqual([[true], [false]]);
   });
 });

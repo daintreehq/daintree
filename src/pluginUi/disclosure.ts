@@ -4,9 +4,9 @@ import type { UseDisclosureOptions, UseDisclosureResult } from "@shared/types/pl
 /**
  * Open/closed state for a popover, dialog, sheet or section, controlled with
  * `open` + `onOpenChange` or uncontrolled from `defaultOpen`. `onOpenChange`
- * only fires for a change from what is rendered, or from a request made
- * earlier in the same handler; a controlled owner that declines a request
- * hears the next one.
+ * only fires for a change: from what is rendered, from a request made earlier
+ * in the same handler, or back from a request a controlled owner hasn't
+ * rendered yet. A controlled owner that declines a request hears the next one.
  */
 export function useDisclosure(rawOptions?: UseDisclosureOptions): UseDisclosureResult {
   const options: UseDisclosureOptions =
@@ -16,28 +16,33 @@ export function useDisclosure(rawOptions?: UseDisclosureOptions): UseDisclosureR
   const open = controlled ? options.open === true : inner;
   const notify = typeof options.onOpenChange === "function" ? options.onOpenChange : undefined;
 
-  // Changes compare against the last request not yet rendered, so an
+  // The last request, and whether the next one still composes with it, so an
   // `onOpen(); onClose()` in one handler ends closed rather than on this
-  // render's value. A controlled owner can decline and keep rendering the same
-  // `open`, so its request lapses at the next commit or microtask; an
-  // uncontrolled one is always applied, so it lasts until `open` changes, even
-  // across an unrelated commit that renders ahead of it.
+  // render's value. An uncontrolled request is always applied, so it stays live
+  // until `open` changes, even across an unrelated commit that renders ahead of
+  // it. A controlled owner can decline and keep rendering the same `open`, so
+  // there the request stops composing at the next commit or microtask, and
+  // repeats compare against what is rendered. Until `open` changes it still
+  // lets an undo through: the owner may have accepted on a later lane.
   const rendered = useRef(open);
-  const pending = useRef<{ value: boolean } | null>(null);
+  const last = useRef<{ value: boolean; live: boolean } | null>(null);
   useLayoutEffect(() => {
-    if (controlled || rendered.current !== open) pending.current = null;
+    if (rendered.current !== open) last.current = null;
+    else if (controlled && last.current) last.current.live = false;
     rendered.current = open;
   });
 
   const set = (next: boolean) => {
-    const current = pending.current?.value ?? rendered.current;
-    if (next === current) return;
-    const request = { value: next };
-    pending.current = request;
+    const request = last.current;
+    const repeat = request?.live
+      ? next === request.value
+      : next === rendered.current && (request === null || request.value === next);
+    if (repeat) return;
+    const entry = { value: next, live: true };
+    last.current = entry;
     if (controlled) {
-      // Only this request's own lapse: a newer one made after a commit stands.
       queueMicrotask(() => {
-        if (pending.current === request) pending.current = null;
+        entry.live = false;
       });
     } else {
       setInner(next);
@@ -49,7 +54,10 @@ export function useDisclosure(rawOptions?: UseDisclosureOptions): UseDisclosureR
     open,
     onOpen: () => set(true),
     onClose: () => set(false),
-    onToggle: () => set(!(pending.current?.value ?? rendered.current)),
+    onToggle: () => {
+      const request = last.current;
+      set(!(request?.live ? request.value : rendered.current));
+    },
     onOpenChange: (next: boolean) => set(next === true),
   };
 }
