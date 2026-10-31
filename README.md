@@ -25,7 +25,7 @@
 
 ## Install
 
-Builds for macOS, Windows, and Linux live at [daintree.org/download](https://daintree.org/download). macOS ships as a signed-and-notarized DMG in `arm64`, `x64`, and universal variants. Linux ships as `AppImage` and `.deb` for x64 and arm64, on glibc 2.34 or newer (Ubuntu 22.04, Debian 12, Fedora 35, RHEL 9 and later), under X11 or Wayland. Windows ships as a sideloadable `.appx` while the Microsoft Store listing is in review. Homebrew and winget recipes are coming.
+Builds for macOS, Windows, and Linux live at [daintree.org/download](https://daintree.org/download). macOS ships as a signed-and-notarized DMG in `arm64`, `x64`, and universal variants. Linux ships as `AppImage` and `.deb` for x64 and arm64, on glibc 2.34 or newer (Ubuntu 22.04, Debian 12, Fedora 35, RHEL 9 and later), under X11 or Wayland. Windows ships as a per-user `-setup.exe` installer (no admin rights needed) for x64 and arm64, auto-updated in place. An x64-only `.appx` is also built for Microsoft Store submission and is updated through the Store. Homebrew and winget recipes are coming.
 
 <p align="center">
   <a href="https://daintree.org/download"><img alt="Download Daintree for macOS, Windows, or Linux" src="https://cdn.daintree.org/brand/download-button-v3.svg" width="340"></a>
@@ -91,11 +91,11 @@ cd daintree
 npm install
 ```
 
-| Platform | Command                 | Output                                 |
-| -------- | ----------------------- | -------------------------------------- |
-| macOS    | `npm run package:mac`   | `.dmg`, `.zip` (arm64, x64, universal) |
-| Windows  | `npm run package:win`   | `.appx`, `.msix`                       |
-| Linux    | `npm run package:linux` | `.AppImage`, `.deb`                    |
+| Platform | Command | Output |
+| --- | --- | --- |
+| macOS | `npm run package:mac` | `.dmg`, `.zip` (arm64, x64, universal) |
+| Windows | `npm run package:win` | `.appx` and NSIS `-setup.exe` (`package:win:appx` / `package:win:nsis` build just one) |
+| Linux | `npm run package:linux` | `.AppImage`, `.deb` |
 
 The `postinstall` step rebuilds `node-pty` for Electron automatically. If you see PTY errors, run `npm run rebuild`.
 
