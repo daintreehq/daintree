@@ -3090,6 +3090,10 @@ describe("rendererBridge — holding a confirm-gated dispatch open (#14989)", ()
     });
     const startedAt = Date.now();
     const holdUntil = startedAt + 9_000;
+    // The first call's view takes 20s to thaw: main's clock ran the whole time.
+    vi.mocked(unfreezeWebContents).mockReturnValueOnce(
+      new Promise<void>((resolve) => setTimeout(resolve, 20_000))
+    );
 
     const calls = [
       bridge.dispatchActionForWebContents(820, "worktree.delete", {}, false, undefined, "external"),
@@ -3103,9 +3107,9 @@ describe("rendererBridge — holding a confirm-gated dispatch open (#14989)", ()
         { holdUntil }
       ),
     ].map((call) => call.catch((err: unknown) => err));
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(20_000);
 
-    expect(sent).toEqual([startedAt + MCP_DISPATCH_TIMEOUT_MS, holdUntil]);
+    expect(sent).toEqual([holdUntil, startedAt + MCP_DISPATCH_TIMEOUT_MS]);
     await vi.advanceTimersByTimeAsync(MCP_DISPATCH_TIMEOUT_MS);
     await Promise.all(calls);
   });

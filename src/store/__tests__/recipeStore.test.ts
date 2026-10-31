@@ -1974,15 +1974,17 @@ describe("recipeStore", () => {
         seedAmbientPanels(18);
         seedRecipe();
 
+        // The issue's path: the host's recipe preview was approved first.
         const run = useRecipeStore
           .getState()
           .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1", undefined, {
             dispatchSource: "agent",
+            hostApprovedRecipeRun: approvalFor(tenTerminalRecipe()),
             dispatchDeadlineAt: Date.now() + 30_000,
           });
         await vi.advanceTimersByTimeAsync(0);
         const pending = usePanelLimitStore.getState().pendingConfirm;
-        expect(pending?.request).toMatchObject({ currentCount: 18, allowedCount: 3 });
+        expect(pending?.request).toMatchObject({ currentCount: 18, allowedCount: 10 });
 
         await vi.advanceTimersByTimeAsync(30_000);
         // The late click: on the dialog as it was shown, and through the store.
@@ -1995,7 +1997,7 @@ describe("recipeStore", () => {
         expect(results.spawned).toHaveLength(0);
         expect(
           results.failed.filter((f) => f.error === PANEL_LIMIT_CONFIRM_EXPIRED_REASON)
-        ).toHaveLength(3);
+        ).toHaveLength(10);
         expect(usePanelLimitStore.getState().pendingConfirm).toBeNull();
         // Nothing held for the run: other runs see the capacity again.
         expect(getPanelSlotReservations().unclaimed).toBe(0);
@@ -2023,6 +2025,8 @@ describe("recipeStore", () => {
 
       it("asks nobody and starts nothing once the deadline has already passed", async () => {
         vi.useFakeTimers();
+        // Enough open that the gate would otherwise ask.
+        seedAmbientPanels(18);
         seedRecipe();
 
         const results = await useRecipeStore

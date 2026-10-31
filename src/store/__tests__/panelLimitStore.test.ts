@@ -375,19 +375,22 @@ describe("preflightSpawnBatchLimit behind a dispatch deadline (#15648)", () => {
     vi.useRealTimers();
   });
 
-  it("takes its dialog down a grace period before the deadline, holding nothing", async () => {
-    const deadlineAt = Date.now() + 30_000;
-    const result = preflightSpawnBatchLimit(() => 18, 3, { deadlineAt });
-    expect(pending()?.request).toMatchObject({ currentCount: 18, allowedCount: 3 });
+  it.each([30_000, 9_000])(
+    "takes its dialog down a grace period before a deadline %ims away, holding nothing",
+    async (leftMs) => {
+      const deadlineAt = Date.now() + leftMs;
+      const result = preflightSpawnBatchLimit(() => 18, 3, { deadlineAt });
+      expect(pending()?.request).toMatchObject({ currentCount: 18, allowedCount: 3 });
 
-    await vi.advanceTimersByTimeAsync(30_000 - MCP_CONFIRM_HOLD_GRACE_MS - 1);
-    expect(pending()).not.toBeNull();
-    await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(leftMs - MCP_CONFIRM_HOLD_GRACE_MS - 1);
+      expect(pending()).not.toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
 
-    expect(await result).toEqual({ allowed: 0, declined: false, expired: true, grant: null });
-    expect(pending()).toBeNull();
-    expect(getPanelSlotReservations().unclaimed).toBe(0);
-  });
+      expect(await result).toEqual({ allowed: 0, declined: false, expired: true, grant: null });
+      expect(pending()).toBeNull();
+      expect(getPanelSlotReservations().unclaimed).toBe(0);
+    }
+  );
 
   it("counts a yes that lands after the close as expired, even before its timer fires", async () => {
     const deadlineAt = Date.now() + 30_000;

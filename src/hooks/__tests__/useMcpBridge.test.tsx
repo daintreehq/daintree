@@ -177,6 +177,7 @@ describe("useMcpBridge", () => {
         authorization?: "tier" | "user" | "session-grant" | "native-grant" | "skip-preference";
         requester?:
           { kind: "pane"; terminalId: string } | { kind: "assistant"; helpSessionId: string };
+        dispatchDeadlineAt?: number;
       }) => void | Promise<void>)
     | undefined;
   let cleanupManifest: ReturnType<typeof vi.fn>;
@@ -1984,12 +1985,15 @@ describe("useMcpBridge", () => {
   });
 
   describe("dispatch deadline handed to the action (#15648)", () => {
-    it("passes a pre-authorized dispatch the deadline main sent", async () => {
+    // Shorter than a fresh 30s from receipt, as a thawed view or a capped
+    // remote hold leaves it, and one already gone: either is passed on as sent.
+    it.each([
+      ["a short", 7_000],
+      ["an already passed", -1],
+    ])("passes a pre-authorized dispatch %s deadline main sent", async (_label, offsetMs) => {
       mocks.get.mockReturnValue(confirmManifestEntry());
       mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
-      // Shorter than a fresh 30s from receipt, as a thawed view or a capped
-      // remote hold leaves it.
-      const sentDeadlineAt = Date.now() + 7_000;
+      const sentDeadlineAt = Date.now() + offsetMs;
 
       renderHook(() => useMcpBridge());
       await dispatchHandler?.({
@@ -2005,6 +2009,30 @@ describe("useMcpBridge", () => {
         { worktreeId: "wt-4" },
         expect.objectContaining({ dispatchDeadlineAt: sentDeadlineAt })
       );
+    });
+
+    it("falls back to 30s from receipt when main sends no deadline", async () => {
+      mocks.get.mockReturnValue(safeManifestEntry());
+      mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+      const start = Date.now();
+      vi.spyOn(Date, "now").mockImplementation(() => start);
+
+      try {
+        renderHook(() => useMcpBridge());
+        await dispatchHandler?.({
+          requestId: "req-no-deadline",
+          actionId: "actions.list",
+          args: { limit: 10 },
+        });
+
+        expect(mocks.dispatch).toHaveBeenCalledWith(
+          "actions.list",
+          { limit: 10 },
+          expect.objectContaining({ dispatchDeadlineAt: start + MCP_DISPATCH_TIMEOUT_MS })
+        );
+      } finally {
+        vi.mocked(Date.now).mockRestore();
+      }
     });
 
     it("starts a confirmation's first deadline from the one main sent", async () => {
@@ -2031,6 +2059,14 @@ describe("useMcpBridge", () => {
       const start = Date.now();
       let elapsed = 0;
       vi.spyOn(Date, "now").mockImplementation(() => start + elapsed);
+      // A capped call's run is shorter than the plain 30s; that is what counts.
+      const grantedRunMs = 7_000;
+      holdDispatch.mockImplementation(
+        async ({ phase }: { phase: keyof typeof HOLD_GRANTS_MS }) => ({
+          held: true,
+          remainingMs: phase === "approved" ? grantedRunMs : HOLD_GRANTS_MS[phase],
+        })
+      );
 
       try {
         renderHook(() => useMcpBridge());
@@ -2049,9 +2085,7 @@ describe("useMcpBridge", () => {
         expect(mocks.dispatch).toHaveBeenCalledWith(
           "worktree.delete",
           { worktreeId: "wt-1" },
-          expect.objectContaining({
-            dispatchDeadlineAt: start + 80_000 + HOLD_GRANTS_MS.approved,
-          })
+          expect.objectContaining({ dispatchDeadlineAt: start + 80_000 + grantedRunMs })
         );
       } finally {
         vi.mocked(Date.now).mockRestore();

@@ -393,9 +393,12 @@ describe("recipeActions adversarial", () => {
 
     const run = setupActions();
 
-    await expect(run("recipe.run", { recipeId: "r1", worktreeId: "wt-1" }, {})).rejects.toThrow(
-      /Recipe launch failed: Panel limit reached/
+    const failure = await run("recipe.run", { recipeId: "r1", worktreeId: "wt-1" }, {}).catch(
+      (err: unknown) => err
     );
+    expect((failure as Error).message).toMatch(/Recipe launch failed: Panel limit reached/);
+    // A refusal is not a confirm that ran out of time (#15648).
+    expect(failure).not.toBeInstanceOf(ConfirmationTimeoutError);
     expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, expect.any(Object));
   });
 
@@ -403,8 +406,8 @@ describe("recipeActions adversarial", () => {
     const results = {
       spawned: [],
       failed: [
-        { index: 0, error: PANEL_LIMIT_CONFIRM_EXPIRED_REASON },
-        { index: 1, error: "Agent recipe terminal cap reached" },
+        { index: 0, error: "Agent recipe terminal cap reached" },
+        { index: 1, error: PANEL_LIMIT_CONFIRM_EXPIRED_REASON },
       ],
     };
     setRecipeState({ runRecipeWithResults: vi.fn().mockResolvedValue(results) });
