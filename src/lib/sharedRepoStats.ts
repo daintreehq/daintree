@@ -28,9 +28,10 @@ const RECORD_PREFIX = "daintree:repo-stats:origin:";
 // every real reading until the clock caught up; one this far ahead is junk.
 const MAX_CLOCK_LEAD_MS = 24 * 60 * 60 * 1000;
 
-// A host's own clock orders its readings for only this long: one corrected
-// after running ahead would otherwise have every reading refused until it
-// caught up.
+// How long a host's clock is trusted against what this Shell last measured of
+// it: to refuse its older readings (one corrected after running ahead would
+// otherwise have every reading refused until it caught up), and to date its
+// cache replays.
 const HOST_CLOCK_TRUST_MS = 5 * 60 * 1000;
 
 export interface SharedRepoStats {
@@ -52,6 +53,13 @@ export interface SharedRepoStats {
   sourceUpdatedAt: number;
   /** Host that made the reading (`local` for this machine). */
   hostId: string;
+  /**
+   * How the host's clock sits against this Shell's (`receivedAt - lastUpdated`
+   * of a live answer), and when that was measured. Absent on an entry only a
+   * cache replay ever filled: its arrival says nothing about the host's clock.
+   */
+  clockOffset?: number;
+  clockAnchoredAt?: number;
 }
 
 function recordScope(repoKey: string): string {
@@ -108,7 +116,7 @@ function parseRecord(v: unknown): SharedRepoStats | null {
   if (!isTime(v.sourceUpdatedAt) || typeof v.hostId !== "string") return null;
   const limit = Date.now() + MAX_CLOCK_LEAD_MS;
   if (v.receivedAt > limit || v.issueObservedAt > limit || v.prObservedAt > limit) return null;
-  return {
+  const record: SharedRepoStats = {
     issueCount: v.issueCount,
     prCount: v.prCount,
     receivedAt: v.receivedAt,
@@ -117,6 +125,15 @@ function parseRecord(v: unknown): SharedRepoStats | null {
     sourceUpdatedAt: v.sourceUpdatedAt,
     hostId: v.hostId,
   };
+  if (
+    typeof v.clockOffset === "number" &&
+    Number.isFinite(v.clockOffset) &&
+    isTime(v.clockAnchoredAt)
+  ) {
+    record.clockOffset = v.clockOffset;
+    record.clockAnchoredAt = v.clockAnchoredAt;
+  }
+  return record;
 }
 
 function newer(a: SharedRepoStats, b: SharedRepoStats): boolean {
@@ -171,22 +188,37 @@ export function publishSharedRepoStats(
   }
   const key = recordKey(repoKey, reading.hostId);
   const existing = parseRecord(readJson(key));
-  if (
-    existing &&
-    existing.sourceUpdatedAt >= reading.lastUpdated &&
-    now - existing.receivedAt < HOST_CLOCK_TRUST_MS
-  ) {
-    return false;
+  if (existing) {
+    // The same reading again (the poll's answer and its broadcast, or another
+    // view's copy of it) is never news, however late it lands.
+    if (existing.sourceUpdatedAt === reading.lastUpdated) return false;
+    if (
+      existing.sourceUpdatedAt > reading.lastUpdated &&
+      now - existing.receivedAt < HOST_CLOCK_TRUST_MS
+    ) {
+      return false;
+    }
   }
   let receivedAt = now;
+  let clock: Pick<SharedRepoStats, "clockOffset" | "clockAnchoredAt"> = {
+    clockOffset: now - reading.lastUpdated,
+    clockAnchoredAt: now,
+  };
   if (reading.replay) {
-    if (existing) {
-      // The host's last entry says how its clock sits against this one.
-      const offset = existing.receivedAt - existing.sourceUpdatedAt;
+    const offset = existing?.clockOffset;
+    const anchoredAt = existing?.clockAnchoredAt;
+    if (
+      offset !== undefined &&
+      anchoredAt !== undefined &&
+      now - anchoredAt < HOST_CLOCK_TRUST_MS
+    ) {
       receivedAt = Math.max(1, Math.min(now, reading.lastUpdated + offset));
+      clock = { clockOffset: offset, clockAnchoredAt: anchoredAt };
     } else if (readSharedRepoStats(repoKey) !== null) {
       // Nothing to date it by: it may be older than what the others reported.
       return false;
+    } else {
+      clock = {};
     }
   }
   // How old each count was when the host made the reading, measured on its own
@@ -200,6 +232,7 @@ export function publishSharedRepoStats(
     prObservedAt: Math.max(1, receivedAt - ageOf(reading.prRefreshedAt)),
     sourceUpdatedAt: reading.lastUpdated,
     hostId: reading.hostId,
+    ...clock,
   };
   if (!writeJson(key, record)) return false;
   // The `storage` event reaches every other document; views in this one hear

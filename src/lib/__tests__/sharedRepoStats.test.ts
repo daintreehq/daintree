@@ -84,6 +84,14 @@ describe("sharedRepoStats", () => {
     expect(readSharedRepoStats(REPO)?.issueCount).toBe(7);
   });
 
+  it("never takes the same reading twice, however late it lands", () => {
+    publishSharedRepoStats(REPO, reading("studio", 2_000, 5), NOW);
+    publishSharedRepoStats(REPO, reading("local", 3_000, 8), NOW + 10);
+
+    expect(publishSharedRepoStats(REPO, reading("studio", 2_000, 5), NOW + 3_600_000)).toBe(false);
+    expect(readSharedRepoStats(REPO)?.hostId).toBe("local");
+  });
+
   describe("cache replays", () => {
     it("dates one by when the host made it, through the host's clock offset", () => {
       // studio's clock runs 10s behind this Shell's.
@@ -111,6 +119,36 @@ describe("sharedRepoStats", () => {
         issueCount: 3,
         receivedAt: NOW + 25_000,
       });
+    });
+
+    it("never dates one by an entry only a replay filled", () => {
+      // studio's replay fills the empty record: its arrival says nothing about
+      // studio's clock.
+      publishSharedRepoStats(REPO, { ...reading("studio", NOW, 5), replay: true }, NOW + 50_000);
+      publishSharedRepoStats(REPO, reading("local", NOW + 80_000, 8), NOW + 80_000);
+
+      expect(
+        publishSharedRepoStats(
+          REPO,
+          { ...reading("studio", NOW + 60_000, 4), replay: true },
+          NOW + 90_000
+        )
+      ).toBe(false);
+      expect(readSharedRepoStats(REPO)?.hostId).toBe("local");
+    });
+
+    it("stops trusting a clock measured too long ago", () => {
+      publishSharedRepoStats(REPO, reading("studio", NOW, 5), NOW);
+      publishSharedRepoStats(REPO, reading("local", NOW + 10_000, 8), NOW + 10_000);
+
+      expect(
+        publishSharedRepoStats(
+          REPO,
+          { ...reading("studio", NOW + 380_000, 4), replay: true },
+          NOW + 400_000
+        )
+      ).toBe(false);
+      expect(readSharedRepoStats(REPO)?.hostId).toBe("local");
     });
 
     it("only fills an empty record from a host this Shell has no entry from", () => {

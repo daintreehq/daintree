@@ -466,16 +466,16 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
 
       hostStatsRef.current = preservedStats;
 
-      // A fresh, dated answer says which repository both counts come from
-      // (#15546): it moves this view onto that origin's shared record, or off
-      // sharing when no one origin stands behind both (an issues provider now
-      // owns the issue count), and becomes the record's newest reading unless
-      // this host already published it. Stale answers and seeds say nothing
-      // about the origin and never publish.
+      // An answer the provider dated says which repository both counts come
+      // from (#15546), stale or not: it moves this view onto that origin's
+      // shared record, or off sharing when no one origin stands behind both (an
+      // issues provider now owns the issue count, even one failing to answer).
+      // A fresh one also becomes the record's newest reading unless this host
+      // already published it. Seeds and undated answers say nothing about the
+      // origin, and only fresh answers publish.
       const answeringProviderId = providerIdRef.current;
       if (
         !opts.seed &&
-        !shouldPreserve &&
         repoStats.lastUpdated !== undefined &&
         sharingEnabledRef.current &&
         answeringProviderId !== null
@@ -483,7 +483,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
         const repoKey = repoStats.repoKey ?? null;
         rememberRepoOrigin(opts.projectPath, answeringProviderId, repoKey);
         bindOrigin(opts.projectPath, repoKey);
-        if (repoKey !== null) {
+        if (repoKey !== null && !shouldPreserve) {
           publishSharedRepoStats(repoKey, {
             issueCount: repoStats.issueCount,
             prCount: repoStats.prCount,

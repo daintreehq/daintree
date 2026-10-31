@@ -3496,6 +3496,31 @@ describe("useRepositoryStats", () => {
       expect(result.current.stats?.issueCount).toBe(2);
     });
 
+    it("stops sharing on a stale answer that names no origin", async () => {
+      publishFrom("local", 11, 5);
+      const poll = createDeferred<ForgeRepositoryStats>();
+      getRepoStatsMock.mockReturnValue(poll.promise);
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => {
+        expect(result.current.sharedCounts).toBe(true);
+      });
+
+      // An issues provider was just bound and couldn't answer: the blend is
+      // stale, and no one origin stands behind it.
+      await act(async () => {
+        poll.resolve(freshAnswer(0, 4, { repoKey: undefined, stale: true }));
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(result.current.sharedCounts).toBe(false);
+      });
+      // This host's own preserved count, not the code forge's shared one.
+      expect(result.current.stats?.issueCount).toBe(7);
+      expect(readSharedRepoStats(REPO_KEY)?.hostId).toBe("local");
+    });
+
     it("shares nothing for a project whose counts have no single origin", async () => {
       publishFrom("local", 11, 5);
       getRepoKeyMock.mockResolvedValue(null);
