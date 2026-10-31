@@ -562,7 +562,7 @@ describe("HostMetricsSampler", () => {
       await vi.advanceTimersByTimeAsync(3_000);
       const second = sampler.sample();
       await vi.advanceTimersByTimeAsync(0);
-      await expect(second).resolves.toMatchObject({ memoryTotalBytes: null });
+      await expect(second).resolves.toMatchObject({ memoryTotalBytes: null, cpuPercent: null });
       expect(meminfoReads).toBe(1);
       await vi.advanceTimersByTimeAsync(7_000);
       const third = sampler.sample();
