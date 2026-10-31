@@ -79,14 +79,14 @@ describe("derivePrMergeControl for a GitLab merge request", () => {
 
   it("still says a closed or merged MR is closed or merged", () => {
     expect(
-      derivePrMergeControl(mergeRequestToForgePR(restMR({ state: "closed" }), HOST), GITLAB_METADATA)
+      derivePrMergeControl(
+        mergeRequestToForgePR(restMR({ state: "closed" }), HOST),
+        GITLAB_METADATA
+      )
     ).toMatchObject({ kind: "unavailable", reason: "closed" });
     expect(
       derivePrMergeControl(
-        mergeRequestToForgePR(
-          restMR({ state: "merged", merged_at: "2026-07-03T10:00:00Z" }),
-          HOST
-        ),
+        mergeRequestToForgePR(restMR({ state: "merged", merged_at: "2026-07-03T10:00:00Z" }), HOST),
         GITLAB_METADATA
       )
     ).toMatchObject({ kind: "unavailable", reason: "merged" });
@@ -96,8 +96,9 @@ describe("derivePrMergeControl for a GitLab merge request", () => {
   // makes no claim keeps today's transient reading of a missing status.
   it("keeps the unreported retry for a provider that makes no such declaration", () => {
     const { mergePreviewSupported: _declared, ...undeclared } = GITLAB_METADATA;
-    expect(
-      derivePrMergeControl(mergeRequestToForgePR(restMR(), HOST), undeclared)
-    ).toMatchObject({ kind: "unavailable", reason: "unreported" });
+    expect(derivePrMergeControl(mergeRequestToForgePR(restMR(), HOST), undeclared)).toMatchObject({
+      kind: "unavailable",
+      reason: "unreported",
+    });
   });
 });
