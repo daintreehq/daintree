@@ -183,8 +183,32 @@ describe("answerRunByLabel", () => {
       if (data !== "\r") setTimeout(() => (screen.text = redrawFor(text, data)), 150);
       return text;
     };
+    // What was highlighted on screen as each key went in.
+    const highlighted: string[] = [];
+    const write = pty.write.bind(pty);
+    pty.write = (id: string, data: string) => {
+      highlighted.push(/[❯] \d\. (.+)/.exec(screen.text)?.[1] ?? "");
+      write(id, data);
+    };
     await answerRunByLabel({ pty, runId: "run-1", spawnedAt: 100, label: "No", ...listed });
     expect(state.writes).toEqual(["\x1b[B", "\x1b[B", "\x1b[B", "\r"]);
+    // Each key waited for the one before it to be drawn.
+    expect(highlighted).toEqual(["Yes", "Maybe", "Not now", "No"]);
+  });
+
+  it("presses no Enter when the dialog is replaced after the last arrow", async () => {
+    const { pty, state } = fakePty();
+    screen.text = DIALOG_A;
+    state.redraw = (text, data) => {
+      const next = redrawFor(text, data);
+      return next.includes("❯ 4. No")
+        ? DIALOG_B.replace("❯ 1. Yes", "  1. Yes").replace("  4. No", "❯ 4. No")
+        : next;
+    };
+    await expect(
+      answerRunByLabel({ pty, runId: "run-1", spawnedAt: 100, label: "No", ...listed })
+    ).rejects.toMatchObject({ userMessage: expect.stringContaining("The question changed") });
+    expect(state.writes).toEqual(["\x1b[B", "\x1b[B", "\x1b[B"]);
   });
 
   it("answers an option several rows above the highlight", async () => {
@@ -231,7 +255,7 @@ describe("answerRunByLabel", () => {
     expect(state.writes).toEqual(["\x1b[B"]);
     expect(refused).toContain("The question changed");
     // Keys went in, so it never says nothing was pressed.
-    expect(refused).toContain("Enter wasn't pressed, so nothing was chosen");
+    expect(refused).toContain("Arrow keys were sent, but Enter wasn't");
     expect(refused).not.toContain("Nothing was pressed");
   });
 
@@ -241,7 +265,7 @@ describe("answerRunByLabel", () => {
     state.redraw = () => "Done.\n────────────\n> \n────────────";
     await expect(
       answerRunByLabel({ pty, runId: "run-1", spawnedAt: 100, label: "No", ...listed })
-    ).rejects.toMatchObject({ userMessage: expect.stringContaining("nothing was chosen") });
+    ).rejects.toMatchObject({ userMessage: expect.stringContaining("Enter wasn't") });
     expect(state.writes).toEqual(["\x1b[B"]);
   });
 

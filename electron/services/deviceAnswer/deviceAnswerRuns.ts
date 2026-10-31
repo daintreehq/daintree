@@ -117,7 +117,7 @@ export async function listWaitingRuns(deps: DeviceAnswerRunsDeps): Promise<Waiti
         screen: screen === null ? null : redactSecrets(screen),
         // Parsed from the raw screen, since redacting can swallow rows of the
         // dialog; the device answers with these labels as sent.
-        ...(screen === null ? NO_CHOICES : answerableChoices(row, screen)),
+        ...(screen === null ? noChoices() : answerableChoices(row, screen)),
       };
     })
   );
@@ -126,21 +126,22 @@ export async function listWaitingRuns(deps: DeviceAnswerRunsDeps): Promise<Waiti
   return views.filter((view) => isRunStillWaiting(after, view.runId, view.spawnedAt));
 }
 
-const NO_CHOICES = { choices: [], questionId: null } as const;
+type Answerable = Pick<WaitingRunView, "choices" | "questionId">;
+
+function noChoices(): Answerable {
+  return { choices: [], questionId: null };
+}
 
 /**
  * The options as the device is sent them, with the question they answer, or
  * none when one couldn't be sent back: redacting can lengthen a label past
  * what an answer may carry.
  */
-function answerableChoices(
-  row: FleetRunRow,
-  screen: string
-): Pick<WaitingRunView, "choices" | "questionId"> {
+function answerableChoices(row: FleetRunRow, screen: string): Answerable {
   const choices = listChoices(screen, redactSecrets);
   const question = parseChoiceList(screen)?.question;
   if (choices.length === 0 || !choices.every(isAnswerLabel) || question === undefined) {
-    return NO_CHOICES;
+    return noChoices();
   }
   return { choices, questionId: questionIdOf(row.runId, row.spawnedAt, question) };
 }

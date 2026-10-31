@@ -533,7 +533,7 @@ describe("canopy IPC", () => {
       const refused = await answer(NO);
       expect(refused).toEqual({
         ok: false,
-        message: expect.stringContaining("nothing was chosen"),
+        message: expect.stringContaining("Enter wasn't"),
       });
       expect(state.writes).toEqual(["\x1b[B"]);
     });

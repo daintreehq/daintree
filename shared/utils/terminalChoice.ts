@@ -18,10 +18,12 @@ const BOX_RIGHT = /\s*[│┃║]\s*$/;
 
 /** Rows within this distance of the label are searched for the highlight. */
 const MAX_LIST_ROWS = 12;
-/** Rows above a list read as its question, when no frame or rule closes it sooner. */
-const MAX_QUESTION_ROWS = 20;
-/** A rule or a box's corner: the edge of a dialog, above which its question can't go on. */
-const DIALOG_EDGE = /^\s*(?:[╭┌╔╰└╚]|[─━═]{8,})/;
+/**
+ * A rule or a box's corner drawn at the left edge: a dialog's frame, above
+ * which its question doesn't go on. Indented, it is part of what is asked (a
+ * divider inside a heredoc), so it never ends the question.
+ */
+const DIALOG_EDGE = /^ ?(?:[╭┌╔╰└╚]|[─━═]{8,})/;
 
 /**
  * `question` is the dialog the keys were planned on, as text that doesn't
@@ -50,20 +52,23 @@ function unframe(row: string): string {
 }
 
 /**
- * The question a list on `lines` asks, from the row its first option is on
- * through `last`: the rows above it up to the dialog's edge, and the rows of
- * its options with the highlight taken off, so moving the highlight leaves it
- * the same and a different command, prompt or option makes it differ. Rows
- * below the list (key hints, task lists, status) never count, since they can
+ * The question a list on `lines` asks: every row above its own rows up to the
+ * dialog's frame (or the top of what was read), as drawn, since a command's
+ * text and indentation are what is being approved; then the list's rows from
+ * `listTop` through `last` with the highlight and the indent that moves with
+ * it taken off. Moving the highlight leaves it the same; a different command,
+ * prompt or option makes it differ. Rows after the list's block, which a
+ * blank row ends (key hints, task lists, status), never count, since they can
  * change while the question doesn't.
  */
-function questionText(lines: readonly string[], first: number, last: number): string {
-  let top = first;
-  while (top > 0 && first - top < MAX_QUESTION_ROWS && !DIALOG_EDGE.test(lines[top - 1]!)) top--;
-  return lines
-    .slice(top, last + 1)
-    .map((row) => row.replace(HIGHLIGHT_MARKER, "").trim())
-    .join("\n");
+function questionText(lines: readonly string[], listTop: number, last: number): string {
+  let top = listTop;
+  while (top > 0 && !DIALOG_EDGE.test(lines[top - 1]!)) top--;
+  const asked = lines.slice(top, listTop).map((row) => row.trimEnd());
+  const listed = lines
+    .slice(listTop, last + 1)
+    .map((row) => row.replace(HIGHLIGHT_MARKER, "").trim());
+  return [...asked, ...listed].join("\n");
 }
 
 export function planChoice(screen: string, label: string): ChoicePlan {
@@ -251,7 +256,8 @@ function readChoiceList(rawLines: readonly string[], requireHint: boolean): Choi
   return {
     labels,
     cursor: rows.indexOf(cursor),
-    question: questionText(lines, rows[0]!, rows[rows.length - 1]!),
+    // Through the block's end, so the last option's wrapped rows count too.
+    question: questionText(lines, rows[0]!, bottom),
   };
 }
 

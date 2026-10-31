@@ -46,11 +46,24 @@ export function isAnswerLabel(label: unknown): label is string {
 }
 
 const MOVED_ON = "That terminal has moved on since the list showed it.";
-/** Every key but the last is an arrow, so an answer stopped after its first key chose nothing. */
-const NOTHING_CHOSEN =
-  "The highlight was moved, but Enter wasn't pressed, so nothing was chosen. Check the screen before answering again.";
+/** Every key but the last is an arrow: an answer stopped after its first key sent no Enter. */
+const ARROWS_SENT =
+  "Arrow keys were sent, but Enter wasn't. Check the screen before answering again.";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** `work`'s result, or null once `deadline` passes first; a late result is dropped. */
+async function beforeDeadline<T>(work: Promise<T>, deadline: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now()));
+  });
+  try {
+    return await Promise.race([work, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function sameKeys(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((key, i) => key === b[i]);
@@ -72,12 +85,16 @@ async function awaitPlannedScreen(options: {
   sent: number;
 }): Promise<void> {
   const { pty, runId, label, planKeys, planned, sent } = options;
-  const stop = (reason: string) => answerRefused(`${reason} ${NOTHING_CHOSEN}`);
+  const stop = (reason: string) => answerRefused(`${reason} ${ARROWS_SENT}`);
   const remaining = planned.keys.slice(sent);
   const lastKeyNotDrawn = planned.keys.slice(sent - 1);
   const deadline = Date.now() + ANSWER_REDRAW_WAIT_MS;
   for (;;) {
-    const screen = await readPluginTerminalScreen(pty, runId, null, ANSWER_SCREEN_LINES);
+    const screen = await beforeDeadline(
+      readPluginTerminalScreen(pty, runId, null, ANSWER_SCREEN_LINES),
+      deadline
+    );
+    if (screen === null) throw stop("Couldn't read the terminal in time to check the question.");
     if (screen.status !== "ok") throw stop("Couldn't read the terminal to check the question.");
     const now = planKeys(screen.text, label);
     if (!now.ok || now.question !== planned.question) {
@@ -160,7 +177,7 @@ export async function answerRunByLabel(options: {
       // Every key is for the terminal the screen was read from: a restart
       // under the same id between keys stops the rest.
       if (generation !== null && !pty.isLiveGeneration(runId, generation)) {
-        throw answerRefused(index > 0 ? `${MOVED_ON} ${NOTHING_CHOSEN}` : MOVED_ON);
+        throw answerRefused(index > 0 ? `${MOVED_ON} ${ARROWS_SENT}` : MOVED_ON);
       }
       const refusal = stillAllowed();
       if (refusal !== null) throw answerRefused(refusal);

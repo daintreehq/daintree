@@ -364,6 +364,52 @@ describe("the question a list asks", () => {
     expect(parseChoiceList(changedAround)!.question).toBe(question);
   });
 
+  it("keeps the command as drawn: a leading > or a changed indent is a different question", () => {
+    const ask = (body: string[]) =>
+      [
+        "────────────────────────────────────────",
+        " Bash command",
+        "",
+        ...body,
+        "",
+        " Do you want to proceed?",
+        " ❯ 1. Yes",
+        "   2. No",
+        "",
+        HINT,
+      ].join("\n");
+    const question = (body: string[]) => parseChoiceList(ask(body))!.question;
+    expect(question(["   > /tmp/task.sh"])).not.toBe(question(["   /tmp/task.sh"]));
+    expect(question(["   if ok:", "       run()"])).not.toBe(question(["   if ok:", "   run()"]));
+  });
+
+  it("reads past a divider inside the command, and the whole of a long one", () => {
+    const heredoc = (target: string) =>
+      permission("rm -rf build", 1).replace(
+        "   rm -rf build",
+        [`   cat > ${target} <<'EOF'`, "   ────────────────", "   EOF"].join("\n")
+      );
+    expect(parseChoiceList(heredoc("/tmp/cache"))!.question).not.toBe(
+      parseChoiceList(heredoc("~/.ssh/config"))!.question
+    );
+    const long = (first: string) =>
+      permission("rm -rf build", 1).replace(
+        "   rm -rf build",
+        [`   ${first}`, ...Array.from({ length: 24 }, (_, i) => `   step ${i}`)].join("\n")
+      );
+    expect(parseChoiceList(long("cd ~/scratch"))!.question).not.toBe(
+      parseChoiceList(long("cd ~/prod"))!.question
+    );
+  });
+
+  it("counts the last option's wrapped rows", () => {
+    const scope = (wrapped: string) =>
+      ["Which scope?", "❯ 1. Cancel", "  2. Allow", `     ${wrapped}`, "", HINT].join("\n");
+    expect(parseChoiceList(scope("for this file only"))!.question).not.toBe(
+      parseChoiceList(scope("for all repositories permanently"))!.question
+    );
+  });
+
   it("is the same for the looser plan wherever the highlight is, and differs with the prompt", () => {
     const trust = (highlightNo: boolean, folder: string) =>
       [

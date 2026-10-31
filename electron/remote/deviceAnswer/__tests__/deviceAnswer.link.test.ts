@@ -314,6 +314,18 @@ describe("answering a connected host's agents from a device paired with the Shel
     expect(older.client.isOpen).toBe(true);
   });
 
+  it("names a host that can't check the question as needing an update even with nothing waiting", async () => {
+    const older = await pair();
+    older.host.registerCallHandler(
+      DeviceAnswerLinkMethod.LIST,
+      DeviceAnswerListPayloadSchema,
+      () => ({ runs: [] })
+    );
+    sessionByHost.set("studio-04", older.client);
+    const listed = await client.listWaiting();
+    expect(listed.find((host) => host.hostId === "studio-04")?.status).toBe("needs-update");
+  });
+
   it("stops pressing when the Shell's link closes mid-answer, and says it may have been pressed", async () => {
     let carryOn!: () => void;
     const gate = new Promise<void>((resolve) => (carryOn = resolve));

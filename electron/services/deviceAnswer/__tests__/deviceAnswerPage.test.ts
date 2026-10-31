@@ -110,7 +110,7 @@ describe("the paired device's page", () => {
   it("names each run's machine once a host is connected, and answers it on that machine", async () => {
     await openPage({
       runs: [
-        run({ hostId: "local", host: "greg-studio" }),
+        run({ hostId: "local", host: "greg-studio", questionId: "question-of-local-run-01" }),
         run({ hostId: "studio-03", host: "studio-03", project: "api" }),
       ],
       hosts: [
@@ -157,6 +157,32 @@ describe("the paired device's page", () => {
       label: "Yes",
       questionId: "question-of-run-1-0001",
     });
+  });
+
+  it("answers with the question the card shows now, though its options read the same", async () => {
+    const waiting = {
+      runs: [
+        run({
+          screen: "Run rm -rf build?\n❯ 1. Yes\n  2. No",
+          questionId: "question-a-0000000001",
+        }),
+      ],
+    };
+    await openPage(waiting);
+    const yes = button(document.querySelector(".run")!, "Yes");
+    // The agent asks again with the same options; the next read shows it.
+    waiting.runs = [
+      run({
+        screen: "Run git push --force?\n❯ 1. Yes\n  2. No",
+        questionId: "question-b-0000000002",
+      }),
+    ];
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(document.querySelector(".run pre")?.textContent).toContain("git push --force");
+    expect(button(document.querySelector(".run")!, "Yes")).toBe(yes);
+    yes.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent.at(-1)!.body).toMatchObject({ label: "Yes", questionId: "question-b-0000000002" });
   });
 
   it("keeps the runs it can answer when what it's told of hosts can't be read", async () => {
