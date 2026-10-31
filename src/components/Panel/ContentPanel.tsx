@@ -805,8 +805,8 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
 export const ContentPanel = forwardRef<HTMLDivElement, ContentPanelProps>(
   function ContentPanel(props, ref) {
     // Resolve the display title once for both the header and the rename
-    // editor (WYSIWYG prefill): identity-only in the dock, task-composed in
-    // the grid. Non-pty panels keep the caller-provided title untouched, and
+    // editor (WYSIWYG prefill): task-composed in the grid and in a dock
+    // preview alike, so a preview names the session its chip names. Non-pty panels keep the caller-provided title untouched, and
     // a parent-supplied override (props.title differing from the stored panel
     // title, e.g. the fleet scope's worktree prefix) always wins.
     const showAgentTaskTitles = usePreferencesStore((s) => s.showAgentTaskTitles);
@@ -814,17 +814,13 @@ export const ContentPanel = forwardRef<HTMLDivElement, ContentPanelProps>(
     const composedTitle = usePanelStore((s) => {
       const panel = s.panelsById[props.id];
       if (!panel || !isPtyPanel(panel) || panel.title !== propsTitle) return undefined;
-      return getTerminalDisplayTitle(panel, props.location === "dock" ? "base" : "full", {
-        showTask: showAgentTaskTitles,
-      });
+      return getTerminalDisplayTitle(panel, "full", { showTask: showAgentTaskTitles });
     });
     // The task alone, which is what the header paints: the brand mark beside it
-    // already names the agent. Only the grid composes tasks, and only when the
-    // compact form actually differs.
+    // already names the agent. Only when the compact form actually differs.
     const compactTitle = usePanelStore((s) => {
       const panel = s.panelsById[props.id];
       if (!panel || !isPtyPanel(panel) || panel.title !== propsTitle) return undefined;
-      if (props.location === "dock") return undefined;
       const compact = getTerminalDisplayTitle(panel, "compact", { showTask: showAgentTaskTitles });
       return compact && compact !== composedTitle ? compact : undefined;
     });

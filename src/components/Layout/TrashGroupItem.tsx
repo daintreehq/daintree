@@ -25,6 +25,23 @@ import {
 } from "./trashCountdown";
 import { pluralize } from "@/lib/pluralize";
 
+/** A trashed panel's name: a frozen user title, else its last task, else its launch identity. */
+export function resolveTrashedPanelName(terminal: PanelInstance): string | null {
+  if (isPtyPanel(terminal)) {
+    // A user-locked title is fully frozen — it outranks the observed task.
+    if ((terminal.titleMode ?? "default") === "user") return terminal.title;
+    const observed = cleanTaskTitle(terminal.lastObservedTitle);
+    if (observed && !isUselessTitle(observed)) return observed;
+    if (terminal.launchAgentId) {
+      if (terminal.title && !isUselessTitle(terminal.title)) return terminal.title;
+      const agentConfig = getEffectiveAgentConfig(terminal.launchAgentId);
+      return agentConfig?.name ?? terminal.launchAgentId;
+    }
+  }
+  if (terminal.title && !isUselessTitle(terminal.title)) return terminal.title;
+  return null;
+}
+
 interface TrashGroupItemProps {
   groupRestoreId: string;
   groupMetadata: TrashedTerminalGroupMetadata;
@@ -81,23 +98,7 @@ export function TrashGroupItem({
   // label keeps the header and expanded list consistent.
   const activeEntry = terminals.find(({ terminal }) => terminal.id === groupMetadata.activeTabId);
 
-  const resolvedActiveTitle = (() => {
-    if (!activeEntry) return null;
-    const { terminal } = activeEntry;
-    if (isPtyPanel(terminal)) {
-      // A user-locked title is fully frozen — it outranks the observed task.
-      if ((terminal.titleMode ?? "default") === "user") return terminal.title;
-      const observed = cleanTaskTitle(terminal.lastObservedTitle);
-      if (observed && !isUselessTitle(observed)) return observed;
-      if (terminal.launchAgentId) {
-        if (terminal.title && !isUselessTitle(terminal.title)) return terminal.title;
-        const agentConfig = getEffectiveAgentConfig(terminal.launchAgentId);
-        return agentConfig?.name ?? terminal.launchAgentId;
-      }
-    }
-    if (terminal.title && !isUselessTitle(terminal.title)) return terminal.title;
-    return null;
-  })();
+  const resolvedActiveTitle = activeEntry ? resolveTrashedPanelName(activeEntry.terminal) : null;
 
   const fallbackName = `Tab group (${pluralize(tabCount, "tab")})`;
   const groupName = resolvedActiveTitle
@@ -106,7 +107,13 @@ export function TrashGroupItem({
       : resolvedActiveTitle
     : fallbackName;
 
-  const childName = useCallback((terminal: PanelInstance) => terminal.title || "Terminal", []);
+  // Members are named the way the group header and single rows are: the task
+  // a "Claude" was on, not "Claude" four times over.
+  const childName = useCallback(
+    (terminal: PanelInstance) =>
+      resolveTrashedPanelName(terminal) ?? (terminal.title || "Terminal"),
+    []
+  );
 
   const handleRemoveAll = useCallback(() => {
     // Every member by name, not just the count: a bundled destruction owes the
@@ -175,8 +182,8 @@ export function TrashGroupItem({
                 <span aria-hidden="true" className="text-text-muted">
                   &middot;
                 </span>
-                <span className="inline-flex shrink-0 items-center gap-1 text-status-warning">
-                  <Unlink className="h-2.5 w-2.5" aria-hidden="true" />
+                <span className="inline-flex shrink-0 items-center gap-1 text-text-secondary">
+                  <Unlink className="h-2.5 w-2.5 text-status-warning" aria-hidden="true" />
                   Worktree deleted
                 </span>
               </>
@@ -195,6 +202,7 @@ export function TrashGroupItem({
                   // Focusable while unavailable, so it stays the row's keyboard
                   // target instead of Remove all.
                   aria-disabled={!canRestore || undefined}
+                  data-dock-row-target=""
                   aria-label={
                     isOrphan
                       ? canRestore
@@ -249,7 +257,7 @@ export function TrashGroupItem({
               return 0;
             })
             .map(({ terminal }) => {
-              const terminalName = terminal.title || "Terminal";
+              const terminalName = childName(terminal);
               const isActiveTab = groupMetadata.activeTabId === terminal.id;
               return (
                 <div

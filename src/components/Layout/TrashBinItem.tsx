@@ -102,7 +102,12 @@ export function TrashBinItem({
         />
       </div>
 
-      <div className="flex-1 min-w-0">
+      {/* Clicking the row restores it, as clicking a Waiting or Unread row
+          opens it; the Restore button stays the row's keyboard target. */}
+      <div
+        className={cn("flex-1 min-w-0", canRestore && "cursor-pointer")}
+        onClick={canRestore ? handleRestore : undefined}
+      >
         <div className="text-xs font-medium text-text-secondary group-hover:text-text-primary truncate transition-colors">
           {terminalName}
         </div>
@@ -127,8 +132,8 @@ export function TrashBinItem({
               {/* A glyph, not just a colour: at the final approach the deadline
                   beside it is warning-coloured too, and two warnings that differ
                   only in hue read as one. */}
-              <span className="inline-flex shrink-0 items-center gap-1 text-status-warning">
-                <Unlink className="h-2.5 w-2.5" aria-hidden="true" />
+              <span className="inline-flex shrink-0 items-center gap-1 text-text-secondary">
+                <Unlink className="h-2.5 w-2.5 text-status-warning" aria-hidden="true" />
                 Worktree deleted
               </span>
             </>

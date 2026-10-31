@@ -18,10 +18,10 @@ import {
 import { DURATION_200, UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
 import { usePanelStore } from "@/store";
 import { TRASH_TTL_SECONDS, useTrashCountdown, type TrashRemovalRequest } from "./trashCountdown";
-import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
+import type { PanelInstance } from "@shared/types/panel";
 import type { TrashedTerminal, TrashedTerminalGroupMetadata } from "@/store/slices";
 import { TrashBinItem } from "./TrashBinItem";
-import { TrashGroupItem } from "./TrashGroupItem";
+import { TrashGroupItem, resolveTrashedPanelName } from "./TrashGroupItem";
 import {
   DOCK_STATUS_PILL_CLASS,
   DOCK_STATUS_PILL_OPEN_CLASS,
@@ -446,10 +446,9 @@ export function TrashContainer({
   const trashPreviewTitles = useMemo(() => {
     const titles: string[] = [];
     for (const item of trashedTerminals) {
-      const panel = item.terminal;
-      const lastObservedTitle = isPtyPanel(panel) ? panel.lastObservedTitle : undefined;
-      const title = panel.title || lastObservedTitle;
-      titles.push(title || "Untitled");
+      // Named as the rows above name them, so the confirmation lists the
+      // sessions the user just read rather than "Claude" four times.
+      titles.push(resolveTrashedPanelName(item.terminal) ?? (item.terminal.title || "Untitled"));
     }
     return titles;
   }, [trashedTerminals]);

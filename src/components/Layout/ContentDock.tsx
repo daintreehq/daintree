@@ -1,4 +1,11 @@
-import { useMemo, useRef, useCallback, useLayoutEffect, useSyncExternalStore } from "react";
+import {
+  useMemo,
+  useRef,
+  useCallback,
+  useLayoutEffect,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import { useShallow } from "zustand/react/shallow";
 import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
@@ -66,6 +73,7 @@ import {
   type DockRenderItem,
 } from "./dockRenderItems";
 import { usePreferencesStore, type DockDensity } from "@/store/preferencesStore";
+import { dockSessionTags } from "./dockSessionTag";
 
 const DOCK_DENSITY_OPTIONS = [
   { value: "compact", label: "Compact" },
@@ -113,6 +121,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   // inside HelpPanel, so all must stay out of the dock.
   const helpTerminalIdList = useHelpPanelStore(useShallow(selectSlotTerminalIds));
   const setDockDensity = usePreferencesStore((s) => s.setDockDensity);
+  const showAgentTaskTitles = usePreferencesStore((s) => s.showAgentTaskTitles);
 
   // Narrow dock subscription (#10908). Subscribing to the whole `panelsById`
   // re-rendered the dock on every panel's rAF status-buffer flush — including
@@ -404,6 +413,17 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
     return buildDockRenderItems(dockTerminals, storeTabGroups, activeWorktreeId);
   }, [dockTerminals, storeTabGroups, activeWorktreeId]);
 
+  // Chips that would read the same get the time their session started.
+  const sessionTags = useMemo(
+    () =>
+      dockSessionTags(
+        dockItems.filter((item) => item.panels.length === 1).map((item) => item.panels[0]!),
+        showAgentTaskTitles,
+        Date.now()
+      ),
+    [dockItems, showAgentTaskTitles]
+  );
+
   // Tab group IDs for SortableContext
   const panelIds = useMemo(() => {
     if (dockItems.length === 0) {
@@ -414,6 +434,43 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   }, [dockItems]);
 
   const isCompact = density === "compact";
+
+  // The tray drops its words before the rail drops a chip. It condenses the
+  // moment this worktree's chips stop fitting, and only expands again once they
+  // would still fit beside the full-width tray — the width it gives back is
+  // remembered, so the two never trade places on every resize.
+  const railContentRef = useRef<HTMLDivElement | null>(null);
+  const expandedTrayWidthRef = useRef(0);
+  const [isTrayCondensed, setIsTrayCondensed] = useState(false);
+  useLayoutEffect(() => {
+    const rail = scrollContainerRef.current;
+    const content = railContentRef.current;
+    const tray = actionContainerRef.current;
+    if (!rail || !content || !tray) return;
+    const evaluate = () => {
+      const railStyle = getComputedStyle(rail);
+      const needed =
+        content.scrollWidth +
+        parseFloat(railStyle.paddingLeft) +
+        parseFloat(railStyle.paddingRight);
+      setIsTrayCondensed((condensed) => {
+        if (!condensed) {
+          if (needed <= rail.clientWidth + 1) return false;
+          expandedTrayWidthRef.current = tray.offsetWidth;
+          return true;
+        }
+        const regained = Math.max(0, expandedTrayWidthRef.current - tray.offsetWidth);
+        return needed > rail.clientWidth - regained + 1;
+      });
+    };
+    evaluate();
+    const observer = new ResizeObserver(evaluate);
+    observer.observe(rail);
+    observer.observe(content);
+    observer.observe(tray);
+    return () => observer.disconnect();
+  }, []);
+  const isTrayCompact = isCompact || isTrayCondensed;
 
   return (
     <ContextMenu>
@@ -469,7 +526,10 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
                 items={panelIds}
                 strategy={horizontalListSortingStrategy}
               >
-                <div className="flex items-center gap-[var(--dock-gap)] min-w-[100px] min-h-[calc(var(--dock-item-height)-4px)]">
+                <div
+                  ref={railContentRef}
+                  className="flex items-center gap-[var(--dock-gap)] min-w-[100px] min-h-[calc(var(--dock-item-height)-4px)]"
+                >
                   {dockItems.length === 0 ? (
                     <SortableDockPlaceholder />
                   ) : (
@@ -480,7 +540,10 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
                         return (
                           <SortableDockItem key={group.id} terminal={terminal} sourceIndex={index}>
                             {isPtyPanel(terminal) ? (
-                              <DockedTerminalItem terminal={terminal} />
+                              <DockedTerminalItem
+                                terminal={terminal}
+                                sessionTag={sessionTags.get(terminal.id)}
+                              />
                             ) : (
                               <DockedNonPtyPanelItem
                                 panel={terminal}
@@ -525,14 +588,30 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
             role="group"
             aria-label="All worktrees"
             className="dock-status-tray shrink-0"
+            data-condensed={isTrayCompact || undefined}
           >
-            <BackgroundContainer compact={isCompact} />
-            <WaitingContainer compact={isCompact} />
-            <UnreadContainer compact={isCompact} />
-            <ErrorsContainer compact={isCompact} />
+            {/* The scope, said once for the whole tray: every count here is
+                project-wide while the chips beside it are this worktree's. The
+                group's own name carries it for assistive tech. */}
+            <span
+              className="dock-status-tray-scope dock-status-tray-scope--full"
+              aria-hidden="true"
+            >
+              All worktrees
+            </span>
+            <span
+              className="dock-status-tray-scope dock-status-tray-scope--short"
+              aria-hidden="true"
+            >
+              All
+            </span>
+            <BackgroundContainer compact={isTrayCompact} />
+            <WaitingContainer compact={isTrayCompact} />
+            <UnreadContainer compact={isTrayCompact} />
+            <ErrorsContainer compact={isTrayCompact} />
             <TrashContainer
               trashedTerminals={trashedItems}
-              compact={isCompact}
+              compact={isTrayCompact}
               onFocusHandoff={handleTrashFocusHandoff}
             />
           </div>
