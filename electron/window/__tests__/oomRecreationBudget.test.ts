@@ -233,17 +233,24 @@ describe("OOM recreation budget across replacement windows (#15647)", () => {
     vi.restoreAllMocks();
   });
 
-  /** One OOM in the startup view, run to completion; returns the window it leaves standing. */
+  /** Runs the crash's recovery to completion; returns the window it leaves standing. */
+  async function settle(win: WiredWindow): Promise<WiredWindow> {
+    await vi.runAllTimersAsync();
+    if (!win.destroyed) return win;
+    // A window torn down without a live replacement is a failed rebuild, not
+    // a recreation.
+    expect(win.replacement?.destroyed).toBe(false);
+    return win.replacement!;
+  }
+
   async function appViewOom(win: WiredWindow): Promise<WiredWindow> {
     win.appViewGone("oom");
-    await vi.runAllTimersAsync();
-    return win.destroyed ? win.replacement! : win;
+    return settle(win);
   }
 
   async function projectViewOom(win: WiredWindow): Promise<WiredWindow> {
     win.projectViewGone("oom");
-    await vi.runAllTimersAsync();
-    return win.destroyed ? win.replacement! : win;
+    return settle(win);
   }
 
   it("shows the recovery page on the third OOM within a minute, and recreates an isolated OOM after", async () => {
