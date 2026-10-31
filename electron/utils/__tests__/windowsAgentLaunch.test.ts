@@ -3,7 +3,11 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { quotePowerShellArg } from "../../../shared/utils/shellEscape.js";
+import { generateAgentCommand } from "../../../shared/types/agentSettings.js";
+import {
+  quotePowerShellArg,
+  setAgentCommandDialectResolver,
+} from "../../../shared/utils/shellEscape.js";
 import {
   buildWindowsAgentLaunchScript,
   isWindowsAgentExecutableFor,
@@ -38,6 +42,24 @@ describe("Windows agent argv", () => {
   it("decodes every source literal into the original argv token", () => {
     const command = `& ${quotePowerShellArg("C:\\O’Brien\\agent.exe")} ${values.map(quotePowerShellArg).join(" ")}`;
     expect(parseWindowsAgentCommand(command)).toEqual(["C:\\O’Brien\\agent.exe", ...values]);
+  });
+
+  it("decodes a generated command's preset args into the preset's own elements (#15638)", () => {
+    const presetArgs = ["--system-prompt", "two words", "  padded  ", "it's fine"];
+    setAgentCommandDialectResolver(() => "windows");
+    try {
+      const command = generateAgentCommand(
+        `& ${quotePowerShellArg("C:\\agent.exe")}`,
+        {},
+        "claude",
+        {
+          presetArgs,
+        }
+      );
+      expect(parseWindowsAgentCommand(command)).toEqual(["C:\\agent.exe", ...presetArgs]);
+    } finally {
+      setAgentCommandDialectResolver(null);
+    }
   });
 
   it("preserves inert fused options that command generation leaves bare", () => {

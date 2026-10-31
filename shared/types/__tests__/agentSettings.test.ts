@@ -670,6 +670,56 @@ describe("generateAgentCommand with recipeArgs", () => {
   });
 });
 
+describe("generateAgentCommand with presetArgs (#15638)", () => {
+  forcePosixPlatform();
+
+  it("keeps a multi-word preset element as one quoted argument", () => {
+    const cmd = generateAgentCommand("claude", {}, "claude", {
+      presetArgs: ["--system-prompt", "two words"],
+    });
+    expect(cmd).toBe("claude --system-prompt 'two words'");
+  });
+
+  it("quotes non-flag preset elements and leaves safe options bare", () => {
+    const cmd = generateAgentCommand("claude", {}, "claude", {
+      presetArgs: ["--provider", "blue", "--verbose"],
+    });
+    expect(cmd).toBe("claude --provider 'blue' --verbose");
+  });
+
+  it("produces the same argv as the persisted launch flags replayed on resume", () => {
+    const presetArgs = ["--system-prompt", "be concise and direct", "--verbose"];
+    const launch = generateAgentCommand("claude", {}, "claude", { presetArgs });
+    const flags = buildAgentLaunchFlags({}, "claude", { presetArgs });
+    expect(launch).toBe(buildLaunchCommandFromFlags("claude", "claude", flags));
+  });
+
+  it("places preset args after --model and before recipe args", () => {
+    const cmd = generateAgentCommand("claude", {}, "claude", {
+      modelId: "claude-opus-4-6",
+      presetArgs: ["--append-system-prompt", "stay terse"],
+      recipeArgs: "--recipe-flag",
+    });
+    expect(cmd).toBe(
+      "claude --model claude-opus-4-6 --append-system-prompt 'stay terse' --recipe-flag"
+    );
+  });
+
+  it("produces no change for an empty preset args array", () => {
+    const base = generateAgentCommand("claude", {}, "claude");
+    expect(generateAgentCommand("claude", {}, "claude", { presetArgs: [] })).toBe(base);
+  });
+
+  it("keeps fused, padded, whitespace-only and apostrophe elements exactly as given", () => {
+    const presetArgs = ["--label=two words", "  padded  ", " ", "it's fine"];
+    const cmd = generateAgentCommand("claude", {}, "claude", { presetArgs });
+    expect(cmd).toBe("claude '--label=two words' '  padded  ' ' ' 'it'\\''s fine'");
+    const flags = buildAgentLaunchFlags({}, "claude", { presetArgs });
+    expect(flags).toEqual(presetArgs);
+    expect(cmd).toBe(buildLaunchCommandFromFlags("claude", "claude", flags));
+  });
+});
+
 describe("buildLaunchCommandFromFlags", () => {
   forcePosixPlatform();
 

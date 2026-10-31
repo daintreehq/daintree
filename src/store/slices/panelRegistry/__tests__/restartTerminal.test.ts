@@ -1765,7 +1765,7 @@ describe("restartTerminal keeps the launch's standing instruction", () => {
       expect.any(String),
       expect.anything(),
       "claude",
-      expect.objectContaining({ systemPromptArgs: pair, presetArgs: "--provider amber" })
+      expect.objectContaining({ systemPromptArgs: pair, presetArgs: ["--provider", "amber"] })
     );
     expect(mockSpawn.mock.calls[0]![0].agentLaunchFlags).toEqual(["--rebuilt", ...pair]);
   });
@@ -2132,6 +2132,30 @@ describe("restartTerminalOnPreset", () => {
     expect(pane().callerLaunchFlags).toEqual(["--verbose"]);
     expect(pane().agentLaunchFlags).not.toContain("--continue");
     expect(mockSpawn.mock.calls[0]![0].command).not.toContain("--continue");
+  });
+
+  it("respawns a multi-word preset element as one argument in both the command and its launch flags (#15638)", async () => {
+    const actual = await vi.importActual<typeof import("@shared/types")>("@shared/types");
+    const { generateAgentCommand } = await import("@shared/types");
+    vi.mocked(generateAgentCommand).mockImplementationOnce(actual.generateAgentCommand);
+    buildAgentLaunchFlagsMock.mockImplementationOnce(actual.buildAgentLaunchFlags);
+    getMergedPresetMock.mockImplementation((_agentId: string, presetId: string) =>
+      presetId === "prompted"
+        ? { id: "prompted", name: "Prompted", args: ["--system-prompt", "two words"] }
+        : presets[presetId]
+    );
+    seed();
+
+    await usePanelStore.getState().restartTerminalOnPreset("test-1", "prompted");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    const baseCommand = vi.mocked(generateAgentCommand).mock.calls[0]![0];
+    expect(payload.command).toContain("--system-prompt 'two words'");
+    expect(payload.agentLaunchFlags).toEqual(["--system-prompt", "two words"]);
+    expect(pane().agentLaunchFlags).toEqual(["--system-prompt", "two words"]);
+    expect(payload.command).toBe(
+      actual.buildLaunchCommandFromFlags(baseCommand, "claude", payload.agentLaunchFlags)
+    );
   });
 
   it("leaves a fallback hop's caller flags exactly as they were", async () => {

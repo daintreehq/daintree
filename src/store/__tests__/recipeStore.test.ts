@@ -157,6 +157,7 @@ import { usePanelLimitStore } from "../panelLimitStore";
 import type { RecipeTerminal } from "@shared/types/project";
 import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { RecipeImportDropsTerminalsError } from "@/utils/recipeImport";
+import { buildLaunchCommandFromFlags } from "@shared/types/agentSettings";
 
 /** A host approval that genuinely covers `recipe`, as the bridge would issue it. */
 function approvalFor(recipe: { id: string; terminals: RecipeTerminal[] }, terminalCount?: number) {
@@ -2124,6 +2125,27 @@ describe("recipeStore", () => {
         // Restart/resume must reproduce the scoped preset, so its args have to
         // land in the persisted launch flags too — not just the live command.
         expect(call.agentLaunchFlags).toEqual(expect.arrayContaining(["--careful"]));
+      });
+
+      it("launches a multi-word preset element as one argument, as its launch flags replay it (#15638)", async () => {
+        getAgentSettingsMock.mockResolvedValue({
+          agents: {
+            claude: {
+              presetId: "prompted",
+              customPresets: [
+                { id: "prompted", name: "Prompted", args: ["--system-prompt", "two words"] },
+              ],
+            },
+          },
+        });
+
+        const call = await runSingleAgentRecipe({ type: "claude", title: "Claude", env: {} });
+
+        expect(call.command).toContain("--system-prompt 'two words'");
+        expect(call.agentLaunchFlags).toEqual(["--system-prompt", "two words"]);
+        expect(call.command).toBe(
+          buildLaunchCommandFromFlags("claude", "claude", call.agentLaunchFlags!)
+        );
       });
 
       it("launches the bare agent where the worktree saved Agent default (#15054)", async () => {

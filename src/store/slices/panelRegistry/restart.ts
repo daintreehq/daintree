@@ -781,7 +781,7 @@ export const createRestartActions = (
                 {
                   clipboardDirectory,
                   modelId: currentTerminal.agentModelId,
-                  presetArgs: runtimeSettings.settings.preset?.args?.join(" "),
+                  presetArgs: runtimeSettings.settings.preset?.args,
                   globalSkipPermissions: runtimeSettings.globalSkipPermissions,
                   globalUseAltScreen: runtimeSettings.globalUseAltScreen,
                 }
@@ -1744,7 +1744,7 @@ async function respawnAgentOnPreset(
         clipboardDirectory,
         modelId: terminal.agentModelId,
         systemPromptArgs,
-        presetArgs: nextPreset.args?.join(" "),
+        presetArgs: nextPreset.args,
         globalSkipPermissions,
         globalUseAltScreen,
       }),

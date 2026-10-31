@@ -299,7 +299,7 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
       clipboardDirectory,
       modelId: options?.modelId,
       systemPromptArgs: options?.systemPromptArgs,
-      presetArgs: preset?.args?.join(" "),
+      presetArgs: preset?.args,
       globalSkipPermissions,
       globalUseAltScreen,
       sessionId: assignedSessionId,

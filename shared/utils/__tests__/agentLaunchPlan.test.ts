@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getEffectiveAgentConfig, setUserRegistry } from "../../config/agentRegistry.js";
-import type { AgentSettings } from "../../types/agentSettings.js";
+import {
+  buildLaunchCommandFromFlags,
+  stripAssignedSessionIdArgs,
+  type AgentSettings,
+} from "../../types/agentSettings.js";
 import { buildAgentLaunchPlan, type AgentLaunchPlanInput } from "../agentLaunchPlan.js";
 
 function input(overrides: Partial<AgentLaunchPlanInput> = {}): AgentLaunchPlanInput {
@@ -377,6 +381,25 @@ describe("buildAgentLaunchPlan", () => {
     expect(plan.command?.endsWith("--model opus")).toBe(true);
     expect(plan.launchFlags?.slice(-2)).toEqual(["--model", "opus"]);
     expect(plan.callerLaunchFlags).toEqual(["--model", "opus"]);
+  });
+
+  it("launches a multi-word preset element as one argument, as its resume flags replay it (#15638)", async () => {
+    const plan = await buildAgentLaunchPlan(
+      input({
+        settings: settingsWith({
+          presetId: "prompted",
+          customPresets: [
+            { id: "prompted", name: "Prompted", args: ["--system-prompt", "two words"] },
+          ],
+        }),
+      })
+    );
+
+    expect(plan.command).toContain("--system-prompt 'two words'");
+    expect(plan.launchFlags).toEqual(["--system-prompt", "two words"]);
+    expect(stripAssignedSessionIdArgs(plan.command!, "claude")).toBe(
+      buildLaunchCommandFromFlags("claude", "claude", plan.launchFlags!)
+    );
   });
 
   it("mints a fresh session id per launch and runs the command it was resolved to", async () => {
