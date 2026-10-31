@@ -54,6 +54,8 @@ interface CreatedWorktree {
   worktreeId: string;
   branch: string;
   setupState: WorktreeSetupState;
+  /** The commit a `fetchBase` create started the branch at. */
+  startCommit?: string;
 }
 
 import type {
@@ -152,6 +154,7 @@ export function repoNameFromCommonDir(commonDir: string): string {
 import { waitForPathExists } from "../utils/fs.js";
 import { markHostPerformance } from "../utils/hostPerformance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import { worktreeSnapshotContentEqual } from "../../shared/utils/worktreeSnapshotTick.js";
 import {
   parseCheckedOutBranches,
@@ -296,6 +299,36 @@ const FORGE_CONFIG_POLL_INTERVAL_MS = 5 * 60 * 1000;
 // polling anyway. A stat on a dead mount never returns, and polling stranded
 // behind it would be worse than one check against a possibly stale provider.
 const FORGE_RESUME_SETTLE_TIMEOUT_MS = 5_000;
+
+// The fresh-base fetch a create can ask for (#15733), including any wait behind
+// a background fetch of the same repo. Under the 30s a workspace request and an
+// MCP dispatch each get, so a slow remote fails the create with its own reason
+// instead of the caller timing out on a create that may still land.
+const CREATE_BASE_FETCH_TIMEOUT_MS = 20_000;
+
+/** Where a fresh-base create fetches its base from. */
+interface CreateBaseSource {
+  remote: string;
+  /** The branch on the remote, `refs/heads/<name>`. */
+  sourceRef: string;
+  /** The remote-tracking ref the fetch writes and the start commit is read from. */
+  trackingRef: string;
+}
+
+/** A remote base names its own source: `origin/develop` is `develop` on `origin`. */
+function remoteCreateBaseSource(baseBranch: string, remotes: readonly string[]): CreateBaseSource {
+  const parsed = parseKnownRemoteBranch(baseBranch, remotes);
+  if (!parsed) {
+    throw new Error(
+      `Can't fetch base '${baseBranch}': it doesn't name a branch on any of this repository's remotes (${remotes.length > 0 ? remotes.join(", ") : "none"}). No worktree was created.`
+    );
+  }
+  return {
+    remote: parsed.remote,
+    sourceRef: `refs/heads/${parsed.branch}`,
+    trackingRef: `refs/remotes/${baseBranch}`,
+  };
+}
 
 // FIFO cap on the acknowledged-mutation dedup set. Mutation ids are arbitrary
 // UUIDs (not path-keyed), so size-capping is the only viable pruning strategy;
@@ -3586,6 +3619,7 @@ export class WorkspaceService {
           worktreeId: created.worktreeId,
           branch: created.branch,
           setupState: created.setupState,
+          ...(created.startCommit !== undefined ? { startCommit: created.startCommit } : {}),
         });
       } catch (error) {
         this.sendEvent({
@@ -3610,6 +3644,7 @@ export class WorkspaceService {
         worktreeId: created.worktreeId,
         branch: created.branch,
         setupState: created.setupState,
+        ...(created.startCommit !== undefined ? { startCommit: created.startCommit } : {}),
       });
     } catch (error) {
       this.sendEvent({
@@ -3674,6 +3709,9 @@ export class WorkspaceService {
       fromRemote: options.fromRemote ?? false,
       useExistingBranch: options.useExistingBranch ?? false,
       collisionPolicy: options.collisionPolicy ?? "suffix",
+      // A fresh-base create must not be handed the answer of one that branched
+      // from the last-fetched ref.
+      fetchBase: options.fetchBase ?? false,
       submoduleInit: options.submoduleInit ?? "inherit",
       provisionResource: options.provisionResource ?? false,
       worktreeMode: options.worktreeMode ?? "local",
@@ -3690,6 +3728,91 @@ export class WorkspaceService {
   private normalizeCreateWorktreeKeyPath(pathValue: string): string {
     const resolvedPath = pathResolve(pathValue);
     return os.platform() === "win32" ? resolvedPath.toLowerCase() : resolvedPath;
+  }
+
+  /**
+   * Fetch a create's base from its remote and return the commit the new branch
+   * starts at (#15733). A remote base is fetched as named; a local base from
+   * its upstream, with the local branch left where it is. Nothing here falls
+   * back to a ref it didn't just fetch: a base with no remote behind it is
+   * refused, and a failed fetch throws with git's reason.
+   */
+  private async fetchCreateBase(
+    git: SimpleGit,
+    rootPath: string,
+    baseBranch: string,
+    fromRemote: boolean
+  ): Promise<string> {
+    let remotes: string[];
+    try {
+      remotes = (await git.getRemotes()).map((r) => r.name).filter((n) => n.length > 0);
+    } catch (error) {
+      throw new Error(
+        `Couldn't read this repository's remotes to fetch base '${baseBranch}'. No worktree was created. Details: ${formatErrorMessage(error, "git remote failed")}`,
+        { cause: error }
+      );
+    }
+    const source = fromRemote
+      ? remoteCreateBaseSource(baseBranch, remotes)
+      : await this.upstreamCreateBaseSource(git, baseBranch, remotes);
+    try {
+      return await this.fetchCoordinator.fetchRefCommit({
+        cwd: rootPath,
+        ...source,
+        timeoutMs: CREATE_BASE_FETCH_TIMEOUT_MS,
+      });
+    } catch (error) {
+      throw new Error(
+        `Couldn't fetch base '${baseBranch}' from '${source.remote}'. No worktree was created. Details: ${scrubSecrets(formatErrorMessage(error, "git fetch failed"))}`,
+        { cause: error }
+      );
+    }
+  }
+
+  /** A local base is fetched from its upstream, which must be a branch on one of the remotes. */
+  private async upstreamCreateBaseSource(
+    git: SimpleGit,
+    baseBranch: string,
+    remotes: readonly string[]
+  ): Promise<CreateBaseSource> {
+    const localRef = `refs/heads/${baseBranch}`;
+    let listing: string;
+    try {
+      listing = String(
+        (await git.raw([
+          "for-each-ref",
+          "--format=%(refname)%00%(upstream)%00%(upstream:remotename)%00%(upstream:remoteref)",
+          localRef,
+        ])) ?? ""
+      );
+    } catch (error) {
+      throw new Error(
+        `Couldn't read the upstream of base '${baseBranch}'. No worktree was created. Details: ${formatErrorMessage(error, "git for-each-ref failed")}`,
+        { cause: error }
+      );
+    }
+    // The pattern also lists branches nested under the name (`develop/x`), so
+    // only the exact ref counts.
+    const fields = listing
+      .split("\n")
+      .map((line) => line.split("\0"))
+      .find((parts) => parts[0] === localRef);
+    if (!fields) {
+      throw new Error(
+        `Can't fetch base '${baseBranch}': it isn't a local branch. To fetch a remote branch, name it as '<remote>/<branch>' and set fromRemote. No worktree was created.`
+      );
+    }
+    const [, trackingRef = "", remote = "", sourceRef = ""] = fields;
+    if (
+      !trackingRef.startsWith("refs/remotes/") ||
+      !remotes.includes(remote) ||
+      !sourceRef.startsWith("refs/heads/")
+    ) {
+      throw new Error(
+        `Can't fetch base '${baseBranch}': it has no upstream branch on a remote. Name the remote branch as '<remote>/<branch>' and set fromRemote. No worktree was created.`
+      );
+    }
+    return { remote, sourceRef, trackingRef };
   }
 
   private async performCreateWorktree(
@@ -3735,6 +3858,23 @@ export class WorkspaceService {
       // path patterns can produce. Runs before any mkdir/git so an out-of-bounds
       // target never creates directories or invokes git.
       await assertWorktreePathContained(rootPath, absoluteCreatePath);
+
+      // Fetched before anything is created or marked pending: a failed fetch
+      // must leave nothing behind, and network time must not run down the
+      // topology watcher's pending window. The branch then starts at the
+      // fetched COMMIT rather than the ref, so a fetch landing between here and
+      // the add can't move the start away from the commit reported back.
+      let startCommit: string | undefined;
+      if (options.fetchBase === true) {
+        if (useExistingBranch) {
+          throw new Error(
+            "fetchBase starts a new branch from the fetched base, so it can't be combined with useExistingBranch."
+          );
+        }
+        startCommit = await this.fetchCreateBase(git, rootPath, baseBranch, fromRemote);
+      }
+      const startPoint = startCommit ?? baseBranch;
+
       const parentDir = dirname(absoluteCreatePath);
       if (!existsSync(parentDir)) {
         await mkdir(parentDir, { recursive: true });
@@ -3789,7 +3929,9 @@ export class WorkspaceService {
        * `topic-2`, and `origin/topic` is not that branch's counterpart.
        */
       const shouldTrackBase = async (branchName: string): Promise<boolean> => {
-        if (!fromRemote) return false;
+        // A fresh-base create starts at a commit, and git can only set up
+        // tracking from a branch start point.
+        if (!fromRemote || startCommit !== undefined) return false;
         const parsed = parseKnownRemoteBranch(baseBranch, await knownRemotes());
         return parsed !== null && parsed.branch === branchName;
       };
@@ -3804,7 +3946,7 @@ export class WorkspaceService {
           tracking,
           "--end-of-options",
           path,
-          baseBranch,
+          startPoint,
         ]);
       };
 
@@ -3878,7 +4020,12 @@ export class WorkspaceService {
           // starts at the right commit. That retry emits `--no-track`: a
           // suffixed name is by definition not the remote base's counterpart,
           // and shouldTrackBase is recomputed against the name being created.
-          const canReuse = !listFailed && !fromRemote && !checkedOut.has(newBranch);
+          //
+          // A fresh-base create never reuses either, for the same reason: the
+          // caller asked for the fetched commit, and the existing branch is
+          // wherever it was left. Its retry starts at that commit.
+          const canReuse =
+            !listFailed && !fromRemote && startCommit === undefined && !checkedOut.has(newBranch);
 
           this.topologyWatcher.markPendingCreate(pendingCreateKey);
           if (canReuse) {
@@ -4170,6 +4317,7 @@ export class WorkspaceService {
         // race-free way to learn it. The stamp above happened before this
         // return, so this is never absent for a worktree we just created.
         setupState: this.monitors.get(canonicalWorktreeId)?.setupStatus?.state ?? "pending",
+        ...(startCommit !== undefined ? { startCommit } : {}),
       };
     } catch (error) {
       // Create failed — drop any pending entry so a real external change to

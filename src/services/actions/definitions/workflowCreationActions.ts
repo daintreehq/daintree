@@ -34,7 +34,7 @@ export function registerWorkflowCreationActions(
       id: "worktree.createWithRecipe",
       title: "Create managed worktree",
       description:
-        "Create a managed git worktree; Daintree's creator also copies project config, initializes submodules and runs setup. Pick one mode: new branch, existing branch as named, or pull request. A recipe is optional, only to launch terminals. Setup runs in the background and can fail after this returns.",
+        "Create a managed git worktree: Daintree also copies project config, initializes submodules and runs setup. Pick one source mode. A recipe is optional, only to launch terminals. Setup runs in the background and can fail after this returns.",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -73,6 +73,12 @@ export function registerWorkflowCreationActions(
             "The recipe panels this call actually started, in spawn order. Use these ids to read output from or close the terminals it created."
           ),
         failedTerminalCount: z.number().int().nonnegative(),
+        startCommit: z
+          .string()
+          .optional()
+          .describe(
+            "With source.fetchBase, the commit the branch started at, as fetched. Absent otherwise, and absent means no fetched start was confirmed."
+          ),
         setupState: WorktreeSetupStateSchema.describe(
           "Setup state as of the moment git creation finished, which is BEFORE any recipe terminals or issue assignment this call also did — so it is a snapshot, not the state on return, and setup may since have advanced or failed. Re-read it from the worktree listing, or wait on it where a readiness wait is available, before running work that needs a fully initialized tree."
         ),

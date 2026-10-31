@@ -65,6 +65,7 @@ export async function runWorktreeCreateWithRecipe(
   let useExistingBranch: boolean;
   let fromRemote: boolean;
   let collisionPolicy: WorktreeBranchCollisionPolicy | undefined;
+  const fetchBase = source.kind === "newBranch" && source.fetchBase === true;
   let path: string;
   let created: WorktreeCreateResult;
   try {
@@ -159,6 +160,7 @@ export async function runWorktreeCreateWithRecipe(
         fromRemote,
         useExistingBranch,
         ...(collisionPolicy ? { collisionPolicy } : {}),
+        ...(fetchBase ? { fetchBase: true } : {}),
       },
     });
   } catch (err) {
@@ -213,6 +215,7 @@ export async function runWorktreeCreateWithRecipe(
     spawnedTerminalIds: [],
     failedTerminalCount: 0,
     setupState: created.setupState,
+    ...(created.startCommit !== undefined ? { startCommit: created.startCommit } : {}),
     assignedToSelf,
     assignedUsername,
     assignmentError,

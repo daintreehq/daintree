@@ -4306,6 +4306,7 @@ export interface GeneratedIpcInvokeMap {
           sourcePrLinkedIssueNumber?: number | undefined;
           submoduleInit?: "none" | "inherit" | "all" | undefined;
           collisionPolicy?: "error" | "suffix" | undefined;
+          fetchBase?: boolean | undefined;
         };
         opId?: string | undefined;
       },

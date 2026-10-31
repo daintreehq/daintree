@@ -1258,6 +1258,7 @@ export class WorkspaceClient extends EventEmitter {
       worktreeId?: string;
       branch?: string;
       setupState?: WorktreeSetupState;
+      startCommit?: string;
     }>({
       type: "create-worktree",
       requestId,
@@ -1274,6 +1275,9 @@ export class WorkspaceClient extends EventEmitter {
       // it — saying "setup has started" about a host that never told us would
       // be exactly the invention this field exists to remove.
       setupState: result.setupState ?? "unknown",
+      // Passed on only as the host reported it. Nothing stands in for an
+      // absent one: it is the evidence that the base was actually fetched.
+      ...(typeof result.startCommit === "string" ? { startCommit: result.startCommit } : {}),
     };
   }
 

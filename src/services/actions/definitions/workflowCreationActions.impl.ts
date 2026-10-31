@@ -105,6 +105,8 @@ export const workflowCreationActionRuns = {
     let effectiveUseExisting: boolean;
     let effectiveFromRemote: boolean;
     let collisionPolicy: WorktreeBranchCollisionPolicy | undefined;
+    // Only a new branch has a base to fetch; the host refuses it beside reuse.
+    const fetchBase = source.kind === "newBranch" && source.fetchBase === true;
 
     if (source.kind === "pullRequest") {
       const pr = await forgeClient.getPR(rootPath, source.pullRequestNumber);
@@ -194,6 +196,7 @@ export const workflowCreationActionRuns = {
         fromRemote: effectiveFromRemote,
         useExistingBranch: effectiveUseExisting,
         ...(collisionPolicy ? { collisionPolicy } : {}),
+        ...(fetchBase ? { fetchBase: true } : {}),
       },
       rootPath
     );
@@ -209,6 +212,10 @@ export const workflowCreationActionRuns = {
     // race — store rows travel over a different port than this response,
     // with no ordering between them.
     const { worktreeId, branch: effectiveBranch, setupState } = created;
+    // Only what the host reported: its absence after a `fetchBase` request is
+    // the caller's evidence that no fetched start was confirmed.
+    const startCommitField =
+      created.startCommit !== undefined ? { startCommit: created.startCommit } : {};
 
     let recipeLaunched = false;
     let spawnedTerminalCount = 0;
@@ -265,6 +272,7 @@ export const workflowCreationActionRuns = {
             spawnedTerminalIds: [],
             failedTerminalCount: 0,
             setupState,
+            ...startCommitField,
             assignedToSelf: false,
             assignedUsername: null,
             assignmentError: null,
@@ -318,6 +326,7 @@ export const workflowCreationActionRuns = {
       spawnedTerminalIds,
       failedTerminalCount,
       setupState,
+      ...startCommitField,
       assignedToSelf,
       assignedUsername,
       assignmentError,

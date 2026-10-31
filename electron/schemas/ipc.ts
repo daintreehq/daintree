@@ -1056,6 +1056,9 @@ export const WorktreeCreatePayloadSchema = z.object({
     // reaches WorkspaceService, which owns collision handling atomically — a
     // renderer-side check cannot, because it reserves nothing.
     collisionPolicy: z.enum(["suffix", "error"]).optional(),
+    // Fetch the base before branching (#15733). Declared so the request
+    // reaches the host instead of quietly branching from the last-fetched ref.
+    fetchBase: z.boolean().optional(),
   }),
   // Named by a remote view, so a create whose answer was lost can be looked up
   // by id instead of being repeated. A local view names none.
