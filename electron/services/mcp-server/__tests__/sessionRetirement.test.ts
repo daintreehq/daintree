@@ -137,6 +137,13 @@ describe("SessionStore retirement routes (#15624)", () => {
   });
 
   afterEach(() => {
+    // Drained, and spies restored, while the fake clock is still installed: a
+    // spy restored after it would put the fake `clearTimeout` back.
+    for (const store of stores.splice(0)) {
+      store.drain();
+      store.grantCache.dispose();
+    }
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -291,6 +298,8 @@ describe("SessionStore retirement routes (#15624)", () => {
 
     expect(findResidue(store, ["first"])).toEqual([]);
     expect(ledger.owns(principal, "terminal", "terminal-held")).toBe(true);
+    // Still live, not just still holding: a creation finishing now is recorded.
+    expect(ledger.record(principal, [{ kind: "terminal", id: "terminal-late" }])).toHaveLength(1);
 
     openSession(store, "second", "streamable-http");
     ledger.bindPrincipal("second", id);
@@ -298,6 +307,7 @@ describe("SessionStore retirement routes (#15624)", () => {
 
     expect(findResidue(store, ["second"])).toEqual([]);
     expect(ledger.owns(principal, "terminal", "terminal-held")).toBe(true);
+    expect(ledger.record(principal, [{ kind: "terminal", id: "terminal-later" }])).toHaveLength(1);
   });
 
   it("drain leaves nothing behind for any session", () => {
@@ -358,6 +368,7 @@ describe("SessionStore retirement routes (#15624)", () => {
       private readonly own = new Set(["s1"]);
       readonly ledger = new Ledger();
       readonly plain = { rows: [{ owner: "s1" }] };
+      readonly wrapper = { inner: new Inner() };
       count() {
         return this.own.size;
       }
@@ -370,7 +381,7 @@ describe("SessionStore retirement routes (#15624)", () => {
       "plain.rows.0.owner",
     ]);
     expect(stateCollections(holder)).toEqual(["own", "ledger.bySession"]);
-    expect(opaqueHolders(holder)).toEqual(["ledger.nested"]);
+    expect(opaqueHolders(holder)).toEqual(["ledger.nested", "wrapper.inner"]);
   });
 });
 

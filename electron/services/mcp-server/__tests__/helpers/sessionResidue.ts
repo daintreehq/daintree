@@ -92,26 +92,45 @@ export function stateCollections(root: object): string[] {
 }
 
 /**
- * Objects a ledger holds that {@link findResidue} will not walk into: class
- * instances one level below the store's own ledgers. A ledger nested there
- * would hide its collections from every scan, so each one found must be named
- * in {@link OPAQUE_HOLDERS} as holding no session state.
+ * Every object {@link findResidue} reaches but will not walk into: a class
+ * instance below the store's own ledgers, however it is held there. A ledger
+ * nested that way would hide its collections from every scan, so each one found
+ * must be named in {@link OPAQUE_HOLDERS} as holding no session state.
  */
-export function opaqueHolders(root: object): string[] {
+export function opaqueHolders(
+  root: object,
+  retained: Readonly<Record<string, string>> = RETAINED_COLLECTIONS
+): string[] {
   const paths: string[] = [];
-  for (const [key, value] of Object.entries(root)) {
-    if (typeof value !== "object" || value === null || isPlainData(value)) continue;
-    for (const [inner, held] of Object.entries(value)) {
-      if (typeof held === "object" && held !== null && !isPlainData(held)) {
-        paths.push(`${key}.${inner}`);
+  const seen = new WeakSet<object>();
+  const visit = (value: unknown, path: string, depth: number): void => {
+    if (path in retained) return;
+    if (typeof value !== "object" || value === null || seen.has(value)) return;
+    if (depth > 1 && !isPlainData(value)) {
+      // A promise (a dedup entry's pending call) is a value, not somewhere state is kept.
+      if (!(value instanceof Promise)) paths.push(path);
+      return;
+    }
+    seen.add(value);
+    if (value instanceof Map) {
+      for (const [key, entry] of value) visit(entry, `${path}[${String(key)}]`, depth + 1);
+    } else if (value instanceof Set) {
+      for (const member of value) visit(member, `${path}{}`, depth + 1);
+    } else {
+      for (const [key, entry] of Object.entries(value)) {
+        visit(entry, path === "" ? key : `${path}.${key}`, depth + 1);
       }
     }
-  }
+  };
+  visit(root, "", 0);
   return paths;
 }
 
-/** Class instances below the store's ledgers known to hold no session state, by path. */
-export const OPAQUE_HOLDERS: Readonly<Record<string, string>> = {};
+/** Objects below the store's ledgers known to hold no session state, by path. */
+export const OPAQUE_HOLDERS: Readonly<Record<string, string>> = {
+  "grantCache.sweepTimer":
+    "the cache's own sweep interval handle (a Node Timeout under real timers)",
+};
 
 export interface SeedOptions {
   helpSessionId: string;
