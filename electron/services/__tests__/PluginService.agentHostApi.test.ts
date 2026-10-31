@@ -208,6 +208,7 @@ vi.mock("../plugin/PluginDevWorkerHost.js", () => ({
   PluginDevWorkerHost: devWorkerMock.MockPluginDevWorkerHost,
   CRASH_WINDOW_MS: 30 * 60 * 1000,
 }));
+vi.mock("node-pty", () => ({ spawn: vi.fn() }));
 vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
   PluginDevWorkerMainBridge: devWorkerMock.MockPluginDevWorkerMainBridge,
 }));
@@ -225,6 +226,8 @@ import {
   recordPluginLaunch,
 } from "../plugin/pluginLaunchedAgents.js";
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
+import type { IPty } from "node-pty";
+import { TerminalProcess } from "../pty/TerminalProcess.js";
 
 let tmpDir: string;
 
@@ -610,6 +613,70 @@ describe("Plugin agent-input host API (#10558)", () => {
     await host.sendToActiveAgent("run it", { submit: true });
     expect(fake.submit).toHaveBeenCalledWith("t1", "run it");
     expect(fake.stage).not.toHaveBeenCalled();
+  });
+
+  // #15554. Both calls resolve once their message is posted, so the stage
+  // reaches the pty host while the submit's body still waits for its Enter.
+  // Driven through a real TerminalProcess: the ordering lives in its submit
+  // lane, which two forwarding spies could not show.
+  it("never folds a staged draft into the line a preceding submit:true sends", async () => {
+    const fake = installFakePtyClient([
+      { id: "t1", detectedAgentId: "claude", agentState: "waiting", hasPty: true },
+    ]);
+    const { host } = await setupInputHost(["agent:input"]);
+
+    vi.useFakeTimers();
+    const ptyWrites: string[] = [];
+    const pty: Partial<IPty> = {
+      // Non-positive, so disposing the terminal never signals a real process.
+      pid: 0,
+      cols: 80,
+      rows: 24,
+      write: (data: string | Buffer) => {
+        ptyWrites.push(String(data));
+      },
+      resize: () => {},
+      kill: () => {},
+      pause: () => {},
+      resume: () => {},
+      onData: () => ({ dispose: () => {} }),
+      onExit: () => ({ dispose: () => {} }),
+    };
+    const terminal = new TerminalProcess(
+      "t1",
+      { cwd: process.cwd(), cols: 80, rows: 24, kind: "terminal", launchAgentId: "claude" },
+      { emitData: () => {}, onExit: () => {} },
+      {
+        agentStateService: { handleActivityState: () => {} } as never,
+        ptyPool: null,
+        processTreeCache: null,
+      },
+      { shell: "/bin/zsh", args: ["-l"], env: {} },
+      pty as IPty
+    );
+    onTestFinished(() => {
+      terminal.dispose();
+      vi.useRealTimers();
+    });
+    (
+      terminal as unknown as { terminalInfo: { detectedAgentId: string } }
+    ).terminalInfo.detectedAgentId = "claude";
+    const terminals = new Map([["t1", terminal]]);
+    fake.submit.mockImplementation((id: string, text: string) => terminals.get(id)?.submit(text));
+    fake.stage.mockImplementation((id: string, text: string) => terminals.get(id)?.stage(text));
+
+    await host.sendToActiveAgent("a", { submit: true });
+    await host.sendToActiveAgent("b");
+    expect(fake.submit).toHaveBeenCalledWith("t1", "a");
+    expect(fake.stage).toHaveBeenCalledWith("t1", "b");
+    expect(ptyWrites).toEqual(["a"]);
+
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(ptyWrites).toEqual(["a", "\r", "b"]);
+    const [submittedLine, unsent] = ptyWrites.join("").split("\r");
+    expect(submittedLine).toBe("a");
+    expect(unsent).toBe("b");
   });
 
   it("prefers a focused/visible agent over a backgrounded waiting agent", async () => {

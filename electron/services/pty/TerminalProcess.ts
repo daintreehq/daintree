@@ -1178,7 +1178,9 @@ export class TerminalProcess {
    * (bracketed paste when supported, soft newlines otherwise) so a stray `\n`
    * can't trigger the shell-submit detection in {@link write} and auto-execute a
    * line. Trailing newlines in `text` are dropped — staging never submits. Used
-   * by `host.sendToActiveAgent(text, { submit: false })` (#10558).
+   * by `host.sendToActiveAgent(text, { submit: false })` (#10558). The write
+   * waits its turn in the submit lane, behind every submission already
+   * accepted (#15554).
    */
   stage(text: string): void {
     this.inputController.stage(text);
