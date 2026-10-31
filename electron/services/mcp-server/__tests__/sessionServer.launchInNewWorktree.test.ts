@@ -9,7 +9,9 @@ vi.mock("electron", () => ({
 }));
 
 import { getViewlessHelpBaseManifest } from "../baseManifest.js";
+import { SESSION_OWNERSHIP_NOTE } from "../sessionCallOwnership.js";
 import { createSessionServer } from "../sessionServer.js";
+import { RELAY_CALL_ID_META_KEY } from "../shared.js";
 import type { SessionServerDeps } from "../sessionServer.js";
 import { SessionStore } from "../sessionStore.js";
 import {
@@ -238,7 +240,9 @@ describe("agent.launchInNewWorktree through the session server (#15738)", () => 
       launch: { spawnStatus: "missing-cli" },
     });
     expect(store.resourceOwnership.owns("s-1", "worktree", WORKTREE)).toBe(true);
-    expect(store.resourceOwnership.list("s-1").filter((r) => r.kind === "terminal")).toEqual([]);
+    expect(store.resourceOwnership.list("s-1").map(({ kind }) => kind)).toEqual(["worktree"]);
+    // The ownership note follows only a launch that happened.
+    expect(result.content).toHaveLength(1);
   });
 
   it("is listed to a session on a host with no window, where its steps run viewless", () => {
@@ -314,35 +318,45 @@ describe("agent.launchInNewWorktree through the session server (#15738)", () => 
     // Without a create key scoped to the call, the second create would be
     // answered from the first one's cache entry and both agents would share
     // one tree.
-    const { dispatchAction, server } = harness({
-      "worktree.createWithRecipe": created,
+    let creates = 0;
+    const { store, dispatchAction, server } = harness({
+      "worktree.createWithRecipe": () => {
+        const id = `${WORKTREE}-${++creates}`;
+        return { result: { ok: true, result: { ...created.result.result, worktreeId: id } } };
+      },
       "worktree.waitUntilReady": ready,
       "agent.launch": launched,
     });
 
-    await callTool(server, {
+    const first = await callTool(server, {
       name: "agent.launchInNewWorktree",
       arguments: { source: SOURCE, agentId: "claude" },
     });
-    await callTool(server, {
+    const second = await callTool(server, {
       name: "agent.launchInNewWorktree",
       arguments: { source: SOURCE, agentId: "codex" },
     });
 
+    const ids = [first, second].map(
+      (result) => (result.structuredContent as Record<string, unknown>).worktreeId
+    );
+    expect(ids).toEqual([`${WORKTREE}-1`, `${WORKTREE}-2`]);
     expect(
-      dispatchAction.mock.calls.filter((c) => c[0] === "worktree.createWithRecipe")
-    ).toHaveLength(2);
+      dispatchAction.mock.calls.filter((c) => c[0] === "agent.launch").map((c) => c[1].worktreeId)
+    ).toEqual(ids);
+    for (const id of ids)
+      expect(store.resourceOwnership.owns("s-1", "worktree", String(id))).toBe(true);
   });
 
-  it("reuses the worktree its first try made when the same call is retried after a stop", async () => {
-    let launches = 0;
+  it("answers a retry of a call that stopped after creating with its first answer", async () => {
+    // However long setup ran: the composite's own answer is what is kept,
+    // not the create step's entry, which can expire while setup runs.
     const { dispatchAction, server } = harness({
       "worktree.createWithRecipe": created,
       "worktree.waitUntilReady": ready,
-      "agent.launch": (args: Record<string, unknown>) =>
-        ++launches === 1
-          ? { result: { ok: false, error: { code: "EXECUTION_ERROR", message: "spawn failed" } } }
-          : launched(args),
+      "agent.launch": {
+        result: { ok: false, error: { code: "EXECUTION_ERROR", message: "spawn failed" } },
+      },
     });
     const call = {
       name: "agent.launchInNewWorktree",
@@ -353,10 +367,63 @@ describe("agent.launchInNewWorktree through the session server (#15738)", () => 
     const second = await callTool(server, call);
 
     expect(toolErrorPayload(first).code).toBe("PARTIAL_SUCCESS");
-    expect(second.isError).toBeFalsy();
-    expect((second.structuredContent as Record<string, unknown>).worktreeId).toBe(WORKTREE);
-    expect(
-      dispatchAction.mock.calls.filter((c) => c[0] === "worktree.createWithRecipe")
-    ).toHaveLength(1);
+    expect(second.content).toEqual(first.content);
+    expect(dispatchAction.mock.calls.map((c) => c[0])).toEqual([
+      "worktree.createWithRecipe",
+      "worktree.waitUntilReady",
+      "agent.launch",
+    ]);
+  });
+
+  it("refuses notify with no pane to type it into before anything is created", async () => {
+    const { dispatchAction, server } = harness({});
+
+    const result = await callTool(server, {
+      name: "agent.launchInNewWorktree",
+      arguments: { source: SOURCE, agentId: "claude", prompt: "Fix it", notify: true },
+    });
+
+    expect(toolErrorPayload(result).code).toBe("NOTIFY_NOT_ELIGIBLE");
+    expect(JSON.stringify(result.content)).toContain("Nothing was created");
+    expect(dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("carries a relayed call's id to every step it dispatches", async () => {
+    const { dispatchAction, server } = harness(
+      {
+        "worktree.createWithRecipe": created,
+        "worktree.waitUntilReady": ready,
+        "agent.launch": launched,
+      },
+      "core",
+      { relay: { shellName: "shell-mbp", refuseWrite: vi.fn(() => null) } }
+    );
+
+    const result = await callTool(server, {
+      name: "agent.launchInNewWorktree",
+      arguments: { source: SOURCE, agentId: "claude" },
+      _meta: { [RELAY_CALL_ID_META_KEY]: "call-7" },
+    } as Parameters<typeof callTool>[1]);
+
+    expect(result.isError).toBeFalsy();
+    expect(dispatchAction).toHaveBeenCalledTimes(3);
+    for (const call of dispatchAction.mock.calls) expect(call[4]).toBe("call-7");
+  });
+
+  it("tells a session-scoped caller once that it owns what it made", async () => {
+    const { server } = harness({
+      "worktree.createWithRecipe": created,
+      "worktree.waitUntilReady": ready,
+      "agent.launch": launched,
+    });
+
+    const result = await callTool(server, {
+      name: "agent.launchInNewWorktree",
+      arguments: { source: SOURCE, agentId: "claude" },
+    });
+
+    const texts = (result.content as Array<{ text: string }>).map((block) => block.text);
+    expect(texts.filter((text) => text === SESSION_OWNERSHIP_NOTE)).toHaveLength(1);
+    expect(texts.at(-1)).toBe(SESSION_OWNERSHIP_NOTE);
   });
 });

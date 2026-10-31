@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { ErrorCode, McpError, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
   formatPartialSuccessMessage,
   parsePartialSuccessMessage,
@@ -290,6 +290,133 @@ describe("runLaunchInNewWorktree (#15738)", () => {
     });
   });
 
+  it.each([
+    [
+      "worktree.waitUntilReady",
+      "setup",
+      new McpError(ErrorCode.InvalidParams, "bad wait"),
+      "VALIDATION_ERROR",
+    ],
+    ["agent.launch", "launch", new Error("bridge gone"), "EXECUTION_ERROR"],
+  ])("answers a %s step that throws as a stop at %s", async (tool, step, thrown, code) => {
+    const run = steps({
+      "worktree.createWithRecipe": [createdOk],
+      "worktree.waitUntilReady": [
+        () => {
+          if (tool === "worktree.waitUntilReady") throw thrown;
+          return setup("ready");
+        },
+      ],
+      "agent.launch": [
+        () => {
+          throw thrown;
+        },
+      ],
+    });
+
+    const { result } = await runLaunchInNewWorktree(
+      { source: SOURCE, agentId: "claude" },
+      { callTool: run.callTool, signal: live() }
+    );
+
+    expect(partialOf(result)).toMatchObject({
+      worktreeId: WORKTREE,
+      stoppedAt: step,
+      error: { code, message: expect.stringContaining(thrown.message) },
+    });
+  });
+
+  it("starts nothing more once cancelled between setup slices", async () => {
+    const controller = new AbortController();
+    let clock = 0;
+    const run = steps({
+      "worktree.createWithRecipe": [createdOk],
+      "worktree.waitUntilReady": [
+        (args) => {
+          clock += Number(args.timeoutMs);
+          controller.abort();
+          return setup("running", { timedOut: true });
+        },
+      ],
+    });
+
+    const { result } = await runLaunchInNewWorktree(
+      { source: SOURCE, agentId: "claude" },
+      { callTool: run.callTool, signal: controller.signal, now: () => clock }
+    );
+
+    expect(run.names()).toEqual(["worktree.createWithRecipe", "worktree.waitUntilReady"]);
+    expect(partialOf(result)).toMatchObject({ stoppedAt: "setup", error: { code: "CANCELLED" } });
+  });
+
+  it("launches into a worktree whose setup read ready, whatever the wait's flag says", async () => {
+    const run = steps({
+      "worktree.createWithRecipe": [createdOk],
+      "worktree.waitUntilReady": [() => setup("ready", { timedOut: true })],
+      "agent.launch": [() => launchedOk()],
+    });
+
+    const { outcome } = await runLaunchInNewWorktree(
+      { source: SOURCE, agentId: "claude", setupTimeoutMs: 0 },
+      { callTool: run.callTool, signal: live() }
+    );
+
+    expect(outcome.ok).toBe(true);
+  });
+
+  it("claims no worktree for a create that answered without one", async () => {
+    const run = steps({ "worktree.createWithRecipe": [() => ok({ recipeLaunched: false })] });
+
+    const { result, outcome } = await runLaunchInNewWorktree(
+      { source: SOURCE, agentId: "claude" },
+      { callTool: run.callTool, signal: live() }
+    );
+
+    expect(run.names()).toEqual(["worktree.createWithRecipe"]);
+    const envelope = JSON.parse((result.content[0] as { text: string }).text) as { code: string };
+    expect(envelope.code).toBe("EXECUTION_ERROR");
+    expect(outcome.ok).toBe(false);
+  });
+
+  it("answers a create a view didn't answer in time as unconfirmed, not retriable", async () => {
+    const run = steps({
+      "worktree.createWithRecipe": [
+        () =>
+          buildToolError({
+            code: "EXECUTION_ERROR",
+            message: "Action dispatch timed out: worktree.createWithRecipe",
+          }),
+      ],
+    });
+
+    const { result } = await runLaunchInNewWorktree(
+      { source: SOURCE, agentId: "claude" },
+      { callTool: run.callTool, signal: live() }
+    );
+
+    expect(run.names()).toEqual(["worktree.createWithRecipe"]);
+    const envelope = JSON.parse((result.content[0] as { text: string }).text) as {
+      code: string;
+      retriable: boolean;
+      message: string;
+    };
+    expect(envelope).toMatchObject({ code: "CREATE_UNCONFIRMED", retriable: false });
+    expect(envelope.message).toMatch(/isn't known whether a worktree was made/);
+  });
+
+  it("passes the call's create key to the create step", async () => {
+    const run = steps({
+      "worktree.createWithRecipe": [() => buildToolError({ code: "X", message: "no" })],
+    });
+
+    await runLaunchInNewWorktree(
+      { source: SOURCE, agentId: "claude" },
+      { callTool: run.callTool, signal: live(), createRequestKey: "key-1" }
+    );
+
+    expect(run.calls[0]!.args).toEqual({ source: SOURCE, requestKey: "key-1" });
+  });
+
   describe("arguments", () => {
     const run = () => steps({});
 
@@ -310,10 +437,34 @@ describe("runLaunchInNewWorktree (#15738)", () => {
       ],
     ])("refuses %j before anything is created", async (args, message) => {
       const runner = run();
-      await expect(
-        runLaunchInNewWorktree(args, { callTool: runner.callTool, signal: live() })
-      ).rejects.toThrow(message);
+      const refused = runLaunchInNewWorktree(args, { callTool: runner.callTool, signal: live() });
+      await expect(refused).rejects.toThrow(message);
+      await expect(refused).rejects.toMatchObject({ code: ErrorCode.InvalidParams });
       expect(runner.callTool).not.toHaveBeenCalled();
+    });
+
+    it("holds setup and reply waits to 1800 s together, and only with waitForReply", async () => {
+      const accepts = async (extra: Record<string, unknown>) => {
+        const runner = steps({
+          "worktree.createWithRecipe": [() => buildToolError({ code: "X", message: "no" })],
+        });
+        return runLaunchInNewWorktree(
+          { source: SOURCE, agentId: "claude", ...extra },
+          { callTool: runner.callTool, signal: live() }
+        ).then(
+          () => true,
+          () => false
+        );
+      };
+      // The default setup budget is 300 s, so the reply may have the other 1500.
+      expect(await accepts({ waitForReply: true, waitSeconds: 1_500 })).toBe(true);
+      expect(await accepts({ waitForReply: true, waitSeconds: 1_501 })).toBe(false);
+      expect(await accepts({ waitForReply: true, waitSeconds: 1_800, setupTimeoutMs: 0 })).toBe(
+        true
+      );
+      expect(
+        await accepts({ waitForReply: false, waitSeconds: 1_800, setupTimeoutMs: 600_000 })
+      ).toBe(true);
     });
 
     it("lets the default budgets through together", async () => {

@@ -1718,6 +1718,33 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // reply wait work as on `agent.launch`, and each step dispatches with
         // no view where it can. The composite adds no authority of its own.
         if (actionId === AGENT_LAUNCH_IN_NEW_WORKTREE_TOOL) {
+          // What the launch step would refuse `notify` for is refused here,
+          // before a worktree is made for an agent that won't be launched.
+          if (
+            typeof args === "object" &&
+            args !== null &&
+            (args as Record<string, unknown>).notify === true
+          ) {
+            const refuse = (code: string, message: string) => {
+              outcome = {
+                kind: "result",
+                value: { ok: false, error: { code: auditCodeForNotifyRefusal(code), message } },
+              };
+              return buildToolError({ code, message });
+            };
+            if ((tier === "external" ? null : ownPane()) === null || terminalNotify === undefined) {
+              return refuse(
+                NOTIFY_NOT_ELIGIBLE,
+                "`notify` types into the caller's own pane, and this connection has none: only an agent pane or an assistant session can ask for it. Nothing was created."
+              );
+            }
+            if ((readStringArg(args, "prompt") ?? "").trim().length === 0) {
+              return refuse(
+                NOTIFY_VALIDATION_ERROR,
+                "`notify` needs a `prompt`: there is no work to finish without one. Nothing was created."
+              );
+            }
+          }
           emitToolCallStarted(false, false);
           const stepOptions =
             confirmationsSkipped || relayCallId !== undefined
@@ -3234,7 +3261,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         dedupKey,
         argsHash!,
         answerPromise,
-        () => outcome?.kind === "result" && outcome.value.ok
+        // The one-call launch's partial answer is kept as well: it names a
+        // worktree that exists, and a retry run again would make another.
+        () =>
+          outcome?.kind === "result" &&
+          (outcome.value.ok ||
+            (actionId === AGENT_LAUNCH_IN_NEW_WORKTREE_TOOL &&
+              outcome.value.error.code === "PARTIAL_SUCCESS"))
       );
     }
 

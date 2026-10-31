@@ -39,9 +39,9 @@ export interface LaunchInNewWorktreeDeps {
 }
 
 /**
- * The create step's request key, scoped to the composite call that made it:
- * a retry of the same call reuses the worktree its first try created, while
- * a different call naming the same source gets one of its own.
+ * The create step's request key, scoped to the composite call that made it,
+ * so a different call naming the same source gets a worktree of its own
+ * rather than the first call's cached create answer.
  */
 export function createStepRequestKey(callDedupKey: string): string {
   return `${AGENT_LAUNCH_IN_NEW_WORKTREE_TOOL}:${createHash("sha256").update(callDedupKey).digest("hex")}`;
@@ -136,6 +136,21 @@ function parseArgs(args: unknown) {
   return parsed.data;
 }
 
+/**
+ * A create step a view didn't answer before its dispatch deadline. Git may
+ * have made the worktree after all, and nothing records it, so this is not
+ * the retriable execution error it arrives as.
+ */
+const DISPATCH_TIMED_OUT = /^Action dispatch timed out\b/;
+
+function createUnconfirmed(detail: string): LaunchInNewWorktreeAnswer {
+  const message = `The create step didn't answer before its dispatch deadline, so it isn't known whether a worktree was made, and nothing was launched. Check the worktree listing for the branch before calling again: a retry could make a second worktree. ${detail}`;
+  return {
+    result: buildToolError({ code: "CREATE_UNCONFIRMED", message, retriable: false }),
+    outcome: { ok: false, error: { code: "EXECUTION_ERROR", message } },
+  };
+}
+
 /** Why setup stopped the launch, for a wait that did not end ready. */
 function setupStop(setup: JsonRecord, waitedMs: number): StepError {
   const state = typeof setup.setupState === "string" ? setup.setupState : "unknown";
@@ -203,8 +218,11 @@ export async function runLaunchInNewWorktree(
   // Filled in as each step answers, so a stop reports everything that exists.
   let creation: JsonRecord | undefined;
   let setup: JsonRecord | undefined;
-  let launchValue: JsonRecord | undefined;
-  const stopped = (step: Step, error: StepError): LaunchInNewWorktreeAnswer => {
+  const stopped = (
+    step: Step,
+    error: StepError,
+    launchValue?: JsonRecord
+  ): LaunchInNewWorktreeAnswer => {
     const id = String(creation?.worktreeId);
     const partialResult: JsonRecord = {
       worktreeId: id,
@@ -239,6 +257,7 @@ export async function runLaunchInNewWorktree(
     const partial =
       error.code === PARTIAL_SUCCESS_CODE ? parsePartialSuccessMessage(error.message) : null;
     if (partial === null || typeof partial.partialResult.worktreeId !== "string") {
+      if (DISPATCH_TIMED_OUT.test(error.message)) return createUnconfirmed(error.message);
       return {
         result: createdResult,
         outcome: { ok: false, error: { code: "EXECUTION_ERROR", message: error.message } },
@@ -281,7 +300,7 @@ export async function runLaunchInNewWorktree(
     setup = valueOf(waited) ?? { setupState: "unknown", timedOut: false };
     if (setup.timedOut !== true || now() >= deadline) break;
   }
-  if (setup === undefined || setup.setupState !== "ready" || setup.timedOut === true) {
+  if (setup?.setupState !== "ready") {
     return stopped("setup", setupStop(setup ?? {}, now() - startedWaiting));
   }
 
@@ -298,14 +317,15 @@ export async function runLaunchInNewWorktree(
     return stopped("launch", thrownError(error));
   }
   if (launched.isError === true) return stopped("launch", errorOf(launched));
-  launchValue = valueOf(launched);
+  const launchValue = valueOf(launched);
   if (launchValue === undefined || launchValue.launched === false) {
     const status =
       typeof launchValue?.spawnStatus === "string" ? launchValue.spawnStatus : "unknown";
-    return stopped("launch", {
-      code: "LAUNCH_DECLINED",
-      message: `The agent didn't launch (${status}).`,
-    });
+    return stopped(
+      "launch",
+      { code: "LAUNCH_DECLINED", message: `The agent didn't launch (${status}).` },
+      launchValue
+    );
   }
 
   const value: JsonRecord = { ...launchValue, creation, setup };

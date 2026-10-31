@@ -148,4 +148,30 @@ describe("viewless argument schemas", () => {
       sourceArmKeys(rendererSchema)
     );
   });
+
+  it("accepts and refuses agent.launchInNewWorktree's arguments as its renderer action does", async () => {
+    const registry = await createActionRegistry();
+    const rendererSchema: unknown = registry.get("agent.launchInNewWorktree")?.()?.argsSchema;
+    if (!isZodSchema(rendererSchema)) throw new Error("launchInNewWorktree has no args schema");
+    const newBranch = { kind: "newBranch", branchName: "unit-1" };
+    // Main additionally refuses unknown keys and a combined wait past the
+    // hold, neither of which the renderer's advertised schema can express.
+    const cases: Array<Record<string, unknown>> = [
+      { source: newBranch, agentId: "claude" },
+      { source: { ...newBranch, fetchBase: true, collisionPolicy: "error" }, agentId: "codex" },
+      { source: { kind: "pullRequest", pullRequestNumber: 7 }, agentId: "claude", model: "sol" },
+      { source: { kind: "existingBranch", branchName: "x", baseBranch: "develop" }, agentId: "a" },
+      { source: { kind: "pullRequest", pullRequestNumber: 0 }, agentId: "claude" },
+      { source: newBranch },
+      { source: { ...newBranch, branchName: "  " }, agentId: "claude" },
+      { source: newBranch, agentId: "claude", setupTimeoutMs: 600_001 },
+      { source: newBranch, agentId: "claude", location: "overlay", interactive: true },
+      { source: newBranch, agentId: "claude", name: "x".repeat(201) },
+    ];
+    for (const args of cases) {
+      expect(AgentLaunchInNewWorktreeArgsSchema.safeParse(args).success, JSON.stringify(args)).toBe(
+        rendererSchema.safeParse(args).success
+      );
+    }
+  });
 });
