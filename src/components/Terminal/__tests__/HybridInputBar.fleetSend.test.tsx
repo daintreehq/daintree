@@ -59,7 +59,7 @@ import {
 } from "@/store/fleetTargetOverridesStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { HybridInputBar, type HybridInputBarProps } from "../HybridInputBar";
-import { addImageChip } from "../inputEditorExtensions";
+import { addImageChip, readImageChipPaths } from "../inputEditorExtensions";
 import { composerUploadSurface, trackUpload } from "../uploads/pendingUploads";
 
 const WT_ID = "/repo/wt";
@@ -462,19 +462,35 @@ describe("HybridInputBar's fleet send with context tokens (#14953)", () => {
 describe("HybridInputBar's fleet send with image chips (#15600)", () => {
   const IMAGE = "/tmp/daintree/shot.png";
 
-  async function pasteImage(view: EditorView, at = view.state.doc.length): Promise<void> {
+  async function pasteImage(
+    view: EditorView,
+    at = view.state.doc.length,
+    image = IMAGE
+  ): Promise<void> {
     await act(async () => {
       view.dispatch({
-        changes: { from: at, insert: IMAGE },
+        changes: { from: at, insert: image },
         effects: addImageChip.of({
           from: at,
-          to: at + IMAGE.length,
-          filePath: IMAGE,
+          to: at + image.length,
+          filePath: image,
           thumbnailUrl: "data:image/png;base64,",
         }),
-        selection: { anchor: at + IMAGE.length },
+        selection: { anchor: at + image.length },
       });
     });
+  }
+
+  function armRemote(): string {
+    const key = "host-fleet:studio:r-1";
+    useFleetArmingStore.getState().armCrossHostTarget({
+      key,
+      hostId: "studio",
+      hostName: "Studio",
+      terminalId: "r-1",
+      title: "remote",
+    });
+    return key;
   }
 
   const sentWithImages = () =>
@@ -497,6 +513,24 @@ describe("HybridInputBar's fleet send with image chips (#15600)", () => {
       { id: "term-2", text: `look at ${IMAGE} please`, paths: [IMAGE] },
     ]);
     expect(view.state.doc.toString()).toBe("");
+  });
+
+  it("attaches each pane its images in the order its own text names them", async () => {
+    const SECOND = "/tmp/daintree/a-second.png";
+    useFleetTargetOverridesStore.getState().setPayloadOverride("term-2", `${SECOND} vs ${IMAGE}`);
+    const { view, type, pressEnter, settle } = await mount();
+    await type("compare ");
+    await pasteImage(view);
+    await type(" with ");
+    await pasteImage(view, view.state.doc.length, SECOND);
+    await pressEnter();
+    await settle();
+
+    expect(sentWithImages()).toEqual([
+      { id: "term-1", text: `compare ${IMAGE} with ${SECOND}`, paths: [IMAGE, SECOND] },
+      { id: "term-2", text: `${SECOND} vs ${IMAGE}`, paths: [SECOND, IMAGE] },
+    ]);
+    expect(submitMock).not.toHaveBeenCalled();
   });
 
   it("attaches nothing for a pane whose own text leaves the image out", async () => {
@@ -583,6 +617,34 @@ describe("HybridInputBar's fleet send with image chips (#15600)", () => {
       { id: "term-1", text: `/compact ${IMAGE}`, paths: [IMAGE] },
       { id: "term-2", text: `/compact ${IMAGE}`, paths: [IMAGE] },
     ]);
+  });
+
+  it("runs a slash command from the menu nowhere, and says why, when its image would reach another host", async () => {
+    armRemote();
+    const remoteSubmit = vi.fn().mockResolvedValue(undefined);
+    Object.assign(window.electron, { hostMetrics: { submitFleet: remoteSubmit } });
+    const { view, type, pressEnter, settle, onSend, draft } = await mount();
+    await type("/compa");
+    await pasteImage(view, view.state.doc.length);
+    await act(async () => {
+      view.dispatch({ changes: { from: 6, insert: " " }, selection: { anchor: 6 } });
+    });
+    await settle();
+    expect(document.querySelector('[role="option"]')?.textContent).toContain("/compact");
+
+    await pressEnter();
+    await settle();
+
+    expect(remoteSubmit).not.toHaveBeenCalled();
+    expect(submitMock).not.toHaveBeenCalled();
+    expect(submitWithImagesMock).not.toHaveBeenCalled();
+    expect(onSend).not.toHaveBeenCalled();
+    expect(view.state.doc.toString()).toBe(`/compa ${IMAGE}`);
+    expect(draft("term-1")).toBe(`/compa ${IMAGE}`);
+    expect(readImageChipPaths(view)).toEqual([IMAGE]);
+    expect(document.querySelector("[data-send-refused-caption]")?.textContent).toContain(
+      "Images can't reach another host"
+    );
   });
 
   it("attaches the draft's images to a slash command picked from the menu on this pane alone", async () => {

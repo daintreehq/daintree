@@ -20,6 +20,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
+import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { subscribeDictationRangeTracking } from "@/store/dictationRangeStore";
@@ -29,6 +30,7 @@ import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { setPendingComposerSelection } from "@/lib/composerCaret";
 import { makeDraftKey } from "@/lib/draftKey";
 import { HybridInputBar } from "../HybridInputBar";
+import { addImageChip } from "../inputEditorExtensions";
 
 type DeltaPayload = { text: string; itemId?: string };
 type CompletePayload = {
@@ -701,6 +703,70 @@ describe("HybridInputBar dictated send whose composer unmounts mid-wait (#15510)
     expect(onSend.mock.calls.map(([payload]) => payload.text)).toEqual(["Hello world."]);
     expect(draft()).toBe("");
     expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
+  });
+
+  it("sends the fleet the images it had at Enter when its pane is armed (#15600)", async () => {
+    const IMAGE = "/tmp/daintree/shot.png";
+    const panel = usePanelStore.getState().panelsById[PANEL_ID]!;
+    usePanelStore.setState({
+      panelsById: { [PANEL_ID]: panel, "term-2": { ...panel, id: "term-2" } },
+      panelIds: [PANEL_ID, "term-2"],
+      panelIdsByWorktreeId: { [WT_ID]: [PANEL_ID, "term-2"] },
+    });
+    useFleetArmingStore.getState().armIds([PANEL_ID, "term-2"]);
+    const submit = vi.fn().mockResolvedValue(undefined);
+    Object.assign(window.electron, {
+      terminal: { submit },
+      notification: { playUiEvent: vi.fn().mockResolvedValue(undefined) },
+      runHistory: { append: vi.fn().mockResolvedValue(undefined) },
+    });
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const onSend = vi.fn();
+    try {
+      act(() => {
+        dictate("look at wrld");
+      });
+      const bar = await mountBar(onSend);
+      await act(async () => {
+        const at = bar.view.state.doc.length + 1;
+        bar.view.dispatch({
+          changes: { from: at - 1, insert: ` ${IMAGE}` },
+          effects: addImageChip.of({
+            from: at,
+            to: at + IMAGE.length,
+            filePath: IMAGE,
+            thumbnailUrl: "data:image/png;base64,",
+          }),
+        });
+      });
+      await act(async () => {
+        runScopeHandlers(bar.view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+      });
+      act(() => {
+        bar.unmount();
+      });
+      expect(submit).not.toHaveBeenCalled();
+
+      await act(async () => {
+        pending.resolve({ action: "replace", correctedText: "Look at world." });
+      });
+      await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(2));
+    } finally {
+      useFleetArmingStore.setState({
+        armedIds: new Set(),
+        armOrder: [],
+        armOrderById: {},
+        lastArmedId: null,
+      });
+    }
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(submit.mock.calls.map(([id]) => id).sort()).toEqual([PANEL_ID, "term-2"]);
+    for (const [, text, , , images] of submit.mock.calls) {
+      expect(text).toBe(`Look at world. ${IMAGE}`);
+      expect(images).toEqual([IMAGE]);
+    }
   });
 
   it("sends the words as dictated when the cleanup fails", async () => {

@@ -11,6 +11,7 @@ import {
 import { isTerminalFleetBroadcastTarget, isTerminalFleetEligible } from "@/store/fleetEligibility";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { isPtyPanel } from "@shared/types/panel";
+import { findImagePathsInText } from "@shared/utils/imageAttachmentInput";
 import { replaceRecipeVariables, detectUnresolvedVariables } from "@/utils/recipeVariables";
 import {
   buildFleetBroadcastRecipeContext,
@@ -160,7 +161,7 @@ export function findCrossHostImageTargets(
   return targetIds.filter(
     (id) =>
       isHostQualifiedTargetId(id) &&
-      imagePaths.some((path) => (perTargetOverrides?.[id] ?? draft).includes(path))
+      findImagePathsInText(perTargetOverrides?.[id] ?? draft, imagePaths).length > 0
   );
 }
 
@@ -240,8 +241,9 @@ function resolveSubmissions(
       payload: override ?? baseResolved,
       authored,
       // Read from what the user wrote, not the expanded payload: a diff that
-      // happens to mention the path doesn't make it an attachment.
-      imagePaths: imagePaths.filter((path) => authored.includes(path)),
+      // happens to mention the path doesn't make it an attachment. In the
+      // order that text names them, since an edit may reorder the chips.
+      imagePaths: findImagePathsInText(authored, imagePaths),
     };
   });
 }

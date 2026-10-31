@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { isImageAttachmentPath, splitImageInputSegments } from "../imageAttachmentInput.js";
+import {
+  findImagePathsInText,
+  isImageAttachmentPath,
+  splitImageInputSegments,
+} from "../imageAttachmentInput.js";
 
 describe("isImageAttachmentPath", () => {
   it("accepts absolute local image paths, spaces and Unicode included", () => {
@@ -26,6 +30,33 @@ describe("isImageAttachmentPath", () => {
     expect(isImageAttachmentPath("/tmp/a\x1bb.png")).toBe(false);
     expect(isImageAttachmentPath("/tmp/a\tb.png")).toBe(false);
     expect(isImageAttachmentPath("/tmp/a.png ")).toBe(false);
+  });
+});
+
+describe("findImagePathsInText", () => {
+  const A = "/tmp/a.png";
+  const B = "/tmp/b.png";
+
+  it("lists the paths in the order the text names them", () => {
+    const text = `compare ${B} with ${A}`;
+    expect(findImagePathsInText(text, [A, B])).toEqual([B, A]);
+    // In that order the splitter attaches both, where the chips' order loses one.
+    const attached = (paths: string[]) =>
+      splitImageInputSegments(text, paths).filter((s) => s.kind === "image").length;
+    expect(attached(findImagePathsInText(text, [A, B]))).toBe(2);
+    expect(attached([A, B])).toBe(1);
+  });
+
+  it("leaves out a path the text doesn't name, or names only inside another path", () => {
+    expect(findImagePathsInText(`just ${B}`, [A, B])).toEqual([B]);
+    expect(findImagePathsInText(`use /srv${A} or ${A}.bak`, [A])).toEqual([]);
+    expect(findImagePathsInText("", [A])).toEqual([]);
+  });
+
+  it("counts a path as often as it appears, up to as often as it was given", () => {
+    expect(findImagePathsInText(`${A} then ${A}`, [A, A])).toEqual([A, A]);
+    expect(findImagePathsInText(`${A} then ${A}`, [A])).toEqual([A]);
+    expect(findImagePathsInText(`only ${A}`, [A, A])).toEqual([A]);
   });
 });
 

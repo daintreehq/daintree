@@ -873,26 +873,48 @@ describe("executeFleetBroadcast — image chips (#15600)", () => {
   const imagesBy = () =>
     new Map(submitWithImagesMock.mock.calls.map(([id, , paths]) => [id, paths]));
 
-  it("attaches to each pane the images its own text names, in order", async () => {
-    seedPanels([makeAgent("a"), makeAgent("b"), makeAgent("c")]);
+  it("attaches to each pane the images its own text names, in the order it names them", async () => {
+    seedPanels([makeAgent("a"), makeAgent("b"), makeAgent("c"), makeAgent("d"), makeAgent("e")]);
     const draft = `compare ${ONE} with ${TWO}`;
     const result = await executeFleetBroadcast(
       draft,
-      ["a", "b", "c"],
-      { b: `only ${TWO}`, c: "no pictures" },
+      ["a", "b", "c", "d", "e"],
+      { b: `only ${TWO}`, c: "no pictures", d: "", e: `${TWO} before ${ONE}` },
       undefined,
       { imagePaths: [ONE, TWO] }
     );
 
-    expect(result.successCount).toBe(3);
+    expect(result.successCount).toBe(5);
     expect(imagesBy()).toEqual(
       new Map([
         ["a", [ONE, TWO]],
         ["b", [TWO]],
+        // The chips' order would leave the second one as text.
+        ["e", [TWO, ONE]],
       ])
     );
     expect(submitWithImagesMock.mock.calls.find(([id]) => id === "a")?.[1]).toBe(draft);
-    expect(submitMock.mock.calls).toEqual([["c", "no pictures"]]);
+    expect(submitMock.mock.calls).toEqual([
+      ["c", "no pictures"],
+      ["d", ""],
+    ]);
+  });
+
+  it("doesn't attach an image a pane's recipe variables fill in", async () => {
+    buildFleetBroadcastRecipeContextMock.mockReturnValue({ worktreePath: TWO });
+    seedPanels([makeAgent("a")]);
+    await executeFleetBroadcast(
+      `Review {{worktree_path}} and ${ONE}`,
+      ["a"],
+      undefined,
+      undefined,
+      {
+        imagePaths: [ONE, TWO],
+      }
+    );
+
+    expect(submitWithImagesMock.mock.calls[0]![1]).toBe(`Review ${TWO} and ${ONE}`);
+    expect(imagesBy().get("a")).toEqual([ONE]);
   });
 
   it("doesn't attach an image a pane's expanded context happens to mention", async () => {
@@ -963,6 +985,17 @@ describe("findCrossHostImageTargets", () => {
     expect(findCrossHostImageTargets(`see ${IMAGE}`, ["a", REMOTE], [])).toEqual([]);
     expect(
       findCrossHostImageTargets(`see ${IMAGE}`, ["a", REMOTE], [IMAGE], { [REMOTE]: "see it" })
+    ).toEqual([]);
+    expect(
+      findCrossHostImageTargets(`see ${IMAGE}`, ["a", REMOTE], [IMAGE], { [REMOTE]: "" })
+    ).toEqual([]);
+    // One image of several is enough to refuse.
+    expect(findCrossHostImageTargets(`see ${IMAGE}`, [REMOTE], ["/tmp/other.png", IMAGE])).toEqual([
+      REMOTE,
+    ]);
+    // A path of that host's own that merely ends the same way is not the image.
+    expect(
+      findCrossHostImageTargets(`see ${IMAGE}`, [REMOTE], [IMAGE], { [REMOTE]: `use /srv${IMAGE}` })
     ).toEqual([]);
     expect(
       findCrossHostImageTargets("see it", ["a", REMOTE], [IMAGE], { [REMOTE]: IMAGE })

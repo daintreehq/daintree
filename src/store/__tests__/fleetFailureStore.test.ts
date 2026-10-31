@@ -98,12 +98,29 @@ describe("useFleetFailureStore", () => {
     expect(useFleetFailureStore.getState().imagePaths).toEqual([]);
   });
 
-  it("drops an earlier broadcast's images when a text-only failure replaces it", () => {
+  it.each([
+    ["a text-only broadcast's", "plain words"],
+    ["a keystroke's", null],
+  ])("drops an earlier broadcast's images when %s failure replaces it", (_, payload) => {
     useFleetFailureStore.getState().recordFailure("draft", ["a"], 0, {
       imagePaths: ["/tmp/one.png"],
       perTargetOverrides: { a: "for a" },
     });
-    useFleetFailureStore.getState().recordFailure(null, ["a"]);
+    useFleetFailureStore.getState().recordFailure(payload, ["a"]);
+    expect(useFleetFailureStore.getState().payload).toBe(payload);
+    expect(useFleetFailureStore.getState().imagePaths).toEqual([]);
+    expect(useFleetFailureStore.getState().perTargetOverrides).toEqual({});
+  });
+
+  it.each([
+    ["cleared", () => useFleetFailureStore.getState().clear()],
+    ["recorded with nothing failed", () => useFleetFailureStore.getState().recordFailure("x", [])],
+  ])("forgets the images and edits when %s", (_, reset) => {
+    useFleetFailureStore.getState().recordFailure("draft", ["a"], 0, {
+      imagePaths: ["/tmp/one.png"],
+      perTargetOverrides: { a: "for a" },
+    });
+    reset();
     expect(useFleetFailureStore.getState().imagePaths).toEqual([]);
     expect(useFleetFailureStore.getState().perTargetOverrides).toEqual({});
   });
