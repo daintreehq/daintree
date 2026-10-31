@@ -685,19 +685,29 @@ describe("previews pulled ahead", () => {
     expect(ctx.stats.maxSends).toBe(PREVIEW_PULL_DEPTH);
   });
 
-  it("leaves a pull slot for another preview while one whose reader paused holds its read-ahead", async () => {
+  it("leaves a pull slot for another preview while ones whose readers paused hold their read-ahead", async () => {
     const ctx = await pipelined({ conditions: { oneWayDelayMs: 2 } });
-    const paused = await write("paused.mp4", 8 * MiB);
+    const first = await write("first.mp4", 8 * MiB);
+    const second = await write("second.mp4", 8 * MiB);
     const other = await write("other.mp4", 3 * MiB + 5);
-    const reader = (await ctx.open(paused.file)).body!.getReader();
-    await reader.read();
+    const pausedA = (await ctx.open(first.file)).body!.getReader();
+    await pausedA.read();
     await waitFor(() => ctx.bodies[0]!.bufferedBytes === PREVIEW_PULL_DEPTH * MiB);
+    const pausedB = (await ctx.open(second.file)).body!.getReader();
+    await pausedB.read();
     await waitFor(() => ctx.stats.sends === 0);
     const response = await ctx.open(other.file);
-    expect(sha256(new Uint8Array(await response.arrayBuffer()))).toBe(sha256(other.bytes));
-    // The paused body kept everything it read ahead.
+    const body = await Promise.race([
+      response.arrayBuffer(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("starved of a pull slot")), 5_000)
+      ),
+    ]);
+    expect(sha256(new Uint8Array(body))).toBe(sha256(other.bytes));
+    // The first paused body kept everything it read ahead.
     expect(ctx.bodies[0]!.bufferedBytes).toBe(PREVIEW_PULL_DEPTH * MiB);
-    await reader.cancel();
+    await pausedA.cancel();
+    await pausedB.cancel();
   });
 
   it("drops what it read ahead the moment the host revokes the stream", async () => {

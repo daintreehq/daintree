@@ -24,6 +24,7 @@ import {
 import { ClientFileTransport, type HostFileBody } from "../ClientFileTransport.js";
 import { createHostFileProxy } from "../hostFileProxy.js";
 import { HostFileService, type HostFileEndpoint } from "../HostFileService.js";
+import { PREVIEW_PULL_DEPTH } from "../linkMethods.js";
 import { ViewFileCapabilities } from "../viewCapabilities.js";
 
 /**
@@ -32,11 +33,14 @@ import { ViewFileCapabilities } from "../viewCapabilities.js";
  * emulated link, one slice at a time (as before pull depths) and pipelined.
  *
  * Opt-in: `DAINTREE_REMOTE_PREVIEW_BENCH=1 npm test -- <this file>`. Knobs:
- * `…_DELAYS` (one-way ms, default `0,5,20`), `…_DEPTHS` (default `1,2`),
+ * `…_DELAYS` (one-way ms, default `0,5,20`), `…_DEPTHS` (default one slice at
+ * a time and the shipped depth),
  * `…_RATE_MBPS` (link rate each way, unlimited by default), `…_RUNS`
  * (default 3, the median is reported) and `…_OUT` (a JSON file for the raw
  * samples). A socket mechanism measurement: it says how long the transport
- * takes to deliver verified bytes, not how long a PDF takes to paint.
+ * takes to deliver verified bytes, not how long a PDF takes to paint. Echo
+ * latency is closed-loop (each keystroke waits for the last echo, then 5 ms),
+ * not a fixed typing rate.
  */
 
 const ENV = "DAINTREE_REMOTE_PREVIEW_BENCH";
@@ -50,7 +54,7 @@ function listOf(name: string, fallback: number[]): number[] {
 }
 
 const DELAYS = listOf("DELAYS", [0, 5, 20]);
-const DEPTHS = listOf("DEPTHS", [1, 2]);
+const DEPTHS = listOf("DEPTHS", [1, PREVIEW_PULL_DEPTH]);
 const RUNS = Number(process.env[`${ENV}_RUNS`] ?? 3);
 const RATE_MBPS = process.env[`${ENV}_RATE_MBPS`] ? Number(process.env[`${ENV}_RATE_MBPS`]) : null;
 
@@ -77,7 +81,9 @@ interface Sample {
   delayMs: number;
   depth: number;
   ttfbMs: number;
+  /** The last byte handed over; the body's end may only be learned a pull later. */
   ttlbMs: number;
+  eofMs: number;
   hostSlicePeakBytes: number;
   hostPreviewBufferBytes: number;
   clientPeakBytes: number;
@@ -237,15 +243,18 @@ async function measure(
     const reader = response.body!.getReader();
     const hash = crypto.createHash("sha256");
     let ttfbMs = Number.NaN;
+    let ttlbMs = Number.NaN;
     let received = 0;
     for (;;) {
       const next = await reader.read();
       if (next.done) break;
-      if (received === 0) ttfbMs = performance.now() - started;
+      const now = performance.now();
+      if (received === 0) ttfbMs = now - started;
       received += next.value.byteLength;
+      if (received === fixture.size) ttlbMs = now - started;
       hash.update(next.value);
     }
-    const ttlbMs = performance.now() - started;
+    const eofMs = performance.now() - started;
     loading = false;
     await typing;
 
@@ -257,6 +266,7 @@ async function measure(
       depth,
       ttfbMs,
       ttlbMs,
+      eofMs,
       hostSlicePeakBytes,
       hostPreviewBufferBytes,
       clientPeakBytes: (body as HostFileBody | null)?.peakBufferedBytes ?? Number.NaN,
@@ -283,15 +293,16 @@ describe.runIf(BENCH)("remote preview transport bench", () => {
         for (const fixture of FIXTURES) {
           // Arms alternate run by run so drift on the machine lands on both.
           for (let run = 0; run < RUNS; run++) {
-            for (const depth of DEPTHS) samples.push(await measure(fixture, delayMs, depth));
+            const order = run % 2 === 0 ? DEPTHS : [...DEPTHS].reverse();
+            for (const depth of order) samples.push(await measure(fixture, delayMs, depth));
           }
         }
       }
 
       const rows: string[] = [
         `[remote-preview-bench] rate ${RATE_MBPS === null ? "unlimited" : `${RATE_MBPS} Mbit/s`}, median of ${RUNS}`,
-        "| fixture | one-way delay | depth | TTFB ms | TTLB ms | host slice peak MiB | host preview buffer MiB | client peak MiB | echo p50/p95/max ms (n) | idle echo p50 ms |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| fixture | one-way delay | depth | TTFB ms | TTLB ms | EOF ms | host slice peak MiB | host preview buffer MiB | client peak MiB | echo p50/p95/max ms (n) | idle echo p50 ms |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
       ];
       for (const delayMs of DELAYS) {
         for (const fixture of FIXTURES) {
@@ -302,7 +313,7 @@ describe.runIf(BENCH)("remote preview transport bench", () => {
             const m = (pick: (s: Sample) => number) => median(cell.map(pick));
             const mib = (bytes: number) => (bytes / MiB).toFixed(1);
             rows.push(
-              `| ${fixture.name} | ${delayMs} ms | ${depth} | ${m((s) => s.ttfbMs).toFixed(0)} | ${m((s) => s.ttlbMs).toFixed(0)} | ${mib(m((s) => s.hostSlicePeakBytes))} | ${mib(m((s) => s.hostPreviewBufferBytes))} | ${mib(m((s) => s.clientPeakBytes))} | ${m((s) => s.echoP50Ms).toFixed(1)}/${m((s) => s.echoP95Ms).toFixed(1)}/${m((s) => s.echoMaxMs).toFixed(1)} (${m((s) => s.echoSamples)}) | ${m((s) => s.idleEchoP50Ms).toFixed(1)} |`
+              `| ${fixture.name} | ${delayMs} ms | ${depth} | ${m((s) => s.ttfbMs).toFixed(0)} | ${m((s) => s.ttlbMs).toFixed(0)} | ${m((s) => s.eofMs).toFixed(0)} | ${mib(m((s) => s.hostSlicePeakBytes))} | ${mib(m((s) => s.hostPreviewBufferBytes))} | ${mib(m((s) => s.clientPeakBytes))} | ${m((s) => s.echoP50Ms).toFixed(1)}/${m((s) => s.echoP95Ms).toFixed(1)}/${m((s) => s.echoMaxMs).toFixed(1)} (${m((s) => s.echoSamples)}) | ${m((s) => s.idleEchoP50Ms).toFixed(1)} |`
             );
           }
         }
