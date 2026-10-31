@@ -11,6 +11,7 @@ vi.mock("node:dns/promises", () => ({
   default: { lookup: vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]) },
 }));
 
+const dns = (await import("node:dns/promises")).default;
 const { PluginArtifactStore } = await import("../PluginArtifactStore.js");
 const { PluginArtifactService } = await import("../PluginArtifactService.js");
 const { compileAllowedUrls } = await import("../pluginArtifactNetworkPolicy.js");
@@ -338,6 +339,40 @@ describe("download", () => {
     });
     expect(artifact.size).toBe(2);
     expect(netFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("holds a stalled DNS check to the header wait without stacking lookups on retry", async () => {
+    const quick = new PluginArtifactService({
+      store,
+      netFetch: netFetch as never,
+      sweepIntervalMs: 0,
+      backoffMs: () => 1,
+      idleMs: 30,
+    });
+    let release: (answer: Array<{ address: string; family: number }>) => void = () => {};
+    const lookupsBefore = vi.mocked(dns.lookup).mock.calls.length;
+    vi.mocked(dns.lookup).mockImplementationOnce(
+      () => new Promise((resolve) => (release = resolve as typeof release)) as never
+    );
+    try {
+      await expect(
+        quick.download({
+          pluginId: PLUGIN,
+          projectId: null,
+          url: new URL("https://api.example.com/v1/x"),
+          headers: {},
+          isAllowed: allowed,
+          attempts: 2,
+        })
+      ).rejects.toMatchObject({ code: "ARTIFACT_TRANSFER_FAILED" });
+      // The retry waited on the lookup still running, rather than starting another.
+      expect(vi.mocked(dns.lookup).mock.calls.length - lookupsBefore).toBe(1);
+      expect(netFetch).not.toHaveBeenCalled();
+    } finally {
+      release([{ address: "93.184.216.34", family: 4 }]);
+      await new Promise((resolve) => setImmediate(resolve));
+      await quick.dispose();
+    }
   });
 
   it("gives up after the attempts it was given and leaves no partial file", async () => {

@@ -257,15 +257,22 @@ interface StalledLookup {
 /** Settle within `ms` of real time, or report the promise still pending. */
 async function settleWithin<T>(
   promise: Promise<T>,
-  ms = 200
+  ms = 1000
 ): Promise<{ ok: true; value: T } | { ok: false; error: unknown } | "pending"> {
-  return Promise.race([
-    promise.then(
-      (value) => ({ ok: true as const, value }),
-      (error: unknown) => ({ ok: false as const, error })
-    ),
-    new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), ms)),
-  ]);
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error })
+      ),
+      new Promise<"pending">((resolve) => {
+        watchdog = setTimeout(() => resolve("pending"), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(watchdog);
+  }
 }
 
 /** Let settled lookups run their cleanup before the next assertion. */
@@ -312,24 +319,29 @@ describe("fetchWithPrivateHostGuard — cancellation during the DNS check", () =
     expect(netFetch).not.toHaveBeenCalled();
   });
 
-  it("rejects promptly with the abort reason when the signal aborts mid-lookup", async () => {
-    const controller = new AbortController();
-    const reason = new Error("cancelled by the user");
-    const netFetch = vi.fn(async () => resp(200));
+  it.each([
+    ["an Error", new Error("cancelled by the user")],
+    ["a primitive", "cancelled"],
+  ])(
+    "rejects promptly with the abort reason (%s) when the signal aborts mid-lookup",
+    async (_, reason) => {
+      const controller = new AbortController();
+      const netFetch = vi.fn(async () => resp(200));
 
-    const pending = fetchWithPrivateHostGuard(netFetch as never, "https://stall.example/p.dntr", {
-      signal: controller.signal,
-    });
-    await flush();
-    expect(mockLookup).toHaveBeenCalledTimes(1);
-    controller.abort(reason);
+      const pending = fetchWithPrivateHostGuard(netFetch as never, "https://stall.example/p.dntr", {
+        signal: controller.signal,
+      });
+      await flush();
+      expect(mockLookup).toHaveBeenCalledTimes(1);
+      controller.abort(reason);
 
-    expect(await settleWithin(pending)).toEqual({ ok: false, error: reason });
-    // The lookup finishing later must not start the fetch it was guarding.
-    stalled[0]!.resolve(["93.184.216.34"]);
-    await flush();
-    expect(netFetch).not.toHaveBeenCalled();
-  });
+      expect(await settleWithin(pending)).toEqual({ ok: false, error: reason });
+      // The lookup finishing later must not start the fetch it was guarding.
+      stalled[0]!.resolve(["93.184.216.34"]);
+      await flush();
+      expect(netFetch).not.toHaveBeenCalled();
+    }
+  );
 
   it("rejects with TimeoutError when the caller's deadline expires mid-lookup", async () => {
     const netFetch = vi.fn(async () => resp(200));
@@ -382,6 +394,104 @@ describe("fetchWithPrivateHostGuard — cancellation during the DNS check", () =
 
     expect(await settleWithin(pending)).toEqual({ ok: false, error: reason });
     expect(netFetch).not.toHaveBeenCalled();
+  });
+
+  it("lets an abort beat a private answer that lands in the same tick", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled");
+    const netFetch = vi.fn(async () => resp(200));
+
+    const pending = fetchWithPrivateHostGuard(netFetch as never, "https://stall.example/p.dntr", {
+      signal: controller.signal,
+    });
+    await flush();
+    stalled[0]!.resolve(["127.0.0.1"]);
+    controller.abort(reason);
+
+    expect(await settleWithin(pending)).toEqual({ ok: false, error: reason });
+  });
+
+  it("cancels only the caller that aborted when two share a lookup", async () => {
+    const first = new AbortController();
+    const reason = new Error("first cancelled");
+    const ok = resp(200);
+    const netFetch = vi.fn(async () => ok);
+
+    const cancelled = fetchWithPrivateHostGuard(netFetch as never, "https://stall.example/a.dntr", {
+      signal: first.signal,
+    });
+    const live = fetchWithPrivateHostGuard(netFetch as never, "https://stall.example/b.dntr", {
+      signal: new AbortController().signal,
+    });
+    await flush();
+    expect(mockLookup).toHaveBeenCalledTimes(1);
+    first.abort(reason);
+    expect(await settleWithin(cancelled)).toEqual({ ok: false, error: reason });
+
+    // A failed shared lookup still fails open for the caller that's waiting.
+    stalled[0]!.reject(new Error("ENOTFOUND"));
+    expect(await settleWithin(live)).toEqual({
+      ok: true,
+      value: { ok: true, response: ok, url: "https://stall.example/b.dntr" },
+    });
+    expect(netFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("looks the host up again once its lookup has settled, whichever way", async () => {
+    const netFetch = vi.fn(async () => resp(200));
+
+    const afterAnswer = fetchWithPrivateHostGuard(netFetch as never, "https://stall.example/p", {});
+    await flush();
+    stalled[0]!.resolve(["93.184.216.34"]);
+    await settleWithin(afterAnswer);
+
+    const afterFailure = fetchWithPrivateHostGuard(
+      netFetch as never,
+      "https://stall.example/p",
+      {}
+    );
+    await flush();
+    expect(mockLookup).toHaveBeenCalledTimes(2);
+    stalled[1]!.reject(new Error("ENOTFOUND"));
+    await settleWithin(afterFailure);
+
+    void fetchWithPrivateHostGuard(netFetch as never, "https://stall.example/p", {});
+    await flush();
+    expect(mockLookup).toHaveBeenCalledTimes(3);
+  });
+
+  it("holds every hop to the caller's signal and the hop's own", async () => {
+    const caller = new AbortController();
+    const hop = new AbortController();
+    const initFor = vi.fn((hopUrl: URL) =>
+      hopUrl.hostname === "first.example" ? { cache: "no-store" as const } : { signal: hop.signal }
+    );
+    const netFetch = vi.fn(async () => resp(302, "https://second.example/p.dntr"));
+
+    const pending = fetchWithPrivateHostGuard(
+      netFetch as never,
+      "https://first.example/p.dntr",
+      { signal: caller.signal },
+      undefined,
+      { initFor }
+    );
+    await flush();
+    stalled[0]!.resolve(["93.184.216.34"]);
+    await flush();
+    // A hop init without a signal still fetches under the caller's.
+    const [, firstInit] = netFetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(firstInit.signal).toBe(caller.signal);
+    expect(firstInit.cache).toBe("no-store");
+
+    // A hop init with its own signal doesn't release it from the caller's.
+    const reason = new Error("caller cancelled");
+    caller.abort(reason);
+    expect(await settleWithin(pending)).toEqual({ ok: false, error: reason });
+    expect(netFetch).toHaveBeenCalledTimes(1);
+    expect(initFor.mock.calls.map(([hopUrl]) => hopUrl.hostname)).toEqual([
+      "first.example",
+      "second.example",
+    ]);
   });
 
   it("shares one outstanding lookup across repeated cancelled attempts at the same host", async () => {
