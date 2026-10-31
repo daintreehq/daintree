@@ -48,9 +48,14 @@ describe("Windows agent argv", () => {
     const presetArgs = ["--system-prompt", "two words", "  padded  ", "it's fine"];
     setAgentCommandDialectResolver(() => "windows");
     try {
-      const command = generateAgentCommand(`& ${quotePowerShellArg("C:\\agent.exe")}`, {}, "claude", {
-        presetArgs,
-      });
+      const command = generateAgentCommand(
+        `& ${quotePowerShellArg("C:\\agent.exe")}`,
+        {},
+        "claude",
+        {
+          presetArgs,
+        }
+      );
       expect(parseWindowsAgentCommand(command)).toEqual(["C:\\agent.exe", ...presetArgs]);
     } finally {
       setAgentCommandDialectResolver(null);
