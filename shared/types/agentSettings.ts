@@ -254,7 +254,7 @@ export const DEFAULT_DANGEROUS_ARGS: Record<string, string> = {
   codex: "--dangerously-bypass-approvals-and-sandbox",
   grok: "--always-approve",
   cursor: "--force",
-  interpreter: "--auto_run",
+  interpreter: "--dangerously-bypass-approvals-and-sandbox",
   amp: "--dangerously-allow-all",
   aider: "--yes-always",
   qwen: "--yolo",
@@ -263,6 +263,17 @@ export const DEFAULT_DANGEROUS_ARGS: Record<string, string> = {
   kiro: "--trust-all-tools",
   // opencode intentionally absent: --dangerously-skip-permissions exists only
   // on the `run` subcommand, not the bare TUI launch (verified on 1.14.48)
+};
+
+/**
+ * Bypass flags an agent's default used to be, before its CLI stopped accepting
+ * them. Captured launch flags outlive the default they were built from, so a
+ * restore strips these as well instead of relaunching into a CLI that rejects
+ * them.
+ */
+const RETIRED_DANGEROUS_ARGS: Readonly<Record<string, readonly string[]>> = {
+  // The Python program's flag; the current Rust product rejects it (#15567).
+  interpreter: ["--auto_run"],
 };
 
 export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
@@ -592,7 +603,11 @@ export function reconcileBypassFlags(
   // been captured before the user customized `dangerousArgs`, so cleaning only
   // the current value could leave a stale default flag behind.
   const groups: string[][] = [];
-  for (const source of [resolved, DEFAULT_DANGEROUS_ARGS[agentId]]) {
+  for (const source of [
+    resolved,
+    DEFAULT_DANGEROUS_ARGS[agentId],
+    ...(RETIRED_DANGEROUS_ARGS[agentId] ?? []),
+  ]) {
     for (const group of optionGroups(source?.trim().split(/\s+/).filter(Boolean) ?? [])) {
       if (!groups.some((known) => known.join(" ") === group.join(" "))) groups.push(group);
     }

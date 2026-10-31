@@ -243,7 +243,7 @@ export interface AgentProviderTemplate {
 export interface AgentPackages {
   /** npm package name (e.g. "@anthropic-ai/claude-code"). Probed via npm-global bin shim. */
   npm?: string;
-  /** PyPI package name (e.g. "open-interpreter"). Drives uv/pipx path synthesis. */
+  /** PyPI package name (e.g. "aider-chat"). Drives uv/pipx path synthesis. */
   pypi?: string;
   /** Homebrew formula name (e.g. "opencode"). Surfaced by install/update help only today. */
   brew?: string;
@@ -868,7 +868,7 @@ export interface AgentConfig {
     /** npm package name for version lookup (e.g., "@anthropic-ai/claude-code") */
     npmPackage?: string;
     /**
-     * PyPI package name for version lookup (e.g., "open-interpreter"). When
+     * PyPI package name for version lookup (e.g., "aider-chat"). When
      * set, AgentVersionService queries https://pypi.org/pypi/<pkg>/json after
      * github/npm fall through.
      */

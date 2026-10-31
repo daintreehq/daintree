@@ -38,6 +38,7 @@ import { migration038 } from "./038-tap-or-hold-recording-mode.js";
 import { migration039 } from "./039-device-agent-toolbar-pins.js";
 import { migration040 } from "./040-voice-cleanup-on-terra.js";
 import { migration041 } from "./041-learned-everyday-heard-as.js";
+import { migration042 } from "./042-interpreter-bypass-flag.js";
 
 export const migrations: Migration[] = [
   migration002,
@@ -80,4 +81,5 @@ export const migrations: Migration[] = [
   migration039,
   migration040,
   migration041,
+  migration042,
 ];

@@ -7,80 +7,64 @@ export const config: AgentConfig = {
   color: "#111111",
   iconId: "interpreter",
   supportsContextInjection: true,
-  // Open Interpreter is a code-execution host, not an MCP client — it runs
-  // Python/shell/JS on behalf of an outer agent rather than consuming
-  // external MCP servers. The Daintree assistant overlay has nothing to
-  // inject into it, so it is structurally ineligible.
+  // Not offered to the Daintree assistant. The current product does speak MCP,
+  // but that alone isn't a reason to enable it, and no injection path has been
+  // verified against it.
   supports: false,
-  tooltip: "Open Interpreter's CLI",
-  usageUrl: "https://docs.openinterpreter.com/",
-  externalLinks: [{ label: "View docs", url: "https://docs.openinterpreter.com/" }],
-  packages: {
-    pypi: "open-interpreter",
+  continuity: {
+    tier: "unverified",
+    detail: "Open Interpreter resumes by session ID; resuming after a move isn't confirmed",
   },
+  tooltip: "Open Interpreter's CLI",
+  usageUrl: "https://www.openinterpreter.com/docs/terminal",
+  externalLinks: [{ label: "View docs", url: "https://www.openinterpreter.com/docs/terminal" }],
+  // The standalone installers drop the binary here; Electron's PATH often
+  // misses ~/.local/bin, and the Windows directory is a junction the installer
+  // adds to the user PATH only for new shells.
+  nativePaths: [
+    "~/.local/bin/interpreter",
+    "%LOCALAPPDATA%\\Programs\\Open Interpreter\\bin\\interpreter.exe",
+  ],
   version: {
     args: ["--version"],
-    pypiPackage: "open-interpreter",
-    githubRepo: "openinterpreter/open-interpreter",
-    releaseNotesUrl: "https://github.com/openinterpreter/open-interpreter/releases",
-  },
-  update: {
-    pip: "pip install --upgrade open-interpreter",
-    pipx: "pipx upgrade open-interpreter",
+    githubRepo: "openinterpreter/openinterpreter",
+    releaseNotesUrl: "https://github.com/openinterpreter/openinterpreter/releases/tag/rust-v{version}",
   },
   install: {
-    docsUrl: "https://docs.openinterpreter.com/getting-started/setup",
+    docsUrl: "https://www.openinterpreter.com/docs/terminal/install",
     byOs: {
       macos: [
         {
-          label: "pipx (recommended)",
-          commands: ["pipx install open-interpreter"],
-        },
-        {
-          label: "pip",
-          commands: ["pip install open-interpreter"],
-        },
-        {
-          label: "uv",
-          commands: ["uv tool install open-interpreter"],
+          label: "Install script",
+          commands: ["curl -fsSL https://www.openinterpreter.com/install | sh"],
         },
       ],
       linux: [
         {
-          label: "pipx (recommended)",
-          commands: ["pipx install open-interpreter"],
-        },
-        {
-          label: "pip",
-          commands: ["pip install open-interpreter"],
-        },
-        {
-          label: "uv",
-          commands: ["uv tool install open-interpreter"],
+          label: "Install script",
+          commands: ["curl -fsSL https://www.openinterpreter.com/install | sh"],
         },
       ],
       windows: [
         {
-          label: "pipx (recommended)",
-          commands: ["pipx install open-interpreter"],
-        },
-        {
-          label: "pip",
-          commands: ["pip install open-interpreter"],
-        },
-        {
-          label: "uv",
-          commands: ["uv tool install open-interpreter"],
+          label: "PowerShell",
+          commands: ["irm https://www.openinterpreter.com/install.ps1 | iex"],
         },
       ],
     },
     troubleshooting: [
       "Restart Daintree after installation to update PATH",
-      "Requires Python 3.10 or newer",
       "Verify installation with: interpreter --version",
-      "Set OPENAI_API_KEY (or ANTHROPIC_API_KEY / GOOGLE_API_KEY) before launch, or run 'interpreter' once to be prompted",
-      "Code runs locally — keep auto-run mode disabled unless you trust the prompt source",
+      "Run 'interpreter' once to sign in or choose a model provider",
+      "Credentials live in ~/.openinterpreter, or in INTERPRETER_HOME when it's set",
+      "A 0.4.x version is the legacy Python package, a different program: install the current release with the command above",
     ],
+  },
+  // `interpreter update` re-runs the standalone installer for this platform
+  // (the curl script on macOS and Linux, the PowerShell one on Windows), so one
+  // method covers both install routes.
+  update: {
+    curl: "interpreter update",
   },
   capabilities: {
     scrollback: 10000,
@@ -90,33 +74,69 @@ export const config: AgentConfig = {
     supportsBracketedPaste: false,
     softNewlineSequence: "\n",
     ignoredInputSequences: ["\n", "\x1b\r"],
+    // The working line advertises "esc to interrupt" (status_indicator_widget.rs).
+    interrupt: "double-escape",
   },
+  // Unverified against live PTY output: derived from the upstream source
+  // (openinterpreter/openinterpreter a8385667, 0.0.57), not captured. The TUI is
+  // a Codex fork, so these are the Codex shapes with Open Interpreter's name.
   detection: {
-    primaryPatterns: ["[•·]\\s+(Running|Executing|Generating)"],
-    fallbackPatterns: ["```(python|shell|javascript|applescript|html|r)\\b"],
-    bootCompletePatterns: ["Welcome to.*Open Interpreter", "Model set to"],
-    promptPatterns: ["^\\s*>\\s*$"],
-    promptHintPatterns: ["Would you like to run this code"],
+    // `<spinner> Working (1m 05s • esc to interrupt)`. The header text changes
+    // with the turn's reasoning summary and a ` · <note>` can follow, so only
+    // the elapsed-time and hint part is matched.
+    primaryPatterns: ["\\(\\d+[hms](?: \\d+[ms])*\\s*[•·]\\s*esc to interrupt\\)"],
+    // The session header card's title row, `>_ Open Interpreter (v0.0.57)`.
+    // "Welcome to Open Interpreter" is onboarding-only, so it isn't used.
+    bootCompletePatterns: ["Open Interpreter \\(v\\d+\\.\\d+\\.\\d+"],
+    // The composer row, `› Ask Codex to do anything` when empty (the placeholder
+    // is inherited unchanged from Codex).
+    promptPatterns: ["^\\s*›(?:\\s|$)"],
     scanLineCount: 10,
     primaryConfidence: 0.95,
-    fallbackConfidence: 0.7,
     promptConfidence: 0.85,
   },
-  // Empty on purpose: the only way back to a past conversation is the
-  // `--conversations` picker, which would sit on the restored PTY waiting for a
-  // choice, so a restore starts fresh instead.
   resume: {
-    kind: "rolling-history",
-    args: () => [],
-    shutdownKeySequence: "\x04",
+    kind: "session-id",
+    args: (sessionId: string) => ["resume", sessionId],
+    // On exit it prints "To continue this session, run:" then the command. The
+    // exit summary still hardcodes `codex resume <id>` (tui/src/app/exit_summary.rs)
+    // even though the binary is `interpreter`, so both names are accepted. A UUID
+    // capture keeps the follow-up "Or run codex resume and select <name>." out.
+    sessionIdPattern:
+      "(?:codex|interpreter) resume ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
+    // Scoped to the launch directory, and starts fresh when it holds no session
+    // (tui/src/lib.rs, `latest_session_cwd_filter`).
+    resumeLatestArgs: ["resume", "--last"],
+    // No automated quit: Codex's gated Ctrl-C was measured on Codex only, and a
+    // slash command typed into a busy composer becomes chat text. The id is
+    // still captured when the user quits, and a restore without one falls back
+    // to the latest session.
+    quitCommand: "",
   },
   authCheck: {
-    configPaths: {
-      darwin: ["Library/Application Support/open-interpreter/profiles/default.yaml"],
-      win32: ["AppData/Roaming/Open Interpreter/profiles/default.yaml"],
+    // Everything lives under ~/.openinterpreter, or INTERPRETER_HOME when set;
+    // CODEX_HOME is deliberately ignored (utils/home-dir). `auth.json` is the
+    // default file store for a ChatGPT sign-in or a saved API key; the keyring
+    // backend keeps an encrypted copy in `secrets/codex_auth.age`, and provider
+    // OAuth sign-ins land in `secrets/gateway_oauth.age`. A keyring-only login
+    // leaves no file to observe.
+    configHome: {
+      envVar: "INTERPRETER_HOME",
+      defaultDir: ".openinterpreter",
+      paths: ["auth.json", "secrets/codex_auth.age", "secrets/gateway_oauth.age"],
     },
-    configPathsAll: [".config/open-interpreter/profiles/default.yaml"],
-    envVar: ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"],
+    // OpenAI is the built-in default provider. The bundled provider catalog
+    // reads around a hundred other keys; these are the common ones.
+    envVar: [
+      "OPENAI_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "GEMINI_API_KEY",
+      "OPENROUTER_API_KEY",
+      "DEEPSEEK_API_KEY",
+      "MOONSHOT_API_KEY",
+      "ZAI_API_KEY",
+      "GROQ_API_KEY",
+    ],
   },
   prerequisites: [
     {
@@ -124,7 +144,7 @@ export const config: AgentConfig = {
       label: "Open Interpreter CLI",
       versionArgs: ["--version"],
       severity: "fatal",
-      installUrl: "https://docs.openinterpreter.com/getting-started/setup",
+      installUrl: "https://www.openinterpreter.com/docs/terminal/install",
     },
   ],
 };
