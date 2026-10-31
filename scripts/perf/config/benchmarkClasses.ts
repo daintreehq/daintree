@@ -297,7 +297,7 @@ const FAMILIES: readonly Family[] = [
   },
   {
     label: "file picker",
-    ids: ["PERF-190", "PERF-191", "PERF-192"],
+    ids: ["PERF-190", "PERF-191", "PERF-192", "PERF-199"],
     kind: "mechanism",
     fidelity: withFidelity({ processTopology: "partial" }),
     claim:

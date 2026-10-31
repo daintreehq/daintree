@@ -1,11 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { createPerfTempRoot } from "./tempRoots";
 import { createRng } from "./workloads";
 
 /**
- * Fixture for the file-picker scenarios (PERF-190..192).
+ * Fixture for the file-picker scenarios (PERF-190..192, PERF-199).
  *
  * Drives the real `FileSearchService` (electron/services/FileSearchService.ts)
  * — the single implementation behind the `@`-mention picker and the file
@@ -33,6 +33,26 @@ export const REPRESENTATIVE_FILE_COUNT = 3200;
 
 /** Large monorepo, still under the service's 20k fallback cap. */
 export const MONOREPO_FILE_COUNT = 12000;
+
+/** The empty-query scenario's larger repo, four times the monorepo. */
+export const SCALED_FILE_COUNT = 51200;
+
+/**
+ * Three root files of one length that `Intl.Collator` calls equal: a soft
+ * hyphen is ignorable in collation wherever it sits. Short enough to land in
+ * every empty-query page, so the order they come back in is the order the
+ * ranking gave paths it cannot tell apart, which has to be the listing order.
+ * Soft hyphens rather than canonical singletons (U+212B against U+00C5) because
+ * no Unicode normalisation rewrites them on the way through git.
+ *
+ * The byte-greatest is left untracked in the worktree rather than committed:
+ * `ls-files` prints `--others` ahead of the index, so the three are listed in an
+ * order raw string comparison would not give, and a ranking that broke collator
+ * ties by raw string rather than by listing order cannot pass.
+ */
+export const COLLATOR_TIE_PATHS = ["ab\u00AD.md", "a\u00ADb.md", "\u00ADab.md"] as const;
+const TRACKED_TIE_PATHS = COLLATOR_TIE_PATHS.slice(0, 2);
+const UNTRACKED_TIE_PATHS = COLLATOR_TIE_PATHS.slice(2);
 
 const TOP_LEVEL = [
   "src",
@@ -169,7 +189,14 @@ export const RETENTION_FILE_COUNT = 3200;
 
 let fixture: FileSearchFixture | null = null;
 
-function buildRepo(root: string, name: string, fileCount: number, seed: number): FileSearchRepo {
+function buildRepo(
+  root: string,
+  name: string,
+  fileCount: number,
+  seed: number,
+  extraPaths: readonly string[] = [],
+  untrackedPaths: readonly string[] = []
+): FileSearchRepo {
   const repoPath = join(root, name);
   mkdirSync(repoPath, { recursive: true });
   git(repoPath, ["init", "-b", "main"]);
@@ -193,13 +220,31 @@ function buildRepo(root: string, name: string, fileCount: number, seed: number):
     "committer perf <perf@example.invalid> 1 +0000",
     `data ${Buffer.byteLength(message)}`,
     message,
-    ...[...relativePaths, GIT_ONLY_SENTINEL].map((relative) => `M 100644 :1 ${relative}`),
+    ...[...relativePaths, GIT_ONLY_SENTINEL, ...extraPaths].map(
+      (relative) => `M 100644 :1 ${relative}`
+    ),
     "",
     "done",
     "",
   ].join("\n");
   git(repoPath, ["fast-import", "--quiet"], importStream);
   git(repoPath, ["read-tree", "HEAD"]);
+  for (const relative of untrackedPaths) {
+    const absolute = join(repoPath, relative);
+    mkdirSync(dirname(absolute), { recursive: true });
+    writeFileSync(absolute, contents);
+  }
+  if (untrackedPaths.length > 0) {
+    // The service's own `ls-files --exclude-standard` reads the developer's
+    // global excludes, which the setup env above does not reach. `info/exclude`
+    // outranks them, so a global `*.md` cannot hide a planted path.
+    const infoDir = join(repoPath, ".git", "info");
+    mkdirSync(infoDir, { recursive: true });
+    appendFileSync(
+      join(infoDir, "exclude"),
+      untrackedPaths.map((relative) => `!/${relative}\n`).join("")
+    );
+  }
 
   return { path: repoPath, fileCount: relativePaths.length };
 }
@@ -228,6 +273,46 @@ export function getFileSearchFixture(): FileSearchFixture {
   };
 
   return fixture;
+}
+
+export interface FileSearchEmptyQueryFixture {
+  monorepo: FileSearchRepo;
+  scaled: FileSearchRepo;
+}
+
+let emptyQueryFixture: FileSearchEmptyQueryFixture | null = null;
+
+/**
+ * The empty-query scenario's two repos, built only when that scenario runs.
+ *
+ * The monorepo shares `getFileSearchFixture`'s seed, so it is the same
+ * generated corpus PERF-192 times, plus `COLLATOR_TIE_PATHS`. Built apart from
+ * that fixture so the other scenarios neither pay for a 51,200-path repo nor
+ * see paths they were not written against.
+ */
+export function getFileSearchEmptyQueryFixture(): FileSearchEmptyQueryFixture {
+  if (emptyQueryFixture) return emptyQueryFixture;
+
+  const root = createPerfTempRoot("daintree-perf-filesearch-empty-", { canonical: true });
+  emptyQueryFixture = {
+    monorepo: buildRepo(
+      root,
+      "monorepo",
+      MONOREPO_FILE_COUNT,
+      191,
+      TRACKED_TIE_PATHS,
+      UNTRACKED_TIE_PATHS
+    ),
+    scaled: buildRepo(
+      root,
+      "scaled",
+      SCALED_FILE_COUNT,
+      199,
+      TRACKED_TIE_PATHS,
+      UNTRACKED_TIE_PATHS
+    ),
+  };
+  return emptyQueryFixture;
 }
 
 let retentionRepos: FileSearchRepo[] | null = null;
