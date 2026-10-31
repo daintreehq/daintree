@@ -283,6 +283,20 @@ describe("GitStatusPass", () => {
     expect(hashOf([a, { ...b, mtimeMs: 10 }])).not.toBe(hashOf([a, { ...b, mtimeMs: 20 }]));
   });
 
+  it("calculateStateHash changes when only the omitted untracked count does (#15559)", () => {
+    const { pass } = makePass();
+    const hashOf = (omittedUntrackedCount?: number) =>
+      (pass as unknown as { calculateStateHash: (c: unknown) => number }).calculateStateHash({
+        changes: [{ path: "/w/out/f0.txt", status: "untracked", insertions: 1, deletions: 0 }],
+        changedFileCount: 1 + (omittedUntrackedCount ?? 0),
+        omittedUntrackedCount,
+      });
+
+    // 201 and 205 untracked files list the same capped rows.
+    expect(hashOf(1)).not.toBe(hashOf(5));
+    expect(hashOf(undefined)).not.toBe(hashOf(1));
+  });
+
   it("uses the actual latest dirty-file mtime on initial load instead of observation time", async () => {
     const fileMtime = Date.now() - 120_000;
     const commitTime = fileMtime - 60_000;

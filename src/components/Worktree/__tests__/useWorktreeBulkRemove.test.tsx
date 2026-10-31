@@ -37,6 +37,8 @@ import {
   isBulkRemoveEligible,
   bulkRemoveEvidenceKey,
   bulkRemoveExclusion,
+  bulkRemoveDiscardedFileCount,
+  describeBulkRemoveLosses,
   describeBulkRemoveRisks,
   type BulkRemoveTarget,
   type BulkRemoveTargetStatus,
@@ -1671,5 +1673,32 @@ describe("bulkRemoveExclusion", () => {
       })
     );
     expect(risks).toEqual(["2 files inside submodules"]);
+  });
+});
+
+describe("bulk remove untracked files past the enrichment cap (#15559)", () => {
+  // 200 listed rows plus 5 the status read counted without listing.
+  const capped = (omittedUntrackedCount: number) =>
+    target({
+      status: verified({
+        changes: [
+          change("src/app.ts", "modified"),
+          ...Array.from({ length: 200 }, (_, i) => change(`out/f${i}.txt`, "untracked")),
+        ],
+        omittedUntrackedCount,
+      }),
+    });
+
+  it("states the full untracked count in the loss line and the batch total", () => {
+    expect(describeBulkRemoveLosses(capped(5))).toEqual([
+      "1 uncommitted file",
+      "205 untracked files",
+    ]);
+    expect(bulkRemoveDiscardedFileCount(capped(5))).toBe(206);
+  });
+
+  it("asks for consent again when only the omitted count changes", () => {
+    // 201 and 205 untracked files list the same 200 rows.
+    expect(bulkRemoveEvidenceKey(capped(1))).not.toBe(bulkRemoveEvidenceKey(capped(5)));
   });
 });

@@ -218,7 +218,8 @@ function EligibleBody({ target }: { target: BulkRemoveTarget }) {
   const changeRows = buildWorktreeChangeRows(
     [...submoduleRows, ...files],
     BULK_PREVIEW_FILE_LIMIT,
-    status.preview.rootPath
+    status.preview.rootPath,
+    status.preview.omittedUntrackedCount
   );
   const nestedRows = buildSubmoduleFileRows(
     status.preview.submodules.risk,

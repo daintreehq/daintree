@@ -1093,13 +1093,20 @@ export async function getWorktreeChangesWithStats(
         }
       }
 
-      const untrackedFiles = status.not_added;
+      // Only enrichment is capped: `git status -u` already listed every
+      // untracked file, so the rest are counted rather than dropped. A delete
+      // preview reads this count, and stating the capped list as the total
+      // undercounts what the delete destroys (#15559).
+      const untrackedFiles = [...new Set(status.not_added)].filter(
+        (file) => !changesMap.has(resolve(gitRoot, file))
+      );
       const concurrencyLimit = 10;
 
       const limitedUntrackedFiles =
         untrackedFiles.length > MAX_UNTRACKED_FILES
           ? untrackedFiles.slice(0, MAX_UNTRACKED_FILES)
           : untrackedFiles;
+      const omittedUntrackedCount = untrackedFiles.length - limitedUntrackedFiles.length;
 
       if (untrackedFiles.length > MAX_UNTRACKED_FILES) {
         if (!warnedLargeUntracked.has(cwd)) {
@@ -1157,7 +1164,8 @@ export async function getWorktreeChangesWithStats(
         worktreeId: realCwd,
         rootPath: gitRoot,
         changes,
-        changedFileCount: changes.length,
+        changedFileCount: changes.length + omittedUntrackedCount,
+        ...(omittedUntrackedCount > 0 ? { omittedUntrackedCount } : {}),
         totalInsertions,
         totalDeletions,
         insertions: totalInsertions,

@@ -937,3 +937,70 @@ describe("delete-preview parity for the MCP confirm", () => {
     await expect(fetchWorktreeTeardownPreview("wt-1")).resolves.toBe("unreadable");
   });
 });
+
+describe("untracked files past the producer's enrichment cap (#15559)", () => {
+  // The producer lists 200 untracked files and counts the rest; a worktree
+  // holding 205 must never preview as 200.
+  const listedUntracked = Array.from({ length: 200 }, (_, i) =>
+    file(`out/f${String(i).padStart(3, "0")}.txt`, "untracked")
+  );
+  const tracked = [file("src/a.ts", "modified"), file("src/b.ts", "deleted")];
+
+  it("adds the omitted files to the untracked count only", () => {
+    const summary = summarizeWorktreeChanges([...tracked, ...listedUntracked], 5);
+    expect(summary.untrackedFileCount).toBe(205);
+    expect(summary.trackedChangeCount).toBe(2);
+    expect(summary.hasUntrackedFiles).toBe(true);
+  });
+
+  it("reports untracked files when every one of them is omitted", () => {
+    const summary = summarizeWorktreeChanges([], 3);
+    expect(summary).toMatchObject({ untrackedFileCount: 3, hasUntrackedFiles: true });
+    expect(summary.hasTrackedChanges).toBe(false);
+  });
+
+  it("carries the omitted count from the forced status read into the preview", async () => {
+    getSubmoduleDeleteRiskMock.mockResolvedValue(emptyRisk());
+    getFreshChangesMock.mockResolvedValue({
+      ...changes([...tracked, ...listedUntracked]),
+      changedFileCount: 207,
+      omittedUntrackedCount: 5,
+    });
+
+    const preview = await buildWorktreeDeletePreview("wt-1");
+
+    expect(preview?.untrackedFileCount).toBe(205);
+    expect(preview?.omittedUntrackedCount).toBe(5);
+    expect(preview?.hasTrackedChanges).toBe(true);
+  });
+
+  it("counts omitted files in both overflow tails, even with nothing else past the limit", () => {
+    const few = [file("a.ts", "modified"), file("n.txt", "untracked")];
+
+    expect(formatWorktreeChangeRows(few, 12, ROOT, 4)).toEqual([
+      "  M a.ts",
+      "  ? n.txt",
+      "  …and 4 more",
+    ]);
+    const rows = buildWorktreeChangeRows([...tracked, ...listedUntracked], 12, ROOT, 5);
+    expect(rows.filter((r) => !r.isOverflow)).toHaveLength(12);
+    expect(rows[rows.length - 1]).toMatchObject({ isOverflow: true, label: "…and 195 more" });
+  });
+
+  it("states the full untracked count in the MCP confirm lines", () => {
+    const all = [...tracked, ...listedUntracked];
+    const preview: WorktreeDeletePreview = {
+      ...summarizeWorktreeChanges(all, 5),
+      changes: all,
+      rootPath: ROOT,
+      omittedUntrackedCount: 5,
+      submodules: CLEAR,
+    };
+
+    const lines = formatWorktreeDeletePreviewLines(preview);
+
+    expect(lines[0]).toBe("2 uncommitted tracked files and 205 untracked files:");
+    // 202 listed + 5 omitted, 12 shown.
+    expect(lines[lines.length - 1]).toBe("  …and 195 more");
+  });
+});

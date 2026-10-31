@@ -1717,6 +1717,74 @@ describe("getWorktreeChangesWithStats oversized changeset warnings", () => {
   });
 });
 
+describe("getWorktreeChangesWithStats untracked totals past the enrichment cap (#15559)", () => {
+  const emptyStatus = {
+    modified: [],
+    created: [],
+    deleted: [],
+    renamed: [],
+    staged: [],
+    conflicted: [],
+    not_added: [],
+  };
+  const tracked = ["src/a.ts", "src/b.ts"];
+
+  const untracked = (n: number) => Array.from({ length: n }, (_, i) => `out/f${i}.txt`);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __clearPerFileDiffStatCacheForTesting();
+    (fs.access as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs: 1000, size: 12 });
+    readFileMock.mockResolvedValue(Buffer.from("line1\nline2\n"));
+    mockGit.raw.mockResolvedValue("");
+    mockGit.diff.mockResolvedValue(tracked.map((p) => `3\t1\t${p}`).join("\n"));
+  });
+
+  it.each([199, 200, 201, 205])(
+    "reports all %i untracked files beside tracked changes",
+    async (n) => {
+      const cwd = `/untracked-total-${n}/` + Math.random();
+      mockGit.status.mockResolvedValue({ ...emptyStatus, modified: tracked, not_added: untracked(n) });
+
+      const result = await getWorktreeChangesWithStats(cwd, { forceRefresh: true });
+
+      const listed = result.changes.filter((c) => c.status === "untracked").length;
+      expect(listed).toBe(Math.min(n, 200));
+      expect(result.changes.filter((c) => c.status === "modified")).toHaveLength(tracked.length);
+      expect(listed + (result.omittedUntrackedCount ?? 0)).toBe(n);
+      expect(result.changedFileCount).toBe(tracked.length + n);
+      // Enrichment stays bounded: only listed untracked files are read.
+      expect(readFileMock.mock.calls.length).toBeLessThanOrEqual(200);
+    }
+  );
+
+  it("keeps the omitted count on a cached read", async () => {
+    const cwd = "/untracked-total-cached/" + Math.random();
+    mockGit.status.mockResolvedValue({ ...emptyStatus, not_added: untracked(205) });
+
+    const fresh = await getWorktreeChangesWithStats(cwd, { forceRefresh: true });
+    const cached = await getWorktreeChangesWithStats(cwd);
+
+    expect(mockGit.status).toHaveBeenCalledTimes(1);
+    expect(fresh.omittedUntrackedCount).toBe(5);
+    expect(cached.omittedUntrackedCount).toBe(5);
+    expect(cached.changedFileCount).toBe(205);
+  });
+
+  it("drops the omitted count once the set falls back under the cap", async () => {
+    const cwd = "/untracked-total-shrink/" + Math.random();
+    mockGit.status.mockResolvedValue({ ...emptyStatus, not_added: untracked(205) });
+    await getWorktreeChangesWithStats(cwd, { forceRefresh: true });
+
+    mockGit.status.mockResolvedValue({ ...emptyStatus, not_added: untracked(3) });
+    const result = await getWorktreeChangesWithStats(cwd, { forceRefresh: true });
+
+    expect(result.omittedUntrackedCount ?? 0).toBe(0);
+    expect(result.changedFileCount).toBe(3);
+  });
+});
+
 describe("capCommitBody", () => {
   it("keeps the trailer block when a long body is capped", () => {
     const trailers = "Co-authored-by: Sam Okafor <sam@helios.dev>";

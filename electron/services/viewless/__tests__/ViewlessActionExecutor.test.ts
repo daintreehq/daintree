@@ -370,6 +370,48 @@ describe("viewless actions", () => {
       expect(ask.lines.some((line) => /teardown may also run/.test(line))).toBe(true);
     });
 
+    it("states every untracked file the status read counted, listed or not (#15559)", async () => {
+      const { deps, hosts } = setup();
+      const root = "/repo-wt/feature";
+      const listed = Array.from({ length: 200 }, (_, i) => ({
+        path: `${root}/out/f${String(i).padStart(3, "0")}.txt`,
+        status: "untracked" as const,
+        insertions: null,
+        deletions: null,
+      }));
+      hosts.getDeletePreview.mockResolvedValueOnce({
+        changes: {
+          worktreeId: root,
+          rootPath: root,
+          changedFileCount: 205,
+          omittedUntrackedCount: 5,
+          changes: listed,
+        },
+        risk: {
+          entries: [],
+          dirtyFiles: [],
+          untrackedFiles: [],
+          atRiskCommits: [],
+          requiresMechanicalForce: false,
+          incomplete: false,
+        },
+        teardown: null,
+      });
+      const requestApproval = vi.fn(async (_ask: ViewlessApprovalAsk) => ({
+        decision: "rejected" as const,
+      }));
+
+      await executeViewlessAction(
+        { ...request("worktree.delete", deleteArgs), requestApproval },
+        deps
+      );
+
+      const [ask] = requestApproval.mock.calls[0]!;
+      expect(ask.lines[0]).toBe("205 untracked files:");
+      // 200 listed + 5 counted, 12 shown.
+      expect(ask.lines).toContain("  …and 193 more");
+    });
+
     it("puts the plugins' notes to the person alongside the host's preview (#13805)", async () => {
       const { deps, hosts } = setup();
       const collectWorktreeDeleteNotes = vi.fn(async () => [
