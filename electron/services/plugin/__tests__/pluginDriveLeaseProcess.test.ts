@@ -138,7 +138,7 @@ function loadedPlugin(): unknown {
 function setup(mode: PluginProcessMode = "pty"): {
   child: FakeChild;
   plugins: Map<string, unknown>;
-  spawn: (as: ClientEndpoint | null, cwd?: string) => Promise<PluginProcessHandle>;
+  spawn: (as: ClientEndpoint | null, cwd?: string | null) => Promise<PluginProcessHandle>;
   spawnPty: (as: ClientEndpoint | null) => Promise<PluginPtyProcessHandle>;
 } {
   const child = fakeChild(mode);
@@ -151,9 +151,10 @@ function setup(mode: PluginProcessMode = "pty"): {
   const api = buildProcessApi(deps, PLUGIN_ID, async () => [
     { path: PROJECT_ROOT, isCurrent: true } as WorktreeSnapshot,
   ]);
-  const spawn = (as: ClientEndpoint | null, cwd: string | undefined = PROJECT_ROOT) => {
+  /** `cwd` null spawns with none. */
+  const spawn = (as: ClientEndpoint | null, cwd: string | null = PROJECT_ROOT) => {
     const run = () =>
-      api.spawn("sh", { mode, ...(cwd !== undefined && { cwd }) } as PluginProcessSpawnOptions);
+      api.spawn("sh", { mode, ...(cwd !== null && { cwd }) } as PluginProcessSpawnOptions);
     return as === null ? run() : runInPluginInvocation(PLUGIN_ID, as, run);
   };
   const spawnPty = (as: ClientEndpoint | null) => spawn(as) as Promise<PluginPtyProcessHandle>;
@@ -452,7 +453,7 @@ describe("plugin process handles after another screen takes the project (#15792)
 
   it("judges a process spawned with no cwd by the active worktree's project", async () => {
     const { child, spawn } = setup();
-    const handle = (await spawn(VIEW, undefined)) as PluginPtyProcessHandle;
+    const handle = (await spawn(VIEW, null)) as PluginPtyProcessHandle;
     installLeases(new Map([["p1", OTHER]]));
 
     asCaller(VIEW, () => handle.write("x"));
@@ -491,6 +492,23 @@ describe("plugin process handles after another screen takes the project (#15792)
 
     expect(written(child)).toEqual(["from-view"]);
     expect(seen).toEqual([null]);
+  });
+
+  it("hands a callback that isn't a function to the manager as given, for it to refuse", async () => {
+    const { child, spawnPty } = setup();
+    const received: unknown[] = [];
+    const record = (cb: unknown) => {
+      received.push(cb);
+      return () => undefined;
+    };
+    Object.assign(child, { onData: record, onExit: record, onCrash: record });
+    const handle = await spawnPty(VIEW);
+
+    handle.onData("nope" as never);
+    handle.onExit(42 as never);
+    handle.onCrash(null as never);
+
+    expect(received).toEqual(["nope", 42, null]);
   });
 
   it("runs output callbacks as the plugin's own work, whichever call started the child", async () => {

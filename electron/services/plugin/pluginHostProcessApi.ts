@@ -169,9 +169,9 @@ export function buildProcessApi(
           });
         });
       },
-      onExit: (cb) => handle.onExit((info) => asBackground(() => cb(info))),
-      onCrash: (cb) => handle.onCrash((info) => asBackground(() => cb(info))),
-      onData: (cb) => handle.onData((chunk) => asBackground(() => cb(chunk))),
+      onExit: (cb) => handle.onExit(asBackgroundCallback(cb)),
+      onCrash: (cb) => handle.onCrash(asBackgroundCallback(cb)),
+      onData: (cb) => handle.onData(asBackgroundCallback(cb)),
     };
     // Only the handle handed back is registered: it is what the worker bridge
     // holds when it cleans up.
@@ -243,10 +243,13 @@ interface GatedProcessOp {
  * a dev worker, even when a view's call started or restarted the child: its
  * streams would otherwise carry that call's context into every later chunk.
  */
-function asBackground(fn: () => void): void {
-  runWithPluginInvocation(null, () =>
-    runWithEndedPluginInvocation(null, () => runWithServiceInvocation(null, fn))
-  );
+function asBackgroundCallback<A>(cb: (arg: A) => void): (arg: A) => void {
+  // Anything else goes through as given, for the manager to refuse by name.
+  if (typeof cb !== "function") return cb;
+  return (arg) =>
+    runWithPluginInvocation(null, () =>
+      runWithEndedPluginInvocation(null, () => runWithServiceInvocation(null, () => cb(arg)))
+    );
 }
 
 /**
