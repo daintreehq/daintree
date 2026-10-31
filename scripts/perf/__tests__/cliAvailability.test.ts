@@ -268,7 +268,11 @@ describe("perf cli-availability auth expectations", () => {
   it("plants and grades a relocatable config root under its default directory", () => {
     const config = agent({
       authCheck: {
-        configHome: { envVar: "ALPHA_HOME", defaultDir: ".alpha", paths: ["creds/a.json", "c.toml"] },
+        configHome: {
+          envVar: "ALPHA_HOME",
+          defaultDir: ".alpha",
+          paths: ["creds/a.json", "c.toml"],
+        },
       },
     });
     expect(expectedAuthState(config, new Set())).toBe("unauthenticated");

@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { homedir } from "os";
 import { join } from "path";
-import { CliAvailabilityService } from "../CliAvailabilityService.js";
+import { CliAvailabilityService, isFullyQualifiedPath } from "../CliAvailabilityService.js";
 import { getAgentConfig, getAgentIds } from "../../../shared/config/agentRegistry.js";
 import { execFile, execFileSync } from "child_process";
 import { refreshPath } from "../../setup/environment.js";
@@ -1017,6 +1017,30 @@ describe("CliAvailabilityService", () => {
         join(homedir(), ".kimi-code", "credentials", "kimi-code.json"),
         join(homedir(), ".kimi-code", "config.toml"),
       ]);
+    });
+  });
+
+  describe("isFullyQualifiedPath (#15566)", () => {
+    it.each([
+      ["/opt/kimi", true],
+      ["relative/kimi", false],
+      ["./kimi", false],
+    ])("POSIX: %s -> %s", (p, expected) => {
+      expect(isFullyQualifiedPath(p, "darwin")).toBe(expected);
+    });
+
+    it.each([
+      ["C:\\Users\\me\\kimi", true],
+      ["d:/kimi", true],
+      ["\\\\server\\share\\kimi", true],
+      // Resolved against whichever drive is current.
+      ["\\kimi", false],
+      ["/kimi", false],
+      // Resolved against the current directory on drive C.
+      ["C:kimi", false],
+      ["kimi", false],
+    ])("Windows: %s -> %s", (p, expected) => {
+      expect(isFullyQualifiedPath(p, "win32")).toBe(expected);
     });
   });
 
