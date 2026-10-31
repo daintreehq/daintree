@@ -113,7 +113,7 @@ describe("setupResourceListeners — persistence flush on hide (#9914)", () => {
 function installViewLifecycle(latchedCached = false) {
   const flushers = new Set<() => unknown>();
   let latched = latchedCached;
-  (globalThis as unknown as { window: Window }).window.electron = {
+  vi.stubGlobal("electron", {
     terminal: { onResourceMetrics: vi.fn(() => () => {}) },
     app: {
       isViewCached: () => latched,
@@ -126,7 +126,7 @@ function installViewLifecycle(latchedCached = false) {
       onViewWarmActivated: () => () => {},
       onViewRevealed: () => () => {},
     },
-  } as unknown as Window["electron"];
+  });
   return {
     cache: () => {
       latched = true;
@@ -148,6 +148,7 @@ describe("setupResourceListeners — persistence flush when the view is cached (
   afterEach(() => {
     setHidden(false);
     __resetProjectViewCacheStateForTests();
+    vi.unstubAllGlobals();
   });
 
   it("flushes panel and draft persistence on the cached edge, with the document still visible", async () => {
@@ -163,30 +164,33 @@ describe("setupResourceListeners — persistence flush when the view is cached (
     d.dispose();
   });
 
-  it("holds main's cached edge until both the layout and draft writes settle", async () => {
-    const view = installViewLifecycle();
-    let releasePanels!: () => void;
-    let releaseDrafts!: () => void;
-    flushPanelPersistenceMock.mockReturnValueOnce(
-      new Promise<void>((resolve) => (releasePanels = resolve))
-    );
-    draftsIdleMock.mockReturnValueOnce(new Promise<void>((resolve) => (releaseDrafts = resolve)));
-    const d = setupResourceListeners();
+  it.each(["layout", "drafts"] as const)(
+    "holds main's cached edge until both the layout and draft writes settle (%s first)",
+    async (first) => {
+      const view = installViewLifecycle();
+      let releasePanels!: () => void;
+      let releaseDrafts!: () => void;
+      flushPanelPersistenceMock.mockReturnValueOnce(
+        new Promise<void>((resolve) => (releasePanels = resolve))
+      );
+      draftsIdleMock.mockReturnValueOnce(new Promise<void>((resolve) => (releaseDrafts = resolve)));
+      const d = setupResourceListeners();
 
-    let released = false;
-    void view.cache().then(() => (released = true));
-    releasePanels();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(released).toBe(false);
+      let released = false;
+      void view.cache().then(() => (released = true));
+      (first === "layout" ? releasePanels : releaseDrafts)();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(released).toBe(false);
 
-    releaseDrafts();
-    await vi.waitFor(() => expect(released).toBe(true));
-    // The drafts were queued before their writes were awaited.
-    expect(flushDraftsMock.mock.invocationCallOrder[0]).toBeLessThan(
-      draftsIdleMock.mock.invocationCallOrder[0]!
-    );
-    d.dispose();
-  });
+      (first === "layout" ? releaseDrafts : releasePanels)();
+      await vi.waitFor(() => expect(released).toBe(true));
+      // The drafts were queued before their writes were awaited.
+      expect(flushDraftsMock.mock.invocationCallOrder[0]).toBeLessThan(
+        draftsIdleMock.mock.invocationCallOrder[0]!
+      );
+      d.dispose();
+    }
+  );
 
   it("flushes both immediately when the view is already cached at registration", () => {
     installViewLifecycle(true);

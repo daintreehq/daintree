@@ -95,11 +95,14 @@ vi.mock("@/lib/viewCacheState", () => ({
 function emitPhase(phase: LifecyclePhase): void {
   for (const listener of Array.from(viewCache.listeners)) listener(phase);
 }
-// Mirrors preload on main's cached edge: run every flusher and hand back what
-// main waits on before it may freeze or evict the view.
-function cacheView(): unknown[] {
+// Mirrors preload on main's cached edge: every flusher runs, ahead of the
+// renderer's own cached latch and lifecycle listeners, and what they return is
+// what main waits on before it may freeze or evict the view.
+function cacheView(): Promise<unknown>[] {
+  const held = Array.from(viewCache.flushers, (flush) => Promise.resolve(flush()));
   viewCache.cached = true;
-  return Array.from(viewCache.flushers, (flush) => flush());
+  emitPhase("cached");
+  return held;
 }
 
 const { initStoreOrchestrator, destroyStoreOrchestrator } =
@@ -261,7 +264,7 @@ describe("rendererStoreOrchestrator — MRU flush on hide (#9914)", () => {
     expect(flushSpy).toHaveBeenCalledTimes(1);
     // Main keeps the view unfrozen and resident until the persist settles.
     let released = false;
-    void (held as Promise<unknown>).then(() => (released = true));
+    void held!.then(() => (released = true));
     await Promise.resolve();
     expect(released).toBe(false);
     settle();
@@ -280,8 +283,7 @@ describe("rendererStoreOrchestrator — MRU flush on hide (#9914)", () => {
   it("stops flushing on the cached edge after destroy", () => {
     destroyStoreOrchestrator();
 
-    cacheView();
-
+    expect(cacheView()).toEqual([]);
     expect(viewCache.flushers.size).toBe(0);
     expect(flushSpy).not.toHaveBeenCalled();
   });

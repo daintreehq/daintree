@@ -584,9 +584,10 @@ describe("PanelPersistence", () => {
     it("waits for a save queued behind a write still in flight", async () => {
       const client = createMockProjectClient();
       let releaseFirst!: () => void;
-      client.setTerminals.mockImplementationOnce(
-        () => new Promise<void>((resolve) => (releaseFirst = resolve))
-      );
+      let releaseSecond!: () => void;
+      client.setTerminals
+        .mockImplementationOnce(() => new Promise<void>((resolve) => (releaseFirst = resolve)))
+        .mockImplementationOnce(() => new Promise<void>((resolve) => (releaseSecond = resolve)));
       const persistence = new PanelPersistence(client, { debounceMs: 500 });
 
       persistence.save([createMockTerminal()], projectId);
@@ -605,6 +606,40 @@ describe("PanelPersistence", () => {
       releaseFirst();
       await vi.advanceTimersByTimeAsync(0);
       expect(client.setTerminals).toHaveBeenCalledTimes(2);
+      expect(settled).toBe(false);
+
+      releaseSecond();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(true);
+    });
+
+    it("waits for every project's writes, not only the current project's", async () => {
+      const client = createMockProjectClient();
+      let releaseOther!: () => void;
+      client.setTerminals.mockImplementationOnce(
+        () => new Promise<void>((resolve) => (releaseOther = resolve))
+      );
+      const persistence = new PanelPersistence(client, {
+        debounceMs: 500,
+        getProjectId: () => "current-project",
+      });
+
+      persistence.save([createMockTerminal()], "other-project");
+      persistence.flush();
+      await vi.advanceTimersByTimeAsync(0);
+      persistence.save([createMockTerminal()], "current-project");
+      persistence.flush();
+      await vi.advanceTimersByTimeAsync(0);
+      // Separate tails: the current project's write isn't queued behind the other's.
+      expect(client.setTerminals).toHaveBeenCalledTimes(2);
+
+      let settled = false;
+      void persistence.flushAndSettle().then(() => (settled = true));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+
+      releaseOther();
+      await vi.advanceTimersByTimeAsync(0);
       expect(settled).toBe(true);
     });
 
