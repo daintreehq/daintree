@@ -432,7 +432,13 @@ export class TerminalInputController {
     const generation = this.inputGeneration;
     const owner = this.captureOwner();
     this.host.writeQueue.stage(() => {
-      if (this.isStillOwnedBy(generation, owner)) this.writeStaged(body);
+      // A plugin can address an agent known only by its launch hint. Detection
+      // landing while the draft waits is that agent arriving, not a new one.
+      const recipient =
+        owner.agentId === undefined
+          ? { ...owner, agentId: this.host.terminalInfo.detectedAgentId }
+          : owner;
+      if (this.isStillOwnedBy(generation, recipient)) this.writeStaged(body);
     });
   }
 

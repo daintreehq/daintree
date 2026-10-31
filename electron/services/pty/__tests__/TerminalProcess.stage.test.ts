@@ -196,6 +196,19 @@ describe("TerminalProcess.stage and the submit lane (#15554)", () => {
     expect(writes()).not.toContain(DRAFT);
   });
 
+  it("still reaches an agent whose detection lands while the draft waits", async () => {
+    const terminal = createAgentTerminal("claude");
+    info(terminal).detectedAgentId = undefined;
+
+    terminal.submit("first prompt");
+    terminal.stage(DRAFT);
+    info(terminal).detectedAgentId = "claude";
+
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(writes()).toEqual(["first prompt", "\r", DRAFT]);
+  });
+
   it("keeps a deferred multi-line draft inside one bracketed paste with no Enter after it", async () => {
     const terminal = createAgentTerminal("claude");
 
