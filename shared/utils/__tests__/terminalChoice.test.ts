@@ -439,6 +439,22 @@ describe("the question a list asks", () => {
     expect(question(ask("> /tmp/task.sh", 1), "Yes")).toBe(
       question(ask("> /tmp/task.sh", 2), "Yes")
     );
+    // A heredoc's indentation above options drawn at the same indent.
+    const heredoc = (line: string, highlighted: 1 | 2) =>
+      [
+        " Write hello.txt?",
+        "",
+        "   cat > hello.txt <<'EOF'",
+        line,
+        "   EOF",
+        "",
+        `${highlighted === 1 ? " ❯" : "  "} No`,
+        `${highlighted === 2 ? " ❯" : "  "} Yes`,
+      ].join("\n");
+    expect(question(heredoc("   hello", 1), "Yes")).not.toBe(
+      question(heredoc("    hello", 2), "Yes")
+    );
+    expect(question(heredoc("   hello", 1), "Yes")).toBe(question(heredoc("   hello", 2), "Yes"));
     // Options a blank row apart: the highlight leaving one is still no other question.
     const apart = (onNo: boolean) =>
       [
