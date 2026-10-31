@@ -2152,5 +2152,164 @@ describe("WorktreeMonitor", () => {
 
       monitor.stop();
     });
+
+    it("runs the next poll's pass and drops the abandoned one when it settles late (#15630)", async () => {
+      let releaseHung!: (changes: unknown) => void;
+      let releaseNext!: (changes: unknown) => void;
+      mockGetWorktreeChangesWithStats
+        .mockReset()
+        .mockReturnValueOnce(new Promise((resolve) => (releaseHung = resolve)))
+        .mockReturnValueOnce(new Promise((resolve) => (releaseNext = resolve)));
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+      (monitor as unknown as { _isRunning: boolean })._isRunning = true;
+      vi.spyOn(
+        monitor as unknown as { scheduleNextPoll: () => void },
+        "scheduleNextPoll"
+      ).mockImplementation(() => {});
+      const poll = () => (monitor as unknown as { poll: () => Promise<void> }).poll();
+      const isUpdating = () => (monitor as unknown as { _isUpdating: boolean })._isUpdating;
+
+      const hung = poll();
+      await vi.advanceTimersByTimeAsync(45_000);
+      await hung;
+      expect(isUpdating()).toBe(false);
+
+      const next = poll();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(2);
+      expect(isUpdating()).toBe(true);
+
+      const result = (lastCommitMessage: string) => ({
+        worktreeId: TEST_WORKTREE.id,
+        rootPath: TEST_WORKTREE.path,
+        changes: [],
+        changedFileCount: 0,
+        tracking: null,
+        lastCommitMessage,
+      });
+      releaseHung(result("late"));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(callbacks.onUpdate).not.toHaveBeenCalled();
+      expect(monitor.getSnapshot().worktreeChanges).toBeNull();
+      expect(isUpdating()).toBe(true);
+
+      releaseNext(result("fresh"));
+      await next;
+
+      expect(callbacks.onUpdate).toHaveBeenCalledTimes(1);
+      expect(monitor.getSnapshot().worktreeChanges?.lastCommitMessage).toBe("fresh");
+      expect(isUpdating()).toBe(false);
+
+      monitor.stop();
+    });
+
+    it("records no poll outcome for a lifecycle that stopped mid-pass (#15630)", async () => {
+      let release!: (changes: unknown) => void;
+      mockGetWorktreeChangesWithStats
+        .mockReset()
+        .mockReturnValueOnce(new Promise((resolve) => (release = resolve)));
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+      (monitor as unknown as { _isRunning: boolean })._isRunning = true;
+      vi.spyOn(
+        monitor as unknown as { scheduleNextPoll: () => void },
+        "scheduleNextPoll"
+      ).mockImplementation(() => {});
+      const strategy = (
+        monitor as unknown as {
+          pollingStrategy: { recordSuccess: () => void; recordFailure: () => boolean };
+        }
+      ).pollingStrategy;
+      const recordSuccess = vi.spyOn(strategy, "recordSuccess");
+      const recordFailure = vi.spyOn(strategy, "recordFailure");
+
+      const polling = (monitor as unknown as { poll: () => Promise<void> }).poll();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+
+      monitor.stop();
+      release({
+        worktreeId: TEST_WORKTREE.id,
+        rootPath: TEST_WORKTREE.path,
+        changes: [],
+        changedFileCount: 0,
+        tracking: null,
+      });
+      await polling;
+
+      expect(recordSuccess).not.toHaveBeenCalled();
+      expect(recordFailure).not.toHaveBeenCalled();
+    });
+
+    it("records no failure when the watchdog fires for a lifecycle that already stopped (#15630)", async () => {
+      let release!: (changes: unknown) => void;
+      mockGetWorktreeChangesWithStats
+        .mockReset()
+        .mockReturnValueOnce(new Promise((resolve) => (release = resolve)));
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+      (monitor as unknown as { _isRunning: boolean })._isRunning = true;
+      const strategy = (
+        monitor as unknown as {
+          pollingStrategy: { recordSuccess: () => void; recordFailure: () => boolean };
+        }
+      ).pollingStrategy;
+      const recordSuccess = vi.spyOn(strategy, "recordSuccess");
+      const recordFailure = vi.spyOn(strategy, "recordFailure");
+
+      const polling = (monitor as unknown as { poll: () => Promise<void> }).poll();
+      await vi.advanceTimersByTimeAsync(0);
+      monitor.stop();
+      await vi.advanceTimersByTimeAsync(45_000);
+      await polling;
+
+      expect(recordSuccess).not.toHaveBeenCalled();
+      expect(recordFailure).not.toHaveBeenCalled();
+      release({ worktreeId: TEST_WORKTREE.id, changes: [], changedFileCount: 0, tracking: null });
+    });
+  });
+
+  describe("stop mid-pass (#15630)", () => {
+    it("lets a restart run its own pass and drops the stopped lifecycle's late result", async () => {
+      let releaseOld!: (changes: unknown) => void;
+      const changes = (file: string) => ({
+        worktreeId: TEST_WORKTREE.id,
+        rootPath: TEST_WORKTREE.path,
+        changes: [{ path: `${TEST_WORKTREE.path}/${file}`, status: "modified" }],
+        changedFileCount: 1,
+        tracking: null,
+        lastCommitMessage: "commit",
+      });
+      mockGetWorktreeChangesWithStats
+        .mockReset()
+        .mockReturnValueOnce(new Promise((resolve) => (releaseOld = resolve)))
+        .mockResolvedValue(changes("new.ts"));
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+
+      await monitor.start();
+      await flushInitialStatus();
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+
+      monitor.stop();
+      await monitor.start();
+      await flushInitialStatus();
+
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(2);
+      expect(callbacks.onUpdate).toHaveBeenCalledTimes(1);
+      expect(monitor.getSnapshot().worktreeChanges?.changes[0]?.path).toBe(
+        `${TEST_WORKTREE.path}/new.ts`
+      );
+
+      releaseOld(changes("old.ts"));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(callbacks.onUpdate).toHaveBeenCalledTimes(1);
+      expect(monitor.getSnapshot().worktreeChanges?.changes[0]?.path).toBe(
+        `${TEST_WORKTREE.path}/new.ts`
+      );
+
+      monitor.stop();
+    });
   });
 });

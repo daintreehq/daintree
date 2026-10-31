@@ -443,6 +443,43 @@ describe("WorkspaceService external worktree removal", () => {
       );
     });
 
+    it("drops a removed monitor's late updates, before and after the path is re-created (#15630)", async () => {
+      const busUpdates = vi.fn();
+      mockEvents.on("sys:worktree:update", busUpdates);
+      try {
+        await service["addNewWorktreeMonitor"](createTestWorktree(), false, true);
+        const first = service["monitors"].get(TEST_WORKTREE_PATH)!;
+        service["removeMonitor"](TEST_WORKTREE_PATH);
+        mockSendEvent.mockClear();
+        busUpdates.mockClear();
+
+        // Both routes a late pass or a service-side refresh would publish by.
+        first["callbacks"].onUpdate(first.getSnapshot());
+        service["emitUpdate"](first);
+
+        const published = expect.objectContaining({
+          type: expect.stringMatching(/^worktree-(update|tick)$/),
+        });
+        expect(mockSendEvent).not.toHaveBeenCalledWith(published);
+        expect(busUpdates).not.toHaveBeenCalled();
+
+        await service["addNewWorktreeMonitor"](createTestWorktree(), false, true);
+        const second = service["monitors"].get(TEST_WORKTREE_PATH)!;
+        mockSendEvent.mockClear();
+        busUpdates.mockClear();
+
+        first["callbacks"].onUpdate(first.getSnapshot());
+        expect(mockSendEvent).not.toHaveBeenCalledWith(published);
+        expect(busUpdates).not.toHaveBeenCalled();
+
+        second["callbacks"].onUpdate(second.getSnapshot());
+        expect(mockSendEvent).toHaveBeenCalledWith(published);
+        expect(busUpdates).toHaveBeenCalledTimes(1);
+      } finally {
+        mockEvents.off("sys:worktree:update", busUpdates);
+      }
+    });
+
     it("installs one monitor when two adds for the same path overlap", async () => {
       // The entry guard reads `monitors` before several awaits, so without
       // single-flighting both callers install a monitor and the registered one

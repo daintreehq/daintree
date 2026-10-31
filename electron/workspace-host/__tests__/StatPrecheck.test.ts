@@ -195,6 +195,19 @@ describe("StatPrecheck", () => {
     expect(await precheck.shouldSkip("/repo/.git", true)).toBe(false);
   });
 
+  it("leaves no baseline behind from a capture its pass was abandoned during", async () => {
+    vi.mocked(stat).mockResolvedValue(makeStatResult(1_000));
+    const precheck = new StatPrecheck(makeHost());
+    let current = true;
+
+    const capture = precheck.recordFullPass("/repo/.git", () => current);
+    current = false;
+    await capture;
+
+    expect(precheck.baselineRevision).toBe(0);
+    expect(await precheck.shouldSkip("/repo/.git", true)).toBe(false);
+  });
+
   it("caches a resolved commondir for the instance lifetime", async () => {
     vi.mocked(readFile).mockResolvedValueOnce("/repo/.git\n" as unknown as string);
     const precheck = new StatPrecheck(makeHost());
