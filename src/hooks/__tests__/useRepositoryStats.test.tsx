@@ -91,6 +91,15 @@ const { resolvedProviderRef, makeResolvedProvider } = vi.hoisted(() => {
   };
 });
 
+// Whether this machine has paired a host — what turns sharing on in a local
+// view (#14199).
+const { pairedHostRef } = vi.hoisted(() => ({ pairedHostRef: { current: false } }));
+
+vi.mock("@/components/Hosts/hostList", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/Hosts/hostList")>()),
+  hasRemoteHosts: () => pairedHostRef.current,
+}));
+
 vi.mock("@/hooks/useResolvedForgeProvider", () => ({
   useResolvedForgeProvider: () => resolvedProviderRef.current,
 }));
@@ -162,6 +171,7 @@ describe("useRepositoryStats", () => {
     // into later tests' cold-start hydration.
     getFirstPageCacheMock.mockResolvedValue(null);
     resolvedProviderRef.current = makeResolvedProvider("test.forge.provider");
+    pairedHostRef.current = false;
     _resetPollingLifecycleForTests();
     _resetSwitchBackCacheForTests();
     // Reset the mocked worktree store so a prior test's main-worktree counts
@@ -3140,6 +3150,138 @@ describe("useRepositoryStats", () => {
       });
     });
 
+    it("holds the disk bootstrap until it knows the origin", async () => {
+      publishFrom("local", 11, 5);
+      getCurrentMock.mockResolvedValue({ id: "test-project", path: "/srv/widgets" });
+      getFirstPageCacheMock.mockResolvedValue({
+        providerId: PROVIDER_ID,
+        projectPath: "/srv/widgets",
+        issues: { items: [], endCursor: null, hasNextPage: false },
+        prs: { items: [], endCursor: null, hasNextPage: false },
+        lastUpdated: 1_000,
+        stats: { commitCount: 412, issueCount: 7, prCount: 3, lastUpdated: 1_000 },
+      });
+      const origin = createDeferred<string | null>();
+      getRepoKeyMock.mockReturnValue(origin.promise);
+      getRepoStatsMock.mockReturnValue(createDeferred<ForgeRepositoryStats>().promise);
+      const shownIssueCounts: Array<number | null> = [];
+
+      const { result } = renderHook(() => {
+        const value = useRepositoryStats();
+        if (value.stats) shownIssueCounts.push(value.stats.issueCount);
+        return value;
+      });
+
+      await waitFor(() => {
+        expect(getFirstPageCacheMock).toHaveBeenCalled();
+      });
+      await wait(20);
+      expect(result.current.stats).toBeNull();
+
+      await act(async () => {
+        origin.resolve(REPO_KEY);
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(11);
+      });
+      expect(result.current.stats?.commitCount).toBe(412);
+      expect(shownIssueCounts.every((count) => count === 11)).toBe(true);
+    });
+
+    it("drops the disk bootstrap of a project switched away from during the origin lookup", async () => {
+      const projectA = { id: "a", path: "/srv/widgets" };
+      const projectB = {
+        id: "b",
+        path: "/srv/gadgets",
+        lastKnownStats: { ...persisted, commitCount: 50, issueCount: 1, prCount: 1 },
+      };
+      let currentProject: { id: string; path: string } = projectA;
+      getCurrentMock.mockImplementation(async () => currentProject);
+      let switchHandler: (() => void) | undefined;
+      onSwitchMock.mockImplementation((callback: () => void) => {
+        switchHandler = callback;
+        return () => {};
+      });
+      getFirstPageCacheMock.mockResolvedValue({
+        providerId: PROVIDER_ID,
+        projectPath: "/srv/widgets",
+        issues: { items: [], endCursor: null, hasNextPage: false },
+        prs: { items: [], endCursor: null, hasNextPage: false },
+        lastUpdated: 1_000,
+        stats: { commitCount: 412, issueCount: 7, prCount: 3, lastUpdated: 1_000 },
+      });
+      const originA = createDeferred<string | null>();
+      getRepoKeyMock.mockImplementation((path: string) =>
+        path === "/srv/widgets" ? originA.promise : Promise.resolve(null)
+      );
+      getRepoStatsMock.mockReturnValue(createDeferred<ForgeRepositoryStats>().promise);
+
+      const { result } = renderHook(() => useRepositoryStats());
+      // The poll's read of the project, then the bootstrap's two: it is now
+      // waiting on the origin lookup.
+      await waitFor(() => {
+        expect(getRepoKeyMock).toHaveBeenCalledWith("/srv/widgets");
+        expect(getCurrentMock).toHaveBeenCalledTimes(3);
+      });
+
+      currentProject = projectB;
+      act(() => {
+        switchHandler?.();
+      });
+      await act(async () => {
+        originA.resolve(REPO_KEY);
+        await Promise.resolve();
+      });
+
+      // B seeds from its own record, not A's cached counts.
+      await waitFor(() => {
+        expect(result.current.stats?.commitCount).toBe(50);
+      });
+      await wait(20);
+      expect(result.current.stats?.commitCount).toBe(50);
+      expect(result.current.stats?.issueCount).toBe(1);
+    });
+
+    it("keeps the record over a cached answer from a host it has no entry from", async () => {
+      publishFrom("local", 11, 5);
+      const poll = createDeferred<ForgeRepositoryStats>();
+      getRepoStatsMock.mockReturnValue(poll.promise);
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(11);
+      });
+
+      // An older reading of this host's that this Shell never received.
+      await act(async () => {
+        poll.resolve(freshAnswer(7, 3, { countsSource: "memory-cache" }));
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(result.current.isValidating).toBe(false);
+      });
+
+      expect(result.current.stats?.issueCount).toBe(11);
+      expect(result.current.stats?.commitCount).toBe(413);
+      expect(readSharedRepoStats(REPO_KEY)?.hostId).toBe("local");
+    });
+
+    it("shares in a local view once a host is paired", async () => {
+      delete window.__DAINTREE_HOST_ID__;
+      pairedHostRef.current = true;
+      publishFrom("studio", 11, 5);
+      getRepoStatsMock.mockReturnValue(createDeferred<ForgeRepositoryStats>().promise);
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(11);
+      });
+      expect(result.current.sharedCounts).toBe(true);
+      expect(getRepoKeyMock).toHaveBeenCalledWith("/srv/widgets");
+    });
+
     it("shares one record whichever forge account each host is signed in to", async () => {
       publishFrom("local", 11, 5);
       getRepoStatsMock.mockReturnValue(createDeferred<ForgeRepositoryStats>().promise);
@@ -3341,6 +3483,17 @@ describe("useRepositoryStats", () => {
         await Promise.resolve();
       });
       expect(result.current.stats?.issueCount).toBe(2);
+      expect(result.current.sharedCounts).toBe(false);
+
+      // The next fetch goes by what the answer said, not a stale lookup.
+      getRepoStatsMock.mockReturnValue(createDeferred<ForgeRepositoryStats>().promise);
+      act(() => {
+        void result.current.refresh();
+      });
+      await waitFor(() => {
+        expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
+      });
+      expect(result.current.stats?.issueCount).toBe(2);
     });
 
     it("shares nothing for a project whose counts have no single origin", async () => {
@@ -3394,6 +3547,7 @@ describe("useRepositoryStats", () => {
       });
 
       expect(result.current.stats?.issueCount).toBe(9);
+      expect(result.current.sharedCounts).toBe(false);
       expect(getRepoKeyMock).not.toHaveBeenCalled();
       expect(readSharedRepoStats(REPO_KEY)?.hostId).toBe("build-box");
       expect(

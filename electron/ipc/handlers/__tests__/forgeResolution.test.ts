@@ -63,6 +63,7 @@ const pluginServiceMock = vi.hoisted(() => ({
 vi.mock("../../../services/PluginService.js", () => ({ pluginService: pluginServiceMock }));
 
 import {
+  hasIssueOverrideForCwd,
   issueToTooltipData,
   readIssueLinkTarget,
   resolveForCwd,
@@ -914,6 +915,19 @@ describe("resolveForCwd — issues role (#13700)", () => {
     await expect(resolveForCwd("/repo", "issues")).rejects.toThrow(
       "Tracker isn't set up for this project yet"
     );
+  });
+
+  it("says from settings alone whether issues are bound elsewhere (#15546)", async () => {
+    const tracker = makeIssuesOnlyProvider();
+    const resolveIssueRepo = vi.spyOn(tracker, "resolveIssueRepo");
+    registryMock.getForgeIssueProviderImpl.mockReturnValue(tracker);
+
+    await expect(hasIssueOverrideForCwd("/repo/src", "/repo")).resolves.toBe(true);
+    expect(resolveIssueRepo).not.toHaveBeenCalled();
+    expect(pluginServiceMock.activatePluginForForgeProvider).not.toHaveBeenCalled();
+
+    projectStoreMock.getProjectSettings.mockResolvedValue({ runCommands: [] });
+    await expect(hasIssueOverrideForCwd("/repo/src")).resolves.toBe(false);
   });
 
   it("stamps issues it served with the provider's canonical id", async () => {

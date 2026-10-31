@@ -5,6 +5,7 @@ import { broadcastToRenderer, checkRateLimit, typedHandle } from "../utils.js";
 import { defineIpcNamespace, op } from "../define.js";
 import {
   getIssueForLink,
+  hasIssueOverrideForCwd,
   issueToTooltipData,
   readIssueLinkTarget,
   resolveForCwd,
@@ -561,6 +562,7 @@ async function handleForgeGetRepoStats(payload: {
     : codeSnapshot;
   const { count: commitCount, reliable: commitReliable } = await readCommitCount(cwd);
   const stats = buildForgeRepositoryStats(commitCount, snapshot.counts);
+  if (snapshot.source) stats.countsSource = snapshot.source;
   // A split blend's issue count belongs to another tracker, so no one key names
   // both counts' source.
   if (!split) stats.repoKey = repoKeyOf(repoRef);
@@ -639,13 +641,11 @@ async function handleForgeGetRepoKey(payload: { cwd: string }): Promise<string |
   if (typeof payload.cwd !== "string" || !payload.cwd.trim()) return null;
   try {
     const { repoRef } = await resolveForCwd(payload.cwd);
-    // A bound issues provider splits the issue count off, and one that fails to
-    // resolve still splits it (`readIssueOverrideCount` answers for it), so
-    // neither has one origin behind both counts.
-    const split = await resolveIssueOverrideForCwd(payload.cwd, repoRef.projectPath).then(
-      (context) => context !== null,
-      () => true
-    );
+    // A bound issues provider splits the issue count off, even one that fails
+    // to resolve (`readIssueOverrideCount` answers for it), so neither has one
+    // origin behind both counts. Read from settings, so this never waits on the
+    // tracker; unreadable settings share nothing.
+    const split = await hasIssueOverrideForCwd(payload.cwd, repoRef.projectPath).catch(() => true);
     return split ? null : repoKeyOf(repoRef);
   } catch {
     return null;

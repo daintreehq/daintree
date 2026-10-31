@@ -199,6 +199,11 @@ export interface UseRepositoryStatsReturn {
   errorSeverity: RepositoryStatsErrorSeverity | null;
   isTokenError: boolean;
   isStale: boolean;
+  /**
+   * The issue/PR counts are the Shell's shared record of the repository
+   * (#15546), which every view of it shows, rather than this host's own.
+   */
+  sharedCounts: boolean;
   lastUpdated: number | null;
   rateLimitResetAt: number | null;
   rateLimitKind: ForgeRateLimitKind | null;
@@ -293,6 +298,8 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   // gate, and never enters the switch-back cache.
   const originRef = useRef<{ projectPath: string; repoKey: string } | null>(null);
   const [boundRepoKey, setBoundRepoKey] = useState<string | null>(null);
+  // Whether the issue/PR counts on screen are that record's.
+  const [sharedCounts, setSharedCounts] = useState(false);
   // What this host's own results would show, so a change to the shared record
   // can be redrawn over them.
   const hostStatsRef = useRef<ForgeRepositoryStats | null>(null);
@@ -484,12 +491,14 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
             issueRefreshedAt: repoStats.issueCountRefreshedAt ?? repoStats.lastUpdated,
             prRefreshedAt: repoStats.prCountRefreshedAt ?? repoStats.lastUpdated,
             hostId: observerHostId,
+            replay: repoStats.countsSource === "memory-cache" || repoStats.countsSource === "disk",
           });
         }
       }
 
       const shared = readBoundSharedStats(opts.projectPath);
       setStats(shared ? withSharedCounts(preservedStats, shared) : preservedStats);
+      setSharedCounts(shared !== null);
       // Freshness stays a statement about this host's own polling: the shared
       // record holds this host's fresh readings too, so it is never older than
       // what a healthy poll here would show.
@@ -580,6 +589,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     if (!host || projectPath === null) return;
     const shared = readBoundSharedStats(projectPath);
     setStats(shared ? withSharedCounts(host, shared) : host);
+    setSharedCounts(shared !== null);
   }, [readBoundSharedStats]);
 
   // Follow the bound record: a poll on any host, in any window, redraws the
@@ -718,6 +728,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
             hostStatsRef.current = null;
             originRef.current = null;
             setBoundRepoKey(null);
+            setSharedCounts(false);
             setStats(null);
             setError(null);
             setIsStale(false);
@@ -908,6 +919,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
       hostStatsRef.current = null;
       originRef.current = null;
       setBoundRepoKey(null);
+      setSharedCounts(false);
       hasAppliedResultRef.current = false;
       statsProjectPathRef.current = null;
 
@@ -983,6 +995,8 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     if (!providerId || hasHydratedRef.current) return;
     hasHydratedRef.current = true;
     let cancelled = false;
+    // A project switch while this is out bumps the fetch epoch.
+    const generation = fetchGenerationRef.current;
     void (async () => {
       try {
         const project = await projectClient.getCurrent();
@@ -1005,6 +1019,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
         if (cached.stats && sharingEnabledRef.current && resolvedProviderId !== null) {
           const repoKey = await resolveRepoOrigin(currentProject.path, resolvedProviderId);
           if (cancelled || !mountedRef.current) return;
+          if (fetchGenerationRef.current !== generation) return;
           if (!hasAppliedResultRef.current && providerIdRef.current === resolvedProviderId) {
             bindOrigin(currentProject.path, repoKey);
           }
@@ -1440,6 +1455,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
     errorSeverity,
     isTokenError,
     isStale,
+    sharedCounts,
     lastUpdated,
     rateLimitResetAt,
     rateLimitKind,

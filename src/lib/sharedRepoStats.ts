@@ -16,7 +16,8 @@
  * processes never race on one slot. "Newest" is the order this Shell received
  * the readings in, on its own clock: each host stamps its counts on its own
  * clock, and a host whose clock runs ahead would otherwise outrank every fresh
- * poll from the others.
+ * poll from the others. A reading the host served from its cache was made
+ * before it arrived, so it is dated by when the host made it instead.
  *
  * Every storage access is best-effort — a blocked or full store reads as empty.
  */
@@ -27,10 +28,18 @@ const RECORD_PREFIX = "daintree:repo-stats:origin:";
 // every real reading until the clock caught up; one this far ahead is junk.
 const MAX_CLOCK_LEAD_MS = 24 * 60 * 60 * 1000;
 
+// A host's own clock orders its readings for only this long: one corrected
+// after running ahead would otherwise have every reading refused until it
+// caught up.
+const HOST_CLOCK_TRUST_MS = 5 * 60 * 1000;
+
 export interface SharedRepoStats {
   issueCount: number | null;
   prCount: number | null;
-  /** When this Shell received the reading, on its own clock. Orders the entries. */
+  /**
+   * When this Shell received the reading, on its own clock — for a cache replay,
+   * when the host made it. Orders the entries.
+   */
   receivedAt: number;
   /** When each count was read from the forge, moved onto this Shell's clock. */
   issueObservedAt: number;
@@ -142,6 +151,8 @@ export interface SharedRepoReading {
   issueRefreshedAt: number;
   prRefreshedAt: number;
   hostId: string;
+  /** Served from the host's cache: made before it arrived, possibly long before. */
+  replay?: boolean;
 }
 
 const localListeners = new Map<string, Set<() => void>>();
@@ -160,16 +171,33 @@ export function publishSharedRepoStats(
   }
   const key = recordKey(repoKey, reading.hostId);
   const existing = parseRecord(readJson(key));
-  if (existing && existing.sourceUpdatedAt >= reading.lastUpdated) return false;
-  // How old each count was when the host answered, measured on its own clock
-  // and carried onto this one.
+  if (
+    existing &&
+    existing.sourceUpdatedAt >= reading.lastUpdated &&
+    now - existing.receivedAt < HOST_CLOCK_TRUST_MS
+  ) {
+    return false;
+  }
+  let receivedAt = now;
+  if (reading.replay) {
+    if (existing) {
+      // The host's last entry says how its clock sits against this one.
+      const offset = existing.receivedAt - existing.sourceUpdatedAt;
+      receivedAt = Math.max(1, Math.min(now, reading.lastUpdated + offset));
+    } else if (readSharedRepoStats(repoKey) !== null) {
+      // Nothing to date it by: it may be older than what the others reported.
+      return false;
+    }
+  }
+  // How old each count was when the host made the reading, measured on its own
+  // clock and carried onto this one.
   const ageOf = (refreshedAt: number) => Math.max(0, reading.lastUpdated - refreshedAt);
   const record: SharedRepoStats = {
     issueCount: reading.issueCount,
     prCount: reading.prCount,
-    receivedAt: now,
-    issueObservedAt: Math.max(1, now - ageOf(reading.issueRefreshedAt)),
-    prObservedAt: Math.max(1, now - ageOf(reading.prRefreshedAt)),
+    receivedAt,
+    issueObservedAt: Math.max(1, receivedAt - ageOf(reading.issueRefreshedAt)),
+    prObservedAt: Math.max(1, receivedAt - ageOf(reading.prRefreshedAt)),
     sourceUpdatedAt: reading.lastUpdated,
     hostId: reading.hostId,
   };

@@ -47,11 +47,16 @@ describe("sharedRepoStats", () => {
     expect(readSharedRepoStats(REPO)?.issueCount).toBe(5);
   });
 
-  it("picks the same entry for every reader on a tie", () => {
+  it("picks the same entry on a tie, whichever was written first", () => {
     publishSharedRepoStats(REPO, reading("studio", 2_000, 5), NOW);
     publishSharedRepoStats(REPO, reading("build-box", 3_000, 8), NOW);
+    const first = readSharedRepoStats(REPO)?.hostId;
 
-    expect(readSharedRepoStats(REPO)?.hostId).toBe("studio");
+    window.localStorage.clear();
+    publishSharedRepoStats(REPO, reading("build-box", 3_000, 8), NOW);
+    publishSharedRepoStats(REPO, reading("studio", 2_000, 5), NOW);
+
+    expect(readSharedRepoStats(REPO)?.hostId).toBe(first);
   });
 
   it("never lets a host republish a reading, or replace it with an older one", () => {
@@ -64,6 +69,61 @@ describe("sharedRepoStats", () => {
 
     expect(publishSharedRepoStats(REPO, reading("studio", 3_000, 0), NOW + 40)).toBe(true);
     expect(readSharedRepoStats(REPO)).toMatchObject({ hostId: "studio", issueCount: 0 });
+  });
+
+  it("takes a host's readings again once its clock is corrected back", () => {
+    // studio's clock ran an hour ahead when it published.
+    publishSharedRepoStats(REPO, reading("studio", NOW + 3_600_000, 5), NOW);
+
+    expect(publishSharedRepoStats(REPO, reading("studio", NOW + 60_000, 6), NOW + 60_000)).toBe(
+      false
+    );
+    expect(publishSharedRepoStats(REPO, reading("studio", NOW + 400_000, 7), NOW + 400_000)).toBe(
+      true
+    );
+    expect(readSharedRepoStats(REPO)?.issueCount).toBe(7);
+  });
+
+  describe("cache replays", () => {
+    it("dates one by when the host made it, through the host's clock offset", () => {
+      // studio's clock runs 10s behind this Shell's.
+      publishSharedRepoStats(REPO, reading("studio", NOW - 10_000, 5), NOW);
+      publishSharedRepoStats(REPO, reading("local", NOW + 20_000, 8), NOW + 20_000);
+
+      // Made at studio's NOW + 5s (this Shell's NOW + 15s): older than local's.
+      expect(
+        publishSharedRepoStats(
+          REPO,
+          { ...reading("studio", NOW + 5_000, 4), replay: true },
+          NOW + 30_000
+        )
+      ).toBe(true);
+      expect(readSharedRepoStats(REPO)?.hostId).toBe("local");
+
+      // Made after local's reading, so it is the newest.
+      publishSharedRepoStats(
+        REPO,
+        { ...reading("studio", NOW + 15_000, 3), replay: true },
+        NOW + 40_000
+      );
+      expect(readSharedRepoStats(REPO)).toMatchObject({
+        hostId: "studio",
+        issueCount: 3,
+        receivedAt: NOW + 25_000,
+      });
+    });
+
+    it("only fills an empty record from a host this Shell has no entry from", () => {
+      expect(
+        publishSharedRepoStats(REPO, { ...reading("studio", 2_000, 5), replay: true }, NOW)
+      ).toBe(true);
+      expect(readSharedRepoStats(REPO)?.hostId).toBe("studio");
+
+      expect(
+        publishSharedRepoStats(REPO, { ...reading("build-box", 9_000, 8), replay: true }, NOW + 10)
+      ).toBe(false);
+      expect(readSharedRepoStats(REPO)?.hostId).toBe("studio");
+    });
   });
 
   it("dates each count on this Shell's clock by the age the host reported", () => {

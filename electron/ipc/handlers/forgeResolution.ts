@@ -482,6 +482,23 @@ export async function resolveIssueOverrideForCwd(
 }
 
 /**
+ * Whether the project binds its issues to a provider of their own (#13700),
+ * read from its settings alone: unlike {@link resolveIssueOverrideForCwd}, it
+ * never activates or asks that provider anything.
+ */
+export async function hasIssueOverrideForCwd(
+  cwd: string,
+  knownMainWorktreePath?: string
+): Promise<boolean> {
+  const gitService = gitServiceCache.getGitService(cwd);
+  if (!gitService) return false;
+  const { issueProviderOverride } = knownMainWorktreePath
+    ? await readProjectForgeSettingsAt(knownMainWorktreePath)
+    : await readProjectForgeSettings(gitService, cwd);
+  return Boolean(issueProviderOverride);
+}
+
+/**
  * Resolve the provider an issue link names (#13744): the link's stored
  * provider, the code forge for `role: "code"`, else the project's issues
  * provider — what an unqualified number has always meant. A named provider is

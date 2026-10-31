@@ -113,6 +113,7 @@ vi.mock("../forgeResolution.js", () => ({
   stampIssueProvider: (_context: unknown, issue: unknown) => issue,
   stampIssuePageProvider: (_context: unknown, page: unknown) => page,
   resolveIssueOverrideForCwd: async () => null,
+  hasIssueOverrideForCwd: async () => false,
   readIssueLinkTarget: () => undefined,
   resolveIssueLinkForCwd: (cwd: string) => resolveForCwdMock(cwd),
   resolveIssueLinkUrl: async (
