@@ -927,6 +927,7 @@ Keybindings also see the focus and UI keys:
 | `sidebarVisible` | boolean | The worktree sidebar is currently visible. |
 | `canopyHidden` | boolean | The user hid Canopy; its panel cannot open. |
 | `dictationActive` | boolean | Voice dictation is starting, running, paused or finishing, in this view or another. |
+| `voiceSendWaiting` | boolean | A prompt sent with Stop and send (its key or the session panel's Send) is still waiting on its dictation's cleanup in this view. |
 
 The `presentation*` keys come from the project's presentation profile, which the user sets in Project settings → General → Features, and → Launcher for the two launcher keys. A repository can suggest one by committing `.daintree/presentation.json` — `{ "features": { "forgeStats": "hidden", "gitDetail": "demoted" } }` — and the suggestion applies only once the user accepts it when the project opens. Daintree reads that file and never writes it, unknown features and levels are ignored, and no plugin API changes a level.
 

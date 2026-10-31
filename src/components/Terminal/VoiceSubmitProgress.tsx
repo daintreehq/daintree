@@ -1,6 +1,9 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
+import { describeChord, formatChordText } from "@/lib/kbdShortcut";
+import { isMac } from "@/lib/platform";
+import type { VoiceWaitKeysReach } from "@/lib/voiceWaitKeys";
 import {
   UI_ANIMATION_DURATION,
   UI_EXIT_DURATION,
@@ -91,13 +94,46 @@ export function polishingShareAt(wait: VoiceSubmitWait, now: number): number {
 }
 
 /**
- * The wait's caption: what it waits on, and the ways out. Only the cleanup's
- * wait is one Enter cuts short; the transcript still finishes first.
+ * The keys that end a wait from where the keyboard is: Enter and Escape when
+ * they reach it, and the stop-and-send key (`skip`, its combo) for a send that
+ * key started, which reaches it from anywhere (#15705).
  */
-export function voiceSubmitWaitCaption(wait: VoiceSubmitWait): string {
-  return wait.phase === "polishing"
-    ? "Polishing… · Enter to send as dictated · Esc to cancel"
-    : "Finishing… · Esc to cancel";
+export interface VoiceSubmitWaitKeys extends VoiceWaitKeysReach {
+  skip: string | null;
+}
+
+/**
+ * What sends the wait as it stands, if anything does. Only the cleanup's wait
+ * names one: the transcript still finishes first.
+ */
+function sendNowKey(wait: VoiceSubmitWait, keys: VoiceSubmitWaitKeys, spoken: boolean) {
+  if (wait.phase !== "polishing") return null;
+  if (keys.skip)
+    return spoken ? describeChord(keys.skip, isMac()) : formatChordText(keys.skip, isMac());
+  return keys.enter ? "Enter" : null;
+}
+
+/** The wait's caption: what it waits on, and the ways out that work from where the keyboard is. */
+export function voiceSubmitWaitCaption(wait: VoiceSubmitWait, keys: VoiceSubmitWaitKeys): string {
+  const send = sendNowKey(wait, keys, false);
+  return [
+    wait.phase === "polishing" ? "Polishing…" : "Finishing…",
+    send && `${send} to send as dictated`,
+    keys.escape && "Esc to cancel",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/** The wait as a screen reader hears it, naming the same ways out as its caption. */
+export function voiceSubmitWaitStatus(wait: VoiceSubmitWait, keys: VoiceSubmitWaitKeys): string {
+  const send = sendNowKey(wait, keys, true);
+  const ways = [
+    send && `${send} to send it as dictated`,
+    keys.escape && "Escape to cancel the send",
+  ].filter(Boolean);
+  const waiting = wait.phase === "polishing" ? "Polishing dictation." : "Finishing dictation.";
+  return ways.length > 0 ? `${waiting} Press ${ways.join(", or ")}.` : waiting;
 }
 
 /** A send a dictation in its draft reopened: its words wait for the next send (#15703). */
@@ -110,6 +146,8 @@ const UNCLEANED_RECEIPT: Record<VoiceSendCleanup, string> = {
 
 interface VoiceSubmitProgressProps {
   wait: VoiceSubmitWait | null;
+  /** The keys that end the wait from where the keyboard is, which its caption names. */
+  keys: VoiceSubmitWaitKeys;
   outcome: VoiceSubmitOutcome | null;
   /** The cleanup's own progress once it streams (`correctionStreamShare`). */
   streamed?: number | null;
@@ -142,6 +180,7 @@ interface VoiceSubmitProgressProps {
  */
 export function VoiceSubmitProgress({
   wait,
+  keys,
   outcome,
   streamed = null,
   onPresentChange,
@@ -163,11 +202,11 @@ export function VoiceSubmitProgress({
   // Until the gate opens the shell alone says Enter landed.
   const shown = useDeferredLoading(active, UI_INLINE_LOADING_GATE_MS);
 
-  if (wait && voiceSubmitWaitCaption(wait) !== lastWaitCaption)
-    setLastWaitCaption(voiceSubmitWaitCaption(wait));
-  const caption = wait
-    ? voiceSubmitWaitCaption(wait)
-    : outcome?.kind === "sent"
+  const waitCaption = wait ? voiceSubmitWaitCaption(wait, keys) : null;
+  if (waitCaption !== null && waitCaption !== lastWaitCaption) setLastWaitCaption(waitCaption);
+  const caption =
+    waitCaption ??
+    (outcome?.kind === "sent"
       ? outcome.cleanup
         ? UNCLEANED_RECEIPT[outcome.cleanup]
         : "Sent"
@@ -175,7 +214,7 @@ export function VoiceSubmitProgress({
         ? "Sending…"
         : outcome?.kind === "reopened"
           ? VOICE_SEND_REOPENED_CAPTION
-          : lastWaitCaption;
+          : lastWaitCaption);
 
   const visible = active && shown;
   if (visible !== wasShown) {

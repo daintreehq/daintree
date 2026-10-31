@@ -120,6 +120,7 @@ import { CorrectionStreamAligner, type StreamedRewrite } from "@/services/voiceC
 import {
   isHeldBackSession,
   planVoiceDraftSend,
+  sendWaitingStopAndSends,
   type VoiceDraftSend,
 } from "@/services/voiceDraftSend";
 import {
@@ -6050,8 +6051,11 @@ class VoiceRecordingService {
    * Stop and send, staying where the person is: the session panel's Send and
    * its key. Its composer sends as Enter would. Without one mounted to send
    * from, the dictation still stops and its words stay in the draft; another
-   * view's session stops there. Whatever stops short of handing the composer
-   * the send leaves one line in the log saying why (#15704).
+   * view's session stops there. With no dictation left to send, a send it
+   * started that still waits on its cleanup goes as the words stand, as a
+   * second Enter sends one Enter started (#15705); a drain still finishing is
+   * left to finish, never stopped again. Whatever stops short of handing the
+   * composer the send leaves one line in the log saying why (#15704).
    */
   async stopAndSend({
     asker = "stop_and_send_key",
@@ -6059,6 +6063,7 @@ class VoiceRecordingService {
     this.initialize();
     const unsent = this.dispatchActiveSessionSend(asker);
     if (unsent === null) return;
+    if (sendWaitingStopAndSends()) return;
     // Read before the stop moves the store on.
     const { activeTarget, status, sessionElsewhere } = useVoiceRecordingStore.getState();
     const panelId = activeTarget?.panelId ?? null;

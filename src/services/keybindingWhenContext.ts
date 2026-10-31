@@ -8,6 +8,7 @@ import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { getChromeWhenContext } from "@/services/chromeWhenContext";
 import { isInPaneDialog } from "@/lib/paneDialog";
 import { hasAppModal } from "@/lib/appModal";
+import { hasWaitingStopAndSend } from "@/services/voiceDraftSend";
 
 /**
  * Live `when`-clause context for keybinding resolution — the documented
@@ -68,5 +69,7 @@ export function buildKeybindingWhenContext(event: KeyboardEvent): WhenClauseCont
       (voice.status !== "idle" && voice.status !== "error") ||
       voice.pendingTarget !== null ||
       voice.sessionElsewhere !== null,
+    // A send the stop-and-send key started, still waiting: the key sends it as it stands.
+    voiceSendWaiting: hasWaitingStopAndSend(),
   };
 }

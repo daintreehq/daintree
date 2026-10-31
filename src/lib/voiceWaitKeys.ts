@@ -40,8 +40,8 @@ function isOnCancelControl(event: KeyboardEvent): boolean {
   return target instanceof Element && target.closest("[data-voice-wait-cancel]") !== null;
 }
 
-function claimFor(event: KeyboardEvent): VoiceWaitKeyClaim | null {
-  const target = event.target;
+/** The waiting composer a key typed at `target` belongs to. */
+function claimAt(target: EventTarget | null): VoiceWaitKeyClaim | null {
   if (
     target instanceof Element &&
     target !== document.body &&
@@ -72,7 +72,7 @@ function claimFor(event: KeyboardEvent): VoiceWaitKeyClaim | null {
 export function routeVoiceWaitKey(event: KeyboardEvent): boolean {
   if (routed.has(event)) return true;
   if (claims.length === 0 || !isWaitKey(event)) return false;
-  const claim = claimFor(event);
+  const claim = claimAt(event.target);
   if (!claim) return false;
   routed.add(event);
   event.preventDefault();
@@ -90,6 +90,61 @@ function onKeyDown(event: KeyboardEvent): void {
   routeVoiceWaitKey(event);
 }
 
+/** Which of Enter and Escape, typed where the keyboard is now, reach a waiting send. */
+export interface VoiceWaitKeysReach {
+  /** Enter sends what stands. */
+  enter: boolean;
+  /** Escape calls the send off. */
+  escape: boolean;
+}
+
+export const NO_VOICE_WAIT_KEYS: VoiceWaitKeysReach = { enter: false, escape: false };
+const REACHES_BOTH: VoiceWaitKeysReach = { enter: true, escape: true };
+const REACHES_ESCAPE: VoiceWaitKeysReach = { enter: false, escape: true };
+
+/**
+ * Where Enter and Escape typed now would go, by the same rule that routes
+ * them, so a wait names only the keys that reach it. One of three shared
+ * values, so a caller can tell a change by identity.
+ */
+export function voiceWaitKeysReach(claim: VoiceWaitKeyClaim): VoiceWaitKeysReach {
+  const active = document.activeElement;
+  if (claimAt(active) !== claim) return NO_VOICE_WAIT_KEYS;
+  // Enter on Cancel send calls the send off rather than sending it.
+  return active instanceof Element && active.closest("[data-voice-wait-cancel]") !== null
+    ? REACHES_ESCAPE
+    : REACHES_BOTH;
+}
+
+const reachListeners = new Set<() => void>();
+
+function notifyReach(): void {
+  for (const listener of [...reachListeners]) listener();
+}
+
+// Focus leaving for nowhere fires no focusin, and `activeElement` settles on
+// the body only after the focusout.
+function onFocusOut(): void {
+  queueMicrotask(notifyReach);
+}
+
+/**
+ * Calls `listener` whenever where the wait keys go may have changed: the
+ * keyboard moved, or a waiting composer claimed or released them.
+ */
+export function observeVoiceWaitKeysReach(listener: () => void): () => void {
+  if (reachListeners.size === 0) {
+    window.addEventListener("focusin", notifyReach, true);
+    window.addEventListener("focusout", onFocusOut, true);
+  }
+  reachListeners.add(listener);
+  return () => {
+    if (!reachListeners.delete(listener) || reachListeners.size > 0) return;
+    window.removeEventListener("focusin", notifyReach, true);
+    window.removeEventListener("focusout", onFocusOut, true);
+  };
+}
+
 /**
  * Claims Enter and Escape for a waiting send until the returned release runs.
  * Capture phase, so the key that started the wait, already past the window
@@ -101,6 +156,8 @@ export function claimVoiceWaitKeys(claim: VoiceWaitKeyClaim): () => void {
     listening = true;
     window.addEventListener("keydown", onKeyDown, true);
   }
+  // With the keyboard nowhere, how many composers wait decides which gets the keys.
+  notifyReach();
   let released = false;
   return () => {
     if (released) return;
@@ -111,5 +168,6 @@ export function claimVoiceWaitKeys(claim: VoiceWaitKeyClaim): () => void {
       listening = false;
       window.removeEventListener("keydown", onKeyDown, true);
     }
+    notifyReach();
   };
 }
