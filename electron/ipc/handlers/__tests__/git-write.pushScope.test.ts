@@ -222,9 +222,9 @@ describe("git push — destinations and recoveries keep working", () => {
       await push(fixture.repo);
 
       expect(remoteTip(fixture.bare, "refs/heads/fresh")).toBe(freshTip);
-      expect(
-        git(fixture.repo, ["for-each-ref", "--format=%(upstream)", "refs/heads/fresh"])
-      ).toBe("refs/remotes/origin/fresh");
+      expect(git(fixture.repo, ["for-each-ref", "--format=%(upstream)", "refs/heads/fresh"])).toBe(
+        "refs/remotes/origin/fresh"
+      );
       expectOtherUnpublished(fixture);
     });
   }
