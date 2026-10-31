@@ -78,6 +78,22 @@ let stopped = false;
  * swept that project — leaving PTYs the capture pass will never see again.
  */
 let running: ProjectViewManager | null = null;
+/**
+ * The project `runOne` has in hand: already off its job's pending list, and not
+ * yet a view while it waits on admission.
+ */
+let taking: string | null = null;
+
+/**
+ * Every workspace this queue still means to restore, the one in hand included,
+ * so the scratch-cleanup sweep never tombstones one between the manifest and
+ * its view (#15614).
+ */
+export function getQueuedBackgroundRestoreIds(): string[] {
+  const ids = queue.flatMap((job) => job.projectIds);
+  if (taking !== null) ids.push(taking);
+  return ids;
+}
 
 /**
  * Queue one window's background projects. Returns immediately — window boot
@@ -145,7 +161,12 @@ async function drain(): Promise<void> {
       setPendingBackgroundRestores(job.windowId, [...job.projectIds]);
 
       job.taken += 1;
-      await runOne(job, projectId);
+      taking = projectId;
+      try {
+        await runOne(job, projectId);
+      } finally {
+        taking = null;
+      }
 
       // Yield between boots. Each job already awaits a full renderer cold start,
       // so this is not throughput pacing — it is what keeps a synchronous
@@ -242,4 +263,5 @@ export function resetBackgroundRestoreQueueForTests(): void {
   draining = false;
   stopped = false;
   running = null;
+  taking = null;
 }

@@ -27,21 +27,40 @@
  * about to vanish. Only the reap phase's hard-delete is deferred while writes
  * are suppressed — the directory removal still runs, reclaiming space.
  *
- * The current scratch (per `app_state.currentScratchId`) is always excluded
- * from Phase 2 so an actively-open workspace can never disappear under the
- * user. A tombstoned row whose ID still matches `currentScratchId` is the
- * crash-recovery case and IS reaped.
+ * Phase 2 never tombstones a scratch the app still holds (#15614): one a local
+ * window shows, caches, or is bridging away from; one a connected remote Shell
+ * has a view of; one with a tracked terminal; one a window has reserved or a
+ * switch has claimed but not yet bound; one the background-restore queue or the
+ * open-window manifest still means to restore. In a launch that never rewrites
+ * the manifest (recovery, the windowless Host) that last one is what the next
+ * launch restores, so those scratches stay held until it does. The global
+ * `currentScratchId` pointer only names the last scratch any window switched
+ * to, so it stays an extra exclusion, never the check. That set comes from the
+ * reader `globalServicesInit` installs, is read before inspection and again
+ * after it (an open during the inspection wins), and any read that fails, or a
+ * missing reader, skips Phase 2 for the sweep: nothing is tombstoned that could
+ * not be verified closed.
+ *
+ * Every held scratch also has `last_opened` moved up to the sweep's time, so a
+ * scratch restored at launch or kept open in a window for months is not aged
+ * out for never being picked from the switcher again, and the TTL counts from
+ * the last sweep that saw it held. That write is dropped while disk writes are
+ * suppressed (#6271), and the observation is kept in memory and counted
+ * meanwhile, then written on the first sweep that may.
+ *
+ * Phase 1 does not consult the held set: a tombstone is a committed deletion
+ * decision, and it may equally be a user `removeScratch` that crashed, which
+ * must finish. A tombstoned row whose ID still matches `currentScratchId` is
+ * that crash-recovery case and IS reaped.
  *
  * Known limitations (documented, not silently overstated): git-ignored files
  * in an otherwise-clean repo are treated as disposable (git-ignored = declared
  * disposable); the activity scan is bounded, so a non-git tree larger than the
  * scan limits fails closed (protected, never reclaimed) rather than be scanned
  * unboundedly; once a scratch is tombstoned, work that appears externally
- * within the grace window is not re-inspected before the directory is reaped
- * (a tombstone is a committed deletion decision — it may equally be a user
- * `removeScratch` that crashed, which must not be resurrected); and a scratch
- * open only in a non-current window is not distinguished from an idle one
- * because `currentScratchId` is a single global pointer.
+ * within the grace window is not re-inspected before the directory is reaped;
+ * and a scratch closed between two sweeps counts from the earlier one, which is
+ * sooner than it was actually last open.
  *
  * Mirrors the fire-and-forget pattern of `initializeTrashedPidCleanup`: never
  * awaited by production callers, never throws — a cleanup failure must not
@@ -60,7 +79,7 @@ import {
   SCRATCH_CLEANUP_TTL_MS,
   SCRATCH_CLEANUP_GRACE_MS,
 } from "../../shared/config/scratchCleanup.js";
-import { getScratchDir, getScratchesRoot } from "./scratchStorePaths.js";
+import { getScratchDir, getScratchesRoot, isValidScratchId } from "./scratchStorePaths.js";
 import { getWritesSuppressed } from "./diskPressureState.js";
 import { createHardenedGit, GIT_BLOCK_TIMEOUT_MS } from "../utils/hardenedGit.js";
 
@@ -114,6 +133,68 @@ export interface ScratchCleanupStore {
   tombstoneScratch(scratchId: string, deletedAt: number): void;
   hardDeleteScratch(scratchId: string): void;
   clearCurrentScratch(): void;
+  touchScratches(lastSeenAt: ReadonlyMap<string, number>): void;
+}
+
+/**
+ * Every workspace id the app still holds — see the module header for what
+ * counts. Must throw rather than answer from a partial read: the sweep
+ * tombstones whatever this leaves out.
+ */
+export type HeldWorkspaceIdsReader = () => Iterable<string>;
+
+let heldWorkspaceIdsReader: HeldWorkspaceIdsReader | null = null;
+
+/**
+ * When each held scratch was last seen held, until that reaches `last_opened`.
+ * Kept across sweeps so a scratch seen open while writes were suppressed still
+ * counts from then once it closes.
+ */
+const unsavedLastSeen = new Map<string, number>();
+
+/** Installs the held-workspace reader. Returns its uninstaller. */
+export function setHeldWorkspaceIdsReader(reader: HeldWorkspaceIdsReader | null): () => void {
+  heldWorkspaceIdsReader = reader;
+  return () => {
+    if (heldWorkspaceIdsReader === reader) heldWorkspaceIdsReader = null;
+  };
+}
+
+export function resetScratchCleanupStateForTesting(): void {
+  heldWorkspaceIdsReader = null;
+  unsavedLastSeen.clear();
+}
+
+/** The held set, or null when it could not be read in full. */
+function readHeldWorkspaceIds(): Set<string> | null {
+  if (!heldWorkspaceIdsReader) {
+    logInfo("[ScratchCleanup] no held-workspace reader installed; skipping tombstones");
+    return null;
+  }
+  try {
+    return new Set(heldWorkspaceIdsReader());
+  } catch (error) {
+    logError("[ScratchCleanup] could not read held workspaces; skipping tombstones", error);
+    return null;
+  }
+}
+
+function noteHeldScratches(store: ScratchCleanupStore, held: Set<string>, now: number): void {
+  for (const id of held) {
+    if (isValidScratchId(id)) unsavedLastSeen.set(id, Math.max(unsavedLastSeen.get(id) ?? 0, now));
+  }
+  // Tier-2 recency write (#6271): dropped under disk pressure, kept in memory.
+  if (unsavedLastSeen.size === 0 || getWritesSuppressed()) return;
+  try {
+    store.touchScratches(unsavedLastSeen);
+    unsavedLastSeen.clear();
+  } catch (error) {
+    logError("[ScratchCleanup] Failed to record when held scratches were last seen", error);
+  }
+}
+
+function lastSeenAt(row: ScratchRow): number {
+  return Math.max(row.lastOpened, unsavedLastSeen.get(row.id) ?? 0);
 }
 
 /** Directory names (at any depth) whose recency never counts as live work. */
@@ -320,6 +401,9 @@ export async function runScratchCleanup(
   const reapCutoff = now - SCRATCH_CLEANUP_GRACE_MS;
   const root = getScratchesRoot();
   const currentScratchId = store.getCurrentScratchId();
+  // Read before the candidates, so a held scratch is already fresh in them.
+  const held = readHeldWorkspaceIds();
+  if (held) noteHeldScratches(store, held, now);
 
   const candidates = store.getStaleScratchCandidates(staleCutoff);
   result.candidates = candidates.length;
@@ -328,12 +412,19 @@ export async function runScratchCleanup(
   const readyToReap = candidates.filter(
     (row) => row.deletedAt != null && row.deletedAt < reapCutoff
   );
-  // Live stale rows eligible for inspection. The current scratch is excluded so
-  // an open workspace can never be tombstoned. Lesson #3721: a falsy
-  // `lastOpened` on a live row is missing data, not maximal staleness — skip it.
-  const liveStale = candidates.filter(
-    (row) => row.deletedAt == null && !!row.lastOpened && row.id !== currentScratchId
-  );
+  // Live stale rows eligible for inspection: none at all unless the held set
+  // was read in full. Lesson #3721: a falsy `lastOpened` on a live row is
+  // missing data, not maximal staleness — skip it.
+  const liveStale = held
+    ? candidates.filter(
+        (row) =>
+          row.deletedAt == null &&
+          !!row.lastOpened &&
+          lastSeenAt(row) < staleCutoff &&
+          row.id !== currentScratchId &&
+          !held.has(row.id)
+      )
+    : [];
 
   // Phase 1: reclaim directories tombstoned on a prior sweep past the grace
   // window (and finish any `removeScratch` that crashed mid-flight). Reaping
@@ -401,13 +492,16 @@ export async function runScratchCleanup(
     )
   ).filter((outcome): outcome is InspectionOutcome => outcome != null);
 
-  // Re-validate against a fresh snapshot: an in-app open during the async
-  // inspection updates `lastOpened` and the current pointer, and must win over
-  // a tombstone decision made moments earlier.
+  // Re-validate against a fresh snapshot: a scratch opened during the async
+  // inspection, whether by a switch (which moves `lastOpened` and the current
+  // pointer) or by a window or Shell binding it, must win over a tombstone
+  // decision made moments earlier. Nothing awaits between here and the writes.
+  const heldAfterInspect = inspected.length > 0 ? readHeldWorkspaceIds() : null;
+  if (heldAfterInspect) noteHeldScratches(store, heldAfterInspect, now);
   const stillStale = new Set(
     store
       .getStaleScratchCandidates(staleCutoff)
-      .filter((row) => row.deletedAt == null && !!row.lastOpened && row.lastOpened < staleCutoff)
+      .filter((row) => row.deletedAt == null && !!row.lastOpened && lastSeenAt(row) < staleCutoff)
       .map((row) => row.id)
   );
   const currentAfterInspect = store.getCurrentScratchId();
@@ -417,7 +511,14 @@ export async function runScratchCleanup(
       result.protectedCount += 1;
       continue;
     }
-    if (row.id === currentAfterInspect || !stillStale.has(row.id)) continue;
+    if (
+      !heldAfterInspect ||
+      heldAfterInspect.has(row.id) ||
+      row.id === currentAfterInspect ||
+      !stillStale.has(row.id)
+    ) {
+      continue;
+    }
     try {
       // Unconditional with respect to disk-pressure suppression: the row must
       // leave getAllScratches() the instant it is chosen for deletion so the

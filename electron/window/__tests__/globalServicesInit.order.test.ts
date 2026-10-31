@@ -216,9 +216,16 @@ vi.mock("../../services/TrashedPidTracker.js", () => ({
 // globalServicesInit for the disk-critical edge. A factory that omits them
 // throws only when that edge is actually exercised, so they must be present
 // for the onCriticalChange tests below.
+const manifestWorkspaceIds = vi.hoisted(() => ({ current: [] as string[] }));
+vi.mock("../../services/persistence/windowManifestStore.js", () => ({
+  readManifestWorkspaceIds: () => manifestWorkspaceIds.current,
+  writeOpenWindowsManifest: vi.fn(),
+}));
+
 vi.mock("../../services/ScratchCleanupService.js", () => ({
   initializeScratchCleanup: vi.fn(),
   runScratchCleanup: vi.fn(async () => {}),
+  setHeldWorkspaceIdsReader: vi.fn(() => () => {}),
 }));
 
 vi.mock("../../services/AssistantScratchService.js", () => ({
@@ -1309,6 +1316,53 @@ describe("initGlobalServices task ordering", () => {
     expect(trashedSpy).not.toHaveBeenCalled();
     expect(scratchSpy).not.toHaveBeenCalled();
     expect(assistantSpy).not.toHaveBeenCalled();
+  });
+
+  it("installs the scratch sweep's held-workspace reader before any deferred task runs (#15614)", async () => {
+    const { setHeldWorkspaceIdsReader } = await import("../../services/ScratchCleanupService.js");
+    const { claimProjectActivation } = await import("../projectActivationClaims.js");
+    const readerSpy = setHeldWorkspaceIdsReader as ReturnType<typeof vi.fn>;
+    readerSpy.mockClear();
+    let shown = "shown-scratch";
+    const pvm = {
+      getActiveProjectId: () => shown,
+      getOutgoingBridgeProjectId: () => null,
+      getAllViews: () => [{ projectId: "cached-scratch" }],
+    };
+    const fakeRegistry = {
+      all: () => [{ services: { projectViewManager: pvm } }],
+      size: 1,
+    } as unknown as WindowRegistry;
+    manifestWorkspaceIds.current = ["restoring-scratch"];
+
+    await initGlobalServices(fakeRegistry);
+
+    // Deferred tasks are only queued here, so a reader installed by now is in
+    // place before the boot sweep or the disk-critical edge can run.
+    expect(registeredTaskNames).toContain("scratch-cleanup");
+    expect(readerSpy).toHaveBeenCalledTimes(1);
+    const reader = readerSpy.mock.calls[0]![0] as () => Iterable<string>;
+
+    const release = claimProjectActivation("opening-scratch", 7);
+    try {
+      expect([...reader()].sort()).toEqual([
+        "cached-scratch",
+        "opening-scratch",
+        "restoring-scratch",
+        "shown-scratch",
+      ]);
+      // Read live on every call: windows switch and close between sweeps.
+      shown = "switched-scratch";
+      manifestWorkspaceIds.current = [];
+      expect([...reader()].sort()).toEqual([
+        "cached-scratch",
+        "opening-scratch",
+        "switched-scratch",
+      ]);
+    } finally {
+      release();
+      manifestWorkspaceIds.current = [];
+    }
   });
 
   it("deferred cleanup tasks invoke their service initializers when run (#8817)", async () => {
