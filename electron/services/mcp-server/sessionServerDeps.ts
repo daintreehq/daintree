@@ -904,6 +904,17 @@ export function createSessionServerDeps(
         relay !== undefined && relayCallId !== undefined
           ? relay.callDeadline?.(relayCallId)
           : undefined;
+      if (
+        relay?.callDeadline !== undefined &&
+        relayCallId !== undefined &&
+        callDeadline === undefined
+      ) {
+        // Its caller has already been answered, a timeout most likely, while
+        // this call was still reading: nothing more of it may run.
+        return Promise.reject(
+          new Error(`Relayed call ${relayCallId} has already ended, so ${actionId} was not run`)
+        );
+      }
       const holdUntil =
         callDeadline !== undefined ? callDeadline - MCP_REMOTE_CONFIRM_MARGIN_MS : undefined;
       const relayOptions: WorkspaceDispatchOptions | undefined = relay

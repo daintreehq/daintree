@@ -5,7 +5,10 @@ import {
 } from "../../../shared/config/globalAssistant.js";
 import { PROJECT_CHECK_DEFAULT_TIMEOUT_MS } from "../../../shared/types/projectCheck.js";
 import { REPLY_WAIT_DEFAULT_SECONDS } from "../../../shared/types/replyWait.js";
-import { MCP_REMOTE_DISPATCH_TIMEOUT_MS } from "../../../shared/config/mcpConfirmWindow.js";
+import {
+  MCP_REMOTE_DISPATCH_TIMEOUT_MS,
+  remoteHoldUntil,
+} from "../../../shared/config/mcpConfirmWindow.js";
 import {
   HOST_LIST_PROJECT_BYTES_MAX,
   type HostCallArgs,
@@ -87,6 +90,7 @@ import {
   type McpCallAnswer,
   type RelayApproveAnswer,
   type RelayApprovePayload,
+  type RelayApproveTimedPayload,
   type RelayCallRequest,
   type RelayNotice,
   type RelayNoticeStatusAnswer,
@@ -299,6 +303,11 @@ export interface RelayApprovalQuestion {
   args: Record<string, unknown>;
   subject?: string;
   lines: string[];
+  /**
+   * The latest the dialog may hold, on this machine's clock (#15699): inside
+   * the host's own wait for the answer. Absent from a host too old to say.
+   */
+  holdUntil?: number;
 }
 
 /** A relayed call out to a host right now, and the run here that made it. */
@@ -1077,7 +1086,12 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * says so. Anything else is `refused`, which approves nothing. The host is
    * the connection's, never the payload's.
    */
-  async receiveApproval(hostId: HostId, payload: RelayApprovePayload): Promise<RelayApproveAnswer> {
+  async receiveApproval(
+    hostId: HostId,
+    payload: RelayApprovePayload | RelayApproveTimedPayload
+  ): Promise<RelayApproveAnswer> {
+    // Before anything awaits: the host's wait started when it asked.
+    const receivedAt = this.now();
     const answer = (decision: RelayApproveAnswer["decision"]): RelayApproveAnswer => ({
       approvalId: payload.approvalId,
       argsHash: payload.argsHash,
@@ -1115,6 +1129,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         args: payload.args,
         ...(payload.subject !== undefined ? { subject: payload.subject } : {}),
         lines: payload.lines,
+        ...("holdBudgetMs" in payload
+          ? { holdUntil: remoteHoldUntil(receivedAt, payload.holdBudgetMs) }
+          : {}),
       });
     } catch (error) {
       logger.warn("Asking about a host's call failed", { error });

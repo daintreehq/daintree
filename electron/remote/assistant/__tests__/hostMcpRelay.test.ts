@@ -839,13 +839,15 @@ describe("installHostMcpRelay approvals (#13501)", () => {
     expect(links[1]!.sent).toEqual([]);
     expect(links[0]!.sent).toEqual([
       {
-        method: AssistantLinkMethod.RELAY_APPROVE,
+        // Asked the timed way first, saying how long it waits (#15699).
+        method: AssistantLinkMethod.RELAY_APPROVE_TIMED,
         payload: expect.objectContaining({
           helpSessionId: "help-1",
           callId: "call-1",
           projectId: "project-1",
           actionId: "worktree.delete",
           args: { worktreeId: "/wt/feature" },
+          holdBudgetMs: expect.any(Number),
         }),
       },
     ]);

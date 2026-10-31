@@ -335,6 +335,8 @@ describe("relayRunMs", () => {
   });
 
   it("leaves a call that never asks anyone its own floor", () => {
+    expect(relayRunMs("throwaway.launch", {}, 90_000)).toBe(90_000);
+    expect(relayRunMs("throwaway.launch", { timeoutMs: 1_000 }, 90_000)).toBe(90_000);
     expect(relayRunMs("throwaway.launch", {}, 90_000)).toBeLessThan(
       relayRunMs("throwaway.launch", {})
     );

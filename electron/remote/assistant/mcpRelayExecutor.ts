@@ -454,6 +454,9 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
     spec: RelayMcpSessionSpec,
     payload: McpCallPayload
   ): Promise<McpCallAnswer> => {
+    // The Shell times the call from when it sent it, so admitting it here
+    // comes out of its run rather than on top of it (#15699).
+    const deadline = now() + payload.runMs;
     if (!deps.acceptsRemoteControl()) return { status: "refused", reason: "control-off" };
     if (!(await deps.hasProject(payload.projectId))) {
       return { status: "refused", reason: "no-project" };
@@ -464,8 +467,15 @@ export function createMcpRelayExecutor(deps: McpRelayExecutorDeps): McpRelayExec
     cached.inFlight += 1;
     cached.usedAt = now();
     try {
+      const timeoutMs = deadline - now();
+      if (timeoutMs <= 0) {
+        return {
+          status: "done",
+          result: errorResult(new Error("The call's time ran out before it reached the tool")),
+        };
+      }
       const result = await session.callTool(payload.tool, payload.args, {
-        timeoutMs: payload.runMs,
+        timeoutMs,
         callId: payload.callId,
       });
       return { status: "done", result: projectRelayResult(result) };

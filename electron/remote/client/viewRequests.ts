@@ -13,10 +13,7 @@ import { LOCAL_HOST_ID, parseHostScopedKey } from "../../../shared/types/remoteH
 import { getProjectForWebContents } from "../../window/webContentsRegistry.js";
 import { resolveEffectiveActionDanger } from "../../../shared/utils/effectiveActionDanger.js";
 import { AppError } from "../../utils/errorTypes.js";
-import {
-  MCP_REMOTE_CONFIRM_MARGIN_MS,
-  MCP_REMOTE_DISPATCH_TIMEOUT_MS,
-} from "../../../shared/config/mcpConfirmWindow.js";
+import { remoteHoldUntil } from "../../../shared/config/mcpConfirmWindow.js";
 import {
   NOTIFICATION_CLOSE_METHOD,
   NOTIFICATION_RECONCILE_METHOD,
@@ -250,18 +247,17 @@ function narrowRegistryRead(actionId: string, result: ActionDispatchResult): Act
 }
 
 /**
- * How long this view may hold a host's dispatch (#15699): inside what the host
- * said it waits, measured from when it arrived and less the trip back, and
- * never longer than a whole confirmation. A host that didn't say waits the
- * plain deadline, so its dispatch is held to that.
+ * How long this view may hold what a host asked for (#15699): inside the wait
+ * the host named, from when it arrived. A host that didn't say waits about
+ * the plain deadline, so it is held to that.
  */
 function hostDeadline(
-  request: McpDispatchPayload,
+  holdBudgetMs: number | undefined,
   receivedAt: number
 ): { holdUntil: number } | { fixedDeadline: true } {
-  if (request.holdBudgetMs === undefined) return { fixedDeadline: true };
-  const budgetMs = Math.min(request.holdBudgetMs, MCP_REMOTE_DISPATCH_TIMEOUT_MS);
-  return { holdUntil: receivedAt + budgetMs - MCP_REMOTE_CONFIRM_MARGIN_MS };
+  return holdBudgetMs === undefined
+    ? { fixedDeadline: true }
+    : { holdUntil: remoteHoldUntil(receivedAt, holdBudgetMs) };
 }
 
 async function dispatchAction(
@@ -289,7 +285,7 @@ async function dispatchAction(
       },
     };
   }
-  const deadline = hostDeadline(request, receivedAt);
+  const deadline = hostDeadline(request.holdBudgetMs, receivedAt);
   const service = await loadMcpServerService();
   // Otherwise never pre-confirmed: a confirm-gated action raises this Shell's
   // own dialog, naming the host that asked, exactly as a local MCP client's
@@ -358,10 +354,9 @@ export async function askHostApprovalInWindow(
       {
         approvalOnly: true,
         hostPreview: { lines: ask.lines, ...(ask.subject ? { subject: ask.subject } : {}) },
-        // Inside the host's wait for the answer (#15699), which covers a whole
-        // confirmation. The host runs the call itself, and only on an answer
-        // that came in time, so one it gave up on runs nothing.
-        holdUntil: Date.now() + MCP_REMOTE_DISPATCH_TIMEOUT_MS - MCP_REMOTE_CONFIRM_MARGIN_MS,
+        // Inside the host's own wait for the answer (#15699), so the dialog
+        // never outlasts it; a host too old to say waits about the plain deadline.
+        ...(ask.holdUntil !== undefined ? { holdUntil: ask.holdUntil } : { fixedDeadline: true }),
       },
       describeHost(ask.hostId, true)
     );

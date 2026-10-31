@@ -26,6 +26,7 @@ import {
 import type { ClientEndpoint } from "../../../ipc/endpoint.js";
 import { WorkspaceBindingError } from "../rendererBridge.js";
 import { MCP_REMOTE_CONFIRM_MARGIN_MS } from "../../../../shared/config/mcpConfirmWindow.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 
 function entry(id: string, kind: "query" | "command", readOnlyHint?: boolean): ActionManifestEntry {
   return {
@@ -455,6 +456,102 @@ describe("HttpLifecycle.openRelaySession (#13493)", () => {
       expect(dispatchActionForWorkspace.mock.calls[0]?.[5]).toMatchObject({ holdUntil });
       expect(requestApproval).toHaveBeenCalledWith(expect.objectContaining({ holdUntil }));
       expect(store.getRelayCaller(sessionId)?.callDeadline?.("c8")).toBeUndefined();
+      session.close();
+    });
+
+    it("has the SDK wait the call's whole time, not a default", async () => {
+      const callTool = vi.spyOn(Client.prototype, "callTool");
+      const { lc } = await startedLifecycle();
+      const session = (await lc.openRelaySession({
+        tier: "full",
+        workspaceId: "project-1",
+        caller: CALLER,
+      }))!;
+
+      await session.callTool("terminal.list", {}, { timeoutMs: 200_000, callId: "c9" });
+
+      expect(callTool.mock.calls[0]?.[2]).toEqual({ timeout: 200_000 });
+      session.close();
+    });
+
+    it("keeps each call in flight to its own deadline, and a newer one past an older one with its id", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(NOW);
+      const { lc, store, dispatchActionForWorkspace } = await startedLifecycle();
+      const releases = new Map<string, () => void>();
+      dispatchActionForWorkspace.mockImplementation(
+        (_ws: string, _actionId: string, args: { agentId: string }) =>
+          new Promise((resolve) => {
+            releases.set(args.agentId, () => resolve({ result: { ok: true, result: {} } }));
+          })
+      );
+      const session = (await lc.openRelaySession({
+        tier: "full",
+        workspaceId: "project-1",
+        caller: CALLER,
+      }))!;
+      const deadlineOf = (callId: string) =>
+        store.getRelayCaller(session.sessionId)?.callDeadline?.(callId);
+      const launch = (agentId: string, callId: string, timeoutMs: number) =>
+        session.callTool("agent.launch", { agentId }, { timeoutMs, callId });
+
+      const other = launch("other", "c10", 50_000);
+      const older = launch("older", "c11", 100_000);
+      const newer = launch("newer", "c11", 200_000);
+      await vi.waitFor(() => expect(releases.size).toBe(3));
+      expect(deadlineOf("c10")).toBe(NOW + 50_000);
+      expect(deadlineOf("c11")).toBe(NOW + 200_000);
+      expect(deadlineOf("nobody")).toBeUndefined();
+
+      // The older settling never takes the newer's deadline with it.
+      releases.get("older")!();
+      await older;
+      expect(deadlineOf("c11")).toBe(NOW + 200_000);
+      releases.get("newer")!();
+      releases.get("other")!();
+      await Promise.all([newer, other]);
+      expect(deadlineOf("c11")).toBeUndefined();
+      expect(deadlineOf("c10")).toBeUndefined();
+      session.close();
+    });
+
+    it("runs nothing more of a call whose caller already gave up on it", async () => {
+      let manifestRead: (manifest: ActionManifestEntry[]) => void = () => {};
+      const { lc, store, dispatchActionForWorkspace } = await startedLifecycle({
+        getCachedManifestForWorkspace: vi.fn(() => null),
+        requestManifestForWorkspace: vi.fn(
+          () =>
+            new Promise<ActionManifestEntry[]>((resolve) => {
+              manifestRead = resolve;
+            })
+        ),
+      } as never);
+      const session = (await lc.openRelaySession({
+        tier: "full",
+        workspaceId: "project-1",
+        caller: CALLER,
+      }))!;
+
+      // Still reading what the tool is when the SDK stops waiting on it.
+      await expect(
+        session.callTool("agent.launch", { agentId: "claude" }, { timeoutMs: 50, callId: "c12" })
+      ).rejects.toThrow();
+      expect(store.getRelayCaller(session.sessionId)?.callDeadline?.("c12")).toBeUndefined();
+      manifestRead(MANIFEST);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(dispatchActionForWorkspace).not.toHaveBeenCalled();
+
+      // The same read finishing in time does dispatch: the refusal above was the call's end.
+      const answered = session.callTool(
+        "agent.launch",
+        { agentId: "claude" },
+        { timeoutMs: 5_000, callId: "c13" }
+      );
+      await vi.waitFor(() => expect(manifestRead).toBeTypeOf("function"));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      manifestRead(MANIFEST);
+      await answered;
+      expect(dispatchActionForWorkspace).toHaveBeenCalledTimes(1);
       session.close();
     });
 

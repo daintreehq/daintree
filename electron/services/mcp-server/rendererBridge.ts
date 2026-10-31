@@ -1611,9 +1611,11 @@ export function createRendererBridge(
         options.holdUntil !== undefined ? options.holdUntil - Date.now() : Infinity
       )
     );
-    if (holdBudgetMs <= MCP_REMOTE_CONFIRM_MARGIN_MS) {
+    // A Shell too old to read the budget holds the plain deadline whatever it
+    // is told, so a shorter wait here could give up on a dialog it still runs.
+    if (holdBudgetMs < MCP_DISPATCH_TIMEOUT_MS + MCP_REMOTE_CONFIRM_MARGIN_MS) {
       throw new Error(
-        `Action dispatch timed out: ${actionId} — the call's deadline left the driving view no time`
+        `Action dispatch timed out: ${actionId} — too little of the call's deadline was left to send it`
       );
     }
     let answer: unknown;

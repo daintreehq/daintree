@@ -5,6 +5,7 @@ import type {
   McpCallAnswer,
   RelayApproveAnswer,
   RelayApprovePayload,
+  RelayApproveTimedPayload,
   RelayCallRequest,
   RelayNoticesPayload,
   ThrowawayCallAnswer,
@@ -37,7 +38,9 @@ export interface LocalMcpRelayDeps extends Pick<
   /** Ends what the person handed one of this machine's help sessions (#14161). */
   releaseHandOvers?(helpSessionId: string): void;
   /** Puts one confirm-gated local call to the person, as a host's question would be. */
-  receiveApproval(payload: RelayApprovePayload): Promise<RelayApproveAnswer>;
+  receiveApproval(
+    payload: RelayApprovePayload | RelayApproveTimedPayload
+  ): Promise<RelayApproveAnswer>;
   /** This machine's throwaway runs (#14445), read at each call; absent or null, they are off. */
   throwawayRuns?(): HostThrowawayExecutor | null;
   newId?: () => string;
@@ -83,7 +86,8 @@ export function createLocalMcpRelay(deps: LocalMcpRelayDeps): LocalMcpRelay {
   });
   // What `askShellApproval` asks over a link, asked of this machine's runtime instead.
   const approvals: Pick<LinkSession, "call"> = {
-    call: async (_method, payload) => deps.receiveApproval(payload as RelayApprovePayload),
+    // Asked the timed way, so the dialog here ends inside the wait (#15699).
+    call: async (_method, payload) => deps.receiveApproval(payload as RelayApproveTimedPayload),
   };
   let disposed = false;
   return {

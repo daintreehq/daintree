@@ -3279,6 +3279,17 @@ describe("rendererBridge — holding a confirm-gated dispatch open (#14989)", ()
       expect(call.outcome()).toBeInstanceOf(Error);
     });
 
+    it("ends a dispatch that never reports a phase at a budget shorter than the plain deadline", async () => {
+      const call = await startDispatch(819, { holdUntil: Date.now() + 5_000 });
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(call.outcome()).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(call.outcome()).toBeInstanceOf(Error);
+      // Nothing it claims afterwards revives it.
+      expect(bridge.holdDispatch(819, call.requestId(), "approved")).toEqual({ held: false });
+    });
+
     it("ends at the budget when it is shorter than the plain deadline", async () => {
       const call = await startDispatch(817, { holdUntil: Date.now() + 5_000 });
       bridge.holdDispatch(817, call.requestId(), "queued");

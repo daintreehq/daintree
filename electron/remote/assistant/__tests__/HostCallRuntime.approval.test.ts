@@ -7,6 +7,10 @@ import {
   type RelayApprovalQuestion,
 } from "../HostCallRuntime.js";
 import type { McpCallAnswer, RelayApproveAnswer, RelayApprovePayload } from "../linkMethods.js";
+import {
+  MCP_REMOTE_CONFIRM_MARGIN_MS,
+  MCP_REMOTE_DISPATCH_TIMEOUT_MS,
+} from "../../../../shared/config/mcpConfirmWindow.js";
 
 const RUN_A: OpenRun = {
   projectId: "proj-1",
@@ -140,6 +144,45 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
     expect(answers).toEqual([
       { approvalId: "approval-1", argsHash: ask().argsHash, decision: "approved" },
     ]);
+  });
+
+  describe("inside the wait the host names (#15699)", () => {
+    it("holds the dialog inside it, measured from when the ask arrived", async () => {
+      let arrived = 0;
+      duringCall = (r, callId) => {
+        arrived = Date.now();
+        return r.receiveApproval("studio", { ...ask({ callId }), holdBudgetMs: 200_000 });
+      };
+
+      await deleteCall();
+      const after = Date.now();
+
+      const holdUntil = asked[0]!.holdUntil!;
+      expect(holdUntil).toBeGreaterThanOrEqual(arrived + 200_000 - MCP_REMOTE_CONFIRM_MARGIN_MS);
+      expect(holdUntil).toBeLessThanOrEqual(after + 200_000 - MCP_REMOTE_CONFIRM_MARGIN_MS);
+    });
+
+    it("never holds it longer than a whole confirmation, whatever a host names", async () => {
+      duringCall = (r, callId) =>
+        r.receiveApproval("studio", {
+          ...ask({ callId }),
+          holdBudgetMs: 10 * MCP_REMOTE_DISPATCH_TIMEOUT_MS,
+        });
+
+      await deleteCall();
+
+      expect(asked[0]!.holdUntil! - Date.now()).toBeLessThanOrEqual(
+        MCP_REMOTE_DISPATCH_TIMEOUT_MS - MCP_REMOTE_CONFIRM_MARGIN_MS
+      );
+    });
+
+    it("names no hold for a host too old to say, so the dialog keeps the plain deadline", async () => {
+      duringCall = (r, callId) => r.receiveApproval("studio", ask({ callId }));
+
+      await deleteCall();
+
+      expect(asked[0]).not.toHaveProperty("holdUntil");
+    });
   });
 
   it("asks about an owned delete as the plain delete the host runs on the same id", async () => {

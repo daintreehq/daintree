@@ -62,6 +62,19 @@ export const MCP_REMOTE_CONFIRM_MARGIN_MS = 10_000;
 export const MCP_REMOTE_DISPATCH_TIMEOUT_MS = MCP_CONFIRM_ASK_MAX_MS + MCP_REMOTE_CONFIRM_MARGIN_MS;
 
 /**
+ * The latest a machine may hold a dialog another machine asked for, on its own
+ * clock (#15699): inside the wait the asker named, measured from arrival and
+ * less the trip back, and never longer than a whole confirmation.
+ */
+export function remoteHoldUntil(receivedAt: number, holdBudgetMs: number): number {
+  return (
+    receivedAt +
+    Math.min(holdBudgetMs, MCP_REMOTE_DISPATCH_TIMEOUT_MS) -
+    MCP_REMOTE_CONFIRM_MARGIN_MS
+  );
+}
+
+/**
  * The longest a confirm-gated tool call can stay open end to end. A call can
  * ask twice: an agent pane's call above its tier is approved first, and some
  * still raise their own dialog after (#12692). Every client timeout Daintree

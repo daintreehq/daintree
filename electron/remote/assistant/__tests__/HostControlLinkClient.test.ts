@@ -649,11 +649,36 @@ describe("HostControlLinkClient relay approvals (#13501)", () => {
     relay.dispose();
   });
 
+  it("hands on an ask that says how long the host waits, with the wait (#15699)", async () => {
+    const receiveApproval = vi.fn(
+      async (_hostId: string, payload: RelayApprovePayload): Promise<RelayApproveAnswer> => ({
+        approvalId: payload.approvalId,
+        argsHash: payload.argsHash,
+        decision: "approved",
+      })
+    );
+    const { relay, handlers } = opened({ receiveApproval });
+    const timed = { ...ASK, holdBudgetMs: 200_000 };
+
+    await expect(handlers.get(AssistantLinkMethod.RELAY_APPROVE_TIMED)!(timed)).resolves.toEqual({
+      approvalId: "approval-1",
+      argsHash: ASK.argsHash,
+      decision: "approved",
+    });
+    expect(receiveApproval).toHaveBeenCalledWith("studio", timed);
+    // The wait is the timed ask's whole point: one without it isn't read.
+    expect(() => handlers.get(AssistantLinkMethod.RELAY_APPROVE_TIMED)!(ASK)).toThrow();
+    relay.dispose();
+  });
+
   it("refuses an ask with nobody to put it to, approving nothing", async () => {
     const { relay, handlers } = opened();
     expect(await handlers.get(AssistantLinkMethod.RELAY_APPROVE)!(ASK)).toMatchObject({
       decision: "refused",
     });
+    expect(
+      await handlers.get(AssistantLinkMethod.RELAY_APPROVE_TIMED)!({ ...ASK, holdBudgetMs: 1_000 })
+    ).toMatchObject({ decision: "refused" });
     relay.dispose();
   });
 

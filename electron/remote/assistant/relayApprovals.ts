@@ -13,6 +13,7 @@ import {
   AssistantLinkMethod,
   RelayApproveAnswerSchema,
   type RelayApprovePayload,
+  type RelayApproveTimedPayload,
 } from "./linkMethods.js";
 
 /**
@@ -91,11 +92,19 @@ export async function askShellApproval(
     ...(ask.subject ? { subject: ask.subject.slice(0, 256) } : {}),
     lines: ask.lines,
   };
+  const timed: RelayApproveTimedPayload = { ...payload, holdBudgetMs: windowMs };
   let answer: unknown;
   try {
-    answer = await session.call(AssistantLinkMethod.RELAY_APPROVE, payload, {
-      timeoutMs: windowMs,
-    });
+    answer = await session
+      .call(AssistantLinkMethod.RELAY_APPROVE_TIMED, timed, { timeoutMs: windowMs })
+      .catch((error: unknown) => {
+        if (codeOf(error) !== "UNSUPPORTED") throw error;
+        // A Shell too old to be told the wait holds its dialog to the plain
+        // deadline, well inside it.
+        return session.call(AssistantLinkMethod.RELAY_APPROVE, payload, {
+          timeoutMs: Math.max(1, answerBy - now()),
+        });
+      });
   } catch (error) {
     // It may have been answered and the answer lost: nothing approved it here.
     return codeOf(error) === "OUTCOME_UNKNOWN"
