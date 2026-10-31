@@ -250,6 +250,7 @@ export default { app, Notification: StubNotification, webContents, powerMonitor,
 const PROJECT_STORE_STUB_SOURCE = `${BUS_PREAMBLE}
 export const projectStore = {
   getEffectiveNotificationSettings: () => bus().settings,
+  loadNotificationOverrides: async () => {},
   getCurrentProjectId: () => bus().currentProjectId,
   getAllProjects: () => bus().projects,
   getProjectState: async () => null,
