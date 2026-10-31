@@ -98,7 +98,7 @@ Scenario specs worth reading before writing a new one: `core-restart-persistence
 
 Every config shares `e2e/global-setup.ts` and `e2e/global-teardown.ts`. Setup reaps `daintree-e2e-*` temp dirs older than 24 hours that a killed run left behind and opens a manifest for this run; every userData and HOME dir a launch creates is recorded there, and teardown removes them all (not `closeApp`, because restart journeys relaunch on the same userData). `DAINTREE_E2E_KEEP_USERDATA=1` keeps them for a post-mortem and prints the manifest path.
 
-`failOnFlakyTests` is a single **top-level** flag (not per-project), wired to `process.env.FAIL_ON_FLAKY_TESTS === "true"`. Only the release-gating `core` run sets that env, so a test that passes on retry fails the run there but is tolerated on PR `full-*` runs for velocity.
+`failOnFlakyTests` is a single **top-level** flag (not per-project), wired to `process.env.FAIL_ON_FLAKY_TESTS === "true"`. Only the release-gating `core` run sets that env, so a test that passes on retry fails the run there but is tolerated on `full-*` runs for velocity.
 
 ### Mechanism checks (separate config)
 
