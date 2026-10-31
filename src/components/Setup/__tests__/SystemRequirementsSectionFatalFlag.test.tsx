@@ -74,7 +74,8 @@ function machine(present: Record<string, boolean>) {
   );
 }
 
-async function settledFatalFlag(): Promise<boolean | undefined> {
+/** Renders the section and waits for the check to settle (the numeric header only shows once it has). */
+async function renderSettled(): Promise<ReturnType<typeof vi.fn>> {
   const onFatalFailureChange = vi.fn();
   const view = render(
     <SystemRequirementsSection
@@ -83,7 +84,7 @@ async function settledFatalFlag(): Promise<boolean | undefined> {
     />
   );
   await waitFor(() => expect(view.container.textContent).toMatch(/\d+ of \d+ tools ready/));
-  return onFatalFailureChange.mock.calls.at(-1)?.[0];
+  return onFatalFailureChange;
 }
 
 describe("SystemRequirementsSection — what blocks the wizard", () => {
@@ -95,17 +96,23 @@ describe("SystemRequirementsSection — what blocks the wizard", () => {
     cleanup();
   });
 
-  it("reports no fatal failure when only Node.js is missing", async () => {
+  it("never reports a fatal failure when only Node.js is missing", async () => {
     machine({ git: true, node: false });
 
-    expect(await settledFatalFlag()).toBe(false);
+    const onFatalFailureChange = await renderSettled();
+
     expect(document.body.textContent).toContain("Warning: 1 of 2 tools ready");
+    expect(onFatalFailureChange).toHaveBeenCalled();
+    expect(onFatalFailureChange.mock.calls.every(([fatal]) => fatal === false)).toBe(true);
   });
 
   it("reports a fatal failure when Git is missing, even with Node.js present", async () => {
     machine({ git: false, node: true });
 
-    expect(await settledFatalFlag()).toBe(true);
+    const onFatalFailureChange = await renderSettled();
+
     expect(document.body.textContent).toContain("Action required: 1 of 2 tools ready");
+    // The header can land a commit before the passive effect that reports the flag.
+    await waitFor(() => expect(onFatalFailureChange).toHaveBeenLastCalledWith(true));
   });
 });
