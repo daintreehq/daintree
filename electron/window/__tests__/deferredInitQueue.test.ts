@@ -18,6 +18,7 @@ import {
   signalFirstInteractive,
   getDeferredQueueState,
   resetDeferredQueue,
+  resetDeferredQueueForNextWindow,
   haltDeferredQueue,
   __resetDeferredQueueForTests,
 } from "../deferredInitQueue.js";
@@ -518,5 +519,238 @@ describe("deferredInitQueue", () => {
     await vi.advanceTimersByTimeAsync(15_000);
     expect(task).not.toHaveBeenCalled();
     expect(getDeferredQueueState().drainState).toBe("idle");
+  });
+
+  // Global tasks are registered once per process, so the last-window-close
+  // reset must not take any that haven't run yet with it (#15562).
+  describe("resetDeferredQueueForNextWindow", () => {
+    function gate() {
+      let release: () => void = () => {};
+      const run = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            release = resolve;
+          })
+      );
+      return { run, release: () => release() };
+    }
+
+    it("resets a drained queue so the next window's tasks wait for its first-interactive", async () => {
+      registerDeferredTask({ name: "global", run: vi.fn() });
+      finalizeDeferredRegistration(10_000);
+      signalFirstInteractive(1);
+      await waitForDrain();
+
+      resetDeferredQueueForNextWindow();
+      expect(getDeferredQueueState().drainState).toBe("idle");
+
+      const nextWindow = vi.fn();
+      registerDeferredTask({ name: "next-window", run: nextWindow });
+      finalizeDeferredRegistration(10_000);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(nextWindow).not.toHaveBeenCalled();
+
+      signalFirstInteractive(2);
+      await waitForDrain();
+      expect(nextWindow).toHaveBeenCalledTimes(1);
+    });
+
+    it("lets an in-flight drain finish the tasks it has left", async () => {
+      const slow = gate();
+      const after = vi.fn();
+      registerDeferredTask({ name: "slow", run: slow.run });
+      registerDeferredTask({ name: "after", run: after });
+      finalizeDeferredRegistration(10_000);
+      signalFirstInteractive(1);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(slow.run).toHaveBeenCalledTimes(1);
+
+      resetDeferredQueueForNextWindow();
+      slow.release();
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(slow.run).toHaveBeenCalledTimes(1);
+      expect(after).toHaveBeenCalledTimes(1);
+    });
+
+    it("resets once a drain it left running finishes with no window registered", async () => {
+      const slow = gate();
+      registerDeferredTask({ name: "slow", run: slow.run });
+      finalizeDeferredRegistration(10_000);
+      signalFirstInteractive(1);
+      await vi.advanceTimersByTimeAsync(0);
+
+      resetDeferredQueueForNextWindow();
+      slow.release();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(getDeferredQueueState().drainState).toBe("idle");
+
+      const nextWindow = vi.fn();
+      registerDeferredTask({ name: "next-window", run: nextWindow });
+      finalizeDeferredRegistration(10_000);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(nextWindow).not.toHaveBeenCalled();
+
+      signalFirstInteractive(2);
+      await waitForDrain();
+      expect(nextWindow).toHaveBeenCalledTimes(1);
+      expect(slow.run).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps a window that registered during the drain, without rerunning its tasks", async () => {
+      const slow = gate();
+      registerDeferredTask({ name: "slow", run: slow.run });
+      finalizeDeferredRegistration(10_000);
+      signalFirstInteractive(1);
+      await vi.advanceTimersByTimeAsync(0);
+
+      resetDeferredQueueForNextWindow();
+      const nextWindow = vi.fn();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      registerDeferredTask({ name: "next-window", run: nextWindow });
+      warn.mockRestore();
+      finalizeDeferredRegistration(10_000);
+      expect(nextWindow).toHaveBeenCalledTimes(1);
+
+      slow.release();
+      await waitForDrain();
+      signalFirstInteractive(2);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(getDeferredQueueState().drainState).toBe("drained");
+      expect(nextWindow).toHaveBeenCalledTimes(1);
+      expect(slow.run).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps tasks queued before first-interactive and drains them with no window", async () => {
+      const global = vi.fn();
+      registerDeferredTask({ name: "global", run: global });
+      finalizeDeferredRegistration(5_000);
+
+      resetDeferredQueueForNextWindow();
+      expect(getDeferredQueueState().taskCount).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(global).toHaveBeenCalledTimes(1);
+    });
+
+    it("runs tasks queued before first-interactive with a replacement window's own, once each", async () => {
+      const global = vi.fn();
+      registerDeferredTask({ name: "global", run: global });
+      finalizeDeferredRegistration(10_000);
+
+      resetDeferredQueueForNextWindow();
+      const nextWindow = vi.fn();
+      registerDeferredTask({ name: "next-window", run: nextWindow });
+      finalizeDeferredRegistration(10_000);
+      expect(global).not.toHaveBeenCalled();
+      expect(nextWindow).not.toHaveBeenCalled();
+
+      signalFirstInteractive(2);
+      await waitForDrain();
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(global).toHaveBeenCalledTimes(1);
+      expect(nextWindow).toHaveBeenCalledTimes(1);
+      expect(getDeferredQueueState().drainState).toBe("drained");
+    });
+
+    it("survives a close, reopen and close again while one task holds the drain", async () => {
+      const slow = gate();
+      const after = vi.fn();
+      registerDeferredTask({ name: "slow", run: slow.run });
+      registerDeferredTask({ name: "after", run: after });
+      finalizeDeferredRegistration(10_000);
+      signalFirstInteractive(1);
+      await vi.advanceTimersByTimeAsync(0);
+
+      resetDeferredQueueForNextWindow();
+      const secondWindow = vi.fn();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      registerDeferredTask({ name: "second-window", run: secondWindow });
+      warn.mockRestore();
+      finalizeDeferredRegistration(10_000);
+      resetDeferredQueueForNextWindow();
+
+      slow.release();
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(after).toHaveBeenCalledTimes(1);
+      expect(secondWindow).toHaveBeenCalledTimes(1);
+      expect(getDeferredQueueState().drainState).toBe("idle");
+    });
+
+    it("drains what an early first-interactive was waiting on when registration never finalized", async () => {
+      const queued = vi.fn();
+      registerDeferredTask({ name: "queued", run: queued });
+      signalFirstInteractive(1);
+
+      resetDeferredQueueForNextWindow();
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(queued).toHaveBeenCalledTimes(1);
+      expect(getDeferredQueueState().drainState).toBe("idle");
+    });
+
+    it("resets on the spot when finalizing drains an empty queue", () => {
+      signalFirstInteractive(1);
+
+      resetDeferredQueueForNextWindow();
+
+      expect(getDeferredQueueState()).toMatchObject({
+        drainState: "idle",
+        registrationComplete: false,
+        firstInteractiveReceived: false,
+      });
+    });
+
+    it("leaves a fresh cycle drained when a generic reset replaced the pending one", async () => {
+      const slow = gate();
+      registerDeferredTask({ name: "slow", run: slow.run });
+      finalizeDeferredRegistration(10_000);
+      signalFirstInteractive(1);
+      await vi.advanceTimersByTimeAsync(0);
+
+      resetDeferredQueueForNextWindow();
+      resetDeferredQueue();
+      registerDeferredTask({ name: "fresh", run: vi.fn() });
+      finalizeDeferredRegistration(10_000);
+      signalFirstInteractive(2);
+      await waitForDrain();
+      slow.release();
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(getDeferredQueueState().drainState).toBe("drained");
+    });
+
+    it("changes nothing once the queue is halted", async () => {
+      registerDeferredTask({ name: "global", run: vi.fn() });
+      finalizeDeferredRegistration(10_000);
+      signalFirstInteractive(1);
+      await waitForDrain();
+
+      haltDeferredQueue();
+      resetDeferredQueueForNextWindow();
+
+      expect(getDeferredQueueState().drainState).toBe("drained");
+    });
+
+    it("starts nothing once the queue is halted", async () => {
+      const slow = gate();
+      const after = vi.fn();
+      registerDeferredTask({ name: "slow", run: slow.run });
+      registerDeferredTask({ name: "after", run: after });
+      finalizeDeferredRegistration(10_000);
+      signalFirstInteractive(1);
+      await vi.advanceTimersByTimeAsync(0);
+
+      resetDeferredQueueForNextWindow();
+      haltDeferredQueue();
+      slow.release();
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(after).not.toHaveBeenCalled();
+    });
   });
 });

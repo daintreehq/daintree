@@ -43,6 +43,12 @@ const {
   };
 });
 const registerCommandsMock = vi.hoisted(() => vi.fn());
+// Off by default: only the composed last-window-close test hands registrations
+// and the close on to the real queue.
+const deferredForward = vi.hoisted(() => ({
+  register: null as ((task: { name: string; run: () => unknown }) => void) | null,
+  resetForNextWindow: null as (() => void) | null,
+}));
 const {
   pluginInitialize,
   pluginGetPluginRoot,
@@ -120,6 +126,7 @@ vi.mock("../../utils/logger.js", () => ({
 vi.mock("../../services/TelemetryService.js", () => ({
   initializeTelemetry: vi.fn(),
   setOnboardingCompleteTag: vi.fn(),
+  trackEvent: vi.fn(),
 }));
 
 vi.mock("../../services/connectivity/index.js", () => ({
@@ -377,9 +384,11 @@ vi.mock("../deferredInitQueue.js", () => ({
   registerDeferredTask: vi.fn((task: { name: string; run: () => unknown }) => {
     registeredTaskNames.push(task.name);
     registeredTaskRuns.set(task.name, task.run);
+    deferredForward.register?.(task);
   }),
   finalizeDeferredRegistration: vi.fn(),
   resetDeferredQueue: vi.fn(),
+  resetDeferredQueueForNextWindow: vi.fn(() => deferredForward.resetForNextWindow?.()),
 }));
 
 vi.mock("electron", () => ({
@@ -414,6 +423,7 @@ import { startAppMetricsMonitor } from "../../services/ProcessMemoryMonitor.js";
 import type { Mock } from "vitest";
 import { CHANNELS } from "../../ipc/channels.js";
 import { store } from "../../store.js";
+import { releaseDeferredQueueOnWindowClosed } from "../lastWindowClosed.js";
 import { projectVisibilityClock } from "../../services/projectVisibilityClock.js";
 import { notifyProjectPresenceChanged } from "../projectPresenceChanges.js";
 
@@ -1744,6 +1754,85 @@ describe("initGlobalServices task ordering", () => {
 
       expect(pluginInitialize).toHaveBeenCalledTimes(1);
       expect(activateOpenFileInstaller).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // The once-guard means a window opened after the last one closed never
+  // registers the global tasks again, so the close must not drop any the drain
+  // hasn't reached (#15562).
+  describe("closing the only window while plugin-service holds the drain", () => {
+    it("runs every global task once and the replacement window's task once", async () => {
+      const queue =
+        await vi.importActual<typeof import("../deferredInitQueue.js")>("../deferredInitQueue.js");
+      queue.__resetDeferredQueueForTests();
+      const registry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+      // Counted by registration slot, so a name registered twice can't hide a rerun.
+      const globalStarts: number[] = [];
+      // Created up front so releasing it can't miss, and a one-shot left
+      // unconsumed by an early failure hands later tests a settled promise.
+      let releasePluginInit: () => void = () => {};
+      const pluginInitGate = new Promise<void>((resolve) => {
+        releasePluginInit = resolve;
+      });
+      pluginInitialize.mockImplementationOnce(() => pluginInitGate);
+      // Real bodies would boot services this suite doesn't mock; plugin-service
+      // runs for real so its awaited init is what holds the drain open.
+      deferredForward.register = (task) => {
+        const slot = globalStarts.push(0) - 1;
+        queue.registerDeferredTask({
+          name: task.name,
+          run: () => {
+            globalStarts[slot]++;
+            return task.name === "plugin-service" ? (task.run() as Promise<void>) : undefined;
+          },
+        });
+      };
+      deferredForward.resetForNextWindow = queue.resetDeferredQueueForNextWindow;
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        const firstRun = ensureGlobalServicesInitialized(registry);
+        await firstRun;
+        const globalNames = [...registeredTaskNames];
+        const pluginSlot = globalNames.indexOf("plugin-service");
+        expect(pluginSlot).toBeGreaterThanOrEqual(0);
+        expect(pluginSlot).toBeLessThan(globalNames.length - 1);
+
+        // Window 1: its own task, then finalize — what initPerWindowServices does.
+        const windowStarts = { first: 0, replacement: 0 };
+        queue.registerDeferredTask({ name: "window-1", run: () => void windowStarts.first++ });
+        queue.finalizeDeferredRegistration();
+        queue.signalFirstInteractive(1);
+        await vi.waitFor(() => expect(pluginInitialize).toHaveBeenCalledTimes(1), {
+          timeout: 5_000,
+        });
+        expect(globalStarts[pluginSlot + 1]).toBe(0);
+
+        releaseDeferredQueueOnWindowClosed({ openWindowCount: 0, hostRuntimeActive: false });
+
+        expect(ensureGlobalServicesInitialized(registry)).toBe(firstRun);
+        await firstRun;
+        expect(registeredTaskNames).toEqual(globalNames);
+        queue.registerDeferredTask({
+          name: "window-2",
+          run: () => void windowStarts.replacement++,
+        });
+        queue.finalizeDeferredRegistration();
+        queue.signalFirstInteractive(2);
+
+        releasePluginInit();
+        await vi.waitFor(() => expect(windowStarts.first).toBe(1), { timeout: 5_000 });
+
+        expect(globalStarts).toEqual(globalNames.map(() => 1));
+        expect(windowStarts).toEqual({ first: 1, replacement: 1 });
+        expect(pluginInitialize).toHaveBeenCalledTimes(1);
+      } finally {
+        releasePluginInit();
+        deferredForward.register = null;
+        deferredForward.resetForNextWindow = null;
+        warn.mockRestore();
+        queue.__resetDeferredQueueForTests();
+      }
     });
   });
 });

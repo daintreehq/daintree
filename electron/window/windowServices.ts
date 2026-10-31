@@ -64,7 +64,7 @@ import {
 } from "./openDirHandler.js";
 import { holdWindowForOpen, isWindowBound } from "./windowOpenState.js";
 import { readOpenFoldersInNewWindow } from "./windowOpeningConfig.js";
-import { resetDeferredQueue } from "./deferredInitQueue.js";
+import { releaseDeferredQueueOnWindowClosed } from "./lastWindowClosed.js";
 import { ensureGlobalServicesInitialized } from "./globalServicesInit.js";
 import {
   createWindowDepsAdopter,
@@ -940,20 +940,13 @@ export async function setupWindowServices(
   // (electron/lifecycle/shutdown.ts). On macOS, closing all windows does NOT quit
   // the app; reactivating from the dock must re-open a window without racing an
   // in-flight async teardown of the global singletons. Keeping globals alive
-  // makes the dock-reactivation path a no-op past `initGlobalServices()`.
-  //
-  // We still reset the deferred init queue so a future window can re-register
-  // per-window-context deferred tasks. The `globalServicesInitialized` guard
-  // stays true, so `initGlobalServices()` itself does NOT re-run.
+  // makes the dock-reactivation path a no-op past `initGlobalServices()`; only
+  // the deferred init queue is reset, once nothing global is left in it.
   win.on("closed", () => {
-    if (windowRegistry && windowRegistry.size > 0) {
-      // Other windows still open — nothing to do at this level.
-      return;
-    }
-    // A Host owns the queue: it drained it for the process, and a reset while
-    // that drain is still running would abandon the global tasks it had left.
-    if (isHostRuntimeActive()) return;
-    resetDeferredQueue();
+    releaseDeferredQueueOnWindowClosed({
+      openWindowCount: windowRegistry?.size ?? 0,
+      hostRuntimeActive: isHostRuntimeActive(),
+    });
   });
 
   return "ok";

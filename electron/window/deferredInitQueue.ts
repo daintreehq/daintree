@@ -31,6 +31,13 @@ let generation = 0;
 // to undo the halt. Once halted, no deferred task may start — the services
 // they would initialize are being torn down.
 let halted = false;
+// Set when the last window closes before the drain has finished. The tasks
+// still waiting include global ones, which `ensureGlobalServicesInitialized()`
+// registers once per process, so the close leaves them to drain and the reset
+// a later window needs waits until they have. Cleared when a window finalizes
+// its registration first: its tasks have already run, registered after the
+// drain started, and a reset would strand its first-interactive.
+let resetWhenDrained = false;
 
 export function registerDeferredTask(task: DeferredTask): void {
   if (halted) {
@@ -56,6 +63,7 @@ export function registerDeferredTask(task: DeferredTask): void {
 
 export function finalizeDeferredRegistration(fallbackMs: number = DEFAULT_FALLBACK_MS): void {
   if (halted) return;
+  resetWhenDrained = false;
   if (registrationComplete) return;
   registrationComplete = true;
 
@@ -109,13 +117,15 @@ export function getDeferredQueueState(): {
 }
 
 /**
- * Clear all queue state. Called when the last window closes (so a new window
- * opened later — e.g. macOS `activate` — gets a fresh queue) and from test
- * setup. Increments the generation counter so any in-flight drain callbacks
- * from the previous cycle bail out instead of mutating fresh state.
+ * Clear all queue state, abandoning any task that hasn't started. Increments
+ * the generation counter so any in-flight drain callbacks from the previous
+ * cycle bail out instead of mutating fresh state. The last-window close goes
+ * through {@link resetDeferredQueueForNextWindow}, which only resets once
+ * nothing is left to drain.
  */
 export function resetDeferredQueue(): void {
   generation++;
+  resetWhenDrained = false;
   tasks = [];
   drainState = "idle";
   registrationComplete = false;
@@ -125,6 +135,29 @@ export function resetDeferredQueue(): void {
     fallbackTimer = null;
   }
   drainedSenderIds.clear();
+}
+
+/**
+ * Called when the last window closes, so a window opened later — e.g. macOS
+ * `activate`, or OOM recovery's replacement — gets a fresh cycle whose tasks
+ * wait for its own first-interactive. Global tasks are registered once per
+ * process, so a reset before the drain finishes would drop the ones it has
+ * left for the rest of the session (#15562). Until then the queue keeps them:
+ * a drain in flight carries on, and a queue still waiting on first-interactive
+ * drains on the fallback the closed window armed. The reset follows once the
+ * drain finishes, unless a new window has registered in the meantime.
+ */
+export function resetDeferredQueueForNextWindow(): void {
+  if (halted) return;
+  // A window always finalizes before it can close, so this only arms a
+  // fallback if one was somehow never armed. It can drain an empty queue on
+  // the spot, which the state check below then sees as drained.
+  if (drainState === "idle") finalizeDeferredRegistration();
+  if (drainState === "drained") {
+    resetDeferredQueue();
+    return;
+  }
+  resetWhenDrained = true;
 }
 
 /**
@@ -162,6 +195,7 @@ function reportDeferredTaskFailure(taskName: string, err: unknown): void {
  */
 export function haltDeferredQueue(): void {
   halted = true;
+  resetWhenDrained = false;
   if (fallbackTimer) {
     clearTimeout(fallbackTimer);
     fallbackTimer = null;
@@ -200,6 +234,7 @@ function drainNext(index: number, startedAt: number, drainGen: number): void {
     // Release task closures once drained so they don't retain references to
     // destroyed windows, services, etc. until the next reset.
     tasks = [];
+    if (resetWhenDrained) resetDeferredQueue();
     return;
   }
 

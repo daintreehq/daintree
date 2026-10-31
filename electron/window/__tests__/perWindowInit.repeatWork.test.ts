@@ -233,6 +233,26 @@ describe("initPerWindowServices repeated work across windows", () => {
     expect(third.menus).toBe(0);
   });
 
+  it("skips the queued work of a window closed before it ran, leaving its replacement's", async () => {
+    let destroyed = false;
+    const closing = { ...fakeWindow(1), isDestroyed: () => destroyed } as unknown as BrowserWindow;
+    await initPerWindowServices(closing, fakeContext(1), undefined);
+    destroyed = true;
+    signalFirstInteractive(1);
+    await settle();
+    expect(probeCount()).toBe(0);
+
+    // Settled before the replacement opens: had the closed window's rebuild
+    // waited on the catalog, plugin init would count as settled and the
+    // replacement would queue no rebuild of its own.
+    pluginInit.resolve();
+    await settle();
+    const replacement = await openWindow(2);
+
+    expect(replacement.probes).toBeGreaterThanOrEqual(agentCount);
+    expect(replacement.menuWindowIds).toEqual([2, 2]);
+  });
+
   it("re-probes for a window opened after the reuse window has passed", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const first = await openWindow(1, { settlePlugins: true });
