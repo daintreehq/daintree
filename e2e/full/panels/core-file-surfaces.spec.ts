@@ -1,11 +1,15 @@
 import path from "path";
+import { createSocket } from "dgram";
 import { writeFileSync, mkdirSync } from "fs";
+import { createServer as createHttpServer } from "http";
+import { createServer as createTcpServer, type AddressInfo, type Socket } from "net";
 import { test, expect, type Locator, type Page } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
+import { HTML_PREVIEW_PARTITION } from "../../../shared/utils/partitionUtils";
 
 // One launch for the three file surfaces: the `file.view` dialog, file grid
 // panels, and the worktree file browser (dialog and grid panel).
@@ -132,6 +136,162 @@ async function resetSurfaces(page: Page) {
   await expect(page.locator(SEL.panel.gridPanel)).toHaveCount(0, { timeout: T_MEDIUM });
   await expect(page.locator("[data-dock-item]")).toHaveCount(0, { timeout: T_MEDIUM });
 }
+
+/**
+ * Title of the rendered-HTML guest whose URL contains `pathFragment`, read in
+ * main. Only a guest in the preview session counts, so a preview that lands
+ * anywhere else (an app iframe, another partition) is never found.
+ */
+async function previewGuestTitle(pathFragment: string): Promise<string | null> {
+  return ctx.app.evaluate(
+    ({ webContents, session }, { pathFragment, partition }) => {
+      const previewSession = session.fromPartition(partition);
+      const guest = webContents
+        .getAllWebContents()
+        .find(
+          (wc) =>
+            wc.getType() === "webview" &&
+            wc.session === previewSession &&
+            wc.getURL().includes(pathFragment) &&
+            !wc.isLoading()
+        );
+      return guest ? guest.getTitle() : null;
+    },
+    { pathFragment, partition: HTML_PREVIEW_PARTITION }
+  );
+}
+
+function parseTitleJson(prefix: string, title: string | null): unknown {
+  if (!title?.startsWith(prefix)) return null;
+  try {
+    return JSON.parse(title.slice(prefix.length));
+  } catch {
+    return null;
+  }
+}
+
+interface WebRtcSinks {
+  udpPort: number;
+  tcpPort: number;
+  counts(): { udp: number; tcp: number };
+  close(): Promise<void>;
+}
+
+/** A UDP socket and a TCP listener on loopback that count what reaches them. */
+async function openWebRtcSinks(): Promise<WebRtcSinks> {
+  const counts = { udp: 0, tcp: 0 };
+  const accepted = new Set<Socket>();
+  const udp = createSocket("udp4");
+  udp.on("message", () => counts.udp++);
+  await new Promise<void>((resolve, reject) => {
+    udp.once("error", reject);
+    udp.bind(0, "127.0.0.1", () => resolve());
+  });
+  const tcp = createTcpServer((socket) => {
+    counts.tcp++;
+    accepted.add(socket);
+    socket.on("close", () => accepted.delete(socket));
+    socket.destroy();
+  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      tcp.once("error", reject);
+      tcp.listen(0, "127.0.0.1", () => resolve());
+    });
+  } catch (error) {
+    udp.close();
+    throw error;
+  }
+  return {
+    udpPort: udp.address().port,
+    tcpPort: (tcp.address() as AddressInfo).port,
+    counts: () => ({ ...counts }),
+    close: async () => {
+      for (const socket of accepted) socket.destroy();
+      udp.close();
+      await new Promise<void>((resolve) => tcp.close(() => resolve()));
+    },
+  };
+}
+
+/**
+ * #15793: a page that opens a peer connection to STUN and TURN servers on the
+ * given sinks, from its own script and from a `srcdoc` child running its own
+ * inline script. Each scope reports `offered` once its local description is
+ * set and `complete` once ICE gathering has tried every server, so a silent
+ * sink after `complete` means the traffic was never sent. Progress is
+ * published as JSON in the document title, which main can read from a
+ * sandboxed, opaque-origin document without injecting script.
+ */
+function webrtcProbeHtml(udpPort: number, tcpPort: number): string {
+  return [
+    "<!doctype html>",
+    "<html>",
+    "<body>",
+    "<script>",
+    "  var PROBE = function (report) {",
+    "    try {",
+    "      var pc = new RTCPeerConnection({ iceServers: [",
+    `        { urls: 'stun:127.0.0.1:${udpPort}' },`,
+    `        { urls: 'turn:127.0.0.1:${udpPort}?transport=udp', username: 'u', credential: 'p' },`,
+    `        { urls: 'turn:127.0.0.1:${tcpPort}?transport=tcp', username: 'u', credential: 'p' },`,
+    `        { urls: 'turns:127.0.0.1:${tcpPort}?transport=tcp', username: 'u', credential: 'p' }`,
+    "      ] });",
+    "      window.__probePc = pc;",
+    "      pc.onicegatheringstatechange = function () {",
+    "        if (pc.iceGatheringState === 'complete') report('complete');",
+    "      };",
+    "      pc.createDataChannel('probe');",
+    "      pc.createOffer()",
+    "        .then(function (offer) { return pc.setLocalDescription(offer); })",
+    "        .then(function () { report('offered'); }, function (e) { report('error: ' + e); });",
+    "    } catch (e) {",
+    "      report('threw: ' + e);",
+    "    }",
+    "  };",
+    "  var state = { direct: {}, child: {} };",
+    "  function publish() { document.title = 'webrtc:' + JSON.stringify(state); }",
+    "  function reporter(scope) {",
+    "    return function (message) {",
+    "      if (message === 'offered') state[scope].offered = true;",
+    "      else if (message === 'complete') state[scope].complete = true;",
+    "      else state[scope].error = message;",
+    "      publish();",
+    "    };",
+    "  }",
+    "  window.addEventListener('message', function (event) {",
+    "    if (event.data && typeof event.data.probe === 'string') reporter('child')(event.data.probe);",
+    "  });",
+    "  PROBE(reporter('direct'));",
+    "  var child = document.createElement('iframe');",
+    "  child.srcdoc = '<script>(' + PROBE.toString() + ')(function (m) { parent.postMessage({ probe: m }, \"*\"); });<\\/script>';",
+    "  document.body.appendChild(child);",
+    "  publish();",
+    "</script>",
+    "</body>",
+    "</html>",
+  ].join("\n");
+}
+
+// The preview document's own CSP, minus its token authority: the positive
+// control proves CSP alone stops none of this traffic.
+const WEBRTC_CONTROL_CSP = [
+  "sandbox allow-scripts",
+  "default-src 'none'",
+  "script-src 'unsafe-inline'",
+  "connect-src 'none'",
+  "worker-src 'none'",
+  "frame-src 'none'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'",
+].join("; ");
+
+// 1x1 PNG, so a relative image proves it loaded by its natural width.
+const PIXEL_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64"
+);
 
 /**
  * #11254: the pane body owns the scroll inside the dialog too. Without the
@@ -638,7 +798,9 @@ test.describe("Core: File surfaces", () => {
     // #11191: rendered HTML runs the page's own scripts, resolves its relative
     // assets via daintree-html://, and stays isolated from the app. This is the
     // only automated proof of the runtime security contract (unit tests can't
-    // exercise Chromium's iframe origin/CSP).
+    // exercise Chromium's guest, origin or CSP). Since #15793 the page is the
+    // top frame of its own <webview> guest in the preview session, so results
+    // are read from that guest in main rather than through a frame locator.
     test("rendered HTML runs its scripts + relative assets while staying sandboxed", async () => {
       const assetsDir = path.join(fixtureDir, "html-report", "assets");
       mkdirSync(assetsDir, { recursive: true });
@@ -647,6 +809,7 @@ test.describe("Core: File surfaces", () => {
         path.join(assetsDir, "report.js"),
         "document.getElementById('title').setAttribute('data-external-ran', 'yes');\n"
       );
+      writeFileSync(path.join(assetsDir, "pixel.png"), PIXEL_PNG);
       writeFileSync(
         path.join(fixtureDir, "html-report", "index.html"),
         [
@@ -655,20 +818,34 @@ test.describe("Core: File surfaces", () => {
           '<head><link rel="stylesheet" href="assets/report.css" /></head>',
           "<body>",
           '  <h1 id="title">Report</h1>',
+          '  <img id="pixel" src="assets/pixel.png" alt="" />',
           '  <script src="assets/report.js"></script>',
           "  <script>",
           "    var t = document.getElementById('title');",
-          "    t.setAttribute('data-inline-ran', 'yes');",
-          "    t.setAttribute('data-has-electron', String(typeof window.electron !== 'undefined'));",
-          "    try { void window.parent.document; t.setAttribute('data-parent', 'reachable'); }",
-          "    catch (e) { t.setAttribute('data-parent', 'blocked'); }",
-          // connect-src 'none' must hold: a fetch to the legacy daintree-file://
-          // arbitrary-read route must be blocked by the token-scoped preview CSP.
-          // If the trusted app CSP had leaked onto this frame, this would resolve.
-          "    t.setAttribute('data-fetch', 'pending');",
+          "    var r = { inline: 'yes' };",
+          "    r.hasElectron = typeof window.electron !== 'undefined';",
+          // Its own top frame: there is no embedding document to reach.
+          "    r.isTop = window.top === window && window.parent === window;",
+          "    r.hasFrameElement = window.frameElement !== null;",
+          // An opaque origin (CSP sandbox without allow-same-origin) has no storage.
+          "    try { void window.localStorage.length; r.storage = 'reachable'; }",
+          "    catch (e) { r.storage = 'blocked'; }",
+          "    function publish() { document.title = 'report:' + JSON.stringify(r); }",
+          // connect-src 'none' must hold, and the preview session serves no
+          // daintree-file:// at all: the legacy arbitrary-read route stays
+          // unreachable.
+          "    r.fetch = 'pending';",
           "    fetch('daintree-file://load?path=/etc/passwd&root=/')",
-          "      .then(function () { t.setAttribute('data-fetch', 'allowed'); })",
-          "      .catch(function () { t.setAttribute('data-fetch', 'blocked'); });",
+          "      .then(function () { r.fetch = 'allowed'; publish(); })",
+          "      .catch(function () { r.fetch = 'blocked'; publish(); });",
+          "    window.addEventListener('load', function () {",
+          "      r.external = t.getAttribute('data-external-ran');",
+          "      r.color = getComputedStyle(t).color;",
+          "      r.imageWidth = document.getElementById('pixel').naturalWidth;",
+          "      r.loaded = true;",
+          "      publish();",
+          "    });",
+          "    publish();",
           "  </script>",
           "</body>",
           "</html>",
@@ -682,28 +859,142 @@ test.describe("Core: File surfaces", () => {
 
       const frameEl = ctx.window.locator('[data-testid="html-preview-frame"]');
       await expect(frameEl).toBeVisible({ timeout: T_LONG });
-      // Exactly allow-scripts — never allow-same-origin (that would let the page
-      // escape its opaque origin back into the daintree-html:// partition).
-      await expect(frameEl).toHaveAttribute("sandbox", "allow-scripts");
+      // A guest in the preview session, never an iframe in the app's own
+      // WebContents, where Chromium can't keep WebRTC off the network.
+      expect(await frameEl.evaluate((el) => el.tagName)).toBe("WEBVIEW");
+      await expect(frameEl).toHaveAttribute("partition", HTML_PREVIEW_PARTITION);
 
-      const frame = ctx.window.frameLocator('[data-testid="html-preview-frame"]');
-      const title = frame.locator("#title");
-
-      // The page's own inline + relative external scripts execute.
-      await expect(title).toHaveAttribute("data-inline-ran", "yes", { timeout: T_LONG });
-      await expect(title).toHaveAttribute("data-external-ran", "yes", { timeout: T_MEDIUM });
-      // Relative stylesheet resolved via daintree-html:// and applied.
       await expect
-        .poll(() => title.evaluate((el) => getComputedStyle(el).color), { timeout: T_MEDIUM })
-        .toBe("rgb(12, 34, 56)");
+        .poll(
+          async () => parseTitleJson("report:", await previewGuestTitle("/html-report/index.html")),
+          { timeout: T_LONG, message: "the preview guest published its script and asset results" }
+        )
+        .toEqual({
+          inline: "yes",
+          external: "yes",
+          color: "rgb(12, 34, 56)",
+          imageWidth: 1,
+          loaded: true,
+          hasElectron: false,
+          isTop: true,
+          hasFrameElement: false,
+          storage: "blocked",
+          fetch: "blocked",
+        });
+    });
 
-      // Isolation: no app bridge, and the opaque-origin frame can't reach the parent.
-      await expect(title).toHaveAttribute("data-has-electron", "false");
-      await expect(title).toHaveAttribute("data-parent", "blocked");
-      // The token-scoped preview CSP (connect-src 'none') is authoritative — the
-      // trusted app CSP is NOT overlaid onto the frame, so the legacy daintree-file
-      // arbitrary-read route is unreachable.
-      await expect(title).toHaveAttribute("data-fetch", "blocked", { timeout: T_MEDIUM });
+    // #15793: Chromium ignores the CSP `webrtc` directive, so only the preview
+    // session (no-UDP WebRTC policy, refusing proxy) keeps a peer connection
+    // off the network. Nothing may reach either sink, from the page or from a
+    // child frame it creates.
+    test("rendered HTML reaches no WebRTC sink over UDP or TCP, from the page or a child frame", async () => {
+      const sinks = await openWebRtcSinks();
+      try {
+        const probeDir = path.join(fixtureDir, "webrtc-probe");
+        mkdirSync(probeDir, { recursive: true });
+        writeFileSync(
+          path.join(probeDir, "index.html"),
+          webrtcProbeHtml(sinks.udpPort, sinks.tcpPort)
+        );
+
+        await dispatchAction(ctx.window, "file.openPanel", {
+          path: path.join(probeDir, "index.html").replace(/\\/g, "/"),
+          viewMode: "rendered",
+        });
+        await expect(ctx.window.locator('[data-testid="html-preview-frame"]')).toBeVisible({
+          timeout: T_LONG,
+        });
+
+        // Both scopes must actually run and finish gathering: a constructor
+        // that threw, or a child that never ran, would leave the sinks silent
+        // for the wrong reason.
+        await expect
+          .poll(
+            async () =>
+              parseTitleJson("webrtc:", await previewGuestTitle("/webrtc-probe/index.html")),
+            { timeout: T_LONG, message: "the probe finished ICE gathering in the page and child" }
+          )
+          .toEqual({
+            direct: { offered: true, complete: true },
+            child: { offered: true, complete: true },
+          });
+        expect(sinks.counts()).toEqual({ udp: 0, tcp: 0 });
+      } finally {
+        await sinks.close();
+      }
+    });
+
+    test("the same WebRTC probe reaches its sinks outside the preview session (positive control)", async () => {
+      const sinks = await openWebRtcSinks();
+      const server = createHttpServer((_req, res) => {
+        res.writeHead(200, {
+          "Content-Type": "text/html; charset=utf-8",
+          "Content-Security-Policy": WEBRTC_CONTROL_CSP,
+        });
+        res.end(webrtcProbeHtml(sinks.udpPort, sinks.tcpPort));
+      });
+      let controlWindowId: number | null = null;
+      try {
+        await new Promise<void>((resolve, reject) => {
+          server.once("error", reject);
+          server.listen(0, "127.0.0.1", () => resolve());
+        });
+        const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/probe.html`;
+
+        // A plain hidden window in a throwaway in-memory session: the same page
+        // and CSP, without the preview session's policy and proxy.
+        controlWindowId = await ctx.app.evaluate(
+          ({ BrowserWindow }, { url }) => {
+            const win = new BrowserWindow({
+              show: false,
+              webPreferences: {
+                partition: "e2e-webrtc-control",
+                sandbox: true,
+                contextIsolation: true,
+                nodeIntegration: false,
+              },
+            });
+            void win.loadURL(url).catch(() => {});
+            return win.id;
+          },
+          { url }
+        );
+
+        await expect
+          .poll(
+            async () => {
+              const counts = sinks.counts();
+              return counts.udp > 0 && counts.tcp > 0;
+            },
+            { timeout: T_LONG, message: "the unprotected probe reached both the UDP and TCP sinks" }
+          )
+          .toBe(true);
+
+        // The child scope ran here too, so its silence in the preview is the
+        // preview's doing.
+        await expect
+          .poll(
+            async () =>
+              parseTitleJson(
+                "webrtc:",
+                await ctx.app.evaluate(
+                  ({ BrowserWindow }, id) =>
+                    BrowserWindow.fromId(id)?.webContents.getTitle() ?? null,
+                  controlWindowId!
+                )
+              ),
+            { timeout: T_LONG, message: "the unprotected probe ran in the page and child" }
+          )
+          .toMatchObject({ direct: { offered: true }, child: { offered: true } });
+      } finally {
+        if (controlWindowId !== null) {
+          await ctx.app.evaluate(({ BrowserWindow }, id) => {
+            BrowserWindow.fromId(id)?.destroy();
+          }, controlWindowId);
+        }
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await sinks.close();
+      }
     });
   });
 
