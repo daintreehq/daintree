@@ -28,7 +28,22 @@ vi.mock("../ForgeIntegrationsTab", () => ({
   ForgeIntegrationsTab: () => <div data-testid="forge-integrations-tab" />,
 }));
 vi.mock("../ForgeProviderSelectorDropdown", () => ({
-  ForgeProviderSelectorDropdown: () => <div data-testid="forge-provider-selector" />,
+  ForgeProviderSelectorDropdown: ({
+    activeSubtab,
+    providerOptions,
+  }: {
+    activeSubtab: string;
+    providerOptions: Array<{ id: string; unavailable?: boolean }>;
+  }) => (
+    <div
+      data-testid="forge-provider-selector"
+      data-active={activeSubtab}
+      data-unavailable={providerOptions
+        .filter((p) => p.unavailable)
+        .map((p) => p.id)
+        .join(",")}
+    />
+  ),
 }));
 vi.mock("../SettingsValidationRegistry", () => ({
   useSettingsTabValidation: vi.fn(),
@@ -443,5 +458,45 @@ describe("CodeForgeSettingsTab — canonical subtab routing", () => {
       expect(screen.getByTestId("forge-integrations-tab")).toBeTruthy();
     });
     expect(screen.queryByTestId("github-settings-tab")).toBeNull();
+  });
+});
+
+describe("CodeForgeSettingsTab — installed plugins' providers (#15583)", () => {
+  const REASON = "Forge providers currently run only as built-in plugins";
+  const gitea: ForgeProviderEntry = {
+    ...makeProvider("acme", "gitea", "Gitea", [
+      { id: "token", label: "API token", type: "password" },
+    ]),
+    unavailableReason: REASON,
+  };
+
+  it("explains why the provider is unavailable instead of offering its credential form", async () => {
+    const { getCredentialStatus } = installForgeMocks({ providers: [gitea] });
+
+    render(<CodeForgeSettingsTab activeSubtab="acme.gitea" onSubtabChange={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Gitea isn't available")).toBeTruthy();
+    });
+    expect(screen.getByText(new RegExp(REASON))).toBeTruthy();
+    expect(screen.queryByTestId("forge-credential-form")).toBeNull();
+    expect(screen.queryByLabelText("API token")).toBeNull();
+    expect(getCredentialStatus).not.toHaveBeenCalled();
+    expect(screen.getByTestId("forge-provider-selector").getAttribute("data-unavailable")).toBe(
+      "acme.gitea"
+    );
+  });
+
+  it("opens on a provider that can run rather than an unavailable one listed first", async () => {
+    installForgeMocks({ providers: [gitea, makeGitHubProvider()] });
+
+    render(<CodeForgeSettingsTab activeSubtab={null} onSubtabChange={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("github-settings-tab")).toBeTruthy();
+    });
+    expect(screen.getByTestId("forge-provider-selector").getAttribute("data-active")).toBe(
+      "daintree.github.github"
+    );
   });
 });
