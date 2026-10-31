@@ -209,9 +209,12 @@ describe("isOpenWindowMenuStale", () => {
     useRegistry([a, b]);
     buildOpenWindowMenuItems();
 
-    noteWindowClosing(b as unknown as Electron.BrowserWindow, {
-      defaultPrevented: false,
-    } as Electron.Event);
+    noteWindowClosing(
+      b as unknown as Electron.BrowserWindow,
+      {
+        defaultPrevented: false,
+      } as Electron.Event
+    );
 
     expect(isOpenWindowMenuStale()).toBe(true);
   });
@@ -287,9 +290,12 @@ describe("noteWindowClosing", () => {
     useRegistry([a, b], b);
     buildAndInstall();
 
-    noteWindowClosing(b as unknown as Electron.BrowserWindow, {
-      defaultPrevented: false,
-    } as Electron.Event);
+    noteWindowClosing(
+      b as unknown as Electron.BrowserWindow,
+      {
+        defaultPrevented: false,
+      } as Electron.Event
+    );
 
     expect(visibleLabels()).toEqual(["a"]);
     expect(checkedLabels()).toEqual([]);

@@ -1211,7 +1211,11 @@ describe("update menu lifecycle", () => {
       type FakeWindow = ReturnType<typeof fakeWindow>;
 
       function useWindows(windows: FakeWindow[], primary: FakeWindow = windows[0]!): void {
-        const ctxFor = (win: FakeWindow) => ({ windowId: win.id, browserWindow: win, services: {} });
+        const ctxFor = (win: FakeWindow) => ({
+          windowId: win.id,
+          browserWindow: win,
+          services: {},
+        });
         windowRefMock.getWindowRegistry.mockReturnValue({
           all: () => windows.map(ctxFor),
           getPrimary: () => ctxFor(primary),

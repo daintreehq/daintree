@@ -54,15 +54,13 @@ export function buildOpenWindowMenuItems(): Electron.MenuItemConstructorOptions[
   const primaryId = registry?.getPrimary()?.windowId;
   return [
     { type: "separator" },
-    ...windows.map(
-      (ctx): Electron.MenuItemConstructorOptions => ({
-        id: itemIdFor(ctx.windowId),
-        label: menuLabelFor(ctx.browserWindow),
-        type: "checkbox",
-        checked: ctx.windowId === primaryId,
-        click: () => focusListedWindow(ctx.windowId),
-      })
-    ),
+    ...windows.map((ctx): Electron.MenuItemConstructorOptions => ({
+      id: itemIdFor(ctx.windowId),
+      label: menuLabelFor(ctx.browserWindow),
+      type: "checkbox",
+      checked: ctx.windowId === primaryId,
+      click: () => focusListedWindow(ctx.windowId),
+    })),
   ];
 }
 
