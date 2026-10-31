@@ -16,6 +16,8 @@ import {
   FileLinkMethod,
   FilePullResultSchema,
   FileResponseSchema,
+  FileStreamClosedPayloadSchema,
+  PREVIEW_PULL_DEPTH,
   PULL_MAX_BYTES,
   STREAM_SINK_PREFIX,
   type FileRequestPayload,
@@ -32,7 +34,31 @@ import {
 export interface ClientFileTransportOptions {
   /** Preview pulls in flight per host; the rest wait. Keeps previews off terminal traffic. */
   maxConcurrentPulls?: number;
+  /** Pulls to keep in flight on one preview body, when the host allows that many. */
+  pullDepth?: number;
   downloadTimeoutMs?: number;
+}
+
+export interface HostFileBody {
+  /** The next slice of the body, in order; `done` once the host has sent all of it. */
+  read(): Promise<{ bytes: Uint8Array; done: boolean }>;
+  /** Stop reading: the host stops sending, and whatever is held for the body is dropped. */
+  cancel(): void;
+  /** Slice bytes held for this body now: arriving, or verified and waiting to be read. */
+  readonly bufferedBytes: number;
+  readonly peakBufferedBytes: number;
+}
+
+export interface OpenBodyOptions {
+  /** The pulls the host accepts in flight on the stream, as its answer said; one when absent. */
+  pullDepth?: number;
+  /** The body's announced length, when there is one: no pull is made for bytes past it. */
+  expectedBytes: number | null;
+}
+
+interface SliceResult {
+  bytes: Uint8Array;
+  done: boolean;
 }
 
 export interface DownloadOptions {
@@ -250,19 +276,254 @@ class Gate {
 
   constructor(private readonly limit: number) {}
 
-  async run<T>(work: () => Promise<T>): Promise<T> {
+  /** A slot, after the waiters in front; the returned function gives it back, once. */
+  async acquire(): Promise<() => void> {
     if (this.active >= this.limit) {
       await new Promise<void>((resolve) => this.waiting.push(resolve));
     } else {
       this.active++;
     }
-    try {
-      return await work();
-    } finally {
+    return this.releaser();
+  }
+
+  /**
+   * A slot for read-ahead, only while another stays free: read-ahead never
+   * queues, and a slice read ahead keeps its slot until someone reads it, so
+   * a body whose reader paused must not hold the slot a waiting read needs.
+   */
+  tryAcquireSpare(): (() => void) | null {
+    if (this.active >= this.limit - 1) return null;
+    this.active++;
+    return this.releaser();
+  }
+
+  private releaser(): () => void {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
       const next = this.waiting.shift();
       if (next) next();
       else this.active--;
+    };
+  }
+}
+
+interface SliceSlot {
+  sequence: number;
+  /** Its gate slot; null while it waits for one. */
+  release: (() => void) | null;
+  settled: boolean;
+  dropped: boolean;
+  /** Bytes its sink holds, counted until the slice is handed over or dropped. */
+  heldBytes: number;
+  result: Promise<SliceResult>;
+}
+
+interface PreviewBodyDeps {
+  session: LinkSession | null;
+  hostId: HostId;
+  streamId: string;
+  depth: number;
+  expectedBytes: number | null;
+  gate: Gate;
+  pullSlice(
+    session: LinkSession,
+    sequence: number | null,
+    onBegin: (size: number) => void
+  ): Promise<SliceResult>;
+  /** Tell the host to stop: its stream is closed and its transfers aborted. */
+  cancelRemote(): void;
+  /** The body no longer needs the transport to route anything to it. */
+  forget(): void;
+}
+
+/**
+ * One preview body, read slice by slice in order. With a depth above one, the
+ * next slices are pulled while the first is still being acknowledged, but
+ * only on spare gate slots, and each slice keeps its slot until it has been
+ * handed over or dropped, so read-ahead counts against the per-host pull cap
+ * like any other pull, and the last slot is always left for a read someone
+ * is waiting on. Cancelling, the host closing the
+ * stream, the link dropping or any slice failing drops every slice held at
+ * once; nothing read ahead is handed over after that.
+ */
+class PreviewBody implements HostFileBody {
+  private readonly slots: SliceSlot[] = [];
+  private nextSequence = 0;
+  private endSeen = false;
+  private finished = false;
+  private stopped: Error | null = null;
+  /** Rejects the read waiting on the head slice, when the body stops first. */
+  private interruptRead: ((error: Error) => void) | null = null;
+  private readonly offClose: () => void;
+  private held = 0;
+  private peak = 0;
+
+  constructor(private readonly deps: PreviewBodyDeps) {
+    const session = deps.session;
+    if (!session || !session.isOpen) {
+      this.offClose = () => {};
+      this.stop(disconnected(deps.hostId));
+      return;
     }
+    this.offClose = session.onClose(() => this.stop(disconnected(deps.hostId)));
+  }
+
+  get bufferedBytes(): number {
+    return this.held;
+  }
+
+  get peakBufferedBytes(): number {
+    return this.peak;
+  }
+
+  async read(): Promise<SliceResult> {
+    if (this.stopped) throw this.stopped;
+    if (this.finished) return { bytes: new Uint8Array(0), done: true };
+    if (this.slots.length === 0) this.demand();
+    const head = this.slots[0]!;
+    // Not a race against one long-lived promise: each read's reaction would
+    // stay on it, holding that read's slice, for the life of the body.
+    const result = await new Promise<SliceResult>((resolve, reject) => {
+      this.interruptRead = reject;
+      head.result.then(resolve, reject);
+    }).finally(() => {
+      this.interruptRead = null;
+    });
+    if (this.stopped) throw this.stopped;
+    this.slots.shift();
+    this.handOver(head);
+    if (result.done) this.finish();
+    else this.readAhead();
+    return result;
+  }
+
+  cancel(): void {
+    if (this.finished || this.stopped) return;
+    this.stop(transferFailure("cancelled"));
+    this.deps.cancelRemote();
+  }
+
+  /** The host closed the stream (revoked, idle, failed): drop everything, ask nothing. */
+  closedByHost(): void {
+    if (this.finished) return;
+    this.stop(new AppError({ code: "CANCELLED", message: "The host closed the preview stream" }));
+  }
+
+  /** The slice the reader is waiting on: it takes the next free slot, in turn. */
+  private demand(): void {
+    const slot = this.newSlot();
+    slot.result = this.deps.gate.acquire().then((release) => {
+      slot.release = release;
+      if (this.stopped) {
+        this.settle(slot);
+        throw this.stopped;
+      }
+      const result = this.issue(slot);
+      this.readAhead();
+      return result;
+    });
+    slot.result.catch(() => {});
+  }
+
+  /** Pull ahead, up to the depth, while slots are free and the body may have more. */
+  private readAhead(): void {
+    if (this.deps.depth < 2) return;
+    while (!this.stopped && !this.finished && !this.endSeen) {
+      if (this.slots.length >= this.deps.depth) return;
+      // Pulls go out in sequence: none behind one still waiting for its slot.
+      if (this.slots.some((slot) => slot.release === null)) return;
+      const expected = this.deps.expectedBytes;
+      // One pull past the announced length learns that the body ended there.
+      if (expected !== null && this.nextSequence * PULL_MAX_BYTES > expected) return;
+      const release = this.deps.gate.tryAcquireSpare();
+      if (!release) return;
+      const slot = this.newSlot();
+      slot.release = release;
+      slot.result = this.issue(slot);
+      slot.result.catch(() => {});
+    }
+  }
+
+  private newSlot(): SliceSlot {
+    const slot: SliceSlot = {
+      sequence: this.nextSequence++,
+      release: null,
+      settled: false,
+      dropped: false,
+      heldBytes: 0,
+      result: Promise.resolve({ bytes: new Uint8Array(0), done: true }),
+    };
+    this.slots.push(slot);
+    return slot;
+  }
+
+  private issue(slot: SliceSlot): Promise<SliceResult> {
+    const session = this.deps.session!;
+    const sequence = this.deps.depth > 1 ? slot.sequence : null;
+    return this.deps
+      .pullSlice(session, sequence, (size) => {
+        if (slot.dropped) return;
+        slot.heldBytes = size;
+        this.held += size;
+        if (this.held > this.peak) this.peak = this.held;
+      })
+      .then(
+        (result) => {
+          this.settle(slot);
+          if (result.done) this.endSeen = true;
+          return result;
+        },
+        (error: unknown) => {
+          this.settle(slot);
+          const failure = error instanceof Error ? error : new Error(String(error));
+          if (!this.finished && !this.stopped) {
+            this.stop(failure);
+            this.deps.cancelRemote();
+          }
+          throw failure;
+        }
+      );
+  }
+
+  /** The slot's pull is over on the host too: a dropped slice gives its slot back now. */
+  private settle(slot: SliceSlot): void {
+    slot.settled = true;
+    if (slot.dropped) slot.release?.();
+  }
+
+  private handOver(slot: SliceSlot): void {
+    this.held -= slot.heldBytes;
+    slot.heldBytes = 0;
+    slot.release?.();
+  }
+
+  private drop(slot: SliceSlot): void {
+    slot.dropped = true;
+    this.held -= slot.heldBytes;
+    slot.heldBytes = 0;
+    // A slot whose pull is still running keeps counting until the host is done with it.
+    if (slot.settled) slot.release?.();
+  }
+
+  /** The body was read to its end: pulls made past it are dropped, and the host may let go. */
+  private finish(): void {
+    this.finished = true;
+    for (const slot of this.slots.splice(0)) this.drop(slot);
+    this.offClose();
+    this.deps.forget();
+    // With several pulls in flight the host keeps the stream until it hears this.
+    if (this.deps.depth > 1) this.deps.cancelRemote();
+  }
+
+  private stop(error: Error): void {
+    if (this.stopped) return;
+    this.stopped = error;
+    this.interruptRead?.(error);
+    for (const slot of this.slots.splice(0)) this.drop(slot);
+    this.offClose();
+    this.deps.forget();
   }
 }
 
@@ -271,6 +532,8 @@ export class ClientFileTransport {
   private readonly sinks = new Map<string, SinkCreator>();
   private readonly sinkSessions = new WeakSet<LinkSession>();
   private readonly gates = new Map<HostId, Gate>();
+  /** Bodies read with several pulls in flight, by stream, so the host can close them. */
+  private readonly bodies = new Map<string, { session: LinkSession; body: PreviewBody }>();
 
   constructor(private readonly options: ClientFileTransportOptions = {}) {}
 
@@ -346,6 +609,19 @@ export class ClientFileTransport {
       this.sinks.delete(destination.path);
       return create(begin);
     });
+    session.registerCallHandler(
+      FileLinkMethod.STREAM_CLOSED,
+      FileStreamClosedPayloadSchema,
+      ({ streamId }) => {
+        const entry = this.bodies.get(streamId);
+        if (entry?.session === session) entry.body.closedByHost();
+        return null;
+      }
+    );
+  }
+
+  private get pullDepth(): number {
+    return Math.max(1, this.options.pullDepth ?? PREVIEW_PULL_DEPTH);
   }
 
   async request(
@@ -358,6 +634,7 @@ export class ClientFileTransport {
     const answer = await this.sessionFor(hostId).call(FileLinkMethod.REQUEST, {
       ...payload,
       endpointId,
+      ...(this.pullDepth > 1 ? { pullDepth: this.pullDepth } : {}),
     });
     return FileResponseSchema.parse(answer);
   }
@@ -369,76 +646,109 @@ export class ClientFileTransport {
     await this.sessionFor(hostId).call(FileLinkMethod.GRANT_CLICKED, { endpointId, hostPath });
   }
 
-  /** The next slice of a streamed body; `done` once the host has sent it all. */
-  pull(
-    hostId: HostId,
-    streamId: string,
-    maxBytes = PULL_MAX_BYTES
-  ): Promise<{ bytes: Uint8Array; done: boolean }> {
-    return this.gate(hostId).run(async () => {
-      const session = this.sessionFor(hostId);
-      const token = newToken();
-      const destination = `${STREAM_SINK_PREFIX}${token}`;
-      let settle!: { resolve: (bytes: Uint8Array) => void; reject: (error: Error) => void };
-      const received = new Promise<Uint8Array>((resolve, reject) => {
-        settle = { resolve, reject };
-      });
-      received.catch(() => {});
-      this.sinks.set(destination, (begin) => {
-        if (begin.size > maxBytes) throw new Error("Slice larger than requested");
-        const chunks: Uint8Array[] = [];
-        let total = 0;
-        return {
-          write(chunk) {
-            total += chunk.byteLength;
-            chunks.push(chunk);
-          },
-          async commit() {
-            const out = new Uint8Array(total);
-            let offset = 0;
-            for (const chunk of chunks) {
-              out.set(chunk, offset);
-              offset += chunk.byteLength;
-            }
-            settle.resolve(out);
-            return "received";
-          },
-          abort(reason) {
-            settle.reject(transferFailure(reason));
-          },
-        };
-      });
-      let result;
-      try {
-        result = FilePullResultSchema.parse(
-          await session.call(FileLinkMethod.PULL, { streamId, token, maxBytes })
-        );
-      } catch (error) {
-        this.sinks.delete(destination);
-        throw error;
-      }
-      if (result.bytes === 0) {
-        this.sinks.delete(destination);
-        return { bytes: new Uint8Array(0), done: result.done };
-      }
-      // The host answers only once its transfer was acknowledged, so the bytes are here.
-      const bytes = await Promise.race([
-        received,
-        new Promise<never>((_, reject) => {
-          const timer = setTimeout(
-            () =>
-              reject(new AppError({ code: "INTERNAL", message: "Preview slice never arrived" })),
-            PULL_RESULT_TIMEOUT_MS
-          );
-          timer.unref?.();
-          void received.finally(() => clearTimeout(timer)).catch(() => {});
-        }),
-      ]).finally(() => this.sinks.delete(destination));
-      if (bytes.byteLength !== result.bytes) {
-        throw new AppError({ code: "INTERNAL", message: "Preview slice size mismatch" });
-      }
-      return { bytes, done: result.done };
+  /**
+   * Read a streamed body the host answered a preview with, pulling as many
+   * slices at once as both the host's answer and this Shell allow.
+   */
+  openBody(hostId: HostId, streamId: string, options: OpenBodyOptions): HostFileBody {
+    const session = this.hosts.get(hostId)?.session ?? null;
+    const depth = Math.max(1, Math.min(options.pullDepth ?? 1, this.pullDepth));
+    // Assigned after construction: a body opened with no live session stops,
+    // and forgets itself, inside its constructor.
+    let body: PreviewBody | null = null;
+    body = new PreviewBody({
+      session,
+      hostId,
+      streamId,
+      depth,
+      expectedBytes: options.expectedBytes,
+      gate: this.gate(hostId),
+      pullSlice: (pinned, sequence, onBegin) => this.pullSlice(pinned, streamId, sequence, onBegin),
+      cancelRemote: () => {
+        if (session?.isOpen) {
+          void session.call(FileLinkMethod.CANCEL, { streamId }).catch(() => {});
+        }
+      },
+      forget: () => {
+        if (body && this.bodies.get(streamId)?.body === body) this.bodies.delete(streamId);
+      },
     });
+    if (depth > 1 && session?.isOpen) this.bodies.set(streamId, { session, body });
+    return body;
+  }
+
+  /** One slice of a streamed body, on the session the stream was opened on. */
+  private async pullSlice(
+    session: LinkSession,
+    streamId: string,
+    sequence: number | null,
+    onBegin: (size: number) => void
+  ): Promise<SliceResult> {
+    if (!session.isOpen) throw new AppError({ code: "HOST_DISCONNECTED", message: "Link closed" });
+    const token = newToken();
+    const destination = `${STREAM_SINK_PREFIX}${token}`;
+    let settle!: { resolve: (bytes: Uint8Array) => void; reject: (error: Error) => void };
+    const received = new Promise<Uint8Array>((resolve, reject) => {
+      settle = { resolve, reject };
+    });
+    received.catch(() => {});
+    this.sinks.set(destination, (begin) => {
+      if (begin.size > PULL_MAX_BYTES) throw new Error("Slice larger than requested");
+      // Written in place as it arrives: one copy of the slice, never two.
+      const out = new Uint8Array(begin.size);
+      let written = 0;
+      onBegin(begin.size);
+      return {
+        write(chunk) {
+          if (written + chunk.byteLength > out.byteLength) {
+            throw new Error("Slice larger than announced");
+          }
+          out.set(chunk, written);
+          written += chunk.byteLength;
+        },
+        async commit() {
+          settle.resolve(out);
+          return "received";
+        },
+        abort(reason) {
+          settle.reject(transferFailure(reason));
+        },
+      };
+    });
+    let result;
+    try {
+      result = FilePullResultSchema.parse(
+        await session.call(FileLinkMethod.PULL, {
+          streamId,
+          token,
+          maxBytes: PULL_MAX_BYTES,
+          ...(sequence !== null ? { sequence } : {}),
+        })
+      );
+    } catch (error) {
+      this.sinks.delete(destination);
+      throw error;
+    }
+    if (result.bytes === 0) {
+      this.sinks.delete(destination);
+      return { bytes: new Uint8Array(0), done: result.done };
+    }
+    // The host answers only once its transfer was acknowledged, so the bytes are here.
+    const bytes = await Promise.race([
+      received,
+      new Promise<never>((_, reject) => {
+        const timer = setTimeout(
+          () => reject(new AppError({ code: "INTERNAL", message: "Preview slice never arrived" })),
+          PULL_RESULT_TIMEOUT_MS
+        );
+        timer.unref?.();
+        void received.finally(() => clearTimeout(timer)).catch(() => {});
+      }),
+    ]).finally(() => this.sinks.delete(destination));
+    if (bytes.byteLength !== result.bytes) {
+      throw new AppError({ code: "INTERNAL", message: "Preview slice size mismatch" });
+    }
+    return { bytes, done: result.done };
   }
 
   async cancelStream(hostId: HostId, streamId: string): Promise<void> {
