@@ -5,6 +5,7 @@ import type { HostMetricsSummary } from "../../../../shared/types/remoteHosts.js
 import { SummaryLoop } from "../../metrics/summaryLoop.js";
 import type { SummaryReceipt } from "../../metrics/summaryReceipt.js";
 import type { LaneWake } from "../../../services/mcp-server/terminalNotify.js";
+import { buildToolCallResult } from "../../../services/mcp-server/toolCallResult.js";
 import { AGENT_DIRECTORY_BYTES_MAX } from "../../../../shared/types/agentDirectory.js";
 import {
   HOST_LIST_PROJECTS_MAX,
@@ -464,6 +465,31 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
           callId: "00000000-0000-4000-8000-000000000001",
         },
       ]);
+    });
+
+    it("answers a tool with no output schema in its structured half (#15730)", async () => {
+      const value = {
+        commands: [
+          {
+            id: "/review",
+            label: "/review",
+            description: "Review the diff",
+            scope: "project",
+            agentId: "claude",
+          },
+        ],
+      };
+      answer = async () => buildToolCallResult(value);
+
+      const settled = await runtime.call(
+        "a",
+        { ...LIST, tool: "slashCommands.list", args: {} },
+        { tier: "full" }
+      );
+
+      if (!settled.ok) throw new Error("refused");
+      expect(settled.value.result).toEqual({ isError: false, structured: value, text: null });
+      expect(HostCallResultSchema.safeParse(settled.value).success).toBe(true);
     });
 
     describe("whose the call is (#14545)", () => {

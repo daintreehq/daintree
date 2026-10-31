@@ -326,7 +326,7 @@ export const HostCallArgsSchema = z
   );
 export type HostCallArgs = z.infer<typeof HostCallArgsSchema>;
 
-/** A host tool's answer, as its own MCP result: structured when it has a schema, else its text. */
+/** A host tool's answer: structured when it is a JSON object, schema or not, else its text. */
 const hostCallInnerSchema = z.object({
   isError: z.boolean(),
   structured: z.record(z.string(), z.unknown()).nullable(),

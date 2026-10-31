@@ -1,6 +1,7 @@
 import { McpError, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { canonicalArgsHash } from "../../services/mcp-server/sessionDedup.js";
+import { DEFAULT_ENCODING_LIMITS, LONE_SURROGATE } from "../link/encoding.js";
 import {
   MAX_RELAY_NOTICE_STATUS_CALLS,
   MAX_RELAY_RESULT_BYTES,
@@ -182,20 +183,70 @@ function head(text: string, bytes: number): string {
 }
 
 /**
- * A tool's MCP result as the Shell carries it: its structured half when it
- * has one, else its text. One too large to carry whole is cut, saying that
- * the call ran, so nobody runs it again to see the rest.
+ * How deep a carried object may nest: the link encoder's ceiling, less the
+ * four levels of the frame an answer rides in, and as many again to spare.
+ */
+export const MAX_CARRIED_DEPTH = DEFAULT_ENCODING_LIMITS.maxDepth - 8;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Whether an object reaches the Shell whole: no deeper than the link encodes,
+ * and no key the encoder refuses (a lone surrogate) or the Shell's validation
+ * drops (`__proto__`). One that doesn't goes as its text, which always does.
+ * Iterative, so a deep value can't overflow the walk meant to turn it away.
+ */
+function carriesWhole(object: Record<string, unknown>): boolean {
+  const pending: Array<{ node: unknown; depth: number }> = [{ node: object, depth: 1 }];
+  while (pending.length > 0) {
+    const { node, depth } = pending.pop()!;
+    if (node === null || typeof node !== "object") continue;
+    if (depth > MAX_CARRIED_DEPTH) return false;
+    if (Array.isArray(node)) {
+      for (const child of node) pending.push({ node: child, depth: depth + 1 });
+      continue;
+    }
+    for (const [key, child] of Object.entries(node)) {
+      if (key === "__proto__" || LONE_SURROGATE.test(key)) return false;
+      pending.push({ node: child, depth: depth + 1 });
+    }
+  }
+  return true;
+}
+
+/**
+ * The object a result answers with: its structured content, or, for a tool
+ * with no output schema, the JSON object that is its whole text. An error
+ * keeps its text, and so does text that isn't one JSON object alone, such as
+ * a result already cut to fit or one with a note after it.
+ */
+function objectOf(result: CallToolResult, isError: boolean): Record<string, unknown> | null {
+  if (isRecord(result.structuredContent)) return result.structuredContent;
+  if (isError || !Array.isArray(result.content) || result.content.length !== 1) return null;
+  const [block] = result.content;
+  if (block?.type !== "text" || !block.text.trimStart().startsWith("{")) return null;
+  try {
+    const parsed: unknown = JSON.parse(block.text);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A tool's MCP result as the Shell carries it: the JSON object it answers
+ * with, whether or not the tool declares an output schema, else its text. One
+ * too large to carry whole is cut to text, saying that the call ran, so nobody
+ * runs it again to see the rest.
  */
 export function projectRelayResult(
   result: CallToolResult
 ): Extract<McpCallAnswer, { status: "done" }>["result"] {
   const isError = result.isError === true;
-  const structured =
-    result.structuredContent !== null &&
-    typeof result.structuredContent === "object" &&
-    !Array.isArray(result.structuredContent)
-      ? result.structuredContent
-      : null;
+  const object = objectOf(result, isError);
+  const structured = object && carriesWhole(object) ? object : null;
   const projected = { isError, structured, text: structured ? null : textOf(result.content) };
   const fullBytes = Buffer.byteLength(JSON.stringify(projected), "utf8");
   if (fullBytes <= MAX_RELAY_RESULT_BYTES) return projected;
