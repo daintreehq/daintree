@@ -637,7 +637,10 @@ describe("useFileRowMenuItems — Reveal routing", () => {
 describe("useFileRowMenuItems — Copy host path in a remote window (#15722)", () => {
   beforeEach(() => {
     window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
-    setHostPlatformInfo({ platform: "linux", connection: { kind: "ssh", target: "greg@studio-01" } });
+    setHostPlatformInfo({
+      platform: "linux",
+      connection: { kind: "ssh", target: "greg@studio-01" },
+    });
   });
 
   afterEach(() => {
@@ -655,9 +658,7 @@ describe("useFileRowMenuItems — Copy host path in a remote window (#15722)", (
 
     // Main writes the clipboard; the row has closed, so the flash and the
     // announcement are the only sign it happened.
-    await waitFor(() =>
-      expect(useAnnouncerStore.getState().polite?.msg).toBe("Host path copied")
-    );
+    await waitFor(() => expect(useAnnouncerStore.getState().polite?.msg).toBe("Host path copied"));
     expect(getCopyFlash()).not.toBeNull();
     expect(dispatchMock).toHaveBeenCalledWith(
       "file.showItemInFolder",
@@ -681,9 +682,7 @@ describe("useFileRowMenuItems — Copy host path in a remote window (#15722)", (
 
     payload.action!.onClick();
 
-    await waitFor(() =>
-      expect(useAnnouncerStore.getState().polite?.msg).toBe("Host path copied")
-    );
+    await waitFor(() => expect(useAnnouncerStore.getState().polite?.msg).toBe("Host path copied"));
     expect(getCopyFlash()).not.toBeNull();
   });
 

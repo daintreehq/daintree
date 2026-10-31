@@ -2416,7 +2416,10 @@ describe("Copy host path in a remote window (#15722)", () => {
 
   beforeEach(() => {
     window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
-    setHostPlatformInfo({ platform: "linux", connection: { kind: "ssh", target: "greg@studio-01" } });
+    setHostPlatformInfo({
+      platform: "linux",
+      connection: { kind: "ssh", target: "greg@studio-01" },
+    });
     _resetCopyFlashForTests();
     useAnnouncerStore.setState({ polite: null, assertive: null });
   });
@@ -2460,9 +2463,7 @@ describe("Copy host path in a remote window (#15722)", () => {
     expect(glyph(row, "copy")).toBe(true);
     fireEvent.click(row);
 
-    await waitFor(() =>
-      expect(useAnnouncerStore.getState().polite?.msg).toBe("Host path copied")
-    );
+    await waitFor(() => expect(useAnnouncerStore.getState().polite?.msg).toBe("Host path copied"));
     expect(getCopyFlash()).not.toBeNull();
   });
 });

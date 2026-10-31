@@ -3,8 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type DispatchResult =
-  | { ok: true; result: unknown }
-  | { ok: false; error: { message: string; details?: unknown } };
+  { ok: true; result: unknown } | { ok: false; error: { message: string; details?: unknown } };
 const { dispatchMock, reportFailureMock } = vi.hoisted(() => ({
   dispatchMock: vi.fn<(id: string, args?: unknown, opts?: unknown) => Promise<DispatchResult>>(),
   reportFailureMock: vi.fn<(title: string, details: unknown, path: string) => void>(),
