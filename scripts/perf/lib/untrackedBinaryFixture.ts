@@ -128,6 +128,11 @@ export function getUntrackedBinaryFixture(): UntrackedBinaryFixture {
   setupGit(repoPath, ["config", "core.fsmonitor", "false"]);
   setupGit(repoPath, ["config", "core.autocrlf", "false"]);
   setupGit(repoPath, ["config", "diff.algorithm", "myers"]);
+  // The passes run with the developer's global config, and a global ignore
+  // such as `*.log` or `*.png` would hide fixture files from `git status`.
+  const excludesFile = join(root, "empty-excludes");
+  writeFileSync(excludesFile, "");
+  setupGit(repoPath, ["config", "core.excludesFile", excludesFile]);
   const trackedPath = join(repoPath, ...TRACKED_REL.split("/"));
   writeFileSync(trackedPath, TRACKED_BASE);
   setupGit(repoPath, ["add", "-A"]);
@@ -189,6 +194,7 @@ export function rowOracleMisses(f: UntrackedBinaryFixture, result: WorktreeChang
   let misses = 0;
   const seen = new Set<string>();
   for (const change of result.changes) {
+    if (seen.has(change.path)) misses++;
     seen.add(change.path);
     if (change.path === f.trackedPath) {
       if (

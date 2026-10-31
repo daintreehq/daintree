@@ -1234,10 +1234,10 @@ describe("getWorktreeChangesWithStats binary file handling", () => {
     // The writer is still going: the read sees more bytes than the stat did.
     (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs: 1000, size: 8 });
     readFileMock.mockImplementation(async (path: string) =>
-      String(path).endsWith(".png") ? BINARY : Buffer.from("a\nb\nc\n")
+      String(path).endsWith(".png") ? BINARY : Buffer.from("a\nb\nc\nd\ne\n")
     );
 
-    const expected = { "growing.png": null, "growing.txt": 3 };
+    const expected = { "growing.png": null, "growing.txt": 5 };
     expect(insertionsByName(await getWorktreeChangesWithStats(cwd, true))).toEqual(expected);
 
     readFileMock.mockClear();
