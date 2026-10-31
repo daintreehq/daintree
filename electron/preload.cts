@@ -685,21 +685,39 @@ let _viewCached = false;
 // map. Dropping it saves ~30 MB per cached view, and the view stays smaller
 // after it returns (#14219). Live images and fonts are held by their elements.
 // clearCache() also raises critical memory pressure in this renderer, so it
-// waits out a quick switch back and never runs once the view is active again,
-// including when a freeze held the cached signal until the next activation.
+// waits out a quick switch back and never runs once the view is active again.
 // A view the efficiency profile freezes inside the delay keeps its cache.
 const CACHED_VIEW_CACHE_CLEAR_DELAY_MS = 2_000;
 let _cacheClearTimer: ReturnType<typeof setTimeout> | null = null;
-/**
- * Work that persists unsaved edits when this view is cached (#15633), run here
- * rather than by `_typedOn` subscribers so their promises can be awaited. Main
- * holds the view unfrozen and resident only while this is non-empty, and lets
- * go when the edge's flush id comes back.
- */
-const _viewCachedFlushers = new Set<() => unknown>();
-ipcRenderer.on(CHANNELS.APP_VIEW_CACHED, (_event, payload?: { flushId?: unknown }) => {
-  _viewCached = true;
-  if (_cacheClearTimer !== null) clearTimeout(_cacheClearTimer);
+// A full collection of what the view left behind in the foreground, run in its
+// first idle period after caching, while nobody is looking at it. Renderers get
+// `gc` from `--expose-gc` (main.ts), in this world as well as the page's.
+const CACHED_VIEW_GC_IDLE_TIMEOUT_MS = 1_000;
+let _cachedViewGcHandle: number | null = null;
+// Set by the page's `freeze` event, cleared when the view is active again. A
+// frozen renderer's overdue timers and idle callbacks run the moment
+// activation thaws it, ahead of the warm-activated IPC that would clear
+// `_viewCached` (#15680), so cached-time reclaim is cancelled when the freeze
+// lands and never scheduled after one. IPC still runs while frozen, so a
+// cached signal can arrive after the freeze. Nothing marks the thaw itself:
+// `resume` does not fire for main's CDP unfreeze. The main-side purge session
+// still collects a view that stays cached.
+let _viewFrozenSinceActive = false;
+
+function cancelCachedViewReclaim(): void {
+  if (_cacheClearTimer !== null) {
+    clearTimeout(_cacheClearTimer);
+    _cacheClearTimer = null;
+  }
+  if (_cachedViewGcHandle !== null) {
+    if (typeof cancelIdleCallback === "function") cancelIdleCallback(_cachedViewGcHandle);
+    _cachedViewGcHandle = null;
+  }
+}
+
+function scheduleCachedViewReclaim(): void {
+  cancelCachedViewReclaim();
+  if (_viewFrozenSinceActive) return;
   _cacheClearTimer = setTimeout(() => {
     _cacheClearTimer = null;
     if (!_viewCached) return;
@@ -709,6 +727,40 @@ ipcRenderer.on(CHANNELS.APP_VIEW_CACHED, (_event, payload?: { flushId?: unknown 
       // Best-effort reclaim; a renderer mid-teardown has nothing to free.
     }
   }, CACHED_VIEW_CACHE_CLEAR_DELAY_MS);
+  const gc = (globalThis as { gc?: () => void }).gc;
+  if (typeof gc !== "function" || typeof requestIdleCallback !== "function") return;
+  _cachedViewGcHandle = requestIdleCallback(
+    () => {
+      _cachedViewGcHandle = null;
+      if (!_viewCached) return;
+      gc();
+    },
+    { timeout: CACHED_VIEW_GC_IDLE_TIMEOUT_MS }
+  );
+}
+
+function onViewActiveAgain(): void {
+  _viewCached = false;
+  _viewFrozenSinceActive = false;
+  cancelCachedViewReclaim();
+}
+
+// Suites that evaluate this bundle against a bare fake `window` have no DOM.
+if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+  document.addEventListener("freeze", () => {
+    _viewFrozenSinceActive = true;
+    cancelCachedViewReclaim();
+  });
+}
+/**
+ * Work that persists unsaved edits when this view is cached (#15633), run here
+ * rather than by `_typedOn` subscribers so their promises can be awaited. Main
+ * holds the view unfrozen and resident only while this is non-empty, and lets
+ * go when the edge's flush id comes back.
+ */
+const _viewCachedFlushers = new Set<() => unknown>();
+ipcRenderer.on(CHANNELS.APP_VIEW_CACHED, (_event, payload?: { flushId?: unknown }) => {
+  _viewCached = true;
   const flushes = Array.from(_viewCachedFlushers, (flush) => {
     try {
       return flush();
@@ -721,16 +773,19 @@ ipcRenderer.on(CHANNELS.APP_VIEW_CACHED, (_event, payload?: { flushId?: unknown 
   void Promise.allSettled(flushes).then(() => {
     if (typeof flushId === "string") ipcRenderer.send(CHANNELS.APP_VIEW_CACHED_FLUSHED, flushId);
   });
+  // Best-effort and last: it must never keep the edits from flushing, main from
+  // hearing back, or the view's own cached-edge listeners from running.
+  try {
+    scheduleCachedViewReclaim();
+  } catch {
+    // A renderer mid-teardown has nothing worth reclaiming.
+  }
 });
 // Warm activation — not reveal — owns the clear: main only sends
 // APP_VIEW_REVEALED while the view is still the active project, so a superseded
 // switch delivers warm-activated alone. Reveal clears too, defensively.
-ipcRenderer.on(CHANNELS.APP_VIEW_WARM_ACTIVATED, () => {
-  _viewCached = false;
-});
-ipcRenderer.on(CHANNELS.APP_VIEW_REVEALED, () => {
-  _viewCached = false;
-});
+ipcRenderer.on(CHANNELS.APP_VIEW_WARM_ACTIVATED, onViewActiveAgain);
+ipcRenderer.on(CHANNELS.APP_VIEW_REVEALED, onViewActiveAgain);
 
 // Wired eagerly at creation: see createEventBus.
 const { on: _eventBusOn } = createEventBus(ipcRenderer);

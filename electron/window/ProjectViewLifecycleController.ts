@@ -148,27 +148,23 @@ export function deactivateEntry(
       // Renderer may have torn down between the isDestroyed check and this call
     }
 
-    // Trigger V8 GC during idle callbacks so the call doesn't synchronously
-    // block the renderer. The timeout (1s) guarantees it runs even under
-    // background throttling.
     const capturedProjectId = current.projectId;
-    const { view, webContents: vc } = { view: current.view, webContents: current.view.webContents };
-    const liveEntry = host.views.get(capturedProjectId);
-    if (liveEntry && liveEntry.view === view && liveEntry.state === "cached" && !vc.isDestroyed()) {
-      vc.executeJavaScript(
-        "requestIdleCallback(() => { if (window.gc) window.gc(); }, { timeout: 1000 })"
-      ).catch(() => {});
-    }
+    const vc = current.view.webContents;
 
-    // Freeze AFTER GC scheduling — Page.setWebLifecycleState suspends the
-    // renderer event loop, so the requestIdleCallback above would never run
-    // if we froze first (lesson #4684). Skip the freeze for a project with a
-    // live agent: a frozen renderer can't apply queued agent:state-changed
-    // events, stranding the background dashboard on a stale state (mirrors
-    // the freezeAllCached guard). A live MCP session binding earns the same
-    // skip for the same reason — a frozen renderer can't answer the dispatch
-    // IPC either, and this is the path that would freeze a bound workspace the
-    // moment the user switches away from it (#11790).
+    // The renderer schedules its own idle-time collection when it handles
+    // APP_VIEW_CACHED (preload), sent above, ahead of the freeze below (lesson
+    // #4684). It lives there rather than in a script injected from here because
+    // only the renderer can drop it the moment a freeze lands; an injected one
+    // ran on the thaw that activation causes, in the view the user had just
+    // returned to (#15680).
+    //
+    // Skip the freeze for a project with a live agent: a frozen renderer can't
+    // apply queued agent:state-changed events, stranding the background
+    // dashboard on a stale state (mirrors the freezeAllCached guard). A live
+    // MCP session binding earns the same skip for the same reason — a frozen
+    // renderer can't answer the dispatch IPC either, and this is the path that
+    // would freeze a bound workspace the moment the user switches away from it
+    // (#11790).
     if (
       host.efficiencyFreezeEnabled &&
       !vc.isDestroyed() &&
@@ -200,11 +196,11 @@ export function deactivateEntry(
 }
 
 /**
- * Delayed + periodic V8 garbage collection for a cached view. The
- * renderer-side `requestIdleCallback(gc)` above is best-effort and never runs
- * once the view is frozen; this is the guaranteed main-side counterpart (works
- * frozen too). It reclaims the renderer's JS heap only — Blink's
- * discardable caches are not in reach from main (see the invariants on
+ * Delayed + periodic V8 garbage collection for a cached view. The renderer's
+ * own idle-time collection on the cached edge (preload) is best-effort and is
+ * dropped once the view is frozen; this is the guaranteed main-side
+ * counterpart (works frozen too). It reclaims the renderer's JS heap only —
+ * Blink's discardable caches are not in reach from main (see the invariants on
  * `purgeMemoryWebContents`). Collecting does not stop timers, ports, or
  * agent output processing, so it is safe for cached views with live agents.
  *
