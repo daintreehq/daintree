@@ -277,7 +277,13 @@ function detached(value: string): string {
 function asText(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
-  return trimmed.length > 0 ? detached(trimmed.slice(0, META_FIELD_MAX_CHARS)) : null;
+  return trimmed.length > 0 ? trimmed.slice(0, META_FIELD_MAX_CHARS) : null;
+}
+
+/** `asText` for a field that will be cached, copied once when the sidecar is parsed. */
+function ownedText(value: unknown): string | null {
+  const text = asText(value);
+  return text === null ? null : detached(text);
 }
 
 /**
@@ -309,10 +315,10 @@ export function parseSubagentMeta(raw: string, createdAt: number | null): Subage
   const meta = parsed as Record<string, unknown>;
   const depth = meta.spawnDepth;
   return {
-    agentType: asText(meta.agentType),
+    agentType: ownedText(meta.agentType),
     // Present only when the caller supplied one, which is often not the case.
-    description: asText(meta.description),
-    model: asText(meta.model),
+    description: ownedText(meta.description),
+    model: ownedText(meta.model),
     depth: typeof depth === "number" && Number.isFinite(depth) ? depth : null,
     createdAt,
   };
