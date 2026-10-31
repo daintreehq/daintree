@@ -178,7 +178,11 @@ async function buildHostListener(
   teardowns.push(() => host.dispose());
   teardowns.push(() => disposeAllTerminalBridges());
 
-  teardowns.push(admitHybridHostLegs());
+  teardowns.push(
+    admitHybridHostLegs({
+      onTransportChange: (listener) => host.sessionHost.onTransportChange(listener),
+    })
+  );
 
   // Each attached Shell's own alert choices, for what this host sends its views (#14701).
   teardowns.push(installNotificationPolicyHost(server));

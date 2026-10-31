@@ -27,6 +27,7 @@ import {
   acceptLocalPushForRemoteView,
   installHybridSplits,
   installNotificationPolicyPush,
+  releaseHostNotifications,
   ViewVisibilityReporter,
 } from "./hybrid/index.js";
 import { installClipboardSplits } from "./hybrid/clipboard.js";
@@ -191,6 +192,14 @@ function startClient(options: StartRemoteHostsOptions): void {
         visibility.noteEndpointClosed(webContentsId, endpointId);
         detachClientTerminalRelayFor(webContentsId, hostId, endpointId);
         detachClientWorktreeRelayFor(webContentsId, hostId, endpointId);
+        releaseHostNotifications(hostId, webContentsId);
+      })
+    );
+    // A fresh session reopens views without closing them first, but the host
+    // dropped the old endpoints and with them any way to close their banners.
+    teardowns.push(
+      client.manager.onSessionAttached((hostId, { resumed }) => {
+        if (!resumed) releaseHostNotifications(hostId);
       })
     );
     // Runs before the overrides are uninstalled (teardowns run in reverse).
