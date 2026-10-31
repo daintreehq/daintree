@@ -73,6 +73,7 @@ import { initAgentDefaultsSync } from "@/services/agentDefaultsSync";
 import { initTerminalConfigSync } from "@/services/terminalConfigSync";
 import { initAgentSettingsSync } from "@/services/agentSettingsSync";
 import { initPanelGridConfigSync } from "@/services/panelGridConfigSync";
+import { initKeybindingOverridesSync } from "@/services/keybindingOverridesSync";
 import { initAgentToolbarPinsSync } from "@/services/agentToolbarPinsSync";
 import {
   isProjectViewCached,
@@ -762,6 +763,9 @@ export function initStoreOrchestrator(): () => void {
   // Agent settings from the host and the grid layout from this machine (#14700).
   disposables.add(toDisposable(initAgentSettingsSync()));
   disposables.add(toDisposable(initPanelGridConfigSync()));
+
+  // This machine's keyboard shortcuts, as any of its views saved them (#15579).
+  disposables.add(toDisposable(initKeybindingOverridesSync()));
 
   cleanupFn = () => {
     disposables.dispose();

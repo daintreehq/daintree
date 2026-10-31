@@ -2,12 +2,15 @@
 import { BrowserWindow, dialog } from "electron";
 import { promises as fs } from "node:fs";
 import { CHANNELS } from "../channels.js";
-import { store } from "../../store.js";
 import type { HandlerDependencies } from "../types.js";
 import type { KeyAction } from "../../../shared/types/keymap.js";
 import { exportProfile, importProfile } from "../../utils/keybindingProfileIO.js";
 import type { ImportResult } from "../../utils/keybindingProfileIO.js";
-import { getValidatedOverrides } from "../../services/keybindingOverridesStore.js";
+import {
+  getValidatedOverrides,
+  readKeybindingOverrides,
+  saveKeybindingOverrides,
+} from "../../services/keybindingOverridesStore.js";
 import { typedHandle, typedHandleWithContext } from "../utils.js";
 
 export { getValidatedOverrides };
@@ -36,7 +39,7 @@ export function registerKeybindingHandlers(deps: HandlerDependencies): () => voi
 
   handlers.push(
     typedHandle(CHANNELS.KEYBINDING_GET_OVERRIDES, async () => {
-      return getValidatedOverrides();
+      return readKeybindingOverrides();
     })
   );
 
@@ -64,8 +67,11 @@ export function registerKeybindingHandlers(deps: HandlerDependencies): () => voi
 
         const overrides = getValidatedOverrides();
         overrides[actionId] = combo;
-        store.set("keybindingOverrides.overrides", overrides);
+        // Saved and pushed before the menu rebuild yields, so pushes leave in
+        // the order the writes landed.
+        const saved = saveKeybindingOverrides(overrides);
         await rebuildMenuForOverrides();
+        return saved;
       }
     )
   );
@@ -78,15 +84,17 @@ export function registerKeybindingHandlers(deps: HandlerDependencies): () => voi
 
       const overrides = getValidatedOverrides();
       delete overrides[actionId];
-      store.set("keybindingOverrides.overrides", overrides);
+      const saved = saveKeybindingOverrides(overrides);
       await rebuildMenuForOverrides();
+      return saved;
     })
   );
 
   handlers.push(
     typedHandle(CHANNELS.KEYBINDING_RESET_ALL, async () => {
-      store.set("keybindingOverrides.overrides", {});
+      const saved = saveKeybindingOverrides({});
       await rebuildMenuForOverrides();
+      return saved;
     })
   );
 
@@ -136,8 +144,7 @@ export function registerKeybindingHandlers(deps: HandlerDependencies): () => voi
 
         if (result.ok) {
           const existing = getValidatedOverrides();
-          const merged = { ...existing, ...result.overrides };
-          store.set("keybindingOverrides.overrides", merged);
+          saveKeybindingOverrides({ ...existing, ...result.overrides });
           await rebuildMenuForOverrides();
         }
 

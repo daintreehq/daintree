@@ -176,6 +176,16 @@ import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
 import type { IdleBackgroundClosedPayload } from "./idleBackgroundAutoClose.js";
 import type { KeyAction } from "../keymap.js";
 
+/**
+ * This machine's saved keybinding overrides, numbered by save. A read, a
+ * write's reply and the pushes reach a view separately, so it keeps the
+ * newest (#15579).
+ */
+export interface KeybindingOverridesSnapshot {
+  revision: number;
+  overrides: Record<string, string[]>;
+}
+
 export interface KeybindingImportResult {
   ok: boolean;
   overrides: Record<string, string[]>;
@@ -1525,18 +1535,20 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onStateChanged(callback: (payload: { osDndActive: boolean | undefined }) => void): () => void;
   };
   keybinding: {
-    /** Get current keybinding overrides */
-    getOverrides(): Promise<Record<KeyAction, string[]>>;
-    /** Set override for a specific action */
-    setOverride(actionId: KeyAction, combo: string[]): Promise<void>;
-    /** Remove override for a specific action (revert to default) */
-    removeOverride(actionId: KeyAction): Promise<void>;
-    /** Reset all overrides to defaults */
-    resetAll(): Promise<void>;
+    /** Get current keybinding overrides, numbered like the saves */
+    getOverrides(): Promise<KeybindingOverridesSnapshot>;
+    /** Set override for a specific action; resolves to the saved map */
+    setOverride(actionId: KeyAction, combo: string[]): Promise<KeybindingOverridesSnapshot>;
+    /** Remove override for a specific action (revert to default); resolves to the saved map */
+    removeOverride(actionId: KeyAction): Promise<KeybindingOverridesSnapshot>;
+    /** Reset all overrides to defaults; resolves to the saved map */
+    resetAll(): Promise<KeybindingOverridesSnapshot>;
     /** Export current overrides to a file via save dialog; returns false if cancelled */
     exportProfile(): Promise<boolean>;
     /** Import overrides from a file via open dialog; returns import result */
     importProfile(): Promise<KeybindingImportResult>;
+    /** This machine's saved overrides, the whole map, after any view changes them (#15579). */
+    onOverridesChanged(callback: (snapshot: KeybindingOverridesSnapshot) => void): () => void;
   };
   worktreeConfig: {
     /** Get worktree path pattern configuration */

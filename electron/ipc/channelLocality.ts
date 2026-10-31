@@ -539,6 +539,8 @@ export const CHANNEL_LOCALITY = {
   "keybinding:export-profile": "shell",
   "keybinding:get-overrides": "shell",
   "keybinding:import-profile": "shell",
+  // Device-owned (#15579): every view on this machine hears it, a view of another host too.
+  "keybinding:overrides-changed": "shell",
   "keybinding:remove-override": "shell",
   "keybinding:reset-all": "shell",
   "keybinding:set-override": "shell",

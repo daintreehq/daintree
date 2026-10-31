@@ -391,6 +391,11 @@ describe("events:push split", () => {
     expect(acceptLocalPushForRemoteView(CHANNELS.APP_PANEL_GRID_CONFIG_CHANGED, [{}])).toBe(true);
   });
 
+  it("takes keyboard shortcuts from this machine, never the host (#15579)", () => {
+    expect(acceptHostPush(CHANNELS.KEYBINDING_OVERRIDES_CHANGED, [{}])).toBe(false);
+    expect(acceptLocalPushForRemoteView(CHANNELS.KEYBINDING_OVERRIDES_CHANGED, [{}])).toBe(true);
+  });
+
   it("drops an unclassified bus event from both sides", () => {
     expect(acceptHostPush(CHANNELS.EVENTS_PUSH, push("made:up"))).toBe(false);
     expect(acceptLocalPushForRemoteView(CHANNELS.EVENTS_PUSH, push("made:up"))).toBe(false);

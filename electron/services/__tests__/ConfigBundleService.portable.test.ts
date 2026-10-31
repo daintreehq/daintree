@@ -52,6 +52,10 @@ vi.mock("../UserAgentRegistryService.js", () => ({
 }));
 vi.mock("../keybindingOverridesStore.js", () => ({
   getValidatedOverrides: () => mockStore.get("keybindingOverrides.overrides") ?? {},
+  saveKeybindingOverrides: (overrides: Record<string, string[]>) => {
+    mockStore.set("keybindingOverrides.overrides", overrides);
+    return { revision: 1, overrides };
+  },
 }));
 vi.mock("../getSoundService.js", () => ({ getAllowedSoundFiles: async () => new Set<string>() }));
 vi.mock("../ProjectStore.js", () => ({

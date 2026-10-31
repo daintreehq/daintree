@@ -34,6 +34,7 @@ import type {
 } from "../shared/types/ipc/mcpServer.js";
 import type { ActionContext, ActionDispatchResult } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
+import type { KeybindingOverridesSnapshot } from "../shared/types/ipc/api.js";
 import type { GitPushReview } from "../shared/types/git.js";
 import type { PluginPerfSnapshot } from "../shared/types/pluginMetrics.js";
 import type { PluginRendererMetricsEnvelope } from "../shared/types/ipc/pluginMetrics.js";
@@ -2381,6 +2382,9 @@ function buildElectronApi(): ElectronAPI {
       exportProfile: () => _unwrappingInvoke(CHANNELS.KEYBINDING_EXPORT_PROFILE),
 
       importProfile: () => _unwrappingInvoke(CHANNELS.KEYBINDING_IMPORT_PROFILE),
+
+      onOverridesChanged: (callback: (snapshot: KeybindingOverridesSnapshot) => void) =>
+        _typedOn(CHANNELS.KEYBINDING_OVERRIDES_CHANGED, callback),
     },
 
     // Worktree Config API
