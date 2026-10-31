@@ -17,10 +17,11 @@ const POSIX: WorktreeMatchOptions = {
   resolveDeadlineMs: 1_000,
 };
 const WINDOWS: WorktreeMatchOptions = { ...POSIX, caseInsensitive: true };
-/** A resolver stuck on a dead mount. */
+/** A resolver that answers at once, except for a spawn directory on a dead mount. */
 const HUNG: WorktreeMatchOptions = {
   ...POSIX,
-  realpath: () => new Promise<string>(() => {}),
+  realpath: (path) =>
+    path.startsWith("/net/stale") ? new Promise<string>(() => {}) : Promise.resolve(path),
   resolveDeadlineMs: 20,
 };
 
