@@ -63,7 +63,9 @@ const { isImageDiffCandidateMock } = vi.hoisted(() => ({
     vi.fn<typeof import("@/components/FileViewer/ImageDiffViewer").isImageDiffCandidate>(),
 }));
 vi.mock("@/components/FileViewer/ImageDiffViewer", () => ({
-  ImageDiffViewer: () => <div data-testid="image-diff-mock" />,
+  ImageDiffViewer: (props: { side?: string }) => (
+    <div data-testid="image-diff-mock" data-side={props.side ?? "none"} />
+  ),
   isImageDiffCandidate: isImageDiffCandidateMock,
 }));
 vi.mock("@/components/ui/EmptyState", () => ({
@@ -537,9 +539,59 @@ describe("DiffPane — content-aware toolbar", () => {
     expect(screen.getByLabelText("Refresh")).toBeTruthy();
   });
 
+  it("hands each twin of a partially staged image its own side of the index", () => {
+    isImageDiffCandidateMock.mockReturnValue(true);
+    const changeSet: DiffChangeSetEntry[] = [
+      { path: "logo.png", status: "modified", viewedKey: "staged:logo.png", side: "staged" },
+      { path: "logo.png", status: "modified", viewedKey: "unstaged:logo.png", side: "unstaged" },
+    ];
+    const sideFor = (viewedKey: string) => {
+      cleanup();
+      seedPanel({ filePath: "logo.png", fileStatus: "modified", viewedKey, changeSet });
+      renderPane();
+      return screen.getByTestId("image-diff-mock").getAttribute("data-side");
+    };
+
+    expect(sideFor("staged:logo.png")).toBe("staged");
+    expect(sideFor("unstaged:logo.png")).toBe("unstaged");
+  });
+
+  it("names no side for a plain working-tree image, even beside sided entries", () => {
+    isImageDiffCandidateMock.mockReturnValue(true);
+    seedPanel({ filePath: "logo.png", fileStatus: "modified", changeSet: [entry("logo.png")] });
+    renderPane();
+    expect(screen.getByTestId("image-diff-mock").getAttribute("data-side")).toBe("none");
+
+    // The open file isn't in the set, so no entry's side is its own.
+    cleanup();
+    seedPanel({
+      filePath: "logo.png",
+      fileStatus: "modified",
+      changeSet: [{ ...entry("other.png"), side: "staged" }],
+    });
+    renderPane();
+    expect(screen.getByTestId("image-diff-mock").getAttribute("data-side")).toBe("none");
+  });
+
+  it.each(["staged", "unstaged"] as const)(
+    "keeps a %s panel's own side over its entry's",
+    (diffSource) => {
+      isImageDiffCandidateMock.mockReturnValue(true);
+      const entrySide = diffSource === "staged" ? "unstaged" : "staged";
+      seedPanel({
+        filePath: "logo.png",
+        fileStatus: "modified",
+        diffSource,
+        changeSet: [{ ...entry("logo.png"), side: entrySide }],
+      });
+      renderPane();
+      expect(screen.getByTestId("image-diff-mock").getAttribute("data-side")).toBe(diffSource);
+    }
+  );
+
   it("keeps them for a base-branch image, which the text viewer still handles", () => {
-    // ImageDiffViewer compares the working tree against HEAD, so it has nothing
-    // to show for a base-branch comparison — those stay on DiffViewer whatever
+    // ImageDiffViewer compares local versions (HEAD, the index, the working
+    // tree), so it has nothing to show for a base-branch comparison — those stay on DiffViewer whatever
     // the extension. Gating the toolbar on candidacy alone would strip the
     // controls off a body that is still the text viewer.
     isImageDiffCandidateMock.mockReturnValue(true);

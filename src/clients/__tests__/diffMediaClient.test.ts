@@ -125,6 +125,28 @@ describe("diffMediaClient.readFileVersions caching", () => {
     expect(mockRead).toHaveBeenLastCalledWith({ cwd: "/other", filePath: "img.png" });
   });
 
+  it("keys entries by side, so one comparison's versions never revalidate another's", async () => {
+    mockRead.mockResolvedValueOnce({ head: loaded("h", "head"), working: loaded("i", "index") });
+    await client.diffMediaClient.readFileVersions({ ...payload, side: "staged" });
+
+    mockRead.mockResolvedValueOnce({ head: loaded("i", "index"), working: loaded("w", "w1") });
+    await client.diffMediaClient.readFileVersions({ ...payload, side: "unstaged" });
+    expect(mockRead).toHaveBeenLastCalledWith({ ...payload, side: "unstaged" });
+
+    mockRead.mockResolvedValueOnce({ head: unchanged("head"), working: unchanged("index") });
+    await client.diffMediaClient.readFileVersions({ ...payload, side: "staged" });
+    expect(mockRead).toHaveBeenLastCalledWith({
+      ...payload,
+      side: "staged",
+      known: { head: "head", working: "index" },
+    });
+
+    // HEAD against disk is a third comparison, held apart from both.
+    mockRead.mockResolvedValueOnce({ head: loaded("h", "head"), working: loaded("w", "w1") });
+    await client.diffMediaClient.readFileVersions(payload);
+    expect(mockRead).toHaveBeenLastCalledWith(payload);
+  });
+
   it("rejects an unchanged reply for a version it doesn't hold", async () => {
     mockRead.mockResolvedValueOnce({ head: loaded("h", "h1"), working: loaded("w", "w1") });
     await client.diffMediaClient.readFileVersions(payload);
