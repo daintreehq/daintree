@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorktreeState } from "@/types";
 import type { DeletedWorktree } from "@/store/worktreeStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import { usePanelStore } from "@/store/panelStore";
+import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import { getWorktreeSortDragId } from "@/components/DragDrop/SortableWorktreeCard";
 import { useSidebarWorktreeModel } from "../useSidebarWorktreeModel";
 
@@ -188,5 +191,109 @@ describe("useSidebarWorktreeModel — rows", () => {
 
     act(() => useWorktreeFilterStore.getState().toggleStatusFilter("dirty"));
     expect(result.current.filteredWorktrees).toEqual([]);
+  });
+});
+
+describe("useSidebarWorktreeModel — main card aggregate counts", () => {
+  function pushFleet(runs: FleetRunRow[]): void {
+    act(() =>
+      useFleetSnapshotStore.getState().applySnapshot({
+        runs,
+        changedAt: 1,
+        degraded: false,
+        lastSuccessfulAt: null,
+      })
+    );
+  }
+  const run = (runId: string, overrides: Partial<FleetRunRow> = {}): FleetRunRow => ({
+    runId,
+    workspaceId: "p1",
+    spawnedAt: 0,
+    cwd: "/repo",
+    ...overrides,
+  });
+
+  function seedAgentPanel(id: string, worktreeId: string): void {
+    usePanelStore.setState({
+      panelIds: [id],
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test carrier: only the fields the sidebar selectors read
+      panelsById: {
+        [id]: {
+          id,
+          kind: "terminal",
+          title: id,
+          worktreeId,
+          location: "grid",
+          detectedAgentId: "claude",
+          agentState: "working",
+        },
+      } as never,
+      panelIdsByWorktreeId: { [worktreeId]: [id] },
+    });
+  }
+
+  afterEach(() => {
+    act(() => {
+      useFleetSnapshotStore.setState({ snapshot: null });
+      usePanelStore.setState({ panelIds: [], panelsById: {}, panelIdsByWorktreeId: {} });
+    });
+  });
+
+  it("moves with each count and keeps its identity across pushes that move none", () => {
+    // A fresh object here re-renders the main card through its memoized row.
+    seedAgentPanel("agent-a", "a");
+    pushFleet([run("agent-a", { agentState: "idle" }), run("x", { agentState: "working" })]);
+    const { result } = renderModel();
+    const idle = result.current.mainWorktreeAggregateCounts;
+    expect(idle).toEqual({ worktrees: 2, working: 0, waiting: 0, finished: 0 });
+
+    pushFleet([run("agent-a", { agentState: "idle" }), run("x", { agentState: "idle" })]);
+    pushFleet([run("agent-a", { agentState: "idle", title: "renamed" })]);
+    expect(result.current.mainWorktreeAggregateCounts).toBe(idle);
+
+    // Each step moves exactly one count off the idle baseline, so every count
+    // is checked on its own.
+    const states: Array<
+      [Partial<FleetRunRow>, { working: number; waiting: number; finished: number }]
+    > = [
+      [{ agentState: "working" }, { working: 1, waiting: 0, finished: 0 }],
+      [{ agentState: "idle" }, { working: 0, waiting: 0, finished: 0 }],
+      [
+        { agentState: "waiting", waitingReason: "approval" },
+        { working: 0, waiting: 1, finished: 0 },
+      ],
+      [{ agentState: "idle" }, { working: 0, waiting: 0, finished: 0 }],
+      [
+        { agentState: "waiting", waitingReason: "prompt", handBack: { stoppedAt: 1 } },
+        { working: 0, waiting: 0, finished: 1 },
+      ],
+      [{ agentState: "idle" }, { working: 0, waiting: 0, finished: 0 }],
+    ];
+    for (const [overrides, counts] of states) {
+      pushFleet([run("agent-a", overrides)]);
+      expect(result.current.mainWorktreeAggregateCounts).toEqual({ worktrees: 2, ...counts });
+    }
+  });
+
+  it("follows the worktree count and drops out with only the main worktree", () => {
+    pushFleet([]);
+    const { result, rerender } = renderModel();
+    expect(result.current.mainWorktreeAggregateCounts).toEqual({
+      worktrees: 2,
+      working: 0,
+      waiting: 0,
+      finished: 0,
+    });
+
+    const props = {
+      activeWorktreeId: null,
+      deletedWorktrees: new Map(),
+      canPruneWorktreeIds: true,
+    };
+    rerender({ ...props, worktrees: [...snapshot(), makeWorktree("c")] });
+    expect(result.current.mainWorktreeAggregateCounts).toMatchObject({ worktrees: 3 });
+
+    rerender({ ...props, worktrees: snapshot().filter((w) => w.isMainWorktree) });
+    expect(result.current.mainWorktreeAggregateCounts).toBeUndefined();
   });
 });

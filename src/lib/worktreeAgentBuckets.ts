@@ -57,12 +57,25 @@ export function isWorktreeMergedForCleanup(
   );
 }
 
-/** Fleet runs keyed by run id, which is the agent panel's own id. */
+const EMPTY_RUNS_BY_ID: ReadonlyMap<string, FleetRunRow> = new Map();
+const runsByIdCache = new WeakMap<readonly FleetRunRow[], ReadonlyMap<string, FleetRunRow>>();
+
+/**
+ * Fleet runs keyed by run id, which is the agent panel's own id.
+ *
+ * Cached by array identity: a snapshot is replaced, never mutated, so every
+ * card, the sidebar model and cycling share one index per push instead of each
+ * building its own over the whole fleet.
+ */
 export function indexFleetRuns(
   runs: readonly FleetRunRow[] | null | undefined
 ): ReadonlyMap<string, FleetRunRow> {
+  if (!runs || runs.length === 0) return EMPTY_RUNS_BY_ID;
+  const cached = runsByIdCache.get(runs);
+  if (cached) return cached;
   const map = new Map<string, FleetRunRow>();
-  for (const run of runs ?? []) map.set(run.runId, run);
+  for (const run of runs) map.set(run.runId, run);
+  runsByIdCache.set(runs, map);
   return map;
 }
 
