@@ -29,8 +29,8 @@ const VALUE = String.raw`(?=[^\s-])(?:\\[^\n]|[^\s"'\\]|"(?:\\[^\n]|[^"\\])*"|'[
  */
 const GIT = String.raw`\bgit(?:\s+(?:-[Cc]\s+${VALUE}|--(?:git-dir|work-tree|namespace)(?:=|\s+)${VALUE}|--(?:no-pager|paginate|no-optional-locks)|-[pP])(?=\s))*\s+`;
 
-/** The rest of the command, up to the next pipe, `;`, `&`, backtick or line end. */
-const ARGS = String.raw`[^|;&\n\x60]*`;
+/** The rest of the command, up to the next pipe, `;`, `&` or line end. */
+const ARGS = String.raw`[^|;&\n]*`;
 
 function git(subcommand: string, flags = "i"): RegExp {
   return new RegExp(GIT + subcommand, flags);

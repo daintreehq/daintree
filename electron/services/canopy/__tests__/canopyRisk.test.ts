@@ -40,6 +40,7 @@ describe("irreversibleReason", () => {
     ["git push -uf origin main", "Overwrites the remote branch"],
     ["git push -ud origin main", "Overwrites the remote branch"],
     ["git push origin '+main:main'", "Overwrites the remote branch"],
+    ["git push `printf origin` --force", "Overwrites the remote branch"],
     ["git -c core.x=y clean -fd", "Deletes untracked files for good"],
     ['git -c core.x="y z" clean -fd', "Deletes untracked files for good"],
     ["git --no-pager clean -xdf", "Deletes untracked files for good"],
