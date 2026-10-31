@@ -357,7 +357,10 @@ function actionHashesOf(call: CallInFlight, actionId: string): string | null {
   return canonicalArgsHash(actionId, delegateArgs);
 }
 
-/** Whether two sends under one callId are the same call, which the host runs once for both. */
+/**
+ * Whether two sends under one callId are the same call, which the host runs
+ * once for both: its ledger's own identity, the arguments whole.
+ */
 function sameCall(
   a: Pick<CallInFlight, "tool" | "projectId" | "tier" | "args">,
   b: Pick<CallInFlight, "tool" | "projectId" | "tier" | "args">
@@ -366,8 +369,7 @@ function sameCall(
     a.tool === b.tool &&
     a.projectId === b.projectId &&
     a.tier === b.tier &&
-    canonicalArgsHash(a.tool, relayedActionArgs(a.args)) ===
-      canonicalArgsHash(b.tool, relayedActionArgs(b.args))
+    canonicalArgsHash(a.tool, a.args) === canonicalArgsHash(b.tool, b.args)
   );
 }
 

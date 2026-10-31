@@ -496,7 +496,11 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
           let other = 0;
           let resent: Promise<unknown> | undefined;
           relayWith(async (r, callId) => {
-            resent = send(callId, () => (other += 1), { worktreeId: "/wt/other" });
+            // Any difference the host's ledger sees refuses it as a conflict, a request key's too.
+            resent = send(callId, () => (other += 1), {
+              worktreeId: "/wt/feature",
+              requestKey: "rk-2",
+            });
             await laterSent;
             expect(r.skipsRelayedDispatch("studio", dispatch(callId))).toBe(true);
             release();
