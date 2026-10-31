@@ -156,6 +156,7 @@ describe("git push — resolved destination", () => {
 
     await getHandler("git:push")(FAKE_EVENT, { cwd: CWD, setUpstream: true });
 
+    expect(git.push).toHaveBeenCalledTimes(1);
     expect(git.push).toHaveBeenCalledWith([
       "--set-upstream",
       ...singleBranchArgs(REMOTE, LOCAL_BRANCH, REMOTE_BRANCH),
@@ -318,6 +319,7 @@ describe("git force-push-with-lease — resolved destination", () => {
       leaseSha: LEASE,
     });
 
+    expect(git.push).toHaveBeenCalledTimes(1);
     expect(git.push).toHaveBeenCalledWith([
       `--force-with-lease=refs/heads/${REMOTE_BRANCH}:${LEASE}`,
       "--force-if-includes",
@@ -344,6 +346,7 @@ describe("git force-push-with-lease — upstream repair", () => {
       leaseSha: LEASE,
     });
 
+    expect(git.push).toHaveBeenCalledTimes(1);
     expect(git.push).toHaveBeenCalledWith([
       `--force-with-lease=refs/heads/${LOCAL_BRANCH}:${LEASE}`,
       "--force-if-includes",
@@ -369,6 +372,7 @@ describe("git force-push-with-lease — upstream repair", () => {
       leaseSha: LEASE,
     });
 
+    expect(git.push).toHaveBeenCalledTimes(1);
     expect(git.push).toHaveBeenCalledWith([
       `--force-with-lease=refs/heads/${LOCAL_BRANCH}:${LEASE}`,
       "--force-if-includes",
@@ -389,6 +393,7 @@ describe("git force-push-with-lease — upstream repair", () => {
       leaseSha: LEASE,
     });
 
+    expect(git.push).toHaveBeenCalledTimes(1);
     expect(git.push).toHaveBeenCalledWith(
       expect.not.arrayContaining(["--set-upstream"]) as unknown as string[]
     );

@@ -302,6 +302,54 @@ describe("resolveGitPushDestination — fails closed", () => {
     });
   });
 
+  it("tracks where git's own push.autoSetupRemote would, for a branch with no upstream", async () => {
+    // A bare push sets this tracking itself; the explicit refspec every push
+    // now uses switches that off, so the destination has to ask for it.
+    const repo = makeRepo();
+    git(repo, ["remote", "add", "origin", makeBare()]);
+    git(repo, ["remote", "add", "fork", makeBare()]);
+    git(repo, ["config", "branch.topic.pushRemote", "fork"]);
+    git(repo, ["config", "push.default", "current"]);
+    git(repo, ["config", "push.autoSetupRemote", "true"]);
+
+    const result = await resolve(repo);
+
+    expect(result.status === "resolved" && result.destination.establishesUpstream).toBe(true);
+  });
+
+  it("leaves tracking alone under push.autoSetupRemote when push.default=matching ignores it", async () => {
+    const repo = makeRepo();
+    git(repo, ["remote", "add", "origin", makeBare()]);
+    git(repo, ["remote", "add", "fork", makeBare()]);
+    git(repo, ["config", "branch.topic.pushRemote", "fork"]);
+    git(repo, ["config", "push.default", "matching"]);
+    git(repo, ["config", "push.autoSetupRemote", "true"]);
+
+    const result = await resolve(repo);
+
+    expect(result.status).toBe("resolved");
+    expect(result.status === "resolved" && result.destination.establishesUpstream).toBeUndefined();
+  });
+
+  it("never establishes tracking over an upstream the fallback branch already has", async () => {
+    // git can't produce this record (an upstream implies a named remote), so
+    // the guard is pinned with a double.
+    const result = await resolveGitPushDestination(
+      stubGit({
+        record: refRecord("", "", "refs/remotes/origin/topic"),
+        remotes: ["origin"],
+        config: "",
+      }),
+      "topic"
+    );
+
+    expect(result.status === "resolved" && result.destination).toEqual({
+      remote: "origin",
+      branch: "topic",
+      remoteTrackingRef: "refs/remotes/origin/topic",
+    });
+  });
+
   it("refuses an unconfigured branch when several remotes exist, even with an origin", async () => {
     const repo = makeRepo();
     git(repo, ["remote", "add", "origin", makeBare()]);

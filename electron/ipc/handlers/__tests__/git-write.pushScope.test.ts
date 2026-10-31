@@ -46,20 +46,24 @@ vi.mock("../../../utils/hardenedGit.js", () => ({
 import { registerGitWriteHandlers } from "../git-write.js";
 import { _resetRateLimitQueuesForTest } from "../../utils.js";
 
-const GIT_ENV = {
-  ...process.env,
-  GIT_CONFIG_GLOBAL: "/dev/null",
-  GIT_CONFIG_SYSTEM: "/dev/null",
-  GIT_TERMINAL_PROMPT: "0",
-};
-
-function hermeticSimpleGit(cwd: string) {
-  const env = {
+/**
+ * One environment for the fixture commands and the client under test, built
+ * from nothing rather than inherited: a developer's config, a hook's `GIT_DIR`
+ * or an injected `GIT_CONFIG_PARAMETERS` must not decide these results.
+ */
+function hermeticEnv(): Record<string, string> {
+  return {
     PATH: process.env.PATH ?? "",
+    HOME: tmpRoot,
+    XDG_CONFIG_HOME: tmpRoot,
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_SYSTEM: "/dev/null",
     GIT_TERMINAL_PROMPT: "0",
   };
+}
+
+function hermeticSimpleGit(cwd: string) {
+  const env = hermeticEnv();
   return simpleGit(cwd, {
     allowEnvironment: Object.keys(env),
     unsafe: { allowUnsafeConfigPaths: true },
@@ -67,7 +71,11 @@ function hermeticSimpleGit(cwd: string) {
 }
 
 function git(cwd: string, args: string[]): string {
-  return execFileSync("git", args, { cwd, env: GIT_ENV, encoding: "utf8" }).trim();
+  return execFileSync("git", args, { cwd, env: hermeticEnv(), encoding: "utf8" }).trim();
+}
+
+function upstreamOf(repo: string, branch: string): string {
+  return git(repo, ["for-each-ref", "--format=%(upstream)", `refs/heads/${branch}`]);
 }
 
 /** The remote's tip for `ref`, or null when the remote has no such ref. */
@@ -183,6 +191,19 @@ describe("git push — writes only the branch the confirm named", () => {
     expectOtherUnpublished(fixture);
   });
 
+  it("leaves another ahead branch unpublished when the push also sets upstream", async () => {
+    const fixture = makeFixture();
+    git(fixture.repo, ["config", "remote.origin.push", "refs/heads/*:refs/heads/*"]);
+
+    await push(fixture.repo, true);
+
+    expect(remoteTip(fixture.bare, "refs/heads/topic")).toBe(
+      git(fixture.repo, ["rev-parse", "topic"])
+    );
+    expect(upstreamOf(fixture.repo, "topic")).toBe("refs/remotes/origin/topic");
+    expectOtherUnpublished(fixture);
+  });
+
   it("refuses a mirror remote rather than mirroring every ref onto it", async () => {
     const fixture = makeFixture();
     const topicBefore = remoteTip(fixture.bare, "refs/heads/topic");
@@ -218,16 +239,51 @@ describe("git push — destinations and recoveries keep working", () => {
       git(fixture.repo, ["checkout", "-q", "-b", "fresh"]);
       const freshTip = commit(fixture.repo, "fresh.txt");
       if (pushDefault) git(fixture.repo, ["config", "push.default", pushDefault]);
+      expect(upstreamOf(fixture.repo, "fresh")).toBe("");
 
       await push(fixture.repo);
 
       expect(remoteTip(fixture.bare, "refs/heads/fresh")).toBe(freshTip);
-      expect(git(fixture.repo, ["for-each-ref", "--format=%(upstream)", "refs/heads/fresh"])).toBe(
-        "refs/remotes/origin/fresh"
+      expect(upstreamOf(fixture.repo, "fresh")).toBe("refs/remotes/origin/fresh");
+      expectOtherUnpublished(fixture);
+    });
+  }
+
+  for (const autoSetupRemote of [true, false]) {
+    it(`tracks a branch git names a push remote for only where push.autoSetupRemote would (${autoSetupRemote})`, async () => {
+      // A bare push under these settings tracked the branch itself; the
+      // explicit refspec switches git's auto-setup off.
+      const fixture = makeFixture();
+      git(fixture.repo, ["checkout", "-q", "-b", "fresh"]);
+      const freshTip = commit(fixture.repo, "fresh.txt");
+      git(fixture.repo, ["config", "remote.pushDefault", "origin"]);
+      git(fixture.repo, ["config", "push.default", "current"]);
+      git(fixture.repo, ["config", "push.autoSetupRemote", String(autoSetupRemote)]);
+      expect(upstreamOf(fixture.repo, "fresh")).toBe("");
+
+      await push(fixture.repo);
+
+      expect(remoteTip(fixture.bare, "refs/heads/fresh")).toBe(freshTip);
+      expect(upstreamOf(fixture.repo, "fresh")).toBe(
+        autoSetupRemote ? "refs/remotes/origin/fresh" : ""
       );
       expectOtherUnpublished(fixture);
     });
   }
+
+  it("leaves a differently-tracked branch's upstream alone under push.default=current", async () => {
+    const fixture = makeFixture();
+    git(fixture.repo, ["branch", "-q", "--set-upstream-to=origin/main", "topic"]);
+    git(fixture.repo, ["config", "push.default", "current"]);
+
+    await push(fixture.repo);
+
+    expect(remoteTip(fixture.bare, "refs/heads/topic")).toBe(
+      git(fixture.repo, ["rev-parse", "topic"])
+    );
+    expect(upstreamOf(fixture.repo, "topic")).toBe("refs/remotes/origin/main");
+    expectOtherUnpublished(fixture);
+  });
 
   it("pushes to a differently-named remote branch under push.default=upstream", async () => {
     const fixture = makeFixture();
@@ -261,6 +317,8 @@ describe("git push — destinations and recoveries keep working", () => {
     expect(remoteTip(fork, "refs/heads/topic")).toBe(git(fixture.repo, ["rev-parse", "topic"]));
     expect(remoteTip(fork, "refs/heads/other")).toBe(fixture.otherRemote);
     expect(remoteTip(fixture.bare, "refs/heads/topic")).toBe(originTopic);
+    // Still pulls from where it did: the push must not re-track it to the fork.
+    expect(upstreamOf(fixture.repo, "topic")).toBe("refs/remotes/origin/topic");
   });
 
   it("repairs a branch whose upstream names another branch, in the same push", async () => {
@@ -272,9 +330,7 @@ describe("git push — destinations and recoveries keep working", () => {
 
     expect(remoteTip(fixture.bare, "refs/heads/wt")).toBe(wtTip);
     expect(remoteTip(fixture.bare, "refs/heads/main")).not.toBe(wtTip);
-    expect(git(fixture.repo, ["for-each-ref", "--format=%(upstream)", "refs/heads/wt"])).toBe(
-      "refs/remotes/origin/wt"
-    );
+    expect(upstreamOf(fixture.repo, "wt")).toBe("refs/remotes/origin/wt");
   });
 
   it("leases against the destination that rejected the push, and force-pushes only it", async () => {

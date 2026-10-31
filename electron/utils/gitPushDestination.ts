@@ -23,11 +23,13 @@ export interface ResolvedGitPushDestination extends GitPushDestination {
    */
   requiresUpstreamRepair?: boolean;
   /**
-   * The branch tracks nothing and git named no push remote, so the destination
-   * above is the repository's only remote. The push names its refspec
-   * explicitly, which unlike a bare `git push` never fails for want of an
-   * upstream, so the caller passes `--set-upstream` to write the tracking the
-   * fresh branch would otherwise never get.
+   * The branch tracks nothing, and the push should give it tracking to the
+   * destination above: either git named no push remote and the destination is
+   * the repository's only remote (a freshly created worktree branch), or git's
+   * own `push.autoSetupRemote` would have set it. The push names its refspec
+   * explicitly, which switches off both of git's own routes to tracking — the
+   * "no upstream" failure the caller used to recover from, and auto-setup — so
+   * the caller passes `--set-upstream` instead.
    *
    * Main-process-only, like {@link requiresUpstreamRepair}.
    */
@@ -273,8 +275,48 @@ async function resolvePushFromFields(
       // simply fails and the force-push CTA stays suppressed, which is the safe
       // direction.
       remoteTrackingRef: `${REMOTE_TRACKING_PREFIX}${remote}/${remoteBranch}`,
+      ...(!upstreamRef && (await autoSetupRemoteApplies(git)) ? { establishesUpstream: true } : {}),
     },
   };
+}
+
+/**
+ * True when git's own default push would give an untracked branch its upstream:
+ * `push.autoSetupRemote` is on, under a `push.default` that honours it (all but
+ * `matching` and `nothing`). Read only for a branch that tracks nothing.
+ *
+ * A failed read answers false. Unlike {@link hasDefaultSimplePushConfig}, this
+ * never decides where a push goes or what it sends, only whether tracking is
+ * written afterwards, so leaving it unwritten is the harmless direction.
+ */
+async function autoSetupRemoteApplies(git: Pick<SimpleGit, "raw">): Promise<boolean> {
+  let out: string;
+  try {
+    out = await git.raw(["config", "--list", "-z"]);
+  } catch {
+    return false;
+  }
+
+  let autoSetup = false;
+  let pushDefault: string | null = null;
+  for (const entry of out.split("\u0000")) {
+    if (!entry) continue;
+    const newline = entry.indexOf("\n");
+    const key = (newline === -1 ? entry : entry.slice(0, newline)).toLowerCase();
+    // A key with no `=` at all is git's spelling of true.
+    if (key === "push.autosetupremote") {
+      autoSetup = newline === -1 || isGitTrue(entry.slice(newline + 1));
+    } else if (key === "push.default") {
+      pushDefault = (newline === -1 ? "" : entry.slice(newline + 1)).trim().toLowerCase();
+    }
+  }
+  return autoSetup && pushDefault !== "matching" && pushDefault !== "nothing";
+}
+
+function isGitTrue(raw: string): boolean {
+  const value = raw.trim().toLowerCase();
+  if (value === "true" || value === "yes" || value === "on") return true;
+  return /^[+-]?\d+$/.test(value) && Number(value) !== 0;
 }
 
 /** The one `push.default` value under which the recovery below is git's own intent. */
