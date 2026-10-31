@@ -22,12 +22,14 @@ const LINUX = "startsWith(matrix.os, 'ubuntu')";
 const SMOKE = "node scripts/run-packaged-smoke.mjs";
 const PRELOAD = "npm run check:preload-backdoors";
 
-// Shell with comment lines dropped, so a commented-out command never counts.
+// Shell with continuations joined and comments dropped, so a commented-out
+// command never counts.
 const code = (step) =>
   typeof step.run === "string"
     ? step.run
+        .replace(/\\\n/g, " ")
         .split("\n")
-        .filter((line) => !line.trim().startsWith("#"))
+        .map((line) => line.replace(/(^|\s)#.*$/, ""))
         .join("\n")
     : "";
 const runs = (step, text) => code(step).includes(text);
@@ -77,9 +79,13 @@ describe("nightly-publish gates (#15587)", () => {
 
   it("smokes the macOS arm64 and universal bundles after packaging, before upload", () => {
     const { index, step } = packagedSmoke(MACOS);
-    const loop = code(step).match(/^\s*for app in (.+); do$/m);
+    const loop = code(step).match(/^\s*for app in (.+?);\s*do\s*$/m);
     expect(loop, "macOS smoke no longer loops over the bundles").not.toBeNull();
-    expect(loop[1].trim().split(/\s+/).sort()).toEqual([
+    const bundles = loop[1]
+      .trim()
+      .split(/\s+/)
+      .map((word) => word.replace(/^["']|["']$/g, ""));
+    expect(bundles.sort()).toEqual([
       "release/mac-arm64/Daintree.app",
       "release/mac-universal/Daintree.app",
     ]);
@@ -122,29 +128,41 @@ describe("nightly-publish gates (#15587)", () => {
 
   it("publishes only after every gate passed", () => {
     expect(publish.needs).toEqual(expect.arrayContaining(["build", "smoke-x64"]));
-    // A status function would let a job run past a failed or skipped gate.
+    // Any status function in a job condition can run it past a failed gate.
     for (const [name, job] of Object.entries({ build, "smoke-x64": smokeX64, publish })) {
-      expect(String(job.if ?? ""), name).not.toMatch(/\b(?:always|failure|cancelled)\s*\(/);
+      expect(job.if, name).toBeUndefined();
       expect(job["continue-on-error"] ?? false, name).toBe(false);
     }
     expect(gateSteps.length).toBeGreaterThanOrEqual(4);
     for (const step of gateSteps) {
       expect(step["continue-on-error"] ?? false, step.name).toBe(false);
-      expect(code(step), step.name).not.toMatch(/\|\|\s*(?:true|:)\s*$/m);
+      expect(code(step), step.name).not.toMatch(/\|\|\s*(?:true|:)\s*(?:[;)]|$)/m);
       if (/\bfor\b/.test(code(step))) {
         // The loop's trailing `echo` would otherwise mask a failed launch.
-        expect(code(step), step.name).toMatch(/^\s*set -euo pipefail$/m);
+        expect(code(step), step.name).toMatch(/^\s*set\s+-[a-zA-Z]*e/m);
       }
     }
   });
 
   it("writes to R2 only from the publish job", () => {
+    const r2Secret = /secrets(?:\.|\[\s*['"])(?:DAINTREE_)?R2_/;
+    const values = (obj) => Object.values(obj ?? {}).map(String);
+    expect(values(workflow.env).some((v) => r2Secret.test(v))).toBe(false);
     for (const [name, job] of Object.entries(workflow.jobs)) {
       if (name === "publish") continue;
+      expect(
+        values(job.env).some((v) => r2Secret.test(v)),
+        name
+      ).toBe(false);
       for (const step of job.steps) {
-        expect(/\baws\b.*\bs3(?:api)?\b/.test(code(step)), `${name}: ${step.name}`).toBe(false);
+        const where = `${name}: ${step.name}`;
+        expect(/\baws\b.*\bs3(?:api)?\b/.test(code(step)), where).toBe(false);
+        const inputs = [...values(step.env), ...values(step.with), code(step)];
+        expect(
+          inputs.some((v) => r2Secret.test(v)),
+          where
+        ).toBe(false);
       }
-      expect(JSON.stringify(job), name).not.toMatch(/secrets\.(?:R2_|DAINTREE_R2_)/);
     }
   });
 
@@ -155,7 +173,7 @@ describe("nightly-publish gates (#15587)", () => {
       expect(grantsIssueWrite(job.permissions), name).toBe(false);
     }
     const suite =
-      /\bnpm\b[^\n]*?\s(?:t|test|test:(?!smoke:packaged\b)[\w:-]+)(?=\s|$)|\bvitest\b|\bplaywright\b/m;
+      /(?:^|[\s;(&|])npm\s[^\n;&|]*?\b(?:t|test|test:(?!smoke:packaged\b)[\w:-]+)(?=[\s;)&|]|$)|\bvitest\b|\bplaywright\b/m;
     for (const step of allSteps) {
       expect(suite.test(code(step)), step.name).toBe(false);
     }
