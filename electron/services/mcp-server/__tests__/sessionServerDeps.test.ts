@@ -179,7 +179,13 @@ describe("createSessionServerDeps", () => {
       },
     });
 
-    await sessionDeps.dispatchAction("worktree.delete", { worktreeId: "/wt" }, false, undefined, "call-1");
+    await sessionDeps.dispatchAction(
+      "worktree.delete",
+      { worktreeId: "/wt" },
+      false,
+      undefined,
+      "call-1"
+    );
     await sessionDeps.dispatchAction("worktree.delete", { worktreeId: "/wt" }, false);
 
     const relays = dispatchActionForWorkspace.mock.calls.map(

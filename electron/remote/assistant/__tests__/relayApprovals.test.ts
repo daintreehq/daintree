@@ -63,7 +63,11 @@ describe("askShellApproval (#13501)", () => {
 
     await expect(
       askShellApproval(linkAnswering(skipped), ASK, { now: () => clock, windowMs: 40_000 })
-    ).resolves.toEqual({ decision: "approved", deadline: 41_000, authorization: "skip-preference" });
+    ).resolves.toEqual({
+      decision: "approved",
+      deadline: 41_000,
+      authorization: "skip-preference",
+    });
 
     // Bound to the ask like any answer, and covering nothing once late.
     await expect(
@@ -77,9 +81,9 @@ describe("askShellApproval (#13501)", () => {
       return skipped(payload);
     });
     clock = 1_000;
-    await expect(askShellApproval(late, ASK, { now: () => clock, windowMs: 40_000 })).resolves.toEqual(
-      { decision: "timeout" }
-    );
+    await expect(
+      askShellApproval(late, ASK, { now: () => clock, windowMs: 40_000 })
+    ).resolves.toEqual({ decision: "timeout" });
   });
 
   it("counts nobody's approval in an answer that doesn't echo the ask", async () => {

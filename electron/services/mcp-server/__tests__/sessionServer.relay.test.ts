@@ -406,7 +406,10 @@ describe("a relayed session (#13493)", () => {
   });
 
   it("records a call its Shell ran under its own assistant's Never ask as that, not as unasked (#15698)", async () => {
-    const skipped = { result: { ok: true, result: { ran: true } }, authorization: "skip-preference" };
+    const skipped = {
+      result: { ok: true, result: { ran: true } },
+      authorization: "skip-preference",
+    };
     const relay = await relayed("full", { dispatchAction: vi.fn().mockResolvedValue(skipped) });
     await relay.client.callTool({
       name: "agent.launch",
@@ -414,7 +417,11 @@ describe("a relayed session (#13493)", () => {
       _meta: { [RELAY_CALL_ID_META_KEY]: "call-123" },
     });
     // The same answer for a session that isn't relayed speaks for nobody's preference.
-    const plain = await relayed("full", { dispatchAction: vi.fn().mockResolvedValue(skipped) }, false);
+    const plain = await relayed(
+      "full",
+      { dispatchAction: vi.fn().mockResolvedValue(skipped) },
+      false
+    );
     await plain.client.callTool({
       name: "agent.launch",
       arguments: { agentId: "claude" },
