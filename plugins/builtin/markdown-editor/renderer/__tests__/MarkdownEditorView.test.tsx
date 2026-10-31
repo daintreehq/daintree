@@ -31,7 +31,7 @@ import { useDocumentStateStore } from "../documentStateStore";
 import { useFileDocumentStore } from "@/store/fileDocumentStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { CHANNELS, identityKey } from "../../shared/protocol";
+import { CHANNELS, PUSH_CHANNELS, identityKey } from "../../shared/protocol";
 import { createFakeMain, type FakeMain } from "./testHost";
 import { whenPluginUiReady } from "@daintreehq/plugin-ui";
 import { installAppPluginKitHost } from "@/services/plugin/appPluginKitHost";
@@ -282,6 +282,28 @@ describe("MarkdownEditorView (#12323)", () => {
     await waitFor(() =>
       expect(main.files.get("/repo/docs/plan-draft.md")).toBe("# Plan\n\nBody\n\nmine")
     );
+  });
+
+  it("an open comparison closes when the disk file grows past the ceiling (#15608)", async () => {
+    await renderReady();
+    await type("\nmine");
+    main.files.set(FILE, "# Plan\n\nBody\n\ntheirs\n");
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("markdown-editor-save"));
+    });
+    await screen.findByText("File changed on disk");
+    fireEvent.click(screen.getByRole("button", { name: "Compare" }));
+    await screen.findByTestId("diff-viewer-mock");
+
+    main.oversized.add(FILE);
+    act(() => {
+      main.push(PUSH_CHANNELS.documentChanged, {
+        identityKey: identityKey({ projectId: "p1", worktreePath: "/repo", filePath: FILE }),
+      });
+    });
+    expect(await screen.findByText("File on disk is over 2 MiB")).toBeTruthy();
+    expect(screen.queryByTestId("diff-viewer-mock")).toBeNull();
+    expect(editorView().state.doc.toString()).toBe("# Plan\n\nBody\n\nmine");
   });
 
   it("Load disk version asks first, then replaces the buffer with a fresh history", async () => {

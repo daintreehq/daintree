@@ -575,7 +575,9 @@ describe("markdown-editor main (#12323)", () => {
   });
 
   describe("a document whose disk file grows past the ceiling (#15608)", () => {
-    const oversized = () => Buffer.alloc(MAX_EDITABLE_BYTES * 3, 0x61);
+    // One byte over, so a weaker cap than the ceiling would read it whole and
+    // show up in `largestRead` instead of being refused on its size alone.
+    const oversized = () => Buffer.alloc(MAX_EDITABLE_BYTES + 1, 0x61);
     let uncapped: ReturnType<typeof vi.spyOn>;
 
     beforeEach(() => {
@@ -623,6 +625,18 @@ describe("markdown-editor main (#12323)", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(fake.watchers).toHaveLength(1);
       expectBounded();
+      // The refusal is what this side observed, so a wake has nothing new to say.
+      await settleWake();
+      expect(fake.pushes).toEqual([]);
+    });
+
+    it("a release that lands while an oversized read is in flight leaves no watch behind", async () => {
+      await fs.writeFile(identity.filePath, oversized());
+      const reading = call(CHANNELS.read, { identity, panelId: "a" });
+      await call(CHANNELS.release, { identity, panelId: "a" });
+      expect(await reading).toEqual({ status: "refused", reason: "TOO_LARGE" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(fake.watchers.filter((w) => !w.disposed)).toHaveLength(0);
     });
 
     it("revalidate reports it as too large without reading or hashing it, and its revision once it shrinks", async () => {
@@ -665,6 +679,8 @@ describe("markdown-editor main (#12323)", () => {
       });
       expect(result).toEqual({ status: "too-large" });
       expectBounded();
+      await settleWake();
+      expect(fake.pushes).toEqual([]);
     });
 
     it("a stale edited save is held as too large before the host's revision compare, and writes nothing", async () => {
@@ -681,7 +697,7 @@ describe("markdown-editor main (#12323)", () => {
       expect(result).toEqual({ status: "too-large" });
       expect(writes).not.toHaveBeenCalled();
       expectBounded();
-      expect((await fs.stat(identity.filePath)).size).toBe(MAX_EDITABLE_BYTES * 3);
+      expect((await fs.stat(identity.filePath)).size).toBe(MAX_EDITABLE_BYTES + 1);
     });
 
     it("a save that loses the race to a file growing after the check is held as too large", async () => {

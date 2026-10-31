@@ -509,7 +509,7 @@ describe("DocumentController (#12323)", () => {
       main.push(PUSH_CHANNELS.documentChanged, { identityKey: KEY });
     };
 
-    it("refuses a clean document as too large, and reloads it once it shrinks", async () => {
+    it("refuses a clean document as too large, stays quiet while it grows, and reloads it once it shrinks back", async () => {
       const controller = await open();
       grow();
       await flush(200);
@@ -517,14 +517,76 @@ describe("DocumentController (#12323)", () => {
       expect(main.calls.filter((c) => c.channel === CHANNELS.read)).toHaveLength(1);
       expect(announceMock).toHaveBeenCalledWith("File is now over 2 MiB and can't be edited here");
 
+      announceMock.mockClear();
+      main.push(PUSH_CHANNELS.documentChanged, { identityKey: KEY });
+      await flush(200);
+      expect(announceMock).not.toHaveBeenCalled();
+      expect(main.calls.filter((c) => c.channel === CHANNELS.read)).toHaveLength(1);
+
+      // Back to the very revision it was refused from: nothing about the
+      // revision says it moved, only that it fits again.
       main.oversized.delete(PROPS.filePath);
-      main.files.set(PROPS.filePath, "# Smaller\n");
       main.push(PUSH_CHANNELS.documentChanged, { identityKey: KEY });
       await flush(200);
       expect(controller.record()).toMatchObject({
         status: "ready",
         refusal: null,
-        base: { text: "# Smaller\n" },
+        base: { text: "# Plan\n" },
+      });
+      expect(announceMock).toHaveBeenCalledWith("File changed on disk, reloaded");
+    });
+
+    it("a held draft whose file is deleted and comes back still oversized is held again", async () => {
+      const controller = await open();
+      controller.setText("# Plan\n\nmine\n");
+      grow();
+      await flush(200);
+      main.oversized.delete(PROPS.filePath);
+      main.files.delete(PROPS.filePath);
+      main.push(PUSH_CHANNELS.documentChanged, { identityKey: KEY });
+      await flush(200);
+      expect(controller.record().status).toBe("unavailable");
+
+      main.files.set(PROPS.filePath, "huge");
+      grow();
+      await flush(200);
+      const record = controller.record();
+      expect(record.status).toBe("ready");
+      expect(record.conflict).toMatchObject({ tooLarge: true });
+      expect(record.draft?.text).toBe("# Plan\n\nmine\n");
+    });
+
+    it("a recovered draft on an older base stays a conflict when the file shrinks back to the disk base", async () => {
+      main.drafts.set(KEY, {
+        generation: 1,
+        record: {
+          stateVersion: 1,
+          identity: IDENTITY,
+          baseRevision: sha("old base"),
+          baseText: "old base",
+          draftText: "old base plus draft",
+          hasBom: false,
+          eol: "\n",
+          updatedAt: 1,
+        },
+      });
+      const controller = await open("# Plan v2\n");
+      expect(controller.record().conflict).toMatchObject({ tooLarge: false });
+      grow();
+      await flush(200);
+      expect(controller.record().conflict).toMatchObject({ tooLarge: true });
+
+      main.oversized.delete(PROPS.filePath);
+      main.push(PUSH_CHANNELS.documentChanged, { identityKey: KEY });
+      await flush(200);
+      // The draft was typed against "old base", not the disk's "# Plan v2":
+      // clearing the conflict here would let Save overwrite v2 with it.
+      expect(controller.record().conflict).toEqual({
+        tooLarge: false,
+        revision: sha("# Plan v2\n"),
+        text: "# Plan v2\n",
+        hasBom: false,
+        eol: "\n",
       });
     });
 
@@ -665,6 +727,19 @@ describe("DocumentController (#12323)", () => {
       expect(record.status).toBe("ready");
       expect(record.draft?.text).toBe("# Plan\n\nmine\n");
       expect(record.conflict).toMatchObject({ tooLarge: true });
+      expect(announceMock).toHaveBeenCalledWith("File on disk is now over 2 MiB, draft kept");
+      expect(announceMock).not.toHaveBeenCalledWith("File changed on disk, reloaded");
+    });
+
+    it("a clean reload that finds it too large says so, not that it reloaded", async () => {
+      const controller = await open();
+      main.files.set(PROPS.filePath, "# Plan\n\nagent\n");
+      main.overrides.set(CHANNELS.read, () => ({ status: "refused", reason: "TOO_LARGE" }));
+      main.push(PUSH_CHANNELS.documentChanged, { identityKey: KEY });
+      await flush(200);
+      expect(controller.record()).toMatchObject({ status: "refused", refusal: "TOO_LARGE" });
+      expect(announceMock).toHaveBeenCalledWith("File is now over 2 MiB and can't be edited here");
+      expect(announceMock).not.toHaveBeenCalledWith("File changed on disk, reloaded");
     });
   });
 

@@ -704,6 +704,18 @@ export class DocumentController {
 
   // ── External change detection ──────────────────────────────────────
 
+  /** What a reload ended as: it can find the file grown past the ceiling instead. */
+  private announceReload(before: DocumentRecord): void {
+    const after = this.record();
+    if (after.status === "refused" && after.refusal === "TOO_LARGE") {
+      if (before.status !== "refused") announceDiskTooLarge("refused");
+    } else if (after.conflict?.tooLarge) {
+      announceDiskTooLarge("held");
+    } else {
+      announce("File changed on disk, reloaded");
+    }
+  }
+
   private scheduleRevalidate(): void {
     if (this.disposed || this.revalidateTimer !== null) return;
     this.revalidateTimer = setTimeout(() => {
@@ -738,13 +750,17 @@ export class DocumentController {
     }
     if (result.status === "too-large") {
       // Already there: a file that keeps growing must not re-announce on every change.
-      if (current.status === "refused" || current.conflict?.tooLarge) return;
+      if (
+        current.status === "refused" ||
+        (current.status === "ready" && current.conflict?.tooLarge)
+      )
+        return;
       announceDiskTooLarge(settleDiskTooLarge(this.key));
       return;
     }
     if (current.status === "refused") {
       await this.load({ restoreDraft: current.draft === null });
-      announce("File changed on disk, reloaded");
+      this.announceReload(current);
       return;
     }
     if (!current.base) {
@@ -774,7 +790,7 @@ export class DocumentController {
     }
     if (current.draft === null) {
       await this.load({ restoreDraft: false });
-      announce("File changed on disk, reloaded");
+      this.announceReload(current);
       return;
     }
     const fresh = await this.read();
