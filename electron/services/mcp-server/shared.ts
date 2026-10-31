@@ -797,12 +797,13 @@ export const MCP_ASSISTANT_SERVER_INSTRUCTIONS =
  * identical second delete inside the TTL can name a genuinely different
  * worktree. A cached answer there reported success for a delete that never
  * ran and asked no confirmation (#15791). Concurrent identical deletes are not
- * singleflighted either: lookup runs before the ownership check, the process
- * guard and the confirmation, so a shared promise would answer the duplicate
- * with the first call's checks instead of its own, and a path carries no
- * instance identity to prove both still name the same worktree. Every delete
- * call runs its own checks and asks its own confirmation; the cost is an
- * honest error on a redundant one.
+ * singleflighted either: lookup runs right after admission and the native
+ * grant charge, so a shared promise hands the duplicate the first call's
+ * outcome, and for `worktree.deleteOwned` that skips the duplicate's own
+ * ownership check and process guard (#15729). Each delete call goes through
+ * its own checks and confirmation policy and returns its own result or
+ * refusal; a concurrent duplicate costs a second dialog, or a second dispatch
+ * when the call is pre-authorized.
  *
  * The forge writes that used to sit here left MCP with the core/full split, so
  * no replay of them can arrive.

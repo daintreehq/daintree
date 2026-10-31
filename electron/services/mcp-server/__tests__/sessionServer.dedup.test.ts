@@ -6,7 +6,7 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { createSessionServer } from "../sessionServer.js";
+import { createSessionServer, type SessionServerDeps } from "../sessionServer.js";
 import { SessionStore as RealSessionStore } from "../sessionStore.js";
 import {
   TIER_NOT_PERMITTED_CODE,
@@ -581,7 +581,7 @@ describe("worktree.delete redispatch (#15791)", () => {
   // a delete that never happened, with no confirmation asked.
   const deleteArgs = { worktreeId: "/repo-wt-feature-x" };
 
-  const serverWith = (sessionId: string, dispatchAction: ReturnType<typeof vi.fn>) => {
+  const serverWith = (sessionId: string, dispatchAction: SessionServerDeps["dispatchAction"]) => {
     const deps = fakeDeps({ sessionStore: fakeSessionStore("full"), dispatchAction });
     // The unscoped delete is on the assistant's surface only.
     deps.sessionStore.sessionOriginMap.set(sessionId, "help");
@@ -599,8 +599,8 @@ describe("worktree.delete redispatch (#15791)", () => {
     const second = await callTool(server, { name: "worktree.delete", arguments: deleteArgs });
 
     expect(dispatchAction).toHaveBeenCalledTimes(2);
-    expect(second).not.toEqual(first);
-    expect(JSON.stringify(second)).toContain("second");
+    // The same answer shape, carrying the second dispatch's payload.
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first).replace('"first', '"second'));
   });
 
   it("answers a repeat against a worktree that is already gone with the delete's own error", async () => {
@@ -619,11 +619,14 @@ describe("worktree.delete redispatch (#15791)", () => {
     const second = (await callTool(server, {
       name: "worktree.delete",
       arguments: deleteArgs,
-    })) as { isError?: boolean };
+    })) as { isError?: boolean; content: Array<{ text: string }> };
 
     expect(dispatchAction).toHaveBeenCalledTimes(2);
     expect(second.isError).toBe(true);
-    expect(JSON.stringify(second)).toContain("Worktree not found");
+    expect(JSON.parse(second.content[0]!.text)).toMatchObject({
+      code: "EXECUTION_ERROR",
+      message: "Worktree not found: /repo-wt-feature-x",
+    });
   });
 
   it("does not let a repeated requestKey suppress the second delete", async () => {
@@ -634,11 +637,11 @@ describe("worktree.delete redispatch (#15791)", () => {
     const server = serverWith("redispatch-15791-rk", dispatchAction);
 
     const args = { ...deleteArgs, requestKey: "rk-delete" };
-    await callTool(server, { name: "worktree.delete", arguments: args });
+    const first = await callTool(server, { name: "worktree.delete", arguments: args });
     const second = await callTool(server, { name: "worktree.delete", arguments: args });
 
     expect(dispatchAction).toHaveBeenCalledTimes(2);
-    expect(JSON.stringify(second)).toContain("second");
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first).replace('"first', '"second'));
   });
 
   it("dispatches concurrent identical deletes independently instead of sharing one", async () => {
@@ -666,13 +669,23 @@ describe("worktree.delete redispatch (#15791)", () => {
     resolvers[1]!({
       result: { ok: false, error: { code: "EXECUTION_ERROR", message: "already removed" } },
     });
-    const [resultA, resultB] = (await Promise.all([a, b])) as Array<{ isError?: boolean }>;
+    const [resultA, resultB] = (await Promise.all([a, b])) as Array<{
+      isError?: boolean;
+      content: Array<{ text: string }>;
+    }>;
 
     expect(dispatchAction).toHaveBeenCalledTimes(2);
+    // Neither dispatch borrows an approval: each is handed to the renderer
+    // unconfirmed, so each raises its own dialog.
+    expect(dispatchAction).toHaveBeenNthCalledWith(1, "worktree.delete", deleteArgs, false);
+    expect(dispatchAction).toHaveBeenNthCalledWith(2, "worktree.delete", deleteArgs, false);
     expect(resultA.isError).not.toBe(true);
-    expect(JSON.stringify(resultA)).toContain("first");
+    expect(resultA.content[0]!.text).toContain("first");
     expect(resultB.isError).toBe(true);
-    expect(JSON.stringify(resultB)).toContain("already removed");
+    expect(JSON.parse(resultB.content[0]!.text)).toMatchObject({
+      code: "EXECUTION_ERROR",
+      message: "already removed",
+    });
   });
 
   // Dropping the delete leaves the creation tools' replay untouched.
