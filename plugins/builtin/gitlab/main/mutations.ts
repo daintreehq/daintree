@@ -15,6 +15,7 @@ import type {
   RepoRef,
 } from "../../../../shared/types/forge.js";
 import type { GitLabIssue, GitLabMergeRequest, GitLabNote, GitLabUser } from "../shared/types.js";
+import { getTokenVersion } from "./GitLabAuth.js";
 import { GitLabApiError, gitlabRest } from "./GitLabClient.js";
 import { encodeProjectId, repoWebUrl } from "./gitlabRemote.js";
 import {
@@ -80,6 +81,67 @@ function currentAssigneeIds(issue: GitLabIssue): number[] {
   return issue.assignees.map((a) => a.id).filter((id): id is number => typeof id === "number");
 }
 
+/** Every assignee's id, or `null` when a row has none and the list can't be compared whole. */
+function completeAssigneeIds(issue: GitLabIssue): number[] | null {
+  if (!Array.isArray(issue.assignees)) return [];
+  const ids = currentAssigneeIds(issue);
+  return ids.length === issue.assignees.length ? ids : null;
+}
+
+function sameIdSet(a: readonly number[], b: readonly number[]): boolean {
+  const set = new Set(a);
+  return set.size === new Set(b).size && b.every((id) => set.has(id));
+}
+
+/**
+ * What an assignment displaced, by issue. GitLab Free keeps only the first of
+ * `assignee_ids`, so assigning there replaces the assignee instead of joining
+ * them, and an Undo that only removed the new assignee would leave the issue
+ * with nobody. Undo is offered for seconds, so only the latest few are kept.
+ */
+interface DisplacedAssignment {
+  userId: number;
+  /** Lowercased, so an unassign of someone else can be told apart even when they hold no row. */
+  username: string;
+  tokenVersion: number;
+  /** The list before the write: what Undo puts back. */
+  before: number[];
+  /** The list the write landed: what Undo must still find, or something else moved it since. */
+  after: number[];
+}
+
+const displacedAssignments = new Map<string, DisplacedAssignment>();
+const DISPLACED_ASSIGNMENTS_LIMIT = 50;
+
+function assignmentKey(repo: RepoRef, issueNumber: number): string {
+  return `${repo.host}\u0000${encodeProjectId(repo)}\u0000${issueNumber}`;
+}
+
+function rememberDisplacedAssignment(
+  key: string,
+  write: Omit<DisplacedAssignment, "after">,
+  landed: GitLabIssue
+): void {
+  // A credential (or its instance) changed mid-write: this response belongs to
+  // the old one, and must neither record nor erase the new one's history.
+  if (write.tokenVersion !== getTokenVersion()) return;
+  // Any write supersedes what an earlier one displaced.
+  displacedAssignments.delete(key);
+  const after = completeAssigneeIds(landed);
+  if (!after || !after.includes(write.userId)) return;
+  // Additive, as on multi-assignee tiers: removing the user alone is the inverse.
+  if (write.before.every((id) => after.includes(id))) return;
+  displacedAssignments.set(key, { ...write, after });
+  if (displacedAssignments.size > DISPLACED_ASSIGNMENTS_LIMIT) {
+    const oldest = displacedAssignments.keys().next().value;
+    if (oldest !== undefined) displacedAssignments.delete(oldest);
+  }
+}
+
+export function clearGitLabAssignmentHistory(): void {
+  displacedAssignments.clear();
+}
+
 export async function createIssueImpl(repo: RepoRef, input: CreateIssueInput): Promise<Issue> {
   const { data } = await gitlabRest<GitLabIssue>({
     host: repo.host,
@@ -100,6 +162,7 @@ export async function assignIssueImpl(
   issueNumber: number,
   username: string
 ): Promise<ForgeUser[]> {
+  const tokenVersion = getTokenVersion();
   const [userId, issue] = await Promise.all([
     resolveUserId(repo, username),
     fetchIssueRaw(repo, issueNumber),
@@ -120,6 +183,11 @@ export async function assignIssueImpl(
     body: { assignee_ids: [userId, ...ids] },
   });
   clearGitLabCaches();
+  rememberDisplacedAssignment(
+    assignmentKey(repo, issueNumber),
+    { userId, username: username.toLowerCase(), tokenVersion, before: ids },
+    data
+  );
   // The updated issue's own list, not the requested id: on GitLab Free the
   // extra ids are dropped, so only the response says what actually landed.
   return gitlabAssigneesToForgeUsers(data, repo.host);
@@ -132,22 +200,50 @@ export async function unassignIssueImpl(
 ): Promise<ForgeUser[]> {
   const issue = await fetchIssueRaw(repo, issueNumber);
   const assignees = Array.isArray(issue.assignees) ? issue.assignees : [];
-  const kept = assignees.filter((a) => (a.username ?? "").toLowerCase() !== username.toLowerCase());
+  const target = username.toLowerCase();
+  const kept = assignees.filter((a) => (a.username ?? "").toLowerCase() !== target);
+  const key = assignmentKey(repo, issueNumber);
+  const displaced = displacedAssignments.get(key);
   // Not assigned in the first place — nothing to write, and the current list
   // is already the resulting list. Measured on the username filter ALONE: an
   // assignee GitLab returned without a numeric id drops out of the id list
   // below, and comparing that against the full list would read as a removal
   // and write back an `assignee_ids` that silently unassigns them.
-  if (kept.length === assignees.length) return gitlabAssigneesToForgeUsers(issue, repo.host);
+  if (kept.length === assignees.length) {
+    // They lost the issue since: whoever they displaced is no longer ours to restore.
+    if (displaced?.username === target) displacedAssignments.delete(key);
+    return gitlabAssigneesToForgeUsers(issue, repo.host);
+  }
   const remaining = kept.map((a) => a.id).filter((id): id is number => typeof id === "number");
+  let assigneeIds = remaining;
+  // Matched on the id, not the login: a rename since the assignment is still the same person.
+  if (
+    displaced !== undefined &&
+    displaced.tokenVersion === getTokenVersion() &&
+    assignees.some((a) => a.id === displaced.userId && !kept.includes(a))
+  ) {
+    // The assignment that displaced someone is being undone. Put them back
+    // only if the issue is still exactly as that write left it: if anyone
+    // else changed it since, there is nothing of ours left to restore.
+    const current = completeAssigneeIds(issue);
+    if (!current || !sameIdSet(current, displaced.after)) {
+      displacedAssignments.delete(key);
+      return gitlabAssigneesToForgeUsers(issue, repo.host);
+    }
+    assigneeIds = [...new Set([...displaced.before, ...remaining])];
+  }
   const { data } = await gitlabRest<GitLabIssue>({
     host: repo.host,
     method: "PUT",
     path: `${projectPath(repo)}/issues/${issueNumber}`,
     // `[0]` is GitLab's documented "unassign everyone" sentinel.
-    body: { assignee_ids: remaining.length > 0 ? remaining : [0] },
+    body: { assignee_ids: assigneeIds.length > 0 ? assigneeIds : [0] },
   });
   clearGitLabCaches();
+  // This write supersedes what the earlier assignment displaced. Only once it
+  // landed, so a failed Undo can be retried, and only the record read above,
+  // so an assignment that landed meanwhile keeps its own.
+  if (displacedAssignments.get(key) === displaced) displacedAssignments.delete(key);
   return gitlabAssigneesToForgeUsers(data, repo.host);
 }
 

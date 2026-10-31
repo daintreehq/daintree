@@ -189,9 +189,12 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       category: "forge",
       kind: "command",
       // Deliberately unattended at system tier (#12118): assigning is an
-      // idempotent state-set whose exact inverse is `forge.unassignIssue`. It
-      // authors no content and creates no new record, which is also why it was
-      // dropped from MCP_DEDUP_ALLOWLIST (#11534) — a repeat call is a no-op.
+      // idempotent state-set that `forge.unassignIssue` reverses. Where an
+      // issue holds one assignee (Linear, GitLab Free) assigning replaces the
+      // holder, so those providers remember who was displaced and the unassign
+      // hands the issue back. It authors no content and creates no new record,
+      // which is also why it was dropped from MCP_DEDUP_ALLOWLIST (#11534) — a
+      // repeat call is a no-op.
       danger: "safe",
       scope: "renderer",
       argsSchema: assignIssueArgsSchema,
@@ -210,7 +213,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       category: "forge",
       kind: "command",
       // Deliberately unattended at system tier (#12118), on the same reasoning
-      // as `forge.assignIssue`: idempotent, exactly reversible, authors nothing.
+      // as `forge.assignIssue`: idempotent, reverses it, authors nothing.
       danger: "safe",
       scope: "renderer",
       argsSchema: unassignIssueArgsSchema,
