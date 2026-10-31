@@ -1,5 +1,7 @@
 # Release & Code Signing
 
+The workflow files and the one-time repository setup (R2 bucket and secrets) are mapped in [`.github/workflows/README.md`](../.github/workflows/README.md).
+
 ## Overview
 
 Releases are built by **three per-OS workflows** — `.github/workflows/release-macos.yml`, `release-linux.yml`, and `release-windows.yml` (#8052) — each triggered independently by the same `v*` tag (or manual `workflow_dispatch`). Each workflow runs a full vertical slice for its OS (checks → unit tests → e2e → build → R2 upload → website notify) and publishes to Cloudflare R2 the moment its own pipeline is green. A failure or hang in one OS only delays that OS; the other two ship unaffected, and re-running a failed OS is a single-workflow re-trigger. macOS builds universal, Windows x64+arm64, Linux x64+arm64 (native runners, separate `latest-linux.yml` / `latest-linux-arm64.yml` feeds).
@@ -79,7 +81,7 @@ Notarization is enabled. All CI builds are signed and submitted to Apple's notar
 
 ### Key technical details
 
-- electron-builder 26.8.1. Notarization is **not** driven by electron-builder's built-in `@electron/notarize` integration (that package is only a transitive dep now). Instead a custom `afterSign` hook runs — `scripts/notarize-macos.cjs`, wired via the `afterSign` key in `electron-builder.config.cjs`.
+- Notarization is **not** driven by electron-builder's built-in `@electron/notarize` integration (that package is only a transitive dep now). Instead a custom `afterSign` hook runs — `scripts/notarize-macos.cjs`, wired via the `afterSign` key in `electron-builder.config.cjs`.
 - `mac.notarize` is set to `false` in `electron-builder.config.cjs`; the custom `afterSign` hook performs notarization itself, so the built-in path is intentionally disabled.
 - `APPLE_API_KEY` env var = **file path** to .p8 (not content, not Key ID)
 - `APPLE_API_KEY_ID` = 10-character Key ID
