@@ -237,6 +237,7 @@ export class ProjectSettingsManager {
       (this.writeGenerations.get(projectId) ?? 0) !== generation;
     if (!overlappedWrite) {
       this.notificationOverridesCache.set(projectId, settings.notificationOverrides);
+      this.noSettingsFileAt.delete(projectId);
       this.settingsCache.set(projectId, settings);
     }
 
@@ -603,6 +604,7 @@ export class ProjectSettingsManager {
     // Published only once the write lands, so a failed save leaves the last
     // saved overrides in effect.
     this.notificationOverridesCache.set(projectId, runtimeSettings.notificationOverrides);
+    this.noSettingsFileAt.delete(projectId);
 
     // Invalidate after durable write succeeds. Dynamic import avoids
     // expanding the static module graph for tests that mock ProjectStore.
