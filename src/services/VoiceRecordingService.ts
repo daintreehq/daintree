@@ -4446,8 +4446,8 @@ class VoiceRecordingService {
   /**
    * The dictation sessions a send from this draft takes, read as it starts:
    * every one with words in the draft or cleanup on its way, and the one
-   * dictating into it. A session that starts after this is the next prompt's
-   * (#14804).
+   * dictating into it. A session that starts here while the send waits
+   * reopens it (#15703); one after it was handed over is the next prompt's.
    */
   sendSessions(panelId: string, projectId: string | undefined): ReadonlySet<string> {
     const sessions = new Set<string>();
