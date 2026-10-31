@@ -53,6 +53,7 @@ interface PluginBridge {
 
 interface AppBridge {
   isViewCached: () => boolean;
+  onViewCached: (cb: () => void) => () => void;
   onViewCachedFlush: (cb: () => unknown) => () => void;
   onPanelGridConfigChanged: (cb: (payload: unknown) => void) => () => void;
 }
@@ -460,26 +461,28 @@ describe("preload event subscriptions", () => {
       expect(fakeGc).not.toHaveBeenCalled();
     });
 
-    it("flushes and answers main even when scheduling the reclaim throws", async () => {
+    it("flushes, answers main and reaches the view's cached listeners even when scheduling the reclaim throws", async () => {
       ipcRenderer.send.mockClear();
       const flush = vi.fn();
       const offFlush = app.onViewCachedFlush(flush);
+      const onCached = vi.fn();
+      const offCached = app.onViewCached(onCached);
       const globals = globalThis as Record<string, unknown>;
       const schedule = globals.requestIdleCallback;
       globals.requestIdleCallback = () => {
         throw new Error("renderer tearing down");
       };
       try {
-        expect(() => ipcRenderer.emit("app:view-cached", {}, { flushId: "reclaim-threw" })).toThrow(
-          "renderer tearing down"
-        );
+        ipcRenderer.emit("app:view-cached", {}, { flushId: "reclaim-threw" });
         expect(flush).toHaveBeenCalledTimes(1);
+        expect(onCached).toHaveBeenCalledTimes(1);
         await vi.waitFor(() =>
           expect(ipcRenderer.send).toHaveBeenCalledWith("app:view-cached-flushed", "reclaim-threw")
         );
       } finally {
         globals.requestIdleCallback = schedule;
         offFlush();
+        offCached();
       }
     });
 

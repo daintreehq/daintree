@@ -773,8 +773,13 @@ ipcRenderer.on(CHANNELS.APP_VIEW_CACHED, (_event, payload?: { flushId?: unknown 
   void Promise.allSettled(flushes).then(() => {
     if (typeof flushId === "string") ipcRenderer.send(CHANNELS.APP_VIEW_CACHED_FLUSHED, flushId);
   });
-  // Last, so nothing in it can keep the edits from flushing or main from hearing back.
-  scheduleCachedViewReclaim();
+  // Best-effort and last: it must never keep the edits from flushing, main from
+  // hearing back, or the view's own cached-edge listeners from running.
+  try {
+    scheduleCachedViewReclaim();
+  } catch {
+    // A renderer mid-teardown has nothing worth reclaiming.
+  }
 });
 // Warm activation — not reveal — owns the clear: main only sends
 // APP_VIEW_REVEALED while the view is still the active project, so a superseded
