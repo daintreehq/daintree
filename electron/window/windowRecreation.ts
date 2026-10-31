@@ -72,7 +72,7 @@ export interface WindowRecreation {
 
 export function createWindowRecreation(deps: WindowRecreationDeps): WindowRecreation {
   let prepared = false;
-  const oomHistory = [...(deps.oomHistory ?? [])];
+  let oomHistory: readonly number[] = deps.oomHistory ?? [];
   return {
     isRecreating: () => prepared,
     prepare: () => {
@@ -81,14 +81,11 @@ export function createWindowRecreation(deps: WindowRecreationDeps): WindowRecrea
       // and it spends one recreation.
       if (prepared) return () => Promise.resolve();
 
-      const now = Date.now();
-      while (oomHistory.length > 0 && now - oomHistory[0]! > OOM_LOOP_WINDOW_MS) {
-        oomHistory.shift();
-      }
       // A refused attempt counts too, so OOMs that keep coming keep the window
-      // on the recovery page. Only the latest few can decide the next one.
-      oomHistory.push(now);
-      if (oomHistory.length > OOM_LOOP_THRESHOLD) oomHistory.shift();
+      // on the recovery page. An entry in the future means the clock was set
+      // back, and says nothing about the last minute.
+      const now = Date.now();
+      oomHistory = [...oomHistory.filter((at) => at <= now && now - at <= OOM_LOOP_WINDOW_MS), now];
       if (oomHistory.length >= OOM_LOOP_THRESHOLD) return null;
       prepared = true;
 
@@ -111,7 +108,7 @@ export function createWindowRecreation(deps: WindowRecreationDeps): WindowRecrea
           await deps.createWindow(projectId, {
             ...options,
             revealMode,
-            oomHistory: [...oomHistory],
+            oomHistory,
             onRegistered: (id) => {
               replacementId = id;
               setPendingWindowRecreation(id, record);

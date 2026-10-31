@@ -81,6 +81,8 @@ interface WiredWindow {
   appViewGone: (reason: string) => void;
   /** The window's project view renderer dies. */
   projectViewGone: (reason: string) => void;
+  /** The window its OOM rebuild opened, once there is one. */
+  replacement?: WiredWindow;
 }
 
 /**
@@ -150,7 +152,14 @@ function createFleet() {
       windowRegistry: registry,
       getWindowId: () => windowId,
       oomHistory: init.oomHistory,
-      createWindow,
+      createWindow: (projectId, opts) =>
+        createWindow(projectId, {
+          ...opts,
+          onRegistered: (id) => {
+            wired.replacement = windows.find((win) => win.windowId === id);
+            opts.onRegistered(id);
+          },
+        }),
     });
 
     attachAppViewRendererGoneHandler({
@@ -191,9 +200,7 @@ function createFleet() {
     return wired;
   }
 
-  const live = () => windows.filter((win) => !win.destroyed);
-
-  return { open, live, createWindow };
+  return { open, createWindow };
 }
 
 function isRecoveryLoad(webContents: ReturnType<typeof fakeWebContents>): boolean {
@@ -226,94 +233,82 @@ describe("OOM recreation budget across replacement windows (#15647)", () => {
     vi.restoreAllMocks();
   });
 
+  /** One OOM in the startup view, run to completion; returns the window it leaves standing. */
+  async function appViewOom(win: WiredWindow): Promise<WiredWindow> {
+    win.appViewGone("oom");
+    await vi.runAllTimersAsync();
+    return win.destroyed ? win.replacement! : win;
+  }
+
+  async function projectViewOom(win: WiredWindow): Promise<WiredWindow> {
+    win.projectViewGone("oom");
+    await vi.runAllTimersAsync();
+    return win.destroyed ? win.replacement! : win;
+  }
+
   it("shows the recovery page on the third OOM within a minute, and recreates an isolated OOM after", async () => {
     const first = fleet.open();
 
-    first.appViewGone("oom");
-    await vi.runAllTimersAsync();
-    const [second] = fleet.live();
-    expect(first.destroyed).toBe(true);
-    expect(second).toBeDefined();
-
+    const second = await appViewOom(first);
+    expect(second).not.toBe(first);
     await vi.advanceTimersByTimeAsync(20_000);
-    second!.appViewGone("oom");
-    await vi.runAllTimersAsync();
-    const [third] = fleet.live();
-    expect(second!.destroyed).toBe(true);
-    expect(third).toBeDefined();
-
+    const third = await appViewOom(second);
+    expect(third).not.toBe(second);
     await vi.advanceTimersByTimeAsync(20_000);
-    third!.appViewGone("oom");
-    await vi.runAllTimersAsync();
 
-    expect(third!.destroyed).toBe(false);
+    expect(await appViewOom(third)).toBe(third);
+    expect(third.destroyed).toBe(false);
     expect(fleet.createWindow).toHaveBeenCalledTimes(2);
-    expect(third!.appWebContents.loadURL).toHaveBeenCalledWith(
+    expect(third.appWebContents.loadURL).toHaveBeenCalledWith(
       "app://daintree/recovery.html?reason=oom"
     );
     expect(isWindowRecreating()).toBe(false);
 
     // Long after the last one, an OOM is an isolated event again.
     await vi.advanceTimersByTimeAsync(60_001);
-    third!.appViewGone("oom");
-    await vi.runAllTimersAsync();
+    const fourth = await appViewOom(third);
 
-    expect(third!.destroyed).toBe(true);
+    expect(third.destroyed).toBe(true);
+    expect(fourth).not.toBe(third);
     expect(fleet.createWindow).toHaveBeenCalledTimes(3);
-    expect(fleet.live()).toHaveLength(1);
   });
 
   it("counts startup-view and project-view OOMs against the same window", async () => {
-    const first = fleet.open();
+    const second = await appViewOom(fleet.open());
+    const third = await projectViewOom(second);
+    expect(second.destroyed).toBe(true);
 
-    first.appViewGone("oom");
-    await vi.runAllTimersAsync();
-    const [second] = fleet.live();
-
-    second!.projectViewGone("oom");
-    await vi.runAllTimersAsync();
-    const [third] = fleet.live();
-    expect(second!.destroyed).toBe(true);
-
-    third!.projectViewGone("oom");
-    await vi.runAllTimersAsync();
-
-    expect(third!.destroyed).toBe(false);
+    expect(await projectViewOom(third)).toBe(third);
     expect(fleet.createWindow).toHaveBeenCalledTimes(2);
-    expect(third!.projectWebContents.loadURL).toHaveBeenCalledWith(
+    expect(third.projectWebContents.loadURL).toHaveBeenCalledWith(
       expect.stringMatching(/\/recovery\.html\?reason=oom&exitCode=1&project=proj-b$/)
     );
-    expect(third!.projectWebContents.reload).not.toHaveBeenCalled();
+    expect(third.projectWebContents.reload).not.toHaveBeenCalled();
   });
 
-  it("keeps one window's OOMs off another window's budget", async () => {
-    const chain = fleet.open();
-    const other = fleet.open();
+  it("keeps one window's OOMs off another window's budget, both ways round", async () => {
+    let chain = fleet.open();
+    let other = fleet.open();
 
-    chain.appViewGone("oom");
-    await vi.runAllTimersAsync();
-    const chainSecond = fleet.live().find((win) => win !== other)!;
-    chainSecond.appViewGone("oom");
-    await vi.runAllTimersAsync();
+    chain = await appViewOom(chain);
+    // One OOM down the chain: two on the other window still recreate it.
+    other = await appViewOom(other);
+    const otherBefore = other;
+    other = await appViewOom(other);
+    expect(otherBefore.destroyed).toBe(true);
 
-    // Two OOMs down the chain, none on this window: it recreates normally.
-    other.appViewGone("oom");
-    await vi.runAllTimersAsync();
-    expect(other.destroyed).toBe(true);
-    expect(isRecoveryLoad(other.appWebContents)).toBe(false);
-    expect(fleet.createWindow).toHaveBeenCalledTimes(3);
+    // And neither of those spent the chain's second recreation.
+    const chainBefore = chain;
+    chain = await appViewOom(chain);
+    expect(chainBefore.destroyed).toBe(true);
+    expect(isRecoveryLoad(chainBefore.appWebContents)).toBe(false);
+    expect(fleet.createWindow).toHaveBeenCalledTimes(4);
 
-    // And its OOM did not spend the chain's last recreation either way round:
-    // the chain's third OOM is still its third.
-    const [chainThird, otherSecond] = fleet.live();
-    otherSecond!.appViewGone("oom");
-    await vi.runAllTimersAsync();
-    expect(otherSecond!.destroyed).toBe(true);
-
-    chainThird!.appViewGone("oom");
-    await vi.runAllTimersAsync();
-    expect(chainThird!.destroyed).toBe(false);
-    expect(isRecoveryLoad(chainThird!.appWebContents)).toBe(true);
+    // Each is now on its own third.
+    expect(await appViewOom(other)).toBe(other);
+    expect(isRecoveryLoad(other.appWebContents)).toBe(true);
+    expect(await appViewOom(chain)).toBe(chain);
+    expect(isRecoveryLoad(chain.appWebContents)).toBe(true);
   });
 
   it("spends one recreation when two views die under the same pressure", async () => {
@@ -324,98 +319,78 @@ describe("OOM recreation budget across replacement windows (#15647)", () => {
     await vi.runAllTimersAsync();
     expect(fleet.createWindow).toHaveBeenCalledTimes(1);
 
-    const [second] = fleet.live();
-    second!.projectViewGone("oom");
-    await vi.runAllTimersAsync();
+    const second = first.replacement!;
+    const third = await projectViewOom(second);
 
-    expect(second!.destroyed).toBe(true);
-    expect(isRecoveryLoad(second!.projectWebContents)).toBe(false);
+    expect(third).not.toBe(second);
+    expect(isRecoveryLoad(second.projectWebContents)).toBe(false);
     expect(fleet.createWindow).toHaveBeenCalledTimes(2);
   });
 
   it("never spends the budget on an OS memory eviction", async () => {
-    const first = fleet.open();
+    const second = await appViewOom(fleet.open());
 
-    first.appViewGone("oom");
+    second.appViewGone("memory-eviction");
+    second.projectViewGone("memory-eviction");
     await vi.runAllTimersAsync();
-    const [second] = fleet.live();
+    expect(second.destroyed).toBe(false);
 
-    second!.appViewGone("memory-eviction");
-    second!.projectViewGone("memory-eviction");
-    await vi.runAllTimersAsync();
-    expect(second!.destroyed).toBe(false);
+    const third = await projectViewOom(second);
 
-    second!.projectViewGone("oom");
-    await vi.runAllTimersAsync();
-
-    expect(second!.destroyed).toBe(true);
+    expect(third).not.toBe(second);
     expect(fleet.createWindow).toHaveBeenCalledTimes(2);
   });
-  it("still counts an OOM exactly a minute old", async () => {
-    const first = fleet.open();
 
-    first.appViewGone("oom");
-    await vi.runAllTimersAsync();
-    const [second] = fleet.live();
-    second!.appViewGone("oom");
-    await vi.runAllTimersAsync();
-    const [third] = fleet.live();
+  it("still counts an OOM exactly a minute old", async () => {
+    const second = await appViewOom(fleet.open());
+    const third = await appViewOom(second);
 
     await vi.advanceTimersByTimeAsync(60_000);
-    third!.appViewGone("oom");
-    await vi.runAllTimersAsync();
 
-    expect(third!.destroyed).toBe(false);
-    expect(isRecoveryLoad(third!.appWebContents)).toBe(true);
+    expect(await appViewOom(third)).toBe(third);
+    expect(isRecoveryLoad(third.appWebContents)).toBe(true);
   });
 
   it("keeps the window on the recovery page while OOMs keep coming", async () => {
-    const first = fleet.open();
-
-    first.appViewGone("oom");
-    await vi.runAllTimersAsync();
+    const second = await appViewOom(fleet.open());
     await vi.advanceTimersByTimeAsync(1_000);
-    const [second] = fleet.live();
-    second!.appViewGone("oom");
-    await vi.runAllTimersAsync();
+    const third = await appViewOom(second);
     await vi.advanceTimersByTimeAsync(1_000);
-    const [third] = fleet.live();
-    third!.appViewGone("oom");
-    await vi.runAllTimersAsync();
-    expect(third!.destroyed).toBe(false);
+    expect(await appViewOom(third)).toBe(third);
 
     // Both recreations are more than a minute old by the last OOM, but the
     // refused ones since are not: the window stays where it is.
     await vi.advanceTimersByTimeAsync(48_000);
-    third!.projectViewGone("oom");
-    await vi.runAllTimersAsync();
+    expect(await projectViewOom(third)).toBe(third);
     await vi.advanceTimersByTimeAsync(11_500);
-    third!.appViewGone("oom");
-    await vi.runAllTimersAsync();
+    expect(await appViewOom(third)).toBe(third);
 
-    expect(third!.destroyed).toBe(false);
     expect(fleet.createWindow).toHaveBeenCalledTimes(2);
-    expect(third!.appWebContents.loadURL).toHaveBeenCalledTimes(2);
+    expect(third.appWebContents.loadURL).toHaveBeenCalledTimes(2);
   });
 
   it("rebuilds nothing when two views die on a spent budget", async () => {
-    const first = fleet.open();
+    const third = await appViewOom(await appViewOom(fleet.open()));
 
-    first.appViewGone("oom");
-    await vi.runAllTimersAsync();
-    const [second] = fleet.live();
-    second!.appViewGone("oom");
-    await vi.runAllTimersAsync();
-    const [third] = fleet.live();
-
-    third!.appViewGone("oom");
-    third!.projectViewGone("oom");
+    third.appViewGone("oom");
+    third.projectViewGone("oom");
     await vi.runAllTimersAsync();
 
-    expect(third!.destroyed).toBe(false);
+    expect(third.destroyed).toBe(false);
     expect(fleet.createWindow).toHaveBeenCalledTimes(2);
-    expect(isRecoveryLoad(third!.appWebContents)).toBe(true);
-    expect(isRecoveryLoad(third!.projectWebContents)).toBe(true);
+    expect(isRecoveryLoad(third.appWebContents)).toBe(true);
+    expect(isRecoveryLoad(third.projectWebContents)).toBe(true);
     expect(isWindowRecreating()).toBe(false);
+  });
+
+  it("lets go of OOMs recorded before the clock was set back", async () => {
+    const third = await appViewOom(await appViewOom(fleet.open()));
+
+    vi.setSystemTime(Date.now() - 3_600_000);
+    const fourth = await appViewOom(third);
+
+    expect(fourth).not.toBe(third);
+    expect(isRecoveryLoad(third.appWebContents)).toBe(false);
+    expect(fleet.createWindow).toHaveBeenCalledTimes(3);
   });
 });
