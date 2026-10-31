@@ -4,7 +4,10 @@ import type { WorkerToHostMessage } from "../analysisWorkerProtocol.js";
 
 const sessions: AnalysisSession[] = [];
 
-function makeSession(messages: WorkerToHostMessage[]): AnalysisSession {
+function makeSession(
+  messages: WorkerToHostMessage[],
+  bracketedPasteMode?: boolean
+): AnalysisSession {
   const session = new AnalysisSession(
     {
       terminalId: "modes",
@@ -14,6 +17,7 @@ function makeSession(messages: WorkerToHostMessage[]): AnalysisSession {
       restore: false,
       spawnedAt: 1,
       epoch: 1,
+      bracketedPasteMode,
     },
     (message) => messages.push(message)
   );
@@ -43,6 +47,14 @@ describe("AnalysisSession input modes (#15629)", () => {
     session.feedChunk("\x1b[?2004l$ ", { agentLive: false });
     await vi.waitFor(() => expect(lastViewport(messages)).toBeDefined());
     expect(lastViewport(messages)).toMatchObject({ bracketedPasteMode: false });
+  });
+
+  it("starts a rebuilt mirror from the mode its predecessor carried", async () => {
+    const messages: WorkerToHostMessage[] = [];
+    makeSession(messages, true);
+
+    await vi.waitFor(() => expect(lastViewport(messages)).toBeDefined());
+    expect(lastViewport(messages)).toMatchObject({ bracketedPasteMode: true });
   });
 
   it("reports each flip at once instead of folding them into one throttled digest", async () => {

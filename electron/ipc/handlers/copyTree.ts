@@ -431,7 +431,8 @@ const PASTE_READY_POLL_MS = 250;
  * an agent still starting, or one that hasn't turned bracketed paste on yet.
  */
 export function judgePasteDestination(
-  info: TerminalInfoPayload | null
+  info: TerminalInfoPayload | null,
+  platform: NodeJS.Platform = process.platform
 ): { reason: string; transient: boolean } | null {
   if (!info?.hasPty) return { reason: "Terminal no longer exists", transient: false };
   // The host recognises only built-in agents in the process tree. For one a
@@ -439,9 +440,13 @@ export function judgePasteDestination(
   // shell it runs in is the evidence there is.
   const contributedAgent =
     info.launchAgentId !== undefined && !isBuiltInAgentId(info.launchAgentId);
+  // node-pty on Windows answers with the terminal name it was spawned with
+  // (`xterm-256color`), not a process, so there is no foreground to go on.
+  const foreground = platform === "win32" ? undefined : info.ptyForegroundProcess;
   if (
+    info.detectedAgentId === undefined &&
     contributedAgent &&
-    (info.ptyForegroundProcess === undefined || isPlainShellName(info.ptyForegroundProcess))
+    (foreground === undefined || isPlainShellName(foreground))
   ) {
     return { reason: SHELL_REFUSAL, transient: true };
   }

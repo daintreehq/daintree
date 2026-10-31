@@ -90,6 +90,7 @@ vi.mock("../../../window/windowRef.js", () => ({
 }));
 
 import type { CopyTreeHistoryAppendInput } from "../../../../shared/types/ipc/copyTreeHistory.js";
+import type { TerminalInfoPayload } from "../../../../shared/types/ipc/terminal.js";
 import { CHANNELS } from "../../channels.js";
 import {
   OperationRegistry,
@@ -112,6 +113,7 @@ import {
   buildRemoteComputeBlock,
   escapeXml,
   nextChunkBoundary,
+  judgePasteDestination,
 } from "../copyTree.js";
 
 function getInvokeHandler(channel: string): (...args: unknown[]) => Promise<unknown> {
@@ -2347,6 +2349,20 @@ describe("context injection paste boundary (#15629)", () => {
     expect(result).not.toHaveProperty("error");
     expect(ptyClient.getTerminalInfo).toHaveBeenCalledTimes(3);
     expect(writes.join("")).toBe(`${PASTE_START}<files/>\n${PASTE_END}`);
+  });
+
+  it("has no foreground process to trust for a plugin agent on Windows", () => {
+    // node-pty reports the terminal name there, which no shell check would catch.
+    const info = {
+      hasPty: true,
+      launchAgentId: "acme-agent",
+      ptyForegroundProcess: "xterm-256color",
+      bracketedPasteMode: true,
+    } as TerminalInfoPayload;
+
+    expect(judgePasteDestination(info, "win32")).toMatchObject({ reason: expect.any(String) });
+    expect(judgePasteDestination(info, "darwin")).toBeNull();
+    expect(judgePasteDestination({ ...info, detectedAgentId: "claude" }, "win32")).toBeNull();
   });
 
   it("takes a plugin-contributed agent on its launch, which the host can't detect", async () => {

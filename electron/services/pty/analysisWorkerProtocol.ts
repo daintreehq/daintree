@@ -21,6 +21,12 @@ export interface AnalysisCreateSpec {
    * host can discard acks from a superseded generation.
    */
   epoch: number;
+  /**
+   * Bracketed paste as the mirror this one replaces last saw it. A program
+   * turns it on once and never says so again, so a rebuilt mirror starts
+   * from it rather than from xterm's default.
+   */
+  bracketedPasteMode?: boolean;
 }
 
 export interface AnalysisMonitorStartSpec {

@@ -148,6 +148,7 @@ export class AnalysisSession {
         this.scheduleDigest();
       }
     }
+    if (spec.bracketedPasteMode) this.feedPrelude("\x1b[?2004h");
   }
 
   feedChunk(

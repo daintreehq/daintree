@@ -232,8 +232,7 @@ describe("AnalysisWorkerPool", () => {
       await vi.advanceTimersByTimeAsync(600);
       const replacement = workers[1];
 
-      const preludes = replacement.messagesOfType("prelude").map((m) => m.data);
-      expect(preludes.includes("\x1b[?2004h")).toBe(mode);
+      expect(replacement.messagesOfType("create")[0]).toMatchObject({ bracketedPasteMode: mode });
       expect(backend.isBracketedPasteMode()).toBe(mode);
     }
   );
@@ -268,59 +267,13 @@ describe("AnalysisWorkerPool", () => {
     dropNextCreate = true;
     local[0].emit("exit", 1);
     await vi.advanceTimersByTimeAsync(600);
-    expect(local[1].messagesOfType("prelude")).toHaveLength(0);
+    expect(local[1].messagesOfType("create")).toHaveLength(0);
     expect(backend.isBracketedPasteMode()).toBe(false);
 
     // The re-assert finds no session and rebuilds; this create lands.
     backend.resyncGeometry(80, 24);
 
-    expect(local[1].messagesOfType("prelude").map((m) => m.data)).toContain("\x1b[?2004h");
-    expect(backend.isBracketedPasteMode()).toBe(true);
-    localPool.dispose();
-  });
-
-  it("keeps the bracketed-paste seed for the next rebuild when the prelude is dropped", async () => {
-    vi.useFakeTimers();
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    let dropNextPrelude = false;
-    const local: FakeWorker[] = [];
-    const localPool = new AnalysisWorkerPool(2, () => {
-      const worker = new FakeWorker();
-      const post = worker.postMessage.bind(worker);
-      worker.postMessage = (msg: unknown) => {
-        if (dropNextPrelude && (msg as HostToWorkerMessage).type === "prelude") {
-          dropNextPrelude = false;
-          throw new Error("dropped");
-        }
-        post(msg);
-      };
-      local.push(worker);
-      return worker;
-    });
-    const backend = localPool.createBackend(makeSpec("t1"), makeDelegate())!;
-    localPool.createBackend(makeSpec("t2"), makeDelegate());
-    local[0].emit("message", {
-      type: "viewport",
-      terminalId: "t1",
-      lines: [],
-      cursorLine: null,
-      bracketedPasteMode: true,
-    });
-
-    dropNextPrelude = true;
-    local[0].emit("exit", 1);
-    await vi.advanceTimersByTimeAsync(600);
-    expect(backend.isBracketedPasteMode()).toBe(false);
-
-    // A second crash of the slot moves t1 to the surviving worker.
-    local[2].emit("exit", 1);
-    await vi.advanceTimersByTimeAsync(2000);
-
-    const preludes = local[1]
-      .messagesOfType("prelude")
-      .filter((m) => m.terminalId === "t1")
-      .map((m) => m.data);
-    expect(preludes).toContain("\x1b[?2004h");
+    expect(local[1].messagesOfType("create")[0]).toMatchObject({ bracketedPasteMode: true });
     expect(backend.isBracketedPasteMode()).toBe(true);
     localPool.dispose();
   });

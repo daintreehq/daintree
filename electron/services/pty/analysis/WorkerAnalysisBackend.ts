@@ -120,7 +120,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
   private viewportLines: string[] = [];
   private cursorLine: string | null = null;
   private bracketedPasteMode = false;
-  // A rebuild whose `create` or prelude was dropped still owes the next session the mode.
+  // A rebuild whose `create` was dropped still owes the next session the mode.
   private bracketedPasteSeedPending = false;
   private monitorSpec: MonitorStartOptions | null = null;
   private pollingIntervalMs: number | undefined;
@@ -616,6 +616,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
       restore: false,
       spawnedAt: this.spec.spawnedAt,
       epoch: this.feedEpoch,
+      bracketedPasteMode: carriesBracketedPaste,
     });
     // The create carries the geometry, so landing it converges the mirror and
     // dropping it leaves no session at all — the two failure states this slot
@@ -623,16 +624,11 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     this.geometryPostFailed = !created;
     this.sessionCreatePending = !created;
     // The program set bracketed paste once and won't say so again; without
-    // this the fresh mirror would report it off for as long as the program
-    // runs, and context injection would refuse a perfectly good agent.
-    if (created && carriesBracketedPaste) {
-      this.bracketedPasteMode = this.pool.post(this.spec.terminalId, {
-        type: "prelude",
-        terminalId: this.spec.terminalId,
-        data: "\x1b[?2004h",
-      });
-    }
-    this.bracketedPasteSeedPending = carriesBracketedPaste && !this.bracketedPasteMode;
+    // the carry the fresh mirror would report it off for as long as the
+    // program runs, and context injection would refuse a perfectly good agent.
+    // Riding on `create` makes it land with the session or not at all.
+    this.bracketedPasteMode = carriesBracketedPaste && created;
+    this.bracketedPasteSeedPending = carriesBracketedPaste && !created;
     if (this.monitorSpec) {
       this.postAgentContext();
       // Preserve-state semantics (mirrors the in-thread preserveState path):
