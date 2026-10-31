@@ -14,12 +14,13 @@ interface RiskyCommand {
 }
 
 /**
- * One option value: plain characters and quoted parts (`/repo`, `"/My Repo"`,
- * `core.x="y z"`), never opening with a dash. Each step takes one plain
- * character or one whole quoted part, so a value can only be read one way and
- * a long row of options can't backtrack.
+ * One option value: plain characters, escapes and quoted parts (`/repo`,
+ * `/My\ Repo`, `"/My Repo"`, `core.x="y z"`), never opening with a dash. Each
+ * step takes one plain character, one escape or one whole quoted part, each
+ * with its own first character, so a value can only be read one way and a
+ * long row of options can't backtrack.
  */
-const VALUE = String.raw`(?=[^\s-])(?:[^\s"']|"[^"]*"|'[^']*')+`;
+const VALUE = String.raw`(?=[^\s-])(?:\\[^\n]|[^\s"'\\]|"(?:\\[^\n]|[^"\\])*"|'[^']*')+`;
 
 /**
  * `git` and the global options that can sit before its subcommand, so an agent
@@ -28,8 +29,8 @@ const VALUE = String.raw`(?=[^\s-])(?:[^\s"']|"[^"]*"|'[^']*')+`;
  */
 const GIT = String.raw`\bgit(?:\s+(?:-[Cc]\s+${VALUE}|--(?:git-dir|work-tree|namespace)(?:=|\s+)${VALUE}|--(?:no-pager|paginate|no-optional-locks)|-[pP])(?=\s))*\s+`;
 
-/** The rest of the command, up to the next pipe, `;`, `&` or line end. */
-const ARGS = String.raw`[^|;&\n]*`;
+/** The rest of the command, up to the next pipe, `;`, `&`, backtick or line end. */
+const ARGS = String.raw`[^|;&\n\x60]*`;
 
 function git(subcommand: string, flags = "i"): RegExp {
   return new RegExp(GIT + subcommand, flags);
@@ -41,16 +42,18 @@ const RISKY: readonly RiskyCommand[] = [
     reason: "Deletes files for good",
   },
   {
-    // PowerShell's -Recurse or -Force (any prefix it accepts) on Remove-Item or
-    // an alias of it, and cmd's /s (alone or as `/s/q`).
+    // PowerShell's -Recurse or -Force (any prefix it accepts), and cmd's /s
+    // (alone or as `/s/q`).
     pattern:
-      /\b(?:Remove-Item|ri|del|erase|rd|rmdir)\b[^|;&\n]*\s(?:-(?:r[a-z]*|fo[a-z]*)\b|\/s(?=\s|$|\/q\b))/i,
+      /\b(?:Remove-Item|rd|rmdir)\b[^|;&\n]*\s(?:-(?:r[a-z]*|fo[a-z]*)\b|\/s(?=\s|$|\/q\b))/i,
     reason: "Deletes files for good",
   },
   {
     // A force push, a remote branch delete, or a refspec that forces (`+main`)
-    // or deletes (`:main`).
-    pattern: git(String.raw`push\b${ARGS}\s(?:--force\b|--delete\b|-[a-z]*[fd]|[+:]\w)`),
+    // or deletes (`:main`, but not an emoji `:tada:` after the command).
+    pattern: git(
+      String.raw`push\b${ARGS}\s(?:--force\b|--delete\b|-(?=[a-z]*[fd])[a-z]+(?![\w-])|["']?(?:\+\w|:(?!\w+:)\w))`
+    ),
     reason: "Overwrites the remote branch",
   },
   { pattern: git(String.raw`reset\b${ARGS}\s--hard\b`), reason: "Discards uncommitted changes" },

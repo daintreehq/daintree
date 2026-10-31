@@ -209,9 +209,24 @@ describe("toCanopyReading", () => {
 
   it("reads a worktree agent's git -C command, and lets a merged-branch cleanup through", async () => {
     const ask = ["Do you want to proceed?", "1. Yes", "2. No"];
+    // Only the action the reader picked carries the command: it is too far above
+    // the prompt for the rows around it, and the headline is another line.
     const reset = await toCanopyReading(
-      reading({ risk: "none", status_line: 0, question_line: 1, action_line: 0 }),
-      input({ lines: ["⏺ Bash(git -C /Users/me/wt reset --hard HEAD)", ...ask] })
+      reading({
+        risk: "none",
+        status_line: 11,
+        question_line: 12,
+        action_line: 0,
+        option_lines: [13, 14],
+      }),
+      input({
+        lines: [
+          "⏺ Bash(git -C /Users/me/wt reset --hard HEAD)",
+          ...Array.from({ length: 10 }, (_, i) => `step ${i}`),
+          "npm test",
+          ...ask,
+        ],
+      })
     ).words();
     expect(reset.risk).toBe("caution");
     expect(reset.riskReason).toBe("Discards uncommitted changes");
