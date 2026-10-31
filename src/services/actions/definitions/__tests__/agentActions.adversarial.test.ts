@@ -449,6 +449,39 @@ describe("agentActions adversarial", () => {
     expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["an interactive launch", { model: "devstral-small", prompt: "Fix the bug" }],
+    ["a headless launch with no prompt", { model: "devstral-small", interactive: false }],
+    ["a model in its verbatim flags", { agentLaunchFlags: ["--model=devstral-small"] }],
+  ])(
+    "agent.launch refuses a Vibe model on %s, which Vibe ignores or rejects (#15569)",
+    async (_label, args) => {
+      const callbacks = makeCallbacks();
+      const actions = setupActions(callbacks);
+
+      const launch = callAction(actions, "agent.launch", { agentId: "mistral", ...args });
+      await expect(launch).rejects.toBeInstanceOf(UnactionableTargetError);
+      await expect(launch).rejects.toThrow(/Mistral Vibe applies a model only to a new headless run/);
+      expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+    }
+  );
+
+  it("agent.launch passes a Vibe model through for a headless run with a prompt", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await callAction(actions, "agent.launch", {
+      agentId: "mistral",
+      model: "devstral-small",
+      prompt: "Fix the bug",
+      interactive: false,
+    });
+    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
+      "mistral",
+      expect.objectContaining({ modelId: "devstral-small", interactive: false })
+    );
+  });
+
   it("agent.launch refuses a systemPrompt that starts with a dash", async () => {
     const callbacks = makeCallbacks();
     const actions = setupActions(callbacks);

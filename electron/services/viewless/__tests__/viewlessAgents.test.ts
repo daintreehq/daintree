@@ -420,6 +420,7 @@ describe("agent.launch with no frontend", () => {
     ["a panel removed on exit", { agentId: "claude", removeOnExit: true }],
     ["a handback with no prompt", { agentId: "claude", handback: true }],
     ["a notice from an unregistered agent", { agentId: "anti-gravity", notify: true }],
+    ["an interactive Vibe launch with a model", { agentId: "mistral", model: "devstral-small" }],
   ])("refuses %s before anything launches", async (_label, args) => {
     const { deps, invoke } = launchDeps();
 
@@ -429,6 +430,29 @@ describe("agent.launch with no frontend", () => {
     expect(invoke.mock.calls.some(([, channel]) => channel === CHANNELS.TERMINAL_SPAWN)).toBe(
       false
     );
+  });
+
+  it("records a headless Vibe run's model where its command selects it (#15569)", async () => {
+    const { deps, invoke, store } = launchDeps();
+
+    const result = await executeViewlessAction(
+      request("agent.launch", {
+        agentId: "mistral",
+        worktreeId: "/repo-wt/feature",
+        model: "devstral-small",
+        prompt: "Fix the bug",
+        interactive: false,
+      }),
+      deps
+    );
+
+    const terminalId = (result as { result: { terminalId: string } }).result.terminalId;
+    const payload = spawned(invoke);
+    expect(payload.command).toContain("--model devstral-small --prompt");
+    expect(payload).toMatchObject({ agentModelId: "devstral-small", title: "Mistral Vibe (Small)" });
+    expect(payload.agentLaunchFlags).not.toContain("--model");
+    const snapshot = store.read()?.terminals.find((terminal) => terminal.id === terminalId);
+    expect(snapshot?.agentModelId).toBe("devstral-small");
   });
 
   it("records the prompt as the caller wrote it, without the handback instruction (#14592)", async () => {

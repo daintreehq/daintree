@@ -2900,6 +2900,51 @@ describe("restartTerminal with a retired Copilot model (#15652)", () => {
     });
   });
 
+  describe("a pane saved with an interactive Vibe model (#15569)", () => {
+    const vibeWithModel = {
+      ...agentPanelBase,
+      launchAgentId: "mistral",
+      title: "Mistral Vibe (Small)",
+      agentState: "idle" as const,
+      agentModelId: "devstral-small",
+      agentLaunchFlags: ["--trust", "--model", "devstral-small"],
+      command: "vibe --trust --model devstral-small",
+    };
+
+    beforeEach(async () => {
+      const { getAgentConfig } = await import("@/config/agents");
+      vi.mocked(getAgentConfig).mockReturnValue({ command: "vibe" } as never);
+    });
+
+    it("resumes without it, which Vibe refuses on a resume, and claims no model", async () => {
+      mockGracefulKill.mockResolvedValue("abc-1");
+      show(vibeWithModel);
+
+      await usePanelStore.getState().restartTerminal("test-1");
+
+      const payload = mockSpawn.mock.calls[0]![0];
+      expect(payload.command).toBe("vibe --trust --resume abc-1");
+      expect(payload.agentModelId).toBeUndefined();
+      const pane = paneAfterRestart();
+      expect(pane.agentModelId).toBeUndefined();
+      expect(pane.agentLaunchFlags).toEqual(["--trust"]);
+      expect(pane.command).toBe("vibe --trust");
+      expect(notifyRetiredModelDroppedMock).not.toHaveBeenCalled();
+    });
+
+    it("starts over without it, which an interactive session ignores or rejects", async () => {
+      show(vibeWithModel);
+
+      await usePanelStore.getState().restartTerminal("test-1");
+
+      const payload = mockSpawn.mock.calls[0]![0];
+      expect(payload.command).toBe("vibe --trust");
+      expect(payload.agentLaunchFlags).toEqual(["--trust"]);
+      expect(paneAfterRestart().agentModelId).toBeUndefined();
+      expect(notifyRetiredModelDroppedMock).not.toHaveBeenCalled();
+    });
+  });
+
   it("resumes the captured conversation without the retired model", async () => {
     mockGracefulKill.mockResolvedValue("live-7");
     show(retiredCopilot);

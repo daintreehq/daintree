@@ -377,6 +377,50 @@ describe("buildAgentLaunchPlan", () => {
     expect(plan.preset?.id).toBe("scoped");
   });
 
+  describe("a Vibe launch that asks for a model (#15569)", () => {
+    const vibe = (options: AgentLaunchPlanInput["options"]) =>
+      buildAgentLaunchPlan(
+        input({ agentId: "mistral", agentConfig: getEffectiveAgentConfig("mistral"), options })
+      );
+
+    it("claims no model for an interactive launch, whose command can't select one", async () => {
+      const plan = await vibe({ modelId: "devstral-small", prompt: "Fix the bug" });
+
+      expect(plan.command).not.toContain("--model");
+      expect(plan.launchFlags).not.toContain("--model");
+      expect(plan.modelId).toBeUndefined();
+      expect(plan.title).toBe("Mistral Vibe");
+    });
+
+    it("selects and records the model for a headless run, but never persists it for replay", async () => {
+      const plan = await vibe({
+        modelId: "devstral-small",
+        prompt: "Fix the bug",
+        interactive: false,
+      });
+
+      expect(plan.command).toContain("--model devstral-small --prompt");
+      expect(plan.modelId).toBe("devstral-small");
+      expect(plan.title).toBe("Mistral Vibe (Small)");
+      expect(plan.launchFlags).not.toContain("--model");
+    });
+
+    it("claims no model for a headless launch with no prompt, which runs interactive", async () => {
+      const plan = await vibe({ modelId: "devstral-small", prompt: "  ", interactive: false });
+
+      expect(plan.command).not.toContain("--model");
+      expect(plan.modelId).toBeUndefined();
+    });
+
+    it("leaves other agents' interactive model selection as it was", async () => {
+      const plan = await buildAgentLaunchPlan(input({ options: { modelId: "opus" } }));
+
+      expect(plan.command).toContain("--model opus");
+      expect(plan.launchFlags).toEqual(expect.arrayContaining(["--model", "opus"]));
+      expect(plan.modelId).toBe("opus");
+    });
+  });
+
   it("layers the caller's environment over the agent's and the preset's", async () => {
     const plan = await buildAgentLaunchPlan(
       input({
