@@ -49,7 +49,12 @@ const previewGate = vi.hoisted(() => ({
   verdict: "not-preview" as "not-preview" | "allowed" | "refused",
 }));
 vi.mock("../../setup/htmlPreviewSession.js", () => ({
-  gateHtmlPreviewWebviewAttach: vi.fn(() => previewGate.verdict),
+  // Stamps the preferences it was handed, so a test can tell the real object
+  // reached the gate and its hardening reached the caller.
+  gateHtmlPreviewWebviewAttach: vi.fn((webPreferences: Electron.WebPreferences) => {
+    if (previewGate.verdict === "allowed") webPreferences.partition = "stamped-by-preview-gate";
+    return previewGate.verdict;
+  }),
 }));
 
 import {
@@ -532,25 +537,30 @@ describe("ProjectViewHandlers webview attach (#15793)", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
-  it("attaches a preview the preview gate allows, without the localhost rule refusing it", () => {
+  it("hands the preview gate the real attach and keeps what it hardened", async () => {
     previewGate.verdict = "allowed";
+    const { gateHtmlPreviewWebviewAttach } = await import("../../setup/htmlPreviewSession.js");
     const { attach } = setup();
+    const params = { src: "daintree-html://tok/index.html", partition: "daintree-html-preview" };
+    const webPreferences: Electron.WebPreferences = { preload: "/evil.js" };
 
-    const result = attach({
-      src: "daintree-html://tok/index.html",
-      partition: "daintree-html-preview",
-    });
+    const result = attach(params, webPreferences);
 
+    expect(gateHtmlPreviewWebviewAttach).toHaveBeenCalledWith(webPreferences, params);
     expect(result.refused).toBe(false);
+    // The host's own rule never ran over it: that would have refused this src,
+    // dropped the preload and overwritten the partition with the requested one.
+    expect(result.webPreferences.partition).toBe("stamped-by-preview-gate");
+    expect(result.webPreferences.preload).toBe("/evil.js");
   });
 
-  it("refuses a preview the preview gate refuses", () => {
+  it("refuses what the preview gate refuses, even where the localhost rule would allow it", () => {
     previewGate.verdict = "refused";
     const { attach } = setup();
 
-    expect(
-      attach({ src: "daintree-html://tok/index.html", partition: "persist:browser-x" }).refused
-    ).toBe(true);
+    const result = attach({ src: "http://localhost:3000/", partition: "persist:browser-default" });
+
+    expect(result.refused).toBe(true);
   });
 
   it("keeps the localhost rule for everything that isn't a preview", () => {

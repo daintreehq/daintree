@@ -1130,7 +1130,7 @@ if (!gotTheLock) {
       registerDeepLinkProtocolClient();
       registerAppProtocol(distPath, { allowDisplayCapture: isDemoMode });
       registerDaintreeFileProtocol();
-      setupHtmlPreviewSession();
+      await setupHtmlPreviewSession();
       registerDaintreePdfProtocol();
       registerDaintreeMediaProtocol();
       // Register `plugin://` with a placeholder resolver that 404s every

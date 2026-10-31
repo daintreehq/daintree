@@ -37,15 +37,19 @@ const NETWORK_URL_PATTERNS = ["http://*/*", "https://*/*", "ws://*/*", "wss://*/
 
 let previewSession: Session | null = null;
 let proxyApplied = false;
+let sessionReady: Promise<void> | null = null;
 
 /**
  * Configure the preview session once at startup: the `daintree-html` handler
  * and nothing else (no app:, daintree-file:, plugin:), the refusing proxy, and
- * the per-guest lockdown. Previews are refused until the proxy is confirmed,
- * so a failed `setProxy` leaves them unavailable rather than connected.
+ * the per-guest lockdown. The returned promise settles once the proxy is
+ * confirmed or has failed (it never rejects); startup awaits it before any
+ * window exists, because a refused attach leaves its <webview> blank for
+ * good. Previews stay refused if `setProxy` fails, unavailable rather than
+ * connected.
  */
-export function setupHtmlPreviewSession(): void {
-  if (previewSession) return;
+export function setupHtmlPreviewSession(): Promise<void> {
+  if (sessionReady) return sessionReady;
   const ses = session.fromPartition(HTML_PREVIEW_PARTITION);
   previewSession = ses;
   ses.protocol.handle("daintree-html", createDaintreeHtmlProtocolHandler());
@@ -53,7 +57,10 @@ export function setupHtmlPreviewSession(): void {
     callback({ cancel: true });
   });
   ses.on("will-download", (event) => event.preventDefault());
-  ses.setProxy(REFUSING_PROXY).then(
+  app.on("web-contents-created", (_event, contents) => {
+    if (contents.session === ses) lockDownHtmlPreviewGuest(contents);
+  });
+  sessionReady = ses.setProxy(REFUSING_PROXY).then(
     () => {
       proxyApplied = true;
     },
@@ -61,9 +68,7 @@ export function setupHtmlPreviewSession(): void {
       console.error("[MAIN] HTML preview session proxy failed; previews stay disabled:", error);
     }
   );
-  app.on("web-contents-created", (_event, contents) => {
-    if (contents.session === ses) lockDownHtmlPreviewGuest(contents);
-  });
+  return sessionReady;
 }
 
 /** True for a WebContents in the preview session — a rendered HTML preview guest. */
@@ -184,4 +189,5 @@ export function gateHtmlPreviewWebviewAttach(
 export function _resetHtmlPreviewSessionForTesting(): void {
   previewSession = null;
   proxyApplied = false;
+  sessionReady = null;
 }

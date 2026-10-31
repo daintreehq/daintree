@@ -18,7 +18,7 @@ function makeSession() {
     webRequest: { onBeforeRequest: vi.fn() },
     on: vi.fn((event: string, listener: Listener) => sessionListeners.set(event, listener)),
     setProxy: vi.fn(
-      () =>
+      (_config: Electron.ProxyConfig) =>
         new Promise<void>((resolve, reject) => {
           proxyControl.resolve = resolve;
           proxyControl.reject = reject;
@@ -65,21 +65,17 @@ function previewSession(): FakeSession {
   return sessions.get(HTML_PREVIEW_PARTITION) as FakeSession;
 }
 
-async function flush(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 0));
-}
-
 async function setupReady(): Promise<void> {
-  setupHtmlPreviewSession();
+  const ready = setupHtmlPreviewSession();
   proxyControl.resolve();
-  await flush();
+  await ready;
 }
 
 function makeGuest(session: unknown, url = "daintree-html://tok/index.html") {
   const listeners = new Map<string, Listener>();
   const embedder = { isDestroyed: () => false, send: vi.fn() };
   return {
-    session,
+    session: session as Electron.Session,
     hostWebContents: embedder,
     getURL: vi.fn(() => url),
     setWebRTCIPHandlingPolicy: vi.fn(),
@@ -151,8 +147,7 @@ describe("htmlPreviewSession", () => {
     it("routes every connection to a loopback proxy with no direct fallback or loopback bypass", () => {
       setupHtmlPreviewSession();
 
-      const config = previewSession().setProxy.mock
-        .calls[0]?.[0] as unknown as Electron.ProxyConfig;
+      const config = previewSession().setProxy.mock.calls[0]![0];
       expect(config.mode).toBe("fixed_servers");
       // A fixed list without DIRECT fails rather than falling back to a direct dial.
       expect(config.proxyRules?.toLowerCase()).not.toContain("direct");
@@ -184,8 +179,8 @@ describe("htmlPreviewSession", () => {
     });
 
     it("configures the session once", () => {
-      setupHtmlPreviewSession();
-      setupHtmlPreviewSession();
+      const first = setupHtmlPreviewSession();
+      expect(setupHtmlPreviewSession()).toBe(first);
 
       expect(previewSession().protocol.handle).toHaveBeenCalledTimes(1);
       expect(previewSession().setProxy).toHaveBeenCalledTimes(1);
@@ -223,20 +218,20 @@ describe("htmlPreviewSession", () => {
       }
     });
 
-    it("refuses previews until the proxy is confirmed", async () => {
-      setupHtmlPreviewSession();
+    it("refuses previews until the proxy is confirmed, which the setup promise marks", async () => {
+      const ready = setupHtmlPreviewSession();
       expect(gateHtmlPreviewWebviewAttach({}, previewParams())).toBe("refused");
 
       proxyControl.resolve();
-      await flush();
+      await ready;
       expect(gateHtmlPreviewWebviewAttach({}, previewParams())).toBe("allowed");
     });
 
-    it("keeps previews refused when the proxy can't be applied", async () => {
-      setupHtmlPreviewSession();
+    it("keeps previews refused when the proxy can't be applied, without failing startup", async () => {
+      const ready = setupHtmlPreviewSession();
       proxyControl.reject(new Error("network service gone"));
-      await flush();
 
+      await expect(ready).resolves.toBeUndefined();
       expect(gateHtmlPreviewWebviewAttach({}, previewParams())).toBe("refused");
     });
 
@@ -267,7 +262,8 @@ describe("htmlPreviewSession", () => {
   describe("preview guests", () => {
     it("gets the no-UDP WebRTC policy at creation, before any navigation", async () => {
       await setupReady();
-      const guest = makeGuest(previewSession());
+      // Nothing has loaded yet: the session alone must identify the guest.
+      const guest = makeGuest(previewSession(), "");
 
       createGuest(guest);
 

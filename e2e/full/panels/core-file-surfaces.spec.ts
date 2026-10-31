@@ -987,13 +987,19 @@ test.describe("Core: File surfaces", () => {
           )
           .toMatchObject({ direct: { offered: true }, child: { offered: true } });
       } finally {
-        if (controlWindowId !== null) {
-          await ctx.app.evaluate(({ BrowserWindow }, id) => {
-            BrowserWindow.fromId(id)?.destroy();
-          }, controlWindowId);
+        try {
+          if (controlWindowId !== null) {
+            await ctx.app.evaluate(({ BrowserWindow }, id) => {
+              BrowserWindow.fromId(id)?.destroy();
+            }, controlWindowId);
+          }
+        } finally {
+          try {
+            await new Promise<void>((resolve) => server.close(() => resolve()));
+          } finally {
+            await sinks.close();
+          }
         }
-        await new Promise<void>((resolve) => server.close(() => resolve()));
-        await sinks.close();
       }
     });
   });
