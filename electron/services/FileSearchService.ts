@@ -373,14 +373,18 @@ async function loadGitFiles(cwd: string): Promise<string[]> {
   // paths. A non-repository cwd exits non-zero and falls back to the walker.
   const output = await git.raw(["ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
 
-  const files: string[] = [];
+  // ls-files prints an unmerged path once per index stage (base/ours/theirs), so
+  // exact repeats are dropped here. Exact-string only: case and Unicode variants
+  // are distinct paths and stay separate.
+  const seen = new Set<string>();
   let start = 0;
   while (start < output.length) {
     let end = output.indexOf("\0", start);
     if (end === -1) end = output.length;
-    if (end > start) files.push(output.slice(start, end));
+    if (end > start) seen.add(output.slice(start, end));
     start = end + 1;
   }
+  const files = [...seen];
 
   const dirs = new Set<string>();
   for (const file of files) {

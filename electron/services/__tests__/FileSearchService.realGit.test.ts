@@ -177,4 +177,29 @@ describe("FileSearchService against real git", () => {
     expect([...files].sort()).toEqual(["a.txt", "sub/", "sub/b.txt"]);
     await expect(service.search({ cwd: plain, query: "b.txt" })).resolves.toEqual(["sub/b.txt"]);
   });
+
+  it("lists a path with several unmerged index stages once", async () => {
+    const project = path.join(root, "conflict");
+    makeRepo(project);
+    writeFile(path.join(project, "dir", "c.txt"), "base\n");
+    writeFile(path.join(project, "other.txt"));
+    git(project, "add", "-A");
+    git(project, "commit", "-q", "-m", "base");
+    git(project, "checkout", "-q", "-b", "side");
+    writeFile(path.join(project, "dir", "c.txt"), "theirs\n");
+    git(project, "commit", "-q", "-am", "side");
+    git(project, "checkout", "-q", "main");
+    writeFile(path.join(project, "dir", "c.txt"), "ours\n");
+    git(project, "commit", "-q", "-am", "main");
+    expect(spawnSync("git", ["merge", "side"], { cwd: project, env: fixtureEnv() }).status).toBe(1);
+
+    const raw = git(project, ...LS_FILES).split("\0");
+    expect(raw.filter((f) => f === "dir/c.txt")).toHaveLength(3);
+
+    const service = await createService();
+    const files = await service.listFiles(project);
+    expect(files.filter((f) => f === "dir/c.txt")).toHaveLength(1);
+    expect(files.filter((f) => f === "dir/")).toHaveLength(1);
+    await expect(service.search({ cwd: project, query: "c.txt" })).resolves.toEqual(["dir/c.txt"]);
+  });
 });
