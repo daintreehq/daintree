@@ -271,6 +271,16 @@ describe("VoiceSubmitProgress", () => {
       expect(captionOf(view.container)).toBeNull();
     });
 
+    it("fades a send a new dictation reopened saying so, and one called off on its wait", () => {
+      const reopened = settle({ kind: "reopened", attempt: 1 }, { gateOpened: true });
+      reopened.unmount();
+      const cancelled = settle({ kind: "cancelled", attempt: 1 }, { gateOpened: true });
+
+      expect(reopened.caption).toMatch(/^Send reopened/);
+      expect(cancelled.caption).toMatch(/^Polishing/);
+      expect(reachesFull()).toBe(false);
+    });
+
     it("leaves a clean send whose wait ended inside the gate unsaid", () => {
       const { caption, onPresentChange } = settle(sent(), { gateOpened: false });
       expect(caption).toBeNull();

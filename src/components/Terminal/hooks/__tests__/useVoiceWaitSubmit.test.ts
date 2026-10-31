@@ -22,7 +22,7 @@ const voiceState = vi.hoisted(() => ({
   status: "recording",
 }));
 vi.mock("@/store", () => ({
-  useVoiceRecordingStore: { getState: () => voiceState },
+  useVoiceRecordingStore: { getState: () => voiceState, subscribe: () => () => {} },
 }));
 
 vi.mock("@/store/projectStore", () => ({
