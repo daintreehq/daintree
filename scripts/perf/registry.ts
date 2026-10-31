@@ -181,6 +181,12 @@ export const REGISTRY: Record<string, Command> = {
     kind: "mechanism",
     runner: tsxScript("foreground-terminal.ts"),
   },
+  "claude-subagent-lookup": {
+    summary:
+      "Filesystem calls and event-loop time per Claude subagents/ lookup against a ~700-project store (#15669)",
+    kind: "mechanism",
+    runner: tsxScript("claude-subagent-lookup.ts"),
+  },
   // Modes set iteration counts and which scenarios are eligible; each needs
   // `--scenario <ONE-ID>`. Nothing schedules these — there is no perf CI.
   smoke: {

@@ -90,6 +90,8 @@ const CACHE_ENTRY_OVERHEAD_BYTES = 256;
  * cool a session that is still on screen.
  */
 const CACHE_WARM_MS = 30_000;
+/** Scan-found session locations retained across calls, keyed by store and session id. */
+export const CLAUDE_SUBAGENT_LOCATION_CACHE_MAX = 256;
 
 /** Injection seam for tests: a config root and a clock, nothing else. */
 export interface ClaudeSubagentReaderOptions {
@@ -153,6 +155,55 @@ export function isSafeSubagentId(value: string): boolean {
 }
 
 /**
+ * The project directory the fallback scan last found each session's children
+ * under, by entry name. Only a place a `subagents/` directory was actually
+ * seen is kept, never an absence, so nothing here can hide a child that appears
+ * later. Every reuse is verified afresh, containment included, before it is
+ * returned.
+ */
+const scannedLocations = new Map<string, string>();
+
+function rememberLocation(key: string, entry: string): void {
+  // Re-inserted so the map's order is recency of use, not of discovery.
+  scannedLocations.delete(key);
+  scannedLocations.set(key, entry);
+  while (scannedLocations.size > CLAUDE_SUBAGENT_LOCATION_CACHE_MAX) {
+    const oldest = scannedLocations.keys().next().value;
+    if (oldest === undefined) break;
+    scannedLocations.delete(oldest);
+  }
+}
+
+/**
+ * Whether `projectDir` holds this session's own transcript, as a plain file in
+ * a directory that really is inside the store.
+ *
+ * Claude Code writes `<sid>.jsonl` and `<sid>/subagents/` under the same
+ * project directory, and relocating a session (`/cd`, entering or leaving a
+ * worktree) renames both across together. So a transcript here means any child
+ * this session spawns will appear here too, and no other project directory
+ * needs searching. It only ever spares a scan; it never names a path to read.
+ *
+ * The one split Claude Code can leave is a relocation whose second rename
+ * fails, stranding existing children in the old directory. A location the scan
+ * already found is checked before this, so that case still resolves whenever
+ * those children were seen before the move.
+ */
+async function holdsSessionTranscript(
+  projectDir: string,
+  parentSessionId: string,
+  rootReal: string
+): Promise<boolean> {
+  try {
+    const stats = await lstat(path.join(projectDir, `${parentSessionId}.jsonl`));
+    if (!stats.isFile()) return false;
+  } catch {
+    return false;
+  }
+  return isContainedDirectory(projectDir, rootReal);
+}
+
+/**
  * Locate a session's `subagents/` directory.
  *
  * The derived slug is tried first because it is one `stat`. When it misses —
@@ -160,6 +211,12 @@ export function isSafeSubagentId(value: string): boolean {
  * verified — the projects root is scanned for the directory holding this exact
  * session id. That is the part worth trusting: the id was minted by Daintree at
  * launch, so a directory named after it is this terminal's and no one else's.
+ *
+ * The scan costs one `stat` per project directory the user has ever run Claude
+ * in, and this runs on every subagent poll, so two things spare it (#15669).
+ * A session that has simply not delegated yet keeps its transcript under the
+ * derived slug, and that is enough to know the answer is "nothing yet". A
+ * session the scan did find is looked for there first next time.
  */
 export async function findSubagentsDir(
   cwd: string,
@@ -180,8 +237,25 @@ export async function findSubagentsDir(
     throw error;
   }
 
-  const direct = path.join(projectsRoot, deriveProjectSlug(cwd), parentSessionId, "subagents");
+  const derivedDir = path.join(projectsRoot, deriveProjectSlug(cwd));
+  const direct = path.join(derivedDir, parentSessionId, "subagents");
   if (await isContainedDirectory(direct, rootReal)) return direct;
+
+  // Keyed on the resolved store, so a different `CLAUDE_CONFIG_DIR` never
+  // reuses another store's answer, while the path handed back is still built
+  // under the root the caller named.
+  const locationKey = `${rootReal}\0${parentSessionId}`;
+  const remembered = scannedLocations.get(locationKey);
+  if (remembered !== undefined) {
+    const candidate = path.join(projectsRoot, remembered, parentSessionId, "subagents");
+    if (await isContainedDirectory(candidate, rootReal)) {
+      rememberLocation(locationKey, remembered);
+      return candidate;
+    }
+    scannedLocations.delete(locationKey);
+  }
+
+  if (await holdsSessionTranscript(derivedDir, parentSessionId, rootReal)) return null;
 
   let entries: string[];
   try {
@@ -195,7 +269,10 @@ export async function findSubagentsDir(
     // traversal-shaped name is skipped rather than resolved.
     if (entry === "." || entry === ".." || entry.includes(path.sep)) continue;
     const candidate = path.join(projectsRoot, entry, parentSessionId, "subagents");
-    if (await isContainedDirectory(candidate, rootReal)) return candidate;
+    if (await isContainedDirectory(candidate, rootReal)) {
+      rememberLocation(locationKey, entry);
+      return candidate;
+    }
   }
   return null;
 }
@@ -566,6 +643,7 @@ const metaCache = new WarmCache<SubagentMeta>(META_CACHE_MAX_ENTRIES, META_CACHE
 export function __resetClaudeSubagentCaches(): void {
   probeCache.clear();
   metaCache.clear();
+  scannedLocations.clear();
 }
 
 /** Test-only: what the caches currently retain. */

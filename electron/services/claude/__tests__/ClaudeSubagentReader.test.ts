@@ -4,6 +4,7 @@ import { tmpdir } from "os";
 import path from "path";
 import {
   CLAUDE_SUBAGENT_ACTIVE_WINDOW_MS,
+  CLAUDE_SUBAGENT_LOCATION_CACHE_MAX,
   WarmCache,
   __claudeSubagentCacheStats,
   __resetClaudeSubagentCaches,
@@ -25,6 +26,9 @@ import {
 
 /** Every path the reader opens, so a test can tell a cache hit from a re-read. */
 const opened = vi.hoisted(() => ({ paths: [] as string[] }));
+// Every directory the reader lists, so a test can tell a scan of the whole
+// store apart from a lookup that went straight to the answer.
+const listed = vi.hoisted(() => [] as string[]);
 
 vi.mock("fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("fs/promises")>();
@@ -32,7 +36,11 @@ vi.mock("fs/promises", async (importOriginal) => {
     opened.paths.push(String(args[0]));
     return actual.open(...args);
   }) as typeof actual.open;
-  return { ...actual, open, default: { ...actual, open } };
+  const readdir = ((...args: Parameters<typeof actual.readdir>) => {
+    listed.push(String(args[0]));
+    return actual.readdir(...args);
+  }) as typeof actual.readdir;
+  return { ...actual, open, readdir, default: { ...actual, open, readdir } };
 });
 
 function opensOf(suffix: string): number {
@@ -43,6 +51,7 @@ let root: string;
 
 beforeEach(async () => {
   opened.paths.length = 0;
+  listed.length = 0;
   __resetClaudeSubagentCaches();
   root = await mkdtemp(path.join(tmpdir(), "claude-subagents-"));
 });
@@ -181,6 +190,205 @@ describe("findSubagentsDir", () => {
     await expect(
       findSubagentsDir("/Users/x/Projects/demo", SESSION, { configDir: root })
     ).resolves.toBeNull();
+  });
+
+  describe("without scanning the whole store (#15669)", () => {
+    const CWD = "/Users/x/Projects/demo";
+    const projects = () => path.join(root, "projects");
+    const find = (sessionId = SESSION, configDir = root) =>
+      findSubagentsDir(CWD, sessionId, { configDir });
+    const scans = () => listed.filter((target) => target === projects()).length;
+
+    async function seedTranscript(slug = deriveProjectSlug(CWD)): Promise<string> {
+      const dir = path.join(projects(), slug);
+      await mkdir(dir, { recursive: true });
+      await writeFile(path.join(dir, `${SESSION}.jsonl`), "{}\n", "utf8");
+      return dir;
+    }
+
+    async function seedElsewhere(entry: string, sessionId = SESSION, store = root) {
+      const dir = path.join(store, "projects", entry, sessionId, "subagents");
+      await mkdir(dir, { recursive: true });
+      return dir;
+    }
+
+    it("answers a session that has not delegated from its own transcript, without listing the store", async () => {
+      await seedTranscript();
+      await mkdir(path.join(projects(), "some-other-project"), { recursive: true });
+
+      await expect(find()).resolves.toBeNull();
+      expect(scans()).toBe(0);
+    });
+
+    it("sees a child spawned after an empty answer on the very next look", async () => {
+      const dir = await seedTranscript();
+      await expect(find()).resolves.toBeNull();
+
+      const subagents = path.join(dir, SESSION, "subagents");
+      await mkdir(subagents, { recursive: true });
+      await expect(find()).resolves.toBe(subagents);
+    });
+
+    it("sees a child that appears under an unpredicted slug after an empty answer", async () => {
+      await mkdir(projects(), { recursive: true });
+      await expect(find()).resolves.toBeNull();
+
+      const stored = await seedElsewhere("an-encoding-we-did-not-predict");
+      await expect(find()).resolves.toBe(stored);
+    });
+
+    it("looks where the scan last found a session before scanning again", async () => {
+      const stored = await seedElsewhere("an-encoding-we-did-not-predict");
+      await mkdir(path.join(projects(), "some-other-project"), { recursive: true });
+
+      await expect(find()).resolves.toBe(stored);
+      expect(scans()).toBe(1);
+      await expect(find()).resolves.toBe(stored);
+      await expect(find()).resolves.toBe(stored);
+      expect(scans()).toBe(1);
+    });
+
+    it("prefers the derived directory once it exists, even after remembering another", async () => {
+      await seedElsewhere("an-encoding-we-did-not-predict");
+      await find();
+
+      const direct = await makeSubagentsDir(CWD);
+      await expect(find()).resolves.toBe(direct);
+    });
+
+    it("follows a session that moved after its location was remembered", async () => {
+      // What `/cd` or entering a worktree does: the whole session directory is
+      // renamed into another project directory.
+      await seedElsewhere("before-the-move");
+      await find();
+
+      await mkdir(path.join(projects(), "after-the-move"));
+      await rename(
+        path.join(projects(), "before-the-move", SESSION),
+        path.join(projects(), "after-the-move", SESSION)
+      );
+      await expect(find()).resolves.toBe(
+        path.join(projects(), "after-the-move", SESSION, "subagents")
+      );
+    });
+
+    it("keeps answering from a remembered location once a transcript turns up under the derived slug", async () => {
+      // What a relocation leaves behind when renaming the transcript succeeds
+      // and renaming the session directory does not: the children stay where
+      // they were, and the derived directory now holds the transcript.
+      const stored = await seedElsewhere("an-encoding-we-did-not-predict");
+      await find();
+
+      await seedTranscript();
+      listed.length = 0;
+      await expect(find()).resolves.toBe(stored);
+      expect(scans()).toBe(0);
+    });
+
+    it("refuses a remembered location that has since become a symlink out of the store", async () => {
+      await seedElsewhere("an-encoding-we-did-not-predict");
+      await find();
+
+      const outside = path.join(root, "outside", SESSION);
+      await mkdir(path.join(outside, "subagents"), { recursive: true });
+      const plantedAt = path.join(projects(), "an-encoding-we-did-not-predict", SESSION);
+      await rm(plantedAt, { recursive: true });
+      await symlink(outside, plantedAt);
+      await expect(find()).resolves.toBeNull();
+
+      // The refused location falls through to an ordinary search, which still
+      // finds a real directory if there is one.
+      const real = await seedElsewhere("a-real-copy");
+      await expect(find()).resolves.toBe(real);
+    });
+
+    it("does not let a symlinked transcript stand in for the session's own", async () => {
+      const derived = path.join(projects(), deriveProjectSlug(CWD));
+      await mkdir(derived, { recursive: true });
+      const decoy = path.join(root, "decoy.jsonl");
+      await writeFile(decoy, "{}\n", "utf8");
+      await symlink(decoy, path.join(derived, `${SESSION}.jsonl`));
+      const stored = await seedElsewhere("an-encoding-we-did-not-predict");
+
+      await expect(find()).resolves.toBe(stored);
+    });
+
+    it("does not trust a transcript in a derived directory that escapes the store", async () => {
+      const outside = path.join(root, "outside-project");
+      await mkdir(outside, { recursive: true });
+      await writeFile(path.join(outside, `${SESSION}.jsonl`), "{}\n", "utf8");
+      await mkdir(projects(), { recursive: true });
+      await symlink(outside, path.join(projects(), deriveProjectSlug(CWD)));
+      const stored = await seedElsewhere("an-encoding-we-did-not-predict");
+
+      await expect(find()).resolves.toBe(stored);
+    });
+
+    it("answers each store from its own directories when one session id is in both", async () => {
+      const other = await mkdtemp(path.join(tmpdir(), "claude-subagents-other-"));
+      try {
+        const here = await seedElsewhere("found-here");
+        const there = await seedElsewhere("found-there", SESSION, other);
+
+        await expect(find(SESSION, root)).resolves.toBe(here);
+        await expect(find(SESSION, other)).resolves.toBe(there);
+
+        // Each store keeps its own remembered location, so alternating between
+        // them never sends either back to a scan.
+        listed.length = 0;
+        await expect(find(SESSION, root)).resolves.toBe(here);
+        await expect(find(SESSION, other)).resolves.toBe(there);
+        await expect(find(SESSION, root)).resolves.toBe(here);
+        const storeRoots = [projects(), path.join(other, "projects")];
+        expect(listed.filter((target) => storeRoots.includes(target))).toEqual([]);
+
+        await rm(path.join(other, "projects", "found-there"), { recursive: true });
+        await expect(find(SESSION, other)).resolves.toBeNull();
+      } finally {
+        await rm(other, { recursive: true, force: true });
+      }
+    });
+
+    it("returns paths under the root it was given when the whole config dir is a symlink", async () => {
+      const stored = await seedElsewhere("an-encoding-we-did-not-predict");
+      const linked = path.join(root, "linked-config");
+      await symlink(root, linked);
+
+      const expected = path.join(linked, path.relative(root, stored));
+      await expect(find(SESSION, linked)).resolves.toBe(expected);
+
+      // Both spellings share one remembered location, and each still gets the
+      // path under the root it named.
+      listed.length = 0;
+      await expect(find(SESSION, linked)).resolves.toBe(expected);
+      await expect(find(SESSION, root)).resolves.toBe(stored);
+      expect(listed.filter((target) => target.endsWith("projects"))).toEqual([]);
+    });
+
+    it("keeps a bounded number of locations, dropping the least recently used", async () => {
+      const ids = Array.from(
+        { length: CLAUDE_SUBAGENT_LOCATION_CACHE_MAX + 1 },
+        (_, index) => `session-${index}`
+      );
+      for (const id of ids) await seedElsewhere("elsewhere", id);
+      const [first, second] = ids as [string, string];
+      const overflow = ids[CLAUDE_SUBAGENT_LOCATION_CACHE_MAX] as string;
+
+      for (const id of ids.slice(0, -1)) await find(id);
+      // Used again, so it is the newest, and the next one in is what overflows.
+      await find(first);
+      await find(overflow);
+
+      listed.length = 0;
+      await expect(find(first)).resolves.toBe(
+        path.join(projects(), "elsewhere", first, "subagents")
+      );
+      expect(scans()).toBe(0);
+      await expect(find(second)).resolves.toBe(
+        path.join(projects(), "elsewhere", second, "subagents")
+      );
+      expect(scans()).toBe(1);
+    });
   });
 });
 
