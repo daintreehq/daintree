@@ -2,16 +2,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import ts from "typescript";
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import {
+  MIN_CALIBRATION_PAIRS,
   TURN_OUTCOME_CLASS_ORDER,
+  assessReadiness,
   computeClassDistribution,
   computeConfusionMatrix,
   computeKappa,
   computePSI,
+  defaultProfileDir,
   ensureChronological,
   filterBaselineWindow,
   isPsiDrift,
+  joinCalibrationPairs,
   loadCalibration,
   loadRecords,
   matchCalibration,
@@ -34,6 +38,8 @@ function makeRecord(overrides: Partial<AssistantTurnRecord> = {}): AssistantTurn
     ...overrides,
   };
 }
+
+const normalize = (value: string) => value.replace(/\\/g, "/");
 
 // scripts/eval is in no typecheck project, so the union is read from source.
 function readTurnOutcomeUnion(): string[] {
@@ -68,43 +74,92 @@ describe("TURN_OUTCOME_CLASS_ORDER", () => {
 // ---------------------------------------------------------------------------
 
 describe("resolveStorePath", () => {
-  const normalize = (value: string) => value.replace(/\\/g, "/");
+  let tmp: string;
 
-  it("returns explicit path unchanged when absolute", () => {
-    const result = resolveStorePath("/tmp/my-config.json");
-    expect(result).toBe("/tmp/my-config.json");
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "turn-outcome-resolve-"));
   });
 
-  it("uses Daintree capitalization on macOS", () => {
-    const platformSpy = vi.spyOn(os, "platform").mockReturnValue("darwin");
-    // The platform default only applies with no env override, which the test
-    // setup now always provides — unset it explicitly rather than relying on
-    // it being absent from the ambient environment.
-    const prev = process.env.DAINTREE_USER_DATA;
-    delete process.env.DAINTREE_USER_DATA;
-
-    // Can't easily mock os.homedir() but check the path ends correctly
-    const result = resolveStorePath();
-    expect(normalize(result)).toContain("Library/Application Support/Daintree/config.json");
-
-    if (prev) process.env.DAINTREE_USER_DATA = prev;
-    platformSpy.mockRestore();
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("respects DAINTREE_USER_DATA pointing to a json file", () => {
-    const prev = process.env.DAINTREE_USER_DATA;
-    process.env.DAINTREE_USER_DATA = "/custom/path/my-config.json";
-    expect(resolveStorePath()).toBe("/custom/path/my-config.json");
-    if (prev) process.env.DAINTREE_USER_DATA = prev;
-    else delete process.env.DAINTREE_USER_DATA;
+  it("appends daintree.db to an explicit profile directory", () => {
+    expect(resolveStorePath(tmp, {})).toBe(path.join(tmp, "daintree.db"));
   });
 
-  it("appends config.json to DAINTREE_USER_DATA directory", () => {
-    const prev = process.env.DAINTREE_USER_DATA;
-    process.env.DAINTREE_USER_DATA = "/custom/path";
-    expect(resolveStorePath()).toBe(path.join("/custom/path", "config.json"));
-    if (prev) process.env.DAINTREE_USER_DATA = prev;
-    else delete process.env.DAINTREE_USER_DATA;
+  it("returns an explicit file path as given, resolved against cwd", () => {
+    const db = path.join(tmp, "copy.db");
+    fs.writeFileSync(db, "");
+    expect(resolveStorePath(db, {})).toBe(db);
+    expect(resolveStorePath("relative/daintree.db", {})).toBe(path.resolve("relative/daintree.db"));
+  });
+
+  it("keeps a config.json path so the loader can reject it, even beside a database", () => {
+    const config = path.join(tmp, "config.json");
+    fs.writeFileSync(config, "{}");
+    fs.writeFileSync(path.join(tmp, "daintree.db"), "");
+    expect(resolveStorePath(config, {})).toBe(config);
+  });
+
+  it("prefers --store-path over DAINTREE_USER_DATA", () => {
+    const other = path.join(tmp, "other");
+    fs.mkdirSync(other);
+    expect(resolveStorePath(other, { DAINTREE_USER_DATA: tmp })).toBe(
+      path.join(other, "daintree.db")
+    );
+  });
+
+  it("treats DAINTREE_USER_DATA as a profile directory, existing or not", () => {
+    expect(resolveStorePath(undefined, { DAINTREE_USER_DATA: tmp })).toBe(
+      path.join(tmp, "daintree.db")
+    );
+    const missing = path.join(tmp, "not-created-yet");
+    expect(resolveStorePath(undefined, { DAINTREE_USER_DATA: missing })).toBe(
+      path.join(missing, "daintree.db")
+    );
+  });
+
+  it("keeps a DAINTREE_USER_DATA that names a file so the loader can reject it", () => {
+    const config = path.join(tmp, "config.json");
+    fs.writeFileSync(config, "{}");
+    expect(resolveStorePath(undefined, { DAINTREE_USER_DATA: config })).toBe(config);
+  });
+
+  it("falls back to the packaged profile with no flag and no env", () => {
+    vi.spyOn(os, "platform").mockReturnValue("darwin");
+    expect(normalize(resolveStorePath(undefined, {}))).toMatch(
+      /Library\/Application Support\/Daintree\/daintree\.db$/
+    );
+  });
+});
+
+describe("defaultProfileDir", () => {
+  const home = path.join(path.sep, "home", "user");
+
+  it("uses Application Support on macOS", () => {
+    expect(defaultProfileDir("darwin", {}, home)).toBe(
+      path.join(home, "Library", "Application Support", "Daintree")
+    );
+  });
+
+  it("uses APPDATA on Windows, with the roaming profile as fallback", () => {
+    const appData = path.join(path.sep, "roaming");
+    expect(defaultProfileDir("win32", { APPDATA: appData }, home)).toBe(
+      path.join(appData, "Daintree")
+    );
+    expect(defaultProfileDir("win32", {}, home)).toBe(
+      path.join(home, "AppData", "Roaming", "Daintree")
+    );
+  });
+
+  it("uses XDG_CONFIG_HOME on Linux, with ~/.config as fallback", () => {
+    const xdg = path.join(path.sep, "xdg");
+    expect(defaultProfileDir("linux", { XDG_CONFIG_HOME: xdg }, home)).toBe(
+      path.join(xdg, "Daintree")
+    );
+    expect(defaultProfileDir("linux", {}, home)).toBe(path.join(home, ".config", "Daintree"));
   });
 });
 
@@ -126,7 +181,7 @@ describe("loadRecords", () => {
   it("rejects non-array input", () => {
     const { records, warnings } = loadRecords({ foo: "bar" });
     expect(records).toHaveLength(0);
-    expect(warnings).toContain("config key is not an array");
+    expect(warnings).toEqual(["turn-outcome records are not an array"]);
   });
 
   it("skips records missing required fields", () => {
@@ -288,7 +343,7 @@ describe("stratifiedSample", () => {
     const { records, metadata } = stratifiedSample([], 100);
     expect(records).toHaveLength(0);
     expect(metadata.sampled).toBe(0);
-    expect(metadata.absentClasses.length).toBe(10);
+    expect(metadata.absentClasses).toEqual([...TURN_OUTCOME_CLASS_ORDER]);
   });
 
   it("no duplicates in sample", () => {
@@ -334,8 +389,8 @@ describe("computeConfusionMatrix", () => {
     const pred: TurnOutcomeClass[] = ["answered", "answered", "hedged"];
     const exp: TurnOutcomeClass[] = ["answered", "hedged", "hedged"];
     const cm = computeConfusionMatrix(pred, exp);
-    expect(cm.matrix.length).toBe(10);
-    expect(cm.matrix[0].length).toBe(10);
+    expect(cm.matrix.length).toBe(TURN_OUTCOME_CLASS_ORDER.length);
+    expect(cm.matrix[0].length).toBe(TURN_OUTCOME_CLASS_ORDER.length);
     expect(cm.accuracy).toBeCloseTo(2 / 3);
     expect(cm.perClass.answered.precision).toBeCloseTo(0.5); // 1 correct / 2 predicted
     expect(cm.perClass.answered.recall).toBeCloseTo(1); // 1 correct / 1 actual
@@ -456,6 +511,70 @@ describe("matchCalibration", () => {
 
   it("handles empty inputs", () => {
     expect(matchCalibration([], []).matched).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// joinCalibrationPairs + assessReadiness
+// ---------------------------------------------------------------------------
+
+describe("joinCalibrationPairs", () => {
+  it("pairs only labels whose record was judged", () => {
+    const judged = [makeRecord({ id: "a" }), makeRecord({ id: "b" })];
+    const calibration = [
+      { record: makeRecord({ id: "a" }), expected: "answered" as TurnOutcomeClass },
+      { record: makeRecord({ id: "z" }), expected: "hedged" as TurnOutcomeClass },
+      { record: makeRecord({ id: "b" }), expected: "reasoning-loop" as TurnOutcomeClass },
+    ];
+    expect(joinCalibrationPairs(judged, ["refused", "reasoning-loop"], calibration)).toEqual([
+      { predicted: "refused", expected: "answered" },
+      { predicted: "reasoning-loop", expected: "reasoning-loop" },
+    ]);
+  });
+});
+
+describe("assessReadiness", () => {
+  const judged = { dryRun: false, calibrationLoaded: true };
+
+  it("is ready at the pair floor with a passing kappa", () => {
+    const r = assessReadiness({ ...judged, pairs: MIN_CALIBRATION_PAIRS, kappa: 0.7 });
+    expect(r).toMatchObject({ ready: true, exitCode: 0 });
+    expect(r.warning).toBeUndefined();
+    expect(r.verdict).toMatch(/^READY/);
+  });
+
+  it("blames the pair count, not kappa, when kappa passes but pairs fall short", () => {
+    const r = assessReadiness({ ...judged, pairs: MIN_CALIBRATION_PAIRS - 1, kappa: 1 });
+    expect(r).toMatchObject({ ready: false, exitCode: 1 });
+    expect(r.verdict).toContain(`${MIN_CALIBRATION_PAIRS - 1} judge-calibration pairs`);
+    expect(r.verdict).not.toContain("threshold");
+    expect(r.warning).toContain(`Only ${MIN_CALIBRATION_PAIRS - 1} calibration labels joined`);
+  });
+
+  it("fails a low kappa over enough pairs", () => {
+    const r = assessReadiness({ ...judged, pairs: 40, kappa: 0.69 });
+    expect(r).toMatchObject({ ready: false, exitCode: 1 });
+    expect(r.warning).toBeUndefined();
+    expect(r.verdict).toContain("below the 0.70 threshold");
+  });
+
+  it("fails a judged run whose calibration set does not overlap the sample", () => {
+    const r = assessReadiness({ ...judged, pairs: 0 });
+    expect(r).toMatchObject({ ready: false, exitCode: 1 });
+    expect(r.verdict).toContain("no calibration label matches a judged record");
+    expect(r.warning).toBeDefined();
+  });
+
+  it("fails a judged run with no calibration set", () => {
+    const r = assessReadiness({ dryRun: false, calibrationLoaded: false, pairs: 0 });
+    expect(r).toMatchObject({ ready: false, exitCode: 1 });
+    expect(r.verdict).toContain("--calibration-path");
+  });
+
+  it("keeps a dry run exiting 0 without a small-sample warning", () => {
+    const r = assessReadiness({ dryRun: true, calibrationLoaded: true, pairs: 0 });
+    expect(r).toMatchObject({ ready: false, exitCode: 0 });
+    expect(r.warning).toBeUndefined();
   });
 });
 
