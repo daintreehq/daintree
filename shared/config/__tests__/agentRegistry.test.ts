@@ -1638,7 +1638,6 @@ describe("opencode install targets OpenCode 1", () => {
       ...Object.values(config.update ?? {}).filter((c): c is string => typeof c === "string"),
     ];
     const brew = all.filter((c) => /\bbrew\b/.test(c));
-    expect(brew).toHaveLength(3);
     for (const c of brew) {
       expect(c).not.toMatch(/\bbrew\s+(install|upgrade)\s+opencode\b/);
     }

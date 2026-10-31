@@ -663,7 +663,9 @@ describe("AgentVersionService resilience", () => {
       expect(result.installedVersion).toBe("1.18.0");
       expect(result.latestVersion).toBe("1.19.5");
       expect(result.updateAvailable).toBe(true);
-      expect(fetchSpy.mock.calls.map(([url]) => String(url))).not.toContain(
+      const fetched = fetchSpy.mock.calls.map(([url]) => String(url));
+      expect(fetched).toContain("https://api.github.com/repos/anomalyco/opencode/releases/latest");
+      expect(fetched).not.toContain(
         "https://api.github.com/repos/opencode-ai/opencode/releases/latest"
       );
       fetchSpy.mockRestore();
