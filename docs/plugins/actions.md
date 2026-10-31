@@ -576,7 +576,6 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `worktree.resource.status` | Check resource status | safe | `worktreeId?` |
 | `worktree.resource.teardown` | Teardown resource | confirm | `worktreeId?` |
 | `worktree.restartService` | Restart workspace service | confirm | — |
-| `worktree.retireOwned` | Retire owned worktree | confirm | `worktreeId`, `timeoutMs?` |
 | `worktree.retryProjectLoad` | Retry loading worktrees | safe | — |
 | `worktree.reveal` | Reveal worktree | safe | `worktreeId?` |
 | `worktree.reviewReadiness` | Review readiness | safe | `worktreeId?` |

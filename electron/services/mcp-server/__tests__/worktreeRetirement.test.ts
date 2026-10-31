@@ -7,6 +7,7 @@ import {
   retirementStopped,
   tearDownForRetirement,
   type RetirementAttribution,
+  type RetirementClose,
   type RetirementTeardownSteps,
 } from "../worktreeRetirement.js";
 import type { WorktreeGitObservation } from "../worktreeRetirementGit.js";
@@ -26,6 +27,7 @@ const CLEAN: WorktreeGitObservation = {
   unstaged: 0,
   untracked: 0,
   conflicted: 0,
+  hiddenFromStatus: 0,
   unpushedCommits: 0,
 };
 
@@ -39,6 +41,11 @@ const record = (
   isExited: false,
   launchGeneration: 1,
   ...overrides,
+});
+
+const pane = (terminalId: string, launchGeneration: number | undefined): RetirementClose => ({
+  terminalId,
+  launchGeneration,
 });
 
 const MINE: RetirementAttribution = {
@@ -75,6 +82,26 @@ describe("refuseUnlessCleanAndPushed", () => {
     expect(refuseUnlessCleanAndPushed(WORKTREE, CLEAN)).toBeUndefined();
   });
 
+  it.each([
+    ["staged", "1 staged change"],
+    ["unstaged", "1 unstaged change"],
+    ["untracked", "1 untracked entry"],
+    ["conflicted", "1 conflicted path"],
+  ] as const)("refuses one %s entry alone, naming it", (field, named) => {
+    const refusal = refuseUnlessCleanAndPushed(WORKTREE, { ...CLEAN, [field]: 1 });
+    expect(refusal?.details).toMatchObject({ check: "clean", [field]: 1 });
+    expect(refusal?.message).toContain(named);
+  });
+
+  it("refuses files status never checks, as part of the clean check", () => {
+    const refusal = refuseUnlessCleanAndPushed(WORKTREE, { ...CLEAN, hiddenFromStatus: 1 });
+    expect(refusal?.details).toMatchObject({
+      check: "clean",
+      reason: "worktree-has-unchecked-files",
+      hiddenFromStatus: 1,
+    });
+  });
+
   it("names uncommitted work before unpushed commits", () => {
     const refusal = refuseUnlessCleanAndPushed(WORKTREE, {
       ...CLEAN,
@@ -82,13 +109,12 @@ describe("refuseUnlessCleanAndPushed", () => {
       unpushedCommits: 2,
     });
     expect(refusal?.details).toMatchObject({ check: "clean", conflicted: 1 });
-    expect(refusal?.message).toContain("1 conflicted path");
   });
 
-  it("names the pushed check with the commit count and where it was measured from", () => {
-    const refusal = refuseUnlessCleanAndPushed(WORKTREE, { ...CLEAN, unpushedCommits: 2 });
-    expect(refusal?.details).toMatchObject({ check: "pushed", unpushedCommits: 2 });
-    expect(refusal?.message).toContain("2 commits reachable from bbbbbbbbbbbb are on no");
+  it("refuses a single commit no remote holds, saying where it was measured from", () => {
+    const refusal = refuseUnlessCleanAndPushed(WORKTREE, { ...CLEAN, unpushedCommits: 1 });
+    expect(refusal?.details).toMatchObject({ check: "pushed", unpushedCommits: 1 });
+    expect(refusal?.message).toContain("1 commit reachable from bbbbbbbbbbbb is on no");
   });
 
   it("refuses a branch with no commit rather than reading it as pushed", () => {
@@ -102,10 +128,16 @@ describe("refuseUnlessCleanAndPushed", () => {
 describe("planWorktreeRetirement", () => {
   it("closes and awaits an open pane of its own, and only awaits one it already closed", async () => {
     const result = await plan(
-      [record("open"), record("trashed", { isTrashed: true }), record("gone", { isExited: true })],
+      [
+        record("open", { launchGeneration: 4 }),
+        record("trashed", { isTrashed: true }),
+        record("gone", { isExited: true, launchGeneration: undefined }),
+      ],
       { open: MINE, trashed: MINE_CLOSED, gone: MINE }
     );
-    expect(result).toEqual({ plan: { close: ["open", "gone"], awaitExit: ["open", "trashed"] } });
+    expect(result).toEqual({
+      plan: { close: [pane("open", 4), pane("gone", undefined)], awaitExit: ["open", "trashed"] },
+    });
   });
 
   it("leaves exited terminals that are not its own alone", async () => {
@@ -175,25 +207,41 @@ describe("planWorktreeRetirement", () => {
 });
 
 describe("tearDownForRetirement", () => {
-  function steps(overrides: Partial<RetirementTeardownSteps> = {}): RetirementTeardownSteps {
-    return {
+  /** Steps that log each call as it starts and as it finishes, in one sequence. */
+  function steps(overrides: Partial<RetirementTeardownSteps> = {}) {
+    const log: string[] = [];
+    const run: RetirementTeardownSteps = {
       signal: new AbortController().signal,
-      closePane: vi.fn(async () => undefined),
-      waitForExits: vi.fn(async (ids: readonly string[]) => ({
-        result: {
-          processes: ids.map((terminalId) => ({ terminalId, outcome: "exited" as const })),
-        },
-      })),
-      recheck: vi.fn(async () => undefined),
+      closePane: vi.fn(async ({ terminalId }: RetirementClose) => {
+        log.push(`close ${terminalId}`);
+        await Promise.resolve();
+        log.push(`closed ${terminalId}`);
+        return undefined;
+      }),
+      waitForExits: vi.fn(async (ids: readonly string[]) => {
+        log.push(`wait ${ids.join(",")}`);
+        await Promise.resolve();
+        log.push("waited");
+        return {
+          result: {
+            processes: ids.map((terminalId) => ({ terminalId, outcome: "exited" as const })),
+          },
+        };
+      }),
+      recheck: vi.fn(async () => {
+        log.push("recheck");
+        return undefined;
+      }),
       ...overrides,
     };
+    return { run, log };
   }
 
-  it("closes in order, waits for the running ones, checks again, and reports what it did", async () => {
-    const run = steps();
+  it("closes each pane in turn, then waits, then checks again, and reports what it did", async () => {
+    const { run, log } = steps();
     const result = await tearDownForRetirement(
       WORKTREE,
-      { close: ["a", "b"], awaitExit: ["a", "c"] },
+      { close: [pane("a", 3), pane("b", 7)], awaitExit: ["a", "c"] },
       run
     );
     expect(result).toEqual({
@@ -206,18 +254,29 @@ describe("tearDownForRetirement", () => {
         ],
       },
     });
-    expect(run.waitForExits).toHaveBeenCalledWith(["a", "c"]);
-    expect(run.recheck).toHaveBeenCalledOnce();
+    expect(log).toEqual([
+      "close a",
+      "closed a",
+      "close b",
+      "closed b",
+      "wait a,c",
+      "waited",
+      "recheck",
+    ]);
+    expect(run.closePane).toHaveBeenNthCalledWith(1, pane("a", 3));
+    expect(run.closePane).toHaveBeenNthCalledWith(2, pane("b", 7));
   });
 
   it("stops at a close that fails, reporting the panes already closed", async () => {
     const failure: ActionError = { code: "EXECUTION_ERROR", message: "Close failed." };
-    const run = steps({
-      closePane: vi.fn(async (id: string) => (id === "b" ? failure : undefined)),
+    const { run } = steps({
+      closePane: vi.fn(async ({ terminalId }: RetirementClose) =>
+        terminalId === "b" ? failure : undefined
+      ),
     });
     const result = await tearDownForRetirement(
       WORKTREE,
-      { close: ["a", "b", "c"], awaitExit: ["a", "b", "c"] },
+      { close: [pane("a", 1), pane("b", 1), pane("c", 1)], awaitExit: ["a", "b", "c"] },
       run
     );
     expect(result).toMatchObject({
@@ -231,28 +290,76 @@ describe("tearDownForRetirement", () => {
     expect(run.waitForExits).not.toHaveBeenCalled();
   });
 
-  it("answers a first close that fails as the plain failure, since nothing changed", async () => {
-    const failure: ActionError = { code: "RESOURCE_NOT_OWNED", message: "Not yours." };
+  it("keeps the panes already closed when a later close throws", async () => {
+    const { run } = steps({
+      closePane: vi.fn(async ({ terminalId }: RetirementClose) => {
+        if (terminalId === "b") throw new Error("bridge gone");
+        return undefined;
+      }),
+    });
     const result = await tearDownForRetirement(
       WORKTREE,
-      { close: ["a"], awaitExit: ["a"] },
-      steps({ closePane: async () => failure })
+      { close: [pane("a", 1), pane("b", 1)], awaitExit: ["a", "b"] },
+      run
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "PARTIAL_SUCCESS",
+        details: {
+          failedStep: "close",
+          closedTerminalIds: ["a"],
+          cause: { message: "bridge gone" },
+        },
+      },
+    });
+    expect(run.waitForExits).not.toHaveBeenCalled();
+  });
+
+  it("does not claim nothing was closed when the first close fails, since it may have", async () => {
+    const failure: ActionError = { code: "EXECUTION_ERROR", message: "Layout write failed." };
+    const result = await tearDownForRetirement(
+      WORKTREE,
+      { close: [pane("a", 1)], awaitExit: ["a"] },
+      steps({ closePane: async () => failure }).run
     );
     expect(result).toEqual({
       ok: false,
-      error: { ...failure, message: "Not yours. Nothing was closed or deleted." },
+      error: { ...failure, message: "Layout write failed. No delete was sent." },
     });
   });
 
-  it("treats an unknown exit like a running one", async () => {
+  it("keeps the closed panes when the wait itself fails, and checks nothing more", async () => {
+    const { run } = steps({
+      waitForExits: vi.fn(async () => {
+        throw new Error("host gone");
+      }),
+    });
     const result = await tearDownForRetirement(
       WORKTREE,
-      { close: ["a"], awaitExit: ["a"] },
-      steps({
-        waitForExits: async () => ({
-          result: { processes: [{ terminalId: "a", outcome: "unknown" as const }] },
-        }),
-      })
+      { close: [pane("a", 1)], awaitExit: ["a"] },
+      run
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "PARTIAL_SUCCESS",
+        details: { failedStep: "wait", closedTerminalIds: ["a"], cause: { message: "host gone" } },
+      },
+    });
+    expect(run.recheck).not.toHaveBeenCalled();
+  });
+
+  it("treats an unknown exit like a running one", async () => {
+    const { run } = steps({
+      waitForExits: async () => ({
+        result: { processes: [{ terminalId: "a", outcome: "unknown" as const }] },
+      }),
+    });
+    const result = await tearDownForRetirement(
+      WORKTREE,
+      { close: [pane("a", 1)], awaitExit: ["a"] },
+      run
     );
     expect(result).toMatchObject({
       ok: false,
@@ -261,31 +368,76 @@ describe("tearDownForRetirement", () => {
         details: { failedStep: "wait", processes: [{ terminalId: "a", outcome: "unknown" }] },
       },
     });
+    expect(run.recheck).not.toHaveBeenCalled();
   });
 
-  it("starts nothing more once the call is cancelled", async () => {
-    const controller = new AbortController();
-    const run = steps({
-      signal: controller.signal,
-      closePane: vi.fn(async () => {
+  describe("once the call is cancelled, starts nothing more", () => {
+    it("after a close", async () => {
+      const controller = new AbortController();
+      const { run } = steps({
+        signal: controller.signal,
+        closePane: vi.fn(async () => {
+          controller.abort();
+          return undefined;
+        }),
+      });
+      const result = await tearDownForRetirement(
+        WORKTREE,
+        { close: [pane("a", 1)], awaitExit: ["a"] },
+        run
+      );
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          code: "PARTIAL_SUCCESS",
+          details: { failedStep: "wait", closedTerminalIds: ["a"] },
+        },
+      });
+      expect(run.waitForExits).not.toHaveBeenCalled();
+    });
+
+    it("during the wait", async () => {
+      const controller = new AbortController();
+      const { run } = steps({ signal: controller.signal });
+      const wait = run.waitForExits;
+      run.waitForExits = vi.fn(async (ids: readonly string[]) => {
         controller.abort();
-        return undefined;
-      }),
+        return wait(ids);
+      });
+      const result = await tearDownForRetirement(
+        WORKTREE,
+        { close: [pane("a", 1)], awaitExit: ["a"] },
+        run
+      );
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          code: "PARTIAL_SUCCESS",
+          details: { failedStep: "recheck", closedTerminalIds: ["a"] },
+        },
+      });
+      expect(run.recheck).not.toHaveBeenCalled();
     });
-    const result = await tearDownForRetirement(
-      WORKTREE,
-      { close: ["a", "b"], awaitExit: ["a", "b"] },
-      run
-    );
-    expect(result).toMatchObject({
-      ok: false,
-      error: {
-        code: "PARTIAL_SUCCESS",
-        details: { failedStep: "close", closedTerminalIds: ["a"] },
-      },
+
+    it("during the recheck", async () => {
+      const controller = new AbortController();
+      const { run } = steps({
+        signal: controller.signal,
+        recheck: vi.fn(async () => {
+          controller.abort();
+          return undefined;
+        }),
+      });
+      const result = await tearDownForRetirement(
+        WORKTREE,
+        { close: [pane("a", 1)], awaitExit: ["a"] },
+        run
+      );
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: "PARTIAL_SUCCESS", details: { failedStep: "recheck" } },
+      });
     });
-    expect(run.closePane).toHaveBeenCalledOnce();
-    expect(run.waitForExits).not.toHaveBeenCalled();
   });
 });
 
@@ -303,12 +455,17 @@ describe("retirementStopped", () => {
       cause
     );
     expect(error.code).toBe("PARTIAL_SUCCESS");
-    expect(error.details).toMatchObject({ deleteDispatched: true, cause });
+    expect(error.details).toMatchObject({ deleteAttempted: true, cause });
   });
 
-  it("passes a delete's own answer through when the call changed nothing", () => {
+  it("passes a delete's own answer through when nothing was closed and no grace ended", () => {
     expect(
-      retirementStopped(WORKTREE, "delete", { closedTerminalIds: [], processes: [] }, cause)
+      retirementStopped(
+        WORKTREE,
+        "delete",
+        { closedTerminalIds: [], processes: [{ terminalId: "a", outcome: "exited" }] },
+        cause
+      )
     ).toBe(cause);
   });
 });

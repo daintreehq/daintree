@@ -1119,6 +1119,8 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   // Delegates into `worktree.delete` from the main process, so it has to carry
   // the same danger class — the delegation is what raises the modal.
   "worktree.deleteOwned",
+  // The same delegation after main's own checks and closes (#15737).
+  "worktree.retireOwned",
   "worktree.sessions.endAll",
   "worktree.sessions.trashAll",
   "worktree.sessions.restartAll",
@@ -1252,6 +1254,9 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // process checks session ownership and then delegates to `worktree.delete`,
   // so the modal a user answers is wired under that id, above.
   "worktree.deleteOwned",
+  // Same shape (#15737): main checks, closes the session's panes and waits,
+  // then delegates to `worktree.delete`.
+  "worktree.retireOwned",
   // Same shape (#14369): main checks the session launched the pane, then
   // delegates to `terminal.restartOnPreset`, whose confirm is wired above.
   "terminal.restartOnPresetOwned",
@@ -1554,8 +1559,9 @@ describe("plugin-dispatch injection guard (#10558)", () => {
     // project.runCheck requires projectId + runnerId; the terminal-watch tools
     // take terminalIds or a watchId; plugin.reloadPanel a panelId;
     // plugin.backupDatabases a pluginId; plugin.setNotificationsSilenced a
-    // pluginId and a flag; agentSettings.set an agentId and settings). Schemas
-    // are non-strict, so the union satisfies every denied action.
+    // pluginId and a flag; agentSettings.set an agentId and settings;
+    // worktree.retireOwned a worktreeId). Schemas are non-strict, so the union
+    // satisfies every denied action.
     const args = {
       terminalId: "t-placeholder",
       panelId: "p-placeholder",
@@ -1569,6 +1575,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       agentId: "claude",
       settings: {},
       silenced: true,
+      worktreeId: "/wt/placeholder",
     };
     // ...except where a schema is strict, which the union above cannot satisfy:
     // the extra keys are themselves a VALIDATION_ERROR, so dispatch would never

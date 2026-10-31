@@ -692,6 +692,9 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   // Main-process only, keyed on what the caller's MCP credential closed (#15728):
   // a plugin dispatch closed nothing to wait for.
   "terminal.waitForExit",
+  // Main-process only, keyed on what the caller's MCP credential created
+  // (#15737): a plugin dispatch created no worktree to retire.
+  "worktree.retireOwned",
   // Main-process only, for an assistant caller: a plugin is no assistant (#13496).
   "assistant.list",
   "assistant.start",

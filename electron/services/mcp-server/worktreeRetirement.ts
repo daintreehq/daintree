@@ -22,10 +22,17 @@ export interface RetirementAttribution extends TerminalAttribution {
   closedByThisSession: boolean;
 }
 
+/** A pane a retirement closes, and the run the checks found under its id. */
+export interface RetirementClose {
+  terminalId: string;
+  /** Undefined when the host could not say; the close then rests on the ledger alone, as `terminal.closeOwned` does. */
+  launchGeneration: number | undefined;
+}
+
 /** What a retirement does to the worktree's terminals before the delete. */
 export interface RetirementPlan {
   /** This session's panes still open in the worktree, exited or running. */
-  close: string[];
+  close: RetirementClose[];
   /** Processes that must be seen to exit: the running panes closed above, and this session's panes already in their trash grace. */
   awaitExit: string[];
 }
@@ -75,7 +82,7 @@ export function refuseUnlessCleanAndPushed(
   worktreeId: string,
   git: WorktreeGitObservation
 ): ActionError | undefined {
-  const { staged, unstaged, untracked, conflicted } = git;
+  const { staged, unstaged, untracked, conflicted, hiddenFromStatus } = git;
   if (staged + unstaged + untracked + conflicted > 0) {
     const parts = [
       staged > 0 ? pluralize(staged, "staged change") : undefined,
@@ -89,6 +96,18 @@ export function refuseUnlessCleanAndPushed(
       "worktree-not-clean",
       `it has ${parts.join(", ")}. Commit or remove them first.`,
       { staged, unstaged, untracked, conflicted }
+    );
+  }
+  // Edits there never reach status, so nothing above could see them.
+  if (hiddenFromStatus > 0) {
+    return refusal(
+      worktreeId,
+      "clean",
+      "worktree-has-unchecked-files",
+      `${pluralize(hiddenFromStatus, "tracked file is", "tracked files are")} marked ` +
+        `assume-unchanged, or skip-worktree while present, so git does not check them for ` +
+        `changes. Clear the flags and commit what they hide first.`,
+      { hiddenFromStatus }
     );
   }
   if (git.headOid === null || git.unpushedCommits === null) {
@@ -175,16 +194,17 @@ export async function planWorktreeRetirement(
     worktreeId,
     options
   );
-  const close: string[] = [];
+  const close: RetirementClose[] = [];
   const awaitExit: string[] = [];
   const blockers: WorktreeLiveTerminal[] = [];
   for (const record of terminals) {
     const attribution = attributionOf(record);
     const trashed = record.isTrashed === true;
+    const planned = { terminalId: record.id, launchGeneration: record.launchGeneration };
     if (record.isExited === true) {
-      close.push(record.id);
+      close.push(planned);
     } else if (trashed ? attribution.closedByThisSession : attribution.closableByThisSession) {
-      if (!trashed) close.push(record.id);
+      if (!trashed) close.push(planned);
       awaitExit.push(record.id);
     } else {
       blockers.push({
@@ -237,12 +257,13 @@ export function retirementChangedSomething(progress: RetirementProgress): boolea
 
 /**
  * The answer for a retirement that stopped at `step` (#15737). With nothing
- * changed it is the cause itself, saying nothing was touched, so a caller
- * reads the refusal it would have got from the step alone. Once a pane was
- * closed or a grace ended, it is
- * `PARTIAL_SUCCESS` naming what was done, what the processes did, whether the
- * delete was sent, and the cause in full, so a caller retrying knows its panes
- * are already gone and a confirmation timeout reads apart from a rejection.
+ * seen to change it is the cause itself, so a caller reads the refusal it
+ * would have got from the step alone; it does not claim nothing was closed,
+ * since a close that answered with an error may still have trashed its pane.
+ * Once a pane was reported closed or a grace ended, it is `PARTIAL_SUCCESS`
+ * naming what was done, what the processes did, whether the delete was
+ * attempted, and the cause in full, so a caller retrying knows its panes are
+ * already gone and a confirmation timeout reads apart from a rejection.
  */
 export function retirementStopped(
   worktreeId: string,
@@ -250,7 +271,11 @@ export function retirementStopped(
   progress: RetirementProgress,
   cause: ActionError
 ): ActionError {
-  if (!retirementChangedSomething(progress)) return step === "delete" ? cause : untouched(cause);
+  if (!retirementChangedSomething(progress)) {
+    return step === "delete"
+      ? cause
+      : { ...cause, message: `${cause.message} No delete was sent.` };
+  }
   const closed = progress.closedTerminalIds;
   const running = progress.processes.filter((process) => process.outcome !== "exited");
   const done = [
@@ -267,19 +292,19 @@ export function retirementStopped(
             .map((process) => `'${process.terminalId}' ${process.outcome}`)
             .join(", ")})`,
   ].filter((part): part is string => part !== undefined);
-  const deleteDispatched = step === "delete";
+  const deleteAttempted = step === "delete";
   const reason = cause.message.trim();
   return {
     code: "PARTIAL_SUCCESS",
     message:
       `${reason.startsWith(notRetired(worktreeId)) ? reason : `${notRetired(worktreeId)} ${reason}`} ` +
       `Already done: ${done.join("; ")}. ${
-        deleteDispatched ? "The delete was sent and did not complete." : "No delete was sent."
+        deleteAttempted ? "The delete was attempted and did not complete." : "No delete was sent."
       } The branch was kept.`,
     details: {
       failedStep: step,
       worktreeId,
-      deleteDispatched,
+      deleteAttempted,
       closedTerminalIds: closed,
       processes: progress.processes,
       cause,
@@ -290,8 +315,8 @@ export function retirementStopped(
 /** One step of the teardown, as the session server runs it. */
 export interface RetirementTeardownSteps {
   signal: AbortSignal;
-  /** Close one pane; undefined once its close reported it closed. */
-  closePane(terminalId: string): Promise<ActionError | undefined>;
+  /** Close one pane, refusing a run other than the planned one; undefined once its close reported it closed. */
+  closePane(pane: RetirementClose): Promise<ActionError | undefined>;
   waitForExits(
     terminalIds: readonly string[]
   ): Promise<{ result: TerminalWaitForExitResult } | { error: ActionError }>;
@@ -329,16 +354,16 @@ export async function tearDownForRetirement(
     ok: false as const,
     error: retirementStopped(worktreeId, step, progress, cause),
   });
-  for (const terminalId of plan.close) {
+  for (const pane of plan.close) {
     if (steps.signal.aborted) return stop("close", cancelled(worktreeId));
     let failure: ActionError | undefined;
     try {
-      failure = await steps.closePane(terminalId);
+      failure = await steps.closePane(pane);
     } catch (error) {
-      failure = thrown(error, `Closing '${terminalId}' failed.`);
+      failure = thrown(error, `Closing '${pane.terminalId}' failed.`);
     }
     if (failure !== undefined) return stop("close", failure);
-    progress.closedTerminalIds.push(terminalId);
+    progress.closedTerminalIds.push(pane.terminalId);
   }
   if (plan.awaitExit.length > 0) {
     if (steps.signal.aborted) return stop("wait", cancelled(worktreeId));

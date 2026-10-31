@@ -34,6 +34,7 @@ describe("worktree.retireOwned (#15737)", () => {
     unstaged: 0,
     untracked: 0,
     conflicted: 0,
+    hiddenFromStatus: 0,
     unpushedCommits: 0,
   };
 
@@ -203,7 +204,8 @@ describe("worktree.retireOwned (#15737)", () => {
     });
 
     it("refuses a worktree with uncommitted work, naming the clean check", async () => {
-      const { store, census, git, server, dispatchAction } = harness("s-dirty");
+      const { store, census, git, server, dispatchAction, readTerminalProcesses } =
+        harness("s-dirty");
       await launchPane(server);
       census.processes = [ownPane()];
       git.current = { ...CLEAN, unstaged: 2, untracked: 1 };
@@ -214,6 +216,8 @@ describe("worktree.retireOwned (#15737)", () => {
       expect(refusal.code).toBe("DISABLED");
       expect(refusal.details).toMatchObject({ check: "clean", unstaged: 2, untracked: 1 });
       expect(refusal.message).toContain("Nothing was closed or deleted.");
+      // Clean is asked before the census, which a dirty tree never reaches.
+      expect(readTerminalProcesses).not.toHaveBeenCalled();
       expect(dispatched(dispatchAction, "terminal.close")).toHaveLength(0);
       expect(dispatched(dispatchAction, "worktree.delete")).toHaveLength(0);
       expect(store.resourceOwnership.owns("s-dirty", "terminal", "terminal-1")).toBe(true);
@@ -233,7 +237,7 @@ describe("worktree.retireOwned (#15737)", () => {
     });
 
     it("refuses when git cannot answer, rather than reading the worktree as clean", async () => {
-      const { server, dispatchAction } = harness("s-git-fails", {
+      const { server, dispatchAction, readTerminalProcesses } = harness("s-git-fails", {
         readWorktreeGit: vi.fn(async () => {
           throw new Error("git status failed");
         }),
@@ -245,6 +249,7 @@ describe("worktree.retireOwned (#15737)", () => {
         code: "EXECUTION_ERROR",
         details: { reason: "worktree-git-unreadable" },
       });
+      expect(readTerminalProcesses).not.toHaveBeenCalled();
       expect(dispatchAction).not.toHaveBeenCalled();
     });
 
@@ -296,7 +301,8 @@ describe("worktree.retireOwned (#15737)", () => {
   });
 
   it("closes its own pane, waits for it to exit, then sends the same confirmed delete", async () => {
-    const { store, census, server, dispatchAction, waitForClosedPanelExits } = harness("s-full");
+    const { store, census, server, dispatchAction, waitForClosedPanelExits, readWorktreeGit } =
+      harness("s-full");
     await launchPane(server);
     census.processes = [ownPane()];
 
@@ -326,6 +332,18 @@ describe("worktree.retireOwned (#15737)", () => {
       { worktreeId: WORKTREE },
       false
     );
+    expect(dispatched(dispatchAction, "terminal.close")).toEqual([
+      ["terminal.close", { terminalId: "terminal-1" }, false],
+    ]);
+    // Close, then the wait, then git asked again, then the delete.
+    const order = dispatchAction.mock.invocationCallOrder;
+    const [closedAt, deletedAt] = [order[1]!, order[2]!];
+    const waitedAt = waitForClosedPanelExits.mock.invocationCallOrder[0]!;
+    expect(readWorktreeGit).toHaveBeenCalledTimes(2);
+    const recheckedAt = readWorktreeGit.mock.invocationCallOrder[1]!;
+    expect(closedAt).toBeLessThan(waitedAt);
+    expect(waitedAt).toBeLessThan(recheckedAt);
+    expect(recheckedAt).toBeLessThan(deletedAt);
     expect(store.resourceOwnership.owns("s-full", "terminal", "terminal-1")).toBe(false);
     expect(store.resourceOwnership.owns("s-full", "worktree", WORKTREE)).toBe(false);
   });
@@ -364,6 +382,48 @@ describe("worktree.retireOwned (#15737)", () => {
     expect(dispatched(dispatchAction, "worktree.delete")).toHaveLength(1);
   });
 
+  it("refuses a trashed pane whose run is not the one it closed", async () => {
+    const { census, server, dispatchAction, waitForClosedPanelExits } = harness("s-respawned");
+    await launchPane(server);
+    census.processes = [ownPane()];
+    await callTool(server, {
+      name: "terminal.closeOwned",
+      arguments: { terminalId: "terminal-1" },
+    });
+    // The id now names a later run, also in the trash, that this close never reached.
+    census.processes = [ownPane({ isTrashed: true, launchGeneration: 2 })];
+
+    const result = await callTool(server, retireCall());
+
+    expect(payloadOf<Refusal>(result)).toMatchObject({
+      code: "DISABLED",
+      details: { check: "processes", terminals: [expect.objectContaining({ trashed: true })] },
+    });
+    expect(waitForClosedPanelExits).not.toHaveBeenCalled();
+    expect(dispatched(dispatchAction, "terminal.close")).toHaveLength(1);
+    expect(dispatched(dispatchAction, "worktree.delete")).toHaveLength(0);
+  });
+
+  it("leaves a pane restarted after the checks open, and sends no delete", async () => {
+    let generation = 1;
+    const { census, server, dispatchAction } = harness("s-restarted", {
+      terminalGenerationOf: () => generation,
+    });
+    await launchPane(server);
+    census.processes = [ownPane()];
+    // The checks read run 1; by the close, the person has started run 2 under the id.
+    generation = 2;
+
+    const result = await callTool(server, retireCall());
+
+    const answer = payloadOf<Refusal>(result);
+    expect(answer.code).toBe("DISABLED");
+    expect(answer.message).toContain("was restarted after the checks");
+    expect(answer.message).toContain("No delete was sent.");
+    expect(dispatched(dispatchAction, "terminal.close")).toHaveLength(0);
+    expect(dispatched(dispatchAction, "worktree.delete")).toHaveLength(0);
+  });
+
   it("closes its own pane whose process already exited, without waiting on it", async () => {
     const { store, census, server, waitForClosedPanelExits } = harness("s-exited-pane");
     await launchPane(server);
@@ -380,13 +440,15 @@ describe("worktree.retireOwned (#15737)", () => {
   describe("after its panes were closed", () => {
     it("reports the closed pane when its process is not seen to exit, and sends no delete", async () => {
       const { store, census, server, dispatchAction } = harness("s-wait-out", {
-        waitForClosedPanelExits: vi.fn(async (targets) => ({
-          processes: targets.map(({ terminalId }) => ({
-            terminalId,
-            outcome: "running" as const,
-            graceEnded: true,
-          })),
-        })),
+        waitForClosedPanelExits: vi.fn<NonNullable<SessionServerDeps["waitForClosedPanelExits"]>>(
+          async (targets) => ({
+            processes: targets.map(({ terminalId }) => ({
+              terminalId,
+              outcome: "running" as const,
+              graceEnded: true,
+            })),
+          })
+        ),
       });
       await launchPane(server);
       census.processes = [ownPane()];
@@ -397,7 +459,7 @@ describe("worktree.retireOwned (#15737)", () => {
       expect(answer.code).toBe("PARTIAL_SUCCESS");
       expect(answer.details).toMatchObject({
         failedStep: "wait",
-        deleteDispatched: false,
+        deleteAttempted: false,
         closedTerminalIds: ["terminal-1"],
         processes: [{ terminalId: "terminal-1", outcome: "running" }],
         cause: { code: "DISABLED" },
@@ -425,7 +487,7 @@ describe("worktree.retireOwned (#15737)", () => {
       expect(answer.code).toBe("PARTIAL_SUCCESS");
       expect(answer.details).toMatchObject({
         failedStep: "delete",
-        deleteDispatched: true,
+        deleteAttempted: true,
         closedTerminalIds: ["terminal-1"],
         processes: [{ terminalId: "terminal-1", outcome: "exited" }],
         cause: { code: "USER_REJECTED", message: "The user did not approve the delete." },
@@ -461,6 +523,69 @@ describe("worktree.retireOwned (#15737)", () => {
       });
     });
 
+    it("stops before the delete when someone else's terminal started while its panes closed", async () => {
+      const { census, server, dispatchAction, waitForClosedPanelExits } = harness("s-late-foreign");
+      waitForClosedPanelExits.mockImplementationOnce(async (targets) => {
+        census.processes = [
+          ...census.processes.map((record) => ({ ...record, isExited: true })),
+          { id: "user-shell", worktreeId: WORKTREE, cwd: WORKTREE, isExited: false },
+        ];
+        return {
+          processes: targets.map(({ terminalId }) => ({
+            terminalId,
+            outcome: "exited" as const,
+            exitCode: 0,
+          })),
+        };
+      });
+      await launchPane(server);
+      census.processes = [ownPane()];
+
+      const result = await callTool(server, retireCall());
+
+      expect(payloadOf<Refusal>(result)).toMatchObject({
+        code: "PARTIAL_SUCCESS",
+        details: {
+          failedStep: "recheck",
+          closedTerminalIds: ["terminal-1"],
+          cause: { code: "DISABLED", details: { reason: "worktree-has-running-terminals" } },
+        },
+      });
+      expect(dispatched(dispatchAction, "worktree.delete")).toHaveLength(0);
+    });
+
+    it("stops before the delete when the worktree stopped being the one it was admitted on", async () => {
+      const { store, census, server, dispatchAction, waitForClosedPanelExits } =
+        harness("s-late-owner");
+      waitForClosedPanelExits.mockImplementationOnce(async (targets) => {
+        // Deleted and recreated at the path while the wait ran: a new record.
+        store.resourceOwnership.release("s-late-owner", "worktree", WORKTREE);
+        store.resourceOwnership.record("s-late-owner", [{ kind: "worktree", id: WORKTREE }]);
+        census.processes = census.processes.map((record) => ({ ...record, isExited: true }));
+        return {
+          processes: targets.map(({ terminalId }) => ({
+            terminalId,
+            outcome: "exited" as const,
+            exitCode: 0,
+          })),
+        };
+      });
+      await launchPane(server);
+      census.processes = [ownPane()];
+
+      const result = await callTool(server, retireCall());
+
+      expect(payloadOf<Refusal>(result)).toMatchObject({
+        code: "PARTIAL_SUCCESS",
+        details: {
+          failedStep: "recheck",
+          closedTerminalIds: ["terminal-1"],
+          cause: { code: "RESOURCE_NOT_OWNED" },
+        },
+      });
+      expect(dispatched(dispatchAction, "worktree.delete")).toHaveLength(0);
+    });
+
     it("stops before the delete when the tree went dirty while its panes closed", async () => {
       const { census, git, server, dispatchAction, waitForClosedPanelExits } =
         harness("s-late-dirty");
@@ -484,7 +609,7 @@ describe("worktree.retireOwned (#15737)", () => {
         code: "PARTIAL_SUCCESS",
         details: {
           failedStep: "recheck",
-          deleteDispatched: false,
+          deleteAttempted: false,
           closedTerminalIds: ["terminal-1"],
           cause: { code: "DISABLED", details: { check: "clean", untracked: 1 } },
         },

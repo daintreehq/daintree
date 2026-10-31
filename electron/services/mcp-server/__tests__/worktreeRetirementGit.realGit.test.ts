@@ -78,6 +78,7 @@ describe("readWorktreeGitObservation", () => {
       unstaged: 0,
       untracked: 0,
       conflicted: 0,
+      hiddenFromStatus: 0,
       unpushedCommits: 0,
     });
   });
@@ -93,22 +94,58 @@ describe("readWorktreeGitObservation", () => {
     expect((await readWorktreeGitObservation(dir)).unpushedCommits).toBe(0);
   });
 
+  it("counts a commit only a second remote holds as pushed", async () => {
+    const mirror = path.join(root, "mirror.git");
+    git(root, "init", "-q", "--bare", "-b", "main", mirror);
+    git(repo, "remote", "add", "mirror", mirror);
+    const dir = linkedWorktree("mirrored");
+    commit(dir, "m.txt", "m\n");
+
+    git(dir, "push", "-q", "mirror", "mirrored");
+
+    expect((await readWorktreeGitObservation(dir)).unpushedCommits).toBe(0);
+  });
+
   it("counts staged, unstaged and untracked work separately", async () => {
     const dir = linkedWorktree("dirty");
     fs.writeFileSync(path.join(dir, "a.txt"), "changed\n");
-    fs.writeFileSync(path.join(dir, "staged.txt"), "s\n");
-    git(dir, "add", "staged.txt");
+    for (const name of ["s1.txt", "s2.txt"]) {
+      fs.writeFileSync(path.join(dir, name), "s\n");
+      git(dir, "add", name);
+    }
     fs.mkdirSync(path.join(dir, "scratch"));
     fs.writeFileSync(path.join(dir, "scratch", "one.txt"), "1\n");
     fs.writeFileSync(path.join(dir, "scratch", "two.txt"), "2\n");
 
     expect(await readWorktreeGitObservation(dir)).toMatchObject({
-      staged: 1,
+      staged: 2,
       unstaged: 1,
       // The untracked directory is one entry, however many files it holds.
       untracked: 1,
       conflicted: 0,
     });
+  });
+
+  it("counts an edit hidden behind assume-unchanged, which status never reports", async () => {
+    const dir = linkedWorktree("assumed");
+    git(dir, "update-index", "--assume-unchanged", "a.txt");
+    fs.writeFileSync(path.join(dir, "a.txt"), "hidden edit\n");
+
+    expect(await readWorktreeGitObservation(dir)).toMatchObject({
+      unstaged: 0,
+      hiddenFromStatus: 1,
+    });
+  });
+
+  it("counts a skip-worktree file only while it is present", async () => {
+    const dir = linkedWorktree("skipped");
+    git(dir, "update-index", "--skip-worktree", "a.txt");
+    fs.writeFileSync(path.join(dir, "a.txt"), "hidden edit\n");
+    expect((await readWorktreeGitObservation(dir)).hiddenFromStatus).toBe(1);
+
+    // As a sparse checkout leaves it: nothing on disk to lose.
+    fs.rmSync(path.join(dir, "a.txt"));
+    expect((await readWorktreeGitObservation(dir)).hiddenFromStatus).toBe(0);
   });
 
   it("counts a conflicted path", async () => {
@@ -141,6 +178,13 @@ describe("readWorktreeGitObservation", () => {
       headOid: null,
       unpushedCommits: null,
     });
+  });
+
+  it("rejects for a directory that is not its repository's top level", async () => {
+    const nested = path.join(repo, "nested");
+    fs.mkdirSync(nested, { recursive: true });
+
+    await expect(readWorktreeGitObservation(nested)).rejects.toThrow(/other than the worktree/);
   });
 
   it("rejects for a directory git cannot read", async () => {

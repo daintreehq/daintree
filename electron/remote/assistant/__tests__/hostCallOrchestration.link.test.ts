@@ -165,6 +165,7 @@ class Destination {
     unstaged: 0,
     untracked: 0,
     conflicted: 0,
+    hiddenFromStatus: 0,
     unpushedCommits: 0,
   };
   readonly submissions = new Map<string, string[]>();

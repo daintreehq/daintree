@@ -253,6 +253,7 @@ export function registerWorktreeCreateActions(
       category: "worktree",
       kind: "command",
       danger: "confirm",
+      denyPluginDispatch: true,
       scope: "renderer",
       dangerRationale:
         "Closes the session's own panes in the worktree and deletes the working tree from disk. Recovery requires re-creating the worktree, so the session's own ownership record is a precondition rather than the approval.",

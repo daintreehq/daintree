@@ -3065,7 +3065,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               : dispatchAction(id, closeArgs, false);
           const torn = await tearDownForRetirement(retiring.worktreeId, retiring.plan, {
             signal: extra.signal,
-            closePane: async (terminalId) => {
+            closePane: async ({ terminalId, launchGeneration }) => {
               const record = ownedRecordFor("terminal", terminalId);
               if (record === undefined) {
                 return {
@@ -3073,7 +3073,15 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                   message: `Pane '${terminalId}' is no longer this session's to close.`,
                 };
               }
+              // The run the checks found, and no other: a pane restarted
+              // since then is a run they never looked at.
               const generation = deps.terminalGenerationOf?.(terminalId);
+              if (launchGeneration !== undefined && generation !== launchGeneration) {
+                return {
+                  code: "DISABLED",
+                  message: `Pane '${terminalId}' was restarted after the checks, so it was not closed.`,
+                };
+              }
               const { envelope: dispatched } = await dispatchOwnedResource(
                 {
                   sessionId,
@@ -3158,7 +3166,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               }
             },
             recheck: async () => {
-              if (ownedRecordFor("worktree", retiring.worktreeId) === undefined) {
+              // The record the call was admitted on, by identity: a worktree
+              // deleted and recreated at the path since is another worktree.
+              if (ownedRecordFor("worktree", retiring.worktreeId) !== ownedResourceRecord) {
                 return {
                   code: RESOURCE_NOT_OWNED_CODE,
                   message: `Worktree '${retiring.worktreeId}' is no longer this session's to delete.`,
@@ -3188,6 +3198,97 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
           retiring.progress = torn.progress;
         }
+
+        // The answer for a dispatch that threw, shared by the plain reply and
+        // a retirement's cause so the two never classify one error apart.
+        const dispatchFailure = (
+          err: unknown
+        ): { error: Parameters<typeof buildToolError>[0]; confirmationPending: boolean } => {
+          // Checked before the binding failure it extends: the workspace is
+          // reachable in principle, it just has nothing attached that could run
+          // this action, and the host has no form of it to run alone.
+          if (err instanceof NoFrontendAttachedError) {
+            const statusHint =
+              actionId === TERMINAL_GET_STATUS_TOOL
+                ? ` Status for specific terminals can still be read without one — call '${actionId}' again with an explicit 'terminalIds' array.`
+                : "";
+            return {
+              error: {
+                code: NO_FRONTEND_ATTACHED_CODE,
+                message: `${err.message}${statusHint}`,
+                retriable: true,
+              },
+              confirmationPending: false,
+            };
+          }
+          if (err instanceof RelayDrivenElsewhereError) {
+            return { error: { code: err.code, message: err.message }, confirmationPending: false };
+          }
+          if (err instanceof McpRouteBindingError) {
+            return {
+              error: {
+                code: bindingGoneCode(err),
+                message: err.message,
+                // Instance-derived: a workspace the user can reopen is retriable,
+                // a destroyed pinned view never is, and both report this code.
+                retriable: err.retriable,
+              },
+              confirmationPending: false,
+            };
+          }
+          // No live renderer to route the dispatch through (#10640). Every
+          // unconfirmed `danger: "confirm"` dispatch is forwarded to the
+          // renderer bridge so the human can approve it in a native
+          // ConfirmDialog (#11342); with no Daintree window open,
+          // `getActiveProjectWebContents` throws `RendererBridgeUnavailableError`.
+          if (err instanceof RendererBridgeUnavailableError) {
+            // Confirm-gated tool we KNOW needs human approval (manifest entry
+            // resolved): the action could not be confirmed, not that it failed
+            // mid-execution. Reclassify to CONFIRMATION_REQUIRED (audited as
+            // `confirmation-pending`, never retriable) with a machine-readable
+            // `confirmationChannel: "unavailable"` so an autonomous conductor
+            // can tell "needs a human I can't reach" apart from a transient
+            // error. Scoped to unconfirmed dispatches so an already-approved
+            // call that fails for any other reason isn't mislabelled.
+            if (entry?.danger === "confirm" && !dispatchConfirmed) {
+              return {
+                error: {
+                  code: CONFIRMATION_REQUIRED_CODE,
+                  message:
+                    `Action '${actionId}' requires confirmation, but no Daintree window is open to surface the ` +
+                    `approval dialog. The action was not run — a human must approve it in Daintree.`,
+                  details: { confirmationChannel: "unavailable" },
+                },
+                confirmationPending: true,
+              };
+            }
+            // Either a non-confirm tool, or a cold-cache call whose manifest
+            // entry couldn't be fetched (the manifest itself comes from the
+            // renderer, so `entry` is undefined here and the tool's danger is
+            // unknowable). We must not claim CONFIRMATION_REQUIRED without
+            // knowing the tool is confirm-gated. With Host-mode routing this is
+            // the typed, retriable "no frontend" refusal — a window may open,
+            // locally or from another machine; an unbound session names no
+            // workspace, so there is no project the host could run the action
+            // for on its own. Without it, the retriable EXECUTION_ERROR this
+            // has always been.
+            const message =
+              "No Daintree window is open, so the action surface is unavailable. Retry once a project window is open.";
+            return {
+              error: isMcpHostRoutingEnabled()
+                ? { code: NO_FRONTEND_ATTACHED_CODE, message, retriable: true }
+                : { code: EXECUTION_ERROR_CODE, message },
+              confirmationPending: false,
+            };
+          }
+          return {
+            error: {
+              code: EXECUTION_ERROR_CODE,
+              message: formatErrorMessage(err, "Action dispatch failed"),
+            },
+            confirmationPending: false,
+          };
+        };
 
         try {
           // An `*Owned` tool that cleared the gate above delegates to the real
@@ -3327,119 +3428,36 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
         } catch (err) {
           outcome = { kind: "throw", error: err };
+          const failure = dispatchFailure(err);
           // A retirement that already closed panes says so whatever the
           // delete threw, so a caller never sees a bare failure that hides
-          // what changed (#15737). The cause keeps the code the plain answer
-          // below would carry.
+          // what changed (#15737). The cause is the plain answer below.
           if (
             retirement?.progress !== undefined &&
             retirementChangedSomething(retirement.progress)
           ) {
-            const confirmUnavailable =
-              err instanceof RendererBridgeUnavailableError &&
-              entry?.danger === "confirm" &&
-              !dispatchConfirmed;
-            const cause: ActionError = {
-              code: (err instanceof NoFrontendAttachedError
-                ? NO_FRONTEND_ATTACHED_CODE
-                : err instanceof RelayDrivenElsewhereError
-                  ? err.code
-                  : err instanceof McpRouteBindingError
-                    ? bindingGoneCode(err)
-                    : confirmUnavailable
-                      ? CONFIRMATION_REQUIRED_CODE
-                      : EXECUTION_ERROR_CODE) as ActionError["code"],
-              message: formatErrorMessage(err, "Action dispatch failed"),
-              ...(confirmUnavailable ? { details: { confirmationChannel: "unavailable" } } : {}),
-            };
-            const error = retirementStopped(
-              retirement.worktreeId,
-              "delete",
-              retirement.progress,
-              cause
-            );
+            const error = retirementStopped(retirement.worktreeId, "delete", retirement.progress, {
+              code: failure.error.code as ActionError["code"],
+              message: failure.error.message,
+              ...(failure.error.details !== undefined ? { details: failure.error.details } : {}),
+            });
             outcome = { kind: "result", value: { ok: false, error } };
             return buildToolError(error);
           }
-          // Checked before the binding failure it extends: the workspace is
-          // reachable in principle, it just has nothing attached that could run
-          // this action, and the host has no form of it to run alone.
-          if (err instanceof NoFrontendAttachedError) {
-            const statusHint =
-              actionId === TERMINAL_GET_STATUS_TOOL
-                ? ` Status for specific terminals can still be read without one — call '${actionId}' again with an explicit 'terminalIds' array.`
-                : "";
-            return buildToolError({
-              code: NO_FRONTEND_ATTACHED_CODE,
-              message: `${err.message}${statusHint}`,
-              retriable: true,
-            });
-          }
-          if (err instanceof RelayDrivenElsewhereError) {
-            return buildToolError({ code: err.code, message: err.message });
-          }
-          if (err instanceof McpRouteBindingError) {
-            return buildToolError({
-              code: bindingGoneCode(err),
-              message: err.message,
-              // Instance-derived: a workspace the user can reopen is retriable,
-              // a destroyed pinned view never is, and both report this code.
-              retriable: err.retriable,
-            });
-          }
-          // No live renderer to route the dispatch through (#10640). Every
-          // unconfirmed `danger: "confirm"` dispatch is forwarded to the
-          // renderer bridge so the human can approve it in a native
-          // ConfirmDialog (#11342); with no Daintree window open,
-          // `getActiveProjectWebContents` throws `RendererBridgeUnavailableError`.
-          if (err instanceof RendererBridgeUnavailableError) {
-            // Confirm-gated tool we KNOW needs human approval (manifest entry
-            // resolved): the action could not be confirmed, not that it failed
-            // mid-execution. Reclassify to CONFIRMATION_REQUIRED (audited as
-            // `confirmation-pending`, never retriable) with a machine-readable
-            // `confirmationChannel: "unavailable"` so an autonomous conductor
-            // can tell "needs a human I can't reach" apart from a transient
-            // error. Scoped to unconfirmed dispatches so an already-approved
-            // call that fails for any other reason isn't mislabelled.
-            if (entry?.danger === "confirm" && !dispatchConfirmed) {
-              const message =
-                `Action '${actionId}' requires confirmation, but no Daintree window is open to surface the ` +
-                `approval dialog. The action was not run — a human must approve it in Daintree.`;
-              const value: import("../../../shared/types/actions.js").ActionDispatchResult = {
+          if (failure.confirmationPending) {
+            outcome = {
+              kind: "result",
+              value: {
                 ok: false,
                 error: {
                   code: CONFIRMATION_REQUIRED_CODE,
-                  message,
-                  details: { confirmationChannel: "unavailable" },
+                  message: failure.error.message,
+                  details: failure.error.details,
                 },
-              };
-              outcome = { kind: "result", value };
-              return buildToolError({
-                code: CONFIRMATION_REQUIRED_CODE,
-                message,
-                details: { confirmationChannel: "unavailable" },
-              });
-            }
-            // Either a non-confirm tool, or a cold-cache call whose manifest
-            // entry couldn't be fetched (the manifest itself comes from the
-            // renderer, so `entry` is undefined here and the tool's danger is
-            // unknowable). We must not claim CONFIRMATION_REQUIRED without
-            // knowing the tool is confirm-gated. With Host-mode routing this is
-            // the typed, retriable "no frontend" refusal — a window may open,
-            // locally or from another machine; an unbound session names no
-            // workspace, so there is no project the host could run the action
-            // for on its own. Without it, the retriable EXECUTION_ERROR this
-            // has always been.
-            const message =
-              "No Daintree window is open, so the action surface is unavailable. Retry once a project window is open.";
-            return isMcpHostRoutingEnabled()
-              ? buildToolError({ code: NO_FRONTEND_ATTACHED_CODE, message, retriable: true })
-              : buildToolError({ code: EXECUTION_ERROR_CODE, message });
+              },
+            };
           }
-          return buildToolError({
-            code: EXECUTION_ERROR_CODE,
-            message: formatErrorMessage(err, "Action dispatch failed"),
-          });
+          return buildToolError(failure.error);
         }
 
         // A retirement answers for the whole call (#15737): what it closed and
