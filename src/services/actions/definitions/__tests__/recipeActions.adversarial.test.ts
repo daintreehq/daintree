@@ -393,12 +393,10 @@ describe("recipeActions adversarial", () => {
 
     const run = setupActions();
 
-    const failure = await run("recipe.run", { recipeId: "r1", worktreeId: "wt-1" }, {}).catch(
-      (err: unknown) => err
-    );
-    expect((failure as Error).message).toMatch(/Recipe launch failed: Panel limit reached/);
+    const launch = run("recipe.run", { recipeId: "r1", worktreeId: "wt-1" }, {});
+    await expect(launch).rejects.toThrow(/Recipe launch failed: Panel limit reached/);
     // A refusal is not a confirm that ran out of time (#15648).
-    expect(failure).not.toBeInstanceOf(ConfirmationTimeoutError);
+    await expect(launch).rejects.not.toBeInstanceOf(ConfirmationTimeoutError);
     expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, expect.any(Object));
   });
 
@@ -414,14 +412,13 @@ describe("recipeActions adversarial", () => {
     setWorktreeMap(new Map([["wt-1", { path: "/repo/wt" }]]));
 
     const run = setupActions();
-    const failure = await run(
+    const launch = run(
       "recipe.run",
       { recipeId: "r1", worktreeId: "wt-1" },
       { dispatchSource: "agent" }
-    ).catch((err: unknown) => err);
-
-    expect(failure).toBeInstanceOf(ConfirmationTimeoutError);
-    expect((failure as Error).message).toContain(PANEL_LIMIT_CONFIRM_EXPIRED_REASON);
+    );
+    await expect(launch).rejects.toBeInstanceOf(ConfirmationTimeoutError);
+    await expect(launch).rejects.toThrow(PANEL_LIMIT_CONFIRM_EXPIRED_REASON);
     expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, expect.any(Object));
   });
 
