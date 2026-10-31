@@ -4,7 +4,8 @@ import { Button } from "@/components/ui/button";
 import { CircleDot, Ellipsis, GitCommit, GitPullRequest } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { GitBranch } from "@/components/icons";
-import { TOOLBAR_BUTTON_METADATA } from "./toolbarButtonMetadata";
+import { TOOLBAR_BUTTON_METADATA, type ToolbarButtonGroup } from "./toolbarButtonMetadata";
+import { TOOLBAR_CUSTOMIZE_ICON, TOOLBAR_CUSTOMIZE_LABEL } from "./toolbarMenuStrings";
 import { toolbarIconButtonClass } from "./toolbarItemClasses";
 import { PluginOverflowItem, type PluginTrayGroup } from "./PluginTrayButton";
 import {
@@ -22,6 +23,7 @@ import type { ToolbarButtonConfig } from "@shared/config/toolbarButtonRegistry";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
+  DropdownMenuActionItem,
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
@@ -120,6 +122,12 @@ export interface OverflowMenuProps {
   // The project pill's branch chip, when this project's profile demotes it
   // here (#13783): what the chip would have said, and what selecting copies.
   branchRow?: { label: string; copyLabel: string; copyValue: string } | null;
+  // The strip's own grouping, so the menu draws a separator wherever the strip
+  // would have drawn a divider between the buttons it now holds.
+  resolveGroup: (id: AnyToolbarButtonId) => ToolbarButtonGroup;
+  // Why a pinned launcher row can't launch right now, keyed by its button id —
+  // the visible button is disabled with this reason, so its row is too.
+  unavailableReasonById: Partial<Record<string, string>>;
 }
 
 // Overflow `…` menu. A component (not just a render helper) so the trigger can
@@ -149,6 +157,8 @@ export function OverflowMenu({
   panelTrayDisabled,
   keybindingById,
   branchRow = null,
+  resolveGroup,
+  unavailableReasonById,
 }: OverflowMenuProps) {
   const [open, setOpen] = useState(false);
   // Read here rather than threaded through props: the overflow copy-tree item
@@ -242,6 +252,238 @@ export function OverflowMenu({
     return null;
   };
 
+  const renderOverflowEntry = (id: AnyToolbarButtonId): React.ReactNode[] => {
+    if (id === "forge-stats") {
+      // Without a resolved forge provider the visible slot is the
+      // commits-only pill — mirror that here: a local-git group with
+      // just the commits row (issues/PRs are forge data). It opens the
+      // pill's local commit history (#10414), the only route to it once
+      // a project's profile demotes the pill into this menu.
+      if (!forgeProviderName) {
+        return [
+          <DropdownMenuGroup key="forge-group">
+            <DropdownMenuLabel>Git</DropdownMenuLabel>
+            <DropdownMenuItem
+              key="forge-commits"
+              onClick={() => forgeStatsRef.current?.openCommits()}
+              aria-label={
+                repoStats?.commitCount != null
+                  ? `Commits, ${formatCountExact(repoStats.commitCount)}`
+                  : undefined
+              }
+            >
+              <GitCommit className="mr-2 h-3.5 w-3.5" />
+              Commits
+              {repoStats?.commitCount != null && (
+                <DropdownMenuMeta>{formatCountExact(repoStats.commitCount)}</DropdownMenuMeta>
+              )}
+            </DropdownMenuItem>
+          </DropdownMenuGroup>,
+        ];
+      }
+      return [
+        <DropdownMenuGroup key="forge-group">
+          <DropdownMenuLabel>{forgeProviderName}</DropdownMenuLabel>
+          <DropdownMenuItem
+            key="forge-issues"
+            onClick={() => forgeStatsRef.current?.openIssues()}
+            aria-label={
+              repoStats?.issueCount != null
+                ? `Issues, ${formatCountExact(repoStats.issueCount)}`
+                : undefined
+            }
+          >
+            <CircleDot className="mr-2 h-3.5 w-3.5 text-pr-open" />
+            Issues
+            {repoStats?.issueCount != null && (
+              <DropdownMenuMeta>{formatCountExact(repoStats.issueCount)}</DropdownMenuMeta>
+            )}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            key="forge-prs"
+            onClick={() => forgeStatsRef.current?.openPrs()}
+            aria-label={
+              repoStats?.prCount != null
+                ? `Pull requests, ${formatCountExact(repoStats.prCount)}`
+                : undefined
+            }
+          >
+            <GitPullRequest className="mr-2 h-3.5 w-3.5 text-pr-merged" />
+            Pull requests
+            {repoStats?.prCount != null && (
+              <DropdownMenuMeta>{formatCountExact(repoStats.prCount)}</DropdownMenuMeta>
+            )}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            key="forge-commits"
+            onClick={() => forgeStatsRef.current?.openCommits()}
+            aria-label={
+              repoStats?.commitCount != null
+                ? `Commits, ${formatCountExact(repoStats.commitCount)}`
+                : undefined
+            }
+          >
+            <GitCommit className="mr-2 h-3.5 w-3.5" />
+            Commits
+            {repoStats?.commitCount != null && (
+              <DropdownMenuMeta>{formatCountExact(repoStats.commitCount)}</DropdownMenuMeta>
+            )}
+          </DropdownMenuItem>
+        </DropdownMenuGroup>,
+      ];
+    }
+    if (id === "plugin-tray") {
+      // The tray's own dropdown can't be opened from here, and an
+      // un-promoted contribution has no other toolbar route — so inline
+      // the grouped contributions rather than leaving a row that
+      // dismisses the menu and opens nothing.
+      if (pluginTrayGroups.length === 0) return [];
+      return [
+        ...pluginTrayGroups.map((group) => (
+          <DropdownMenuGroup key={`plugin-tray-${group.pluginId}`}>
+            <DropdownMenuLabel>{group.displayName}</DropdownMenuLabel>
+            {group.buttons.map((config) => (
+              <PluginOverflowItem
+                key={config.id}
+                config={config}
+                onSelect={() => selectPluginItem(config)}
+              />
+            ))}
+          </DropdownMenuGroup>
+        )),
+      ];
+    }
+    if (id === "launcher") {
+      // Same reason as `plugin-tray` above: the launcher's dropdown can't
+      // be opened from inside this menu, and since #11680 neither the
+      // agents nor `browser`/`dev-server` have a top-level button of their
+      // own on a fresh profile — so a bare row here would dismiss the menu
+      // and open nothing. That is what `agent-tray` did before the merge:
+      // it had no case at all and no `overflowActions` entry, leaving a
+      // silently dead row. Pins and shortcut editing are omitted:
+      // promoting a button while the toolbar is too narrow to show it has
+      // nothing to reveal.
+      //
+      // Items that already carry their own overflow row are skipped: a
+      // grandfathered profile keeps its agent and `browser`/`dev-server`
+      // buttons, and when those overflow alongside the launcher the
+      // generic rows below already offer them. Inlining anyway would put
+      // two identically labelled rows in one menu.
+      const inlinedAgents = launcherAgentIds.filter(
+        (agentId) => !overflowIds.includes(agentId) && OVERFLOW_MENU_META[agentId]
+      );
+      const inlinedPanels = launcherPanelItems.filter((item) => !overflowIds.includes(item.id));
+      if (inlinedAgents.length === 0 && inlinedPanels.length === 0) return [];
+      return [
+        ...inlinedAgents.map((agentId) => {
+          const agentMeta = OVERFLOW_MENU_META[agentId]!;
+          return (
+            <AgentOverflowItem
+              key={`launcher-${agentId}`}
+              id={agentId}
+              label={agentMeta.label}
+              Icon={agentMeta.icon}
+              attentionState={agentAttentionStates.get(agentId) ?? null}
+              onSelect={() => overflowActions[agentId]?.()}
+            />
+          );
+        }),
+        ...inlinedPanels.map((item) => {
+          const Icon = item.icon;
+          return (
+            <DropdownMenuItem
+              key={`launcher-${item.id}`}
+              disabled={panelTrayDisabled[item.id]}
+              onClick={() => overflowActions[item.id]?.()}
+              keybinding={keybindingById[item.id]}
+            >
+              <Icon className="mr-2 h-3.5 w-3.5" />
+              <span className="flex-1">{item.label}</span>
+            </DropdownMenuItem>
+          );
+        }),
+      ];
+    }
+    const pluginConfig = pluginConfigs.get(id);
+    if (pluginConfig) {
+      return [
+        <PluginOverflowItem
+          key={id}
+          config={pluginConfig}
+          onSelect={() => selectPluginItem(pluginConfig)}
+          keybinding={keybindingById[id]}
+        />,
+      ];
+    }
+    const meta = OVERFLOW_MENU_META[id] ?? dynamicOverflowMeta[id];
+    if (!meta) return [];
+    if (isBuiltInAgentId(id)) {
+      return [
+        <AgentOverflowItem
+          key={id}
+          id={id}
+          label={meta.label}
+          Icon={meta.icon}
+          attentionState={agentAttentionStates.get(id) ?? null}
+          onSelect={() => overflowActions[id]?.()}
+        />,
+      ];
+    }
+    const Icon = meta.icon;
+    // Mirror the visible copy-tree button, which declines both when there
+    // is nothing to copy yet (no workspace, or a project's worktrees still
+    // loading) and while a copy is in flight — without this the overflow item would
+    // look live yet silently close with no feedback, since its handler
+    // guards on the same two conditions.
+    const unavailableReason = unavailableReasonById[id];
+    const disabled =
+      (id === "copy-tree" && (!canCopyTree || isCopyingTree)) || unavailableReason !== undefined;
+    // The in-flight reason is spelled out, as the visible button's
+    // spinner and "Copying…" name do — a greyed row alone reads as
+    // unavailable rather than busy. The label carries it rather than a
+    // trailing meta, which would widen the open menu and snap it back
+    // narrower the moment the copy lands.
+    const copying = id === "copy-tree" && isCopyingTree;
+    const count = overflowCount(id);
+    return [
+      <DropdownMenuItem
+        key={id}
+        disabled={disabled}
+        onClick={() => overflowActions[id]?.()}
+        keybinding={keybindingById[id]}
+      >
+        {copying && showCopyingSpinner ? (
+          <Spinner size="sm" className="mr-2" />
+        ) : (
+          <Icon className="mr-2 h-3.5 w-3.5" />
+        )}
+        {id === "copy-tree" ? (
+          // Both labels share one grid cell so the row is always as wide
+          // as the longer one: the open menu keeps its width when a copy
+          // starts or lands under the pointer.
+          <span className="grid flex-1">
+            <span className="[grid-area:1/1]">{copying ? "Copying context…" : meta.label}</span>
+            <span aria-hidden="true" className="invisible [grid-area:1/1]">
+              Copying context…
+            </span>
+          </span>
+        ) : (
+          <span className="flex-1">{meta.label}</span>
+        )}
+        {/* Audible: the count belongs in the row's accessible name. */}
+        {count !== null && <DropdownMenuMeta aria-hidden={false}>{count}</DropdownMenuMeta>}
+        {unavailableReason !== undefined && (
+          <DropdownMenuMeta aria-hidden={false}>{unavailableReason}</DropdownMenuMeta>
+        )}
+      </DropdownMenuItem>,
+    ];
+  };
+
+  const entryNodes = joinOverflowBlocks(
+    overflowIds.map((id) => ({ id, nodes: renderOverflowEntry(id) })),
+    resolveGroup
+  );
+
   return (
     <PluginToolbarPopover origin={popoverOrigin} configs={pluginConfigs}>
       <DropdownMenu open={isEmpty ? false : open} onOpenChange={handleOpenChange}>
@@ -322,245 +564,55 @@ export function OverflowMenu({
               </DropdownMenuItem>
             </DropdownMenuGroup>
           )}
-          {branchRow !== null && overflowIds.length > 0 && <DropdownMenuSeparator />}
-          {overflowIds.flatMap((id, idx) => {
-            if (id === "forge-stats") {
-              const isLast = idx === overflowIds.length - 1;
-              // Without a resolved forge provider the visible slot is the
-              // commits-only pill — mirror that here: a local-git group with
-              // just the commits row (issues/PRs are forge data). It opens the
-              // pill's local commit history (#10414), the only route to it once
-              // a project's profile demotes the pill into this menu.
-              if (!forgeProviderName) {
-                return [
-                  <DropdownMenuGroup key="forge-group">
-                    <DropdownMenuLabel>Git</DropdownMenuLabel>
-                    <DropdownMenuItem
-                      key="forge-commits"
-                      onClick={() => forgeStatsRef.current?.openCommits()}
-                      aria-label={
-                        repoStats?.commitCount != null
-                          ? `Commits, ${formatCountExact(repoStats.commitCount)}`
-                          : undefined
-                      }
-                    >
-                      <GitCommit className="mr-2 h-3.5 w-3.5" />
-                      Commits
-                      {repoStats?.commitCount != null && (
-                        <DropdownMenuMeta>
-                          {formatCountExact(repoStats.commitCount)}
-                        </DropdownMenuMeta>
-                      )}
-                    </DropdownMenuItem>
-                  </DropdownMenuGroup>,
-                  ...(isLast ? [] : [<DropdownMenuSeparator key="forge-sep" />]),
-                ];
-              }
-              return [
-                <DropdownMenuGroup key="forge-group">
-                  <DropdownMenuLabel>{forgeProviderName}</DropdownMenuLabel>
-                  <DropdownMenuItem
-                    key="forge-issues"
-                    onClick={() => forgeStatsRef.current?.openIssues()}
-                    aria-label={
-                      repoStats?.issueCount != null
-                        ? `Issues, ${formatCountExact(repoStats.issueCount)}`
-                        : undefined
-                    }
-                  >
-                    <CircleDot className="mr-2 h-3.5 w-3.5 text-pr-open" />
-                    Issues
-                    {repoStats?.issueCount != null && (
-                      <DropdownMenuMeta>{formatCountExact(repoStats.issueCount)}</DropdownMenuMeta>
-                    )}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    key="forge-prs"
-                    onClick={() => forgeStatsRef.current?.openPrs()}
-                    aria-label={
-                      repoStats?.prCount != null
-                        ? `Pull requests, ${formatCountExact(repoStats.prCount)}`
-                        : undefined
-                    }
-                  >
-                    <GitPullRequest className="mr-2 h-3.5 w-3.5 text-pr-merged" />
-                    Pull requests
-                    {repoStats?.prCount != null && (
-                      <DropdownMenuMeta>{formatCountExact(repoStats.prCount)}</DropdownMenuMeta>
-                    )}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    key="forge-commits"
-                    onClick={() => forgeStatsRef.current?.openCommits()}
-                    aria-label={
-                      repoStats?.commitCount != null
-                        ? `Commits, ${formatCountExact(repoStats.commitCount)}`
-                        : undefined
-                    }
-                  >
-                    <GitCommit className="mr-2 h-3.5 w-3.5" />
-                    Commits
-                    {repoStats?.commitCount != null && (
-                      <DropdownMenuMeta>{formatCountExact(repoStats.commitCount)}</DropdownMenuMeta>
-                    )}
-                  </DropdownMenuItem>
-                </DropdownMenuGroup>,
-                ...(isLast ? [] : [<DropdownMenuSeparator key="forge-sep" />]),
-              ];
-            }
-            if (id === "plugin-tray") {
-              // The tray's own dropdown can't be opened from here, and an
-              // un-promoted contribution has no other toolbar route — so inline
-              // the grouped contributions rather than leaving a row that
-              // dismisses the menu and opens nothing.
-              if (pluginTrayGroups.length === 0) return [];
-              const isLast = idx === overflowIds.length - 1;
-              return [
-                ...pluginTrayGroups.map((group) => (
-                  <DropdownMenuGroup key={`plugin-tray-${group.pluginId}`}>
-                    <DropdownMenuLabel>{group.displayName}</DropdownMenuLabel>
-                    {group.buttons.map((config) => (
-                      <PluginOverflowItem
-                        key={config.id}
-                        config={config}
-                        onSelect={() => selectPluginItem(config)}
-                      />
-                    ))}
-                  </DropdownMenuGroup>
-                )),
-                ...(isLast ? [] : [<DropdownMenuSeparator key="plugin-tray-sep" />]),
-              ];
-            }
-            if (id === "launcher") {
-              // Same reason as `plugin-tray` above: the launcher's dropdown can't
-              // be opened from inside this menu, and since #11680 neither the
-              // agents nor `browser`/`dev-server` have a top-level button of their
-              // own on a fresh profile — so a bare row here would dismiss the menu
-              // and open nothing. That is what `agent-tray` did before the merge:
-              // it had no case at all and no `overflowActions` entry, leaving a
-              // silently dead row. Pins and shortcut editing are omitted:
-              // promoting a button while the toolbar is too narrow to show it has
-              // nothing to reveal.
-              //
-              // Items that already carry their own overflow row are skipped: a
-              // grandfathered profile keeps its agent and `browser`/`dev-server`
-              // buttons, and when those overflow alongside the launcher the
-              // generic rows below already offer them. Inlining anyway would put
-              // two identically labelled rows in one menu.
-              const inlinedAgents = launcherAgentIds.filter(
-                (agentId) => !overflowIds.includes(agentId) && OVERFLOW_MENU_META[agentId]
-              );
-              const inlinedPanels = launcherPanelItems.filter(
-                (item) => !overflowIds.includes(item.id)
-              );
-              if (inlinedAgents.length === 0 && inlinedPanels.length === 0) return [];
-              const isLast = idx === overflowIds.length - 1;
-              return [
-                ...inlinedAgents.map((agentId) => {
-                  const agentMeta = OVERFLOW_MENU_META[agentId]!;
-                  return (
-                    <AgentOverflowItem
-                      key={`launcher-${agentId}`}
-                      id={agentId}
-                      label={agentMeta.label}
-                      Icon={agentMeta.icon}
-                      attentionState={agentAttentionStates.get(agentId) ?? null}
-                      onSelect={() => overflowActions[agentId]?.()}
-                    />
-                  );
-                }),
-                ...inlinedPanels.map((item) => {
-                  const Icon = item.icon;
-                  return (
-                    <DropdownMenuItem
-                      key={`launcher-${item.id}`}
-                      disabled={panelTrayDisabled[item.id]}
-                      onClick={() => overflowActions[item.id]?.()}
-                      keybinding={keybindingById[item.id]}
-                    >
-                      <Icon className="mr-2 h-3.5 w-3.5" />
-                      <span className="flex-1">{item.label}</span>
-                    </DropdownMenuItem>
-                  );
-                }),
-                ...(isLast ? [] : [<DropdownMenuSeparator key="launcher-sep" />]),
-              ];
-            }
-            const pluginConfig = pluginConfigs.get(id);
-            if (pluginConfig) {
-              return [
-                <PluginOverflowItem
-                  key={id}
-                  config={pluginConfig}
-                  onSelect={() => selectPluginItem(pluginConfig)}
-                  keybinding={keybindingById[id]}
-                />,
-              ];
-            }
-            const meta = OVERFLOW_MENU_META[id] ?? dynamicOverflowMeta[id];
-            if (!meta) return [];
-            if (isBuiltInAgentId(id)) {
-              return [
-                <AgentOverflowItem
-                  key={id}
-                  id={id}
-                  label={meta.label}
-                  Icon={meta.icon}
-                  attentionState={agentAttentionStates.get(id) ?? null}
-                  onSelect={() => overflowActions[id]?.()}
-                />,
-              ];
-            }
-            const Icon = meta.icon;
-            // Mirror the visible copy-tree button, which declines both when there
-            // is nothing to copy yet (no workspace, or a project's worktrees still
-            // loading) and while a copy is in flight — without this the overflow item would
-            // look live yet silently close with no feedback, since its handler
-            // guards on the same two conditions.
-            const disabled = id === "copy-tree" && (!canCopyTree || isCopyingTree);
-            // The in-flight reason is spelled out, as the visible button's
-            // spinner and "Copying…" name do — a greyed row alone reads as
-            // unavailable rather than busy. The label carries it rather than a
-            // trailing meta, which would widen the open menu and snap it back
-            // narrower the moment the copy lands.
-            const copying = id === "copy-tree" && isCopyingTree;
-            const count = overflowCount(id);
-            return [
-              <DropdownMenuItem
-                key={id}
-                disabled={disabled}
-                onClick={() => overflowActions[id]?.()}
-                keybinding={keybindingById[id]}
-              >
-                {copying && showCopyingSpinner ? (
-                  <Spinner size="sm" className="mr-2" />
-                ) : (
-                  <Icon className="mr-2 h-3.5 w-3.5" />
-                )}
-                {id === "copy-tree" ? (
-                  // Both labels share one grid cell so the row is always as wide
-                  // as the longer one: the open menu keeps its width when a copy
-                  // starts or lands under the pointer.
-                  <span className="grid flex-1">
-                    <span className="[grid-area:1/1]">
-                      {copying ? "Copying context…" : meta.label}
-                    </span>
-                    <span aria-hidden="true" className="invisible [grid-area:1/1]">
-                      Copying context…
-                    </span>
-                  </span>
-                ) : (
-                  <span className="flex-1">{meta.label}</span>
-                )}
-                {/* Audible: the count belongs in the row's accessible name. */}
-                {count !== null && <DropdownMenuMeta aria-hidden={false}>{count}</DropdownMenuMeta>}
-              </DropdownMenuItem>,
-            ];
-          })}
+          {branchRow !== null && entryNodes.length > 0 && <DropdownMenuSeparator />}
+          {entryNodes}
+          {/* Where to change what is hidden here, from the one menu that only
+              exists because the strip ran out of room. */}
+          {(branchRow !== null || entryNodes.length > 0) && <DropdownMenuSeparator />}
+          <DropdownMenuActionItem actionId="app.settings.openTab" args={{ tab: "toolbar" }}>
+            <TOOLBAR_CUSTOMIZE_ICON
+              data-menu-icon
+              className="mr-2 h-3.5 w-3.5"
+              aria-hidden="true"
+            />
+            {TOOLBAR_CUSTOMIZE_LABEL}
+          </DropdownMenuActionItem>
         </DropdownMenuContent>
       </DropdownMenu>
     </PluginToolbarPopover>
   );
+}
+
+// Entries that inline a whole group of their own rows (a forge's three counts, a
+// plugin's contributions, the launcher's agents and panels) are fenced off on
+// both sides; single rows are separated only where their toolbar group changes,
+// which is exactly where the strip drew a divider between the same buttons.
+const MULTI_ROW_OVERFLOW_IDS: ReadonlySet<AnyToolbarButtonId> = new Set([
+  "forge-stats",
+  "plugin-tray",
+  "launcher",
+]);
+
+function joinOverflowBlocks(
+  blocks: ReadonlyArray<{ id: AnyToolbarButtonId; nodes: React.ReactNode[] }>,
+  resolveGroup: (id: AnyToolbarButtonId) => ToolbarButtonGroup
+): React.ReactNode[] {
+  const out: React.ReactNode[] = [];
+  let previous: AnyToolbarButtonId | null = null;
+  for (const { id, nodes } of blocks) {
+    if (nodes.length === 0) continue;
+    if (
+      previous !== null &&
+      (MULTI_ROW_OVERFLOW_IDS.has(previous) ||
+        MULTI_ROW_OVERFLOW_IDS.has(id) ||
+        resolveGroup(previous) !== resolveGroup(id))
+    ) {
+      out.push(<DropdownMenuSeparator key={`overflow-sep-${id}`} />);
+    }
+    out.push(...nodes);
+    previous = id;
+  }
+  return out;
 }
 
 // Overflow menu item for a built-in agent. Restores the two signals the bare

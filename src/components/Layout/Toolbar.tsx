@@ -46,11 +46,16 @@ import { useRecipeStore } from "@/store/recipeStore";
 import { useLauncherData } from "./useLauncherData";
 import {
   activateDockLaunchItem,
+  panelPrecondition,
   useDockLaunchModel,
   type ActivateDockLaunchItemContext,
   type DockLaunchAgentOptions,
 } from "./dockLaunchItems";
-import { buildLauncherToolbarMeta, useLauncherToolbarCatalog } from "./launcherToolbarCatalog";
+import {
+  buildLauncherToolbarMeta,
+  collidingRecipeNames,
+  useLauncherToolbarCatalog,
+} from "./launcherToolbarCatalog";
 import { LauncherToolbarButton } from "./LauncherToolbarButton";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
@@ -725,6 +730,10 @@ export function Toolbar({
     launcherModel.searchItems,
     currentRecipeProjectId
   );
+  const recipeNameCollisions = useMemo(
+    () => collidingRecipeNames(launcherCatalog),
+    [launcherCatalog]
+  );
   const launcherActivationContext = useMemo<ActivateDockLaunchItemContext>(
     () => ({
       cwd: launcherData.cwd,
@@ -1175,6 +1184,9 @@ export function Toolbar({
                 key={entry.buttonId}
                 entry={entry}
                 activationContext={launcherActivationContext}
+                showScope={
+                  entry.item.category === "recipe" && recipeNameCollisions.has(entry.item.name)
+                }
                 data-toolbar-item=""
               />
             ),
@@ -1195,6 +1207,7 @@ export function Toolbar({
       launchAgentFromToolbar,
       launcherCatalog,
       launcherActivationContext,
+      recipeNameCollisions,
       sidebarShortcut,
       sidebarAriaShortcut,
       sidebarHintHover,
@@ -1475,6 +1488,24 @@ export function Toolbar({
 
   // Mirrors the launcher's own row gates so an inlined overflow row degrades
   // the same way the launcher row does rather than silently opening nothing.
+  // A pinned launcher row that can't launch right now stays on the toolbar,
+  // disabled with its reason; overflowing it must not quietly re-enable it.
+  // The two built-in panel buttons with a precondition carry the launcher row's
+  // own gate and wording for it.
+  const overflowUnavailableReasons = useMemo(() => {
+    const reasons: Partial<Record<string, string>> = {};
+    for (const entry of launcherCatalog.values()) {
+      const reason = entry.item.disabled?.reason;
+      if (reason !== undefined) reasons[entry.buttonId] = reason;
+    }
+    const preconditions = { hasWorkspace, hasProject: currentProject !== null };
+    const fileBrowser = panelPrecondition("file-browser", preconditions)?.reason;
+    const devPreview = panelPrecondition("dev-preview", preconditions)?.reason;
+    if (fileBrowser !== undefined) reasons["file-browser"] = fileBrowser;
+    if (devPreview !== undefined) reasons["dev-server"] = devPreview;
+    return reasons;
+  }, [launcherCatalog, hasWorkspace, currentProject]);
+
   const panelTrayDisabled: Partial<Record<string, boolean>> = {
     "file-browser": !hasWorkspace,
     "dev-server": !currentProject,
@@ -1523,6 +1554,8 @@ export function Toolbar({
       panelTrayDisabled={panelTrayDisabled}
       keybindingById={OVERFLOW_KEYBINDING_BY_ID}
       branchRow={branchRow}
+      resolveGroup={resolveToolbarGroup}
+      unavailableReasonById={overflowUnavailableReasons}
     />
   );
 

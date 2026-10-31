@@ -37,7 +37,7 @@ import {
 // and persisted settings. Tests are independent: each adds the presets it acts
 // on, so a failure restarts the app without stranding the rest.
 
-const TOOLBAR_CHEVRON = '[aria-label="Set Claude preset"]';
+const TOOLBAR_CHEVRON = '[aria-label="Start Claude with a preset"]';
 
 let ctx: AppContext;
 let agents: FakeAgents;

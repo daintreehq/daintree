@@ -192,14 +192,15 @@ function mergeButtonList(
 }
 
 /**
- * Give a promoted button a slot next to the launcher it was promoted from, so
- * the things pinned out of the launcher stay grouped beside it rather than
- * landing at whichever end of the row a bare append would put them.
+ * Give a promoted button a slot on the launcher's side of the toolbar, after
+ * everything already there.
  *
- * Inserts *after* the launcher, not at its index: the launcher leads its group
- * (#11680), so splicing at its index would push it off the leading edge one
- * promotion at a time. `panel-tray` used to sit mid-row, where inserting before
- * it was what kept the panel buttons grouped.
+ * The render boundary regroups each side (#11681), so a button pinned out of
+ * the launcher lands in its own group whatever its array index, and what the
+ * index still decides is its place among its peers. Appending puts it last,
+ * which is the order the user pinned in. Splicing in right after the launcher —
+ * from when the array order was the only grouping there was — put each new pin
+ * first, so three recipes pinned A, B, C read C, B, A.
  *
  * `launcher` can only be missing from a hand-edited profile; the left side is
  * where these buttons have always lived (`LEFT_HOME_BUTTON_IDS`), so that is the
@@ -214,13 +215,7 @@ function positionLauncherButton(
   buttonIds: AnyToolbarButtonId[]
 ): { leftButtons: AnyToolbarButtonId[]; rightButtons: AnyToolbarButtonId[] } {
   const launcherOnRight = layout.rightButtons.includes("launcher");
-  const target = [...(launcherOnRight ? layout.rightButtons : layout.leftButtons)];
-  const launcherIndex = target.indexOf("launcher");
-  // One splice for the whole batch rather than one per id: repeated single
-  // inserts all land at the same index (the launcher does not move) or all
-  // append (when there is no launcher), and those two produce OPPOSITE
-  // orderings. Inserting the batch keeps the caller's order either way.
-  target.splice(launcherIndex === -1 ? target.length : launcherIndex + 1, 0, ...buttonIds);
+  const target = [...(launcherOnRight ? layout.rightButtons : layout.leftButtons), ...buttonIds];
   const positioned = sanitizeButtonList(target);
   return launcherOnRight
     ? { leftButtons: layout.leftButtons, rightButtons: positioned }
@@ -254,8 +249,7 @@ function restorePromotedPanelButtons(layout: ToolbarLayoutState): ToolbarLayoutS
       !layout.rightButtons.includes(buttonId)
   );
   if (missing.length === 0) return layout;
-  // One batched insert, in list order — see `positionLauncherButton` on why
-  // restoring them one at a time reverses the group.
+  // One batched append, in list order, so the restored group keeps it.
   const next: ToolbarLayoutState = { ...layout, ...positionLauncherButton(layout, [...missing]) };
   return next;
 }
@@ -456,8 +450,7 @@ interface ToolbarPreferencesState extends ToolbarPreferences {
    * boundary in `Toolbar.tsx`, which reads the authoritative pin from
    * `agentToolbarPinsStore`.
    *
-   * Takes a batch as well as a single id: positioning several agents one call at
-   * a time reverses them, since every insert lands at the same index — see
+   * Takes a batch as well as a single id, appended in the order given — see
    * `positionLauncherButton`.
    */
   positionAgentButton: (buttonIds: AnyToolbarButtonId | AnyToolbarButtonId[]) => void;
@@ -988,7 +981,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
           // (#11680). Both old ids are persisted literals in the position arrays
           // and the pin map of every existing profile, so leaving them would
           // strand two dead references: `buttonRegistry` no longer renders
-          // either, and `positionLauncherButton`'s anchor would find nothing.
+          // either, and nothing would anchor the launcher's side of the row.
           //
           // `agent-tray` is *renamed* rather than dropped-and-re-added, so the
           // launcher inherits its exact index and a user who dragged the tray

@@ -384,6 +384,7 @@ vi.mock("lucide-react", () => ({
   ExternalLink: () => <span data-testid="external-link-icon" />,
   PanelBottom: () => <span data-testid="panel-bottom-icon" />,
   Unplug: () => <span data-testid="unplug-icon" />,
+  PinOff: () => <span data-testid="pin-off-icon" />,
   Bookmark: () => <span data-testid="bookmark-icon" />,
   FolderGit2: () => <span data-testid="folder-git-icon" />,
   PanelTop: () => <span data-testid="panel-top-icon" />,
@@ -1122,7 +1123,7 @@ describe("AgentButton preset UX", () => {
       const { getAllByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
-      expect(tooltipTexts(getAllByTestId)).toContain("Set Claude preset");
+      expect(tooltipTexts(getAllByTestId)).toContain("Start Claude with a preset");
     });
 
     it("preserves the preset segment when the sign-in probe is unconfirmed", () => {
