@@ -774,8 +774,8 @@ describe("useScrollIndicator paging past a tall card between bands", () => {
     { index: 4, offset: 1100, size: 100, kind: "row" },
   ]);
 
-  function setup(scrollTop: number) {
-    const scroller = makeScroller({ scrollTop, clientHeight: 300, scrollHeight: 1200 });
+  function setup(scrollTop: number, clientHeight = 300) {
+    const scroller = makeScroller({ scrollTop, clientHeight, scrollHeight: 1200 });
     const scrollTo = vi.fn();
     Object.defineProperty(scroller, "scrollTo", { value: scrollTo });
     const { result } = renderHook(() =>
@@ -801,5 +801,17 @@ describe("useScrollIndicator paging past a tall card between bands", () => {
     const above = setup(700);
     act(() => above.result.current.revealAbove());
     expect(above.scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ top: 472 }));
+  });
+
+  // A 120px list still has room for both bands, with 48px between them. Any
+  // longer step would skip part of the card.
+  it("never steps further than what shows between the bands", () => {
+    const below = setup(200, 120);
+    act(() => below.result.current.revealBelow());
+    expect(below.scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ top: 248 }));
+
+    const above = setup(700, 120);
+    act(() => above.result.current.revealAbove());
+    expect(above.scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ top: 652 }));
   });
 });

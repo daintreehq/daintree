@@ -204,6 +204,23 @@ describe("ScrollIndicator", () => {
       expect(onWheel).not.toHaveBeenCalled();
     });
 
+    // jsdom doesn't hit-test, so this reads the merged classes: the pill's
+    // primitive bakes in `pointer-events-auto`, which must give way on exit.
+    it("lets presses fall through to the rows while it fades out", () => {
+      const classes = (el: Element) => el.className.split(/\s+/);
+      const { rerender } = render(
+        <ScrollIndicator direction="below" count={2} onClick={onClick} />
+      );
+      expect(classes(band())).not.toContain("pointer-events-none");
+      expect(classes(screen.getByRole("button"))).toContain("pointer-events-auto");
+
+      mockUseAnimatedPresence.mockReturnValue({ isVisible: false, shouldRender: true });
+      rerender(<ScrollIndicator direction="below" count={0} onClick={onClick} />);
+      expect(classes(band())).toContain("pointer-events-none");
+      expect(classes(screen.getByRole("button"))).not.toContain("pointer-events-auto");
+      expect(classes(screen.getByRole("button"))).toContain("pointer-events-none");
+    });
+
     it("leaves with the pill", () => {
       const { rerender, container } = render(
         <ScrollIndicator direction="below" count={2} onClick={onClick} />
