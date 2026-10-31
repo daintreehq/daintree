@@ -363,6 +363,182 @@ describe("MigrationRunner", () => {
     }
   );
 
+  describe("pre-migration backup retention", () => {
+    // Mixed legacy (unversioned) and versioned names, oldest first. The legacy
+    // 2024-12-15 backup is newer than v2-2024-11-01, so ordering by file name
+    // instead of timestamp would keep the wrong files.
+    const SEEDED_BACKUPS = [
+      "config.json.backup-2024-04-01T08-00-00-000Z",
+      "config.json.backup-v1-2024-06-01T08-00-00-000Z",
+      "config.json.backup-v2-2024-11-01T08-00-00-000Z",
+      "config.json.backup-2024-12-15T08-00-00-000Z",
+      "config.json.backup-v2-2025-01-20T08-00-00-000Z",
+    ];
+    const NEWEST_SEEDED = [SEEDED_BACKUPS[4], SEEDED_BACKUPS[3]];
+    const UNRELATED_FILES = [
+      "config.json.bak",
+      "config.json.corrupted.1700000000000",
+      "config.json.failed-2024-01-01T00-00-00-000Z",
+      "config.json.backup-notes",
+      "other.json.backup-2024-01-01T00-00-00-000Z",
+    ];
+    const noop: Migration = { version: 4, description: "noop", up: () => {} };
+
+    function seed(names: string[]): void {
+      for (const name of names) fs.writeFileSync(path.join(tempDir, name), "{}", "utf8");
+    }
+
+    function backups(): string[] {
+      return fs
+        .readdirSync(tempDir)
+        .filter((f) => f.startsWith("config.json.backup-") && f !== "config.json.backup-notes")
+        .sort();
+    }
+
+    it("keeps only the newest backups by timestamp after a successful chain", async () => {
+      seed([...SEEDED_BACKUPS, ...UNRELATED_FILES]);
+      const store = createMockStore(storePath, { _schemaVersion: 3 });
+
+      await new MigrationRunner(store as never).runMigrations([noop]);
+
+      expect(store.data._schemaVersion).toBe(4);
+      expect(fs.readdirSync(tempDir).sort()).toEqual(
+        [
+          "config.json",
+          "config.json.backup-v3-2025-02-10T10-00-00-000Z",
+          ...NEWEST_SEEDED,
+          ...UNRELATED_FILES,
+        ].sort()
+      );
+    });
+
+    it("keeps this run's backup even when the clock reads older than existing backups", async () => {
+      vi.setSystemTime(new Date("2024-01-01T00:00:00.000Z"));
+      seed(SEEDED_BACKUPS);
+      const store = createMockStore(storePath, { _schemaVersion: 3 });
+
+      await new MigrationRunner(store as never).runMigrations([noop]);
+
+      expect(backups()).toEqual(
+        ["config.json.backup-v3-2024-01-01T00-00-00-000Z", ...NEWEST_SEEDED].sort()
+      );
+    });
+
+    it("deletes no backups when the chain fails and restores from its backup", async () => {
+      seed(SEEDED_BACKUPS);
+      const store = createMockStore(storePath, { _schemaVersion: 3 });
+
+      await expect(
+        new MigrationRunner(store as never).runMigrations([
+          {
+            version: 4,
+            description: "broken",
+            up: () => {
+              throw new Error("kaboom");
+            },
+          },
+        ])
+      ).rejects.toThrow(StoreMigrationError);
+
+      expect(backups()).toEqual([...SEEDED_BACKUPS].sort());
+    });
+
+    it("deletes no backups when no migration is pending", async () => {
+      seed(SEEDED_BACKUPS);
+      const store = createMockStore(storePath, { _schemaVersion: 4 });
+
+      await new MigrationRunner(store as never).runMigrations([noop]);
+
+      expect(backups()).toEqual([...SEEDED_BACKUPS].sort());
+    });
+
+    it("keeps the floor-reset backup, the only copy of the pre-reset data", async () => {
+      const originalBytes = JSON.stringify({ _schemaVersion: 1, sentinel: "pre-reset" });
+      fs.writeFileSync(storePath, originalBytes, "utf8");
+      seed(SEEDED_BACKUPS);
+      const store = createMockStore(storePath, { _schemaVersion: 1 });
+
+      await new MigrationRunner(store as never, { floorVersion: 5 }).runMigrations([
+        { version: 5, description: "v5", up: () => {} },
+      ]);
+
+      const floorBackup = "config.json.backup-v1-2025-02-10T10-00-00-000Z";
+      expect(store.data._schemaVersion).toBe(5);
+      expect(backups()).toEqual([floorBackup, ...NEWEST_SEEDED].sort());
+      expect(fs.readFileSync(path.join(tempDir, floorBackup), "utf8")).toBe(originalBytes);
+    });
+
+    it("logs and swallows a failed deletion, and the migration still succeeds", async () => {
+      seed(SEEDED_BACKUPS);
+      const stuck = path.join(tempDir, SEEDED_BACKUPS[0]);
+      const realUnlinkSync = fs.unlinkSync.bind(fs);
+      const unlinkSpy = vi.spyOn(fs, "unlinkSync").mockImplementation(((target: fs.PathLike) => {
+        if (String(target) === stuck) {
+          throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" });
+        }
+        realUnlinkSync(target);
+      }) as typeof fs.unlinkSync);
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const store = createMockStore(storePath, { _schemaVersion: 3 });
+
+      try {
+        await expect(
+          new MigrationRunner(store as never).runMigrations([noop])
+        ).resolves.toBeUndefined();
+      } finally {
+        unlinkSpy.mockRestore();
+      }
+
+      expect(store.data._schemaVersion).toBe(4);
+      expect(backups()).toEqual(
+        [
+          SEEDED_BACKUPS[0],
+          "config.json.backup-v3-2025-02-10T10-00-00-000Z",
+          ...NEWEST_SEEDED,
+        ].sort()
+      );
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(stuck), expect.any(Error));
+      warnSpy.mockRestore();
+    });
+
+    it("still succeeds when the store directory cannot be listed", async () => {
+      seed(SEEDED_BACKUPS);
+      const readdirSpy = vi.spyOn(fs, "readdirSync").mockImplementation((() => {
+        throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      }) as typeof fs.readdirSync);
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const store = createMockStore(storePath, { _schemaVersion: 3 });
+
+      try {
+        await expect(
+          new MigrationRunner(store as never).runMigrations([noop])
+        ).resolves.toBeUndefined();
+      } finally {
+        readdirSpy.mockRestore();
+      }
+
+      expect(store.data._schemaVersion).toBe(4);
+      expect(backups()).toEqual(
+        ["config.json.backup-v3-2025-02-10T10-00-00-000Z", ...SEEDED_BACKUPS].sort()
+      );
+      warnSpy.mockRestore();
+    });
+
+    it.skipIf(process.platform === "win32")(
+      "tightens retained backups written by older builds to 0o600",
+      async () => {
+        seed(SEEDED_BACKUPS);
+        const retainedLegacy = path.join(tempDir, NEWEST_SEEDED[1]);
+        fs.chmodSync(retainedLegacy, 0o644);
+        const store = createMockStore(storePath, { _schemaVersion: 3 });
+
+        await new MigrationRunner(store as never).runMigrations([noop]);
+
+        expect(fs.statSync(retainedLegacy).mode & 0o777).toBe(0o600);
+      }
+    );
+  });
+
   describe("auto-restore on migration failure", () => {
     it("atomically restores the pre-migration store file when a migration throws", async () => {
       const originalBytes = JSON.stringify({ _schemaVersion: 0, sentinel: "pre-migration" });
