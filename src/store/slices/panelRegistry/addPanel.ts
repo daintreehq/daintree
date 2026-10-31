@@ -104,10 +104,7 @@ function estimateOverlayGridDims(fontSize: number): { cols: number; rows: number
   );
 }
 
-export const createAddPanelActions = (
-  set: Set,
-  get: Get
-): Pick<PanelRegistrySlice, "addPanel"> => {
+export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySlice, "addPanel"> => {
   const createPanel = async (
     options: AddPanelOptions,
     commit: AddPanelCommitOptions | undefined

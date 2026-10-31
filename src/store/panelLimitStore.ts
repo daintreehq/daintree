@@ -15,7 +15,10 @@ import {
   type PanelLimitSnapshot,
   type PanelLimitTier,
 } from "@shared/utils/panelLimit";
-import { reservePanelSlots, type PanelSlotGrant } from "./slices/panelRegistry/panelSlotReservations";
+import {
+  reservePanelSlots,
+  type PanelSlotGrant,
+} from "./slices/panelRegistry/panelSlotReservations";
 
 export { buildPanelLimitSnapshot, computeHardwareDefaults, evaluatePanelLimit };
 export type { PanelLimitSnapshot, PanelLimitTier };
@@ -412,7 +415,11 @@ export async function preflightSpawnBatchLimit(
       notifyPanelLimitReached(liveHardLimit, options.worktreeId);
       return { allowed: 0, declined: false, grant: null };
     }
-    return { allowed: confirmedAllowed, declined: false, grant: reservePanelSlots(confirmedAllowed) };
+    return {
+      allowed: confirmedAllowed,
+      declined: false,
+      grant: reservePanelSlots(confirmedAllowed),
+    };
   }
 
   return { allowed, declined: false, grant: reservePanelSlots(allowed) };
