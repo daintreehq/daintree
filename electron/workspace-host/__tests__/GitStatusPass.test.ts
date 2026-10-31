@@ -945,9 +945,9 @@ describe("GitStatusPass", () => {
       expect(made.recordFullPass).toHaveBeenCalledTimes(1);
     });
 
-    it("refuses to start on a stopped monitor", async () => {
+    it("refuses to start on a monitor that is not running", async () => {
       const made = setUp();
-      stopHost(made);
+      (made.host as { isRunning: boolean }).isRunning = false;
 
       await made.pass.run(true);
 
@@ -1026,35 +1026,57 @@ describe("GitStatusPass", () => {
       expect(made.watcherController.flushPendingIfReady).toHaveBeenCalledTimes(1);
     });
 
-    it("swallows an abandoned pass's failure without touching the newer pass", async () => {
+    it("discards a baseline capture its pass was abandoned during", async () => {
       const made = setUp();
-      let rejectStale!: (error: unknown) => void;
-      const freshNote = deferred<NoteRead>();
-      mockGetWorktreeChangesWithStats.mockReturnValueOnce(
-        new Promise((_res, rej) => (rejectStale = rej))
-      );
-      vi.mocked(made.noteReader.read).mockReturnValueOnce(freshNote.promise);
+      const recording = deferred<void>();
+      made.recordFullPass.mockReturnValueOnce(recording.promise);
 
-      const stale = made.pass.run(true);
-      await vi.waitFor(() => expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1));
+      const running = made.pass.run(true);
+      await vi.waitFor(() => expect(made.recordFullPass).toHaveBeenCalledTimes(1));
+      const isCurrent = made.recordFullPass.mock.calls[0][1] as () => boolean;
+      expect(isCurrent()).toBe(true);
+
       made.pass.abandon();
-      const fresh = made.pass.run(true);
-      await vi.waitFor(() => expect(made.noteReader.read).toHaveBeenCalledTimes(1));
-      made.dropBaseline.mockClear();
+      expect(isCurrent()).toBe(false);
+      recording.resolve();
+      await running;
 
-      rejectStale(new Error("fatal: bad object"));
-      await expect(stale).resolves.toBeUndefined();
-
-      expect(made.host.mood).toBe("stable");
-      expect(made.host.emitUpdate).not.toHaveBeenCalled();
-      expect(made.watcherController.markPending).not.toHaveBeenCalled();
-      expect(made.dropBaseline).not.toHaveBeenCalled();
-      expect(made.host.isUpdating).toBe(true);
-
-      freshNote.resolve({ content: "fresh", timestamp: 2 });
-      await fresh;
-      expect(made.host.emitUpdate).toHaveBeenCalledTimes(1);
+      expect(made.watcherController.flushPendingIfReady).not.toHaveBeenCalled();
     });
+
+    it.each(["fatal: bad object", "Unable to create '.git/index.lock': File exists"])(
+      "swallows an abandoned pass's failure (%s) without touching the newer pass",
+      async (message) => {
+        const made = setUp();
+        let rejectStale!: (error: unknown) => void;
+        const freshNote = deferred<NoteRead>();
+        mockGetWorktreeChangesWithStats.mockReturnValueOnce(
+          new Promise((_res, rej) => (rejectStale = rej))
+        );
+        vi.mocked(made.noteReader.read).mockReturnValueOnce(freshNote.promise);
+
+        const stale = made.pass.run(true);
+        await vi.waitFor(() => expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1));
+        made.pass.abandon();
+        const fresh = made.pass.run(true);
+        await vi.waitFor(() => expect(made.noteReader.read).toHaveBeenCalledTimes(1));
+        made.dropBaseline.mockClear();
+
+        rejectStale(new Error(message));
+        await expect(stale).resolves.toBeUndefined();
+
+        expect(made.host.mood).toBe("stable");
+        expect(made.host.emitUpdate).not.toHaveBeenCalled();
+        expect(made.watcherController.markPending).not.toHaveBeenCalled();
+        expect(made.watcherController.scheduleDelayedFlush).not.toHaveBeenCalled();
+        expect(made.dropBaseline).not.toHaveBeenCalled();
+        expect(made.host.isUpdating).toBe(true);
+
+        freshNote.resolve({ content: "fresh", timestamp: 2 });
+        await fresh;
+        expect(made.host.emitUpdate).toHaveBeenCalledTimes(1);
+      }
+    );
 
     it("ignores an abandon signal that fires after its pass finished", async () => {
       const made = setUp();

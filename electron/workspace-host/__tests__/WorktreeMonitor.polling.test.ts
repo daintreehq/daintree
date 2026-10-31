@@ -2241,6 +2241,32 @@ describe("WorktreeMonitor", () => {
       expect(recordSuccess).not.toHaveBeenCalled();
       expect(recordFailure).not.toHaveBeenCalled();
     });
+
+    it("records no failure when the watchdog fires for a lifecycle that already stopped (#15630)", async () => {
+      let release!: (changes: unknown) => void;
+      mockGetWorktreeChangesWithStats
+        .mockReset()
+        .mockReturnValueOnce(new Promise((resolve) => (release = resolve)));
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+      (monitor as unknown as { _isRunning: boolean })._isRunning = true;
+      const strategy = (
+        monitor as unknown as {
+          pollingStrategy: { recordSuccess: () => void; recordFailure: () => boolean };
+        }
+      ).pollingStrategy;
+      const recordSuccess = vi.spyOn(strategy, "recordSuccess");
+      const recordFailure = vi.spyOn(strategy, "recordFailure");
+
+      const polling = (monitor as unknown as { poll: () => Promise<void> }).poll();
+      await vi.advanceTimersByTimeAsync(0);
+      monitor.stop();
+      await vi.advanceTimersByTimeAsync(45_000);
+      await polling;
+
+      expect(recordSuccess).not.toHaveBeenCalled();
+      expect(recordFailure).not.toHaveBeenCalled();
+      release({ worktreeId: TEST_WORKTREE.id, changes: [], changedFileCount: 0, tracking: null });
+    });
   });
 
   describe("stop mid-pass (#15630)", () => {
