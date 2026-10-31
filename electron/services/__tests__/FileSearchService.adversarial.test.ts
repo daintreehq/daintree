@@ -16,11 +16,16 @@ vi.mock("../../utils/hardenedGit.js", () => ({
   createHardenedGit: createHardenedGitMock,
 }));
 
+// Defaults to a non-repository cwd: `ls-files` exits non-zero there, which is
+// what sends the service to the disk walker. An empty successful listing is a
+// different answer (everything under cwd is ignored) and lists nothing.
 function createGitClient(): GitClient {
   return {
     checkIsRepo: vi.fn(async () => false),
     revparse: vi.fn(async () => ""),
-    raw: vi.fn(async () => ""),
+    raw: vi.fn(async (): Promise<string> => {
+      throw new Error("fatal: not a git repository (or any of the parent directories): .git");
+    }),
   };
 }
 

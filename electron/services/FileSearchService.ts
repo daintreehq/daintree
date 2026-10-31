@@ -589,10 +589,12 @@ export class FileSearchService {
     }
 
     try {
-      const gitFiles = await loadGitFiles(cwd);
-      if (gitFiles.length > 0) return gitFiles;
+      // A successful listing is the answer even when it is empty: inside a work
+      // tree, empty means everything under cwd is ignored, and the walker below
+      // doesn't read .gitignore, so falling through would list exactly those files.
+      return await loadGitFiles(cwd);
     } catch {
-      // ignore; fall back to filesystem walk
+      // Not inside a work tree, or git can't run here: walk the disk instead.
     }
 
     return loadFilesFromDisk(cwd);
