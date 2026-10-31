@@ -474,3 +474,84 @@ describe("ScratchStore resumable agent count (#11821)", () => {
     });
   });
 });
+
+describe("ScratchStore.touchScratches (#15614)", () => {
+  let store: ScratchStore;
+
+  function insert(lastOpened: number, deletedAt: number | null = null): string {
+    const id = randomUUID();
+    db.insert(schema.scratches)
+      .values({
+        id,
+        path: "/tmp/daintree-scratch-test/" + id,
+        name: "Test Scratch",
+        createdAt: 1_000,
+        lastOpened,
+        deletedAt,
+      })
+      .run();
+    return id;
+  }
+
+  function lastOpenedOf(id: string): number | undefined {
+    return db.select().from(schema.scratches).where(eq(schema.scratches.id, id)).get()?.lastOpened;
+  }
+
+  beforeEach(() => {
+    sqlite = new Database(":memory:");
+    sqlite.exec(CREATE_TABLES_SQL);
+    db = drizzle(sqlite, { schema });
+    store = new ScratchStore();
+  });
+
+  afterEach(() => {
+    sqlite.close();
+  });
+
+  it("moves each scratch up to when it was last seen, never back", () => {
+    const older = insert(2_000);
+    const newer = insert(9_000);
+
+    store.touchScratches(
+      new Map([
+        [older, 5_000],
+        [newer, 5_000],
+      ])
+    );
+
+    expect(lastOpenedOf(older)).toBe(5_000);
+    expect(lastOpenedOf(newer)).toBe(9_000);
+  });
+
+  it("leaves a tombstoned scratch and the current pointer as they were", () => {
+    const current = insert(2_000);
+    const tombstoned = insert(2_000, 3_000);
+    store.setCurrentScratch(current);
+    const other = insert(2_000);
+
+    store.touchScratches(
+      new Map([
+        [tombstoned, 5_000],
+        [other, 5_000],
+      ])
+    );
+
+    expect(lastOpenedOf(tombstoned)).toBe(2_000);
+    expect(lastOpenedOf(other)).toBe(5_000);
+    expect(store.getCurrentScratchId()).toBe(current);
+  });
+
+  it("ignores ids that are not scratches", () => {
+    const id = insert(2_000);
+
+    expect(() =>
+      store.touchScratches(
+        new Map([
+          ["a".repeat(64), 5_000],
+          [id, Number.NaN],
+        ])
+      )
+    ).not.toThrow();
+    expect(lastOpenedOf(id)).toBe(2_000);
+  });
+});

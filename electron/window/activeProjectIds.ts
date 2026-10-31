@@ -129,3 +129,46 @@ function collect(
 
   return activeIds;
 }
+
+export interface HeldWorkspaceSources {
+  projectViewManagers: ProjectViewManagersProvider;
+  /** The workspace each connected remote Shell view is bound to, shown or cached. */
+  remoteViewWorkspaceIds: () => Iterable<string | null>;
+  /** Workspaces with at least one tracked terminal. */
+  liveTerminalWorkspaceIds: () => Iterable<string>;
+  /** Workspaces a window has committed to before its manager has a view. */
+  reservedWorkspaceIds: () => Iterable<string>;
+  /**
+   * Workspaces the persisted open-window manifest names. Covers a window the
+   * launch is still restoring, which has neither a view nor a reservation yet
+   * while the windows before it come up.
+   */
+  manifestWorkspaceIds: () => Iterable<string>;
+}
+
+/**
+ * Every workspace something in the app still holds: shown, cached or bridged in
+ * any window, bound to a remote Shell view, running a terminal, being opened,
+ * or being restored (#15614).
+ *
+ * The broadest of these collectors, and the only strict one: a source that
+ * fails to answer throws instead of being skipped, because its caller deletes
+ * what this set leaves out.
+ */
+export function collectHeldWorkspaceIds(sources: HeldWorkspaceSources): Set<string> {
+  const ids = new Set<string>();
+  for (const manager of sources.projectViewManagers()) {
+    const activeId = manager.getActiveProjectId();
+    if (activeId) ids.add(activeId);
+    const outgoingId = manager.getOutgoingBridgeProjectId();
+    if (outgoingId) ids.add(outgoingId);
+    for (const entry of manager.getAllViews()) ids.add(entry.projectId);
+  }
+  for (const id of sources.remoteViewWorkspaceIds()) {
+    if (id) ids.add(id);
+  }
+  for (const id of sources.liveTerminalWorkspaceIds()) ids.add(id);
+  for (const id of sources.reservedWorkspaceIds()) ids.add(id);
+  for (const id of sources.manifestWorkspaceIds()) ids.add(id);
+  return ids;
+}

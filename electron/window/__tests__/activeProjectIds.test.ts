@@ -8,6 +8,7 @@ vi.mock("../../utils/logger.js", () => ({
 
 import {
   collectActiveProjectIds,
+  collectHeldWorkspaceIds,
   collectShownProjectIds,
   projectViewManagersFrom,
   setRemoteVisibleProjectIdsProvider,
@@ -206,5 +207,84 @@ describe("projectViewManagersFrom", () => {
 
   it("yields an empty list when no registry is available", () => {
     expect(projectViewManagersFrom(undefined)()).toEqual([]);
+  });
+});
+
+describe("collectHeldWorkspaceIds (#15614)", () => {
+  function heldManager(opts: {
+    active?: string | null;
+    outgoing?: string | null;
+    views?: string[];
+  }): ProjectViewManager {
+    return {
+      getActiveProjectId: () => opts.active ?? null,
+      getOutgoingBridgeProjectId: () => opts.outgoing ?? null,
+      getAllViews: () => (opts.views ?? []).map((projectId) => ({ projectId })),
+    } as unknown as ProjectViewManager;
+  }
+
+  const none = () => [];
+
+  it("unions every window's shown, bridged and cached views with every other hold", () => {
+    const ids = collectHeldWorkspaceIds({
+      projectViewManagers: () => [
+        heldManager({ active: "shown-a", views: ["shown-a", "cached-a"] }),
+        heldManager({ active: "incoming-b", outgoing: "bridged-b" }),
+      ],
+      remoteViewWorkspaceIds: () => ["remote-cached", null],
+      liveTerminalWorkspaceIds: () => ["terminal-only"],
+      reservedWorkspaceIds: () => ["opening"],
+      manifestWorkspaceIds: () => ["restoring"],
+    });
+
+    expect([...ids].sort()).toEqual([
+      "bridged-b",
+      "cached-a",
+      "incoming-b",
+      "opening",
+      "remote-cached",
+      "restoring",
+      "shown-a",
+      "terminal-only",
+    ]);
+  });
+
+  it.each([
+    "projectViewManagers",
+    "remoteViewWorkspaceIds",
+    "liveTerminalWorkspaceIds",
+    "reservedWorkspaceIds",
+    "manifestWorkspaceIds",
+  ] as const)("throws rather than answer without %s", (failing) => {
+    const sources = {
+      projectViewManagers: () => [heldManager({ active: "shown" })],
+      remoteViewWorkspaceIds: none,
+      liveTerminalWorkspaceIds: none,
+      reservedWorkspaceIds: none,
+      manifestWorkspaceIds: none,
+      [failing]: () => {
+        throw new Error(`${failing} unavailable`);
+      },
+    };
+
+    expect(() => collectHeldWorkspaceIds(sources)).toThrow(`${failing} unavailable`);
+  });
+
+  it("throws when one window's manager cannot answer", () => {
+    const disposing = {
+      getActiveProjectId: () => {
+        throw new Error("disposed");
+      },
+    } as unknown as ProjectViewManager;
+
+    expect(() =>
+      collectHeldWorkspaceIds({
+        projectViewManagers: () => [heldManager({ active: "shown" }), disposing],
+        remoteViewWorkspaceIds: none,
+        liveTerminalWorkspaceIds: none,
+        reservedWorkspaceIds: none,
+        manifestWorkspaceIds: none,
+      })
+    ).toThrow("disposed");
   });
 });

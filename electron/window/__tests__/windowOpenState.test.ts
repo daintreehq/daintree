@@ -6,6 +6,7 @@ const logErrorMock = vi.hoisted(() => vi.fn());
 vi.mock("../../utils/logger.js", () => ({ logError: logErrorMock }));
 
 import {
+  getReservedWorkspaceIds,
   hasPendingOpen,
   holdWindowForOpen,
   isWindowBound,
@@ -276,6 +277,17 @@ describe("reserveWindowForOpen", () => {
       reservations: [],
       unboundOpens: [],
     });
+  });
+
+  it("names every reserved workspace across windows until its open settles (#15614)", () => {
+    const restoring = reserveWindowForOpen(1, { projectId: "scratch-a", projectPath: null });
+    reserveWindowForOpen(2, { projectId: null, projectPath: "/folder" });
+    reserveWindowForOpen(2, { projectId: "project-b", projectPath: "/b" });
+
+    expect(getReservedWorkspaceIds().sort()).toEqual(["project-b", "scratch-a"]);
+
+    restoring(true);
+    expect(getReservedWorkspaceIds()).toEqual(["project-b"]);
   });
 
   it("keeps an open that settled unbound until the window binds a workspace", () => {

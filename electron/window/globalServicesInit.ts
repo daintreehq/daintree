@@ -46,7 +46,10 @@ import { getSharedTerminalSnapshot } from "../services/sharedTerminalSnapshot.js
 import { withTimeout } from "../utils/withTimeout.js";
 
 import { startDiskSpaceMonitor } from "../services/DiskSpaceMonitor.js";
-import { runScratchCleanup } from "../services/ScratchCleanupService.js";
+import {
+  runScratchCleanup,
+  setHeldWorkspaceIdsReader,
+} from "../services/ScratchCleanupService.js";
 import {
   initializeAgentCompileCacheCleanup,
   requestAgentCompileCacheCleanup,
@@ -88,9 +91,13 @@ import { findCoordinationHold } from "../services/coordinationHolds.js";
 import { registerDeferredTask } from "./deferredInitQueue.js";
 import {
   collectActiveProjectIds,
+  collectHeldWorkspaceIds,
   collectShownProjectIds,
   projectViewManagersFrom,
 } from "./activeProjectIds.js";
+import { getReservedWorkspaceIds } from "./windowOpenState.js";
+import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
+import { readManifestWorkspaceIds } from "../services/persistence/windowManifestStore.js";
 import { isSmokeTest } from "../setup/environment.js";
 import { setPluginDirResolver, setPluginTourAudioResolver } from "../setup/protocols.js";
 import { isE2EFaultMode, isE2EMode } from "../setup/runtimeFlags.js";
@@ -573,6 +580,22 @@ export async function initGlobalServices(
   const presenceViews = projectViewManagersFrom(windowRegistry);
   getProjectPresenceTracker().setShownReader(() =>
     collectShownProjectIds(presenceViews, "project-presence")
+  );
+
+  // What the scratch sweep must never tombstone (#15614). Installed before any
+  // deferred task, so neither the boot sweep nor the disk-critical one can run
+  // without it — and a sweep without it tombstones nothing.
+  setHeldWorkspaceIdsReader(() =>
+    collectHeldWorkspaceIds({
+      projectViewManagers: presenceViews,
+      remoteViewWorkspaceIds: () =>
+        getEndpointRegistry()
+          .getRemote()
+          .map((endpoint) => endpoint.projectId),
+      liveTerminalWorkspaceIds: () => getPtyClient()?.getLiveWorkspaceIds() ?? [],
+      reservedWorkspaceIds: getReservedWorkspaceIds,
+      manifestWorkspaceIds: readManifestWorkspaceIds,
+    })
   );
 
   // ── Group 1: cheap synchronous wires ──

@@ -5,6 +5,8 @@ import path from "path";
 import {
   runScratchCleanup,
   inspectScratchForCleanup,
+  setHeldWorkspaceIdsReader,
+  resetScratchCleanupStateForTesting,
   type ScratchCleanupStore,
   type ScratchCleanupSafetyCheck,
   type ScratchCleanupSafetyDecision,
@@ -106,6 +108,12 @@ function makeStore(rows: ScratchRow[], currentScratchId: string | null = null): 
     clearCurrentScratch() {
       store.currentScratchId = null;
     },
+    touchScratches(lastSeenAt: ReadonlyMap<string, number>) {
+      for (const [id, at] of lastSeenAt) {
+        const r = store.rows.find((x) => x.id === id);
+        if (r && r.deletedAt == null && r.lastOpened < at) r.lastOpened = at;
+      }
+    },
   };
   return store;
 }
@@ -143,6 +151,8 @@ beforeEach(async () => {
   scratchTestRoot.current = tmpDir;
   mockedCreateHardenedGit.mockReset();
   removeScratchPersistedStateMock.mockClear();
+  resetScratchCleanupStateForTesting();
+  setHeldWorkspaceIdsReader(() => []);
 });
 
 afterEach(async () => {
@@ -374,6 +384,182 @@ describe("runScratchCleanup — phase 2 (inspect + tombstone)", () => {
     release();
     await Promise.all([sweepA, sweepB]);
     expect(maxActive).toBe(3);
+  });
+});
+
+describe("runScratchCleanup — scratches the app still holds (#15614)", () => {
+  const HELD = "11111111-1111-4111-8111-111111111111";
+  const LOOSE = "22222222-2222-4222-8222-222222222222";
+  const DAY = 86_400_000;
+
+  async function scratchRow(id: string, lastOpened: number): Promise<ScratchRow> {
+    const dir = path.join(tmpDir, id);
+    await fs.mkdir(dir, { recursive: true });
+    return row({ id, path: dir, lastOpened });
+  }
+
+  it.each([
+    ["another scratch", "33333333-3333-4333-8333-333333333333"],
+    ["nothing, after a project switch cleared it", null],
+  ])(
+    "does not tombstone a stale scratch held by a window while the pointer names %s",
+    async (_label, currentScratchId) => {
+      const store = makeStore(
+        [await scratchRow(HELD, NOW - 2 * SCRATCH_TTL_MS), await scratchRow(LOOSE, 1)],
+        currentScratchId
+      );
+      setHeldWorkspaceIdsReader(() => [HELD, "a-project-id"]);
+      const check = vi.fn(ALWAYS_SAFE);
+
+      const result = await runScratchCleanup(NOW, store, check);
+
+      expect(check).toHaveBeenCalledTimes(1);
+      expect(check.mock.calls[0]![0]).toContain(LOOSE);
+      expect(store.rows.find((r) => r.id === HELD)!.deletedAt).toBeNull();
+      expect(store.rows.find((r) => r.id === LOOSE)!.deletedAt).toBe(NOW);
+      expect(result.tombstoned).toBe(1);
+      // Being held refreshes recency, but is not a switch.
+      expect(store.rows.find((r) => r.id === HELD)!.lastOpened).toBe(NOW);
+      expect(store.currentScratchId).toBe(currentScratchId);
+    }
+  );
+
+  it("keeps a scratch restored at launch alive across more than the TTL, then ages it from the last sweep that saw it", async () => {
+    // Restored into a window every launch, never picked from the switcher, so
+    // nothing but the sweep ever moves its `last_opened`.
+    const store = makeStore([await scratchRow(HELD, NOW - 2 * SCRATCH_TTL_MS)]);
+    let held: string[] = [HELD];
+    setHeldWorkspaceIdsReader(() => held);
+
+    const sweeps = [NOW, NOW + SCRATCH_TTL_MS / 2, NOW + SCRATCH_TTL_MS + DAY];
+    for (const at of sweeps) {
+      const result = await runScratchCleanup(at, store, ALWAYS_SAFE);
+      expect(result.tombstoned).toBe(0);
+    }
+    const lastSeen = sweeps.at(-1)!;
+    expect(store.rows[0]!.lastOpened).toBe(lastSeen);
+
+    held = [];
+    expect((await runScratchCleanup(lastSeen + SCRATCH_TTL_MS, store, ALWAYS_SAFE)).tombstoned).toBe(
+      0
+    );
+    expect(
+      (await runScratchCleanup(lastSeen + SCRATCH_TTL_MS + 1, store, ALWAYS_SAFE)).tombstoned
+    ).toBe(1);
+  });
+
+  it("does not tombstone a scratch a window or Shell takes hold of during inspection", async () => {
+    const store = makeStore([await scratchRow(HELD, NOW - 2 * SCRATCH_TTL_MS)]);
+    let held: string[] = [];
+    setHeldWorkspaceIdsReader(() => held);
+    // Neither `lastOpened` nor the current pointer moves: a restore or remote
+    // view binding touches neither.
+    const check: ScratchCleanupSafetyCheck = async () => {
+      held = [HELD];
+      return { disposition: "safe", reason: "test-safe" };
+    };
+
+    const result = await runScratchCleanup(NOW, store, check);
+
+    expect(result.tombstoned).toBe(0);
+    expect(store.rows[0]!.deletedAt).toBeNull();
+  });
+
+  it("tombstones nothing when the held set cannot be read, but still reaps mature tombstones", async () => {
+    const reapDir = path.join(tmpDir, "mature");
+    await fs.mkdir(reapDir, { recursive: true });
+    const store = makeStore([
+      await scratchRow(LOOSE, NOW - 2 * SCRATCH_TTL_MS),
+      row({
+        id: "mature",
+        path: reapDir,
+        lastOpened: NOW - 2 * SCRATCH_TTL_MS,
+        deletedAt: NOW - 2 * GRACE_MS,
+      }),
+    ]);
+    setHeldWorkspaceIdsReader(() => {
+      throw new Error("manager disposing");
+    });
+    const check = vi.fn(ALWAYS_SAFE);
+
+    const result = await runScratchCleanup(NOW, store, check);
+
+    expect(check).not.toHaveBeenCalled();
+    expect(result.tombstoned).toBe(0);
+    expect(store.rows.find((r) => r.id === LOOSE)!.deletedAt).toBeNull();
+    expect(result.directoriesRemoved).toBe(1);
+    await expect(fs.access(reapDir)).rejects.toBeDefined();
+  });
+
+  it("tombstones nothing when no reader is installed", async () => {
+    resetScratchCleanupStateForTesting();
+    const store = makeStore([await scratchRow(LOOSE, NOW - 2 * SCRATCH_TTL_MS)]);
+
+    const result = await runScratchCleanup(NOW, store, ALWAYS_SAFE);
+
+    expect(result.tombstoned).toBe(0);
+    expect(store.rows[0]!.deletedAt).toBeNull();
+  });
+
+  it("tombstones none of the batch when the re-check after inspection cannot be read", async () => {
+    const store = makeStore([
+      await scratchRow(LOOSE, NOW - 2 * SCRATCH_TTL_MS),
+      await scratchRow(HELD, NOW - 2 * SCRATCH_TTL_MS),
+    ]);
+    let reads = 0;
+    setHeldWorkspaceIdsReader(() => {
+      if (++reads > 1) throw new Error("registry tearing down");
+      return [];
+    });
+
+    const result = await runScratchCleanup(NOW, store, ALWAYS_SAFE);
+
+    expect(reads).toBe(2);
+    expect(result.tombstoned).toBe(0);
+    expect(store.rows.every((r) => r.deletedAt == null)).toBe(true);
+  });
+
+  it("still reaps a mature tombstone a window holds: a committed delete finishes", async () => {
+    const dir = path.join(tmpDir, HELD);
+    await fs.mkdir(dir, { recursive: true });
+    const store = makeStore([
+      row({
+        id: HELD,
+        path: dir,
+        lastOpened: NOW - 2 * SCRATCH_TTL_MS,
+        deletedAt: NOW - 2 * GRACE_MS,
+      }),
+    ]);
+    setHeldWorkspaceIdsReader(() => [HELD]);
+
+    const result = await runScratchCleanup(NOW, store, ALWAYS_SAFE);
+
+    expect(result.directoriesRemoved).toBe(1);
+    expect(store.rows).toHaveLength(0);
+  });
+
+  it("counts a scratch held while writes were suppressed from when it was seen, and writes that once they resume", async () => {
+    const store = makeStore([await scratchRow(HELD, NOW - 2 * SCRATCH_TTL_MS)]);
+    const touch = vi.spyOn(store, "touchScratches");
+    let held: string[] = [HELD];
+    setHeldWorkspaceIdsReader(() => held);
+
+    setWritesSuppressed(true);
+    await runScratchCleanup(NOW, store, ALWAYS_SAFE);
+    expect(touch).not.toHaveBeenCalled();
+    expect(store.rows[0]!.lastOpened).toBe(NOW - 2 * SCRATCH_TTL_MS);
+
+    // Closed while the disk is still critical: the stale row in the DB must not
+    // be what the next sweep goes by.
+    held = [];
+    const whileSuppressed = await runScratchCleanup(NOW + DAY, store, ALWAYS_SAFE);
+    expect(whileSuppressed.tombstoned).toBe(0);
+    expect(store.rows[0]!.deletedAt).toBeNull();
+
+    setWritesSuppressed(false);
+    await runScratchCleanup(NOW + 2 * DAY, store, ALWAYS_SAFE);
+    expect(store.rows[0]!.lastOpened).toBe(NOW);
+    expect(store.rows[0]!.deletedAt).toBeNull();
   });
 });
 

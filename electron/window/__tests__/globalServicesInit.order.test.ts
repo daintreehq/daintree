@@ -203,6 +203,7 @@ vi.mock("../../services/TrashedPidTracker.js", () => ({
 vi.mock("../../services/ScratchCleanupService.js", () => ({
   initializeScratchCleanup: vi.fn(),
   runScratchCleanup: vi.fn(async () => {}),
+  setHeldWorkspaceIdsReader: vi.fn(() => () => {}),
 }));
 
 vi.mock("../../services/AssistantScratchService.js", () => ({
@@ -1290,6 +1291,21 @@ describe("initGlobalServices task ordering", () => {
     expect(trashedSpy).not.toHaveBeenCalled();
     expect(scratchSpy).not.toHaveBeenCalled();
     expect(assistantSpy).not.toHaveBeenCalled();
+  });
+
+  it("installs the scratch sweep's held-workspace reader before any deferred task runs (#15614)", async () => {
+    const { setHeldWorkspaceIdsReader } = await import("../../services/ScratchCleanupService.js");
+    const readerSpy = setHeldWorkspaceIdsReader as ReturnType<typeof vi.fn>;
+    readerSpy.mockClear();
+
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    // Deferred tasks are only queued here, so a reader installed by now is in
+    // place before the boot sweep or the disk-critical edge can run.
+    expect(registeredTaskNames).toContain("scratch-cleanup");
+    expect(readerSpy).toHaveBeenCalledTimes(1);
+    expect(readerSpy.mock.calls[0]![0]).toEqual(expect.any(Function));
   });
 
   it("deferred cleanup tasks invoke their service initializers when run (#8817)", async () => {

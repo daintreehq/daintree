@@ -191,6 +191,34 @@ export class ScratchStore {
     db.delete(scratchesTable).where(eq(scratchesTable.id, scratchId)).run();
   }
 
+  /**
+   * Moves each scratch's `last_opened` up to when the cleanup sweep last saw it
+   * held open (#15614). Never moves it back, skips tombstoned rows and ids that
+   * are not scratches, and leaves the current pointer alone: being on screen in
+   * some window is not a switch to it.
+   */
+  touchScratches(lastSeenAt: ReadonlyMap<string, number>): void {
+    const db = getSharedDb();
+    db.transaction(
+      (tx) => {
+        for (const [scratchId, at] of lastSeenAt) {
+          if (!isValidScratchId(scratchId) || !Number.isFinite(at)) continue;
+          tx.update(scratchesTable)
+            .set({ lastOpened: at })
+            .where(
+              and(
+                eq(scratchesTable.id, scratchId),
+                isNull(scratchesTable.deletedAt),
+                lt(scratchesTable.lastOpened, at)
+              )
+            )
+            .run();
+        }
+      },
+      { behavior: "immediate" }
+    );
+  }
+
   updateScratch(
     scratchId: string,
     updates: Partial<Pick<Scratch, "name" | "lastOpened">>
