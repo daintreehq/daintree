@@ -4,7 +4,6 @@ import type { PerfScenario, ScenarioSample } from "../types";
 import type { NotificationSettings } from "../../../shared/types/ipc/api";
 import type { WaitingReason } from "../../../shared/types/agent";
 import {
-  appStateForFleet,
   buildFleet,
   buildIdleCorpus,
   buildRoutingScript,
@@ -19,6 +18,7 @@ import {
   NotificationClock,
   onScreenProvider,
   resetBusObservations,
+  saveFleetLayout,
   type ExpectedNotification,
   type FleetTerminal,
   type IdleTerminalRow,
@@ -96,7 +96,6 @@ async function withNotificationHarness<T>(
   configure(bus);
 
   const fleet = buildFleet(fleetSize);
-  modules.store.set("appState", appStateForFleet(fleet, "idle"));
 
   const clock = new NotificationClock();
   clock.install();
@@ -105,11 +104,13 @@ async function withNotificationHarness<T>(
   modules.notificationService.initialize(windows.registry, windows.lookup);
   modules.agentNotificationService.dispose();
   modules.agentNotificationService.initialize();
+  saveFleetLayout(fleet);
   await clock.tick(BOOT_GRACE_SETTLE_MS);
   modules.agentNotificationService.syncWatchedPanels(
     OWNER_WEB_CONTENTS_ID,
     fleet.filter((terminal) => terminal.watched).map((terminal) => terminal.id)
   );
+  modules.agentNotificationService.setSelectedWorktree(OWNER_WEB_CONTENTS_ID, "wt-0");
 
   try {
     return await body({ modules, clock, fleet, windows });
@@ -214,8 +215,9 @@ function gradeRouting(
 
 /**
  * Bring the agent service back to a known state between battery cases: drop
- * every timer and buffer, install this case's settings, re-seed `appState`, and
- * re-declare the watch set (dispose clears it).
+ * every timer and buffer, install this case's settings, re-save the fleet's
+ * panel record, and re-declare the watch set and the view's selection (dispose
+ * clears them).
  *
  * `settleMs` is how far past `initialize()` the case starts, which is the boot
  * grace period's own input — a case that must observe the grace passes 0.
@@ -235,13 +237,14 @@ async function resetAgentService(
   // this is the effective baseline for the whole battery.
   bus.settings = { ...defaultNotificationSettings(), soundEnabled: true, ...settings };
   bus.osDnd = undefined;
-  harness.modules.store.set("appState", appStateForFleet(harness.fleet, "idle"));
   harness.modules.agentNotificationService.initialize();
+  saveFleetLayout(harness.fleet);
   if (settleMs > 0) await harness.clock.tick(settleMs);
   harness.modules.agentNotificationService.syncWatchedPanels(
     OWNER_WEB_CONTENTS_ID,
     harness.fleet.filter((terminal) => terminal.watched).map((terminal) => terminal.id)
   );
+  harness.modules.agentNotificationService.setSelectedWorktree(OWNER_WEB_CONTENTS_ID, "wt-0");
   resetBusObservations();
 }
 
@@ -664,24 +667,26 @@ function buildGateBattery(): GateCase[] {
       settleMs: BOOT_GRACE_SETTLE_MS,
       expected: { notifications: 0, sounds: 1 },
       body: async (h) => {
-        // The peak is read from appState, so the snapshot has to show the two
-        // agents as working at the moment the second one starts.
-        h.modules.store.set("appState", appStateForFleet(h.fleet, "working"));
-        emit(h, {
-          terminalId: "panel-0",
-          agentId: "claude",
-          worktreeId: "wt-0",
-          state: "working",
-          previousState: "idle",
-        });
-        h.modules.store.set("appState", appStateForFleet(h.fleet, "idle"));
-        emit(h, {
-          terminalId: "panel-0",
-          agentId: "claude",
-          worktreeId: "wt-0",
-          state: "completed",
-          previousState: "working",
-        });
+        // The peak counts agents the events say are working, so both have to
+        // start before either finishes.
+        for (const [terminalId, agentId] of [
+          ["panel-0", "claude"],
+          ["panel-1", "codex"],
+        ] as const) {
+          emit(h, { terminalId, agentId, worktreeId: "wt-0", state: "working", previousState: "idle" });
+        }
+        for (const [terminalId, agentId] of [
+          ["panel-0", "claude"],
+          ["panel-1", "codex"],
+        ] as const) {
+          emit(h, {
+            terminalId,
+            agentId,
+            worktreeId: "wt-0",
+            state: "completed",
+            previousState: "working",
+          });
+        }
         await h.clock.tick(600);
       },
     },
@@ -992,7 +997,7 @@ export const notificationScenarios: PerfScenario[] = [
     id: "PERF-321",
     name: "Routing Cost Against Fleet Size",
     description:
-      "The same 384 transitions routed against an 8-panel and a 96-panel fleet, timing ONLY the synchronous decision (events.emit through handleStateChanged) with the virtual-clock flush outside the bracket. Every transition re-reads appState through the product's cached-read proxy, which structuredClones the whole snapshot and then scans it twice, so the per-decision cost carries the fleet with it — this is the number that says how much a busy fleet pays per state change. Both arms are graded by the same two-directional routing table.",
+      "The same 384 transitions routed against an 8-panel and a 96-panel fleet, timing ONLY the synchronous decision (events.emit through handleStateChanged) with the virtual-clock flush outside the bracket. Every transition looks its panel up in the per-project panel index the layout saves keep, so the per-decision cost should stay flat as the fleet grows — this is the number that says how much a busy fleet pays per state change. Both arms are graded by the same two-directional routing table.",
     tier: "heavy",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 3, ci: 5, nightly: 8 },
@@ -1099,9 +1104,9 @@ export const notificationScenarios: PerfScenario[] = [
           let notificationTotal = 0;
           let soundTotal = 0;
 
-          // Only the case body is timed: the per-case reset rewrites `appState`
-          // through electron-store, and an atomic whole-file write is fixture
-          // cost that would swamp the decision this scenario is about.
+          // Only the case body is timed: the per-case reset re-initializes the
+          // service and re-saves the fleet's layout, which is fixture cost that
+          // would swamp the decision this scenario is about.
           let decisionMs = 0;
           for (const gateCase of cases) {
             await resetAgentService(harness, gateCase.settings, gateCase.settleMs);

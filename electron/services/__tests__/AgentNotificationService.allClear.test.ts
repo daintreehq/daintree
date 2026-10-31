@@ -6,9 +6,23 @@ const storeMock = vi.hoisted(() => ({
   get: vi.fn(),
 }));
 
+/** What subscribed to per-project saves: the service hears every panel layout through here. */
+const persistedListeners = vi.hoisted(
+  () => new Set<(workspaceId: string, state: { terminals: unknown[] } | null) => void>()
+);
+
 const projectStoreMock = vi.hoisted(() => ({
   getEffectiveNotificationSettings: vi.fn(),
   getCurrentProjectId: vi.fn(() => null),
+  getProjectState: vi.fn(async () => null),
+  onProjectStatePersisted: vi.fn(
+    (listener: (workspaceId: string, state: { terminals: unknown[] } | null) => void) => {
+      persistedListeners.add(listener);
+      return () => {
+        persistedListeners.delete(listener);
+      };
+    }
+  ),
 }));
 
 const notificationServiceMock = vi.hoisted(() => ({
@@ -58,6 +72,7 @@ vi.mock("../OsDndService.js", () => ({
 
 import { events } from "../events.js";
 import { agentNotificationService } from "../AgentNotificationService.js";
+import { setPtyClientRef } from "../../window/serviceRefs.js";
 
 const DEFAULT_SETTINGS = {
   enabled: true,
@@ -430,31 +445,96 @@ describe("AgentNotificationService – all-clear", () => {
     emitSpy.mockRestore();
   });
 
-  it("re-checks active count after debounce to prevent false fires", () => {
-    mockTerminals([
-      { id: "term-1", agentState: "working" },
-      { id: "term-2", agentState: "working" },
-    ]);
+  it("re-checks active count after debounce to prevent false fires", async () => {
+    // The startup seed is the one way an agent becomes active without an
+    // event: its answer landing inside the debounce must hold the all-clear.
+    let answer!: (terminals: Array<{ id: string; agentState?: string }>) => void;
+    agentNotificationService.dispose();
+    setPtyClientRef({
+      getAllTerminalsAsync: () => new Promise((resolve) => (answer = resolve)),
+      getTerminalProjectId: () => null,
+    } as never);
+    agentNotificationService.initialize();
+
     emitStateChange("working", "idle", "term-1");
     emitStateChange("working", "idle", "term-2");
-
-    // Both complete
-    mockTerminals([
-      { id: "term-1", agentState: "completed" },
-      { id: "term-2", agentState: "completed" },
-    ]);
     emitStateChange("completed", "working", "term-1");
     emitStateChange("completed", "working", "term-2");
 
-    // Simulate: by the time debounce fires, a terminal went back to working
-    // (but without emitting a state-changed event through our handler)
-    mockTerminals([
-      { id: "term-1", agentState: "working" },
-      { id: "term-2", agentState: "completed" },
-    ]);
-
-    vi.advanceTimersByTime(600);
+    answer([{ id: "term-3", agentState: "working" }]);
+    await vi.advanceTimersByTimeAsync(600);
     expect(soundServiceMock.play).not.toHaveBeenCalledWith("all-clear");
+  });
+
+  it("ignores a legacy terminal entry still marked active from an old session", () => {
+    // `appState.terminals` is a pre-multi-project record nothing live writes:
+    // an entry there left `working` must not hold the all-clear back.
+    mockTerminals([
+      { id: "term-stale", agentState: "working" },
+      { id: "term-1", agentState: "idle" },
+      { id: "term-2", agentState: "idle" },
+    ]);
+    agentNotificationService.dispose();
+    agentNotificationService.initialize();
+
+    emitStateChange("working", "idle", "term-1");
+    emitStateChange("working", "idle", "term-2");
+    emitStateChange("completed", "working", "term-1");
+    emitStateChange("completed", "working", "term-2");
+    vi.advanceTimersByTime(600);
+
+    expect(soundServiceMock.play).toHaveBeenCalledWith("all-clear");
+  });
+
+  describe("agents already working at startup", () => {
+    afterEach(() => {
+      setPtyClientRef(null);
+    });
+
+    function seedFromPtyHost(terminals: Array<{ id: string; agentState?: string; isExited?: boolean }>) {
+      let answer!: () => void;
+      agentNotificationService.dispose();
+      setPtyClientRef({
+        getAllTerminalsAsync: () => new Promise((resolve) => (answer = () => resolve(terminals))),
+        getTerminalProjectId: () => null,
+      } as never);
+      agentNotificationService.initialize();
+      return () => answer();
+    }
+
+    it("holds the all-clear while an agent the PTY host reports working is still at it", async () => {
+      seedFromPtyHost([{ id: "term-early", agentState: "working" }])();
+      await vi.advanceTimersByTimeAsync(0);
+
+      emitStateChange("working", "idle", "term-1");
+      emitStateChange("working", "idle", "term-2");
+      emitStateChange("completed", "working", "term-1");
+      emitStateChange("completed", "working", "term-2");
+      await vi.advanceTimersByTimeAsync(600);
+      expect(soundServiceMock.play).not.toHaveBeenCalledWith("all-clear");
+
+      emitStateChange("completed", "working", "term-early");
+      await vi.advanceTimersByTimeAsync(600);
+      expect(soundServiceMock.play).toHaveBeenCalledWith("all-clear");
+    });
+
+    it("lets an event that landed while the seed was in flight outrank its answer", async () => {
+      const answer = seedFromPtyHost([
+        { id: "term-1", agentState: "working" },
+        { id: "term-2", agentState: "working" },
+        { id: "term-gone", agentState: "working", isExited: true },
+      ]);
+      emitStateChange("working", "idle", "term-1");
+      emitStateChange("working", "idle", "term-2");
+      emitStateChange("completed", "working", "term-1");
+      emitStateChange("completed", "working", "term-2");
+      // The host's answer is older than both completions, and an exited
+      // terminal's last state is not activity.
+      answer();
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(soundServiceMock.play).toHaveBeenCalledWith("all-clear");
+    });
   });
 
   it("fires for working and directing agent states", () => {
@@ -742,28 +822,16 @@ describe("AgentNotificationService – all-clear", () => {
       expect(soundServiceMock.play).not.toHaveBeenCalled();
     });
 
-    it("restores first-transition snapshot counting after a suppressed all-clear", () => {
-      // Pins `hasEverGoneWorking` specifically. The first active transition of
-      // a session rescans the persisted fleet, so a lone `working` event with
-      // two working terminals in the store still reaches a peak of 2. Leave the
-      // flag set and that rescan is skipped, the peak stops at 1, and no
-      // all-clear ever fires again.
+    it("fires again for the next two-agent session after a suppressed all-clear", () => {
       osDndServiceMock.getState.mockReturnValue(true);
       runTwoAgentSession();
       vi.advanceTimersByTime(600);
       osDndServiceMock.getState.mockReturnValue(false);
 
-      mockTerminals([
-        { id: "term-3", agentState: "working" },
-        { id: "term-4", agentState: "working" },
-      ]);
       emitStateChange("working", "idle", "term-3");
-
-      mockTerminals([
-        { id: "term-3", agentState: "completed" },
-        { id: "term-4", agentState: "completed" },
-      ]);
+      emitStateChange("working", "idle", "term-4");
       emitStateChange("completed", "working", "term-3");
+      emitStateChange("completed", "working", "term-4");
       vi.advanceTimersByTime(600);
 
       expect(soundServiceMock.play).toHaveBeenCalledTimes(1);

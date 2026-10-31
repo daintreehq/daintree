@@ -2,10 +2,15 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockGetState, mockSubscribe, fireWatchNotificationMock } = vi.hoisted(() => ({
+const { mockGetState, mockSubscribe, fireWatchNotificationMock, selection } = vi.hoisted(() => ({
   mockGetState: vi.fn(),
   mockSubscribe: vi.fn(),
   fireWatchNotificationMock: vi.fn(),
+  /** The view's worktree selection store: its state and who listens to it. */
+  selection: {
+    state: { activeWorktreeId: null as string | null, setActiveWorktree: () => {} },
+    listeners: new Set<(state: { activeWorktreeId: string | null }) => void>(),
+  },
 }));
 
 vi.mock("@/store/panelStore", () => ({
@@ -17,9 +22,20 @@ vi.mock("@/store/panelStore", () => ({
 
 vi.mock("@/store/worktreeStore", () => ({
   useWorktreeSelectionStore: Object.assign(vi.fn(), {
-    getState: vi.fn(() => ({ setActiveWorktree: vi.fn() })),
+    getState: () => selection.state,
+    subscribe: (listener: (state: { activeWorktreeId: string | null }) => void) => {
+      selection.listeners.add(listener);
+      return () => {
+        selection.listeners.delete(listener);
+      };
+    },
   }),
 }));
+
+function selectWorktree(activeWorktreeId: string | null): void {
+  selection.state = { ...selection.state, activeWorktreeId };
+  for (const listener of [...selection.listeners]) listener(selection.state);
+}
 
 vi.mock("@/lib/watchNotification", () => ({
   fireWatchNotification: fireWatchNotificationMock,
@@ -98,6 +114,8 @@ describe("useWatchedPanelNotifications", () => {
     vi.useFakeTimers();
     subscribers = [];
     currentState = buildState([]);
+    selection.state = { activeWorktreeId: null, setActiveWorktree: () => {} };
+    selection.listeners.clear();
 
     mockGetState.mockImplementation(() => currentState);
     mockSubscribe.mockImplementation((cb: (state: PanelStoreState) => void) => {
@@ -268,6 +286,42 @@ describe("useWatchedPanelNotifications", () => {
 
     // Unsubscribers returned by mockSubscribe splice their cb out of subscribers.
     expect(subscribers.length).toBe(0);
+    expect(selection.listeners.size).toBe(0);
+  });
+
+  describe("reporting the view's selected worktree", () => {
+    const sync = () =>
+      (window.electron as unknown as { notification: { syncWatchedPanels: ReturnType<typeof vi.fn> } })
+        .notification.syncWatchedPanels;
+
+    it("sends the selection with the initial watched set", () => {
+      selection.state = { ...selection.state, activeWorktreeId: "/repo/wt-a" };
+      currentState = buildState([{ id: "p1" }], ["p1"]);
+      renderHook(() => useWatchedPanelNotifications());
+
+      expect(sync()).toHaveBeenCalledWith(["p1"], { activeWorktreeId: "/repo/wt-a" });
+    });
+
+    it("resends when only the selection changes, including to none", () => {
+      currentState = buildState([{ id: "p1" }], ["p1"]);
+      renderHook(() => useWatchedPanelNotifications());
+      sync().mockClear();
+
+      act(() => selectWorktree("/repo/wt-b"));
+      expect(sync()).toHaveBeenLastCalledWith(["p1"], { activeWorktreeId: "/repo/wt-b" });
+
+      act(() => selectWorktree(null));
+      expect(sync()).toHaveBeenLastCalledWith(["p1"], { activeWorktreeId: null });
+      expect(sync()).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not resend for a store update that leaves the selection alone", () => {
+      renderHook(() => useWatchedPanelNotifications());
+      sync().mockClear();
+
+      act(() => selectWorktree(null));
+      expect(sync()).not.toHaveBeenCalled();
+    });
   });
 
   it("does not fire notifications after unmount even with subsequent transitions", () => {

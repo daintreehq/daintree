@@ -420,6 +420,48 @@ describe("ProjectStore resumable agent count", () => {
     });
   });
 
+  describe("telling listeners what was persisted", () => {
+    it("hands every listener the saved state, and a clear as null, beside the count", () => {
+      const heard: Array<[string, unknown]> = [];
+      const state = { terminals: [agentPanel("a")] };
+      store.onProjectStatePersisted((id, saved) => heard.push([id, saved]));
+
+      observerSlot.current?.(projectId, state);
+      observerSlot.current?.(projectId, null);
+
+      expect(heard).toEqual([
+        [projectId, state],
+        [projectId, null],
+      ]);
+      expect(storedCount()).toBe(0);
+    });
+
+    it("stops telling a listener that unsubscribed", () => {
+      const listener = vi.fn();
+      const unsubscribe = store.onProjectStatePersisted(listener);
+      unsubscribe();
+
+      observerSlot.current?.(projectId, { terminals: [] });
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it("keeps a throwing listener from reaching the save or the others", () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const after = vi.fn();
+      store.onProjectStatePersisted(() => {
+        throw new Error("boom");
+      });
+      store.onProjectStatePersisted(after);
+
+      expect(() =>
+        observerSlot.current?.(projectId, { terminals: [agentPanel("a")] })
+      ).not.toThrow();
+      expect(after).toHaveBeenCalledTimes(1);
+      expect(storedCount()).toBe(1);
+      errorSpy.mockRestore();
+    });
+  });
+
   describe("what the renderer is allowed to influence", () => {
     it("does not let a status change disturb the count", () => {
       observerSlot.current?.(projectId, { terminals: [agentPanel("a"), agentPanel("b")] });
