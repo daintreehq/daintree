@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { claimVoiceWaitKeys, routeVoiceWaitKey, type VoiceWaitKeyClaim } from "../voiceWaitKeys";
+import {
+  claimVoiceWaitKeys,
+  observeVoiceWaitKeysReach,
+  routeVoiceWaitKey,
+  voiceWaitKeysReach,
+  type VoiceWaitKeyClaim,
+} from "../voiceWaitKeys";
 
 const releases: Array<() => void> = [];
 const listeners: Array<(event: KeyboardEvent) => void> = [];
@@ -229,5 +235,85 @@ describe("voiceWaitKeys", () => {
     expect(repeats.map((event) => event.defaultPrevented)).toEqual([true, true]);
     expect(owner.sendNow).not.toHaveBeenCalled();
     expect(owner.cancel).not.toHaveBeenCalled();
+  });
+
+  // #15705: a wait names only the keys that reach it from where the keyboard is.
+  describe("voiceWaitKeysReach", () => {
+    function composer() {
+      const bar = document.createElement("div");
+      const editor = document.createElement("div");
+      editor.tabIndex = -1;
+      const cancel = document.createElement("button");
+      cancel.setAttribute("data-voice-wait-cancel", "");
+      bar.append(editor, cancel);
+      document.body.appendChild(bar);
+      return { bar, editor, cancel };
+    }
+
+    it("says both reach from the composer, and neither from another pane, where they stay", () => {
+      const { bar, editor } = composer();
+      const pane = document.createElement("textarea");
+      document.body.appendChild(pane);
+      const owner = claim({ holds: (element) => bar.contains(element) });
+
+      editor.focus();
+      expect(voiceWaitKeysReach(owner)).toEqual({ enter: true, escape: true });
+
+      pane.focus();
+      expect(voiceWaitKeysReach(owner)).toEqual({ enter: false, escape: false });
+      expect(press("Enter", pane).defaultPrevented).toBe(false);
+      expect(press("Escape", pane).defaultPrevented).toBe(false);
+      expect(owner.sendNow).not.toHaveBeenCalled();
+      expect(owner.cancel).not.toHaveBeenCalled();
+    });
+
+    it("gives the keyboard nowhere to the one waiting composer, or the selected one of several", () => {
+      const only = claim();
+      expect(voiceWaitKeysReach(only)).toEqual({ enter: true, escape: true });
+
+      const selected = claim({ isSelected: () => true });
+      expect(voiceWaitKeysReach(only)).toEqual({ enter: false, escape: false });
+      expect(voiceWaitKeysReach(selected)).toEqual({ enter: true, escape: true });
+    });
+
+    it("says only Escape reaches from Cancel send, where Enter calls the send off", () => {
+      const { bar, cancel } = composer();
+      const owner = claim({ holds: (element) => bar.contains(element) });
+
+      cancel.focus();
+
+      expect(voiceWaitKeysReach(owner)).toEqual({ enter: false, escape: true });
+    });
+
+    it("tells observers when the keyboard moves or a composer claims or releases the keys", async () => {
+      const { bar, editor } = composer();
+      const pane = document.createElement("textarea");
+      document.body.appendChild(pane);
+      const changed = vi.fn();
+      const stop = observeVoiceWaitKeysReach(changed);
+      try {
+        claim({ holds: (element) => bar.contains(element) });
+        expect(changed).toHaveBeenCalledTimes(1);
+
+        pane.focus();
+        expect(changed).toHaveBeenCalledTimes(2);
+
+        changed.mockClear();
+        pane.blur();
+        await Promise.resolve();
+        expect(changed).toHaveBeenCalled();
+
+        changed.mockClear();
+        releases.shift()!();
+        expect(changed).toHaveBeenCalledTimes(1);
+
+        stop();
+        changed.mockClear();
+        editor.focus();
+        expect(changed).not.toHaveBeenCalled();
+      } finally {
+        stop();
+      }
+    });
   });
 });

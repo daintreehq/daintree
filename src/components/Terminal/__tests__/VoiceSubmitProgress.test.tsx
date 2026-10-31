@@ -2,26 +2,43 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render } from "@testing-library/react";
 import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
+import { describeChord, formatChordText } from "@/lib/kbdShortcut";
+import { isMac } from "@/lib/platform";
 import {
   polishingShareAt,
   VoiceSubmitProgress,
   voiceSubmitWaitCaption,
+  voiceSubmitWaitStatus,
+  type VoiceSubmitWaitKeys,
 } from "../VoiceSubmitProgress";
 import type { VoiceSubmitOutcome, VoiceSubmitWait } from "../hooks/useVoiceWaitSubmit";
 
 const polishing = (
   beganAt: number | null,
   expectedAt: number | null,
-  startedAt = 5_000
+  startedAt = 5_000,
+  byStopAndSend = false
 ): VoiceSubmitWait => ({
   attempt: 1,
   phase: "polishing",
   startedAt,
+  byStopAndSend,
   beganAt,
   expectedAt,
   sessions: new Set(["s1"]),
 });
-const finishing: VoiceSubmitWait = { attempt: 1, phase: "finishing", startedAt: 0 };
+const finishing: VoiceSubmitWait = {
+  attempt: 1,
+  phase: "finishing",
+  startedAt: 0,
+  byStopAndSend: false,
+};
+
+// The keyboard in the composer, or nowhere with this the one wait.
+const IN_REACH: VoiceSubmitWaitKeys = { enter: true, escape: true, skip: null };
+// The keyboard in another pane, where Enter and Escape are that pane's.
+const ELSEWHERE: VoiceSubmitWaitKeys = { enter: false, escape: false, skip: null };
+const SKIP_COMBO = "Cmd+Alt+D";
 
 /** Share of the shell a keyframe's transform covers. */
 const shareOf = (keyframe: Keyframe | undefined) =>
@@ -61,12 +78,77 @@ describe("polishingShareAt", () => {
 });
 
 describe("voiceSubmitWaitCaption", () => {
+  const skipText = formatChordText(SKIP_COMBO, isMac());
+
   it("offers Enter as the way to send as dictated only while the cleanup is awaited", () => {
-    expect(voiceSubmitWaitCaption(polishing(1_000, 3_000))).toMatch(/Enter.*as dictated/);
-    expect(voiceSubmitWaitCaption(finishing)).not.toMatch(/Enter/);
+    expect(voiceSubmitWaitCaption(polishing(1_000, 3_000), IN_REACH)).toMatch(/Enter.*as dictated/);
+    expect(voiceSubmitWaitCaption(finishing, IN_REACH)).not.toMatch(/Enter/);
     for (const wait of [polishing(null, null), finishing]) {
-      expect(voiceSubmitWaitCaption(wait)).toMatch(/Esc/);
+      expect(voiceSubmitWaitCaption(wait, IN_REACH)).toMatch(/Esc/);
     }
+  });
+
+  // #15705: Enter and Escape typed in another pane are that pane's.
+  it("names neither Enter nor Escape when they don't reach the wait", () => {
+    for (const wait of [polishing(1_000, 3_000), finishing]) {
+      const caption = voiceSubmitWaitCaption(wait, ELSEWHERE);
+      expect(caption).not.toMatch(/Enter|Esc/);
+      expect(caption).toMatch(/…$/);
+    }
+  });
+
+  it("doesn't offer Enter to send from Cancel send, where Enter cancels", () => {
+    const caption = voiceSubmitWaitCaption(polishing(1_000, 3_000), {
+      enter: false,
+      escape: true,
+      skip: null,
+    });
+    expect(caption).not.toMatch(/Enter/);
+    expect(caption).toMatch(/Esc to cancel/);
+  });
+
+  it("names the stop-and-send key for a send it started, from wherever the keyboard is", () => {
+    const wait = polishing(1_000, 3_000, 5_000, true);
+    const elsewhere = voiceSubmitWaitCaption(wait, { ...ELSEWHERE, skip: SKIP_COMBO });
+    expect(elsewhere).toContain(`${skipText} to send as dictated`);
+    expect(elsewhere).not.toMatch(/Esc/);
+
+    const inReach = voiceSubmitWaitCaption(wait, { ...IN_REACH, skip: SKIP_COMBO });
+    expect(inReach).toContain(`${skipText} to send as dictated`);
+    expect(inReach).not.toMatch(/Enter to send/);
+    expect(inReach).toMatch(/Esc to cancel/);
+  });
+
+  it("names no key to send a stop-and-send wait that only the transcript holds, or one with the key unbound", () => {
+    const finishingSend: VoiceSubmitWait = { ...finishing, byStopAndSend: true };
+    expect(voiceSubmitWaitCaption(finishingSend, { ...ELSEWHERE, skip: SKIP_COMBO })).not.toContain(
+      skipText
+    );
+    expect(voiceSubmitWaitCaption(polishing(1_000, 3_000, 5_000, true), ELSEWHERE)).not.toMatch(
+      /as dictated/
+    );
+  });
+});
+
+describe("voiceSubmitWaitStatus", () => {
+  it("says the ways out the caption names, in words", () => {
+    expect(voiceSubmitWaitStatus(polishing(1_000, 3_000), IN_REACH)).toBe(
+      "Polishing dictation. Press Enter to send it as dictated, or Escape to cancel the send."
+    );
+    expect(voiceSubmitWaitStatus(finishing, IN_REACH)).toBe(
+      "Finishing dictation. Press Escape to cancel the send."
+    );
+    expect(voiceSubmitWaitStatus(polishing(1_000, 3_000), ELSEWHERE)).toBe("Polishing dictation.");
+  });
+
+  it("reads the stop-and-send key aloud for a send it started", () => {
+    const status = voiceSubmitWaitStatus(polishing(1_000, 3_000, 5_000, true), {
+      ...ELSEWHERE,
+      skip: SKIP_COMBO,
+    });
+    expect(status).toBe(
+      `Polishing dictation. Press ${describeChord(SKIP_COMBO, isMac())} to send it as dictated.`
+    );
   });
 });
 
@@ -119,6 +201,7 @@ describe("VoiceSubmitProgress", () => {
     clock = enterAt;
     const view = render(
       <VoiceSubmitProgress
+        keys={IN_REACH}
         wait={wait}
         outcome={null}
         streamed={streamed}
@@ -132,6 +215,7 @@ describe("VoiceSubmitProgress", () => {
     const rerender = (next: VoiceSubmitWait, nextStreamed: number | null = null) => {
       view.rerender(
         <VoiceSubmitProgress
+          keys={IN_REACH}
           wait={next}
           outcome={null}
           streamed={nextStreamed}
@@ -198,7 +282,12 @@ describe("VoiceSubmitProgress", () => {
       const onPresentChange = vi.fn();
       const wait = polishing(1_000, 3_000);
       const view = render(
-        <VoiceSubmitProgress wait={wait} outcome={null} onPresentChange={onPresentChange} />
+        <VoiceSubmitProgress
+          keys={IN_REACH}
+          wait={wait}
+          outcome={null}
+          onPresentChange={onPresentChange}
+        />
       );
       if (options.gateOpened) {
         act(() => {
@@ -206,7 +295,12 @@ describe("VoiceSubmitProgress", () => {
         });
       }
       view.rerender(
-        <VoiceSubmitProgress wait={null} outcome={outcome} onPresentChange={onPresentChange} />
+        <VoiceSubmitProgress
+          keys={IN_REACH}
+          wait={null}
+          outcome={outcome}
+          onPresentChange={onPresentChange}
+        />
       );
       return { caption: captionOf(view.container), onPresentChange, unmount: view.unmount };
     }
@@ -241,6 +335,7 @@ describe("VoiceSubmitProgress", () => {
       const onPresentChange = vi.fn();
       const view = render(
         <VoiceSubmitProgress
+          keys={IN_REACH}
           wait={polishing(1_000, 3_000)}
           outcome={null}
           onPresentChange={onPresentChange}
@@ -248,6 +343,7 @@ describe("VoiceSubmitProgress", () => {
       );
       view.rerender(
         <VoiceSubmitProgress
+          keys={IN_REACH}
           wait={null}
           outcome={sent("failed")}
           onPresentChange={onPresentChange}
@@ -263,6 +359,7 @@ describe("VoiceSubmitProgress", () => {
 
       view.rerender(
         <VoiceSubmitProgress
+          keys={IN_REACH}
           wait={null}
           outcome={sent("failed")}
           onPresentChange={onPresentChange}

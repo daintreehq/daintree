@@ -1,6 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DictationRecord } from "@/store/dictationRangeStore";
-import { planVoiceDraftSend } from "../voiceDraftSend";
+import {
+  claimWaitingSend,
+  hasWaitingStopAndSend,
+  isHeldBackSession,
+  planVoiceDraftSend,
+  sendWaitingStopAndSends,
+} from "../voiceDraftSend";
 
 const TARGET = { panelId: "panel-1", projectId: "project-1" };
 const SENT_BY = new Set(["stopped"]);
@@ -125,5 +131,56 @@ describe("planVoiceDraftSend (#14804)", () => {
     expect(plan.kept).toBe("\nnext words");
     expect(applyChanges(draft, plan)).toBe(plan.kept);
     expect(plan.leadingSpace).toBeNull();
+  });
+});
+
+describe("waiting sends the stop-and-send key started (#15705)", () => {
+  const releases: Array<() => void> = [];
+  afterEach(() => releases.splice(0).forEach((release) => release()));
+  const claim = (panelId: string, sendNow?: () => void, sessions = new Set(["s1"])) => {
+    const release = claimWaitingSend(panelId, sessions, sendNow);
+    releases.push(release);
+    return release;
+  };
+
+  it("counts only a send the key started, and only until it is released", () => {
+    claim("enter-panel");
+    expect(hasWaitingStopAndSend()).toBe(false);
+    expect(sendWaitingStopAndSends()).toBe(false);
+
+    const sendNow = vi.fn();
+    const release = claim("key-panel", sendNow);
+    expect(hasWaitingStopAndSend()).toBe(true);
+
+    release();
+    expect(hasWaitingStopAndSend()).toBe(false);
+    expect(sendWaitingStopAndSends()).toBe(false);
+    expect(sendNow).not.toHaveBeenCalled();
+  });
+
+  it("sends every waiting send the key started, and leaves one Enter started alone", () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    claim("panel-a", first);
+    claim("panel-b", second);
+    claim("enter-panel");
+
+    expect(sendWaitingStopAndSends()).toBe(true);
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a newer send for the same panel when an older one's release comes late", () => {
+    const sessions = new Set(["s1"]);
+    const stale = claim("panel-a", vi.fn(), sessions);
+    const newer = vi.fn();
+    claim("panel-a", newer, sessions);
+
+    stale();
+
+    expect(hasWaitingStopAndSend()).toBe(true);
+    expect(isHeldBackSession("panel-a", "a-later-session")).toBe(true);
+    sendWaitingStopAndSends();
+    expect(newer).toHaveBeenCalledTimes(1);
   });
 });

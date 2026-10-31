@@ -3,6 +3,8 @@
  * Enter while dictating, through the real composer, voice service and stores:
  * a dictation started on the same panel while the send waits for its cleanup
  * reopens the send, and the next send takes both passages (#14804, #15703).
+ * Stop and send's key, through the real keybindings, does for a send it
+ * started what a second Enter does for one Enter started (#15705).
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -30,6 +32,13 @@ import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { setPendingComposerSelection } from "@/lib/composerCaret";
 import { makeDraftKey } from "@/lib/draftKey";
 import { HybridInputBar } from "../HybridInputBar";
+import { useGlobalKeybindings } from "@/hooks/useGlobalKeybindings";
+import { keybindingService } from "@/services/KeybindingService";
+import { actionService } from "@/services/ActionService";
+import { registerVoiceActions } from "@/services/actions/definitions/voiceActions";
+import type { ActionRegistry } from "@/services/actions/actionTypes";
+import { formatChordText } from "@/lib/kbdShortcut";
+import { isMac } from "@/lib/platform";
 import { addImageChip } from "../inputEditorExtensions";
 
 type DeltaPayload = { text: string; itemId?: string };
@@ -192,11 +201,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function mount(onSend: (payload: { text: string }) => void) {
+async function mount(onSend: (payload: { text: string }) => void, beside?: React.ReactNode) {
   const result = render(
     <TooltipProvider>
       <WorktreeStoreContext.Provider value={createWorktreeStore()}>
         <HybridInputBar terminalId={PANEL_ID} cwd={WT_ID} agentId="claude" onSend={onSend} />
+        {beside}
       </WorktreeStoreContext.Provider>
     </TooltipProvider>
   );
@@ -880,4 +890,104 @@ describe("HybridInputBar dictated send whose composer went disabled before it un
     expect(submitText.mock.calls.map(([text]) => text)).toEqual(["Hello world."]);
     expect(draft()).toBe("");
   });
+});
+
+describe("HybridInputBar stop-and-send pressed again while its send waits (#15705)", () => {
+  beforeEach(() => {
+    const actions: ActionRegistry = new Map();
+    registerVoiceActions(actions);
+    actionService.register(actions.get("voiceInput.stopAndSend")!());
+  });
+  afterEach(() => {
+    actionService.unregister("voiceInput.stopAndSend");
+  });
+
+  function GlobalKeys() {
+    useGlobalKeybindings(true);
+    return null;
+  }
+
+  const combo = () => keybindingService.getEffectiveCombo("voiceInput.stopAndSend")!;
+
+  /** The key as the keyboard sends it, at whatever has focus. */
+  function pressStopAndSend() {
+    const parts = combo().split("+");
+    const key = parts.pop()!;
+    const event = new KeyboardEvent("keydown", {
+      key: key.length === 1 ? key.toLowerCase() : key,
+      code: /^[A-Z]$/.test(key) ? `Key${key}` : key === "." ? "Period" : key,
+      metaKey: parts.includes("Cmd") && isMac(),
+      ctrlKey: parts.includes("Ctrl") || (parts.includes("Cmd") && !isMac()),
+      shiftKey: parts.includes("Shift"),
+      altKey: parts.includes("Alt"),
+      bubbles: true,
+      cancelable: true,
+    });
+    (document.activeElement ?? document.body).dispatchEvent(event);
+    return event;
+  }
+
+  const caption = () => document.querySelector("[data-voice-submit-caption]")?.textContent ?? "";
+
+  it.each(["its composer", "another pane"])(
+    "sends what stands at the key pressed again with the keyboard in %s",
+    async (where) => {
+      const pending = deferred<CorrectResult>();
+      correct.mockReturnValueOnce(pending.promise);
+      const onSend = vi.fn();
+      act(() => {
+        dictate("hello wrld");
+      });
+      const view = await mount(onSend, <GlobalKeys />);
+      const pane = document.createElement("textarea");
+      document.body.appendChild(pane);
+      if (where === "another pane") pane.focus();
+      else view.focus();
+
+      let first!: KeyboardEvent;
+      await act(async () => {
+        first = pressStopAndSend();
+      });
+      expect(first.defaultPrevented).toBe(true);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, UI_INLINE_LOADING_GATE_MS + 50));
+      });
+      expect(onSend).not.toHaveBeenCalled();
+      expect(caption()).toContain(`${formatChordText(combo(), isMac())} to send as dictated`);
+      if (where === "another pane") {
+        expect(caption()).not.toMatch(/· Enter to send|Esc/);
+        // Enter and Escape typed there are that pane's.
+        for (const key of ["Enter", "Escape"]) {
+          const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+          pane.dispatchEvent(event);
+          expect(event.defaultPrevented).toBe(false);
+        }
+        expect(onSend).not.toHaveBeenCalled();
+      } else {
+        expect(caption()).toMatch(/Esc to cancel/);
+      }
+
+      let second!: KeyboardEvent;
+      await act(async () => {
+        second = pressStopAndSend();
+      });
+
+      expect(second.defaultPrevented).toBe(true);
+      expect(onSend.mock.calls.map(([payload]) => payload.text)).toEqual(["hello wrld"]);
+      expect(caption()).toMatch(/cleanup skipped/);
+      if (where === "another pane") expect(document.activeElement).toBe(pane);
+
+      // With no send waiting, the key is free for whatever else holds it.
+      let after!: KeyboardEvent;
+      await act(async () => {
+        after = pressStopAndSend();
+      });
+      expect(after.defaultPrevented).toBe(false);
+
+      await act(async () => {
+        pending.resolve({ action: "replace", correctedText: "Hello world." });
+      });
+      expect(onSend).toHaveBeenCalledTimes(1);
+    }
+  );
 });

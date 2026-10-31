@@ -20,6 +20,8 @@ import {
 } from "@/store/projectPresentationStore";
 import type { Project } from "@shared/types/project";
 import { useSidebarViewStore, WORKTREES_SIDEBAR_VIEW_ID } from "@/store/sidebarViewStore";
+import { claimWaitingSend } from "@/services/voiceDraftSend";
+import { buildDefaultKeybindings } from "@shared/config/defaultKeybindings";
 
 function makeAgent(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -110,6 +112,32 @@ describe("buildKeybindingWhenContext", () => {
     expect(buildKeybindingWhenContext(eventFrom(null)).dictationActive).toBe(true);
   });
 
+  // #15705: the stop-and-send key, pressed again, sends a waiting send it started.
+  it("reports voiceSendWaiting only while a send the stop-and-send key started waits", () => {
+    const waiting = () => buildKeybindingWhenContext(eventFrom(null)).voiceSendWaiting;
+    const releaseEnter = claimWaitingSend("enter-panel", new Set(["s0"]));
+    expect(waiting()).toBe(false);
+
+    const release = claimWaitingSend("key-panel", new Set(["s1"]), () => {});
+    expect(waiting()).toBe(true);
+
+    release();
+    releaseEnter();
+    expect(waiting()).toBe(false);
+  });
+
+  it("holds the macOS stop-and-send key while a send it started waits, with dictation over", () => {
+    const when = buildDefaultKeybindings(false).find(
+      (binding) => binding.actionId === "voiceInput.stopAndSend"
+    )!.when!;
+    const holds = () => evaluate(parse(when), buildKeybindingWhenContext(eventFrom(null)));
+    expect(holds()).toBe(false);
+
+    const release = claimWaitingSend("key-panel", new Set(["s1"]), () => {});
+    expect(holds()).toBe(true);
+    release();
+    expect(holds()).toBe(false);
+  });
   it("reports terminalFocused only for targets inside an xterm host", () => {
     const xterm = document.createElement("div");
     xterm.className = "xterm";
