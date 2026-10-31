@@ -921,12 +921,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       if (owner.agentId !== agentId || relaunched) lost = AGENT_GONE_STOP;
     };
 
-    // An answer that straddled a respawn describes the predecessor. Without
-    // an answer there is nothing to pin, and adopting whichever agent turns up
-    // later could hand the bundle to a successor.
+    // An answer that straddled a respawn describes the predecessor. No answer
+    // at all is a spawn the host hasn't made yet (or a failed read), so the
+    // pin waits for the first agent seen.
     if (ledger.currentGeneration(terminalId) !== generation) lost = TERMINAL_CLOSED;
-    else if (!info?.hasPty) lost = TERMINAL_GONE;
-    else if (info.detectedAgentId) adoptOrCompare(info.detectedAgentId, info.agentIncarnation);
+    else if (info && !info.hasPty) lost = TERMINAL_GONE;
+    else if (info?.detectedAgentId) adoptOrCompare(info.detectedAgentId, info.agentIncarnation);
 
     // Subscribed in the continuation of the snapshot, so every event seen here
     // happened after the state that answer describes.
@@ -934,9 +934,11 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       if (lost || event.terminalId !== terminalId || !event.agentType) return;
       adoptOrCompare(event.agentType, event.agentIncarnation);
     });
+    // An agent leaving before one was pinned was there when the injection was
+    // asked for, unseen by a failed read: whatever starts next isn't it.
     const offExited = events.on("agent:exited", (event) => {
       if (lost || event.terminalId !== terminalId || !event.agentType) return;
-      if (owner) lost = AGENT_GONE_STOP;
+      lost = AGENT_GONE_STOP;
     });
 
     return {

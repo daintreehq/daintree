@@ -2272,7 +2272,7 @@ describe("context injection paste boundary (#15629)", () => {
     expect(writes.join("")).toBe(`${PASTE_START}${bundle}${PASTE_END}`);
   });
   // Reads: the target's pin before generation, then at most one admission
-  // read. A terminal with no live PTY is refused at the pin, before generating.
+  // read. A terminal the host says has no live PTY is refused at the pin.
   it.each([
     ["a shell", { hasPty: true, bracketedPasteMode: true }, "not a shell", 2],
     [
@@ -2282,7 +2282,7 @@ describe("context injection paste boundary (#15629)", () => {
       2,
     ],
     ["an exited terminal", { hasPty: false, detectedAgentId: "claude" }, "no longer exists", 1],
-    ["a terminal the host doesn't know", null, "no longer exists", 1],
+    ["a terminal the host doesn't know", null, "no longer exists", 2],
   ])("refuses %s at once, without writing a byte", async (_label, info, message, reads) => {
     register('<file path="run.sh">\nrm -rf ~/work\n</file>\n');
     ptyClient.getTerminalInfo.mockResolvedValue(info);
@@ -2697,15 +2697,47 @@ describe("context injection into a locked pane or a changed target (#15644)", ()
     expect(ptyClient.write).not.toHaveBeenCalled();
   });
 
-  it("refuses before generating when the host can't describe the terminal to pin", async () => {
-    register();
-    // The id still exists, but without an answer there is no agent to hold
-    // the injection to.
+  it("delivers to a launch the host hadn't spawned yet when the pin was taken", async () => {
+    register("<files/>\n");
+    // `hasTerminal` counts a pending spawn; the host answers null until it exists.
     ptyClient.getTerminalInfo.mockResolvedValueOnce(null);
 
     const result = await inject();
 
-    expect(result.error).toBe("Terminal no longer exists");
+    expect(result).not.toHaveProperty("error");
+    expect(writes.join("")).toBe(`${PASTE_START}<files/>\n${PASTE_END}`);
+  });
+
+  it("gives nothing to a successor when an unpinned agent exits during generation", async () => {
+    register();
+    // A failed read leaves nothing pinned, but the agent was there all along.
+    ptyClient.getTerminalInfo.mockResolvedValueOnce(null);
+    const release = holdGeneration();
+
+    const pending = inject();
+    await vi.waitFor(() => expect(generateContext).toHaveBeenCalled());
+    agentExited("claude");
+    agentDetected("codex", 1);
+    ptyClient.getTerminalInfo.mockResolvedValue({
+      ...PASTE_READY_AGENT,
+      detectedAgentId: "codex",
+      agentIncarnation: 1,
+    });
+    release();
+    const result = await pending;
+
+    expect(result.error).toContain("no longer running");
+    expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
+  it("generates nothing for a lock that overtook its inject across a project switch", async () => {
+    register();
+    await stop("inj-switch", "input-locked");
+    contextInjectionTracker.onProjectSwitch();
+
+    const result = await inject("inj-switch");
+
+    expect(result.error).toContain("input was locked");
     expect(generateContext).not.toHaveBeenCalled();
     expect(ptyClient.write).not.toHaveBeenCalled();
   });

@@ -129,13 +129,13 @@ describe("ContextInjectionTracker", () => {
       for (let i = 1; i < 65; i++) expect(tracker.isCancelled(`inj-${i}`)).toBe(true);
     });
 
-    it("is cleared by a project switch", () => {
-      tracker.markCancelled("inj-early");
+    it("survives a project switch, which doesn't stop its inject arriving", () => {
+      tracker.markCancelled("inj-early", "input-locked");
       tracker.onProjectSwitch();
 
       tracker.beginInjection("t1", "inj-early");
 
-      expect(tracker.isCancelled("inj-early")).toBe(false);
+      expect(tracker.getStop("inj-early")).toBe("input-locked");
     });
   });
 

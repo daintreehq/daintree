@@ -96,14 +96,13 @@ export class ContextInjectionTracker {
   }
 
   /**
-   * Releases every terminal reservation. A run still in its handler keeps its
-   * stop and can still be stopped: a lock recorded before the switch must not
-   * be forgotten while the bundle is still on its way.
+   * Releases every terminal reservation. Stops are kept, for runs in their
+   * handler and for runs still on their way to it: a lock recorded before the
+   * switch must not be forgotten while the bundle can still be written.
    */
   onProjectSwitch(): void {
     this.injectionsInProgress.clear();
     this.activeInjectionIds.clear();
-    this.earlyStops.clear();
   }
 
   private pruneEarlyStops(): void {
