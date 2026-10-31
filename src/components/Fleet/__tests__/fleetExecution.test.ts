@@ -84,6 +84,12 @@ beforeAll(async () => {
   await loadTerminalService();
 });
 
+// Some tests spy on `terminalClient.submit` directly; put the shared mock back
+// so no later test, in whatever order, sends through a stale spy.
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 function makeAgent(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id,
@@ -118,7 +124,7 @@ function seedPanels(terminals: PanelInstance[]): void {
   useFleetArmingStore.setState({
     armedIds: new Set(panelIds),
     armOrder: panelIds,
-    armOrderById: Object.fromEntries(panelIds.map((id, i) => [id, i])),
+    armOrderById: Object.fromEntries(panelIds.map((id, i) => [id, i + 1])),
     lastArmedId: panelIds[panelIds.length - 1] ?? null,
   });
 }
@@ -732,6 +738,18 @@ describe("executeFleetBroadcast — context tokens (#14953)", () => {
     );
   });
 
+  it("never resolves or expands anything here for another host's agent no longer armed (#15560)", async () => {
+    const stale = crossHostTargetKey("host-2", "gone");
+    seedPanels([makeAgent("a", { cwd: "/wt/a" })]);
+    const result = await executeFleetBroadcast("Review @diff", ["a", stale]);
+    expect(buildFleetBroadcastRecipeContextMock.mock.calls.map((call) => call[0])).toEqual(["a"]);
+    expect(getWorkingDiff.mock.calls.map((call) => call[0])).toEqual(["/wt/a"]);
+    expect(submitMock.mock.calls.map((call) => call[0])).toEqual(["a"]);
+    expect(remoteSubmit).not.toHaveBeenCalled();
+    expect(result.failedIds).toEqual([]);
+    expect(result.skippedCount).toBe(1);
+  });
+
   it("sends nothing to a pane that left the fleet while its context was read", async () => {
     seedPanels([makeAgent("a", { cwd: "/wt/a" }), makeAgent("b", { cwd: "/wt/b" })]);
     const answer = holdDiffs();
@@ -1182,5 +1200,50 @@ describe("executeFleetBroadcast — targets that leave the fleet between large-p
       expect(mock.mock.calls.map((call) => call[0])).not.toContain(remote);
     }
     expect(sentTo(remote)).toEqual([]);
+  });
+
+  it("keeps an in-flight rejection from another host's agent remote after it leaves the fleet", async () => {
+    const remote = crossHostTargetKey("host-2", "r1");
+    seedPanels([makeAgent("a")]);
+    useFleetArmingStore.setState({
+      crossHostTargets: [
+        { key: remote, hostId: "host-2", hostName: "Studio", terminalId: "r1", title: "r1" },
+      ],
+    });
+    let refuse!: () => void;
+    remoteSubmit.mockImplementation(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          refuse = () => reject(new Error("ENOSPC: host disk full"));
+        })
+    );
+
+    const sending = executeFleetBroadcast("hello", ["a", remote]);
+    useFleetArmingStore.getState().disarmId(remote);
+    refuse();
+    const result = await sending;
+
+    expect(result.failedIds).toEqual([remote]);
+    expect(clearDirectingStateMock.mock.calls.map((call) => call[0])).not.toContain(remote);
+  });
+
+  it("never hands another host's agent to this view's terminals, even once its batch is picked", async () => {
+    const remote = crossHostTargetKey("host-2", "r1");
+    seedPanels([makeAgent("a")]);
+    useFleetArmingStore.setState({
+      crossHostTargets: [
+        { key: remote, hostId: "host-2", hostName: "Studio", terminalId: "r1", title: "r1" },
+      ],
+    });
+    // Leaves the fleet after the batch was filtered, before its own submit.
+    notifyUserInputMock.mockImplementation((id) => {
+      if (id === "a") useFleetArmingStore.getState().disarmId(remote);
+    });
+
+    await executeFleetBroadcast("hello", ["a", remote]);
+
+    expect(sentIds()).toEqual(["a"]);
+    expect(notifyUserInputMock.mock.calls.map((call) => call[0])).toEqual(["a"]);
+    expect(remoteSubmit).not.toHaveBeenCalled();
   });
 });

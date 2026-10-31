@@ -283,11 +283,19 @@ export const fleetActionRuns = {
       const stillFailed = new Set(result.transientlyFailedIds);
       // A failed pane that's locked now, before the retry or while it ran, was
       // left out rather than retried: its failure stays so it can be retried
-      // once it's unlocked.
+      // once it's unlocked. One that left the fleet was left out for good, so
+      // its failure goes rather than leaving a Retry that never reaches it.
       const sent = new Set(result.perTarget.map((t) => t.terminalId));
       const { panelsById } = usePanelStore.getState();
+      const { armedIds } = useFleetArmingStore.getState();
       for (const id of targets) {
-        if (!sent.has(id) && isFleetArmEligible(getNarrowPanel(panelsById, id))) continue;
+        if (
+          !sent.has(id) &&
+          armedIds.has(id) &&
+          isFleetArmEligible(getNarrowPanel(panelsById, id))
+        ) {
+          continue;
+        }
         if (!stillFailed.has(id) && !awaitingConfirmation.has(id)) {
           useFleetFailureStore.getState().dismissId(id);
         }

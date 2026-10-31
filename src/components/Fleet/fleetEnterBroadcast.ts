@@ -44,11 +44,10 @@ export function cancelActiveBroadcast(): void {
  * submission is withdrawn; a run already watching its agents carries on.
  */
 function cancelWhenFleetEmpties(controller: AbortController): () => void {
+  // A newer send aborts this controller before taking over, which stops this
+  // watch, so a cancel from here always lands on the send it was made for.
   const cancelIfEmpty = (state: ReturnType<typeof useFleetArmingStore.getState>) => {
-    if (selectFleetMemberCount(state) > 0) return;
-    // A newer send owns the controller and the progress store now.
-    if (activeBroadcastController !== controller) return;
-    cancelActiveBroadcast();
+    if (selectFleetMemberCount(state) === 0) cancelActiveBroadcast();
   };
   const unsubscribe = useFleetArmingStore.subscribe(cancelIfEmpty);
   const stop = () => {
@@ -143,6 +142,10 @@ function describeFailureSplit(permanent: number, transient: number): string {
   return `${transient} failed`;
 }
 
+function isFleetMember(id: string): boolean {
+  return useFleetArmingStore.getState().armedIds.has(id) || getCrossHostTarget(id) !== null;
+}
+
 /** The hosts a broadcast's failures were on, for words a screen reader can act on. */
 function failedHostsSuffix(failedHosts: readonly string[]): string {
   return failedHosts.length === 0 ? "" : ` on ${failedHosts.join(" and ")}`;
@@ -214,13 +217,17 @@ function applyFleetBroadcastOutcome(text: string, result: FleetExecutionResult):
         useFleetFailureStore.getState().dismissId(id);
       }
     }
-    if (result.transientlyFailedIds.length > 0) {
+    // A target that left the fleet while its submit was out has nothing left
+    // to retry against, and the failure store's own watch on the fleet has
+    // already run, so it would sit in the banner for good.
+    const retryable = result.transientlyFailedIds.filter(isFleetMember);
+    if (retryable.length > 0) {
       // The disarm count rides along so the banner can describe THIS
       // broadcast's permanent casualties without consulting the run store
       // (whose run may be superseded by the time the banner renders).
       useFleetFailureStore
         .getState()
-        .recordFailure(text, result.transientlyFailedIds, result.permanentlyFailedIds.length);
+        .recordFailure(text, retryable, result.permanentlyFailedIds.length);
     }
     // Successful targets in a partial-failure run still clear their
     // stale failure dots — same logic as the all-success branch below.

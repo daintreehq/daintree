@@ -721,6 +721,30 @@ describe("fleet.retryFailures", () => {
     expect([...useFleetFailureStore.getState().failedIds]).toEqual(["t2"]);
   });
 
+  it("lets go of the failure of a pane that left the fleet, rather than retrying it forever (#15560)", async () => {
+    seedPanels([makeAgent("t1"), makeAgent("t2")]);
+    useFleetArmingStore.getState().armIds(["t1"]);
+    // t2 failed, then was disarmed: the broadcast skips it as no longer in the fleet.
+    vi.mocked(runManagedFleetBroadcast).mockResolvedValueOnce({
+      total: 1,
+      successCount: 1,
+      failureCount: 0,
+      perTarget: [{ terminalId: "t1", status: "fulfilled" }],
+      failedIds: [],
+      permanentlyFailedIds: [],
+      transientlyFailedIds: [],
+      cancelled: false,
+      skippedCount: 1,
+    });
+    useFleetFailureStore.setState({
+      failedIds: new Set(["t1", "t2"]),
+      payload: "ls\r",
+    });
+    const registry = await buildRegistry();
+    await run(registry, "fleet.retryFailures");
+    expect(useFleetFailureStore.getState().failedIds.size).toBe(0);
+  });
+
   it("leaves out, and keeps failed, another host's agent whose safe retry window has passed", async () => {
     vi.mocked(needsCrossHostResendConfirmation).mockImplementation(
       (id) => id === "host-fleet:h:t2"
