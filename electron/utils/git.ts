@@ -1059,9 +1059,11 @@ export async function getWorktreeChangesWithStats(
             return null;
           }
 
-          // Untracked line counts are a pure function of file content, so
-          // their identity deliberately excludes HEAD OID: commits must not
-          // discard them.
+          // Untracked line counts and binary verdicts (`null`) are a pure
+          // function of file content, so their identity deliberately excludes
+          // HEAD OID: commits must not discard them. Remembering the binary
+          // verdict is what keeps an unchanged binary from being read whole on
+          // every pass.
           const cached = diffStatPass.lookupUntracked(filePath, stats.mtimeMs, stats.size);
           if (cached !== undefined) {
             diffStatPass.keepUntracked(filePath, stats.mtimeMs, stats.size, cached);
@@ -1069,9 +1071,17 @@ export async function getWorktreeChangesWithStats(
           }
 
           const buffer = await perFile(() => readFileBounded(filePath));
+          // A read that disagrees with the stat raced a writer. Its answer is
+          // still this pass's best, but it may not belong to the identity the
+          // stat gave, so nothing is kept under it.
+          const keep = (insertions: number | null) => {
+            if (buffer.length !== stats.size) return;
+            diffStatPass.keepUntracked(filePath, stats.mtimeMs, stats.size, insertions);
+          };
 
           const sampleSize = Math.min(buffer.length, 8192);
           if (buffer.subarray(0, sampleSize).indexOf(0) !== -1) {
+            keep(null);
             return null;
           }
 
@@ -1086,8 +1096,7 @@ export async function getWorktreeChangesWithStats(
             lineCount++;
           }
 
-          diffStatPass.keepUntracked(filePath, stats.mtimeMs, stats.size, lineCount);
-
+          keep(lineCount);
           return lineCount;
         } catch (_error) {
           return null;
