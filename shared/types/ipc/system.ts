@@ -423,14 +423,20 @@ export type RendererCpuProfileStartResult =
  * Result of collecting a renderer CPU profile. `canceled` means the user
  * dismissed the save dialog (silent, not an error). `devtools-detached`
  * means something (typically DevTools) stole the CDP session mid-recording
- * and the profile data is unrecoverable.
+ * and the profile data is unrecoverable. `capture-failed` is any other
+ * `Profiler.stop` failure, with the debugger still attached.
  */
 export type RendererCpuProfileStopResult =
   | { status: "saved" }
   | { status: "canceled" }
   | {
       status: "failed";
-      reason: "not-recording" | "already-stopping" | "devtools-detached" | "save-failed";
+      reason:
+        | "not-recording"
+        | "already-stopping"
+        | "devtools-detached"
+        | "capture-failed"
+        | "save-failed";
       message?: string;
     };
 
