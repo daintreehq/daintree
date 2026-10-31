@@ -601,7 +601,11 @@ describe("useScrollIndicator with the pills' bands (issue #15805)", () => {
     return { ...hook, scroller, scrollToIndex, scrollBy };
   }
 
-  function scrollTo(scroller: HTMLElement, result: { current: { handleScroll: () => void } }, top: number) {
+  function scrollTo(
+    scroller: HTMLElement,
+    result: { current: { handleScroll: () => void } },
+    top: number
+  ) {
     scroller.scrollTop = top;
     act(() => result.current.handleScroll());
     flushFrames();
