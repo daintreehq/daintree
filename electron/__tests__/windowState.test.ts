@@ -65,8 +65,11 @@ vi.mock("../services/ProjectStore.js", () => ({
 import {
   createWindowWithState,
   pruneWindowStateForPath,
+  pruneWindowStateForScratch,
+  pruneWindowStatesForHost,
   rekeyWindowStateForPath,
 } from "../windowState.js";
+import { folderlessBoundsKey } from "../window/windowBoundsKeys.js";
 
 describe("createWindowWithState", () => {
   // Helper: fire the deferred 'show' handler (fullscreen is applied after show)
@@ -1037,6 +1040,58 @@ describe("createWindowWithState", () => {
       windowStatesStoreMock.set.mockClear();
 
       pruneWindowStateForPath("/missing");
+
+      expect(windowStatesStoreMock.set).not.toHaveBeenCalled();
+    });
+
+    it("pruneWindowStateForScratch drops only that scratch's bounds", () => {
+      const entry = { x: 0, y: 0, width: 800, height: 600, isMaximized: false };
+      const scratch = "3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e";
+      const otherScratch = "0a1b2c3d-4e5f-4a6b-9c7d-8e9f0a1b2c3d";
+      const keep = ["/a", folderlessBoundsKey(otherScratch)!, "__legacy__"];
+      const getState = makeStateful(
+        Object.fromEntries([folderlessBoundsKey(scratch)!, ...keep].map((k) => [k, entry]))
+      );
+
+      pruneWindowStateForScratch(scratch);
+
+      expect(Object.keys(getState())).toEqual(keep);
+    });
+
+    it("pruneWindowStatesForHost drops every project on that host and nothing else", () => {
+      const entry = { x: 0, y: 0, width: 800, height: 600, isMaximized: false };
+      const p1 = "a".repeat(64);
+      const p2 = "b".repeat(64);
+      const keep = [
+        "/a",
+        folderlessBoundsKey(`build-box-2:${p1}`)!,
+        folderlessBoundsKey(`gpu-box:${p1}`)!,
+        folderlessBoundsKey("3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e")!,
+        "__legacy__",
+      ];
+      const getState = makeStateful(
+        Object.fromEntries(
+          [
+            folderlessBoundsKey(`build-box:${p1}`)!,
+            folderlessBoundsKey(`build-box:${p2}`)!,
+            ...keep,
+          ].map((k) => [k, entry])
+        )
+      );
+
+      pruneWindowStatesForHost("build-box");
+
+      expect(Object.keys(getState())).toEqual(keep);
+      const lastSet = windowStatesStoreMock.set.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+      expect(Object.values(lastSet)).not.toContain(undefined);
+    });
+
+    it("pruneWindowStatesForHost writes nothing for a host with no saved bounds", () => {
+      makeStateful({ "/b": { x: 0, y: 0, width: 800, height: 600 } });
+      windowStatesStoreMock.set.mockClear();
+
+      pruneWindowStatesForHost("build-box");
+      pruneWindowStatesForHost("");
 
       expect(windowStatesStoreMock.set).not.toHaveBeenCalled();
     });

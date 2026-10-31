@@ -1,13 +1,14 @@
 import { BrowserWindow, screen } from "electron";
 import { windowStatesStore, type WindowStateEntry } from "./store.js";
+import { hostBoundsKeyPrefix, scratchBoundsKey } from "./window/windowBoundsKeys.js";
 
 const LEGACY_KEY = "__legacy__";
 const MRU_OFFSET_PX = 30;
 // How many cascade steps a new window takes off windows it would land on.
 const MAX_CASCADE_STEPS = 10;
 
-// Cap on how many per-project window-state entries `window-states.json` retains.
-// Without it the map grows one entry per project ever opened, is never pruned,
+// Cap on how many per-workspace window-state entries `window-states.json` retains.
+// Without it the map grows one entry per workspace ever opened, is never pruned,
 // and electron-store re-serializes the whole file on every window move/resize
 // (500ms debounce) plus a 60s crash-recovery snapshot. The `__legacy__`
 // cold-start fallback is exempt — it never counts toward or is evicted by the cap.
@@ -58,7 +59,7 @@ type WindowStateBounds = {
   isFullScreen: boolean;
 };
 
-let lastSavedProjectPath: string | null = null;
+let lastSavedKey: string | null = null;
 
 // Cached on first use — lazy-require of ProjectStore is a one-shot, not a hot-path reload.
 let cachedProjectStore: {
@@ -93,8 +94,8 @@ function getCurrentProjectPath(): string | null {
 function getMruBounds(): WindowStateBounds | null {
   const windowStates = windowStatesStore.get("windowStates") ?? {};
 
-  if (lastSavedProjectPath && windowStates[lastSavedProjectPath]) {
-    return { isFullScreen: false, ...windowStates[lastSavedProjectPath] };
+  if (lastSavedKey && windowStates[lastSavedKey]) {
+    return { isFullScreen: false, ...windowStates[lastSavedKey] };
   }
 
   if (windowStates[LEGACY_KEY]) {
@@ -139,19 +140,19 @@ function clampToDisplay(bounds: { x: number; y: number; width: number; height: n
 }
 
 interface ResolvedWindowBounds extends WindowStateBounds {
-  /** The project's own saved bounds, as opposed to ones borrowed from another window. */
+  /** The workspace's own saved bounds, as opposed to ones borrowed from another window. */
   ownSaved: boolean;
 }
 
-function resolveWindowBounds(projectPath: string | null | undefined): ResolvedWindowBounds {
-  // 1. Try per-project state
+function resolveWindowBounds(key: string | null | undefined): ResolvedWindowBounds {
+  // 1. Try per-workspace state
   const windowStates = windowStatesStore.get("windowStates") ?? {};
-  if (projectPath) {
-    if (windowStates[projectPath]) {
-      return { isFullScreen: false, ...windowStates[projectPath], ownSaved: true };
+  if (key) {
+    if (windowStates[key]) {
+      return { isFullScreen: false, ...windowStates[key], ownSaved: true };
     }
 
-    // 2. MRU cascade for new project windows
+    // 2. MRU cascade for new workspace windows
     const mru = getMruBounds();
     if (mru && mru.x !== undefined && mru.y !== undefined) {
       const offset = clampToDisplay({
@@ -169,9 +170,9 @@ function resolveWindowBounds(projectPath: string | null | undefined): ResolvedWi
     }
   }
 
-  // 3. Cold-start restore: startup may not know the project path yet, so use
+  // 3. Cold-start restore: startup may not know the workspace yet, so use
   // the last shell window state exactly (no cascade offset, preserve maximize).
-  if (!projectPath) {
+  if (!key) {
     const mru = getMruBounds();
     if (mru) {
       return { ...mru, ownSaved: false };
@@ -248,45 +249,68 @@ type WindowStatesMap = Record<string, WindowStateEntry>;
 // Single capped writer all mutation paths route through (per lesson #7586), so
 // the MRU cap lives in exactly one place rather than being duplicated across the
 // save and prune paths. Object key order is insertion order for these string
-// keys, so the earliest project keys are the least-recently-touched — evict them
-// first when over the cap. `__legacy__` is never counted or evicted.
+// keys, so the earliest workspace keys are the least-recently-touched — evict
+// them first when over the cap. `__legacy__` is never counted or evicted.
 function commitWindowStates(windowStates: WindowStatesMap): void {
-  const projectKeys = Object.keys(windowStates).filter((k) => k !== LEGACY_KEY);
-  const overflow = projectKeys.length - WINDOW_STATE_MRU_CAP;
+  const workspaceKeys = Object.keys(windowStates).filter((k) => k !== LEGACY_KEY);
+  const overflow = workspaceKeys.length - WINDOW_STATE_MRU_CAP;
   for (let i = 0; i < overflow; i++) {
-    delete windowStates[projectKeys[i]];
+    delete windowStates[workspaceKeys[i]];
   }
   windowStatesStore.set("windowStates", windowStates);
 }
 
-function saveWindowStates(projectPath: string | null | undefined, bounds: WindowStateBounds): void {
+function saveWindowStates(key: string | null | undefined, bounds: WindowStateBounds): void {
   const windowStates: WindowStatesMap = windowStatesStore.get("windowStates") ?? {};
-  if (projectPath) {
-    // Delete then re-add so a touched path moves to the most-recent slot in
+  if (key) {
+    // Delete then re-add so a touched key moves to the most-recent slot in
     // insertion order and can't be picked as the eviction victim below.
-    delete windowStates[projectPath];
-    windowStates[projectPath] = bounds;
+    delete windowStates[key];
+    windowStates[key] = bounds;
   }
   windowStates[LEGACY_KEY] = bounds;
   commitWindowStates(windowStates);
-  lastSavedProjectPath = projectPath ?? LEGACY_KEY;
+  lastSavedKey = key ?? LEGACY_KEY;
+}
+
+/**
+ * Drop the saved window states whose keys match, through the same capped
+ * writer as the save path, never writing `undefined` (electron-store v11
+ * rejects it). `__legacy__` is never dropped. No-op when nothing matches.
+ */
+function pruneWindowStates(matches: (key: string) => boolean): void {
+  const windowStates: WindowStatesMap | undefined = windowStatesStore.get("windowStates");
+  if (!windowStates) return;
+  const pruned = Object.keys(windowStates).filter((key) => key !== LEGACY_KEY && matches(key));
+  if (pruned.length === 0) return;
+  for (const key of pruned) delete windowStates[key];
+  commitWindowStates(windowStates);
+  if (lastSavedKey !== null && pruned.includes(lastSavedKey)) {
+    lastSavedKey = null;
+  }
 }
 
 /**
  * Drop a project's saved window state — called when the project is removed so
  * `window-states.json` doesn't retain bounds for projects that no longer exist.
- * Routes through the same capped writer as the save path and never writes
- * `undefined` (electron-store v11 rejects it). No-op if the path isn't present.
  */
 export function pruneWindowStateForPath(projectPath: string): void {
   if (!projectPath) return;
-  const windowStates: WindowStatesMap | undefined = windowStatesStore.get("windowStates");
-  if (!windowStates || !(projectPath in windowStates)) return;
-  delete windowStates[projectPath];
-  commitWindowStates(windowStates);
-  if (lastSavedProjectPath === projectPath) {
-    lastSavedProjectPath = null;
-  }
+  pruneWindowStates((key) => key === projectPath);
+}
+
+/** Drop a deleted scratch's saved window state. */
+export function pruneWindowStateForScratch(scratchId: string): void {
+  if (!scratchId) return;
+  const scratchKey = scratchBoundsKey(scratchId);
+  pruneWindowStates((key) => key === scratchKey);
+}
+
+/** Drop the saved window states of every project on a host removed from this device. */
+export function pruneWindowStatesForHost(hostId: string): void {
+  const prefix = hostBoundsKeyPrefix(hostId);
+  if (!prefix) return;
+  pruneWindowStates((key) => key.startsWith(prefix));
 }
 
 /**
@@ -311,8 +335,8 @@ export function rekeyWindowStateForPath(oldPath: string, newPath: string): void 
   delete windowStates[newPath];
   windowStates[newPath] = bounds;
   commitWindowStates(windowStates);
-  if (lastSavedProjectPath === oldPath) {
-    lastSavedProjectPath = newPath;
+  if (lastSavedKey === oldPath) {
+    lastSavedKey = newPath;
   }
 }
 
@@ -333,19 +357,20 @@ function keepRestoredBounds(
 }
 
 /**
- * What a window needs from its owner to keep its bounds under the right project
- * across project switches, and to stay clear of the other windows.
+ * What a window needs from its owner to keep its bounds under the right
+ * workspace across switches, and to stay clear of the other windows.
  */
 export interface WindowStateTracking {
   /**
-   * The folder of the project the window is showing now, or null when it shows
-   * none (the picker, a scratch, a host's project). Bounds are saved under it
-   * because it is the project the open-window manifest reopens the window on.
-   * The process-global current project is no stand-in: it names whichever
-   * window switched last (#11101), so with two windows open every move of one
-   * was saved over the other's bounds.
+   * The key of the workspace the window is showing now (a local project's
+   * folder, or a scratch's or a host's project's id), or null when it shows
+   * none (the picker). Bounds are saved under it because it is the workspace
+   * the open-window manifest reopens the window on. The process-global current
+   * project is no stand-in: it names whichever window switched last (#11101),
+   * so with two windows open every move of one was saved over the other's
+   * bounds.
    */
-  getShownProjectPath: (win: BrowserWindow) => string | null;
+  getShownBoundsKey: (win: BrowserWindow) => string | null;
   /** Subscribe to windows changing what they show. Returns the unsubscribe. */
   onShownProjectChange?: (listener: () => void) => () => void;
   /**
@@ -368,15 +393,16 @@ export function disposeWindowStateTracking(win: BrowserWindow): void {
 }
 
 /**
- * Create a window at the bounds saved for `projectPath` — or, without them, at
- * the most recent window's bounds — and keep its bounds saved as it moves.
+ * Create a window at the bounds saved under `initialKey` (the workspace it
+ * opens on) — or, without them, at the most recent window's bounds — and keep
+ * its bounds saved as it moves.
  */
 export function createWindowWithState(
   options: Electron.BrowserWindowConstructorOptions,
-  projectPath?: string | null,
+  initialKey?: string | null,
   tracking?: WindowStateTracking
 ): BrowserWindow {
-  const windowState = resolveWindowBounds(projectPath);
+  const windowState = resolveWindowBounds(initialKey);
 
   const win = new BrowserWindow({
     ...options,
@@ -388,7 +414,7 @@ export function createWindowWithState(
 
   let bounds = win.getBounds();
   const hasSavedPosition = windowState.x !== undefined && windowState.y !== undefined;
-  // Back exactly where this project's window was. Every other placement —
+  // Back exactly where this workspace's window was. Every other placement —
   // borrowed bounds, saved bounds the displays no longer fit, a centred
   // fallback — can land squarely on another open window.
   let atOwnSavedSpot = false;
@@ -488,21 +514,21 @@ export function createWindowWithState(
     }
   }
 
-  // The project this window's bounds belong to: the one it opened on until it
+  // The workspace this window's bounds belong to: the one it opened on until it
   // shows one, then the one it shows. A switch saves them again under the
-  // project switched to, so the window the manifest reopens on it comes back here.
-  let boundsKey: string | null = projectPath ?? null;
+  // workspace switched to, so the window the manifest reopens on it comes back here.
+  let boundsKey: string | null = initialKey ?? null;
   let hasShownProject = false;
-  const readShownProjectPath = (): string | null => {
-    const shown = tracking?.getShownProjectPath(win) ?? null;
+  const readShownKey = (): string | null => {
+    const shown = tracking?.getShownBoundsKey(win) ?? null;
     if (shown) hasShownProject = true;
     return shown;
   };
   const resolveSaveKey = (): string | null => {
-    if (!tracking) return projectPath ?? getCurrentProjectPath();
-    // Before the window shows any project, it is still the window for the one
-    // it opened on. Once it has shown one, showing none saves nothing per project.
-    return readShownProjectPath() ?? (hasShownProject ? null : (projectPath ?? null));
+    if (!tracking) return initialKey ?? getCurrentProjectPath();
+    // Before the window shows any workspace, it is still the window for the one
+    // it opened on. Once it has shown one, showing none saves nothing per workspace.
+    return readShownKey() ?? (hasShownProject ? null : (initialKey ?? null));
   };
 
   // At fractional display scaling on Windows, a window with a hidden title bar
@@ -549,10 +575,10 @@ export function createWindowWithState(
   if (tracking?.onShownProjectChange) {
     const unsubscribe = tracking.onShownProjectChange(() => {
       if (win.isDestroyed()) return;
-      const shown = readShownProjectPath();
+      const shown = readShownKey();
       // Nothing shown yet is a window still coming up, not one that left its project.
       if (shown === boundsKey || (!shown && !hasShownProject)) return;
-      // A move still waiting to save was made under the project shown before
+      // A move still waiting to save was made under the workspace shown before
       // the switch, so it saves there first.
       if (debouncedSaveState.pending()) {
         debouncedSaveState.cancel();

@@ -160,6 +160,21 @@ export function readProjectPathSync(projectId: string): string | null {
   });
 }
 
+/**
+ * Whether a scratch is live: it has a row that isn't tombstoned. A scratch's
+ * window bounds are kept only while it is, the way a local project's are kept
+ * only while its row names a folder. Same connection rules as the readers above.
+ */
+export function isLiveScratchSync(scratchId: string): boolean {
+  return (
+    readProjectRowSync((sqlite) =>
+      sqlite.prepare("SELECT 1 FROM scratches WHERE id = ? AND deleted_at IS NULL").get(scratchId)
+        ? true
+        : null
+    ) ?? false
+  );
+}
+
 function readProjectRowSync<T>(
   read: (sqlite: InstanceType<typeof Database>) => T | null
 ): T | null {

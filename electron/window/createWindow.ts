@@ -51,7 +51,7 @@ import { getLinuxWindowIconOption } from "./linuxWindowIcon.js";
 import { showWindowInactive } from "./showWindowInactive.js";
 import { seedTitleBarOverlay } from "./titleBarOverlay.js";
 import { readLastActiveProjectIdentitySync } from "../services/persistence/readLastProjectId.js";
-import { appWindowStateTracking, resolveBoundsProjectPath } from "./windowStateTracking.js";
+import { appWindowStateTracking, resolveBoundsKey } from "./windowStateTracking.js";
 import { attachRendererConsoleCapture } from "./rendererConsoleCapture.js";
 import { attachRendererEditContextMenu } from "./rendererEditContextMenu.js";
 import { markPerformance } from "../utils/performance.js";
@@ -150,6 +150,12 @@ export interface SetupBrowserWindowOptions {
    *  Used to assign the correct session partition to the initial view. */
   initialProjectId?: string;
   /**
+   * The host's project (`<hostId>:<projectId>`) a restored window was showing.
+   * The window opens on this machine's picker, and its bounds come from the
+   * host's project, where it moves once Remote Hosts is up.
+   */
+  remoteWorkspaceKey?: string;
+  /**
    * How the reveal gate maps the window (#11492). "showInactive" is for the
    * background windows of a startup restore: they come up after the window the
    * user is working in, and a plain `show()` would pull focus away from it.
@@ -177,6 +183,7 @@ export function setupBrowserWindow(
     onCreateWindow,
     projectPath,
     initialProjectId,
+    remoteWorkspaceKey,
     revealMode = "show",
   } = options;
   let smokeTestTimer: ReturnType<typeof setTimeout> | undefined;
@@ -242,7 +249,7 @@ export function setupBrowserWindow(
       ...getLinuxWindowIconOption(),
       backgroundColor: windowBg,
     },
-    resolveBoundsProjectPath(projectPath, initialProjectId),
+    resolveBoundsKey(projectPath, initialProjectId ?? remoteWorkspaceKey),
     appWindowStateTracking
   );
   markPerformance(PERF_MARKS.MAIN_WINDOW_CREATED);

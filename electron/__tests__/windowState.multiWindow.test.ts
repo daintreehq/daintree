@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WindowStateTracking } from "../windowState.js";
+import { folderlessBoundsKey } from "../window/windowBoundsKeys.js";
 
 type Rect = { x: number; y: number; width: number; height: number };
 
@@ -117,7 +118,7 @@ function open(projectPath?: string, tracking?: WindowStateTracking): FakeWindow 
 
 function occupiedBy(...windows: FakeWindow[]): WindowStateTracking {
   return {
-    getShownProjectPath: () => null,
+    getShownBoundsKey: () => null,
     getOccupiedBounds: () => windows.map((w) => w.getNormalBounds()),
   };
 }
@@ -239,7 +240,7 @@ describe("placing restored windows", () => {
 describe("saving under the project the window shows", () => {
   function tracking(shown: { path: string | null }, listeners: Array<() => void> = []) {
     return {
-      getShownProjectPath: vi.fn(() => shown.path),
+      getShownBoundsKey: vi.fn(() => shown.path),
       onShownProjectChange: vi.fn((listener: () => void) => {
         listeners.push(listener);
         return () => {
@@ -358,6 +359,52 @@ describe("saving under the project the window shows", () => {
 
     expect(daintreeListeners).toHaveLength(0);
     expect(helloWebListeners).toHaveLength(1);
+  });
+});
+
+describe("windows on a host's project or a scratch", () => {
+  const HOST_PROJECT = "a".repeat(64);
+  const ON_BUILD_BOX = folderlessBoundsKey(`build-box:${HOST_PROJECT}`)!;
+  const ON_GPU_BOX = folderlessBoundsKey(`gpu-box:${HOST_PROJECT}`)!;
+  const SCRATCH = folderlessBoundsKey("3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e")!;
+
+  function showing(key: string) {
+    return {
+      getShownBoundsKey: () => key,
+      getOccupiedBounds: () => fakes.FakeWindow.created.map((w) => w.getNormalBounds()),
+    } satisfies WindowStateTracking;
+  }
+
+  it("brings each back where it was, not beside whichever window moved last", () => {
+    const placed: Record<string, Rect> = {
+      [ON_BUILD_BOX]: { x: 900, y: 0, width: 1000, height: 700 },
+      [ON_GPU_BOX]: { x: 1000, y: 400, width: 900, height: 600 },
+      [SCRATCH]: { x: 200, y: 600, width: 800, height: 500 },
+      [DAINTREE]: { x: 5, y: 56, width: 956, height: 1053 },
+    };
+    // The local window moves and closes last, holding the last-saved bounds.
+    for (const key of [ON_BUILD_BOX, ON_GPU_BOX, SCRATCH, DAINTREE]) {
+      const win = open(key, showing(key));
+      win.bounds = { ...placed[key]! };
+      win.emit("close");
+    }
+    fakes.FakeWindow.created.length = 0;
+
+    const reopened = [DAINTREE, ON_BUILD_BOX, ON_GPU_BOX, SCRATCH].map((key) => ({
+      key,
+      win: open(key, showing(key)),
+    }));
+
+    for (const { key, win } of reopened) expect(win.getBounds()).toEqual(placed[key]);
+  });
+
+  it("brings a host window back maximized when it closed maximized", () => {
+    const win = open(ON_BUILD_BOX, showing(ON_BUILD_BOX));
+    win.maximized = true;
+    win.emit("close");
+    open(DAINTREE, showing(DAINTREE)).emit("close");
+
+    expect(open(ON_BUILD_BOX, showing(ON_BUILD_BOX)).maximize).toHaveBeenCalledTimes(1);
   });
 });
 
