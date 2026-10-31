@@ -1,4 +1,7 @@
-import { PANEL_LIMIT_DECLINED_REASON } from "@/services/actions/definitions/panelLimitError";
+import {
+  PANEL_LIMIT_CONFIRM_EXPIRED_REASON,
+  PANEL_LIMIT_DECLINED_REASON,
+} from "@/services/actions/definitions/panelLimitError";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -152,8 +155,9 @@ const runHistoryAppendMock = vi.fn().mockResolvedValue(undefined);
   },
 };
 
-import { useRecipeStore } from "../recipeStore";
+import { RECIPE_DISPATCH_EXPIRED_REASON, useRecipeStore } from "../recipeStore";
 import { usePanelLimitStore } from "../panelLimitStore";
+import { getPanelSlotReservations } from "../slices/panelRegistry/panelSlotReservations";
 import type { RecipeTerminal } from "@shared/types/project";
 import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { RecipeImportDropsTerminalsError } from "@/utils/recipeImport";
@@ -1873,12 +1877,11 @@ describe("recipeStore", () => {
     });
 
     it("still reaches the panel-limit prompt when the ambient count is high (#12263)", async () => {
-      // Pins the defect the removed comment denied. The agent cap bounds the
+      // Pins the behaviour the removed comment denied. The agent cap bounds the
       // BATCH, never `currentCount` — the workspace's ambient panel count —
       // so preflightSpawnBatchLimit prompts on 18 + 3 = 21 > 20 for a run the
-      // cap has already trimmed to three. Left unfixed on purpose: it is a
-      // separate defect from the cap, and this test is here so the next reader
-      // finds the behaviour instead of the old claim that it cannot happen.
+      // cap has already trimmed to three. The prompt is bounded by the
+      // dispatch deadline instead (#15648, tested beside this).
       const requestConfirmationSpy = vi.fn().mockResolvedValue(true);
       const previousRequestConfirmation = usePanelLimitStore.getState().requestConfirmation;
       usePanelLimitStore.setState({ requestConfirmation: requestConfirmationSpy });
@@ -1940,6 +1943,170 @@ describe("recipeStore", () => {
       } finally {
         usePanelLimitStore.setState({ requestConfirmation: previousRequestConfirmation });
       }
+    });
+
+    describe("panel-limit confirm behind an agent dispatch deadline (#15648)", () => {
+      afterEach(() => {
+        usePanelLimitStore.getState().resolveConfirmation(false);
+        vi.useRealTimers();
+      });
+
+      function seedAmbientPanels(count: number) {
+        const ids = Array.from({ length: count }, (_, i) => `ambient-${i}`);
+        panelStoreState.panelIds = ids;
+        panelStoreState.panelsById = Object.fromEntries(
+          ids.map((id) => [id, { location: "grid" }])
+        );
+      }
+
+      function seedRecipe() {
+        let callIndex = 0;
+        addTerminalMock.mockImplementation(() => Promise.resolve(`terminal-${++callIndex}`));
+        useRecipeStore.setState({
+          recipes: [tenTerminalRecipe()],
+          isLoading: false,
+          currentProjectId: "project-1",
+        });
+      }
+
+      it("starts nothing when the person says yes after the dispatch deadline passed", async () => {
+        vi.useFakeTimers();
+        seedAmbientPanels(18);
+        seedRecipe();
+
+        // The issue's path: the host's recipe preview was approved first.
+        const run = useRecipeStore
+          .getState()
+          .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1", undefined, {
+            dispatchSource: "agent",
+            hostApprovedRecipeRun: approvalFor(tenTerminalRecipe()),
+            dispatchDeadlineAt: Date.now() + 30_000,
+          });
+        await vi.advanceTimersByTimeAsync(0);
+        const pending = usePanelLimitStore.getState().pendingConfirm;
+        expect(pending?.request).toMatchObject({ currentCount: 18, allowedCount: 10 });
+
+        await vi.advanceTimersByTimeAsync(30_000);
+        // The late click: on the dialog as it was shown, and through the store.
+        pending!.resolve(true);
+        usePanelLimitStore.getState().resolveConfirmation(true);
+        const results = await run;
+
+        expect(addTerminalMock).not.toHaveBeenCalled();
+        expect(beginSpawnBatchMock).not.toHaveBeenCalled();
+        expect(results.spawned).toHaveLength(0);
+        expect(
+          results.failed.filter((f) => f.error === PANEL_LIMIT_CONFIRM_EXPIRED_REASON)
+        ).toHaveLength(10);
+        expect(usePanelLimitStore.getState().pendingConfirm).toBeNull();
+        // Nothing held for the run: other runs see the capacity again.
+        expect(getPanelSlotReservations().unclaimed).toBe(0);
+      });
+
+      it("opens the batch when the person says yes inside the deadline", async () => {
+        vi.useFakeTimers();
+        seedAmbientPanels(18);
+        seedRecipe();
+
+        const run = useRecipeStore
+          .getState()
+          .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1", undefined, {
+            dispatchSource: "agent",
+            dispatchDeadlineAt: Date.now() + 30_000,
+          });
+        await vi.advanceTimersByTimeAsync(10_000);
+        usePanelLimitStore.getState().resolveConfirmation(true);
+        const results = await run;
+
+        expect(addTerminalMock).toHaveBeenCalledTimes(3);
+        expect(results.spawned.map((s) => s.index)).toEqual([0, 1, 2]);
+        expect(getPanelSlotReservations().unclaimed).toBe(0);
+      });
+
+      it("asks nobody and starts nothing once the deadline has already passed", async () => {
+        vi.useFakeTimers();
+        // Enough open that the gate would otherwise ask.
+        seedAmbientPanels(18);
+        seedRecipe();
+
+        const results = await useRecipeStore
+          .getState()
+          .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1", undefined, {
+            dispatchSource: "agent",
+            dispatchDeadlineAt: Date.now() - 1,
+          });
+
+        expect(usePanelLimitStore.getState().pendingConfirm).toBeNull();
+        expect(addTerminalMock).not.toHaveBeenCalled();
+        expect(
+          results.failed.filter((f) => f.error === RECIPE_DISPATCH_EXPIRED_REASON)
+        ).toHaveLength(3);
+      });
+
+      it("drops an agent step whose CLI lookup outlasts the deadline", async () => {
+        vi.useFakeTimers();
+        let callIndex = 0;
+        addTerminalMock.mockImplementation(() => Promise.resolve(`terminal-${++callIndex}`));
+        refreshCliAvailabilityMock.mockImplementation(
+          () => new Promise<void>((resolve) => setTimeout(resolve, 40_000))
+        );
+        useRecipeStore.setState({
+          recipes: [
+            {
+              id: "recipe-mixed",
+              name: "Mixed",
+              projectId: "project-1",
+              terminals: [
+                { type: "terminal", title: "Shell", command: "npm test", env: {} },
+                { type: "claude", title: "Agent", env: {} },
+              ],
+              createdAt: Date.now(),
+            },
+          ],
+          isLoading: false,
+          currentProjectId: "project-1",
+        });
+
+        const run = useRecipeStore
+          .getState()
+          .runRecipeWithResults("recipe-mixed", "/tmp/worktree", "worktree-1", undefined, {
+            dispatchSource: "agent",
+            dispatchDeadlineAt: Date.now() + 30_000,
+          });
+        await vi.advanceTimersByTimeAsync(40_000);
+        const results = await run;
+
+        expect(addTerminalMock).toHaveBeenCalledTimes(1);
+        expect(addTerminalMock).not.toHaveBeenCalledWith(
+          expect.objectContaining({ launchAgentId: "claude" })
+        );
+        expect(results.failed).toEqual([{ index: 1, error: RECIPE_DISPATCH_EXPIRED_REASON }]);
+        expect(getPanelSlotReservations().unclaimed).toBe(0);
+      });
+
+      it("keeps waiting on the person for a user-started run, however long they take", async () => {
+        vi.useFakeTimers();
+        seedAmbientPanels(18);
+        seedRecipe();
+
+        const run = useRecipeStore
+          .getState()
+          .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(usePanelLimitStore.getState().pendingConfirm?.request).toMatchObject({
+          currentCount: 18,
+          allowedCount: 10,
+        });
+
+        await vi.advanceTimersByTimeAsync(10 * 60_000);
+        expect(usePanelLimitStore.getState().pendingConfirm).not.toBeNull();
+        usePanelLimitStore.getState().resolveConfirmation(true);
+        const results = await run;
+
+        expect(addTerminalMock).toHaveBeenCalledTimes(10);
+        expect(results.spawned).toHaveLength(10);
+        expect(results.failed).toHaveLength(0);
+      });
     });
 
     it("spawns all terminals for an agent run at exactly the cap", async () => {

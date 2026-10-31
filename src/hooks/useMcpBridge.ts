@@ -1233,12 +1233,20 @@ export function useMcpBridge(): void {
         hostPreview,
         authorization,
         requester,
+        dispatchDeadlineAt: sentDeadlineAt,
       }) => {
         // Main started its clock when it sent this; ours starts a beat later.
         // Only a confirmation's first deadline reads it, until main grants a
         // hold, and an approval runs on main's own say-so, never on this.
         // Taken before the snapshot wait below, which spends that same clock.
         const receivedAt = Date.now();
+        // Main's own deadline when it says, which also counts the thaw before
+        // the send and any shorter cap the caller set (#15648). The receipt
+        // estimate is for a main that doesn't.
+        const dispatchDeadlineAt =
+          typeof sentDeadlineAt === "number" && Number.isFinite(sentDeadlineAt)
+            ? sentDeadlineAt
+            : receivedAt + MAIN_DISPATCH_DEADLINE_MS;
         // A background view's worktree port is restored just before main sends
         // this, so the snapshot it fetched may still be on its way. Everything
         // below reads the worktree store, which has to hold it first (#13348).
@@ -1525,7 +1533,7 @@ export function useMcpBridge(): void {
                   // screen (#14989); until it grants that, the plain deadline it
                   // started when it sent this is all the dialog can count on.
                   {
-                    deadlineAt: receivedAt + MAIN_DISPATCH_DEADLINE_MS,
+                    deadlineAt: dispatchDeadlineAt,
                     hold: (phase) => holdDispatch(requestId, phase),
                   }
                 );
@@ -1711,6 +1719,10 @@ export function useMcpBridge(): void {
                 ...(hostApprovedTargets ? { hostApprovedTargets } : {}),
                 ...(approvedRecipeRun ? { hostApprovedRecipeRun: approvedRecipeRun } : {}),
                 ...(approvedPush ? { hostApprovedPush: approvedPush } : {}),
+                // An approval's run budget replaces the deadline main first
+                // sent; a dispatch nobody was asked about keeps that one. An
+                // action that waits on a person gives up at it (#15648).
+                dispatchDeadlineAt: runDeadlineAt ?? dispatchDeadlineAt,
               }),
             actionId
           );

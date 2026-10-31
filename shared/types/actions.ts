@@ -221,6 +221,21 @@ export interface ActionContext {
    */
   hostApprovedPush?: HostApprovedPush;
   /**
+   * When main gives up on the agent dispatch running this action, as epoch ms
+   * on this machine's clock (#15648). Set by `ActionService.dispatch` from
+   * {@link ActionDispatchOptions.dispatchDeadlineAt} on the same terms as
+   * {@link hostApprovedRecipeRun}: host-only, stamped over whatever a
+   * `contextOverride` claimed, and deliberately left out of the launch-time
+   * `ActionContextSchema` snapshot, since one call's deadline means nothing to
+   * the next.
+   *
+   * Past it the caller has already been told the call timed out, so an action
+   * that would start something after waiting on a person (a recipe's
+   * panel-limit confirm) must give up instead. Absent for every dispatch with
+   * no deadline behind it.
+   */
+  dispatchDeadlineAt?: number;
+  /**
    * The plugin behind a `"plugin"` dispatch, stamped by `ActionService.dispatch`
    * from {@link ActionDispatchOptions.callerPluginId} and absent for every other
    * source, so a `contextOverride` can't claim one. Lets an action hold a plugin
@@ -628,6 +643,12 @@ export interface ActionDispatchOptions {
    * from the preview the approver actually read.
    */
   hostApprovedPush?: HostApprovedPush;
+  /**
+   * Main's deadline for the MCP dispatch this runs — NOT a client-supplied
+   * value. See {@link ActionContext.dispatchDeadlineAt}. Set only by the MCP
+   * renderer bridge, from the deadline main sent or the run budget it granted.
+   */
+  dispatchDeadlineAt?: number;
   /**
    * The plugin making a `source: "plugin"` dispatch — NOT a plugin-supplied
    * value. Set by the host from the plugin host's own closure (the

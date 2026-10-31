@@ -1116,6 +1116,10 @@ export function createRendererBridge(
             // Only on this local send: another machine's view has none of
             // this machine's panes to look the id up in.
             ...(approval?.requester ? { requester: approval.requester } : {}),
+            // When this call ends unless the view reports a confirm (#15648),
+            // capped by whoever is timing it. Also local-only: it is an
+            // instant on this machine's clock, which another machine's isn't.
+            dispatchDeadlineAt: hold.deadlineAt,
           });
         } catch (err) {
           clearTimeout(pendingDispatches.get(requestId)?.timer ?? timer);

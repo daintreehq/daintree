@@ -38,6 +38,7 @@ import type { ActionDefinition, ActionId } from "@shared/types/actions";
 import { AGENT_LAUNCH_CONFIG_DISPATCH_DANGER_RATIONALE } from "../actions/effectiveDanger";
 import { ConfirmationStagedError } from "../actions/confirmationStaged";
 import { TerminalInOtherProjectError } from "@shared/utils/terminalInOtherProject";
+import { ConfirmationTimeoutError } from "../actions/confirmationTimeout";
 
 describe("ActionService", () => {
   let service: ActionService;
@@ -955,6 +956,31 @@ describe("ActionService", () => {
         );
       });
 
+      // The deadline (#15648): an action that waits on a person gives up at
+      // it, so a caller able to plant or stretch one could launch after the
+      // agent was told the call timed out.
+      it("stamps ctx.dispatchDeadlineAt from the options, and never from a contextOverride", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(confirmAction(mockRun));
+
+        await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+          contextOverride: { dispatchDeadlineAt: 9_999_999_999_999 },
+          dispatchDeadlineAt: 1_000,
+        });
+        await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+          contextOverride: { dispatchDeadlineAt: 9_999_999_999_999 },
+        });
+
+        expect(mockRun.mock.calls.map(([, ctx]) => ctx.dispatchDeadlineAt)).toEqual([
+          1_000,
+          undefined,
+        ]);
+      });
+
       // The push half (#15646): what a confirm showed, which `git.push` pins
       // the push to. A caller able to plant one could pin a push to a review
       // nobody saw, so it rides on the options alone.
@@ -1088,6 +1114,26 @@ describe("ActionService", () => {
           undefined,
           expect.objectContaining({ callerPluginId: undefined })
         );
+      });
+    });
+
+    it("maps ConfirmationTimeoutError to CONFIRMATION_TIMEOUT (#15648)", async () => {
+      service.register({
+        id: "actions.list" as ActionId,
+        title: "Test Action",
+        description: "A test action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        run: vi.fn().mockRejectedValue(new ConfirmationTimeoutError("Recipe launch failed: late")),
+      });
+
+      const result = await service.dispatch("actions.list", undefined, { source: "agent" });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: "CONFIRMATION_TIMEOUT", message: "Recipe launch failed: late" },
       });
     });
 

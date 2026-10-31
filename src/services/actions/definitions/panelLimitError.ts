@@ -31,3 +31,12 @@ export function isPanelLimitError(message: string | undefined): boolean {
  * a failure would blame the limit for a Cancel the user pressed a moment ago.
  */
 export const PANEL_LIMIT_DECLINED_REASON = "Cancelled at the panel limit confirmation";
+
+/**
+ * The failure reason for panels an agent's run gave up on because the
+ * panel-limit confirm was still open when the dispatch behind it ran out of
+ * time (#15648). Neither a decline nor the limit refusing: nobody answered in
+ * time, so nothing started, and the caller is told so before main gives up.
+ */
+export const PANEL_LIMIT_CONFIRM_EXPIRED_REASON =
+  "Panel limit confirmation timed out before the user responded";

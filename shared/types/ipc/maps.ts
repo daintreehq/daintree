@@ -1768,6 +1768,8 @@ export interface IpcEventMap {
     authorization?: import("./mcpServer.js").McpDispatchAuthorization;
     /** The pane or Assistant tab that sent the call (#14992); set only by main. */
     requester?: import("./mcpServer.js").McpRequester;
+    /** Main's deadline for the call as sent, epoch ms (#15648); set only by main. */
+    dispatchDeadlineAt?: number;
   };
 
   /**

@@ -2548,6 +2548,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
          * (#14992), set only by main, so the dialog can name it.
          */
         requester?: import("./mcpServer.js").McpRequester;
+        /**
+         * Main's deadline for the call as it stood when sent, epoch ms on
+         * this machine's clock (#15648), set only by main. A confirm the view
+         * reports moves it; until then, nothing may start after it.
+         */
+        dispatchDeadlineAt?: number;
       }) => void
     ): () => void;
     /** Send action dispatch result to main process */

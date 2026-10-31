@@ -19,6 +19,7 @@ import {
   reservePanelSlots,
   type PanelSlotGrant,
 } from "./slices/panelRegistry/panelSlotReservations";
+import { MCP_CONFIRM_HOLD_GRACE_MS } from "@shared/config/mcpConfirmWindow";
 
 export { buildPanelLimitSnapshot, computeHardwareDefaults, evaluatePanelLimit };
 export type { PanelLimitSnapshot, PanelLimitTier };
@@ -79,6 +80,12 @@ interface PanelLimitState {
   dismissSoftWarning: (currentCount: number) => void;
   requestConfirmation: (request: PanelLimitConfirmRequest) => Promise<boolean>;
   resolveConfirmation: (ok: boolean) => void;
+  /**
+   * Take down `request`'s dialog without an answer, resolving its waiter with
+   * false. A no-op unless that exact request is still the one on screen, so a
+   * newer request that superseded it is never touched.
+   */
+  withdrawConfirmation: (request: PanelLimitConfirmRequest) => void;
   initializeFromHardware: () => Promise<void>;
   resetToHardwareDefaults: () => Promise<void>;
 }
@@ -250,6 +257,13 @@ export const usePanelLimitStore = create<PanelLimitState>()(
         }
       },
 
+      withdrawConfirmation: (request: PanelLimitConfirmRequest) => {
+        const pending = get().pendingConfirm;
+        if (pending?.request !== request) return;
+        pending.resolve(false);
+        set({ pendingConfirm: null });
+      },
+
       initializeFromHardware: async () => {
         if (_initPromise) return _initPromise;
         _initPromise = (async () => {
@@ -365,22 +379,32 @@ function notifyPanelLimitReached(hardLimit: number, worktreeId: string | undefin
  * confirm is open: the count is read again once it's answered, and the grant
  * shrinks to whatever is still free.
  *
+ * A batch an agent's dispatch is waiting on passes that dispatch's
+ * `deadlineAt` (#15648). Its confirm then closes on its own a grace period
+ * before main gives up on the call, so the caller hears a timeout instead of
+ * main's generic one, and a yes given after that launches nothing.
+ *
  * @param readUsage - Reads the live count, `countPanelLimitUsage` over the
  *   current panel store state; called again after the confirm.
  * @returns `allowed` — how many of the requested panels may be spawned now
  *   (0 when the hard limit is already reached or the user declines the confirm);
  *   `declined` — true only when the user answered the confirm with no;
+ *   `expired` — set only when the confirm ran out of time first;
  *   `grant` — the reserved slots, `null` when `allowed` is 0.
  */
 export async function preflightSpawnBatchLimit(
   readUsage: () => number,
   requestedCount: number,
-  options: { source?: PanelLimitBatchSource; worktreeId?: string } = {}
-): Promise<{ allowed: number; declined: boolean; grant: PanelSlotGrant | null }> {
+  options: { source?: PanelLimitBatchSource; worktreeId?: string; deadlineAt?: number } = {}
+): Promise<{
+  allowed: number;
+  declined: boolean;
+  expired?: true;
+  grant: PanelSlotGrant | null;
+}> {
   if (requestedCount <= 0) return { allowed: 0, declined: false, grant: null };
 
-  const { confirmationLimit, hardLimit, warningsDisabled, requestConfirmation } =
-    usePanelLimitStore.getState();
+  const { confirmationLimit, hardLimit, warningsDisabled } = usePanelLimitStore.getState();
 
   const currentCount = readUsage();
   const available = Math.max(0, hardLimit - currentCount);
@@ -397,15 +421,19 @@ export async function preflightSpawnBatchLimit(
   // keep the blocking confirm even though `addPanel` dropped it for single adds
   // (#10547). The batch crosses the confirm threshold when `projected > confirmationLimit`.
   if (!warningsDisabled && projected > confirmationLimit) {
-    const confirmed = await requestConfirmation({
-      currentCount,
-      requestedCount,
-      allowedCount: allowed,
-      confirmationLimit,
-      hardLimit,
-      ...(options.source ? { source: options.source } : {}),
-    });
-    if (!confirmed) return { allowed: 0, declined: true, grant: null };
+    const answer = await confirmBefore(
+      {
+        currentCount,
+        requestedCount,
+        allowedCount: allowed,
+        confirmationLimit,
+        hardLimit,
+        ...(options.source ? { source: options.source } : {}),
+      },
+      options.deadlineAt
+    );
+    if (answer === "expired") return { allowed: 0, declined: false, expired: true, grant: null };
+    if (!answer) return { allowed: 0, declined: true, grant: null };
 
     // Other adds kept going while the dialog was open. Never more than the
     // user agreed to, and never more than is free now.
@@ -423,4 +451,40 @@ export async function preflightSpawnBatchLimit(
   }
 
   return { allowed, declined: false, grant: reservePanelSlots(allowed) };
+}
+
+/**
+ * Ask the person, within whatever the dispatch behind the batch has left.
+ *
+ * With no deadline the dialog waits as long as the person takes. With one, it
+ * closes {@link MCP_CONFIRM_HOLD_GRACE_MS} before it, the slack main keeps for
+ * an answer still on its way. The timer only takes the dialog down: a
+ * background view can fire it late, after a click has already landed, so the
+ * clock decides whether a yes still counts.
+ */
+async function confirmBefore(
+  request: PanelLimitConfirmRequest,
+  deadlineAt: number | undefined
+): Promise<boolean | "expired"> {
+  const { requestConfirmation, withdrawConfirmation } = usePanelLimitStore.getState();
+  if (deadlineAt === undefined) return requestConfirmation(request);
+
+  const closeAt = deadlineAt - MCP_CONFIRM_HOLD_GRACE_MS;
+  const remainingMs = closeAt - Date.now();
+  if (remainingMs <= 0) return "expired";
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const closed = new Promise<"expired">((resolve) => {
+    timer = setTimeout(() => resolve("expired"), remainingMs);
+  });
+  try {
+    const answer = await Promise.race([requestConfirmation(request), closed]);
+    if (answer === "expired" || (answer && Date.now() >= closeAt)) {
+      withdrawConfirmation(request);
+      return "expired";
+    }
+    return answer;
+  } finally {
+    clearTimeout(timer);
+  }
 }
