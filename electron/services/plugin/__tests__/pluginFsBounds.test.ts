@@ -321,12 +321,18 @@ describe.skipIf(process.platform === "win32")("host.fs single-file reads of a FI
     });
   });
 
-  it("writeFile's revision compare refuses it and leaves it standing", async () => {
-    const { api } = harness(root, path.join(base, "data"));
-    await expect(api.writeFile(fifo, "after", { expectedRevision: sha("") })).rejects.toMatchObject(
-      { code: "TARGET_UNAVAILABLE" }
+  it("writeFile's revision compare refuses it, leaves it standing and frees the path", async () => {
+    const h = harness(root, path.join(base, "data"));
+    const caught = await h.api.writeFile(fifo, "after", { expectedRevision: sha("") }).then(
+      () => null,
+      (error: unknown) => error as Error & { code?: string; currentRevision?: string }
     );
+    expect(caught?.code).toBe("TARGET_UNAVAILABLE");
+    expect(caught?.currentRevision).toBeUndefined();
+    expect(h.deps.safeAppendAudit).not.toHaveBeenCalled();
     expect((await fs.lstat(fifo)).isFIFO()).toBe(true);
+    // The refusal happened inside the path's write lock; it must not hold it.
+    await expect(runExclusive(fifo, async () => "free")).resolves.toBe("free");
   });
 
   it("refuses a regular file swapped for one after containment", async () => {
@@ -348,11 +354,20 @@ describe.skipIf(process.platform === "win32")("host.fs single-file reads of a FI
     }
   });
 
+  it("refuses a device", async () => {
+    const { api } = harness("/dev", path.join(base, "data"));
+    await expect(api.readFileBytes("/dev/null")).rejects.toMatchObject({
+      code: "TARGET_UNAVAILABLE",
+    });
+  });
+
   it("still fails a directory with Node's own error", async () => {
     const { api } = harness(root, path.join(base, "data"));
     const dir = path.join(root, "sub");
     await fs.mkdir(dir);
-    await expect(api.readFile(dir)).rejects.toMatchObject({ code: "EISDIR" });
+    for (const read of [api.readFile, api.readFileBytes, api.readFileWithRevision]) {
+      await expect(read(dir)).rejects.toMatchObject({ code: "EISDIR" });
+    }
     await expect(api.writeFile(dir, "x", { expectedRevision: sha("") })).rejects.toMatchObject({
       code: "EISDIR",
     });
