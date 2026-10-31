@@ -282,7 +282,7 @@ export function EnvironmentSettingsTab() {
               row={envVar}
               position={index + 1}
               error={rowErrors[envVar.id]}
-              sensitive={isSensitiveEnvKey(envVar.key)}
+              sensitive={isSecretEnvEntry(envVar.key, envVar.value)}
               revealed={visibleEnvVars.has(envVar.id)}
               onToggleReveal={() => toggleVisibility(envVar.id)}
               onKeyChange={(v) => updateRow(index, "key", v)}

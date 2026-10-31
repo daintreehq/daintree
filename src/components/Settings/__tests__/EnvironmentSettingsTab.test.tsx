@@ -307,3 +307,54 @@ describe("EnvironmentSettingsTab close-time save", () => {
     expect(window.electron.globalEnv.set).toHaveBeenCalledTimes(1);
   });
 });
+
+// Obviously fake: the shapes the shared secret test recognises, with no real key material.
+const FAKE_GITHUB_PAT = `ghp_${"0".repeat(36)}`;
+const FAKE_OPENAI_KEY = `sk-${"x".repeat(32)}`;
+
+async function renderTabWith(vars: Record<string, string>) {
+  window.electron.globalEnv.get = vi.fn().mockResolvedValue(vars);
+  renderTab();
+  await waitFor(() => {
+    expect(screen.getAllByLabelText("Environment variable name")).toHaveLength(
+      Object.keys(vars).length
+    );
+  });
+}
+
+const valueInputs = () =>
+  screen.getAllByLabelText<HTMLInputElement>("Environment variable value");
+
+describe("EnvironmentSettingsTab masking (#15577)", () => {
+  it("masks a token stored under a neutral name and leaves an ordinary value readable", async () => {
+    await renderTabWith({ GITHUB_PAT: FAKE_GITHUB_PAT, TOOLS_DIR: "/usr/local/bin" });
+    const [pat, tools] = valueInputs();
+    expect(pat!.type).toBe("password");
+    expect(screen.getByRole("button", { name: "Show value of GITHUB_PAT" })).toBeTruthy();
+    expect(tools!.type).toBe("text");
+    expect(screen.queryByRole("button", { name: "Show value of TOOLS_DIR" })).toBeNull();
+  });
+
+  it("still masks a secret-sounding name whatever its value, except a ${VAR} reference", async () => {
+    await renderTabWith({ API_TOKEN: "plain", GH_TOKEN: "${GITHUB_TOKEN}" });
+    const [apiToken, ghToken] = valueInputs();
+    expect(apiToken!.type).toBe("password");
+    expect(ghToken!.type).toBe("text");
+  });
+
+  it("masks an unrevealed row as soon as a token is pasted into its value", async () => {
+    await renderTabWith({ OPENAI: "pending" });
+    expect(valueInputs()[0]!.type).toBe("text");
+    fireEvent.change(valueInputs()[0]!, { target: { value: FAKE_OPENAI_KEY } });
+    expect(valueInputs()[0]!.type).toBe("password");
+    expect(screen.getByRole("button", { name: "Show value of OPENAI" })).toBeTruthy();
+  });
+
+  it("keeps a row the user revealed revealed while they edit its value", async () => {
+    await renderTabWith({ GITHUB_PAT: FAKE_GITHUB_PAT });
+    fireEvent.click(screen.getByRole("button", { name: "Show value of GITHUB_PAT" }));
+    expect(valueInputs()[0]!.type).toBe("text");
+    fireEvent.change(valueInputs()[0]!, { target: { value: `${FAKE_GITHUB_PAT}1` } });
+    expect(valueInputs()[0]!.type).toBe("text");
+  });
+});

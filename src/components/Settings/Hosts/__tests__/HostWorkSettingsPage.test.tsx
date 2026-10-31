@@ -8,6 +8,7 @@ import type {
   HostSettingsUpdateResult,
 } from "@shared/types/hostSettings";
 import { HostWorkSettingsPage } from "../HostWorkSettingsPage";
+import { hostEnvDrafts } from "../hostEnvDrafts";
 
 const api = {
   read: vi.fn<(payload: { hostId: string }) => Promise<HostSettingsSnapshot>>(),
@@ -20,7 +21,8 @@ function snapshot(
   {
     readsLocally = true,
     unavailable = [],
-  }: { readsLocally?: boolean; unavailable?: HostSettingKey[] } = {}
+    env = { LANG: "C" },
+  }: { readsLocally?: boolean; unavailable?: HostSettingKey[]; env?: Record<string, string> } = {}
 ): HostSettingsSnapshot {
   return {
     hostId: "studio-01",
@@ -43,7 +45,7 @@ function snapshot(
         : [
             {
               key: "globalEnvironmentVariables" as const,
-              value: { LANG: "C" },
+              value: env,
               revision: "r-env",
             },
             { key: "sessionRestore.enabled" as const, value: true, revision: "r-restore" },
@@ -62,6 +64,8 @@ const describedText = (element: HTMLElement) =>
     .join(" ");
 
 beforeEach(() => {
+  // A test that leaves an unsaved edit would otherwise hand it to the next render.
+  hostEnvDrafts.clear();
   api.read.mockReset();
   api.update.mockReset();
   api.read.mockResolvedValue(snapshot());
@@ -253,5 +257,54 @@ describe("HostWorkSettingsPage (#14167, #14706)", () => {
       expect: { instanceId: "launch-1", revisions: { globalEnvironmentVariables: "r-env" } },
     });
     expect(screen.getByRole("button", { name: "Save" }).getAttribute("aria-disabled")).toBe("true");
+  });
+});
+
+// Obviously fake: the shapes the shared secret test recognises, with no real key material.
+const FAKE_GITHUB_PAT = `ghp_${"0".repeat(36)}`;
+const FAKE_OPENAI_KEY = `sk-${"x".repeat(32)}`;
+
+const envValueInputs = () =>
+  screen.getAllByLabelText<HTMLInputElement>("Environment variable value");
+
+describe("HostWorkSettingsPage environment masking (#15577)", () => {
+  it("masks a token stored under a neutral name and leaves an ordinary value readable", async () => {
+    api.read.mockResolvedValue(
+      snapshot("unset", false, { env: { GITHUB_PAT: FAKE_GITHUB_PAT, TOOLS_DIR: "/usr/local/bin" } })
+    );
+    await renderSection();
+    const [pat, tools] = envValueInputs();
+    expect(pat!.type).toBe("password");
+    expect(screen.getByRole("button", { name: "Show value of GITHUB_PAT" })).toBeTruthy();
+    expect(tools!.type).toBe("text");
+    expect(screen.queryByRole("button", { name: "Show value of TOOLS_DIR" })).toBeNull();
+  });
+
+  it("still masks a secret-sounding name whatever its value, except a ${VAR} reference", async () => {
+    api.read.mockResolvedValue(
+      snapshot("unset", false, { env: { API_TOKEN: "plain", GH_TOKEN: "${GITHUB_TOKEN}" } })
+    );
+    await renderSection();
+    const [apiToken, ghToken] = envValueInputs();
+    expect(apiToken!.type).toBe("password");
+    expect(ghToken!.type).toBe("text");
+  });
+
+  it("masks an unrevealed row as soon as a token is pasted into its value", async () => {
+    api.read.mockResolvedValue(snapshot("unset", false, { env: { OPENAI: "pending" } }));
+    await renderSection();
+    expect(envValueInputs()[0]!.type).toBe("text");
+    fireEvent.change(envValueInputs()[0]!, { target: { value: FAKE_OPENAI_KEY } });
+    expect(envValueInputs()[0]!.type).toBe("password");
+    expect(screen.getByRole("button", { name: "Show value of OPENAI" })).toBeTruthy();
+  });
+
+  it("keeps a row the user revealed revealed while they edit its value", async () => {
+    api.read.mockResolvedValue(snapshot("unset", false, { env: { GITHUB_PAT: FAKE_GITHUB_PAT } }));
+    await renderSection();
+    fireEvent.click(screen.getByRole("button", { name: "Show value of GITHUB_PAT" }));
+    expect(envValueInputs()[0]!.type).toBe("text");
+    fireEvent.change(envValueInputs()[0]!, { target: { value: `${FAKE_GITHUB_PAT}1` } });
+    expect(envValueInputs()[0]!.type).toBe("text");
   });
 });
