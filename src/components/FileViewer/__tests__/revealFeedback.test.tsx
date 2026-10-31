@@ -49,6 +49,7 @@ function deferred() {
   return { promise, resolve };
 }
 
+const realAnnounce = useAnnouncerStore.getState().announce;
 const politeMessage = () => useAnnouncerStore.getState().polite?.msg ?? null;
 const politeId = () => useAnnouncerStore.getState().polite?.id ?? 0;
 
@@ -56,7 +57,7 @@ beforeEach(() => {
   client.mac = true;
   client.windows = false;
   _resetCopyFlashForTests();
-  useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
+  useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1, announce: realAnnounce });
 });
 
 afterEach(() => {
@@ -286,6 +287,27 @@ describe.each([
     expect(politeMessage()).toBe("Host path copied");
     expect(politeId()).toBe(1);
     expect(getCopyFlash()).not.toBeNull();
+  });
+
+  it("announces once even when the announcement itself takes the control down", async () => {
+    // Whatever speaks first must be the only thing that speaks: a second owner
+    // that sees the control gone would otherwise confirm the same copy again.
+    enterRemoteWindow();
+    const { unmount } = render(renderButton(() => Promise.resolve(true)));
+    let announced = 0;
+    useAnnouncerStore.setState({
+      announce: (msg, priority) => {
+        announced += 1;
+        realAnnounce(msg, priority);
+        if (announced === 1) unmount();
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy host path" }));
+    await act(async () => {});
+
+    expect(announced).toBe(1);
+    expect(politeMessage()).toBe("Host path copied");
   });
 
   it("keeps a local reveal's folder glyph and adds no feedback", async () => {
