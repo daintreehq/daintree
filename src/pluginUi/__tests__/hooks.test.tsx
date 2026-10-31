@@ -1,5 +1,13 @@
 // @vitest-environment jsdom
-import { createElement, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import {
+  createElement,
+  startTransition,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { flushSync } from "react-dom";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
 
@@ -703,6 +711,137 @@ describe("useDisclosure", () => {
     act(() => result.current.onToggle());
     expect(onOpenChange).toHaveBeenCalledWith(true);
     expect(result.current.open).toBe(false);
+  });
+
+  it("asks a controlled owner again after it declines a close", () => {
+    const onOpenChange = vi.fn();
+    const { result, rerender } = renderHook(() => useDisclosure({ open: true, onOpenChange }));
+    act(() => result.current.onClose());
+    rerender();
+    act(() => result.current.onClose());
+    expect(onOpenChange.mock.calls).toEqual([[false], [false]]);
+    act(() => result.current.onOpenChange(false));
+    expect(onOpenChange).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks a controlled owner again after it declines an open", () => {
+    const onOpenChange = vi.fn();
+    const { result, rerender } = renderHook(() => useDisclosure({ open: false, onOpenChange }));
+    act(() => result.current.onOpen());
+    rerender();
+    act(() => result.current.onOpenChange(true));
+    expect(onOpenChange.mock.calls).toEqual([[true], [true]]);
+  });
+
+  it("toggles from what a controlled owner rendered, not from a declined request", () => {
+    const onOpenChange = vi.fn();
+    const { result, rerender } = renderHook(() => useDisclosure({ open: false, onOpenChange }));
+    act(() => result.current.onToggle());
+    rerender();
+    act(() => result.current.onToggle());
+    expect(onOpenChange.mock.calls).toEqual([[true], [true]]);
+  });
+
+  it("asks again after a microtask, without a rerender", async () => {
+    const onOpenChange = vi.fn();
+    const { result } = renderHook(() => useDisclosure({ open: false, onOpenChange }));
+    act(() => result.current.onOpen());
+    await act(async () => {});
+    act(() => result.current.onOpen());
+    await act(async () => {});
+    act(() => result.current.onToggle());
+    expect(onOpenChange.mock.calls).toEqual([[true], [true], [true]]);
+
+    const onClosed = vi.fn();
+    const shown = renderHook(() => useDisclosure({ open: true, onOpenChange: onClosed }));
+    act(() => shown.result.current.onClose());
+    await act(async () => {});
+    act(() => shown.result.current.onClose());
+    expect(onClosed.mock.calls).toEqual([[false], [false]]);
+  });
+
+  it("lets a request undo one a controlled owner hasn't rendered yet", async () => {
+    const onOpenChange = vi.fn();
+    const { result, rerender } = renderHook(() => useDisclosure({ open: false, onOpenChange }));
+    // An owner accepting on a later lane renders after the request lapses,
+    // whether at an unrelated commit or a microtask.
+    act(() => result.current.onOpen());
+    rerender();
+    act(() => result.current.onClose());
+    await act(async () => {});
+    act(() => result.current.onOpen());
+    await act(async () => {});
+    act(() => result.current.onClose());
+    await act(async () => {});
+    // Back on what is rendered, a close is no change.
+    act(() => result.current.onClose());
+    expect(onOpenChange.mock.calls).toEqual([[true], [false], [true], [false]]);
+  });
+
+  it("keeps a controlled request made after a commit live when an older one lapses", async () => {
+    const onOpenChange = vi.fn();
+    const { result, rerender } = renderHook(({ open }) => useDisclosure({ open, onOpenChange }), {
+      initialProps: { open: false },
+    });
+    let repeated: Promise<void> = Promise.resolve();
+    act(() => {
+      result.current.onOpen();
+      // Queued behind the open's lapse and ahead of the close's.
+      repeated = Promise.resolve().then(() => result.current.onClose());
+    });
+    rerender({ open: true });
+    act(() => result.current.onClose());
+    await act(async () => repeated);
+    expect(onOpenChange.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it("keeps an uncontrolled open queued behind an unrelated commit", () => {
+    const onOpenChange = vi.fn();
+    const { result } = renderHook(() => {
+      const [tick, setTick] = useState(0);
+      return { disclosure: useDisclosure({ onOpenChange }), tick, setTick };
+    });
+    act(() => {
+      startTransition(() => result.current.disclosure.onOpen());
+      flushSync(() => result.current.setTick(1));
+      expect(result.current.tick).toBe(1);
+      expect(result.current.disclosure.open).toBe(false);
+      result.current.disclosure.onOpen();
+      result.current.disclosure.onToggle();
+    });
+    expect(result.current.disclosure.open).toBe(false);
+    expect(onOpenChange.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it("composes several requests to a controlled owner in one handler", () => {
+    const onOpenChange = vi.fn();
+    const { result } = renderHook(() => useDisclosure({ open: false, onOpenChange }));
+    act(() => {
+      result.current.onOpen();
+      result.current.onClose();
+      result.current.onClose();
+    });
+    expect(onOpenChange.mock.calls).toEqual([[true], [false]]);
+    onOpenChange.mockClear();
+    act(() => {
+      result.current.onToggle();
+      result.current.onToggle();
+    });
+    expect(onOpenChange.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it("follows an owner that accepts, then compares callbacks it kept against the new value", () => {
+    const onOpenChange = vi.fn();
+    const { result, rerender } = renderHook(({ open }) => useDisclosure({ open, onOpenChange }), {
+      initialProps: { open: false },
+    });
+    const { onOpen, onToggle } = result.current;
+    act(() => onOpen());
+    rerender({ open: true });
+    expect(result.current.open).toBe(true);
+    act(() => onOpen());
+    act(() => onToggle());
+    expect(onOpenChange.mock.calls).toEqual([[true], [false]]);
   });
 });
 

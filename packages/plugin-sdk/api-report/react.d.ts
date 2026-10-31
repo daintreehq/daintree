@@ -191,6 +191,10 @@ interface UseDisclosureOptions {
     /** Controlled. Pair with `onOpenChange`. */
     open?: boolean;
     defaultOpen?: boolean;
+    /**
+     * Hears each requested change from what is rendered. A controlled owner can
+     * decline one by keeping `open` as it is, and still hears the next.
+     */
     onOpenChange?: (open: boolean) => void;
 }
 interface UseDisclosureResult {
