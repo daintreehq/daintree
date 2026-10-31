@@ -99,17 +99,28 @@ describe("useRevealCopy", () => {
     });
   });
 
-  it("claims no copy on a Windows PC until main says the host is a WSL distro", () => {
+  it("treats a Windows PC's remote window as the WSL distro it must be, before main says so", () => {
+    // Daintree for Windows reaches only WSL distros, which main reveals in
+    // Explorer: claiming a copy there would confirm one that never happened.
     client.mac = false;
     client.windows = true;
     window.__DAINTREE_HOST_ID__ = { id: "wsl-ubuntu" };
     const { result } = renderHook(() => useRevealCopy());
-    // The label and glyph it has always had while the answer is in flight.
     expect(summary(result.current)).toEqual({
-      label: "Copy host path",
+      label: "Show in Explorer",
       icon: FolderOpen,
       copiedAnnouncement: null,
     });
+
+    act(() => setHostPlatformInfo({ connection: { kind: "wsl", distro: "Ubuntu" } }));
+
+    expect(result.current.label).toBe("Show in Explorer");
+  });
+
+  it("follows the connection main reports once it lands", () => {
+    window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+    const { result } = renderHook(() => useRevealCopy());
+    expect(result.current.copiedAnnouncement).toBe("Host path copied");
 
     act(() => setHostPlatformInfo({ connection: { kind: "wsl", distro: "Ubuntu" } }));
 
@@ -117,22 +128,6 @@ describe("useRevealCopy", () => {
       label: "Show in Explorer",
       icon: FolderOpen,
       copiedAnnouncement: null,
-    });
-  });
-
-  it("copies on a Windows PC once main says the host is reached over ssh", () => {
-    client.mac = false;
-    client.windows = true;
-    window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
-    const { result } = renderHook(() => useRevealCopy());
-    expect(result.current.copiedAnnouncement).toBeNull();
-
-    act(() => setHostPlatformInfo({ connection: { kind: "ssh", target: "greg@studio-01" } }));
-
-    expect(summary(result.current)).toEqual({
-      label: "Copy host path",
-      icon: Copy,
-      copiedAnnouncement: "Host path copied",
     });
   });
 });

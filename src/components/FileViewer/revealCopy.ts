@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { Copy, type LucideIcon } from "lucide-react";
 import { FolderOpen } from "@/components/icons";
 import { isWindows } from "@/lib/platform";
+import { remoteConnectionKindOn } from "@shared/config/remoteHostsSupport";
 import {
   getHostPlatformInfo,
   isHostMac,
@@ -43,18 +44,6 @@ const COPY_HOST_PATH: RevealCopy = {
   copiedAnnouncement: "Host path copied",
 };
 
-/**
- * A remote window on a Windows PC before main has said how its host is reached:
- * a WSL distro reveals in Explorer, an ssh host copies, and until the answer
- * lands the control keeps its old folder glyph and claims no copy, rather than
- * confirm one that main then doesn't make.
- */
-const COPY_HOST_PATH_UNRESOLVED: RevealCopy = {
-  ...COPY_HOST_PATH,
-  icon: FolderOpen,
-  copiedAnnouncement: null,
-};
-
 const REVEAL_IN_FINDER: RevealCopy = {
   label: "Reveal in Finder",
   errorTitle: "Couldn't reveal in Finder",
@@ -77,11 +66,12 @@ const SHOW_IN_FOLDER: RevealCopy = {
  */
 function revealCopyFor(host: HostPlatformInfo): RevealCopy {
   if (isRemoteWindow()) {
-    if (host.connection?.kind === "wsl") return SHOW_IN_EXPLORER;
-    // A WSL distro is only ever reached from a Windows PC (`wsl.exe`), so
-    // anywhere else a host whose connection is still unknown is an ssh one.
-    if (host.connection === null && isWindows()) return COPY_HOST_PATH_UNRESOLVED;
-    return COPY_HOST_PATH;
+    // Main names the connection after the first render; until then the client
+    // decides it, since Daintree for Windows reaches only WSL distros and every
+    // other client only ssh hosts. A reveal claiming a copy main never makes
+    // would confirm one that didn't happen.
+    const kind = host.connection?.kind ?? remoteConnectionKindOn(isWindows() ? "win32" : "posix");
+    return kind === "wsl" ? SHOW_IN_EXPLORER : COPY_HOST_PATH;
   }
   if (isHostMac()) return REVEAL_IN_FINDER;
   if (isHostWindows()) return SHOW_IN_EXPLORER;
@@ -105,10 +95,9 @@ export function revealCopy(): RevealCopy {
 }
 
 /**
- * `revealCopy` for a render path. A WSL window is told apart by a connection
- * kind main reports after the first render, and a reveal still wearing "Copy
- * host path" there would confirm a copy that never happened — so this reads the
- * host through its subscription rather than a getter the compiler could cache.
+ * `revealCopy` for a render path: it reads the host through its subscription
+ * rather than a getter the compiler could cache, so the reveal follows what
+ * main reports about the host after the first render.
  */
 export function useRevealCopy(): RevealCopy {
   const host = useHostPlatform();
