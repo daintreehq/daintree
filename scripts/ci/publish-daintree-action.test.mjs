@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
+import { isBuiltin } from "module";
 import { fileURLToPath } from "url";
 import path from "path";
 import { load } from "js-yaml";
@@ -20,51 +21,77 @@ const steps = action.runs.steps;
 const pkg = JSON.parse(read("package.json"));
 const lock = JSON.parse(read("package-lock.json"));
 
-const PACKAGE_MANAGER_CALL = /\b(npm\s+(install|i|add|ci|update|exec)|npx|yarn|pnpm)\b/;
+const SETUP_NODE_INSTALL = "./.github/actions/setup-node-install";
+
+// Any package-manager token, not only `npm install`: `npm --no-save install x`
+// puts its options before the subcommand.
+const PACKAGE_MANAGER = /\b(npm|npx|yarn|pnpm|corepack|bun)\b/;
 
 const scriptsRunByAction = () =>
   steps.flatMap((s) =>
-    [...(s.run ?? "").matchAll(/\bnode\s+(scripts\/\S+\.mjs)/g)].map((m) => m[1])
+    [
+      ...(s.run ?? "").matchAll(/\bnode\s+(?:-\S+\s+)*["']?(?:\.\/)?(scripts\/[^\s"']+\.m?js)/g),
+    ].map((m) => m[1])
   );
 
-const bareImports = (source) =>
-  [...source.matchAll(/^\s*import\s[^;]*?from\s+["']([^"']+)["']/gm)]
-    .map((m) => m[1])
-    .filter((spec) => !spec.startsWith(".") && !spec.startsWith("node:"))
-    .map((spec) =>
+// Static, side-effect and dynamic imports, re-exports and require(), following
+// relative imports so a package reached through a local helper still counts.
+const SPECIFIER = /(?:\bfrom\s*|^\s*import\s*|\b(?:import|require)\s*\(\s*)["']([^"']+)["']/gm;
+
+const bareImports = (rel, seen) => {
+  if (seen.has(rel)) return [];
+  seen.add(rel);
+  return [...read(rel).matchAll(SPECIFIER)].flatMap(([, spec]) => {
+    if (spec.startsWith(".")) return bareImports(path.join(path.dirname(rel), spec), seen);
+    if (isBuiltin(spec)) return [];
+    return [
       spec
         .split("/")
         .slice(0, spec.startsWith("@") ? 2 : 1)
-        .join("/")
-    );
+        .join("/"),
+    ];
+  });
+};
 
 describe("publish-daintree composite (#15625)", () => {
   it("installs packages only through the locked setup-node-install step", () => {
-    const installs = steps.filter((s) => s.uses === "./.github/actions/setup-node-install");
+    const installs = steps.filter((s) => s.uses === SETUP_NODE_INSTALL);
     expect(installs).toHaveLength(1);
     expect(installs[0].with?.install_args ?? "").not.toMatch(/--omit|--only|--production/);
 
     for (const step of steps) {
-      expect(step.run ?? "", `step "${step.name}"`).not.toMatch(PACKAGE_MANAGER_CALL);
+      expect(step.run ?? "", `step "${step.name}"`).not.toMatch(PACKAGE_MANAGER);
     }
   });
 
-  it("installs through `npm ci` before any gate or verify script runs", () => {
+  it("installs through `npm ci` after the clean checkout and before any script runs", () => {
     const setup = load(read(".github/actions/setup-node-install/action.yml"));
     const install = setup.runs.steps.find((s) => s.name === "Install dependencies");
-    expect(install.run).toContain("node scripts/ci/npm-ci-retry.mjs");
+    expect(install.run).toMatch(/^\s*node scripts\/ci\/npm-ci-retry\.mjs\b/m);
     expect(read("scripts/ci/npm-ci-retry.mjs")).toContain('const npmArgs = ["ci"');
 
-    const installIdx = steps.findIndex((s) => s.uses === "./.github/actions/setup-node-install");
-    const firstScriptIdx = steps.findIndex((s) => /\bnode\s+scripts\//.test(s.run ?? ""));
+    // The checkout runs `git clean -ffdx`, which would delete node_modules if
+    // it came after the install.
+    const checkoutIdx = steps.findIndex((s) => s.uses?.startsWith("actions/checkout"));
+    const installIdx = steps.findIndex((s) => s.uses === SETUP_NODE_INSTALL);
+    const firstScriptIdx = steps.findIndex((s) => /\bnode\s/.test(s.run ?? ""));
+    expect(checkoutIdx).toBeGreaterThanOrEqual(0);
+    expect(installIdx).toBeGreaterThan(checkoutIdx);
     expect(firstScriptIdx).toBeGreaterThan(installIdx);
   });
 
   it("resolves every package the composite's scripts import from the lockfile", () => {
     const scripts = scriptsRunByAction();
-    expect(scripts).toContain("scripts/ci/check-version-monotonic.mjs");
+    expect(scripts).toEqual(
+      expect.arrayContaining([
+        "scripts/ci/check-version-monotonic.mjs",
+        "scripts/ci/verify-r2-uploads.mjs",
+        "scripts/ci/verify-r2-metadata.mjs",
+      ])
+    );
 
-    const imported = new Set(scripts.flatMap((script) => bareImports(read(script))));
+    const seen = new Set();
+    const imported = new Set(scripts.flatMap((script) => bareImports(script, seen)));
     expect([...imported]).toEqual(expect.arrayContaining(["js-yaml", "semver"]));
 
     for (const name of imported) {
