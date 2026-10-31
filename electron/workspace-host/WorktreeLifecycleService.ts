@@ -36,6 +36,8 @@ import {
 } from "./lifecycleCommandTrust.js";
 
 const OUTPUT_TAIL_BYTES = 8192;
+const FAILURE_SUMMARY_SCAN_CHARS = 4096;
+const MAX_FAILURE_SUMMARY_CHARS = 500;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TEARDOWN_LOGS_PER_WORKTREE = 10;
 
@@ -112,6 +114,13 @@ export function ownResource(
     : undefined;
 }
 
+/**
+ * A setup command may end its output with a line starting with this to say why
+ * it failed. Only that line is read, never the rest of the output, because the
+ * setup error rides every worktree snapshot and reaches model context (#15734).
+ */
+export const SETUP_FAILURE_SUMMARY_PREFIX = "DAINTREE_SETUP_ERROR:";
+
 /** Recorded on a skipped phase and returned by a refused resource action. */
 export const LIFECYCLE_COMMANDS_NEED_APPROVAL_ERROR =
   "These commands come from the repository and haven't been approved. Review them on the worktree card.";
@@ -157,6 +166,12 @@ export interface RunCommandsOptions {
    * Callers that don't want persistence (resource status polls, setup) omit it.
    */
   logDir?: string;
+  /**
+   * Read a failing command's {@link SETUP_FAILURE_SUMMARY_PREFIX} line into
+   * `RunCommandsResult.failureSummary`. Setup only: it is the one phase whose
+   * error reaches `worktree.waitUntilReady`.
+   */
+  readFailureSummary?: boolean;
 }
 
 export interface RunCommandsResult {
@@ -180,6 +195,11 @@ export interface RunCommandsResult {
    * inflicted non-zero exit (lesson #4054).
    */
   signalName?: string | null;
+  /**
+   * Why the failing command says it failed, when its output ended with a
+   * {@link SETUP_FAILURE_SUMMARY_PREFIX} line and the caller asked for it.
+   */
+  failureSummary?: string;
 }
 
 async function fileExists(p: string): Promise<boolean> {
@@ -483,7 +503,15 @@ export class WorktreeLifecycleService {
    * the early-return has no impact on the teardown log story).
    */
   async runCommands(commands: string[], options: RunCommandsOptions): Promise<RunCommandsResult> {
-    const { cwd, env, onProgress, timeoutMs = DEFAULT_TIMEOUT_MS, signal, logDir } = options;
+    const {
+      cwd,
+      env,
+      onProgress,
+      timeoutMs = DEFAULT_TIMEOUT_MS,
+      signal,
+      logDir,
+      readFailureSummary = false,
+    } = options;
 
     if (!commands.length) {
       return { success: true, output: "" };
@@ -524,6 +552,9 @@ export class WorktreeLifecycleService {
 
       onProgress(i, commands.length, command);
 
+      // Where this command's output starts, so a failure summary can only come
+      // from the command that failed.
+      const commandOutputStart = outputChunks.length;
       const result = await this.runSingleCommand(
         command,
         cwd,
@@ -548,6 +579,9 @@ export class WorktreeLifecycleService {
 
       if (!result.success) {
         const logPath = await this.persistRunLog(outputChunks, logDir);
+        const failureSummary = readFailureSummary
+          ? readSetupFailureSummary(outputChunks.slice(commandOutputStart))
+          : undefined;
         return {
           success: false,
           output: tailOutput(outputChunks, logPath),
@@ -556,6 +590,7 @@ export class WorktreeLifecycleService {
           logPath,
           exitCode: result.exitCode ?? null,
           signalName: result.signalName ?? null,
+          ...(failureSummary !== undefined ? { failureSummary } : {}),
         };
       }
     }
@@ -1119,6 +1154,7 @@ export class WorktreeLifecycleService {
     const result = await this.runCommands(commands, {
       cwd: worktreePath,
       env,
+      readFailureSummary: true,
       onProgress: (commandIndex, totalCommands, command) => {
         const m = ctx.getMonitor(worktreeId);
         if (m) {
@@ -1142,7 +1178,10 @@ export class WorktreeLifecycleService {
         state: result.timedOut ? "timed-out" : result.success ? "success" : "failed",
         totalCommands: commands.length,
         output: result.output,
-        error: result.error,
+        error:
+          result.error !== undefined && result.failureSummary !== undefined
+            ? `${result.error} — ${result.failureSummary}`
+            : result.error,
         startedAt: finalMonitor.lifecycleStatus?.startedAt ?? Date.now(),
         completedAt: Date.now(),
       });
@@ -1617,6 +1656,35 @@ function shellEscapeValue(value: string): string {
 
 function buildSpawnEnv(customEnv: Record<string, string>): Record<string, string> {
   return { ...buildProbeEnv(), ...customEnv };
+}
+
+/**
+ * The summary a failed command's last non-empty line gives after
+ * {@link SETUP_FAILURE_SUMMARY_PREFIX}: control characters dropped, secrets
+ * scrubbed, then capped. Undefined when the last line doesn't carry one.
+ */
+function readSetupFailureSummary(chunks: string[]): string | undefined {
+  const full = chunks.join("");
+  // A last line longer than this isn't a one-line summary.
+  const end = full.length > FAILURE_SUMMARY_SCAN_CHARS ? full.slice(-FAILURE_SUMMARY_SCAN_CHARS) : full;
+  const lastLine = end
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .at(-1);
+  if (!lastLine?.startsWith(SETUP_FAILURE_SUMMARY_PREFIX)) return undefined;
+  // Without a control-character regex literal, which lint refuses.
+  const printable = Array.from(lastLine.slice(SETUP_FAILURE_SUMMARY_PREFIX.length))
+    .filter((ch) => {
+      const code = ch.codePointAt(0) ?? 0;
+      return code > 0x1f && code !== 0x7f && !(code >= 0x80 && code <= 0x9f);
+    })
+    .join("");
+  const summary = scrubSecrets(printable).trim();
+  if (summary.length === 0) return undefined;
+  return summary.length > MAX_FAILURE_SUMMARY_CHARS
+    ? `${summary.slice(0, MAX_FAILURE_SUMMARY_CHARS - 1)}…`
+    : summary;
 }
 
 function tailOutput(chunks: string[], logPath?: string): string {

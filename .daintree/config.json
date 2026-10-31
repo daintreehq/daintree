@@ -1,0 +1,3 @@
+{
+  "setup": ["node scripts/link-shared-node-modules.mjs"]
+}
