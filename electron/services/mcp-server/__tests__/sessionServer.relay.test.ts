@@ -406,40 +406,54 @@ describe("a relayed session (#13493)", () => {
   });
 
   it("records a call its Shell ran under its own assistant's Never ask as that, not as unasked (#15698)", async () => {
+    // A recipe makes an agent's create confirm-gated.
+    const manifest = [...MANIFEST, entry("worktree.createWithRecipe", "command")];
     const skipped = {
       result: { ok: true, result: { ran: true } },
       authorization: "skip-preference",
     };
-    const relay = await relayed("full", { dispatchAction: vi.fn().mockResolvedValue(skipped) });
-    await relay.client.callTool({
-      name: "agent.launch",
-      arguments: { agentId: "claude" },
-      _meta: { [RELAY_CALL_ID_META_KEY]: "call-123" },
+    const answering = (answer: unknown) => ({
+      requestManifest: vi.fn().mockResolvedValue(manifest),
+      getCachedManifest: vi.fn(() => manifest),
+      dispatchAction: vi.fn().mockResolvedValue(answer),
     });
+    const create = (harness: Harness) =>
+      harness.client.callTool({
+        name: "worktree.createWithRecipe",
+        arguments: { recipeId: "inrepo-work" },
+        _meta: { [RELAY_CALL_ID_META_KEY]: "call-123" },
+      });
+    const recorded = (harness: Harness) =>
+      (harness.deps.appendAuditRecord as ReturnType<typeof vi.fn>).mock.calls.map(
+        ([record]) => record as Record<string, unknown>
+      );
+
+    const relay = await relayed("full", answering(skipped));
+    await create(relay);
+    // Its Shell's answer that says no skip records none.
+    const asked = await relayed("full", answering({ result: { ok: true, result: { ran: true } } }));
+    await create(asked);
     // The same answer for a session that isn't relayed speaks for nobody's preference.
-    const plain = await relayed(
-      "full",
-      { dispatchAction: vi.fn().mockResolvedValue(skipped) },
-      false
-    );
-    await plain.client.callTool({
-      name: "agent.launch",
-      arguments: { agentId: "claude" },
-      _meta: { [RELAY_CALL_ID_META_KEY]: "call-123" },
-    });
+    const plain = await relayed("full", answering(skipped), false);
+    await create(plain);
 
     expect(relay.deps.dispatchAction).toHaveBeenCalledWith(
-      "agent.launch",
-      expect.objectContaining({ agentId: "claude" }),
+      "worktree.createWithRecipe",
+      expect.objectContaining({ recipeId: "inrepo-work" }),
       false,
       undefined,
       "call-123"
     );
-    expect(relay.deps.appendAuditRecord).toHaveBeenCalledWith(
-      expect.objectContaining({ toolId: "agent.launch", authorization: "skip-preference" })
-    );
-    const [input] = (plain.deps.appendAuditRecord as ReturnType<typeof vi.fn>).mock.calls[0]!;
-    expect(input).not.toHaveProperty("authorization");
+    expect(recorded(relay)).toEqual([
+      expect.objectContaining({
+        toolId: "worktree.createWithRecipe",
+        authorization: "skip-preference",
+      }),
+    ]);
+    expect(recorded(asked)).toHaveLength(1);
+    expect(recorded(asked)[0]).not.toHaveProperty("authorization");
+    expect(recorded(plain)).toHaveLength(1);
+    expect(recorded(plain)[0]).not.toHaveProperty("authorization");
   });
 
   it("ignores a callId on a session that isn't relayed", async () => {

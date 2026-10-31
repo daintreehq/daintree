@@ -330,6 +330,111 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
         expect(skipNotes).toBe(1);
       });
 
+      it("skips once per call: a second dispatch of the same call asks", async () => {
+        skips = true;
+        during((r, callId) => {
+          verdicts.push(r.skipsRelayedDispatch("studio", dispatch(callId)));
+          verdicts.push(r.skipsRelayedDispatch("studio", dispatch(callId)));
+        });
+
+        await deleteCall("worktree.deleteOwned");
+
+        expect(verdicts).toEqual([true, false]);
+        expect(skipNotes).toBe(1);
+      });
+
+      it("rebuilds an owned tool's delegate from its id and the fields it forwards, nothing else", async () => {
+        skips = true;
+        const restart = (callId: string, args: Record<string, unknown>) =>
+          dispatch(callId, { actionId: "terminal.restartOnPreset", args });
+        during((r, callId) => {
+          for (const args of [
+            { terminalId: "t-9", presetId: "other" },
+            { terminalId: "t-9" },
+            { terminalId: "t-9", presetId: "p-1", extra: "x" },
+            { terminalId: "t-8", presetId: "p-1" },
+            { terminalId: "t-9", presetId: "p-1" },
+          ]) {
+            verdicts.push(r.skipsRelayedDispatch("studio", restart(callId, args)));
+          }
+        });
+
+        await deleteCall("terminal.restartOnPresetOwned", {
+          terminalId: "t-9",
+          presetId: "p-1",
+          extra: "dropped by the host",
+        });
+
+        expect(verdicts).toEqual([false, false, false, false, true]);
+      });
+
+      it("rebuilds an owned tool that delegates to itself, never matching what the host dropped", async () => {
+        skips = true;
+        const place = (callId: string, args: Record<string, unknown>) =>
+          dispatch(callId, { actionId: "terminal.placeOwned", args });
+        during((r, callId) => {
+          verdicts.push(
+            r.skipsRelayedDispatch(
+              "studio",
+              place(callId, { terminalId: "t-9", location: "dock", recipeId: "extra" })
+            )
+          );
+          verdicts.push(
+            r.skipsRelayedDispatch("studio", place(callId, { terminalId: "t-9", location: "dock" }))
+          );
+        });
+
+        await deleteCall("terminal.placeOwned", {
+          terminalId: "t-9",
+          location: "dock",
+          recipeId: "extra",
+        });
+
+        expect(verdicts).toEqual([false, true]);
+      });
+
+      it("notes the skip on every send of the call still out", async () => {
+        skips = true;
+        let resendNotes = 0;
+        let resendOut!: () => void;
+        const resendSent = new Promise<void>((resolve) => (resendOut = resolve));
+        let releaseResend!: () => void;
+        const resendHeld = new Promise<void>((resolve) => (releaseResend = resolve));
+        let resent: Promise<unknown> | undefined;
+        let resending = false;
+        verdicts = [];
+        duringCall = async (r, callId) => {
+          if (resending) {
+            resendOut();
+            await resendHeld;
+            return { decision: "unused" };
+          }
+          resending = true;
+          resent = r.call(
+            "a",
+            {
+              hostId: "studio",
+              projectId: "proj-2",
+              tool: "worktree.deleteOwned",
+              args: { worktreeId: "/wt/feature" },
+              callId,
+            },
+            { tier: "full", noteSkipPreference: () => (resendNotes += 1) }
+          );
+          await resendSent;
+          verdicts.push(r.skipsRelayedDispatch("studio", dispatch(callId)));
+          releaseResend();
+          return { decision: "unused" };
+        };
+
+        await deleteCall("worktree.deleteOwned");
+        await resent;
+
+        expect(verdicts).toEqual([true]);
+        expect(skipNotes).toBe(1);
+        expect(resendNotes).toBe(1);
+      });
+
       it("skips a direct call's own action with the arguments it was sent", async () => {
         skips = true;
         during((r, callId) =>

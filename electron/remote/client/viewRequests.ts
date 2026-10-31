@@ -66,8 +66,9 @@ const McpDispatchPayloadSchema = z.object({
   // without asking.
   relayCall: z
     .object({
-      callId: z.string().min(1).max(128),
-      helpSessionId: z.string().min(1).max(128),
+      // The link's own bounds for both, so no call a host admitted is refused here.
+      callId: z.string().min(1).max(256),
+      helpSessionId: z.string().min(1).max(256),
     })
     .strict()
     .optional(),

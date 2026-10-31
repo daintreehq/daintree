@@ -281,7 +281,7 @@ describe("view reverse requests", () => {
       expect(answer).toEqual({ result: { ok: true, result: 1 } });
     });
 
-    it("says a dialog raised after all, not the skip", async () => {
+    it("lets a decision from the view speak over the skip it was sent with", async () => {
       m.skipsRelayedDispatch.mockReturnValue(true);
       m.dispatchActionForHost.mockResolvedValue({
         result: { ok: true, result: 1 },
@@ -290,7 +290,45 @@ describe("view reverse requests", () => {
 
       const answer = await ask("mcp:dispatch-action", relayedDelete);
 
+      expect(m.dispatchActionForHost.mock.calls[0]?.[3]).toBe(true);
+      expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({
+        authorization: "skip-preference",
+        fixedDeadline: true,
+      });
       expect(answer).toEqual({ result: { ok: true, result: 1 }, confirmationDecision: "approved" });
+    });
+
+    it("goes by the danger the view resolves for these arguments, as its dialog does", async () => {
+      m.skipsRelayedDispatch.mockReturnValue(true);
+      m.requestManifestForHost.mockResolvedValue([
+        { id: "worktree.createWithRecipe", danger: "safe" },
+      ]);
+      const create = (args: Record<string, unknown>) => ({
+        ...relayedDelete,
+        actionId: "worktree.createWithRecipe",
+        args,
+      });
+
+      // A recipe makes the agent's call confirm-gated.
+      await ask("mcp:dispatch-action", create({ recipeId: "inrepo-work" }));
+      await ask("mcp:dispatch-action", create({}));
+
+      expect(m.skipsRelayedDispatch).toHaveBeenCalledTimes(1);
+      expect(m.dispatchActionForHost.mock.calls.map((call) => call[3])).toEqual([true, false]);
+    });
+
+    it("takes a call named within the link's own bounds, and refuses one past them", async () => {
+      await ask("mcp:dispatch-action", {
+        ...relayedDelete,
+        relayCall: { callId: "c".repeat(256), helpSessionId: "h".repeat(256) },
+      });
+      await expect(
+        ask("mcp:dispatch-action", {
+          ...relayedDelete,
+          relayCall: { callId: "c".repeat(257), helpSessionId: "help-a" },
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+      expect(m.dispatchActionForHost).toHaveBeenCalledTimes(1);
     });
 
     it("leaves a call this view wouldn't ask about as it is, and its record unmarked", async () => {

@@ -299,10 +299,16 @@ interface CallInFlight {
   tool: string;
   args: Record<string, unknown>;
   run: OpenRun;
-  /** A host asked about it once already: an approval is for the call, not each ask. */
+  /**
+   * A host asked about it, or ran it under the skip preference, once already:
+   * an approval or a skip is for the call, not each ask or dispatch.
+   */
   asked: boolean;
-  /** Tells the `host.call` that made it that it ran under the skip preference, for its audit. */
-  noteSkipPreference?: () => void;
+  /**
+   * Tells each `host.call` send still out for it that it ran under the skip
+   * preference, for that send's audit record (#15698).
+   */
+  skipNotes: Set<() => void>;
   /** Sends of it still out, a resend's included; the record goes with the last. */
   sends: number;
 }
@@ -325,11 +331,16 @@ function relayedActionArgs(args: Record<string, unknown>): Record<string, unknow
  * the id and the fields it forwards just as the host's server rebuilds it.
  */
 function actionHashesOf(call: CallInFlight, actionId: string): string | null {
-  if (call.tool === actionId) return canonicalArgsHash(actionId, relayedActionArgs(call.args));
   const owned = Object.hasOwn(OWNED_RESOURCE_TOOLS, call.tool)
     ? OWNED_RESOURCE_TOOLS[call.tool]
     : undefined;
-  if (owned?.executor !== "renderer" || owned.delegateTo !== actionId || owned.reveals === true) {
+  // An owned tool's arguments are always rebuilt, even one that delegates to itself.
+  if (owned === undefined) {
+    return call.tool === actionId
+      ? canonicalArgsHash(actionId, relayedActionArgs(call.args))
+      : null;
+  }
+  if (owned.executor !== "renderer" || owned.delegateTo !== actionId || owned.reveals === true) {
     return null;
   }
   const id = call.args[owned.idArg];
@@ -857,6 +868,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     if (
       this.disposed ||
       call === undefined ||
+      call.asked ||
       call.hostId !== hostId ||
       call.helpSessionId !== dispatch.helpSessionId ||
       call.projectId !== dispatch.projectId ||
@@ -867,7 +879,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     ) {
       return false;
     }
-    call.noteSkipPreference?.();
+    call.asked = true;
+    for (const note of call.skipNotes) note();
     return true;
   }
 
@@ -1041,7 +1054,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     // The person's own "Never ask" covers their assistant's call on a host as
     // it does one here (#15698): nobody is asked, and the host is told so.
     if (this.skipsConfirmations(call, payload.actionId)) {
-      call.noteSkipPreference?.();
+      for (const note of call.skipNotes) note();
       return answer("skip-preference");
     }
     let decision: McpConfirmationDecision | null;
@@ -1387,15 +1400,18 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       const noted = resend
         ? NOTHING_NOTED
         : this.noteCall(callId, args.hostId, caller, args.tool, toolArgs);
-      const sendDone = this.trackSend(callId, {
-        hostId: args.hostId,
-        helpSessionId,
-        projectId,
-        tool: args.tool,
-        args: toolArgs,
-        run: caller,
-        ...(context.noteSkipPreference ? { noteSkipPreference: context.noteSkipPreference } : {}),
-      });
+      const sendDone = this.trackSend(
+        callId,
+        {
+          hostId: args.hostId,
+          helpSessionId,
+          projectId,
+          tool: args.tool,
+          args: toolArgs,
+          run: caller,
+        },
+        context.noteSkipPreference
+      );
       let answer: McpCallAnswer;
       try {
         answer = local
@@ -1443,17 +1459,25 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * send is still out is the same call and shares that record, so an approval
    * the host is asking for still counts.
    */
-  private trackSend(callId: string, record: Omit<CallInFlight, "asked" | "sends">): () => void {
+  private trackSend(
+    callId: string,
+    record: Omit<CallInFlight, "asked" | "sends" | "skipNotes">,
+    noteSkip?: () => void
+  ): () => void {
     const { hostId, helpSessionId } = record;
     this.callsOut.set(hostId, (this.callsOut.get(hostId) ?? 0) + 1);
     const sharing = this.callsInFlight.get(callId);
     const inFlight: CallInFlight =
       sharing !== undefined && sharing.hostId === hostId && sharing.helpSessionId === helpSessionId
         ? sharing
-        : { ...record, asked: false, sends: 0 };
+        : { ...record, asked: false, sends: 0, skipNotes: new Set() };
     inFlight.sends += 1;
     if (inFlight !== sharing) this.callsInFlight.set(callId, inFlight);
+    // Each send's own: a send that settled has written its record already.
+    const note = noteSkip !== undefined ? () => noteSkip() : undefined;
+    if (note !== undefined) inFlight.skipNotes.add(note);
     return () => {
+      if (note !== undefined) inFlight.skipNotes.delete(note);
       const left = (this.callsOut.get(hostId) ?? 1) - 1;
       if (left > 0) this.callsOut.set(hostId, left);
       else this.callsOut.delete(hostId);

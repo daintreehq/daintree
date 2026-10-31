@@ -273,22 +273,31 @@ describe("HttpLifecycle.openRelaySession (#13493)", () => {
     await session.callTool("copyTree.generate", {}, { timeoutMs: 5_000, callId: "c3" });
     await session.callTool("recipe.list", {}, { timeoutMs: 5_000, callId: "c4" });
 
-    const relayOf = (actionId: string) => {
-      const relay = dispatchActionForWorkspace.mock.calls.find((call) => call[1] === actionId)?.[5]
-        ?.relay as { call?: unknown } | undefined;
-      if (relay === undefined) return undefined;
-      const { call: _call, ...classified } = relay;
-      return classified;
-    };
-    expect(relayOf("actions.search")).toEqual({ linkSessionId: "link-1", readOnly: true });
+    const relayOf = (actionId: string) =>
+      dispatchActionForWorkspace.mock.calls.find((call) => call[1] === actionId)?.[5]?.relay;
+    const named = (callId: string) => ({ callId, helpSessionId: CALLER.helpSessionId });
+    expect(relayOf("actions.search")).toEqual({
+      linkSessionId: "link-1",
+      readOnly: true,
+      call: named("c1"),
+    });
     // A query the catalog says writes (it reconciles the recipe store) stays a write.
-    expect(relayOf("recipe.list")).toEqual({ linkSessionId: "link-1", readOnly: false });
+    expect(relayOf("recipe.list")).toEqual({
+      linkSessionId: "link-1",
+      readOnly: false,
+      call: named("c4"),
+    });
     expect(relayOf("worktree.createWithRecipe")).toEqual({
       linkSessionId: "link-1",
       readOnly: false,
+      call: named("c2"),
     });
     // Not in the host's catalog, so still a write.
-    expect(relayOf("copyTree.generate")).toEqual({ linkSessionId: "link-1", readOnly: false });
+    expect(relayOf("copyTree.generate")).toEqual({
+      linkSessionId: "link-1",
+      readOnly: false,
+      call: named("c3"),
+    });
     session.close();
   });
 
