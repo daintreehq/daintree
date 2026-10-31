@@ -731,22 +731,55 @@ describe("quoted launch arguments (#15637)", () => {
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
     const cmd = generateAgentCommand(
       "claude",
-      { customFlags: `--add-dir "C:\\Users\\me\\My Project"` },
+      { customFlags: `--add-dir "C:\\Users\\O'Brien\\My Project"` },
       "claude",
       { recipeArgs: `--config 'C:\\Program Files\\cfg.json'` }
     );
     expect(cmd).toBe(
-      "claude --config 'C:\\Program Files\\cfg.json' --add-dir 'C:\\Users\\me\\My Project'"
+      "claude --config 'C:\\Program Files\\cfg.json' --add-dir 'C:\\Users\\O''Brien\\My Project'"
     );
   });
 
   it("recognises a quoted clipboard directory in custom flags as already shared", () => {
     const dir = "/tmp/my clipboard";
-    const flags = generateAgentFlags({ customFlags: `--include-directories "${dir}"` }, "gemini", {
-      clipboardDirectory: dir,
-    });
+    const customFlags = `--include-directories "${dir}"`;
+    const flags = generateAgentFlags({ customFlags }, "gemini", { clipboardDirectory: dir });
     expect(flags.filter((flag) => flag === "--include-directories")).toHaveLength(1);
     expect(flags).toContain(dir);
+    expect(
+      generateAgentFlags({ customFlags, shareClipboardDirectory: false }, "gemini", {
+        clipboardDirectory: dir,
+      })
+    ).toEqual(["--include-directories", dir]);
+  });
+
+  it("keeps the whitespace split for text with an unclosed quote", () => {
+    const entry = { customFlags: "--name O'Brien --verbose" };
+    expect(generateAgentFlags(entry, "claude")).toEqual(["--name", "O'Brien", "--verbose"]);
+    expect(
+      generateAgentCommand("claude", {}, "claude", { recipeArgs: `--title "draft --yolo` })
+    ).toBe(`claude --title '"draft' --yolo`);
+  });
+
+  it("turns a control character inside a quoted value into a space", () => {
+    const entry = { customFlags: '--append-system-prompt "first\nsecond\tthird"' };
+    expect(generateAgentFlags(entry, "claude")).toEqual([
+      "--append-system-prompt",
+      "first second third",
+    ]);
+    expect(generateAgentCommand("claude", {}, "claude", { recipeArgs: '--label "a\r\nb"' })).toBe(
+      "claude --label 'a b'"
+    );
+  });
+
+  it("leaves an explicit recipe decoration override in the persisted flags", () => {
+    const entry = { decorativeEffects: true };
+    const options = { recipeArgs: "-c tui.whimsy=false" };
+    const flags = buildAgentLaunchFlags(entry, "codex", options);
+    expect(flags).toEqual(expect.arrayContaining(["-c", "tui.whimsy=false"]));
+    expect(generateAgentCommand("codex", entry, "codex", options)).toBe(
+      buildLaunchCommandFromFlags("codex", "codex", flags)
+    );
   });
 
   it("leaves unquoted arguments exactly as the whitespace split did", () => {

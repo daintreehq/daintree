@@ -8,7 +8,7 @@ import {
   quotePowerShellArg,
 } from "../utils/shellEscape.js";
 import { systemPromptArgPositions } from "../utils/agentSystemPrompt.js";
-import { parseShellArgs } from "../utils/shellArgs.js";
+import { hasUnclosedQuote, parseShellArgs } from "../utils/shellArgs.js";
 import { HOST_INBOX_DIR_NAME } from "./ipc/fileTransfer.js";
 
 /**
@@ -30,6 +30,24 @@ function quoteAgentArg(arg: string): string {
 function quoteAgentArgOptional(arg: string): string {
   return arg !== "" && isSafeUnescaped(arg) ? arg : quoteAgentArg(arg);
 }
+
+/**
+ * Tokenises an Arguments or Custom arguments field into argv (#15637): quotes
+ * group a spaced value into one argument. Text with an unclosed quote keeps
+ * the whitespace split it always had, so a bare apostrophe (`O'Brien`) can't
+ * swallow every argument after it. A control character inside a quoted value
+ * becomes a space, because the spawn schema refuses a command that holds one.
+ */
+function parseLaunchArgs(text: string | undefined): string[] {
+  if (!text?.trim()) return [];
+  if (hasUnclosedQuote(text)) return text.trim().split(/\s+/);
+  // eslint-disable-next-line no-control-regex
+  return parseShellArgs(text).map((arg) => arg.replace(/[\x00-\x1F\x7F]+/g, " "));
+}
+
+// Marks where recipe args go in the persisted launch flags while those are
+// reconciled. argv elements are C strings, so no real argument holds a NUL.
+const RECIPE_ARGS_SLOT = "\0recipe-args";
 
 /**
  * Tri-state permission-bypass intent. `"on"`/`"off"` are explicit user choices
@@ -670,7 +688,7 @@ export function generateAgentFlags(
     }
   }
   if (entry.customFlags) {
-    flags.push(...parseShellArgs(entry.customFlags));
+    flags.push(...parseLaunchArgs(entry.customFlags));
   }
 
   // Decorative-effect opt-out (e.g. Codex's composer sparkles): the registry
@@ -721,7 +739,7 @@ export interface GenerateAgentCommandOptions {
    */
   systemPromptArgs?: readonly string[];
   /**
-   * The recipe terminal's Arguments field, tokenised by {@link parseShellArgs}
+   * The recipe terminal's Arguments field, tokenised by {@link parseLaunchArgs}
    * so quotes group a spaced value into one argument.
    */
   recipeArgs?: string;
@@ -845,7 +863,7 @@ export function generateAgentCommand(
   }
 
   // Add recipe-level args (per-terminal overrides from recipe editor)
-  for (const arg of parseShellArgs(options?.recipeArgs ?? "")) {
+  for (const arg of parseLaunchArgs(options?.recipeArgs)) {
     parts.push(isSafeShellOption(arg) ? arg : quoteAgentArg(arg));
   }
 
@@ -1073,8 +1091,12 @@ export function buildAgentLaunchFlags(
   }
 
   // Recipe args sit between preset args and settings flags, as in
-  // generateAgentCommand, so a restart replays them in launch order.
-  flags.push(...parseShellArgs(options?.recipeArgs ?? ""));
+  // generateAgentCommand, so a restart replays them in launch order. A slot
+  // holds their place through the decoration reconciliation below, which
+  // must leave an explicit recipe override (Codex's `-c tui.whimsy=false`)
+  // in place, as the launch command does.
+  const recipeArgs = parseLaunchArgs(options?.recipeArgs);
+  if (recipeArgs.length) flags.push(RECIPE_ARGS_SLOT);
 
   // Dangerous args and custom flags (from generateAgentFlags, excluding clipboard dir)
   const settingsFlags = generateAgentFlags(entry, agentId, {
@@ -1091,7 +1113,9 @@ export function buildAgentLaunchFlags(
 
   // generateAgentFlags dedupes the decorations pair against its own output
   // only; a preset's args (pushed above) can carry it too. Converge on one.
-  return reconcileDecorationFlags(flags, agentId, resolveKeepDecorations(entry));
+  return reconcileDecorationFlags(flags, agentId, resolveKeepDecorations(entry)).flatMap((flag) =>
+    flag === RECIPE_ARGS_SLOT ? recipeArgs : [flag]
+  );
 }
 
 /**
