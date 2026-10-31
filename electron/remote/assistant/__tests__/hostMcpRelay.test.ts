@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { AGENT_DIRECTORY_BYTES_MAX } from "../../../../shared/types/agentDirectory.js";
+import { buildToolError } from "../../../services/mcp-server/shared.js";
+import { buildToolCallResult } from "../../../services/mcp-server/toolCallResult.js";
 import type { LinkSession } from "../../link/session.js";
 import type { MetricsSessionContext } from "../../metrics/hostMetricsHost.js";
 import {
@@ -567,6 +569,81 @@ describe("projectRelayResult", () => {
     ).toEqual({ isError: true, structured: null, text: "line one\n[image content omitted]" });
   });
 
+  it("carries a JSON object answered as text in its structured half, as a schema'd tool's", () => {
+    expect(
+      projectRelayResult({ content: [{ type: "text", text: '{"commands":[],"n":1}' }] })
+    ).toEqual({ isError: false, structured: { commands: [], n: 1 }, text: null });
+  });
+
+  it("keeps as text whatever isn't a lone JSON object, and every error", () => {
+    const asText = (text: string, extra: Partial<CallToolResult> = {}) =>
+      projectRelayResult({ content: [{ type: "text", text }], ...extra });
+
+    expect(asText("OK")).toEqual({ isError: false, structured: null, text: "OK" });
+    expect(asText("[1,2]")).toEqual({ isError: false, structured: null, text: "[1,2]" });
+    expect(asText("null")).toEqual({ isError: false, structured: null, text: "null" });
+    expect(asText('"{}"')).toEqual({ isError: false, structured: null, text: '"{}"' });
+    expect(asText("{not json")).toEqual({ isError: false, structured: null, text: "{not json" });
+    const error = '{"code":"NOT_FOUND","message":"No such terminal"}';
+    expect(asText(error, { isError: true })).toEqual({
+      isError: true,
+      structured: null,
+      text: error,
+    });
+    // A note after the result, or a result the host's server already cut, stays as it came.
+    expect(
+      projectRelayResult({
+        content: [
+          { type: "text", text: '{"terminalId":"t-1"}' },
+          { type: "text", text: "Owned for this session." },
+        ],
+      })
+    ).toEqual({
+      isError: false,
+      structured: null,
+      text: '{"terminalId":"t-1"}\nOwned for this session.',
+    });
+    const serverCut = buildToolCallResult({ items: "x".repeat(60 * 1024) });
+    expect(projectRelayResult(serverCut)).toMatchObject({
+      structured: null,
+      text: expect.stringMatching(/^\[Tool result truncated/),
+    });
+  });
+
+  it("prefers the structured half to a text that disagrees with it", () => {
+    expect(
+      projectRelayResult({
+        content: [{ type: "text", text: '{"a":2}' }],
+        structuredContent: { a: 1 },
+      })
+    ).toEqual({ isError: false, structured: { a: 1 }, text: null });
+  });
+
+  it("carries as text an object nested too deep for the link to encode", () => {
+    const deep = `${'{"a":'.repeat(64)}1${"}".repeat(64)}`;
+    expect(projectRelayResult({ content: [{ type: "text", text: deep }] })).toEqual({
+      isError: false,
+      structured: null,
+      text: deep,
+    });
+    const deepStructured = JSON.parse(deep) as Record<string, unknown>;
+    expect(
+      projectRelayResult({
+        content: [{ type: "text", text: deep }],
+        structuredContent: deepStructured,
+      })
+    ).toEqual({ isError: false, structured: null, text: deep });
+  });
+
+  it("carries a prototype-named key as data", () => {
+    const projected = projectRelayResult({
+      content: [{ type: "text", text: '{"__proto__":{"polluted":true}}' }],
+    });
+
+    expect(Object.keys(projected.structured!)).toEqual(["__proto__"]);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
   it("cuts a result too large to carry, saying the call ran", () => {
     const big = "x".repeat(MAX_RELAY_RESULT_BYTES * 2);
     const projected = projectRelayResult({ content: [{ type: "text", text: big }] });
@@ -578,6 +655,80 @@ describe("projectRelayResult", () => {
     expect(Buffer.byteLength(JSON.stringify(projected), "utf8")).toBeLessThanOrEqual(
       MAX_RELAY_RESULT_BYTES
     );
+  });
+
+  it("cuts a JSON object answered as text that is too large to carry, as text with its notice", () => {
+    const big = JSON.stringify({ items: ["x".repeat(MAX_RELAY_RESULT_BYTES * 2)] });
+    const projected = projectRelayResult({ content: [{ type: "text", text: big }] });
+
+    expect(projected.structured).toBeNull();
+    expect(projected.text).toMatch(
+      /^\[The host's result was cut to fit: \d+ of \d+ bytes shown\. The call ran[^\n]*\n\{"items":\["x/
+    );
+    expect(Buffer.byteLength(JSON.stringify(projected), "utf8")).toBeLessThanOrEqual(
+      MAX_RELAY_RESULT_BYTES
+    );
+  });
+});
+
+describe("installHostMcpRelay results of tools with no output schema (#15730)", () => {
+  // What the host's MCP server answers for an action whose manifest entry has
+  // no output schema: its result as compact JSON text, with no structured content.
+  const noSchemaAnswer = (value: unknown) => async () => buildToolCallResult(value);
+
+  it.each([
+    [
+      "worktree.createWithRecipe",
+      {
+        worktreeId: "wt-1",
+        worktreePath: "/repo-worktrees/feature-x",
+        branch: "feature/x",
+        requestedBranch: "feature/x",
+        effectiveBranch: "feature/x",
+        recipeLaunched: true,
+        spawnedTerminalCount: 1,
+        spawnedTerminalIds: ["t-1"],
+        failedTerminalCount: 0,
+        setupState: { status: "running" },
+        assignedToSelf: false,
+        assignedUsername: null,
+        assignmentError: null,
+      },
+    ],
+    [
+      "slashCommands.list",
+      {
+        commands: [
+          {
+            id: "/review",
+            label: "/review",
+            description: "Review the diff",
+            scope: "project",
+            agentId: "claude",
+          },
+        ],
+      },
+    ],
+  ])("answers %s in its structured half", async (tool, value) => {
+    const { links, relay } = harness([["link-1", "sender-a"]], {}, noSchemaAnswer(value));
+
+    await expect(links[0]!.call({ tool, args: {} })).resolves.toEqual({
+      status: "done",
+      result: { isError: false, structured: value, text: null },
+    });
+    relay.dispose();
+  });
+
+  it("still answers a tool's refusal in its text half", async () => {
+    const refusal = buildToolError({ code: "NOT_FOUND", message: "No such worktree" });
+    const { links, relay } = harness([["link-1", "sender-a"]], {}, async () => refusal);
+
+    const answer = (await links[0]!.call({ tool: "worktree.createWithRecipe" })) as {
+      result: { isError: boolean; structured: unknown; text: string };
+    };
+    expect(answer.result).toMatchObject({ isError: true, structured: null });
+    expect(JSON.parse(answer.result.text)).toMatchObject({ code: "NOT_FOUND" });
+    relay.dispose();
   });
 });
 
