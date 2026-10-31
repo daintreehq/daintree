@@ -6,7 +6,7 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { createSessionServer } from "../sessionServer.js";
+import { createSessionServer, type SessionServerDeps } from "../sessionServer.js";
 import { SessionStore as RealSessionStore } from "../sessionStore.js";
 import {
   TIER_NOT_PERMITTED_CODE,
@@ -574,40 +574,147 @@ describe("MCP_DEDUP_ALLOWLIST exclusion boundary (#8468)", () => {
   );
 });
 
-describe("MCP_DEDUP_ALLOWLIST widening (#9156)", () => {
-  // `forge.assignIssue` shipped in this cohort but was dropped in #11534 —
-  // assignment is provider-idempotent, and caching it broke assign → unassign
-  // → reassign. See the #11534 block below.
-  const NEW_MUTATIONS = ["worktree.delete"];
+describe("worktree.delete redispatch (#15791)", () => {
+  // Worktree ids are paths, and delete -> recreate at the same path is a
+  // supported workflow, so a repeated identical delete inside the TTL can name
+  // a genuinely different worktree. Replaying the first success there reported
+  // a delete that never happened, with no confirmation asked.
+  const deleteArgs = { worktreeId: "/repo-wt-feature-x" };
 
-  it.each(NEW_MUTATIONS)(
-    "dedups a post-completion duplicate of newly-allowlisted %s",
-    async (tool) => {
-      // Distinct per-call payloads so the replay assertion has teeth: with a
-      // single mockResolvedValue both dispatches return equal results and
-      // `second === first` would hold even with dedup switched off.
-      const dispatchAction = vi
-        .fn()
-        .mockResolvedValueOnce({ result: { ok: true, result: "first" } })
-        .mockResolvedValueOnce({ result: { ok: true, result: "second" } });
-      const deps = fakeDeps({
-        sessionStore: fakeSessionStore("full"),
-        dispatchAction,
+  const serverWith = (sessionId: string, dispatchAction: SessionServerDeps["dispatchAction"]) => {
+    const deps = fakeDeps({ sessionStore: fakeSessionStore("full"), dispatchAction });
+    // The unscoped delete is on the assistant's surface only.
+    deps.sessionStore.sessionOriginMap.set(sessionId, "help");
+    return createSessionServer(sessionId, deps);
+  };
+  const textAnswer = (payload: string) => ({
+    content: [{ type: "text", text: JSON.stringify(payload) }],
+  });
+
+  it("dispatches a repeated identical delete and returns its own result", async () => {
+    const dispatchAction = vi
+      .fn()
+      .mockResolvedValueOnce({ result: { ok: true, result: "first" } })
+      .mockResolvedValueOnce({ result: { ok: true, result: "second" } });
+    const server = serverWith("redispatch-15791-seq", dispatchAction);
+
+    const first = await callTool(server, { name: "worktree.delete", arguments: deleteArgs });
+    const second = await callTool(server, { name: "worktree.delete", arguments: deleteArgs });
+
+    expect(dispatchAction).toHaveBeenCalledTimes(2);
+    expect(first).toEqual(textAnswer("first"));
+    expect(second).toEqual(textAnswer("second"));
+  });
+
+  it("answers a repeat against a worktree that is already gone with the delete's own error", async () => {
+    const dispatchAction = vi
+      .fn()
+      .mockResolvedValueOnce({ result: { ok: true, result: null } })
+      .mockResolvedValueOnce({
+        result: {
+          ok: false,
+          error: { code: "EXECUTION_ERROR", message: "Worktree not found: /repo-wt-feature-x" },
+        },
       });
-      // The unscoped delete is on the assistant's surface only; every other
-      // origin holds `worktree.deleteOwned`, which is deliberately not deduped.
-      deps.sessionStore.sessionOriginMap.set(`dedup-9156-${tool}`, "help");
-      const server = createSessionServer(`dedup-9156-${tool}`, deps);
+    const server = serverWith("redispatch-15791-gone", dispatchAction);
 
-      const args = { target: "x" };
-      const first = await callTool(server, { name: tool, arguments: args });
-      const second = await callTool(server, { name: tool, arguments: args });
+    await callTool(server, { name: "worktree.delete", arguments: deleteArgs });
+    const second = (await callTool(server, {
+      name: "worktree.delete",
+      arguments: deleteArgs,
+    })) as { isError?: boolean; content: Array<{ text: string }> };
 
-      expect(dispatchAction).toHaveBeenCalledTimes(1);
-      expect(second).toEqual(first);
-      expect(JSON.stringify(second)).not.toContain("second");
+    expect(dispatchAction).toHaveBeenCalledTimes(2);
+    expect(second.isError).toBe(true);
+    expect(JSON.parse(second.content[0]!.text)).toMatchObject({
+      code: "EXECUTION_ERROR",
+      message: "Worktree not found: /repo-wt-feature-x",
+    });
+  });
+
+  it("does not let a repeated requestKey suppress the second delete", async () => {
+    const dispatchAction = vi
+      .fn()
+      .mockResolvedValueOnce({ result: { ok: true, result: "first" } })
+      .mockResolvedValueOnce({ result: { ok: true, result: "second" } });
+    const server = serverWith("redispatch-15791-rk", dispatchAction);
+
+    const args = { ...deleteArgs, requestKey: "rk-delete" };
+    const first = await callTool(server, { name: "worktree.delete", arguments: args });
+    const second = await callTool(server, { name: "worktree.delete", arguments: args });
+
+    expect(dispatchAction).toHaveBeenCalledTimes(2);
+    expect(first).toEqual(textAnswer("first"));
+    expect(second).toEqual(textAnswer("second"));
+  });
+
+  it("dispatches concurrent identical deletes independently instead of sharing one", async () => {
+    // Deliberate: dedup lookup runs before the confirmation, so a shared
+    // promise would answer the duplicate with the first call's dialog. Each
+    // concurrent delete asks for itself, and both must be in flight before
+    // either settles.
+    const resolvers: Array<(envelope: unknown) => void> = [];
+    const dispatchAction = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve as (envelope: unknown) => void);
+        })
+    );
+    const server = serverWith("redispatch-15791-inflight", dispatchAction);
+
+    const a = callTool(server, { name: "worktree.delete", arguments: deleteArgs });
+    const b = callTool(server, { name: "worktree.delete", arguments: deleteArgs });
+    for (let i = 0; i < 100 && resolvers.length < 2; i++) {
+      await Promise.resolve();
     }
-  );
+    expect(resolvers).toHaveLength(2);
+
+    resolvers[0]!({ result: { ok: true, result: "first" } });
+    resolvers[1]!({
+      result: { ok: false, error: { code: "EXECUTION_ERROR", message: "already removed" } },
+    });
+    const [resultA, resultB] = (await Promise.all([a, b])) as Array<{
+      isError?: boolean;
+      content: Array<{ text: string }>;
+    }>;
+
+    expect(dispatchAction).toHaveBeenCalledTimes(2);
+    // Neither dispatch borrows an approval: each is handed to the renderer
+    // unconfirmed, so each raises its own dialog.
+    expect(dispatchAction).toHaveBeenNthCalledWith(1, "worktree.delete", deleteArgs, false);
+    expect(dispatchAction).toHaveBeenNthCalledWith(2, "worktree.delete", deleteArgs, false);
+    expect(resultA.isError).not.toBe(true);
+    expect(resultA.content[0]!.text).toContain("first");
+    expect(resultB.isError).toBe(true);
+    expect(JSON.parse(resultB.content[0]!.text)).toMatchObject({
+      code: "EXECUTION_ERROR",
+      message: "already removed",
+    });
+  });
+
+  // Dropping the delete leaves the creation tools' replay untouched.
+  it.each([
+    "terminal.new",
+    "agent.launch",
+    "recipe.run",
+    "worktree.createWithRecipe",
+    "workflow.startWorkOnIssue",
+    "worktree.resource.provision",
+  ])("still returns the cached result for a repeated %s", async (tool) => {
+    const dispatchAction = vi
+      .fn()
+      .mockResolvedValueOnce({ result: { ok: true, result: "first" } })
+      .mockResolvedValueOnce({ result: { ok: true, result: "second" } });
+    const server = serverWith(`creation-15791-${tool}`, dispatchAction);
+
+    const args = { target: "x" };
+    const first = await callTool(server, { name: tool, arguments: args });
+    const second = await callTool(server, { name: tool, arguments: args });
+
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
+    expect(second).toEqual(first);
+    expect(JSON.stringify(second)).not.toContain("second");
+  });
 });
 
 describe("MCP_DEDUP_ALLOWLIST criterion correction (#11534)", () => {
