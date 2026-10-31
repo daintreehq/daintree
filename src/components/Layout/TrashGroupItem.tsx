@@ -4,15 +4,13 @@ import { cn } from "@/lib/utils";
 import { DOCK_POPOVER_ROW_HOVER_CLASS } from "./dockStatusPill";
 import { Button } from "@/components/ui/button";
 import { usePanelStore } from "@/store";
-import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
+import type { PanelInstance } from "@shared/types/panel";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { TrashedTerminal, TrashedTerminalGroupMetadata } from "@/store/slices";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { isUselessTitle } from "@shared/utils/isUselessTitle";
-import { cleanTaskTitle } from "@shared/utils/taskTitle";
-import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { resolveTrashedPanelName } from "./trashedPanelName";
 import {
   subscribeToPluginAgentRegistry,
   getPluginAgentRegistrySnapshot,
@@ -24,23 +22,6 @@ import {
   type TrashRemovalRequest,
 } from "./trashCountdown";
 import { pluralize } from "@/lib/pluralize";
-
-/** A trashed panel's name: a frozen user title, else its last task, else its launch identity. */
-export function resolveTrashedPanelName(terminal: PanelInstance): string | null {
-  if (isPtyPanel(terminal)) {
-    // A user-locked title is fully frozen — it outranks the observed task.
-    if ((terminal.titleMode ?? "default") === "user") return terminal.title;
-    const observed = cleanTaskTitle(terminal.lastObservedTitle);
-    if (observed && !isUselessTitle(observed)) return observed;
-    if (terminal.launchAgentId) {
-      if (terminal.title && !isUselessTitle(terminal.title)) return terminal.title;
-      const agentConfig = getEffectiveAgentConfig(terminal.launchAgentId);
-      return agentConfig?.name ?? terminal.launchAgentId;
-    }
-  }
-  if (terminal.title && !isUselessTitle(terminal.title)) return terminal.title;
-  return null;
-}
 
 interface TrashGroupItemProps {
   groupRestoreId: string;
@@ -71,7 +52,7 @@ export function TrashGroupItem({
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
   // Re-render when a plugin loads/unloads mid-session so trashed terminals'
   // icon/name pick up the updated registry (#9879). Subscription is the
-  // mechanism; the value itself is read via getEffectiveAgentConfig below.
+  // mechanism; the value itself is read in resolveTrashedPanelName.
   useSyncExternalStore(subscribeToPluginAgentRegistry, getPluginAgentRegistrySnapshot);
 
   const [isExpanded, setIsExpanded] = useState(false);

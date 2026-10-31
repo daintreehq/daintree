@@ -21,7 +21,8 @@ import { TRASH_TTL_SECONDS, useTrashCountdown, type TrashRemovalRequest } from "
 import type { PanelInstance } from "@shared/types/panel";
 import type { TrashedTerminal, TrashedTerminalGroupMetadata } from "@/store/slices";
 import { TrashBinItem } from "./TrashBinItem";
-import { TrashGroupItem, resolveTrashedPanelName } from "./TrashGroupItem";
+import { TrashGroupItem } from "./TrashGroupItem";
+import { resolveTrashedPanelName } from "./trashedPanelName";
 import {
   DOCK_STATUS_PILL_CLASS,
   DOCK_STATUS_PILL_OPEN_CLASS,

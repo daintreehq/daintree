@@ -28,6 +28,7 @@ import { pluralize } from "@/lib/pluralize";
 import { getTerminalTaskTitle } from "@/utils/terminalTitleDisplay";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { isBuiltInAgentId } from "@shared/config/agentIds";
 
 export interface StatusContainerConfig {
   icon: ComponentType<{ className?: string }>;
@@ -200,7 +201,9 @@ function ErroredAgentRow({
   const task = getTerminalTaskTitle({
     ...terminal,
     agentState: undefined,
-    detectedAgentId: terminal.detectedAgentId ?? terminal.launchAgentId,
+    detectedAgentId:
+      terminal.detectedAgentId ??
+      (isBuiltInAgentId(terminal.launchAgentId) ? terminal.launchAgentId : undefined),
   });
   const context = [worktreeName, task].filter(Boolean).join(" · ");
   const exitText =
