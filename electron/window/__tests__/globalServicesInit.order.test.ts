@@ -13,6 +13,11 @@ let migrationCurrentVersion = 1;
 let migrationShouldThrow = false;
 let storeFreshAtBoot = false;
 const migrationRunCalls = vi.hoisted(() => ({ count: 0 }));
+const legacyAuditImport = vi.hoisted(() => ({
+  hasSources: false,
+  shouldThrow: false,
+  calls: [] as { migrationRuns: number; tasksRegistered: number }[],
+}));
 let mockLogRetentionDays: number | undefined = 30;
 const { pruneOldLogs, pruneOldLogsAsync, pruneHeapSnapshots, pruneHeapSnapshotsAsync } = vi.hoisted(
   () => ({
@@ -86,6 +91,17 @@ vi.mock("../../store.js", () => ({
     set: vi.fn(),
   },
   wasStoreFreshAtBoot: vi.fn(() => storeFreshAtBoot),
+  hasLegacyAuditRingSources: vi.fn(() => legacyAuditImport.hasSources),
+}));
+
+vi.mock("../../services/persistence/legacyAuditRingImport.js", () => ({
+  importLegacyAuditRings: vi.fn(() => {
+    legacyAuditImport.calls.push({
+      migrationRuns: migrationRunCalls.count,
+      tasksRegistered: registeredTaskNames.length,
+    });
+    if (legacyAuditImport.shouldThrow) throw new Error("test-import-failure");
+  }),
 }));
 
 vi.mock("../../utils/logger.js", () => ({
@@ -778,6 +794,9 @@ describe("initGlobalServices task ordering", () => {
     migrationShouldThrow = false;
     storeFreshAtBoot = false;
     migrationRunCalls.count = 0;
+    legacyAuditImport.hasSources = false;
+    legacyAuditImport.shouldThrow = false;
+    legacyAuditImport.calls.length = 0;
     mockLogRetentionDays = 30;
     setGlobalServicesInitialized(false);
     _resetGlobalServiceStartsForTest();
@@ -1570,6 +1589,50 @@ describe("initGlobalServices task ordering", () => {
     // Guard is set early so a concurrent second window doesn't double-run
     // migrations; app.exit(1) terminates the process before that matters.
     expect(getGlobalServicesInitialized()).toBe(true);
+  });
+
+  it("imports legacy audit rings after the migrations and before any deferred task (#15615)", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    migrationCurrentVersion = 0;
+    legacyAuditImport.hasSources = true;
+
+    const result = await initGlobalServices(fakeRegistry);
+
+    expect(result).toBe("ok");
+    expect(legacyAuditImport.calls).toEqual([{ migrationRuns: 1, tasksRegistered: 0 }]);
+    expect(registeredTaskNames.length).toBeGreaterThan(0);
+  });
+
+  it("skips the legacy audit import when no source remains", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+
+    await initGlobalServices(fakeRegistry);
+
+    expect(legacyAuditImport.calls).toEqual([]);
+  });
+
+  it("keeps booting when the legacy audit import throws", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    legacyAuditImport.hasSources = true;
+    legacyAuditImport.shouldThrow = true;
+
+    const result = await initGlobalServices(fakeRegistry);
+
+    expect(result).toBe("ok");
+    expect(legacyAuditImport.calls).toHaveLength(1);
+    expect(registeredTaskNames.length).toBeGreaterThan(0);
+  });
+
+  it("does not import legacy audit rings when the migrations fail", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    migrationCurrentVersion = 0;
+    migrationShouldThrow = true;
+    legacyAuditImport.hasSources = true;
+
+    const result = await initGlobalServices(fakeRegistry);
+
+    expect(result).toBe("exit-requested");
+    expect(legacyAuditImport.calls).toEqual([]);
   });
 
   describe("shared between a window and the windowless Host runtime", () => {

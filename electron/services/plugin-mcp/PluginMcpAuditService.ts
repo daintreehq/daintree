@@ -65,7 +65,7 @@ export interface PluginMcpAuditInput {
 /**
  * Persistence boundary for the ring buffer itself. Config flags stay behind
  * `saveConfig`/`readConfig` (the `pluginMcpAudit` config.json slice); the ring
- * lives in the dedicated audit-logs store (migration023). Injected so this
+ * lives in SQLite `audit_rings`. Injected so this
  * class stays store-free and unit-testable.
  */
 export interface PluginMcpAuditLogStore {
