@@ -46,6 +46,8 @@ export interface WorktreeHeaderProps {
   worktree: WorktreeState;
   isActive: boolean;
   variant?: "sidebar" | "grid";
+  /** Sidebar only: compact packs the stack; comfortable gives each fact a line. */
+  density?: "comfortable" | "compact";
   isMuted?: boolean;
   isProjectNotificationsMuted?: boolean;
   isMainWorktree: boolean;
@@ -100,6 +102,7 @@ export function WorktreeHeader({
   worktree,
   isActive,
   variant = "sidebar",
+  density = "compact",
   isMuted,
   isProjectNotificationsMuted,
   isMainWorktree,
@@ -205,7 +208,15 @@ export function WorktreeHeader({
   // name took 60% of the active card's title row at the default width and the
   // whole of it at the narrowest. Below 28rem the glyphs stay and the words
   // move to their tooltips and accessible names.
-  const compactTrailingLabel = variant === "sidebar" ? "hidden @md/card:inline" : undefined;
+  // A comfortable card keeps the words down to 20rem: it has the extra line
+  // budget, and the name is the part of a dev server worth reading.
+  const isCompact = variant === "sidebar" && density === "compact";
+  const compactTrailingLabel =
+    variant !== "sidebar"
+      ? undefined
+      : isCompact
+        ? "hidden @md/card:inline"
+        : "hidden @xs/card:inline";
   // Below 20rem healthy infrastructure gives way entirely; a failure never
   // does. Every glyph it hides is also reachable from the card's menus.
   const narrowHide = variant === "sidebar" ? "hidden @xs/card:inline-flex" : undefined;
@@ -565,6 +576,9 @@ export function WorktreeHeader({
             {[gitStateIndicator?.label, lifecycleAlarm?.label].filter(Boolean).join(". ")}
           </span>
         )}
+        {/* Both densities raise it on an open card too: the attention column is
+            where the eye goes for blocked work, and a failed CI that showed
+            only beside the PR number would be the one alarm missing from it. */}
         {(isCollapsed || variant === "sidebar") && (
           <CollapsedAlarmPill
             alarm={collapsedAlarm.tier >= 2 ? collapsedAlarm : NO_ALARM}
@@ -577,10 +591,10 @@ export function WorktreeHeader({
           />
         )}
 
-        {/* The sidebar draws session state here in both modes, so a waiting
-            ring always lands in the same column of every card's first line:
-            the one place to look for "does anything need me". */}
-        {(isCollapsed || variant === "sidebar") && visibleStates.length > 0 && (
+        {/* The compact card draws session state here in both modes, so a
+            waiting ring always lands in the same column of every card's first
+            line. An open comfortable card draws it on its Sessions row. */}
+        {(isCollapsed || isCompact) && visibleStates.length > 0 && (
           <CollapsedSessionIndicators
             visibleStates={visibleStates}
             sessionAriaLabel={sessionAriaLabel}
@@ -603,6 +617,7 @@ export function WorktreeHeader({
       {!isCollapsed && isMainStandardLayout && (
         <MainWorktreeSecondaryRow
           variant={variant}
+          density={density}
           branchLabel={branchLabel}
           isActive={isActive}
           isMuted={isMuted}
@@ -633,6 +648,7 @@ export function WorktreeHeader({
           hasPlanFile) && (
           <NonMainSecondaryRow
             variant={variant}
+            density={density}
             worktree={worktree}
             branchLabel={branchLabel}
             isActive={isActive}
@@ -653,10 +669,7 @@ export function WorktreeHeader({
           without squeezing the headline out of the row above. */}
       {!isCollapsed && pluginStatuses.length > 0 && (
         <div
-          className={cn(
-            "flex flex-wrap items-center gap-1 px-1",
-            variant === "sidebar" ? "mt-1" : "mt-1.5"
-          )}
+          className={cn("flex flex-wrap items-center gap-1 px-1", isCompact ? "mt-1" : "mt-1.5")}
         >
           <WorktreePluginStatusChips worktreeId={worktree.id} statuses={pluginStatuses} />
         </div>

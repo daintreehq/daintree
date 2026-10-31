@@ -32,6 +32,8 @@ export type PrIssueFilter = "hasIssue" | "hasPR" | "prOpen" | "prMerged" | "prCl
 export type SessionFilter = "hasTerminals" | "working" | "waiting" | "completed" | "exited";
 export type ActivityFilter = "last15m" | "last1h" | "last24h" | "last7d";
 export type DevServerFilter = "running" | "starting" | "hasDevServer" | "error";
+/** How much room each sidebar worktree card takes: one line per fact, or tight rows. */
+export type CardDensity = "comfortable" | "compact";
 
 const PR_ISSUE_FILTER_VALUES: ReadonlySet<string> = new Set<PrIssueFilter>([
   "hasIssue",
@@ -72,6 +74,7 @@ interface WorktreeFilterState {
   alwaysShowActive: boolean;
   alwaysShowWaiting: boolean;
   hideMainWorktree: boolean;
+  cardDensity: CardDensity;
   pinnedWorktrees: string[];
   collapsedWorktrees: string[];
   /** Worktree id → label colour token. Absent means no label (#13408). */
@@ -98,6 +101,7 @@ interface WorktreeFilterActions {
   setAlwaysShowActive: (enabled: boolean) => void;
   setAlwaysShowWaiting: (enabled: boolean) => void;
   setHideMainWorktree: (enabled: boolean) => void;
+  setCardDensity: (density: CardDensity) => void;
   pinWorktree: (id: string) => void;
   unpinWorktree: (id: string) => void;
   isWorktreePinned: (id: string) => boolean;
@@ -140,6 +144,7 @@ interface GlobalPrefsState {
   alwaysShowActive: boolean;
   alwaysShowWaiting: boolean;
   hideMainWorktree: boolean;
+  cardDensity: CardDensity;
 }
 
 /**
@@ -178,6 +183,7 @@ interface GlobalPersistedShape {
   alwaysShowActive: boolean;
   alwaysShowWaiting: boolean;
   hideMainWorktree: boolean;
+  cardDensity: CardDensity;
 }
 
 interface ProjectPersistedShape {
@@ -253,6 +259,7 @@ const GLOBAL_FIELD_KEYS = new Set<keyof WorktreeFilterStore>([
   "alwaysShowActive",
   "alwaysShowWaiting",
   "hideMainWorktree",
+  "cardDensity",
 ]);
 
 function isGlobalField(key: string): boolean {
@@ -375,7 +382,12 @@ const GLOBAL_PREFS_PERSISTED_DEFAULTS: GlobalPersistedShape = {
   alwaysShowActive: true,
   alwaysShowWaiting: true,
   hideMainWorktree: false,
+  cardDensity: "comfortable",
 };
+
+function isCardDensity(value: unknown): value is CardDensity {
+  return value === "comfortable" || value === "compact";
+}
 
 function isOrderBy(value: unknown): value is OrderBy {
   return value === "recent" || value === "created" || value === "alpha" || value === "manual";
@@ -395,6 +407,7 @@ function toGlobalPrefsPersisted(
       typeof raw.alwaysShowWaiting === "boolean" ? raw.alwaysShowWaiting : d.alwaysShowWaiting,
     hideMainWorktree:
       typeof raw.hideMainWorktree === "boolean" ? raw.hideMainWorktree : d.hideMainWorktree,
+    cardDensity: isCardDensity(raw.cardDensity) ? raw.cardDensity : d.cardDensity,
   };
 }
 
@@ -444,6 +457,7 @@ function mergeGlobalPrefsPersistedWrite({
         inc.hideMainWorktree,
         disk.hideMainWorktree
       ),
+      cardDensity: pickFieldByWriterDelta(base.cardDensity, inc.cardDensity, disk.cardDensity),
     },
   };
 }
@@ -456,6 +470,7 @@ const _globalPrefsStore = create<GlobalPrefsState>()(
       alwaysShowActive: true,
       alwaysShowWaiting: true,
       hideMainWorktree: false,
+      cardDensity: "comfortable",
     }),
     {
       name: GLOBAL_KEY,
@@ -469,6 +484,7 @@ const _globalPrefsStore = create<GlobalPrefsState>()(
         alwaysShowActive: state.alwaysShowActive,
         alwaysShowWaiting: state.alwaysShowWaiting,
         hideMainWorktree: state.hideMainWorktree,
+        cardDensity: state.cardDensity,
       }),
       migrate: (persistedState, version) => {
         // Legacy (version 0 / undefined) wrote a combined blob — strip the
@@ -481,6 +497,7 @@ const _globalPrefsStore = create<GlobalPrefsState>()(
             alwaysShowActive: legacy.alwaysShowActive ?? true,
             alwaysShowWaiting: legacy.alwaysShowWaiting ?? true,
             hideMainWorktree: legacy.hideMainWorktree ?? false,
+            cardDensity: "comfortable",
           } satisfies GlobalPrefsState;
         }
         return persistedState as GlobalPrefsState;
@@ -498,6 +515,7 @@ const _globalPrefsStore = create<GlobalPrefsState>()(
           alwaysShowActive: p?.alwaysShowActive ?? current.alwaysShowActive,
           alwaysShowWaiting: p?.alwaysShowWaiting ?? current.alwaysShowWaiting,
           hideMainWorktree: p?.hideMainWorktree ?? current.hideMainWorktree,
+          cardDensity: isCardDensity(p?.cardDensity) ? p.cardDensity : current.cardDensity,
         };
       },
     }
@@ -937,6 +955,9 @@ const _actions: WorktreeFilterActions = {
   setHideMainWorktree: (enabled) => {
     _globalPrefsStore.setState({ hideMainWorktree: enabled });
   },
+  setCardDensity: (density) => {
+    _globalPrefsStore.setState({ cardDensity: density });
+  },
   pinWorktree: (id) => {
     _projectStore.setState((state) => {
       if (state.pinnedWorktrees.includes(id)) return state;
@@ -1157,6 +1178,7 @@ function _computeMergedState(): WorktreeFilterStore {
     alwaysShowActive: g.alwaysShowActive,
     alwaysShowWaiting: g.alwaysShowWaiting,
     hideMainWorktree: g.hideMainWorktree,
+    cardDensity: g.cardDensity,
     pinnedWorktrees: p.pinnedWorktrees,
     collapsedWorktrees: p.collapsedWorktrees,
     worktreeLabelColors: p.worktreeLabelColors,
