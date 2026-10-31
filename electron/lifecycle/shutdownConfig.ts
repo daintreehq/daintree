@@ -38,6 +38,12 @@ export const POST_PTY_TEARDOWN_RESERVE_MS = 2_000;
 // a clean release.
 export const VAD_DRAIN_BUDGET_MS = 1_000;
 
+// The same bounded wait for a retiring Canopy reader process (#15538), which
+// IPC cleanup retires mid-read the way it retires the VAD. It runs alongside
+// the VAD drain, so the two share the reserve rather than adding to it, and a
+// miss still meets the reader's own SIGKILL backstop.
+export const CANOPY_READER_DRAIN_BUDGET_MS = 1_000;
+
 // Bounds the post-cleanup tail — the telemetry flush and perf-trace flush that run
 // AFTER the cleanup race resolves and are therefore NOT covered by
 // CLEANUP_TIMEOUT_MS. Sized for the worst-case closeTelemetry(): the Sentry
