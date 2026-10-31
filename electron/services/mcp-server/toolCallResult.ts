@@ -59,7 +59,7 @@ const STRUCTURED_OMITTED_NOTICE =
  * reject. Only ever run on a freshly parsed value, which is a tree, so the walk
  * is linear in the (already bounded) text it came from.
  */
-export function exceedsDepth(value: unknown, maxDepth: number): boolean {
+function exceedsDepth(value: unknown, maxDepth: number): boolean {
   const pending: { node: unknown; depth: number }[] = [{ node: value, depth: 1 }];
   while (pending.length > 0) {
     const { node, depth } = pending.pop()!;

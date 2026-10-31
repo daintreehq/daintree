@@ -1,8 +1,7 @@
 import { McpError, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { canonicalArgsHash } from "../../services/mcp-server/sessionDedup.js";
-import { exceedsDepth } from "../../services/mcp-server/toolCallResult.js";
-import { DEFAULT_ENCODING_LIMITS } from "../link/encoding.js";
+import { DEFAULT_ENCODING_LIMITS, LONE_SURROGATE } from "../link/encoding.js";
 import {
   MAX_RELAY_NOTICE_STATUS_CALLS,
   MAX_RELAY_RESULT_BYTES,
@@ -184,13 +183,37 @@ function head(text: string, bytes: number): string {
 }
 
 /**
- * How deep a carried object may nest: half the link encoder's ceiling, which
- * also counts the envelopes the answer rides in. Deeper goes as its text.
+ * How deep a carried object may nest: the link encoder's ceiling, less the
+ * four levels of the frame an answer rides in, and as many again to spare.
  */
-const MAX_CARRIED_DEPTH = DEFAULT_ENCODING_LIMITS.maxDepth / 2;
+export const MAX_CARRIED_DEPTH = DEFAULT_ENCODING_LIMITS.maxDepth - 8;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Whether an object reaches the Shell whole: no deeper than the link encodes,
+ * and no key the encoder refuses (a lone surrogate) or the Shell's validation
+ * drops (`__proto__`). One that doesn't goes as its text, which always does.
+ * Iterative, so a deep value can't overflow the walk meant to turn it away.
+ */
+function carriesWhole(object: Record<string, unknown>): boolean {
+  const pending: Array<{ node: unknown; depth: number }> = [{ node: object, depth: 1 }];
+  while (pending.length > 0) {
+    const { node, depth } = pending.pop()!;
+    if (node === null || typeof node !== "object") continue;
+    if (depth > MAX_CARRIED_DEPTH) return false;
+    if (Array.isArray(node)) {
+      for (const child of node) pending.push({ node: child, depth: depth + 1 });
+      continue;
+    }
+    for (const [key, child] of Object.entries(node)) {
+      if (key === "__proto__" || LONE_SURROGATE.test(key)) return false;
+      pending.push({ node: child, depth: depth + 1 });
+    }
+  }
+  return true;
 }
 
 /**
@@ -223,7 +246,7 @@ export function projectRelayResult(
 ): Extract<McpCallAnswer, { status: "done" }>["result"] {
   const isError = result.isError === true;
   const object = objectOf(result, isError);
-  const structured = object && !exceedsDepth(object, MAX_CARRIED_DEPTH) ? object : null;
+  const structured = object && carriesWhole(object) ? object : null;
   const projected = { isError, structured, text: structured ? null : textOf(result.content) };
   const fullBytes = Buffer.byteLength(JSON.stringify(projected), "utf8");
   if (fullBytes <= MAX_RELAY_RESULT_BYTES) return projected;

@@ -3,6 +3,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { AGENT_DIRECTORY_BYTES_MAX } from "../../../../shared/types/agentDirectory.js";
 import { buildToolError } from "../../../services/mcp-server/shared.js";
 import { buildToolCallResult } from "../../../services/mcp-server/toolCallResult.js";
+import { decodeValue, encodeValue } from "../../link/encoding.js";
 import type { LinkSession } from "../../link/session.js";
 import type { MetricsSessionContext } from "../../metrics/hostMetricsHost.js";
 import {
@@ -22,6 +23,7 @@ import {
   ThrowawayCallPayloadSchema,
   type McpCallPayload,
 } from "../linkMethods.js";
+import { MAX_CARRIED_DEPTH } from "../mcpRelayExecutor.js";
 import { MAX_RELAY_NOTICES_PER_SENDER } from "../relayNoticeOutbox.js";
 import { SenderSessions } from "../senderSessions.js";
 import type { HostThrowawayExecutor } from "../throwawayRelay.js";
@@ -590,7 +592,8 @@ describe("projectRelayResult", () => {
       structured: null,
       text: error,
     });
-    // A note after the result, or a result the host's server already cut, stays as it came.
+    // A note after the result, a JSON object split across blocks, or a result
+    // the host's server already cut, stays as it came.
     expect(
       projectRelayResult({
         content: [
@@ -603,10 +606,22 @@ describe("projectRelayResult", () => {
       structured: null,
       text: '{"terminalId":"t-1"}\nOwned for this session.',
     });
+    expect(
+      projectRelayResult({
+        content: [
+          { type: "text", text: '{"a":' },
+          { type: "text", text: "1}" },
+        ],
+      })
+    ).toEqual({ isError: false, structured: null, text: '{"a":\n1}' });
     const serverCut = buildToolCallResult({ items: "x".repeat(60 * 1024) });
-    expect(projectRelayResult(serverCut)).toMatchObject({
+    const [cutBlock] = serverCut.content;
+    if (cutBlock?.type !== "text") throw new Error("expected a text block");
+    expect(() => JSON.parse(cutBlock.text) as unknown).toThrow();
+    expect(projectRelayResult(serverCut)).toEqual({
+      isError: false,
       structured: null,
-      text: expect.stringMatching(/^\[Tool result truncated/),
+      text: cutBlock.text,
     });
   });
 
@@ -619,28 +634,50 @@ describe("projectRelayResult", () => {
     ).toEqual({ isError: false, structured: { a: 1 }, text: null });
   });
 
-  it("carries as text an object nested too deep for the link to encode", () => {
-    const deep = `${'{"a":'.repeat(64)}1${"}".repeat(64)}`;
-    expect(projectRelayResult({ content: [{ type: "text", text: deep }] })).toEqual({
+  it("carries an object as deep as the link encodes in a whole answer, and a deeper one as text", () => {
+    const nested = (depth: number) => `${'{"a":'.repeat(depth)}1${"}".repeat(depth)}`;
+    const deepest = nested(MAX_CARRIED_DEPTH);
+    const projected = projectRelayResult({ content: [{ type: "text", text: deepest }] });
+    expect(projected).toEqual({ isError: false, structured: JSON.parse(deepest), text: null });
+    // As the link carries the answer back: a call result, its envelope, the answer.
+    const frame = {
+      requestId: 1,
+      envelope: {
+        __daintreeIpcEnvelope: true,
+        ok: true,
+        data: { status: "done", result: projected },
+      },
+    };
+    expect(decodeValue(encodeValue(frame))).toEqual(frame);
+
+    const deeper = nested(MAX_CARRIED_DEPTH + 1);
+    expect(projectRelayResult({ content: [{ type: "text", text: deeper }] })).toEqual({
       isError: false,
       structured: null,
-      text: deep,
+      text: deeper,
     });
-    const deepStructured = JSON.parse(deep) as Record<string, unknown>;
     expect(
       projectRelayResult({
-        content: [{ type: "text", text: deep }],
-        structuredContent: deepStructured,
+        content: [{ type: "text", text: deeper }],
+        structuredContent: JSON.parse(deeper) as Record<string, unknown>,
       })
-    ).toEqual({ isError: false, structured: null, text: deep });
+    ).toEqual({ isError: false, structured: null, text: deeper });
   });
 
-  it("carries a prototype-named key as data", () => {
-    const projected = projectRelayResult({
-      content: [{ type: "text", text: '{"__proto__":{"polluted":true}}' }],
-    });
-
-    expect(Object.keys(projected.structured!)).toEqual(["__proto__"]);
+  it("carries as text an object with a key the link can't encode or the Shell would drop", () => {
+    for (const text of ['{"ok":{"__proto__":{"polluted":true}}}', '{"ok":{"\\ud800":1}}']) {
+      expect(projectRelayResult({ content: [{ type: "text", text }] })).toEqual({
+        isError: false,
+        structured: null,
+        text,
+      });
+      expect(
+        projectRelayResult({
+          content: [{ type: "text", text }],
+          structuredContent: JSON.parse(text) as Record<string, unknown>,
+        })
+      ).toEqual({ isError: false, structured: null, text });
+    }
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
@@ -658,7 +695,8 @@ describe("projectRelayResult", () => {
   });
 
   it("cuts a JSON object answered as text that is too large to carry, as text with its notice", () => {
-    const big = JSON.stringify({ items: ["x".repeat(MAX_RELAY_RESULT_BYTES * 2)] });
+    // Spaced out, so the cut shows the object as it was carried rather than the text as it came.
+    const big = `{ "items" : [ "${"x".repeat(MAX_RELAY_RESULT_BYTES * 2)}" ] }`;
     const projected = projectRelayResult({ content: [{ type: "text", text: big }] });
 
     expect(projected.structured).toBeNull();
@@ -674,7 +712,12 @@ describe("projectRelayResult", () => {
 describe("installHostMcpRelay results of tools with no output schema (#15730)", () => {
   // What the host's MCP server answers for an action whose manifest entry has
   // no output schema: its result as compact JSON text, with no structured content.
-  const noSchemaAnswer = (value: unknown) => async () => buildToolCallResult(value);
+  const noSchemaAnswer = (value: unknown) => async () => {
+    const result = buildToolCallResult(value);
+    expect(result.structuredContent).toBeUndefined();
+    expect(result.content).toEqual([{ type: "text", text: JSON.stringify(value) }]);
+    return result;
+  };
 
   it.each([
     [
@@ -721,13 +764,14 @@ describe("installHostMcpRelay results of tools with no output schema (#15730)", 
 
   it("still answers a tool's refusal in its text half", async () => {
     const refusal = buildToolError({ code: "NOT_FOUND", message: "No such worktree" });
+    const [block] = refusal.content;
+    if (block?.type !== "text") throw new Error("expected a text block");
     const { links, relay } = harness([["link-1", "sender-a"]], {}, async () => refusal);
 
-    const answer = (await links[0]!.call({ tool: "worktree.createWithRecipe" })) as {
-      result: { isError: boolean; structured: unknown; text: string };
-    };
-    expect(answer.result).toMatchObject({ isError: true, structured: null });
-    expect(JSON.parse(answer.result.text)).toMatchObject({ code: "NOT_FOUND" });
+    await expect(links[0]!.call({ tool: "worktree.createWithRecipe" })).resolves.toEqual({
+      status: "done",
+      result: { isError: true, structured: null, text: block.text },
+    });
     relay.dispose();
   });
 });

@@ -468,7 +468,17 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
     });
 
     it("answers a tool with no output schema in its structured half (#15730)", async () => {
-      const value = { commands: [{ id: "/review", label: "/review", agentId: "claude" }] };
+      const value = {
+        commands: [
+          {
+            id: "/review",
+            label: "/review",
+            description: "Review the diff",
+            scope: "project",
+            agentId: "claude",
+          },
+        ],
+      };
       answer = async () => buildToolCallResult(value);
 
       const settled = await runtime.call(
