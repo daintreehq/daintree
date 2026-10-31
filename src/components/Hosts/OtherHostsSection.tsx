@@ -1,4 +1,5 @@
-import { FolderGit2, RefreshCw, Server } from "lucide-react";
+import { ChevronRight, FolderGit2, RefreshCw, Server } from "lucide-react";
+import { pluralize } from "@/lib/pluralize";
 import { STATE_LABELS } from "@/components/Worktree/terminalStateConfig";
 import { LOCAL_HOST_ID, type HostId, type HostPlatform } from "@shared/types/remoteHosts";
 import { getViewHostId } from "@/hooks/useHostConnection";
@@ -81,6 +82,8 @@ export interface OtherHostGroup {
   link: { tone: HostLinkTone; state: string | null };
   /** What the host's list is doing, when that's worth saying: "Listing…", "listed 5 min ago". */
   listing: string | null;
+  /** The host is connected but its last listing failed. */
+  listingFailed?: boolean;
   /** The link and the listing together, e.g. "Not connected · listed 5 min ago". */
   note: string | null;
   options: OtherHostOption[];
@@ -247,6 +250,7 @@ export function useOtherHostProjectOptions(query: string): OtherHostOptions {
         ...base,
         link: target.link,
         listing: listingWords,
+        listingFailed: listing.status === "failed",
         note: [target.link.state, listingWords].filter(Boolean).join(" · ") || null,
         options,
       });
@@ -343,7 +347,11 @@ function HostGlyph({ platform, size }: { platform: HostPlatform | null; size: nu
  * something else.
  */
 function HostState({ group, className }: { group: OtherHostGroup; className?: string }) {
-  const linkWords = group.link.tone === "live" && group.listing ? null : group.link.state;
+  // Except a failed listing: there the filled mark sat directly against
+  // "Couldn't list projects" and read as the failure being healthy, so the
+  // link keeps its own word for the mark to qualify.
+  const linkWords =
+    group.link.tone === "live" && group.listing && !group.listingFailed ? null : group.link.state;
   const words = [linkWords, group.listing].filter(Boolean).join(" · ");
   if (!words) return null;
   return (
@@ -393,7 +401,8 @@ const HOST_GAP = "not-first:mt-1";
 function rowClass(inset: string) {
   return cn(
     PALETTE_ROW_CLASS,
-    "group flex w-full min-w-0 items-center gap-2 rounded-[var(--radius-sm)] py-1.5 pr-2 text-left cursor-pointer",
+    // `py-1`, the rhythm every workspace row above the band keeps.
+    "group flex w-full min-w-0 items-center gap-2 rounded-[var(--radius-sm)] py-1 pr-2 text-left cursor-pointer",
     inset,
     inset === HOST_INSET && HOST_GAP
   );
@@ -485,12 +494,19 @@ function ProjectRowContent({
  * order, the same as every other result, so `activeKey` is the switcher's
  * cursor when it sits in this band. Renders nothing when there are no hosts.
  */
+/** The folded band's header row, as the switcher's cursor addresses it. */
+export const OTHER_HOSTS_BAND_OPTION_ID = "band-option-other-hosts";
+
 export function OtherHostsSection({
   groups,
   activeKey,
   onChosen,
   onHoverKey,
   query,
+  collapsed = false,
+  onToggleCollapsed,
+  cursorOnBand = false,
+  onHoverBand,
 }: {
   groups: OtherHostGroup[];
   activeKey: string | null;
@@ -499,8 +515,26 @@ export function OtherHostsSection({
   query?: string;
   /** The pointer moves the switcher's cursor, as every other result row's does. */
   onHoverKey?: (key: string) => void;
+  /**
+   * Folded like every band above it (#11943): offline hosts otherwise hold a
+   * row each for good. Never applied to a search, which must show its matches.
+   */
+  collapsed?: boolean;
+  /** Omitted, the band cannot fold — a surface with no switcher cursor behind it. */
+  onToggleCollapsed?: () => void;
+  cursorOnBand?: boolean;
+  onHoverBand?: () => void;
 }) {
   if (groups.length === 0) return null;
+  const foldable = onToggleCollapsed !== undefined;
+  const folded = foldable && collapsed;
+  const projectCount = groups.reduce(
+    (count, group) =>
+      count +
+      group.options.filter((option) => option.kind === "project" || option.kind === "worktree")
+        .length,
+    0
+  );
 
   const renderOption = (option: OtherHostOption, group: OtherHostGroup, inset: string) => {
     const isActive = option.key === activeKey;
@@ -568,48 +602,111 @@ export function OtherHostsSection({
     );
   };
 
+  const label = (
+    <span id="project-switcher-other-hosts" className="uppercase tracking-wider">
+      Other hosts
+    </span>
+  );
   return (
-    <section className="px-1 py-1" data-testid="project-switcher-other-hosts">
-      <h3
-        id="project-switcher-other-hosts"
-        className={cn("px-2 py-1", PALETTE_SECTION_LABEL_CLASS)}
-      >
-        Other hosts
-      </h3>
+    <section className="px-1 pt-2 pb-1" data-testid="project-switcher-other-hosts">
+      {!foldable ? (
+        <div className={cn("flex min-h-6 items-center px-2", PALETTE_SECTION_LABEL_CLASS)}>
+          {label}
+        </div>
+      ) : (
+        !folded && (
+          // Open, a pointer-only bar like every band header above it: hidden
+          // from assistive technology, the listbox still named by its label.
+          <div
+            aria-hidden="true"
+            className={cn(
+              "flex min-h-6 items-center border border-transparent px-2",
+              PALETTE_SECTION_LABEL_CLASS
+            )}
+          >
+            <button
+              type="button"
+              tabIndex={-1}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={onToggleCollapsed}
+              className="flex min-h-6 flex-1 items-center gap-1.5 text-left hover:text-text-primary transition-colors"
+              data-testid="band-collapse-toggle-other-hosts"
+            >
+              <ChevronRight
+                data-animated-chevron
+                className="w-3 h-3 shrink-0 rotate-90 transition-transform duration-150 ease-out"
+                aria-hidden="true"
+              />
+              {label}
+            </button>
+          </div>
+        )
+      )}
       <div id={OTHER_HOSTS_LIST_ID} role="listbox" aria-labelledby="project-switcher-other-hosts">
-        {groups.map((group) => {
-          if (group.options.length === 0) {
-            // Still giving its first list: the host is shown, but a group has
-            // to hold options, so it stands as one that can't be picked. The
-            // arrow keys never land on it — it isn't in the band's options.
+        {folded && (
+          <div
+            role="option"
+            id={OTHER_HOSTS_BAND_OPTION_ID}
+            aria-selected={cursorOnBand}
+            onClick={onToggleCollapsed}
+            onPointerMove={onHoverBand && !cursorOnBand ? onHoverBand : undefined}
+            className={cn(
+              PALETTE_SECTION_LABEL_CLASS,
+              PALETTE_ROW_CLASS,
+              "flex min-h-6 cursor-pointer items-center justify-between gap-2 rounded-[var(--radius-sm)] px-2"
+            )}
+          >
+            <span className="flex items-center gap-1.5">
+              <ChevronRight data-animated-chevron className="w-3 h-3 shrink-0" aria-hidden="true" />
+              {label}
+              <span className="sr-only">, folded, {pluralize(groups.length, "host")}</span>
+              {projectCount > 0 && (
+                // The hosts are the count; what they offer is said in words,
+                // so the number never changes what it is counting.
+                <span className="ml-1 normal-case tracking-normal text-text-secondary">
+                  {pluralize(projectCount, "project")}
+                </span>
+              )}
+            </span>
+            <span aria-hidden="true" className="shrink-0 text-3xs tabular-nums">
+              {groups.length}
+            </span>
+          </div>
+        )}
+        {!folded &&
+          groups.map((group) => {
+            if (group.options.length === 0) {
+              // Still giving its first list: the host is shown, but a group has
+              // to hold options, so it stands as one that can't be picked. The
+              // arrow keys never land on it — it isn't in the band's options.
+              return (
+                <div
+                  key={group.hostId}
+                  className={HOST_GAP}
+                  role="option"
+                  aria-selected={false}
+                  aria-disabled={true}
+                  aria-label={`${group.hostName}, ${group.note ?? "listing projects"}`}
+                  data-host-id={group.hostId}
+                >
+                  <HostHeader group={group} />
+                </div>
+              );
+            }
+            const only = group.options.length === 1 ? group.options[0]! : null;
+            // A host with nothing but its own action needs no header naming it:
+            // the row is the host.
+            if (only && only.kind !== "project" && only.kind !== "worktree") {
+              return renderOption(only, group, HOST_INSET);
+            }
+            const headerId = `project-switcher-other-host-${encodeURIComponent(group.hostId)}`;
             return (
-              <div
-                key={group.hostId}
-                className={HOST_GAP}
-                role="option"
-                aria-selected={false}
-                aria-disabled={true}
-                aria-label={`${group.hostName}, ${group.note ?? "listing projects"}`}
-                data-host-id={group.hostId}
-              >
-                <HostHeader group={group} />
+              <div key={group.hostId} role="group" aria-labelledby={headerId} className={HOST_GAP}>
+                <HostHeader group={group} labelId={headerId} />
+                {group.options.map((option) => renderOption(option, group, CHILD_INSET))}
               </div>
             );
-          }
-          const only = group.options.length === 1 ? group.options[0]! : null;
-          // A host with nothing but its own action needs no header naming it:
-          // the row is the host.
-          if (only && only.kind !== "project" && only.kind !== "worktree") {
-            return renderOption(only, group, HOST_INSET);
-          }
-          const headerId = `project-switcher-other-host-${encodeURIComponent(group.hostId)}`;
-          return (
-            <div key={group.hostId} role="group" aria-labelledby={headerId} className={HOST_GAP}>
-              <HostHeader group={group} labelId={headerId} />
-              {group.options.map((option) => renderOption(option, group, CHILD_INSET))}
-            </div>
-          );
-        })}
+          })}
       </div>
     </section>
   );

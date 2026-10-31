@@ -1673,6 +1673,7 @@ export function Toolbar({
                         results={projectSwitcher.results}
                         browseBands={projectSwitcher.browseBands}
                         selectedIndex={projectSwitcher.selectedIndex}
+                        cycleRequest={projectSwitcher.cycleRequest}
                         onQueryChange={projectSwitcher.setQuery}
                         onSelectPrevious={projectSwitcher.selectPrevious}
                         onSelectNext={projectSwitcher.selectNext}

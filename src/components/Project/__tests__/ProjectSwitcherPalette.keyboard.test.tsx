@@ -252,6 +252,11 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     mode: "modal" as const,
   };
 
+  const threeRowProps = {
+    ...defaultProps,
+    results: [...defaultProps.results, makeProject({ id: "p3", name: "Project 3" })],
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     modifierKeysState.meta = false;
@@ -290,9 +295,13 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
   });
 
   it("moves the selection when ArrowUp is pressed on the results region", () => {
-    render(<ProjectSwitcherPalette {...defaultProps} />);
+    // From the second of three rows, so the step up is the short way round:
+    // on two rows up and down land on the same row and the palette steps the
+    // hook forward.
+    render(<ProjectSwitcherPalette {...threeRowProps} selectedIndex={1} />);
     fireEvent.keyDown(screen.getByTestId("palette-body"), { key: "ArrowUp" });
     expect(defaultProps.onSelectPrevious).toHaveBeenCalledTimes(1);
+    expect(defaultProps.onSelectNext).not.toHaveBeenCalled();
   });
 
   it("confirms the active project when Enter is pressed on the results region", () => {
@@ -343,7 +352,7 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
   });
 
   it("still calls onSelectPrevious on ArrowUp", () => {
-    render(<ProjectSwitcherPalette {...defaultProps} />);
+    render(<ProjectSwitcherPalette {...threeRowProps} selectedIndex={1} />);
     const input = screen.getByTestId("palette-input");
     fireEvent.keyDown(input, { key: "ArrowUp" });
     expect(defaultProps.onSelectPrevious).toHaveBeenCalledTimes(1);
@@ -1075,9 +1084,10 @@ describe("getProjectSwitcherEnterHint (#12597)", () => {
       keys: "↵",
       label: "to switch",
     });
+    // Enter on the current project closes the palette, on either key.
     expect(getProjectSwitcherEnterHint(projectRow({ isActive: true }), true, true)).toEqual({
       keys: "↵",
-      label: "to switch",
+      label: "to close",
     });
     // A missing project's Enter opens the relocation dialog, and says so.
     expect(getProjectSwitcherEnterHint(projectRow({ isMissing: true }), true, true)).toEqual({
@@ -1094,7 +1104,7 @@ describe("getProjectSwitcherEnterHint (#12597)", () => {
     const row = projectRow({ isActive: true, openInOtherWindow: "foreground" });
     expect(getProjectSwitcherEnterHint(row, false, true)).toEqual({
       keys: "↵",
-      label: "to switch",
+      label: "to close",
     });
   });
 

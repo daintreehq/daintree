@@ -300,6 +300,52 @@ describe("rankSwitcherMatches", () => {
     );
     expect(results.map((r) => r.id)).toEqual(["new", "old"]);
   });
+
+  it("puts the workspace you are in behind an equal match, unless it is named exactly", () => {
+    // Enter on the current row only closes the palette, so a shared prefix
+    // has to hand Enter to the other match — even one that is busier and
+    // more recent loses to that only when the names tie on quality.
+    const here = makeProject({
+      id: "here",
+      name: "Daintree Website",
+      path: "/repos/website",
+      isActive: true,
+      waitingAgentCount: 2,
+      lastOpened: 900,
+    });
+    const there = makeProject({
+      id: "there",
+      name: "Daintree App",
+      path: "/repos/app",
+      lastOpened: 100,
+    });
+    expect(rankSwitcherMatches("daintree", [here, there], [], null).map((r) => r.id)).toEqual([
+      "there",
+      "here",
+    ]);
+    // Typing the whole name is asking for that row.
+    expect(
+      rankSwitcherMatches("daintree website", [here, there], [], null).map((r) => r.id)[0]
+    ).toBe("here");
+  });
+
+  it("matches a several-word query word by word when the whole string finds nothing", () => {
+    const backend = makeProject({
+      id: "backend",
+      name: "canopy-model-backend",
+      path: "/repos/canopy-model-backend",
+    });
+    const brief = makeProject({ id: "brief", name: "DailyBrief", path: "/repos/brief" });
+    expect(scoreProjectQuery("backend canopy", backend.name, backend.path)).toBe(0);
+    expect(
+      rankSwitcherMatches("backend canopy", [backend, brief], [], null).map((r) => r.id)
+    ).toEqual(["backend"]);
+    expect(rankSwitcherMatches("daily brief", [backend, brief], [], null).map((r) => r.id)).toEqual(
+      ["brief"]
+    );
+    // Every word has to land somewhere.
+    expect(rankSwitcherMatches("canopy zebra", [backend, brief], [], null)).toEqual([]);
+  });
 });
 
 describe("rankSwitcherMatches activity ordering", () => {
@@ -927,12 +973,22 @@ describe("rankSwitcherMatches typo tolerance", () => {
   });
 
   it("refuses an edit made in the space between two words", () => {
-    // One deletion from "Daintree", but the character deleted is the space. It
-    // belongs to no word, so there is no word to hold to a length — and
-    // admitting it would let the short-word rule be sidestepped by punctuation.
+    // One substitution from "Daintree Website", but the character replaced is
+    // the space. It belongs to no word, so there is no word to hold to a
+    // length — and admitting it would let the short-word rule be sidestepped
+    // by punctuation. One word of query, so the per-word fallback cannot
+    // rescue it either.
+    const project = makeProject({ id: "dw", name: "Daintree Website", path: "/repos/dw" });
+    expectsNoStrictMatch("daintreexwebsite", project);
+    expect(rankSwitcherMatches("daintreexwebsite", [project], [], null)).toEqual([]);
+  });
+
+  it("finds a name split by a space through its words, not the typo tier", () => {
+    // Both halves of "dain tree" sit in "Daintree", so the multi-word fallback
+    // owns this query now that the whole string fails the strict scorer.
     const project = makeProject({ id: "d", name: "Daintree", path: "/repos/d" });
     expectsNoStrictMatch("dain tree", project);
-    expect(rankSwitcherMatches("dain tree", [project], [], null)).toEqual([]);
+    expect(rankSwitcherMatches("dain tree", [project], [], null).map((r) => r.id)).toEqual(["d"]);
   });
 
   it("does not reach past the end of a name shorter than the query", () => {

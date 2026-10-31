@@ -1154,6 +1154,14 @@ describe("scratch activity in the search freeze — issue #11861", () => {
     projectStatsState.stats = {};
   });
 
+  // The workspace you're in ranks last among equal text matches, which would
+  // outrank the activity these specs read. Neither scratch is current here.
+  function seedQuietScratches(count: number): Scratch[] {
+    const seeded = seedScratches(count);
+    scratchState.currentScratch = null;
+    return seeded;
+  }
+
   it("still resolves when the palette opened before the scratches loaded", async () => {
     // Loading the workspace lists is itself async and retried, so a palette
     // opened during boot captures an EMPTY snapshot. Treating "nothing to ask
@@ -1168,7 +1176,7 @@ describe("scratch activity in the search freeze — issue #11861", () => {
 
     // The lists land first...
     act(() => {
-      seedScratches(2);
+      seedQuietScratches(2);
       rerender();
     });
     // ...and their stats only after.
@@ -1192,7 +1200,7 @@ describe("scratch activity in the search freeze — issue #11861", () => {
     // With no projects there is nothing for a project-gated hydration check to
     // ask about, so it reads as hydrated immediately and freezes every scratch
     // as quiet — for the whole session, since the one recapture never fires.
-    const seeded = seedScratches(2);
+    const seeded = seedQuietScratches(2);
     expect(seeded[1]!.lastOpened).toBeGreaterThan(seeded[0]!.lastOpened);
     projectStatsState.stats = {};
     vi.mocked(projectClient.getBulkStats).mockResolvedValue({
@@ -1239,7 +1247,7 @@ describe("scratch activity in the search freeze — issue #11861", () => {
   it("ranks scratches on frozen activity, and holds it against a stats push", async () => {
     // Scratches join the ranked list (#11466) but never a browse band, so
     // search's freeze is the only one that covers them at all.
-    const seeded = seedScratches(2);
+    const seeded = seedQuietScratches(2);
     // Recency runs the other way, so the wait is the only thing that can put
     // scratch-1 first.
     expect(seeded[1]!.lastOpened).toBeGreaterThan(seeded[0]!.lastOpened);

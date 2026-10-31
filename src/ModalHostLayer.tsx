@@ -507,6 +507,7 @@ export function ModalHostLayer({
               results={projectSwitcherPalette.results}
               browseBands={projectSwitcherPalette.browseBands}
               selectedIndex={projectSwitcherPalette.selectedIndex}
+              cycleRequest={projectSwitcherPalette.cycleRequest}
               onQueryChange={projectSwitcherPalette.setQuery}
               onSelectPrevious={projectSwitcherPalette.selectPrevious}
               onSelectNext={projectSwitcherPalette.selectNext}

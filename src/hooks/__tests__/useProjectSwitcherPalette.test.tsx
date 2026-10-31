@@ -1396,7 +1396,7 @@ describe("useProjectSwitcherPalette", () => {
       expect(result.current.selectedIndex).toBe(0);
     });
 
-    it("cycles through all projects in MRU order", async () => {
+    it("asks the palette to step on a repeat and keeps MRU order for stepping", async () => {
       const projectsWithActiveNotFirst = [
         {
           id: "project-1",
@@ -1453,19 +1453,36 @@ describe("useProjectSwitcherPalette", () => {
       expect(result.current.results[2]!.id).toBe("project-1");
       expect(result.current.selectedIndex).toBe(1);
 
-      // Toggle cycle: 1 → 2 → 0 → 1
+      // The palette's cursor walks the stops this hook doesn't select among
+      // (folded headers, scratches, other hosts), so a repeated shortcut only
+      // asks the palette to step; the hook's own selection stays put.
+      const before = result.current.cycleRequest;
       await act(async () => {
         result.current.toggle();
+      });
+      expect(result.current.isOpen).toBe(true);
+      expect(result.current.cycleRequest).toBe(before + 1);
+      expect(result.current.selectedIndex).toBe(1);
+
+      await act(async () => {
+        result.current.toggle();
+      });
+      expect(result.current.cycleRequest).toBe(before + 2);
+      expect(result.current.selectedIndex).toBe(1);
+
+      // Stepping still walks the MRU order and wraps: 1 → 2 → 0 → 1
+      await act(async () => {
+        result.current.selectNext();
       });
       expect(result.current.selectedIndex).toBe(2);
 
       await act(async () => {
-        result.current.toggle();
+        result.current.selectNext();
       });
       expect(result.current.selectedIndex).toBe(0);
 
       await act(async () => {
-        result.current.toggle();
+        result.current.selectNext();
       });
       expect(result.current.selectedIndex).toBe(1);
     });

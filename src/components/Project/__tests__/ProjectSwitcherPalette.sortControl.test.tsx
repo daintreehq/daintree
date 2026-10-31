@@ -128,6 +128,9 @@ vi.mock("@/components/ui/popover", () => ({
 
 vi.mock("@/components/ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
 }));
 
 vi.mock("@/components/ui/ConfirmDialog", () => ({
@@ -225,7 +228,7 @@ function headerRow(): HTMLElement {
   const label = document.getElementById("project-section-other");
   // Not `parentElement`: the leaf sits inside the fold control now (#11943), so
   // walking one level up lands on the button rather than the row Radix is on.
-  const row = label?.closest('[role="presentation"]');
+  const row = label?.closest("[data-band-header]");
   if (!(row instanceof HTMLElement)) throw new Error("Other projects header not found");
   return row;
 }
@@ -325,6 +328,11 @@ describe("Other projects sort control (#11455)", () => {
     expect(screen.queryByTestId("other-projects-sort-trigger")).toBeNull();
     const group = screen.getByRole("group", { name: "Other projects" });
     expect(within(group).getByText("4")).toBeTruthy();
-    expect(within(group).queryAllByRole("option")).toHaveLength(0);
+    // No project rows: the folded header itself is the band's only option, so
+    // the cursor can still reach it.
+    const options = within(group).queryAllByRole("option");
+    expect(options).toHaveLength(1);
+    expect(options[0]!.id).toBe("band-option-other");
+    expect(options[0]!.textContent).toContain("folded, 4 projects");
   });
 });
