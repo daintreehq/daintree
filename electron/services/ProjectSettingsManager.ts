@@ -42,14 +42,14 @@ export class ProjectSettingsManager {
    * them (a Shell's alert choices, #14701); the overrides still apply.
    */
   getEffectiveNotificationSettings(
-    currentProjectId: string | null,
+    projectId: string | null,
     globalChoices?: Partial<NotificationSettings>
   ): NotificationSettings {
     const own = this.store.get("notificationSettings");
     const global = globalChoices ? { ...own, ...globalChoices } : own;
-    if (!currentProjectId) return global;
+    if (!projectId) return global;
 
-    const overrides = this.notificationOverridesCache.get(currentProjectId);
+    const overrides = this.notificationOverridesCache.get(projectId);
     if (!overrides) return global;
 
     return {
@@ -73,6 +73,15 @@ export class ProjectSettingsManager {
       quietHoursEndMin: global.quietHoursEndMin,
       quietHoursWeekdays: global.quietHoursWeekdays,
     };
+  }
+
+  /**
+   * Read `projectId`'s settings if no read or save has reached its alert
+   * overrides yet, so its agents' alerts go by them rather than the globals.
+   */
+  async loadNotificationOverrides(projectId: string): Promise<void> {
+    if (this.notificationOverridesCache.has(projectId)) return;
+    await this.getProjectSettings(projectId);
   }
 
   /**

@@ -13,6 +13,7 @@ const persistedListeners = vi.hoisted(
 
 const projectStoreMock = vi.hoisted(() => ({
   getEffectiveNotificationSettings: vi.fn(),
+  loadNotificationOverrides: vi.fn(async (_projectId: string) => {}),
   getCurrentProjectId: vi.fn(() => null),
   getProjectState: vi.fn(async () => null),
   onProjectStatePersisted: vi.fn(
@@ -160,7 +161,6 @@ interface PendingNotificationInternal {
 
 interface AgentNotificationServiceInternal {
   completionBurstBuffer: PendingNotificationInternal[];
-  completionBurstSoundFile?: string;
   completionBurstTimer: ReturnType<typeof setTimeout> | null;
   drainQueue: () => void;
   notificationQueue: PendingNotificationInternal[];

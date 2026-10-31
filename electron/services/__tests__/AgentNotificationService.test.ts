@@ -12,6 +12,7 @@ const persistedListeners = vi.hoisted(
 
 const projectStoreMock = vi.hoisted(() => ({
   getEffectiveNotificationSettings: vi.fn(),
+  loadNotificationOverrides: vi.fn(async (_projectId: string) => {}),
   getCurrentProjectId: vi.fn(() => null),
   getProjectState: vi.fn(async () => null),
   onProjectStatePersisted: vi.fn(
@@ -160,10 +161,9 @@ function mockStore(
   saveProjectPanels(view.terminals);
   agentNotificationService.setSelectedWorktree(OWNER, view.activeWorktreeId ?? null);
   // Another machine's global choices stand in for this one's, as ProjectStore does.
-  projectStoreMock.getEffectiveNotificationSettings.mockImplementation((choices?: object) => ({
-    ...notifSettings,
-    ...choices,
-  }));
+  projectStoreMock.getEffectiveNotificationSettings.mockImplementation(
+    (_projectId: string | null, choices?: object) => ({ ...notifSettings, ...choices })
+  );
 }
 
 /** A per-project save landing, as `project:set-terminals` does once its write commits. */
@@ -2622,7 +2622,8 @@ describe("AgentNotificationService", () => {
     });
 
     it("groups asks that land together into one banner", () => {
-      mockStore();
+      const [first] = DEFAULT_APP_STATE.terminals;
+      mockStore({}, { terminals: [first, { ...first, id: "term-2" }] });
       pastBoot();
       agentNotificationService.notifyCanopyAsk(ask("term-1", "question"), () => []);
       agentNotificationService.notifyCanopyAsk(ask("term-2", "question"), () => []);
@@ -3182,10 +3183,9 @@ describe("panel details come from the panel's per-project record (#15636)", () =
     storeMock.get.mockImplementation((key: string) =>
       key === "notificationSettings" ? notifSettings : undefined
     );
-    projectStoreMock.getEffectiveNotificationSettings.mockImplementation((choices?: object) => ({
-      ...notifSettings,
-      ...choices,
-    }));
+    projectStoreMock.getEffectiveNotificationSettings.mockImplementation(
+      (_projectId: string | null, choices?: object) => ({ ...notifSettings, ...choices })
+    );
   }
 
   beforeEach(() => {
@@ -3592,6 +3592,487 @@ describe("panel details come from the panel's per-project record (#15636)", () =
         notificationServiceMock.isOwnerViewFocused.mockImplementation((owner) => owner === OWNER);
       });
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+describe("decided under the overrides of the agent's own project (#15635)", () => {
+  const PROJECT_A = "project-a";
+  const PROJECT_B = "project-b";
+  /** Views of each project: B's is a cached background view, or in another window. */
+  const VIEW_A = 301;
+  const VIEW_B = 302;
+  const REMOTE_OWNER = -7;
+  /** What `project.muteNotifications` writes into a project's overrides. */
+  const MUTED = { completedEnabled: false, waitingEnabled: false };
+
+  const agentA = {
+    id: "term-a",
+    kind: "terminal",
+    agentId: "agent-1",
+    title: "Agent A",
+    location: "grid",
+    worktreeId: "wt-a",
+  };
+  const agentB = { ...agentA, id: "term-b", title: "Agent B", worktreeId: "wt-b" };
+
+  type Settings = Partial<typeof DEFAULT_NOTIFICATION_SETTINGS> & { enabled?: boolean };
+
+  /** The project `currentProjectId` names: whichever window switched last. */
+  let currentProjectId: string | null = PROJECT_A;
+  let liveProjects: Record<string, string> = {};
+
+  /**
+   * ProjectStore's layering: the named project's overrides over the globals,
+   * or over a Shell's choices standing in for them. Leaving the project out
+   * gets the current one's, which is how the lookup went wrong.
+   */
+  function settings(global: Settings, overridesByProject: Record<string, Settings> = {}) {
+    const notifSettings = { ...DEFAULT_NOTIFICATION_SETTINGS, ...global };
+    storeMock.get.mockImplementation((key: string) =>
+      key === "notificationSettings" ? notifSettings : undefined
+    );
+    projectStoreMock.getEffectiveNotificationSettings.mockImplementation(
+      (projectId?: string | null, choices?: object) => {
+        const id = projectId === undefined ? currentProjectId : projectId;
+        return { ...notifSettings, ...choices, ...(id ? overridesByProject[id] : undefined) };
+      }
+    );
+  }
+
+  function layout(a: object = agentA, b: object = agentB) {
+    saveProjectPanels([a], PROJECT_A);
+    saveProjectPanels([b], PROJECT_B);
+  }
+
+  function transition(state: AgentState, previousState: AgentState, terminalId: string) {
+    events.emit("agent:state-changed", {
+      state,
+      previousState,
+      terminalId,
+      agentId: "agent-1",
+      timestamp: Date.now(),
+      trigger: "heuristic" as const,
+      confidence: 1,
+    });
+  }
+
+  function bannersFor(terminalId: string): string[] {
+    return notificationServiceMock.showWatchNotification.mock.calls
+      .filter((call) => (call[2] as { panelId: string }).panelId === terminalId)
+      .map((call) => call[0] as string);
+  }
+
+  /** Waits, then finishes, with the watch held the whole time. */
+  function waitThenFinish(terminalId: string) {
+    transition("waiting", "working", terminalId);
+    vi.advanceTimersByTime(250);
+    transition("working", "waiting", terminalId);
+    transition("completed", "working", terminalId);
+    vi.advanceTimersByTime(2_500);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    _resetEndpointRegistryForTesting();
+    osDndServiceMock.getState.mockReturnValue(undefined);
+    agentNotificationService.initialize();
+    currentProjectId = PROJECT_A;
+    liveProjects = { "term-a": PROJECT_A, "term-b": PROJECT_B };
+    projectStoreMock.getCurrentProjectId.mockImplementation(() => currentProjectId as never);
+    setPtyClientRef({ getTerminalProjectId: (id: string) => liveProjects[id] ?? null } as never);
+    agentNotificationService.syncWatchedPanels(VIEW_A, ["term-a"]);
+    agentNotificationService.syncWatchedPanels(VIEW_B, ["term-b"]);
+  });
+
+  afterEach(() => {
+    agentNotificationService.dispose();
+    setPtyClientRef(null);
+    projectStoreMock.getCurrentProjectId.mockImplementation(() => null);
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+    _resetEndpointRegistryForTesting();
+  });
+
+  it("raises nothing for a muted background project's agent", () => {
+    settings({ completedEnabled: true, waitingEnabled: true }, { [PROJECT_B]: MUTED });
+    layout();
+
+    waitThenFinish("term-b");
+    waitThenFinish("term-a");
+
+    expect(bannersFor("term-b")).toEqual([]);
+    expect(bannersFor("term-a")).toEqual(["Agent waiting", "Agent finished"]);
+  });
+
+  it("doesn't let a muted current project silence a background project's agent", () => {
+    settings({ completedEnabled: true, waitingEnabled: true }, { [PROJECT_A]: MUTED });
+    layout();
+
+    waitThenFinish("term-b");
+    waitThenFinish("term-a");
+
+    expect(bannersFor("term-b")).toEqual(["Agent waiting", "Agent finished"]);
+    expect(bannersFor("term-a")).toEqual([]);
+  });
+
+  it("goes by the panel's saved project once the live terminal no longer names one", () => {
+    settings({ completedEnabled: true, waitingEnabled: true }, { [PROJECT_B]: MUTED });
+    layout();
+    liveProjects = {};
+
+    waitThenFinish("term-b");
+
+    expect(bannersFor("term-b")).toEqual([]);
+  });
+
+  it("goes by the globals alone for an agent no project claims, not the current one's", () => {
+    settings({ waitingEnabled: true }, { [PROJECT_A]: MUTED });
+    layout();
+    agentNotificationService.syncWatchedPanels(VIEW_A, ["term-a", "term-x"]);
+
+    transition("waiting", "working", "term-x");
+    vi.advanceTimersByTime(250);
+
+    expect(bannersFor("term-x")).toEqual(["Agent waiting"]);
+  });
+
+  it("arms a wait's reminder on its own project's delay and sound, not the current one's", () => {
+    settings(
+      { waitingEnabled: true, soundEnabled: true, waitingEscalationDelayMs: 180_000 },
+      {
+        [PROJECT_A]: { waitingEscalationDelayMs: 600_000, escalationSoundFile: "a-ping.wav" },
+        [PROJECT_B]: { waitingEscalationDelayMs: 60_000, escalationSoundFile: "b-ping.wav" },
+      }
+    );
+    layout(agentA, { ...agentB, location: "dock" });
+    agentNotificationService.syncWatchedPanels(VIEW_B, []);
+
+    transition("waiting", "working", "term-b");
+    vi.advanceTimersByTime(60_000);
+
+    expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+    expect(soundServiceMock.playFile).toHaveBeenCalledWith("b-ping.wav");
+  });
+
+  it("raises a reminder that comes due after a switch to a project that turned them off", () => {
+    settings({ waitingEnabled: true }, { [PROJECT_A]: { waitingEscalationEnabled: false } });
+    layout(agentA, { ...agentB, location: "dock" });
+    agentNotificationService.syncWatchedPanels(VIEW_B, []);
+    currentProjectId = PROJECT_B;
+
+    transition("waiting", "working", "term-b");
+    currentProjectId = PROJECT_A;
+    vi.advanceTimersByTime(180_000);
+
+    expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+      "Agent still waiting",
+      expect.any(String),
+      expect.objectContaining({ closeWithPanels: ["term-b"] })
+    );
+  });
+
+  it("keeps a muted project's waiting agent out of another project's grouped reminder", () => {
+    settings({ waitingEnabled: true }, { [PROJECT_B]: MUTED });
+    layout({ ...agentA, location: "dock" }, { ...agentB, location: "dock" });
+    agentNotificationService.syncWatchedPanels(VIEW_A, []);
+    agentNotificationService.syncWatchedPanels(VIEW_B, []);
+
+    transition("waiting", "working", "term-a");
+    transition("waiting", "working", "term-b");
+    vi.advanceTimersByTime(180_000);
+
+    expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+    expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+      "Agent still waiting",
+      expect.any(String),
+      expect.objectContaining({ closeWithPanels: ["term-a"] })
+    );
+  });
+
+  it("keeps a running pulse on its own project's choices after a switch", () => {
+    settings(
+      { soundEnabled: true, workingPulseEnabled: false },
+      { [PROJECT_B]: { workingPulseEnabled: true, workingPulseSoundFile: "b-pulse.wav" } }
+    );
+    layout();
+    currentProjectId = PROJECT_B;
+
+    transition("working", "idle", "term-b");
+    vi.advanceTimersByTime(10_000);
+    expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
+
+    currentProjectId = PROJECT_A;
+    vi.advanceTimersByTime(10_000);
+
+    expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(2);
+    expect(soundServiceMock.playPulse).toHaveBeenLastCalledWith("b-pulse.wav", expect.any(Number));
+  });
+
+  it("starts no pulse for an agent whose project turned it off, whatever is current", () => {
+    settings(
+      { soundEnabled: true, workingPulseEnabled: true },
+      { [PROJECT_B]: { workingPulseEnabled: false } }
+    );
+    layout();
+
+    transition("working", "idle", "term-b");
+    vi.advanceTimersByTime(30_000);
+
+    expect(soundServiceMock.playPulse).not.toHaveBeenCalled();
+  });
+
+  it("plays the spawn sound by the spawned agent's project", () => {
+    settings(
+      { soundEnabled: true, uiFeedbackSoundEnabled: true },
+      { [PROJECT_B]: { soundEnabled: false } }
+    );
+    layout();
+    vi.advanceTimersByTime(10_000);
+
+    events.emit("agent:spawned", { terminalId: "term-b", agentId: "claude", timestamp: 0 });
+    expect(soundServiceMock.play).not.toHaveBeenCalled();
+
+    events.emit("agent:spawned", { terminalId: "term-a", agentId: "claude", timestamp: 0 });
+    expect(soundServiceMock.play).toHaveBeenCalledWith("agent-spawned");
+  });
+
+  it("layers a remote Shell's choices under the owning project's overrides, not the current one's", () => {
+    getEndpointRegistry().add({
+      endpointId: "remote:s1:view-1",
+      clientId: "client-a",
+      projectId: PROJECT_B,
+      kind: "remote-view",
+      handle: REMOTE_OWNER,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: () => ({ dispose: () => undefined }),
+      isClosed: () => false,
+    });
+    settings({ waitingEnabled: false }, { [PROJECT_B]: { waitingEnabled: false } });
+    agentNotificationService.setShellPolicy("client-a", {
+      enabled: true,
+      completedEnabled: true,
+      waitingEnabled: true,
+      waitingEscalationEnabled: false,
+      waitingEscalationDelayMs: 180_000,
+    });
+    layout();
+    agentNotificationService.syncWatchedPanels(VIEW_A, []);
+    agentNotificationService.syncWatchedPanels(VIEW_B, []);
+    agentNotificationService.syncWatchedPanels(REMOTE_OWNER, ["term-a", "term-b"]);
+
+    transition("waiting", "working", "term-b");
+    transition("waiting", "working", "term-a");
+    vi.advanceTimersByTime(250);
+
+    expect(bannersFor("term-b")).toEqual([]);
+    expect(bannersFor("term-a")).toEqual(["Agent waiting"]);
+  });
+});
+
+describe("each project's own choices across a burst (#15635)", () => {
+  const PROJECT_A = "project-a";
+  const PROJECT_B = "project-b";
+  const VIEW_A = 301;
+  const VIEW_B = 302;
+  const MUTED = { completedEnabled: false, waitingEnabled: false };
+  type Settings = Partial<typeof DEFAULT_NOTIFICATION_SETTINGS> & { enabled?: boolean };
+
+  const panel = (id: string, worktreeId: string, location = "grid") => ({
+    id,
+    kind: "terminal",
+    agentId: "agent-1",
+    title: id,
+    location,
+    worktreeId,
+  });
+
+  const projectOfTerminal: Record<string, string> = {
+    "term-a": PROJECT_A,
+    "term-a2": PROJECT_A,
+    "term-b": PROJECT_B,
+    "term-b2": PROJECT_B,
+  };
+  /** Projects no read or save has reached: their overrides aren't in effect yet. */
+  let coldProjects = new Set<string>();
+
+  function settings(global: Settings, overridesByProject: Record<string, Settings> = {}) {
+    const notifSettings = { ...DEFAULT_NOTIFICATION_SETTINGS, ...global };
+    storeMock.get.mockImplementation((key: string) =>
+      key === "notificationSettings" ? notifSettings : undefined
+    );
+    projectStoreMock.getEffectiveNotificationSettings.mockImplementation(
+      (projectId: string | null, choices?: object) => ({
+        ...notifSettings,
+        ...choices,
+        ...(projectId && !coldProjects.has(projectId) ? overridesByProject[projectId] : undefined),
+      })
+    );
+  }
+
+  function transition(state: AgentState, previousState: AgentState, terminalId: string) {
+    events.emit("agent:state-changed", {
+      state,
+      previousState,
+      terminalId,
+      agentId: "agent-1",
+      timestamp: Date.now(),
+      trigger: "heuristic" as const,
+      confidence: 1,
+    });
+  }
+
+  function banners(): Array<[string, string]> {
+    return notificationServiceMock.showWatchNotification.mock.calls.map((call) => [
+      call[0] as string,
+      (call[2] as { panelId: string }).panelId,
+    ]);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    osDndServiceMock.getState.mockReturnValue(undefined);
+    agentNotificationService.initialize();
+    coldProjects = new Set();
+    projectStoreMock.loadNotificationOverrides.mockImplementation(async (projectId: string) => {
+      coldProjects.delete(projectId);
+    });
+    setPtyClientRef({
+      getTerminalProjectId: (id: string) => projectOfTerminal[id] ?? null,
+    } as never);
+    saveProjectPanels([panel("term-a", "wt-a"), panel("term-a2", "wt-a")], PROJECT_A);
+    saveProjectPanels([panel("term-b", "wt-b"), panel("term-b2", "wt-b")], PROJECT_B);
+    agentNotificationService.syncWatchedPanels(VIEW_A, ["term-a", "term-a2"]);
+    agentNotificationService.syncWatchedPanels(VIEW_B, ["term-b", "term-b2"]);
+  });
+
+  afterEach(() => {
+    agentNotificationService.dispose();
+    setPtyClientRef(null);
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+  });
+
+  it("announces waits from two projects apart, each with its own sound", () => {
+    settings(
+      { waitingEnabled: true, soundEnabled: true },
+      { [PROJECT_A]: { waitingSoundFile: "a.wav" }, [PROJECT_B]: { waitingSoundFile: "b.wav" } }
+    );
+
+    transition("waiting", "working", "term-a");
+    transition("waiting", "working", "term-b");
+    vi.advanceTimersByTime(250);
+
+    expect(banners()).toEqual([
+      ["Agent waiting", "term-a"],
+      ["Agent waiting", "term-b"],
+    ]);
+    expect(soundServiceMock.playFile.mock.calls.map((call) => call[0])).toEqual(["a.wav", "b.wav"]);
+  });
+
+  it("announces completions from two projects apart, each with its own sound", () => {
+    settings(
+      { completedEnabled: true, soundEnabled: true },
+      {
+        [PROJECT_A]: { completedSoundFile: "a-done.wav" },
+        [PROJECT_B]: { completedSoundFile: "b-done.wav" },
+      }
+    );
+
+    transition("completed", "working", "term-a");
+    transition("completed", "working", "term-a2");
+    transition("completed", "working", "term-b");
+    vi.advanceTimersByTime(3_000);
+
+    expect(banners()).toEqual([
+      ["Agents finished", "term-a"],
+      ["Agent finished", "term-b"],
+    ]);
+    expect(soundServiceMock.playFile.mock.calls.map((call) => call[0])).toEqual([
+      "a-done.wav",
+      "b-done.wav",
+    ]);
+  });
+
+  it("groups a project's own reminders, and leaves another project's on its own delay", () => {
+    settings(
+      { waitingEnabled: true, waitingEscalationDelayMs: 180_000 },
+      { [PROJECT_B]: { waitingEscalationDelayMs: 60_000 } }
+    );
+    saveProjectPanels([panel("term-a", "wt-a", "dock")], PROJECT_A);
+    saveProjectPanels([panel("term-b", "wt-b", "dock"), panel("term-b2", "wt-b", "dock")], PROJECT_B);
+    agentNotificationService.syncWatchedPanels(VIEW_A, []);
+    agentNotificationService.syncWatchedPanels(VIEW_B, []);
+
+    transition("waiting", "working", "term-a");
+    transition("waiting", "working", "term-b");
+    transition("waiting", "working", "term-b2");
+    vi.advanceTimersByTime(60_000);
+
+    const reminders = () =>
+      notificationServiceMock.showNativeNotification.mock.calls.map((call) => [
+        call[0],
+        (call[2] as { closeWithPanels?: string[] }).closeWithPanels,
+      ]);
+    expect(reminders()).toEqual([["Agents still waiting", ["term-b", "term-b2"]]]);
+
+    vi.advanceTimersByTime(120_000);
+    expect(reminders()).toEqual([
+      ["Agents still waiting", ["term-b", "term-b2"]],
+      ["Agent still waiting", ["term-a"]],
+    ]);
+  });
+
+  it("reads a project's overrides on its agent's first sighting, before its first alert", async () => {
+    settings({ waitingEnabled: true }, { [PROJECT_B]: MUTED });
+    coldProjects = new Set([PROJECT_B]);
+
+    transition("working", "idle", "term-b");
+    await vi.advanceTimersByTimeAsync(0);
+    transition("waiting", "working", "term-b");
+    transition("working", "waiting", "term-b");
+    transition("waiting", "working", "term-b");
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(banners()).toEqual([]);
+    expect(projectStoreMock.loadNotificationOverrides.mock.calls).toEqual([[PROJECT_B]]);
+  });
+
+  it("asks again on the next sighting after a read that failed", async () => {
+    settings({ waitingEnabled: true });
+    projectStoreMock.loadNotificationOverrides.mockRejectedValueOnce(new Error("EACCES"));
+
+    transition("working", "idle", "term-b");
+    await vi.advanceTimersByTimeAsync(0);
+    transition("waiting", "working", "term-b");
+    await vi.advanceTimersByTimeAsync(0);
+    transition("working", "waiting", "term-b");
+
+    expect(projectStoreMock.loadNotificationOverrides.mock.calls).toEqual([
+      [PROJECT_B],
+      [PROJECT_B],
+    ]);
+  });
+
+  describe("the all-clear", () => {
+    function fleetFinishes(order: readonly string[]) {
+      for (const id of order) transition("working", "idle", id);
+      for (const id of order) transition("completed", "working", id);
+      vi.advanceTimersByTime(600);
+    }
+
+    it("sounds by the project of the agent whose finish left nothing working", () => {
+      settings({ soundEnabled: true }, { [PROJECT_B]: { soundEnabled: false } });
+
+      fleetFinishes(["term-b", "term-a"]);
+      expect(soundServiceMock.play).toHaveBeenCalledWith("all-clear");
+
+      soundServiceMock.play.mockClear();
+      fleetFinishes(["term-a", "term-b"]);
+      expect(soundServiceMock.play).not.toHaveBeenCalledWith("all-clear");
     });
   });
 });

@@ -30,6 +30,11 @@ export class PanelRecordIndex {
     return panelId === undefined ? undefined : this.records.get(panelId)?.panel;
   }
 
+  /** The workspace whose save last listed the panel. */
+  workspaceOf(panelId: string | undefined): string | undefined {
+    return panelId === undefined ? undefined : this.records.get(panelId)?.workspaceId;
+  }
+
   noteSaved(workspaceId: string, state: SavedPanels): void {
     this.generations.set(workspaceId, (this.generations.get(workspaceId) ?? 0) + 1);
     this.replace(workspaceId, state);

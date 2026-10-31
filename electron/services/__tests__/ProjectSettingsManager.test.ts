@@ -852,6 +852,43 @@ describe("ProjectSettingsManager caching", () => {
     });
   });
 
+  describe("loadNotificationOverrides (#15635)", () => {
+    const writeOverrides = (id: string, overrides: object) =>
+      fs.writeFile(
+        path.join(tempDir, id, "settings.json"),
+        JSON.stringify({ runCommands: [], notificationOverrides: overrides }),
+        "utf-8"
+      );
+
+    it("puts a cold project's own overrides in effect, apart from any other project's", async () => {
+      await writeOverrides(projectId, { completedEnabled: false, waitingEnabled: false });
+      const cold = new ProjectSettingsManager(tempDir, createMockStore());
+      expect(cold.getEffectiveNotificationSettings(projectId).completedEnabled).toBe(true);
+
+      await cold.loadNotificationOverrides(projectId);
+
+      expect(cold.getEffectiveNotificationSettings(projectId)).toMatchObject({
+        completedEnabled: false,
+        waitingEnabled: false,
+      });
+      const other = generateProjectId("/test/other");
+      expect(cold.getEffectiveNotificationSettings(other).completedEnabled).toBe(true);
+      expect(cold.getEffectiveNotificationSettings(null).completedEnabled).toBe(true);
+    });
+
+    it("leaves overrides a save already published as they are", async () => {
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        notificationOverrides: { waitingEnabled: false },
+      });
+      await writeOverrides(projectId, { waitingEnabled: true });
+
+      await manager.loadNotificationOverrides(projectId);
+
+      expect(manager.getEffectiveNotificationSettings(projectId).waitingEnabled).toBe(false);
+    });
+  });
+
   describe("isNotificationsMuted (#13818)", () => {
     it("reads a cold project's file, and counts only both of its own switches off", async () => {
       const settingsPath = path.join(tempDir, projectId, "settings.json");
