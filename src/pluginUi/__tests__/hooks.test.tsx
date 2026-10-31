@@ -765,10 +765,9 @@ describe("useDisclosure", () => {
 
   it("keeps a controlled request made after a commit when an older one lapses", async () => {
     const onOpenChange = vi.fn();
-    const { result, rerender } = renderHook(
-      ({ open }) => useDisclosure({ open, onOpenChange }),
-      { initialProps: { open: false } }
-    );
+    const { result, rerender } = renderHook(({ open }) => useDisclosure({ open, onOpenChange }), {
+      initialProps: { open: false },
+    });
     let repeated: Promise<void> = Promise.resolve();
     act(() => {
       result.current.onOpen();
@@ -815,10 +814,9 @@ describe("useDisclosure", () => {
 
   it("follows an owner that accepts, then compares against the new value", () => {
     const onOpenChange = vi.fn();
-    const { result, rerender } = renderHook(
-      ({ open }) => useDisclosure({ open, onOpenChange }),
-      { initialProps: { open: false } }
-    );
+    const { result, rerender } = renderHook(({ open }) => useDisclosure({ open, onOpenChange }), {
+      initialProps: { open: false },
+    });
     act(() => result.current.onOpen());
     rerender({ open: true });
     expect(result.current.open).toBe(true);
