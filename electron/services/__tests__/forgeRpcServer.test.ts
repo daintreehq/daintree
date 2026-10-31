@@ -650,7 +650,11 @@ describe("installed plugins' providers (#15583)", () => {
       [{ id: "gitea", name: "Gitea", matches: ["gitea.example.com"] }],
       { builtin: false }
     );
-    registerForgeProviderImpl("daintree.gitea", "gitea", makeImpl());
+    // Cold: the impl binds only when activation runs, so resolving proves the
+    // built-in still goes through implicit activation.
+    pluginServiceMock.activatePluginForForgeProvider.mockImplementationOnce(async () => {
+      registerForgeProviderImpl("daintree.gitea", "gitea", makeImpl());
+    });
     const { send, sent } = captureSender();
 
     await dispatchForgeRpc(

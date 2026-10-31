@@ -106,6 +106,27 @@ describe("project:save-settings with an installed plugin's provider (#15583)", (
     expect(projectStoreMock.saveProjectSettings).toHaveBeenCalledTimes(1);
   });
 
+  it("checks a legacy bare id against the role it's saved for, like the resolver", async () => {
+    registerForgeProviders(
+      "daintree.linear",
+      [{ id: "linear", name: "Linear", matches: [], roles: ["issues"] }],
+      { builtin: true }
+    );
+    registerForgeProviders(
+      "acme.linear",
+      [{ id: "linear", name: "Linear Code", matches: ["linear.example.com"] }],
+      { builtin: false }
+    );
+
+    // As the code forge, bare "linear" resolves to the installed code provider.
+    await expect(save({ runCommands: [], forgeProviderOverride: "linear" })).rejects.toThrow(
+      'Forge provider "Linear Code" can\'t run'
+    );
+    // As the issues provider, it resolves to the built-in issues-only Linear.
+    await save({ runCommands: [], issueProviderOverride: "linear" });
+    expect(projectStoreMock.saveProjectSettings).toHaveBeenCalledTimes(1);
+  });
+
   it("still accepts a built-in provider", async () => {
     await save({ runCommands: [], forgeProviderOverride: "daintree.github.github" });
 

@@ -41,7 +41,9 @@ import { AppError, GitOperationError } from "../../../utils/errorTypes.js";
  */
 async function resolveCloneCapability(url: string): Promise<CloneCapability | undefined> {
   const provider = getActiveProvider(url);
-  if (!provider) return undefined;
+  // An installed plugin's provider never binds an impl, so activating it would
+  // only start its worker before the anonymous clone runs anyway.
+  if (!provider || provider.unavailableReason) return undefined;
   const namespacedId = makeForgeProviderId(provider.pluginId, provider.contribution.id);
   try {
     const { pluginService } = await import("../../../services/PluginService.js");

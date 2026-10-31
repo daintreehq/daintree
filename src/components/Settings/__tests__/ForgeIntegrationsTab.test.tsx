@@ -381,7 +381,9 @@ describe("ForgeIntegrationsTab — installed plugins' providers (#15583)", () =>
     const byText = (text: string) => options.find((o) => o.textContent?.includes(text));
     expect(byText("Gitea (unavailable)")?.getAttribute("aria-disabled")).toBe("true");
     expect(byText("Gitea (unavailable)")?.textContent).toContain(REASON);
-    expect(byText("GitHub")?.getAttribute("aria-disabled")).not.toBe("true");
+    const builtin = byText("GitHub");
+    expect(builtin).toBeDefined();
+    expect(builtin?.getAttribute("aria-disabled")).toBeNull();
   });
 
   it("shows a stored default naming one as unavailable, with the reason", async () => {

@@ -4,6 +4,7 @@ import type {
   ForgeProviderBaseImpl,
   ForgeProviderContribution,
   ForgeProviderImpl,
+  ForgeProviderRole,
   RegisteredForgeProvider,
   RepoRef,
 } from "../../shared/types/forge.js";
@@ -291,15 +292,20 @@ function findContribution(namespacedId: string): ForgeProviderContribution | und
  * handling for that). Checked before implicit activation so an unrunnable
  * provider never starts its plugin's worker. Accepts the canonical
  * `{pluginId}.{contributionId}` id and, like the resolver, a legacy bare
- * contribution id.
+ * contribution id; pass the role a stored selection is for so a bare id is
+ * matched against the same candidates the resolver uses.
  */
-export function getForgeProviderUnavailableError(providerId: string): string | null {
+export function getForgeProviderUnavailableError(
+  providerId: string,
+  role?: ForgeProviderRole
+): string | null {
   if (typeof providerId !== "string" || providerId.length === 0) return null;
   // First match in registration order, like the resolver's `findById`, so a
   // bare id a built-in and an installed plugin share names the same provider
   // the resolver would pick.
   for (const [pluginId, { contributions, builtin }] of PLUGIN_FORGE_PROVIDERS) {
     for (const contribution of contributions) {
+      if (role && !forgeProviderServesRole(contribution, role)) continue;
       if (
         makeForgeProviderId(pluginId, contribution.id) !== providerId &&
         contribution.id !== providerId

@@ -76,10 +76,13 @@ export function registerProjectSettingsHandlers(deps: HandlerDependencies = {}):
     // Refuse a newly picked provider that can never run (an installed plugin's).
     // Only a changed binding is checked, so a stored one doesn't block saving
     // unrelated settings, and clearing it always works.
-    for (const key of ["forgeProviderOverride", "issueProviderOverride"] as const) {
+    for (const [key, role] of [
+      ["forgeProviderOverride", "code"],
+      ["issueProviderOverride", "issues"],
+    ] as const) {
       const next = normalizeProviderId(settings[key]);
       if (next === null || next === normalizeProviderId(previousSettings[key])) continue;
-      const unavailable = getForgeProviderUnavailableError(next);
+      const unavailable = getForgeProviderUnavailableError(next, role);
       if (unavailable) throw new Error(unavailable);
     }
     await projectStore.saveProjectSettings(projectId, settings as ProjectSettings);

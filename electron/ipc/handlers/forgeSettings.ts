@@ -339,7 +339,7 @@ export function registerForgeSettingsHandlers(): () => void {
       // A new default that can never run is refused; one already stored stays
       // as it is, so re-saving it or clearing it still works.
       if (next !== null && next !== previous) {
-        const unavailable = getForgeProviderUnavailableError(next);
+        const unavailable = getForgeProviderUnavailableError(next, "code");
         if (unavailable) throw new Error(unavailable);
       }
       store.set("forgeDefaultProviderId", next);
