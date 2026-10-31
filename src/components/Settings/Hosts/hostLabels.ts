@@ -65,16 +65,6 @@ export function installLabel(install: HostInstallInfo | null): string {
   return commit ? `${version} (${commit})` : version;
 }
 
-/** How the host's build compares with this machine's, as far as the probe could tell. */
-export function buildMatchLabel(
-  probe: Pick<HostProbeResult, "matchesClient" | "hostBuild">
-): string {
-  if (probe.matchesClient === true) return "Same build";
-  if (probe.hostBuild?.order === "newer") return "Newer build";
-  if (probe.hostBuild?.order === "older") return "Older build";
-  return probe.matchesClient === false ? "Different build" : "Can't tell";
-}
-
 export function stagedUpdateLabel(staged: StagedHostUpdate): string {
   return staged.installsOnQuit && !staged.ready
     ? `Daintree ${staged.version}, still being prepared`

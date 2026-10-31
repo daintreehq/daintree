@@ -219,7 +219,6 @@ vi.mock("@shared/utils/smokeTestTerminals", () => ({
 // or loses `resumeLatestArgs` is caught here rather than passing against a
 // hand-maintained list.
 
-// Override stagger constants so tests don't have to wait 100ms × N
 // Spy on getRestoreBatchParams so tests can both pin fast/deterministic batches
 // (batchSize 2, delayMs 0) AND assert the resource profile is threaded through
 // from the context (#10528).
@@ -231,8 +230,6 @@ vi.mock("../batchScheduler", async () => {
   const actual = await vi.importActual<typeof import("../batchScheduler")>("../batchScheduler");
   return {
     ...actual,
-    RESTORE_SPAWN_BATCH_SIZE: 2,
-    RESTORE_SPAWN_BATCH_DELAY_MS: 0,
     getRestoreBatchParams: getRestoreBatchParamsMock,
   };
 });
@@ -936,7 +933,7 @@ describe("restorePanelsPhase — orphan reconnection", () => {
 
 describe("restorePanelsPhase — withHydrationBatch wrapper", () => {
   it("wraps the WHOLE batch (one withHydrationBatch per stagger batch, not per task)", async () => {
-    // RESTORE_SPAWN_BATCH_SIZE=2 (mocked) — 2 background PTY tasks fit in one batch.
+    // batchSize=2 (getRestoreBatchParams mocked) — 2 background PTY tasks fit in one batch.
     // If a regression wrapped each task individually, this would fire twice.
     const ctx = makeContext({ activeWorktreeId: "wA" });
     ctx.backendTerminalMap.set("t1", backend("t1"));

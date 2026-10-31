@@ -112,37 +112,6 @@ export function getXtermOptions(config: TerminalAppearanceConfig): ITerminalOpti
 }
 
 /**
- * Get terminal options with minimal configuration.
- * Useful when only font settings are available.
- */
-export function getXtermOptionsSimple(
-  fontSize: number,
-  fontFamily: string,
-  scrollback: number,
-  performanceMode: boolean = false
-): ITerminalOptions {
-  return getXtermOptions({
-    fontSize,
-    fontFamily,
-    scrollback,
-    performanceMode,
-  });
-}
-
-/**
- * Create xterm options suitable for readonly/snapshot display.
- * Disables cursor and input-related options.
- */
-export function getXtermOptionsForSnapshot(config: TerminalAppearanceConfig): ITerminalOptions {
-  return {
-    ...getXtermOptions(config),
-    cursorBlink: false,
-    cursorStyle: "bar",
-    disableStdin: true,
-  };
-}
-
-/**
  * Extract terminal metrics for calculating cell dimensions.
  * These values should be consistent across all terminal instances.
  */

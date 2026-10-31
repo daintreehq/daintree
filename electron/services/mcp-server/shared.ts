@@ -31,7 +31,6 @@ import {
   ACTIONS_LIST_TOOL,
   CORE_TIER_TOOLS as CORE_TIER_TOOLS_LIST,
   FULL_TIER_ADDONS as FULL_TIER_ADDONS_LIST,
-  RENDERER_OWNED_ORIGIN_ONLY_TOOLS,
   toNonRendererOwnedTools,
 } from "../../../shared/config/helpAssistantTierAllowlists.js";
 import { MCP_EXTERNAL_TIER_TOOLS } from "../../../shared/config/mcpExternalTierAllowlist.js";
@@ -642,11 +641,6 @@ export const TIER_ALLOWLISTS: Readonly<Record<McpTier, ReadonlySet<string>>> = {
   full: FULL_TOOLS,
   external: MCP_TOOL_ALLOWLIST,
 };
-
-/** Tools only a renderer-owned session may reach, at any tier (#12407). */
-export const RENDERER_OWNED_ORIGIN_ONLY_TOOL_IDS: ReadonlySet<string> = new Set(
-  RENDERER_OWNED_ORIGIN_ONLY_TOOLS
-);
 
 /**
  * The same three surfaces as {@link TIER_ALLOWLISTS}, admitted against by every

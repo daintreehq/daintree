@@ -226,7 +226,6 @@ export function linuxHandoffScript(
 export function macStartScript(appPath: string = MAC_APP_PATH): string {
   return `open -n -g -a ${sq(appPath)} --args ${HOST_MODE_FLAG}`;
 }
-export const MAC_START_SCRIPT = macStartScript();
 export const LINUX_START_SCRIPT = `systemctl --user start ${LINUX_UNIT_NAME}`;
 
 /** Launch (or hand over to) Daintree on a Mac, in its logged-in session. */
