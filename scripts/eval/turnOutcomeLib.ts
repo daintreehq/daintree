@@ -584,12 +584,14 @@ export function matchCalibration(
  */
 export function joinCalibrationPairs(
   judged: readonly AssistantTurnRecord[],
-  predictions: readonly TurnOutcomeClass[],
+  predictions: ReadonlyArray<TurnOutcomeClass | null>,
   calibration: ReadonlyArray<{ record: AssistantTurnRecord; expected: TurnOutcomeClass }>
 ): Array<{ predicted: TurnOutcomeClass; expected: TurnOutcomeClass }> {
   const predictedById = new Map<string, TurnOutcomeClass>();
   for (let i = 0; i < judged.length && i < predictions.length; i++) {
-    predictedById.set(judged[i].id, predictions[i]);
+    const predicted = predictions[i];
+    // A failed judgment is not a prediction, so it never forms a pair.
+    if (predicted) predictedById.set(judged[i].id, predicted);
   }
   const pairs: Array<{ predicted: TurnOutcomeClass; expected: TurnOutcomeClass }> = [];
   for (const entry of calibration) {

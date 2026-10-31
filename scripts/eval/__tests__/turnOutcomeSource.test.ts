@@ -2,15 +2,15 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  TURN_OUTCOME_RING,
-  TurnOutcomeSourceError,
-  readTurnOutcomeRing,
-} from "../turnOutcomeSource.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TurnOutcomeSourceError, readTurnOutcomeRing } from "../turnOutcomeSource.js";
 
 const { DatabaseSync } = process.getBuiltinModule("node:sqlite") as typeof import("node:sqlite");
 type Db = InstanceType<typeof DatabaseSync>;
+
+// The ring name the app persists under, spelled out rather than imported so a
+// wrong constant in the reader cannot agree with its own fixtures.
+const RING = "mcpTurnOutcomeLog";
 
 // The app's audit_rings shape: migrations 0004 and 0018.
 const AUDIT_RINGS_DDL = `
@@ -26,17 +26,69 @@ const AUDIT_RINGS_DDL = `
 `;
 
 let tmp: string;
+let openWriters: Db[];
 
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "turn-outcome-source-"));
+  openWriters = [];
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  for (const db of openWriters) {
+    if (db.isOpen) db.close();
+  }
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
+interface SqliteHooks {
+  onOpen?(location: string): void;
+  beforeQuery?(location: string): void;
+  afterQuery?(location: string): void;
+}
+
+/**
+ * Route the reader's node:sqlite through real connections that record each
+ * location opened, run hooks around the ring query, and return unordered rows
+ * in reverse so only an explicit ORDER BY keeps ring order.
+ */
+function instrumentSqlite(hooks: SqliteHooks = {}): string[] {
+  const opened: string[] = [];
+  const original = process.getBuiltinModule.bind(process);
+  vi.spyOn(process, "getBuiltinModule").mockImplementation(((id: string) => {
+    if (id !== "node:sqlite") return original(id);
+    function Instrumented(location: string, options: { readOnly?: boolean; timeout?: number }) {
+      const db = new DatabaseSync(location, options);
+      opened.push(location);
+      db.exec("PRAGMA reverse_unordered_selects = ON");
+      hooks.onOpen?.(location);
+      return {
+        prepare(sql: string) {
+          const statement = db.prepare(sql);
+          const isRingQuery = sql.includes("WHERE ring = ?");
+          return {
+            get: (...params: never[]) => statement.get(...params),
+            all: (...params: never[]) => {
+              if (isRingQuery) hooks.beforeQuery?.(location);
+              const rows = statement.all(...params);
+              if (isRingQuery) hooks.afterQuery?.(location);
+              return rows;
+            },
+          };
+        },
+        close: () => db.close(),
+      };
+    }
+    return { DatabaseSync: Instrumented };
+  }) as never);
+  return opened;
+}
+
+const isImmutable = (location: string) => location.startsWith("file:");
+
 function openProfileDb(dbPath: string): Db {
   const db = new DatabaseSync(dbPath);
+  openWriters.push(db);
   db.exec("PRAGMA journal_mode = WAL");
   return db;
 }
@@ -64,6 +116,18 @@ function fingerprint(file: string): string {
     : "absent";
 }
 
+function ids(rows: unknown[]): string[] {
+  return (rows as Array<{ id: string }>).map((r) => r.id);
+}
+
+function idleProfile(rows: Array<[string, number]>): string {
+  const dbPath = path.join(tmp, "daintree.db");
+  const db = createProfileDb(dbPath);
+  for (const [id, timestamp] of rows) insert(db, RING, turn(id, timestamp), id);
+  db.close();
+  return dbPath;
+}
+
 function expectSourceError(dbPath: string, kind: TurnOutcomeSourceError["kind"]): string {
   let caught: unknown;
   try {
@@ -84,27 +148,28 @@ describe("readTurnOutcomeRing", () => {
     const dbPath = path.join(tmp, "daintree.db");
     const db = createProfileDb(dbPath);
     insert(db, "mcpAuditLog", { id: "audit-1", timestamp: 1 }, "audit-1");
-    insert(db, TURN_OUTCOME_RING, turn("t-3", 3000), "t-3");
+    insert(db, RING, turn("t-3", 3000), "t-3");
     insert(db, "pluginAuditLog", { id: "plugin-1" }, "plugin-1");
     // Ring order is insertion order, not timestamp order.
-    insert(db, TURN_OUTCOME_RING, turn("t-1", 1000, "reasoning-loop"), "t-1");
+    insert(db, RING, turn("t-1", 1000, "reasoning-loop"), "t-1");
     insert(db, "runHistoryRecords", { id: "run-1" }, "run-1");
     // Rows written before migration 0018 carry no record_id.
-    insert(db, TURN_OUTCOME_RING, turn("t-2", 2000), null);
+    insert(db, RING, turn("t-2", 2000), null);
     db.close();
 
+    instrumentSqlite();
     const result = readTurnOutcomeRing(dbPath);
     expect(result.rowCount).toBe(3);
     expect(result.warnings).toEqual([]);
-    expect((result.rows as Array<{ id: string }>).map((r) => r.id)).toEqual(["t-3", "t-1", "t-2"]);
+    expect(ids(result.rows)).toEqual(["t-3", "t-1", "t-2"]);
     expect(result.rows[1]).toMatchObject({ outcome: "reasoning-loop" });
   });
 
   it("skips and names rows whose record is not valid JSON", () => {
     const dbPath = path.join(tmp, "daintree.db");
     const db = createProfileDb(dbPath);
-    insert(db, TURN_OUTCOME_RING, turn("good", 1000), "good");
-    insert(db, TURN_OUTCOME_RING, "{not json", "bad");
+    insert(db, RING, turn("good", 1000), "good");
+    insert(db, RING, "{not json", "bad");
     const badRowId = (db.prepare("SELECT max(id) AS id FROM audit_rings").get() as { id: number })
       .id;
     db.close();
@@ -165,7 +230,7 @@ describe("readTurnOutcomeRing", () => {
     const configPath = path.join(tmp, "config.json");
     fs.writeFileSync(configPath, JSON.stringify({ auditEnabled: true }));
     const db = createProfileDb(dbPath);
-    insert(db, TURN_OUTCOME_RING, turn("t-1", 1000), "t-1");
+    insert(db, RING, turn("t-1", 1000), "t-1");
     db.close();
     const before = fs.readdirSync(tmp).sort();
     expect(before).toEqual(["config.json", "daintree.db"]);
@@ -183,8 +248,8 @@ describe("readTurnOutcomeRing", () => {
     const livePath = path.join(tmp, "live.db");
     const writer = createProfileDb(livePath);
     writer.exec("PRAGMA wal_autocheckpoint = 0");
-    insert(writer, TURN_OUTCOME_RING, turn("t-1", 1000), "t-1");
-    insert(writer, TURN_OUTCOME_RING, turn("t-2", 2000), "t-2");
+    insert(writer, RING, turn("t-1", 1000), "t-1");
+    insert(writer, RING, turn("t-2", 2000), "t-2");
 
     // Copying the files while the writer still holds them is what a crash
     // leaves behind: rows that exist only in the -wal.
@@ -199,7 +264,7 @@ describe("readTurnOutcomeRing", () => {
     expect(walBefore).not.toBe("absent");
 
     const result = readTurnOutcomeRing(dbPath);
-    expect((result.rows as Array<{ id: string }>).map((r) => r.id)).toEqual(["t-1", "t-2"]);
+    expect(ids(result.rows)).toEqual(["t-1", "t-2"]);
 
     expect(fingerprint(dbPath)).toBe(dbBefore);
     expect(fingerprint(`${dbPath}-wal`)).toBe(walBefore);
@@ -209,18 +274,134 @@ describe("readTurnOutcomeRing", () => {
     const dbPath = path.join(tmp, "daintree.db");
     const writer = createProfileDb(dbPath);
     writer.exec("PRAGMA wal_autocheckpoint = 0");
-    insert(writer, TURN_OUTCOME_RING, turn("t-1", 1000), "t-1");
+    insert(writer, RING, turn("t-1", 1000), "t-1");
     writer.exec("BEGIN IMMEDIATE");
-    insert(writer, TURN_OUTCOME_RING, turn("t-2", 2000), "t-2");
+    insert(writer, RING, turn("t-2", 2000), "t-2");
     const dbBefore = fingerprint(dbPath);
+    let commitError: unknown = "not attempted";
+    const opened = instrumentSqlite({
+      // Commit while the reader's connection is still open.
+      afterQuery: () => {
+        try {
+          writer.exec("COMMIT");
+          commitError = undefined;
+        } catch (error) {
+          commitError = error;
+        }
+      },
+    });
 
     const during = readTurnOutcomeRing(dbPath);
-    expect((during.rows as Array<{ id: string }>).map((r) => r.id)).toEqual(["t-1"]);
 
-    expect(() => writer.exec("COMMIT")).not.toThrow();
+    expect(opened.some(isImmutable)).toBe(false);
+    expect(ids(during.rows)).toEqual(["t-1"]);
+    expect(commitError).toBeUndefined();
     expect(fingerprint(dbPath)).toBe(dbBefore);
-    const after = readTurnOutcomeRing(dbPath);
-    expect((after.rows as Array<{ id: string }>).map((r) => r.id)).toEqual(["t-1", "t-2"]);
-    writer.close();
+    vi.restoreAllMocks();
+    expect(ids(readTurnOutcomeRing(dbPath).rows)).toEqual(["t-1", "t-2"]);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "finds the -wal beside the real file when the path is a symlink",
+    () => {
+      const livePath = path.join(tmp, "live.db");
+      const writer = createProfileDb(livePath);
+      writer.exec("PRAGMA wal_autocheckpoint = 0");
+      insert(writer, RING, turn("t-1", 1000), "t-1");
+      const profile = path.join(tmp, "profile");
+      fs.mkdirSync(profile);
+      const dbPath = path.join(profile, "daintree.db");
+      fs.copyFileSync(livePath, dbPath);
+      fs.copyFileSync(`${livePath}-wal`, `${dbPath}-wal`);
+      writer.close();
+      const alias = path.join(tmp, "alias.db");
+      fs.symlinkSync(dbPath, alias);
+      const walBefore = fingerprint(`${dbPath}-wal`);
+
+      expect(ids(readTurnOutcomeRing(alias).rows)).toEqual(["t-1"]);
+      expect(fingerprint(`${dbPath}-wal`)).toBe(walBefore);
+    }
+  );
+
+  it("never reads a rollback-mode database as immutable", () => {
+    const dbPath = path.join(tmp, "daintree.db");
+    const db = new DatabaseSync(dbPath);
+    openWriters.push(db);
+    db.exec(AUDIT_RINGS_DDL);
+    insert(db, RING, turn("t-1", 1000), "t-1");
+    db.close();
+    const opened = instrumentSqlite();
+
+    expect(ids(readTurnOutcomeRing(dbPath).rows)).toEqual(["t-1"]);
+    expect(opened.some(isImmutable)).toBe(false);
+  });
+
+  it("never reads as immutable with a -journal beside the database", () => {
+    const dbPath = idleProfile([["t-1", 1000]]);
+    fs.writeFileSync(`${dbPath}-journal`, "");
+    const opened = instrumentSqlite();
+
+    expect(ids(readTurnOutcomeRing(dbPath).rows)).toEqual(["t-1"]);
+    expect(opened.some(isImmutable)).toBe(false);
+  });
+});
+
+describe("readTurnOutcomeRing immutable fallback", () => {
+  it("rereads on a WAL connection when the app starts during the read", () => {
+    const dbPath = idleProfile([["t-1", 1000]]);
+    const opened = instrumentSqlite({
+      onOpen: (location) => {
+        if (!isImmutable(location)) return;
+        const app = openProfileDb(dbPath);
+        app.exec("PRAGMA wal_autocheckpoint = 0");
+        insert(app, RING, turn("late", 2000), "late");
+      },
+    });
+
+    const result = readTurnOutcomeRing(dbPath);
+
+    expect(opened.map(isImmutable)).toEqual([true, false]);
+    expect(ids(result.rows)).toEqual(["t-1", "late"]);
+  });
+
+  it("rereads when the file changes under the read without a -wal appearing", () => {
+    const dbPath = idleProfile([["t-1", 1000]]);
+    const opened = instrumentSqlite({
+      onOpen: (location) => {
+        if (isImmutable(location)) fs.utimesSync(dbPath, new Date(), new Date(Date.now() + 60_000));
+      },
+    });
+
+    expect(ids(readTurnOutcomeRing(dbPath).rows)).toEqual(["t-1"]);
+    expect(opened.map(isImmutable)).toEqual([true, false]);
+  });
+
+  it("retries an immutable read that failed while the file changed", () => {
+    const dbPath = idleProfile([["t-1", 1000]]);
+    const opened = instrumentSqlite({
+      onOpen: (location) => {
+        if (isImmutable(location)) fs.utimesSync(dbPath, new Date(), new Date(Date.now() + 60_000));
+      },
+      beforeQuery: (location) => {
+        if (isImmutable(location)) throw new Error("database disk image is malformed");
+      },
+    });
+
+    expect(ids(readTurnOutcomeRing(dbPath).rows)).toEqual(["t-1"]);
+    expect(opened.map(isImmutable)).toEqual([true, false]);
+  });
+
+  it("reports an immutable read failure on an unchanged file without retrying", () => {
+    const dbPath = idleProfile([["t-1", 1000]]);
+    const listing = fs.readdirSync(tmp).sort();
+    const opened = instrumentSqlite({
+      beforeQuery: () => {
+        throw new Error("database disk image is malformed");
+      },
+    });
+
+    expect(expectSourceError(dbPath, "unreadable")).toContain("malformed");
+    expect(opened.map(isImmutable)).toEqual([true]);
+    expect(fs.readdirSync(tmp).sort()).toEqual(listing);
   });
 });

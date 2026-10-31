@@ -70,18 +70,23 @@ function sameIdentity(a: FileIdentity | null, b: FileIdentity | null): boolean {
   return !!a && !!b && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs;
 }
 
-function readHeader(dbPath: string): string {
+// The magic string, then bytes 18 and 19: the file format write and read
+// versions, both 2 once the database is in WAL mode.
+const HEADER_BYTES = 20;
+
+function readHeader(dbPath: string): Buffer {
   const fd = fs.openSync(dbPath, "r");
   try {
-    const buffer = Buffer.alloc(SQLITE_HEADER.length);
+    const buffer = Buffer.alloc(HEADER_BYTES);
     const read = fs.readSync(fd, buffer, 0, buffer.length, 0);
-    return buffer.subarray(0, read).toString("latin1");
+    return buffer.subarray(0, read);
   } finally {
     fs.closeSync(fd);
   }
 }
 
-function assertSqliteSource(dbPath: string): void {
+/** Validates the source and reports whether its header says WAL mode. */
+function assertSqliteSource(dbPath: string): { walMode: boolean } {
   let stat: fs.Stats;
   try {
     stat = fs.statSync(dbPath);
@@ -106,7 +111,7 @@ function assertSqliteSource(dbPath: string): void {
       `${dbPath} is not a file. Expected ${EXPECTED_SOURCE}.`
     );
   }
-  let header: string;
+  let header: Buffer;
   try {
     header = readHeader(dbPath);
   } catch (error) {
@@ -116,7 +121,7 @@ function assertSqliteSource(dbPath: string): void {
       `Cannot read ${dbPath}: ${(error as Error).message}`
     );
   }
-  if (header !== SQLITE_HEADER) {
+  if (header.subarray(0, SQLITE_HEADER.length).toString("latin1") !== SQLITE_HEADER) {
     const legacy = dbPath.toLowerCase().endsWith(".json")
       ? " Turn outcomes are no longer stored in config.json; point at the profile directory instead."
       : "";
@@ -126,6 +131,16 @@ function assertSqliteSource(dbPath: string): void {
       `${dbPath} is not a SQLite database. Expected ${EXPECTED_SOURCE}.${legacy}`
     );
   }
+  return { walMode: header.length === HEADER_BYTES && header[18] === 2 && header[19] === 2 };
+}
+
+/**
+ * SQLite refuses a URI authority other than localhost, so a UNC share's server
+ * goes into the path behind an empty one (`file:////server/share/...`).
+ */
+function immutableUri(filePath: string): string {
+  const url = pathToFileURL(filePath);
+  return `file://${url.host === "" ? "" : `//${url.host}`}${url.pathname}?immutable=1`;
 }
 
 function queryRing(db: SqliteDatabase, dbPath: string): TurnOutcomeRingRead {
@@ -185,28 +200,31 @@ function withConnection<T>(location: string, read: (db: SqliteDatabase) => T): T
  * Anything else means the app started meanwhile, and the read is redone on a
  * read-only WAL connection, which sees one consistent snapshot, never blocks
  * the app's writers, and never checkpoints (it cannot take the write lock).
+ * A rollback-mode file, or one with a -journal beside it, may need recovery
+ * that only a locking connection performs, so it never takes the immutable path.
  */
 export function readTurnOutcomeRing(dbPath: string): TurnOutcomeRingRead {
-  assertSqliteSource(dbPath);
-  const walPath = `${dbPath}-wal`;
+  const { walMode } = assertSqliteSource(dbPath);
   try {
-    if (!fs.existsSync(walPath)) {
-      const before = identityOf(dbPath);
-      const unchanged = () => !fs.existsSync(walPath) && sameIdentity(before, identityOf(dbPath));
+    // Sidecars sit beside the real file; a symlinked path would hide its -wal.
+    const realPath = fs.realpathSync(dbPath);
+    const walPath = `${realPath}-wal`;
+    const read = (location: string) => withConnection(location, (db) => queryRing(db, dbPath));
+    if (walMode && !fs.existsSync(walPath) && !fs.existsSync(`${realPath}-journal`)) {
+      const before = identityOf(realPath);
+      const unchanged = () => !fs.existsSync(walPath) && sameIdentity(before, identityOf(realPath));
       let result: TurnOutcomeRingRead;
       try {
-        result = withConnection(`${pathToFileURL(dbPath).href}?immutable=1`, (db) =>
-          queryRing(db, dbPath)
-        );
+        result = read(immutableUri(realPath));
       } catch (error) {
         // A page torn by a checkpoint mid-read surfaces as an error; only a
         // file that stayed put makes the error the database's own.
         if (unchanged()) throw error;
-        return withConnection(dbPath, (db) => queryRing(db, dbPath));
+        return read(realPath);
       }
       if (unchanged()) return result;
     }
-    return withConnection(dbPath, (db) => queryRing(db, dbPath));
+    return read(realPath);
   } catch (error) {
     if (error instanceof TurnOutcomeSourceError) throw error;
     throw new TurnOutcomeSourceError(

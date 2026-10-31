@@ -43,7 +43,7 @@ function writeProfile(rows: unknown[], otherRings = true): void {
   );
   if (otherRings) insert.run("mcpAuditLog", "audit-1", JSON.stringify({ id: "audit-1" }), 1);
   for (const row of rows) {
-    insert.run(TURN_OUTCOME_RING, null, JSON.stringify(row), 1);
+    insert.run("mcpTurnOutcomeLog", null, JSON.stringify(row), 1);
   }
   db.close();
 }
@@ -204,6 +204,50 @@ describe("runTurnOutcomeEval", () => {
     expect(report.warnings).not.toContainEqual(
       expect.stringContaining("calibration labels joined")
     );
+  });
+
+  it("does not count failed judgments as calibration pairs", async () => {
+    // Every label says "unknown": a failure filled in as "unknown" would agree
+    // with all of them and certify the run.
+    const records = turns(MIN_CALIBRATION_PAIRS, ["unknown"]);
+    writeProfile(records);
+    const calibrationPath = path.join(tmp, "calibration.json");
+    fs.writeFileSync(
+      calibrationPath,
+      JSON.stringify(records.map((r) => ({ recordId: r.id, expected: r.outcome })))
+    );
+    const { deps, logs, judge } = harness({ OPENAI_API_KEY: "test-key" });
+    judge.mockImplementation(async (batch) => ({
+      predictions: batch.map(() => null),
+      failures: batch.length,
+    }));
+
+    const code = await runTurnOutcomeEval(
+      [
+        "--store-path",
+        profile,
+        "--budget",
+        String(MIN_CALIBRATION_PAIRS),
+        "--calibration-path",
+        calibrationPath,
+        "--out-dir",
+        outDir,
+      ],
+      deps
+    );
+
+    expect(code).toBe(1);
+    const report = readReport();
+    expect(report).toMatchObject({
+      ready: false,
+      calibrationPairs: 0,
+      judgeRecords: 0,
+      judgeFailures: MIN_CALIBRATION_PAIRS,
+    });
+    expect([...(report.judgeFailedIds as string[])].sort()).toEqual(
+      records.map((r) => r.id).sort()
+    );
+    expect(logs).toContain("NOT READY: no calibration label matches a judged record");
   });
 
   it("fails a judged run whose calibration set misses the sample", async () => {

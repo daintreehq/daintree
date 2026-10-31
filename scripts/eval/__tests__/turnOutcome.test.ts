@@ -533,6 +533,17 @@ describe("joinCalibrationPairs", () => {
       { predicted: "reasoning-loop", expected: "reasoning-loop" },
     ]);
   });
+
+  it("skips records the judge failed on", () => {
+    const judged = [makeRecord({ id: "a" }), makeRecord({ id: "b" })];
+    const calibration = [
+      { record: judged[0], expected: "unknown" as TurnOutcomeClass },
+      { record: judged[1], expected: "answered" as TurnOutcomeClass },
+    ];
+    expect(joinCalibrationPairs(judged, [null, "answered"], calibration)).toEqual([
+      { predicted: "answered", expected: "answered" },
+    ]);
+  });
 });
 
 describe("assessReadiness", () => {

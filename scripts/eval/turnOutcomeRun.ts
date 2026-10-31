@@ -26,7 +26,8 @@ import {
 import type { AssistantTurnRecord, TurnOutcomeClass } from "../../shared/types/ipc/mcpServer.js";
 
 export interface JudgeResult {
-  predictions: TurnOutcomeClass[];
+  /** Aligned to the judged records; `null` where the judge gave no answer. */
+  predictions: Array<TurnOutcomeClass | null>;
   failures: number;
 }
 
@@ -140,8 +141,9 @@ export async function runTurnOutcomeEval(argv: string[], deps: RunDeps): Promise
   }
 
   // Judge
-  let judgePredictions: TurnOutcomeClass[] = [];
+  let judgePredictions: Array<TurnOutcomeClass | null> = [];
   let judgeFailures = 0;
+  let judgeFailedIds: string[] = [];
 
   if (!options.dryRun && sample.records.length > 0) {
     const apiKey = env.OPENAI_API_KEY;
@@ -156,11 +158,14 @@ export async function runTurnOutcomeEval(argv: string[], deps: RunDeps): Promise
     const result = await deps.judge(sample.records, options.model, apiKey);
     judgePredictions = result.predictions;
     judgeFailures = result.failures;
+    judgeFailedIds = sample.records.filter((_, i) => !judgePredictions[i]).map((r) => r.id);
 
     if (judgeFailures > 0) {
       warnings.push(`Judge failed on ${judgeFailures} records (see report for IDs)`);
     }
-    log(`Judge completed: ${judgePredictions.length} classifications, ${judgeFailures} failures`);
+    log(
+      `Judge completed: ${judgePredictions.length - judgeFailures} classifications, ${judgeFailures} failures`
+    );
   } else if (options.dryRun) {
     log("Dry run — skipping judge API calls.");
   }
@@ -217,8 +222,9 @@ export async function runTurnOutcomeEval(argv: string[], deps: RunDeps): Promise
     calibrationUnmatched: calibrationUnmatched.length,
     calibrationUnmatchedIds: calibrationUnmatched,
     judgeModel: options.dryRun ? undefined : options.model,
-    judgeRecords: judgePredictions.length,
+    judgeRecords: judgePredictions.length - judgeFailures,
     judgeFailures,
+    judgeFailedIds,
     judgedAt: options.dryRun ? undefined : new Date().toISOString(),
   };
 
