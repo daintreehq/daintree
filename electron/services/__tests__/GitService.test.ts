@@ -194,6 +194,8 @@ index 1a2b3c4..5d6e7f8 100644
         "refs/heads/feature/foo+bar-10\r",
         "refs/heads/other/feature/foo+bar-99",
         "refs/remotes/origin/feature/foo+bar-999",
+        // Sliced without the prefix check, this would read as `feature/foo+bar-999`.
+        "refs/tags/xfeature/foo+bar-999",
         "",
       ].join("\n")
     );

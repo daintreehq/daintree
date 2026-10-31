@@ -39,7 +39,7 @@ export const BRANCH_NAME_AVAILABILITY_CLASS: BenchmarkClass = {
     renderer: "absent",
     electronTransport: "none",
     pty: "none",
-    processTopology: "single-process",
+    processTopology: "partial",
     externalDependencies: "hermetic",
   },
   claim:
