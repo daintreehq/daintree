@@ -30,6 +30,17 @@ function isDictationKey(actionId: string | undefined): boolean {
 }
 
 /**
+ * Whether this keystroke is one of the combos that triggers the action right
+ * now. Reads every combo of an override (and every registered default), not
+ * just the first, and skips chords: a single event can't complete one.
+ */
+function matchesTriggerCombo(e: KeyboardEvent, actionId: string): boolean {
+  return keybindingService
+    .getTriggerCombos(actionId)
+    .some((combo) => !combo.includes(" ") && keybindingService.matchesEvent(e, combo));
+}
+
+/**
  * Canonical first-step combo of every chord (they all begin `Cmd+K`). Opening
  * this chord shows the command HUD; the service stores it in `eventToCombo`
  * form (`"Cmd+k"`), so compare with `combosFieldsEqual`, never `===`.
@@ -56,17 +67,14 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
   useEffect(() => {
     if (!enabled) return;
 
-    // Region-focus bypass: let the user's current focusRegion bindings escape
-    // the editable/.xterm bailouts, even when the user has rebound them away
-    // from the default F6 / Shift+F6. Match the full combo via matchesEvent so
-    // a Ctrl+F6 rebind doesn't accidentally let bare F6 through.
-    const isFocusRegionEvent = (e: KeyboardEvent): boolean => {
-      const next = keybindingService.getEffectiveCombo("nav.focusRegion.next");
-      if (next && keybindingService.matchesEvent(e, next)) return true;
-      const prev = keybindingService.getEffectiveCombo("nav.focusRegion.prev");
-      if (prev && keybindingService.matchesEvent(e, prev)) return true;
-      return false;
-    };
+    // Region-focus bypass: let every combo currently bound to focusRegion
+    // next/prev escape the editable/.xterm bailouts, even when the user has
+    // rebound them away from the default F6 / Shift+F6 or given them several
+    // combos. Match the full combo via matchesEvent so a Ctrl+F6 rebind doesn't
+    // accidentally let bare F6 through.
+    const isFocusRegionEvent = (e: KeyboardEvent): boolean =>
+      matchesTriggerCombo(e, "nav.focusRegion.next") ||
+      matchesTriggerCombo(e, "nav.focusRegion.prev");
 
     const handler = (e: KeyboardEvent) => {
       // Skip repeat events
@@ -106,10 +114,7 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
         // resolver, and with it every other binding the surface keeps out.
         const matches = (
           actionId: "canopy.toggle" | "terminal.close" | (typeof DICTATION_KEYS)[number]
-        ) =>
-          keybindingService
-            .getTriggerCombos(actionId)
-            .some((combo) => !combo.includes(" ") && keybindingService.matchesEvent(e, combo));
+        ) => matchesTriggerCombo(e, actionId);
         if (
           !matches("canopy.toggle") &&
           !(ownsDictation && DICTATION_KEYS.some(matches)) &&
@@ -140,7 +145,9 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
 
       // Handle Shift+F10 and ContextMenu key for panel context menus.
       // Must be checked before the editable/terminal bailouts below.
-      // Respects user overrides — if the binding is disabled, fall through.
+      // Respects user overrides — the keys route here only while they are still
+      // among the action's current combos. Rebound or disabled, they fall
+      // through to ordinary resolution, where whatever else holds them runs.
       // Target-guarded twice. A surface marked `data-row-menu` (the file
       // browser's tree, the worktree card's changed files, the Review Hub list,
       // the diff sidebar) routes these keys to its own row-level menu, and this
@@ -162,22 +169,20 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
         isMenuKey &&
         // An isolated surface types to its own terminal: the focused grid
         // pane's menu is not what these keys mean there.
-        !isolated
+        !isolated &&
+        matchesTriggerCombo(e, "terminal.contextMenu")
       ) {
-        const effectiveCombo = keybindingService.getEffectiveCombo("terminal.contextMenu");
-        if (effectiveCombo !== undefined) {
-          e.preventDefault();
-          e.stopPropagation();
-          const focusedId = usePanelStore.getState().focusedId;
-          if (focusedId) {
-            void actionService.dispatch(
-              "terminal.contextMenu",
-              { terminalId: focusedId },
-              { source: "keybinding" }
-            );
-          }
-          return;
+        e.preventDefault();
+        e.stopPropagation();
+        const focusedId = usePanelStore.getState().focusedId;
+        if (focusedId) {
+          void actionService.dispatch(
+            "terminal.contextMenu",
+            { terminalId: focusedId },
+            { source: "keybinding" }
+          );
         }
+        return;
       }
 
       // Escape cancels any pending chord — consume the event to prevent xterm leakage
