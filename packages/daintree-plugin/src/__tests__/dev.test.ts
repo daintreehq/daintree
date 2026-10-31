@@ -262,15 +262,41 @@ describe("cleanupDevLink", () => {
 
   it("releases the marker only after the link is gone", async () => {
     const link = await linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" });
-    const unlink = vi.spyOn(fs, "unlink");
+    const realUnlink = fs.unlink.bind(fs);
+    let releaseLinkUnlink!: () => void;
+    const linkUnlinkGate = new Promise<void>((resolve) => (releaseLinkUnlink = resolve));
+    const unlink = vi.spyOn(fs, "unlink").mockImplementationOnce(async (target) => {
+      await linkUnlinkGate;
+      return realUnlink(target);
+    });
     try {
-      await cleanupDevLink(link);
-      // The marker reserves the directory: dropped first, a session starting
-      // here could reuse the link and then have it removed under it.
-      expect(unlink.mock.calls.map((c) => c[0])).toEqual([link.linkPath, link.markerPath]);
+      const cleaning = cleanupDevLink(link);
+      await vi.waitFor(() => expect(unlink).toHaveBeenCalledWith(link.linkPath));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // The marker reserves the directory: dropped before the link is gone, a
+      // session starting here could reuse the link and then lose it.
+      await expect(fs.access(link.markerPath)).resolves.toBeUndefined();
+
+      releaseLinkUnlink();
+      await cleaning;
+      expect(await lstatSafe(link.markerPath)).toBeNull();
     } finally {
       unlink.mockRestore();
     }
+  });
+
+  it("leaves a link a new directory at a moved plugin dir's path reuses", async () => {
+    const older = await linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" });
+    await fs.rename(pluginDir, path.join(tmpDir, "moved"));
+    await fs.mkdir(pluginDir);
+    const newer = await linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" });
+    expect(newer.createdSymlink).toBe(false);
+
+    await cleanupDevLink(older);
+
+    // Same path, same link text, but no longer the directory the older one served.
+    expect(await lstatSafe(older.linkPath)).not.toBeNull();
+    await expect(fs.access(newer.markerPath)).resolves.toBeUndefined();
   });
 
   it("never removes a real directory that replaced its link", async () => {
@@ -358,6 +384,24 @@ describe("runDev", () => {
 
     expect(vi.mocked(sendCliRequest).mock.calls.map((c) => c[0])).toContain("plugin.dev.stop");
     expect(await lstatSafe(path.join(pluginsRoot, "acme.demo"))).toBeNull();
+  });
+
+  it("still unloads when the plugin dir behind a reused alias link moved away", async () => {
+    const alias = path.join(tmpDir, "alias");
+    await fs.symlink(pluginDir, alias);
+    await fs.mkdir(pluginsRoot, { recursive: true });
+    await fs.symlink(alias, path.join(pluginsRoot, "acme.demo"));
+    const controller = new AbortController();
+    const done = runDev({ dir: pluginDir, pluginsRoot, keepAliveSignal: controller.signal });
+    await vi.waitFor(() => expect(spawnViteWatchMock).toHaveBeenCalled());
+
+    await fs.rename(pluginDir, path.join(tmpDir, "moved"));
+    controller.abort();
+    await done;
+
+    expect(vi.mocked(sendCliRequest).mock.calls.map((c) => c[0])).toContain("plugin.dev.stop");
+    // Reused, not created, so it stays.
+    expect(await lstatSafe(path.join(pluginsRoot, "acme.demo"))).not.toBeNull();
   });
 
   it("never asks for metrics with metrics disabled, and stops polling before unloading", async () => {

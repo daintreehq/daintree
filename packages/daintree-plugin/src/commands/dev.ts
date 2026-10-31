@@ -55,6 +55,19 @@ export interface DevLink {
    * in place on teardown.
    */
   createdSymlink: boolean;
+  /**
+   * The link as this session left it: its readlink text and the directory it
+   * reached. The session owns the link only while both still hold, so neither
+   * a retarget nor a new directory created at a moved plugin dir's path counts.
+   */
+  linkTarget: string;
+  dirIdentity: DirIdentity;
+}
+
+interface DirIdentity {
+  dev: bigint;
+  ino: bigint;
+  realPath: string;
 }
 
 interface DevMarker {
@@ -137,49 +150,45 @@ async function removeOwnMarker(markerPath: string, sessionId: string): Promise<v
   await fs.unlink(markerPath);
 }
 
-/**
- * Whether two paths reach the same directory. Compared by identity rather than
- * by spelling: a junction's readlink, a case-insensitive volume or a symlinked
- * tmpdir can all spell one directory differently.
- */
-async function isSameDirectory(a: string, b: string): Promise<boolean> {
+/** The directory a path reaches, or null when it reaches none. */
+async function directoryIdentity(p: string): Promise<DirIdentity | null> {
   try {
-    const [statA, statB] = await Promise.all([
-      fs.stat(a, { bigint: true }),
-      fs.stat(b, { bigint: true }),
-    ]);
-    if (statA.ino === 0n || statB.ino === 0n) {
-      // No usable file identity (some network filesystems).
-      return (await fs.realpath(a)) === (await fs.realpath(b));
-    }
-    return statA.dev === statB.dev && statA.ino === statB.ino;
+    const stat = await fs.stat(p, { bigint: true });
+    return { dev: stat.dev, ino: stat.ino, realPath: await fs.realpath(p) };
   } catch {
-    return false;
+    return null;
   }
 }
 
-/** Whether the link is still a symlink into this session's plugin directory. */
+/**
+ * Compared by identity rather than by spelling: a junction's readlink, a
+ * case-insensitive volume or a symlinked tmpdir can all spell one directory
+ * differently.
+ */
+function isSameIdentity(a: DirIdentity, b: DirIdentity): boolean {
+  // No usable file identity (some network filesystems).
+  if (a.ino === 0n || b.ino === 0n) return a.realPath === b.realPath;
+  return a.dev === b.dev && a.ino === b.ino;
+}
+
+async function isSameDirectory(a: string, b: string): Promise<boolean> {
+  const [identityA, identityB] = await Promise.all([directoryIdentity(a), directoryIdentity(b)]);
+  return identityA !== null && identityB !== null && isSameIdentity(identityA, identityB);
+}
+
+/** Whether the link is still the one this session set up, into its directory. */
 async function linkTargetsSession(link: DevLink): Promise<boolean> {
   try {
     if (!(await fs.lstat(link.linkPath)).isSymbolicLink()) return false;
+    if ((await fs.readlink(link.linkPath)) !== link.linkTarget) return false;
   } catch {
     return false;
   }
-  try {
-    await fs.stat(link.linkPath);
-  } catch {
-    // Dangling: the plugin dir was deleted or moved mid-session, leaving no
-    // identity to compare, so go by where the link says it points.
-    try {
-      const target = path.resolve(path.dirname(link.linkPath), await fs.readlink(link.linkPath));
-      return process.platform === "win32"
-        ? target.toLowerCase() === link.pluginDir.toLowerCase()
-        : target === link.pluginDir;
-    } catch {
-      return false;
-    }
-  }
-  return isSameDirectory(link.linkPath, link.pluginDir);
+  const reached = await directoryIdentity(link.linkPath);
+  // Dangling: the plugin dir was deleted or moved mid-session. The link is
+  // still the one this session set up, so it is still this session's.
+  if (!reached) return true;
+  return isSameIdentity(reached, link.dirIdentity);
 }
 
 /**
@@ -206,6 +215,8 @@ export async function linkDevPlugin(args: {
   await claimDevMarker(pluginId, markerPath, sessionId);
 
   let createdSymlink: boolean;
+  let linkTarget: string;
+  let dirIdentity: DirIdentity | null;
   try {
     await fs.mkdir(pluginsRoot, { recursive: true });
     try {
@@ -231,12 +242,23 @@ export async function linkDevPlugin(args: {
         createdSymlink = true;
       }
     }
+    linkTarget = await fs.readlink(linkPath);
+    dirIdentity = await directoryIdentity(pluginDir);
+    if (!dirIdentity) throw new Error(`Can't dev-link "${pluginId}": ${pluginDir} is unreadable.`);
   } catch (err) {
     await removeOwnMarker(markerPath, sessionId).catch(() => {});
     throw err;
   }
 
-  return { linkPath, pluginDir, markerPath, sessionId, createdSymlink };
+  return {
+    linkPath,
+    pluginDir,
+    markerPath,
+    sessionId,
+    createdSymlink,
+    linkTarget,
+    dirIdentity,
+  };
 }
 
 /**

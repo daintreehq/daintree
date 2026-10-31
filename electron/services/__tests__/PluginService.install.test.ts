@@ -1914,6 +1914,38 @@ describe("dev sessions — full-artifact reconcile (#12277)", () => {
       service.dispose();
     });
 
+    it("retires the session and its watcher when a start fails after arming it", async () => {
+      await writeDevPlugin();
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      await service.loadDevPlugin(DEV_ID, "older");
+      const internals = service as unknown as {
+        loadPlugin: (...args: unknown[]) => Promise<unknown>;
+        emitRuntimeStatus: (pluginId: string) => void;
+      };
+      // A step past the marker check failing: the session is re-armed, then
+      // the load throws.
+      const realLoad = internals.loadPlugin.bind(service);
+      vi.spyOn(internals, "loadPlugin").mockImplementationOnce(async (...args) => {
+        await realLoad(...args);
+        throw new Error("skills registration failed");
+      });
+      const sessionAtEmit: boolean[] = [];
+      const realEmit = internals.emitRuntimeStatus.bind(service);
+      vi.spyOn(internals, "emitRuntimeStatus").mockImplementation((pluginId) => {
+        if (pluginId === DEV_ID) sessionAtEmit.push(devStatus(service) !== undefined);
+        realEmit(pluginId);
+      });
+
+      await expect(service.loadDevPlugin(DEV_ID, "newer")).rejects.toThrow(/skills/);
+
+      expect(watcherOf(service)).toBeUndefined();
+      expect(devStatus(service)).toBeUndefined();
+      // The last status published says the session is gone.
+      expect(sessionAtEmit.at(-1)).toBe(false);
+
+      service.dispose();
+    });
+
     it("re-arms the artifact watcher on the directory a takeover links", async () => {
       async function writeWorktree(name: string): Promise<string> {
         const dir = path.join(tmpDir, name);
