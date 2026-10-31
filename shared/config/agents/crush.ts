@@ -56,7 +56,9 @@ export const config: AgentConfig = {
       windows: [
         {
           label: "winget",
-          commands: ["winget install charmbracelet.crush"],
+          commands: [
+            "winget install --id charmbracelet.crush -e --source winget --accept-source-agreements --accept-package-agreements",
+          ],
         },
         {
           label: "Scoop",

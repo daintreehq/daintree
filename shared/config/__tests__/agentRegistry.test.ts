@@ -1239,7 +1239,7 @@ describe("crush and kiro Windows install help", () => {
   it("offers the vendor-documented Windows routes", () => {
     const crush = getAgentConfig("crush")!.install!.byOs!.windows!;
     expect(crush.find((m) => m.label === "winget")?.commands).toEqual([
-      "winget install charmbracelet.crush",
+      "winget install --id charmbracelet.crush -e --source winget --accept-source-agreements --accept-package-agreements",
     ]);
     expect(crush.find((m) => m.label === "Scoop")?.commands).toEqual([
       "scoop bucket add charm https://github.com/charmbracelet/scoop-bucket.git",
