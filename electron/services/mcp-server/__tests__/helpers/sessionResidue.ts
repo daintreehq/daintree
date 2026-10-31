@@ -141,7 +141,7 @@ export interface SeedOptions {
 /**
  * Give `sessionId` a row in every per-session collection one session can hold
  * at once, as a pinned help session that has been elevated, granted, denied,
- * deduplicated, subscribed and listed would. Its transport entry, idle-start
+ * deduplicated, subscribed and listed, and has closed a terminal it owned, would. Its transport entry, idle-start
  * timestamp or pane filing come from however the session was opened. Returns
  * the strings retirement must leave nowhere: the session id and the public help
  * id its figure counter is keyed by.
@@ -187,7 +187,9 @@ export function seedSessionState(
   store.resourceSubscriptions.set(sessionId, new Map([["daintree://seeded", unsubscribe]]));
   store.toolListRouteWatch.noteListed(sessionId, () => "route-a");
   const ledger = store.resourceOwnership;
-  ledger.record(ledger.ownerOf(sessionId), [{ kind: "terminal", id: `terminal-${sessionId}` }]);
+  const owner = ledger.ownerOf(sessionId);
+  ledger.record(owner, [{ kind: "terminal", id: `terminal-${sessionId}` }]);
+  ledger.noteClosed(owner, [{ terminalId: `terminal-${sessionId}-closed`, launchGeneration: 1 }]);
   return [sessionId, helpSessionId];
 }
 
