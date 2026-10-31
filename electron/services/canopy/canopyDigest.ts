@@ -49,7 +49,7 @@ const ECHO: Readonly<Record<string, RegExp>> = {
   qwen: /^>\s+(\S.*)$/,
   antigravity: /^>\s+(\S.*)$/,
   aider: /^(?:ask|architect|help|multi)?>\s+(\S.*)$/,
-  interpreter: /^>\s+(\S.*)$/,
+  interpreter: /^›\s+(\S.*)$/,
   kiro: /^(?:\d+% )?!?>\s+(\S.*)$/,
   mistral: /^(?:❯|>)\s+(\S.*)$/,
   cursor: /^→\s+(\S.*)$/,

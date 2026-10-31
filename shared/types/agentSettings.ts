@@ -254,7 +254,7 @@ export const DEFAULT_DANGEROUS_ARGS: Record<string, string> = {
   codex: "--dangerously-bypass-approvals-and-sandbox",
   grok: "--always-approve",
   cursor: "--force",
-  interpreter: "--auto_run",
+  interpreter: "--dangerously-bypass-approvals-and-sandbox",
   amp: "--dangerously-allow-all",
   aider: "--yes-always",
   qwen: "--yolo",
@@ -264,6 +264,31 @@ export const DEFAULT_DANGEROUS_ARGS: Record<string, string> = {
   // opencode intentionally absent: --dangerously-skip-permissions exists only
   // on the `run` subcommand, not the bare TUI launch (verified on 1.14.48)
 };
+
+/**
+ * Bypass flags an agent's default used to be, before its CLI stopped accepting
+ * them. Settings seeded from the old default, config bundles exported from
+ * them, and captured launch flags all outlive the change, so a retired value
+ * reads as unset and a restore strips it instead of relaunching into a CLI that
+ * rejects it.
+ */
+const RETIRED_DANGEROUS_ARGS: Readonly<Record<string, readonly string[]>> = {
+  // The Python program's flag; the current Rust product rejects it (#15567).
+  interpreter: ["--auto_run"],
+};
+
+// Own keys only: a custom agent's id can name an Object.prototype member
+// ("toString"), which a plain index would hand back as a function.
+function ownEntry<T>(map: Readonly<Record<string, T>>, agentId: string | undefined): T | undefined {
+  return agentId !== undefined && Object.hasOwn(map, agentId) ? map[agentId] : undefined;
+}
+
+/** The written `dangerousArgs`, or the agent's default when unset or retired. */
+function resolveDangerousArgs(written: string | undefined, agentId: string | undefined): string {
+  const value = written?.trim() ?? "";
+  if (value && !ownEntry(RETIRED_DANGEROUS_ARGS, agentId)?.includes(value)) return value;
+  return ownEntry(DEFAULT_DANGEROUS_ARGS, agentId)?.trim() ?? "";
+}
 
 export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
   agents: Object.fromEntries(
@@ -587,12 +612,16 @@ export function reconcileBypassFlags(
   effectiveBypass: boolean,
   bypassArgs?: string
 ): string[] {
-  const resolved = (bypassArgs?.trim() || DEFAULT_DANGEROUS_ARGS[agentId] || "").trim();
+  const resolved = resolveDangerousArgs(bypassArgs, agentId);
   // Strip both the resolved args and the registry default: a snapshot may have
   // been captured before the user customized `dangerousArgs`, so cleaning only
   // the current value could leave a stale default flag behind.
   const groups: string[][] = [];
-  for (const source of [resolved, DEFAULT_DANGEROUS_ARGS[agentId]]) {
+  for (const source of [
+    resolved,
+    ownEntry(DEFAULT_DANGEROUS_ARGS, agentId),
+    ...(ownEntry(RETIRED_DANGEROUS_ARGS, agentId) ?? []),
+  ]) {
     for (const group of optionGroups(source?.trim().split(/\s+/).filter(Boolean) ?? [])) {
       if (!groups.some((known) => known.join(" ") === group.join(" "))) groups.push(group);
     }
@@ -687,8 +716,7 @@ export function generateAgentFlags(
   const flags: string[] = [];
   if (resolveEffectiveBypass(entry, agentId, options?.globalSkipPermissions)) {
     // Use entry.dangerousArgs if set, otherwise fall back to default for this agent
-    const dangerousArgs =
-      entry.dangerousArgs?.trim() || (agentId ? DEFAULT_DANGEROUS_ARGS[agentId] : "");
+    const dangerousArgs = resolveDangerousArgs(entry.dangerousArgs, agentId);
     if (dangerousArgs) {
       flags.push(...dangerousArgs.split(/\s+/));
     }

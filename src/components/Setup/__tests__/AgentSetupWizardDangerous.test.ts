@@ -15,7 +15,8 @@ describe("Skip permissions toggle gating", () => {
       "--dangerously-bypass-approvals-and-sandbox"
     );
     expect(DEFAULT_DANGEROUS_ARGS).toHaveProperty("cursor", "--force");
-    expect(DEFAULT_DANGEROUS_ARGS).toHaveProperty("interpreter", "--auto_run");
+    // The Rust product shares Codex's flag; the Python program's --auto_run is retired (#15567).
+    expect(DEFAULT_DANGEROUS_ARGS).toHaveProperty("interpreter", DEFAULT_DANGEROUS_ARGS.codex);
     expect(DEFAULT_DANGEROUS_ARGS).toHaveProperty("amp", "--dangerously-allow-all");
   });
 

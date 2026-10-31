@@ -186,8 +186,44 @@ describe("buildResumeLatestCommand", () => {
   });
 
   it("returns undefined for a rolling-history agent whose only way back is a picker", () => {
-    // Interpreter declares empty args rather than a picker that would block the PTY.
-    expect(buildResumeLatestCommand("interpreter")).toBeUndefined();
+    // Empty args stand in for a picker that would sit on the restored PTY.
+    setUserRegistry({
+      "picker-only": {
+        id: "picker-only",
+        name: "Picker Only",
+        command: "picker-only",
+        color: "#ffffff",
+        iconId: "custom",
+        supportsContextInjection: false,
+        resume: { kind: "rolling-history", args: () => [] },
+      },
+    });
+    try {
+      expect(buildResumeLatestCommand("picker-only")).toBeUndefined();
+      // Control: the same agent with resume flags does get a command.
+      setUserRegistry({
+        "picker-only": {
+          id: "picker-only",
+          name: "Picker Only",
+          command: "picker-only",
+          color: "#ffffff",
+          iconId: "custom",
+          supportsContextInjection: false,
+          resume: { kind: "rolling-history", args: () => ["--continue"] },
+        },
+      });
+      expect(buildResumeLatestCommand("picker-only")).toBe("picker-only --continue");
+    } finally {
+      setUserRegistry({});
+    }
+  });
+
+  it("resumes Open Interpreter's latest session in the folder with resume --last", () => {
+    // The Rust product, not the Python CLI whose only way back was a picker (#15567).
+    expect(buildResumeLatestCommand("interpreter")).toBe("interpreter resume --last");
+    expect(buildResumeLatestCommand("interpreter", ["-m", "o4"])).toBe(
+      "interpreter -m 'o4' resume --last"
+    );
   });
 
   it("returns undefined for a named-target agent, whose args need the target", () => {
@@ -1145,6 +1181,57 @@ describe("reconcileBypassFlags", () => {
     expect(stripped).toEqual(["--model"]);
     const readded = reconcileBypassFlags(["--model"], "claude", true, "--custom-skip");
     expect(readded).toContain("--custom-skip");
+  });
+
+  it("replaces Open Interpreter's retired Python flag captured in a snapshot (#15567)", () => {
+    const current = DEFAULT_DANGEROUS_ARGS.interpreter as string;
+    expect(current).not.toBe("--auto_run");
+    // A pane captured under the old default must not relaunch with a flag the
+    // Rust CLI rejects: dropped when bypass is off, swapped in place when on.
+    expect(reconcileBypassFlags(["--auto_run", "-m", "o4"], "interpreter", false)).toEqual([
+      "-m",
+      "o4",
+    ]);
+    expect(reconcileBypassFlags(["--auto_run", "-m", "o4"], "interpreter", true)).toEqual([
+      current,
+      "-m",
+      "o4",
+    ]);
+    // Another agent's flag of the same spelling is not touched.
+    expect(reconcileBypassFlags(["--auto_run"], "aider", false)).toEqual(["--auto_run"]);
+  });
+
+  it("resolves bypass args for a custom agent whose id names an Object.prototype member", () => {
+    expect(
+      generateAgentFlags({ dangerousArgs: "--approve", dangerousMode: "on" }, "toString")
+    ).toEqual(["--approve"]);
+    expect(reconcileBypassFlags(["--approve", "-v"], "toString", false, "--approve")).toEqual([
+      "-v",
+    ]);
+    expect(reconcileBypassFlags(["-v"], "constructor", true, "--approve")).toEqual([
+      "-v",
+      "--approve",
+    ]);
+    // With nothing written there is no default to inherit from the prototype.
+    expect(generateAgentFlags({ dangerousMode: "on" }, "toString")).toEqual([]);
+  });
+
+  it("reads Open Interpreter's retired flag in settings as unset (#15567)", () => {
+    // An old config bundle can bring the Python default back after migration 042.
+    const current = DEFAULT_DANGEROUS_ARGS.interpreter as string;
+    expect(reconcileBypassFlags(["--auto_run"], "interpreter", true, "--auto_run")).toEqual([
+      current,
+    ]);
+    expect(
+      generateAgentFlags({ dangerousArgs: "--auto_run", dangerousMode: "on" }, "interpreter")
+    ).toEqual([current]);
+    // A value the user wrote themselves still wins.
+    expect(
+      generateAgentFlags(
+        { dangerousArgs: "--auto_run --verbose", dangerousMode: "on" },
+        "interpreter"
+      )
+    ).toEqual(["--auto_run", "--verbose"]);
   });
 
   it("does not mutate the input array", () => {
