@@ -403,11 +403,7 @@ function candidateAuthPaths(config: AgentConfig): string[] {
   const homePaths = check.configHome
     ? check.configHome.paths.map((relative) => `${check.configHome!.defaultDir}/${relative}`)
     : [];
-  return [
-    ...(check.configPaths?.[platform] ?? []),
-    ...(check.configPathsAll ?? []),
-    ...homePaths,
-  ];
+  return [...(check.configPaths?.[platform] ?? []), ...(check.configPathsAll ?? []), ...homePaths];
 }
 
 /** Every env var any agent treats as proof of auth. */
