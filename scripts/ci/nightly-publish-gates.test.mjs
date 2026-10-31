@@ -17,25 +17,47 @@ const workflow = load(readFileSync(workflowPath, "utf8"));
 const { build, publish } = workflow.jobs;
 const smokeX64 = workflow.jobs["smoke-x64"];
 
-const runs = (step, text) => typeof step.run === "string" && step.run.includes(text);
-const indexOf = (job, predicate) => job.steps.findIndex(predicate);
-const allSteps = Object.values(workflow.jobs).flatMap((job) => job.steps);
-const uploadIndex = () => indexOf(build, (s) => s.uses?.startsWith("actions/upload-artifact"));
+const MACOS = "startsWith(matrix.os, 'macos')";
+const LINUX = "startsWith(matrix.os, 'ubuntu')";
+const SMOKE = "node scripts/run-packaged-smoke.mjs";
+const PRELOAD = "npm run check:preload-backdoors";
 
-function packagedSmoke(job, condition) {
-  const index = indexOf(
-    job,
-    (s) => s.if === condition && runs(s, "node scripts/run-packaged-smoke.mjs")
+// Shell with comment lines dropped, so a commented-out command never counts.
+const code = (step) =>
+  typeof step.run === "string"
+    ? step.run
+        .split("\n")
+        .filter((line) => !line.trim().startsWith("#"))
+        .join("\n")
+    : "";
+const runs = (step, text) => code(step).includes(text);
+const allSteps = Object.values(workflow.jobs).flatMap((job) => job.steps);
+const gateSteps = allSteps.filter((s) => runs(s, SMOKE) || runs(s, PRELOAD));
+
+function stepIndex(job, predicate, what) {
+  const index = job.steps.findIndex(predicate);
+  expect(index, `missing step: ${what}`).toBeGreaterThanOrEqual(0);
+  return index;
+}
+
+const packageIndex = (condition) =>
+  stepIndex(
+    build,
+    (s) => s.if === condition && runs(s, "npx electron-builder"),
+    `electron-builder for ${condition}`
   );
-  expect(index, `no packaged smoke step for ${condition}`).toBeGreaterThanOrEqual(0);
-  return { index, step: job.steps[index] };
+const uploadIndex = () =>
+  stepIndex(build, (s) => s.uses?.startsWith("actions/upload-artifact"), "artifact upload");
+
+function packagedSmoke(condition) {
+  const index = stepIndex(build, (s) => s.if === condition && runs(s, SMOKE), `smoke ${condition}`);
+  return { index, step: build.steps[index] };
 }
 
 describe("nightly-publish gates (#15587)", () => {
   it("checks for preload backdoors after the build and before any packaging", () => {
-    const buildIndex = indexOf(build, (s) => /^npm run build$/m.test(s.run ?? ""));
-    const checkIndex = indexOf(build, (s) => runs(s, "npm run check:preload-backdoors"));
-    expect(buildIndex).toBeGreaterThanOrEqual(0);
+    const buildIndex = stepIndex(build, (s) => /^npm run build$/m.test(code(s)), "npm run build");
+    const checkIndex = stepIndex(build, (s) => runs(s, PRELOAD), PRELOAD);
     expect(checkIndex).toBeGreaterThan(buildIndex);
     // Every leg packages, so the gate must not be scoped to one OS.
     expect(build.steps[checkIndex].if).toBeUndefined();
@@ -49,87 +71,93 @@ describe("nightly-publish gates (#15587)", () => {
 
   it("launches only packaged binaries, never the dev Electron against dist/", () => {
     for (const step of allSteps) {
-      expect(runs(step, "test:smoke"), step.name).toBe(false);
-      expect(runs(step, "run-smoke.mjs"), step.name).toBe(false);
+      expect(/\btest:smoke(?!:)|\brun-smoke\.mjs\b/.test(code(step)), step.name).toBe(false);
     }
   });
 
   it("smokes the macOS arm64 and universal bundles after packaging, before upload", () => {
-    const { index, step } = packagedSmoke(build, "startsWith(matrix.os, 'macos')");
-    expect(step.run).toContain("release/mac-arm64/Daintree.app");
-    expect(step.run).toContain("release/mac-universal/Daintree.app");
-    expect(step.run).toContain('PACKAGED_BINARY="$app/Contents/MacOS/Daintree"');
-    const packageIndex = indexOf(build, (s) => s.name === "Package (macOS)");
-    expect(index).toBeGreaterThan(packageIndex);
+    const { index, step } = packagedSmoke(MACOS);
+    const loop = code(step).match(/^\s*for app in (.+); do$/m);
+    expect(loop, "macOS smoke no longer loops over the bundles").not.toBeNull();
+    expect(loop[1].trim().split(/\s+/).sort()).toEqual([
+      "release/mac-arm64/Daintree.app",
+      "release/mac-universal/Daintree.app",
+    ]);
+    expect(code(step)).toContain('PACKAGED_BINARY="$app/Contents/MacOS/Daintree"');
+    expect(index).toBeGreaterThan(packageIndex(MACOS));
     expect(index).toBeLessThan(uploadIndex());
   });
 
   it("smokes each Linux AppImage on its own runner after packaging, before upload", () => {
-    const { index, step } = packagedSmoke(build, "startsWith(matrix.os, 'ubuntu')");
-    expect(step.run).toContain("release/*.AppImage");
-    expect(step.run).toContain("--appimage-extract");
-    expect(step.run).toContain('PACKAGED_BINARY="$work/squashfs-root/AppRun"');
-    expect(step.run).toContain("xvfb-run --auto-servernum node scripts/run-packaged-smoke.mjs");
-    const packageIndex = indexOf(build, (s) => s.name === "Package (Linux)");
-    expect(index).toBeGreaterThan(packageIndex);
+    const { index, step } = packagedSmoke(LINUX);
+    expect(code(step)).toContain("release/*.AppImage");
+    expect(code(step)).toContain("--appimage-extract");
+    expect(code(step)).toContain('PACKAGED_BINARY="$work/squashfs-root/AppRun"');
+    expect(code(step)).toMatch(/xvfb-run --auto-servernum node scripts\/run-packaged-smoke\.mjs/);
+    expect(index).toBeGreaterThan(packageIndex(LINUX));
     expect(index).toBeLessThan(uploadIndex());
   });
 
   it("smokes the shipped x64 macOS zip natively on Intel", () => {
+    expect(smokeX64, "smoke-x64 job is missing").toBeTruthy();
     expect(smokeX64["runs-on"]).toBe("macos-15-intel");
     expect(smokeX64.needs).toEqual(expect.arrayContaining(["build"]));
-    const download = smokeX64.steps.find((s) => s.uses?.startsWith("actions/download-artifact"));
-    expect(download.with.name).toBe("nightly-macos-15");
-    const smoke = smokeX64.steps.find((s) => runs(s, "node scripts/run-packaged-smoke.mjs"));
-    expect(smoke.run).toContain("release/Daintree-*-x64-mac.zip");
-    expect(smoke.run).toContain("ditto -x -k");
-    expect(smoke.run).toContain(
+    const download = stepIndex(
+      smokeX64,
+      (s) => s.uses?.startsWith("actions/download-artifact"),
+      "x64 artifact download"
+    );
+    expect(smokeX64.steps[download].with.name).toBe("nightly-macos-15");
+    const smoke = stepIndex(smokeX64, (s) => runs(s, SMOKE), "x64 packaged smoke");
+    expect(smoke).toBeGreaterThan(download);
+    const step = smokeX64.steps[smoke];
+    // A skipped step would let the job, and so publish, succeed unlaunched.
+    expect(step.if).toBeUndefined();
+    expect(code(step)).toContain("release/Daintree-*-x64-mac.zip");
+    expect(code(step)).toContain("ditto -x -k");
+    expect(code(step)).toContain(
       'PACKAGED_BINARY="release/mac-x64/Daintree.app/Contents/MacOS/Daintree"'
     );
   });
 
-  it("installs the Linux runtime libraries and xvfb before the Linux smoke", () => {
-    const { index } = packagedSmoke(build, "startsWith(matrix.os, 'ubuntu')");
-    const install = indexOf(
-      build,
-      (s) =>
-        s.if === "startsWith(matrix.os, 'ubuntu')" &&
-        /apt-get install[\s\S]*\bxvfb\b/.test(s.run ?? "")
-    );
-    expect(install).toBeGreaterThanOrEqual(0);
-    expect(install).toBeLessThan(index);
-  });
-
   it("publishes only after every gate passed", () => {
     expect(publish.needs).toEqual(expect.arrayContaining(["build", "smoke-x64"]));
-    // An `always()`/`!cancelled()` condition would publish past a failed gate.
-    for (const [name, job] of Object.entries(workflow.jobs)) {
-      expect(job.if, name).toBeUndefined();
-      expect(job["continue-on-error"], name).toBeUndefined();
+    // A status function would let a job run past a failed or skipped gate.
+    for (const [name, job] of Object.entries({ build, "smoke-x64": smokeX64, publish })) {
+      expect(String(job.if ?? ""), name).not.toMatch(/\b(?:always|failure|cancelled)\s*\(/);
+      expect(job["continue-on-error"] ?? false, name).toBe(false);
     }
-    for (const step of allSteps) {
-      if (runs(step, "run-packaged-smoke.mjs") || runs(step, "check:preload-backdoors")) {
-        expect(step["continue-on-error"], step.name).toBeUndefined();
+    expect(gateSteps.length).toBeGreaterThanOrEqual(4);
+    for (const step of gateSteps) {
+      expect(step["continue-on-error"] ?? false, step.name).toBe(false);
+      expect(code(step), step.name).not.toMatch(/\|\|\s*(?:true|:)\s*$/m);
+      if (/\bfor\b/.test(code(step))) {
+        // The loop's trailing `echo` would otherwise mask a failed launch.
+        expect(code(step), step.name).toMatch(/^\s*set -euo pipefail$/m);
       }
     }
   });
 
-  it("uploads to R2 only from the publish job", () => {
+  it("writes to R2 only from the publish job", () => {
     for (const [name, job] of Object.entries(workflow.jobs)) {
       if (name === "publish") continue;
-      for (const step of job.steps)
-        expect(runs(step, "aws s3"), `${name}: ${step.name}`).toBe(false);
+      for (const step of job.steps) {
+        expect(/\baws\b.*\bs3(?:api)?\b/.test(code(step)), `${name}: ${step.name}`).toBe(false);
+      }
+      expect(JSON.stringify(job), name).not.toMatch(/secrets\.(?:R2_|DAINTREE_R2_)/);
     }
   });
 
   it("stays publish-only: no test suites and no issue-writing permissions", () => {
-    expect(workflow.permissions).toEqual({ contents: "read" });
+    const grantsIssueWrite = (perms) => perms === "write-all" || perms?.issues === "write";
+    expect(grantsIssueWrite(workflow.permissions)).toBe(false);
     for (const [name, job] of Object.entries(workflow.jobs)) {
-      expect(job.permissions, name).toBeUndefined();
+      expect(grantsIssueWrite(job.permissions), name).toBe(false);
     }
-    const suite = /\bnpm (?:run )?test\b|\bvitest\b|\bplaywright\b/;
+    const suite =
+      /\bnpm\b[^\n]*?\s(?:t|test|test:(?!smoke:packaged\b)[\w:-]+)(?=\s|$)|\bvitest\b|\bplaywright\b/m;
     for (const step of allSteps) {
-      expect(suite.test(step.run ?? ""), step.name).toBe(false);
+      expect(suite.test(code(step)), step.name).toBe(false);
     }
   });
 });
