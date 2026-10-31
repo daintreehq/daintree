@@ -150,7 +150,8 @@ export function CodeForgeTab({
   const savedProviderKnown = forgeProviderOverride === null || savedProvider !== undefined;
 
   const savedIssueProvider = findProvider(issueProviders, issueProviderOverride);
-  const savedIssueProviderKnown = issueProviderOverride === null || savedIssueProvider !== undefined;
+  const savedIssueProviderKnown =
+    issueProviderOverride === null || savedIssueProvider !== undefined;
 
   const remoteOptions: SettingsSelectOption[] = [
     { value: AUTO_DETECT, label: "Auto-detect" },

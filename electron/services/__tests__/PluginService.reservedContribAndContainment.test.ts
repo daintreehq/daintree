@@ -588,8 +588,8 @@ describe("reserved contribution point warnings", () => {
     expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("contributes.forgeProviders"));
     // The author's durable signal: the plugin's own log, not just the console.
     const logLines =
-      service.getDiagnosticsSnapshot().plugins.find((p) => p.pluginId === "acme.forge")
-        ?.logLines ?? [];
+      service.getDiagnosticsSnapshot().plugins.find((p) => p.pluginId === "acme.forge")?.logLines ??
+      [];
     expect(logLines).toContainEqual(
       expect.objectContaining({
         level: "warn",
