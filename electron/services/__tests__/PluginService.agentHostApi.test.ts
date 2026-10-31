@@ -620,8 +620,15 @@ describe("Plugin agent-input host API (#10558)", () => {
   // Driven through a real TerminalProcess: the ordering lives in its submit
   // lane, which two forwarding spies could not show.
   it("never folds a staged draft into the line a preceding submit:true sends", async () => {
+    const fake = installFakePtyClient([
+      { id: "t1", detectedAgentId: "claude", agentState: "waiting", hasPty: true },
+    ]);
+    const { host } = await setupInputHost(["agent:input"]);
+
+    vi.useFakeTimers();
     const ptyWrites: string[] = [];
     const pty: Partial<IPty> = {
+      // Non-positive, so disposing the terminal never signals a real process.
       pid: 0,
       cols: 80,
       rows: 24,
@@ -647,23 +654,20 @@ describe("Plugin agent-input host API (#10558)", () => {
       { shell: "/bin/zsh", args: ["-l"], env: {} },
       pty as IPty
     );
-    (
-      terminal as unknown as { terminalInfo: { detectedAgentId: string } }
-    ).terminalInfo.detectedAgentId = "claude";
-    const fake = installFakePtyClient([
-      { id: "t1", detectedAgentId: "claude", agentState: "waiting", hasPty: true },
-    ]);
-    fake.submit.mockImplementation((_id: string, text: string) => terminal.submit(text));
-    fake.stage.mockImplementation((_id: string, text: string) => terminal.stage(text));
-    const { host } = await setupInputHost(["agent:input"]);
-    vi.useFakeTimers();
     onTestFinished(() => {
       terminal.dispose();
       vi.useRealTimers();
     });
+    (
+      terminal as unknown as { terminalInfo: { detectedAgentId: string } }
+    ).terminalInfo.detectedAgentId = "claude";
+    const terminals = new Map([["t1", terminal]]);
+    fake.submit.mockImplementation((id: string, text: string) => terminals.get(id)?.submit(text));
+    fake.stage.mockImplementation((id: string, text: string) => terminals.get(id)?.stage(text));
 
     await host.sendToActiveAgent("a", { submit: true });
     await host.sendToActiveAgent("b");
+    expect(fake.submit).toHaveBeenCalledWith("t1", "a");
     expect(fake.stage).toHaveBeenCalledWith("t1", "b");
     expect(ptyWrites).toEqual(["a"]);
 

@@ -12,7 +12,8 @@ vi.mock("node-pty", () => {
 
 function createMockPty(): IPty {
   const pty: Partial<IPty> = {
-    pid: 123,
+    // Non-positive, so disposing a terminal never signals a real process.
+    pid: 0,
     cols: 80,
     rows: 24,
     write: (data: string) => {
@@ -43,6 +44,8 @@ interface Internals {
   };
 }
 
+const liveTerminals: TerminalProcess[] = [];
+
 function createAgentTerminal(agentId: string): TerminalProcess {
   const terminal = new TerminalProcess(
     "t-stage",
@@ -57,6 +60,7 @@ function createAgentTerminal(agentId: string): TerminalProcess {
     createMockPty()
   );
   info(terminal).detectedAgentId = agentId;
+  liveTerminals.push(terminal);
   return terminal;
 }
 
@@ -78,6 +82,7 @@ describe("TerminalProcess.stage and the submit lane (#15554)", () => {
   });
 
   afterEach(() => {
+    for (const terminal of liveTerminals.splice(0)) terminal.dispose();
     vi.useRealTimers();
   });
 
@@ -172,6 +177,37 @@ describe("TerminalProcess.stage and the submit lane (#15554)", () => {
     expect(writes()).toContain("NEW-OWNER-DRAFT");
   });
 
+  it("is dropped by the input generation alone, should the lane ever keep it", async () => {
+    const terminal = createAgentTerminal("claude");
+    const internals = terminal as unknown as {
+      writeQueue: { cancelPendingInput: () => void };
+      inputController: { acquireShutdownInputLock: () => () => void };
+    };
+    // The lane normally discards a waiting draft itself; with that disabled,
+    // the generation the draft was accepted under is all that stops it.
+    vi.spyOn(internals.writeQueue, "cancelPendingInput").mockImplementation(() => {});
+
+    terminal.submit("first prompt");
+    terminal.stage(DRAFT);
+    internals.inputController.acquireShutdownInputLock()();
+
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(writes()).not.toContain(DRAFT);
+  });
+
+  it("is dropped when the terminal is disposed while it waits", async () => {
+    const terminal = createAgentTerminal("claude");
+
+    terminal.submit("first prompt");
+    terminal.stage(DRAFT);
+    terminal.dispose();
+
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(writes()).not.toContain(DRAFT);
+  });
+
   it("is dropped when the agent it was meant for is relaunched while it waits", async () => {
     const terminal = createAgentTerminal("claude");
 
@@ -190,6 +226,45 @@ describe("TerminalProcess.stage and the submit lane (#15554)", () => {
     terminal.submit("first prompt");
     terminal.stage(DRAFT);
     info(terminal).detectedAgentId = undefined;
+
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(writes()).not.toContain(DRAFT);
+  });
+
+  it("is dropped when a different agent takes the pty while it waits", async () => {
+    const terminal = createAgentTerminal("claude");
+
+    terminal.submit("first prompt");
+    terminal.stage(DRAFT);
+    info(terminal).detectedAgentId = "gemini";
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(writes()).not.toContain(DRAFT);
+  });
+
+  it("is dropped when the agent detected while it waits is not the one launched", async () => {
+    const terminal = createAgentTerminal("claude");
+    info(terminal).detectedAgentId = undefined;
+
+    terminal.submit("first prompt");
+    terminal.stage(DRAFT);
+    info(terminal).detectedAgentId = "codex";
+
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(writes()).not.toContain(DRAFT);
+  });
+
+  it("is dropped when the launched agent is detected only after a relaunch", async () => {
+    const terminal = createAgentTerminal("claude");
+    info(terminal).detectedAgentId = undefined;
+
+    terminal.submit("first prompt");
+    terminal.stage(DRAFT);
+    info(terminal).detectedAgentId = "claude";
+    info(terminal).agentIncarnation += 1;
 
     await vi.advanceTimersByTimeAsync(3_000);
 
@@ -229,7 +304,8 @@ describe("TerminalProcess.stage and the submit lane (#15554)", () => {
     await vi.advanceTimersByTimeAsync(5_000);
 
     const softNewline = getSoftNewlineSequence(info(terminal) as never);
-    expect(softNewline).not.toBe("\r");
+    // Whatever the sequence is, it must not be one the agent reads as Enter.
+    expect(["\r", "\n", "\r\n"]).not.toContain(softNewline);
     expect(writes()).toEqual(["first prompt", "\r", `line one${softNewline}line two`]);
   });
 

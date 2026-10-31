@@ -431,12 +431,15 @@ export class TerminalInputController {
     // this one) owns the pty once the lane frees up.
     const generation = this.inputGeneration;
     const owner = this.captureOwner();
+    const launchHint = terminal.launchAgentId;
     this.host.writeQueue.stage(() => {
       // A plugin can address an agent known only by its launch hint. Detection
-      // landing while the draft waits is that agent arriving, not a new one.
+      // of that agent landing while the draft waits is its arrival; any other
+      // agent detected by then is a recipient the draft was never meant for.
+      const detected = this.host.terminalInfo.detectedAgentId;
       const recipient =
-        owner.agentId === undefined
-          ? { ...owner, agentId: this.host.terminalInfo.detectedAgentId }
+        owner.agentId === undefined && detected === launchHint
+          ? { ...owner, agentId: detected }
           : owner;
       if (this.isStillOwnedBy(generation, recipient)) this.writeStaged(body);
     });

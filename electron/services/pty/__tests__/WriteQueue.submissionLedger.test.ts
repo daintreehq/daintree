@@ -591,9 +591,16 @@ describe("WriteQueue submission ledger with staged text in the lane (#15554)", (
 
   it("cancels the tokened submissions queued around a stage", async () => {
     const h = makeHarness();
+    const executed: string[] = [];
     let release!: () => void;
+    // Every submission that runs is delivered, so a `cancelled` below can only
+    // come from the queue discarding it, never from the drain loop's fallback.
     h.performSubmit.mockImplementation((text, ctx) => {
-      if (text !== "one") return Promise.resolve();
+      executed.push(text);
+      if (text !== "one") {
+        ctx.markPtyWritten();
+        return Promise.resolve();
+      }
       return new Promise<void>((resolve) => {
         release = () => {
           ctx.markPtyWritten();
@@ -601,16 +608,19 @@ describe("WriteQueue submission ledger with staged text in the lane (#15554)", (
         };
       });
     });
+    const stageWrite = vi.fn();
     const wq = new WriteQueue(h.options);
 
     wq.submit("one", "tok-1");
     wq.submit("two", "tok-2");
-    wq.stage(() => {});
+    wq.stage(stageWrite);
     wq.submit("three", "tok-3");
     wq.cancelPendingInput();
     release();
     await vi.runAllTimersAsync();
 
+    expect(executed).toEqual(["one"]);
+    expect(stageWrite).not.toHaveBeenCalled();
     expect(wq.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
     expect(wq.getSubmission("tok-2")).toMatchObject({ phase: "cancelled" });
     expect(wq.getSubmission("tok-3")).toMatchObject({ phase: "cancelled" });
