@@ -836,9 +836,6 @@ describe("QuickRun", () => {
   });
 
   describe("when the history can't be read or saved", () => {
-    const HISTORY_KEY = "daintree_cmd_history_test-project";
-    const AUTO_RESTART_KEY = "daintree_quickrun_autorestart_test-project";
-
     /** What AppLayout's section boundary does to the sidebar when a render throws. */
     class SectionBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
       state = { failed: false };
@@ -854,24 +851,36 @@ describe("QuickRun", () => {
     const accessDenied = () => new DOMException("Access is denied.", "SecurityError");
 
     const degradedNotice = vi.fn();
+    // A structural failure parks writes in a memory map shared by the whole module,
+    // so each test uses a project of its own rather than inheriting the last one's.
+    let projectNumber = 0;
+    let projectId: string;
+    let historyKey: string;
+    let autoRestartKey: string;
     let historyWrites: string[];
 
     /** Makes the history key's reads or writes fail, recording every attempted write. */
     function failHistory(method: "getItem" | "setItem", error: () => Error) {
-      vi.spyOn(localStorage, method).mockImplementation(((key: string, value?: string) => {
-        if (key === HISTORY_KEY) {
-          if (method === "setItem") historyWrites.push(value as string);
+      if (method === "getItem") {
+        vi.spyOn(localStorage, "getItem").mockImplementation((key) => {
+          if (key === historyKey) throw error();
+          return storageMap.get(key) ?? null;
+        });
+        return;
+      }
+      vi.spyOn(localStorage, "setItem").mockImplementation((key, value) => {
+        if (key === historyKey) {
+          historyWrites.push(value);
           throw error();
         }
-        if (method === "getItem") return storageMap.get(key) ?? null;
-        storageMap.set(key, value as string);
-      }) as typeof localStorage.getItem);
+        storageMap.set(key, value);
+      });
     }
 
     function renderFooter(strict = false) {
       const tree = (
         <SectionBoundary>
-          <Footer projectId="test-project" />
+          <Footer projectId={projectId} />
         </SectionBoundary>
       );
       return render(strict ? <StrictMode>{tree}</StrictMode> : tree);
@@ -889,6 +898,9 @@ describe("QuickRun", () => {
     }
 
     beforeEach(() => {
+      projectId = `history-failure-${++projectNumber}`;
+      historyKey = `daintree_cmd_history_${projectId}`;
+      autoRestartKey = `daintree_quickrun_autorestart_${projectId}`;
       historyWrites = [];
       setPermanentFallbackHandler(degradedNotice);
       vi.spyOn(console, "error").mockImplementation(() => {});
@@ -919,7 +931,7 @@ describe("QuickRun", () => {
       renderFooter();
 
       typeAndEnter("npm test");
-      // Recording waits for the terminal to exist: nothing is written for a launch that failed.
+      // Recording waits for the terminal to exist.
       expect(historyWrites).toEqual([]);
       await act(async () => resolveTerminal());
 
@@ -930,6 +942,19 @@ describe("QuickRun", () => {
       expect(recentCommands()).toEqual([expect.stringContaining("npm test")]);
       // A full quota is transient; storage is still healthy, so no degraded-storage notice.
       expect(degradedNotice).not.toHaveBeenCalled();
+    });
+
+    it("records nothing for a launch that failed", async () => {
+      failHistory("setItem", quotaError);
+      setupPendingTerminal();
+      renderFooter();
+
+      typeAndEnter("npm test");
+      await act(async () => rejectTerminal(new Error("spawn failed")));
+
+      expect(screen.getByRole("alert")).not.toBeNull();
+      expect(historyWrites).toEqual([]);
+      expect(storageMap.has(historyKey)).toBe(false);
     });
 
     it("keeps a command the quota refused when the panel is closed and reopened", async () => {
@@ -968,7 +993,7 @@ describe("QuickRun", () => {
 
       await launch("npm test");
 
-      expect(setItem.mock.calls.filter(([key]) => key === HISTORY_KEY)).toHaveLength(1);
+      expect(setItem.mock.calls.filter(([key]) => key === historyKey)).toHaveLength(1);
       expect(recentCommands()).toEqual([expect.stringContaining("npm test")]);
     });
 
@@ -976,28 +1001,33 @@ describe("QuickRun", () => {
       const setItem = vi.spyOn(localStorage, "setItem");
       renderFooter(true);
       openPanel();
+      const toggle = screen.getByRole("button", { name: "Auto-restart" });
 
-      fireEvent.click(screen.getByRole("button", { name: "Auto-restart" }));
+      fireEvent.click(toggle);
+      expect(toggle.getAttribute("aria-pressed")).toBe("true");
+      fireEvent.click(toggle);
+      expect(toggle.getAttribute("aria-pressed")).toBe("false");
 
-      expect(setItem.mock.calls.filter(([key]) => key === AUTO_RESTART_KEY)).toEqual([
-        [AUTO_RESTART_KEY, "true"],
+      expect(setItem.mock.calls.filter(([key]) => key === autoRestartKey)).toEqual([
+        [autoRestartKey, "true"],
+        [autoRestartKey, "false"],
       ]);
     });
 
-    it("starts from an empty history when the stored one is malformed", async () => {
+    it("starts from an empty history when the stored one is malformed", () => {
       for (const stored of [
         "{not json",
         JSON.stringify([null]),
         JSON.stringify([{ command: 7, timestamp: 1 }]),
         JSON.stringify({ command: "npm test", timestamp: 1 }),
       ]) {
-        storageMap.set(HISTORY_KEY, stored);
+        storageMap.set(historyKey, stored);
         const view = renderFooter();
         fireEvent.keyDown(openPanel(), { key: "ArrowDown" });
 
         expect(screen.queryByTestId("section-fallback")).toBeNull();
         expect(screen.queryAllByRole("option")).toEqual([]);
-        expect(storageMap.has(HISTORY_KEY)).toBe(false);
+        expect(storageMap.has(historyKey)).toBe(false);
         view.unmount();
         resetQuickRunHistoryForTests();
       }

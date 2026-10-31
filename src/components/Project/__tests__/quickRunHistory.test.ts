@@ -43,12 +43,18 @@ afterEach(() => {
 });
 
 describe("appendHistory", () => {
-  it("puts the command first and keeps the spelling it was run with", () => {
+  it("puts the command first", () => {
     expect(appendHistory([item("a"), item("b")], "c", 9)).toEqual([
       { command: "c", timestamp: 9 },
       item("a"),
       item("b"),
     ]);
+  });
+
+  it("keeps the spelling it was run with, replacing the earlier spelling", () => {
+    const next = appendHistory([item("ls"), item("npm run test")], 'npm  run "test"', 9);
+
+    expect(next).toEqual([{ command: 'npm  run "test"', timestamp: 9 }, item("ls")]);
   });
 
   it("replaces an earlier entry that differs only by whitespace or quoting", () => {
@@ -134,11 +140,10 @@ describe("loadHistory", () => {
 });
 
 describe("recordHistory", () => {
-  it("adds to what is stored and persists the result", () => {
+  it("adds to the list it is given and persists the result", () => {
     const backing = installStorage({});
-    backing.set(KEY, JSON.stringify([item("a")]));
 
-    const next = recordHistory(KEY, "b");
+    const next = recordHistory(KEY, "b", [item("a")]);
 
     expect(next.map((h) => h.command)).toEqual(["b", "a"]);
     expect(JSON.parse(backing.get(KEY)!)).toEqual(next);
@@ -151,16 +156,11 @@ describe("recordHistory", () => {
       },
     });
 
-    const next = recordHistory(KEY, "npm test");
+    const next = recordHistory(KEY, "npm test", []);
 
     expect(next.map((h) => h.command)).toEqual(["npm test"]);
     expect(backing.has(KEY)).toBe(false);
     expect(loadHistory(KEY)).toEqual(next);
-    // The next launch builds on the unsaved list, not the empty disk.
-    expect(recordHistory(KEY, "npm run lint").map((h) => h.command)).toEqual([
-      "npm run lint",
-      "npm test",
-    ]);
   });
 
   it("goes back to what is stored once a write lands", () => {
@@ -171,27 +171,39 @@ describe("recordHistory", () => {
         backing.set(key, value);
       },
     });
-    recordHistory(KEY, "unsaved");
+    const first = recordHistory(KEY, "unsaved", []);
     full = false;
 
-    const next = recordHistory(KEY, "saved");
+    const next = recordHistory(KEY, "saved", first);
     backing.set(KEY, JSON.stringify([item("elsewhere")]));
 
     expect(next.map((h) => h.command)).toEqual(["saved", "unsaved"]);
     expect(loadHistory(KEY)).toEqual([item("elsewhere")]);
   });
 
-  it("returns the new list when storage fails for good", () => {
+  it("returns the new list and serves it back when storage fails for good", () => {
     installStorage({
       setItem: () => {
         throw new DOMException("Access is denied.", "SecurityError");
       },
     });
 
-    recordHistory(KEY, "a");
-    const next = recordHistory(KEY, "b");
+    const first = recordHistory(KEY, "a", []);
+    const next = recordHistory(KEY, "b", first);
 
     expect(next.map((h) => h.command)).toEqual(["b", "a"]);
     expect(loadHistory(KEY)).toEqual(next);
+  });
+
+  it("keeps the list it was given when storage can no longer be read", () => {
+    installStorage({
+      getItem: () => {
+        throw new DOMException("Access is denied.", "SecurityError");
+      },
+    });
+
+    const next = recordHistory(KEY, "c", [item("b"), item("a")]);
+
+    expect(next.map((h) => h.command)).toEqual(["c", "b", "a"]);
   });
 });

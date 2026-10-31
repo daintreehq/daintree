@@ -474,7 +474,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
         exitBehavior: restart ? "restart" : undefined,
         spawnedBy: "quickrun",
       });
-      setHistory(recordHistory(historyStorageKey(projectId), cmd));
+      setHistory(recordHistory(historyStorageKey(projectId), cmd, history));
     } catch (error) {
       logError("Failed to spawn terminal", error);
       // Give the command back rather than leaving an empty field and no task —

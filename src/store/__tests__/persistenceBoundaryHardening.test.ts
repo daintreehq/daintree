@@ -1678,12 +1678,15 @@ describe("createSafeStringStorage", () => {
     expect(storage.getItem("plain-key")).toBeNull();
   });
 
-  it("skips a write the quota refuses, retries storage on the next, and raises no notice", async () => {
+  it("skips a write the quota refuses, keeps what was stored, retries storage on the next, and raises no notice", async () => {
     const notifySpy = vi.fn();
-    const setItem = vi.fn().mockImplementationOnce(() => {
-      throw quotaError();
+    const backing = new Map([["quota-key", "old"]]);
+    let full = true;
+    const setItem = vi.fn((key: string, value: string) => {
+      if (full) throw quotaError();
+      backing.set(key, value);
     });
-    installLocalStorage(createStorageMock({ setItem }));
+    installLocalStorage(createStorageMock({ getItem: (key) => backing.get(key) ?? null, setItem }));
     const { createSafeStringStorage, setPermanentFallbackHandler } =
       await import("../persistence/safeStorage");
     setPermanentFallbackHandler(notifySpy);
@@ -1691,7 +1694,12 @@ describe("createSafeStringStorage", () => {
       const storage = createSafeStringStorage();
 
       expect(storage.setItem("quota-key", "big")).toBe("quota");
+      expect(storage.getItem("quota-key")).toBe("old");
+
+      full = false;
       expect(storage.setItem("quota-key", "small")).toBe("durable");
+      expect(storage.getItem("quota-key")).toBe("small");
+      expect(backing.get("quota-key")).toBe("small");
       expect(setItem).toHaveBeenCalledTimes(2);
       expect(notifySpy).not.toHaveBeenCalled();
     } finally {
