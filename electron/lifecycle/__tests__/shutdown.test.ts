@@ -616,6 +616,15 @@ describe("registerShutdownHandler", () => {
   });
 
   describe("termination while the quit warning is open (#15563)", () => {
+    // clearAllMocks keeps queued once-implementations, so a test that fails
+    // before consuming one would hand it to the next test.
+    afterEach(() => {
+      appMock.exit.mockReset();
+      appMock.quit.mockReset();
+      signalShutdownMock.setSignalShutdown.mockReset();
+      quitWarningMock.showQuitWarning.mockReset();
+    });
+
     async function setupOpenWarning() {
       const warning = {
         answer: (_confirmed: boolean) => {},
@@ -710,7 +719,10 @@ describe("registerShutdownHandler", () => {
       expect(appMock.exit).toHaveBeenCalledOnce();
     });
 
-    it("does the same for a Windows session-end", async () => {
+    it.each([
+      ["Quit Anyway", true],
+      ["Cancel", false],
+    ])("does the same for a Windows session-end and a late %s", async (_answer, confirmed) => {
       const originalPlatform = process.platform;
       vi.doMock("../../projectMenuState.js", () => ({ refreshProjectMenuState: vi.fn() }));
       vi.doMock("../../windowMenuState.js", () => ({
@@ -750,7 +762,7 @@ describe("registerShutdownHandler", () => {
         expect(coordinator.getActiveShutdown()?.initiator).toBe("app-quit");
         expect(startShutdown).toHaveBeenCalledOnce();
 
-        warning.answer(false);
+        warning.answer(confirmed);
         await userQuit;
         await exited;
 
