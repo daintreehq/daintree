@@ -84,6 +84,7 @@ vi.mock("lucide-react", () => ({
   Settings2: () => <span data-testid="icon-settings" />,
   AlertCircle: () => <span data-testid="icon-alert" />,
   Unplug: () => <span data-testid="icon-unplug" />,
+  PinOff: () => <span data-testid="icon-pin-off" />,
   PanelTop: () => <span data-testid="icon-panel-top" />,
 }));
 

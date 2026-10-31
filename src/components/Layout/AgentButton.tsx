@@ -403,7 +403,9 @@ export function AgentButton({
   const chevronTooltip = isLoading
     ? `Checking ${config.name} CLI availability…`
     : isLaunchable
-      ? `Set ${config.name} preset`
+      ? // Its rows launch; only their trailing control sets a default, so
+        // naming it "set" promised the one thing a click on a row doesn't do.
+        `Start ${config.name} with a preset`
       : needsSetup
         ? // The chevron blocks clicks when not launchable, so its copy names
           // the precondition alone — unlike the primary button, it opens

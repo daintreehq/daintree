@@ -99,6 +99,7 @@ import {
   DOCK_LAUNCH_CATEGORY_LABELS,
   DOCK_LAUNCH_CUE_LABELS,
   DOCK_LAUNCH_PRESET_GROUP_LABELS,
+  DOCK_LAUNCH_SURFACE_HEADER,
   dockLaunchBandLabel,
   getDockLaunchRowPluginGroup,
   type ActivateDockLaunchItemContext,
@@ -144,6 +145,7 @@ const PLACEMENT_CONFIG = {
     triggerClassName: "px-2",
     iconClassName: "w-3.5 h-3.5",
     label: "Open launcher",
+    surface: "dock",
     // The dock owns its own right-click menu on the rail behind this button, so
     // a second one on the trigger would shadow it.
     hasContextMenu: false,
@@ -153,9 +155,12 @@ const PLACEMENT_CONFIG = {
     tooltipSide: "bottom",
     triggerVariant: "ghost",
     triggerSize: "icon",
-    triggerClassName: "toolbar-agent-button text-text-primary",
+    // `toolbar-launcher-trigger` gives the one control on the strip that starts
+    // anything a resting surface the shortcuts beside it don't have.
+    triggerClassName: "toolbar-agent-button toolbar-launcher-trigger text-text-primary",
     iconClassName: undefined,
     label: "Launcher",
+    surface: "grid",
     hasContextMenu: true,
   },
 } as const;
@@ -1024,7 +1029,7 @@ export function DockLaunchButton({
           data-testid="dock-launcher-band"
           className={cn(PALETTE_SECTION_LABEL_CLASS, "px-2 pt-2 pb-1 first:pt-0")}
         >
-          {dockLaunchBandLabel(headingBand(row.band), row)}
+          {dockLaunchBandLabel(headingBand(row.band), row, config.surface)}
         </div>
       )}
       {capturingRowKey === row.rowKey ? (
@@ -1093,7 +1098,16 @@ export function DockLaunchButton({
           </Button>
         </AppPalettePopover.Trigger>
       </TooltipTrigger>
-      <TooltipContent side={config.tooltipSide}>{config.label}</TooltipContent>
+      <TooltipContent side={config.tooltipSide}>
+        {/* Says where the rows land before the palette is open, and carries the
+            discovery dot's meaning, which is otherwise only in the name. */}
+        <span className="flex flex-col gap-0.5">
+          <span>{DOCK_LAUNCH_SURFACE_HEADER[config.surface]}</span>
+          {placement === "toolbar" && showDiscoveryBadge && (
+            <span className="text-text-secondary">New agents detected</span>
+          )}
+        </span>
+      </TooltipContent>
     </Tooltip>
   );
 
@@ -1163,7 +1177,7 @@ export function DockLaunchButton({
         // refusal.
         onKeyDown={handleNavigationKeyDown}
       >
-        <AppPaletteDialog.Header label="Launch">
+        <AppPaletteDialog.Header label={DOCK_LAUNCH_SURFACE_HEADER[config.surface]}>
           <AppPaletteDialog.Input
             inputRef={inputRef}
             value={query}
@@ -1626,9 +1640,17 @@ function DockLaunchOption({
                 ? "Dock"
                 : "Grid"
               : item!.category === "recipe"
-                ? item!.isShadowed
-                  ? `${item!.scopeLabel} · Overridden by Team`
-                  : item!.scopeLabel
+                ? [
+                    item!.isShadowed
+                      ? `${item!.scopeLabel} · Overridden by Team`
+                      : item!.scopeLabel,
+                    // A recipe opens in the grid from either launcher; in the
+                    // dock's that is the exception, and the heading saying so
+                    // is decorative.
+                    placement === "dock" ? "Grid" : undefined,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")
                 : item!.agentBand !== "launch"
                   ? "Setup"
                   : "Agent";
@@ -1661,7 +1683,14 @@ function DockLaunchOption({
           disabledReason !== undefined
           ? disabledReason
           : item!.category === "recipe" && item!.isShadowed
-            ? `${item!.scopeLabel} · Overridden by Team`
+            ? // Still runnable (it runs the Team recipe), so a dock search keeps
+              // the destination the other recipe rows carry.
+              [
+                `${item!.scopeLabel} · Overridden by Team`,
+                isSearchResult && placement === "dock" ? "Grid" : undefined,
+              ]
+                .filter(Boolean)
+                .join(" · ")
             : item!.category === "agent" && item!.agentBand !== "launch"
               ? // Setup rows share the agent column and its one heading now, so
                 // the row states it in both modes.
@@ -1679,10 +1708,11 @@ function DockLaunchOption({
                     // is what leaves the browse slot empty on most rows.
                     [
                       isSearchResult ? DOCK_LAUNCH_CATEGORY_LABELS.panel : undefined,
-                      // Only the dock can land a panel in either place; in the
-                      // toolbar every panel opens in the grid and the word would
-                      // end every row.
-                      isSearchResult && placement === "dock"
+                      // The dock lands panels in either place, so its results
+                      // say which; the toolbar lands them in the grid but for
+                      // project-scoped kinds, which always open in the dock,
+                      // so only those say anything there.
+                      isSearchResult && (placement === "dock" || item!.location === "dock")
                         ? item!.location === "dock"
                           ? "Dock"
                           : "Grid"
@@ -1702,7 +1732,15 @@ function DockLaunchOption({
                       // A recipe keeps its scope beside the category: two recipes
                       // named Work are otherwise indistinguishable in results.
                       item!.category === "recipe"
-                      ? `${DOCK_LAUNCH_CATEGORY_LABELS.recipe} · ${item!.scopeLabel}`
+                      ? [
+                          DOCK_LAUNCH_CATEGORY_LABELS.recipe,
+                          item!.scopeLabel,
+                          // Search drops the "open in grid" heading the dock's
+                          // browse view puts over its recipes.
+                          placement === "dock" ? "Grid" : undefined,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")
                       : // Search drops the plugin's heading, so a result says
                         // whose row it is beside what it is.
                         item!.category === "plugin-entry"

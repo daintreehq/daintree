@@ -4,6 +4,7 @@ import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/component
 import { BrandMark, Workflow } from "@/components/icons";
 import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
 import { SquareTerminal } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import {
@@ -29,7 +30,10 @@ function LauncherItemIcon({ item }: { item: DockLaunchItem }) {
     );
   }
   if (item.category === "panel") {
-    return <PanelKindIcon iconId={item.iconId} color={item.color} />;
+    // No kind colour: the toolbar's built-in panel buttons are monochrome, and a
+    // pinned kind wearing its launcher colour was the one panel on the strip
+    // that shouted.
+    return <PanelKindIcon iconId={item.iconId} />;
   }
   if (item.category === "plugin-entry") return <PanelKindIcon iconId={item.iconId} />;
   return <Workflow />;
@@ -47,8 +51,12 @@ const ACTION_VERB = {
  * author's verb phrase ("New record…"), so it carries its plugin's name in
  * place of a verb — the same words Settings → Toolbar shows for it.
  */
-function launcherButtonLabel(item: DockLaunchItem): string {
+function launcherButtonLabel(item: DockLaunchItem, showScope: boolean): string {
   if (item.category === "plugin-entry") return `${item.name} (${item.pluginName})`;
+  // Every other launch from the toolbar opens in the grid, which its launcher
+  // says once; a project-scoped panel kind always opens in the dock.
+  if (item.category === "panel" && item.location === "dock") return `Open ${item.name} in dock`;
+  if (item.category === "recipe" && showScope) return `Run ${item.name} (${item.scopeLabel})`;
   return `${ACTION_VERB[item.category]} ${item.name}`;
 }
 
@@ -69,16 +77,23 @@ function launcherButtonLabel(item: DockLaunchItem): string {
 export function LauncherToolbarButton({
   entry,
   activationContext,
+  showScope = false,
   "data-toolbar-item": dataToolbarItem,
 }: {
   entry: LauncherToolbarEntry;
   activationContext: ActivateDockLaunchItemContext;
+  /** Another recipe shares this one's name, so its scope rides beside it. */
+  showScope?: boolean;
   "data-toolbar-item"?: string;
 }) {
   const setLauncherItemOnToolbar = useToolbarPreferencesStore((s) => s.setLauncherItemOnToolbar);
   const { item } = entry;
-  const label = launcherButtonLabel(item);
+  const label = launcherButtonLabel(item, showScope);
   const disabledReason = item.disabled?.reason;
+  // Recipes share one glyph and carry no icon or colour of their own, so
+  // icon-only pins were indistinguishable at rest. Their name is the only thing
+  // that tells one from another; the width it costs is what overflow is for.
+  const showsName = item.category === "recipe";
 
   return (
     <ContextMenu>
@@ -96,10 +111,25 @@ export function LauncherToolbarButton({
                 // would rearrange the toolbar under them.
                 disabled={disabledReason !== undefined}
                 onClick={() => activateDockLaunchItem(item, activationContext)}
-                className="toolbar-icon-button text-text-primary relative"
+                className={cn(
+                  "toolbar-icon-button text-text-primary relative",
+                  showsName && "w-auto max-w-40 gap-1.5 px-2"
+                )}
                 aria-label={disabledReason ? `${label} (${disabledReason})` : label}
               >
                 <LauncherItemIcon item={item} />
+                {showsName && (
+                  // The scope is the only thing telling two same-named recipes
+                  // apart, so the name gives way to it rather than the reverse.
+                  <span aria-hidden="true" className="flex min-w-0 text-xs">
+                    <span className="min-w-0 truncate">{item.name}</span>
+                    {showScope && item.category === "recipe" && (
+                      <span className="shrink-0 whitespace-pre text-text-secondary">
+                        {` · ${item.scopeLabel}`}
+                      </span>
+                    )}
+                  </span>
+                )}
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">

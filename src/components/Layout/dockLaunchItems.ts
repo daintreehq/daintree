@@ -320,12 +320,33 @@ export function getDockLaunchRowPluginGroup(row: DockLaunchRow): DockLaunchPlugi
  * group, which is headed by the plugin it belongs to — that heading is the
  * attribution, so a row never has to say whose it is.
  */
-export function dockLaunchBandLabel(band: DockLaunchBandId, row: DockLaunchRow): string {
+export function dockLaunchBandLabel(
+  band: DockLaunchBandId,
+  row: DockLaunchRow,
+  surface?: DockLaunchSurface
+): string {
   if (band === "plugin-entries") {
     return getDockLaunchRowPluginGroup(row)?.pluginName ?? DOCK_LAUNCH_BAND_LABELS[band];
   }
+  if (surface) {
+    // The launcher's header states where this surface lands things, so a band
+    // that lands there too says what it holds; only a band that lands somewhere
+    // else names the destination, where it is the one fact the row can't carry.
+    if (band === "dock-panels" && surface === "dock") return "Panels";
+    if (band === "grid-panels" && surface === "grid") return "Panels";
+    // A recipe opens in the grid whichever launcher runs it: a terminal's dock
+    // placement only lives in a cloned layout and is stripped from every stored
+    // recipe (`sanitizeRecipeTerminal`).
+    if (band === "recipes" && surface === "dock") return "Recipes · open in grid";
+  }
   return DOCK_LAUNCH_BAND_LABELS[band];
 }
+
+/** Where a surface lands what it launches, as its header and trigger say it. */
+export const DOCK_LAUNCH_SURFACE_HEADER: Record<DockLaunchSurface, string> = {
+  grid: "Launch in grid",
+  dock: "Launch in dock",
+};
 
 /** Narrowing helper — the item rows are the only ones carrying a launchable item. */
 export function getDockLaunchRowItem(row: DockLaunchRow): DockLaunchItem | undefined {
@@ -530,7 +551,7 @@ export interface BuildDockLaunchModelOptions extends DockLaunchPreconditions {
  * here rather than at the row so every consumer of the model agrees, and stated
  * as a reason the row can render rather than a bare boolean.
  */
-function panelPrecondition(
+export function panelPrecondition(
   kindId: string,
   { hasWorkspace, hasProject }: DockLaunchPreconditions
 ): DockLaunchDisabledState | undefined {

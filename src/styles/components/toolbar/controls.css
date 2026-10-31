@@ -51,6 +51,15 @@
   box-shadow: var(--_hover-shadow);
 }
 
+/* The launcher is the one control on the strip that starts anything, and the
+ * shortcuts pinned out of it are ghosts beside it; a resting surface is what
+ * tells them apart before anything is read. Neutral by construction (accent is
+ * reserved), one tier under hover so hover, armed and press still step up from
+ * it, and single-class so every one of those (0,2,0) states wins over it. */
+.toolbar-launcher-trigger {
+  background: var(--toolbar-launcher-rest-bg, var(--theme-overlay-subtle));
+}
+
 /* Keyboard focus reads against the idle surface — the 2px accent outline is the
  * sole signal. Painting the hover background here makes focus-visible look
  * identical to mouse hover apart from the ring. */
