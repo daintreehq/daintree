@@ -475,7 +475,7 @@ interface CacheSlot<T> {
  * so what the cache does hold keeps hitting and only the overflow is re-read.
  * Entries nobody polls any more go cold and are the first to go.
  */
-class WarmCache<T> {
+export class WarmCache<T> {
   private readonly slots = new Map<string, CacheSlot<T>>();
   private totalBytes = 0;
 

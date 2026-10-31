@@ -1,9 +1,11 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { chmod, mkdtemp, mkdir, rm, symlink, writeFile, utimes } from "fs/promises";
+import { chmod, mkdtemp, mkdir, rename, rm, symlink, writeFile, utimes } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 import {
   CLAUDE_SUBAGENT_ACTIVE_WINDOW_MS,
+  WarmCache,
+  __claudeSubagentCacheStats,
   __resetClaudeSubagentCaches,
   deriveProjectSlug,
   findSubagentsDir,
@@ -16,7 +18,10 @@ import {
   recordText,
   resolveClaudeConfigDir,
 } from "../ClaudeSubagentReader.js";
-import { SUBAGENT_TRANSCRIPT_MESSAGE_LIMIT } from "../../../../shared/types/ipc/agentSubagents.js";
+import {
+  SUBAGENT_LIST_LIMIT,
+  SUBAGENT_TRANSCRIPT_MESSAGE_LIMIT,
+} from "../../../../shared/types/ipc/agentSubagents.js";
 
 let root: string;
 
@@ -568,6 +573,186 @@ describe("listSubagentsInDir", () => {
     );
     const second = await listSubagentsInDir(dir);
     expect(second[0]?.status).toEqual({ type: "completed" });
+  });
+});
+
+describe("listSubagentsInDir past what it shows", () => {
+  const enforcesModeBits = process.platform !== "win32" && process.getuid?.() !== 0;
+  const BASE_SECONDS = 1_700_000_000;
+
+  /** Children `c0000`…, each a second newer than the last, so the highest index leads. */
+  async function writeChildren(dir: string, count: number): Promise<string[]> {
+    const files: string[] = [];
+    for (let index = 0; index < count; index += 1) {
+      const id = `c${String(index).padStart(4, "0")}`;
+      const file = await writeChild(
+        dir,
+        id,
+        [userRecord(`task ${index}`), assistantRecord("done", "end_turn")],
+        { description: `child ${index}` }
+      );
+      const at = new Date((BASE_SECONDS + index) * 1000);
+      await utimes(file, at, at);
+      files.push(file);
+    }
+    return files;
+  }
+
+  it("probes and reads sidecars only for the rows it returns", async () => {
+    const dir = await makeSubagentsDir("/Users/x/Projects/demo");
+    await writeChildren(dir, SUBAGENT_LIST_LIMIT + 10);
+
+    const rows = await listSubagentsInDir(dir);
+    expect(rows).toHaveLength(SUBAGENT_LIST_LIMIT);
+    expect(rows[0]?.id).toBe(`c${String(SUBAGENT_LIST_LIMIT + 9).padStart(4, "0")}`);
+    expect(rows.at(-1)?.id).toBe("c0010");
+    // The ten oldest were ranked by their `lstat` and never opened.
+    const stats = __claudeSubagentCacheStats();
+    expect(stats.probes.entries).toBe(SUBAGENT_LIST_LIMIT);
+    expect(stats.sidecars.entries).toBe(SUBAGENT_LIST_LIMIT);
+  });
+
+  it.skipIf(!enforcesModeBits)(
+    "lets the next child in when a newer one turns out to be unreadable",
+    async () => {
+      const dir = await makeSubagentsDir("/Users/x/Projects/demo");
+      const files = await writeChildren(dir, SUBAGENT_LIST_LIMIT + 1);
+      const newest = files.at(-1) as string;
+      expect((await listSubagentsInDir(dir)).map((row) => row.id)).not.toContain("c0000");
+
+      await chmod(newest, 0o000);
+      try {
+        const ids = (await listSubagentsInDir(dir)).map((row) => row.id);
+        expect(ids).toHaveLength(SUBAGENT_LIST_LIMIT);
+        expect(ids).not.toContain(`c${String(SUBAGENT_LIST_LIMIT).padStart(4, "0")}`);
+        expect(ids.at(-1)).toBe("c0000");
+      } finally {
+        await chmod(newest, 0o600);
+      }
+    }
+  );
+
+  it("picks up a sidecar that arrives after its transcript was listed", async () => {
+    const dir = await makeSubagentsDir("/Users/x/Projects/demo");
+    await writeChild(dir, "aaa1", [userRecord("go")]);
+    expect((await listSubagentsInDir(dir))[0]?.label).toBeNull();
+
+    await writeFile(path.join(dir, "agent-aaa1.meta.json"), JSON.stringify({ description: "Late" }));
+    expect((await listSubagentsInDir(dir))[0]?.label).toBe("Late");
+  });
+
+  it("re-reads a sidecar replaced under the same size and times", async () => {
+    const dir = await makeSubagentsDir("/Users/x/Projects/demo");
+    await writeChild(dir, "aaa1", [userRecord("go")]);
+    const meta = path.join(dir, "agent-aaa1.meta.json");
+    const at = new Date(BASE_SECONDS * 1000);
+    await writeFile(meta, JSON.stringify({ description: "aaaa" }));
+    await utimes(meta, at, at);
+    expect((await listSubagentsInDir(dir))[0]?.label).toBe("aaaa");
+
+    const staged = path.join(dir, "staged.tmp");
+    await writeFile(staged, JSON.stringify({ description: "bbbb" }));
+    await utimes(staged, at, at);
+    await rename(staged, meta);
+    expect((await listSubagentsInDir(dir))[0]?.label).toBe("bbbb");
+  });
+
+  it("stops trusting a sidecar that has been swapped for a symlink", async () => {
+    const dir = await makeSubagentsDir("/Users/x/Projects/demo");
+    await writeChild(dir, "aaa1", [userRecord("go")], { description: "Real" });
+    expect((await listSubagentsInDir(dir))[0]?.label).toBe("Real");
+
+    const planted = path.join(root, "planted.meta.json");
+    await writeFile(planted, JSON.stringify({ description: "Planted" }));
+    const meta = path.join(dir, "agent-aaa1.meta.json");
+    await rm(meta);
+    await symlink(planted, meta);
+    const [child] = await listSubagentsInDir(dir);
+    expect(child?.label).toBeNull();
+    expect(child?.createdAt).toBe(Date.parse("2026-08-01T19:28:19.515Z"));
+  });
+
+  it("derives status from the clock on every call, even from a cached probe", async () => {
+    const dir = await makeSubagentsDir("/Users/x/Projects/demo");
+    const file = await writeChild(dir, "aaa1", [
+      userRecord("go"),
+      assistantRecord("thinking", "tool_use"),
+    ]);
+    const at = BASE_SECONDS * 1000;
+    await utimes(file, new Date(at), new Date(at));
+
+    const fresh = await listSubagentsInDir(dir, { now: () => at + 1_000 });
+    expect(fresh[0]?.status).toEqual({ type: "working" });
+    const later = await listSubagentsInDir(dir, {
+      now: () => at + CLAUDE_SUBAGENT_ACTIVE_WINDOW_MS + 1,
+    });
+    expect(later[0]?.status).toEqual({ type: "unknown", reason: "stale" });
+    expect(__claudeSubagentCacheStats().probes.entries).toBe(1);
+  });
+});
+
+describe("WarmCache", () => {
+  const HOUR = 3_600_000;
+
+  it("keeps hitting on what it holds when polled in a loop larger than itself", () => {
+    const cache = new WarmCache<number>(4, 1_000_000);
+    const keys = ["a", "b", "c", "d", "e", "f"];
+    let now = 0;
+    const poll = (): number => {
+      let hits = 0;
+      for (const key of keys) {
+        if (cache.get(key, "v1", now) !== undefined) hits += 1;
+        else cache.set(key, "v1", 1, 10, now);
+      }
+      now += 5_000;
+      return hits;
+    };
+
+    poll();
+    // FIFO or LRU would hit nothing here: each insert evicts the next key needed.
+    expect(poll()).toBe(4);
+    expect(poll()).toBe(4);
+    expect(cache.stats()).toEqual({ entries: 4, bytes: 40 });
+  });
+
+  it("makes room by dropping what has gone unused", () => {
+    const cache = new WarmCache<string>(2, 1_000_000);
+    cache.set("a", "v1", "a", 10, 0);
+    cache.set("b", "v1", "b", 10, 1);
+    cache.set("c", "v1", "c", 10, 2);
+    expect(cache.get("c", "v1", 2)).toBeUndefined();
+
+    cache.set("c", "v1", "c", 10, HOUR);
+    expect(cache.get("a", "v1", HOUR)).toBeUndefined();
+    expect(cache.get("b", "v1", HOUR)).toBe("b");
+    expect(cache.get("c", "v1", HOUR)).toBe("c");
+  });
+
+  it("never holds more bytes than its cap", () => {
+    const cache = new WarmCache<string>(10, 100);
+    cache.set("a", "v1", "a", 60, 0);
+    cache.set("b", "v1", "b", 60, 0);
+    cache.set("huge", "v1", "huge", 200, HOUR);
+    expect(cache.stats()).toEqual({ entries: 1, bytes: 60 });
+
+    cache.set("b", "v1", "b", 60, HOUR);
+    expect(cache.stats()).toEqual({ entries: 1, bytes: 60 });
+    expect(cache.get("b", "v1", HOUR)).toBe("b");
+  });
+
+  it("drops an entry once the file behind it has a different identity", () => {
+    const cache = new WarmCache<string>(4, 1_000);
+    cache.set("a", "v1", "old", 10, 0);
+    expect(cache.get("a", "v2", 0)).toBeUndefined();
+    expect(cache.stats()).toEqual({ entries: 0, bytes: 0 });
+  });
+
+  it("treats a clock that went backwards as no evidence of use", () => {
+    const cache = new WarmCache<string>(1, 1_000);
+    cache.set("a", "v1", "a", 10, HOUR);
+    cache.set("b", "v1", "b", 10, 0);
+    expect(cache.get("b", "v1", 0)).toBe("b");
+    expect(cache.stats().entries).toBe(1);
   });
 });
 
