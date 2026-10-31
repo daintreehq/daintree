@@ -228,7 +228,8 @@ export const workflowCreationActionRuns = {
         // the dialog listed — both matching recipe.run. This composite's
         // confirm dialog previews the same recipe through the same
         // formatter, so omitting the second would preview terminals it then
-        // refused to start (#12263).
+        // refused to start (#12263). The deadline git has already spent from
+        // goes too, so a panel-limit confirm can't outlast it (#15648).
         const results = await useRecipeStore
           .getState()
           .runRecipeWithResults(recipeId, path, worktreeId, recipeContext, {
@@ -236,6 +237,7 @@ export const workflowCreationActionRuns = {
             focusPolicy,
             dispatchSource: ctx.dispatchSource,
             hostApprovedRecipeRun: ctx.hostApprovedRecipeRun,
+            dispatchDeadlineAt: ctx.dispatchDeadlineAt,
           });
         // "Launched" means at least one terminal actually spawned — a run
         // where every terminal was dropped (e.g. panel limit) must not
@@ -437,7 +439,8 @@ export const workflowCreationActionRuns = {
         // the dialog listed — both matching recipe.run. This composite's
         // confirm dialog previews the same recipe through the same
         // formatter, so omitting the second would preview terminals it then
-        // refused to start (#12263).
+        // refused to start (#12263). The deadline git has already spent from
+        // goes too, so a panel-limit confirm can't outlast it (#15648).
         const results = await useRecipeStore
           .getState()
           .runRecipeWithResults(recipeId, worktreePath, worktreeId, recipeContext, {
@@ -445,6 +448,7 @@ export const workflowCreationActionRuns = {
             focusPolicy,
             dispatchSource: ctx.dispatchSource,
             hostApprovedRecipeRun: ctx.hostApprovedRecipeRun,
+            dispatchDeadlineAt: ctx.dispatchDeadlineAt,
           });
         // "Launched" means at least one terminal actually spawned — a run
         // where every terminal was dropped (e.g. panel limit) must not

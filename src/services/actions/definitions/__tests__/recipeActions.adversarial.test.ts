@@ -29,6 +29,8 @@ vi.mock("@/utils/recipeNotify", () => ({
 }));
 
 import { registerRecipeActions } from "../recipeActions";
+import { ConfirmationTimeoutError } from "../../confirmationTimeout";
+import { PANEL_LIMIT_CONFIRM_EXPIRED_REASON } from "../panelLimitError";
 import { resolveEffectiveActionDanger } from "../../effectiveDanger";
 
 type Worktree = {
@@ -212,6 +214,7 @@ describe("recipeActions adversarial", () => {
         dispatchSource: "agent",
         projectPath: "/repo",
         hostApprovedRecipeRun: { recipeId: "r1", terminalCount: 7, terminalsDigest: "deadbeef" },
+        dispatchDeadlineAt: 123_456,
       }
     );
 
@@ -223,6 +226,8 @@ describe("recipeActions adversarial", () => {
       expect.objectContaining({
         dispatchSource: "agent",
         hostApprovedRecipeRun: { recipeId: "r1", terminalCount: 7, terminalsDigest: "deadbeef" },
+        // And the deadline that bounds its panel-limit confirm (#15648).
+        dispatchDeadlineAt: 123_456,
       })
     );
   });
@@ -391,6 +396,29 @@ describe("recipeActions adversarial", () => {
     await expect(run("recipe.run", { recipeId: "r1", worktreeId: "wt-1" }, {})).rejects.toThrow(
       /Recipe launch failed: Panel limit reached/
     );
+    expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, expect.any(Object));
+  });
+
+  it("recipe.run reports a panel-limit confirm nobody answered in time as a confirmation timeout (#15648)", async () => {
+    const results = {
+      spawned: [],
+      failed: [
+        { index: 0, error: PANEL_LIMIT_CONFIRM_EXPIRED_REASON },
+        { index: 1, error: "Agent recipe terminal cap reached" },
+      ],
+    };
+    setRecipeState({ runRecipeWithResults: vi.fn().mockResolvedValue(results) });
+    setWorktreeMap(new Map([["wt-1", { path: "/repo/wt" }]]));
+
+    const run = setupActions();
+    const failure = await run(
+      "recipe.run",
+      { recipeId: "r1", worktreeId: "wt-1" },
+      { dispatchSource: "agent" }
+    ).catch((err: unknown) => err);
+
+    expect(failure).toBeInstanceOf(ConfirmationTimeoutError);
+    expect((failure as Error).message).toContain(PANEL_LIMIT_CONFIRM_EXPIRED_REASON);
     expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, expect.any(Object));
   });
 

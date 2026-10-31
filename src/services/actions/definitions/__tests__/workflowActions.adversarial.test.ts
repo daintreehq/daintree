@@ -701,6 +701,7 @@ describe("worktree.createWithRecipe", () => {
         terminalCount: 6,
         terminalsDigest: "deadbeef",
       },
+      dispatchDeadlineAt: 123_456,
     } as never);
 
     expect(runRecipeWithResults).toHaveBeenCalledWith(
@@ -715,6 +716,8 @@ describe("worktree.createWithRecipe", () => {
           terminalCount: 6,
           terminalsDigest: "deadbeef",
         },
+        // The deadline the worktree creation already spent from (#15648).
+        dispatchDeadlineAt: 123_456,
       })
     );
   });
@@ -1019,12 +1022,18 @@ describe("workflow recipe-spawn plugin guard (issue #10582)", () => {
           terminalCount: 8,
           terminalsDigest: "deadbeef",
         },
+        dispatchDeadlineAt: 123_456,
       }
     );
     expect(approved.ok).toBe(true);
-    expect(
-      (runRecipeWithResults.mock.calls[1]?.[4] as Record<string, unknown>).hostApprovedRecipeRun
-    ).toEqual({ recipeId: "recipe-1", terminalCount: 8, terminalsDigest: "deadbeef" });
+    const approvedOptions = runRecipeWithResults.mock.calls[1]?.[4] as Record<string, unknown>;
+    expect(approvedOptions.hostApprovedRecipeRun).toEqual({
+      recipeId: "recipe-1",
+      terminalCount: 8,
+      terminalsDigest: "deadbeef",
+    });
+    // The bridge's deadline reaches the run through the same stamp (#15648).
+    expect(approvedOptions.dispatchDeadlineAt).toBe(123_456);
   });
 });
 

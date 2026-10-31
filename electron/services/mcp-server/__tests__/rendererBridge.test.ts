@@ -3079,6 +3079,37 @@ describe("rendererBridge — holding a confirm-gated dispatch open (#14989)", ()
     expect(call.outcome()).toMatchObject({ result: { ok: true, result: "deleted" } });
   });
 
+  it("tells the view the deadline it set, capped by whoever times the call (#15648)", async () => {
+    const wc = makeWebContents(820);
+    mockWebContentsRegistry.set(820, wc);
+    const sent: unknown[] = [];
+    wc.send.mockImplementation((channel: string, payload: { dispatchDeadlineAt?: unknown }) => {
+      if (channel === CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) {
+        sent.push(payload.dispatchDeadlineAt);
+      }
+    });
+    const startedAt = Date.now();
+    const holdUntil = startedAt + 9_000;
+
+    const calls = [
+      bridge.dispatchActionForWebContents(820, "worktree.delete", {}, false, undefined, "external"),
+      bridge.dispatchActionForWebContents(
+        820,
+        "worktree.delete",
+        {},
+        false,
+        undefined,
+        "external",
+        { holdUntil }
+      ),
+    ].map((call) => call.catch((err: unknown) => err));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sent).toEqual([startedAt + MCP_DISPATCH_TIMEOUT_MS, holdUntil]);
+    await vi.advanceTimersByTimeAsync(MCP_DISPATCH_TIMEOUT_MS);
+    await Promise.all(calls);
+  });
+
   it("gives an accepted approval the run budget and no more", async () => {
     const call = await startDispatch(808);
     bridge.holdDispatch(808, call.requestId(), "shown");

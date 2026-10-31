@@ -286,7 +286,7 @@ describe("useMcpBridge", () => {
     expect(mocks.dispatch).toHaveBeenCalledWith(
       "actions.list",
       { limit: 10 },
-      { source: "agent", confirmed: undefined }
+      { source: "agent", confirmed: undefined, dispatchDeadlineAt: expect.any(Number) }
     );
     expect(sendDispatchActionResponse).toHaveBeenCalledWith({
       requestId: "req-safe",
@@ -331,6 +331,7 @@ describe("useMcpBridge", () => {
       { query: "x" },
       {
         source: "agent",
+        dispatchDeadlineAt: expect.any(Number),
         confirmed: undefined,
         contextOverride: expect.objectContaining({
           activeWorktreeId: "wt-new",
@@ -399,7 +400,12 @@ describe("useMcpBridge", () => {
     expect(mocks.dispatch).toHaveBeenCalledWith(
       "terminal.inject",
       { text: "ls" },
-      { source: "agent", confirmed: undefined, contextOverride: boundContext }
+      {
+        source: "agent",
+        confirmed: undefined,
+        contextOverride: boundContext,
+        dispatchDeadlineAt: expect.any(Number),
+      }
     );
   });
 
@@ -431,6 +437,7 @@ describe("useMcpBridge", () => {
       { query: "x" },
       {
         source: "agent",
+        dispatchDeadlineAt: expect.any(Number),
         confirmed: undefined,
         contextOverride: {
           projectId: "p1",
@@ -466,7 +473,12 @@ describe("useMcpBridge", () => {
     expect(mocks.dispatch).toHaveBeenCalledWith(
       "files.search",
       { query: "x" },
-      { source: "agent", confirmed: undefined, contextOverride: snapshot }
+      {
+        source: "agent",
+        confirmed: undefined,
+        contextOverride: snapshot,
+        dispatchDeadlineAt: expect.any(Number),
+      }
     );
   });
 
@@ -485,7 +497,12 @@ describe("useMcpBridge", () => {
     expect(mocks.dispatch).toHaveBeenCalledWith(
       "actions.list",
       { limit: 3 },
-      { source: "agent", confirmed: undefined, contextOverride: undefined }
+      {
+        source: "agent",
+        confirmed: undefined,
+        contextOverride: undefined,
+        dispatchDeadlineAt: expect.any(Number),
+      }
     );
   });
 
@@ -541,7 +558,7 @@ describe("useMcpBridge", () => {
     expect(mocks.dispatch).toHaveBeenCalledWith(
       "worktree.delete",
       { worktreeId: "wt-1" },
-      { source: "agent", confirmed: true }
+      { source: "agent", confirmed: true, dispatchDeadlineAt: expect.any(Number) }
     );
     expect(sendDispatchActionResponse).toHaveBeenCalledWith({
       requestId: "req-confirm",
@@ -621,7 +638,12 @@ describe("useMcpBridge", () => {
     expect(mocks.dispatch).toHaveBeenCalledWith(
       "worktree.delete",
       { worktreeId: "wt-1" },
-      { source: "agent", confirmed: true, contextOverride: boundContext }
+      {
+        source: "agent",
+        confirmed: true,
+        contextOverride: boundContext,
+        dispatchDeadlineAt: expect.any(Number),
+      }
     );
   });
 
@@ -1018,7 +1040,7 @@ describe("useMcpBridge", () => {
     expect(mocks.dispatch).toHaveBeenCalledWith(
       "worktree.delete",
       { worktreeId: "wt-4" },
-      { source: "agent", confirmed: true }
+      { source: "agent", confirmed: true, dispatchDeadlineAt: expect.any(Number) }
     );
     expect(sendDispatchActionResponse).toHaveBeenCalledWith({
       requestId: "req-pre-confirmed",
@@ -1083,7 +1105,7 @@ describe("useMcpBridge", () => {
         expect(mocks.dispatch).toHaveBeenCalledWith(
           "agent.launch",
           { agentId: "claude", spawnedBy: expectedSource, focusPolicy: "preserve" },
-          { source: "agent", confirmed: undefined }
+          { source: "agent", confirmed: undefined, dispatchDeadlineAt: expect.any(Number) }
         );
       }
     );
@@ -1107,7 +1129,7 @@ describe("useMcpBridge", () => {
       expect(mocks.dispatch).toHaveBeenCalledWith(
         "agent.launch",
         { agentId: "claude", spawnedBy: "mcp", focusPolicy: "preserve" },
-        { source: "agent", confirmed: undefined }
+        { source: "agent", confirmed: undefined, dispatchDeadlineAt: expect.any(Number) }
       );
     });
 
@@ -1137,7 +1159,7 @@ describe("useMcpBridge", () => {
       expect(mocks.dispatch).toHaveBeenCalledWith(
         "recipe.run",
         { recipeId: "recipe-1", spawnedBy: "assistant", focusPolicy: "preserve" },
-        { source: "agent", confirmed: true }
+        { source: "agent", confirmed: true, dispatchDeadlineAt: expect.any(Number) }
       );
     });
 
@@ -1171,7 +1193,7 @@ describe("useMcpBridge", () => {
       expect(mocks.dispatch).toHaveBeenCalledWith(
         "actions.list",
         { query: "worktree" },
-        { source: "agent", confirmed: undefined }
+        { source: "agent", confirmed: undefined, dispatchDeadlineAt: expect.any(Number) }
       );
     });
   });
@@ -1194,7 +1216,7 @@ describe("useMcpBridge", () => {
       expect(mocks.dispatch).toHaveBeenCalledWith(
         "workflow.startWorkOnIssue",
         { issueNumber: 6959, agentId: "claude", spawnedBy: "mcp", focusPolicy: "preserve" },
-        { source: "agent", confirmed: undefined }
+        { source: "agent", confirmed: undefined, dispatchDeadlineAt: expect.any(Number) }
       );
     });
 
@@ -1218,13 +1240,13 @@ describe("useMcpBridge", () => {
         1,
         "recipe.run",
         { recipeId: "recipe-1", spawnedBy: "mcp", focusPolicy: "preserve" },
-        { source: "agent", confirmed: undefined }
+        { source: "agent", confirmed: undefined, dispatchDeadlineAt: expect.any(Number) }
       );
       expect(mocks.dispatch).toHaveBeenNthCalledWith(
         2,
         "terminal.new",
         { spawnedBy: "mcp", focusPolicy: "preserve" },
-        { source: "agent", confirmed: undefined }
+        { source: "agent", confirmed: undefined, dispatchDeadlineAt: expect.any(Number) }
       );
     });
 
@@ -1247,7 +1269,7 @@ describe("useMcpBridge", () => {
       expect(mocks.dispatch).toHaveBeenCalledWith(
         "agent.claude",
         { spawnedBy: "mcp", focusPolicy: "preserve" },
-        { source: "agent", confirmed: undefined }
+        { source: "agent", confirmed: undefined, dispatchDeadlineAt: expect.any(Number) }
       );
     });
   });
@@ -1959,6 +1981,82 @@ describe("useMcpBridge", () => {
     } finally {
       vi.mocked(Date.now).mockRestore();
     }
+  });
+
+  describe("dispatch deadline handed to the action (#15648)", () => {
+    it("passes a pre-authorized dispatch the deadline main sent", async () => {
+      mocks.get.mockReturnValue(confirmManifestEntry());
+      mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+      // Shorter than a fresh 30s from receipt, as a thawed view or a capped
+      // remote hold leaves it.
+      const sentDeadlineAt = Date.now() + 7_000;
+
+      renderHook(() => useMcpBridge());
+      await dispatchHandler?.({
+        requestId: "req-sent-deadline",
+        actionId: "worktree.delete",
+        args: { worktreeId: "wt-4" },
+        confirmed: true,
+        dispatchDeadlineAt: sentDeadlineAt,
+      });
+
+      expect(mocks.dispatch).toHaveBeenCalledWith(
+        "worktree.delete",
+        { worktreeId: "wt-4" },
+        expect.objectContaining({ dispatchDeadlineAt: sentDeadlineAt })
+      );
+    });
+
+    it("starts a confirmation's first deadline from the one main sent", async () => {
+      cleanForceDeleteTarget();
+      holdDispatch.mockImplementation(() => new Promise(() => {}));
+      const sentDeadlineAt = Date.now() + 12_000;
+
+      renderHook(() => useMcpBridge());
+      void dispatchHandler?.({
+        requestId: "req-sent-wait",
+        actionId: "worktree.delete",
+        args: { worktreeId: "wt-1", force: true },
+        dispatchDeadlineAt: sentDeadlineAt,
+      });
+
+      await vi.waitFor(() => {
+        expect(useMcpConfirmStore.getState().current?.deadlineAt).toBe(sentDeadlineAt);
+      });
+    });
+
+    it("replaces it with the run main granted once an approval is accepted", async () => {
+      mocks.get.mockReturnValue(confirmManifestEntry());
+      mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+      const start = Date.now();
+      let elapsed = 0;
+      vi.spyOn(Date, "now").mockImplementation(() => start + elapsed);
+
+      try {
+        renderHook(() => useMcpBridge());
+        const dispatched = dispatchHandler?.({
+          requestId: "req-run-deadline",
+          actionId: "worktree.delete",
+          args: { worktreeId: "wt-1" },
+          dispatchDeadlineAt: start + MCP_DISPATCH_TIMEOUT_MS,
+        });
+        await Promise.resolve();
+        // Approved well after the first deadline, inside the window main held.
+        elapsed = 80_000;
+        useMcpConfirmStore.getState().resolveCurrent("approved");
+        await dispatched;
+
+        expect(mocks.dispatch).toHaveBeenCalledWith(
+          "worktree.delete",
+          { worktreeId: "wt-1" },
+          expect.objectContaining({
+            dispatchDeadlineAt: start + 80_000 + HOLD_GRANTS_MS.approved,
+          })
+        );
+      } finally {
+        vi.mocked(Date.now).mockRestore();
+      }
+    });
   });
 
   it("drops a teardown-racing force delete without dispatching or answering (#12115)", async () => {

@@ -1435,7 +1435,10 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             const cliDetail = await launchCliDetail;
             // That wait can outlast the dispatch an agent is waiting on.
             if (dispatchExpired()) throw new Error(RECIPE_DISPATCH_EXPIRED_REASON);
-            const baseCommand = resolveAgentLaunchBaseCommand(agentConfig?.command ?? "", cliDetail);
+            const baseCommand = resolveAgentLaunchBaseCommand(
+              agentConfig?.command ?? "",
+              cliDetail
+            );
             const resolvedContext: RecipeContext = { ...context, worktreePath };
             const step = resolveRecipeAgentStep(recipe, terminal, agentId, resolvedContext);
             if (!step.ok) throw new Error(step.reason);

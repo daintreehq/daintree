@@ -16,6 +16,7 @@ import {
   getPanelSlotReservations,
   resetPanelSlotReservations,
 } from "../slices/panelRegistry/panelSlotReservations";
+import { MCP_CONFIRM_HOLD_GRACE_MS } from "@shared/config/mcpConfirmWindow";
 
 const DEFAULT_LIMITS = {
   softWarningLimit: DEFAULT_SOFT_WARNING_LIMIT,
@@ -356,6 +357,104 @@ describe("preflightSpawnBatchLimit", () => {
       grant: null,
     });
     expect(getPanelSlotReservations().unclaimed).toBe(0);
+  });
+});
+
+describe("preflightSpawnBatchLimit behind a dispatch deadline (#15648)", () => {
+  const pending = () => usePanelLimitStore.getState().pendingConfirm;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    usePanelLimitStore.setState({ confirmationLimit: 20, hardLimit: 32, warningsDisabled: false });
+  });
+
+  afterEach(() => {
+    usePanelLimitStore.getState().resolveConfirmation(false);
+    resetPanelSlotReservations();
+    usePanelLimitStore.setState({ ...DEFAULT_LIMITS, warningsDisabled: false });
+    vi.useRealTimers();
+  });
+
+  it("takes its dialog down a grace period before the deadline, holding nothing", async () => {
+    const deadlineAt = Date.now() + 30_000;
+    const result = preflightSpawnBatchLimit(() => 18, 3, { deadlineAt });
+    expect(pending()?.request).toMatchObject({ currentCount: 18, allowedCount: 3 });
+
+    await vi.advanceTimersByTimeAsync(30_000 - MCP_CONFIRM_HOLD_GRACE_MS - 1);
+    expect(pending()).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(await result).toEqual({ allowed: 0, declined: false, expired: true, grant: null });
+    expect(pending()).toBeNull();
+    expect(getPanelSlotReservations().unclaimed).toBe(0);
+  });
+
+  it("counts a yes that lands after the close as expired, even before its timer fires", async () => {
+    const deadlineAt = Date.now() + 30_000;
+    const result = preflightSpawnBatchLimit(() => 18, 3, { deadlineAt });
+
+    // A background view's timer can run late; the click gets in first.
+    vi.setSystemTime(deadlineAt - MCP_CONFIRM_HOLD_GRACE_MS);
+    usePanelLimitStore.getState().resolveConfirmation(true);
+
+    expect(await result).toMatchObject({ allowed: 0, expired: true, grant: null });
+    expect(getPanelSlotReservations().unclaimed).toBe(0);
+  });
+
+  it("asks nobody when there is no time left to answer", async () => {
+    const confirm = vi.fn().mockResolvedValue(true);
+    usePanelLimitStore.setState({ requestConfirmation: confirm });
+    try {
+      const result = await preflightSpawnBatchLimit(() => 18, 3, {
+        deadlineAt: Date.now() + MCP_CONFIRM_HOLD_GRACE_MS,
+      });
+
+      expect(result).toMatchObject({ allowed: 0, expired: true });
+      expect(confirm).not.toHaveBeenCalled();
+    } finally {
+      usePanelLimitStore.setState({
+        requestConfirmation: usePanelLimitStore.getInitialState().requestConfirmation,
+      });
+    }
+  });
+
+  it("grants as before when the person answers in time", async () => {
+    const result = preflightSpawnBatchLimit(() => 18, 3, { deadlineAt: Date.now() + 30_000 });
+    await vi.advanceTimersByTimeAsync(10_000);
+    usePanelLimitStore.getState().resolveConfirmation(true);
+
+    const decision = await result;
+    expect(decision).toMatchObject({ allowed: 3, declined: false });
+    expect(decision).not.toHaveProperty("expired");
+    expect(getPanelSlotReservations().unclaimed).toBe(3);
+    decision.grant?.release();
+    // The close timer went with the answer: nothing fires into the next request.
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("reports a no inside the window as the person's decline", async () => {
+    const result = preflightSpawnBatchLimit(() => 18, 3, { deadlineAt: Date.now() + 30_000 });
+    usePanelLimitStore.getState().resolveConfirmation(false);
+
+    expect(await result).toEqual({ allowed: 0, declined: true, grant: null });
+  });
+
+  it("withdraws only the request it names, never a newer one on screen", async () => {
+    const { requestConfirmation, withdrawConfirmation } = usePanelLimitStore.getState();
+    const base = { currentCount: 18, requestedCount: 3, allowedCount: 3 };
+    const limits = { confirmationLimit: 20, hardLimit: 32 };
+    const first = { ...base, ...limits };
+    const second = { ...base, ...limits };
+    const firstAnswer = requestConfirmation(first);
+    const secondAnswer = requestConfirmation(second);
+    expect(await firstAnswer).toBe(false);
+
+    withdrawConfirmation(first);
+    expect(pending()?.request).toBe(second);
+
+    withdrawConfirmation(second);
+    expect(pending()).toBeNull();
+    expect(await secondAnswer).toBe(false);
   });
 });
 

@@ -24,6 +24,7 @@ import { TerminalInOtherProjectError } from "@shared/utils/terminalInOtherProjec
 import { parsePluginPaletteArgs, type PluginPaletteArgs } from "@/lib/pluginPaletteArgs";
 import { ConfirmationStagedError } from "./actions/confirmationStaged";
 import { UnactionableTargetError } from "./actions/unactionableTarget";
+import { ConfirmationTimeoutError } from "./actions/confirmationTimeout";
 import {
   CORE_TIER_TOOLS,
   FULL_TIER_ADDONS,
@@ -750,6 +751,10 @@ export class ActionService {
         // human was shown. Unconditional for the same reason, so an injected
         // `contextOverride` cannot pin a push to a review nobody saw.
         hostApprovedPush: options?.hostApprovedPush,
+        // Same unconditional stamp (#15648): an action that waits on a person
+        // gives up at this deadline, so a `contextOverride` must not be able
+        // to stretch or plant one.
+        dispatchDeadlineAt: options?.dispatchDeadlineAt,
         // Same unconditional stamp: a plugin's identity comes from the host's
         // own bridge closure, never from a context the caller could shape.
         callerPluginId: source === "plugin" ? options?.callerPluginId : undefined,
@@ -852,6 +857,9 @@ export class ActionService {
         // `TerminalInOtherProjectError` gets its own code (#13120) and, unlike
         // the others, plain `details`: its fields are the point, and custom
         // `Error` properties are dropped by the structured clone to plugins.
+        // `ConfirmationTimeoutError` is a confirm of the action's own that ran
+        // out of time behind an agent dispatch (#15648), so it reports what a
+        // host confirm nobody answered reports.
         // A plugin action's result is checked in main, against the JSON Schema
         // only main holds, and comes back as a decoded AppError: it is the same
         // failure the `resultSchema` gate above reports for a built-in, so it
@@ -867,7 +875,9 @@ export class ActionService {
                   ? "VALIDATION_ERROR"
                   : err instanceof TerminalInOtherProjectError
                     ? "TERMINAL_IN_OTHER_PROJECT"
-                    : "EXECUTION_ERROR",
+                    : err instanceof ConfirmationTimeoutError
+                      ? "CONFIRMATION_TIMEOUT"
+                      : "EXECUTION_ERROR",
         message,
         details: err instanceof TerminalInOtherProjectError ? err.toDetails() : err,
       };
