@@ -850,9 +850,7 @@ describe("tryFleetBroadcastFromEditor — image chips (#15600)", () => {
     useFleetTargetOverridesStore.getState().setPayloadOverride("b", "described in words");
     const images = [IMAGE];
 
-    expect(tryFleetBroadcastFromEditor("a", `see ${IMAGE}`, vi.fn(), undefined, images)).toBe(
-      true
-    );
+    expect(tryFleetBroadcastFromEditor("a", `see ${IMAGE}`, vi.fn(), undefined, images)).toBe(true);
     // What the composer reads afterwards can't change what this send carries.
     images.length = 0;
     await vi.waitFor(() => expect(useFleetFailureStore.getState().failedIds.size).toBe(3));

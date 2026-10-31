@@ -360,12 +360,7 @@ export async function executeFleetBroadcast(
   const retry = options.retry === true;
   const run = ++latestRun;
   const progress = () => (run === latestRun ? useFleetBroadcastProgressStore.getState() : null);
-  let resolved = resolveSubmissions(
-    draft,
-    targetIds,
-    perTargetOverrides,
-    options.imagePaths ?? []
-  );
+  let resolved = resolveSubmissions(draft, targetIds, perTargetOverrides, options.imagePaths ?? []);
   // Checked right before each submit, so a target that stops being a recipient
   // while its context is read or between batches is skipped, never sent.
   const canDispatch = (r: ResolvedSubmission) => isStillRecipient(r.terminalId);

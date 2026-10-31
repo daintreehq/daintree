@@ -179,9 +179,9 @@ describe("Enter in an armed composer", () => {
     it("says why aloud when no one asked to be told", () => {
       armLocal("t-1");
       armRemote();
-      expect(tryComposerFleetBroadcast(true, "t-1", `see ${IMAGE}`, vi.fn(), undefined, [IMAGE])).toBe(
-        true
-      );
+      expect(
+        tryComposerFleetBroadcast(true, "t-1", `see ${IMAGE}`, vi.fn(), undefined, [IMAGE])
+      ).toBe(true);
       expect(useAnnouncerStore.getState().polite?.msg).toBe(CROSS_HOST_IMAGE_REFUSAL);
       expect(submitCrossHostMock).not.toHaveBeenCalled();
     });

@@ -964,9 +964,9 @@ describe("findCrossHostImageTargets", () => {
     expect(
       findCrossHostImageTargets(`see ${IMAGE}`, ["a", REMOTE], [IMAGE], { [REMOTE]: "see it" })
     ).toEqual([]);
-    expect(findCrossHostImageTargets("see it", ["a", REMOTE], [IMAGE], { [REMOTE]: IMAGE })).toEqual(
-      [REMOTE]
-    );
+    expect(
+      findCrossHostImageTargets("see it", ["a", REMOTE], [IMAGE], { [REMOTE]: IMAGE })
+    ).toEqual([REMOTE]);
   });
 });
 
