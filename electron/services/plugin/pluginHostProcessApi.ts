@@ -1,8 +1,11 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "path";
 
 import { PLUGIN_PTY_DEFAULT_COLS, PLUGIN_PTY_DEFAULT_ROWS } from "./PluginProcessManager.js";
 import { assertPluginCallerDrives, capturePluginCallerDrives } from "./pluginDriveLease.js";
+import { runWithEndedPluginInvocation, runWithPluginInvocation } from "./pluginFrontendRouting.js";
 import { processHandleKillers } from "./pluginInternalApprovers.js";
+import { runWithServiceInvocation } from "./pluginServiceInvocation.js";
 
 import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 import type {
@@ -141,7 +144,10 @@ export function buildProcessApi(
     // once the plugin unloads, so a handle retained by a leaked timer can't
     // drive the child afterwards (killManagedProcesses already tore the live
     // children down on unload).
-    const gate = createProcessGate(() => deps.plugins.has(pluginId));
+    // Bound to this load of the plugin, so an operation still waiting when it
+    // unloads can't land after a reload under the same id brings it back.
+    const loaded = deps.plugins.get(pluginId);
+    const gate = createProcessGate(() => deps.plugins.get(pluginId) === loaded);
     const check = (op: string) => capturePluginCallerDrives(pluginId, `process.${op}`, leaseTarget);
     const base: PluginProcessHandle = {
       get id() {
@@ -163,9 +169,9 @@ export function buildProcessApi(
           });
         });
       },
-      onExit: (cb) => handle.onExit(cb),
-      onCrash: (cb) => handle.onCrash(cb),
-      onData: (cb) => handle.onData(cb),
+      onExit: (cb) => handle.onExit((info) => asBackground(() => cb(info))),
+      onCrash: (cb) => handle.onCrash((info) => asBackground(() => cb(info))),
+      onData: (cb) => handle.onData((chunk) => asBackground(() => cb(chunk))),
     };
     // Only the handle handed back is registered: it is what the worker bridge
     // holds when it cleans up.
@@ -233,6 +239,17 @@ interface GatedProcessOp {
 }
 
 /**
+ * A child's output and exit reach the plugin as its own background work, as in
+ * a dev worker, even when a view's call started or restarted the child: its
+ * streams would otherwise carry that call's context into every later chunk.
+ */
+function asBackground(fn: () => void): void {
+  runWithPluginInvocation(null, () =>
+    runWithEndedPluginInvocation(null, () => runWithServiceInvocation(null, fn))
+  );
+}
+
+/**
  * Apply a process handle's operations in the order the plugin made them, each
  * once its lease check clears. The check runs when the operation reaches the
  * front, so it answers to the leases as they stand just before it lands, not
@@ -244,12 +261,35 @@ function createProcessGate(isLive: () => boolean): {
   submit: (op: GatedProcessOp) => void;
   retire: () => void;
 } {
-  const waiting: GatedProcessOp[] = [];
+  // Each waiting operation resumes in the context it was made in, not in that
+  // of the one whose check let the queue move on.
+  const waiting: Array<{ op: GatedProcessOp; resume: (fn: () => void) => void }> = [];
   let busy = false;
+  let draining = false;
   let retired = false;
   const live = () => !retired && isLive();
 
-  const applyLate = (op: GatedProcessOp): void => {
+  const finish = (): void => {
+    busy = false;
+    drain();
+  };
+
+  // A loop rather than recursion, so a long run of operations that clear at
+  // once behind one that waited can't overflow the stack.
+  const drain = (): void => {
+    if (draining) return;
+    draining = true;
+    try {
+      while (!busy && waiting.length > 0) {
+        const next = waiting.shift()!;
+        next.resume(() => start(next.op, false));
+      }
+    } finally {
+      draining = false;
+    }
+  };
+
+  const applyCleared = (op: GatedProcessOp): void => {
     if (!live()) {
       op.dropped?.();
       return;
@@ -261,16 +301,19 @@ function createProcessGate(isLive: () => boolean): {
     }
   };
 
-  const drain = (): void => {
-    while (!busy && waiting.length > 0) start(waiting.shift()!, false);
-  };
-
   const start = (op: GatedProcessOp, direct: boolean): void => {
     if (!live()) {
       op.dropped?.();
       return;
     }
-    const verdict = op.check();
+    let verdict: Promise<void> | undefined;
+    try {
+      verdict = op.check();
+    } catch (err) {
+      // A check that can't answer refuses, as the lease gate does.
+      op.refused?.(err);
+      return;
+    }
     // Held busy while the child is touched, so an operation the plugin makes
     // from inside it (a data callback, say) queues behind it.
     busy = true;
@@ -281,33 +324,32 @@ function createProcessGate(isLive: () => boolean): {
         if (direct) throw err;
         op.refused?.(err);
       } finally {
-        busy = false;
-        drain();
+        finish();
       }
       return;
     }
     void verdict
       .then(
-        () => applyLate(op),
+        () => applyCleared(op),
         (reason: unknown) => {
           if (live()) op.refused?.(reason);
           else op.dropped?.();
         }
       )
-      .then(() => {
-        busy = false;
-        drain();
-      });
+      .then(finish, finish);
   };
 
   return {
     submit: (op) => {
-      if (busy || waiting.length > 0) waiting.push(op);
-      else start(op, true);
+      if (busy || waiting.length > 0) {
+        waiting.push({ op, resume: AsyncLocalStorage.snapshot() });
+      } else {
+        start(op, true);
+      }
     },
     retire: () => {
       retired = true;
-      for (const op of waiting.splice(0)) op.dropped?.();
+      for (const { op } of waiting.splice(0)) op.dropped?.();
     },
   };
 }

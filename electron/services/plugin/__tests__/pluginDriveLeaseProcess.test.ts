@@ -37,6 +37,7 @@ import type { ManagedProcessHandle } from "../PluginProcessManager.js";
 import { killPluginProcessForHost } from "../pluginInternalApprovers.js";
 import {
   _resetPluginFrontendRoutingForTesting,
+  currentPluginInvocation,
   runInPluginInvocation,
   runWithEndedPluginInvocation,
   setPluginFrontendRouter,
@@ -50,7 +51,12 @@ import type { DriveLeaseHolder } from "../../../../shared/types/remoteHosts.js";
 import type {
   PluginPtyProcessHandle,
   PluginDuplexProcessHandle,
+  PluginProcessDataChunk,
+  PluginProcessHandle,
+  PluginProcessMode,
+  PluginProcessSpawnOptions,
 } from "../../../../shared/types/plugin.js";
+import type { WorktreeSnapshot } from "../../../../shared/types/workspace-host.js";
 
 /**
  * A process a plugin started from a view works on the project it runs in, so
@@ -104,40 +110,74 @@ function installLeases(leases: Map<string, ClientEndpoint>): void {
   _resetDriveLeaseServiceForTesting(service as unknown as DriveLeaseService);
 }
 
-function fakeChild(): ManagedProcessHandle {
+type FakeChild = ManagedProcessHandle & { emitData: (chunk: PluginProcessDataChunk) => void };
+
+function fakeChild(mode: PluginProcessMode = "pty"): FakeChild {
+  let onData: ((chunk: PluginProcessDataChunk) => void) | undefined;
   return {
     id: "proc-1",
-    mode: "pty",
+    mode,
     kill: vi.fn(),
     restart: vi.fn(async () => undefined),
     onExit: () => () => undefined,
     onCrash: () => () => undefined,
-    onData: () => () => undefined,
+    onData: (cb) => {
+      onData = cb;
+      return () => undefined;
+    },
     write: vi.fn(),
     resize: vi.fn(),
+    emitData: (chunk) => onData?.(chunk),
   };
 }
 
-function setup(): {
-  child: ManagedProcessHandle;
+function loadedPlugin(): unknown {
+  return { isBuiltin: true, manifest: { capabilities: ["shell:exec"] } };
+}
+
+function setup(mode: PluginProcessMode = "pty"): {
+  child: FakeChild;
   plugins: Map<string, unknown>;
+  spawn: (as: ClientEndpoint | null, cwd?: string) => Promise<PluginProcessHandle>;
   spawnPty: (as: ClientEndpoint | null) => Promise<PluginPtyProcessHandle>;
 } {
-  const child = fakeChild();
-  const plugins = new Map<string, unknown>([
-    [PLUGIN_ID, { isBuiltin: true, manifest: { capabilities: ["shell:exec"] } }],
-  ]);
+  const child = fakeChild(mode);
+  const plugins = new Map<string, unknown>([[PLUGIN_ID, loadedPlugin()]]);
   const deps = {
     plugins,
     getProcessManager: () => ({ spawn: async () => child }),
   } as unknown as PluginHostFactoryDeps;
-  const api = buildProcessApi(deps, PLUGIN_ID, async () => []);
-  const spawnPty = (as: ClientEndpoint | null) => {
-    const run = () => api.spawn("sh", { mode: "pty", cwd: PROJECT_ROOT });
+  // With no cwd a spawn runs in the active worktree, which is in the project.
+  const api = buildProcessApi(deps, PLUGIN_ID, async () => [
+    { path: PROJECT_ROOT, isCurrent: true } as WorktreeSnapshot,
+  ]);
+  const spawn = (as: ClientEndpoint | null, cwd: string | undefined = PROJECT_ROOT) => {
+    const run = () =>
+      api.spawn("sh", { mode, ...(cwd !== undefined && { cwd }) } as PluginProcessSpawnOptions);
     return as === null ? run() : runInPluginInvocation(PLUGIN_ID, as, run);
   };
-  return { child, plugins, spawnPty };
+  const spawnPty = (as: ClientEndpoint | null) => spawn(as) as Promise<PluginPtyProcessHandle>;
+  return { child, plugins, spawn, spawnPty };
 }
+
+/** A lookup that answers only once released. */
+function stalledLookup(): { release: () => void } {
+  let release!: () => void;
+  const lookup = new Promise<void>((resolve) => (release = resolve));
+  installLeases(
+    new Map([
+      ["p1", VIEW],
+      ["p2", OTHER],
+    ])
+  );
+  owners.projectsForPath = async (p) => {
+    await lookup;
+    return p.startsWith(PROJECT_ROOT) ? ["p1"] : [];
+  };
+  return { release };
+}
+
+const WAIT = { timeout: 5000 };
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -153,7 +193,7 @@ function asCaller<T>(caller: ClientEndpoint, fn: () => T): T {
 async function settled(handle: PluginDuplexProcessHandle, child: ManagedProcessHandle) {
   const marker = `marker-${Math.random()}`;
   handle.write(marker);
-  await vi.waitFor(() => expect(child.write).toHaveBeenCalledWith(marker));
+  await vi.waitFor(() => expect(child.write).toHaveBeenCalledWith(marker), WAIT);
 }
 
 function written(child: ManagedProcessHandle): string[] {
@@ -277,6 +317,19 @@ describe("plugin process handles after another screen takes the project (#15792)
     expect(written(child)).toEqual(["from-view", "from-background"]);
   });
 
+  it("lands a long burst of background writes queued behind a call's write", async () => {
+    const { child, spawnPty } = setup();
+    const handle = await spawnPty(VIEW);
+    judgedSlowly();
+
+    asCaller(VIEW, () => handle.write("from-view"));
+    const burst = Array.from({ length: 50_000 }, (_, i) => String(i));
+    for (const data of burst) handle.write(data);
+    await settled(handle, child);
+
+    expect(written(child)).toEqual(["from-view", ...burst]);
+  });
+
   it("keeps going after a refusal: later operations still land, in order", async () => {
     const { child, spawnPty } = setup();
     const handle = await spawnPty(VIEW);
@@ -352,18 +405,106 @@ describe("plugin process handles after another screen takes the project (#15792)
     expect(child.restart).not.toHaveBeenCalled();
   });
 
-  it("lets the host kill the process past the lease, dropping what still waits", async () => {
+  it("lets the host kill the process past the lease, settling what still waits", async () => {
     const { child, spawnPty } = setup();
     const handle = await spawnPty(VIEW);
-    judgedSlowly();
-    asCaller(VIEW, () => handle.write("pending"));
+    const { release } = stalledLookup();
+    asCaller(VIEW, () => handle.write("being judged"));
+    const restart = asCaller(VIEW, () => handle.restart());
+
+    asCaller(OTHER, () => killPluginProcessForHost(handle));
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    await expect(restart).resolves.toBeUndefined();
+    release();
+    handle.write("after");
+    await flush();
+    await flush();
+
+    expect(child.write).not.toHaveBeenCalled();
+    expect(child.restart).not.toHaveBeenCalled();
+  });
+
+  it("holds duplex and pipe handles to it too", async () => {
+    const duplex = setup("duplex");
+    const writable = (await duplex.spawn(VIEW)) as PluginDuplexProcessHandle;
+    const pipe = setup("pipe");
+    const piped = await pipe.spawn(VIEW);
     installLeases(new Map([["p1", OTHER]]));
 
-    asCaller(VIEW, () => killPluginProcessForHost(handle));
-    expect(child.kill).toHaveBeenCalledTimes(1);
-    handle.write("after");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    asCaller(VIEW, () => {
+      writable.write("{}\n");
+      writable.kill();
+      piped.kill();
+    });
+    await expect(asCaller(VIEW, () => writable.restart())).rejects.toMatchObject({
+      code: "DRIVEN_ELSEWHERE",
+    });
+    await expect(asCaller(VIEW, () => piped.restart())).rejects.toMatchObject({
+      code: "DRIVEN_ELSEWHERE",
+    });
+
+    expect(duplex.child.write).not.toHaveBeenCalled();
+    for (const { child } of [duplex, pipe]) {
+      expect(child.kill).not.toHaveBeenCalled();
+      expect(child.restart).not.toHaveBeenCalled();
+    }
+  });
+
+  it("judges a process spawned with no cwd by the active worktree's project", async () => {
+    const { child, spawn } = setup();
+    const handle = (await spawn(VIEW, undefined)) as PluginPtyProcessHandle;
+    installLeases(new Map([["p1", OTHER]]));
+
+    asCaller(VIEW, () => handle.write("x"));
+    await settled(handle, child);
+
+    expect(written(child)).toEqual([]);
+  });
+
+  it("drops what waited through an unload even if the plugin is loaded again", async () => {
+    const { child, plugins, spawnPty } = setup();
+    const handle = await spawnPty(VIEW);
+    const { release } = stalledLookup();
+    asCaller(VIEW, () => handle.write("before unload"));
+    const restart = asCaller(VIEW, () => handle.restart());
+
+    plugins.delete(PLUGIN_ID);
+    plugins.set(PLUGIN_ID, loadedPlugin());
+    release();
+
+    await expect(restart).resolves.toBeUndefined();
     expect(child.write).not.toHaveBeenCalled();
+    expect(child.restart).not.toHaveBeenCalled();
+  });
+
+  it("applies a waiting operation as the work that made it, not as the one ahead", async () => {
+    const { child, spawnPty } = setup();
+    const handle = await spawnPty(VIEW);
+    const seen: Array<string | null> = [];
+    vi.mocked(child.restart).mockImplementation(async () => {
+      seen.push(currentPluginInvocation()?.endpoint.endpointId ?? null);
+    });
+    judgedSlowly();
+
+    asCaller(VIEW, () => handle.write("from-view"));
+    await handle.restart();
+
+    expect(written(child)).toEqual(["from-view"]);
+    expect(seen).toEqual([null]);
+  });
+
+  it("runs output callbacks as the plugin's own work, whichever call started the child", async () => {
+    const { child, spawnPty } = setup();
+    const handle = await spawnPty(VIEW);
+    handle.onData(({ chunk }) => handle.write(`ack ${chunk}`));
+    installLeases(new Map([["p1", OTHER]]));
+
+    // The child's streams were opened inside the view's call, so its output
+    // arrives in that call's context.
+    asCaller(VIEW, () => child.emitData({ stream: "data", chunk: "ready" }));
+    await settled(handle, child);
+
+    expect(written(child)).toEqual(["ack ready"]);
   });
 });
 
@@ -412,13 +553,19 @@ describe("dev worker process operations and the drive lease (#15792)", () => {
     _resetDriveLeaseServiceForTesting(null);
   });
 
-  async function workerWithPty() {
+  async function workerWithPty(spawning: Promise<void> = Promise.resolve()) {
     const child = fakeChild();
+    let spawnStarted!: () => void;
+    const started = new Promise<void>((resolve) => (spawnStarted = resolve));
     const deps = {
-      plugins: new Map([
-        [PLUGIN_ID, { isBuiltin: true, manifest: { capabilities: ["shell:exec"] } }],
-      ]),
-      getProcessManager: () => ({ spawn: async () => child }),
+      plugins: new Map([[PLUGIN_ID, loadedPlugin()]]),
+      getProcessManager: () => ({
+        spawn: async () => {
+          spawnStarted();
+          await spawning;
+          return child;
+        },
+      }),
     } as unknown as PluginHostFactoryDeps;
     const host = {
       pluginId: PLUGIN_ID,
@@ -426,7 +573,7 @@ describe("dev worker process operations and the drive lease (#15792)", () => {
       process: buildProcessApi(deps, PLUGIN_ID, async () => []),
     };
     const workerHost = new FakeWorkerHost();
-    new PluginDevWorkerMainBridge({
+    const bridge = new PluginDevWorkerMainBridge({
       pluginId: PLUGIN_ID,
       host: host as never,
       workerHost: workerHost as never,
@@ -447,7 +594,10 @@ describe("dev worker process operations and the drive lease (#15792)", () => {
     /** Start a frontend invocation from `caller` and return its id. */
     const invokeAs = async (caller: ClientEndpoint) => {
       const before = workerHost.sent.filter((m) => m.type === "invoke").length;
-      void runInPluginInvocation(PLUGIN_ID, caller, () => handler({}, {}));
+      // Rejected when the bridge goes away, which one test makes it do.
+      void Promise.resolve(runInPluginInvocation(PLUGIN_ID, caller, () => handler({}, {}))).catch(
+        () => undefined
+      );
       await flush();
       return workerHost.sent.filter((m) => m.type === "invoke")[before].requestId as string;
     };
@@ -455,7 +605,7 @@ describe("dev worker process operations and the drive lease (#15792)", () => {
       emit({ type: "host-call", requestId, method, params, invocationId: id });
       const answer = () =>
         workerHost.sent.find((m) => m.type === "host-result" && m.requestId === requestId);
-      await vi.waitFor(() => expect(answer()).toBeDefined());
+      await vi.waitFor(() => expect(answer()).toBeDefined(), WAIT);
       return answer();
     };
     const notify = (method: string, params: unknown, id?: string) =>
@@ -466,26 +616,41 @@ describe("dev worker process operations and the drive lease (#15792)", () => {
         ...(id !== undefined && { invocationId: id }),
       });
     const invocationId = await invokeAs(VIEW);
-    const spawned = await call(
-      "spawn",
-      "process.spawn",
-      { command: "sh", options: { mode: "pty", cwd: PROJECT_ROOT } },
-      invocationId
-    );
-    const processId = (spawned?.result as { id: string }).id;
+    const spawnParams = { command: "sh", options: { mode: "pty", cwd: PROJECT_ROOT } };
+    const spawned = call("spawn", "process.spawn", spawnParams, invocationId);
+    const processId = "proc-1";
     /** A background write, landing only once everything before it was judged. */
     const settledAll = async () => {
       const marker = `marker-${Math.random()}`;
       notify("process.write", { processId, data: marker });
-      await vi.waitFor(() => expect(child.write).toHaveBeenCalledWith(marker));
+      await vi.waitFor(() => expect(child.write).toHaveBeenCalledWith(marker), WAIT);
     };
     const settle = (requestId: string) =>
       emit({ type: "invoke-result", requestId, ok: true, result: null });
-    return { child, processId, invocationId, call, notify, settledAll, settle };
+    return {
+      child,
+      bridge,
+      started,
+      processId,
+      invocationId,
+      spawned,
+      call,
+      emit,
+      notify,
+      settledAll,
+      settle,
+    };
+  }
+
+  /** A worker whose spawn has answered. */
+  async function workerWithLivePty() {
+    const worker = await workerWithPty();
+    expect(await worker.spawned).toMatchObject({ ok: true, result: { id: "proc-1" } });
+    return worker;
   }
 
   it("judges a write, resize and kill sent inside the view's call as that view's", async () => {
-    const { child, processId, invocationId, call, notify, settledAll } = await workerWithPty();
+    const { child, processId, invocationId, call, notify, settledAll } = await workerWithLivePty();
     installLeases(new Map([["p1", OTHER]]));
 
     notify("process.write", { processId, data: "typed\r" }, invocationId);
@@ -502,7 +667,8 @@ describe("dev worker process operations and the drive lease (#15792)", () => {
   });
 
   it("holds work sent after the call returned to the caller who made it", async () => {
-    const { child, processId, invocationId, notify, settledAll, settle } = await workerWithPty();
+    const { child, processId, invocationId, notify, settledAll, settle } =
+      await workerWithLivePty();
     settle(invocationId);
     installLeases(new Map([["p1", OTHER]]));
 
@@ -512,8 +678,48 @@ describe("dev worker process operations and the drive lease (#15792)", () => {
     expect(written(child)).toEqual([]);
   });
 
+  it("lets work sent after the call returned through while its caller still drives", async () => {
+    const { child, processId, invocationId, notify, settledAll, settle } =
+      await workerWithLivePty();
+    settle(invocationId);
+
+    notify("process.write", { processId, data: "late" }, invocationId);
+    await settledAll();
+
+    expect(written(child)).toEqual(["late"]);
+  });
+
+  it("kills a spawn the worker gave up on, even after its caller lost the project", async () => {
+    let finishSpawn!: () => void;
+    const { child, emit, spawned, started } = await workerWithPty(
+      new Promise<void>((resolve) => (finishSpawn = resolve))
+    );
+    // Past spawn's own lease checks, with the child being started.
+    await started;
+    emit({ type: "host-cancel", requestId: "spawn" });
+    installLeases(new Map([["p1", OTHER]]));
+    finishSpawn();
+    await spawned;
+
+    expect(child.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("kills the worker's processes when it goes away, without waiting on a check", async () => {
+    const { child, bridge, processId, invocationId, notify } = await workerWithLivePty();
+    const { release } = stalledLookup();
+    notify("process.write", { processId, data: "being judged" }, invocationId);
+
+    bridge.dispose();
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    release();
+    await flush();
+    await flush();
+
+    expect(child.write).not.toHaveBeenCalled();
+  });
+
   it("lets the view that drives, and background work, through", async () => {
-    const { child, processId, invocationId, call, notify, settledAll } = await workerWithPty();
+    const { child, processId, invocationId, call, notify, settledAll } = await workerWithLivePty();
 
     notify("process.write", { processId, data: "a" }, invocationId);
     notify("process.write", { processId, data: "b" });
@@ -528,7 +734,7 @@ describe("dev worker process operations and the drive lease (#15792)", () => {
   });
 
   it("leaves operations with no invocation as background after a takeover", async () => {
-    const { child, processId, notify, settledAll } = await workerWithPty();
+    const { child, processId, notify, settledAll } = await workerWithLivePty();
     installLeases(new Map([["p1", OTHER]]));
 
     notify("process.write", { processId, data: "bg" });

@@ -2349,10 +2349,17 @@ describe("PluginDevWorkerHostProxy invocation id", () => {
     const spawned = proxy.host.process.spawn("sh", { mode: "pty" });
     resolveCall(proxy, sent, "process.spawn", { id: "p1", mode: "pty" });
     const handle = await spawned;
+    let wroteLater!: () => void;
+    const later = new Promise<void>((resolve) => (wroteLater = resolve));
     proxy.host.registerHandler("type", () => {
       handle.write("ls\r");
       handle.resize(40, 10);
       handle.kill();
+      // Left running after the handler returns: still that call's work.
+      setTimeout(() => {
+        handle.write("after return");
+        wroteLater();
+      }, 0);
       return null;
     });
     handle.write("background");
@@ -2367,6 +2374,8 @@ describe("PluginDevWorkerHostProxy invocation id", () => {
       args: [],
     });
     await flush();
+    expect(sent.some((m) => m.type === "invoke-result" && m.requestId === "i7")).toBe(true);
+    await later;
 
     const notifies = sent.filter(
       (m) => m.type === "host-notify" && m.method.startsWith("process.")
@@ -2376,6 +2385,7 @@ describe("PluginDevWorkerHostProxy invocation id", () => {
       ["process.write", "ls\r", "i7"],
       ["process.resize", null, "i7"],
       ["process.kill", null, "i7"],
+      ["process.write", "after return", "i7"],
     ]);
     expect("invocationId" in notifies[0]).toBe(false);
   });
