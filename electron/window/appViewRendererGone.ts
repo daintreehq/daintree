@@ -37,7 +37,6 @@ export function attachAppViewRendererGoneHandler(opts: AppViewRendererGoneOption
   const { win, appWebContents, getProjectViewManager, getRecoveryUrl, prepareWindowRecreation } =
     opts;
   const rendererCrashTimestamps: number[] = [];
-  const oomRecreationTimestamps: number[] = [];
 
   appWebContents.on("render-process-gone", (_event, details) => {
     if (details.reason === "clean-exit") return;
@@ -132,16 +131,12 @@ export function attachAppViewRendererGoneHandler(opts: AppViewRendererGoneOption
         appWebContents.loadURL(recoveryUrl);
       });
     } else if (isProbableOom && prepareWindowRecreation) {
-      const now2 = Date.now();
-      while (
-        oomRecreationTimestamps.length > 0 &&
-        now2 - oomRecreationTimestamps[0] > CRASH_LOOP_WINDOW_MS
-      ) {
-        oomRecreationTimestamps.shift();
-      }
-      oomRecreationTimestamps.push(now2);
-
-      if (oomRecreationTimestamps.length >= CRASH_LOOP_THRESHOLD) {
+      // Captured now, while the window still holds its views: destroying it
+      // disposes everything that knows what it was showing (#15564). The
+      // OOM budget lives there too, since this handler dies with the window
+      // and the replacement starts a fresh one (#15647).
+      const recreateWindow = prepareWindowRecreation();
+      if (!recreateWindow) {
         console.error("[MAIN] OOM crash loop detected, loading recovery page");
         setImmediate(() => {
           if (win.isDestroyed()) return;
@@ -156,9 +151,6 @@ export function attachAppViewRendererGoneHandler(opts: AppViewRendererGoneOption
           ),
           { source: "renderer-crash" }
         );
-        // Captured now, while the window still holds its views: destroying it
-        // disposes everything that knows what it was showing (#15564).
-        const recreateWindow = prepareWindowRecreation();
         setImmediate(() => {
           // Increment the guard before `destroy()` — Electron emits
           // `window-all-closed` synchronously inside the destroy call.

@@ -354,7 +354,7 @@ describe("OOM window recreation (#15564)", () => {
     win.activeProjectId = "proj-c";
     const second = recreation.prepare();
     fleet.destroy(1);
-    await Promise.all([first(), second()]);
+    await Promise.all([first!(), second!()]);
 
     expect(createWindow).toHaveBeenCalledTimes(1);
     expect(createWindow).toHaveBeenCalledWith("proj-b", expect.anything());

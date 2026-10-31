@@ -11,6 +11,12 @@
  * once the window is gone. The rebuild goes through the launch restore's
  * mapping, so a host-scoped workspace opens on the picker and moves to its
  * host, and a workspace that no longer exists resolves to the picker.
+ *
+ * The chain also carries the window's OOM budget (#15647). Every rebuild
+ * replaces the WebContents and the BrowserWindow, so a history kept on either
+ * starts empty in the replacement and a window that dies on every restore is
+ * rebuilt forever. The rebuild hands the history to the replacement instead,
+ * and a window that has used up its recreations shows the recovery page.
  */
 
 import type { WindowRegistry } from "./WindowRegistry.js";
@@ -24,22 +30,30 @@ import {
   setPendingWindowRecreation,
 } from "./openWindowsTracker.js";
 
+const OOM_LOOP_WINDOW_MS = 60_000;
+const OOM_LOOP_THRESHOLD = 3;
+
 /**
  * Called by an OOM branch at the crash, while the window still holds its
- * views. Returns the rebuild, to run once the window has been destroyed.
+ * views. Returns the rebuild, to run once the window has been destroyed, or
+ * `null` when this window has been rebuilt for OOM too often lately: the
+ * branch loads the recovery page instead and leaves the window standing.
  */
-export type PrepareWindowRecreation = () => () => Promise<void>;
+export type PrepareWindowRecreation = () => (() => Promise<void>) | null;
 
 export interface WindowRecreationDeps {
   windowRegistry: WindowRegistry;
   /** The window this rebuilds, once it is registered. */
   getWindowId: () => number | undefined;
+  /** When the windows this one replaced died of a probable OOM; empty for a new window. */
+  oomHistory?: readonly number[];
   createWindow: (
     projectId: string | undefined,
     opts: {
       revealMode: "show" | "showInactive";
       backgroundProjectIds?: readonly string[];
       remoteWorkspaceKey?: string;
+      oomHistory: readonly number[];
       onRegistered: (windowId: number) => void;
     }
   ) => Promise<CreateWindowResult>;
@@ -58,12 +72,24 @@ export interface WindowRecreation {
 
 export function createWindowRecreation(deps: WindowRecreationDeps): WindowRecreation {
   let prepared = false;
+  const oomHistory = [...(deps.oomHistory ?? [])];
   return {
     isRecreating: () => prepared,
     prepare: () => {
       // Two views dying under the same pressure each reach an OOM branch
-      // before the first rebuild runs. One window goes, so one comes back.
+      // before the first rebuild runs. One window goes, so one comes back,
+      // and it spends one recreation.
       if (prepared) return () => Promise.resolve();
+
+      const now = Date.now();
+      while (oomHistory.length > 0 && now - oomHistory[0]! > OOM_LOOP_WINDOW_MS) {
+        oomHistory.shift();
+      }
+      // A refused attempt counts too, so OOMs that keep coming keep the window
+      // on the recovery page. Only the latest few can decide the next one.
+      oomHistory.push(now);
+      if (oomHistory.length > OOM_LOOP_THRESHOLD) oomHistory.shift();
+      if (oomHistory.length >= OOM_LOOP_THRESHOLD) return null;
       prepared = true;
 
       const windowId = deps.getWindowId();
@@ -85,6 +111,7 @@ export function createWindowRecreation(deps: WindowRecreationDeps): WindowRecrea
           await deps.createWindow(projectId, {
             ...options,
             revealMode,
+            oomHistory: [...oomHistory],
             onRegistered: (id) => {
               replacementId = id;
               setPendingWindowRecreation(id, record);

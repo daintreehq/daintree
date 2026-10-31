@@ -581,15 +581,20 @@ if (!gotTheLock) {
       remoteWorkspaceKey?: string;
       /** The user chose to open `initialProjectPath` anyway at critical memory pressure (#13638). */
       ignoreMemoryPressure?: boolean;
+      /** An OOM rebuild: when the windows this one replaces died of a probable OOM (#15647). */
+      oomHistory?: readonly number[];
     }
   ): Promise<CreateWindowResult> {
     // An OOM rebuilds the window onto what it is showing then, never onto this
     // call's arguments (#15564). One instance serves both the startup view's
-    // handler and the manager's, so the window is rebuilt once. `ctx` is read
-    // lazily: it is registered synchronously below, before any renderer can die.
+    // handler and the manager's, so the window is rebuilt once and spends one
+    // of the OOM budget it inherits from the window it replaces (#15647). `ctx`
+    // is read lazily: it is registered synchronously below, before any
+    // renderer can die.
     const recreation = createWindowRecreation({
       windowRegistry,
       getWindowId: () => ctx.windowId,
+      oomHistory: opts?.oomHistory,
       createWindow: (projectId, recreateOpts) => createWindow(undefined, projectId, recreateOpts),
     });
     const { win, appView, loadRenderer, smokeTestTimer, smokeRendererUnresponsive } =

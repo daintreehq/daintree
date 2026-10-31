@@ -276,8 +276,7 @@ export function setupViewHandlers(
     }
     crashTimestamps.push(now);
 
-    if (crashTimestamps.length >= CRASH_LOOP_THRESHOLD) {
-      console.error("[ProjectViewManager] Crash loop detected, loading recovery page");
+    const loadRecoveryPage = () => {
       setImmediate(() => {
         if (wc.isDestroyed()) return;
         const params = new URLSearchParams({
@@ -302,39 +301,51 @@ export function setupViewHandlers(
           wc.loadURL(`app://daintree/recovery.html?${params}`);
         }
       });
+    };
+
+    if (crashTimestamps.length >= CRASH_LOOP_THRESHOLD) {
+      console.error("[ProjectViewManager] Crash loop detected, loading recovery page");
+      loadRecoveryPage();
     } else if (isProbableOom && host.prepareWindowRecreation) {
-      console.warn("[ProjectViewManager] OOM crash, destroying and recreating window");
-      notifyError(new Error("A project view ran out of memory and the window was recreated."), {
-        source: "renderer-crash",
-      });
       // Captured now, while the window still holds its views: destroying it
-      // disposes everything that knows what it was showing (#15564).
+      // disposes everything that knows what it was showing (#15564). The
+      // OOM budget lives there too, since this entry's crash history dies
+      // with the window and the replacement starts a fresh one (#15647).
       const recreateWindow = host.prepareWindowRecreation();
-      setImmediate(() => {
-        // Increment the guard before `destroy()` — Electron emits
-        // `window-all-closed` synchronously inside the destroy call.
-        beginWindowRecreating();
-        if (!win.isDestroyed()) win.destroy();
-        recreateWindow()
-          .catch((err) => {
-            console.error("[ProjectViewManager] Failed to recreate window after OOM:", err);
-          })
-          .finally(() => {
-            endWindowRecreating();
-            // The suppressed `window-all-closed` event must be replayed if
-            // the recreation failed — otherwise on non-darwin the process
-            // hangs headless with no windows and no quit path. Skip when
-            // another OOM recreate is still in flight or any window remains
-            // (the natural `window-all-closed` path will cover those cases).
-            if (
-              !isWindowRecreating() &&
-              process.platform !== "darwin" &&
-              BrowserWindow.getAllWindows().length === 0
-            ) {
-              app.quit();
-            }
-          });
-      });
+      if (!recreateWindow) {
+        console.error("[ProjectViewManager] OOM crash loop detected, loading recovery page");
+        loadRecoveryPage();
+      } else {
+        console.warn("[ProjectViewManager] OOM crash, destroying and recreating window");
+        notifyError(new Error("A project view ran out of memory and the window was recreated."), {
+          source: "renderer-crash",
+        });
+        setImmediate(() => {
+          // Increment the guard before `destroy()` — Electron emits
+          // `window-all-closed` synchronously inside the destroy call.
+          beginWindowRecreating();
+          if (!win.isDestroyed()) win.destroy();
+          recreateWindow()
+            .catch((err) => {
+              console.error("[ProjectViewManager] Failed to recreate window after OOM:", err);
+            })
+            .finally(() => {
+              endWindowRecreating();
+              // The suppressed `window-all-closed` event must be replayed if
+              // the recreation failed — otherwise on non-darwin the process
+              // hangs headless with no windows and no quit path. Skip when
+              // another OOM recreate is still in flight or any window remains
+              // (the natural `window-all-closed` path will cover those cases).
+              if (
+                !isWindowRecreating() &&
+                process.platform !== "darwin" &&
+                BrowserWindow.getAllWindows().length === 0
+              ) {
+                app.quit();
+              }
+            });
+        });
+      }
     } else if (projectId && projectId !== host.activeProjectId && crashEntry?.state === "cached") {
       // A crashed cached view has no user-visible reason to be resurrected
       // in the background — evict it and let the next visit cold-start

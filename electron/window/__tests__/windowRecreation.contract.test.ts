@@ -93,6 +93,25 @@ describe("main.ts OOM recreation wiring (#15564)", () => {
     expect(args).toEqual(["undefined", params[0], params[1]]);
   });
 
+  it("seeds the recreation with the OOM history its createWindow was handed (#15647)", () => {
+    // The window this one replaces hands its history over through the rebuild
+    // above; a window opened any other way passes none and starts fresh.
+    let fn: ts.Node | undefined = recreationDecl;
+    while (fn && !ts.isFunctionDeclaration(fn)) fn = fn.parent;
+    const createWindowDecl = fn as ts.FunctionDeclaration | undefined;
+    expect(createWindowDecl?.name?.text).toBe("createWindow");
+    const optsParam = createWindowDecl?.parameters[2]?.name.getText();
+    expect(optsParam).toBeDefined();
+
+    const seeded = property(recreationArgs, "oomHistory");
+    expect(
+      seeded !== undefined &&
+        ts.isPropertyAccessExpression(seeded) &&
+        seeded.expression.getText() === optsParam &&
+        seeded.name.text === "oomHistory"
+    ).toBe(true);
+  });
+
   it("reads the window id from the registration, not from a launch argument", () => {
     const getWindowId = property(recreationArgs, "getWindowId");
     expect(getWindowId && ts.isArrowFunction(getWindowId)).toBe(true);
