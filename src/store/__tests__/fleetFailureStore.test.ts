@@ -6,7 +6,7 @@ import { usePanelStore } from "../panelStore";
 import type { PtyPanelData } from "@shared/types/panel";
 
 function resetStores() {
-  useFleetFailureStore.setState({ failedIds: new Set(), payload: null });
+  useFleetFailureStore.getState().clear();
   useFleetArmingStore.setState({
     armedIds: new Set<string>(),
     armOrder: [],
@@ -67,6 +67,45 @@ describe("useFleetFailureStore", () => {
     const s = useFleetFailureStore.getState();
     expect(s.failedIds).toEqual(new Set(["a", "b"]));
     expect(s.payload).toBeNull();
+  });
+
+  it("keeps what a retry needs to send each failed target what it was sent", () => {
+    const images = ["/tmp/one.png", "/tmp/two.png"];
+    const overrides = { b: "just one /tmp/one.png", c: "for c only" };
+    useFleetFailureStore
+      .getState()
+      .recordFailure("draft", ["a", "b"], 0, { imagePaths: images, perTargetOverrides: overrides });
+    images.push("/tmp/later.png");
+    overrides.b = "changed afterwards";
+
+    const s = useFleetFailureStore.getState();
+    expect(s.imagePaths).toEqual(["/tmp/one.png", "/tmp/two.png"]);
+    // Only a failed target's own text is worth keeping.
+    expect(s.perTargetOverrides).toEqual({ b: "just one /tmp/one.png" });
+  });
+
+  it("forgets a dismissed target's own text, and everything once the last one goes", () => {
+    useFleetFailureStore.getState().recordFailure("draft", ["a", "b"], 0, {
+      imagePaths: ["/tmp/one.png"],
+      perTargetOverrides: { a: "for a", b: "for b" },
+    });
+    useFleetFailureStore.getState().dismissId("a");
+    expect(useFleetFailureStore.getState().perTargetOverrides).toEqual({ b: "for b" });
+    expect(useFleetFailureStore.getState().imagePaths).toEqual(["/tmp/one.png"]);
+
+    useFleetFailureStore.getState().dismissId("b");
+    expect(useFleetFailureStore.getState().perTargetOverrides).toEqual({});
+    expect(useFleetFailureStore.getState().imagePaths).toEqual([]);
+  });
+
+  it("drops an earlier broadcast's images when a text-only failure replaces it", () => {
+    useFleetFailureStore.getState().recordFailure("draft", ["a"], 0, {
+      imagePaths: ["/tmp/one.png"],
+      perTargetOverrides: { a: "for a" },
+    });
+    useFleetFailureStore.getState().recordFailure(null, ["a"]);
+    expect(useFleetFailureStore.getState().imagePaths).toEqual([]);
+    expect(useFleetFailureStore.getState().perTargetOverrides).toEqual({});
   });
 
   it("dismissId removes a single id and preserves the rest", () => {

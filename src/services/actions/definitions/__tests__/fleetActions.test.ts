@@ -113,7 +113,7 @@ function resetStores(): void {
     lastArmedId: null,
   });
   useFleetPendingActionStore.setState({ pending: null });
-  useFleetFailureStore.setState({ failedIds: new Set(), payload: null });
+  useFleetFailureStore.getState().clear();
   usePanelStore.setState({
     panelsById: {},
     panelIds: [],
@@ -651,6 +651,38 @@ describe("fleet.retryFailures", () => {
     expect(draft).toBe("");
     expect(targets.slice().sort()).toEqual(["t1", "t2"]);
     expect(overrides).toEqual({ t1: "ls\r", t2: "ls\r" });
+  });
+
+  it("sends each target its own text again, with the broadcast's images (#15600)", async () => {
+    useFleetFailureStore.getState().recordFailure("look at /tmp/shot.png", ["t1", "t2"], 0, {
+      imagePaths: ["/tmp/shot.png"],
+      perTargetOverrides: { t2: "described in words" },
+    });
+    const registry = await buildRegistry();
+    await run(registry, "fleet.retryFailures");
+    expect(runManagedFleetBroadcast).toHaveBeenCalledTimes(1);
+    const [draft, targets, overrides, opts] = vi.mocked(runManagedFleetBroadcast).mock.calls[0]!;
+    expect(draft).toBe("");
+    expect(targets.slice().sort()).toEqual(["t1", "t2"]);
+    expect(overrides).toEqual({ t1: "look at /tmp/shot.png", t2: "described in words" });
+    expect(opts).toMatchObject({ isRetry: true, imagePaths: ["/tmp/shot.png"] });
+  });
+
+  it("asks whether another host may get a target's own text twice, not the draft", async () => {
+    vi.mocked(needsCrossHostResendConfirmation).mockImplementation(
+      (_id, text) => text === "described in words"
+    );
+    useFleetFailureStore.getState().recordFailure("look at /tmp/shot.png", ["t1", "t2"], 0, {
+      imagePaths: ["/tmp/shot.png"],
+      perTargetOverrides: { t2: "described in words" },
+    });
+    const registry = await buildRegistry();
+    try {
+      await run(registry, "fleet.retryFailures");
+    } finally {
+      vi.mocked(needsCrossHostResendConfirmation).mockImplementation(() => false);
+    }
+    expect(vi.mocked(runManagedFleetBroadcast).mock.calls[0]?.[1]).toEqual(["t1"]);
   });
 
   it("filters out targets that went ineligible before dispatch", async () => {

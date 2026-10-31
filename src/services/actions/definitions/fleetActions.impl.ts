@@ -237,10 +237,13 @@ export const fleetActionRuns = {
     // terminating payloads (`"make deploy\r"`) that double-executes
     // the command.
     if (retryInFlight) return;
-    const { failedIds, payload } = useFleetFailureStore.getState();
+    const { failedIds, payload, imagePaths, perTargetOverrides } = useFleetFailureStore.getState();
     if (payload == null || failedIds.size === 0) return;
     // Snapshot once — `failedIds` mutates as dismissId fires inside the loop.
     const targets = Array.from(failedIds);
+    // What each target was sent: its own edit where it had one, so a retry
+    // doesn't hand it an image or a token that edit took out.
+    const textFor = (id: string) => perTargetOverrides[id] ?? payload;
     // Re-check eligibility at dispatch time: a pane that died or was trashed
     // since the failure was recorded must not receive bytes. The primary
     // broadcast gates this in its caller (tryFleetBroadcastFromEditor), not
@@ -249,7 +252,7 @@ export const fleetActionRuns = {
     // hold its record could get the prompt twice: it stays failed until the
     // person confirms sending again from the banner.
     const awaitingConfirmation = new Set(
-      targets.filter((id) => needsCrossHostResendConfirmation(id, payload))
+      targets.filter((id) => needsCrossHostResendConfirmation(id, textFor(id)))
     );
     const eligibleTargets = filterEligibleIds(targets).filter(
       (id) => !awaitingConfirmation.has(id)
@@ -257,17 +260,16 @@ export const fleetActionRuns = {
     if (eligibleTargets.length === 0) return;
     retryInFlight = true;
     try {
-      // The stored payload is already fully substituted (it's the verbatim
-      // literal the user originally broadcast), so route it through
-      // perTargetOverrides to bypass executeFleetBroadcast's recipe-variable
-      // substitution — the empty draft is never resolved when every target
-      // has an override. `runManagedFleetBroadcast` runs it through the shared
-      // single-flight controller so the retry gains batching, progress, and a
-      // working ribbon Cancel button just like the primary Enter path.
-      const perTargetOverrides = Object.fromEntries(eligibleTargets.map((id) => [id, payload]));
-      const result = await runManagedFleetBroadcast("", eligibleTargets, perTargetOverrides, {
+      // Each target's text goes through perTargetOverrides, so the empty
+      // draft is never resolved. `runManagedFleetBroadcast` runs it through the
+      // shared single-flight controller so the retry gains batching, progress,
+      // and a working ribbon Cancel button just like the primary Enter path.
+      // The images go again too, attached wherever that text still names them.
+      const retryOverrides = Object.fromEntries(eligibleTargets.map((id) => [id, textFor(id)]));
+      const result = await runManagedFleetBroadcast("", eligibleTargets, retryOverrides, {
         isRetry: true,
         draftPreview: payload,
+        imagePaths,
       });
       // Permanent failures (dead PTYs) auto-disarm so a future retry doesn't
       // keep firing into the same dead pipes. The retry chip clears for them

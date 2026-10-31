@@ -15,6 +15,7 @@ import { usePanelStore } from "@/store/panelStore";
 import type { PtyPanelData } from "@shared/types/panel";
 
 const submitMock = vi.fn<(id: string, text: string) => Promise<void>>();
+const submitWithImagesMock = vi.fn<(id: string, text: string, paths: string[]) => Promise<void>>();
 // Lets a test stand in for the armed-set and eligibility reads at dispatch.
 const targetReads = vi.hoisted(() => ({
   resolve: null as null | ((actual: () => string[]) => string[]),
@@ -48,6 +49,8 @@ vi.mock("@/clients", async (importOriginal) => {
     terminalClient: {
       ...actual.terminalClient,
       submit: (id: string, text: string) => submitMock(id, text),
+      submitWithImages: (id: string, text: string, paths: string[]) =>
+        submitWithImagesMock(id, text, paths),
     },
   };
 });
@@ -93,6 +96,8 @@ beforeEach(() => {
   targetReads.filterEligible = null;
   submitMock.mockReset();
   submitMock.mockResolvedValue(undefined);
+  submitWithImagesMock.mockReset();
+  submitWithImagesMock.mockResolvedValue(undefined);
   useFleetArmingStore.setState({
     armedIds: new Set<string>(),
     armOrder: [],
@@ -832,6 +837,47 @@ describe("tryFleetBroadcastFromEditor — context tokens (#14953)", () => {
       expect(sent.get(id)).not.toContain("@diff");
     }
     await vi.waitFor(() => expect(onSent).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe("tryFleetBroadcastFromEditor — image chips (#15600)", () => {
+  const IMAGE = "/tmp/daintree/shot.png";
+
+  it("keeps the images, and each failed pane's own text, for the retry", async () => {
+    arm(["a", "b", "c"]);
+    submitWithImagesMock.mockRejectedValue(new Error("ENOSPC: disk full"));
+    submitMock.mockRejectedValue(new Error("ENOSPC: disk full"));
+    useFleetTargetOverridesStore.getState().setPayloadOverride("b", "described in words");
+    const images = [IMAGE];
+
+    expect(tryFleetBroadcastFromEditor("a", `see ${IMAGE}`, vi.fn(), undefined, images)).toBe(
+      true
+    );
+    // What the composer reads afterwards can't change what this send carries.
+    images.length = 0;
+    await vi.waitFor(() => expect(useFleetFailureStore.getState().failedIds.size).toBe(3));
+
+    expect(submitWithImagesMock.mock.calls.map(([id, , paths]) => [id, paths]).sort()).toEqual([
+      ["a", [IMAGE]],
+      ["c", [IMAGE]],
+    ]);
+    expect(submitMock.mock.calls).toEqual([["b", "described in words"]]);
+    const failure = useFleetFailureStore.getState();
+    expect(failure.payload).toBe(`see ${IMAGE}`);
+    expect(failure.imagePaths).toEqual([IMAGE]);
+    expect(failure.perTargetOverrides).toEqual({ b: "described in words" });
+  });
+
+  it("replaces an earlier failure's images with a text-only send's nothing", async () => {
+    arm(["a", "b"]);
+    useFleetFailureStore.getState().recordFailure(`see ${IMAGE}`, ["a"], 0, {
+      imagePaths: [IMAGE],
+    });
+    submitMock.mockRejectedValue(new Error("ENOSPC: disk full"));
+
+    expect(tryFleetBroadcastFromEditor("a", "plain words", vi.fn())).toBe(true);
+    await vi.waitFor(() => expect(useFleetFailureStore.getState().payload).toBe("plain words"));
+    expect(useFleetFailureStore.getState().imagePaths).toEqual([]);
   });
 });
 

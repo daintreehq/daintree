@@ -34,6 +34,7 @@ function retryFailures(): void {
 export function FleetFailureBanner(): ReactElement | null {
   const failedIds = useFleetFailureStore((s) => s.failedIds);
   const payload = useFleetFailureStore((s) => s.payload);
+  const perTargetOverrides = useFleetFailureStore((s) => s.perTargetOverrides);
   // Snapshotted alongside the failure record (same broadcast), so a mixed
   // outcome names both halves — what's retryable here vs. what was already
   // disarmed as unreachable — without cross-referencing the run store, whose
@@ -46,7 +47,8 @@ export function FleetFailureBanner(): ReactElement | null {
   let nextDeadline: number | null = null;
   if (payload !== null) {
     for (const id of failedIds) {
-      const deadline = crossHostSafeRetryDeadline(id, payload);
+      // Checked against the text a retry would send it, which is what it was sent.
+      const deadline = crossHostSafeRetryDeadline(id, perTargetOverrides[id] ?? payload);
       if (deadline === null) continue;
       if (deadline <= now) unconfirmed.push(id);
       else if (nextDeadline === null || deadline < nextDeadline) nextDeadline = deadline;

@@ -124,7 +124,12 @@ import {
 } from "./uploads/pendingUploads";
 import { HeldBackAttachmentsBanner } from "./uploads/HeldBackAttachmentsBanner";
 import { advanceComposerDraft } from "./inputEditorExtensions/composerDraftGeneration";
-import { CROSS_HOST_CONTEXT_REFUSAL, tryComposerFleetBroadcast } from "./composerFleetBroadcast";
+import {
+  CROSS_HOST_CONTEXT_REFUSAL,
+  CROSS_HOST_IMAGE_REFUSAL,
+  type CrossHostRefusal,
+  tryComposerFleetBroadcast,
+} from "./composerFleetBroadcast";
 import { PendingUploadChips } from "./uploads/PendingUploadChips";
 import { LazyUploadConfirmHost } from "./uploads/LazyUploadConfirmHost";
 import { registerPaneDropTarget } from "./uploads/paneDropRouting";
@@ -384,7 +389,14 @@ function editorOwnsDomFocus(view: EditorView): boolean {
  */
 const SEND_HELD_STATUS = "Not sent. The draft is still here.";
 const SPOKEN_SEND_TOO_SHORT_CAPTION = "Too short to send by voice · Enter to send";
-const CROSS_HOST_CONTEXT_CAPTION = "Not sent · Context can't reach another host";
+const CROSS_HOST_CAPTION: Record<CrossHostRefusal, string> = {
+  context: "Not sent · Context can't reach another host",
+  image: "Not sent · Images can't reach another host",
+};
+const CROSS_HOST_STATUS: Record<CrossHostRefusal, string> = {
+  context: CROSS_HOST_CONTEXT_REFUSAL,
+  image: CROSS_HOST_IMAGE_REFUSAL,
+};
 const SPOKEN_SEND_TOO_SHORT_STATUS =
   "Not sent: a voice send needs three or more words. Press Enter to send the reply.";
 const VOICE_SUBMIT_OUTCOME_STATUS: Record<VoiceSubmitOutcome["kind"], string> = {
@@ -1260,7 +1272,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       terminalId: string;
       refused: boolean;
       tooShort?: true;
-      crossHostContext?: true;
+      crossHost?: CrossHostRefusal;
       retires?: VoiceScratchRefusal | VoiceFileReferenceNote | null;
     } | null>(null);
     const dropSendRefusal = (dictationKeepsReply = false) =>
@@ -1298,9 +1310,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const retires = standingVoiceNote(voiceId);
       setSendNote({ terminalId, refused: true, tooShort: true, retires });
     }, [terminalId, voiceId]);
-    const noteCrossHostContextRefusal = () => {
+    const noteCrossHostRefusal = (reason: CrossHostRefusal) => {
       ++submitAttemptRef.current;
-      setSendNote({ terminalId, refused: true, crossHostContext: true });
+      setSendNote({ terminalId, refused: true, crossHost: reason });
     };
 
     // Every way this composer sends — Enter, a picked slash command, a prompt
@@ -1401,6 +1413,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         ? () => unchanged() || (!editorAheadOfStore() && voiceRecordingService.holdsBackFrom(split))
         : unchanged;
 
+      // A chip whose path the text no longer spells is left out, as the editor's own are.
+      // Read before the fleet is asked: it attaches them too (#15600).
+      const imagePaths = (departed ? departed.imagePaths : readImageChipPaths(view)).filter(
+        (path) => text.includes(path)
+      );
+
       // A fleet send settles a batch, or another host, later: what was typed
       // since stays, as on a single-pane send. One the fleet turned down took
       // nothing.
@@ -1420,17 +1438,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           // draft since takes the store's word for what is left.
           if (departed) useTerminalInputStore.getState().bumpExternalDraftRevision();
         },
-        () => {
+        (reason) => {
           refused = true;
-          noteCrossHostContextRefusal();
-        }
+          noteCrossHostRefusal(reason);
+        },
+        imagePaths
       );
       if (intercepted) return !refused;
 
-      // A chip whose path the text no longer spells is left out, as the editor's own are.
-      const imagePaths = departed
-        ? departed.imagePaths.filter((path) => text.includes(path))
-        : readImageChipPaths(view);
       return sendText(text, {
         imagePaths,
         isDraftUnchanged,
@@ -1544,13 +1559,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const isSendRefused = ownSendNote?.refused === true;
     const sendRefusedCaption = ownSendNote?.tooShort
       ? SPOKEN_SEND_TOO_SHORT_CAPTION
-      : ownSendNote?.crossHostContext
-        ? CROSS_HOST_CONTEXT_CAPTION
+      : ownSendNote?.crossHost
+        ? CROSS_HOST_CAPTION[ownSendNote.crossHost]
         : "Not sent";
     const sendRefusedStatus = ownSendNote?.tooShort
       ? SPOKEN_SEND_TOO_SHORT_STATUS
-      : ownSendNote?.crossHostContext
-        ? CROSS_HOST_CONTEXT_REFUSAL
+      : ownSendNote?.crossHost
+        ? CROSS_HOST_STATUS[ownSendNote.crossHost]
         : SEND_HELD_STATUS;
     // A refused send retires the voice note it found on the border, never a
     // newer one. One the send took outlives it: it says what went out.
@@ -1820,12 +1835,23 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       if (isComposerSendHeld(uploadSurface)) return;
       // The editor still reads the partial token: only that leaves the draft.
       const isDraftUnchanged = guardSentDraft(latest.projectId);
-      const intercepted = tryComposerFleetBroadcast(isFocusedTerminal, terminalId, text, () => {
-        if (!isDraftUnchanged()) return;
-        clearDraftInput(terminalId, projectId);
-        resetEditorDoc();
-      });
-      if (!intercepted) void sendText(text);
+      // The draft's images go with the command, as on Enter (#15600).
+      const imagePaths = readImageChipPaths(editorViewRef.current).filter((path) =>
+        text.includes(path)
+      );
+      const intercepted = tryComposerFleetBroadcast(
+        isFocusedTerminal,
+        terminalId,
+        text,
+        () => {
+          if (!isDraftUnchanged()) return;
+          clearDraftInput(terminalId, projectId);
+          resetEditorDoc();
+        },
+        noteCrossHostRefusal,
+        imagePaths
+      );
+      if (!intercepted) void sendText(text, { imagePaths });
     };
 
     // The `/` token a template was picked with, as an undo step of its own: a
