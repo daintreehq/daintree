@@ -27,6 +27,9 @@ const loaded: LoggerModule[] = [];
 /** `parentPort` is process-global; put back whatever was there. */
 let originalParentPort: PropertyDescriptor | undefined;
 
+/** Each loaded module registers its own exit flush; only these get removed. */
+let exitListeners: Set<unknown>;
+
 /** Physical lines are not records — a pretty-printed context spans several. */
 const RECORD_PREFIX = /^\[\d{4}-\d{2}-\d{2}T[^\]]+\] \[(DEBUG|INFO|WARN|ERROR)\] /;
 
@@ -86,6 +89,7 @@ function captureSentEvents(): { events: HostLogEvent[]; postMessage: (value: unk
 
 beforeEach(() => {
   originalParentPort = Object.getOwnPropertyDescriptor(process, "parentPort");
+  exitListeners = new Set(process.listeners("exit"));
   rmSync(TEST_LOG_DIR, { recursive: true, force: true });
   mkdirSync(TEST_LOG_DIR, { recursive: true });
   // Both roles resolve the same file — a host through the environment, main
@@ -102,6 +106,9 @@ afterEach(async () => {
     logger.resetLoggerStateForTesting();
   }
   loaded.length = 0;
+  for (const listener of process.listeners("exit")) {
+    if (!exitListeners.has(listener)) process.off("exit", listener);
+  }
   vi.restoreAllMocks();
   delete (process as { parentPort?: unknown }).parentPort;
   if (originalParentPort) {
@@ -366,5 +373,53 @@ describe("structured host log forwarding (#12544)", () => {
     });
 
     expect(logBuffer.getAll().some((e) => e.message === "MARKER_DEBUG")).toBe(true);
+  });
+});
+
+describe("local-only records (#15558)", () => {
+  it("writes a host's record to the file without sending it to main", async () => {
+    const { events, postMessage } = captureSentEvents();
+    const host = await loadHostLogger("pty-host", postMessage);
+    const { logBuffer } = await import("../../services/LogBuffer.js");
+
+    host.logLocalOnly("error", "terminal tail MARKER_LOCAL_HOST\nsecond line");
+
+    expect(recordsMatching("MARKER_LOCAL_HOST")).toHaveLength(1);
+    expect(readLogFile()).toContain("second line");
+    // Either route would put the terminal's text on Main's console.
+    expect(events).toHaveLength(0);
+    expect(console.error).not.toHaveBeenCalled();
+    expect(logBuffer.getAll().some((e) => e.message.includes("MARKER_LOCAL_HOST"))).toBe(false);
+  });
+
+  it("keeps main's record off the console and out of the renderer feed", async () => {
+    const main = await loadMainLogger();
+    const broadcasts: unknown[] = [];
+    main.registerLoggerTransport(
+      (_channel, ...args) => broadcasts.push(args),
+      () => true
+    );
+    const { logBuffer } = await import("../../services/LogBuffer.js");
+
+    main.logLocalOnly("warn", "terminal tail MARKER_LOCAL_MAIN");
+    await main.flushLogFileWritesForTesting();
+
+    expect(recordsMatching("MARKER_LOCAL_MAIN")).toHaveLength(1);
+    expect(console.warn).not.toHaveBeenCalled();
+    expect(broadcasts).toHaveLength(0);
+    expect(logBuffer.getAll().some((e) => e.message.includes("MARKER_LOCAL_MAIN"))).toBe(false);
+  });
+
+  it("scrubs secrets and honours an off override", async () => {
+    const main = await loadMainLogger();
+    const token = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456";
+
+    main.logLocalOnly("error", `MARKER_LOCAL_SCRUB ${token}`);
+    main.setLogLevelOverrides({ "*": "off" });
+    main.logLocalOnly("error", "MARKER_LOCAL_OFF");
+
+    expect(recordsMatching("MARKER_LOCAL_SCRUB")).toHaveLength(1);
+    expect(readLogFile()).not.toContain(token);
+    expect(recordsMatching("MARKER_LOCAL_OFF")).toHaveLength(0);
   });
 });
