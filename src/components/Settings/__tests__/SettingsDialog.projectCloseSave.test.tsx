@@ -242,6 +242,30 @@ describe("SettingsDialog close when the project save fails", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  it("keeps Retry focused through a retry that fails again, and says so again", async () => {
+    await openOnProjectVariables();
+    await failExplicitSave();
+    await pressEscape();
+    const retry = screen.getByRole("button", { name: "Retry" });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(retry);
+    });
+    const bannerMessage = () =>
+      screen.getByText("Read-only file system", { selector: "#project-settings-save-error p" });
+    const announced = bannerMessage();
+    const attempts = persistence.saveSettings.mock.calls.length;
+
+    await act(async () => {
+      fireEvent.click(retry);
+    });
+
+    await waitFor(() => {
+      expect(bannerMessage()).not.toBe(announced);
+    });
+    expect(persistence.saveSettings.mock.calls.length).toBeGreaterThan(attempts);
+    expect(document.activeElement).toBe(retry);
+  });
+
   it("closes after the edit is discarded, without writing it", async () => {
     const onClose = await openOnProjectVariables();
     fireEvent.change(valueInput(), { target: { value: "b" } });

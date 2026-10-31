@@ -57,6 +57,8 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   const currentProject = projectId ? projects.find((p) => p.id === projectId) : undefined;
 
   const [projectAutoSaveError, setProjectAutoSaveError] = useState<string | null>(null);
+  // Counts failed saves, so a retry that fails the same way still says so.
+  const [projectAutoSaveFailures, setProjectAutoSaveFailures] = useState(0);
   const [projectName, setProjectName] = useState("");
   const [projectEmoji, setProjectEmoji] = useState("🌲");
   const [projectColor, setProjectColor] = useState<string | undefined>(undefined);
@@ -105,10 +107,13 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   // that differ from it, laid over the settings as they are on disk.
   const lastSavedFieldsRef = useRef<FormOwnedSettings | null>(null);
   const persistChainRef = useRef<Promise<SaveOutcome> | null>(null);
-  // Set by a discard until the form seeds again. A close or save already under
-  // way when the user discarded must not write the abandoned draft, nor bring
-  // its error back.
+  // Set by a discard until the form seeds again, so nothing queued meanwhile
+  // writes the abandoned draft.
   const discardingRef = useRef(false);
+  // Bumped by every discard and never reset. A save begun before one carries the
+  // abandoned draft: it writes nothing more, and its failure doesn't bring the
+  // error back, even once a close has reset everything else.
+  const discardGenerationRef = useRef(0);
   // Retry bumps the attempt so the read made on open runs again.
   const [openReadAttempt, setOpenReadAttempt] = useState(0);
   const [settledOpenRead, setSettledOpenRead] = useState<{
@@ -253,6 +258,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   // it holds what main stores and a close after it has nothing left to write.
   const discardUnsavedChanges = () => {
     discardingRef.current = true;
+    discardGenerationRef.current += 1;
     debouncedProjectSaveRef.current?.cancel();
     setProjectAutoSaveError(null);
     setProjectIsInitialized(false);
@@ -455,7 +461,9 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
   ]);
 
   const persistDraft = async (force: boolean): Promise<SaveOutcome> => {
-    if (!projectSettings || !currentProject || !projectId || discardingRef.current) {
+    const generation = discardGenerationRef.current;
+    const abandoned = () => discardingRef.current || generation !== discardGenerationRef.current;
+    if (!projectSettings || !currentProject || !projectId || abandoned()) {
       return undefined;
     }
 
@@ -511,7 +519,9 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       // disk without touching the cache, and a field this form never changed
       // must keep whatever they stored (#15573).
       if (force || hasFormEdits(baseline, draft)) {
+        if (abandoned()) return undefined;
         const stored = await projectClient.getSettings(projectId);
+        if (abandoned()) return undefined;
         await saveProjectSettings(applyFormEdits(stored, baseline, draft));
       }
 
@@ -523,9 +533,10 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       return undefined;
     } catch (err) {
       logError("Failed to auto-save project settings", err);
-      if (discardingRef.current) return undefined;
+      if (abandoned()) return undefined;
       const message = formatErrorMessage(err, "Failed to save settings");
       setProjectAutoSaveError(message);
+      setProjectAutoSaveFailures((count) => count + 1);
       return { message };
     }
   };
@@ -585,6 +596,7 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
 
   return {
     projectAutoSaveError,
+    projectAutoSaveFailures,
     projectName,
     setProjectName,
     projectEmoji,

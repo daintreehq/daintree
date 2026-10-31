@@ -16,6 +16,11 @@ interface SettingsLoadErrorBannerProps {
   onDiscard?: () => void;
   /** Lets a settings landing find the banner. */
   id?: string;
+  /**
+   * Changing it re-announces the message while the banner, and the Retry that may
+   * hold focus, stay mounted: a retry failing the same way would otherwise be silent.
+   */
+  announceKey?: number;
 }
 
 /**
@@ -30,6 +35,7 @@ export function SettingsLoadErrorBanner({
   retryLabel = "Retry",
   onDiscard,
   id,
+  announceKey,
 }: SettingsLoadErrorBannerProps) {
   const retry = (
     <Button type="button" variant="outline" size="sm" onClick={onRetry}>
@@ -44,7 +50,9 @@ export function SettingsLoadErrorBanner({
       title={title}
       action={onDiscard ? undefined : retry}
     >
-      <p className="select-text">{message}</p>
+      <p key={announceKey} className="select-text">
+        {message}
+      </p>
       {/* Two ways forward sit under the words, Retry first: a landing on the banner
           focuses its first button, and that mustn't be the one that drops the edit. */}
       {onDiscard && (

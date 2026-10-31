@@ -1221,6 +1221,7 @@ function SettingsDialogInner({
                     id={PROJECT_SAVE_ERROR_ID}
                     title={`Couldn't save settings for ${projectLabel}`}
                     message={projectForm.projectAutoSaveError}
+                    announceKey={projectForm.projectAutoSaveFailures}
                     onRetry={() => void projectForm.saveNow()}
                     // A close stays open while the edit won't save, so there has to
                     // be a way to give the edit up and close.

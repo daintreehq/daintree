@@ -76,6 +76,7 @@ vi.mock("@/store/recipeStore", () => ({
 }));
 
 import { useProjectSettingsForm } from "../useProjectSettingsForm";
+import { projectClient } from "@/clients";
 
 const baseSettings: ProjectSettings = {
   runCommands: [{ id: "rc-1", name: "Dev", command: "npm run dev" }],
@@ -592,6 +593,59 @@ describe("useProjectSettingsForm", () => {
     expect(outcome).toBeUndefined();
     expect(result.current.projectAutoSaveError).toBeNull();
     expect(mockSaveSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("a save still reading when the edit is discarded doesn't go on to write it", async () => {
+    vi.useFakeTimers();
+    const { result } = await renderSeededForm();
+    let finishRead!: () => void;
+    vi.mocked(projectClient.getSettings).mockImplementationOnce(
+      () => new Promise((resolve) => (finishRead = () => resolve(baseSettings)))
+    );
+
+    let saving!: Promise<unknown>;
+    act(() => {
+      saving = result.current.saveNow();
+    });
+    await vi.waitFor(() => {
+      expect(projectClient.getSettings).toHaveBeenCalled();
+    });
+    act(() => {
+      result.current.discardUnsavedChanges();
+    });
+    await act(async () => {
+      finishRead();
+      await saving;
+    });
+
+    expect(mockSaveSettings).not.toHaveBeenCalled();
+  });
+
+  it("a discarded save that fails after Settings closes leaves no error for the next open", async () => {
+    vi.useFakeTimers();
+    const hook = await renderSeededForm();
+    let rejectSave!: (err: Error) => void;
+    mockSaveSettings.mockImplementationOnce(
+      () => new Promise<void>((_, reject) => (rejectSave = reject))
+    );
+    let saving!: Promise<unknown>;
+    act(() => {
+      saving = hook.result.current.saveNow();
+    });
+    await vi.waitFor(() => {
+      expect(mockSaveSettings).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      hook.result.current.discardUnsavedChanges();
+    });
+    hook.rerender({ isOpen: false, tick: 3, projectId: "proj-1" });
+    await act(async () => {
+      rejectSave(new Error("Disk full"));
+      await saving;
+    });
+
+    expect(hook.result.current.projectAutoSaveError).toBeNull();
   });
 
   it("stays uninitialized while loading with no settings yet (backs the Doherty loader)", async () => {
