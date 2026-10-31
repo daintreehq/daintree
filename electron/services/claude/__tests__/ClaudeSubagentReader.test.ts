@@ -4,7 +4,7 @@ import { tmpdir } from "os";
 import path from "path";
 import {
   CLAUDE_SUBAGENT_ACTIVE_WINDOW_MS,
-  __resetClaudeSubagentProbeCache,
+  __resetClaudeSubagentCaches,
   deriveProjectSlug,
   findSubagentsDir,
   humanizeAgentType,
@@ -21,7 +21,7 @@ import { SUBAGENT_TRANSCRIPT_MESSAGE_LIMIT } from "../../../../shared/types/ipc/
 let root: string;
 
 beforeEach(async () => {
-  __resetClaudeSubagentProbeCache();
+  __resetClaudeSubagentCaches();
   root = await mkdtemp(path.join(tmpdir(), "claude-subagents-"));
 });
 

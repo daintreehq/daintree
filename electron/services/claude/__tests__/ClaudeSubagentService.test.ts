@@ -15,7 +15,7 @@ afterEach(() => {
   setPtyClientRef(null);
 });
 
-const { deriveProjectSlug, __resetClaudeSubagentProbeCache } =
+const { deriveProjectSlug, __resetClaudeSubagentCaches } =
   await import("../ClaudeSubagentReader.js");
 const { listClaudeSubagents, readClaudeSubagentTranscript } =
   await import("../ClaudeSubagentService.js");
@@ -27,7 +27,7 @@ let root: string;
 let previousConfigDir: string | undefined;
 
 beforeEach(async () => {
-  __resetClaudeSubagentProbeCache();
+  __resetClaudeSubagentCaches();
   getTerminalAsync.mockReset();
   root = await mkdtemp(path.join(tmpdir(), "claude-subagent-service-"));
   previousConfigDir = process.env.CLAUDE_CONFIG_DIR;
