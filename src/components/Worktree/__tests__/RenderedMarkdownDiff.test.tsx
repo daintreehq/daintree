@@ -1,6 +1,30 @@
 // @vitest-environment jsdom
+import { Component, type ReactNode } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, render } from "@testing-library/react";
+import {
+  buildMarkdownDiff,
+  type MarkdownDiffResult,
+  type ReconstructInput,
+} from "../markdownBlockDiff";
+
+interface PendingBuild {
+  key: string;
+  input: ReconstructInput;
+  signal: AbortSignal;
+  resolve: (result: MarkdownDiffResult | null) => void;
+  reject: (error: unknown) => void;
+}
+
+// Long documents build on the worker. The client is replaced with one whose
+// builds the test settles by hand, so each can land late, early or never.
+const { buildMock, builds } = vi.hoisted(() => ({
+  buildMock: vi.fn(),
+  builds: [] as PendingBuild[],
+}));
+vi.mock("@/services/MarkdownDiffService", () => ({
+  markdownDiffClient: { build: buildMock },
+}));
 
 const { dispatchMock } = vi.hoisted(() => ({
   dispatchMock: vi.fn().mockResolvedValue({ ok: true, result: undefined }),
@@ -48,6 +72,7 @@ function renderDiff(
       filePath={FILE}
       rootPath={ROOT}
       attemptKey="attempt-1"
+      requestKey="pane-1"
       {...overrides}
     />
   );
@@ -86,6 +111,14 @@ const EDITED_SOURCE = "# Guide\n\nThe quick brown fox leaps over the lazy dog.\n
 
 beforeEach(() => {
   dispatchMock.mockClear();
+  builds.length = 0;
+  buildMock.mockReset();
+  buildMock.mockImplementation(
+    (key: string, input: ReconstructInput, signal: AbortSignal) =>
+      new Promise<MarkdownDiffResult | null>((resolve, reject) => {
+        builds.push({ key, input, signal, resolve, reject });
+      })
+  );
 });
 
 /**
@@ -413,6 +446,7 @@ describe("RenderedMarkdownDiff", () => {
         filePath={FILE}
         rootPath={ROOT}
         attemptKey="attempt-1"
+        requestKey="pane-1"
         cacheBust="rev-2"
       />
     );
@@ -489,5 +523,180 @@ describe("RenderedMarkdownDiff", () => {
 
     expect(blockKinds(container)).toEqual(["removed", "removed"]);
     expect(container.textContent).toContain("Body text here.");
+  });
+});
+
+/**
+ * A document past the in-render ceiling with its last paragraph edited, as a
+ * real patch plus its new side, so a test can settle the build with what the
+ * engine actually makes of it.
+ */
+function longDocument(marker: string) {
+  const filler = Array.from(
+    { length: 400 },
+    (_, i) => `Paragraph ${i + 1} of the ${marker} document, long enough to count.`
+  );
+  const newSource = [`# ${marker}`, ...filler, `The ${marker} ending was rewritten.`].join("\n\n");
+  const line = newSource.split("\n").length;
+  const diff = patch([
+    `@@ -${line},1 +${line},1 @@`,
+    `-The ${marker} ending.`,
+    `+The ${marker} ending was rewritten.`,
+  ]);
+  expect(newSource.length).toBeGreaterThan(16 * 1024);
+  return { diff, newSource };
+}
+
+function engineResult(build: PendingBuild | undefined): MarkdownDiffResult {
+  if (!build) throw new Error("no build was requested");
+  return buildMarkdownDiff(build.input);
+}
+
+const SKELETON = '[aria-label="Loading rendered Markdown"]';
+
+class Boundary extends Component<{ children: ReactNode }, { error: unknown }> {
+  override state: { error: unknown } = { error: null };
+  static getDerivedStateFromError(error: unknown) {
+    return { error };
+  }
+  override render() {
+    return this.state.error ? <div data-testid="boundary" /> : this.props.children;
+  }
+}
+
+describe("RenderedMarkdownDiff off the main thread", () => {
+  it("keeps a short document in render without touching the worker", () => {
+    const { container } = renderDiff(EDITED_DIFF, EDITED_SOURCE);
+
+    expect(buildMock).not.toHaveBeenCalled();
+    expect(blockKinds(container)).toContain("added");
+  });
+
+  it("shows the skeleton and reports nothing until a long document's build lands", async () => {
+    const onVerdict = vi.fn();
+    const onChangeCount = vi.fn();
+    const { diff, newSource } = longDocument("first");
+
+    const { container } = renderDiff(diff, newSource, { onVerdict, onChangeCount });
+
+    expect(container.querySelector(SKELETON)).not.toBeNull();
+    expect(container.querySelector("[data-block-kind]")).toBeNull();
+    expect(onVerdict).not.toHaveBeenCalled();
+    expect(onChangeCount).not.toHaveBeenCalled();
+    expect(builds).toHaveLength(1);
+    expect(builds[0]!.key).toBe("pane-1");
+    expect(builds[0]!.input).toEqual({ diff, newSource, status: "modified" });
+
+    await act(async () => builds[0]!.resolve(engineResult(builds[0])));
+
+    expect(container.querySelector(SKELETON)).toBeNull();
+    expect(blockKinds(container)).toEqual(expect.arrayContaining(["removed", "added"]));
+    expect(visibleText(container)).toContain("The first ending was rewritten.");
+    expect(onVerdict.mock.calls).toEqual([[null, "attempt-1"]]);
+    expect(onChangeCount.mock.calls).toEqual([[1, "attempt-1"]]);
+  });
+
+  it("never shows or reports a late result for inputs it has moved past", async () => {
+    const onVerdict = vi.fn();
+    const onChangeCount = vi.fn();
+    const first = longDocument("first");
+    const second = longDocument("second");
+    const props = { onVerdict, onChangeCount };
+
+    const { container, rerender } = renderDiff(first.diff, first.newSource, props);
+    rerender(
+      <RenderedMarkdownDiff
+        diff={second.diff}
+        newSource={second.newSource}
+        status="modified"
+        filePath={FILE}
+        rootPath={ROOT}
+        attemptKey="attempt-2"
+        requestKey="pane-1"
+        {...props}
+      />
+    );
+
+    expect(builds).toHaveLength(2);
+    expect(builds[0]!.signal.aborted).toBe(true);
+    expect(builds[1]!.key).toBe("pane-1");
+
+    // The first file's comparison lands after the reader has already moved on.
+    await act(async () => builds[0]!.resolve(engineResult(builds[0])));
+
+    expect(container.querySelector(SKELETON)).not.toBeNull();
+    expect(container.querySelector("[data-block-kind]")).toBeNull();
+    expect(onVerdict).not.toHaveBeenCalled();
+    expect(onChangeCount).not.toHaveBeenCalled();
+
+    await act(async () => builds[1]!.resolve(engineResult(builds[1])));
+
+    expect(visibleText(container)).toContain("The second ending was rewritten.");
+    expect(visibleText(container)).not.toContain("first ending");
+    expect(onVerdict.mock.calls).toEqual([[null, "attempt-2"]]);
+    expect(onChangeCount.mock.calls).toEqual([[1, "attempt-2"]]);
+  });
+
+  it("reports the worker's refusal exactly and renders nothing", async () => {
+    const onVerdict = vi.fn();
+    const onChangeCount = vi.fn();
+    const { diff, newSource } = longDocument("refused");
+
+    const { container } = renderDiff(diff, newSource, {
+      onVerdict,
+      onChangeCount,
+      attemptKey: "attempt-9",
+    });
+    await act(async () => builds[0]!.resolve({ ok: false, reason: "too-large" }));
+
+    expect(onVerdict.mock.calls).toEqual([["too-large", "attempt-9"]]);
+    expect(onChangeCount.mock.calls).toEqual([[0, "attempt-9"]]);
+    expect(container.innerHTML).toBe("");
+  });
+
+  it("stays loading, and silent, when its build is superseded", async () => {
+    const onVerdict = vi.fn();
+    const { diff, newSource } = longDocument("superseded");
+
+    const { container } = renderDiff(diff, newSource, { onVerdict });
+    await act(async () => builds[0]!.resolve(null));
+
+    expect(container.querySelector(SKELETON)).not.toBeNull();
+    expect(onVerdict).not.toHaveBeenCalled();
+  });
+
+  it("abandons its build when it unmounts", () => {
+    const { diff, newSource } = longDocument("closed");
+
+    const { unmount } = renderDiff(diff, newSource);
+    unmount();
+
+    expect(builds[0]!.signal.aborted).toBe(true);
+  });
+
+  it("hands an engine error to the error boundary rather than reporting a verdict", async () => {
+    const onVerdict = vi.fn();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { diff, newSource } = longDocument("broken");
+
+    const { getByTestId } = render(
+      <Boundary>
+        <RenderedMarkdownDiff
+          diff={diff}
+          newSource={newSource}
+          status="modified"
+          filePath={FILE}
+          rootPath={ROOT}
+          attemptKey="attempt-1"
+          requestKey="pane-1"
+          onVerdict={onVerdict}
+        />
+      </Boundary>
+    );
+    await act(async () => builds[0]!.reject(new Error("engine exploded")));
+
+    expect(getByTestId("boundary")).toBeTruthy();
+    expect(onVerdict).not.toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 });

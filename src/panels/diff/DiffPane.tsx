@@ -92,6 +92,7 @@ import {
   isRenderedMarkdownSupported,
 } from "./renderedMarkdownAvailability";
 import type { MarkdownDiffFailure } from "@/components/Worktree/markdownBlockDiff";
+import { RenderedMarkdownDiffSkeleton } from "@/components/Worktree/RenderedMarkdownDiffSkeleton";
 import type { DiffSubject } from "./diffContentCache";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import type { TabInfo } from "@/components/Panel/TabButton";
@@ -768,7 +769,16 @@ export function DiffPane({
   // The rendered layout's change inventory, reported up by the view because the
   // host has a patch and the view has the model: a hunk is a run of lines, a
   // change here is a block the reader can point at, and the two counts differ.
-  const [renderedChangeCount, setRenderedChangeCount] = useState(0);
+  //
+  // Stamped with the attempt it counts, like the verdict below: a count from the
+  // previous file must not drive the stepper while this one is still being read
+  // or compared, and the view reports nothing until its comparison is done.
+  const [renderedInventory, setRenderedInventory] = useState<{
+    attempt: string;
+    count: number;
+  } | null>(null);
+  const renderedChangeCount =
+    renderedInventory?.attempt === renderedAttemptKey ? renderedInventory.count : 0;
   const [renderedChangeIndex, setRenderedChangeIndex] = useState(0);
   const scrollRootRef = useRef<HTMLDivElement>(null);
 
@@ -911,8 +921,8 @@ export function DiffPane({
     </div>
   );
 
-  const handleRenderedChangeCount = useCallback((count: number) => {
-    setRenderedChangeCount(count);
+  const handleRenderedChangeCount = useCallback((count: number, forAttempt: string) => {
+    setRenderedInventory({ attempt: forAttempt, count });
     setRenderedChangeIndex(0);
   }, []);
 
@@ -985,15 +995,6 @@ export function DiffPane({
         ?.scrollIntoView({ block: "center", behavior: "instant" });
     },
     [renderedChangeCount, renderedChangeIndex]
-  );
-
-  const renderedSkeleton = (
-    <div className="p-4 space-y-3">
-      <Skeleton label="Loading rendered Markdown">
-        <SkeletonBone className="h-7 w-3/4" />
-        <SkeletonText lines={8} />
-      </Skeleton>
-    </div>
   );
 
   const renderedDisabledReason =
@@ -1476,9 +1477,9 @@ export function DiffPane({
               content &&
               !sinceReviewNotice?.replacesBody &&
               (showRendered ? (
-                <Suspense fallback={renderedSkeleton}>
+                <Suspense fallback={<RenderedMarkdownDiffSkeleton />}>
                   {renderedSourcePending ? (
-                    renderedSkeleton
+                    <RenderedMarkdownDiffSkeleton />
                   ) : (
                     <LazyRenderedMarkdownDiff
                       diff={content}
@@ -1489,6 +1490,7 @@ export function DiffPane({
                       cacheBust={String(previewReloadNonce)}
                       fontSize={markdownFontSize}
                       attemptKey={renderedAttemptKey}
+                      requestKey={`rendered-markdown:${id}`}
                       onVerdict={handleRenderedVerdict}
                       onChangeCount={handleRenderedChangeCount}
                     />
