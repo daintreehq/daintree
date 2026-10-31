@@ -823,6 +823,37 @@ describe("ProjectStateManager never writes over an unpreserved state file (#1561
     expect(utilsMock.resilientAtomicWriteFile).toHaveBeenCalledTimes(1);
   });
 
+  it("re-reads rather than stay blocked when a save lands while a failing rename retries", async () => {
+    let finishWrite!: () => void;
+    utilsMock.resilientAtomicWriteFile.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (finishWrite = resolve))
+    );
+    let failRename!: (error: Error) => void;
+    utilsMock.resilientRename.mockImplementationOnce(
+      () => new Promise<void>((_resolve, reject) => (failRename = reject))
+    );
+    fsPromisesMock.readFile
+      .mockResolvedValueOnce("{ not valid json")
+      .mockResolvedValue(
+        JSON.stringify({ _schemaVersion: 1, sidebarWidth: 350, terminals: [terminal("new")] })
+      );
+
+    // Admitted before any read flagged the file, so the block can't stop it.
+    const saving = manager.saveProjectState(projectId, makeState({ terminals: [terminal("new")] }));
+    await vi.waitFor(() => expect(utilsMock.resilientAtomicWriteFile).toHaveBeenCalledTimes(1));
+    const reading = manager.getProjectState(projectId);
+    await vi.waitFor(() => expect(utilsMock.resilientRename).toHaveBeenCalledTimes(1));
+
+    finishWrite();
+    await saving;
+    failRename(renameDenied());
+
+    // The rename left the saved file in place, and the read finds it usable.
+    expect((await reading)?.terminals.map((t) => t.id)).toEqual(["new"]);
+    await manager.saveProjectState(projectId, makeState({ sidebarWidth: 400 }));
+    expect(utilsMock.resilientAtomicWriteFile).toHaveBeenCalledTimes(2);
+  });
+
   it("reports a file left in place alongside an earlier quarantine nobody has shown yet", async () => {
     utilsMock.resilientRename.mockResolvedValue(undefined);
     fsPromisesMock.readFile.mockResolvedValueOnce("{ not valid json");

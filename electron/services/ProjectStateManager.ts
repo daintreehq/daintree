@@ -666,7 +666,13 @@ export class ProjectStateManager {
           `[ProjectStateManager] Failed to quarantine unreadable state for ${projectId}; leaving it in place:`,
           renameError.error
         );
-        if (!this.isReadCurrent(projectId, fence)) return superseded;
+        if (!this.isReadCurrent(projectId, fence)) {
+          // Whatever superseded this read (a save that landed while the rename
+          // retried) cached a state the block outlived, so the retry has to go
+          // back to disk to learn whether the live file is usable now.
+          this.projectStateCache.delete(projectId);
+          return superseded;
+        }
         return leaveInPlace();
       }
       // Lifted whether or not this read is still current: no save could fill
