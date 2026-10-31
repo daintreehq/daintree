@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { listChoices, planChoice, planListedChoice } from "../terminalChoice.js";
+import {
+  listChoices,
+  parseChoiceList,
+  planChoice,
+  planListedChoice,
+  type ChoicePlan,
+} from "../terminalChoice.js";
 
 describe("planChoice", () => {
   it("moves down past the highlighted default on Claude's trust dialog", () => {
@@ -11,7 +17,7 @@ describe("planChoice", () => {
       "",
       " Enter to confirm · Esc to cancel",
     ].join("\n");
-    expect(planChoice(screen, "Yes, I trust this folder")).toEqual({
+    expect(planChoice(screen, "Yes, I trust this folder")).toMatchObject({
       ok: true,
       keys: ["Down", "Enter"],
     });
@@ -21,12 +27,12 @@ describe("planChoice", () => {
     const screen = ["› 1. Trust and continue", "  2. Quit", "  enter continue · esc quit"].join(
       "\n"
     );
-    expect(planChoice(screen, "Trust and continue")).toEqual({ ok: true, keys: ["Enter"] });
+    expect(planChoice(screen, "Trust and continue")).toMatchObject({ ok: true, keys: ["Enter"] });
   });
 
   it("moves up to an option above the highlight", () => {
     const screen = ["  Yes, I trust this folder", "> No, exit"].join("\n");
-    expect(planChoice(screen, "yes, i trust")).toEqual({ ok: true, keys: ["Up", "Enter"] });
+    expect(planChoice(screen, "yes, i trust")).toMatchObject({ ok: true, keys: ["Up", "Enter"] });
   });
 
   it("does not count a wrapped description as an option", () => {
@@ -37,7 +43,7 @@ describe("planChoice", () => {
       "                               and remember",
       "    3. Always allow            Run the tool",
     ].join("\n");
-    expect(planChoice(screen, "Always allow")).toEqual({
+    expect(planChoice(screen, "Always allow")).toMatchObject({
       ok: true,
       keys: ["Down", "Down", "Enter"],
     });
@@ -51,7 +57,7 @@ describe("planChoice", () => {
       "",
       "> answered: Yes, I trust this folder",
     ].join("\n");
-    expect(planChoice(screen, "Yes, I trust this folder")).toEqual({
+    expect(planChoice(screen, "Yes, I trust this folder")).toMatchObject({
       ok: true,
       keys: ["Down", "Enter"],
     });
@@ -65,7 +71,7 @@ describe("planChoice", () => {
       "  1. Allow                     Run the tool",
       "  › 2. Allow for this session  Run the tool",
     ].join("\n");
-    expect(planChoice(screen, "Allow")).toEqual({ ok: true, keys: ["Up", "Enter"] });
+    expect(planChoice(screen, "Allow")).toMatchObject({ ok: true, keys: ["Up", "Enter"] });
   });
 
   it("refuses a label two options fit equally well", () => {
@@ -88,9 +94,9 @@ describe("planChoice", () => {
       " │   3. No                                                     │",
       " ╰─────────────────────────────────────────────────────────────╯",
     ].join("\n");
-    expect(planChoice(screen, "Yes")).toEqual({ ok: true, keys: ["Enter"] });
-    expect(planChoice(screen, "No")).toEqual({ ok: true, keys: ["Down", "Down", "Enter"] });
-    expect(planChoice(screen, "Yes, and remember")).toEqual({
+    expect(planChoice(screen, "Yes")).toMatchObject({ ok: true, keys: ["Enter"] });
+    expect(planChoice(screen, "No")).toMatchObject({ ok: true, keys: ["Down", "Down", "Enter"] });
+    expect(planChoice(screen, "Yes, and remember")).toMatchObject({
       ok: true,
       keys: ["Down", "Enter"],
     });
@@ -143,7 +149,10 @@ describe("listChoices", () => {
       "Yes, and switch to accept edits (auto-approve file edits and common file",
       "No",
     ]);
-    expect(planListedChoice(screen, "No")).toEqual({ ok: true, keys: ["Down", "Down", "Enter"] });
+    expect(planListedChoice(screen, "No")).toMatchObject({
+      ok: true,
+      keys: ["Down", "Down", "Enter"],
+    });
   });
 
   it("reads Codex's approval, whose other options sit left of the highlight", () => {
@@ -251,7 +260,7 @@ describe("planListedChoice", () => {
       HINT,
     ].join("\n");
     expect(listChoices(screen)).toEqual(["A", "B", "C", "D", "E"]);
-    expect(planListedChoice(screen, "A")).toEqual({
+    expect(planListedChoice(screen, "A")).toMatchObject({
       ok: true,
       keys: ["Up", "Up", "Up", "Up", "Enter"],
     });
@@ -259,8 +268,8 @@ describe("planListedChoice", () => {
 
   it("matches an option row, never a description that repeats its label", () => {
     const screen = ["❯ 1. Allow", "  2. Deny", "     Allow", "", HINT].join("\n");
-    expect(planListedChoice(screen, "Allow")).toEqual({ ok: true, keys: ["Enter"] });
-    expect(planListedChoice(screen, "Deny")).toEqual({ ok: true, keys: ["Down", "Enter"] });
+    expect(planListedChoice(screen, "Allow")).toMatchObject({ ok: true, keys: ["Enter"] });
+    expect(planListedChoice(screen, "Deny")).toMatchObject({ ok: true, keys: ["Down", "Enter"] });
   });
 
   it("takes only a whole label, so text beside an empty composer presses nothing", () => {
@@ -280,7 +289,7 @@ describe("planListedChoice", () => {
       HINT,
     ].join("\n");
     const keys = listChoices(screen).map((label) => planListedChoice(screen, label));
-    expect(keys).toEqual([
+    expect(keys).toMatchObject([
       { ok: true, keys: ["Up", "Enter"] },
       { ok: true, keys: ["Enter"] },
       { ok: true, keys: ["Down", "Enter"] },
@@ -294,7 +303,7 @@ describe("listed choices as they were shown", () => {
   it("offers each label as shown and presses the raw option it was shown for", () => {
     const screen = ["❯ 1. Yes", "  2. Use key 123456", "  3. No", "", HINT].join("\n");
     expect(listChoices(screen, masked)).toEqual(["Yes", "Use key [redacted]", "No"]);
-    expect(planListedChoice(screen, "Use key [redacted]", masked)).toEqual({
+    expect(planListedChoice(screen, "Use key [redacted]", masked)).toMatchObject({
       ok: true,
       keys: ["Down", "Enter"],
     });
@@ -308,5 +317,68 @@ describe("listed choices as they were shown", () => {
     const plan = planListedChoice(screen, "No", masked);
     expect(plan).toMatchObject({ ok: false });
     expect(JSON.stringify(plan)).not.toMatch(/123456|987654/);
+  });
+});
+
+describe("the question a list asks", () => {
+  const permission = (command: string, highlighted: number) =>
+    [
+      "  Earlier output the agent printed",
+      "────────────────────────────────────────",
+      " Bash command",
+      "",
+      `   ${command}`,
+      "   Remove the build directory",
+      "",
+      " Do you want to proceed?",
+      ...["Yes", "Yes, and don't ask again for this command", "No"].map(
+        (label, i) => `${i + 1 === highlighted ? " ❯" : "  "} ${i + 1}. ${label}`
+      ),
+      "",
+      HINT,
+    ].join("\n");
+  const questionOf = (plan: ChoicePlan) => (plan.ok ? plan.question : null);
+
+  it("stays the same wherever the highlight is", () => {
+    const top = parseChoiceList(permission("rm -rf build", 1))!;
+    const bottom = parseChoiceList(permission("rm -rf build", 3))!;
+    expect(bottom.cursor).toBe(2);
+    expect(bottom.question).toBe(top.question);
+    expect(questionOf(planListedChoice(permission("rm -rf build", 3), "Yes"))).toBe(top.question);
+  });
+
+  it("differs for another command offering the same options", () => {
+    const first = parseChoiceList(permission("rm -rf build", 1))!;
+    const next = parseChoiceList(permission("git push --force", 1))!;
+    expect(next.labels).toEqual(first.labels);
+    expect(next.question).not.toBe(first.question);
+  });
+
+  it("reads up to the dialog's edge and never below the options", () => {
+    const question = parseChoiceList(permission("rm -rf build", 1))!.question;
+    expect(question).toContain("rm -rf build");
+    expect(question).not.toContain("Earlier output");
+    const changedAround = permission("rm -rf build", 1)
+      .replace("Earlier output the agent printed", "Other output")
+      .replace(HINT, " Esc to cancel · 3 tasks running");
+    expect(parseChoiceList(changedAround)!.question).toBe(question);
+  });
+
+  it("is the same for the looser plan wherever the highlight is, and differs with the prompt", () => {
+    const trust = (highlightNo: boolean, folder: string) =>
+      [
+        ` Claude Code'll be able to read, edit, and execute files in ${folder}.`,
+        "",
+        highlightNo ? " ❯ No, exit" : "   No, exit",
+        highlightNo ? "   Yes, I trust this folder" : " ❯ Yes, I trust this folder",
+        "",
+        " Enter to confirm · Esc to cancel",
+      ].join("\n");
+    const before = questionOf(planChoice(trust(true, "~/api"), "Yes, I trust this folder"));
+    const after = questionOf(planChoice(trust(false, "~/api"), "Yes, I trust this folder"));
+    expect(after).toBe(before);
+    expect(questionOf(planChoice(trust(true, "~/web"), "Yes, I trust this folder"))).not.toBe(
+      before
+    );
   });
 });

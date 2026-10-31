@@ -4,6 +4,7 @@ import {
   type WaitingRunView,
 } from "../../services/deviceAnswer/deviceAnswerRuns.js";
 import { isAnswerLabel } from "../../services/terminalAnswer.js";
+import { isQuestionId } from "../../services/deviceAnswer/questionId.js";
 
 /**
  * Session-level methods behind a device paired with a Shell answering this
@@ -13,8 +14,18 @@ import { isAnswerLabel } from "../../services/terminalAnswer.js";
 export const DeviceAnswerLinkMethod = {
   /** Shell → Host: this host's waiting runs, screens read and redacted here. */
   LIST: "deviceAnswer.list",
-  /** Shell → Host: press one listed option, under this host's own drive lease. */
+  /**
+   * Shell → Host, from Shells before answers named their question: refused
+   * here, since it would press by label alone.
+   */
   ANSWER: "deviceAnswer.answer",
+  /**
+   * Shell → Host: press one listed option, under this host's own drive lease,
+   * only into the question it was listed for. A new method rather than a new
+   * field, so a host from before it answers UNSUPPORTED instead of dropping
+   * the question and pressing by label alone.
+   */
+  ANSWER_QUESTION: "deviceAnswer.answerQuestion",
 } as const;
 
 /** Room for a 40-row screen of wide lines; anything longer is not one. */
@@ -29,6 +40,13 @@ export const DeviceAnswerAnswerPayloadSchema = z.object({
   label: z.string().refine(isAnswerLabel),
 });
 export type DeviceAnswerAnswerPayload = z.infer<typeof DeviceAnswerAnswerPayloadSchema>;
+
+export const DeviceAnswerAnswerQuestionPayloadSchema = DeviceAnswerAnswerPayloadSchema.extend({
+  questionId: z.string().refine(isQuestionId),
+});
+export type DeviceAnswerAnswerQuestionPayload = z.infer<
+  typeof DeviceAnswerAnswerQuestionPayloadSchema
+>;
 
 const nullableText = (max: number) => z.string().max(max).nullable();
 
@@ -46,9 +64,16 @@ export const WaitingRunViewSchema = z.object({
   snoozed: z.boolean(),
   screen: nullableText(MAX_SCREEN_LENGTH),
   choices: z.array(z.string().refine(isAnswerLabel)).max(MAX_CHOICES),
+  questionId: z.string().refine(isQuestionId).nullable(),
 }) satisfies z.ZodType<WaitingRunView>;
 
 export const DeviceAnswerListResultSchema = z.object({
   runs: z.array(WaitingRunViewSchema).max(MAX_LISTED_RUNS),
+  /**
+   * The host checks each answer against the question it listed. One from
+   * before lists without it, and is shown as needing an update rather than
+   * offered answers it would press by label alone.
+   */
+  questionIds: z.literal(true),
 });
 export type DeviceAnswerListResult = z.infer<typeof DeviceAnswerListResultSchema>;

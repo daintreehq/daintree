@@ -519,11 +519,14 @@ const SCRIPT = String.raw`
     }, GATE_MS);
     let next;
     try {
+      // The question the card shows goes with its label, so a later one
+      // offering the same options is never the one pressed.
       const r = await call("POST", "/api/answer", {
         hostId: run.hostId,
         runId: run.runId,
         spawnedAt: run.spawnedAt,
         label,
+        questionId: run.questionId,
       }, ANSWER_TIMEOUT_MS);
       if (r.status === 401) return;
       next = r.ok

@@ -7,6 +7,7 @@ import { planListedChoice } from "../../../shared/utils/terminalChoice.js";
 import { answerRefused, answerRunByLabel } from "../terminalAnswer.js";
 import { redactSecrets } from "../redactSecrets.js";
 import { isRunStillWaiting, listWaitingRuns, type WaitingRunView } from "./deviceAnswerRuns.js";
+import { questionIdOf } from "./questionId.js";
 
 /**
  * Who a device's answer stands as in this machine's drive lease. It is only
@@ -38,17 +39,19 @@ export function listLocalWaitingRuns(): Promise<WaitingRunView[]> {
 
 /**
  * Press the option labelled `label` in one of this machine's runs, for a
- * device standing as `standing`. The same rules hold whether the device is
- * paired here or with a Shell attached to this host.
+ * device standing as `standing`, only while the screen still asks the
+ * question `questionId` was listed for. The same rules hold whether the
+ * device is paired here or with a Shell attached to this host.
  */
 export async function answerLocalRun(request: {
   standing: DeviceLeaseStanding;
   runId: string;
   spawnedAt: number;
   label: string;
+  questionId: string;
   stillAllowed: () => string | null;
 }): Promise<void> {
-  const { standing, runId, spawnedAt, label, stillAllowed } = request;
+  const { standing, runId, spawnedAt, label, questionId, stillAllowed } = request;
   const pty = getPtyClient();
   if (!pty) throw answerRefused("Daintree's terminals aren't running. Nothing was pressed.");
   const fleet = getFleetSnapshotServiceRef()?.getLastBroadcast() ?? null;
@@ -64,6 +67,11 @@ export async function answerLocalRun(request: {
     // Only an option of the list on screen now, never text near a composer,
     // matched as the device was sent it and pressed from the list as drawn.
     plan: (screen, wanted) => planListedChoice(screen, wanted, redactSecrets),
+    // The run waiting is not enough: a later question can offer the same labels.
+    checkQuestion: (question) =>
+      questionIdOf(runId, spawnedAt, question) === questionId
+        ? null
+        : "The question changed since this device showed it.",
     stillAllowed: () => {
       const refusal = stillAllowed();
       if (refusal !== null) return refusal;

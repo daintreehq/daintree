@@ -18,8 +18,19 @@ const BOX_RIGHT = /\s*[│┃║]\s*$/;
 
 /** Rows within this distance of the label are searched for the highlight. */
 const MAX_LIST_ROWS = 12;
+/** Rows above a list read as its question, when no frame or rule closes it sooner. */
+const MAX_QUESTION_ROWS = 20;
+/** A rule or a box's corner: the edge of a dialog, above which its question can't go on. */
+const DIALOG_EDGE = /^\s*(?:[╭┌╔╰└╚]|[─━═]{8,})/;
 
-export type ChoicePlan = { ok: true; keys: string[] } | { ok: false; reason: string };
+/**
+ * `question` is the dialog the keys were planned on, as text that doesn't
+ * change when only its highlight moves: an answer checks it is still the same
+ * question before each key it presses.
+ */
+export type ChoicePlan =
+  | { ok: true; keys: string[]; question: string }
+  | { ok: false; reason: string };
 
 function indentOf(row: string): number {
   const marker = HIGHLIGHT_MARKER.exec(row);
@@ -37,6 +48,23 @@ function unframe(row: string): string {
   // Both sides, or it is not a frame: a tree or a quote can start a row with `│`.
   if (!BOX_LEFT.test(row) || !BOX_RIGHT.test(row)) return row;
   return row.replace(BOX_LEFT, "").replace(BOX_RIGHT, "");
+}
+
+/**
+ * The question a list on `lines` asks, from the row its first option is on
+ * through `last`: the rows above it up to the dialog's edge, and the rows of
+ * its options with the highlight taken off, so moving the highlight leaves it
+ * the same and a different command, prompt or option makes it differ. Rows
+ * below the list (key hints, task lists, status) never count, since they can
+ * change while the question doesn't.
+ */
+function questionText(lines: readonly string[], first: number, last: number): string {
+  let top = first;
+  while (top > 0 && first - top < MAX_QUESTION_ROWS && !DIALOG_EDGE.test(lines[top - 1]!)) top--;
+  return lines
+    .slice(top, last + 1)
+    .map((row) => row.replace(HIGHLIGHT_MARKER, "").trim())
+    .join("\n");
 }
 
 export function planChoice(screen: string, label: string): ChoicePlan {
@@ -98,7 +126,16 @@ export function planChoice(screen: string, label: string): ChoicePlan {
   for (let i = from; i <= to; i++) if (isOption(i)) steps++;
 
   const move = cursor < target ? "Down" : "Up";
-  return { ok: true, keys: [...Array<string>(steps).fill(move), "Enter"] };
+  // The list's own rows are those around the label, up to a blank row.
+  let first = target;
+  while (first > 0 && rows(first - 1).trim() !== "") first--;
+  let last = target;
+  while (last < lines.length - 1 && rows(last + 1).trim() !== "") last++;
+  return {
+    ok: true,
+    keys: [...Array<string>(steps).fill(move), "Enter"],
+    question: questionText(lines, first, last),
+  };
 }
 
 const NUMBERED_OPTION = /^\s*(?:[❯›>▶➜→●]\s*)?(\d+)[.)]\s+/;
@@ -116,6 +153,8 @@ export interface ChoiceList {
   labels: string[];
   /** Index into `labels` of the highlighted option. */
   cursor: number;
+  /** What it asks, the same wherever its highlight is; see `questionText`. */
+  question: string;
 }
 
 function labelOf(row: string): string {
@@ -210,7 +249,11 @@ function readChoiceList(rawLines: readonly string[], requireHint: boolean): Choi
   const labels = rows.map((i) => labelOf(lines[i]!));
   const folded = labels.map((label) => label.toLowerCase());
   if (labels.some((label) => label === "") || new Set(folded).size !== folded.length) return null;
-  return { labels, cursor: rows.indexOf(cursor) };
+  return {
+    labels,
+    cursor: rows.indexOf(cursor),
+    question: questionText(lines, rows[0]!, rows[rows.length - 1]!),
+  };
 }
 
 /**
@@ -262,5 +305,9 @@ export function planListedChoice(
   if (index === -1) return { ok: false, reason: `No option "${label}" is on the screen.` };
   const steps = index - list.cursor;
   const move = steps > 0 ? "Down" : "Up";
-  return { ok: true, keys: [...Array<string>(Math.abs(steps)).fill(move), "Enter"] };
+  return {
+    ok: true,
+    keys: [...Array<string>(Math.abs(steps)).fill(move), "Enter"],
+    question: list.question,
+  };
 }

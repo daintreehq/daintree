@@ -21,6 +21,7 @@ const run = (overrides: Record<string, unknown>) => ({
   snoozed: false,
   screen: "❯ 1. Yes\n  2. No",
   choices: ["Yes", "No"],
+  questionId: "question-of-run-1-0001",
   ...overrides,
 });
 
@@ -133,7 +134,13 @@ describe("the paired device's page", () => {
     expect(sent.at(-1)).toEqual({
       method: "POST",
       path: "/api/answer",
-      body: { hostId: "studio-03", runId: "run-1", spawnedAt: 100, label: "No" },
+      body: {
+        hostId: "studio-03",
+        runId: "run-1",
+        spawnedAt: 100,
+        label: "No",
+        questionId: "question-of-run-1-0001",
+      },
     });
   });
 
@@ -144,7 +151,12 @@ describe("the paired device's page", () => {
 
     button(card, "Yes").click();
     await vi.advanceTimersByTimeAsync(0);
-    expect(sent.at(-1)!.body).toEqual({ runId: "run-1", spawnedAt: 100, label: "Yes" });
+    expect(sent.at(-1)!.body).toEqual({
+      runId: "run-1",
+      spawnedAt: 100,
+      label: "Yes",
+      questionId: "question-of-run-1-0001",
+    });
   });
 
   it("keeps the runs it can answer when what it's told of hosts can't be read", async () => {

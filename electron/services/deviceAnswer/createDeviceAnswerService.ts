@@ -87,7 +87,7 @@ export function createDeviceAnswerService(): DeviceAnswerService {
     readSettings: () => sanitizeDeviceAnswerSettings(store.get("deviceAnswer")),
     writeSettings: (settings) => store.set("deviceAnswer", settings),
     listWaiting,
-    answer: async ({ device, hostId, runId, spawnedAt, label, stillAllowed }) => {
+    answer: async ({ device, hostId, runId, spawnedAt, label, questionId, stillAllowed }) => {
       if (isLocalHostId(hostId)) {
         // A device paired here stands in the drive lease as this machine's own
         // windows do: it drives a project wherever they do, and never one a
@@ -97,6 +97,7 @@ export function createDeviceAnswerService(): DeviceAnswerService {
           runId,
           spawnedAt,
           label,
+          questionId,
           stillAllowed,
         });
         return;
@@ -108,7 +109,8 @@ export function createDeviceAnswerService(): DeviceAnswerService {
       // the answers it hasn't sent yet.
       const refusal = stillAllowed();
       if (refusal !== null) throw answerRefused(refusal);
-      await hosts.answer({ hostId, runId, spawnedAt, label });
+      // The host checks the question itself: only it can read the screen.
+      await hosts.answer({ hostId, runId, spawnedAt, label, questionId });
     },
     hostName: (hostId) => getRemoteService("deviceAnswerHosts")?.hostName(hostId) ?? null,
     onStatusChanged: (status) => broadcastLocal({ type: "status-changed", status }),
