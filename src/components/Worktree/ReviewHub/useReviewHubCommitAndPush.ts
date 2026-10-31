@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
+import type { GitPushReview } from "@shared/types/git";
 import { isClientAppError } from "@/utils/clientAppError";
 import type { debounce } from "@/utils/debounce";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
@@ -129,10 +130,17 @@ export function useReviewHubCommitAndPush({
   );
 
   const isPushingRef = useRef(false);
+  /**
+   * The review the last push ran under, so Retry pushes what was approved
+   * rather than whatever the branch holds by then (#15646). `null` for the
+   * commit-and-push path, whose confirm pins nothing.
+   */
+  const lastPushReviewRef = useRef<GitPushReview | null>(null);
 
-  const runPush = useCallback(async () => {
+  const runPush = useCallback(async (review: GitPushReview | null) => {
     if (isPushingRef.current) return;
     isPushingRef.current = true;
+    lastPushReviewRef.current = review;
     setIsPushing(true);
     setPushError(null);
     setPushProgress(new Map());
@@ -165,9 +173,11 @@ export function useReviewHubCommitAndPush({
       await runHostOperation(
         opId,
         () =>
-          opId
-            ? window.electron.git.push(worktreePath, undefined, opId)
-            : window.electron.git.push(worktreePath),
+          review
+            ? window.electron.git.push(worktreePath, undefined, opId, review)
+            : opId
+              ? window.electron.git.push(worktreePath, undefined, opId)
+              : window.electron.git.push(worktreePath),
         { fromResult: () => undefined }
       );
       setPushError(null);
@@ -226,7 +236,7 @@ export function useReviewHubCommitAndPush({
         // Same review reset as handleCommit — the changeset starts over.
         useDiffViewedStore.getState().clearWorktree(worktreePath);
         await refresh();
-        await runPush();
+        await runPush(null);
       } finally {
         setIsCommitPushInFlight(false);
       }
@@ -237,7 +247,7 @@ export function useReviewHubCommitAndPush({
   const handleRetryPush = useCallback(async () => {
     setPushError(null);
     debouncedBgRefreshRef.current?.cancel();
-    await runPush();
+    await runPush(lastPushReviewRef.current);
   }, [runPush, debouncedBgRefreshRef]);
 
   // Push from the clean-tree state, where no CommitPanel (and thus no local
@@ -245,9 +255,9 @@ export function useReviewHubCommitAndPush({
   // git.push action uses, then reuses runPush so progress and error banners
   // stay on the hub's existing paths.
   const handlePushClean = useCallback(async () => {
-    const confirmed = await useGitPushConfirmStore.getState().requestConfirmation(worktreePath);
-    if (!confirmed) return;
-    await runPush();
+    const result = await useGitPushConfirmStore.getState().requestConfirmation(worktreePath);
+    if (!result.confirmed) return;
+    await runPush(result.review);
   }, [worktreePath, runPush]);
 
   const handlePullRebase = useCallback(async () => {

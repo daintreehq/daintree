@@ -6,6 +6,8 @@ import {
   type GitRemoteOperationPreview,
 } from "../gitRemoteOperationPreview";
 
+const PUSH_HEAD_OID = "0123456789abcdef0123456789abcdef01234567";
+
 function stubGit(overrides: {
   currentBranch?: string | null;
   pushDestination?: { remote: string; branch: string } | null;
@@ -60,6 +62,7 @@ function stubGit(overrides: {
           commits: pushCommits,
           total: overrides.pushTotal ?? pushCommits.length,
           behind: overrides.pushBehind ?? 0,
+          headOid: PUSH_HEAD_OID,
         })
   );
   const rebaseCommits = overrides.rebaseCommits ?? [];
@@ -130,6 +133,7 @@ describe("buildGitRemoteOperationPreview", () => {
       destination: null,
       commits: [],
       pushRange: null,
+      pushReview: null,
       rebaseRange: null,
     });
     expect(listPushCommits).not.toHaveBeenCalled();
@@ -140,6 +144,7 @@ describe("buildGitRemoteOperationPreview", () => {
     await expect(buildGitRemoteOperationPreview("/repo", "push")).resolves.toMatchObject({
       branch: null,
       pushRange: null,
+      pushReview: null,
       rebaseRange: null,
     });
     expect(listPushCommits).not.toHaveBeenCalled();
@@ -164,10 +169,43 @@ describe("buildGitRemoteOperationPreview", () => {
       commits: [],
       total: 0,
       behind: 0,
+      headOid: PUSH_HEAD_OID,
     });
     await expect(buildGitRemoteOperationPreview("/repo", "push")).resolves.toMatchObject({
       destination: { remote: "fork", branch: "renamed-topic" },
     });
+  });
+
+  // What approving the preview approves (#15646): the branch the range read
+  // named, the tip main measured from, and the destination main measured
+  // against — the same three things on screen.
+  it("carries the review the push range was measured against", async () => {
+    const { listPushCommits } = stubGit({
+      currentBranch: "topic",
+      pushDestination: { remote: "fork", branch: "topic" },
+    });
+    listPushCommits.mockResolvedValueOnce({
+      destination: { remote: "fork", branch: "renamed-topic" },
+      rangeBasis: "unverified" as const,
+      commits: [],
+      total: 0,
+      behind: 0,
+      headOid: PUSH_HEAD_OID,
+    });
+
+    const preview = await buildGitRemoteOperationPreview("/repo", "push");
+
+    expect(preview.pushReview).toEqual({
+      branch: "topic",
+      headOid: PUSH_HEAD_OID,
+      destination: { remote: "fork", branch: "renamed-topic" },
+    });
+  });
+
+  it("carries no push review for a pull-rebase", async () => {
+    stubGit({ currentBranch: "topic" });
+    const preview = await buildGitRemoteOperationPreview("/repo", "pull-rebase");
+    expect(preview.pushReview).toBeNull();
   });
 
   // The #11980 invariant, and the mirror of the push one above. A rebase preview

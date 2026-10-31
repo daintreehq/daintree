@@ -596,6 +596,12 @@ describe("getGitRecoveryAction", () => {
       label: "Trust this repo",
       actionId: "git.markSafeDirectory",
     });
+    // Only a fresh review can cover what the branch holds now (#15646), and
+    // pushing again is what opens one.
+    expect(getGitRecoveryAction("push-review-stale")).toEqual({
+      label: "Review push",
+      actionId: "git.push",
+    });
   });
 
   it("returns undefined for reasons without a CTA", () => {

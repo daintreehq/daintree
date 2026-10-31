@@ -746,6 +746,10 @@ export class ActionService {
         // terminals a dialog listed, so an injected `contextOverride` must not
         // be able to claim an approval that raises the agent terminal cap.
         hostApprovedRecipeRun: options?.hostApprovedRecipeRun,
+        // And the push half (#15646): the branch, commit and destination a
+        // human was shown. Unconditional for the same reason, so an injected
+        // `contextOverride` cannot pin a push to a review nobody saw.
+        hostApprovedPush: options?.hostApprovedPush,
         // Same unconditional stamp: a plugin's identity comes from the host's
         // own bridge closure, never from a context the caller could shape.
         callerPluginId: source === "plugin" ? options?.callerPluginId : undefined,

@@ -35,8 +35,15 @@ async function resolvePushConfirm(ok: boolean): Promise<void> {
   await vi.waitFor(() => {
     expect(useGitPushConfirmStore.getState().pendingConfirm).not.toBeNull();
   });
-  useGitPushConfirmStore.getState().resolveConfirmation(ok);
+  useGitPushConfirmStore.getState().resolveConfirmation(ok ? PUSH_REVIEW : null);
 }
+
+/** What an approving confirm showed; the push must carry exactly this (#15646). */
+const PUSH_REVIEW = {
+  branch: "feature/x",
+  headOid: "e".repeat(40),
+  destination: { remote: "origin", branch: "feature/x" },
+};
 
 /** Same deferred-Promise gate, for `git.pullRebase` (#8242). */
 async function resolvePullRebaseConfirm(ok: boolean): Promise<void> {
@@ -150,7 +157,7 @@ afterEach(() => {
   // Both stores are module singletons. A test that fails mid-gate would
   // otherwise leave a pending request behind and contaminate the next one.
   if (useGitPushConfirmStore.getState().pendingConfirm) {
-    useGitPushConfirmStore.getState().resolveConfirmation(false);
+    useGitPushConfirmStore.getState().resolveConfirmation(null);
   }
   if (useGitPullRebaseConfirmStore.getState().pendingConfirm) {
     useGitPullRebaseConfirmStore.getState().resolveConfirmation(false);
@@ -434,7 +441,7 @@ describe("gitActions adversarial", () => {
     const p = run("git.push", { cwd: "/repo", setUpstream: false });
     await resolvePushConfirm(true);
     await p;
-    expect(git.push).toHaveBeenCalledWith("/repo", false);
+    expect(git.push).toHaveBeenCalledWith("/repo", false, undefined, PUSH_REVIEW);
   });
 
   it("git.push names the push as an operation only in a remote-bound view", async () => {
@@ -445,7 +452,8 @@ describe("gitActions adversarial", () => {
     expect(remote.git.push).toHaveBeenCalledWith(
       "/repo",
       true,
-      expect.stringMatching(/^[0-9a-f-]{36}$/)
+      expect.stringMatching(/^[0-9a-f-]{36}$/),
+      PUSH_REVIEW
     );
 
     // A view on this machine's own host takes the untracked path.
@@ -453,7 +461,7 @@ describe("gitActions adversarial", () => {
     const q = local.run("git.push", { cwd: "/repo", setUpstream: true });
     await resolvePushConfirm(true);
     await q;
-    expect(local.git.push).toHaveBeenCalledWith("/repo", true);
+    expect(local.git.push).toHaveBeenCalledWith("/repo", true, undefined, PUSH_REVIEW);
   });
 
   it("git.push does not reach IPC when the confirm gate is declined", async () => {
@@ -544,6 +552,30 @@ describe("gitActions adversarial", () => {
     const { run, git } = setupActions();
     await run("git.push", { cwd: "/repo", setUpstream: false }, { dispatchSource: "agent" });
     expect(git.push).toHaveBeenCalledWith("/repo", false);
+  });
+
+  // The MCP confirm's approval travels on the context, stamped by the host, and
+  // the push carries it exactly as it does a local dialog's (#15646).
+  it("git.push pins an agent dispatch to the review the host confirm showed", async () => {
+    const { run, git } = setupActions();
+    await run(
+      "git.push",
+      { cwd: "/repo" },
+      { dispatchSource: "agent", hostApprovedPush: { cwd: "/repo", review: PUSH_REVIEW } }
+    );
+    expect(git.push).toHaveBeenCalledWith("/repo", undefined, undefined, PUSH_REVIEW);
+  });
+
+  it("git.push refuses an approval that was given for another worktree", async () => {
+    const { run, git } = setupActions();
+    await expect(
+      run(
+        "git.push",
+        { cwd: "/repo/one" },
+        { dispatchSource: "agent", hostApprovedPush: { cwd: "/repo/two", review: PUSH_REVIEW } }
+      )
+    ).rejects.toThrow(/different worktree/);
+    expect(git.push).not.toHaveBeenCalled();
   });
 
   // The bypass is keyed to "agent" alone — no other source has been through the

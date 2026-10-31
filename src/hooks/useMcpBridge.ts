@@ -62,6 +62,7 @@ import type {
   ActionContext,
   ActionDispatchResult,
   ActionId,
+  HostApprovedPush,
   HostApprovedRecipeRun,
   HostApprovedTarget,
 } from "@shared/types/actions";
@@ -128,6 +129,23 @@ const TIMEOUT_RESULT: ActionDispatchResult = {
   error: {
     code: "CONFIRMATION_TIMEOUT",
     message: "Confirmation request timed out before the user responded.",
+  },
+};
+
+/**
+ * An approved push whose confirm measured nothing (#15646): the read failed, or
+ * found no branch or destination. The approval then names no branch, commit or
+ * destination, and a push is only ever allowed to publish what one did — so it
+ * is refused rather than run against whatever the worktree holds now. The
+ * modal still allowed the click, with its "couldn't verify" warning, because a
+ * permanently disabled approve button would strand the request until timeout.
+ */
+const UNREVIEWED_PUSH_RESULT: ActionDispatchResult = {
+  ok: false,
+  error: {
+    code: "CONFIRMATION_REQUIRED",
+    message:
+      "Push refused: the confirmation couldn't read what this push would publish, so the approval covers no branch, commit or destination. Nothing was pushed. Call again once the worktree has a branch with a push destination to raise a fresh confirmation.",
   },
 };
 
@@ -825,6 +843,12 @@ export interface McpConfirmPreviewResult {
    * count the approver read.
    */
   approvedRecipeRun?: HostApprovedRecipeRun;
+  /**
+   * The branch, commit and destination a push preview showed, for the approval
+   * to pin the push to (#15646). Built from the same read the lines describe,
+   * and only when that read measured a push range.
+   */
+  approvedPush?: HostApprovedPush;
 }
 
 /**
@@ -921,6 +945,9 @@ export async function buildMcpConfirmPreview(
           : "No local commits to replay.",
         operation
       ),
+      ...(target.kind === "gitPush" && preview.pushReview
+        ? { approvedPush: { cwd: target.cwd, review: preview.pushReview } }
+        : {}),
     };
   } catch {
     return { lines: formatGitRemoteOperationPreviewLines(null, "", operation) };
@@ -1244,6 +1271,11 @@ export function useMcpBridge(): void {
         // keeps the smaller unapproved terminal cap rather than silently
         // inheriting a ten-pane authority nobody was shown.
         let approvedRecipeRun: HostApprovedRecipeRun | undefined;
+        // The push half of the same attestation (#15646), captured the same
+        // way: set from the preview build before approval can be clicked, and
+        // undefined for a pre-granted dispatch, which previews nothing and so
+        // keeps pushing the worktree as it stands.
+        let approvedPush: HostApprovedPush | undefined;
         try {
           let effectiveConfirmed = confirmed;
 
@@ -1359,10 +1391,11 @@ export function useMcpBridge(): void {
               const previewPending = hasAsyncPreview;
               if (hasAsyncPreview && previewTarget !== undefined) {
                 void buildMcpConfirmPreview(previewTarget)
-                  .then(({ lines, typedNameTarget, approvedRecipeRun: offered }) => {
+                  .then(({ lines, typedNameTarget, approvedRecipeRun: offered, approvedPush: shown }) => {
                     if (disposed) return;
                     approvedTypedNameTarget = typedNameTarget;
                     approvedRecipeRun = offered;
+                    approvedPush = shown;
                     useMcpConfirmStore.getState().setPreview(requestId, lines, typedNameTarget);
                   })
                   // The builder already fails soft, but a rejection escaping it
@@ -1372,6 +1405,7 @@ export function useMcpBridge(): void {
                   .catch(() => {
                     if (disposed) return;
                     approvedRecipeRun = undefined;
+                    approvedPush = undefined;
                     useMcpConfirmStore.getState().setPreview(requestId, []);
                   });
               }
@@ -1573,6 +1607,18 @@ export function useMcpBridge(): void {
                   return;
                 }
               }
+
+              // An approved push runs only on the review it was shown. With
+              // none, the approval covers no particular push, and `git.push`
+              // would otherwise run on whatever the worktree holds now.
+              if (previewTarget?.kind === "gitPush" && approvedPush === undefined) {
+                window.electron.mcpBridge.sendDispatchActionResponse({
+                  requestId,
+                  result: UNREVIEWED_PUSH_RESULT,
+                  confirmationDecision,
+                });
+                return;
+              }
             }
           }
 
@@ -1627,6 +1673,7 @@ export function useMcpBridge(): void {
                 contextOverride: context,
                 ...(hostApprovedTargets ? { hostApprovedTargets } : {}),
                 ...(approvedRecipeRun ? { hostApprovedRecipeRun: approvedRecipeRun } : {}),
+                ...(approvedPush ? { hostApprovedPush: approvedPush } : {}),
               }),
             actionId
           );

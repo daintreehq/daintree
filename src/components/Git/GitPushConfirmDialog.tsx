@@ -129,7 +129,7 @@ function GitPushConfirmDialogInner() {
   useEffect(() => {
     return () => {
       if (useGitPushConfirmStore.getState().pendingConfirm) {
-        useGitPushConfirmStore.getState().resolveConfirmation(false);
+        useGitPushConfirmStore.getState().resolveConfirmation(null);
       }
     };
   }, []);
@@ -173,6 +173,10 @@ function GitPushConfirmDialogInner() {
   // list is an estimate. The warning leads, and the consequence moves to the
   // footnote rather than sitting above the thing the user most needs to read.
   const hasWarning = isLoaded && (behind > 0 || isUnverified);
+  // What approving approves: the branch, commit and destination the rows on
+  // screen were measured against (#15646). Read only from this request's own
+  // settled answer, so a click can never carry a review the dialog isn't showing.
+  const pushReview = isSettled ? (preview?.pushReview ?? null) : null;
 
   // A destination nobody can name can't be approved — the handler would refuse
   // the write anyway, and guessing `origin` is the bug (#11746). `commits === null`
@@ -182,7 +186,11 @@ function GitPushConfirmDialogInner() {
   // A diverged destination is NOT blocked. Git refuses the push itself, and that
   // refusal is the one moment the force-push lease can be captured (#7822) — a
   // confirm that blocked here would take away the only route to that recovery.
-  const confirmDisabled = !isSettled || commits === null || !destination || !!loadError;
+  //
+  // No review, no approval: the push has to be pinned to what was shown, and a
+  // preview that measured nothing has nothing to pin it to.
+  const confirmDisabled =
+    !isSettled || commits === null || !destination || !pushReview || !!loadError;
 
   // Names the one unmet prerequisite rather than leaving a dead button to be
   // read as arbitrary. Ordered by which the user can act on first, and short
@@ -279,7 +287,7 @@ function GitPushConfirmDialogInner() {
   return (
     <ConfirmDialog
       isOpen={true}
-      onClose={() => resolveConfirmation(false)}
+      onClose={() => resolveConfirmation(null)}
       title="Push commits?"
       // Shown while the read is pending and when a push is actually about to
       // publish something. Blocked and empty states drop it: the consequence of a
@@ -305,7 +313,9 @@ function GitPushConfirmDialogInner() {
       // way out of the dialog.
       confirmDisabled={confirmDisabled}
       hint={blockedReason}
-      onConfirm={() => resolveConfirmation(true)}
+      onConfirm={() => {
+        if (pushReview) resolveConfirmation(pushReview);
+      }}
     >
       <PreviewFrame>
         {notice}

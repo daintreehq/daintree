@@ -1321,10 +1321,17 @@ describe("ReviewHub", () => {
   });
 
   describe("clean-tree push affordance", () => {
+    /** What the preview dialog showed; the push must carry it (#15646). */
+    const PUSH_REVIEW = {
+      branch: "main",
+      headOid: "f".repeat(40),
+      destination: { remote: "origin", branch: "main" },
+    };
+
     afterEach(() => {
       // The real (unmocked) confirm store is shared suite-wide — resolve any
       // request a failing test left pending so it can't bleed forward.
-      useGitPushConfirmStore.getState().resolveConfirmation(false);
+      useGitPushConfirmStore.getState().resolveConfirmation(null);
     });
 
     function setWorktreeDivergence(overrides: Record<string, unknown>) {
@@ -1365,9 +1372,11 @@ describe("ReviewHub", () => {
       expect(useGitPushConfirmStore.getState().pendingConfirm?.cwd).toBe(WORKTREE_PATH);
 
       await act(async () => {
-        useGitPushConfirmStore.getState().resolveConfirmation(true);
+        useGitPushConfirmStore.getState().resolveConfirmation(PUSH_REVIEW);
       });
-      await waitFor(() => expect(pushMock).toHaveBeenCalledWith(WORKTREE_PATH));
+      await waitFor(() =>
+        expect(pushMock).toHaveBeenCalledWith(WORKTREE_PATH, undefined, undefined, PUSH_REVIEW)
+      );
     });
 
     it("names the push as an operation in a remote-bound view", async () => {
@@ -1377,18 +1386,44 @@ describe("ReviewHub", () => {
         await screen.findByTestId("review-hub-clean-unpushed");
         act(() => void fireEvent.click(screen.getByTestId("review-hub-clean-push")));
         await act(async () => {
-          useGitPushConfirmStore.getState().resolveConfirmation(true);
+          useGitPushConfirmStore.getState().resolveConfirmation(PUSH_REVIEW);
         });
         await waitFor(() =>
           expect(pushMock).toHaveBeenCalledWith(
             WORKTREE_PATH,
             undefined,
-            expect.stringMatching(/^[0-9a-f-]{36}$/)
+            expect.stringMatching(/^[0-9a-f-]{36}$/),
+            PUSH_REVIEW
           )
         );
       } finally {
         delete window.__DAINTREE_HOST_ID__;
       }
+    });
+
+    // Retry is the same approval spent again, so it carries the same review
+    // rather than pushing whatever the branch holds by then (#15646).
+    it("retries a failed clean push under the review it was approved with", async () => {
+      pushMock.mockRejectedValueOnce(
+        Object.assign(new Error("Could not resolve host: github.com"), {
+          name: "GitOperationError",
+          gitReason: "network-unavailable",
+        })
+      );
+      renderCleanHub({ aheadCount: 1, behindCount: 0 });
+      await screen.findByTestId("review-hub-clean-unpushed");
+
+      act(() => void fireEvent.click(screen.getByTestId("review-hub-clean-push")));
+      await act(async () => {
+        useGitPushConfirmStore.getState().resolveConfirmation(PUSH_REVIEW);
+      });
+      const retry = await screen.findByTestId("review-hub-push-error-cta");
+      await act(async () => {
+        fireEvent.click(retry);
+      });
+
+      await waitFor(() => expect(pushMock).toHaveBeenCalledTimes(2));
+      expect(pushMock).toHaveBeenLastCalledWith(WORKTREE_PATH, undefined, undefined, PUSH_REVIEW);
     });
 
     it("does not push when the preview dialog is declined", async () => {
@@ -1397,7 +1432,7 @@ describe("ReviewHub", () => {
 
       act(() => void fireEvent.click(screen.getByTestId("review-hub-clean-push")));
       await act(async () => {
-        useGitPushConfirmStore.getState().resolveConfirmation(false);
+        useGitPushConfirmStore.getState().resolveConfirmation(null);
       });
       expect(pushMock).not.toHaveBeenCalled();
     });
