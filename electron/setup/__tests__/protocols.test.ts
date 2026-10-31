@@ -174,7 +174,7 @@ import { mintHtmlPreviewToken, _resetHtmlPreviewTokensForTests } from "../htmlPr
 import { createDaintreeHtmlProtocolHandler } from "../protocols/html.js";
 import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
 import { setRemoteWebviewSrcGate } from "../../window/webviewSrcGate.js";
-import { PATH_CANONICAL_HEADER } from "../../../shared/types/ipc/files.js";
+import { PATH_CANONICAL_HEADER, PREVIEW_REFUSAL_HEADER } from "../../../shared/types/ipc/files.js";
 
 const mockedGetWebviewDialogService = vi.mocked(getWebviewDialogService);
 
@@ -2225,6 +2225,7 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
         .split(",")
         .map((name) => name.trim().toLowerCase());
       expect(exposed).toContain(PATH_CANONICAL_HEADER.toLowerCase());
+      expect(exposed).toContain(PREVIEW_REFUSAL_HEADER.toLowerCase());
     });
   });
 });

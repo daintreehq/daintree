@@ -3,7 +3,16 @@ import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PATH_CANONICAL_HEADER } from "@shared/types/ipc/files";
 import type { WorktreeChangedDirs } from "@/store/createWorktreeStore";
-import { TrackedMarkdownImage, type MarkdownImageTracking } from "../markdownImageRefresh";
+import {
+  MarkdownImageTrackingContext,
+  TrackedMarkdownImage,
+  type MarkdownImageTracking,
+} from "../markdownImageRefresh";
+import { MarkdownDocument } from "../MarkdownDocument";
+
+vi.mock("@/services/ActionService", () => ({
+  actionService: { dispatch: vi.fn().mockResolvedValue({ ok: true, result: undefined }) },
+}));
 
 const LOCAL_SRC = "daintree-file://load?path=%2Frepo%2Fassets%2Fb.png&root=%2Frepo";
 const REMOTE_SRC =
@@ -69,20 +78,30 @@ describe("TrackedMarkdownImage", () => {
     expect(srcOf(view.container)).toBe(second);
 
     view.rerender(image(LOCAL_SRC, trackingAt(103, ["assets"])));
-    expect(srcOf(view.container)).not.toBe(second);
+    const third = srcOf(view.container);
+    expect(third).not.toBe(second);
+
+    // That refresh lapsed the proof: until its own probe lands, a tick naming
+    // another directory can't be ruled out — an ancestor may have just become
+    // a symlink.
+    view.rerender(image(LOCAL_SRC, trackingAt(104, ["src"])));
+    expect(srcOf(view.container)).not.toBe(third);
   });
 
-  it("drops a proof that lands after a later refresh superseded it", async () => {
+  it("drops a probe answer that lands after a later refresh superseded it", async () => {
     const view = render(image(LOCAL_SRC, trackingAt(100, ["docs"])));
     const stale = pending[0]!;
 
     view.rerender(image(LOCAL_SRC, trackingAt(101, ["src"])));
     expect(stale.signal?.aborted).toBe(true);
+    // The current refresh's proof lands first; the superseded one must not
+    // then overwrite it, or the next unrelated tick would refetch for nothing.
+    await act(async () => pending.at(-1)!.resolve(true));
     await act(async () => stale.resolve(true));
 
     const before = srcOf(view.container);
     view.rerender(image(LOCAL_SRC, trackingAt(102, ["src"])));
-    expect(srcOf(view.container)).not.toBe(before);
+    expect(srcOf(view.container)).toBe(before);
   });
 
   it("aborts its probe when it unmounts", () => {
@@ -99,6 +118,34 @@ describe("TrackedMarkdownImage", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(srcOf(view.container)).not.toBe(first);
+  });
+
+  // An edit points the image elsewhere, the first file is rewritten while the
+  // second is on screen (so no tick reaches it), and an undo points it back.
+  it("never rebuilds a source's earlier URL when a document edit returns to it", async () => {
+    function doc(content: string, tracking: MarkdownImageTracking) {
+      return (
+        <MarkdownImageTrackingContext value={tracking}>
+          <MarkdownDocument
+            content={content}
+            filePath="/repo/docs/spec.md"
+            rootPath="/repo"
+            cacheBust="0"
+          />
+        </MarkdownImageTrackingContext>
+      );
+    }
+    const view = render(doc("![a](../assets/a.png)", trackingAt(100, ["docs"])));
+    const firstA = srcOf(view.container);
+
+    view.rerender(doc("![a](../media/b.png)", trackingAt(100, ["docs"])));
+    await act(async () => pending.at(-1)!.resolve(true));
+    view.rerender(doc("![a](../media/b.png)", trackingAt(101, ["assets"])));
+    view.rerender(doc("![a](../assets/a.png)", trackingAt(101, ["assets"])));
+
+    const secondA = srcOf(view.container);
+    expect(secondA).toContain(encodeURIComponent("/repo/assets/a.png"));
+    expect(secondA).not.toBe(firstA);
   });
 
   it("asks again on a fresh mount instead of reusing an earlier mount's URL", () => {

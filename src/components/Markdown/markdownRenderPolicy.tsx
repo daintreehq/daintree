@@ -196,7 +196,11 @@ function MarkdownImage({ node: _node, src, ...props }: ComponentProps<"img"> & E
     typeof src === "string" &&
     src.startsWith(LOCAL_IMAGE_PREFIX)
   ) {
-    return <TrackedMarkdownImage {...props} src={src} epoch={cacheBust} tracking={tracking} />;
+    // Keyed by source: an edit that points this image elsewhere and back must
+    // not rebuild the URL the first source had before a write it never saw.
+    return (
+      <TrackedMarkdownImage key={src} {...props} src={src} epoch={cacheBust} tracking={tracking} />
+    );
   }
   // Only `urlTransform` mints daintree-file:// URLs — remote and data: sources
   // pass through the default sanitizer, which never yields that scheme.

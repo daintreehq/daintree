@@ -21,8 +21,14 @@ vi.mock("@/store/panelStore", () => ({
       activeDockTerminalId: null,
     }),
 }));
+const lifecycleListeners = vi.hoisted(() => new Set<(phase: string) => void>());
 vi.mock("@/lib/viewCacheState", () => ({
-  subscribeProjectViewLifecycle: () => () => {},
+  subscribeProjectViewLifecycle: (listener: (phase: string) => void) => {
+    lifecycleListeners.add(listener);
+    return () => {
+      lifecycleListeners.delete(listener);
+    };
+  },
   isProjectViewCached: () => false,
   isProjectViewObservable: () => true,
   subscribeProjectViewObservability: () => () => {},
@@ -138,13 +144,13 @@ function probes(): string[] {
   );
 }
 
-function pane() {
+function pane(isFocused = true) {
   return (
     <TooltipProvider>
       <FilePane
         id="file-0"
         title="spec.md"
-        isFocused
+        isFocused={isFocused}
         location="grid"
         onFocus={() => {}}
         onClose={() => {}}
@@ -215,6 +221,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  lifecycleListeners.clear();
   vi.unstubAllGlobals();
   for (const key of Object.keys(panelsById)) delete panelsById[key];
 });
@@ -347,5 +354,42 @@ describe("a rendered Markdown pane on worktree ticks (#15678)", () => {
       "/repo/media/c.png",
     ]);
     expect(after.get("https://example.com/r.png")).toBe("https://example.com/r.png");
+  });
+
+  // #11588: an image rewritten while the project view sat cached reached no
+  // tick, and the re-read the reveal triggers finds identical Markdown.
+  it("refetches every local image when the project view is revealed", async () => {
+    const view = await mountPane();
+    const before = imageSrcs(view.container);
+    const reads = readMock.mock.calls.length;
+
+    await act(async () => {
+      for (const listener of Array.from(lifecycleListeners)) listener("revealed");
+    });
+
+    await waitFor(() => expect(readMock.mock.calls.length).toBe(reads + 1));
+    expect(changedImages(before, imageSrcs(view.container)).sort()).toEqual([
+      "/repo/assets/b.png",
+      "/repo/docs/img/a.png",
+      "/repo/media/c.png",
+    ]);
+  });
+
+  it("refetches every local image when the pane regains focus", async () => {
+    const view = await mountPane();
+    await act(async () => {
+      view.rerender(pane(false));
+    });
+    const before = imageSrcs(view.container);
+
+    await act(async () => {
+      view.rerender(pane(true));
+    });
+
+    expect(changedImages(before, imageSrcs(view.container)).sort()).toEqual([
+      "/repo/assets/b.png",
+      "/repo/docs/img/a.png",
+      "/repo/media/c.png",
+    ]);
   });
 });
