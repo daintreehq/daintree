@@ -831,6 +831,9 @@ export const SELF_GATED_TOOLS: ReadonlySet<string> = new Set([
   "terminal.restartOnPresetOwned",
   "terminal.readLastMessageOwned",
   "worktree.deleteOwned",
+  // Waits only for panels this session closed (#15728): an argument-free probe
+  // names none, and its correct refusal is not a miss.
+  "terminal.waitForExit",
   "help.displayImage",
   // Terminal notices answer only a caller with a pane of its own, which no
   // perf session has. Their admit/refuse grading lives in
