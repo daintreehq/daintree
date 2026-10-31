@@ -30,6 +30,8 @@ describe("migration042 — Open Interpreter's retired bypass flag", () => {
         agents: {
           interpreter: { customFlags: "-m o4", dangerousArgs: "--auto_run", dangerousMode: "on" },
           claude: { dangerousArgs: "--dangerously-skip-permissions" },
+          // A custom agent may legitimately take the same spelling.
+          "my-agent": { dangerousArgs: "--auto_run", dangerousMode: "on" },
         },
       },
     });
@@ -43,6 +45,7 @@ describe("migration042 — Open Interpreter's retired bypass flag", () => {
           dangerousMode: "on",
         },
         claude: { dangerousArgs: "--dangerously-skip-permissions" },
+        "my-agent": { dangerousArgs: "--auto_run", dangerousMode: "on" },
       },
     });
   });
@@ -62,6 +65,9 @@ describe("migration042 — Open Interpreter's retired bypass flag", () => {
     ["agent settings without agents", { agentSettings: { globalSkipPermissions: false } }],
     ["no interpreter entry", { agentSettings: { agents: { claude: {} } } }],
     ["a malformed interpreter entry", { agentSettings: { agents: { interpreter: "x" } } }],
+    ["null agent settings", { agentSettings: null }],
+    ["null agents", { agentSettings: { agents: null } }],
+    ["a null interpreter entry", { agentSettings: { agents: { interpreter: null } } }],
   ])("does nothing with %s", (_label, initial) => {
     const { store } = run(initial);
     expect(store.set).not.toHaveBeenCalled();

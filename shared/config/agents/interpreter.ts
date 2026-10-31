@@ -111,14 +111,15 @@ export const config: AgentConfig = {
   authCheck: {
     // Everything lives under ~/.openinterpreter, or INTERPRETER_HOME when set;
     // CODEX_HOME is deliberately ignored (utils/home-dir). `auth.json` is the
-    // default file store for a ChatGPT sign-in or a saved API key; the keyring
-    // backend keeps an encrypted copy in `secrets/codex_auth.age`, and provider
-    // OAuth sign-ins land in `secrets/gateway_oauth.age`. A keyring-only login
-    // leaves no file to observe.
+    // default store for a ChatGPT sign-in or a saved API key, and logging out
+    // deletes it. The keyring backends' `secrets/*.age` files are not used: a
+    // logout rewrites them as an empty encrypted map rather than removing them
+    // (secrets/src/local.rs), so their presence proves nothing. A keyring-only
+    // login therefore leaves nothing to observe.
     configHome: {
       envVar: "INTERPRETER_HOME",
       defaultDir: ".openinterpreter",
-      paths: ["auth.json", "secrets/codex_auth.age", "secrets/gateway_oauth.age"],
+      paths: ["auth.json"],
     },
     // OpenAI is the built-in default provider. The bundled provider catalog
     // reads around a hundred other keys; these are the common ones.

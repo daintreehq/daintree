@@ -200,6 +200,19 @@ describe("buildResumeLatestCommand", () => {
     });
     try {
       expect(buildResumeLatestCommand("picker-only")).toBeUndefined();
+      // Control: the same agent with resume flags does get a command.
+      setUserRegistry({
+        "picker-only": {
+          id: "picker-only",
+          name: "Picker Only",
+          command: "picker-only",
+          color: "#ffffff",
+          iconId: "custom",
+          supportsContextInjection: false,
+          resume: { kind: "rolling-history", args: () => ["--continue"] },
+        },
+      });
+      expect(buildResumeLatestCommand("picker-only")).toBe("picker-only --continue");
     } finally {
       setUserRegistry({});
     }
@@ -1186,6 +1199,24 @@ describe("reconcileBypassFlags", () => {
     ]);
     // Another agent's flag of the same spelling is not touched.
     expect(reconcileBypassFlags(["--auto_run"], "aider", false)).toEqual(["--auto_run"]);
+  });
+
+  it("reads Open Interpreter's retired flag in settings as unset (#15567)", () => {
+    // An old config bundle can bring the Python default back after migration 042.
+    const current = DEFAULT_DANGEROUS_ARGS.interpreter as string;
+    expect(reconcileBypassFlags(["--auto_run"], "interpreter", true, "--auto_run")).toEqual([
+      current,
+    ]);
+    expect(
+      generateAgentFlags({ dangerousArgs: "--auto_run", dangerousMode: "on" }, "interpreter")
+    ).toEqual([current]);
+    // A value the user wrote themselves still wins.
+    expect(
+      generateAgentFlags(
+        { dangerousArgs: "--auto_run --verbose", dangerousMode: "on" },
+        "interpreter"
+      )
+    ).toEqual(["--auto_run", "--verbose"]);
   });
 
   it("does not mutate the input array", () => {

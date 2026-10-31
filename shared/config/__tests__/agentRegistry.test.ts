@@ -647,7 +647,14 @@ describe("Open Interpreter configuration (#15567)", () => {
 
   it("installs from the same site its docs live on, on every OS", () => {
     for (const os of ["macos", "linux", "windows"] as const) {
-      expect(config?.install?.byOs?.[os]?.length, `${os} has no install block`).toBeGreaterThan(0);
+      const commands = (config?.install?.byOs?.[os] ?? []).flatMap((block) => block.commands ?? []);
+      expect(commands.length, `${os} has no install command`).toBeGreaterThan(0);
+      // POSIX hosts run the sh script; Windows runs the PowerShell one.
+      for (const command of commands) {
+        expect(command, `${os}: ${command}`).toMatch(
+          os === "windows" ? /^irm \S+\.ps1 \| iex$/ : /^curl \S+ \S+ \| sh$/
+        );
+      }
     }
     const docsHosts = new Set(docsUrls.map((url) => new URL(url).host));
     expect(docsHosts.size).toBe(1);
@@ -666,10 +673,10 @@ describe("Open Interpreter configuration (#15567)", () => {
     expect(config?.version?.pypiPackage).toBeUndefined();
   });
 
-  it("updates through the installed CLI itself", () => {
+  it("updates through the installed CLI's own update subcommand", () => {
     expect(updateCommands.length).toBeGreaterThan(0);
     for (const command of updateCommands) {
-      expect(command.split(/\s+/)[0]).toBe(config?.command);
+      expect(command.split(/\s+/)).toEqual([config?.command, "update"]);
     }
   });
 
@@ -689,6 +696,8 @@ describe("Open Interpreter configuration (#15567)", () => {
   it("reads its latest version and release notes from one repository", () => {
     const repo = config?.version?.githubRepo;
     expect(repo).toBeDefined();
+    // The Python project's old repository only redirects to the Rust one.
+    expect(repo).not.toBe("openinterpreter/open-interpreter");
     expect(config?.version?.releaseNotesUrl).toContain(`github.com/${repo}/`);
   });
 

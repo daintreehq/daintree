@@ -1068,16 +1068,12 @@ describe("CliAvailabilityService", () => {
         .map((call) => String(call[0]))
         .filter((p) => /openinterpreter|open-interpreter|Open Interpreter[\\/]profiles/i.test(p));
 
-    it.each([
-      ["the default auth.json", ["auth.json"]],
-      ["the keyring backend's encrypted copy", ["secrets", "codex_auth.age"]],
-      ["a provider OAuth sign-in", ["secrets", "gateway_oauth.age"]],
-    ])("reaches 'ready' on %s under ~/.openinterpreter", async (_label, segments) => {
+    it("reaches 'ready' when ~/.openinterpreter/auth.json exists", async () => {
       const { access } = await import("fs/promises");
       const mockedAccess = vi.mocked(access);
       interpreterOnPath();
 
-      const credential = join(homedir(), ".openinterpreter", ...segments);
+      const credential = join(homedir(), ".openinterpreter", "auth.json");
       mockedAccess.mockImplementation(async (path) => {
         if (String(path) === credential) return;
         throw new Error("ENOENT");
@@ -1086,6 +1082,23 @@ describe("CliAvailabilityService", () => {
       const result = await service.checkAvailability();
       expect(result.interpreter).toBe("ready");
       expect(service.getDetails()!.interpreter?.authConfirmed).toBe(true);
+    });
+
+    it("does not count the keyring backends' encrypted stores, which a logout leaves behind", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      interpreterOnPath();
+
+      // A logout rewrites these as an empty encrypted map instead of deleting them.
+      const secretsDir = join(homedir(), ".openinterpreter", "secrets");
+      mockedAccess.mockImplementation(async (path) => {
+        if (String(path).startsWith(secretsDir)) return;
+        throw new Error("ENOENT");
+      });
+
+      const result = await service.checkAvailability();
+      expect(result.interpreter).toBe("unauthenticated");
+      expect(service.getDetails()!.interpreter?.authConfirmed).toBe(false);
     });
 
     it("probes INTERPRETER_HOME instead of ~/.openinterpreter when it is set", async () => {
@@ -1141,8 +1154,6 @@ describe("CliAvailabilityService", () => {
       expect(result.interpreter).toBe("unauthenticated");
       expect(authProbes(mockedAccess.mock.calls)).toEqual([
         join(homedir(), ".openinterpreter", "auth.json"),
-        join(homedir(), ".openinterpreter", "secrets", "codex_auth.age"),
-        join(homedir(), ".openinterpreter", "secrets", "gateway_oauth.age"),
       ]);
     });
 
@@ -1189,6 +1200,7 @@ describe("CliAvailabilityService", () => {
 
       const result = await service.checkAvailability();
       expect(result.interpreter).not.toBe("missing");
+      expect(service.getDetails()!.interpreter?.via).toBe("native");
       expect(service.getDetails()!.interpreter?.resolvedPath).toBe(installed);
     });
   });
@@ -2555,6 +2567,18 @@ describe("CliAvailabilityService", () => {
 
       expect(service.getDetails()!.goose?.via).toBe("native");
       expect(service.getDetails()!.goose?.resolvedPath).toBe(gooseExe);
+    });
+
+    it("finds Open Interpreter in its PowerShell installer's directory (#15567)", async () => {
+      process.env.LOCALAPPDATA = "C:\\Users\\test\\AppData\\Local";
+      const installed =
+        "C:\\Users\\test\\AppData\\Local\\Programs\\Open Interpreter\\bin\\interpreter.exe";
+      await onlyExisting(installed);
+
+      await service.checkAvailability();
+
+      expect(service.getDetails()!.interpreter?.via).toBe("native");
+      expect(service.getDetails()!.interpreter?.resolvedPath).toBe(installed);
     });
 
     it("never appends a second extension to an entry that already carries one", async () => {
