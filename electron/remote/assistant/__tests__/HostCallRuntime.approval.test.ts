@@ -435,6 +435,102 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
         expect(resendNotes).toBe(1);
       });
 
+      describe("a resend's own record", () => {
+        const send = (
+          callId: string | undefined,
+          note: () => void,
+          args: Record<string, unknown> = { worktreeId: "/wt/feature" }
+        ) =>
+          runtime.call(
+            "a",
+            {
+              hostId: "studio",
+              projectId: "proj-2",
+              tool: "worktree.deleteOwned",
+              args,
+              ...(callId !== undefined ? { callId } : {}),
+            },
+            { tier: "full", noteSkipPreference: note }
+          );
+        // The first send's relay runs `first`; every later send's waits on `held`.
+        let held: Promise<void>;
+        let release: () => void;
+        let laterOut: () => void;
+        let laterSent: Promise<void>;
+        const relayWith = (first: (r: HostCallRuntime, callId: string) => Promise<void>) => {
+          held = new Promise((resolve) => (release = resolve));
+          laterSent = new Promise((resolve) => (laterOut = resolve));
+          let started = false;
+          duringCall = async (r, callId) => {
+            if (started) {
+              laterOut();
+              await held;
+            } else {
+              started = true;
+              await first(r, callId);
+            }
+            return { decision: "unused" };
+          };
+        };
+
+        it("is told of a skip granted before it joined the call", async () => {
+          skips = true;
+          let joined = 0;
+          let resent: Promise<unknown> | undefined;
+          relayWith(async (r, callId) => {
+            expect(r.skipsRelayedDispatch("studio", dispatch(callId))).toBe(true);
+            resent = send(callId, () => (joined += 1));
+            await laterSent;
+            release();
+          });
+
+          await deleteCall("worktree.deleteOwned");
+          await resent;
+
+          expect(skipNotes).toBe(1);
+          expect(joined).toBe(1);
+        });
+
+        it("is never told for another call sent under the same id", async () => {
+          skips = true;
+          let other = 0;
+          let resent: Promise<unknown> | undefined;
+          relayWith(async (r, callId) => {
+            resent = send(callId, () => (other += 1), { worktreeId: "/wt/other" });
+            await laterSent;
+            expect(r.skipsRelayedDispatch("studio", dispatch(callId))).toBe(true);
+            release();
+          });
+
+          await deleteCall("worktree.deleteOwned");
+          await resent;
+
+          expect(skipNotes).toBe(1);
+          expect(other).toBe(0);
+        });
+
+        it("goes with its send: one that settled is told nothing, the one still out is", async () => {
+          skips = true;
+          // One callback for both sends, so only each send's own entry tells them apart.
+          let noted = 0;
+          const note = () => (noted += 1);
+          let callIdOut = "";
+          let resent: Promise<unknown> | undefined;
+          relayWith(async (_r, callId) => {
+            callIdOut = callId;
+            resent = send(callId, note);
+            await laterSent;
+          });
+
+          await send(undefined, note);
+          expect(runtime.skipsRelayedDispatch("studio", dispatch(callIdOut))).toBe(true);
+          release();
+          await resent;
+
+          expect(noted).toBe(1);
+        });
+      });
+
       it("skips a direct call's own action with the arguments it was sent", async () => {
         skips = true;
         during((r, callId) =>

@@ -298,12 +298,16 @@ interface CallInFlight {
   projectId: string | null;
   tool: string;
   args: Record<string, unknown>;
+  /** The tier it was sent at, which the host holds a resend of it to. */
+  tier: "core" | "full";
   run: OpenRun;
   /**
    * A host asked about it, or ran it under the skip preference, once already:
    * an approval or a skip is for the call, not each ask or dispatch.
    */
   asked: boolean;
+  /** It runs under the skip preference (#15698), so a resend that joins it later does too. */
+  skipped: boolean;
   /**
    * Tells each `host.call` send still out for it that it ran under the skip
    * preference, for that send's audit record (#15698).
@@ -351,6 +355,20 @@ function actionHashesOf(call: CallInFlight, actionId: string): string | null {
   }
   delegateArgs[owned.delegateIdArg ?? owned.idArg] = id;
   return canonicalArgsHash(actionId, delegateArgs);
+}
+
+/** Whether two sends under one callId are the same call, which the host runs once for both. */
+function sameCall(
+  a: Pick<CallInFlight, "tool" | "projectId" | "tier" | "args">,
+  b: Pick<CallInFlight, "tool" | "projectId" | "tier" | "args">
+): boolean {
+  return (
+    a.tool === b.tool &&
+    a.projectId === b.projectId &&
+    a.tier === b.tier &&
+    canonicalArgsHash(a.tool, relayedActionArgs(a.args)) ===
+      canonicalArgsHash(b.tool, relayedActionArgs(b.args))
+  );
 }
 
 /** Whether a host is running exactly this call: the same action with the same arguments. */
@@ -879,9 +897,15 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     ) {
       return false;
     }
-    call.asked = true;
-    for (const note of call.skipNotes) note();
+    this.grantSkip(call);
     return true;
+  }
+
+  /** Spends a call's one ask on the skip, and tells every send of it still out. */
+  private grantSkip(call: CallInFlight): void {
+    call.asked = true;
+    call.skipped = true;
+    for (const note of call.skipNotes) note();
   }
 
   /**
@@ -1054,7 +1078,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     // The person's own "Never ask" covers their assistant's call on a host as
     // it does one here (#15698): nobody is asked, and the host is told so.
     if (this.skipsConfirmations(call, payload.actionId)) {
-      for (const note of call.skipNotes) note();
+      this.grantSkip(call);
       return answer("skip-preference");
     }
     let decision: McpConfirmationDecision | null;
@@ -1408,6 +1432,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
           projectId,
           tool: args.tool,
           args: toolArgs,
+          tier: context.tier,
           run: caller,
         },
         context.noteSkipPreference
@@ -1461,7 +1486,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    */
   private trackSend(
     callId: string,
-    record: Omit<CallInFlight, "asked" | "sends" | "skipNotes">,
+    record: Omit<CallInFlight, "asked" | "sends" | "skipped" | "skipNotes">,
     noteSkip?: () => void
   ): () => void {
     const { hostId, helpSessionId } = record;
@@ -1470,12 +1495,20 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     const inFlight: CallInFlight =
       sharing !== undefined && sharing.hostId === hostId && sharing.helpSessionId === helpSessionId
         ? sharing
-        : { ...record, asked: false, sends: 0, skipNotes: new Set() };
+        : { ...record, asked: false, sends: 0, skipped: false, skipNotes: new Set() };
     inFlight.sends += 1;
     if (inFlight !== sharing) this.callsInFlight.set(callId, inFlight);
-    // Each send's own: a send that settled has written its record already.
-    const note = noteSkip !== undefined ? () => noteSkip() : undefined;
-    if (note !== undefined) inFlight.skipNotes.add(note);
+    // Each send's own, so a send that settled, having written its record, is
+    // told nothing; and only a send of the same call, since the host refuses a
+    // different one under that callId as a conflict, which ran nothing.
+    const note =
+      noteSkip !== undefined && (inFlight === sharing ? sameCall(inFlight, record) : true)
+        ? () => noteSkip()
+        : undefined;
+    if (note !== undefined) {
+      if (inFlight.skipped) note();
+      else inFlight.skipNotes.add(note);
+    }
     return () => {
       if (note !== undefined) inFlight.skipNotes.delete(note);
       const left = (this.callsOut.get(hostId) ?? 1) - 1;
@@ -1592,6 +1625,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       projectId: null,
       tool: args.tool,
       args: parsed.data.args,
+      tier: context.tier,
       run: caller,
     });
     let answer: ThrowawayCallAnswer;

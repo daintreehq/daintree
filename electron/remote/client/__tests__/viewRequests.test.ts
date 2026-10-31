@@ -322,12 +322,14 @@ describe("view reverse requests", () => {
         ...relayedDelete,
         relayCall: { callId: "c".repeat(256), helpSessionId: "h".repeat(256) },
       });
-      await expect(
-        ask("mcp:dispatch-action", {
-          ...relayedDelete,
-          relayCall: { callId: "c".repeat(257), helpSessionId: "help-a" },
-        })
-      ).rejects.toMatchObject({ code: "VALIDATION" });
+      for (const relayCall of [
+        { callId: "c".repeat(257), helpSessionId: "help-a" },
+        { callId: "call-1", helpSessionId: "h".repeat(257) },
+      ]) {
+        await expect(
+          ask("mcp:dispatch-action", { ...relayedDelete, relayCall })
+        ).rejects.toMatchObject({ code: "VALIDATION" });
+      }
       expect(m.dispatchActionForHost).toHaveBeenCalledTimes(1);
     });
 
