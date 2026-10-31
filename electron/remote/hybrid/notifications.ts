@@ -31,8 +31,18 @@ export const NOTIFICATION_SHOW_METHOD = "notification.show";
  */
 export const NOTIFICATION_CLOSE_METHOD = "notification.close";
 
+/**
+ * Host → Shell request: the banners the host still holds on this view, so
+ * the Shell takes down any other it shows for the view. Sent when the Shell
+ * may have missed a close: the link dropped and resumed, or a close failed.
+ */
+export const NOTIFICATION_RECONCILE_METHOD = "notification.reconcile";
+
 /** Most ids one show may supersede, or one close may name. */
 const MAX_IDS_PER_REQUEST = 64;
+
+/** Most live ids one reconcile may name: above what a host keeps closable. */
+const MAX_LIVE_IDS = 256;
 
 // No colon, so the Shell's key for a host's banner can't be read two ways.
 const NoticeIdSchema = z
@@ -68,12 +78,9 @@ const NotificationCloseSchema = z.object({
   ids: z.array(NoticeIdSchema).min(1).max(MAX_IDS_PER_REQUEST),
 });
 
-/**
- * Most closes one view may be owed while its Shell can't hear them. Past it
- * the oldest are dropped: a host retires that many of one view's banners only
- * through an outage far longer than the Shell keeps banners for.
- */
-const MAX_OWED_PER_VIEW = 256;
+const NotificationReconcileSchema = z.object({
+  live: z.array(NoticeIdSchema).max(MAX_LIVE_IDS),
+});
 
 /** Endpoint ids whose link dropped (`attached` false) or came back on a resume (true). */
 export type RemoteTransportFeed = (
@@ -83,66 +90,63 @@ export type RemoteTransportFeed = (
 /**
  * Host side: a notification whose owner is a remote view goes to that view's
  * Shell instead of this machine's screen, and is taken down there once it has
- * been dealt with. A close the Shell may not have heard (the link dropped
- * while it was on its way) is owed to that view, and goes out when its link
- * resumes or ahead of the next notification, so a banner that missed its
- * close can't stay up.
+ * been dealt with. When the Shell may have missed a close (the link dropped
+ * and resumed, or a request to the view failed), the host tells it which of
+ * its banners on that view are still live instead of replaying closes: what
+ * it holds is the truth, however many closes went missing or in what order
+ * their failures arrive.
  */
 export function installRemoteNotificationSink(
   options: { onTransportChange?: RemoteTransportFeed } = {}
 ): () => void {
-  const owed = new Map<number, Set<string>>();
-  const closeWatches = new Map<number, Disposable>();
+  /** Views shown a closable banner, watched so their banners are forgotten when they close. */
+  const watched = new Map<number, Disposable>();
+  /** Views whose Shell may have missed a close since it last heard what is live. */
+  const unsure = new Set<number>();
 
-  const remoteView = (endpoint: ClientEndpoint | undefined): ClientEndpoint | null => {
-    if (!endpoint || endpoint.kind !== "remote-view" || endpoint.isClosed()) return null;
+  const remoteView = (endpoint: ClientEndpoint | undefined): ClientEndpoint | null =>
+    endpoint && endpoint.kind === "remote-view" && !endpoint.isClosed() ? endpoint : null;
+
+  const watch = (endpoint: ClientEndpoint): void => {
     const { handle } = endpoint;
-    if (!closeWatches.has(handle)) {
-      closeWatches.set(
-        handle,
-        endpoint.onClose(() => {
-          closeWatches.delete(handle);
-          owed.delete(handle);
-          notificationService.forgetRemoteOwner(handle);
-        })
-      );
-    }
-    return endpoint;
+    if (watched.has(handle)) return;
+    watched.set(
+      handle,
+      endpoint.onClose(() => {
+        watched.delete(handle);
+        unsure.delete(handle);
+        notificationService.forgetRemoteOwner(handle);
+      })
+    );
   };
 
-  const owe = (endpoint: ClientEndpoint, ids: readonly string[]) => (error: unknown) => {
+  const markUnsure = (endpoint: ClientEndpoint) => (error: unknown) => {
     // A Shell from before closes existed refuses them, and always will; a
     // closed view's Shell takes its banners down itself.
     const code = (error as { code?: unknown } | null)?.code;
     if (code === "UNSUPPORTED" || code === "VALIDATION" || endpoint.isClosed()) return;
-    const pending = owed.get(endpoint.handle) ?? new Set<string>();
-    for (const id of ids) pending.add(id);
-    for (const oldest of pending) {
-      if (pending.size <= MAX_OWED_PER_VIEW) break;
-      pending.delete(oldest);
-    }
-    owed.set(endpoint.handle, pending);
+    unsure.add(endpoint.handle);
+  };
+
+  const reconcile = (endpoint: ClientEndpoint): void => {
+    unsure.delete(endpoint.handle);
+    const live = notificationService.remoteBannerIds(endpoint.handle).slice(-MAX_LIVE_IDS);
+    endpoint.request(NOTIFICATION_RECONCILE_METHOD, { live }).catch(markUnsure(endpoint));
   };
 
   const sendCloses = (endpoint: ClientEndpoint, ids: readonly string[]): void => {
     for (let at = 0; at < ids.length; at += MAX_IDS_PER_REQUEST) {
       const batch = ids.slice(at, at + MAX_IDS_PER_REQUEST);
-      endpoint.request(NOTIFICATION_CLOSE_METHOD, { ids: batch }).catch(owe(endpoint, batch));
+      endpoint.request(NOTIFICATION_CLOSE_METHOD, { ids: batch }).catch(markUnsure(endpoint));
     }
-  };
-
-  const payOwed = (endpoint: ClientEndpoint): void => {
-    const pending = owed.get(endpoint.handle);
-    if (!pending) return;
-    owed.delete(endpoint.handle);
-    sendCloses(endpoint, [...pending]);
   };
 
   const disposeSink = notificationService.setRemoteNotificationSink({
     show(notification: RemoteNotification) {
       const endpoint = remoteView(getEndpointRegistry().getByHandle(notification.ownerHandle));
       if (!endpoint) return;
-      payOwed(endpoint);
+      if (notification.id !== undefined) watch(endpoint);
+      if (unsure.has(endpoint.handle)) reconcile(endpoint);
       const all = notification.supersedes ?? [];
       const supersedes = all.slice(0, MAX_IDS_PER_REQUEST);
       sendCloses(endpoint, all.slice(MAX_IDS_PER_REQUEST));
@@ -154,30 +158,34 @@ export function installRemoteNotificationSink(
         ...(notification.id !== undefined ? { id: notification.id } : {}),
         ...(supersedes.length > 0 ? { supersedes } : {}),
       };
-      endpoint.request(NOTIFICATION_SHOW_METHOD, payload).catch(owe(endpoint, supersedes));
+      endpoint.request(NOTIFICATION_SHOW_METHOD, payload).catch(markUnsure(endpoint));
     },
     close(ownerHandle: number, ids: readonly string[]) {
       const endpoint = remoteView(getEndpointRegistry().getByHandle(ownerHandle));
       if (!endpoint) return;
-      payOwed(endpoint);
-      sendCloses(endpoint, ids);
+      // The ids are no longer live, so a reconcile takes them down too.
+      if (unsure.has(endpoint.handle)) reconcile(endpoint);
+      else sendCloses(endpoint, ids);
     },
   });
 
+  // A failed close's rejection can land after the resume it raced, so every
+  // resume reconciles a view that has had closable banners, not only one
+  // already marked unsure.
   const disposeTransport = options.onTransportChange?.((endpointIds, attached) => {
-    if (!attached || owed.size === 0) return;
+    if (!attached) return;
     for (const endpointId of endpointIds) {
       const endpoint = remoteView(getEndpointRegistry().get(endpointId));
-      if (endpoint) payOwed(endpoint);
+      if (endpoint && watched.has(endpoint.handle)) reconcile(endpoint);
     }
   });
 
   return () => {
     disposeSink();
     disposeTransport?.();
-    for (const watch of closeWatches.values()) watch.dispose();
-    closeWatches.clear();
-    owed.clear();
+    for (const watch of watched.values()) watch.dispose();
+    watched.clear();
+    unsure.clear();
   };
 }
 
@@ -297,6 +305,30 @@ export function closeHostNotifications(payload: unknown, hostId: string): boolea
   const parsed = NotificationCloseSchema.safeParse(payload);
   if (!parsed.success) return false;
   closeHostBanners(hostId, parsed.data.ids);
+  return true;
+}
+
+/**
+ * Shell side: the host says which of its banners on this view are still live;
+ * any other this Shell shows for the view from that host was dealt with while
+ * a close went missing. Only ever takes banners down, and only the host's own
+ * on the view it was addressed to. Returns false for a payload that does not
+ * validate.
+ */
+export function reconcileHostNotifications(
+  webContentsId: number,
+  payload: unknown,
+  hostId: string
+): boolean {
+  const parsed = NotificationReconcileSchema.safeParse(payload);
+  if (!parsed.success) return false;
+  const banners = hostBanners.get(hostId);
+  if (!banners) return true;
+  const live = new Set(parsed.data.live);
+  const gone = [...banners]
+    .filter(([id, owner]) => owner === webContentsId && !live.has(id))
+    .map(([id]) => id);
+  closeHostBanners(hostId, gone);
   return true;
 }
 

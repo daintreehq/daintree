@@ -5,6 +5,7 @@ const m = vi.hoisted(() => ({
   requestManifestForHost: vi.fn(),
   showHostNotification: vi.fn(() => true),
   closeHostNotifications: vi.fn(() => true),
+  reconcileHostNotifications: vi.fn(() => true),
   // Hosts this Shell's assistant has a `host.call` out to right now (#13493).
   callsOut: new Set<string>(),
   // This Shell's runtime's verdict on a host's dispatch of one of its calls (#15698).
@@ -36,8 +37,10 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
 vi.mock("../../hybrid/notifications.js", () => ({
   NOTIFICATION_SHOW_METHOD: "notification.show",
   NOTIFICATION_CLOSE_METHOD: "notification.close",
+  NOTIFICATION_RECONCILE_METHOD: "notification.reconcile",
   showHostNotification: m.showHostNotification,
   closeHostNotifications: m.closeHostNotifications,
+  reconcileHostNotifications: m.reconcileHostNotifications,
 }));
 
 import { toHostScopedKey } from "../../../../shared/types/remoteHosts.js";
@@ -742,6 +745,17 @@ describe("view reverse requests", () => {
 
     m.closeHostNotifications.mockReturnValueOnce(false);
     await expect(ask("notification.close", { ids: "n1" })).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+  });
+
+  it("reconciles a host's banners on the view it addressed", async () => {
+    installViewReverseRequests();
+    await expect(ask("notification.reconcile", { live: ["n1"] })).resolves.toBeNull();
+    expect(m.reconcileHostNotifications).toHaveBeenCalledWith(11, { live: ["n1"] }, "studio");
+
+    m.reconcileHostNotifications.mockReturnValueOnce(false);
+    await expect(ask("notification.reconcile", { live: "n1" })).rejects.toMatchObject({
       code: "VALIDATION",
     });
   });

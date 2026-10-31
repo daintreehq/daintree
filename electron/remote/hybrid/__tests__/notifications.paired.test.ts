@@ -69,10 +69,12 @@ import { RemoteViewEndpoint } from "../../host/RemoteViewEndpoint.js";
 import { resetHostNoticeBudget } from "../hostNoticeBudget.js";
 import {
   NOTIFICATION_CLOSE_METHOD,
+  NOTIFICATION_RECONCILE_METHOD,
   NOTIFICATION_SHOW_METHOD,
   _resetHostBannersForTesting,
   closeHostNotifications,
   installRemoteNotificationSink,
+  reconcileHostNotifications,
   releaseHostNotifications,
   showHostNotification,
 } from "../notifications.js";
@@ -89,7 +91,7 @@ const STUDIO = { id: "studio", name: "Studio Mac" };
 function remoteView(clientEndpointId: string, webContentsId: number, host = STUDIO) {
   let down = false;
   let holding = false;
-  const held: Array<() => void> = [];
+  const held: Array<{ deliver: () => void; fail: (error: Error) => void }> = [];
   let shellAnswers = true;
   const answer = (method: string, payload: unknown): unknown => {
     if (method === NOTIFICATION_SHOW_METHOD) {
@@ -101,6 +103,12 @@ function remoteView(clientEndpointId: string, webContentsId: number, host = STUD
     if (method === NOTIFICATION_CLOSE_METHOD && shellAnswers) {
       if (!closeHostNotifications(payload, host.id)) {
         throw new AppError({ code: "VALIDATION", message: "Malformed close" });
+      }
+      return null;
+    }
+    if (method === NOTIFICATION_RECONCILE_METHOD && shellAnswers) {
+      if (!reconcileHostNotifications(webContentsId, payload, host.id)) {
+        throw new AppError({ code: "VALIDATION", message: "Malformed reconcile" });
       }
       return null;
     }
@@ -123,12 +131,15 @@ function remoteView(clientEndpointId: string, webContentsId: number, host = STUD
         }
         if (holding && method === NOTIFICATION_CLOSE_METHOD) {
           return new Promise((resolve, reject) =>
-            held.push(() => {
-              try {
-                resolve(answer(method, payload));
-              } catch (error) {
-                reject(error);
-              }
+            held.push({
+              deliver: () => {
+                try {
+                  resolve(answer(method, payload));
+                } catch (error) {
+                  reject(error);
+                }
+              },
+              fail: reject,
             })
           );
         }
@@ -147,10 +158,14 @@ function remoteView(clientEndpointId: string, webContentsId: number, host = STUD
       request.mock.calls
         .filter(([method]) => method === NOTIFICATION_CLOSE_METHOD)
         .map(([, payload]) => (payload as { ids: string[] }).ids),
+    reconcilesSent: () =>
+      request.mock.calls
+        .filter(([method]) => method === NOTIFICATION_RECONCILE_METHOD)
+        .map(([, payload]) => (payload as { live: string[] }).live),
     setDown(value: boolean) {
       down = value;
     },
-    /** A Shell from before closes existed. */
+    /** A Shell from before closes and reconciles existed. */
     refuseCloses() {
       shellAnswers = false;
     },
@@ -159,7 +174,14 @@ function remoteView(clientEndpointId: string, webContentsId: number, host = STUD
     },
     releaseCloses() {
       holding = false;
-      for (const deliver of held.splice(0)) deliver();
+      for (const { deliver } of held.splice(0)) deliver();
+    },
+    /** The held closes die with the link they were on. */
+    failHeldCloses() {
+      holding = false;
+      for (const { fail } of held.splice(0)) {
+        fail(new AppError({ code: "HOST_DISCONNECTED", message: "Link closed" }));
+      }
     },
     close() {
       m.byHandle.delete(endpoint.handle);
@@ -167,6 +189,11 @@ function remoteView(clientEndpointId: string, webContentsId: number, host = STUD
       endpoint.close();
     },
   };
+}
+
+function resume(...views: Array<{ endpoint: { endpointId: string } }>): void {
+  const ids = views.map((view) => view.endpoint.endpointId);
+  for (const listener of [...transportListeners]) listener(ids, true);
 }
 
 async function settle(): Promise<void> {
@@ -253,20 +280,56 @@ describe("a remote view's banners, host sink to Shell", () => {
   it("closes a banner whose close was lost with the link once the link resumes", async () => {
     const view = remoteView("view-12", 12);
     hostWaiting(view.handle, "first wait", ["t1"]);
+    hostWaiting(view.handle, "still waiting", ["t2"]);
     await settle();
 
     view.setDown(true);
     notificationService.closeNotificationsForPanel("t1");
     await settle();
-    expect(shellBanners()).toEqual(["Studio Mac: first wait"]);
+    expect(shellBanners()).toEqual(["Studio Mac: first wait", "Studio Mac: still waiting"]);
 
     view.setDown(false);
     for (const listener of transportListeners) listener([view.endpoint.endpointId], false);
     await settle();
-    expect(shellBanners()).toEqual(["Studio Mac: first wait"]);
-    for (const listener of transportListeners) listener([view.endpoint.endpointId], true);
+    expect(view.reconcilesSent()).toEqual([]);
+    resume(view);
+    await settle();
+    expect(shellBanners()).toEqual(["Studio Mac: still waiting"]);
+  });
+
+  it("closes it even when the lost close fails only after the resume it raced", async () => {
+    const view = remoteView("view-12", 12);
+    hostWaiting(view.handle, "first wait", ["t1"]);
+    await settle();
+
+    // The old link is replaced: the new one attaches before the close that
+    // was on the old one is rejected.
+    view.holdCloses();
+    notificationService.closeNotificationsForPanel("t1");
+    await settle();
+    resume(view);
+    view.failHeldCloses();
     await settle();
     expect(shellBanners()).toEqual([]);
+  });
+
+  it("closes it however many banners came and went while the link was down", async () => {
+    const view = remoteView("view-12", 12);
+    hostWaiting(view.handle, "first wait", ["t1"]);
+    await settle();
+
+    view.setDown(true);
+    notificationService.closeNotificationsForPanel("t1");
+    for (let i = 0; i < 300; i++) {
+      hostWaiting(view.handle, `missed ${i}`, [`m${i}`]);
+      notificationService.closeNotificationsForPanel(`m${i}`);
+    }
+    await settle();
+    view.setDown(false);
+    resume(view);
+    await settle();
+    expect(shellBanners()).toEqual([]);
+    expect(view.reconcilesSent().at(-1)).toEqual([]);
   });
 
   it("closes a banner whose close was lost ahead of the next notification", async () => {
@@ -281,6 +344,7 @@ describe("a remote view's banners, host sink to Shell", () => {
     hostWaiting(view.handle, "second wait", ["t1"]);
     await settle();
     expect(shellBanners()).toEqual(["Studio Mac: second wait"]);
+    expect(view.reconcilesSent()).toHaveLength(1);
   });
 
   it("never lets a close that arrives late take down a newer banner", async () => {
@@ -334,10 +398,13 @@ describe("a remote view's banners, host sink to Shell", () => {
     await settle();
     view.close();
     await settle();
-    for (const listener of transportListeners) listener([view.endpoint.endpointId], true);
+    // The host forgot the view's banners with its endpoint.
+    expect(notificationService.remoteBannerIds(view.handle)).toEqual([]);
+    resume(view);
     notificationService.closeNotificationsForPanel("t2");
     await settle();
     expect(view.closesSent()).toHaveLength(1);
+    expect(view.reconcilesSent()).toEqual([]);
   });
 
   it("closes every banner on a panel however many were tracked, past one request's share", async () => {
@@ -393,10 +460,12 @@ describe("a remote view's banners, host sink to Shell", () => {
     await settle();
     expect(view.closesSent()).toEqual([[firstId]]);
 
-    for (const listener of transportListeners) listener([view.endpoint.endpointId], true);
+    resume(view);
     hostWaiting(view.handle, "second wait", ["t2"]);
     await settle();
     expect(view.closesSent()).toEqual([[firstId]]);
+    // The resume's reconcile is refused too, and leaves nothing to retry.
+    expect(view.reconcilesSent()).toHaveLength(1);
     const lastShow = view.request.mock.calls.at(-1)![1] as Record<string, unknown>;
     expect(lastShow.supersedes).toBeUndefined();
   });
@@ -416,6 +485,16 @@ describe("Shell tracking of a host's banners", () => {
     show(12, "a1", { id: "other", name: "Other Mac" });
     closeHostNotifications({ ids: ["a1"] }, STUDIO.id);
     expect(shellBanners()).toEqual(["Other Mac: a1"]);
+  });
+
+  it("reconciles only the host's own banners on the view it addressed", () => {
+    show(12, "a1");
+    show(12, "a2");
+    show(13, "b1");
+    show(12, "a3", { id: "other", name: "Other Mac" });
+    expect(reconcileHostNotifications(12, { live: ["a2"] }, STUDIO.id)).toBe(true);
+    expect(shellBanners()).toEqual(["Studio Mac: a2", "Studio Mac: b1", "Other Mac: a3"]);
+    expect(reconcileHostNotifications(12, { live: ["a:2"] }, STUDIO.id)).toBe(false);
   });
 
   it("takes down only the banners shown for a view that went away", () => {

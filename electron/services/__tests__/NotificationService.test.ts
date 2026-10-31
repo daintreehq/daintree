@@ -1451,6 +1451,8 @@ describe("NotificationService remote owners", () => {
     }
     const kept = (sink.show.mock.calls[1]![0] as { id: string }).id;
     notificationService.forgetRemoteOwner(-4);
+    expect(notificationService.remoteBannerIds(-4)).toEqual([]);
+    expect(notificationService.remoteBannerIds(-6)).toEqual([kept]);
     notificationService.closeNotificationsForPanel("t1");
     expect(sink.close.mock.calls).toEqual([[-6, [kept]]]);
   });

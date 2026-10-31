@@ -15,8 +15,10 @@ import { resolveEffectiveActionDanger } from "../../../shared/utils/effectiveAct
 import { AppError } from "../../utils/errorTypes.js";
 import {
   NOTIFICATION_CLOSE_METHOD,
+  NOTIFICATION_RECONCILE_METHOD,
   NOTIFICATION_SHOW_METHOD,
   closeHostNotifications,
+  reconcileHostNotifications,
   showHostNotification,
 } from "../hybrid/notifications.js";
 import { getRemoteService } from "../runtime.js";
@@ -404,6 +406,18 @@ export function installViewReverseRequests(): () => void {
       }
       return null;
     }),
+    registerReverseRequestMethod(
+      NOTIFICATION_RECONCILE_METHOD,
+      ({ hostId, webContentsId, payload }) => {
+        if (!reconcileHostNotifications(webContentsId, payload, hostId)) {
+          throw new AppError({
+            code: "VALIDATION",
+            message: "Malformed notification reconcile from the host",
+          });
+        }
+        return null;
+      }
+    ),
   ];
   return () => {
     for (const dispose of disposers.splice(0).reverse()) dispose();

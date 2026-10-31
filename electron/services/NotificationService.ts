@@ -468,6 +468,15 @@ class NotificationService {
     }
   }
 
+  /** Ids of the banners this host still holds on a remote owner, oldest first. */
+  remoteBannerIds(ownerHandle: number): string[] {
+    const ids: string[] = [];
+    for (const [id, banner] of this.remoteBanners) {
+      if (banner.ownerHandle === ownerHandle) ids.push(id);
+    }
+    return ids;
+  }
+
   private closeRemote(ownerHandle: number, ids: readonly string[]): void {
     try {
       this.remoteSink?.close(ownerHandle, ids);
