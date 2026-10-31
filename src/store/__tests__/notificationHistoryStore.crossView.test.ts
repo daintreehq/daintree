@@ -410,6 +410,30 @@ describe("notificationHistoryStore cross-view write merge (#15534)", () => {
     expect(entryById(backing, "old")?.seenAsToast).toBe(false);
   });
 
+  it("keeps a row this view marked read through an overflowing merge so its Undo persists", async () => {
+    const target = makeEntry({ id: "target", timestamp: NOW - 8 * DAY });
+    const older = Array.from({ length: 198 }, (_, i) =>
+      makeEntry({ id: `older-${i}`, timestamp: NOW - 9 * DAY - i * 1000 })
+    );
+    const backing = installLocalStorage(seed([target, ...older]));
+
+    const viewA = await openView();
+    const viewB = await openView();
+
+    viewB.getState().addEntry({ type: "error", message: "from B" });
+    flush();
+
+    viewA.getState().addEntry({ type: "error", message: "from A" });
+    viewA.getState().markIdsRead(["target"]);
+    flush();
+    expect(readBlob(backing).state.entries).toHaveLength(200);
+    expect(entryById(backing, "target")?.seenAsToast).toBe(true);
+
+    viewA.getState().markUnseenAsToast("target", { silent: true });
+    flush();
+    expect(entryById(backing, "target")?.seenAsToast).toBe(false);
+  });
+
   it("holds the 200-entry cap, keeping both views' new entries", async () => {
     const old = Array.from({ length: 200 }, (_, i) =>
       makeEntry({ id: `old-${i}`, timestamp: NOW - DAY - i * 1000 })

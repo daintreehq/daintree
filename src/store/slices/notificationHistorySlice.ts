@@ -138,6 +138,12 @@ function computeUnreadCount(
   }).length;
 }
 
+function isPastRetention(entry: NotificationHistoryEntry, now: number): boolean {
+  if (entry.archivedAt !== null) return entry.archivedAt < now - ARCHIVED_RETENTION_MS;
+  if (entry.seenAsToast) return entry.timestamp < now - READ_RETENTION_MS;
+  return false;
+}
+
 /**
  * Drop expired entries (read older than 7d, archived older than 30d), then
  * enforce the 200-entry safety ceiling. Age pruning runs before the cap so
@@ -148,13 +154,7 @@ export function pruneNotificationEntries(
   entries: NotificationHistoryEntry[],
   now: number
 ): NotificationHistoryEntry[] {
-  const readCutoff = now - READ_RETENTION_MS;
-  const archivedCutoff = now - ARCHIVED_RETENTION_MS;
-  const filtered = entries.filter((e) => {
-    if (e.archivedAt !== null) return e.archivedAt >= archivedCutoff;
-    if (e.seenAsToast) return e.timestamp >= readCutoff;
-    return true;
-  });
+  const filtered = entries.filter((e) => !isPastRetention(e, now));
   if (filtered.length <= MAX_ENTRIES) return filtered;
   return filtered.slice(0, MAX_ENTRIES);
 }
@@ -348,10 +348,12 @@ function mergeEntryFields(
  *   - on disk and never known to the writer → a sibling's addition, kept.
  *
  * Snoozes merge per thread through `mergeRecordByWriterDelta`. The result is
- * sorted newest first, and pruned only when both views' additions overflow the
- * 200-entry cap: age retention otherwise stays with hydration and the store's
- * own prunes, so an old unread row marked read (and expired) in memory is still
- * on disk for its Undo. `clearAll` clears what this view knew; entries a
+ * sorted newest first and held to the 200-entry cap. Age retention stays with
+ * hydration and the store's own prunes, and never removes a row this writer
+ * still holds: an old unread row marked read is expired in memory, and its Undo
+ * needs it on disk. Only when both views' additions overflow the cap do rows
+ * past retention go first, so unread rows outlast them as in
+ * `pruneNotificationEntries`. `clearAll` clears what this view knew; entries a
  * sibling added since are kept.
  */
 function mergeNotificationHistoryPersistedWrite({
@@ -382,7 +384,12 @@ function mergeNotificationHistoryPersistedWrite({
   merged.sort((a, b) => b.timestamp - a.timestamp);
 
   const state: PersistedNotificationHistoryShape = {
-    entries: merged.length > MAX_ENTRIES ? pruneNotificationEntries(merged, now) : merged,
+    entries:
+      merged.length > MAX_ENTRIES
+        ? merged
+            .filter((e) => inc.entries.has(e.id) || !isPastRetention(e, now))
+            .slice(0, MAX_ENTRIES)
+        : merged,
     snoozedThreads: mergeRecordByWriterDelta(
       base.snoozedThreads,
       inc.snoozedThreads,
