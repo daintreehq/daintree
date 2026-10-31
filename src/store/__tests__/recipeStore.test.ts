@@ -2049,6 +2049,55 @@ describe("recipeStore", () => {
       expect(call.agentLaunchFlags?.every((f) => f.trim().length > 0)).toBe(true);
     });
 
+    it("launches and persists a quoted spaced recipe argument as one argv entry (#15637)", async () => {
+      getAgentSettingsMock.mockResolvedValue({
+        agents: {
+          claude: { dangerousEnabled: true, customFlags: `--add-dir "/Users/me/My Project"` },
+        },
+      });
+      addTerminalMock.mockResolvedValue("terminal-1");
+
+      useRecipeStore.setState({
+        recipes: [
+          {
+            id: "recipe-1",
+            name: "Agent Recipe",
+            projectId: "project-1",
+            terminals: [
+              {
+                type: "claude",
+                title: "Claude",
+                args: `--config "/tmp/project with spaces/config.json"`,
+                env: {},
+              },
+            ],
+            createdAt: Date.now(),
+          },
+        ],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1");
+
+      const call = addTerminalMock.mock.calls[0]?.[0] as {
+        command?: string;
+        agentLaunchFlags?: string[];
+      };
+      expect(call.agentLaunchFlags).toEqual([
+        "--config",
+        "/tmp/project with spaces/config.json",
+        "--dangerously-skip-permissions",
+        "--add-dir",
+        "/Users/me/My Project",
+      ]);
+      expect(call.command).toBe(
+        buildLaunchCommandFromFlags("claude", "claude", call.agentLaunchFlags!)
+      );
+    });
+
     describe("preset resolution (#10722)", () => {
       type AgentSpawnCall = {
         command?: string;

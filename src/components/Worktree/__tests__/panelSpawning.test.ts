@@ -206,6 +206,32 @@ describe("spawnPanelsFromRecipe", () => {
     expect(call.agentLaunchFlags).not.toBeUndefined();
   });
 
+  it("persists a quoted spaced recipe argument as one argv entry (#15637)", async () => {
+    const args = `--config "/tmp/project with spaces/config.json"`;
+    await spawnPanelsFromRecipe({
+      terminals: [makeAgent({ args })],
+      worktreeId: "wt-1",
+      cwd: "/path/to/wt",
+      agentSettings: { agents: { claude: { dangerousEnabled: true } } },
+      clipboardDirectory: "/tmp/daintree/daintree-clipboard",
+    });
+
+    expect(mockGenerateAgentCommand).toHaveBeenCalledWith(
+      "claude",
+      { dangerousEnabled: true },
+      "claude",
+      expect.objectContaining({ recipeArgs: args })
+    );
+    const call = mockAddPanel.mock.calls[0]?.[0] as { agentLaunchFlags?: string[] };
+    expect(call.agentLaunchFlags).toEqual([
+      "--model",
+      "sonnet",
+      "--config",
+      "/tmp/project with spaces/config.json",
+      "--dangerously-skip-permissions",
+    ]);
+  });
+
   it("forwards recipe args to the initial command (#9650)", async () => {
     await spawnPanelsFromRecipe({
       terminals: [makeAgent({ args: "--recipe-arg" })],

@@ -8,6 +8,7 @@ import {
   quotePowerShellArg,
 } from "../utils/shellEscape.js";
 import { systemPromptArgPositions } from "../utils/agentSystemPrompt.js";
+import { parseShellArgs } from "../utils/shellArgs.js";
 import { HOST_INBOX_DIR_NAME } from "./ipc/fileTransfer.js";
 
 /**
@@ -669,10 +670,7 @@ export function generateAgentFlags(
     }
   }
   if (entry.customFlags) {
-    const trimmed = entry.customFlags.trim();
-    if (trimmed) {
-      flags.push(...trimmed.split(/\s+/));
-    }
+    flags.push(...parseShellArgs(entry.customFlags));
   }
 
   // Decorative-effect opt-out (e.g. Codex's composer sparkles): the registry
@@ -722,7 +720,10 @@ export interface GenerateAgentCommandOptions {
    * `resolveSystemPromptArgs` or `extractSystemPromptArgs`. Quoted here.
    */
   systemPromptArgs?: readonly string[];
-  /** Additional CLI arguments from recipe terminal (whitespace-separated string) */
+  /**
+   * The recipe terminal's Arguments field, tokenised by {@link parseShellArgs}
+   * so quotes group a spaced value into one argument.
+   */
   recipeArgs?: string;
   /**
    * The agent preset's argv elements. Each element is one argument, quoted
@@ -844,14 +845,8 @@ export function generateAgentCommand(
   }
 
   // Add recipe-level args (per-terminal overrides from recipe editor)
-  if (options?.recipeArgs) {
-    for (const token of options.recipeArgs.trim().split(/\s+/).filter(Boolean)) {
-      if (isSafeShellOption(token)) {
-        parts.push(token);
-      } else {
-        parts.push(quoteAgentArg(token));
-      }
-    }
+  for (const arg of parseShellArgs(options?.recipeArgs ?? "")) {
+    parts.push(isSafeShellOption(arg) ? arg : quoteAgentArg(arg));
   }
 
   // Add flags, escaping non-flag values
@@ -1043,6 +1038,7 @@ export function buildAgentLaunchFlags(
     modelId?: string;
     systemPromptArgs?: readonly string[];
     presetArgs?: string[];
+    recipeArgs?: string;
     globalSkipPermissions?: boolean;
     globalUseAltScreen?: boolean;
   }
@@ -1075,6 +1071,10 @@ export function buildAgentLaunchFlags(
   if (options?.presetArgs?.length) {
     flags.push(...options.presetArgs);
   }
+
+  // Recipe args sit between preset args and settings flags, as in
+  // generateAgentCommand, so a restart replays them in launch order.
+  flags.push(...parseShellArgs(options?.recipeArgs ?? ""));
 
   // Dangerous args and custom flags (from generateAgentFlags, excluding clipboard dir)
   const settingsFlags = generateAgentFlags(entry, agentId, {

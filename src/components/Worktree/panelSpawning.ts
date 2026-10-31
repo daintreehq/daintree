@@ -167,16 +167,16 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
             // disk recipes the field is stripped (undefined), so compute from
             // live settings instead — persisting these lets restart/resume
             // reproduce the launch and prevents `--dangerously-skip-permissions`
-            // and recipe args from being dropped on resume (#9650). Recipe args
-            // append as raw tokens.
-            const agentLaunchFlags = t.agentLaunchFlags ?? [
-              ...buildAgentLaunchFlags(entry, agentId, {
+            // and recipe args from being dropped on resume (#9650). The builder
+            // tokenises recipe args exactly as the launch command does (#15637).
+            const agentLaunchFlags =
+              t.agentLaunchFlags ??
+              buildAgentLaunchFlags(entry, agentId, {
                 modelId: t.agentModelId,
+                recipeArgs: t.args,
                 globalSkipPermissions,
                 globalUseAltScreen,
-              }),
-              ...(t.args?.trim().split(/\s+/).filter(Boolean) ?? []),
-            ];
+              });
 
             panelId = await store.addPanel({
               kind: "terminal",

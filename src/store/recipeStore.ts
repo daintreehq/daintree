@@ -1468,17 +1468,16 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             // `--dangerously-skip-permissions` and the recipe's args (#9650).
             // Preserve flags an in-memory recipe already carries; for disk
             // recipes the field is stripped (undefined), so compute from live
-            // settings (mirroring useAgentLauncher) and append recipe args as
-            // raw tokens since the restart command builder applies its own
-            // escaping.
+            // settings (mirroring useAgentLauncher). The builder tokenises the
+            // recipe args exactly as the launch command does (#15637).
             const agentLaunchFlags = terminal.agentLaunchFlags ?? [
               ...buildAgentLaunchFlags(effectiveEntry, agentId, {
                 modelId: terminal.agentModelId,
                 presetArgs: preset?.args,
+                recipeArgs: terminal.args,
                 globalSkipPermissions,
                 globalUseAltScreen,
               }),
-              ...(terminal.args?.trim().split(/\s+/).filter(Boolean) ?? []),
               // Last, where the launch command puts it, so restart replays it.
               ...step.systemPromptArgs,
             ];

@@ -670,6 +670,65 @@ describe("generateAgentCommand with recipeArgs", () => {
   });
 });
 
+describe("quoted launch arguments (#15637)", () => {
+  forcePosixPlatform();
+
+  const spacedPath = "/tmp/project with spaces/config.json";
+
+  it("keeps a quoted spaced value in recipe args as one argument", () => {
+    const cmd = generateAgentCommand("claude", {}, "claude", {
+      recipeArgs: `--config "${spacedPath}"`,
+    });
+    expect(cmd).toBe(`claude --config '${spacedPath}'`);
+  });
+
+  it("keeps a quoted spaced value in custom flags as one argument", () => {
+    const cmd = generateAgentCommand(
+      "claude",
+      { customFlags: `--add-dir "/Users/me/My Project" --append-system-prompt 'be terse'` },
+      "claude"
+    );
+    expect(cmd).toBe("claude --add-dir '/Users/me/My Project' --append-system-prompt 'be terse'");
+  });
+
+  it("persists quoted custom flags as the argv the launch command used", () => {
+    const entry = { customFlags: `--config "${spacedPath}" --verbose` };
+    expect(generateAgentFlags(entry, "claude")).toEqual(["--config", spacedPath, "--verbose"]);
+    const flags = buildAgentLaunchFlags(entry, "claude");
+    expect(flags).toEqual(["--config", spacedPath, "--verbose"]);
+    expect(generateAgentCommand("claude", entry, "claude")).toBe(
+      buildLaunchCommandFromFlags("claude", "claude", flags)
+    );
+  });
+
+  it("persists recipe args where the launch command puts them", () => {
+    const entry = { customFlags: "--custom-flag", dangerousEnabled: true };
+    const options = {
+      presetArgs: ["--preset-flag"],
+      recipeArgs: `--config "${spacedPath}"`,
+    };
+    const flags = buildAgentLaunchFlags(entry, "claude", options);
+    expect(flags).toEqual([
+      "--preset-flag",
+      "--config",
+      spacedPath,
+      "--dangerously-skip-permissions",
+      "--custom-flag",
+    ]);
+    expect(generateAgentCommand("claude", entry, "claude", options)).toBe(
+      buildLaunchCommandFromFlags("claude", "claude", flags)
+    );
+  });
+
+  it("leaves unquoted arguments exactly as the whitespace split did", () => {
+    expect(
+      generateAgentCommand("claude", { customFlags: "  --verbose   --debug " }, "claude", {
+        recipeArgs: " --model   opus --yolo ",
+      })
+    ).toBe("claude --model 'opus' --yolo --verbose --debug");
+  });
+});
+
 describe("generateAgentCommand with presetArgs (#15638)", () => {
   forcePosixPlatform();
 
