@@ -1,7 +1,11 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "path";
 
 import { PLUGIN_PTY_DEFAULT_COLS, PLUGIN_PTY_DEFAULT_ROWS } from "./PluginProcessManager.js";
-import { assertPluginCallerDrives } from "./pluginDriveLease.js";
+import { assertPluginCallerDrives, capturePluginCallerDrives } from "./pluginDriveLease.js";
+import { runWithEndedPluginInvocation, runWithPluginInvocation } from "./pluginFrontendRouting.js";
+import { processHandleKillers } from "./pluginInternalApprovers.js";
+import { runWithServiceInvocation } from "./pluginServiceInvocation.js";
 
 import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 import type {
@@ -102,10 +106,9 @@ export function buildProcessApi(
     // does, so a call from a view must drive it: judged before the consent
     // prompt and again after it, which can outlast a takeover.
     // With no cwd the child inherits Main's, which is judged in its place.
+    const leaseTarget = { paths: [path.resolve(cwd ?? process.cwd())] };
     const requireCallerDrives = async () => {
-      await assertPluginCallerDrives(pluginId, "process.spawn", {
-        paths: [path.resolve(cwd ?? process.cwd())],
-      });
+      await assertPluginCallerDrives(pluginId, "process.spawn", leaseTarget);
       if (!deps.plugins.has(pluginId)) {
         throw new Error(`Plugin "${pluginId}" process.spawn: plugin is no longer loaded`);
       }
@@ -135,50 +138,71 @@ export function buildProcessApi(
       handle.kill();
       throw new Error(`Plugin "${pluginId}" process.spawn: plugin is no longer loaded`);
     }
+    // Every later operation on the handle changes the same project, so each is
+    // held to the lease as `spawn` was, judged as whoever makes it, even on a
+    // handle a view opened while it drove (#15792). The gate also drops them
+    // once the plugin unloads, so a handle retained by a leaked timer can't
+    // drive the child afterwards (killManagedProcesses already tore the live
+    // children down on unload).
+    // Bound to this load of the plugin, so an operation still waiting when it
+    // unloads can't land after a reload under the same id brings it back.
+    const loaded = deps.plugins.get(pluginId);
+    const gate = createProcessGate(() => deps.plugins.get(pluginId) === loaded);
+    const check = (op: string) => capturePluginCallerDrives(pluginId, `process.${op}`, leaseTarget);
     const base: PluginProcessHandle = {
       get id() {
         return handle.id;
       },
-      // Gate lifecycle control on membership so a stale handle retained by a
-      // leaked timer can't kill or respawn a process after the plugin unloads
-      // (killManagedProcesses already tore the live children down on unload).
-      kill: () => {
-        if (!deps.plugins.has(pluginId)) return;
-        handle.kill();
-      },
+      kill: () => gate.submit({ check: check("kill"), apply: () => handle.kill() }),
+      // The respawn is admitted in turn, but later operations don't wait for it
+      // to finish, as they never have.
       restart: () => {
-        if (!deps.plugins.has(pluginId)) return Promise.resolve();
-        return handle.restart();
+        const cleared = check("restart");
+        return new Promise<void>((resolve, reject) => {
+          gate.submit({
+            check: cleared,
+            apply: () => {
+              handle.restart().then(resolve, reject);
+            },
+            refused: reject,
+            dropped: resolve,
+          });
+        });
       },
-      onExit: (cb) => handle.onExit(cb),
-      onCrash: (cb) => handle.onCrash(cb),
-      onData: (cb) => handle.onData(cb),
+      onExit: (cb) => handle.onExit(asBackgroundCallback(cb)),
+      onCrash: (cb) => handle.onCrash(asBackgroundCallback(cb)),
+      onData: (cb) => handle.onData(asBackgroundCallback(cb)),
     };
-    if (mode === "pipe") return base;
+    // Only the handle handed back is registered: it is what the worker bridge
+    // holds when it cleans up.
+    const expose = <T extends PluginProcessHandle>(exposed: T): T => {
+      processHandleKillers.set(exposed, () => {
+        gate.retire();
+        handle.kill();
+      });
+      return exposed;
+    };
+    if (mode === "pipe") return expose(base);
     // Both writable modes get `write`; only a PTY additionally gets `resize`.
-    // Membership-gated like kill/restart so a handle retained by a leaked timer
-    // can't drive a child after the plugin unloads.
     const writable: PluginDuplexProcessHandle = {
       ...base,
       get id() {
         return handle.id;
       },
       write: (data) => {
-        if (!deps.plugins.has(pluginId) || typeof data !== "string") return;
-        handle.write(data);
+        if (typeof data !== "string") return;
+        gate.submit({ check: check("write"), apply: () => handle.write(data) });
       },
     };
-    if (mode === "duplex") return writable;
-    return {
+    if (mode === "duplex") return expose(writable);
+    return expose({
       ...writable,
       get id() {
         return handle.id;
       },
-      resize: (nextCols, nextRows) => {
-        if (!deps.plugins.has(pluginId)) return;
-        handle.resize(nextCols, nextRows);
-      },
-    } satisfies PluginPtyProcessHandle;
+      resize: (nextCols, nextRows) =>
+        gate.submit({ check: check("resize"), apply: () => handle.resize(nextCols, nextRows) }),
+    } satisfies PluginPtyProcessHandle);
   };
   return { spawn } as PluginProcessApi;
 }
@@ -201,4 +225,134 @@ function resolvePtyDimension(
     );
   }
   return value;
+}
+
+/** One operation on a process handle, waiting its turn. */
+interface GatedProcessOp {
+  /** The lease check for whoever made the operation; `undefined` clears it at once. */
+  readonly check: () => Promise<void> | undefined;
+  readonly apply: () => void;
+  /** The lease refused it, or applying it threw after it had waited. */
+  readonly refused?: (reason: unknown) => void;
+  /** The plugin unloaded, or the host killed the process, before its turn. */
+  readonly dropped?: () => void;
+}
+
+/**
+ * A child's output and exit reach the plugin as its own background work, as in
+ * a dev worker, even when a view's call started or restarted the child: its
+ * streams would otherwise carry that call's context into every later chunk.
+ */
+function asBackgroundCallback<A>(cb: (arg: A) => void): (arg: A) => void {
+  // Anything else goes through as given, for the manager to refuse by name.
+  if (typeof cb !== "function") return cb;
+  return (arg) =>
+    runWithPluginInvocation(null, () =>
+      runWithEndedPluginInvocation(null, () => runWithServiceInvocation(null, () => cb(arg)))
+    );
+}
+
+/**
+ * Apply a process handle's operations in the order the plugin made them, each
+ * once its lease check clears. The check runs when the operation reaches the
+ * front, so it answers to the leases as they stand just before it lands, not
+ * as they stood while earlier ones were judged. An operation that needn't wait
+ * (nothing ahead of it, nothing to refuse) runs synchronously, as it always
+ * has, and throws to the plugin as it always has.
+ */
+function createProcessGate(isLive: () => boolean): {
+  submit: (op: GatedProcessOp) => void;
+  retire: () => void;
+} {
+  // Each waiting operation resumes in the context it was made in, not in that
+  // of the one whose check let the queue move on.
+  const waiting: Array<{ op: GatedProcessOp; resume: (fn: () => void) => void }> = [];
+  let busy = false;
+  let draining = false;
+  let retired = false;
+  const live = () => !retired && isLive();
+
+  const finish = (): void => {
+    busy = false;
+    drain();
+  };
+
+  // A loop rather than recursion, so a long run of operations that clear at
+  // once behind one that waited can't overflow the stack.
+  const drain = (): void => {
+    if (draining) return;
+    draining = true;
+    try {
+      while (!busy && waiting.length > 0) {
+        const next = waiting.shift()!;
+        next.resume(() => start(next.op, false));
+      }
+    } finally {
+      draining = false;
+    }
+  };
+
+  const applyCleared = (op: GatedProcessOp): void => {
+    if (!live()) {
+      op.dropped?.();
+      return;
+    }
+    try {
+      op.apply();
+    } catch (err) {
+      op.refused?.(err);
+    }
+  };
+
+  const start = (op: GatedProcessOp, direct: boolean): void => {
+    if (!live()) {
+      op.dropped?.();
+      return;
+    }
+    let verdict: Promise<void> | undefined;
+    try {
+      verdict = op.check();
+    } catch (err) {
+      // A check that can't answer refuses, as the lease gate does.
+      op.refused?.(err);
+      return;
+    }
+    // Held busy while the child is touched, so an operation the plugin makes
+    // from inside it (a data callback, say) queues behind it.
+    busy = true;
+    if (verdict === undefined) {
+      try {
+        op.apply();
+      } catch (err) {
+        if (direct) throw err;
+        op.refused?.(err);
+      } finally {
+        finish();
+      }
+      return;
+    }
+    void verdict
+      .then(
+        () => applyCleared(op),
+        (reason: unknown) => {
+          if (live()) op.refused?.(reason);
+          else op.dropped?.();
+        }
+      )
+      .then(finish, finish);
+  };
+
+  return {
+    submit: (op) => {
+      if (busy || waiting.length > 0) {
+        waiting.push({ op, resume: AsyncLocalStorage.snapshot() });
+      } else {
+        start(op, true);
+      }
+    },
+    retire: () => {
+      retired = true;
+      for (const { op } of waiting.splice(0)) op.dropped?.();
+    },
+  };
 }

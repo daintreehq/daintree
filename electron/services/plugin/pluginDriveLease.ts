@@ -3,18 +3,27 @@ import type { LeaseTargetResolvers } from "../driveLeaseTargets.js";
 import { getEndedPluginInvocation, getPluginInvokeOrigin } from "./pluginFrontendRouting.js";
 import type { ClientEndpoint } from "../../ipc/endpoint.js";
 
+type PluginCaller = Pick<ClientEndpoint, "endpointId" | "clientId">;
+
 /** Who made a call the host can no longer place: it holds no lease, so it drives nothing. */
-const UNKNOWN_CALLER: Pick<ClientEndpoint, "endpointId" | "clientId"> = Object.freeze({
+const UNKNOWN_CALLER: PluginCaller = Object.freeze({
   endpointId: "",
   clientId: "",
 });
+
+/**
+ * The lease module once a check has needed it. Kept so a later check that has
+ * nothing to refuse can answer without a wait, as a process handle's typing
+ * must; until then it stays unloaded, as outside Host mode it nearly always is.
+ */
+let leaseModule: typeof import("../DriveLeaseService.js") | null = null;
 
 /**
  * Who the current work answers to: the call it runs in, or the call that
  * started it if that call has since returned. Null is a plugin's own
  * background work.
  */
-function callerOf(pluginId: string): Pick<ClientEndpoint, "endpointId" | "clientId"> | null {
+function callerOf(pluginId: string): PluginCaller | null {
   const origin = getPluginInvokeOrigin(pluginId);
   if (origin !== null) return origin.endpoint;
   const ended = getEndedPluginInvocation(pluginId);
@@ -48,9 +57,41 @@ export async function assertPluginCallerDrives(
 ): Promise<void> {
   const caller = callerOf(pluginId);
   if (caller === null) return;
+  await assertCallerDrives(caller, pluginId, op, target);
+}
+
+/**
+ * {@link assertPluginCallerDrives} for a change made now but applied later:
+ * the caller is taken from the current work, and the returned check judges
+ * that caller against the leases as they stand when it runs. It answers
+ * `undefined` at once when there is nothing to refuse (background work, no
+ * lease service, nobody else driving), so a change that needn't wait doesn't.
+ */
+export function capturePluginCallerDrives(
+  pluginId: string,
+  op: string,
+  target: PluginWriteTarget
+): () => Promise<void> | undefined {
+  const caller = callerOf(pluginId);
+  return () => {
+    if (caller === null) return undefined;
+    if (leaseModule !== null) {
+      const lease = leaseModule.peekDriveLeaseService();
+      if (lease === null || lease.projectsDrivenElsewhere(caller).size === 0) return undefined;
+    }
+    return assertCallerDrives(caller, pluginId, op, target);
+  };
+}
+
+async function assertCallerDrives(
+  caller: PluginCaller,
+  pluginId: string,
+  op: string,
+  target: PluginWriteTarget
+): Promise<void> {
   // Loaded once a call is in hand, which outside Host mode is rare.
-  const { peekDriveLeaseService, drivenElsewhereError, unmatchedTargetError } =
-    await import("../DriveLeaseService.js");
+  leaseModule ??= await import("../DriveLeaseService.js");
+  const { peekDriveLeaseService, drivenElsewhereError, unmatchedTargetError } = leaseModule;
   const lease = peekDriveLeaseService();
   if (lease === null || lease.projectsDrivenElsewhere(caller).size === 0) return;
 

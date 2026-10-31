@@ -479,6 +479,12 @@ export type PluginWorkerToHostMessage =
       method: PluginHostNotifyMethod;
       params: unknown;
       registrationKey?: string;
+      /**
+       * The `invoke` requestId whose handler sent this, as for `host-call`, so
+       * a process write made while handling a view's call is held to that
+       * view's drive lease rather than passing as background work.
+       */
+      invocationId?: string;
     }
   /** Open an event subscription against the host. */
   | {

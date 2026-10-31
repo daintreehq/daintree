@@ -715,25 +715,8 @@ export class PluginDevWorkerMainBridge {
     // rather than mis-delivered to the new worker (whose requestIds collide).
     const generation = this.reloadGeneration;
     try {
-      // The call answers the invocation it was made for, while that invocation
-      // is still outstanding; once it has returned, only the drive lease still
-      // sees whose call it was (`endedInvocation`).
-      const pending =
-        msg.invocationId !== undefined ? this.pendingInvokes.get(msg.invocationId) : undefined;
-      const scope = pending?.scope ?? null;
-      // A service method's call has ended once its invoke is gone; what its
-      // work starts afterwards is refused rather than made as a fresh call.
-      // Request ids never repeat on a bridge, so the prefix alone says so.
-      const service =
-        pending?.service ??
-        (msg.invocationId?.startsWith(SERVICE_INVOKE_PREFIX) ? ENDED_SERVICE_INVOCATION : null);
-      const ended = pending === undefined ? this.endedInvocation(msg.invocationId) : null;
-      const result = await runWithPluginInvocation(scope, () =>
-        runWithEndedPluginInvocation(ended, () =>
-          runWithServiceInvocation(service, () =>
-            this.dispatchHostCall(msg.method, msg.params, controller.signal)
-          )
-        )
+      const result = await this.runAsInvocation(msg.invocationId, () =>
+        this.dispatchHostCall(msg.method, msg.params, controller.signal)
       );
       if (this.disposed || generation !== this.reloadGeneration) return;
       this.workerHost.send({ type: "host-result", requestId: msg.requestId, ok: true, result });
@@ -756,6 +739,27 @@ export class PluginDevWorkerMainBridge {
         this.hostCallAborts.delete(msg.requestId);
       }
     }
+  }
+
+  /**
+   * Run a worker message's work as the invocation it names. It answers the
+   * invocation it was made for while that invocation is still outstanding;
+   * once it has returned, only the drive lease still sees whose call it was
+   * (`endedInvocation`). Resolved synchronously, before `fn` can await.
+   */
+  private runAsInvocation<T>(invocationId: string | undefined, fn: () => T): T {
+    const pending = invocationId !== undefined ? this.pendingInvokes.get(invocationId) : undefined;
+    const scope = pending?.scope ?? null;
+    // A service method's call has ended once its invoke is gone; what its
+    // work starts afterwards is refused rather than made as a fresh call.
+    // Request ids never repeat on a bridge, so the prefix alone says so.
+    const service =
+      pending?.service ??
+      (invocationId?.startsWith(SERVICE_INVOKE_PREFIX) ? ENDED_SERVICE_INVOCATION : null);
+    const ended = pending === undefined ? this.endedInvocation(invocationId) : null;
+    return runWithPluginInvocation(scope, () =>
+      runWithEndedPluginInvocation(ended, () => runWithServiceInvocation(service, fn))
+    );
   }
 
   private rememberSettledCaller(requestId: string, scope: PluginInvocationScope | null): void {
@@ -797,7 +801,11 @@ export class PluginDevWorkerMainBridge {
     // and the outgoing generation's verdict must not land on the incoming one.
     const generation = this.reloadGeneration;
     try {
-      await this.dispatchHostNotify(msg.method, msg.params);
+      // A notify made while handling a view's call is that call's work, as a
+      // host call is: a process write it makes is held to the caller's lease.
+      await this.runAsInvocation(msg.invocationId, () =>
+        this.dispatchHostNotify(msg.method, msg.params)
+      );
     } catch (err) {
       const error = formatErrorMessage(err, "registration failed");
       if (this.disposed || generation !== this.reloadGeneration) return;
