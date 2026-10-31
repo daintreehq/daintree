@@ -823,7 +823,10 @@ export function useWorktreeBulkRemove({
           message: summarizeBulkRemoveFailures(failures),
           ...(soleTargetId ? { context: { worktreeId: soleTargetId } } : {}),
         });
-        announce(`${failureTitle}. ${describeBulkRemoveFailureCount(failures.length)}`, "assertive");
+        announce(
+          `${failureTitle}. ${describeBulkRemoveFailureCount(failures.length)}`,
+          "assertive"
+        );
       } else {
         // Partial — warning type so the success half isn't lost in red.
         // Warning toasts aren't gated by the success-toast rule, so no

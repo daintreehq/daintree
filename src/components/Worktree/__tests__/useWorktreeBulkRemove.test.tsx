@@ -1101,40 +1101,56 @@ describe("useWorktreeBulkRemove — failure reporting (#15575)", () => {
     expect(selectOnly.mock.calls[0]![0]).toEqual(["child", "parent"]);
   });
 
-  it("drops a failed id the overview no longer lists", async () => {
-    failWith({ a: "Reported failure", b: "Filesystem busy" });
+  it("drops a failed id the overview stopped listing while the run was in flight", async () => {
+    let failA: (err: Error) => void = () => {};
+    worktreeClientMock.delete.mockImplementation((id: string) =>
+      id === "a"
+        ? new Promise<void>((_, reject) => {
+            failA = reject;
+          })
+        : Promise.reject(new Error("Filesystem busy"))
+    );
     const a = wt("a");
     const b = wt("b");
     const selectOnly = vi.fn();
-    const clearSelection = vi.fn();
-    let map = new Map([a, b].map((w) => [w.id, w] as const));
     const hook = renderHook(
       ({ worktreeMap }) =>
         useWorktreeBulkRemove({
           selectedIds: new Set(["a", "b"]),
           worktreeMap,
-          clearSelection,
+          clearSelection: vi.fn(),
           selectOnly,
         }),
-      { initialProps: { worktreeMap: map } }
+      { initialProps: { worktreeMap: new Map([a, b].map((w) => [w.id, w] as const)) } }
     );
     await openAndSettle(hook);
-    // `a` disappears from the overview while the run is in flight.
-    map = new Map([[b.id, b]]);
-    hook.rerender({ worktreeMap: map });
+
+    let confirmed!: Promise<void>;
+    act(() => {
+      confirmed = hook.result.current.handleConfirm();
+    });
+    await flush();
+    // `a` leaves the overview while its delete is still running, then reports failure.
+    hook.rerender({ worktreeMap: new Map([[b.id, b]]) });
     await act(async () => {
-      await hook.result.current.handleConfirm();
+      failA(new Error("Reported failure"));
+      await confirmed;
     });
 
     expect(selectOnly).toHaveBeenCalledWith(["b"]);
   });
 
   it("clears the selection when every failed worktree is already gone", async () => {
-    failWith({ a: "Reported failure" });
+    let failA: (err: Error) => void = () => {};
+    worktreeClientMock.delete.mockImplementation(
+      () =>
+        new Promise<void>((_, reject) => {
+          failA = reject;
+        })
+    );
     const a = wt("a");
     const selectOnly = vi.fn();
     const clearSelection = vi.fn();
-    let map = new Map([[a.id, a]]);
     const hook = renderHook(
       ({ worktreeMap }) =>
         useWorktreeBulkRemove({
@@ -1143,13 +1159,19 @@ describe("useWorktreeBulkRemove — failure reporting (#15575)", () => {
           clearSelection,
           selectOnly,
         }),
-      { initialProps: { worktreeMap: map } }
+      { initialProps: { worktreeMap: new Map([[a.id, a]]) } }
     );
     await openAndSettle(hook);
-    map = new Map();
-    hook.rerender({ worktreeMap: map });
+
+    let confirmed!: Promise<void>;
+    act(() => {
+      confirmed = hook.result.current.handleConfirm();
+    });
+    await flush();
+    hook.rerender({ worktreeMap: new Map() });
     await act(async () => {
-      await hook.result.current.handleConfirm();
+      failA(new Error("Reported failure"));
+      await confirmed;
     });
 
     expect(selectOnly).not.toHaveBeenCalled();
