@@ -1203,8 +1203,9 @@ describe("assignment undo", () => {
    * A stateful issue #9. `multiAssignee: false` mirrors GitLab Free's
    * `filter_assignees_using_checks`, which keeps only the first id; `[0]`
    * clears the list on every tier. `landNext` overrides what the next write
-   * lands, `idless` appends rows GitLab returned without an id, and
-   * `failNextPut` answers the next write with a 500.
+   * lands, `idless` appends rows GitLab returned without an id, `renamed`
+   * serves a user under a new login, and `failNextPut` answers the next write
+   * with a 500.
    */
   function assigneeServer(options: { multiAssignee: boolean; initial: number[] }) {
     const server = {
@@ -1212,13 +1213,17 @@ describe("assignment undo", () => {
       puts: [] as number[][],
       landNext: null as number[] | null,
       idless: [] as string[],
+      renamed: {} as Record<number, string>,
       failNextPut: false,
     };
     const issue = () => ({
       iid: 9,
       state: "opened",
       assignees: [
-        ...server.ids.map((id) => USERS.find((u) => u.id === id)),
+        ...server.ids.map((id) => {
+          const user = USERS.find((u) => u.id === id);
+          return user && { ...user, username: server.renamed[id] ?? user.username };
+        }),
         ...server.idless.map((username) => ({ username })),
       ],
     });
@@ -1378,6 +1383,15 @@ describe("assignment undo", () => {
     await gitlabForgeProvider.unassignIssue(REPO, 9, "bob");
 
     await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(server.ids).toEqual([ADA.id]);
+  });
+
+  it("restores for the same user after a rename of their login", async () => {
+    const server = assigneeServer({ multiAssignee: false, initial: [ADA.id] });
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    server.renamed = { [FIXER.id]: "fixer-renamed" };
+
+    await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer-renamed");
     expect(server.ids).toEqual([ADA.id]);
   });
 

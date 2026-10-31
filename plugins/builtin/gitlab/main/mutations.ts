@@ -204,7 +204,6 @@ export async function unassignIssueImpl(
   const kept = assignees.filter((a) => (a.username ?? "").toLowerCase() !== target);
   const key = assignmentKey(repo, issueNumber);
   const displaced = displacedAssignments.get(key);
-  const undoing = displaced !== undefined && displaced.username === target;
   // Not assigned in the first place — nothing to write, and the current list
   // is already the resulting list. Measured on the username filter ALONE: an
   // assignee GitLab returned without a numeric id drops out of the id list
@@ -212,13 +211,14 @@ export async function unassignIssueImpl(
   // and write back an `assignee_ids` that silently unassigns them.
   if (kept.length === assignees.length) {
     // They lost the issue since: whoever they displaced is no longer ours to restore.
-    if (undoing) displacedAssignments.delete(key);
+    if (displaced?.username === target) displacedAssignments.delete(key);
     return gitlabAssigneesToForgeUsers(issue, repo.host);
   }
   const remaining = kept.map((a) => a.id).filter((id): id is number => typeof id === "number");
   let assigneeIds = remaining;
+  // Matched on the id, not the login: a rename since the assignment is still the same person.
   if (
-    undoing &&
+    displaced !== undefined &&
     displaced.tokenVersion === getTokenVersion() &&
     assignees.some((a) => a.id === displaced.userId && !kept.includes(a))
   ) {
