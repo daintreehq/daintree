@@ -3061,7 +3061,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     dangerRationale:
       "Deletes the working tree from disk. Recovery requires re-creating the worktree, so the session's own ownership record is a precondition rather than the approval.",
     description:
-      "Delete a worktree this session created, removing its directory after the user confirms. Anything else is refused. It never forces past uncommitted or untracked changes, deletes the branch, or closes terminals it does not own; commit or close those first.",
+      "Delete a worktree this session created, and its directory, after the user confirms. Refuses any other, or while a terminal process runs in it, closed panes included. Never forces past uncommitted or untracked changes, deletes the branch, or closes terminals.",
     enabled: true,
     id: "worktree.deleteOwned",
     inputSchema: {

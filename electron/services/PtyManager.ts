@@ -1070,6 +1070,11 @@ export class PtyManager extends EventEmitter {
     return this.registry.isInTrash(id);
   }
 
+  /** When a trashed terminal's grace ends; undefined for one not in the trash. */
+  getTrashExpiresAt(id: string): number | undefined {
+    return this.registry.getTrashExpiresAt(id);
+  }
+
   /**
    * Get terminal info.
    */

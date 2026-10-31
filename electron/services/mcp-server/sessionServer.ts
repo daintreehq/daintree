@@ -78,6 +78,10 @@ import { viewlessStatusArgsAreAnswerable } from "./terminalStatus.js";
 import { viewlessActionDanger } from "../viewless/viewlessActionCatalog.js";
 import { parseLastMessageReadArgs } from "./lastMessageArgs.js";
 import { withClosedPanelProcesses } from "./closedPanelProcesses.js";
+import {
+  WORKTREE_DELETE_OWNED_TOOL,
+  refuseWorktreeDeleteWhileRunning,
+} from "./worktreeProcessGuard.js";
 import { LAST_MESSAGE_TEXT_MAX_BYTES } from "../../../shared/types/agentLastMessage.js";
 import type { OwnedResourceRecord } from "./resourceOwnership.js";
 import type { TerminalAdoptionRecord } from "./terminalAdoption.js";
@@ -1508,6 +1512,42 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               : undefined;
         }
 
+        // An owned worktree delete waits for every process in the worktree to
+        // exit (#15729): `worktree.delete` closes nothing without
+        // `closeTerminals`, which this tool never sends, and git removes the
+        // directory from under whatever still runs there — a pane this
+        // session just closed that is still in its trash grace, or a terminal
+        // it never owned. Asked of the pty-host after ownership is settled, so
+        // an unowned id is still refused uniformly and never learns what runs
+        // in it, and before any question reaches the user. Asked again after
+        // the above-tier ask below, which can wait on the user for minutes.
+        // The delete's own D2 dialog opens inside the delegated dispatch, so a
+        // terminal started while that dialog is up is not seen here.
+        // Only an owned delete awaits anything here: every other call keeps the
+        // tick ordering it had, which a reply wait set up above depends on.
+        const guardedWorktreeId =
+          actionId === WORKTREE_DELETE_OWNED_TOOL ? ownedResourceId : undefined;
+        const refuseWorktreeInUse = async (
+          worktreeId: string
+        ): Promise<CallToolResult | undefined> => {
+          const refusal = await refuseWorktreeDeleteWhileRunning(
+            worktreeId,
+            deps.readTerminalProcesses,
+            (terminalId, launchGeneration) =>
+              (launchGeneration !== undefined &&
+                sessionStore.workerCreations.get(terminalId, launchGeneration)?.owner ===
+                  ownershipOwner) ||
+              ownedRecordFor("terminal", terminalId) !== undefined
+          );
+          if (refusal === undefined) return undefined;
+          outcome = { kind: "result", value: { ok: false, error: refusal } };
+          return buildToolError(refusal);
+        };
+        if (guardedWorktreeId !== undefined) {
+          const worktreeInUse = await refuseWorktreeInUse(guardedWorktreeId);
+          if (worktreeInUse !== undefined) return worktreeInUse;
+        }
+
         // The ask for a pane call above its tier (#12692). Placed after the
         // ownership gate, so a call that would be refused anyway never puts a
         // question to the user, and before every executor — main-only ones
@@ -1516,6 +1556,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         if (approvalRequired) {
           const refusal = await askForApproval();
           if (refusal !== undefined) return refusal;
+          if (guardedWorktreeId !== undefined) {
+            const stillInUse = await refuseWorktreeInUse(guardedWorktreeId);
+            if (stillInUse !== undefined) return stillInUse;
+          }
         }
 
         // The assistant closing a panel it did not open, or one whose agent is

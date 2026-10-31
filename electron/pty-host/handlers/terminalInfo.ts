@@ -17,7 +17,8 @@ export function narrowDetectedAgentId(value: unknown): BuiltInAgentId | undefine
  * `isTrashed` reads from the registry (`ptyManager.isInTrash(t.id)`) rather
  * than the raw `TerminalInfo.isTrashed` field — that field is not maintained
  * on the in-memory record, so reading it directly always returned undefined
- * (lesson #4753).
+ * (lesson #4753). `trashExpiresAt` likewise: only `get-terminal` hands in a
+ * record augmented with it, so the bulk families read it off the registry.
  *
  * `ptyCols`/`ptyRows` report the grid the PTY is ACTUALLY on, straight off the
  * node-pty handle. A reconnecting renderer has no other way to learn it — its
@@ -43,6 +44,7 @@ export function mapTerminalInfo(
   submissionToken?: string
 ) {
   const hasPty = !t.wasKilled && !t.isExited;
+  const isTrashed = ctx.ptyManager.isInTrash(t.id);
   const ptyCols = hasPty ? readPtyDimension(() => t.ptyProcess.cols, null) : null;
   const ptyRows = hasPty ? readPtyDimension(() => t.ptyProcess.rows, null) : null;
   return {
@@ -75,8 +77,8 @@ export function mapTerminalInfo(
       ? undefined
       : (ctx.ptyManager.analysisObservedSince(t.id) ?? undefined),
     spawnedAt: t.spawnedAt,
-    isTrashed: ctx.ptyManager.isInTrash(t.id),
-    trashExpiresAt: t.trashExpiresAt,
+    isTrashed,
+    trashExpiresAt: t.trashExpiresAt ?? (isTrashed ? ctx.ptyManager.getTrashExpiresAt(t.id) : undefined),
     activityTier: ctx.ptyManager.getActivityTier(t.id),
     hasPty,
     // The raw flag is only written by the exit handler, so a terminal that is

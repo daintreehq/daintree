@@ -27,6 +27,7 @@ import {
   type SessionServerDeps,
 } from "../../../services/mcp-server/sessionServer.js";
 import { SessionStore } from "../../../services/mcp-server/sessionStore.js";
+import type { TerminalProcessRecord } from "../../../services/mcp-server/worktreeProcessGuard.js";
 import {
   RELAY_CALL_ID_META_KEY,
   type DispatchEnvelope,
@@ -152,6 +153,8 @@ class Destination {
   readonly terminals = new Set<string>(["user-shell"]);
   readonly worktrees = new Set<string>();
   readonly dirty = new Set<string>();
+  /** What this host's pty host reports running; nothing unless a test says so. */
+  processes: TerminalProcessRecord[] = [];
   readonly submissions = new Map<string, string[]>();
   accepts = true;
   /** Set to hold the next change until released, as a slow host would. */
@@ -189,6 +192,7 @@ class Destination {
       handleTerminalGetStatusViewless: vi.fn(),
       handleTerminalReadLastMessageOwned: vi.fn(),
       isTerminalIdInUse: (id: string) => this.terminals.has(id),
+      readTerminalProcesses: async () => this.processes,
       appendAuditRecord: vi.fn(),
       getCachedManifest: vi.fn(() => MANIFEST),
       resolveOwnPane: () => null,
@@ -904,6 +908,31 @@ describe("cleanup that keeps what it may not remove (#14169)", () => {
     // A refused delete keeps the caller's hold, so it can retry once the work is committed.
     expect(
       destination.store.resourceOwnership.owns(principal("help-a"), "worktree", "/wt/dirty")
+    ).toBe(true);
+  });
+
+  it("keeps a worktree the person's shell still runs in, asking no one (#15729)", async () => {
+    await launchWorker();
+    destination.worktrees.add("/wt/busy");
+    destination.store.resourceOwnership.record(
+      principal("help-a"),
+      [{ kind: "worktree", id: "/wt/busy" }],
+      PROJECT
+    );
+    destination.processes = [{ id: "user-shell", cwd: "/wt/busy", isExited: false }];
+
+    const busy = await settled(call("worktree.deleteOwned", { worktreeId: "/wt/busy" }));
+
+    expect(busy.result).toMatchObject({ isError: true });
+    const text = JSON.stringify(busy.result);
+    expect(text).toContain("DISABLED");
+    expect(text).toContain("user-shell");
+    expect(asked).toEqual([]);
+    expect(destination.count("worktree.delete")).toBe(0);
+    expect(destination.terminals.has("user-shell")).toBe(true);
+    expect(destination.worktrees.has("/wt/busy")).toBe(true);
+    expect(
+      destination.store.resourceOwnership.owns(principal("help-a"), "worktree", "/wt/busy")
     ).toBe(true);
   });
 });
