@@ -60,9 +60,15 @@ describe("reconcileCollapsedGroups", () => {
   });
 
   it("skips the live scan when there is nothing to prune", () => {
+    const rows = [row(1)];
+    Object.defineProperty(rows, Symbol.iterator, {
+      value: () => {
+        throw new Error("rows were scanned");
+      },
+    });
     const prev = new Set<number>();
-    expect(reconcileCollapsedGroups(prev, [row(1)], null)).toBe(prev);
-    expect(reconcileCollapsedGroups(prev, [row(1)], [1])).toEqual(new Set([1]));
+    expect(reconcileCollapsedGroups(prev, rows, null)).toBe(prev);
+    expect(reconcileCollapsedGroups(prev, rows, [1])).toEqual(new Set([1]));
   });
 });
 

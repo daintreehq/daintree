@@ -11,6 +11,17 @@ import {
 } from "@/store/consoleCaptureStore";
 import type { SerializedConsoleRow } from "@shared/types/ipc/webviewConsole";
 import { MAX_CONSOLE_ROWS } from "@shared/config/devPreviewConsole";
+import { pruneToLiveRows, reconcileCollapsedGroups } from "../consoleRowState";
+
+// Call-through spies: what these return is the state the panel keeps.
+vi.mock("../consoleRowState", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../consoleRowState")>();
+  return {
+    ...actual,
+    reconcileCollapsedGroups: vi.fn(actual.reconcileCollapsedGroups),
+    pruneToLiveRows: vi.fn(actual.pruneToLiveRows),
+  };
+});
 
 // Renders every row unless a test narrows the viewport, which unmounts the
 // rows outside it the way scrolling a virtualized list does.
@@ -503,6 +514,11 @@ describe("row state across the buffer cap", () => {
 
   it("keeps fold and stack state for live rows while collapsed groups stream past the cap", () => {
     // Older rows ahead of the user's, so eviction reaches them first.
+    const evictedStackRow = enqueueConsoleRow({
+      level: "error",
+      summaryText: "evicted stack row",
+      stackTrace: { callFrames: [frame] },
+    });
     for (let i = 0; i < 100; i++) enqueueLoggedEvent();
     const expandedGroup = enqueueConsoleRow({
       cdpType: "startGroupCollapsed",
@@ -519,12 +535,14 @@ describe("row state across the buffer cap", () => {
     flushConsoleCaptureBuffer();
     const userRows = new Set([expandedGroup, expandedChild, foldedGroup, foldedChild, stackRow]);
     const showUserRows = (item: { id: number }) => userRows.has(item.id);
-    viewport.shows = showUserRows;
+    viewport.shows = (item) => showUserRows(item) || item.id === evictedStackRow;
     renderPanel();
 
     fireEvent.click(screen.getByRole("button", { name: "expanded by user" }));
     fireEvent.click(screen.getByRole("button", { name: "folded by user" }));
-    fireEvent.click(screen.getByRole("button", { name: /stack trace/i }));
+    const stackToggles = screen.getAllByRole("button", { name: /stack trace/i });
+    expect(stackToggles).toHaveLength(2);
+    for (const toggle of stackToggles) fireEvent.click(toggle);
 
     const expectUserState = () => {
       expect(
@@ -550,8 +568,24 @@ describe("row state across the buffer cap", () => {
     }
     const live = useConsoleCaptureStore.getState().getMessages(mockPaneId);
     expect(live).toHaveLength(MAX_CONSOLE_ROWS);
-    expect(live[0]!.id).toBeGreaterThan(1);
+    expect(live[0]!.id).toBeGreaterThan(evictedStackRow);
     expect(live.some((msg) => msg.id === expandedGroup)).toBe(true);
+
+    // The state the panel now holds covers live rows only, and keeps the
+    // user's choices for the rows that survived.
+    const liveIds = new Set(live.map((msg) => msg.id));
+    const collapsedState = vi.mocked(reconcileCollapsedGroups).mock.results.at(-1)!
+      .value as Set<number>;
+    expect(collapsedState.size).toBeLessThanOrEqual(live.length);
+    for (const id of collapsedState) expect(liveIds.has(id)).toBe(true);
+    expect(collapsedState.has(foldedGroup)).toBe(true);
+    expect(collapsedState.has(expandedGroup)).toBe(false);
+    expect(collapsedState.has(newestGroup)).toBe(true);
+    const stackState = vi.mocked(pruneToLiveRows).mock.results.at(-1)!.value as Map<
+      number,
+      unknown
+    >;
+    expect([...stackState.keys()]).toEqual([stackRow]);
 
     // Groups arriving after eviction began still open collapsed.
     scrollViewport((item) => item.id >= newestGroup);
