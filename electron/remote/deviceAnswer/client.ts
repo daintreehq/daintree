@@ -1,6 +1,8 @@
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import type {
   DeviceWaitingHostStatus,
+  WaitingRunRef,
+  WaitingRunSummary,
   WaitingRunView,
 } from "../../services/deviceAnswer/deviceAnswerRuns.js";
 import { answerRefused } from "../../services/terminalAnswer.js";
@@ -32,6 +34,9 @@ export interface HostWaitingRuns {
   host: string;
   status: DeviceWaitingHostStatus;
   runs: WaitingRunView[];
+  omitted: WaitingRunSummary[];
+  /** How many runs wait there, or null when the host doesn't say (or wasn't read). */
+  waiting: number | null;
 }
 
 function errorCode(error: unknown): unknown {
@@ -54,33 +59,47 @@ export class DeviceAnswerHostsClient {
     return entry ? entry.name || hostId : null;
   }
 
-  /** Every host's waiting runs, read together: a slow or older host holds up none of the rest. */
-  listWaiting(): Promise<HostWaitingRuns[]> {
+  /**
+   * Every host's waiting runs, read together: a slow or older host holds up
+   * none of the rest. `read` names one host's run to read ahead of its others;
+   * it goes to that host alone.
+   */
+  listWaiting(
+    options: { read?: (WaitingRunRef & { hostId: HostId }) | null } = {}
+  ): Promise<HostWaitingRuns[]> {
+    const { read } = options;
     return Promise.all(
       this.deps.hosts().map(async ({ hostId, name }): Promise<HostWaitingRuns> => {
         const host = name || hostId;
+        const unread = (status: DeviceWaitingHostStatus): HostWaitingRuns => ({
+          hostId,
+          host,
+          status,
+          runs: [],
+          omitted: [],
+          waiting: null,
+        });
         const session = this.deps.sessionFor(hostId);
-        if (!session?.isOpen) return { hostId, host, status: "not-connected", runs: [] };
+        if (!session?.isOpen) return unread("not-connected");
         try {
           // A device watching a host's agents is using it: the idle release starts counting again.
           this.deps.touch(hostId);
           const raw = await session.call(
             DeviceAnswerLinkMethod.LIST,
-            {},
+            read?.hostId === hostId
+              ? { read: { runId: read.runId, spawnedAt: read.spawnedAt } }
+              : {},
             { timeoutMs: HOST_LIST_TIMEOUT_MS }
           );
           const parsed = DeviceAnswerListResultSchema.safeParse(raw);
-          if (parsed.success) return { hostId, host, status: "ok", runs: parsed.data.runs };
+          if (parsed.success) {
+            const { runs, omitted = [], waiting } = parsed.data;
+            return { hostId, host, status: "ok", runs, omitted, waiting: waiting ?? null };
+          }
           const checksQuestions = (raw as { questionIds?: unknown } | null)?.questionIds === true;
-          return {
-            hostId,
-            host,
-            status: checksQuestions ? "unreachable" : "needs-update",
-            runs: [],
-          };
+          return unread(checksQuestions ? "unreachable" : "needs-update");
         } catch (error) {
-          const status = errorCode(error) === "UNSUPPORTED" ? "needs-update" : "unreachable";
-          return { hostId, host, status, runs: [] };
+          return unread(errorCode(error) === "UNSUPPORTED" ? "needs-update" : "unreachable");
         }
       })
     );

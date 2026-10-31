@@ -47,6 +47,15 @@ const SCRIPT = String.raw`
   // what changed instead of rebuilding, and an answer's outcome outlives the poll.
   const cards = new Map();
   let cardIds = 0;
+  // Runs a machine's cap left unread, named so one can be picked to have its screen read.
+  const others = new Map();
+  // The one run picked from those, read ahead of its machine's others until it stops waiting.
+  let selected = null;
+  // Runs known to wait past the cards listed, and whether a machine can't say how many.
+  let beyond = 0;
+  let uncounted = false;
+  // What the coverage notes last said, so a change is announced once.
+  let limitsSaid = "";
   try { token = localStorage.getItem(KEY); } catch {}
 
   const el = (tag, className, text) => {
@@ -106,13 +115,24 @@ const SCRIPT = String.raw`
 
   const keyOf = (run) => [run.hostId || "", run.runId, run.spawnedAt].join("\u0000");
 
+  // Everything said within one beat goes out as one message, so none replaces another unheard.
+  let saying = null;
+  let sayTimer = null;
   const announce = (text) => {
-    const live = $("announce");
-    live.textContent = "";
-    setTimeout(() => { live.textContent = text; }, 50);
+    if (saying) {
+      saying.push(text);
+      return;
+    }
+    saying = [text];
+    $("announce").textContent = "";
+    sayTimer = setTimeout(() => {
+      $("announce").textContent = saying.join(" ");
+      saying = null;
+    }, 50);
   };
 
   const save = (value) => {
+    const was = token;
     token = value;
     if (!value) {
       // Nothing read under the old pairing is offered under the next one.
@@ -124,8 +144,22 @@ const SCRIPT = String.raw`
       hostRead.clear();
       hostDownSince.clear();
       hostsSaid = null;
+      // Nothing about the agents of a pairing that ended is still to be said;
+      // a later refusal of the same ending keeps what it said of the end.
+      if (was) {
+        clearTimeout(sayTimer);
+        saying = null;
+        $("announce").textContent = "";
+      }
+      limitsSaid = "";
+      beyond = 0;
+      uncounted = false;
+      selected = null;
       cards.clear();
+      others.clear();
       $("runs").replaceChildren();
+      $("others").replaceChildren();
+      $("more").hidden = true;
       $("hosts").replaceChildren();
       $("empty").hidden = true;
       $("status").textContent = "";
@@ -220,8 +254,9 @@ const SCRIPT = String.raw`
 
   const updateHeader = () => {
     const where = computer ? "Daintree on " + computer : "Daintree";
-    const waiting = [...cards.values()].filter((entry) => !entry.card.classList.contains("gone")).length;
-    setText($("count"), waiting > 0 ? String(waiting) : "");
+    // Runs past the cap count too: a capped list is never presented as the whole.
+    const waiting = [...cards.values()].filter((entry) => !entry.card.classList.contains("gone")).length + beyond;
+    setText($("count"), waiting > 0 ? waiting + (uncounted ? "+" : "") : "");
     // A failed read takes the line the read time sits on, so the header stays one line tall.
     const failing = $("status").textContent !== "";
     show($("status"), failing);
@@ -295,7 +330,10 @@ const SCRIPT = String.raw`
       unheard: ["No reply after " + picked + " at " + clock(state.at), UNHEARD],
     }[state.kind];
     if ((state.kind === "unheard" || state.kind === "refused") && state.collapsed) {
-      lines.push("It isn't listed as waiting any more.");
+      // A run pushed past the cap is still waiting; only its screen went.
+      lines.push(state.unread
+        ? "It's still waiting, listed under Others waiting without its screen."
+        : "It isn't listed as waiting any more.");
     }
     const said = lines.join("\n");
     if (box.dataset.said !== said) {
@@ -348,7 +386,8 @@ const SCRIPT = String.raw`
     pre.scrollLeft = left;
   };
 
-  const fill = (entry, run) => {
+  // What a card and a run listed without its screen both say of it.
+  const fillHead = (entry, run) => {
     entry.run = run;
     const agent = agentName(run);
     const where = [run.host || "", agent].filter(Boolean).join(" · ");
@@ -365,6 +404,10 @@ const SCRIPT = String.raw`
     setText(entry.title, run.title || "");
     show(entry.title, !!run.title);
     setText(entry.meta, headline(run) + (run.since ? " · " + waited(run.since) : ""));
+  };
+
+  const fill = (entry, run) => {
+    fillHead(entry, run);
     entry.screen.setAttribute("aria-label", "Screen of " + (run.project || "this agent"));
     fillScreen(entry, run);
     fillChoices(entry, run);
@@ -377,6 +420,10 @@ const SCRIPT = String.raw`
       entry.state = state.kind === "answered" ? { ...state, kind: "earlier", collapsed: false } : null;
     } else if (state && state.kind === "answered") {
       state.collapsed = true;
+    } else if (state && (state.kind === "refused" || state.kind === "unheard")) {
+      // Listed again, maybe read back from Others waiting: its screen shows once more.
+      state.collapsed = false;
+      state.unread = false;
     }
     showResult(entry);
     refreshCard(entry);
@@ -397,7 +444,23 @@ const SCRIPT = String.raw`
   // What the host notes last said, so a change in coverage is announced once.
   let hostsSaid = null;
 
-  const renderHosts = (hosts, unlisted) => {
+  // One note per machine that listed less than all it has waiting, or can't say.
+  const limitsOf = (coverage, omitted) => coverage.flatMap((machine) => {
+    if (machine.waiting === null) {
+      return [["", machine.host, " runs an older Daintree that doesn't say whether more agents are waiting there than are shown. Update it there to see them all."]];
+    }
+    if (machine.waiting <= machine.listed) return [];
+    const named = omitted.filter((run) => run.hostId === machine.hostId).length;
+    const unnamed = machine.waiting - machine.listed - named;
+    return [[
+      "Showing " + machine.listed + " of " + machine.waiting + " waiting agents on ",
+      machine.host,
+      "." + (named ? " Pick one under Others waiting to read its screen." : "")
+        + (unnamed === 1 ? " 1 more isn't listed." : unnamed > 1 ? " " + unnamed + " more aren't listed." : ""),
+    ]];
+  });
+
+  const renderHosts = (hosts, unlisted, limits) => {
     // Each note is [before, machine, after], so the machine can be picked out
     // without changing the sentence.
     const notes = [];
@@ -431,32 +494,128 @@ const SCRIPT = String.raw`
         ? ["Not connected to ", host.host, at + ", so its agents aren't shown."]
         : ["Couldn't read the waiting agents on ", host.host, at + "."]);
     }
+    const all = [...limits, ...notes];
     const box = $("hosts");
-    if (box.textContent !== notes.map((note) => note.join("")).join("")) {
-      box.replaceChildren(...notes.map(([before, name, after]) => {
+    if (box.textContent !== all.map((note) => note.join("")).join("")) {
+      box.replaceChildren(...all.map(([before, name, after]) => {
         const item = el("li");
         item.append(before, ...(name ? [el("strong", "", name)] : []), after);
         return item;
       }));
     }
-    box.hidden = notes.length === 0;
+    box.hidden = all.length === 0;
     const said = notes.map((note) => note.join("")).join(" ");
     if (hostsSaid !== null && said !== hostsSaid && said) announce(said);
     hostsSaid = said;
   };
 
-  const render = (data) => {
+  const makeOther = (key) => {
+    const item = el("li", "other");
+    const id = "other-" + (cardIds += 1);
+    const head = el("div", "head");
+    const project = el("strong", "project");
+    project.id = id;
+    const tags = el("span", "tags");
+    head.append(project, tags);
+    const title = el("div", "title");
+    const where = el("div", "where");
+    const meta = el("div", "meta");
+    const button = el("button", "read");
+    button.type = "button";
+    meta.id = id + "-meta";
+    button.setAttribute("aria-describedby", meta.id);
+    item.append(head, title, where, meta, button);
+    const entry = { key, item, project, tags, title, where, meta, button, run: null };
+    button.addEventListener("click", () => pick(entry));
+    return entry;
+  };
+
+  const fillOther = (entry, run) => {
+    fillHead(entry, run);
+    // Held, not disabled, so focus stays on it until its card takes it.
+    const picked = !!selected && selected.key === entry.key;
+    entry.button.setAttribute("aria-disabled", String(picked));
+    const label = picked ? "Reading its screen…" : "Show its screen";
+    setText(entry.button, label);
+    // Named by what it would show, so runs of one project still sound apart; the visible words come first.
+    const which = [run.project || "Unknown project", run.title || "", entry.where.textContent].filter(Boolean).join(", ");
+    if (entry.button.getAttribute("aria-label") !== label + ": " + which) entry.button.setAttribute("aria-label", label + ": " + which);
+  };
+
+  // Its screen is read ahead of its machine's others from the next read on.
+  const pick = (entry) => {
+    if (selected && selected.key === entry.key) return;
+    const run = entry.run;
+    selected = { key: entry.key, hostId: run.hostId, runId: run.runId, spawnedAt: run.spawnedAt };
+    for (const other of others.values()) fillOther(other, other.run);
+    // A read already under way didn't ask for it, so it's set aside for one that does.
+    epoch += 1;
+    poll();
+  };
+
+  const renderOthers = (omitted) => {
+    const list = $("others");
+    // Moving a row takes focus out of it; it's put back once the rows are in order.
+    const active = list.contains(document.activeElement) ? document.activeElement : null;
+    const seen = new Set();
+    let prev = null;
+    for (const run of omitted) {
+      const key = keyOf(run);
+      seen.add(key);
+      let entry = others.get(key);
+      if (!entry) {
+        entry = makeOther(key);
+        others.set(key, entry);
+      }
+      fillOther(entry, run);
+      const next = prev ? prev.nextSibling : list.firstChild;
+      if (next !== entry.item) list.insertBefore(entry.item, next);
+      prev = entry.item;
+    }
+    for (const entry of [...others.values()]) {
+      if (seen.has(entry.key)) continue;
+      if (entry.item.contains(document.activeElement)) {
+        // Read now, focus goes to its card; otherwise to the next run listed here.
+        const card = cards.get(entry.key);
+        const sibling = entry.item.nextElementSibling || entry.item.previousElementSibling;
+        const target = card && !card.card.classList.contains("gone") ? card.project
+          : sibling ? sibling.querySelector("button") : $("title");
+        target.focus();
+      }
+      entry.item.remove();
+      others.delete(entry.key);
+    }
+    if (active && list.contains(active) && document.activeElement !== active) active.focus();
+    show($("more"), omitted.length > 0);
+  };
+
+  const render = (data, asked) => {
     const runs = Array.isArray(data.runs) ? data.runs : [];
     const hosts = Array.isArray(data.hosts)
       ? data.hosts.filter((host) => host && typeof host.host === "string")
       : [];
+    const omitted = Array.isArray(data.omitted)
+      ? data.omitted.filter((run) => run && typeof run.runId === "string")
+      : [];
+    const coverage = Array.isArray(data.coverage)
+      ? data.coverage.filter((machine) => machine && typeof machine.host === "string" && typeof machine.listed === "number")
+      : [];
     if (typeof data.computer === "string" && data.computer) computer = data.computer;
-    if (freshness === "checking" && gateOpen && readAt) announce("Up to date.");
+    const caughtUp = freshness === "checking" && gateOpen && readAt;
     readAt = Date.now();
     freshness = "fresh";
     clearTimeout(gate);
     gateOpen = false;
-    renderHosts(hosts, data.hostsUnlisted === true);
+    beyond = coverage.reduce((sum, machine) =>
+      sum + (typeof machine.waiting === "number" ? Math.max(0, machine.waiting - machine.listed) : 0), 0);
+    uncounted = coverage.some((machine) => machine.waiting === null);
+    const limits = limitsOf(coverage, omitted);
+    const limitsText = limits.map((note) => note.join("")).join(" ");
+    // "Up to date" never stands alone over a list that was cut.
+    if (caughtUp) announce("Up to date." + (limitsText ? " " + limitsText : ""));
+    else if (limitsText && limitsText !== limitsSaid) announce(limitsText);
+    limitsSaid = limitsText;
+    renderHosts(hosts, data.hostsUnlisted === true, limits);
     const list = $("runs");
     const seen = new Set(runs.map(keyOf));
     for (const entry of cards.values()) entry.card.classList.toggle("gone", !seen.has(entry.key));
@@ -476,6 +635,7 @@ const SCRIPT = String.raw`
       if (next !== entry.card) list.insertBefore(entry.card, next);
       prev = entry.card;
     }
+    const unread = new Set(omitted.map(keyOf));
     for (const entry of [...cards.values()]) {
       if (seen.has(entry.key)) continue;
       const state = entry.state;
@@ -485,18 +645,30 @@ const SCRIPT = String.raw`
         continue;
       }
       if (state.kind !== "pressing") state.collapsed = true;
+      state.unread = unread.has(entry.key);
       showResult(entry);
       refreshCard(entry);
     }
+    // A pick holds while its run is read; once a read of its machine lists it
+    // no longer, or its machine is gone from the list, it's let go.
+    if (selected && asked && asked.key === selected.key && !seen.has(selected.key)) {
+      const machine = selected.hostId;
+      const read = coverage.some((entry) => entry.hostId === machine);
+      // A host list that couldn't be read says nothing of whether the host left.
+      const left = data.hostsUnlisted !== true && !hosts.some((host) => host.hostId === machine);
+      if (read || left) selected = null;
+    }
+    renderOthers(omitted);
     // A new or grown screen opens at its bottom, where the prompt is; this
     // needs the card laid out, so it runs once every card is in place.
     for (const entry of cards.values()) {
       if (entry.pin) entry.screen.scrollTop = entry.screen.scrollHeight;
       entry.pin = false;
     }
-    // Only machines that were read are said to have nothing waiting.
-    $("empty").hidden = runs.length > 0;
-    const read = hosts.filter((host) => host.status === "ok").map((host) => host.host);
+    // Only machines that were read, and say how much they have, are said to have nothing waiting.
+    $("empty").hidden = runs.length > 0 || omitted.length > 0 || beyond > 0;
+    const unsure = new Set(coverage.filter((machine) => machine.waiting === null).map((machine) => machine.hostId));
+    const read = hosts.filter((host) => host.status === "ok" && !unsure.has(host.hostId)).map((host) => host.host);
     setText($("empty-covered"), "No agent is waiting on " + listOf([here(), ...read]) + ".");
     refreshEmpty();
     updateHeader();
@@ -566,8 +738,13 @@ const SCRIPT = String.raw`
     again = false;
     const seq = epoch;
     const session = token;
+    // The run picked from those left unread goes with every read until it's let go.
+    const asked = selected;
+    const path = "/api/waiting?hosts=1" + (asked
+      ? "&read=" + encodeURIComponent(JSON.stringify({ hostId: asked.hostId, runId: asked.runId, spawnedAt: asked.spawnedAt }))
+      : "");
     try {
-      const r = await call("GET", "/api/waiting?hosts=1");
+      const r = await call("GET", path);
       if (token !== session) {
         // Unpaired while this was in flight; it belongs to the old pairing.
       } else if (r.ok && r.data) {
@@ -576,7 +753,7 @@ const SCRIPT = String.raw`
           if (downSince || $("status").textContent) announce("Back in touch with Daintree.");
           downSince = 0;
           $("status").textContent = "";
-          render(r.data);
+          render(r.data, asked);
         } else {
           again = true;
         }
@@ -790,6 +967,15 @@ input:read-only { color: var(--muted); }
 .count { margin-left: 4px; padding: 0 8px; border-radius: 999px; background: var(--press); color: var(--fg); font-size: 15px; font-weight: 600; vertical-align: 2px; }
 .count:empty { display: none; }
 #runs { padding-top: 16px; }
+#more { margin: 0 0 16px; }
+#more h2 { margin: 0 0 8px; font-size: 15px; line-height: 1.4; color: var(--muted); }
+#others { list-style: none; margin: 0; padding: 0; background: var(--card); border: 1px solid var(--line); border-radius: 14px; }
+.other { padding: 12px 14px 14px; }
+.other + .other { border-top: 1px solid var(--line); }
+.other .project { font-size: 16px; }
+.read { margin-top: 10px; min-height: 44px; padding: 8px 14px; background: var(--card); border: 1px solid var(--edge); border-radius: 10px; font-size: 15px; font-weight: 600; }
+.read:active:not([aria-disabled="true"]) { background: var(--press); }
+.read[aria-disabled="true"] { cursor: default; border-style: dashed; color: var(--muted); }
 
 .run { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 14px 16px; margin: 0 0 16px; scroll-margin-top: 96px; }
 .head { display: flex; align-items: baseline; gap: 8px; }
@@ -849,7 +1035,7 @@ dialog .error { margin-top: 12px; }
   .dialog-actions { flex-direction: row-reverse; }
 }
 @media (forced-colors: active) {
-  .option, .result, .fresh, #hosts, #status, .notice { border-color: CanvasText; }
+  .option, .result, .fresh, #hosts, #status, .notice, #others, .read { border-color: CanvasText; }
 }
 `;
 
@@ -909,6 +1095,10 @@ export const DEVICE_PAGE_HTML = `<!doctype html>
       <p id="empty-checked"></p>
     </div>
     <div id="runs"></div>
+    <section id="more" aria-labelledby="more-title" hidden>
+      <h2 id="more-title">Others waiting</h2>
+      <ul id="others"></ul>
+    </section>
     <footer class="foot">
       <p id="paired-with"></p>
       <button id="forget" class="quiet" type="button">Unpair this device</button>

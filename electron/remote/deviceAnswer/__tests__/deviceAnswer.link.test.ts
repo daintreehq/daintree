@@ -42,6 +42,16 @@ const RUN: WaitingRunView = {
 };
 const QUESTION = RUN.questionId!;
 
+/** A host read whole: everything waiting there was listed. */
+function readHost(hostId: string, host: string, runs: WaitingRunView[] = [RUN]) {
+  return { hostId, host, status: "ok", runs, omitted: [], waiting: runs.length };
+}
+
+/** A host with nothing read from it, so nothing said of what waits there. */
+function unreadHost(hostId: string, host: string, status: string) {
+  return { hostId, host, status, runs: [], omitted: [], waiting: null };
+}
+
 type AnswerRequest = Parameters<DeviceAnswerHostDeps["answer"]>[0];
 
 let dir: string;
@@ -84,7 +94,7 @@ beforeEach(async () => {
   sessions = await pair();
   answered = [];
   hostDeps = {
-    list: vi.fn(async () => [RUN]),
+    list: vi.fn(async () => ({ runs: [RUN], omitted: [], waiting: 1 })),
     answer: vi.fn(async (request: AnswerRequest) => {
       answered.push(request);
     }),
@@ -118,8 +128,8 @@ describe("answering a connected host's agents from a device paired with the Shel
   it("lists the host's runs as the host read them, under the name this Shell knows it by", async () => {
     const listed = await client.listWaiting();
     expect(listed).toEqual([
-      { hostId: HOST, host: HOST, status: "ok", runs: [RUN] },
-      { hostId: "studio-04", host: "studio-04", status: "not-connected", runs: [] },
+      readHost(HOST, HOST),
+      unreadHost("studio-04", "studio-04", "not-connected"),
     ]);
     expect(hostDeps.list).toHaveBeenCalledTimes(1);
     // A device watching it is using it; a host with no link is neither read nor kept up.
@@ -151,10 +161,10 @@ describe("answering a connected host's agents from a device paired with the Shel
       hold,
     });
     expect(await many.listWaiting()).toEqual([
-      { hostId: HOST, host: "Studio", status: "ok", runs: [RUN] },
-      { hostId: "mini", host: "Mini", status: "not-connected", runs: [] },
-      { hostId: "closed", host: "Closed", status: "not-connected", runs: [] },
-      { hostId: "flaky", host: "flaky", status: "unreachable", runs: [] },
+      readHost(HOST, "Studio"),
+      unreadHost("mini", "Mini", "not-connected"),
+      unreadHost("closed", "Closed", "not-connected"),
+      unreadHost("flaky", "flaky", "unreachable"),
     ]);
     expect(closedCall).not.toHaveBeenCalled();
     expect(touch.mock.calls.map(([hostId]) => hostId).sort()).toEqual([HOST, "flaky"].sort());
@@ -165,12 +175,9 @@ describe("answering a connected host's agents from a device paired with the Shel
     const old = await pair();
     sessionByHost.set("studio-04", old.client);
     const listed = await client.listWaiting();
-    expect(listed.find((host) => host.hostId === "studio-04")).toEqual({
-      hostId: "studio-04",
-      host: "studio-04",
-      status: "needs-update",
-      runs: [],
-    });
+    expect(listed.find((host) => host.hostId === "studio-04")).toEqual(
+      unreadHost("studio-04", "studio-04", "needs-update")
+    );
     await expect(
       client.answer({
         hostId: "studio-04",
@@ -195,8 +202,8 @@ describe("answering a connected host's agents from a device paired with the Shel
     sessionByHost.set("studio-04", odd.client);
     const listed = await client.listWaiting();
     expect(listed).toEqual([
-      { hostId: HOST, host: HOST, status: "ok", runs: [RUN] },
-      { hostId: "studio-04", host: "studio-04", status: "unreachable", runs: [] },
+      readHost(HOST, HOST),
+      unreadHost("studio-04", "studio-04", "unreachable"),
     ]);
   });
 
@@ -291,12 +298,9 @@ describe("answering a connected host's agents from a device paired with the Shel
     sessionByHost.set("studio-04", older.client);
 
     const listed = await client.listWaiting();
-    expect(listed.find((host) => host.hostId === "studio-04")).toEqual({
-      hostId: "studio-04",
-      host: "studio-04",
-      status: "needs-update",
-      runs: [],
-    });
+    expect(listed.find((host) => host.hostId === "studio-04")).toEqual(
+      unreadHost("studio-04", "studio-04", "needs-update")
+    );
     await expect(
       client.answer({
         hostId: "studio-04",
@@ -404,8 +408,8 @@ describe("answering a connected host's agents from a device paired with the Shel
     uninstall();
     const listed = await client.listWaiting();
     expect(listed).toEqual([
-      { hostId: HOST, host: HOST, status: "needs-update", runs: [] },
-      { hostId: "studio-04", host: "studio-04", status: "not-connected", runs: [] },
+      unreadHost(HOST, HOST, "needs-update"),
+      unreadHost("studio-04", "studio-04", "not-connected"),
     ]);
   });
 
@@ -433,6 +437,67 @@ describe("answering a connected host's agents from a device paired with the Shel
     expect(listed.find((host) => host.hostId === "studio-04")?.status).toBe("ok");
     stop();
     expect(off).toHaveBeenCalledTimes(1);
+  });
+
+  it("says how many wait on a host past the runs it read, and has the one picked read there alone", async () => {
+    const omitted = { ...RUN, runId: "run-2" } as Partial<WaitingRunView>;
+    delete omitted.screen;
+    delete omitted.choices;
+    delete omitted.questionId;
+    vi.mocked(hostDeps.list).mockResolvedValue({
+      runs: [RUN],
+      omitted: [omitted as never],
+      waiting: 23,
+    });
+    const other = await pair();
+    const otherList = vi.fn(async () => ({ runs: [], omitted: [], waiting: 0 }));
+    const stop = serve(other.host, { ...hostDeps, list: otherList });
+    sessionByHost.set("studio-04", other.client);
+
+    const listed = await client.listWaiting({
+      read: { hostId: HOST, runId: "run-2", spawnedAt: 100 },
+    });
+    expect(listed[0]).toEqual({
+      hostId: HOST,
+      host: HOST,
+      status: "ok",
+      runs: [RUN],
+      omitted: [omitted],
+      waiting: 23,
+    });
+    expect(hostDeps.list).toHaveBeenLastCalledWith({ read: { runId: "run-2", spawnedAt: 100 } });
+    // The pick is that host's run; no other host is asked to read it.
+    expect(otherList).toHaveBeenLastCalledWith({ read: null });
+    stop();
+  });
+
+  it("never presents a host that doesn't say how many wait there as complete", async () => {
+    const older = await pair();
+    older.host.registerCallHandler(
+      DeviceAnswerLinkMethod.LIST,
+      DeviceAnswerListPayloadSchema,
+      () => ({ runs: [RUN], questionIds: true })
+    );
+    sessionByHost.set("studio-04", older.client);
+    const listed = await client.listWaiting();
+    expect(listed.find((host) => host.hostId === "studio-04")).toEqual({
+      ...readHost("studio-04", "studio-04"),
+      waiting: null,
+    });
+  });
+
+  it("shows nothing of a host that counts fewer waiting than it listed", async () => {
+    const odd = await pair();
+    odd.host.registerCallHandler(
+      DeviceAnswerLinkMethod.LIST,
+      DeviceAnswerListPayloadSchema,
+      () => ({ runs: [RUN], omitted: [], waiting: 0, questionIds: true })
+    );
+    sessionByHost.set("studio-04", odd.client);
+    const listed = await client.listWaiting();
+    expect(listed.find((host) => host.hostId === "studio-04")).toEqual(
+      unreadHost("studio-04", "studio-04", "unreachable")
+    );
   });
 
   it("asks nothing of a host whose link closed after it was listed", async () => {
@@ -474,9 +539,7 @@ describe("what a Shell tells a device when a host's reply doesn't come", () => {
 
   it("lists a host that didn't answer in time as unreachable", async () => {
     const { client: shell } = clientOver(failing("OUTCOME_UNKNOWN"));
-    expect(await shell.listWaiting()).toEqual([
-      { hostId: HOST, host: HOST, status: "unreachable", runs: [] },
-    ]);
+    expect(await shell.listWaiting()).toEqual([unreadHost(HOST, HOST, "unreachable")]);
   });
 
   it("says an answer the host may have taken may have been pressed, and never sends it again", async () => {

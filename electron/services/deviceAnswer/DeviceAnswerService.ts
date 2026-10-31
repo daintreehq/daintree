@@ -21,8 +21,12 @@ import {
 import { redactSecrets } from "../redactSecrets.js";
 import { DEVICE_PAGE_CSP, DEVICE_PAGE_HTML } from "./deviceAnswerPage.js";
 import { MAX_AUDIT_ENTRIES, MAX_PAIRED_DEVICES, isValidPort } from "./deviceAnswerSettings.js";
-import { LOCAL_HOST_ID, isLocalHostId } from "../../../shared/types/remoteHosts.js";
-import type { DeviceWaitingList } from "./deviceAnswerRuns.js";
+import {
+  LOCAL_HOST_ID,
+  isLocalHostId,
+  isValidRemoteHostId,
+} from "../../../shared/types/remoteHosts.js";
+import type { DeviceRunRef, DeviceWaitingList } from "./deviceAnswerRuns.js";
 import { isQuestionId } from "./questionId.js";
 import { sshLoginTarget } from "../../utils/machineName.js";
 
@@ -48,9 +52,13 @@ export interface DeviceAnswerServiceDeps {
   writeSettings: (settings: DeviceAnswerSettings) => void;
   /**
    * This machine's waiting runs, with every connected host's when `hosts` is
-   * set, each tagged with its machine.
+   * set, each tagged with its machine. `read` is one run the device picked
+   * from those left unread, to be read ahead of the rest of its machine's.
    */
-  listWaiting: (options: { hosts: boolean }) => Promise<DeviceWaitingList>;
+  listWaiting: (options: {
+    hosts: boolean;
+    read: DeviceRunRef | null;
+  }) => Promise<DeviceWaitingList>;
   /**
    * Press the option labelled `label` in the run on `hostId` (`LOCAL_HOST_ID`
    * for this machine), for `device`, only into the question `questionId` was
@@ -344,14 +352,20 @@ export class DeviceAnswerService {
       if (req.method === "GET" && url.pathname === "/api/waiting") {
         // A page from before hosts were listed answers every run as this
         // machine's, so it is shown this machine's alone.
-        const { computer, runs, hosts, hostsUnlisted } = await this.deps.listWaiting({
-          hosts: url.searchParams.get("hosts") === "1",
-        });
+        const hostsToo = url.searchParams.get("hosts") === "1";
+        const read = readParam(url);
+        const { computer, runs, omitted, coverage, hosts, hostsUnlisted } =
+          await this.deps.listWaiting({
+            hosts: hostsToo,
+            read: read !== null && (hostsToo || isLocalHostId(read.hostId)) ? read : null,
+          });
         // Only a device still paired once the screens are read is shown them.
         this.requireStillPaired(device);
         this.sendJson(res, 200, {
           ...(computer ? { computer } : {}),
           runs,
+          omitted: omitted ?? [],
+          coverage: coverage ?? [],
           hosts,
           hostsUnlisted: hostsUnlisted === true,
         });
@@ -598,6 +612,36 @@ const SECURITY_HEADERS = {
   "X-Frame-Options": "DENY",
   "Cross-Origin-Resource-Policy": "same-origin",
 };
+
+/**
+ * The one run a device picked to have read, from its `read` parameter, or
+ * null with none. Anything else is refused before a screen is read.
+ */
+function readParam(url: URL): DeviceRunRef | null {
+  const values = url.searchParams.getAll("read");
+  if (values.length === 0) return null;
+  let parsed: unknown = null;
+  if (values.length === 1 && values[0]!.length <= 1024) {
+    try {
+      parsed = JSON.parse(values[0]!);
+    } catch {
+      parsed = null;
+    }
+  }
+  const { hostId, runId, spawnedAt } = (parsed ?? {}) as Record<string, unknown>;
+  if (
+    typeof hostId !== "string" ||
+    (hostId !== LOCAL_HOST_ID && !isValidRemoteHostId(hostId)) ||
+    typeof runId !== "string" ||
+    runId === "" ||
+    runId.length > 256 ||
+    typeof spawnedAt !== "number" ||
+    !Number.isFinite(spawnedAt)
+  ) {
+    throw new HttpError(400, "That run wasn't understood.");
+  }
+  return { hostId, runId, spawnedAt };
+}
 
 function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
