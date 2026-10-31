@@ -630,6 +630,7 @@ export const CHANNELS = {
   ELEMENT_PICKER_RESOLVE: "element-picker:resolve",
   ELEMENT_PICKER_DESCRIBE_PROJECT: "element-picker:describe-project",
   ELEMENT_PICKER_SOURCE_REVISIONS: "element-picker:source-revisions",
+  ELEMENT_PICKER_HOLD_SOURCES: "element-picker:hold-sources",
   ELEMENT_PICKER_EVENT: "element-picker:event",
   ELEMENT_PICKER_SOURCE_CHANGED: "element-picker:source-changed",
 

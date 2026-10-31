@@ -5,6 +5,7 @@ import type {
   SitePreviewMode,
 } from "@shared/types/ipc/sitePreview";
 import {
+  ELEMENT_PICKER_MAX_HELD_SOURCES,
   ELEMENT_PICKER_WORKSPACE_CLOSED,
   type ElementPickerBindRequest,
   type ElementPickerPushPayload,
@@ -30,6 +31,12 @@ import type {
 } from "@/services/devPreviewTools/types";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import { cancelAgentRequests, watchPickerPreviews } from "./agentRequest.js";
+import {
+  composerMemoryKey,
+  pinnedSelections,
+  readComposerMemory,
+  subscribeComposerMemory,
+} from "./composerMemory.js";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { mismatchMessage, runtimeIssueMessage, wireFailureMessage } from "./copy.js";
 import { usePanelStore } from "@/store/panelStore";
@@ -39,6 +46,7 @@ import {
   displayLine,
   elementClaim,
   heldPaths,
+  heldSourceOrder,
   samePoint,
   svelteEvidence,
   unionBounds,
@@ -74,6 +82,7 @@ export interface ElementPickerApi {
     workspaceId: string;
     paths: string[];
   }): Promise<ElementPickerSourceRevisionsResult>;
+  holdSources(request: { workspaceId: string; paths: string[] }): Promise<void>;
   onEvent(callback: (payload: ElementPickerPushPayload) => void): () => void;
   onSourceChanged(callback: (payload: ElementPickerSourceChangedPush) => void): () => void;
 }
@@ -557,6 +566,8 @@ export class InspectorController implements DevPreviewToolSession {
   private continuity: Continuity | null = null;
   /** Each selection's picture, taken when it was made: oldest first, bounded. */
   private readonly captures = new Map<string, Promise<PageScreenshot>>();
+  /** The list last sent as what this view holds, and the workspace it went to. */
+  private sourcesHeld: { workspaceId: string; key: string } | null = null;
 
   constructor(
     panelId: string,
@@ -568,6 +579,7 @@ export class InspectorController implements DevPreviewToolSession {
     this.offSourceChanged = deps.picker.onSourceChanged((payload) =>
       this.handleSourceChanged(payload)
     );
+    this.unsubscribers.push(subscribeComposerMemory(() => this.holdSources()));
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -583,6 +595,39 @@ export class InspectorController implements DevPreviewToolSession {
     if (this.disposed) return;
     this.state = { ...this.state, ...patch };
     for (const listener of this.listeners) listener();
+    if (patch.selection !== undefined || patch.workspace !== undefined) this.holdSources();
+  }
+
+  /**
+   * Tell the workspace's source tracker which files to keep watching ahead of
+   * whatever else a resolve read: the selection's own element file, the rest
+   * of its files, then those of what the composer's draft and waiting requests
+   * are pinned to. Sent only when the list changes. A hold that fails is not
+   * retried until it changes again, and still counts as what was last sent, so
+   * a list that later empties is sent as empty: the revisions checked at send
+   * time are the authority, the tracker only a way to notice an edit sooner.
+   */
+  private holdSources(): void {
+    if (this.disposed) return;
+    const workspaceId = this.currentWorkspaceId();
+    if (workspaceId === null) {
+      this.sourcesHeld = null;
+      return;
+    }
+    const selections: PickedSelection[] = [];
+    const selection = this.state.selection;
+    if (selection.status === "ready") selections.push(selection.selection);
+    const memory = readComposerMemory(composerMemoryKey(this.panelId, this.context.worktreeId));
+    selections.push(...pinnedSelections(memory));
+    const paths = heldSourceOrder(
+      selections.filter((entry) => this.workspaceFor(entry) === workspaceId)
+    ).slice(0, ELEMENT_PICKER_MAX_HELD_SOURCES);
+    const key = paths.join("\n");
+    // A workspace opens holding nothing.
+    const before = this.sourcesHeld?.workspaceId === workspaceId ? this.sourcesHeld.key : "";
+    if (key === before) return;
+    this.sourcesHeld = { workspaceId, key };
+    void this.deps.picker.holdSources({ workspaceId, paths }).catch(() => undefined);
   }
 
   /* ------------------------------------------------------------------------ */

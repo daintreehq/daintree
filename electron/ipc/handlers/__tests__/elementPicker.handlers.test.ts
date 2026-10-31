@@ -7,7 +7,10 @@ import { getChannelLocality } from "../../channelLocality.js";
 import { ELEMENT_PICKER_METHOD_CHANNELS } from "../elementPicker.preload.js";
 import type { IpcContext } from "../../types.js";
 import type { ClientEndpoint, Disposable, HostFrame } from "../../endpoint.js";
-import { ELEMENT_PICKER_WORKSPACE_CLOSED } from "../../../../shared/types/ipc/elementPicker.js";
+import {
+  ELEMENT_PICKER_MAX_HELD_SOURCES,
+  ELEMENT_PICKER_WORKSPACE_CLOSED,
+} from "../../../../shared/types/ipc/elementPicker.js";
 
 const bridge = vi.hoisted(() => ({
   bindElementPicker: vi.fn(async (input: { projectId: string; panelId: string }) => ({
@@ -53,6 +56,7 @@ const host = vi.hoisted(() => ({
   resolve: vi.fn(async () => ({ requestId: "r1", documentEpoch: 0, outcomes: [] })),
   describeProject: vi.fn(async () => ({ status: "none" })),
   sourceRevisions: vi.fn(async () => []),
+  holdSources: vi.fn(async () => undefined),
 }));
 vi.mock("../../../services/elementPicker/index.js", () => ({
   getElementPickerHost: async () => host,
@@ -156,6 +160,7 @@ describe("elementPicker handlers", () => {
     expect(getChannelLocality(CHANNELS.ELEMENT_PICKER_EVENT)).toBe("shell");
     expect(getChannelLocality(CHANNELS.ELEMENT_PICKER_RESOLVE)).toBe("host");
     expect(getChannelLocality(CHANNELS.ELEMENT_PICKER_SOURCE_CHANGED)).toBe("host");
+    expect(getChannelLocality(CHANNELS.ELEMENT_PICKER_HOLD_SOURCES)).toBe("host");
   });
 
   it("refuses every operation from a sender with no project", async () => {
@@ -168,6 +173,7 @@ describe("elementPicker handlers", () => {
       all.resolve.handler(ctx(null), { workspaceId: "ws-1" } as never),
       all.describeProject.handler(ctx(null), { workspaceId: "ws-1", url: "http://localhost/" }),
       all.sourceRevisions.handler(ctx(null), { workspaceId: "ws-1", paths: [] }),
+      all.holdSources.handler(ctx(null), { workspaceId: "ws-1", paths: [] }),
     ];
     for (const call of calls) await expect(call).rejects.toMatchObject({ code: "PERMISSION" });
     expect(bridge.bindElementPicker).not.toHaveBeenCalled();
@@ -198,12 +204,27 @@ describe("elementPicker handlers", () => {
         all.sourceRevisions.schema,
         { workspaceId: "ws-1", paths: Array.from({ length: 129 }, (_, i) => `f${i}`) },
       ],
+      [
+        all.holdSources.schema,
+        {
+          workspaceId: "ws-1",
+          paths: Array.from({ length: ELEMENT_PICKER_MAX_HELD_SOURCES + 1 }, (_, i) => `f${i}`),
+        },
+      ],
+      [all.holdSources.schema, { workspaceId: "ws-1", paths: [""] }],
+      [all.holdSources.schema, { workspaceId: "ws-1", paths: ["a"], projectId: "project-b" }],
       [all.resolve.schema, null],
       [all.resolve.schema, []],
       [all.resolve.schema, { requestId: "r1" }],
     ];
     for (const [schema, payload] of refused) {
       expect(schema.safeParse(payload).success, JSON.stringify(payload).slice(0, 80)).toBe(false);
+    }
+    for (const paths of [
+      [],
+      Array.from({ length: ELEMENT_PICKER_MAX_HELD_SOURCES }, (_, i) => `f${i}`),
+    ]) {
+      expect(all.holdSources.schema.safeParse({ workspaceId: "ws-1", paths }).success).toBe(true);
     }
   });
 
@@ -280,8 +301,17 @@ describe("elementPicker handlers", () => {
     await expect(
       all.sourceRevisions.handler(ctx("project-a", 2), { workspaceId: "ws-1", paths: ["a"] })
     ).rejects.toMatchObject(closed);
+    await expect(
+      all.holdSources.handler(ctx("project-b", 1), { workspaceId: "ws-1", paths: ["a"] })
+    ).rejects.toMatchObject(closed);
     expect(host.resolve).not.toHaveBeenCalled();
     expect(host.sourceRevisions).not.toHaveBeenCalled();
+    expect(host.holdSources).not.toHaveBeenCalled();
+
+    await expect(
+      all.holdSources.handler(opener, { workspaceId: "ws-1", paths: ["b", "a"] })
+    ).resolves.toBeUndefined();
+    expect(host.holdSources).toHaveBeenCalledWith("ws-1", ["b", "a"]);
 
     await expect(all.resolve.handler(opener, request)).resolves.toMatchObject({
       requestId: "r1",

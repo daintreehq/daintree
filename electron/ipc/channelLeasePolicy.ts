@@ -186,6 +186,7 @@ export const CHANNEL_LEASE_POLICY = {
   "editor:set-config": "free",
   // Reads the worktree and watches what it read; nothing it does changes the project.
   "element-picker:describe-project": "free",
+  "element-picker:hold-sources": "free",
   "element-picker:resolve": "free",
   "element-picker:source-changed": "free",
   "element-picker:source-revisions": "free",

@@ -299,6 +299,7 @@ export const CHANNEL_LOCALITY = {
   "element-picker:bind": "shell",
   "element-picker:describe-project": "host",
   "element-picker:event": "shell",
+  "element-picker:hold-sources": "host",
   "element-picker:reselect": "shell",
   "element-picker:resolve": "host",
   "element-picker:source-changed": "host",

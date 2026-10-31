@@ -9,13 +9,16 @@ import {
 
 const revision = (n: number) => `sha256:${n.toString(16).padStart(64, "0")}`;
 
-function tracker(initial: Record<string, string | null> = {}) {
+function tracker(initial: Record<string, string | null> = {}, unchanged = false) {
   const disk = new Map(Object.entries(initial));
   const listeners = new Map<string, (changedPath: string) => void>();
   const disposed: string[] = [];
   const changes: SourceChange[] = [];
   const warn = vi.fn();
-  const readRevision = vi.fn(async (file: string) => disk.get(file) ?? null);
+  // An `unchanged` disk holds, for any file it was not told about, the bytes it was read at.
+  const readRevision = vi.fn(async (file: string) =>
+    disk.has(file) ? disk.get(file)! : unchanged ? revision(1) : null
+  );
   const subject = new SourceTracker({
     watch: (directory, onChange) => {
       if (directory.includes("unwatchable")) throw new Error("EACCES");
@@ -107,26 +110,399 @@ describe("SourceTracker", () => {
     ]);
   });
 
-  it("stops tracking past the directory cap and survives a watch that fails", async () => {
-    const t = tracker();
+  it("makes room for a new directory past the directory cap by closing the least recently read", async () => {
+    const t = tracker({}, true);
+    const at = (index: number) => path.join("/repo", `d${index}`, "x.svelte");
     for (let index = 0; index < MAX_WATCHED_DIRECTORIES; index++) {
-      t.subject.observe(path.join("/repo", `d${index}`, "x.svelte"), ref("x.svelte"), revision(1));
+      t.subject.observe(at(index), ref(`d${index}/x.svelte`), revision(1));
     }
-    t.subject.observe(path.join("/repo", "past", "x.svelte"), ref("x.svelte"), revision(1));
-    expect(t.listeners.has(path.join("/repo", "past"))).toBe(false);
+    await t.settle();
+    const oldest = t.listeners.get(path.dirname(at(0)))!;
+    t.readRevision.mockClear();
 
-    const files = tracker();
-    for (let index = 0; index < MAX_TRACKED_FILES + 1; index++) {
-      files.subject.observe(
-        path.join("/repo", "src", `f${index}.svelte`),
-        ref(`f${index}.svelte`),
-        revision(1)
-      );
+    const newest = path.join("/repo", "past", "x.svelte");
+    t.disk.set(newest, revision(1));
+    t.subject.observe(newest, ref("past/x.svelte"), revision(1));
+    expect(t.subject.usage()).toEqual({
+      files: MAX_WATCHED_DIRECTORIES,
+      directories: MAX_WATCHED_DIRECTORIES,
+    });
+    expect(t.listeners.has(path.dirname(newest))).toBe(true);
+    expect(t.disposed).toEqual([path.dirname(at(0))]);
+    await t.settle();
+    expect(t.readRevision).toHaveBeenCalledWith(newest);
+
+    t.disk.set(newest, revision(2));
+    t.listeners.get(path.dirname(newest))!(newest);
+    await t.settle();
+    expect(t.changes).toEqual([{ file: ref("past/x.svelte"), revision: revision(2) }]);
+
+    // The closed watch's late events find nothing to recheck.
+    t.readRevision.mockClear();
+    t.disk.set(at(0), revision(9));
+    oldest(at(0));
+    oldest(path.dirname(at(0)));
+    await t.settle();
+    expect(t.readRevision).not.toHaveBeenCalled();
+    expect(t.changes).toHaveLength(1);
+  });
+
+  it("reconciles the newest file past the file cap and stops tracking the least recently read", async () => {
+    const t = tracker({}, true);
+    const at = (index: number) => file(`f${index}.svelte`);
+    for (let index = 0; index <= MAX_TRACKED_FILES; index++) {
+      t.subject.observe(at(index), ref(`f${index}.svelte`), revision(1));
     }
-    await files.settle();
-    // One reconcile read per tracked file: the one past the cap is never read.
-    expect(files.readRevision).toHaveBeenCalledTimes(MAX_TRACKED_FILES);
+    await t.settle();
+    expect(t.subject.usage()).toEqual({ files: MAX_TRACKED_FILES, directories: 1 });
+    expect(t.readRevision).toHaveBeenCalledTimes(MAX_TRACKED_FILES + 1);
+    expect(t.readRevision).toHaveBeenLastCalledWith(at(MAX_TRACKED_FILES));
+    // The directory still holds tracked files, so its watch stays open.
+    expect(t.disposed).toEqual([]);
 
+    t.readRevision.mockClear();
+    t.listeners.get(path.join("/repo", "src"))!(at(0));
+    await t.settle();
+    expect(t.readRevision).not.toHaveBeenCalled();
+  });
+
+  it("keeps a file a resolve read again ahead of ones read since", async () => {
+    const t = tracker();
+    const at = (index: number) => path.join("/repo", `d${index}`, "x.svelte");
+    for (let index = 0; index < MAX_WATCHED_DIRECTORIES; index++) {
+      t.subject.observe(at(index), ref(`d${index}/x.svelte`), revision(1));
+    }
+    t.subject.observe(at(0), ref("d0/x.svelte"), revision(1));
+    t.subject.observe(at(MAX_WATCHED_DIRECTORIES), ref("past/x.svelte"), revision(1));
+    expect(t.disposed).toEqual([path.dirname(at(1))]);
+  });
+
+  it("tracks a file given up and read again afresh, deaf to its old watch", async () => {
+    const t = tracker({}, true);
+    const at = (index: number) => path.join("/repo", `d${index}`, "x.svelte");
+    t.disk.set(at(0), revision(1));
+    for (let index = 0; index <= MAX_WATCHED_DIRECTORIES; index++) {
+      t.subject.observe(at(index), ref(`d${index}/x.svelte`), revision(1));
+    }
+    await t.settle();
+    const closed = t.listeners.get(path.dirname(at(0)))!;
+    expect(t.disposed).toEqual([path.dirname(at(0))]);
+
+    // Read again: the revision just read is what it is checked against, not
+    // the one it was given up with.
+    t.disk.set(at(0), revision(2));
+    t.subject.observe(at(0), ref("d0/x.svelte"), revision(2));
+    await t.settle();
+    expect(t.changes).toEqual([]);
+    expect(t.listeners.get(path.dirname(at(0)))).not.toBe(closed);
+    t.disk.set(at(0), revision(3));
+    t.listeners.get(path.dirname(at(0)))!(at(0));
+    await t.settle();
+    expect(t.changes).toEqual([{ file: ref("d0/x.svelte"), revision: revision(3) }]);
+
+    t.readRevision.mockClear();
+    closed(at(0));
+    await t.settle();
+    expect(t.readRevision).not.toHaveBeenCalled();
+
+    // Each watch given up is closed once, and dispose closes only what is open.
+    t.subject.dispose();
+    const counts = new Map<string, number>();
+    for (const directory of t.disposed) counts.set(directory, (counts.get(directory) ?? 0) + 1);
+    expect(t.disposed).toHaveLength(MAX_WATCHED_DIRECTORIES + 2);
+    expect(counts.get(path.dirname(at(0)))).toBe(2);
+    expect(counts.get(path.dirname(at(1)))).toBe(1);
+    expect([...counts.values()].every((count) => count <= 2)).toBe(true);
+  });
+
+  it("ignores a read that lands after its file was given up", async () => {
+    const t = tracker();
+    const at = (index: number) => path.join("/repo", `d${index}`, "x.svelte");
+    const held: Array<() => void> = [];
+    t.readRevision.mockImplementation(async (file: string) => {
+      await new Promise<void>((resolve) => held.push(resolve));
+      return file === at(0) ? revision(7) : revision(1);
+    });
+    for (let index = 0; index <= MAX_WATCHED_DIRECTORIES; index++) {
+      t.subject.observe(at(index), ref(`d${index}/x.svelte`), revision(1));
+    }
+    for (const release of held.splice(0)) release();
+    await t.settle();
+    expect(t.changes).toEqual([]);
+  });
+
+  it("keeps a read still out for a file given up off the record that replaced it", async () => {
+    const t = tracker({}, true);
+    const at = (index: number) => path.join("/repo", `d${index}`, "x.svelte");
+    const held: Array<() => void> = [];
+    let reads = 0;
+    t.readRevision.mockImplementation(async (file: string) => {
+      if (file !== at(0)) return revision(1);
+      // The first read answers with bytes the second read has moved past.
+      const answer = ++reads === 1 ? revision(7) : revision(2);
+      await new Promise<void>((resolve) => held.push(resolve));
+      return answer;
+    });
+    for (let index = 0; index <= MAX_WATCHED_DIRECTORIES; index++) {
+      t.subject.observe(at(index), ref(`d${index}/x.svelte`), revision(1));
+    }
+    t.subject.observe(at(0), ref("d0/x.svelte"), revision(2));
+    expect(held).toHaveLength(2);
+    held[0]!();
+    await t.settle();
+    held[1]!();
+    await t.settle();
+    expect(t.changes).toEqual([]);
+  });
+
+  it("still fills a kept directory after a held file finds no directory slot", async () => {
+    const t = tracker({}, true);
+    const at = (index: number) => path.join("/repo", `d${index}`, "x.svelte");
+    const sibling = path.join("/repo", "d1", "y.svelte");
+    const extra = path.join("/repo", "extra", "x.svelte");
+    // Both read early, then given up to newer reads.
+    t.subject.observe(sibling, ref("d1/y.svelte"), revision(1));
+    t.subject.observe(extra, ref("extra/x.svelte"), revision(1));
+    for (let index = 2; index <= MAX_WATCHED_DIRECTORIES; index++) {
+      t.subject.observe(at(index), ref(`d${index}/x.svelte`), revision(1));
+    }
+    t.subject.observe(at(1), ref("d1/x.svelte"), revision(1));
+    expect(t.disposed).toEqual([path.dirname(sibling), path.dirname(extra)]);
+
+    // Both come back in one hold: `extra` ranks higher but finds no directory
+    // slot, and the scan goes on to `sibling`, whose directory is kept.
+    const pinned = Array.from(
+      { length: MAX_WATCHED_DIRECTORIES },
+      (_, index) => ref(`d${index + 1}/x.svelte`).path
+    );
+    t.subject.hold([...pinned, ref("extra/x.svelte").path, ref("d1/y.svelte").path]);
+    expect(t.subject.usage()).toEqual({
+      files: MAX_WATCHED_DIRECTORIES + 1,
+      directories: MAX_WATCHED_DIRECTORIES,
+    });
+    await t.settle();
+    t.readRevision.mockClear();
+    t.listeners.get(path.dirname(sibling))!(sibling);
+    await t.settle();
+    expect(t.readRevision).toHaveBeenCalledWith(sibling);
+  });
+
+  it("ranks the files the view holds ahead of everything else, in its order", async () => {
+    const t = tracker();
+    const at = (index: number) => path.join("/repo", `d${index}`, "x.svelte");
+    t.subject.hold([ref("d0/x.svelte").path]);
+    for (let index = 0; index <= MAX_WATCHED_DIRECTORIES; index++) {
+      t.subject.observe(at(index), ref(`d${index}/x.svelte`), revision(1));
+    }
+    expect(t.disposed).toEqual([path.dirname(at(1))]);
+
+    // A new list replaces the old: d0 is now the least recently read.
+    t.subject.hold([]);
+    t.subject.observe(at(MAX_WATCHED_DIRECTORIES + 1), ref("next/x.svelte"), revision(1));
+    expect(t.disposed).toEqual([path.dirname(at(1)), path.dirname(at(0))]);
+  });
+
+  it("fills the directory cap from the top of the held list when it alone is past it", async () => {
+    const t = tracker();
+    const count = MAX_WATCHED_DIRECTORIES + 6;
+    const at = (index: number) => path.join("/repo", `d${index}`, "x.svelte");
+    const rel = (index: number) => `d${index}/x.svelte`;
+    // Read in the opposite order to the list, so the selected element's own
+    // file, first in the list, is the least recently read.
+    t.subject.hold(Array.from({ length: count }, (_, index) => ref(rel(index)).path));
+    for (let index = count - 1; index >= 0; index--) {
+      t.subject.observe(at(index), ref(rel(index)), revision(1));
+    }
+    expect(t.subject.usage()).toEqual({
+      files: MAX_WATCHED_DIRECTORIES,
+      directories: MAX_WATCHED_DIRECTORIES,
+    });
+    const open = new Set(t.listeners.keys());
+    for (const directory of t.disposed) open.delete(directory);
+    expect([...open].sort()).toEqual(
+      Array.from({ length: MAX_WATCHED_DIRECTORIES }, (_, index) => path.dirname(at(index))).sort()
+    );
+  });
+
+  it("fills the file cap from the top of the held list when it alone is past it", async () => {
+    const t = tracker();
+    const count = MAX_TRACKED_FILES + 20;
+    const at = (index: number) => path.join("/repo", `d${index % 8}`, `f${index}.svelte`);
+    const rel = (index: number) => `d${index % 8}/f${index}.svelte`;
+    t.subject.hold(Array.from({ length: count }, (_, index) => ref(rel(index)).path));
+    for (let index = count - 1; index >= 0; index--) {
+      t.subject.observe(at(index), ref(rel(index)), revision(1));
+    }
+    await t.settle();
+    expect(t.subject.usage()).toEqual({ files: MAX_TRACKED_FILES, directories: 8 });
+
+    // A whole-directory event rechecks exactly what is tracked: the top of the list.
+    t.readRevision.mockClear();
+    for (let directory = 0; directory < 8; directory++) {
+      t.listeners.get(path.join("/repo", `d${directory}`))!(path.join("/repo", `d${directory}`));
+    }
+    await t.settle();
+    expect(t.readRevision.mock.calls.map(([file]) => file).sort()).toEqual(
+      Array.from({ length: MAX_TRACKED_FILES }, (_, index) => at(index)).sort()
+    );
+  });
+
+  it("brings back a held file it gave up, checked against the revision it last read", async () => {
+    const t = tracker({}, true);
+    const at = (index: number) => path.join("/repo", `d${index}`, "x.svelte");
+    for (let index = 0; index <= MAX_WATCHED_DIRECTORIES; index++) {
+      t.subject.observe(at(index), ref(`d${index}/x.svelte`), revision(1));
+    }
+    await t.settle();
+    expect(t.disposed).toEqual([path.dirname(at(0))]);
+
+    // Edited while nothing watched it.
+    t.disk.set(at(0), revision(2));
+    t.subject.hold([ref("d0/x.svelte").path]);
+    expect(t.subject.usage()).toEqual({
+      files: MAX_WATCHED_DIRECTORIES,
+      directories: MAX_WATCHED_DIRECTORIES,
+    });
+    expect(t.disposed).toEqual([path.dirname(at(0)), path.dirname(at(1))]);
+    await t.settle();
+    expect(t.changes).toEqual([{ file: ref("d0/x.svelte"), revision: revision(2) }]);
+
+    // Holding it again changes nothing that is already in place.
+    t.readRevision.mockClear();
+    t.subject.hold([ref("d0/x.svelte").path]);
+    await t.settle();
+    expect(t.readRevision).not.toHaveBeenCalled();
+  });
+
+  it("tracks a new selection's file once held, though held files filled the caps when it was read", async () => {
+    const t = tracker({}, true);
+    const at = (index: number) => path.join("/repo", `d${index}`, "x.svelte");
+    const pinned = Array.from(
+      { length: MAX_WATCHED_DIRECTORIES },
+      (_, index) => ref(`d${index}/x.svelte`).path
+    );
+    t.subject.hold(pinned);
+    for (let index = 0; index < MAX_WATCHED_DIRECTORIES; index++) {
+      t.subject.observe(at(index), ref(`d${index}/x.svelte`), revision(1));
+    }
+    const selected = path.join("/repo", "selected", "x.svelte");
+    t.subject.observe(selected, ref("selected/x.svelte"), revision(1));
+    expect(t.listeners.has(path.dirname(selected))).toBe(false);
+
+    t.subject.hold([ref("selected/x.svelte").path, ...pinned]);
+    expect(t.subject.usage()).toEqual({
+      files: MAX_WATCHED_DIRECTORIES,
+      directories: MAX_WATCHED_DIRECTORIES,
+    });
+    expect(t.listeners.has(path.dirname(selected))).toBe(true);
+    expect(t.disposed).toEqual([path.dirname(at(MAX_WATCHED_DIRECTORIES - 1))]);
+    await t.settle();
+    t.disk.set(selected, revision(2));
+    t.listeners.get(path.dirname(selected))!(selected);
+    await t.settle();
+    expect(t.changes).toEqual([{ file: ref("selected/x.svelte"), revision: revision(2) }]);
+  });
+
+  it("remembers a held file it has no room for through any amount of churn", async () => {
+    const t = tracker({}, true);
+    const at = (index: number) => path.join("/repo", `d${index}`, "x.svelte");
+    const pinned = Array.from(
+      { length: MAX_WATCHED_DIRECTORIES },
+      (_, index) => ref(`d${index}/x.svelte`).path
+    );
+    const late = path.join("/repo", "late", "x.svelte");
+    t.subject.hold([...pinned, ref("late/x.svelte").path]);
+    for (let index = 0; index < MAX_WATCHED_DIRECTORIES; index++) {
+      t.subject.observe(at(index), ref(`d${index}/x.svelte`), revision(1));
+    }
+    t.subject.observe(late, ref("late/x.svelte"), revision(1));
+    // Far more unheld files than the memory of given-up files keeps, none with room.
+    for (let index = 0; index < MAX_TRACKED_FILES * 2; index++) {
+      const churn = path.join("/repo", `churn${index}`, "x.svelte");
+      t.subject.observe(churn, ref(`churn${index}/x.svelte`), revision(1));
+    }
+    expect(t.listeners.has(path.dirname(late))).toBe(false);
+
+    t.disk.set(late, revision(2));
+    t.subject.hold([ref("late/x.svelte").path, ...pinned]);
+    expect(t.listeners.has(path.dirname(late))).toBe(true);
+    expect(t.subject.usage()).toEqual({
+      files: MAX_WATCHED_DIRECTORIES,
+      directories: MAX_WATCHED_DIRECTORIES,
+    });
+    await t.settle();
+    expect(t.changes).toEqual([{ file: ref("late/x.svelte"), revision: revision(2) }]);
+  });
+
+  it("ranks and reports a file reached through a link by every path it was read by", async () => {
+    const t = tracker({}, true);
+    const real = path.join("/repo", "lib", "Real.svelte");
+    // One file on disk, read through its own path and through a link to it.
+    t.subject.observe(real, ref("lib/Real.svelte"), revision(1));
+    t.subject.observe(real, ref("lib/Alias.svelte"), revision(1));
+    t.subject.hold([ref("lib/Alias.svelte").path]);
+    for (let index = 0; index < MAX_WATCHED_DIRECTORIES; index++) {
+      const other = path.join("/repo", `d${index}`, "x.svelte");
+      t.subject.observe(other, ref(`d${index}/x.svelte`), revision(1));
+    }
+    expect(t.disposed).not.toContain(path.dirname(real));
+    expect(t.disposed).toEqual([path.join("/repo", "d0")]);
+
+    await t.settle();
+    t.disk.set(real, revision(2));
+    t.listeners.get(path.dirname(real))!(real);
+    await t.settle();
+    expect(t.changes).toEqual([
+      { file: ref("lib/Real.svelte"), revision: revision(2) },
+      { file: ref("lib/Alias.svelte"), revision: revision(2) },
+    ]);
+  });
+
+  it("stops reporting a link's path for the file it led to before it was retargeted", async () => {
+    const t = tracker({}, true);
+    const first = path.join("/repo", "lib", "First.svelte");
+    const second = path.join("/repo", "lib", "Second.svelte");
+    t.subject.observe(first, ref("lib/First.svelte"), revision(1));
+    t.subject.observe(first, ref("lib/Link.svelte"), revision(1));
+    t.subject.observe(second, ref("lib/Link.svelte"), revision(1));
+    await t.settle();
+
+    t.disk.set(first, revision(2));
+    t.disk.set(second, revision(2));
+    t.listeners.get(path.join("/repo", "lib"))!(path.join("/repo", "lib"));
+    await t.settle();
+    expect(t.changes).toEqual([
+      { file: ref("lib/First.svelte"), revision: revision(2) },
+      { file: ref("lib/Link.svelte"), revision: revision(2) },
+    ]);
+  });
+
+  it("keeps a held path among a file's many paths, and the one read last", async () => {
+    const t = tracker({}, true);
+    const real = path.join("/repo", "lib", "Real.svelte");
+    const alias = (index: number) => ref(`lib/A${index}.svelte`);
+    t.subject.observe(real, alias(0), revision(1));
+    t.subject.hold([alias(0).path]);
+    for (let index = 1; index <= 7; index++) t.subject.observe(real, alias(index), revision(1));
+    t.subject.observe(real, alias(1), revision(1));
+    // A ninth path: A2 is the least recently read path not held, so it goes.
+    t.subject.observe(real, alias(8), revision(1));
+    for (let index = 0; index < MAX_WATCHED_DIRECTORIES; index++) {
+      const other = path.join("/repo", `d${index}`, "x.svelte");
+      t.subject.observe(other, ref(`d${index}/x.svelte`), revision(1));
+    }
+    expect(t.disposed).not.toContain(path.dirname(real));
+
+    await t.settle();
+    t.disk.set(real, revision(2));
+    t.listeners.get(path.dirname(real))!(real);
+    await t.settle();
+    expect(t.changes.map((change) => change.file.path)).toEqual(
+      [0, 3, 4, 5, 6, 7, 1, 8].map((index) => alias(index).path)
+    );
+  });
+
+  it("survives a watch that fails", () => {
     const failing = tracker();
     failing.subject.observe(
       path.join("/repo", "unwatchable", "x.svelte"),
@@ -134,6 +510,7 @@ describe("SourceTracker", () => {
       revision(1)
     );
     expect(failing.warn).toHaveBeenCalledWith("source watch failed", expect.anything());
+    expect(failing.subject.usage()).toEqual({ files: 1, directories: 1 });
   });
 
   it("closes its watches on dispose and reports nothing after", async () => {
