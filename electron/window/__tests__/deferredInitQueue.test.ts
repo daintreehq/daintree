@@ -524,7 +524,7 @@ describe("deferredInitQueue", () => {
   // Global tasks are registered once per process, so the last-window-close
   // reset must not take any that haven't run yet with it (#15562).
   describe("resetDeferredQueueForNextWindow", () => {
-    function gate(): { run: ReturnType<typeof vi.fn>; release: () => void } {
+    function gate() {
       let release: () => void = () => {};
       const run = vi.fn(
         () =>
@@ -720,6 +720,18 @@ describe("deferredInitQueue", () => {
       await waitForDrain();
       slow.release();
       await vi.advanceTimersByTimeAsync(10);
+
+      expect(getDeferredQueueState().drainState).toBe("drained");
+    });
+
+    it("changes nothing once the queue is halted", async () => {
+      registerDeferredTask({ name: "global", run: vi.fn() });
+      finalizeDeferredRegistration(10_000);
+      signalFirstInteractive(1);
+      await waitForDrain();
+
+      haltDeferredQueue();
+      resetDeferredQueueForNextWindow();
 
       expect(getDeferredQueueState().drainState).toBe("drained");
     });
