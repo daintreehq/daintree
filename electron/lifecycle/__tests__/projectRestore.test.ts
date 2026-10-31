@@ -212,6 +212,28 @@ describe("enqueueBackgroundRestores", () => {
     fake.settle();
     await tick();
     expect(getQueuedBackgroundRestoreIds().sort()).toEqual(["b", "c"]);
+
+    releaseRefresh();
+    await tick();
+    fake.settle();
+    await tick();
+    fake.settle();
+    await tick();
+    expect(fake.calls).toEqual(["a", "b", "c"]);
+    expect(getQueuedBackgroundRestoreIds()).toEqual([]);
+  });
+
+  it("keeps naming a cancelled restore's project until that restore settles", async () => {
+    const fake = createFakeManager();
+    enqueueBackgroundRestores(job({ getManager: () => fake.manager, projectIds: ["a", "b"] }));
+    await tick();
+
+    cancelBackgroundRestores();
+    expect(getQueuedBackgroundRestoreIds()).toEqual(["a"]);
+
+    fake.settle({ status: "skipped", reason: "cancelled" });
+    await tick();
+    expect(getQueuedBackgroundRestoreIds()).toEqual([]);
   });
 
   it("narrows the pending set as each project comes back", async () => {

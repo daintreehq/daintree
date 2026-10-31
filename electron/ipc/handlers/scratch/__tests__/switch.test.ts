@@ -379,25 +379,33 @@ describe("scratch:switch claims the scratch until the switch commits", () => {
   });
 
   it.each([
-    ["lands", () => Promise.resolve({ view: null })],
-    ["fails", () => Promise.reject(new Error("swap failed"))],
-  ])("holds the claim while the swap is in flight and drops it once it %s", async (_, settle) => {
-    const claimedDuringSwap: string[][] = [];
+    ["lands", true],
+    ["fails", false],
+  ])("holds the claim across the in-flight swap and drops it once it %s", async (_, lands) => {
+    let settle: () => void = () => {};
+    const swap = new Promise<{ view: null }>((resolve, reject) => {
+      settle = () => (lands ? resolve({ view: null }) : reject(new Error("swap failed")));
+    });
+    const claimedAtCommit: string[][] = [];
+    scratchStoreMock.setCurrentScratch.mockImplementationOnce((id: string) => {
+      claimedAtCommit.push(getAllPendingActivationIds());
+      return { id, path: `/tmp/${id}` };
+    });
     const deps = {
       mainWindow: { id: 82 },
-      projectViewManager: {
-        setPendingFocusIntent: vi.fn(),
-        switchTo: vi.fn(() => {
-          claimedDuringSwap.push(getAllPendingActivationIds());
-          return settle();
-        }),
-      },
+      projectViewManager: { setPendingFocusIntent: vi.fn(), switchTo: vi.fn(() => swap) },
     } as unknown as HandlerDependencies;
     registerScratchHandlers(deps);
 
-    await getHandler(CHANNELS.SCRATCH_SWITCH)(fakeEvent, SCRATCH_ONE).catch(() => undefined);
+    const switching = getHandler(CHANNELS.SCRATCH_SWITCH)(fakeEvent, SCRATCH_ONE).catch(
+      () => undefined
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(getAllPendingActivationIds()).toEqual([SCRATCH_ONE]);
 
-    expect(claimedDuringSwap).toEqual([[SCRATCH_ONE]]);
+    settle();
+    await switching;
+    expect(claimedAtCommit).toEqual(lands ? [[SCRATCH_ONE]] : []);
     expect(getAllPendingActivationIds()).toEqual([]);
     disposeProjectHistory(82);
   });
