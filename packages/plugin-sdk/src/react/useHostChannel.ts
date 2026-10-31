@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useInsertionEffect, useLayoutEffect, useRef, useState } from "react";
 import type { UseHostChannelResult } from "../../../../shared/types/plugin-sdk-react.js";
 import { getPluginHostBridge } from "./hostBridge.js";
 import { isHostLinkError, toHostCallError } from "./hostErrors.js";
@@ -20,7 +20,9 @@ import { isHostLinkError, toHostCallError } from "./hostErrors.js";
  * Concurrent `invoke()` calls keep only the latest result/error — stale
  * resolutions are dropped so a fast click that triggers two invokes never
  * lets the older response overwrite the newer one. `loading` reflects the
- * latest call only.
+ * latest call only. Changing `pluginId` or `channel` supersedes every call
+ * started against the previous target the same way, even before the new
+ * target is invoked: those calls resolve `undefined` and change nothing.
  *
  * In a window attached to another machine the plugin's host code runs there,
  * and the link can drop. A call that could not reach the host fails with
@@ -37,14 +39,32 @@ export function useHostChannel<TArgs = unknown, TResult = unknown>(
   const [error, setError] = useState<Error | null>(null);
   const [disconnected, setDisconnected] = useState(false);
   const callIdRef = useRef(0);
+  const committedTargetRef = useRef({ pluginId, channel });
+  // The target changed and no call on the new target has cleared state yet.
+  const resetPendingRef = useRef(false);
 
-  // Clear loading/error when the channel target changes. The call counter is
-  // monotonic and is NOT reset here: resetting it would let an in-flight call
-  // from the prior target (e.g. callId 1) collide with the first new call (also
-  // callId 1) and pass the stale-call guard below, clobbering the new target's
-  // state. A never-reset counter guarantees every later call outranks any
-  // earlier in-flight one.
-  useEffect(() => {
+  // A target change supersedes every call made against the previous target by
+  // advancing the never-reset call counter, even before the new target is
+  // invoked. An insertion effect fires in the commit that changes the target,
+  // even inside a hidden `<Activity>` where layout effects are disconnected,
+  // and before any layout effect, so a child that invokes the new target from
+  // its own effect in the same commit always lands after the bump. Comparing
+  // with the last committed target keeps a replay (Fast Refresh reruns effects
+  // whatever their deps) from superseding a call on an unchanged target.
+  useInsertionEffect(() => {
+    const committed = committedTargetRef.current;
+    if (committed.pluginId === pluginId && committed.channel === channel) return;
+    committedTargetRef.current = { pluginId, channel };
+    callIdRef.current += 1;
+    resetPendingRef.current = true;
+  }, [pluginId, channel]);
+
+  // Insertion effects can't set state, so the reset waits for layout, which
+  // also runs when a hidden `<Activity>` is shown again. A call already made on
+  // the new target cleared the flag, so its `loading` survives.
+  useLayoutEffect(() => {
+    if (!resetPendingRef.current) return;
+    resetPendingRef.current = false;
     setLoading(false);
     setError(null);
   }, [pluginId, channel]);
@@ -52,6 +72,7 @@ export function useHostChannel<TArgs = unknown, TResult = unknown>(
   const invoke = useCallback(
     async (args: TArgs): Promise<TResult | undefined> => {
       const callId = ++callIdRef.current;
+      resetPendingRef.current = false;
       setLoading(true);
       setError(null);
       try {
