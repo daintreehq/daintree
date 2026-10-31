@@ -402,6 +402,56 @@ describe("the question a list asks", () => {
     );
   });
 
+  it("reads past a divider inside a boxed command", () => {
+    const boxed = (target: string) =>
+      [
+        "╭────────────────────────────────────╮",
+        `│ cat > ${target} <<'EOF'`.padEnd(37) + "│",
+        "│ ────────────────".padEnd(37) + "│",
+        "│ EOF".padEnd(37) + "│",
+        "│".padEnd(37) + "│",
+        "│ ● 1. Yes".padEnd(37) + "│",
+        "│   2. No".padEnd(37) + "│",
+        "│".padEnd(37) + "│",
+        "│ Enter to confirm".padEnd(37) + "│",
+        "╰────────────────────────────────────╯",
+      ].join("\n");
+    expect(parseChoiceList(boxed("/tmp/cache"))!.question).not.toBe(
+      parseChoiceList(boxed("~/.ssh/config"))!.question
+    );
+  });
+
+  it("keeps the looser plan's command rows as drawn, and its options the same wherever the highlight is", () => {
+    const ask = (command: string, highlighted: 1 | 2) =>
+      [
+        " Bash command",
+        `   ${command}`,
+        " Do you want to proceed?",
+        `${highlighted === 1 ? " ❯" : "  "} 1. Yes`,
+        `${highlighted === 2 ? " ❯" : "  "} 2. No`,
+        "",
+        " Esc to cancel",
+      ].join("\n");
+    const question = (screen: string, label: string) => questionOf(planChoice(screen, label));
+    expect(question(ask("> /tmp/task.sh", 2), "Yes")).not.toBe(
+      question(ask("/tmp/task.sh", 2), "Yes")
+    );
+    expect(question(ask("> /tmp/task.sh", 1), "Yes")).toBe(
+      question(ask("> /tmp/task.sh", 2), "Yes")
+    );
+    // Options a blank row apart: the highlight leaving one is still no other question.
+    const apart = (onNo: boolean) =>
+      [
+        " Trust this folder?",
+        onNo ? " ❯ No, exit" : "   No, exit",
+        "",
+        onNo ? "   Yes, I trust this folder" : " ❯ Yes, I trust this folder",
+      ].join("\n");
+    expect(question(apart(false), "Yes, I trust this folder")).toBe(
+      question(apart(true), "Yes, I trust this folder")
+    );
+  });
+
   it("counts the last option's wrapped rows", () => {
     const scope = (wrapped: string) =>
       ["Which scope?", "❯ 1. Cancel", "  2. Allow", `     ${wrapped}`, "", HINT].join("\n");

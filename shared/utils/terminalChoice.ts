@@ -52,29 +52,39 @@ function unframe(row: string): string {
 }
 
 /**
- * The question a list on `lines` asks: every row above its own rows up to the
- * dialog's frame (or the top of what was read), as drawn, since a command's
- * text and indentation are what is being approved; then the list's rows from
- * `listTop` through `last` with the highlight and the indent that moves with
- * it taken off. Moving the highlight leaves it the same; a different command,
- * prompt or option makes it differ. Rows after the list's block, which a
- * blank row ends (key hints, task lists, status), never count, since they can
- * change while the question doesn't.
+ * The question a list asks, from the dialog's frame (or the top of what was
+ * read) through row `last`. Rows are kept as drawn, since a command's text and
+ * indentation are what is being approved, except the list's own rows
+ * (`isListRow`), which lose the highlight and the indent that moves with it.
+ * Moving the highlight leaves it the same; a different command, prompt or
+ * option makes it differ. Rows after the list's block, which a blank row ends
+ * (key hints, task lists, status), never count, since they can change while
+ * the question doesn't.
+ *
+ * The frame is found on the rows as drawn (`raw`), not unframed `lines`: a
+ * divider inside a boxed command is the box's content, never its edge.
  */
-function questionText(lines: readonly string[], listTop: number, last: number): string {
-  let top = listTop;
-  while (top > 0 && !DIALOG_EDGE.test(lines[top - 1]!)) top--;
-  const asked = lines.slice(top, listTop).map((row) => row.trimEnd());
-  const listed = lines
-    .slice(listTop, last + 1)
-    .map((row) => row.replace(HIGHLIGHT_MARKER, "").trim());
-  return [...asked, ...listed].join("\n");
+function questionText(
+  raw: readonly string[],
+  lines: readonly string[],
+  last: number,
+  isListRow: (i: number) => boolean
+): string {
+  let top = last;
+  while (top > 0 && !DIALOG_EDGE.test(raw[top - 1]!)) top--;
+  return lines
+    .slice(top, last + 1)
+    .map((row, k) =>
+      isListRow(top + k) ? row.replace(HIGHLIGHT_MARKER, "").trim() : row.trimEnd()
+    )
+    .join("\n");
 }
 
 export function planChoice(screen: string, label: string): ChoicePlan {
   const wanted = label.trim().toLowerCase();
   if (wanted.length === 0) return { ok: false, reason: "The option label is empty." };
-  const lines = screen.split("\n").map(unframe);
+  const raw = screen.split("\n");
+  const lines = raw.map(unframe);
   const rows = (i: number): string => lines[i] ?? "";
 
   // An option row starts with its label, after any marker or number; a
@@ -130,15 +140,19 @@ export function planChoice(screen: string, label: string): ChoicePlan {
   for (let i = from; i <= to; i++) if (isOption(i)) steps++;
 
   const move = cursor < target ? "Down" : "Up";
-  // The list's own rows are those around the label, up to a blank row.
-  let first = target;
-  while (first > 0 && rows(first - 1).trim() !== "") first--;
   let last = target;
   while (last < lines.length - 1 && rows(last + 1).trim() !== "") last++;
+  // Options are the rows that start where the highlighted one's text does,
+  // wherever the highlight is; a heading or a command drawn at another indent
+  // is kept as drawn.
+  const isListRow = (i: number) => {
+    const indent = indentOf(rows(i));
+    return indent === optionIndent || indent === optionIndent + 1;
+  };
   return {
     ok: true,
     keys: [...Array<string>(steps).fill(move), "Enter"],
-    question: questionText(lines, first, last),
+    question: questionText(raw, lines, last, isListRow),
   };
 }
 
@@ -257,7 +271,7 @@ function readChoiceList(rawLines: readonly string[], requireHint: boolean): Choi
     labels,
     cursor: rows.indexOf(cursor),
     // Through the block's end, so the last option's wrapped rows count too.
-    question: questionText(lines, rows[0]!, bottom),
+    question: questionText(rawLines, lines, bottom, (i) => i >= rows[0]!),
   };
 }
 

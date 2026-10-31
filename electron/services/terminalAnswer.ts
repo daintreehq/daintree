@@ -91,7 +91,9 @@ async function awaitPlannedScreen(options: {
   const deadline = Date.now() + ANSWER_REDRAW_WAIT_MS;
   for (;;) {
     const screen = await beforeDeadline(
-      readPluginTerminalScreen(pty, runId, null, ANSWER_SCREEN_LINES),
+      readPluginTerminalScreen(pty, runId, null, ANSWER_SCREEN_LINES).catch(() => ({
+        status: "unavailable" as const,
+      })),
       deadline
     );
     if (screen === null) throw stop("Couldn't read the terminal in time to check the question.");

@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const screen = { text: "" };
+/** `read` stands in for a screen read that hangs or fails. */
+const screen = { text: "", read: "ok" as "ok" | "hang" | "fail" };
 vi.mock("../plugin/pluginTerminalScreenRead.js", () => ({
-  readPluginTerminalScreen: vi.fn(async () => ({
-    status: "ok",
-    text: screen.text,
-    lineCount: 1,
-    truncated: false,
-  })),
+  readPluginTerminalScreen: vi.fn(() => {
+    if (screen.read === "hang") return new Promise(() => {});
+    if (screen.read === "fail") return Promise.reject(new Error("pty-host didn't answer"));
+    return Promise.resolve({ status: "ok", text: screen.text, lineCount: 1, truncated: false });
+  }),
 }));
 
 import { answerRunByLabel, isAnswerLabel, type AnswerPtyClient } from "../terminalAnswer.js";
@@ -71,6 +71,7 @@ const listed = {
 describe("answerRunByLabel", () => {
   beforeEach(() => {
     screen.text = DIALOG;
+    screen.read = "ok";
   });
 
   it("presses the keys planned from the screen now, never keys of the asker's", async () => {
@@ -288,6 +289,24 @@ describe("answerRunByLabel", () => {
       answerRunByLabel({ pty, runId: "run-1", spawnedAt: 100, label: "Maybe", ...listed })
     ).rejects.toMatchObject({ userMessage: expect.stringContaining("didn't show the highlight") });
     expect(state.writes).toEqual(["\x1b[B"]);
+  });
+
+  it("presses no Enter when the screen can't be read between keys, in time or at all", async () => {
+    for (const read of ["hang", "fail"] as const) {
+      const { pty, state } = fakePty();
+      screen.text = DIALOG_A;
+      screen.read = "ok";
+      state.redraw = (text, data) => {
+        screen.read = read;
+        return redrawFor(text, data);
+      };
+      await expect(
+        answerRunByLabel({ pty, runId: "run-1", spawnedAt: 100, label: "No", ...listed })
+      ).rejects.toMatchObject({
+        userMessage: expect.stringContaining("Arrow keys were sent, but Enter wasn't"),
+      });
+      expect(state.writes).toEqual(["\x1b[B"]);
+    }
   });
 
   it("takes only a non-empty label of bounded length", () => {
