@@ -532,7 +532,7 @@ export function useTerminalFileTransfer(
         onWithheld,
       }: {
         lockEpoch?: number;
-        /** A drop landing on its own, rather than the user typing or pasting. */
+        /** A drop or pasted image landing on its own once it resolves, rather than the user typing. */
         automatic?: boolean;
         /** Re-checked before each paced write, so a change mid-batch stops the rest. */
         stillCurrent?: () => boolean;
@@ -589,6 +589,53 @@ export function useTerminalFileTransfer(
         });
     };
 
+    const offerUnwritten = (
+      owners: readonly (readonly string[] | undefined)[],
+      fromSegment: number,
+      reason: () => WithheldReason,
+      hadPanel = false
+    ) => {
+      const unwritten = owners.slice(fromSegment).flatMap((paths) => paths ?? []);
+      if (unwritten.length > 0) offerWithheldPaths(terminalId, unwritten, reason(), hadPanel);
+    };
+
+    /**
+     * Types a gesture's verified paths in on its own only while the terminal
+     * is still the one the user dropped or pasted on. An upload can take
+     * minutes; if they typed or submitted meanwhile, the agent changed, the
+     * pane moved, or the PTY went away, the paths are offered instead. False
+     * when they were.
+     */
+    const landPaths = (
+      filePaths: readonly string[],
+      context: LandingContext,
+      lockEpoch: number
+    ): boolean => {
+      const withheld = (): WithheldReason | null => {
+        if (cancelled || !isMountedRef.current) return "moved";
+        if (isInputLockedRef.current) return "unavailable";
+        if (lockEpochRef.current !== lockEpoch) return "locked";
+        return landingChange(context);
+      };
+      const reason = withheld();
+      if (reason !== null) {
+        offerWithheldPaths(terminalId, filePaths, reason, context.hasPanel);
+        return false;
+      }
+
+      // Trailing space terminates the last token and leaves the caret ready for
+      // the next argument or prompt word, matching the hybrid input's drop.
+      const owners: string[][] = [];
+      writeSegments(buildSegments(filePaths, context.isAgent, owners), context.isAgent, {
+        lockEpoch,
+        automatic: true,
+        stillCurrent: () => landingChange(context) === null,
+        onWithheld: (from) =>
+          offerUnwritten(owners, from, () => withheld() ?? "input", context.hasPanel),
+      });
+      return true;
+    };
+
     // In a remote window the image crosses the link the way a drop does, so it
     // gets the drop's chip: progress on a slow link, and a cancel before a
     // path lands.
@@ -600,20 +647,20 @@ export function useTerminalFileTransfer(
         : materialize({ kind: "clipboard-image" });
 
     // This machine's clipboard image, saved (or, in a remote window, uploaded
-    // to the host) and typed as its path — the DOM paste below without the
-    // event. Ctrl+V in a remote agent terminal and the Windows/Linux paste keys
-    // use it; "empty" lets the caller fall back to what the key does without
-    // an image, so a cancelled upload is "failed", never "empty".
+    // to the host) and typed as its path. The DOM paste below, Ctrl+V in a
+    // remote agent terminal and the Windows/Linux paste keys all use it.
+    // "empty" lets the caller fall back to what the key does without an
+    // image, so a cancelled upload or a withheld path is "failed", never
+    // "empty".
     const pasteClipboardImage = async (): Promise<"inserted" | "empty" | "failed"> => {
+      // Taken at the gesture, as a drop's are: a lock that comes and goes, or
+      // a terminal that moves on, while the image is saved still stops it.
       const lockEpoch = lockEpochRef.current;
+      const context = captureLandingContext();
       try {
         const { hostPath: filePath } = await materializeClipboardImage();
-        if (cancelled || !isMountedRef.current || isInputLockedRef.current) return "failed";
-        if (lockEpochRef.current !== lockEpoch) return "failed";
         if (!filePath || !isDeliverablePath(filePath)) return "failed";
-        const isAgent = isAgentTerminal();
-        writeSegments(buildSegments([filePath], isAgent), isAgent, { lockEpoch });
-        return "inserted";
+        return landPaths([filePath], context, lockEpoch) ? "inserted" : "failed";
       } catch (error) {
         const empty =
           typeof error === "object" &&
@@ -625,18 +672,6 @@ export function useTerminalFileTransfer(
     };
     const unregisterImagePaster = registerClipboardImagePaster(terminalId, pasteClipboardImage);
 
-    // The user asked for these paths from a withheld drop's notice, so they
-    // go in as typed input, formatted for whatever runs in the terminal now.
-    const offerUnwritten = (
-      owners: readonly (readonly string[] | undefined)[],
-      fromSegment: number,
-      reason: () => WithheldReason,
-      hadPanel = false
-    ) => {
-      const unwritten = owners.slice(fromSegment).flatMap((paths) => paths ?? []);
-      if (unwritten.length > 0) offerWithheldPaths(terminalId, unwritten, reason(), hadPanel);
-    };
-
     // The pane is still mounted, so a missing panel row is a PTY that never
     // had one (a Dev Preview console), not a closed pane.
     const canInsert = () =>
@@ -644,6 +679,8 @@ export function useTerminalFileTransfer(
       isMountedRef.current &&
       !isInputLockedRef.current &&
       !isTerminalUnavailable(terminalId, false);
+    // The user asked for these paths from a withheld drop's notice, so they
+    // go in as typed input, formatted for whatever runs in the terminal now.
     const unregisterDropInserter = registerDropInserter(terminalId, {
       canInsert,
       insert: (paths) => {
@@ -666,29 +703,15 @@ export function useTerminalFileTransfer(
       },
     });
 
-    const handlePaste = async (event: ClipboardEvent) => {
+    const handlePaste = (event: ClipboardEvent) => {
       if (isInputLockedRef.current) return;
       if (!hasImageClipboardItem(event)) return;
 
       // Prevent xterm from processing the image paste as text
       event.preventDefault();
       event.stopPropagation();
-      // Taken before the save: a lock that comes and goes while the image is
-      // written to disk still cancels this paste.
-      const lockEpoch = lockEpochRef.current;
-
-      try {
-        const { hostPath: filePath } = await materializeClipboardImage();
-        // Re-check after the await: the pane may have unmounted or locked, and
-        // the running agent may have changed, while the image was being saved.
-        if (cancelled || !isMountedRef.current || isInputLockedRef.current) return;
-        if (lockEpochRef.current !== lockEpoch) return;
-        if (!filePath || !isDeliverablePath(filePath)) return;
-        const isAgent = isAgentTerminal();
-        writeSegments(buildSegments([filePath], isAgent), isAgent, { lockEpoch });
-      } catch {
-        // Empty clipboard, IPC failure during window close, etc. — nothing to do.
-      }
+      // An empty clipboard or a failed save has nothing to fall back to here.
+      void pasteClipboardImage();
     };
 
     // An agent-context drag is a handoff to this pane's draft, which only a
@@ -836,33 +859,7 @@ export function useTerminalFileTransfer(
           .map((result) => result?.hostPath ?? "")
           .filter((filePath): filePath is string => !!filePath && isDeliverablePath(filePath));
         if (deliverable.length === 0) return;
-
-        // A drop typed in on its own only while the terminal is still the one
-        // the user dropped on. An upload can take minutes; if they typed or
-        // submitted meanwhile, the agent changed, the pane moved, or the PTY
-        // went away, the path is offered instead of typed in.
-        const withheld = (): WithheldReason | null => {
-          if (cancelled || !isMountedRef.current) return "moved";
-          if (isInputLockedRef.current) return "unavailable";
-          if (lockEpochRef.current !== lockEpoch) return "locked";
-          return landingChange(context);
-        };
-        const reason = withheld();
-        if (reason !== null) {
-          offerWithheldPaths(terminalId, deliverable, reason, context.hasPanel);
-          return;
-        }
-
-        // Trailing space terminates the last token and leaves the caret ready for
-        // the next argument or prompt word, matching the hybrid input's drop.
-        const owners: string[][] = [];
-        writeSegments(buildSegments(deliverable, context.isAgent, owners), context.isAgent, {
-          lockEpoch,
-          automatic: true,
-          stillCurrent: () => landingChange(context) === null,
-          onWithheld: (from) =>
-            offerUnwritten(owners, from, () => withheld() ?? "input", context.hasPanel),
-        });
+        if (!landPaths(deliverable, context, lockEpoch)) return;
 
         const activeNow = document.activeElement;
         if (activeNow !== focusAtGesture && activeNow && !container.contains(activeNow)) return;
