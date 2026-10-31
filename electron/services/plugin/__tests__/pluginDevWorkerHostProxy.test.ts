@@ -2343,6 +2343,40 @@ describe("PluginDevWorkerHostProxy invocation id", () => {
     );
     expect(byTitle).toEqual({ background: null, a: "i1", b: "i2" });
   });
+
+  it("stamps a process write, resize and kill with it too, and leaves background ones bare (#15792)", async () => {
+    const { proxy, sent } = makeProxy();
+    const spawned = proxy.host.process.spawn("sh", { mode: "pty" });
+    resolveCall(proxy, sent, "process.spawn", { id: "p1", mode: "pty" });
+    const handle = await spawned;
+    proxy.host.registerHandler("type", () => {
+      handle.write("ls\r");
+      handle.resize(40, 10);
+      handle.kill();
+      return null;
+    });
+    handle.write("background");
+
+    const ctx = { projectId: null, worktreeId: null, webContentsId: 1, pluginId: "acme.demo" };
+    proxy.handleMessage({
+      type: "invoke",
+      requestId: "i7",
+      kind: "handler",
+      channel: "type",
+      ctx,
+      args: [],
+    });
+    await flush();
+
+    const notifies = sent.filter((m) => m.type === "host-notify" && m.method.startsWith("process."));
+    expect(notifies.map((m) => [m.method, m.params.data ?? null, m.invocationId ?? null])).toEqual([
+      ["process.write", "background", null],
+      ["process.write", "ls\r", "i7"],
+      ["process.resize", null, "i7"],
+      ["process.kill", null, "i7"],
+    ]);
+    expect("invocationId" in notifies[0]).toBe(false);
+  });
 });
 
 describe("PluginDevWorkerHostProxy transport limits", () => {
