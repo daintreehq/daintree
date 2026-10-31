@@ -653,17 +653,19 @@ describe("PrChecksPopover", () => {
       expect(screen.queryByTestId("pr-merge-control")).toBeNull();
     });
 
-    it("names the forge the host reports in its own words", async () => {
+    it.each([
+      ["GitHub", /GitHub reports nothing left blocking it/],
+      ["Gitea", /Gitea reports nothing left blocking it/],
+      [undefined, /The forge reports nothing left blocking it/],
+    ] as const)("names the forge the host reports (%s)", async (providerName, wording) => {
       getChecksMock.mockResolvedValue({ checks: [check()] });
       getPRMock.mockResolvedValue({ ...openPR, mergeStatus: "clean" });
-      getRepoMetadataMock.mockResolvedValue({ ...metadata, providerName: "GitHub" });
+      getRepoMetadataMock.mockResolvedValue({ ...metadata, providerName });
       renderPopover();
 
       await openAndSettle();
       expect((await screen.findByTestId("pr-merge-action")).textContent).toBe("Merge pull request");
-      expect(screen.getByTestId("pr-merge-control-status").textContent).toMatch(
-        /GitHub reports nothing left blocking it/
-      );
+      expect(screen.getByTestId("pr-merge-control-status").textContent).toMatch(wording);
     });
 
     describe("on a GitLab merge request (#15603)", () => {

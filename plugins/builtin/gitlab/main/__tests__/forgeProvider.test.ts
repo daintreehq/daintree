@@ -1068,6 +1068,26 @@ describe("mutations", () => {
       );
     });
 
+    // Only a pinned merge can have its head move under it; an unpinned 409
+    // is something else and keeps GitLab's own words.
+    it("leaves an unpinned 409 as GitLab said it", async () => {
+      fetchMock().mockResolvedValue(jsonResponse({ message: "Merge conflict" }, { status: 409 }));
+      await expect(gitlabForgeProvider.mergePR(REPO, 5)).rejects.toThrow("Merge conflict");
+    });
+
+    it("never reads a 409 on the target re-read as a moved head", async () => {
+      fetchMock().mockResolvedValueOnce(
+        jsonResponse({ message: "Resource lock" }, { status: 409 })
+      );
+      const attempt = gitlabForgeProvider.mergePR(REPO, 5, {
+        expectedHeadSha: HEAD,
+        expectedBaseRef: "main",
+      });
+      await expect(attempt).rejects.toThrow("Resource lock");
+      await expect(attempt).rejects.not.toThrow(/new commits/);
+      expect(fetchMock().mock.calls.some(isMergeCall)).toBe(false);
+    });
+
     it("explains an instance that requires a pinned head", async () => {
       fetchMock().mockResolvedValue(
         jsonResponse({ message: "SHA must be provided when merging" }, { status: 400 })
