@@ -177,6 +177,82 @@ describe("worktree.createWithRecipe with no frontend (#13501)", () => {
     expect(channelsCalled(unasked.invoke)).not.toContain(CHANNELS.FORGE_ASSIGN_ISSUE);
   });
 
+  it("asks the host to fetch a fresh base and returns the commit it started from (#15733)", async () => {
+    const startCommit = "f".repeat(40);
+    const { deps, invoke } = creationDeps({
+      [CHANNELS.WORKTREE_CREATE]: {
+        worktreeId: "/repo-wt/topic",
+        branch: "topic",
+        setupState: "pending",
+        startCommit,
+      },
+    });
+
+    const result = await executeViewlessAction(
+      request("worktree.createWithRecipe", {
+        source: {
+          kind: "newBranch",
+          branchName: "topic",
+          baseBranch: "origin/develop",
+          fromRemote: true,
+          fetchBase: true,
+        },
+      }),
+      deps
+    );
+
+    expect(invoke).toHaveBeenCalledWith(PROJECT.id, CHANNELS.WORKTREE_CREATE, [
+      {
+        rootPath: "/repo",
+        options: expect.objectContaining({
+          baseBranch: "origin/develop",
+          fromRemote: true,
+          fetchBase: true,
+        }),
+      },
+    ]);
+    expect(result).toMatchObject({ ok: true, result: { effectiveBranch: "topic", startCommit } });
+  });
+
+  it("passes a failed fresh-base fetch back as the create's failure, with its reason", async () => {
+    const { deps } = creationDeps({
+      [CHANNELS.WORKTREE_CREATE]: () => {
+        throw new Error(
+          "Couldn't fetch base 'origin/develop' from 'origin'. No worktree was created. Details: fatal: could not read from remote repository"
+        );
+      },
+    });
+
+    const result = await executeViewlessAction(
+      request("worktree.createWithRecipe", {
+        source: { kind: "newBranch", branchName: "topic", fetchBase: true },
+      }),
+      deps
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "EXECUTION_ERROR",
+        message: expect.stringContaining("could not read from remote repository"),
+      },
+    });
+  });
+
+  it("refuses fetchBase on an existing-branch source, as the renderer's schema does", async () => {
+    const { deps, invoke } = creationDeps();
+
+    const result = await executeViewlessAction(
+      request("worktree.createWithRecipe", {
+        source: { kind: "existingBranch", branchName: "topic", fetchBase: true },
+      }),
+      deps
+    );
+
+    expect(result).toMatchObject({ ok: false, error: { code: "VALIDATION_ERROR" } });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it("refuses a field borrowed from another mode, as the renderer's schema does", async () => {
     const { deps, invoke } = creationDeps();
 

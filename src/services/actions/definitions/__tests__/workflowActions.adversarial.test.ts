@@ -620,6 +620,40 @@ describe("worktree.createWithRecipe", () => {
     expect(result.setupState).toBe("running");
   });
 
+  it("asks the host for a fresh base and returns the commit the branch started from (#15733)", async () => {
+    const startCommit = "e".repeat(40);
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    worktreeClientMock.create.mockResolvedValue({
+      worktreeId: "wt-new",
+      branch: "feature/foo",
+      setupState: "pending",
+      startCommit,
+    });
+
+    const result = (await def.run(
+      { source: newBranch("feature/foo", { fetchBase: true }) },
+      {} as never
+    )) as Record<string, unknown>;
+
+    expect(worktreeClientMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ fetchBase: true, useExistingBranch: false }),
+      "/repo"
+    );
+    expect(result.startCommit).toBe(startCommit);
+  });
+
+  it("leaves fetchBase off the request, and startCommit off the result, unless asked", async () => {
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+
+    const result = (await def.run({ source: newBranch("feature/foo") }, {} as never)) as Record<
+      string,
+      unknown
+    >;
+
+    expect(worktreeClientMock.create.mock.calls[0]![0]).not.toHaveProperty("fetchBase");
+    expect(result).not.toHaveProperty("startCommit");
+  });
+
   it("recipe context carries prNumber (not issueNumber) when pullRequestNumber is provided", async () => {
     forgeClientMock.getPR.mockResolvedValue({
       number: 42,

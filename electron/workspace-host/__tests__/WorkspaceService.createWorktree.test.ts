@@ -999,6 +999,9 @@ describe("WorkspaceService.createWorktree", () => {
     expect(keyOf({ ...base, fromRemote: true })).not.toBe(keyOf(base));
     expect(keyOf({ ...base, worktreeMode: "remote-worker" })).not.toBe(keyOf(base));
     expect(keyOf({ ...base, sourcePrNumber: 7 })).not.toBe(keyOf(base));
+    // A fresh-base caller handed the answer of a create that skipped the fetch
+    // would start from exactly the stale commit it asked to avoid.
+    expect(keyOf({ ...base, fetchBase: true })).not.toBe(keyOf(base));
   });
 
   it("still coalesces two identical creates, including explicit defaults", async () => {
@@ -1022,6 +1025,7 @@ describe("WorkspaceService.createWorktree", () => {
         submoduleInit: "inherit",
         provisionResource: false,
         worktreeMode: "local",
+        fetchBase: false,
       })
     ).toBe(keyOf(base));
     // Whitespace around the branch name is not a different request either.
@@ -1544,6 +1548,237 @@ describe("WorkspaceService.createWorktree", () => {
       (call) => call[0][0] === "worktree" && call[0][1] === "add"
     );
     expect(addCalls).toHaveLength(1);
+  });
+
+  describe("fetchBase (#15733)", () => {
+    const FETCHED = "b".repeat(40);
+
+    function spyFetch() {
+      return vi.spyOn(service["fetchCoordinator"], "fetchRefCommit");
+    }
+
+    it("fetches a remote base before anything is created and adds from the fetched commit", async () => {
+      const fetchSpy = spyFetch().mockResolvedValue(FETCHED);
+      const pendingSpy = vi.spyOn(service["topologyWatcher"], "markPendingCreate");
+
+      await service.createWorktree("req-fresh", "/test/root", {
+        baseBranch: "origin/main",
+        newBranch: "topic",
+        path: "/test/worktree-fresh",
+        fromRemote: true,
+        fetchBase: true,
+      });
+
+      expect(fetchSpy).toHaveBeenCalledWith({
+        cwd: "/test/root",
+        remote: "origin",
+        sourceRef: "refs/heads/main",
+        trackingRef: "refs/remotes/origin/main",
+        timeoutMs: expect.any(Number),
+      });
+      // The commit, not the ref, and never tracked: a ref could move between the
+      // fetch and the add, and git can't set up tracking from a commit.
+      expect(lastWorktreeAddCall(mockSimpleGit.raw)).toEqual([
+        "worktree",
+        "add",
+        "-b",
+        "topic",
+        "--no-track",
+        "--end-of-options",
+        "/test/worktree-fresh",
+        FETCHED,
+      ]);
+      const fetchOrder = fetchSpy.mock.invocationCallOrder[0]!;
+      expect(fetchOrder).toBeLessThan(pendingSpy.mock.invocationCallOrder[0]!);
+      expect(mockSendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "create-worktree-result",
+          requestId: "req-fresh",
+          success: true,
+          branch: "topic",
+          startCommit: FETCHED,
+        })
+      );
+    });
+
+    it("fetches a local base from its exact branch's upstream, not a branch nested under it", async () => {
+      const fetchSpy = spyFetch().mockResolvedValue(FETCHED);
+      mockSimpleGit.raw.mockImplementation((args: string[]) => {
+        if (args[0] === "for-each-ref") {
+          return Promise.resolve(
+            [
+              "refs/heads/develop/old\0refs/remotes/fork/develop/old\0fork\0refs/heads/develop/old",
+              "refs/heads/develop\0refs/remotes/origin/develop\0origin\0refs/heads/develop",
+              "",
+            ].join("\n")
+          );
+        }
+        return Promise.resolve(undefined);
+      });
+
+      await service.createWorktree("req-fresh-local", "/test/root", {
+        baseBranch: "develop",
+        newBranch: "topic",
+        path: "/test/worktree-fresh-local",
+        fetchBase: true,
+      });
+
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          remote: "origin",
+          sourceRef: "refs/heads/develop",
+          trackingRef: "refs/remotes/origin/develop",
+        })
+      );
+      expect(lastWorktreeAddCall(mockSimpleGit.raw)?.at(-1)).toBe(FETCHED);
+    });
+
+    it("fails with the fetch's reason, secrets scrubbed, and creates nothing", async () => {
+      const token = `ghp_${"a1B2c3D4e5".repeat(4)}`;
+      spyFetch().mockRejectedValue(
+        new Error(`fatal: unable to access 'https://x:${token}@github.com/o/r.git/': 403`)
+      );
+      const pendingSpy = vi.spyOn(service["topologyWatcher"], "markPendingCreate");
+
+      await service.createWorktree("req-fresh-fail", "/test/root", {
+        baseBranch: "origin/main",
+        newBranch: "topic",
+        path: "/test/worktree-fresh-fail",
+        fromRemote: true,
+        fetchBase: true,
+      });
+
+      const result = mockSendEvent.mock.calls
+        .map((call: unknown[]) => call[0] as { type: string; requestId?: string; error?: string })
+        .find((event) => event.type === "create-worktree-result");
+      expect(result).toMatchObject({ requestId: "req-fresh-fail", success: false });
+      expect(result?.error).toContain("Couldn't fetch base 'origin/main' from 'origin'");
+      expect(result?.error).toContain("unable to access");
+      expect(result?.error).not.toContain(token);
+      expect(lastWorktreeAddCall(mockSimpleGit.raw)).toBeUndefined();
+      expect(pendingSpy).not.toHaveBeenCalled();
+    });
+
+    it("refuses a remote base that names no configured remote, without fetching", async () => {
+      const fetchSpy = spyFetch();
+
+      await service.createWorktree("req-fresh-unknown", "/test/root", {
+        baseBranch: "upstream/main",
+        newBranch: "topic",
+        path: "/test/worktree-fresh-unknown",
+        fromRemote: true,
+        fetchBase: true,
+      });
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(mockSendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "create-worktree-result",
+          success: false,
+          error: expect.stringContaining("doesn't name a branch on any of this repository's remotes"),
+        })
+      );
+      expect(lastWorktreeAddCall(mockSimpleGit.raw)).toBeUndefined();
+    });
+
+    it("refuses fetchBase beside useExistingBranch before fetching anything", async () => {
+      const fetchSpy = spyFetch();
+
+      await service.createWorktree("req-fresh-reuse", "/test/root", {
+        baseBranch: "topic",
+        newBranch: "topic",
+        path: "/test/worktree-fresh-reuse",
+        useExistingBranch: true,
+        fetchBase: true,
+      });
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(mockSendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "create-worktree-result",
+          success: false,
+          error: expect.stringContaining("can't be combined with useExistingBranch"),
+        })
+      );
+    });
+
+    it("suffixes rather than reusing an unchecked-out branch, retrying from the fetched commit", async () => {
+      spyFetch().mockResolvedValue(FETCHED);
+      mockSimpleGit.branchLocal.mockResolvedValueOnce({
+        all: ["main", "topic"],
+        current: "main",
+        branches: {},
+        detached: false,
+      });
+      // `topic` is checked out nowhere, which without a fresh base means reuse.
+      mockCollidingAdd(mockSimpleGit.raw, "topic", [
+        "worktree /test/root",
+        "HEAD abc",
+        "branch refs/heads/main",
+        "",
+      ]);
+      const colliding = mockSimpleGit.raw.getMockImplementation()!;
+      mockSimpleGit.raw.mockImplementation((args: string[]) =>
+        args[0] === "for-each-ref"
+          ? Promise.resolve("refs/heads/main\0refs/remotes/origin/main\0origin\0refs/heads/main\n")
+          : colliding(args)
+      );
+
+      await service.createWorktree("req-fresh-collide", "/test/root", {
+        baseBranch: "main",
+        newBranch: "topic",
+        path: "/test/worktree-fresh-collide",
+        fromRemote: false,
+        fetchBase: true,
+      });
+
+      expect(lastWorktreeAddCall(mockSimpleGit.raw)).toEqual([
+        "worktree",
+        "add",
+        "-b",
+        "topic-2",
+        "--no-track",
+        "--end-of-options",
+        "/test/worktree-fresh-collide",
+        FETCHED,
+      ]);
+      expect(mockSendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "create-worktree-result",
+          success: true,
+          branch: "topic-2",
+          startCommit: FETCHED,
+        })
+      );
+    });
+
+    it("hands a coalesced duplicate the same start commit", async () => {
+      const fetchSpy = spyFetch().mockResolvedValue(FETCHED);
+      const options = {
+        baseBranch: "origin/main",
+        newBranch: "topic",
+        path: "/test/worktree-fresh-dup",
+        fromRemote: true,
+        fetchBase: true,
+      };
+
+      await Promise.all([
+        service.createWorktree("req-dup-a", "/test/root", options),
+        service.createWorktree("req-dup-b", "/test/root", options),
+      ]);
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      for (const requestId of ["req-dup-a", "req-dup-b"]) {
+        expect(mockSendEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: "create-worktree-result",
+            requestId,
+            success: true,
+            startCommit: FETCHED,
+          })
+        );
+      }
+    });
   });
 
   it("ignores collisionPolicy on a reuse, because reuse is not a collision", async () => {

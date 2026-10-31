@@ -32,6 +32,7 @@ describe("WorktreeCreatePayloadSchema", () => {
       sourcePrLinkedIssueNumber: 7,
       submoduleInit: "all" as const,
       collisionPolicy: "error" as const,
+      fetchBase: true,
     };
     const result = WorktreeCreatePayloadSchema.safeParse({
       rootPath: "/home/user/repo",

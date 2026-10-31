@@ -1467,3 +1467,155 @@ describe("RepoFetchCoordinator — remote inventory", () => {
     expect(mockGit.raw.mock.calls[0][0][1]).toBe("origin");
   });
 });
+
+describe("RepoFetchCoordinator.fetchRefCommit (#15733)", () => {
+  const COMMIT = "c".repeat(40);
+  const REQUEST = {
+    cwd: "/repo",
+    remote: "origin",
+    sourceRef: "refs/heads/develop",
+    trackingRef: "refs/remotes/origin/develop",
+    timeoutMs: 20_000,
+  };
+
+  /** A git whose fetch resolves and whose rev-parse names {@link COMMIT}. */
+  function refGit(): MockGit {
+    const git = makeMockGit(() => Promise.resolve());
+    git.raw.mockImplementation((args: string[]) =>
+      Promise.resolve(args[0] === "rev-parse" ? `${COMMIT}\n` : "")
+    );
+    return git;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.clearAllMocks();
+    // A queued once-value a test never consumed must not answer the next one.
+    mockCreateBackgroundFetchGit.mockReset();
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("fetches exactly the requested branch into its tracking ref and returns the commit it names", async () => {
+    const git = refGit();
+    mockCreateBackgroundFetchGit.mockReturnValue(git);
+
+    const commit = await new RepoFetchCoordinator().fetchRefCommit(REQUEST);
+
+    expect(commit).toBe(COMMIT);
+    expect(git.raw.mock.calls.map((call) => call[0])).toEqual([
+      [
+        "fetch",
+        "--no-tags",
+        "--no-prune",
+        "--no-auto-gc",
+        "--no-write-fetch-head",
+        "--",
+        "origin",
+        "+refs/heads/develop:refs/remotes/origin/develop",
+      ],
+      ["rev-parse", "--verify", "refs/remotes/origin/develop^{commit}"],
+    ]);
+  });
+
+  it("fetches even inside the window a background fetch's success opened, and records nothing", async () => {
+    const git = refGit();
+    mockCreateBackgroundFetchGit.mockReturnValue(git);
+    const coord = new RepoFetchCoordinator();
+    await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    const recordedAt = coord.getLastSuccessfulFetch("/repo/.git");
+    git.raw.mockClear();
+
+    await coord.fetchRefCommit(REQUEST);
+
+    expect(git.raw.mock.calls[0]![0][0]).toBe("fetch");
+    expect(coord.getLastSuccessfulFetch("/repo/.git")).toBe(recordedAt);
+  });
+
+  it("waits for a background fetch of the same repo to finish before fetching", async () => {
+    let releaseBackground!: () => void;
+    const order: string[] = [];
+    const backgroundGit = makeMockGit(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseBackground = () => {
+            order.push("background-done");
+            resolve();
+          };
+        })
+    );
+    const refFetchGit = refGit();
+    const answer = refFetchGit.raw.getMockImplementation()!;
+    refFetchGit.raw.mockImplementation((args: string[]) => {
+      order.push(args[0]!);
+      return answer(args);
+    });
+    mockCreateBackgroundFetchGit
+      .mockReturnValueOnce(backgroundGit)
+      .mockReturnValueOnce(refFetchGit);
+    const coord = new RepoFetchCoordinator();
+
+    const background = coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    await vi.waitFor(() => expect(backgroundGit.raw).toHaveBeenCalled());
+    const fresh = coord.fetchRefCommit(REQUEST);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(refFetchGit.raw).not.toHaveBeenCalled();
+
+    releaseBackground();
+    await Promise.all([background, fresh]);
+    expect(order).toEqual(["background-done", "fetch", "rev-parse"]);
+  });
+
+  it("rejects with git's own error, and the next fetch of the repo still runs", async () => {
+    const failing = makeMockGit(() =>
+      Promise.reject(new Error("fatal: couldn't find remote ref refs/heads/develop"))
+    );
+    const healthy = makeMockGit(() => Promise.resolve());
+    mockCreateBackgroundFetchGit.mockReturnValueOnce(failing).mockReturnValueOnce(healthy);
+    const coord = new RepoFetchCoordinator();
+
+    await expect(coord.fetchRefCommit(REQUEST)).rejects.toThrow("couldn't find remote ref");
+    const next = await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+
+    expect(next.status).toBe("success");
+  });
+
+  it("gives up within its budget while queued, and never starts the fetch afterwards", async () => {
+    const stuck = makeMockGit(() => new Promise<void>(() => {}));
+    mockCreateBackgroundFetchGit.mockReturnValue(stuck);
+    const coord = new RepoFetchCoordinator();
+    void coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    await vi.waitFor(() => expect(stuck.raw).toHaveBeenCalled());
+
+    const fresh = coord.fetchRefCommit({ ...REQUEST, timeoutMs: 5_000 });
+    const settled = expect(fresh).rejects.toThrow("didn't finish within 5s");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await settled;
+
+    // The background fetch's own 60s abort frees the chain; the abandoned
+    // link must not start a git process when it finally gets its turn.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mockCreateBackgroundFetchGit).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops a running fetch when the coordinator is destroyed", async () => {
+    let signal: AbortSignal | undefined;
+    mockCreateBackgroundFetchGit.mockImplementation(
+      (_cwd: string, opts: { signal: AbortSignal }) => {
+        signal = opts.signal;
+        return makeMockGit(() => new Promise<void>(() => {}));
+      }
+    );
+    const coord = new RepoFetchCoordinator();
+
+    const fresh = coord.fetchRefCommit(REQUEST);
+    await vi.waitFor(() => expect(signal).toBeDefined());
+    coord.destroy();
+
+    await expect(fresh).rejects.toThrow("stopped because the project closed");
+    expect(signal!.aborted).toBe(true);
+  });
+});

@@ -48,6 +48,29 @@ function acceptedKeys(schema: z.ZodType): string[] {
   return Object.keys(json.properties ?? {}).sort();
 }
 
+interface SourceArmJson {
+  properties?: Record<string, { const?: unknown }>;
+}
+
+/**
+ * `createWithRecipe`'s keys per source mode, by `kind`. The top-level keys
+ * alone stop at `source`, so a field one side's arm gained (#15733's
+ * `fetchBase`) would pass unnoticed.
+ */
+function sourceArmKeys(schema: z.ZodType): Record<string, string[]> {
+  const json = z.toJSONSchema(schema, { io: "input", unrepresentable: "any" }) as {
+    properties?: { source?: { oneOf?: SourceArmJson[]; anyOf?: SourceArmJson[] } };
+  };
+  const source = json.properties?.source;
+  const arms = source?.oneOf ?? source?.anyOf ?? [];
+  return Object.fromEntries(
+    arms.map((arm) => [
+      String(arm.properties?.kind?.const),
+      Object.keys(arm.properties ?? {}).sort(),
+    ])
+  );
+}
+
 /**
  * The host runs these actions itself when no frontend is attached (#13495),
  * admitting each against the danger its catalog restates. A definition that
@@ -95,4 +118,14 @@ describe("viewless argument schemas", () => {
       expect(acceptedKeys(schema)).toEqual(acceptedKeys(rendererSchema));
     }
   );
+
+  it("takes the keys worktree.createWithRecipe's renderer action takes in every source mode", async () => {
+    const registry = await createActionRegistry();
+    const rendererSchema: unknown = registry.get("worktree.createWithRecipe")?.()?.argsSchema;
+    if (!isZodSchema(rendererSchema)) throw new Error("createWithRecipe has no args schema");
+
+    const rendererArms = sourceArmKeys(rendererSchema);
+    expect(Object.keys(rendererArms).sort()).toEqual(["existingBranch", "newBranch", "pullRequest"]);
+    expect(sourceArmKeys(WorktreeCreateWithRecipeArgsSchema)).toEqual(rendererArms);
+  });
 });

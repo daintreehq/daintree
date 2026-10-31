@@ -209,6 +209,23 @@ describe("worktree rate limiting", () => {
       resolveCreate("wt-1");
       await expect(Promise.all([first, second])).resolves.toEqual(["wt-1", "wt-1"]);
     });
+
+    it("does not coalesce a fresh-base create onto one that skips the fetch (#15733)", async () => {
+      mockWorktreeService.createWorktree.mockReturnValue(new Promise<string>(() => {}));
+      const handler = getInvokeHandler(CHANNELS.WORKTREE_CREATE);
+      const options = { baseBranch: "main", newBranch: "feat-1", path: "/test/worktrees/feat-1" };
+
+      void handler({} as never, { rootPath: "/test/project", options });
+      void handler({} as never, {
+        rootPath: "/test/project",
+        options: { ...options, fetchBase: true },
+      });
+      await vi.waitFor(() => expect(mockWorktreeService.createWorktree).toHaveBeenCalledTimes(2));
+
+      expect(mockWorktreeService.createWorktree.mock.calls[1]![1]).toMatchObject({
+        fetchBase: true,
+      });
+    });
   });
 
   describe("other handlers still use checkRateLimit", () => {
