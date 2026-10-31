@@ -158,10 +158,18 @@ export interface CopyTreeInjectPayload {
   opId?: string;
 }
 
+/**
+ * Why an injection is being stopped, beyond the user cancelling it. The pane's
+ * input lock lives in the renderer, so the renderer is the one to report it.
+ */
+export type CopyTreeStopReason = "input-locked";
+
 /** Payload for cancelling a specific injection operation */
 export interface CopyTreeCancelPayload {
   /** If provided, only cancel this specific injection. If omitted, cancels all. */
   injectionId?: string;
+  /** Absent for a plain cancel. Only meaningful with `injectionId`. */
+  reason?: CopyTreeStopReason;
 }
 
 /**

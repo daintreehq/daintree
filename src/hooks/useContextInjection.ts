@@ -5,6 +5,11 @@ import { useErrorStore } from "@/store/errorStore";
 import { isPtyPanel } from "@shared/types/panel";
 import type { AgentState, CopyTreeProgress } from "@/types";
 import { copyTreeClient } from "@/clients";
+import {
+  INPUT_LOCKED_INJECTION_REFUSAL,
+  injectContextUnlessLocked,
+  isTerminalInputLocked,
+} from "@/services/contextInjectionGuard";
 import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
 import { formatCopyResultMessage } from "@/lib/formatCopyResult";
 import { notify } from "@/lib/notify";
@@ -209,6 +214,17 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         return;
       }
 
+      // Waiting would only end in a refusal; the person who locked it can see why now.
+      if (terminal && isPtyPanel(terminal) && terminal.isInputLocked === true) {
+        pending.reject(new Error(INPUT_LOCKED_INJECTION_REFUSAL));
+        globalInjectionState.pendingInjection = null;
+        globalInjectionState.isPendingInjection = false;
+        globalInjectionState.activeTerminalId = null;
+        globalInjectionState.lastProgress = null;
+        globalInjectionState.notify();
+        return;
+      }
+
       // Only process if agent state changed to ready
       const currAgentState = terminal && isPtyPanel(terminal) ? terminal.agentState : undefined;
       const prevAgentState =
@@ -223,6 +239,39 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
 
     return unsubscribe;
   }, []);
+
+  // The error store is the surface every caller sees: App's own instance, which
+  // the keybinding and the actions reach, never renders its `error` state.
+  const reportFailure = useCallback(
+    (
+      message: string,
+      address: { worktreeId: string; terminalId: string },
+      details?: string,
+      retryability: "auto" | "user-gated" = "auto"
+    ) => {
+      setError(message);
+
+      let errorType: "config" | "process" | "filesystem" = "process";
+      if (message.includes("not installed") || message.includes("not found")) {
+        errorType = "config";
+      } else if (message.includes("permission") || message.includes("EACCES")) {
+        errorType = "filesystem";
+      }
+
+      currentErrorIdRef.current = addError({
+        type: errorType,
+        message: `Context injection failed: ${message}`,
+        details,
+        source: "ContextInjection",
+        context: address,
+        retryability,
+        correlationId: crypto.randomUUID(),
+      });
+
+      logError("[useContextInjection] Context injection failed", undefined, { message });
+    },
+    [addError]
+  );
 
   const inject = useCallback(
     async (worktreeId: string, terminalId?: string, selectedPaths?: string[]) => {
@@ -247,6 +296,18 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
       let terminal = usePanelStore.getState().panelsById[activeTerminal];
       if (!terminal) {
         setError(`Terminal not found: ${activeTerminal}`);
+        return;
+      }
+
+      // Before the readiness wait as well as at the write: a locked pane is
+      // refused without generating anything.
+      if (isTerminalInputLocked(activeTerminal)) {
+        reportFailure(
+          INPUT_LOCKED_INJECTION_REFUSAL,
+          { worktreeId, terminalId: activeTerminal },
+          undefined,
+          "user-gated"
+        );
         return;
       }
 
@@ -310,7 +371,14 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         } catch (e) {
           // Injection was cancelled while waiting
           const message = formatErrorMessage(e, "Injection cancelled");
-          if (message !== "Injection cancelled") {
+          if (message === INPUT_LOCKED_INJECTION_REFUSAL) {
+            reportFailure(
+              message,
+              { worktreeId, terminalId: activeTerminal },
+              undefined,
+              "user-gated"
+            );
+          } else if (message !== "Injection cancelled") {
             setError(message);
           }
           // Clear stale progress on early abort
@@ -384,13 +452,13 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
           ...(selectedPaths && selectedPaths.length > 0 ? { includePaths: selectedPaths } : {}),
         };
 
-        const result = await copyTreeClient.injectToTerminal(
-          activeTerminal,
+        const result = await injectContextUnlessLocked({
+          terminalId: activeTerminal,
           worktreeId,
           options,
-          injectionUuid,
-          "terminal"
-        );
+          injectionId: injectionUuid,
+          source: "terminal",
+        });
 
         if (result.error) {
           throw new Error(result.error);
@@ -459,33 +527,12 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
           return;
         }
 
-        const details = e instanceof Error ? e.stack : undefined;
-
-        setError(message);
-
-        let errorType: "config" | "process" | "filesystem" = "process";
-        if (message.includes("not installed") || message.includes("not found")) {
-          errorType = "config";
-        } else if (message.includes("permission") || message.includes("EACCES")) {
-          errorType = "filesystem";
-        }
-
-        const errorId = addError({
-          type: errorType,
-          message: `Context injection failed: ${message}`,
-          details,
-          source: "ContextInjection",
-          context: {
-            worktreeId,
-            terminalId: activeTerminal,
-          },
-          retryability: "auto",
-          correlationId: crypto.randomUUID(),
-        });
-
-        currentErrorIdRef.current = errorId;
-
-        logError("[useContextInjection] Context injection failed", undefined, { message });
+        reportFailure(
+          message,
+          { worktreeId, terminalId: activeTerminal },
+          e instanceof Error ? e.stack : undefined,
+          message === INPUT_LOCKED_INJECTION_REFUSAL ? "user-gated" : "auto"
+        );
       } finally {
         cancelledUuids.delete(injectionUuid);
         // Only clear global state if we own this injection (prevent cross-run interference)
@@ -499,7 +546,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         }
       }
     },
-    [addError, removeError]
+    [removeError, reportFailure]
   );
 
   const cancel = useCallback(() => {

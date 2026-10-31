@@ -14,6 +14,7 @@ import {
 } from "./locationArgs";
 import { copiesWorkspaceRoot } from "./workspaceRootCopyTarget";
 import { notify } from "@/lib/notify";
+import { injectContextUnlessLocked } from "@/services/contextInjectionGuard";
 import { announceCopyTreeCopy } from "@/lib/copyTreeFeedback";
 import { panelNotificationAddress } from "@/lib/notificationAddress";
 import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
@@ -383,14 +384,15 @@ export const systemActionRuns: {
       worktreeId: resolvedWorktreeId,
       ...panelNotificationAddress(terminalId),
     };
-    const result = await copyTreeClient.injectToTerminal(
+    // Refuses a locked pane before generation and stops the run if it is
+    // locked while in flight.
+    const result = await injectContextUnlessLocked({
       terminalId,
-      resolvedWorktreeId,
+      worktreeId: resolvedWorktreeId,
       options,
-      undefined,
-      resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource),
-      name
-    );
+      source: resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource),
+      name,
+    });
     throwOnCopyTreeFailure(result);
     // "injected … into terminal", not "copied": the bundle streams into a
     // PTY and never reaches the clipboard. Ordered after the failure check.

@@ -3,6 +3,7 @@ import type {
   CopyTreeResult,
   CopyTreeProgress,
   CopyTreeRunSource,
+  CopyTreeStopReason,
   CopyTreeTestConfigOptions,
   CopyTreeTestConfigResult,
   FileTreeNode,
@@ -61,8 +62,8 @@ export const copyTreeClient = {
     return window.electron.copyTree.isAvailable();
   },
 
-  cancel: (injectionId?: string): Promise<void> => {
-    return window.electron.copyTree.cancel(injectionId);
+  cancel: (injectionId?: string, reason?: CopyTreeStopReason): Promise<void> => {
+    return window.electron.copyTree.cancel(injectionId, reason);
   },
 
   getFileTree: (

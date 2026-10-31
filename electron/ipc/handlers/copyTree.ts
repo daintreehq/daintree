@@ -128,7 +128,11 @@ import type {
 import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { recordCopyTreeRun } from "../../services/copyTreeHistoryService.js";
-import { contextInjectionTracker } from "../../services/ContextInjectionTracker.js";
+import {
+  contextInjectionTracker,
+  type InjectionStop,
+} from "../../services/ContextInjectionTracker.js";
+import { events } from "../../services/events.js";
 import {
   fitContentToResultBudget,
   readContentPreview,
@@ -419,11 +423,41 @@ async function loadCopyTreeProjectSettings(
 }
 
 const INJECTION_CANCELLED = "Injection cancelled";
+const INPUT_LOCKED_STOP = "Injection stopped: the terminal's input was locked";
+const AGENT_GONE_STOP = "Injection stopped: the agent it was for is no longer running there";
+const TERMINAL_CLOSED = "Terminal closed during injection";
 const SHELL_REFUSAL = "Context can only be injected into a running agent, not a shell";
 const NOT_ACCEPTING_PASTE =
   "The agent isn't accepting pasted text yet. Try again once its prompt is ready";
 const PASTE_READY_WAIT_MS = 10_000;
 const PASTE_READY_POLL_MS = 250;
+
+function describeInjectionStop(stop: InjectionStop): string {
+  return stop === "input-locked" ? INPUT_LOCKED_STOP : INJECTION_CANCELLED;
+}
+
+/**
+ * Why delivery must stop. `closePaste` says whether the program that read the
+ * opener is still there to be handed its terminator.
+ */
+interface InjectionHalt {
+  error: string;
+  closePaste: boolean;
+}
+
+/**
+ * The terminal and agent an injection was admitted for, held from before
+ * generation to the last chunk.
+ */
+interface InjectionTarget {
+  /** Lifecycle-ledger generation of the incarnation that was asked for. */
+  readonly generation: number | undefined;
+  /** Fold in a fresh host answer: the agent it names must still be the owner. */
+  observe(info: TerminalInfoPayload | null): void;
+  /** Why the injection can no longer go to this target, or null while it can. */
+  lost(): string | null;
+  dispose(): void;
+}
 
 /**
  * Why the host's view of a terminal doesn't admit the bundle as a bracketed
@@ -856,26 +890,96 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
   );
 
   /**
+   * Pin the incarnation and the agent an injection is for, before generation
+   * spends seconds on it. A terminal with no agent detected yet (a workflow
+   * injects right after launching one) takes the first agent seen as its
+   * owner. From then on an exit, a respawn, or a different agent or session in
+   * the same pane means the bundle no longer has its reader.
+   *
+   * The host's agent events keep the pin current between snapshots, so a chunk
+   * boundary needs no round trip. An agent a plugin contributed has no
+   * detected identity, so only the incarnation is pinned for it.
+   */
+  const pinInjectionTarget = async (terminalId: string): Promise<InjectionTarget> => {
+    const ledger = getLifecycleLedger();
+    const generation = ledger.currentGeneration(terminalId);
+    const info = await deps.ptyClient!.getTerminalInfo(terminalId);
+    let owner: { agentId: string; incarnation: number | undefined } | undefined;
+    let lost: string | null = null;
+
+    const adoptOrCompare = (agentId: string, incarnation: number | undefined): void => {
+      if (!owner) {
+        owner = { agentId, incarnation };
+        return;
+      }
+      // Absent means unobserved, never zero, so only two observed counts compare.
+      const relaunched =
+        owner.incarnation !== undefined &&
+        incarnation !== undefined &&
+        owner.incarnation !== incarnation;
+      if (owner.agentId !== agentId || relaunched) lost = AGENT_GONE_STOP;
+    };
+
+    // An answer that straddled a respawn describes the predecessor.
+    if (ledger.currentGeneration(terminalId) !== generation) lost = TERMINAL_CLOSED;
+    else if (info?.detectedAgentId) adoptOrCompare(info.detectedAgentId, info.agentIncarnation);
+
+    // Subscribed in the continuation of the snapshot, so every event seen here
+    // happened after the state that answer describes.
+    const offDetected = events.on("agent:detected", (event) => {
+      if (lost || event.terminalId !== terminalId || !event.agentType) return;
+      adoptOrCompare(event.agentType, event.agentIncarnation);
+    });
+    const offExited = events.on("agent:exited", (event) => {
+      if (lost || event.terminalId !== terminalId || !event.agentType) return;
+      if (owner) lost = AGENT_GONE_STOP;
+    });
+
+    return {
+      generation,
+      observe(next) {
+        if (lost) return;
+        if (ledger.currentGeneration(terminalId) !== generation) {
+          lost = TERMINAL_CLOSED;
+          return;
+        }
+        if (next?.detectedAgentId) {
+          adoptOrCompare(next.detectedAgentId, next.agentIncarnation);
+        } else if (owner && next?.hasPty) {
+          lost = AGENT_GONE_STOP;
+        }
+      },
+      lost: () => lost,
+      dispose() {
+        offDetected();
+        offExited();
+      },
+    };
+  };
+
+  /**
    * Poll the host until the terminal can take the paste, for as long as the
    * verdict could still change: a workflow injects right after launching its
-   * agent, before the CLI has drawn a prompt. The generation pins the
-   * incarnation that was judged, so a same-id respawn can't inherit the paste.
+   * agent, before the CLI has drawn a prompt. Every answer is held against the
+   * pinned target, so a respawn or a new agent can't inherit the paste.
    */
   const awaitPasteDestination = async (
     terminalId: string,
-    isCancelled: () => boolean
-  ): Promise<{ generation: number | undefined } | { error: string }> => {
-    const ledger = getLifecycleLedger();
+    target: InjectionTarget,
+    halted: () => InjectionHalt | null
+  ): Promise<{ error: string } | null> => {
     const deadline = Date.now() + PASTE_READY_WAIT_MS;
     for (;;) {
-      if (isCancelled()) return { error: INJECTION_CANCELLED };
-      const generation = ledger.currentGeneration(terminalId);
-      const verdict = judgePasteDestination(await deps.ptyClient!.getTerminalInfo(terminalId));
-      if (isCancelled()) return { error: INJECTION_CANCELLED };
-      // An answer that straddled a respawn describes the predecessor.
-      if (!verdict && ledger.currentGeneration(terminalId) === generation) return { generation };
-      if (verdict && !verdict.transient) return { error: verdict.reason };
-      if (Date.now() >= deadline) return { error: verdict?.reason ?? NOT_ACCEPTING_PASTE };
+      const before = halted();
+      if (before) return before;
+      const info = await deps.ptyClient!.getTerminalInfo(terminalId);
+      target.observe(info);
+      const after = halted();
+      if (after) return after;
+      const verdict = judgePasteDestination(info);
+      if (!verdict) return null;
+      if (!verdict.transient) return { error: verdict.reason };
+      if (Date.now() >= deadline) return { error: verdict.reason };
       await new Promise((resolve) => setTimeout(resolve, PASTE_READY_POLL_MS));
     }
   };
@@ -887,15 +991,16 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
    * the same in one string; this payload is too large to hold twice or to
    * write without a cancellation point.
    *
-   * Once delivery stops — cancelled, terminal gone, a write that throws — no
-   * further body byte is written. The terminator is the one exception, so a
-   * terminal that is still alive is never left inside an open paste.
+   * Once delivery stops — cancelled, locked, terminal gone, a write that
+   * throws, the agent gone — no further body byte is written. The terminator
+   * is the one exception, so a program still reading is never left inside an
+   * open paste; one that left has no paste to close.
    */
   const writeBracketedPaste = async (
     terminalId: string,
     generation: number | undefined,
     sources: string[],
-    isCancelled: () => boolean,
+    halted: () => InjectionHalt | null,
     traceId: string
   ): Promise<string | null> => {
     const ptyClient = deps.ptyClient!;
@@ -911,8 +1016,8 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       ledger.currentGeneration(terminalId) === generation &&
       ledger.getEntry(terminalId)?.closedAt === undefined;
 
-    const stop = (error: string): string => {
-      if (opened && isAdmittedTerminalAlive()) {
+    const stop = (error: string, closePaste = true): string => {
+      if (closePaste && opened && isAdmittedTerminalAlive()) {
         try {
           ptyClient.write(terminalId, BRACKETED_PASTE_END, traceId);
         } catch {
@@ -923,19 +1028,21 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     };
 
     // Admission resolved a continuation ago; a respawn can land in between.
-    if (isCancelled()) return INJECTION_CANCELLED;
-    if (!isAdmittedTerminalAlive()) return "Terminal closed during injection";
+    const beforeOpen = halted();
+    if (beforeOpen) return beforeOpen.error;
+    if (!isAdmittedTerminalAlive()) return TERMINAL_CLOSED;
     try {
       ptyClient.write(terminalId, BRACKETED_PASTE_START, traceId);
       opened = true;
       for (const source of sources) {
         for (let i = 0; i < source.length;) {
-          if (isCancelled()) {
-            console.log(`[${traceId}] CopyTree inject cancelled by user`);
-            return stop(INJECTION_CANCELLED);
+          const halt = halted();
+          if (halt) {
+            console.log(`[${traceId}] CopyTree inject stopped: ${halt.error}`);
+            return stop(halt.error, halt.closePaste);
           }
           if (!isAdmittedTerminalAlive()) {
-            return stop("Terminal closed during injection");
+            return stop(TERMINAL_CLOSED);
           }
           const end = nextChunkBoundary(source, i, CHUNK_SIZE);
           // Neutralising maps each code unit to one code unit, so a chunk cut
@@ -954,8 +1061,9 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       );
     }
 
-    if (isCancelled()) return stop(INJECTION_CANCELLED);
-    if (!isAdmittedTerminalAlive()) return "Terminal closed during injection";
+    const afterLast = halted();
+    if (afterLast) return stop(afterLast.error, afterLast.closePaste);
+    if (!isAdmittedTerminalAlive()) return TERMINAL_CLOSED;
     try {
       ptyClient.write(terminalId, BRACKETED_PASTE_END, traceId);
     } catch (error) {
@@ -1015,6 +1123,16 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
 
     contextInjectionTracker.beginInjection(validated.terminalId, injectionId);
     op.onCancel(() => contextInjectionTracker.markCancelled(injectionId));
+    let target: InjectionTarget | undefined;
+
+    // A lock or cancel arrives as a stop on the tracker, and the target's own
+    // loss comes from the host; either ends the run at its next checkpoint.
+    const halted = (): InjectionHalt | null => {
+      const stop = contextInjectionTracker.getStop(injectionId);
+      if (stop) return { error: describeInjectionStop(stop), closePaste: true };
+      const lost = target?.lost();
+      return lost ? { error: lost, closePaste: false } : null;
+    };
 
     try {
       const worktree = await findSenderWorktree(sender, validated.worktreeId, deps.worktreeService);
@@ -1056,9 +1174,17 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
         reportCopyTreeProgress(ctx, op, stampProgress(progress, traceId, op));
       };
 
+      target = await pinInjectionTarget(validated.terminalId);
+
       // Merge project settings with runtime options
       const projectSettings = await loadCopyTreeProjectSettings(sender.projectId);
       const mergedOptions = mergeCopyTreeOptions(projectSettings, validated.options || {});
+
+      // A run stopped while it was being set up has nothing to generate for.
+      const beforeGeneration = halted();
+      if (beforeGeneration) {
+        return { content: "", fileCount: 0, error: beforeGeneration.error };
+      }
 
       const result = await deps.worktreeService.generateContext(
         worktree.path,
@@ -1074,17 +1200,16 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       // started: the bundle is written as one bracketed paste, which a shell's
       // line editor would still leave as a multi-megabyte draft, and a program
       // with bracketed paste off reads every newline in it as Enter.
-      const isCancelled = () => contextInjectionTracker.isCancelled(injectionId);
-      const admission = await awaitPasteDestination(validated.terminalId, isCancelled);
-      if ("error" in admission) {
-        return { content: "", fileCount: 0, error: admission.error };
+      const refusal = await awaitPasteDestination(validated.terminalId, target, halted);
+      if (refusal) {
+        return { content: "", fileCount: 0, error: refusal.error };
       }
 
       const injectError = await writeBracketedPaste(
         validated.terminalId,
-        admission.generation,
+        target.generation,
         [result.content, buildRemoteComputeBlock(worktree)],
-        isCancelled,
+        halted,
         traceId
       );
       if (injectError) {
@@ -1107,6 +1232,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
         outputFormatVersion: result.outputFormatVersion,
       };
     } finally {
+      target?.dispose();
       contextInjectionTracker.finishInjection(validated.terminalId, injectionId);
     }
   };
@@ -1137,13 +1263,14 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     const validated = parseResult.data;
 
     if (validated.injectionId) {
-      const wasActive = contextInjectionTracker.markCancelled(validated.injectionId);
+      const wasActive = contextInjectionTracker.markCancelled(
+        validated.injectionId,
+        validated.reason
+      );
       if (wasActive) {
         console.log(`[cancel] Marked injection ${validated.injectionId} for cancellation`);
       } else {
-        console.log(
-          `[cancel] Ignoring cancel for unknown/completed injection ${validated.injectionId}`
-        );
+        console.log(`[cancel] Holding cancel for injection ${validated.injectionId} not yet active`);
       }
     } else {
       const count = contextInjectionTracker.markAllCancelled();
