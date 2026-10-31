@@ -78,6 +78,17 @@ function parseWatchedIds(payload: unknown): string[] | null {
   return payload.filter((v): v is string => typeof v === "string");
 }
 
+/**
+ * The worktree a view reports it has selected: a string, `null` for none, or
+ * `undefined` when the sync carried no selection and the last one stands.
+ */
+function parseSelectedWorktree(context: unknown): string | null | undefined {
+  if (!context || typeof context !== "object") return undefined;
+  const selected = (context as Record<string, unknown>).activeWorktreeId;
+  if (selected === null) return null;
+  return typeof selected === "string" && selected !== "" ? selected : undefined;
+}
+
 function terminalIdOf(payload: unknown): string | null {
   if (!payload || typeof payload !== "object") return null;
   const terminalId = (payload as Record<string, unknown>).terminalId;
@@ -151,7 +162,11 @@ export function registerNotificationHandlers(deps: HandlerDependencies): () => v
     sound.previewFile(soundFile);
   };
 
-  const handleSyncWatched = (event: Electron.IpcMainEvent, payload: unknown): void => {
+  const handleSyncWatched = (
+    event: Electron.IpcMainEvent,
+    payload: unknown,
+    context?: unknown
+  ): void => {
     const ids = parseWatchedIds(payload);
     if (ids === null) return;
     // The host that runs this view's agents decides when to notify, so it is
@@ -161,10 +176,12 @@ export function registerNotificationHandlers(deps: HandlerDependencies): () => v
     // destroyed while it settles would otherwise have its state resurrected by
     // the late sync — a leak no destroy event can clean up.
     const ownerId = trackOwner(event.sender);
+    const selectedWorktree = parseSelectedWorktree(context);
     void getAgentNotificationService()
       .then((svc) => {
         if (!trackedOwners.has(ownerId)) return;
         svc.syncWatchedPanels(ownerId, ids);
+        if (selectedWorktree !== undefined) svc.setSelectedWorktree(ownerId, selectedWorktree);
       })
       .catch((err) => console.error("[notifications] syncWatched failed:", err));
   };

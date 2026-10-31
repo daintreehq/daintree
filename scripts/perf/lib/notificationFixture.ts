@@ -6,7 +6,6 @@ import { fileURLToPath } from "node:url";
 
 import type { NotificationSettings } from "../../../shared/types/ipc/api";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent";
-import type { StoreSchema } from "../../../electron/store";
 import type { WindowRegistry } from "../../../electron/window/WindowRegistry";
 import type { ProjectViewManagersProvider } from "../../../electron/window/activeProjectIds";
 import { createPerfTempRoot, releasePerfTempRoot } from "./tempRoots";
@@ -34,8 +33,7 @@ import { createPerfTempRoot, releasePerfTempRoot } from "./tempRoots";
  *     5-minute cadence, the dismissal and notified-at cooldowns and their
  *     opportunistic cleanup are the product's own.
  *   - The real `events` bus, the real `electron-store` (a temp profile, product
- *     defaults, product cached-read proxy — so the per-decision `appState`
- *     `structuredClone` PERF-321 measures is the real one), the real
+ *     defaults, product cached-read proxy), the real
  *     `collectActiveProjectIds`, `windowTitle`, `quietHours`,
  *     `waitingReasonDisplay` and `SystemSleepService`.
  *   - Every synthetic `agent:state-changed` payload is validated against the
@@ -109,6 +107,8 @@ export interface NotificationBus {
   logInfoCount: number;
   logErrorCount: number;
   webContentsById: Map<number, StubWebContents>;
+  /** What subscribed to `projectStore.onProjectStatePersisted`: the agent service's panel index. */
+  statePersistedListeners: Set<(workspaceId: string, state: unknown) => void>;
 }
 
 const BUS_KEY = "__daintreePerfNotificationBus";
@@ -132,6 +132,7 @@ export function notificationBus(): NotificationBus {
     logInfoCount: 0,
     logErrorCount: 0,
     webContentsById: new Map(),
+    statePersistedListeners: new Set(),
   };
   (globalThis as Record<string, unknown>)[BUS_KEY] = created;
   return created;
@@ -251,6 +252,11 @@ export const projectStore = {
   getEffectiveNotificationSettings: () => bus().settings,
   getCurrentProjectId: () => bus().currentProjectId,
   getAllProjects: () => bus().projects,
+  getProjectState: async () => null,
+  onProjectStatePersisted: (listener) => {
+    bus().statePersistedListeners.add(listener);
+    return () => bus().statePersistedListeners.delete(listener);
+  },
 };
 `;
 
@@ -799,21 +805,20 @@ export function buildFleet(size: number): FleetTerminal[] {
   }));
 }
 
+/** The workspace the fixture's fleet belongs to. */
+export const FLEET_PROJECT_ID = "perf-project";
+
 /**
- * The `appState` shape `handleStateChanged` reads on EVERY transition. Written
- * through the real store, so the per-decision cost includes the product's own
- * cached-read `structuredClone` of the whole snapshot.
+ * Save the fleet as its project's panel record, the way a committed
+ * `project:set-terminals` write reaches main: through ProjectStore's
+ * persisted-state listeners. The agent service reads dock, worktree and title
+ * from this record (#15636), never from the legacy `appState.terminals`, so
+ * call it after every `initialize()`.
  */
-export function appStateForFleet(
-  fleet: readonly FleetTerminal[],
-  agentState: string
-): StoreSchema["appState"] {
-  return {
+export function saveFleetLayout(fleet: readonly FleetTerminal[]): void {
+  const state = {
+    projectId: FLEET_PROJECT_ID,
     sidebarWidth: 350,
-    focusMode: false,
-    activeWorktreeId: "wt-0",
-    hasSeenWelcome: true,
-    panelGridConfig: { strategy: "automatic", value: 3 },
     terminals: fleet.map((terminal) => ({
       id: terminal.id,
       kind: "terminal" as const,
@@ -821,11 +826,11 @@ export function appStateForFleet(
       cwd: `/Users/perf/code/repo/${terminal.worktreeId}`,
       worktreeId: terminal.worktreeId,
       location: terminal.location,
-      command: "claude --dangerously-skip-permissions",
-      agentState,
-      lastStateChange: 1_800_000_000_000,
     })),
-  } as StoreSchema["appState"];
+  };
+  for (const listener of [...notificationBus().statePersistedListeners]) {
+    listener(FLEET_PROJECT_ID, state);
+  }
 }
 
 // --- State-change events -----------------------------------------------------

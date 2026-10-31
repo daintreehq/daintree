@@ -200,6 +200,10 @@ export class ProjectStore {
   // begin/endRelocationRewrite.
   private relocationRewrites = new Map<string, { oldPath: string; newPath: string }>();
 
+  private statePersistedListeners = new Set<
+    (workspaceId: string, state: ProjectState | null) => void
+  >();
+
   constructor() {
     this.userDataDir = app.getPath("userData");
     this.projectsConfigDir = path.join(this.userDataDir, "projects");
@@ -216,9 +220,37 @@ export class ProjectStore {
     // The slot holds one observer, and scratch state comes through this same
     // manager — so this one routes both kinds by id shape (#11821) rather than
     // a second observer replacing this one.
-    this.stateManager.setStatePersistedObserver((workspaceId, state) =>
-      this.persistResumableAgentCount(workspaceId, state)
-    );
+    this.stateManager.setStatePersistedObserver((workspaceId, state) => {
+      this.persistResumableAgentCount(workspaceId, state);
+      this.notifyStatePersistedListeners(workspaceId, state);
+    });
+  }
+
+  /**
+   * Hear every workspace state that lands on disk, `null` when it is cleared.
+   * The state is the merged result a save actually wrote, never the array one
+   * renderer sent. Listeners must not mutate it or throw back into the save.
+   */
+  onProjectStatePersisted(
+    listener: (workspaceId: string, state: ProjectState | null) => void
+  ): () => void {
+    this.statePersistedListeners.add(listener);
+    return () => {
+      this.statePersistedListeners.delete(listener);
+    };
+  }
+
+  private notifyStatePersistedListeners(workspaceId: string, state: ProjectState | null): void {
+    for (const listener of [...this.statePersistedListeners]) {
+      try {
+        listener(workspaceId, state);
+      } catch (error) {
+        console.error(
+          `[ProjectStore] State-persisted listener failed for workspace ${workspaceId}:`,
+          error
+        );
+      }
+    }
   }
 
   /**

@@ -2475,8 +2475,8 @@ function buildElectronApi(): ElectronAPI {
       onWatchNavigate: (
         callback: (context: { panelId: string; panelTitle: string; worktreeId?: string }) => void
       ) => _typedOn(CHANNELS.NOTIFICATION_WATCH_NAVIGATE, callback),
-      syncWatchedPanels: (panelIds: string[]) =>
-        ipcRenderer.send(CHANNELS.NOTIFICATION_SYNC_WATCHED, panelIds),
+      syncWatchedPanels: (panelIds: string[], context?: { activeWorktreeId: string | null }) =>
+        ipcRenderer.send(CHANNELS.NOTIFICATION_SYNC_WATCHED, panelIds, context),
       acknowledgeWaiting: (terminalId: string) =>
         ipcRenderer.send(CHANNELS.NOTIFICATION_WAITING_ACKNOWLEDGE, { terminalId }),
       acknowledgeWorkingPulse: (terminalId: string) =>
