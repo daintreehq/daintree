@@ -8,7 +8,7 @@ That's a workflow claim, not a courtesy. Issues get run through an AI developmen
 
 **Pull requests are welcome, with one thing worth knowing up front.** A PR usually gets treated as a starting point rather than the finished article. What lands tends to be your change plus a fair amount built on top: edge cases, tests, the adjacent surfaces that had the same bug, the design details that only become visible once the code exists. That's not a verdict on what you sent. It's how work ships here, including work written in-house. You get credited on whatever lands, with `Co-authored-by:` on the commit and a link back to your PR if it's superseded rather than merged directly. If having your patch reworked would bother you, file the issue instead and let the pipeline take it.
 
-**The exception is a real one: if you've validated and verified everything in your PR yourself, it's more than fine exactly as it stands.** That means tests that fail without your change, the full suite green locally, `npm run check` clean, the edge cases actually exercised, and an honest note about anything you couldn't test. A PR that clears that bar is the whole job done, and it gets treated as the whole job. The [testing requirements](#testing-requirements) below are that bar, spelled out.
+**The exception is a real one: if you've validated and verified everything in your PR yourself, it's more than fine exactly as it stands.** That means tests that fail without your change, the tests covering your change green locally (CI runs the full suite on every PR), `npm run check` clean, the edge cases actually exercised, and an honest note about anything you couldn't test. A PR that clears that bar is the whole job done, and it gets treated as the whole job. The [testing requirements](#testing-requirements) below are that bar, spelled out.
 
 Use whatever tools you like to get there, coding agents included: that's what Daintree is for. You own every line you send regardless of what wrote it, and "the agent did it" isn't an answer to a review comment on a diff you can't explain.
 
@@ -62,7 +62,7 @@ A few things worth knowing up front:
 Useful scripts:
 
 ```bash
-npm test           # vitest — the full suite; scoped runs miss things
+npm test -- <path>  # vitest — the tests covering your change; CI runs the full suite
 npm run check      # typecheck + codegen/guard checks + lint ratchet + format check
 npm run fix        # auto-fix lint and format issues (repo-wide — see below)
 npm run build      # production build
@@ -170,9 +170,9 @@ Rules:
 
 1. **Unit tests for every change.** New features need tests. Bug fixes need a **regression test** that reproduces the original bug and fails without your fix. "I tested it manually" does not count.
 2. **`npm run check` is clean.** Zero typecheck errors, zero new lint errors, formatted. The lint ratchet only moves one direction, and it gates per-rule as well as in total — you can't silence a rule in config to get under it.
-3. **The full `npm test` passes.** Run the whole suite before pushing, not just the files you touched. Scoped runs have repeatedly missed failures. If a test breaks because of your change, update it deliberately and explain why in the PR. Don't delete tests to make them pass.
+3. **The full unit suite is green in CI.** Locally, run the tests that cover your change (`npm test -- path/to/file.test.ts`); the full suite takes 15-20 minutes, so CI runs it on every PR, sharded 6 ways, alongside `npm run check`. Fix anything it finds outside your files from the CI log. If a test breaks because of your change, update it deliberately and explain why in the PR. Don't delete tests to make them pass.
 4. **Never widen a baseline to pass.** The ratchet baselines in `scripts/baselines/` are generated, not hand-edited. If your change legitimately moves one, regenerate it with the matching `*:update` script and say so in the PR.
-5. **E2E tests when touching covered features.** CI doesn't run E2E on PRs, so if you modify a feature with an existing E2E test under `e2e/core/` or `e2e/full/`, run that spec locally before pushing:
+5. **E2E tests when touching covered features.** CI doesn't run E2E on PRs, so if you modify a feature with an existing E2E test under `e2e/core/` or `e2e/full/`, run that one spec locally before pushing (a single named spec, not the E2E suite):
    ```bash
    npm run build:e2e
    npx playwright test e2e/core/core-foo.spec.ts

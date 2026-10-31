@@ -8,7 +8,7 @@ npm run dev          # Main + Renderer concurrent dev
 npm run build        # Production build
 npm run check        # typecheck + codegen/wiring guards + lint ratchet + format
 npm run fix          # Auto-fix lint/format
-npm run test         # Vitest once
+npm test -- <path>    # Vitest, only the tests covering your change
 npm run test:watch   # Vitest watch mode
 npm run rebuild      # Rebuild node-pty for Electron
 npm run package      # Build + electron-builder
@@ -106,10 +106,11 @@ For the layering behind this recipe — the envelope, the sender-validation wrap
 ## Testing
 
 ```bash
-npm run test              # Run once
+npm test -- src/components/__tests__/Foo.test.tsx  # Tests covering your change
 npm run test:watch        # Watch mode
-npm run test -- --run src/components  # Filter by path
 ```
+
+Don't run the whole suite locally (15-20 minutes): CI runs it on every PR, sharded 6 ways behind `ci-ok`, together with `npm run check`. E2E does not run on PRs. Fix failures outside your files from the CI log.
 
 Tests live in `__tests__/` directories adjacent to source. Use Vitest. Mock IPC via `vi.mock()`.
 
@@ -180,7 +181,7 @@ The flag is gated on `app.isPackaged === false` (forwarded to the pty host as `D
 `.github/workflows/ci.yml` runs on push/PR to `main` and `develop`:
 
 1. **check** (Ubuntu): typecheck + lint + format (`npm run check`)
-2. **test** (Ubuntu): vitest unit tests, sharded 4 ways, minus the perf liveness guard
+2. **test** (Ubuntu): vitest unit tests, sharded 6 ways, minus the perf liveness guard
 3. **perf-liveness** (Ubuntu): `scripts/perf/__tests__/scenarioLiveness.test.ts` on its own runner, ungated, so its per-scenario child processes stay off the shards' critical path
 4. **build** (Ubuntu only): production build verification
 5. **ci-ok**: aggregate gate that fails if any job failed — the sole required status check
