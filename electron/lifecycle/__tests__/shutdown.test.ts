@@ -880,6 +880,9 @@ describe("registerShutdownHandler", () => {
   });
 
   describe("Canopy reader drain at quit (#15538)", () => {
+    // The chain's lazy imports can outrun vi.waitFor's one-second default under load.
+    const WAIT = { timeout: 5_000 };
+
     it("waits for the reader Canopy teardown retired before exiting", async () => {
       const order: string[] = [];
       let releaseDrain!: () => void;
@@ -925,9 +928,10 @@ describe("registerShutdownHandler", () => {
 
         // The wait must start while a disposal is still holding the chain,
         // not queue up behind the disposals.
-        await vi.waitFor(() => expect(order).toContain("dbMaintenance.dispose"));
-        await vi.waitFor(() =>
-          expect(order).toContain(`reader-wait:${CANOPY_READER_DRAIN_BUDGET_MS}`)
+        await vi.waitFor(() => expect(order).toContain("dbMaintenance.dispose"), WAIT);
+        await vi.waitFor(
+          () => expect(order).toContain(`reader-wait:${CANOPY_READER_DRAIN_BUDGET_MS}`),
+          WAIT
         );
         expect(order).not.toContain("closeSharedDb");
 
@@ -971,8 +975,8 @@ describe("registerShutdownHandler", () => {
         const { beforeQuitCb } = await setup({});
         await beforeQuitCb(makeEvent());
 
-        await vi.waitFor(() => expect(releaseVad).toBeDefined());
-        await vi.waitFor(() => expect(readerWaitStarted).toBe(true));
+        await vi.waitFor(() => expect(releaseVad).toBeDefined(), WAIT);
+        await vi.waitFor(() => expect(readerWaitStarted).toBe(true), WAIT);
         expect(appMock.exit).not.toHaveBeenCalled();
         releaseVad?.();
         await exited;
