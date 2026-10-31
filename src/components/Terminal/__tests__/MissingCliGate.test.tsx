@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import { MissingCliGate } from "../MissingCliGate";
 import type { AgentCliDetail } from "@shared/types/ipc";
+import { config as antigravityConfig } from "@shared/config/agents/antigravity";
 
 // A hand-rolled store double rather than the real one: the gate reads it both
 // as a hook (`refresh`, `isRefreshing`) and imperatively (`getState().availability`),
@@ -58,27 +59,32 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
-// Mock agent config
-vi.mock("@/config/agents", () => ({
-  getAgentConfig: (agentId: string) => {
-    if (agentId === "claude") {
-      return {
-        id: "claude",
-        name: "Claude",
-        install: {
-          docsUrl: "https://docs.anthropic.com/claude-code",
-          byOs: {
-            macos: [{ label: "npm", commands: ["npm install -g @anthropic-ai/claude-code"] }],
-            linux: [{ label: "npm", commands: ["npm install -g @anthropic-ai/claude-code"] }],
-            windows: [{ label: "npm", commands: ["npm install -g @anthropic-ai/claude-code"] }],
+// Mock agent config. Antigravity is the real registry entry, so the gate is
+// tested against the install help that ships.
+vi.mock("@/config/agents", async () => {
+  const { config: antigravity } = await import("@shared/config/agents/antigravity");
+  return {
+    getAgentConfig: (agentId: string) => {
+      if (agentId === "antigravity") return antigravity;
+      if (agentId === "claude") {
+        return {
+          id: "claude",
+          name: "Claude",
+          install: {
+            docsUrl: "https://docs.anthropic.com/claude-code",
+            byOs: {
+              macos: [{ label: "npm", commands: ["npm install -g @anthropic-ai/claude-code"] }],
+              linux: [{ label: "npm", commands: ["npm install -g @anthropic-ai/claude-code"] }],
+              windows: [{ label: "npm", commands: ["npm install -g @anthropic-ai/claude-code"] }],
+            },
+            troubleshooting: ["Restart Daintree after install", "Verify with: claude --version"],
           },
-          troubleshooting: ["Restart Daintree after install", "Verify with: claude --version"],
-        },
-      };
-    }
-    return undefined;
-  },
-}));
+        };
+      }
+      return undefined;
+    },
+  };
+});
 
 function detail(overrides: Partial<AgentCliDetail> = {}): AgentCliDetail {
   return {
@@ -138,6 +144,29 @@ describe("MissingCliGate", () => {
     expect(screen.getByText("Install on macOS")).toBeTruthy();
     expect(screen.getByText("npm install -g @anthropic-ai/claude-code")).toBeTruthy();
   });
+
+  it.each([
+    ["macOS", "macos", true, false],
+    ["Linux", "linux", false, true],
+    ["Windows", "windows", false, false],
+  ] as const)(
+    "shows Antigravity's installers for a missing agy on %s (#15622)",
+    (label, os, mac, linux) => {
+      mockPlatform.isMac.mockReturnValue(mac);
+      mockPlatform.isLinux.mockReturnValue(linux);
+      const commands = (antigravityConfig.install?.byOs?.[os] ?? []).flatMap(
+        (block) => block.commands ?? []
+      );
+      expect(commands.length).toBeGreaterThan(0);
+
+      renderGate({ agentId: "antigravity", detail: detail({ state: "missing" }) });
+
+      const section = screen.getByRole("region", { name: `Install on ${label}` });
+      for (const command of commands) {
+        expect(section.textContent).toContain(command);
+      }
+    }
+  );
 
   it("shows troubleshooting tips for missing state", () => {
     renderGate({ detail: detail({ state: "missing" }) });

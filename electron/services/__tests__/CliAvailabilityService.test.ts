@@ -1809,6 +1809,46 @@ describe("CliAvailabilityService", () => {
     });
   });
 
+  // The installers add their bin directory to the user PATH; the native paths
+  // only cover a PATH Daintree inherited before that (#15622).
+  describe("Antigravity standalone install", () => {
+    const installed = join(homedir(), ".local", "bin", "agy");
+
+    it("finds agy in ~/.local/bin when PATH misses it", async () => {
+      const { access } = await import("fs/promises");
+      mockedExecFileSync.mockImplementation(() => {
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+      vi.mocked(access).mockImplementation(async (p) => {
+        if (String(p) === installed) return;
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      });
+
+      const result = await service.checkAvailability();
+
+      expect(result.antigravity).not.toBe("missing");
+      expect(service.getDetails()!.antigravity?.via).toBe("native");
+      expect(service.getDetails()!.antigravity?.resolvedPath).toBe(installed);
+    });
+
+    it("launches the PATH copy when both exist", async () => {
+      const { access } = await import("fs/promises");
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (cmdOf(args) === "agy") return Buffer.from("/opt/agy/bin/agy\n");
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+      vi.mocked(access).mockImplementation(async (p) => {
+        if (String(p) === installed) return;
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      });
+
+      await service.checkAvailability();
+
+      expect(service.getDetails()!.antigravity?.via).toBe("which");
+      expect(service.getDetails()!.antigravity?.resolvedPath).toBe("/opt/agy/bin/agy");
+    });
+  });
+
   describe("extended native path coverage", () => {
     it("detects cursor-agent via the macOS app-bundle sidecar when only Cursor.app is installed", async () => {
       const { access } = await import("fs/promises");
@@ -2579,6 +2619,17 @@ describe("CliAvailabilityService", () => {
 
       expect(service.getDetails()!.interpreter?.via).toBe("native");
       expect(service.getDetails()!.interpreter?.resolvedPath).toBe(installed);
+    });
+
+    it("finds Antigravity in its installers' directory (#15622)", async () => {
+      process.env.LOCALAPPDATA = "C:\\Users\\test\\AppData\\Local";
+      const installed = "C:\\Users\\test\\AppData\\Local\\agy\\bin\\agy.exe";
+      await onlyExisting(installed);
+
+      await service.checkAvailability();
+
+      expect(service.getDetails()!.antigravity?.via).toBe("native");
+      expect(service.getDetails()!.antigravity?.resolvedPath).toBe(installed);
     });
 
     it("never appends a second extension to an entry that already carries one", async () => {

@@ -25,6 +25,7 @@ import {
   resetInFlightInstalls,
 } from "../AgentInstallService.js";
 import { virtualWindowsFiles } from "../../utils/__tests__/helpers/virtualWindowsFs.js";
+import { config as antigravityConfig } from "../../../shared/config/agents/antigravity.js";
 import { resetWindowsExecutableCache } from "../../utils/windowsExecutable.js";
 
 const NODE_DIR = "C:\\Program Files\\nodejs";
@@ -153,8 +154,18 @@ describe("AgentInstallService adversarial", () => {
       expect(isBlockExecutable({ commands: ["irm https://x | Invoke-Expression"] })).toBe(false);
     });
 
-    it("accepts benign pipe without shell interpreter", () => {
-      expect(isBlockExecutable({ commands: ["echo foo | grep bar"] })).toBe(true);
+    // Spawned without a shell, `echo` would get `|`, `grep` and `bar` as
+    // arguments: the pipe never connects anything, so no button.
+    it("rejects a pipe between two programs, which nothing would connect", () => {
+      expect(isBlockExecutable({ commands: ["echo foo | grep bar"] })).toBe(false);
+    });
+
+    it("rejects an && chain, which would reach the first program as arguments", () => {
+      expect(
+        isBlockExecutable({
+          commands: ["curl -fsSL https://x/install.cmd -o install.cmd && install.cmd"],
+        })
+      ).toBe(false);
     });
 
     it("accepts plain package-manager installs", () => {
@@ -171,6 +182,42 @@ describe("AgentInstallService adversarial", () => {
           commands: ["npm install -g foo", "curl https://x | bash"],
         })
       ).toBe(false);
+    });
+  });
+
+  // Every documented installer needs a shell: a pipe into `bash` or `iex`, or
+  // cmd.exe's `&&` chain. None may reach spawn as a whitespace-split argv.
+  describe("Antigravity installers (#15622)", () => {
+    const cases = (
+      [
+        ["darwin", "macos"],
+        ["linux", "linux"],
+        ["win32", "windows"],
+      ] as const
+    ).flatMap(([platform, os]) =>
+      (antigravityConfig.install?.byOs?.[os] ?? []).map(
+        (block, methodIndex) => [platform, block.label ?? "", methodIndex] as const
+      )
+    );
+
+    it("covers every OS", () => {
+      expect(new Set(cases.map(([platform]) => platform))).toEqual(
+        new Set(["darwin", "linux", "win32"])
+      );
+    });
+
+    it.each(cases)("%s %s is copy-only and never spawns", async (platform, _label, methodIndex) => {
+      setPlatform(platform);
+      getAgentConfigMock.mockReturnValue(antigravityConfig);
+
+      const result = await runAgentInstall(
+        { agentId: "antigravity", jobId: "j1", methodIndex },
+        vi.fn()
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/requires manual execution/);
+      expect(spawnMock).not.toHaveBeenCalled();
     });
   });
 

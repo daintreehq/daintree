@@ -8,6 +8,7 @@ import type {
 } from "../../shared/types/ipc/system.js";
 import { buildInstallEnv } from "../utils/spawnEnv.js";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
+import { requiresShell } from "../../shared/utils/installCommand.js";
 import { isWindowsShellShim, unwrapWindowsShim } from "../utils/windowsCliSpawn.js";
 import {
   findWindowsCommand,
@@ -17,9 +18,9 @@ import {
 } from "../utils/windowsExecutable.js";
 
 function isManualOnlyCommand(command: string): boolean {
-  if (/\|\s*(sudo\s+)?(bash|sh|zsh|pwsh)\b|\|\s*(iex|Invoke-Expression)\b/i.test(command)) {
-    return true;
-  }
+  // `parseCommand` has no shell to hand a chain, pipe or quote to. That covers
+  // piping an installer into `bash` or `iex` as well.
+  if (requiresShell(command)) return true;
   // A leading `sudo` has no pipe to catch it, but spawning it with piped stdio
   // hangs forever on a password prompt the user can never see. The baseline
   // Linux blocks (`sudo apt-get install git`, `sudo dnf install git`, …) are

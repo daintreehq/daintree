@@ -438,6 +438,34 @@ describe("agentInstall", () => {
       const { isBlockExecutable } = await import("../agentInstall");
       expect(isBlockExecutable({ label: "no-commands" })).toBe(false);
     });
+
+    // Main spawns each command without a shell, so a chain would run its first
+    // program with `&&` and the rest as arguments.
+    it("should return false for a cmd.exe && chain", async () => {
+      const { isBlockExecutable } = await import("../agentInstall");
+      expect(
+        isBlockExecutable({
+          commands: ["curl -fsSL https://x/install.cmd -o install.cmd && install.cmd"],
+        })
+      ).toBe(false);
+    });
+
+    it("should return false for the pipes main refuses, not just bash and iex", async () => {
+      const { isBlockExecutable } = await import("../agentInstall");
+      for (const command of ["curl https://x | sudo bash", "irm https://x | pwsh"]) {
+        expect(isBlockExecutable({ commands: [command] }), command).toBe(false);
+      }
+    });
+
+    it("should offer no one-click install for any Antigravity installer (#15622)", async () => {
+      const { isBlockExecutable } = await import("../agentInstall");
+      const { config } = await import("../../../shared/config/agents/antigravity");
+      const blocks = Object.values(config.install?.byOs ?? {}).flat();
+      expect(blocks.length).toBeGreaterThan(0);
+      for (const block of blocks) {
+        expect(isBlockExecutable(block), block.label).toBe(false);
+      }
+    });
   });
 
   describe("npm global permission failures", () => {

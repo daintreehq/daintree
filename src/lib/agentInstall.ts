@@ -4,6 +4,7 @@ import type {
   AgentInstallOS,
 } from "../../shared/config/agentRegistry";
 import { getHostPlatform, isRemoteWindow } from "@/hooks/useHostPlatform";
+import { requiresShell } from "@shared/utils/installCommand";
 import { isMac, isWindows, isLinux } from "./platform";
 
 /**
@@ -215,7 +216,12 @@ export function findNonNpmInstallBlock(
   );
 }
 
+/**
+ * Whether the block gets a one-click Install button. Mirrors the main-side gate
+ * in `AgentInstallService`, which spawns each command without a shell, so any
+ * shell syntax (a pipe into `bash`, a `&&` chain) keeps the block copy-only.
+ */
 export function isBlockExecutable(block: AgentInstallBlock): boolean {
   if (!block.commands || block.commands.length === 0) return false;
-  return block.commands.every((cmd) => !isManualOnlyCommand(cmd) && !requiresElevation(cmd));
+  return block.commands.every((cmd) => !requiresShell(cmd) && !requiresElevation(cmd));
 }

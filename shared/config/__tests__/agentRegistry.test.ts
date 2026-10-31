@@ -1380,6 +1380,7 @@ describe("all built-in agents have Windows or generic install", () => {
     "aider",
     "crush",
     "kiro",
+    "antigravity",
   ])("%s has windows or generic install block", (agentId) => {
     const config = getAgentConfig(agentId);
     const hasWindows = (config?.install?.byOs?.windows?.length ?? 0) > 0;
@@ -1411,6 +1412,52 @@ describe("crush and kiro Windows install help", () => {
   it.each(["crush", "kiro"])("%s troubleshooting never claims macOS/Linux only", (id) => {
     const lines = getAgentConfig(id)!.install!.troubleshooting ?? [];
     expect(lines.some((l) => /macOS and Linux only|only supported on macOS/i.test(l))).toBe(false);
+  });
+});
+
+// Google's CLI quickstart publishes a shell script for macOS and Linux and a
+// PowerShell or cmd.exe script for Windows, all served from the docs' own site.
+describe("Antigravity install help (#15622)", () => {
+  const config = getAgentConfig("antigravity")!;
+  const docsUrl = config.install?.docsUrl;
+  const installerUrl = (command: string) => {
+    const urls = command.match(/https:\/\/[^\s'"|]+/g) ?? [];
+    expect(urls, `${command} names one installer`).toHaveLength(1);
+    return new URL(urls[0]!);
+  };
+
+  it.each([
+    ["macos", /\.sh$/],
+    ["linux", /\.sh$/],
+    ["windows", /\.(?:ps1|cmd)$/],
+  ] as const)("offers the %s installer from the docs' site", (os, script) => {
+    const commands = (config.install?.byOs?.[os] ?? []).flatMap((block) => block.commands ?? []);
+    expect(commands.length, `${os} has no install command`).toBeGreaterThan(0);
+    for (const command of commands) {
+      const url = installerUrl(command);
+      expect(url.host, command).toBe(new URL(docsUrl!).host);
+      expect(url.pathname, command).toMatch(script);
+    }
+  });
+
+  it("sends the docs link and the prerequisite's install link to the same page, not the announcement", () => {
+    expect(new URL(docsUrl!).host).not.toBe("developers.googleblog.com");
+    const installUrls = (config.prerequisites ?? []).map((p) => p.installUrl);
+    expect(installUrls.length).toBeGreaterThan(0);
+    expect(new Set(installUrls)).toEqual(new Set([docsUrl]));
+  });
+
+  it("looks for the binary where the installers put it", () => {
+    const paths = config.nativePaths ?? [];
+    for (const path of paths) {
+      expect(path).toMatch(new RegExp(`[\\\\/]${config.command}(?:\\.exe)?$`));
+    }
+    expect(paths.some((p) => p.startsWith("~/"))).toBe(true);
+    expect(paths.some((p) => p.startsWith("%LOCALAPPDATA%"))).toBe(true);
+  });
+
+  it("stays out of the assistant until its wiring is verified against a live agy", () => {
+    expect(config.supports).toBeUndefined();
   });
 });
 
