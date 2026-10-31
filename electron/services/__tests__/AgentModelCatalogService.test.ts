@@ -7,7 +7,10 @@ import * as os from "node:os";
 import * as fs from "node:fs/promises";
 
 import { AgentModelCatalogService } from "../AgentModelCatalogService.js";
-import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
+import {
+  PROVIDER_TO_AGENT_ID,
+  getEffectiveAgentConfig,
+} from "../../../shared/config/agentRegistry.js";
 
 /**
  * A models.dev entry the capability filter accepts: tool calling plus text
@@ -132,6 +135,7 @@ async function cleanup(cachePath: string): Promise<void> {
 
 interface PersistedCachePayload {
   fetchedAt?: unknown;
+  providers?: unknown;
   raw: {
     anthropic?: {
       models?: Record<string, unknown>;
@@ -139,21 +143,34 @@ interface PersistedCachePayload {
   };
 }
 
-async function readPersistedCache(cachePath: string): Promise<PersistedCachePayload> {
+/**
+ * Waits for the fire-and-forget persist. `until` skips a file seeded before the
+ * call, which parses fine but isn't the write under test.
+ */
+async function readPersistedCache(
+  cachePath: string,
+  until: (payload: PersistedCachePayload) => boolean = () => true
+): Promise<PersistedCachePayload> {
   const deadline = Date.now() + 1_000;
-  let lastError: unknown;
+  let lastError: unknown = new Error("Timed out waiting for persisted cache");
 
   while (Date.now() < deadline) {
     try {
       const text = await fs.readFile(cachePath, "utf-8");
-      return JSON.parse(text) as PersistedCachePayload;
+      const payload = JSON.parse(text) as PersistedCachePayload;
+      if (until(payload)) return payload;
     } catch (error) {
       lastError = error;
-      await new Promise((r) => setTimeout(r, 25));
     }
+    await new Promise((r) => setTimeout(r, 25));
   }
 
   throw lastError instanceof Error ? lastError : new Error("Timed out waiting for persisted cache");
+}
+
+async function seedCache(cachePath: string, payload: Record<string, unknown>): Promise<void> {
+  await fs.mkdir(path.dirname(cachePath), { recursive: true });
+  await fs.writeFile(cachePath, JSON.stringify(payload), "utf-8");
 }
 
 describe("AgentModelCatalogService", () => {
@@ -529,6 +546,215 @@ describe("AgentModelCatalogService", () => {
     expect(result.models.map((m) => m.id)).toEqual(bundledIdsFor("qwen"));
   });
 
+  describe("cut-down catalog shared across app versions", () => {
+    it("persists only the mapped providers, OpenAI included for older builds, and marks the cut", async () => {
+      const fetchImpl = mockFetch({
+        ...makeCatalog(),
+        openrouter: { models: { "anthropic/claude-sonnet-4-6": chatModel("Sonnet", 1) } },
+      });
+      const service = new AgentModelCatalogService({ cachePath, fetchImpl });
+
+      await service.getResolvedModels("claude");
+
+      const payload = await readPersistedCache(cachePath);
+      expect(Object.keys(payload.raw).sort()).toEqual(["anthropic", "google", "openai"]);
+      expect(payload.providers).toEqual(Object.keys(PROVIDER_TO_AGENT_ID));
+    });
+
+    it("keeps only the providers it resolves from in memory, from the network or a full legacy file", async () => {
+      const full = {
+        ...makeCatalog(),
+        openrouter: { models: { "anthropic/claude-sonnet-4-6": chatModel("Sonnet", 1) } },
+      };
+      const online = new AgentModelCatalogService({ cachePath, fetchImpl: mockFetch(full) });
+      expect(Object.keys((await online.getCatalog()) ?? {}).sort()).toEqual([
+        "anthropic",
+        "google",
+      ]);
+      // Let the cut-down write land first, or it could replace the legacy seed.
+      await readPersistedCache(cachePath);
+
+      await seedCache(cachePath, { fetchedAt: Date.now(), raw: full });
+      const fetchImpl = mockFailingFetch(new Error("offline"));
+      const fromDisk = new AgentModelCatalogService({ cachePath, fetchImpl });
+      expect(Object.keys((await fromDisk.getCatalog()) ?? {}).sort()).toEqual([
+        "anthropic",
+        "google",
+      ]);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it("trusts a fresh cut-down file that marks every provider it reads, even ones models.dev didn't list", async () => {
+      // makeCatalog() has no alibaba or mistral: the marker still names them, so
+      // their absence is models.dev's answer, not a reason to refetch.
+      const populator = new AgentModelCatalogService({
+        cachePath,
+        fetchImpl: mockFetch(makeCatalog()),
+      });
+      await populator.getResolvedModels("claude");
+      await readPersistedCache(cachePath);
+
+      const fetchImpl = mockFailingFetch(new Error("offline"));
+      const service = new AgentModelCatalogService({ cachePath, fetchImpl });
+      const claude = await service.getResolvedModels("claude");
+      const qwen = await service.getResolvedModels("qwen");
+
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(claude.source).toBe("merged");
+      expect(claude.contextWindow).toBe(1_000_000);
+      expect(qwen.source).toBe("bundled");
+
+      // Served from memory now: with the file gone, a re-read would come up empty.
+      await fs.rm(cachePath);
+      expect(await service.getResolvedModels("claude")).toEqual(claude);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it("retries the network for an expired file it can still serve offline", async () => {
+      await seedCache(cachePath, {
+        fetchedAt: Date.now() - 2 * 24 * 60 * 60 * 1000,
+        raw: makeCatalog(),
+        providers: Object.keys(PROVIDER_TO_AGENT_ID),
+      });
+      const fetchImpl = mockFailingFetch(new Error("offline"));
+      const service = new AgentModelCatalogService({ cachePath, fetchImpl });
+
+      const first = await service.getResolvedModels("claude");
+      const second = await service.getResolvedModels("claude");
+
+      expect(first.source).toBe("merged");
+      expect(second).toEqual(first);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    });
+
+    it("refetches a fresh file cut down without a provider this build reads", async () => {
+      await seedCache(cachePath, {
+        fetchedAt: Date.now(),
+        raw: { anthropic: makeCatalog().anthropic },
+        providers: ["anthropic"],
+      });
+      const fetchImpl = mockFetch({
+        alibaba: { models: { "qwen-next": chatModel("Qwen Next", 500_000) } },
+      });
+      const service = new AgentModelCatalogService({ cachePath, fetchImpl });
+
+      const first = await service.getResolvedModels("qwen");
+      await service.getResolvedModels("qwen");
+
+      expect(first.models.map((m) => m.id)).toContain("qwen-next");
+      // The refresh carried a complete cut, so the second call is a memory hit.
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      const payload = await readPersistedCache(
+        cachePath,
+        (p) => Array.isArray(p.providers) && p.providers.length > 1
+      );
+      expect(payload.providers).toEqual(Object.keys(PROVIDER_TO_AGENT_ID));
+    });
+
+    it("serves an incomplete file when the refetch fails, and retries on the next call", async () => {
+      await seedCache(cachePath, {
+        fetchedAt: Date.now(),
+        raw: { anthropic: makeCatalog().anthropic },
+        providers: ["anthropic"],
+      });
+      const fetchImpl = mockFailingFetch(new Error("offline"));
+      const service = new AgentModelCatalogService({ cachePath, fetchImpl });
+
+      const first = await service.getResolvedModels("claude");
+      const second = await service.getResolvedModels("claude");
+
+      expect(first.source).toBe("merged");
+      expect(first.contextWindow).toBe(1_000_000);
+      expect(second).toEqual(first);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      ["a string naming every provider", Object.keys(PROVIDER_TO_AGENT_ID).join(",")],
+      ["an array with a non-string entry", [...Object.keys(PROVIDER_TO_AGENT_ID), 42]],
+      ["null", null],
+    ])(
+      "treats a malformed provider marker (%s) as incomplete, not as a full legacy file",
+      async (_label, providers) => {
+        await seedCache(cachePath, {
+          fetchedAt: Date.now(),
+          raw: makeCatalog(),
+          providers,
+        });
+        const fetchImpl = mockFailingFetch(new Error("offline"));
+        const service = new AgentModelCatalogService({ cachePath, fetchImpl });
+
+        const result = await service.getResolvedModels("claude");
+
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+        expect(result.source).toBe("merged");
+      }
+    );
+
+    it("ignores a malformed provider it never reads", async () => {
+      const fetchImpl = mockFetch({
+        ...makeCatalog(),
+        openai: { models: "not-a-record" },
+        openrouter: "not-a-provider",
+      });
+      const service = new AgentModelCatalogService({ cachePath, fetchImpl });
+
+      const result = await service.getResolvedModels("claude");
+
+      expect(result.source).toBe("merged");
+      expect(result.contextWindow).toBe(1_000_000);
+    });
+
+    it("keeps the previous file when a provider older builds validate is malformed", async () => {
+      // An older build rejects the whole file over one bad provider, so writing
+      // this response would take away its stale fallback.
+      const seed = { fetchedAt: Date.now() - 2 * 24 * 60 * 60 * 1000, raw: makeCatalog() };
+      await seedCache(cachePath, seed);
+      const fresh = makeCatalog();
+      const anthropic = fresh.anthropic as { models: Record<string, unknown> };
+      anthropic.models["claude-wide"] = chatModel("Claude Wide", 3_000_000);
+      const fetchImpl = mockFetch({ ...fresh, openai: { models: "not-a-record" } });
+      const service = new AgentModelCatalogService({ cachePath, fetchImpl });
+      // The persist is started synchronously once the fetch lands, so a call is
+      // already visible when the resolver returns.
+      const writeDisk = vi.spyOn(
+        AgentModelCatalogService.prototype as unknown as { writeDisk: () => Promise<void> },
+        "writeDisk"
+      );
+
+      try {
+        const first = await service.getResolvedModels("claude");
+        const second = await service.getResolvedModels("claude");
+
+        // Memory still holds the fresh response: no second fetch, and not the seed's data.
+        expect(first.contextWindow).toBe(3_000_000);
+        expect(second).toEqual(first);
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+        expect(writeDisk).not.toHaveBeenCalled();
+        expect(JSON.parse(await fs.readFile(cachePath, "utf-8"))).toEqual(seed);
+
+        // The same spy sees the write a well-formed response makes.
+        const control = new AgentModelCatalogService({ cachePath, fetchImpl: mockFetch(fresh) });
+        await control.getResolvedModels("claude");
+        expect(writeDisk).toHaveBeenCalledTimes(1);
+        await readPersistedCache(cachePath, (p) => p.fetchedAt !== seed.fetchedAt);
+      } finally {
+        writeDisk.mockRestore();
+      }
+    });
+
+    it.each([
+      ["an array", [makeCatalog()]],
+      ["null", null],
+      ["a string", "catalog"],
+    ])("rejects a payload that isn't a catalog object (%s)", async (_label, payload) => {
+      const service = new AgentModelCatalogService({ cachePath, fetchImpl: mockFetch(payload) });
+
+      expect(await service.getCatalog()).toBeNull();
+      expect((await service.getResolvedModels("claude")).source).toBe("bundled");
+    });
+  });
+
   it("offers the codex CLI's current models in its order, retiring any it points at a successor", async () => {
     const service = new AgentModelCatalogService({
       cachePath,
@@ -894,11 +1120,11 @@ describe("AgentModelCatalogService", () => {
           },
         },
       },
-      // A whole separate provider with a malformed entry must not poison
-      // the catalog for the well-formed google provider.
-      openai: {
+      // An odd value in another provider this build reads must not poison
+      // the catalog for the well-formed alibaba provider.
+      google: {
         models: {
-          "gpt-5.4": { ...chatModel("GPT-5.4", 0), limit: { context: null } },
+          "gemini-3-pro": { ...chatModel("Gemini 3 Pro", 0), limit: { context: null } },
         },
       },
     });
