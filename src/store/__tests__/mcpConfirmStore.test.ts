@@ -446,7 +446,10 @@ describe("mcpConfirmStore", () => {
       useMcpConfirmStore.getState().markShown("a");
       useMcpConfirmStore.getState().expire("a");
       expect(await expiring).toEqual({ decision: "timeout" });
-      expect(useMcpConfirmStore.getState().current).toMatchObject({ requestId: "a", expired: true });
+      expect(useMcpConfirmStore.getState().current).toMatchObject({
+        requestId: "a",
+        expired: true,
+      });
 
       const arriving = requestMcpConfirmation(pendingFixture({ requestId: "b" }));
       const state = useMcpConfirmStore.getState();
