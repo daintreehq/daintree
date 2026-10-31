@@ -462,7 +462,8 @@ async function buildHardenedProfile(
   signal: AbortSignal | undefined,
   platform: NodeJS.Platform,
   owned: NodeJS.ProcessEnv,
-  unsafe: UnsafeFlags
+  unsafe: UnsafeFlags,
+  errors?: SimpleGitOptions["errors"]
 ): Promise<SimpleGit> {
   const { simpleGit } = await simpleGitModule;
   const binary = await nativeGitBinary(platform);
@@ -473,11 +474,27 @@ async function buildHardenedProfile(
       config: [...getHardenedGitConfig(platform)],
       timeout: { block: GIT_BLOCK_TIMEOUT_MS },
       ...(signal ? { abort: signal } : {}),
+      ...(errors ? { errors } : {}),
     },
     binary,
     owned,
     unsafe
   );
+}
+
+/**
+ * simple-git fails a task only when git exits non-zero AND wrote to stderr. A
+ * silent non-zero exit, or a git killed by a signal (exit code `null`), resolves
+ * with whatever stdout it had, so a truncated or empty answer reads as a real one.
+ * Exit 0 and the default's own rejections pass through unchanged.
+ */
+function rejectEveryNonZeroExit(
+  error: Buffer | Error | undefined,
+  result: { exitCode: number | null; stdOut: Buffer[]; stdErr: Buffer[] }
+): Buffer | Error | undefined {
+  if (error || result.exitCode === 0) return error;
+  if (result.stdErr.length > 0) return Buffer.concat([...result.stdOut, ...result.stdErr]);
+  return new Error(`git exited with ${String(result.exitCode)} and no error output`);
 }
 
 export async function createHardenedGit(
@@ -508,6 +525,26 @@ export async function createContinueGit(
     ...UNSAFE_FLAGS,
     allowUnsafeEditor: true,
   });
+}
+
+/**
+ * Hardened profile that rejects every non-zero exit, for reads whose empty
+ * answer is authoritative: an empty listing from a git that died silently must
+ * not pass for "nothing here".
+ */
+export async function createStrictExitGit(
+  cwd: string,
+  signal?: AbortSignal,
+  platform: NodeJS.Platform = process.platform
+): Promise<SimpleGit> {
+  return buildHardenedProfile(
+    cwd,
+    signal,
+    platform,
+    hardenedGitEnvOverrides(platform),
+    UNSAFE_FLAGS,
+    rejectEveryNonZeroExit
+  );
 }
 
 /**

@@ -148,11 +148,16 @@ describe("FileSearchService against real git", () => {
     writeFile(path.join(outer, ".gitignore"), "*\n");
     const inner = path.join(outer, "inner");
     makeRepo(inner);
+    writeFile(path.join(inner, ".gitignore"), "*.log\n");
     writeFile(path.join(inner, "src", "main.ts"));
+    // Only git hides this, so seeing it missing proves the inner repository's
+    // listing answered rather than the walker.
+    writeFile(path.join(inner, "src", "debug.log"));
+    expect(git(inner, "rev-parse", "--show-toplevel").trim()).toBe(inner);
 
     const service = await createService();
     const files = await service.listFiles(inner);
-    expect([...files].sort()).toEqual(["src/", "src/main.ts"]);
+    expect([...files].sort()).toEqual([".gitignore", "src/", "src/main.ts"]);
   });
 
   it("falls back to the disk walker in a directory outside any repository", async () => {

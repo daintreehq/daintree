@@ -1,6 +1,6 @@
 import * as fs from "fs/promises";
 import * as path from "path";
-import { createHardenedGit } from "../utils/hardenedGit.js";
+import { createStrictExitGit } from "../utils/hardenedGit.js";
 import { Cache } from "../utils/cache.js";
 import { logWarn } from "../utils/logger.js";
 import { isPathInside } from "../../shared/utils/path.js";
@@ -356,7 +356,9 @@ async function loadFilesFromDisk(cwd: string): Promise<string[]> {
 }
 
 async function loadGitFiles(cwd: string): Promise<string[]> {
-  const git = await createHardenedGit(cwd);
+  // Strict exit: an empty listing is taken as final, so a git that died without
+  // output has to reject and reach the walker rather than read as "all ignored".
+  const git = await createStrictExitGit(cwd);
 
   // -z: NUL-delimited output. Required to round-trip filenames containing tabs,
   // newlines, or backslashes; core.quotepath=false alone only suppresses high-bit
@@ -590,8 +592,8 @@ export class FileSearchService {
 
     try {
       // A successful listing is the answer even when it is empty: inside a work
-      // tree, empty means everything under cwd is ignored, and the walker below
-      // doesn't read .gitignore, so falling through would list exactly those files.
+      // tree, empty means nothing under cwd is tracked or unignored, and the walker
+      // below doesn't read .gitignore, so falling through would list ignored files.
       // That includes a folder a parent repository ignores (a home directory
       // tracked with `*`): git can't tell that apart from an ignored subtree.
       return await loadGitFiles(cwd);
