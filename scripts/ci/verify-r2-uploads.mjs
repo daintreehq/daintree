@@ -24,13 +24,39 @@ export function buildPublishedUrl(baseUrl, filename) {
   return `${trimmed}${filename}`;
 }
 
-export async function verifyFileUrl(entry, { fetch: fetchFn, publishUrl }) {
+// Matches the 15s deadline in verify-r2-metadata.mjs. Without it a HEAD that connects
+// but never gets headers waits on undici's 300s headersTimeout, and three such
+// attempts outlast the 15-minute publish job.
+export const FETCH_TIMEOUT_MS = 15_000;
+
+export async function verifyFileUrl(
+  entry,
+  { fetch: fetchFn, publishUrl, timeoutMs = FETCH_TIMEOUT_MS }
+) {
   const url = buildPublishedUrl(publishUrl, entry.url);
+  const controller = new AbortController();
+  let timer;
   let response;
   try {
-    response = await fetchFn(url, { method: "HEAD", redirect: "follow" });
+    // Racing the abort against the fetch keeps the deadline hard even if the
+    // fetch implementation never rejects on abort.
+    const timedOut = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new Error(`timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+    });
+    response = await Promise.race([
+      fetchFn(url, { method: "HEAD", redirect: "follow", signal: controller.signal }),
+      timedOut,
+    ]);
   } catch (err) {
+    if (controller.signal.aborted) {
+      return `request timed out after ${timeoutMs}ms fetching ${url}`;
+    }
     return `network error fetching ${url}: ${err?.message ?? err}`;
+  } finally {
+    clearTimeout(timer);
   }
   if (response.status !== 200) {
     return `expected HTTP 200 for ${url}, got ${response.status}`;
@@ -57,11 +83,12 @@ export async function verifyWithRetries(
     sleep: sleepFn = defaultSleep,
     maxAttempts = 3,
     baseDelayMs = 5000,
+    timeoutMs,
   } = {}
 ) {
   let lastError = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const error = await verifyFileUrl(entry, { fetch: fetchFn, publishUrl });
+    const error = await verifyFileUrl(entry, { fetch: fetchFn, publishUrl, timeoutMs });
     if (!error) return null;
     lastError = error;
     if (attempt < maxAttempts) {
@@ -105,6 +132,7 @@ export async function verifyAllFiles({
   sleep: sleepFn = defaultSleep,
   maxAttempts,
   baseDelayMs,
+  timeoutMs,
   log = console.log,
 }) {
   const failures = [];
@@ -137,6 +165,7 @@ export async function verifyAllFiles({
         sleep: sleepFn,
         maxAttempts,
         baseDelayMs,
+        timeoutMs,
       });
       if (error) {
         failures.push({ filePath, message: error });
