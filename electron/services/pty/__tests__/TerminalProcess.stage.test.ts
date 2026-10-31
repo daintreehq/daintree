@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IPty } from "node-pty";
 import { TerminalProcess } from "../TerminalProcess.js";
 import type { SpawnContext } from "../terminalSpawn.js";
+import { getSoftNewlineSequence } from "../terminalInput.js";
 
 let ptyWriteMock: ReturnType<typeof vi.fn<(data: string) => void>>;
 
@@ -36,7 +37,9 @@ interface Internals {
     lastStateChange?: number;
     lastTypedInputAt?: number;
     detectedAgentId?: string;
+    agentIncarnation: number;
     isExited?: boolean;
+    lastOutputTime: number;
   };
 }
 
@@ -105,6 +108,12 @@ describe("TerminalProcess.stage and the submit lane (#15554)", () => {
 
     terminal.submit("first prompt");
     terminal.stage(DRAFT);
+    // Output that keeps arriving holds the Enter back for the settle window's
+    // full length; the draft has to wait all of it out.
+    for (let elapsed = 0; elapsed < 1_500; elapsed += 100) {
+      info(terminal).lastOutputTime = Date.now();
+      await vi.advanceTimersByTimeAsync(100);
+    }
     expect(writes()).toEqual(["first prompt"]);
 
     await vi.advanceTimersByTimeAsync(5_000);
@@ -140,25 +149,75 @@ describe("TerminalProcess.stage and the submit lane (#15554)", () => {
         inputController: { acquireShutdownInputLock: () => () => void };
       }
     ).inputController;
-    const release = inputController.acquireShutdownInputLock();
+    // Released before the in-flight submission has even unwound: the draft
+    // was accepted before the lock and must not outlive it.
+    inputController.acquireShutdownInputLock()();
 
-    await vi.advanceTimersByTimeAsync(3_000);
-    release();
     await vi.advanceTimersByTimeAsync(3_000);
 
     expect(writes()).toEqual(["first prompt"]);
   });
 
-  it("is dropped when pending input is cancelled while it waits", async () => {
+  it("is dropped when pending input is cancelled while it waits, unlike one staged after", async () => {
     const terminal = createAgentTerminal("claude");
 
     terminal.submit("first prompt");
     terminal.stage(DRAFT);
     terminal.cancelPendingInput();
+    terminal.stage("NEW-OWNER-DRAFT");
 
     await vi.advanceTimersByTimeAsync(3_000);
 
-    expect(writes()).toEqual(["first prompt"]);
+    expect(writes()).not.toContain(DRAFT);
+    expect(writes()).toContain("NEW-OWNER-DRAFT");
+  });
+
+  it("is dropped when the agent it was meant for is relaunched while it waits", async () => {
+    const terminal = createAgentTerminal("claude");
+
+    terminal.submit("first prompt");
+    terminal.stage(DRAFT);
+    info(terminal).agentIncarnation += 1;
+
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(writes()).not.toContain(DRAFT);
+  });
+
+  it("is dropped when the agent it was meant for exits to its shell while it waits", async () => {
+    const terminal = createAgentTerminal("claude");
+
+    terminal.submit("first prompt");
+    terminal.stage(DRAFT);
+    info(terminal).detectedAgentId = undefined;
+
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(writes()).not.toContain(DRAFT);
+  });
+
+  it("keeps a deferred multi-line draft inside one bracketed paste with no Enter after it", async () => {
+    const terminal = createAgentTerminal("claude");
+
+    terminal.submit("first prompt");
+    terminal.stage("line one\nline two\n\n");
+
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(writes()).toEqual(["first prompt", "\r", "\x1b[200~line one\rline two\x1b[201~"]);
+  });
+
+  it("writes a deferred multi-line draft with soft newlines where pastes are not supported", async () => {
+    const terminal = createAgentTerminal("gemini");
+
+    terminal.submit("first prompt");
+    terminal.stage("line one\nline two");
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    const softNewline = getSoftNewlineSequence(info(terminal) as never);
+    expect(softNewline).not.toBe("\r");
+    expect(writes()).toEqual(["first prompt", "\r", `line one${softNewline}line two`]);
   });
 
   it("is dropped when the pty exits while it waits", async () => {

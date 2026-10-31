@@ -409,6 +409,12 @@ export class TerminalInputController {
    * can't trigger the shell-submit detection in {@link write} and auto-execute a
    * line. Trailing newlines in `text` are dropped — staging never submits. Used
    * by `host.sendToActiveAgent(text, { submit: false })` (#10558).
+   *
+   * The write takes its turn in the submit lane (#15554). Written while another
+   * submission's body waited for its Enter, the draft became part of that line
+   * and was submitted with it. Behind the lane it lands after every submission
+   * already accepted, and once written it is typed text like any other: a
+   * guarded submission queued after it sees the draft and stays out.
    */
   stage(text: string): void {
     const terminal = this.host.terminalInfo;
@@ -420,6 +426,18 @@ export class TerminalInputController {
     if (body.length === 0) {
       return;
     }
+    // Captured at enqueue so a draft that waited is dropped if a shutdown lock
+    // or cancellation came in meanwhile, or if another agent (or a relaunch of
+    // this one) owns the pty once the lane frees up.
+    const generation = this.inputGeneration;
+    const owner = this.captureOwner();
+    this.host.writeQueue.stage(() => {
+      if (this.isStillOwnedBy(generation, owner)) this.writeStaged(body);
+    });
+  }
+
+  private writeStaged(body: string): void {
+    const terminal = this.host.terminalInfo;
     terminal.lastInputTime = Date.now();
     const useBracketedPaste = body.includes("\n") || body.length > PASTE_THRESHOLD_CHARS;
     if (useBracketedPaste && supportsBracketedPaste(terminal)) {

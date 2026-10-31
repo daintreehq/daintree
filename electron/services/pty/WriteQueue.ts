@@ -65,6 +65,7 @@ export interface SubmitExecutionContext {
 
 /** One queued submission plus the caller's optional correlation token. */
 interface SubmitJob {
+  kind: "submit";
   text: string;
   token?: string;
   /** Run once when this submission reaches `pty_written`, tokened or not (#12488). */
@@ -77,6 +78,19 @@ interface SubmitJob {
   admit?: () => boolean;
   imagePaths?: readonly string[];
 }
+
+/**
+ * Text written into the composer with no Enter behind it (#15554). It takes
+ * its turn in the lane like a submission, so it can never land between another
+ * submission's body and its Enter, but it holds the lane only for its own
+ * synchronous write.
+ */
+interface StageJob {
+  kind: "stage";
+  write: () => void;
+}
+
+type InputJob = SubmitJob | StageJob;
 
 export interface WriteQueueOptions {
   /** True once the underlying PTY has exited; aborts the output-settle wait. */
@@ -139,7 +153,7 @@ export interface OutputSettleOptions {
  * `TerminalProcess`; the queue's job is purely serialisation.
  */
 export class WriteQueue {
-  private submitQueue: SubmitJob[] = [];
+  private submitQueue: InputJob[] = [];
   private submitInFlight = false;
   private disposed = false;
   /**
@@ -179,7 +193,7 @@ export class WriteQueue {
    */
   withdrawGuardedSubmission(token: string): void {
     const index = this.submitQueue.findIndex(
-      (job) => job.token === token && job.admit !== undefined
+      (job) => job.kind === "submit" && job.token === token && job.admit !== undefined
     );
     if (index !== -1) {
       this.submitQueue.splice(index, 1);
@@ -224,7 +238,22 @@ export class WriteQueue {
     if (token !== undefined && !this.pendingSubmissions.has(token)) {
       this.pendingSubmissions.set(token, { token, phase: "queued", at: Date.now() });
     }
-    this.submitQueue.push({ text, token, onPtyWritten, admit, imagePaths });
+    this.enqueue({ kind: "submit", text, token, onPtyWritten, admit, imagePaths });
+  }
+
+  /**
+   * Run `write` once everything already in the lane has finished: straight
+   * away on an idle lane, otherwise after the in-flight submission's Enter and
+   * every job queued before it. Dropped, never run, if the queue is cancelled
+   * or disposed first.
+   */
+  stage(write: () => void): void {
+    if (this.disposed) return;
+    this.enqueue({ kind: "stage", write });
+  }
+
+  private enqueue(job: InputJob): void {
+    this.submitQueue.push(job);
     if (this.submitInFlight) return;
     this.submitInFlight = true;
     void this.drainSubmitQueue();
@@ -242,7 +271,8 @@ export class WriteQueue {
   /**
    * Whether a submission is waiting in the queue or still being written,
    * tokened or not — the in-flight one is shifted off the queue before its
-   * write finishes, so the queue alone would miss it.
+   * write finishes, so the queue alone would miss it. A staged text waiting
+   * behind one counts too: it is input Daintree has yet to write.
    */
   hasPendingSubmission(): boolean {
     return this.submitInFlight || this.submitQueue.length > 0;
@@ -426,7 +456,9 @@ export class WriteQueue {
     const queued = this.submitQueue;
     this.submitQueue = [];
     for (const job of queued) {
-      if (job.token !== undefined) this.finalizeIfPending(job.token, "cancelled");
+      if (job.kind === "submit" && job.token !== undefined) {
+        this.finalizeIfPending(job.token, "cancelled");
+      }
     }
   }
 
@@ -485,6 +517,14 @@ export class WriteQueue {
       while (!this.disposed && this.submitQueue.length > 0) {
         const next = this.submitQueue.shift();
         if (next === undefined) continue;
+        if (next.kind === "stage") {
+          try {
+            next.write();
+          } catch (error) {
+            this.options.onWriteError?.(error, { operation: "stage" });
+          }
+          continue;
+        }
         this.submitStatusReported = false;
         const token = next.token;
         if (next.admit !== undefined && !admitJob(next.admit)) {

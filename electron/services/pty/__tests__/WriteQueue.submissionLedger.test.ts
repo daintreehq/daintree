@@ -557,3 +557,62 @@ describe("WriteQueue outputChangeAfterWriteAt", () => {
     expect(wq.getSubmission("tok-cancelled")).not.toHaveProperty("outputChangeAfterWriteAt");
   });
 });
+
+describe("WriteQueue submission ledger with staged text in the lane (#15554)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("keeps each tokened outcome, and withdrawal still finds the guarded line behind a stage", async () => {
+    const h = makeHarness();
+    const order: string[] = [];
+    h.performSubmit.mockImplementation(async (text, ctx) => {
+      order.push(text);
+      ctx.markPtyWritten();
+    });
+    const wq = new WriteQueue(h.options);
+
+    wq.submit("one", "tok-1");
+    wq.stage(() => order.push("draft"));
+    wq.submit("guarded", "tok-2", undefined, () => true);
+    wq.submit("three", "tok-3");
+    wq.withdrawGuardedSubmission("tok-2");
+    await vi.runAllTimersAsync();
+
+    expect(order).toEqual(["one", "draft", "three"]);
+    expect(wq.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
+    expect(wq.getSubmission("tok-2")).toMatchObject({ phase: "cancelled" });
+    expect(wq.getSubmission("tok-3")).toMatchObject({ phase: "pty_written" });
+  });
+
+  it("cancels the tokened submissions queued around a stage", async () => {
+    const h = makeHarness();
+    let release!: () => void;
+    h.performSubmit.mockImplementation((text, ctx) => {
+      if (text !== "one") return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        release = () => {
+          ctx.markPtyWritten();
+          resolve();
+        };
+      });
+    });
+    const wq = new WriteQueue(h.options);
+
+    wq.submit("one", "tok-1");
+    wq.submit("two", "tok-2");
+    wq.stage(() => {});
+    wq.submit("three", "tok-3");
+    wq.cancelPendingInput();
+    release();
+    await vi.runAllTimersAsync();
+
+    expect(wq.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
+    expect(wq.getSubmission("tok-2")).toMatchObject({ phase: "cancelled" });
+    expect(wq.getSubmission("tok-3")).toMatchObject({ phase: "cancelled" });
+  });
+});
