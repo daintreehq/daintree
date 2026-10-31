@@ -103,7 +103,11 @@ const ORACLE_LOCAL = [
   "bench/suffixed-9-old",
   "bench/suffixed-11/nested",
 ];
-const ORACLE_REMOTE = ["origin/bench/remote-only", "origin/bench/suffixed-30", "origin/bench/taken"];
+const ORACLE_REMOTE = [
+  "origin/bench/remote-only",
+  "origin/bench/suffixed-30",
+  "origin/bench/taken",
+];
 
 /** Local branch count for a fixture: a few, growing slowly with the repo. */
 function localCount(totalRefs: number): number {
@@ -252,7 +256,11 @@ for (const totalRefs of sizes) {
   const service = new GitService(repo);
   const arms: ArmResult[] = [];
   for (const arm of Object.keys(ARMS) as Arm[]) arms.push(await measureArm(arm, service));
-  results.push({ refs: totalRefs, localBranches: localCount(totalRefs) + ORACLE_LOCAL.length, arms });
+  results.push({
+    refs: totalRefs,
+    localBranches: localCount(totalRefs) + ORACLE_LOCAL.length,
+    arms,
+  });
 }
 proto.spawn = originalSpawn;
 
