@@ -1797,7 +1797,11 @@ describe("registerDiagnosticsHandlers", () => {
 
         await start(v.event);
         v.v8.recording = false;
-        const result = (await stop(v.event)) as { status: string; reason: string; message?: string };
+        const result = (await stop(v.event)) as {
+          status: string;
+          reason: string;
+          message?: string;
+        };
 
         expect(result.status).toBe("failed");
         expect(result.reason).toBe("capture-failed");
