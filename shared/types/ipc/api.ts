@@ -2048,6 +2048,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     getFirstPageCache(payload: { cwd: string }): Promise<ForgeFirstPageCachePayload | null>;
     /**
+     * The repository origin (`forge-host/owner/repo`) behind both toolbar
+     * counts, without polling the forge, so a view can find its Shell's shared
+     * record before its first poll answers (#15546). `null` when no provider
+     * resolves or an issues provider splits the issue count off — never throws.
+     */
+    getRepoKey(payload: { cwd: string }): Promise<string | null>;
+    /**
      * Project-health roll-up for the project pulse card. Errors surface in
      * the returned payload's `error` field, never as a rejection.
      */

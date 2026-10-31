@@ -2884,6 +2884,8 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.FORGE_GET_REPO_STATS, payload),
       getFirstPageCache: (payload: { cwd: string }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_FIRST_PAGE_CACHE, payload),
+      getRepoKey: (payload: { cwd: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_REPO_KEY, payload),
       getProjectHealth: (payload: { cwd: string; bypassCache?: boolean }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_PROJECT_HEALTH, payload),
       getIssueTooltip: (

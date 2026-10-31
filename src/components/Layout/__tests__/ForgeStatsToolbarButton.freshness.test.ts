@@ -385,11 +385,13 @@ describe("ForgeStatsToolbarButton list-count badge wiring", () => {
     expect(source).toMatch(
       /prCountRefreshedAt\s*=\s*stats\?\.prCountRefreshedAt\s*\?\?\s*statsRecencyFallback/
     );
+    // While the counts are the Shell's shared record (#15546) the list count
+    // sits out, so every view of the repository shows the same number.
     expect(source).toMatch(
-      /issueDisplayCount[\s\S]{0,80}?=\s*resolveForgeDisplayCount\(\s*issueCount,\s*issueCountRefreshedAt,\s*issueListCount,\s*issueListHasMore,\s*issueListTimestamp\b/
+      /issueDisplayCount[\s\S]{0,80}?=\s*resolveForgeDisplayCount\(\s*issueCount,\s*issueCountRefreshedAt,\s*sharedCounts\s*\?\s*null\s*:\s*issueListCount,\s*issueListHasMore,\s*issueListTimestamp\b/
     );
     expect(source).toMatch(
-      /prDisplayCount[\s\S]{0,80}?=\s*resolveForgeDisplayCount\(\s*prCount,\s*prCountRefreshedAt,\s*prListCount,\s*prListHasMore,\s*prListTimestamp\b/
+      /prDisplayCount[\s\S]{0,80}?=\s*resolveForgeDisplayCount\(\s*prCount,\s*prCountRefreshedAt,\s*sharedCounts\s*\?\s*null\s*:\s*prListCount,\s*prListHasMore,\s*prListTimestamp\b/
     );
   });
 

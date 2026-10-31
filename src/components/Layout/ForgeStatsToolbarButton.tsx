@@ -128,6 +128,7 @@ export const ForgeStatsToolbarButton = memo(
       isValidating: statsValidating,
       errorSeverity,
       isTokenError,
+      sharedCounts,
       refresh: refreshStats,
       lastUpdated,
       rateLimitResetAt,
@@ -325,18 +326,21 @@ export const ForgeStatsToolbarButton = memo(
     // unconditionally once set, freezing the badge until the dropdown reopened
     // even when a fresher poll had landed. Stays separate from the numeric
     // `issueCount` / `prCount` so the digit-pulse delta detection keeps
-    // comparing raw totals.
+    // comparing raw totals. While the counts are the Shell's shared record
+    // (#15546), every view of the repository shows that record: a dropdown's
+    // own total would set this view apart. A fresh list fetch still reaches the
+    // badge, through the stats refresh it triggers and the record it updates.
     const issueDisplayCount: number | string | null = resolveForgeDisplayCount(
       issueCount,
       issueCountRefreshedAt,
-      issueListCount,
+      sharedCounts ? null : issueListCount,
       issueListHasMore,
       issueListTimestamp
     );
     const prDisplayCount: number | string | null = resolveForgeDisplayCount(
       prCount,
       prCountRefreshedAt,
-      prListCount,
+      sharedCounts ? null : prListCount,
       prListHasMore,
       prListTimestamp
     );

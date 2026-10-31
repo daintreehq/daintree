@@ -259,6 +259,7 @@ export const CHANNEL_LEASE_POLICY = {
   "forge:get-prs-by-numbers": "free",
   "forge:get-references-by-numbers": "free",
   "forge:get-rate-limit-details": "free",
+  "forge:get-repo-key": "free",
   "forge:get-repo-metadata": "free",
   "forge:get-repo-stats": "free",
   "forge:get-repo-url": "free",

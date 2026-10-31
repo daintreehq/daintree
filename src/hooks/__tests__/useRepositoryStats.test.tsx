@@ -14,6 +14,7 @@ const {
   onRepoStatsAndPageUpdatedMock,
   onRepoCountsUpdatedMock,
   getCurrentUserMock,
+  getRepoKeyMock,
 } = vi.hoisted(() => ({
   getCurrentMock: vi.fn(),
   onSwitchMock: vi.fn(),
@@ -25,6 +26,7 @@ const {
   ),
   onRepoCountsUpdatedMock: vi.fn<(cb: (payload: unknown) => void) => () => void>(() => () => {}),
   getCurrentUserMock: vi.fn(),
+  getRepoKeyMock: vi.fn(),
 }));
 
 vi.mock("@/clients", () => ({
@@ -42,6 +44,7 @@ vi.mock("@/clients/forgeClient", () => ({
     onRepoStatsAndPageUpdated: onRepoStatsAndPageUpdatedMock,
     onRepoCountsUpdated: onRepoCountsUpdatedMock,
     getCurrentUser: getCurrentUserMock,
+    getRepoKey: getRepoKeyMock,
   },
 }));
 
@@ -88,6 +91,15 @@ const { resolvedProviderRef, makeResolvedProvider } = vi.hoisted(() => {
   };
 });
 
+// Whether this machine has paired a host — what turns sharing on in a local
+// view (#14199).
+const { pairedHostRef } = vi.hoisted(() => ({ pairedHostRef: { current: false } }));
+
+vi.mock("@/components/Hosts/hostList", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/Hosts/hostList")>()),
+  hasRemoteHosts: () => pairedHostRef.current,
+}));
+
 vi.mock("@/hooks/useResolvedForgeProvider", () => ({
   useResolvedForgeProvider: () => resolvedProviderRef.current,
 }));
@@ -107,12 +119,7 @@ import {
   setCache,
 } from "@/lib/forgeResourceCache";
 import type { Issue, PR } from "@shared/types/forge";
-import {
-  publishSharedObservation,
-  readNewestSharedObservation,
-  readRepoAlias,
-  writeRepoAlias,
-} from "@/lib/sharedRepoStats";
+import { publishSharedRepoStats, readSharedRepoStats } from "@/lib/sharedRepoStats";
 
 function createDeferred<T>() {
   let resolve: (value: T) => void;
@@ -164,6 +171,7 @@ describe("useRepositoryStats", () => {
     // into later tests' cold-start hydration.
     getFirstPageCacheMock.mockResolvedValue(null);
     resolvedProviderRef.current = makeResolvedProvider("test.forge.provider");
+    pairedHostRef.current = false;
     _resetPollingLifecycleForTests();
     _resetSwitchBackCacheForTests();
     // Reset the mocked worktree store so a prior test's main-worktree counts
@@ -3026,7 +3034,7 @@ describe("useRepositoryStats", () => {
     });
   });
 
-  describe("cross-host continuity (issue #14199)", () => {
+  describe("cross-host sharing (issues #14199, #15546)", () => {
     const REPO_KEY = "github.test/acme/widgets";
     const persisted = {
       commitCount: 412,
@@ -3036,20 +3044,49 @@ describe("useRepositoryStats", () => {
       lastUpdated: 1_000,
     };
 
-    function shareFromLocalHost(observedAt = 5_000) {
-      writeRepoAlias("studio", "/srv/widgets", { providerId: PROVIDER_ID, repoKey: REPO_KEY });
-      publishSharedObservation(PROVIDER_ID, "octo", REPO_KEY, {
-        issueCount: 11,
-        prCount: 5,
-        observedAt,
-        hostId: "local",
-      });
+    // Another host's reading, as a view of it on this Shell publishes it.
+    function publishFrom(
+      hostId: string,
+      issueCount: number,
+      prCount: number,
+      receivedAt = Date.now()
+    ) {
+      const lastUpdated = Date.now();
+      publishSharedRepoStats(
+        REPO_KEY,
+        {
+          issueCount,
+          prCount,
+          lastUpdated,
+          issueRefreshedAt: lastUpdated,
+          prRefreshedAt: lastUpdated,
+          hostId,
+        },
+        receivedAt
+      );
+    }
+
+    function freshAnswer(
+      issueCount: number,
+      prCount: number,
+      extra: Partial<ForgeRepositoryStats> = {}
+    ): ForgeRepositoryStats {
+      return {
+        commitCount: 413,
+        issueCount,
+        prCount,
+        loading: false,
+        stale: false,
+        lastUpdated: Date.now(),
+        repoKey: REPO_KEY,
+        ...extra,
+      };
     }
 
     beforeEach(() => {
       window.localStorage.clear();
       window.__DAINTREE_HOST_ID__ = { id: "studio" };
-      getCurrentUserMock.mockResolvedValue({ login: "octo", rawData: null });
+      getRepoKeyMock.mockResolvedValue(REPO_KEY);
       getCurrentMock.mockResolvedValue({
         id: "test-project",
         path: "/srv/widgets",
@@ -3063,26 +3100,151 @@ describe("useRepositoryStats", () => {
       window.localStorage.clear();
     });
 
-    it("shows another host's newer counts over this host's older ones, keeping its own commits", async () => {
-      shareFromLocalHost();
+    it("shows the origin's record on the first paint at a host with no history of the project", async () => {
+      publishFrom("local", 11, 5);
+      getRepoStatsMock.mockReturnValue(createDeferred<ForgeRepositoryStats>().promise);
+      const shownIssueCounts: Array<number | null> = [];
+
+      const { result } = renderHook(() => {
+        const value = useRepositoryStats();
+        if (value.stats) shownIssueCounts.push(value.stats.issueCount);
+        return value;
+      });
+
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(11);
+      });
+      // This host's own seed (7) never reaches the screen.
+      expect(shownIssueCounts.every((count) => count === 11)).toBe(true);
+      expect(result.current.stats?.prCount).toBe(5);
+      // The commit count is this host's local git.
+      expect(result.current.stats?.commitCount).toBe(412);
+      expect(result.current.stats?.issueCountRefreshedAt).toBe(
+        readSharedRepoStats(REPO_KEY)?.issueObservedAt
+      );
+      expect(getRepoKeyMock).toHaveBeenCalledWith("/srv/widgets");
+      // A seed is never published as this host's reading.
+      expect(readSharedRepoStats(REPO_KEY)?.hostId).toBe("local");
+    });
+
+    it("holds this host's seed until it knows the origin", async () => {
+      publishFrom("local", 11, 5);
+      const origin = createDeferred<string | null>();
+      getRepoKeyMock.mockReturnValue(origin.promise);
       getRepoStatsMock.mockReturnValue(createDeferred<ForgeRepositoryStats>().promise);
 
       const { result } = renderHook(() => useRepositoryStats());
 
       await waitFor(() => {
+        expect(getRepoKeyMock).toHaveBeenCalled();
+      });
+      await wait(20);
+      expect(result.current.stats).toBeNull();
+
+      await act(async () => {
+        origin.resolve(REPO_KEY);
+        await Promise.resolve();
+      });
+      await waitFor(() => {
         expect(result.current.stats?.issueCount).toBe(11);
       });
-      expect(result.current.stats?.prCount).toBe(5);
-      expect(result.current.stats?.commitCount).toBe(412);
-      // Dated as the other host read them, so the badge's recency arbitration
-      // ranks them against dropdown totals honestly.
-      expect(result.current.stats?.issueCountRefreshedAt).toBe(5_000);
-      expect(result.current.freshnessLevel).toBe("stale-disk");
-      expect(getRepoStatsMock).toHaveBeenCalledTimes(1);
     });
 
-    it("lets a newer poll on this host replace them", async () => {
-      shareFromLocalHost();
+    it("holds the disk bootstrap until it knows the origin", async () => {
+      publishFrom("local", 11, 5);
+      getCurrentMock.mockResolvedValue({ id: "test-project", path: "/srv/widgets" });
+      getFirstPageCacheMock.mockResolvedValue({
+        providerId: PROVIDER_ID,
+        projectPath: "/srv/widgets",
+        issues: { items: [], endCursor: null, hasNextPage: false },
+        prs: { items: [], endCursor: null, hasNextPage: false },
+        lastUpdated: 1_000,
+        stats: { commitCount: 412, issueCount: 7, prCount: 3, lastUpdated: 1_000 },
+      });
+      const origin = createDeferred<string | null>();
+      getRepoKeyMock.mockReturnValue(origin.promise);
+      getRepoStatsMock.mockReturnValue(createDeferred<ForgeRepositoryStats>().promise);
+      const shownIssueCounts: Array<number | null> = [];
+
+      const { result } = renderHook(() => {
+        const value = useRepositoryStats();
+        if (value.stats) shownIssueCounts.push(value.stats.issueCount);
+        return value;
+      });
+
+      await waitFor(() => {
+        expect(getFirstPageCacheMock).toHaveBeenCalled();
+      });
+      await wait(20);
+      expect(result.current.stats).toBeNull();
+
+      await act(async () => {
+        origin.resolve(REPO_KEY);
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(11);
+      });
+      expect(result.current.stats?.commitCount).toBe(412);
+      expect(shownIssueCounts.every((count) => count === 11)).toBe(true);
+    });
+
+    it("drops the disk bootstrap of a project switched away from during the origin lookup", async () => {
+      const projectA = { id: "a", path: "/srv/widgets" };
+      const projectB = {
+        id: "b",
+        path: "/srv/gadgets",
+        lastKnownStats: { ...persisted, commitCount: 50, issueCount: 1, prCount: 1 },
+      };
+      let currentProject: { id: string; path: string } = projectA;
+      getCurrentMock.mockImplementation(async () => currentProject);
+      let switchHandler: (() => void) | undefined;
+      onSwitchMock.mockImplementation((callback: () => void) => {
+        switchHandler = callback;
+        return () => {};
+      });
+      getFirstPageCacheMock.mockResolvedValue({
+        providerId: PROVIDER_ID,
+        projectPath: "/srv/widgets",
+        issues: { items: [], endCursor: null, hasNextPage: false },
+        prs: { items: [], endCursor: null, hasNextPage: false },
+        lastUpdated: 1_000,
+        stats: { commitCount: 412, issueCount: 7, prCount: 3, lastUpdated: 1_000 },
+      });
+      const originA = createDeferred<string | null>();
+      getRepoKeyMock.mockImplementation((path: string) =>
+        path === "/srv/widgets" ? originA.promise : Promise.resolve(null)
+      );
+      getRepoStatsMock.mockReturnValue(createDeferred<ForgeRepositoryStats>().promise);
+
+      const { result } = renderHook(() => useRepositoryStats());
+      // The poll's read of the project, then the bootstrap's two: it is now
+      // waiting on the origin lookup.
+      await waitFor(() => {
+        expect(getRepoKeyMock).toHaveBeenCalledWith("/srv/widgets");
+        expect(getCurrentMock).toHaveBeenCalledTimes(3);
+      });
+
+      currentProject = projectB;
+      act(() => {
+        switchHandler?.();
+      });
+      await act(async () => {
+        originA.resolve(REPO_KEY);
+        await Promise.resolve();
+      });
+
+      // B seeds from its own record, not A's cached counts.
+      await waitFor(() => {
+        expect(result.current.stats?.commitCount).toBe(50);
+      });
+      await wait(20);
+      expect(result.current.stats?.commitCount).toBe(50);
+      expect(result.current.stats?.issueCount).toBe(1);
+    });
+
+    it("keeps the record over a cached answer from a host it has no entry from", async () => {
+      publishFrom("local", 11, 5);
       const poll = createDeferred<ForgeRepositoryStats>();
       getRepoStatsMock.mockReturnValue(poll.promise);
 
@@ -3091,16 +3253,60 @@ describe("useRepositoryStats", () => {
         expect(result.current.stats?.issueCount).toBe(11);
       });
 
+      // An older reading of this host's that this Shell never received.
       await act(async () => {
-        poll.resolve({
-          commitCount: 413,
-          issueCount: 0,
-          prCount: 6,
-          loading: false,
-          stale: false,
-          lastUpdated: Date.now(),
-          repoKey: REPO_KEY,
-        });
+        poll.resolve(freshAnswer(7, 3, { countsSource: "memory-cache" }));
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(result.current.isValidating).toBe(false);
+      });
+
+      expect(result.current.stats?.issueCount).toBe(11);
+      expect(result.current.stats?.commitCount).toBe(413);
+      expect(readSharedRepoStats(REPO_KEY)?.hostId).toBe("local");
+    });
+
+    it("shares in a local view once a host is paired", async () => {
+      delete window.__DAINTREE_HOST_ID__;
+      pairedHostRef.current = true;
+      publishFrom("studio", 11, 5);
+      getRepoStatsMock.mockReturnValue(createDeferred<ForgeRepositoryStats>().promise);
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(11);
+      });
+      expect(result.current.sharedCounts).toBe(true);
+      expect(getRepoKeyMock).toHaveBeenCalledWith("/srv/widgets");
+    });
+
+    it("shares one record whichever forge account each host is signed in to", async () => {
+      publishFrom("local", 11, 5);
+      getRepoStatsMock.mockReturnValue(createDeferred<ForgeRepositoryStats>().promise);
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(11);
+      });
+      expect(getCurrentUserMock).not.toHaveBeenCalled();
+    });
+
+    it("makes a fresh poll here the record's newest reading", async () => {
+      publishFrom("local", 11, 5);
+      const poll = createDeferred<ForgeRepositoryStats>();
+      getRepoStatsMock.mockReturnValue(poll.promise);
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(11);
+      });
+
+      const answer = freshAnswer(0, 6);
+      await act(async () => {
+        poll.resolve(answer);
         await Promise.resolve();
       });
 
@@ -3109,10 +3315,77 @@ describe("useRepositoryStats", () => {
       });
       expect(result.current.stats?.prCount).toBe(6);
       expect(result.current.freshnessLevel).toBe("fresh");
+      expect(readSharedRepoStats(REPO_KEY)).toMatchObject({
+        issueCount: 0,
+        prCount: 6,
+        hostId: "studio",
+        sourceUpdatedAt: answer.lastUpdated,
+      });
     });
 
-    it("holds them against an older answer from this host", async () => {
-      shareFromLocalHost();
+    it("follows a poll another window publishes", async () => {
+      getRepoStatsMock.mockResolvedValue(freshAnswer(9, 4));
+      // What that window will write once this view has polled, captured here
+      // and removed so this view only hears of it through the storage event.
+      publishFrom("build-box", 12, 8, Date.now() + 5_000);
+      const key = Object.keys(window.localStorage).find((k) => k.includes('"build-box"'))!;
+      const value = window.localStorage.getItem(key)!;
+      window.localStorage.removeItem(key);
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(9);
+      });
+      const lastUpdated = result.current.lastUpdated;
+
+      await act(async () => {
+        window.localStorage.setItem(key, value);
+        window.dispatchEvent(new StorageEvent("storage", { key }));
+        await Promise.resolve();
+      });
+
+      expect(result.current.stats?.issueCount).toBe(12);
+      expect(result.current.stats?.prCount).toBe(8);
+      expect(result.current.stats?.commitCount).toBe(413);
+      expect(result.current.lastUpdated).toBe(lastUpdated);
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("follows a poll another view in this window publishes", async () => {
+      getRepoStatsMock.mockResolvedValue(freshAnswer(9, 4));
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(9);
+      });
+
+      await act(async () => {
+        publishFrom("build-box", 12, 8);
+        await Promise.resolve();
+      });
+
+      expect(result.current.stats?.issueCount).toBe(12);
+      expect(getRepoStatsMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("ignores storage changes to other repositories", async () => {
+      getRepoStatsMock.mockResolvedValue(freshAnswer(9, 4));
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(9);
+      });
+      const shown = result.current.stats;
+
+      await act(async () => {
+        window.dispatchEvent(new StorageEvent("storage", { key: "daintree:unrelated" }));
+        await Promise.resolve();
+      });
+
+      expect(result.current.stats).toBe(shown);
+    });
+
+    it("keeps the record through this host's stale and failed answers", async () => {
+      publishFrom("local", 11, 5);
       const poll = createDeferred<ForgeRepositoryStats>();
       getRepoStatsMock.mockReturnValue(poll.promise);
 
@@ -3122,128 +3395,60 @@ describe("useRepositoryStats", () => {
       });
 
       await act(async () => {
-        // A disk fallback dated before the other host's observation.
         poll.resolve({
           commitCount: 412,
           issueCount: 7,
           prCount: 3,
           loading: false,
           stale: true,
-          lastUpdated: 1_000,
-        });
-        await Promise.resolve();
-      });
-
-      await waitFor(() => {
-        expect(result.current.isValidating).toBe(false);
-      });
-      expect(result.current.stats?.issueCount).toBe(11);
-      expect(result.current.stats?.prCount).toBe(5);
-    });
-
-    it("keeps them, marked stale, against an older successful answer from this host", async () => {
-      shareFromLocalHost();
-      const poll = createDeferred<ForgeRepositoryStats>();
-      getRepoStatsMock.mockReturnValue(poll.promise);
-
-      const { result } = renderHook(() => useRepositoryStats());
-      await waitFor(() => {
-        expect(result.current.stats?.issueCount).toBe(11);
-      });
-
-      await act(async () => {
-        // A probe-confirmed cache hit: re-stamped now, but its counts were read
-        // long before the other host's.
-        poll.resolve({
-          commitCount: 412,
-          issueCount: 7,
-          prCount: 3,
-          loading: false,
-          stale: false,
           lastUpdated: Date.now(),
-          issueCountRefreshedAt: 2_000,
-          prCountRefreshedAt: 2_000,
           repoKey: REPO_KEY,
         });
         await Promise.resolve();
       });
-
       await waitFor(() => {
         expect(result.current.isValidating).toBe(false);
       });
       expect(result.current.stats?.issueCount).toBe(11);
-      expect(result.current.isStale).toBe(true);
-      // ...and this host's own observation is still recorded as its own.
-      expect(readNewestSharedObservation(PROVIDER_ID, "octo", REPO_KEY, "local")).toEqual({
-        issueCount: 7,
-        prCount: 3,
-        observedAt: 2_000,
-        hostId: "studio",
+
+      getRepoStatsMock.mockRejectedValue(new Error("Network unreachable"));
+      await act(async () => {
+        await result.current.refresh();
       });
+      expect(result.current.stats?.issueCount).toBe(11);
+      expect(readSharedRepoStats(REPO_KEY)?.hostId).toBe("local");
     });
 
-    it("keeps this host's newer counts through a failed poll", async () => {
-      // Another host's observation, older than this host's first answer.
-      shareFromLocalHost(5_000);
-      getRepoStatsMock.mockResolvedValueOnce({
-        commitCount: 413,
-        issueCount: 20,
-        prCount: 4,
-        loading: false,
-        stale: false,
-        lastUpdated: Date.now(),
-        repoKey: REPO_KEY,
-      });
+    it("never republishes a reading this host already published", async () => {
+      const answer = freshAnswer(9, 4);
+      getRepoStatsMock.mockResolvedValue(answer);
 
       const { result } = renderHook(() => useRepositoryStats());
       await waitFor(() => {
-        expect(result.current.stats?.issueCount).toBe(20);
+        expect(readSharedRepoStats(REPO_KEY)?.hostId).toBe("studio");
       });
 
-      // An undated failure preserves 20; it must not reset what 20 is dated
-      // by, or the next fetch would let the older shared 11 replace it.
-      getRepoStatsMock.mockResolvedValue({
-        commitCount: 413,
-        issueCount: null,
-        prCount: null,
-        loading: false,
-        stale: true,
-        error: "Network unreachable",
-      });
-      await act(async () => {
-        await result.current.refresh();
-      });
+      // Another host reads newer counts; this host then serves its own reading
+      // again (a cache hit, or the poll's broadcast arriving after its answer).
+      publishFrom("local", 11, 5);
       await act(async () => {
         await result.current.refresh();
       });
 
-      expect(getRepoStatsMock).toHaveBeenCalledTimes(3);
-      expect(result.current.stats?.issueCount).toBe(20);
+      expect(result.current.stats?.issueCount).toBe(11);
+      expect(readSharedRepoStats(REPO_KEY)?.hostId).toBe("local");
     });
 
-    it("keeps the repository binding through a switch-back restore", async () => {
-      getRepoStatsMock.mockResolvedValueOnce({
-        commitCount: 413,
-        issueCount: 9,
-        prCount: 4,
-        loading: false,
-        stale: false,
-        lastUpdated: Date.now(),
-        repoKey: REPO_KEY,
-      });
+    it("shows the record over a switch-back restore", async () => {
+      getRepoStatsMock.mockResolvedValueOnce(freshAnswer(9, 4));
       const first = renderHook(() => useRepositoryStats());
       await waitFor(() => {
-        expect(readRepoAlias("studio", "/srv/widgets")).not.toBeNull();
+        expect(first.result.current.stats?.issueCount).toBe(9);
       });
       first.unmount();
 
-      // The other host saw newer counts while this view was away.
-      publishSharedObservation(PROVIDER_ID, "octo", REPO_KEY, {
-        issueCount: 11,
-        prCount: 5,
-        observedAt: Date.now() + 1_000,
-        hostId: "local",
-      });
+      // Another host read newer counts while this view was away.
+      publishFrom("local", 11, 5);
       getRepoStatsMock.mockReturnValue(createDeferred<ForgeRepositoryStats>().promise);
 
       const second = renderHook(() => useRepositoryStats());
@@ -3251,23 +3456,86 @@ describe("useRepositoryStats", () => {
       await waitFor(() => {
         expect(second.result.current.stats?.issueCount).toBe(11);
       });
-      expect(readRepoAlias("studio", "/srv/widgets")).not.toBeNull();
+      expect(second.result.current.stats?.commitCount).toBe(413);
     });
 
-    it("carries on polling when the account lookup fails", async () => {
-      shareFromLocalHost();
-      getCurrentUserMock.mockImplementation(() => {
-        throw new Error("bridge gone");
+    it("stops sharing once the issue count comes from another provider", async () => {
+      publishFrom("local", 11, 5);
+      const poll = createDeferred<ForgeRepositoryStats>();
+      getRepoStatsMock.mockReturnValue(poll.promise);
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(11);
       });
-      getRepoStatsMock.mockResolvedValue({
-        commitCount: 413,
-        issueCount: 9,
-        prCount: 4,
-        loading: false,
-        stale: false,
-        lastUpdated: Date.now(),
-        repoKey: REPO_KEY,
+
+      // No repo key: an issues provider now owns the issue count.
+      await act(async () => {
+        poll.resolve(freshAnswer(2, 4, { repoKey: undefined }));
+        await Promise.resolve();
       });
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(2);
+      });
+
+      await act(async () => {
+        publishFrom("build-box", 12, 8);
+        await Promise.resolve();
+      });
+      expect(result.current.stats?.issueCount).toBe(2);
+      expect(result.current.sharedCounts).toBe(false);
+
+      // The next fetch goes by what the answer said, not a stale lookup.
+      getRepoStatsMock.mockReturnValue(createDeferred<ForgeRepositoryStats>().promise);
+      act(() => {
+        void result.current.refresh();
+      });
+      await waitFor(() => {
+        expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
+      });
+      expect(result.current.stats?.issueCount).toBe(2);
+    });
+
+    it("stops sharing on a stale answer that names no origin", async () => {
+      publishFrom("local", 11, 5);
+      const poll = createDeferred<ForgeRepositoryStats>();
+      getRepoStatsMock.mockReturnValue(poll.promise);
+
+      const { result } = renderHook(() => useRepositoryStats());
+      await waitFor(() => {
+        expect(result.current.sharedCounts).toBe(true);
+      });
+
+      // An issues provider was just bound and couldn't answer: the blend is
+      // stale, and no one origin stands behind it.
+      await act(async () => {
+        poll.resolve(freshAnswer(0, 4, { repoKey: undefined, stale: true }));
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(result.current.sharedCounts).toBe(false);
+      });
+      // This host's own preserved count, not the code forge's shared one.
+      expect(result.current.stats?.issueCount).toBe(7);
+      expect(readSharedRepoStats(REPO_KEY)?.hostId).toBe("local");
+    });
+
+    it("shares nothing for a project whose counts have no single origin", async () => {
+      publishFrom("local", 11, 5);
+      getRepoKeyMock.mockResolvedValue(null);
+      getRepoStatsMock.mockReturnValue(createDeferred<ForgeRepositoryStats>().promise);
+
+      const { result } = renderHook(() => useRepositoryStats());
+
+      await waitFor(() => {
+        expect(result.current.stats?.issueCount).toBe(7);
+      });
+    });
+
+    it("falls back to this host's counts when it can't name the origin", async () => {
+      getRepoKeyMock.mockRejectedValue(new Error("No handler registered"));
+      getRepoStatsMock.mockResolvedValue(freshAnswer(9, 4));
 
       const { result } = renderHook(() => useRepositoryStats());
 
@@ -3275,103 +3543,14 @@ describe("useRepositoryStats", () => {
         expect(result.current.stats?.issueCount).toBe(9);
       });
       expect(result.current.error).toBeNull();
-    });
-
-    it("forgets the repository once the issue count comes from another provider", async () => {
-      shareFromLocalHost();
-      getRepoStatsMock.mockResolvedValue({
-        commitCount: 413,
-        issueCount: 2,
-        prCount: 4,
-        loading: false,
-        stale: false,
-        lastUpdated: Date.now(),
-      });
-
-      const { result } = renderHook(() => useRepositoryStats());
-
-      await waitFor(() => {
-        expect(result.current.stats?.issueCount).toBe(2);
-      });
-      await waitFor(() => {
-        expect(readRepoAlias("studio", "/srv/widgets")).toBeNull();
-      });
-    });
-
-    it("ignores an observation made under a different account", async () => {
-      shareFromLocalHost();
-      getCurrentUserMock.mockResolvedValue({ login: "someone-else", rawData: null });
-      getRepoStatsMock.mockReturnValue(createDeferred<ForgeRepositoryStats>().promise);
-
-      const { result } = renderHook(() => useRepositoryStats());
-
-      // The poll is requested only after the shared-observation decision.
-      await waitFor(() => {
-        expect(getRepoStatsMock).toHaveBeenCalled();
-      });
-      expect(getCurrentUserMock).toHaveBeenCalled();
-      expect(result.current.stats?.issueCount).toBe(7);
-    });
-
-    it("ignores an observation reported by a different provider", async () => {
-      shareFromLocalHost();
-      resolvedProviderRef.current = makeResolvedProvider("other.forge.provider");
-      getCurrentMock.mockResolvedValue({
-        id: "test-project",
-        path: "/srv/widgets",
-        lastKnownStats: { ...persisted, providerId: "other.forge.provider" },
-      });
-      getRepoStatsMock.mockReturnValue(createDeferred<ForgeRepositoryStats>().promise);
-
-      const { result } = renderHook(() => useRepositoryStats());
-
-      await waitFor(() => {
-        expect(getRepoStatsMock).toHaveBeenCalled();
-      });
-      expect(result.current.stats?.issueCount).toBe(7);
-      expect(getCurrentUserMock).not.toHaveBeenCalled();
-    });
-
-    it("records a fresh poll as this host's observation of the repo", async () => {
-      const lastUpdated = Date.now();
-      getRepoStatsMock.mockResolvedValue({
-        commitCount: 413,
-        issueCount: 9,
-        prCount: 4,
-        loading: false,
-        stale: false,
-        lastUpdated,
-        repoKey: REPO_KEY,
-      });
-
-      renderHook(() => useRepositoryStats());
-
-      await waitFor(() => {
-        expect(readNewestSharedObservation(PROVIDER_ID, "octo", REPO_KEY, "local")).toEqual({
-          issueCount: 9,
-          prCount: 4,
-          observedAt: lastUpdated,
-          hostId: "studio",
-        });
-      });
-      expect(readRepoAlias("studio", "/srv/widgets")).toEqual({
-        providerId: PROVIDER_ID,
-        repoKey: REPO_KEY,
-      });
+      // The answer named the origin, so its reading still joins the record.
+      expect(readSharedRepoStats(REPO_KEY)?.hostId).toBe("studio");
     });
 
     it("does no cross-host work in a local-only install", async () => {
       delete window.__DAINTREE_HOST_ID__;
-      // Another host's newer observation is sitting in the store, aliased to
-      // this project; a local-only view must neither read it nor add its own.
-      writeRepoAlias("local", "/srv/widgets", { providerId: PROVIDER_ID, repoKey: REPO_KEY });
-      publishSharedObservation(PROVIDER_ID, "octo", REPO_KEY, {
-        issueCount: 11,
-        prCount: 5,
-        observedAt: 5_000,
-        hostId: "studio",
-      });
-      const keysBefore = Object.keys(window.localStorage).sort();
+      publishFrom("studio", 11, 5);
+      const storedBefore = Object.entries(window.localStorage).sort();
       const poll = createDeferred<ForgeRepositoryStats>();
       getRepoStatsMock.mockReturnValue(poll.promise);
 
@@ -3381,27 +3560,26 @@ describe("useRepositoryStats", () => {
         expect(result.current.stats?.issueCount).toBe(7);
       });
       await act(async () => {
-        poll.resolve({
-          commitCount: 413,
-          issueCount: 9,
-          prCount: 4,
-          loading: false,
-          stale: false,
-          lastUpdated: Date.now(),
-          repoKey: REPO_KEY,
-        });
+        poll.resolve(freshAnswer(9, 4));
         await Promise.resolve();
       });
       await waitFor(() => {
         expect(result.current.stats?.issueCount).toBe(9);
       });
-      await wait(20);
+      await act(async () => {
+        publishFrom("build-box", 12, 8);
+        await Promise.resolve();
+      });
 
-      expect(Object.keys(window.localStorage).sort()).toEqual(keysBefore);
-      expect(readNewestSharedObservation(PROVIDER_ID, "octo", REPO_KEY, "local")?.observedAt).toBe(
-        5_000
-      );
-      expect(getCurrentUserMock).not.toHaveBeenCalled();
+      expect(result.current.stats?.issueCount).toBe(9);
+      expect(result.current.sharedCounts).toBe(false);
+      expect(getRepoKeyMock).not.toHaveBeenCalled();
+      expect(readSharedRepoStats(REPO_KEY)?.hostId).toBe("build-box");
+      expect(
+        Object.entries(window.localStorage)
+          .filter(([key]) => !key.includes('"build-box"'))
+          .sort()
+      ).toEqual(storedBefore);
     });
   });
 

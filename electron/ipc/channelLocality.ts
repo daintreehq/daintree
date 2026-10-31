@@ -389,6 +389,7 @@ export const CHANNEL_LOCALITY = {
   "forge:get-prs-by-numbers": "host",
   "forge:get-references-by-numbers": "host",
   "forge:get-rate-limit-details": "host",
+  "forge:get-repo-key": "host",
   "forge:get-repo-metadata": "host",
   "forge:get-repo-stats": "host",
   "forge:get-repo-url": "host",

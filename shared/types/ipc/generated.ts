@@ -1756,6 +1756,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { cwd: string; numbers: number[] }];
     result: import("../forge.js").ForgeReferenceLookupResult[] | null;
   };
+  "forge:get-repo-key": {
+    args: [payload: { cwd: string }];
+    result: string | null;
+  };
   "forge:get-repo-stats": {
     args: [payload: { cwd: string; bypassCache?: boolean | undefined }];
     result: import("./forge.js").ForgeRepositoryStats;
