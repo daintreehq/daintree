@@ -667,6 +667,56 @@ describe("QuickRun", () => {
       }
     });
 
+    describe("when a pin's saved text and a history entry differ only by surrounding space", () => {
+      beforeEach(() => {
+        settingsMock.runCommands = [
+          { id: "s", name: "Ready", command: "echo ready ", preferredLocation: "dock" },
+        ];
+        seedHistory("echo ready");
+        mockAddTerminal.mockResolvedValue(undefined);
+      });
+      afterEach(() => {
+        settingsMock.runCommands = [];
+      });
+
+      it("runs the history entry a Tab completed, not the pin it trims equal to", async () => {
+        render(<Footer projectId="test-project" />);
+        const input = openPanel();
+        fireEvent.change(input, { target: { value: "echo" } });
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        expect(fireEvent.keyDown(input, { key: "Tab" })).toBe(false);
+
+        expect(commandsListed()).toEqual(["echo ready ", "echo ready"]);
+        expect(document.getElementById(input.getAttribute("aria-activedescendant")!)).toBe(
+          commandOptions()[1]
+        );
+        await act(async () => {
+          fireEvent.keyDown(input, { key: "Enter" });
+        });
+        expect(mockAddTerminal).toHaveBeenCalledWith(
+          expect.objectContaining({ command: "echo ready", location: "grid" })
+        );
+      });
+
+      it.each([
+        ["with the list open", false],
+        ["with the list shut", true],
+      ])("runs the entry that is exactly what was typed, %s", async (_label, shut) => {
+        render(<Footer projectId="test-project" />);
+        const input = openPanel();
+        fireEvent.change(input, { target: { value: "echo ready" } });
+        if (shut) fireEvent.keyDown(input, { key: "Escape" });
+
+        await act(async () => {
+          fireEvent.keyDown(input, { key: "Enter" });
+        });
+        expect(mockAddTerminal).toHaveBeenCalledWith(
+          expect.objectContaining({ command: "echo ready", location: "grid" })
+        );
+      });
+    });
+
     it.each(PAIRS)("keeps %s and %s as two suggestions", (first, second) => {
       seedHistory(first, second);
       render(<Footer projectId="test-project" />);

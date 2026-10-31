@@ -482,13 +482,17 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   const listOpen = showSuggestions && suggestions.length > 0;
   const typedCommand = input.trim();
   const searching = typedCommand.length > 0;
+  // The row that is the field's text. A row whose own text has surrounding space
+  // still counts, but one that matches the field to the character comes first, so
+  // `echo ready ` and `echo ready` stay two rows rather than the earlier winning.
+  const fieldRowIndex = () => {
+    const exact = suggestions.findIndex((s) => s.value === input);
+    return exact >= 0 ? exact : suggestions.findIndex((s) => s.value.trim() === typedCommand);
+  };
   const activeIndex =
     focusedSuggestionIndex === LEAD_INDEX
       ? searching
-        ? Math.max(
-            0,
-            suggestions.findIndex((s) => s.value.trim() === typedCommand)
-          )
+        ? Math.max(0, fieldRowIndex())
         : -1
       : focusedSuggestionIndex;
   const highlighted = listOpen ? suggestions[activeIndex] : undefined;
@@ -516,9 +520,8 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   // command keeps its own output and restart choice after Escape. Every
   // comparison of a row with the field is literal apart from surrounding space,
   // with the list open or shut: `'$SHELL'` is not the command `$SHELL` is.
-  const exactMatch = searching
-    ? suggestions.find((s) => s.type !== "typed" && s.value.trim() === typedCommand)
-    : undefined;
+  const fieldRow = searching ? suggestions[fieldRowIndex()] : undefined;
+  const exactMatch = fieldRow?.type === "typed" ? undefined : fieldRow;
   const runTarget: SuggestionItem | undefined =
     highlighted ??
     exactMatch ??
