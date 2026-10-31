@@ -20,4 +20,5 @@ Then say what bounds it:
 - **By count:** open issues ready to work, divided by that throughput.
 - **By dependencies:** a chain needs one agent-plus-merge cycle per wave (its slowest agent plus a merge, about 2 h 45 m), whatever the batch size, because a wave starts only once the one before it has merged. The longest chain (a tracker issue's wave table, or the pick's Deferred list) sets the floor. The estimate is the larger of the two.
 - **New issues:** count issues filed since the run started, closed ones included (`gh issue list --repo <owner>/<repo> --state all --search "created:>=<run start, YYYY-MM-DD>" --limit 1000 --json number,createdAt,state`, then filter by `createdAt`). When they arrive faster than the run closes them (33 arrived while one 16-issue batch was worked), the drain has no end in sight: say so.
+- **Usage:** a machine scaled down or out on its weekly limit (SKILL.md, Usage limits) runs fewer slots until its reset, and a run held on usage makes no progress until then: count the slots that can actually run.
 - **Never picked:** issues waiting on a human answer, and tracker issues, don't count.
