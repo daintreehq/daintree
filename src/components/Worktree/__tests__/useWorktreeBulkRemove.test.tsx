@@ -950,7 +950,10 @@ describe("useWorktreeBulkRemove — the queue no longer guillotines the batch (#
     // discard every sibling's result. Individual `add()` calls folded through
     // `allSettled` cannot.
     worktreeClientMock.delete.mockResolvedValue(undefined);
-    const { hook } = setup(["a", "b"], [wt("a", { branch: "feature/a" }), wt("b")]);
+    const { hook, clearSelection, selectOnly } = setup(
+      ["a", "b"],
+      [wt("a", { branch: "feature/a" }), wt("b")]
+    );
     // Settle the previews FIRST, then install the spy — so the only queue it
     // can intercept is the delete fan-out, without keying off a concurrency
     // number copied from the implementation.
@@ -981,7 +984,10 @@ describe("useWorktreeBulkRemove — the queue no longer guillotines the batch (#
       expect(warning).toBeDefined();
       // The sibling still ran, and both outcomes reached the one summary.
       expect((warning![0] as { title: string }).title).toBe("Deleted 1 of 2 worktrees");
-      expect((warning![0] as { message: string }).message).toContain("feature/a");
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      expect((warning![0] as { message: string }).message).toBe("feature/a: submission rejected");
+      expect(selectOnly).toHaveBeenCalledWith(["a"]);
+      expect(clearSelection).not.toHaveBeenCalled();
       expect(worktreeClientMock.delete).toHaveBeenCalledTimes(1);
       expect(worktreeClientMock.delete).toHaveBeenCalledWith("b", {
         force: true,
