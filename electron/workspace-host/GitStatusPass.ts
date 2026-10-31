@@ -43,7 +43,7 @@ interface HeadState {
   head: string | undefined;
 }
 
-const UNKNOWN_HEAD: HeadState = { branch: undefined, isDetached: false, head: undefined };
+const NO_GIT_DIR_HEAD: HeadState = { branch: undefined, isDetached: false, head: undefined };
 
 function isValidActivityTimestamp(value: unknown, now: number): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= now;
@@ -387,9 +387,12 @@ export class GitStatusPass {
       if (!this.isLive(claim)) {
         return;
       }
-      this.host.isDetached = headState.isDetached;
-      this.host.head = headState.head;
-      const currentBranch = headState.branch;
+      // An unreadable or malformed HEAD keeps the last observed state.
+      if (headState) {
+        this.host.isDetached = headState.isDetached;
+        this.host.head = headState.head;
+      }
+      const currentBranch = headState?.branch;
       const branchChanged = currentBranch !== undefined && currentBranch !== this.host.branch;
       if (branchChanged) {
         this.host.branch = currentBranch;
@@ -654,10 +657,10 @@ export class GitStatusPass {
   }
 
   // Reads only: the caller applies the result once it knows the pass is live.
-  private async readHead(lifecycleSignal: AbortSignal): Promise<HeadState> {
+  private async readHead(lifecycleSignal: AbortSignal): Promise<HeadState | undefined> {
     const gitDir = await getGitDir(this.host.path, { cache: true, logErrors: false });
     if (!gitDir) {
-      return UNKNOWN_HEAD;
+      return NO_GIT_DIR_HEAD;
     }
 
     const { signal, dispose } = timeoutSignal(FS_OP_TIMEOUT_MS, lifecycleSignal);
@@ -669,14 +672,15 @@ export class GitStatusPass {
         return { branch: trimmed.slice(prefix.length), isDetached: false, head: undefined };
       }
       // Detached HEAD — the file contains a commit SHA
-      if (/^[0-9a-f]{40}$/.test(trimmed)) {
+      // SHA-1 repos hold 40 hex chars, SHA-256 repos 64.
+      if (/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(trimmed)) {
         return { branch: undefined, isDetached: true, head: trimmed };
       }
-      return UNKNOWN_HEAD;
+      return undefined;
     } catch {
-      // Includes a timeout/abort (AbortError) on a stalled filesystem — treat
-      // as "branch unchanged" rather than letting the read hang the poll.
-      return UNKNOWN_HEAD;
+      // Includes a timeout/abort (AbortError) on a stalled filesystem — keep the
+      // last observed state rather than inventing an attached one.
+      return undefined;
     } finally {
       dispose();
     }

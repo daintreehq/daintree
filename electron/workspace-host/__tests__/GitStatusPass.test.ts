@@ -1098,4 +1098,57 @@ describe("GitStatusPass", () => {
       expect(made.pass.aiNote).toBe("fresh");
     });
   });
+
+  describe("HEAD detection", () => {
+    const sha1 = "a".repeat(40);
+    const sha256 = "b".repeat(64);
+
+    async function runWithHead(
+      head: string | Error,
+      initial: { isDetached: boolean; head?: string } = { isDetached: false }
+    ) {
+      mockGetGitDir.mockResolvedValue("/test/worktree/.git");
+      vi.mocked(readFile).mockImplementation((async (path: unknown) => {
+        if (String(path).endsWith("HEAD")) {
+          if (head instanceof Error) throw head;
+          return head;
+        }
+        throw new Error("ENOENT");
+      }) as unknown as typeof readFile);
+      mockGetWorktreeChangesWithStats.mockResolvedValue(makeChanges());
+      const made = makePass();
+      made.host.isDetached = initial.isDetached;
+      made.host.head = initial.head;
+      await made.pass.run(false);
+      vi.mocked(readFile).mockRejectedValue(new Error("ENOENT"));
+      return made.host;
+    }
+
+    it.each([
+      ["SHA-1", sha1],
+      ["SHA-256", sha256],
+    ])("reports a detached %s HEAD with the full OID", async (_n, oid) => {
+      const host = await runWithHead(`${oid}\n`);
+      expect(host.isDetached).toBe(true);
+      expect(host.head).toBe(oid);
+    });
+
+    it("reports a symbolic ref as attached", async () => {
+      const host = await runWithHead("ref: refs/heads/main\n", { isDetached: true, head: sha1 });
+      expect(host.isDetached).toBe(false);
+      expect(host.head).toBeUndefined();
+    });
+
+    it("keeps the detached state when the HEAD read fails", async () => {
+      const host = await runWithHead(new Error("EACCES"), { isDetached: true, head: sha256 });
+      expect(host.isDetached).toBe(true);
+      expect(host.head).toBe(sha256);
+    });
+
+    it("keeps the last observed state on malformed HEAD content", async () => {
+      const host = await runWithHead("abc123", { isDetached: true, head: sha1 });
+      expect(host.isDetached).toBe(true);
+      expect(host.head).toBe(sha1);
+    });
+  });
 });
