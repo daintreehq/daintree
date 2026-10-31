@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { z } from "zod";
 import { CHANNELS } from "../../ipc/channels.js";
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
 import type { PanelSnapshot, Project } from "../../../shared/types/project.js";
@@ -17,8 +16,6 @@ import {
   buildResumeCommand,
   type AgentSettings,
 } from "../../../shared/types/agentSettings.js";
-import { NotifyReplyLinesSchema } from "../../../shared/types/terminalNotify.js";
-import { WaitForReplySchema, WaitSecondsSchema } from "../../../shared/types/replyWait.js";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability.js";
 import { resolveAgentLaunchBaseCommandFor } from "../../../shared/utils/agentLaunchCommand.js";
 import {
@@ -38,7 +35,6 @@ import {
 import {
   hasSystemPromptOverride,
   resolveSystemPromptArgs,
-  SYSTEM_PROMPT_MAX_LENGTH,
 } from "../../../shared/utils/agentSystemPrompt.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { appendHandbackInstruction, mintHandbackCode } from "../../../shared/utils/handback.js";
@@ -59,40 +55,17 @@ import type { ViewlessActionRequest, ViewlessDeps } from "./ViewlessActionExecut
 import { recordViewlessTerminal } from "./projectStateAuthoring.js";
 import { countProjectPanels } from "./viewlessTerminals.js";
 import { readProjectWorktrees } from "./viewlessWorktrees.js";
-import { AgentListModelsArgsSchema, AgentListPresetsArgsSchema } from "./viewlessArgsSchemas.js";
+import {
+  AgentLaunchArgsSchema,
+  AgentListModelsArgsSchema,
+  AgentListPresetsArgsSchema,
+} from "./viewlessArgsSchemas.js";
 import {
   viewlessFailure as failure,
   viewlessSuccess as success,
   viewlessValidationFailure as validationFailure,
 } from "./viewlessResult.js";
 
-/** The renderer action's arguments; the UI-only ones are accepted and have no effect here. */
-const AgentLaunchArgsSchema = z.object({
-  agentId: z.string().min(1),
-  location: z.enum(["grid", "dock", "overlay", "background"]).optional(),
-  cwd: z.string().optional(),
-  worktreeId: z.string().optional(),
-  prompt: z.string().optional(),
-  handback: z.boolean().optional(),
-  notify: z.boolean().optional(),
-  replyLines: NotifyReplyLinesSchema,
-  waitForReply: WaitForReplySchema,
-  waitSeconds: WaitSecondsSchema,
-  systemPrompt: z.string().max(SYSTEM_PROMPT_MAX_LENGTH).optional(),
-  interactive: z.boolean().optional(),
-  model: z.string().optional(),
-  presetId: z.string().nullable().optional(),
-  activateDockOnCreate: z.boolean().optional(),
-  env: z.record(z.string(), z.string()).optional(),
-  excludeFromPersistence: z.boolean().optional(),
-  removeOnExit: z.boolean().optional(),
-  agentLaunchFlags: z.array(z.string()).optional(),
-  spawnedBy: z.unknown().optional(),
-  focusPolicy: z.unknown().optional(),
-  requestedId: z.string().optional(),
-  force: z.boolean().optional(),
-  name: z.string().max(200).optional(),
-});
 
 /** Launch ids the launcher always turns into a panel, never an agent. */
 const PANEL_LAUNCH_IDS: ReadonlySet<string> = new Set(["browser", "dev-preview"]);

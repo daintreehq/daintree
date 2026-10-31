@@ -841,6 +841,9 @@ const MCP_DEDUP_ALLOWLIST_ENTRIES = [
   // first id would hand back a worktree that no longer exists (#11880).
   "worktree.createWithRecipe",
   "workflow.startWorkOnIssue",
+  // A replay of a completed call would launch a second agent into the
+  // worktree its create step's own entry hands back (#15738).
+  "agent.launchInNewWorktree",
   "worktree.resource.provision",
   // Neither delete variant belongs here, cached or singleflighted: see the
   // path-reuse paragraph above (#11909 for `worktree.deleteOwned`, #15791 for

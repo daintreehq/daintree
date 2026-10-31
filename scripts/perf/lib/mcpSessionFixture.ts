@@ -846,6 +846,8 @@ export const SELF_GATED_TOOLS: ReadonlySet<string> = new Set([
   "agent.launchMany",
   "terminal.sendCommandMany",
   "terminal.closeMany",
+  // Validated in main and run as its create, wait and launch, the same way.
+  "agent.launchInNewWorktree",
 ]);
 
 /** The workspace a bound session is pinned to in these scenarios. */

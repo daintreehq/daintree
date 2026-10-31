@@ -30,7 +30,7 @@ import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas"
  * advertise an empty schema and lose every field. Nested, the root stays an
  * object and `toWireSchema` preserves the combinator.
  */
-const WorktreeCreationSourceSchema = z
+export const WorktreeCreationSourceSchema = z
   .discriminatedUnion("kind", [
     z
       .object({

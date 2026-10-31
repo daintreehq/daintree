@@ -32,7 +32,8 @@
  *
  * Some ids here never run in this view at all. The host's MCP server answers
  * them in its own main process — the batches (`*Many`, expanded there into
- * single calls this list already carries), `terminal.notifyWhenIdle`,
+ * single calls this list already carries) and `agent.launchInNewWorktree`
+ * (run there as the same create, wait and launch), `terminal.notifyWhenIdle`,
  * `mcp.surface`, `help.displayImage`, `skills.*`, `project.runCommand`,
  * `terminal.waitForExit` (the exits and closes it reads are the host's),
  * `assistant.list`, `assistant.start` and `agent.readQuota` (a Shell's
@@ -61,6 +62,7 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "agent.getState",
   "agent.launch",
   "agent.launchMany",
+  "agent.launchInNewWorktree",
   "agent.listAvailable",
   "agent.listModels",
   "agent.listPresets",
