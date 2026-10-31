@@ -1893,6 +1893,7 @@ export class TerminalProcess {
       terminalId: this.id,
       handback,
       code: hit.code,
+      ...(t.lastStateChange !== undefined ? { lastStateChange: t.lastStateChange } : {}),
       timestamp: now,
     });
   }

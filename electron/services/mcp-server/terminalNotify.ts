@@ -98,6 +98,8 @@ export interface RelayedNotice {
   terminalId: string;
   observation: NoticeObservation;
   awaitingHandback?: boolean;
+  /** The reported state's transition on this machine's clock, as {@link FiredNotice} has it. */
+  lastTransitionAt: number | null;
 }
 
 type RelayTag = Pick<RelayedNotice, "helpSessionId" | "callId">;
@@ -192,7 +194,13 @@ export interface TerminalNotifyServiceDeps {
    * for. Optional so a host without the observation keeps the settle path.
    */
   onHandbackObserved?: (
-    listener: (terminalId: string, handback: TerminalHandback, code?: string) => void
+    listener: (
+      terminalId: string,
+      handback: TerminalHandback,
+      code?: string,
+      /** The pane's `lastStateChange` when it printed the marker. */
+      lastStateChange?: number
+    ) => void
   ) => () => void;
   /** Whether the MCP server is on. Read on every decision. */
   isEnabled: () => boolean;
@@ -406,6 +414,8 @@ interface Notice {
     waitingReason?: WaitingReason;
     /** When the target left `working`, by the event's own clock. */
     startedAt: number;
+    /** When it entered `state`: later than `startedAt` once the settle moved between states. */
+    lastTransitionAt: number;
     timer: ReturnType<typeof setTimeout>;
   };
 }
@@ -1507,7 +1517,7 @@ export class TerminalNotifyService {
       this.applyTargetEvent(owner, notice, ended);
       return;
     }
-    this.fire(owner, notice, { kind: "not-written", phase });
+    this.fire(owner, notice, { kind: "not-written", phase }, null);
   }
 
   private ensureSubscribed(client: TerminalNotifyPtyClient): void {
@@ -1534,8 +1544,8 @@ export class TerminalNotifyService {
       ...(this.deps.onHandbackObserved
         ? [
             this.deps.onHandbackObserved(
-              guarded((terminalId, handback, code) =>
-                this.handleHandbackObserved(terminalId, handback, code)
+              guarded((terminalId, handback, code, lastStateChange) =>
+                this.handleHandbackObserved(terminalId, handback, code, lastStateChange)
               )
             ),
           ]
@@ -1552,7 +1562,8 @@ export class TerminalNotifyService {
   private handleHandbackObserved(
     terminalId: string,
     handback: TerminalHandback,
-    code?: string
+    code?: string,
+    lastStateChange?: number
   ): void {
     this.reviseFiredHandbacks(terminalId, handback, code);
     const watchers = this.watchersByTarget.get(terminalId);
@@ -1565,7 +1576,8 @@ export class TerminalNotifyService {
       notice.handback = handback;
       if (code !== undefined) notice.handbackCode = code;
       clearSettling(notice);
-      this.fire(owner, notice, { kind: "handback" });
+      // The state the marker was printed in, which may still be `working`.
+      this.fire(owner, notice, { kind: "handback" }, lastStateChange ?? null);
     }
   }
 
@@ -1698,15 +1710,20 @@ export class TerminalNotifyService {
 
   private applyTargetEvent(owner: PaneOwner, notice: Notice, event: TargetEvent): void {
     if (event.kind === "exit") {
-      this.fire(owner, notice, {
-        kind: "exit",
-        ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
-        handback: notice.handbackSeen,
-      });
+      this.fire(
+        owner,
+        notice,
+        {
+          kind: "exit",
+          ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
+          handback: notice.handbackSeen,
+        },
+        null
+      );
       return;
     }
     if (event.kind === "closed") {
-      this.fire(owner, notice, { kind: "closed" });
+      this.fire(owner, notice, { kind: "closed" }, null);
       return;
     }
     const change = event.change;
@@ -1721,12 +1738,17 @@ export class TerminalNotifyService {
     // finished, so the notice goes now rather than after the settle window.
     if (handbackNow && change.state !== "working") {
       clearSettling(notice);
-      this.fire(owner, notice, {
-        kind: "state",
-        state: change.state,
-        ...(change.waitingReason !== undefined ? { waitingReason: change.waitingReason } : {}),
-        handback: true,
-      });
+      this.fire(
+        owner,
+        notice,
+        {
+          kind: "state",
+          state: change.state,
+          ...(change.waitingReason !== undefined ? { waitingReason: change.waitingReason } : {}),
+          handback: true,
+        },
+        change.timestamp
+      );
       return;
     }
     // The agent left its terminal, from whatever state: a CLI quit from its
@@ -1734,7 +1756,7 @@ export class TerminalNotifyService {
     // wait forever.
     if (change.state === "exited") {
       clearSettling(notice);
-      this.fire(owner, notice, { kind: "exit", handback: notice.handbackSeen });
+      this.fire(owner, notice, { kind: "exit", handback: notice.handbackSeen }, null);
       return;
     }
     if (change.state === "working") {
@@ -1755,6 +1777,7 @@ export class TerminalNotifyService {
     if (notice.settling !== undefined) {
       notice.settling.state = change.state;
       notice.settling.waitingReason = change.waitingReason;
+      notice.settling.lastTransitionAt = change.timestamp;
       return;
     }
     if (change.previousState !== "working") return;
@@ -1763,6 +1786,7 @@ export class TerminalNotifyService {
       state: change.state,
       ...(change.waitingReason !== undefined ? { waitingReason: change.waitingReason } : {}),
       startedAt: change.timestamp,
+      lastTransitionAt: change.timestamp,
       timer: setTimeout(() => this.fireSettled(owner, notice), delay),
     };
   }
@@ -1781,18 +1805,23 @@ export class TerminalNotifyService {
         ...(settling.waitingReason !== undefined ? { waitingReason: settling.waitingReason } : {}),
         handback: notice.handbackSeen,
       },
+      settling.lastTransitionAt,
       settling.startedAt
     );
   }
 
   /**
    * The notice has something to say: it leaves the pending set for delivery.
-   * `stoppedAt` is when the target left `working`, for a settle.
+   * `lastTransitionAt` is the transition into the state it reports, fixed
+   * here so a late delivery still names the state it saw; null when no
+   * transition matches the observation. `stoppedAt` is when the target left
+   * `working`, for a settle.
    */
   private fire(
     owner: PaneOwner,
     notice: Notice,
     observation: NoticeObservation,
+    lastTransitionAt: number | null,
     stoppedAt?: number
   ): void {
     if (!this.isCurrent(owner, notice)) return;
@@ -1807,6 +1836,7 @@ export class TerminalNotifyService {
         terminalId: notice.targetId,
         ...(notice.note !== undefined ? { note: notice.note } : {}),
         observation,
+        lastTransitionAt,
         ...(summary !== undefined
           ? { handback: summary.message ?? "", handbackTruncated: summary.truncated }
           : {}),
@@ -2329,6 +2359,7 @@ export class TerminalNotifyService {
         terminalId: notice.terminalId,
         observation: notice.observation,
         ...(notice.awaitingHandback === true ? { awaitingHandback: true } : {}),
+        lastTransitionAt: notice.lastTransitionAt ?? null,
       });
     }
     if (notices.length > 0) {

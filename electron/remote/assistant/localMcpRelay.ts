@@ -112,6 +112,7 @@ export function createLocalMcpRelay(deps: LocalMcpRelayDeps): LocalMcpRelay {
               terminalId: notice.terminalId,
               observation: notice.observation,
               ...(notice.awaitingHandback === true ? { awaitingHandback: true } : {}),
+              lastTransitionAt: notice.lastTransitionAt,
             })),
           });
         },

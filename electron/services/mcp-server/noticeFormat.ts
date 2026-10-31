@@ -37,6 +37,14 @@ export interface FiredNotice {
   replyReachedHandback?: boolean;
   /** It stopped without the marker its prompt asked for, and one more notice is armed. */
   awaitingHandback?: boolean;
+  /**
+   * The target's `lastStateChange` for the state this notice reports, read when
+   * it fired: the `lastTransitionAt` that `terminal.getStatus` on the target's
+   * machine answers for that state. Null for an observation no transition
+   * matches (an exit, a close, a send not written); absent from a host whose
+   * build predates it.
+   */
+  lastTransitionAt?: number | null;
 }
 
 function describeState(state: AgentState, waitingReason?: WaitingReason): string {
@@ -61,8 +69,16 @@ function describeState(state: AgentState, waitingReason?: WaitingReason): string
   }
 }
 
-function describeNotice(notice: FiredNotice): string {
+/** A notice's terminal, with the transition it reports when it carries one. */
+function describeTerminal(notice: FiredNotice): string {
   const id = displayNoticeTerminalId(notice.terminalId);
+  return typeof notice.lastTransitionAt === "number"
+    ? `${id} (lastTransitionAt ${notice.lastTransitionAt})`
+    : id;
+}
+
+function describeNotice(notice: FiredNotice): string {
+  const id = describeTerminal(notice);
   const obs = notice.observation;
   switch (obs.kind) {
     case "state":
@@ -175,9 +191,7 @@ export function formatNoticeLine(notices: readonly FiredNotice[], droppedCount =
       const note = notice.note !== undefined ? `, note "${notice.note}"` : "";
       return `${describeNotice(notice)}${note}`;
     });
-    const rest = notices
-      .slice(MAX_DETAILED_NOTICES_PER_LINE)
-      .map((notice) => displayNoticeTerminalId(notice.terminalId));
+    const rest = notices.slice(MAX_DETAILED_NOTICES_PER_LINE).map(describeTerminal);
     const more = rest.length > 0 ? `; and ${rest.length} more: ${rest.join(", ")}` : "";
     const next = allQuoted ? "" : " Check them with terminal.getStatus.";
     head = `Daintree: ${notices.length} terminals you asked about changed. ${detailed.join("; ")}${more}.${dropped}${next}`;
@@ -192,20 +206,22 @@ export function formatNoticeLine(notices: readonly FiredNotice[], droppedCount =
  */
 export function formatHostNoticeLine(hostName: string, notices: readonly FiredNotice[]): string {
   const where = `on host "${displayNoticeHostName(hostName)}"`;
+  // A host's transition is on its own clock, which only its own status answers on.
+  const clock = notices.some((notice) => typeof notice.lastTransitionAt === "number")
+    ? ", whose lastTransitionAt is on the same host clock"
+    : "";
   if (notices.length === 1) {
     const [notice] = notices;
     const note = notice.note !== undefined ? ` Your note: "${notice.note}".` : "";
-    return `Daintree: ${where}, terminal ${describeNotice(notice)}.${note} Check it with terminal.getStatus through host.call.`;
+    return `Daintree: ${where}, terminal ${describeNotice(notice)}.${note} Check it with terminal.getStatus through host.call${clock}.`;
   }
   const detailed = notices.slice(0, MAX_DETAILED_NOTICES_PER_LINE).map((notice) => {
     const note = notice.note !== undefined ? `, note "${notice.note}"` : "";
     return `${describeNotice(notice)}${note}`;
   });
-  const rest = notices
-    .slice(MAX_DETAILED_NOTICES_PER_LINE)
-    .map((notice) => displayNoticeTerminalId(notice.terminalId));
+  const rest = notices.slice(MAX_DETAILED_NOTICES_PER_LINE).map(describeTerminal);
   const more = rest.length > 0 ? `; and ${rest.length} more: ${rest.join(", ")}` : "";
-  return `Daintree: ${where}, ${notices.length} terminals you asked about changed. ${detailed.join("; ")}${more}. Check them with terminal.getStatus through host.call.`;
+  return `Daintree: ${where}, ${notices.length} terminals you asked about changed. ${detailed.join("; ")}${more}. Check them with terminal.getStatus through host.call${clock}.`;
 }
 
 /**
