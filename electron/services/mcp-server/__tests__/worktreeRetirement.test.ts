@@ -29,7 +29,10 @@ const CLEAN: WorktreeGitObservation = {
   unpushedCommits: 0,
 };
 
-const record = (id: string, overrides: Partial<TerminalProcessRecord> = {}): TerminalProcessRecord => ({
+const record = (
+  id: string,
+  overrides: Partial<TerminalProcessRecord> = {}
+): TerminalProcessRecord => ({
   id,
   worktreeId: WORKTREE,
   cwd: WORKTREE,
@@ -120,11 +123,7 @@ describe("planWorktreeRetirement", () => {
 
   it.each([
     ["someone else's running terminal", record("foreign"), NOT_MINE],
-    [
-      "its own pane it no longer holds",
-      record("lost"),
-      { ...MINE, closableByThisSession: false },
-    ],
+    ["its own pane it no longer holds", record("lost"), { ...MINE, closableByThisSession: false }],
     [
       "a trashed pane with no close of its own on record",
       record("trash", { isTrashed: true, trashExpiresAt: 5 }),
@@ -280,7 +279,10 @@ describe("tearDownForRetirement", () => {
     );
     expect(result).toMatchObject({
       ok: false,
-      error: { code: "PARTIAL_SUCCESS", details: { failedStep: "close", closedTerminalIds: ["a"] } },
+      error: {
+        code: "PARTIAL_SUCCESS",
+        details: { failedStep: "close", closedTerminalIds: ["a"] },
+      },
     });
     expect(run.closePane).toHaveBeenCalledOnce();
     expect(run.waitForExits).not.toHaveBeenCalled();

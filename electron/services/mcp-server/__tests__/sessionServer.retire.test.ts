@@ -98,22 +98,22 @@ describe("worktree.retireOwned (#15737)", () => {
         return { result: { ok: true, result: null } };
       }
     );
-    const waitForClosedPanelExits = vi.fn<NonNullable<SessionServerDeps["waitForClosedPanelExits"]>>(
-      async (targets) => {
-        const ids = new Set(targets.map((target) => target.terminalId));
-        census.processes = census.processes.map((record) =>
-          ids.has(record.id) ? { ...record, isExited: true } : record
-        );
-        return {
-          processes: targets.map(({ terminalId }) => ({
-            terminalId,
-            outcome: "exited" as const,
-            exitCode: 0,
-            graceEnded: true,
-          })),
-        };
-      }
-    );
+    const waitForClosedPanelExits = vi.fn<
+      NonNullable<SessionServerDeps["waitForClosedPanelExits"]>
+    >(async (targets) => {
+      const ids = new Set(targets.map((target) => target.terminalId));
+      census.processes = census.processes.map((record) =>
+        ids.has(record.id) ? { ...record, isExited: true } : record
+      );
+      return {
+        processes: targets.map(({ terminalId }) => ({
+          terminalId,
+          outcome: "exited" as const,
+          exitCode: 0,
+          graceEnded: true,
+        })),
+      };
+    });
     const deps = fakeDeps({
       sessionStore: store,
       dispatchAction,
@@ -189,7 +189,11 @@ describe("worktree.retireOwned (#15737)", () => {
     });
 
     it("is off the external tier, whose clients compose the owned close and delete", async () => {
-      const { server, dispatchAction, readWorktreeGit } = harness("s-api-key", undefined, "external");
+      const { server, dispatchAction, readWorktreeGit } = harness(
+        "s-api-key",
+        undefined,
+        "external"
+      );
 
       const result = await callTool(server, retireCall());
 
@@ -249,7 +253,13 @@ describe("worktree.retireOwned (#15737)", () => {
       await launchPane(server);
       census.processes = [
         ownPane(),
-        { id: "user-shell", worktreeId: WORKTREE, cwd: WORKTREE, isExited: false, launchGeneration: 4 },
+        {
+          id: "user-shell",
+          worktreeId: WORKTREE,
+          cwd: WORKTREE,
+          isExited: false,
+          launchGeneration: 4,
+        },
       ];
 
       const result = await callTool(server, retireCall());
@@ -258,7 +268,9 @@ describe("worktree.retireOwned (#15737)", () => {
       expect(refusal.code).toBe("DISABLED");
       expect(refusal.details).toMatchObject({
         check: "processes",
-        terminals: [expect.objectContaining({ terminalId: "user-shell", createdByThisSession: false })],
+        terminals: [
+          expect.objectContaining({ terminalId: "user-shell", createdByThisSession: false }),
+        ],
       });
       expect(dispatched(dispatchAction, "terminal.close")).toHaveLength(0);
       expect(dispatched(dispatchAction, "worktree.delete")).toHaveLength(0);
@@ -309,7 +321,11 @@ describe("worktree.retireOwned (#15737)", () => {
       "terminal.close",
       "worktree.delete",
     ]);
-    expect(dispatchAction).toHaveBeenLastCalledWith("worktree.delete", { worktreeId: WORKTREE }, false);
+    expect(dispatchAction).toHaveBeenLastCalledWith(
+      "worktree.delete",
+      { worktreeId: WORKTREE },
+      false
+    );
     expect(store.resourceOwnership.owns("s-full", "terminal", "terminal-1")).toBe(false);
     expect(store.resourceOwnership.owns("s-full", "worktree", WORKTREE)).toBe(false);
   });
@@ -330,7 +346,10 @@ describe("worktree.retireOwned (#15737)", () => {
     const { census, server, dispatchAction, waitForClosedPanelExits } = harness("s-trashed");
     await launchPane(server);
     census.processes = [ownPane()];
-    await callTool(server, { name: "terminal.closeOwned", arguments: { terminalId: "terminal-1" } });
+    await callTool(server, {
+      name: "terminal.closeOwned",
+      arguments: { terminalId: "terminal-1" },
+    });
     expect(census.processes[0]?.isTrashed).toBe(true);
 
     const result = await callTool(server, retireCall());
@@ -443,7 +462,8 @@ describe("worktree.retireOwned (#15737)", () => {
     });
 
     it("stops before the delete when the tree went dirty while its panes closed", async () => {
-      const { census, git, server, dispatchAction, waitForClosedPanelExits } = harness("s-late-dirty");
+      const { census, git, server, dispatchAction, waitForClosedPanelExits } =
+        harness("s-late-dirty");
       waitForClosedPanelExits.mockImplementationOnce(async (targets) => {
         git.current = { ...CLEAN, untracked: 1 };
         census.processes = census.processes.map((record) => ({ ...record, isExited: true }));

@@ -341,7 +341,9 @@ describe("relayRunMs", () => {
     expect(relayRunMs("worktree.retireOwned", { timeoutMs: 60_000 })).toBeGreaterThan(
       60_000 + MCP_REMOTE_DISPATCH_TIMEOUT_MS
     );
-    expect(relayRunMs("worktree.retireOwned", {})).toBeGreaterThan(relayRunMs("worktree.delete", {}));
+    expect(relayRunMs("worktree.retireOwned", {})).toBeGreaterThan(
+      relayRunMs("worktree.delete", {})
+    );
   });
 
   it("leaves a call that never asks anyone its own floor", () => {

@@ -3056,7 +3056,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // user; the delete's own confirmation is the one question.
         if (retirement !== undefined) {
           const retiring = retirement;
-          const closeEntry = OWNED_RESOURCE_TOOLS["terminal.closeOwned"] as RendererOwnedResourceTool;
+          const closeEntry = OWNED_RESOURCE_TOOLS[
+            "terminal.closeOwned"
+          ] as RendererOwnedResourceTool;
           const dispatchClose = (id: string, closeArgs: unknown): Promise<DispatchEnvelope> =>
             relayCallId !== undefined
               ? dispatchAction(id, closeArgs, false, undefined, relayCallId)
@@ -3107,7 +3109,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 },
                 closed
               );
-              noteClosedTerminals({ sessionId, sessionStore, ownershipOwner }, closed, () => generation);
+              noteClosedTerminals(
+                { sessionId, sessionStore, ownershipOwner },
+                closed,
+                () => generation
+              );
               if (!closed.result.ok) return closed.result.error;
               if (!closedIdsInclude(closed.result.result, terminalId)) {
                 return {
