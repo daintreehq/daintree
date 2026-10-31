@@ -165,8 +165,8 @@ export function useAgentScope({
     scopeKind === "custom"
       ? customFlagsOverride === undefined
         ? `Using the agent's own arguments (${agentDefaultCustomFlags || "none"}). Type here to replace them for this preset.`
-        : "Extra CLI flags for this preset, used instead of the agent's own"
-      : "Extra CLI flags appended to every launch";
+        : "Extra CLI flags for this preset, used instead of the agent's own; quote arguments that contain spaces"
+      : "Extra CLI flags appended to every launch; quote arguments that contain spaces";
 
   const agentEnvSuggestions = agentCfg?.envSuggestions ?? [];
 

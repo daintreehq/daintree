@@ -804,7 +804,7 @@ export function RecipeEditor({
                             htmlFor={`terminal-args-${index}`}
                             hint={hint(
                               `terminal-args-help-${index}`,
-                              "Additional CLI arguments passed to the agent at launch"
+                              "Additional CLI arguments passed to the agent at launch; quote arguments that contain spaces"
                             )}
                           >
                             <input
