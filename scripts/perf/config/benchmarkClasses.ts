@@ -528,6 +528,14 @@ const FAMILIES: readonly Family[] = [
       "The real ElementPickerHost and the real host process it forks, loading the registry's own resolvers to verify a fixed .svelte element and to map a fixed React frame through a map main fetched from a local origin. Node's fork stands in for utilityProcess, and tsx transpiles the host's own TypeScript as it loads, so a cold start reads somewhat slower than a packaged build's; the compiler, parser and decoder it loads are the shipped JavaScript. No renderer, page, extractor or click: it is not a click-to-inspector latency, and the heap reading is main's alone. PERF-413's plugin hosts are forked the same way, so their resident memory is a Node-plus-tsx reading, not a utility process's.",
   },
   {
+    label: "claude subagent poll",
+    ids: ["PERF-414", "PERF-415", "PERF-416", "PERF-417", "PERF-418"],
+    kind: "mechanism",
+    fidelity: PURE,
+    claim:
+      "The real `listSubagentsInDir` over real transcripts and sidecars on the local disk, with the pre-#15681 reader frozen beside it and measured in the same run. It is what one list costs main once the files are in the page cache — probes, sidecar opens, bytes read, wall, CPU and loop stall — not a poll's user-visible latency: no renderer, no IPC, no terminal lookup or directory discovery, and the sweeps run back to back rather than 5 s apart, so cache expiry between real polls is the unit tests' business. Bytes are what `read` returned from a warm cache, not disk traffic.",
+  },
+  {
     label: "terminal submit lane",
     ids: ["PERF-036"],
     kind: "mechanism",
