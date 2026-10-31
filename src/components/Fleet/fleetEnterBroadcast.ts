@@ -38,6 +38,28 @@ export function cancelActiveBroadcast(): void {
 }
 
 /**
+ * Exit Fleet, the fleet Trash action, and anything else that empties the fleet
+ * withdraws the send still going out to it, as Cancel does: the ribbon and its
+ * Cancel button leave with the fleet, so nothing else could stop it. Only the
+ * submission is withdrawn; a run already watching its agents carries on.
+ */
+function cancelWhenFleetEmpties(controller: AbortController): () => void {
+  // A newer send aborts this controller before taking over, which stops this
+  // watch, so a cancel from here always lands on the send it was made for.
+  const cancelIfEmpty = (state: ReturnType<typeof useFleetArmingStore.getState>) => {
+    if (selectFleetMemberCount(state) === 0) cancelActiveBroadcast();
+  };
+  const unsubscribe = useFleetArmingStore.subscribe(cancelIfEmpty);
+  const stop = () => {
+    unsubscribe();
+    controller.signal.removeEventListener("abort", stop);
+  };
+  controller.signal.addEventListener("abort", stop);
+  cancelIfEmpty(useFleetArmingStore.getState());
+  return stop;
+}
+
+/**
  * Run a fleet broadcast through the shared single-flight controller so it
  * participates in the same coordination as the Enter path: a newer broadcast
  * pre-empts an older one (they share `fleetBroadcastProgressStore`, which only
@@ -58,6 +80,7 @@ export async function runManagedFleetBroadcast(
   activeBroadcastController?.abort();
   const controller = new AbortController();
   activeBroadcastController = controller;
+  const stopWatchingFleet = cancelWhenFleetEmpties(controller);
   // Zero-target dispatches (every pane went ineligible between snapshot and
   // send) are structural no-ops — don't mint a run record for them.
   // `draftPreview` lets the retry path (empty draft, payload in overrides)
@@ -100,6 +123,7 @@ export async function runManagedFleetBroadcast(
     }
     throw error;
   } finally {
+    stopWatchingFleet();
     if (activeBroadcastController === controller) {
       activeBroadcastController = null;
     }
@@ -116,6 +140,10 @@ function describeFailureSplit(permanent: number, transient: number): string {
   }
   if (permanent > 0) return `${permanent} unreachable`;
   return `${transient} failed`;
+}
+
+function isFleetMember(id: string): boolean {
+  return useFleetArmingStore.getState().armedIds.has(id) || getCrossHostTarget(id) !== null;
 }
 
 /** The hosts a broadcast's failures were on, for words a screen reader can act on. */
@@ -147,9 +175,9 @@ function buildBroadcastAnnouncement(
     return `Broadcast cancelled — ${result.successCount} sent${skipped}`;
   }
   if (result.failureCount > 0) {
-    return `Broadcast sent to ${result.successCount} — ${describeFailureSplit(permanent, transient)}${failedHostsSuffix(failedHosts)}`;
+    return `Broadcast sent to ${result.successCount} — ${describeFailureSplit(permanent, transient)}${failedHostsSuffix(failedHosts)}${skipped}`;
   }
-  return `Broadcast sent to ${pluralize(result.successCount, "terminal", "terminals")}`;
+  return `Broadcast sent to ${pluralize(result.successCount, "terminal", "terminals")}${skipped}`;
 }
 
 /**
@@ -189,13 +217,17 @@ function applyFleetBroadcastOutcome(text: string, result: FleetExecutionResult):
         useFleetFailureStore.getState().dismissId(id);
       }
     }
-    if (result.transientlyFailedIds.length > 0) {
+    // A target that left the fleet while its submit was out has nothing left
+    // to retry against, and the failure store's own watch on the fleet has
+    // already run, so it would sit in the banner for good.
+    const retryable = result.transientlyFailedIds.filter(isFleetMember);
+    if (retryable.length > 0) {
       // The disarm count rides along so the banner can describe THIS
       // broadcast's permanent casualties without consulting the run store
       // (whose run may be superseded by the time the banner renders).
       useFleetFailureStore
         .getState()
-        .recordFailure(text, result.transientlyFailedIds, result.permanentlyFailedIds.length);
+        .recordFailure(text, retryable, result.permanentlyFailedIds.length);
     }
     // Successful targets in a partial-failure run still clear their
     // stale failure dots — same logic as the all-success branch below.

@@ -78,6 +78,8 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
 }));
 
 import { FleetArmingRibbon } from "../FleetArmingRibbon";
+import { runManagedFleetBroadcast } from "../fleetEnterBroadcast";
+import { terminalClient } from "@/clients";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetPendingActionStore } from "@/store/fleetPendingActionStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
@@ -1788,4 +1790,73 @@ describe("fleets with agents on other hosts", () => {
     expect(save().getAttribute("aria-disabled")).toBe("true");
     expect(screen.getByDisplayValue("Mixed")).toBe(screen.getByTestId("fleet-save-form-name"));
   });
+});
+
+describe("FleetArmingRibbon — exiting during a send (#15560)", () => {
+  beforeEach(() => {
+    resetStores();
+    useFleetBroadcastProgressStore.setState({
+      completed: 0,
+      total: 0,
+      failed: 0,
+      isActive: false,
+      cancelled: false,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const exits: Array<[string, () => void]> = [
+    ["the leading Exit button", () => fireEvent.click(screen.getByTestId("fleet-leading-exit"))],
+    ["the trailing Exit button", () => fireEvent.click(screen.getByTestId("fleet-exit"))],
+    [
+      "Escape on a ribbon control",
+      () => {
+        const exit = screen.getByTestId("fleet-exit");
+        exit.focus();
+        fireEvent.keyDown(exit, { key: "Escape" });
+      },
+    ],
+  ];
+
+  it.each(exits)(
+    "cancels the batches still to go when the fleet is exited with %s",
+    async (_name, exitFleet) => {
+      const ids = Array.from({ length: 7 }, (_, i) => `t${i}`);
+      seed(ids.map((id) => makeAgent(id)));
+      useFleetArmingStore.getState().armIds(ids);
+      const inFlight: Array<() => void> = [];
+      const submit = vi.spyOn(terminalClient, "submit").mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            inFlight.push(resolve);
+          })
+      );
+      render(<FleetArmingRibbon />);
+
+      let sending!: ReturnType<typeof runManagedFleetBroadcast>;
+      act(() => {
+        sending = runManagedFleetBroadcast("x".repeat(120_000), ids);
+      });
+      expect(inFlight).toHaveLength(5);
+
+      act(exitFleet);
+      expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
+      const result = await act(async () => {
+        for (const land of inFlight.splice(0)) land();
+        return sending;
+      });
+
+      expect(result.cancelled).toBe(true);
+      expect(result.successCount).toBe(5);
+      expect(result.skippedCount).toBe(2);
+      expect(submit.mock.calls.map((call) => call[0])).toEqual(ids.slice(0, 5));
+      expect(useFleetBroadcastProgressStore.getState()).toMatchObject({
+        isActive: false,
+        cancelled: true,
+      });
+    }
+  );
 });

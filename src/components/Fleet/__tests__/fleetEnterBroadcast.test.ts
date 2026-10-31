@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { afterEach, describe, it, expect, beforeEach, vi } from "vitest";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
@@ -54,9 +54,11 @@ vi.mock("@/clients", async (importOriginal) => {
 
 import {
   cancelActiveBroadcast,
+  runManagedFleetBroadcast,
   sendDraftToFleet,
   tryFleetBroadcastFromEditor,
 } from "../fleetEnterBroadcast";
+import { crossHostTargetKey } from "../crossHostFleet";
 
 function makeAgent(id: string): PtyPanelData {
   return {
@@ -830,5 +832,238 @@ describe("tryFleetBroadcastFromEditor — context tokens (#14953)", () => {
       expect(sent.get(id)).not.toContain("@diff");
     }
     await vi.waitFor(() => expect(onSent).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe("a send in progress when its fleet changes (#15560)", () => {
+  const originalAdvance = useFleetBroadcastProgressStore.getState().advance;
+
+  afterEach(() => {
+    useFleetBroadcastProgressStore.setState({ advance: originalAdvance });
+    useFleetArmingStore.setState({ crossHostTargets: [] });
+  });
+
+  /** Arms panes with their own worktrees and holds each `@diff` read until released. */
+  function armHoldingDiffs(ids: string[]): { requested: () => number; release: () => void } {
+    arm(ids);
+    usePanelStore.setState((state) => ({
+      panelsById: Object.fromEntries(
+        ids.map((id) => [id, { ...state.panelsById[id]!, cwd: `/wt/${id}` }])
+      ),
+    }));
+    const waiting: Array<() => void> = [];
+    const getWorkingDiff = vi.fn(
+      (cwd: string) => new Promise<string>((resolve) => waiting.push(() => resolve(`diff ${cwd}`)))
+    );
+    Object.assign(window.electron, { git: { getWorkingDiff } });
+    return {
+      requested: () => waiting.length,
+      release: () => {
+        for (const answer of waiting.splice(0)) answer();
+      },
+    };
+  }
+
+  function afterFirstBatch(change: () => void): void {
+    let batches = 0;
+    useFleetBroadcastProgressStore.setState({
+      advance: (size, failures) => {
+        originalAdvance(size, failures);
+        batches += 1;
+        if (batches === 1) change();
+      },
+    });
+  }
+
+  it("withdraws the send when the fleet is exited while its context is read", async () => {
+    const diffs = armHoldingDiffs(["a", "b"]);
+    const onSent = vi.fn();
+    expect(tryFleetBroadcastFromEditor("a", "Review @diff", onSent)).toBe(true);
+    await vi.waitFor(() => expect(diffs.requested()).toBe(2));
+
+    useFleetArmingStore.getState().clear();
+    expect(useFleetBroadcastProgressStore.getState().cancelled).toBe(true);
+    diffs.release();
+
+    await vi.waitFor(() =>
+      expect(useAnnouncerStore.getState().polite?.msg).toBe(
+        "Broadcast cancelled — 2 terminals skipped"
+      )
+    );
+    expect(submitMock).not.toHaveBeenCalled();
+    expect(onSent).not.toHaveBeenCalled();
+  });
+
+  it("stops the batches still to go when the fleet's panes are trashed, as Cancel does", async () => {
+    const ids = Array.from({ length: 12 }, (_, i) => `t${i}`);
+    arm(ids);
+    afterFirstBatch(() => {
+      usePanelStore.setState((state) => ({
+        panelsById: Object.fromEntries(
+          Object.entries(state.panelsById).map(([id, panel]) => [
+            id,
+            { ...panel, location: "trash" },
+          ])
+        ),
+      }));
+      useFleetArmingStore.getState().clear();
+    });
+
+    const result = await runManagedFleetBroadcast("x".repeat(120_000), ids);
+
+    expect(result.cancelled).toBe(true);
+    expect(result.successCount).toBe(5);
+    expect(result.failureCount).toBe(0);
+    expect(result.skippedCount).toBe(7);
+    expect(submitMock.mock.calls.map((call) => call[0])).toEqual(ids.slice(0, 5));
+    expect(useFleetBroadcastProgressStore.getState()).toMatchObject({
+      isActive: false,
+      cancelled: true,
+    });
+  });
+
+  it("keeps sending to the rest when one pane is disarmed, and says it was skipped", async () => {
+    const diffs = armHoldingDiffs(["a", "b", "c"]);
+    const onSent = vi.fn();
+    tryFleetBroadcastFromEditor("a", "Review @diff", onSent);
+    await vi.waitFor(() => expect(diffs.requested()).toBe(3));
+
+    useFleetArmingStore.getState().disarmId("c");
+    diffs.release();
+
+    await vi.waitFor(() =>
+      expect(useAnnouncerStore.getState().polite?.msg).toBe(
+        "Broadcast sent to 2 terminals, 1 terminal skipped"
+      )
+    );
+    expect(submitMock.mock.calls.map((call) => call[0]).sort()).toEqual(["a", "b"]);
+    expect(useFleetBroadcastProgressStore.getState().cancelled).toBe(false);
+    expect(onSent).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps sending to an agent on another host when the last pane here leaves", async () => {
+    const remote = crossHostTargetKey("host-2", "r1");
+    const diffs = armHoldingDiffs(["a"]);
+    useFleetArmingStore.setState({
+      crossHostTargets: [
+        { key: remote, hostId: "host-2", hostName: "Studio", terminalId: "r1", title: "r1" },
+      ],
+    });
+    const submitFleet = vi.fn().mockResolvedValue(undefined);
+    Object.assign(window.electron, { hostMetrics: { submitFleet } });
+
+    const sending = runManagedFleetBroadcast("Review @diff", ["a", remote], { [remote]: "hello" });
+    await vi.waitFor(() => expect(diffs.requested()).toBe(1));
+    useFleetArmingStore.getState().disarmId("a");
+    diffs.release();
+    const result = await sending;
+
+    expect(result.cancelled).toBe(false);
+    expect(result.skippedCount).toBe(1);
+    expect(submitMock).not.toHaveBeenCalled();
+    expect(submitFleet).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalId: "r1", text: "hello" })
+    );
+  });
+
+  it("withdraws a send whose fleet is already empty when it starts", async () => {
+    arm(["a", "b"]);
+    useFleetArmingStore.getState().clear();
+
+    const result = await runManagedFleetBroadcast("hello", ["a", "b"]);
+
+    expect(result.cancelled).toBe(true);
+    expect(result.skippedCount).toBe(2);
+    expect(submitMock).not.toHaveBeenCalled();
+  });
+
+  it("doesn't keep a retryable failure for a pane disarmed while its submit was out", async () => {
+    arm(["a", "b", "c"]);
+    let refuse!: () => void;
+    submitMock.mockImplementation((id) =>
+      id === "c"
+        ? new Promise<void>((_resolve, reject) => {
+            refuse = () => reject(new Error("ENOSPC: disk full"));
+          })
+        : Promise.resolve()
+    );
+
+    tryFleetBroadcastFromEditor("a", "hello", vi.fn());
+    await vi.waitFor(() => expect(submitMock).toHaveBeenCalledTimes(3));
+    useFleetArmingStore.getState().disarmId("c");
+    refuse();
+
+    await vi.waitFor(() =>
+      expect(useAnnouncerStore.getState().polite?.msg).toBe("Broadcast sent to 2 — 1 failed")
+    );
+    expect(useFleetFailureStore.getState().failedIds.size).toBe(0);
+  });
+
+  it("says how many were skipped beside the ones that failed", async () => {
+    const diffs = armHoldingDiffs(["a", "b", "c"]);
+    submitMock.mockImplementation(async (id) => {
+      if (id === "b") throw new Error("ENOSPC: disk full");
+    });
+    tryFleetBroadcastFromEditor("a", "Review @diff", vi.fn());
+    await vi.waitFor(() => expect(diffs.requested()).toBe(3));
+
+    useFleetArmingStore.getState().disarmId("c");
+    diffs.release();
+
+    await vi.waitFor(() =>
+      expect(useAnnouncerStore.getState().polite?.msg).toBe(
+        "Broadcast sent to 1 — 1 failed, 1 terminal skipped"
+      )
+    );
+    expect([...useFleetFailureStore.getState().failedIds]).toEqual(["b"]);
+  });
+
+  describe("how long it watches the fleet", () => {
+    /** How many of the arming store's subscriptions are live. */
+    function countSubscriptions(): () => number {
+      const subscribe = useFleetArmingStore.subscribe;
+      let live = 0;
+      vi.spyOn(useFleetArmingStore, "subscribe").mockImplementation((listener) => {
+        const unsubscribe = subscribe(listener);
+        live += 1;
+        let done = false;
+        return () => {
+          if (!done) live -= 1;
+          done = true;
+          unsubscribe();
+        };
+      });
+      return () => live;
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("stops once the send has gone out", async () => {
+      arm(["a", "b"]);
+      const live = countSubscriptions();
+      const sending = runManagedFleetBroadcast("hello", ["a", "b"]);
+      expect(live()).toBe(1);
+
+      expect((await sending).successCount).toBe(2);
+
+      expect(live()).toBe(0);
+    });
+
+    it("stops as soon as the send is cancelled, before its submits settle", async () => {
+      arm(["a", "b"]);
+      const inFlight: Array<() => void> = [];
+      submitMock.mockImplementation(() => new Promise<void>((resolve) => inFlight.push(resolve)));
+      const live = countSubscriptions();
+      const sending = runManagedFleetBroadcast("hello", ["a", "b"]);
+      expect(inFlight).toHaveLength(2);
+
+      cancelActiveBroadcast();
+      expect(live()).toBe(0);
+
+      for (const land of inFlight.splice(0)) land();
+      expect((await sending).cancelled).toBe(true);
+    });
   });
 });
