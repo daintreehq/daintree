@@ -72,7 +72,11 @@ const RUN: DeviceWaitingRun = {
   snoozed: false,
   screen: "❯ 1. Yes\n  2. No",
   choices: ["Yes", "No"],
+  questionId: "question-of-run-1-0001",
 };
+
+/** The question a listed run's answer names, as the page sends it back. */
+const QUESTION = RUN.questionId;
 
 const services: DeviceAnswerService[] = [];
 
@@ -248,7 +252,7 @@ describe("DeviceAnswerService", () => {
     const token = await pair();
     const reply = await request(port(), "POST", "/api/answer", {
       headers: { ...api, Authorization: `Bearer ${token}` },
-      body: { runId: "run-1", spawnedAt: 100, label: "Yes", keys: ["Enter"] },
+      body: { runId: "run-1", spawnedAt: 100, label: "Yes", keys: ["Enter"], questionId: QUESTION },
     });
     expect(reply.status).toBe(200);
     expect(answer).toHaveBeenCalledTimes(1);
@@ -272,7 +276,13 @@ describe("DeviceAnswerService", () => {
     const token = await pair();
     const reply = await request(port(), "POST", "/api/answer", {
       headers: { ...api, Authorization: `Bearer ${token}` },
-      body: { hostId: "studio-03", runId: "run-1", spawnedAt: 100, label: "Yes" },
+      body: {
+        hostId: "studio-03",
+        runId: "run-1",
+        spawnedAt: 100,
+        label: "Yes",
+        questionId: QUESTION,
+      },
     });
     expect(reply.status).toBe(200);
     expect(answer.mock.calls[0]![0]).toMatchObject({ hostId: "studio-03", runId: "run-1" });
@@ -287,7 +297,13 @@ describe("DeviceAnswerService", () => {
     });
     const dropped = await request(port(), "POST", "/api/answer", {
       headers: { ...api, Authorization: `Bearer ${token}` },
-      body: { hostId: "studio-03", runId: "run-1", spawnedAt: 100, label: "No" },
+      body: {
+        hostId: "studio-03",
+        runId: "run-1",
+        spawnedAt: 100,
+        label: "No",
+        questionId: QUESTION,
+      },
     });
     expect(dropped.status).toBe(409);
     expect(dropped.json().error).toContain("may have been pressed");
@@ -300,10 +316,42 @@ describe("DeviceAnswerService", () => {
     const token = await pair();
     await request(port(), "POST", "/api/answer", {
       headers: { ...api, Authorization: `Bearer ${token}` },
-      body: { hostId: "local", runId: "run-1", spawnedAt: 100, label: "Yes" },
+      body: { hostId: "local", runId: "run-1", spawnedAt: 100, label: "Yes", questionId: QUESTION },
     });
     expect(settings().answers[0]).not.toHaveProperty("hostId");
     expect(settings().answers[0]).not.toHaveProperty("hostName");
+  });
+
+  it("passes on the question the device was shown, and presses nothing for an answer naming none", async () => {
+    const { service, port, api, pair, answer, settings } = await setup();
+    await service.setEnabled({ enabled: true });
+    const token = await pair();
+    const send = (body: Record<string, unknown>) =>
+      request(port(), "POST", "/api/answer", {
+        headers: { ...api, Authorization: `Bearer ${token}` },
+        body: { runId: "run-1", spawnedAt: 100, label: "Yes", ...body },
+      });
+
+    // A page from before answers named their question would answer by label alone.
+    const stale = await send({});
+    expect(stale.status).toBe(409);
+    expect(stale.json().error).toContain("Reload it");
+    expect(stale.json().error).toContain("Nothing was pressed");
+    for (const questionId of [
+      null,
+      "",
+      7,
+      "short",
+      "has spaces in it, so not one",
+      "x".repeat(129),
+    ]) {
+      expect((await send({ questionId })).status).toBe(400);
+    }
+    expect(answer).not.toHaveBeenCalled();
+    expect(settings().answers).toEqual([]);
+
+    expect((await send({ questionId: QUESTION })).status).toBe(200);
+    expect(answer.mock.calls[0]![0]).toMatchObject({ questionId: QUESTION });
   });
 
   it("refuses an answer naming a host it can't be for, pressing nothing", async () => {
@@ -313,7 +361,7 @@ describe("DeviceAnswerService", () => {
     for (const hostId of [null, "", 7, "x".repeat(65)]) {
       const reply = await request(port(), "POST", "/api/answer", {
         headers: { ...api, Authorization: `Bearer ${token}` },
-        body: { hostId, runId: "run-1", spawnedAt: 100, label: "Yes" },
+        body: { hostId, runId: "run-1", spawnedAt: 100, label: "Yes", questionId: QUESTION },
       });
       expect(reply.status).toBe(400);
     }
@@ -329,7 +377,7 @@ describe("DeviceAnswerService", () => {
     });
     const reply = await request(port(), "POST", "/api/answer", {
       headers: { ...api, Authorization: `Bearer ${token}` },
-      body: { runId: "run-1", spawnedAt: 100, label: "Yes" },
+      body: { runId: "run-1", spawnedAt: 100, label: "Yes", questionId: QUESTION },
     });
     expect(reply.status).toBe(409);
     expect(reply.json().error).toContain("driven from another screen");
@@ -345,7 +393,12 @@ describe("DeviceAnswerService", () => {
     });
     const reply = await request(port(), "POST", "/api/answer", {
       headers: { ...api, Authorization: `Bearer ${token}` },
-      body: { runId: "run-1", spawnedAt: 100, label: "Use token=abcdef123456" },
+      body: {
+        runId: "run-1",
+        spawnedAt: 100,
+        label: "Use token=abcdef123456",
+        questionId: QUESTION,
+      },
     });
     expect(reply.status).toBe(409);
     expect(settings().answers[0]).toMatchObject({
@@ -367,7 +420,7 @@ describe("DeviceAnswerService", () => {
     });
     await request(port(), "POST", "/api/answer", {
       headers: { ...api, Authorization: `Bearer ${token}` },
-      body: { runId: "run-1", spawnedAt: 100, label: "Yes" },
+      body: { runId: "run-1", spawnedAt: 100, label: "Yes", questionId: QUESTION },
     });
     expect(refusalMidAnswer).toContain("removed");
     const after = await request(port(), "GET", "/api/waiting", {
@@ -414,7 +467,7 @@ describe("DeviceAnswerService", () => {
     });
     await request(port(), "POST", "/api/answer", {
       headers: { ...api, Authorization: `Bearer ${token}` },
-      body: { runId: "run-1", spawnedAt: 100, label: "Yes" },
+      body: { runId: "run-1", spawnedAt: 100, label: "Yes", questionId: QUESTION },
     }).catch(() => null);
     expect(refusal).toContain("turned off");
   });

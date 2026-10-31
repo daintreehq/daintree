@@ -26,6 +26,7 @@ const pty = {
   getSerializedStateAsync: async () => null,
   write: (_id: string, data: string) => {
     state.writes.push(data);
+    state.screen = redrawFor(state.screen, data);
   },
 };
 
@@ -50,6 +51,7 @@ vi.mock("../../plugin/pluginTerminalScreenRead.js", () => ({
   }),
 }));
 
+import { redrawFor } from "../../__tests__/answerRedraw.js";
 import { LOCAL_CLIENT_ID } from "../../../ipc/endpoint.js";
 import { LOCAL_HOST_ID } from "../../../../shared/types/remoteHosts.js";
 import { createDeviceAnswerService } from "../createDeviceAnswerService.js";
@@ -67,6 +69,12 @@ function wiredAnswer(): DeviceAnswerServiceDeps["answer"] {
 
 const device = { id: "dev-1", name: "Phone" };
 
+/** The question this machine's run is listed with now, as a device would be sent it. */
+async function listedQuestion(): Promise<string> {
+  const { runs } = await wiredDeps().listWaiting({ hosts: false });
+  return runs.find((run) => run.hostId === LOCAL_HOST_ID)!.questionId!;
+}
+
 const HOST_RUN = {
   runId: "run-1",
   spawnedAt: 100,
@@ -80,6 +88,7 @@ const HOST_RUN = {
   snoozed: false,
   screen: DIALOG,
   choices: ["Yes", "No"],
+  questionId: "question-of-run-1-0001",
 };
 
 describe("createDeviceAnswerService answer", () => {
@@ -98,9 +107,44 @@ describe("createDeviceAnswerService answer", () => {
       runId: "run-1",
       spawnedAt: 100,
       label: "No",
+      questionId: await listedQuestion(),
       stillAllowed: () => null,
     });
     expect(state.writes).toEqual(["\x1b[B", "\r"]);
+  });
+
+  it("presses nothing into a later question that offers the same options as the one listed", async () => {
+    state.screen = " Run rm -rf build?\n❯ 1. Yes\n  2. No\n\n Esc to cancel";
+    const shown = await listedQuestion();
+    // Answered at the desktop, and the agent asks again with the same options.
+    state.screen = " Run git push --force?\n❯ 1. Yes\n  2. No\n\n Esc to cancel";
+    await expect(
+      wiredAnswer()({
+        device,
+        hostId: LOCAL_HOST_ID,
+        runId: "run-1",
+        spawnedAt: 100,
+        label: "Yes",
+        questionId: shown,
+        stillAllowed: () => null,
+      })
+    ).rejects.toMatchObject({
+      userMessage: "The question changed since this device showed it. Nothing was pressed.",
+    });
+    expect(state.writes).toEqual([]);
+
+    // Moving the highlight isn't a different question.
+    state.screen = " Run rm -rf build?\n  1. Yes\n❯ 2. No\n\n Esc to cancel";
+    await wiredAnswer()({
+      device,
+      hostId: LOCAL_HOST_ID,
+      runId: "run-1",
+      spawnedAt: 100,
+      label: "Yes",
+      questionId: shown,
+      stillAllowed: () => null,
+    });
+    expect(state.writes).toEqual(["\x1b[A", "\r"]);
   });
 
   it("stands in the drive lease as this machine's windows, and presses nothing where a remote Shell drives", async () => {
@@ -118,6 +162,7 @@ describe("createDeviceAnswerService answer", () => {
         runId: "run-1",
         spawnedAt: 100,
         label: "Yes",
+        questionId: await listedQuestion(),
         stillAllowed: () => null,
       })
     ).rejects.toMatchObject({ userMessage: expect.stringContaining("driven from another screen") });
@@ -126,6 +171,7 @@ describe("createDeviceAnswerService answer", () => {
   });
 
   it("presses nothing for a run the fleet no longer shows waiting", async () => {
+    const questionId = await listedQuestion();
     state.fleetRuns = [{ runId: "run-1", spawnedAt: 100, agentState: "working" }];
     await expect(
       wiredAnswer()({
@@ -134,6 +180,7 @@ describe("createDeviceAnswerService answer", () => {
         runId: "run-1",
         spawnedAt: 100,
         label: "Yes",
+        questionId,
         stillAllowed: () => null,
       })
     ).rejects.toMatchObject({ userMessage: expect.stringContaining("isn't waiting") });
@@ -142,6 +189,7 @@ describe("createDeviceAnswerService answer", () => {
 
   it("presses the option a redacted label was shown for, and never one named by its secret", async () => {
     state.screen = "❯ 1. Yes\n  2. Use token=abcdef123456\n  3. No\n\n Esc to cancel";
+    const questionId = await listedQuestion();
     const press = (label: string) =>
       wiredAnswer()({
         device,
@@ -149,6 +197,7 @@ describe("createDeviceAnswerService answer", () => {
         runId: "run-1",
         spawnedAt: 100,
         label,
+        questionId,
         stillAllowed: () => null,
       });
     await expect(press("Use token=abcdef123456")).rejects.toMatchObject({
@@ -168,6 +217,8 @@ describe("createDeviceAnswerService answer", () => {
       runId: "run-1",
       spawnedAt: 100,
       label: "Use token=[redacted]",
+      // Such a list is offered with no options, so no question either.
+      questionId: "question-of-run-1-0001",
       stillAllowed: () => null,
     });
     await expect(refused).rejects.toMatchObject({
@@ -246,13 +297,16 @@ describe("createDeviceAnswerService and connected hosts", () => {
       runId: "run-1",
       spawnedAt: 100,
       label: "No",
+      questionId: HOST_RUN.questionId,
       stillAllowed: () => null,
     });
+    // The host checks the question; this machine only passes it on.
     expect(state.remote!.answer).toHaveBeenCalledWith({
       hostId: "studio-03",
       runId: "run-1",
       spawnedAt: 100,
       label: "No",
+      questionId: HOST_RUN.questionId,
     });
     expect(state.writes).toEqual([]);
   });
@@ -265,6 +319,7 @@ describe("createDeviceAnswerService and connected hosts", () => {
         runId: "run-1",
         spawnedAt: 100,
         label: "Yes",
+        questionId: HOST_RUN.questionId,
         stillAllowed: () => "This device was removed. Nothing more was pressed.",
       })
     ).rejects.toMatchObject({ userMessage: expect.stringContaining("removed") });
@@ -280,6 +335,7 @@ describe("createDeviceAnswerService and connected hosts", () => {
         runId: "run-1",
         spawnedAt: 100,
         label: "Yes",
+        questionId: await listedQuestion(),
         stillAllowed: () => null,
       })
     ).rejects.toMatchObject({ userMessage: expect.stringContaining("Nothing was pressed") });

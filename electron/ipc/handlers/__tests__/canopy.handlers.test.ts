@@ -23,6 +23,8 @@ const state = vi.hoisted(() => ({
     worktreeId?: string;
   } | null,
   screen: "",
+  /** How the terminal draws a key it is sent; tests set it to move a list's highlight. */
+  redraw: (screen: string, _data: string) => screen,
   writes: [] as string[],
   submits: [] as string[],
   releaseMirror: (() => {}) as () => void,
@@ -37,7 +39,10 @@ const ptyClient = vi.hoisted(() => ({
   getTerminalAsync: vi.fn(async () => state.record),
   getLiveGeneration: vi.fn((_id: string) => state.generation),
   isLiveGeneration: vi.fn((_id: string, live: number) => live === state.generation),
-  write: vi.fn((_id: string, data: string) => state.writes.push(data)),
+  write: vi.fn((_id: string, data: string) => {
+    state.writes.push(data);
+    state.screen = state.redraw(state.screen, data);
+  }),
   submit: vi.fn((_id: string, text: string) => state.submits.push(text)),
   sendKey: vi.fn(),
   trash: vi.fn(),
@@ -265,6 +270,7 @@ import { resetCanopyTrashRemovalsForTests } from "../../../services/pty/canopyTr
 import type { ClientEndpoint } from "../../endpoint.js";
 import { CHANNELS } from "../../channels.js";
 import { readPluginTerminalScreen } from "../../../services/plugin/pluginTerminalScreenRead.js";
+import { redrawFor } from "../../../services/__tests__/answerRedraw.js";
 
 type Handler = (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>;
 
@@ -318,6 +324,7 @@ describe("canopy IPC", () => {
     state.views = [];
     state.record = { spawnedAt: 100 };
     state.screen = MENU;
+    state.redraw = redrawFor;
     state.writes = [];
     state.submits = [];
     state.mode = "on";
@@ -518,6 +525,16 @@ describe("canopy IPC", () => {
       await inKeyGap();
       state.generation = 2;
       expect((await pressing).ok).toBe(false);
+      expect(state.writes).toEqual(["\x1b[B"]);
+    });
+
+    it("presses no Enter once another question with the same options replaces the dialog", async () => {
+      state.redraw = () => MENU.replace("Do you want to proceed?", "Do you want to push --force?");
+      const refused = await answer(NO);
+      expect(refused).toEqual({
+        ok: false,
+        message: expect.stringContaining("nothing was chosen"),
+      });
       expect(state.writes).toEqual(["\x1b[B"]);
     });
 
@@ -2670,7 +2687,8 @@ describe("canopy IPC", () => {
       lease.holder = "self";
       ptyClient.write.mockImplementationOnce((_id: string, data: string) => {
         lease.holder = "other";
-        return state.writes.push(data);
+        state.writes.push(data);
+        state.screen = state.redraw(state.screen, data);
       });
       const answered = await outcome(
         invoke(
