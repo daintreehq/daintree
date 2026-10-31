@@ -10,9 +10,19 @@ name: Nightly Publish
 #
 # Windows nightly binaries were never published (Windows distribution goes
 # through the Microsoft Store in the release workflow), so only macOS + Linux
-# (x64 and arm64, each on its native runner and its own feed) build here. The launch smoke check stays: it's release hygiene that guards the
-# published artifact from shipping a brick to real auto-update clients, not a
-# test suite.
+# (x64 and arm64, each on its native runner and its own feed) build here.
+#
+# Two release-hygiene gates stay, because a nightly client that can't boot
+# can't auto-update its way out. They are not a test suite:
+# - `check:preload-backdoors` right after the build, as in the release
+#   workflows. The cron builds whatever `develop` points at, whether or not its
+#   CI run passed.
+# - The packaged launch smoke (`scripts/run-packaged-smoke.mjs`, #9246) on
+#   every binary a feed offers: the macOS arm64 and universal bundles on the
+#   build runner, the x64 bundle natively on Intel in `smoke-x64`, and each
+#   Linux AppImage on its own runner. `publish` needs all of them, and is the
+#   only job that uploads anything (the generic provider makes electron-builder's
+#   `--publish always` a no-op), so a failed smoke leaves the channel stale.
 #
 # No failure alerting by design: the old nightly's rolling `nightly-failure`
 # issue was retired with the test-nightly. A failed publish here is silent — the
@@ -132,28 +142,10 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=6144"
         run: npm run build
 
-      - name: Smoke test (Linux)
-        if: startsWith(matrix.os, 'ubuntu')
-        run: xvfb-run --auto-servernum npm run test:smoke
-        env:
-          NODE_ENV: production
-          ELECTRON_ENABLE_LOGGING: "1"
-          DBUS_SESSION_BUS_ADDRESS: /dev/null
-          SMOKE_RUNS: "1"
-          SMOKE_TIMEOUT_MS: "210000"
-          SMOKE_RETRIES: "1"
-        timeout-minutes: 10
-
-      - name: Smoke test (macOS)
-        if: startsWith(matrix.os, 'macos')
-        run: npm run test:smoke
-        env:
-          NODE_ENV: production
-          ELECTRON_ENABLE_LOGGING: "1"
-          SMOKE_RUNS: "1"
-          SMOKE_TIMEOUT_MS: "210000"
-          SMOKE_RETRIES: "1"
-        timeout-minutes: 10
+      # Hard security gate (#9148): fail before packaging if any E2E backdoor
+      # survived the production strip.
+      - name: Check preload backdoors
+        run: npm run check:preload-backdoors
 
       - name: Import macOS certificates
         if: startsWith(matrix.os, 'macos')
@@ -243,6 +235,71 @@ jobs:
           fi
           node scripts/ci/validate-update-metadata.mjs "release/${{ matrix.linux_metadata }}"
 
+      - name: Smoke test (packaged macOS)
+        if: startsWith(matrix.os, 'macos')
+        shell: bash
+        timeout-minutes: 15
+        env:
+          NODE_ENV: production
+          ELECTRON_ENABLE_LOGGING: "1"
+          SMOKE_TIMEOUT_MS: "420000"
+          SMOKE_RETRIES: "1"
+        run: |
+          set -euo pipefail
+          # The x64 bundle runs natively on Intel in smoke-x64; under Rosetta
+          # its startup outgrows the smoke budget (see release-macos.yml).
+          for app in release/mac-arm64/Daintree.app release/mac-universal/Daintree.app; do
+            echo "::group::Packaged smoke — $app"
+            PACKAGED_BINARY="$app/Contents/MacOS/Daintree" node scripts/run-packaged-smoke.mjs
+            echo "::endgroup::"
+          done
+
+      - name: Install Linux runtime dependencies (packaged smoke)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get install -y \
+            libgbm1 \
+            libgtk-3-0 \
+            libnss3 \
+            libasound2 \
+            libxss1 \
+            libxtst6 \
+            libatk1.0-0 \
+            libatk-bridge2.0-0 \
+            libcups2 \
+            libdrm2 \
+            libnotify4 \
+            xvfb
+
+      - name: Smoke test (packaged Linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        shell: bash
+        timeout-minutes: 10
+        env:
+          NODE_ENV: production
+          ELECTRON_ENABLE_LOGGING: "1"
+          DBUS_SESSION_BUS_ADDRESS: /dev/null
+          SMOKE_TIMEOUT_MS: "210000"
+          SMOKE_RETRIES: "1"
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          appimages=(release/*.AppImage)
+          if [ "${#appimages[@]}" -ne 1 ]; then
+            echo "::error::Expected one AppImage in release/, found ${#appimages[@]}"
+            exit 1
+          fi
+          appimage="$GITHUB_WORKSPACE/${appimages[0]}"
+          chmod +x "$appimage"
+          work="$RUNNER_TEMP/appimage-smoke"
+          rm -rf "$work"
+          mkdir -p "$work"
+          # FUSE is unavailable on GitHub runners, so extract rather than mount.
+          # The smoke runner supplies the APPDIR the AppImage runtime would set.
+          (cd "$work" && "$appimage" --appimage-extract > /dev/null)
+          PACKAGED_BINARY="$work/squashfs-root/AppRun" \
+            xvfb-run --auto-servernum node scripts/run-packaged-smoke.mjs
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -257,8 +314,53 @@ jobs:
           retention-days: 3
           if-no-files-found: error
 
-  publish:
+  # The x64 bundle, signed and stapled exactly as published, launched on Intel
+  # hardware: the natives, boot, renderer and IPC that Intel users run.
+  smoke-x64:
     needs: [build]
+    name: Smoke (packaged macOS x64, Intel)
+    runs-on: macos-15-intel
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      # The smoke runner imports only Node built-ins, so no npm install.
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: nightly-macos-15
+          path: release/
+
+      - name: Smoke test (packaged macOS x64)
+        shell: bash
+        timeout-minutes: 15
+        env:
+          NODE_ENV: production
+          ELECTRON_ENABLE_LOGGING: "1"
+          SMOKE_TIMEOUT_MS: "420000"
+          SMOKE_RETRIES: "1"
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          zips=(release/Daintree-*-x64-mac.zip)
+          if [ "${#zips[@]}" -ne 1 ]; then
+            echo "::error::Expected one x64 zip, found ${#zips[@]}"
+            exit 1
+          fi
+          ditto -x -k "${zips[0]}" release/mac-x64
+          PACKAGED_BINARY="release/mac-x64/Daintree.app/Contents/MacOS/Daintree" node scripts/run-packaged-smoke.mjs
+
+  publish:
+    # Every packaged smoke gates the upload: the build matrix runs the macOS
+    # arm64/universal and Linux smokes, smoke-x64 the Intel one.
+    needs: [build, smoke-x64]
     runs-on: ubuntu-22.04
     timeout-minutes: 15
 
