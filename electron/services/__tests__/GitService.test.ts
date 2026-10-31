@@ -186,20 +186,49 @@ index 1a2b3c4..5d6e7f8 100644
     expect(diff).toBe("BINARY_FILE");
   });
 
-  it("finds next local branch suffix while ignoring remote-only conflicts", async () => {
-    gitClientMock.branch.mockResolvedValue({
-      branches: {
-        "feature/foo+bar": { current: false, commit: "a" },
-        "feature/foo+bar-2": { current: false, commit: "b" },
-        "feature/foo+bar-10": { current: false, commit: "c" },
-        "remotes/origin/feature/foo+bar-999": { current: false, commit: "d" },
-      },
-    });
+  it("finds next local branch suffix from local branch names alone", async () => {
+    gitClientMock.raw.mockResolvedValue(
+      [
+        "refs/heads/feature/foo+bar\r",
+        "refs/heads/feature/foo+bar-2",
+        "refs/heads/feature/foo+bar-10\r",
+        "refs/heads/other/feature/foo+bar-99",
+        "refs/remotes/origin/feature/foo+bar-999",
+        // Sliced without the prefix check, this would read as `feature/foo+bar-999`.
+        "refs/tags/xfeature/foo+bar-999",
+        "",
+      ].join("\n")
+    );
 
     const service = new GitService(tempDir);
     const next = await service.findAvailableBranchName("feature/foo+bar");
 
     expect(next).toBe("feature/foo+bar-11");
+    // Remote-tracking refs and tip metadata stay out of the check (#15663),
+    // and the candidate name never reaches git.
+    expect(gitClientMock.raw).toHaveBeenCalledTimes(1);
+    expect(gitClientMock.raw).toHaveBeenCalledWith([
+      "for-each-ref",
+      "--format=%(refname)",
+      "refs/heads/",
+    ]);
+    expect(gitClientMock.branch).not.toHaveBeenCalled();
+  });
+
+  it("findAvailableBranchName throws GitOperationError with classified reason on failure", async () => {
+    gitClientMock.raw.mockRejectedValue(new Error("fatal: not a git repository"));
+    const service = new GitService(tempDir);
+
+    const caught = await service.findAvailableBranchName("feature").then(
+      () => null,
+      (error: unknown) => error
+    );
+
+    expect(caught).toBeInstanceOf(GitOperationError);
+    const opError = caught as GitOperationError;
+    expect(opError.reason).toBe("not-a-repository");
+    expect(opError.op).toBe("list-branches");
+    expect(opError.context).toEqual(expect.objectContaining({ cwd: tempDir }));
   });
 
   it("filters pseudo HEAD references when listing branches", async () => {

@@ -31,6 +31,21 @@ export const MODEL_CATALOG_CLASS: BenchmarkClass = {
     "Event-loop busy time, longest stall and retained JS heap while the real AgentModelCatalogService loads a multi-megabyte models.dev catalog from disk or a mocked fetch under Node. This does not measure network transfer, Electron's net.fetch, V8 differences between Node and Electron, or anything else Main does at startup.",
 };
 
+export const BRANCH_NAME_AVAILABILITY_CLASS: BenchmarkClass = {
+  kind: "mechanism",
+  family: "new worktree branch-name check",
+  fidelity: {
+    entryPoint: "public-api",
+    renderer: "absent",
+    electronTransport: "none",
+    pty: "none",
+    processTopology: "partial",
+    externalDependencies: "hermetic",
+  },
+  claim:
+    "Wall time, git processes started, git stdout bytes and the longest observed timer gap per GitService.findAvailableBranchName() call against synthetic repositories of 300 to 20,000 packed refs under Node. This does not measure the IPC hop, the dialog's debounce or rendering, a cold disk cache, or tip commits larger than a one-line message.",
+};
+
 /**
  * What each scenario's numbers are allowed to be claimed to mean.
  *
