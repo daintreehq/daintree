@@ -8,6 +8,7 @@ import type {
 import { defineIpcNamespace, op } from "../define.js";
 import { MENU_METHOD_CHANNELS } from "./menu.preload.js";
 import { isCachedViewWebContents } from "../../window/webContentsRegistry.js";
+import { getCliAvailabilityServiceRef } from "../../window/serviceRefs.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -160,6 +161,18 @@ export const menuNamespace = defineIpcNamespace({
         // A backgrounded project view can still hold a queued click; without
         // this it would surface a popup over whichever view is now visible.
         if (isCachedViewWebContents(ctx.webContentsId)) return;
+
+        // Only the focused window rebuilds the menu, so a window that opened or
+        // closed while the app was in the background is still missing from (or
+        // left in) the Window menu's list — and the click that focused this
+        // window can be the one asking for the menu.
+        try {
+          const { rebuildApplicationMenuIfStale } = await import("../../menu.js");
+          rebuildApplicationMenuIfStale(win, getCliAvailabilityServiceRef() ?? undefined);
+        } catch (err) {
+          console.error("[MAIN] Failed to bring the application menu up to date:", err);
+        }
+        if (win.isDestroyed()) return;
 
         const menu = Menu.getApplicationMenu();
         if (!menu) return;

@@ -15,6 +15,7 @@ import {
   type ProjectTitleLookup,
 } from "../window/windowTitle.js";
 import { readUserPresence, type UserPresence } from "./userPresence.js";
+import { refreshOpenWindowMenu } from "../windowMenuState.js";
 
 export interface NotificationState {
   waitingCount: number;
@@ -276,6 +277,7 @@ class NotificationService {
       totalWaiting += waitingCount;
       this.writeTitle(ctx, waitingCount);
     }
+    refreshOpenWindowMenu();
 
     if (process.platform === "darwin") {
       app.setBadgeCount(totalWaiting);
@@ -299,6 +301,8 @@ class NotificationService {
     for (const ctx of this.registry.all()) {
       this.writeTitle(ctx, countsByWindow.get(ctx.windowId) ?? 0);
     }
+    // Off macOS the Window menu lists every window by its title.
+    refreshOpenWindowMenu();
   }
 
   /**

@@ -47,6 +47,7 @@ import {
   hasOpenApplicationWindow,
   resolveProjectIdForApplicationMenu,
 } from "./projectMenuState.js";
+import { buildOpenWindowMenuItems, isOpenWindowMenuStale } from "./windowMenuState.js";
 import { PRODUCT_NAME, PRODUCT_WEBSITE, PRODUCT_COPYRIGHT_ORG } from "./utils/productBranding.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 import { getUserMessage, isAppError } from "./utils/errorTypes.js";
@@ -175,17 +176,23 @@ function menuProjectIdFor(win: BrowserWindow): string | null {
 
 /**
  * Rebuild the menu for `win` only if its project would show a different set of
- * plugin items and tours than the installed menu does. The menu is
- * process-global but filtered by one window's project, so a project switch or a
- * focus change can leave it showing another project's choices — yet a rebuild
- * dismisses an open menu, so it must not happen on every switch.
+ * plugin items and tours than the installed menu does, or the Window menu would
+ * list a different set of windows. The menu is process-global but filtered by
+ * one window's project, so a project switch or a focus change can leave it
+ * showing another project's choices — yet a rebuild dismisses an open menu, so
+ * it must not happen on every switch.
  */
-export function rebuildApplicationMenuIfPluginVisibilityChanged(
+export function rebuildApplicationMenuIfStale(
   win: BrowserWindow,
   cliAvailabilityService?: CliAvailabilityService
 ): void {
   if (win.isDestroyed()) return;
-  if (hiddenMenuPluginsKey(menuProjectIdFor(win)) === builtHiddenMenuPluginsKey) return;
+  if (
+    hiddenMenuPluginsKey(menuProjectIdFor(win)) === builtHiddenMenuPluginsKey &&
+    !isOpenWindowMenuStale()
+  ) {
+    return;
+  }
   createApplicationMenu(win, cliAvailabilityService);
 }
 
@@ -769,7 +776,11 @@ export function createApplicationMenu(
       submenu:
         process.platform === "darwin"
           ? [{ role: "minimize" }, { role: "zoom" }, { type: "separator" }, { role: "front" }]
-          : [{ role: "minimize", registerAccelerator: false }, { role: "close" }],
+          : [
+              { role: "minimize", registerAccelerator: false },
+              { role: "close" },
+              ...buildOpenWindowMenuItems(),
+            ],
     },
     {
       role: "help",

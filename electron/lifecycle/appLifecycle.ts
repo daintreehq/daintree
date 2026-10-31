@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
 import { refreshProjectMenuState } from "../projectMenuState.js";
+import { noteWindowClosing, refreshOpenWindowMenu } from "../windowMenuState.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { setSignalShutdown, setSafetyBeltTimer } from "./signalShutdownState.js";
 import { finishIfGroupStop } from "./groupStop.js";
@@ -482,9 +483,14 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
   // focused window, so every focus change can flip them (#11136).
   app.on("browser-window-focus", () => {
     refreshProjectMenuState();
+    // The Window menu marks the focused window (#15536).
+    refreshOpenWindowMenu();
   });
 
   app.on("browser-window-created", (_event, win) => {
+    if (process.platform !== "darwin") {
+      win.on("close", (event) => noteWindowClosing(win, event));
+    }
     win.once("closed", () => {
       // Closing the focused window promotes a survivor that may never take focus
       // (minimized/hidden), so `browser-window-focus` can't be relied on here.
@@ -493,7 +499,10 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
       // synchronously; refreshing inline would still read the closing window. A
       // microtask runs once every listener for this emit has, which is exactly
       // the ordering we need.
-      queueMicrotask(() => refreshProjectMenuState());
+      queueMicrotask(() => {
+        refreshProjectMenuState();
+        refreshOpenWindowMenu();
+      });
     });
   });
 

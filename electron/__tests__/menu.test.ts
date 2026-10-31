@@ -285,7 +285,7 @@ import {
   createApplicationMenu,
   handleDirectoryOpen,
   buildAboutPanelOptions,
-  rebuildApplicationMenuIfPluginVisibilityChanged,
+  rebuildApplicationMenuIfStale,
 } from "../menu.js";
 import {
   getProjectHistory,
@@ -2453,22 +2453,22 @@ describe("plugin menu items in a project that hides the plugin (#13765)", () => 
     // Another project that hides nothing builds the same menu: leave it alone,
     // so a switch never dismisses a menu the user has open for no reason.
     getProjectForWebContentsMock.mockReturnValue("project-c");
-    rebuildApplicationMenuIfPluginVisibilityChanged(win);
+    rebuildApplicationMenuIfStale(win);
     expect(builds).not.toHaveBeenCalled();
 
     getProjectForWebContentsMock.mockReturnValue("project-a");
-    rebuildApplicationMenuIfPluginVisibilityChanged(win);
+    rebuildApplicationMenuIfStale(win);
     expect(builds).toHaveBeenCalledTimes(1);
     const help = capturedTemplate.find((m) => m.role === "help")!;
     expect(
       (help.submenu as Electron.MenuItemConstructorOptions[]).map((i) => i.label)
     ).not.toContain("Acme Docs");
 
-    rebuildApplicationMenuIfPluginVisibilityChanged(win);
+    rebuildApplicationMenuIfStale(win);
     expect(builds).toHaveBeenCalledTimes(1);
 
     getProjectForWebContentsMock.mockReturnValue("project-b");
-    rebuildApplicationMenuIfPluginVisibilityChanged(win);
+    rebuildApplicationMenuIfStale(win);
     expect(builds).toHaveBeenCalledTimes(2);
   });
 
@@ -2499,8 +2499,8 @@ describe("plugin menu items in a project that hides the plugin (#13765)", () => 
     builds.mockClear();
 
     getProjectForWebContentsMock.mockReturnValue("project-a");
-    rebuildApplicationMenuIfPluginVisibilityChanged(win);
-    rebuildApplicationMenuIfPluginVisibilityChanged(win);
+    rebuildApplicationMenuIfStale(win);
+    rebuildApplicationMenuIfStale(win);
 
     expect(builds).toHaveBeenCalledTimes(1);
     const help = capturedTemplate.find((m) => m.role === "help")!;
@@ -2529,10 +2529,10 @@ describe("plugin menu items in a project that hides the plugin (#13765)", () => 
     builds.mockClear();
 
     getProjectForWebContentsMock.mockReturnValue("a");
-    rebuildApplicationMenuIfPluginVisibilityChanged(win);
+    rebuildApplicationMenuIfStale(win);
     expect(builds).toHaveBeenCalledTimes(1);
 
-    rebuildApplicationMenuIfPluginVisibilityChanged(win);
+    rebuildApplicationMenuIfStale(win);
     expect(builds).toHaveBeenCalledTimes(1);
   });
 
