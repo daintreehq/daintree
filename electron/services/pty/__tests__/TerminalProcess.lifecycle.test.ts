@@ -796,6 +796,33 @@ describe("TerminalProcess — observer-driven exit handlers", () => {
     }
   });
 
+  it("does NOT fire fallback on a nonzero exit whose tail only mentions INTERNAL, UNAVAILABLE or 429", () => {
+    const pty = createControllablePty();
+    const fallbackListener = vi.fn();
+    const off = events.on("agent:fallback-triggered", fallbackListener);
+
+    try {
+      createTerminal(
+        pty,
+        { kind: "terminal", launchAgentId: "claude", agentPresetId: "claude-default" },
+        undefined,
+        "t-bare-words"
+      );
+
+      pty.emitData(
+        "const INTERNAL_API_URL = process.env.INTERNAL_API_URL;\nreturn Status.UNAVAILABLE;\nTests: 429 passed, 1 failed\n"
+      );
+      pty.emitExit(1);
+
+      const calls = fallbackListener.mock.calls.filter(
+        (c: unknown[]) => (c[0] as { terminalId: string }).terminalId === "t-bare-words"
+      );
+      expect(calls).toHaveLength(0);
+    } finally {
+      off();
+    }
+  });
+
   it("does NOT fire fallback when terminal was killed before exit", () => {
     const pty = createControllablePty();
     const fallbackListener = vi.fn();
