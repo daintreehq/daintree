@@ -632,6 +632,25 @@ describe("listSubagentsInDir past what it shows", () => {
     }
   );
 
+  it("keeps an unrecognisable newest transcript as a row rather than refilling past it", async () => {
+    const dir = await makeSubagentsDir("/Users/x/Projects/demo");
+    const files = await writeChildren(dir, SUBAGENT_LIST_LIMIT + 1);
+    // Bookkeeping alone: it parses, but there is no task and no turn to read.
+    await writeFile(
+      files.at(-1) as string,
+      record({ type: "summary", summary: "x" }) + "\n",
+      "utf8"
+    );
+    const at = new Date((BASE_SECONDS + SUBAGENT_LIST_LIMIT) * 1000);
+    await utimes(files.at(-1) as string, at, at);
+
+    const rows = await listSubagentsInDir(dir);
+    expect(rows).toHaveLength(SUBAGENT_LIST_LIMIT);
+    expect(rows[0]?.status).toEqual({ type: "unknown", reason: "unrecognized" });
+    expect(rows[0]?.preview).toBe("");
+    expect(rows.map((row) => row.id)).not.toContain("c0000");
+  });
+
   it("picks up a sidecar that arrives after its transcript was listed", async () => {
     const dir = await makeSubagentsDir("/Users/x/Projects/demo");
     await writeChild(dir, "aaa1", [userRecord("go")]);

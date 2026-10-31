@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { setPtyClientRef } from "../../../window/serviceRefs.js";
 import type { PtyClient } from "../../PtyClient.js";
-import { mkdtemp, mkdir, rm, writeFile } from "fs/promises";
+import { chmod, mkdtemp, mkdir, rm, utimes, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 
@@ -19,6 +19,7 @@ const { deriveProjectSlug, __resetClaudeSubagentCaches } =
   await import("../ClaudeSubagentReader.js");
 const { listClaudeSubagents, readClaudeSubagentTranscript } =
   await import("../ClaudeSubagentService.js");
+const { SUBAGENT_LIST_LIMIT } = await import("../../../../shared/types/ipc/agentSubagents.js");
 
 const SESSION = "1ad2578c-b710-4302-90c1-b222c4c29aa2";
 const CWD = "/Users/x/Projects/demo";
@@ -225,4 +226,51 @@ describe("readClaudeSubagentTranscript", () => {
       reason: "no-session",
     });
   });
+
+  /** One more child than the list shows, `c0000` the oldest; returns each transcript's path. */
+  async function seedPastTheLimit(): Promise<string[]> {
+    const files: string[] = [];
+    for (let index = 0; index <= SUBAGENT_LIST_LIMIT; index += 1) {
+      const id = `c${String(index).padStart(4, "0")}`;
+      const dir = await seedChild(id, [TASK, REPLY]);
+      const file = path.join(dir, `agent-${id}.jsonl`);
+      const at = new Date((1_700_000_000 + index) * 1000);
+      await utimes(file, at, at);
+      files.push(file);
+    }
+    return files;
+  }
+
+  it("refuses a child that exists but falls below the list it was offered from", async () => {
+    getTerminalAsync.mockResolvedValue(claudeTerminal());
+    await seedPastTheLimit();
+
+    await expect(readClaudeSubagentTranscript("t1", "c0000")).resolves.toEqual({
+      status: "unavailable",
+      reason: "subagent-not-found",
+    });
+    await expect(readClaudeSubagentTranscript("t1", "c0001")).resolves.toMatchObject({
+      status: "ok",
+    });
+  });
+
+  const enforcesModeBits = process.platform !== "win32" && process.getuid?.() !== 0;
+
+  it.skipIf(!enforcesModeBits)(
+    "accepts a child promoted into the list when a newer one cannot be read",
+    async () => {
+      getTerminalAsync.mockResolvedValue(claudeTerminal());
+      const files = await seedPastTheLimit();
+      const newest = files.at(-1) as string;
+      await chmod(newest, 0o000);
+      try {
+        await expect(readClaudeSubagentTranscript("t1", "c0000")).resolves.toMatchObject({
+          status: "ok",
+          subagentId: "c0000",
+        });
+      } finally {
+        await chmod(newest, 0o600);
+      }
+    }
+  );
 });
