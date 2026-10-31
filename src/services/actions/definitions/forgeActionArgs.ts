@@ -28,13 +28,7 @@ const ForgeListPagingSchema = z.object({
     .describe("The previous response's `nextCursor`, for the next page."),
   // 100 is the tightest page ceiling across the provider roster, so it is the
   // largest request every provider can serve in one round trip.
-  perPage: z
-    .number()
-    .int()
-    .min(1)
-    .max(100)
-    .optional()
-    .describe("1-100 rows; default varies."),
+  perPage: z.number().int().min(1).max(100).optional().describe("1-100 rows; default varies."),
   sort: z.enum(["created", "updated"]).optional().describe("Sort field (default: created)."),
   direction: z.enum(["asc", "desc"]).optional().describe("Default desc; asc may be refused."),
   // The only escape hatch from a warm list cache. Without it an out-of-band
