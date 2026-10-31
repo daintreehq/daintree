@@ -549,6 +549,181 @@ describe("QuickRun", () => {
     }
   });
 
+  describe("commands that differ only in quoting or in whitespace inside quotes", () => {
+    // Pairs a shell reads differently, each of which the old folding made one command.
+    const PAIRS: Array<[string, string]> = [
+      ["'$SHELL'", "$SHELL"],
+      ["echo '$HOME'", 'echo "$HOME"'],
+      ["rm '*.log'", "rm *.log"],
+      ["printf 'a  b'", "printf 'a b'"],
+    ];
+
+    it("runs what was typed, not a quoted history row that looks the same once quotes are dropped", () => {
+      seedHistory("'$SHELL'");
+      mockAddTerminal.mockResolvedValue(undefined);
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.change(input, { target: { value: "$SHELL" } });
+
+      const [typed, quoted] = commandOptions();
+      expect(typed!.getAttribute("data-command")).toBe("$SHELL");
+      expect(typed!.textContent).toMatch(/^Run/);
+      expect(quoted!.getAttribute("data-command")).toBe("'$SHELL'");
+      expect(document.getElementById(input.getAttribute("aria-activedescendant")!)).toBe(typed);
+
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(mockAddTerminal).toHaveBeenCalledTimes(1);
+      expect(mockAddTerminal).toHaveBeenCalledWith(expect.objectContaining({ command: "$SHELL" }));
+    });
+
+    it("runs the quoted command when it is the typed one, even with the unquoted spelling in history", () => {
+      seedHistory("$SHELL");
+      mockAddTerminal.mockResolvedValue(undefined);
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.change(input, { target: { value: "'$SHELL'" } });
+
+      expect(commandOptions()[0]!.getAttribute("data-command")).toBe("'$SHELL'");
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(mockAddTerminal).toHaveBeenCalledWith(
+        expect.objectContaining({ command: "'$SHELL'" })
+      );
+    });
+
+    it("completes a row that differs from the typed text only by its quotes", () => {
+      seedHistory("'$SHELL'");
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.change(input, { target: { value: "$SHELL" } });
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+
+      expect(document.getElementById(input.getAttribute("aria-activedescendant")!)).toBe(
+        commandOptions()[1]
+      );
+      expect(fireEvent.keyDown(input, { key: "Tab" })).toBe(false);
+      expect((input as HTMLInputElement).value).toBe("'$SHELL'");
+      expect(mockAddTerminal).not.toHaveBeenCalled();
+    });
+
+    it.each(PAIRS)("keeps %s and %s as two suggestions", (first, second) => {
+      seedHistory(first, second);
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+
+      expect(commandOptions().map((o) => o.getAttribute("data-command"))).toEqual([first, second]);
+    });
+
+    it.each(PAIRS)("leaves both %s and %s recallable once each has run", async (first, second) => {
+      mockAddTerminal.mockResolvedValue(undefined);
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      for (const command of [first, second]) {
+        fireEvent.change(input, { target: { value: command } });
+        await act(async () => {
+          fireEvent.keyDown(input, { key: "Enter" });
+        });
+      }
+      expect(mockAddTerminal).toHaveBeenCalledTimes(2);
+
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      expect(commandOptions().map((o) => o.getAttribute("data-command"))).toEqual([second, first]);
+    });
+
+    it.each([
+      [
+        "a pinned command",
+        () => {
+          settingsMock.runCommands = [{ id: "s", name: "Shell", command: "'$SHELL'" }];
+        },
+      ],
+      [
+        "a detected script",
+        () => {
+          settingsMock.allDetectedRunners = [{ id: "r", name: "shell", command: "'$SHELL'" }];
+        },
+      ],
+    ])(
+      "runs what was typed, not %s that looks the same once quotes are dropped",
+      (_source, arrange) => {
+        arrange();
+        mockAddTerminal.mockResolvedValue(undefined);
+        try {
+          render(<Footer projectId="test-project" />);
+          const input = openPanel();
+          fireEvent.change(input, { target: { value: "$SHELL" } });
+
+          expect(commandOptions().map((o) => o.getAttribute("data-command"))).toEqual([
+            "$SHELL",
+            "'$SHELL'",
+          ]);
+          fireEvent.click(screen.getByRole("button", { name: "Run" }));
+          expect(mockAddTerminal).toHaveBeenCalledWith(
+            expect.objectContaining({ command: "$SHELL" })
+          );
+        } finally {
+          settingsMock.allDetectedRunners = [];
+          settingsMock.runCommands = [];
+        }
+      }
+    );
+
+    it("keeps a pin written with quotes apart from the detected script, and unpins the text it was saved as", () => {
+      settingsMock.runCommands = [{ id: "s", name: "Tests", command: 'npm run "test"' }];
+      settingsMock.allDetectedRunners = [{ id: "r", name: "test", command: "npm run test" }];
+      try {
+        render(<Footer projectId="test-project" />);
+        const input = openPanel();
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+
+        expect(commandOptions().map((o) => o.getAttribute("data-command"))).toEqual([
+          'npm run "test"',
+          "npm run test",
+        ]);
+        fireEvent.keyDown(input, { key: "π", code: "KeyP", altKey: true });
+        expect(settingsMock.removeFromSaved).toHaveBeenCalledWith('npm run "test"');
+      } finally {
+        settingsMock.allDetectedRunners = [];
+        settingsMock.runCommands = [];
+        settingsMock.removeFromSaved.mockReset();
+      }
+    });
+
+    it("still shows a pin and the detected script it matches as one pinned row", () => {
+      settingsMock.runCommands = [{ id: "s", name: "Tests", command: "npm run test" }];
+      settingsMock.allDetectedRunners = [{ id: "r", name: "test", command: "npm run test" }];
+      try {
+        render(<Footer projectId="test-project" />);
+        const input = openPanel();
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+
+        expect(commandOptions().map((o) => o.getAttribute("data-command"))).toEqual([
+          "npm run test",
+        ]);
+      } finally {
+        settingsMock.allDetectedRunners = [];
+        settingsMock.runCommands = [];
+      }
+    });
+
+    it("keeps a pinned command apart from a history entry that differs only by quoting", () => {
+      settingsMock.runCommands = [{ id: "s", name: "Wipe", command: "rm *.log" }];
+      seedHistory("rm '*.log'");
+      try {
+        render(<Footer projectId="test-project" />);
+        const input = openPanel();
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+
+        expect(commandOptions().map((o) => o.getAttribute("data-command"))).toEqual([
+          "rm *.log",
+          "rm '*.log'",
+        ]);
+      } finally {
+        settingsMock.runCommands = [];
+      }
+    });
+  });
+
   it("describes the lit row with what running it will do", () => {
     settingsMock.runCommands = [
       { id: "s", name: "Docs", command: "npx serve docs", preferredLocation: "dock" },

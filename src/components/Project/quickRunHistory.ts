@@ -10,34 +10,24 @@ export interface HistoryItem {
 
 const MAX_HISTORY = 10;
 
-/**
- * Normalize a command string for comparison.
- * Removes quotes around tokens that don't contain spaces.
- * e.g., `npm run "test"` -> `npm run test`
- * but keeps `npm run "test with spaces"` as is.
- */
-export function normalizeCommand(cmd: string): string {
-  return cmd
-    .trim()
-    .replace(/\s+/g, " ")
-    .replace(/"([^"\s]+)"/g, "$1")
-    .replace(/'([^'\s]+)'/g, "$1");
-}
-
 export function historyStorageKey(projectId: string): string {
   return `${QUICK_RUN_HISTORY_KEY_PREFIX}${hostScopedKey(projectId)}`;
 }
 
-/** The list with `command` first. A command that differs only by quoting replaces its earlier entry. */
+/**
+ * The list with `command` first. Only the same text replaces its earlier entry,
+ * ignoring surrounding space: quotes and spacing inside the command change what
+ * a shell runs (`'$HOME'` is not `"$HOME"`), so those stay separate entries.
+ */
 export function appendHistory(
   previous: readonly HistoryItem[],
   command: string,
   timestamp: number
 ): HistoryItem[] {
-  const normalized = normalizeCommand(command);
+  const trimmed = command.trim();
   return [
     { command, timestamp },
-    ...previous.filter((item) => normalizeCommand(item.command) !== normalized),
+    ...previous.filter((item) => item.command.trim() !== trimmed),
   ].slice(0, MAX_HISTORY);
 }
 
