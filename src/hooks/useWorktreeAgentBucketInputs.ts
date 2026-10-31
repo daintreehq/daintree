@@ -33,10 +33,10 @@ export function useWorktreeAgentBucketInputs(): WorktreeAgentBucketInputs {
 }
 
 /**
- * One worktree's buckets, re-rendering only when they change. The fleet
- * selector returns the encoded bits, so a push that moves only other
- * worktrees' runs leaves the caller alone; plugin attention, which changes
- * apart from the fleet, still reaches it through its own subscription.
+ * One worktree's buckets. The fleet selector returns the encoded bits, so a
+ * push re-renders the caller only when this worktree's buckets moved. Plugin
+ * attention, which changes apart from the fleet, still reaches it through its
+ * own subscription.
  */
 export function useWorktreeAgentBuckets(
   agentPanelIds: readonly string[],

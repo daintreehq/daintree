@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorktreeState } from "@/types";
 import type { DeletedWorktree } from "@/store/worktreeStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import { getWorktreeSortDragId } from "@/components/DragDrop/SortableWorktreeCard";
 import { useSidebarWorktreeModel } from "../useSidebarWorktreeModel";
 
@@ -188,5 +190,54 @@ describe("useSidebarWorktreeModel — rows", () => {
 
     act(() => useWorktreeFilterStore.getState().toggleStatusFilter("dirty"));
     expect(result.current.filteredWorktrees).toEqual([]);
+  });
+});
+
+describe("useSidebarWorktreeModel — main card aggregate counts", () => {
+  function pushFleet(runs: FleetRunRow[]): void {
+    act(() =>
+      useFleetSnapshotStore.getState().applySnapshot({
+        runs,
+        changedAt: 1,
+        degraded: false,
+        lastSuccessfulAt: null,
+      })
+    );
+  }
+  const run = (runId: string, overrides: Partial<FleetRunRow> = {}): FleetRunRow => ({
+    runId,
+    workspaceId: "elsewhere",
+    spawnedAt: 0,
+    cwd: "/elsewhere",
+    ...overrides,
+  });
+
+  afterEach(() => {
+    useFleetSnapshotStore.setState({ snapshot: null });
+  });
+
+  it("keeps its identity across fleet pushes that move no count", () => {
+    // A fresh object here re-renders the main card through its memoized row.
+    pushFleet([run("x", { agentState: "working" })]);
+    const { result, rerender } = renderModel();
+    const counts = result.current.mainWorktreeAggregateCounts;
+    expect(counts).toEqual({ worktrees: 2, working: 0, waiting: 0, finished: 0 });
+
+    pushFleet([run("x", { agentState: "waiting", waitingReason: "approval" })]);
+    pushFleet([run("x", { agentState: "idle" }), run("y", { agentState: "working" })]);
+    expect(result.current.mainWorktreeAggregateCounts).toBe(counts);
+
+    rerender({
+      worktrees: [...snapshot(), makeWorktree("c")],
+      activeWorktreeId: null,
+      deletedWorktrees: new Map(),
+      canPruneWorktreeIds: true,
+    });
+    expect(result.current.mainWorktreeAggregateCounts).toEqual({
+      worktrees: 3,
+      working: 0,
+      waiting: 0,
+      finished: 0,
+    });
   });
 });
