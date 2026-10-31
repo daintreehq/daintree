@@ -7,6 +7,7 @@ import type { NotificationPluginSource } from "@shared/types/ipc/maps";
 import { createDebouncedSafeJSONStorage } from "@/store/persistence/safeStorage";
 import {
   mergeRecordByWriterDelta,
+  pickFieldByWriterDelta,
   type PersistWriteMergeContext,
 } from "@/store/persistence/persistWriteMerge";
 import { registerPersistedStore } from "@/store/persistence/persistedStoreRegistry";
@@ -199,7 +200,10 @@ function sanitizeActions(raw: unknown): NotificationHistoryEntry["actions"] {
  * `summarized` is reset to false because in-session re-entry summaries don't
  * carry meaning across restarts.
  */
-export function sanitizePersistedEntry(raw: unknown): NotificationHistoryEntry | null {
+export function sanitizePersistedEntry(
+  raw: unknown,
+  now: number = Date.now()
+): NotificationHistoryEntry | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   if (typeof r.id !== "string" || r.id.length === 0) return null;
@@ -207,7 +211,7 @@ export function sanitizePersistedEntry(raw: unknown): NotificationHistoryEntry |
   // Reject implausible timestamps: <=0 or far in the future. Bounds protect
   // against corrupt localStorage holding values that would otherwise live in
   // the inbox until the year ~2286.
-  if (r.timestamp <= 0 || r.timestamp > Date.now() + FUTURE_TIMESTAMP_SLACK_MS) return null;
+  if (r.timestamp <= 0 || r.timestamp > now + FUTURE_TIMESTAMP_SLACK_MS) return null;
   if (typeof r.type !== "string" || !VALID_TYPES.has(r.type as NotificationHistoryEntry["type"])) {
     return null;
   }
@@ -219,7 +223,7 @@ export function sanitizePersistedEntry(raw: unknown): NotificationHistoryEntry |
     typeof r.archivedAt === "number" &&
     Number.isFinite(r.archivedAt) &&
     r.archivedAt > 0 &&
-    r.archivedAt <= Date.now() + FUTURE_TIMESTAMP_SLACK_MS
+    r.archivedAt <= now + FUTURE_TIMESTAMP_SLACK_MS
       ? r.archivedAt
       : null;
   return {
@@ -274,17 +278,19 @@ interface PersistedNotificationHistoryShape {
 }
 
 interface NormalizedNotificationHistory {
-  entries: Record<string, NotificationHistoryEntry>;
+  entries: Map<string, NotificationHistoryEntry>;
   snoozedThreads: Record<string, number>;
 }
 
 /**
- * Applies the hydration `merge`'s sanitize + prune to a persisted value at a
- * fixed `now`, keyed by entry id. Every merge input goes through this so the
- * writer-delta diff compares like-for-like: the baseline is the raw hydration
- * read (possibly a v1 blob) while incoming is post-hydration memory, and
- * without it the session-local `summarized` reset, a hydration-time prune or
- * an expired snooze would all read as writer edits.
+ * Sanitizes a persisted value the way hydration does, at a fixed `now`, keyed by
+ * entry id. Every merge input goes through this so the writer-delta diff
+ * compares like-for-like: the baseline is the raw hydration read while incoming
+ * is post-hydration memory, and without it the session-local `summarized`
+ * reset or an expired snooze would read as a writer edit. Entries are not
+ * age-pruned here: an entry that expired after hydration would vanish from the
+ * baseline too and a dismissal of it would look like a sibling's addition. The
+ * merged result is pruned instead.
  */
 function normalizeNotificationHistory(
   value: StorageValue<unknown> | null,
@@ -295,25 +301,57 @@ function normalizeNotificationHistory(
       ? (value.state as Partial<PersistedNotificationHistoryShape>)
       : undefined;
   const rawEntries = Array.isArray(state?.entries) ? state.entries : [];
-  const sanitized = rawEntries
-    .map(sanitizePersistedEntry)
-    .filter((e): e is NotificationHistoryEntry => e !== null);
-  const entries: Record<string, NotificationHistoryEntry> = {};
-  for (const entry of pruneNotificationEntries(sanitized, now)) {
-    entries[entry.id] ??= entry;
+  const entries = new Map<string, NotificationHistoryEntry>();
+  for (const raw of rawEntries) {
+    const entry = sanitizePersistedEntry(raw, now);
+    if (entry && !entries.has(entry.id)) entries.set(entry.id, entry);
   }
   return { entries, snoozedThreads: sanitizeSnoozedThreads(state?.snoozedThreads, now) };
 }
 
 /**
+ * Settles an entry both this writer and the disk still hold, field by field, so
+ * a stale `markAllRead` or message update can't undo a sibling's archive. An
+ * archived entry is always read, matching `archiveEntry`.
+ */
+function mergeEntryFields(
+  baseline: NotificationHistoryEntry,
+  incoming: NotificationHistoryEntry,
+  onDisk: NotificationHistoryEntry
+): NotificationHistoryEntry {
+  const archivedAt = pickFieldByWriterDelta(
+    baseline.archivedAt,
+    incoming.archivedAt,
+    onDisk.archivedAt
+  );
+  return {
+    ...onDisk,
+    message: pickFieldByWriterDelta(baseline.message, incoming.message, onDisk.message),
+    seenAsToast:
+      archivedAt !== null ||
+      pickFieldByWriterDelta(baseline.seenAsToast, incoming.seenAsToast, onDisk.seenAsToast),
+    archivedAt,
+  };
+}
+
+/**
  * Baseline-aware three-way merge for notification-history writes across project
- * views (#15534, the store #11351 left out). Every view persists one shared
- * inbox, so a cached view's stale snapshot used to replace entries a sibling
- * added, and revert rows it read, archived or dismissed. Entries merge per id
- * and snoozes per thread: the writer's own adds, edits and deletions win, and
- * everything it didn't touch keeps the sibling's on-disk state. The result is
- * re-sorted newest first and re-pruned so the 200-entry cap holds across both
- * views' additions.
+ * views (#15534). Every view persists one shared inbox, so a cached view's stale
+ * snapshot used to replace entries a sibling added, and revert rows it read,
+ * archived or dismissed. Per entry id:
+ *
+ *   - added by this writer (absent from its baseline) → its entry is written.
+ *   - held by the writer and the disk → merged field by field.
+ *   - known to the writer but gone from disk → stays gone, even if the writer
+ *     edited it since: a sibling dismissed, cleared or pruned it, and a stale
+ *     read or archive must not bring it back.
+ *   - in the writer's baseline but not its memory → the writer removed it.
+ *   - on disk and never known to the writer → a sibling's addition, kept.
+ *
+ * Snoozes merge per thread through `mergeRecordByWriterDelta`. The result is
+ * sorted newest first and pruned, so retention and the 200-entry cap hold over
+ * both views' additions. `clearAll` clears what this view knew; entries a
+ * sibling added since are kept.
  */
 function mergeNotificationHistoryPersistedWrite({
   baseline,
@@ -326,9 +364,22 @@ function mergeNotificationHistoryPersistedWrite({
   const base = normalizeNotificationHistory(baseline, now);
   const inc = normalizeNotificationHistory(incoming, now);
   const disk = normalizeNotificationHistory(onDisk, now);
-  const merged = Object.values(
-    mergeRecordByWriterDelta(base.entries, inc.entries, disk.entries)
-  ).sort((a, b) => b.timestamp - a.timestamp);
+
+  const merged: NotificationHistoryEntry[] = [];
+  for (const [id, entry] of inc.entries) {
+    const before = base.entries.get(id);
+    if (before === undefined) {
+      merged.push(entry);
+      continue;
+    }
+    const current = disk.entries.get(id);
+    if (current !== undefined) merged.push(mergeEntryFields(before, entry, current));
+  }
+  for (const [id, entry] of disk.entries) {
+    if (!inc.entries.has(id) && !base.entries.has(id)) merged.push(entry);
+  }
+  merged.sort((a, b) => b.timestamp - a.timestamp);
+
   const state: PersistedNotificationHistoryShape = {
     entries: pruneNotificationEntries(merged, now),
     snoozedThreads: mergeRecordByWriterDelta(
@@ -741,10 +792,10 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
       merge: (persisted, current) => {
         const p = persisted as Partial<PersistedNotificationHistoryShape> | undefined;
         const rawEntries = Array.isArray(p?.entries) ? p.entries : [];
-        const sanitized = rawEntries
-          .map(sanitizePersistedEntry)
-          .filter((e): e is NotificationHistoryEntry => e !== null);
         const now = Date.now();
+        const sanitized = rawEntries
+          .map((raw) => sanitizePersistedEntry(raw, now))
+          .filter((e): e is NotificationHistoryEntry => e !== null);
         const pruned = pruneNotificationEntries(sanitized, now);
         const snoozedThreads = sanitizeSnoozedThreads(p?.snoozedThreads, now);
         return {

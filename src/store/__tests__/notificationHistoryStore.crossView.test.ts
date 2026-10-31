@@ -196,6 +196,148 @@ describe("notificationHistoryStore cross-view write merge (#15534)", () => {
     expect(readBlob(backing).state.entries.map((e) => e.id)).toEqual([siblingId]);
   });
 
+  it("keeps a sibling's entry across repeated writes from the stale view", async () => {
+    const backing = installLocalStorage(seed([makeEntry({ id: "existing" })]));
+
+    const viewA = await openView();
+    const viewB = await openView();
+
+    const siblingId = viewB.getState().addEntry({ type: "error", message: "from B" });
+    flush();
+
+    viewA.getState().addEntry({ type: "info", message: "first from A" });
+    flush();
+    viewA.getState().markIdsRead(["existing"]);
+    flush();
+
+    expect(entryById(backing, siblingId)?.message).toBe("from B");
+    expect(readBlob(backing).state.entries).toHaveLength(3);
+  });
+
+  it("merges a sibling's write that lands while this view's write is pending", async () => {
+    const backing = installLocalStorage(seed([]));
+
+    const viewA = await openView();
+    const viewB = await openView();
+
+    const ownId = viewA.getState().addEntry({ type: "info", message: "from A" });
+    const siblingId = viewB.getState().addEntry({ type: "error", message: "from B" });
+    // B's 300ms debounce was armed after A's, so A's flush lands first; B's then
+    // has to merge A's write in.
+    flush();
+
+    const ids = readBlob(backing).state.entries.map((e) => e.id);
+    expect(ids.sort()).toEqual([ownId, siblingId].sort());
+  });
+
+  it("does not un-archive a sibling's archive when this view marks everything read", async () => {
+    const backing = installLocalStorage(seed([makeEntry({ id: "row" })]));
+
+    const viewA = await openView();
+    const viewB = await openView();
+
+    viewB.getState().archiveEntry("row");
+    flush();
+
+    viewA.getState().markAllRead();
+    flush();
+
+    const row = entryById(backing, "row");
+    expect(row?.archivedAt).not.toBeNull();
+    expect(row?.seenAsToast).toBe(true);
+  });
+
+  it("applies this view's message update without reverting a sibling's archive", async () => {
+    const backing = installLocalStorage(seed([makeEntry({ id: "summary", message: "3 more" })]));
+
+    const viewA = await openView();
+    const viewB = await openView();
+
+    viewB.getState().archiveEntry("summary");
+    flush();
+
+    expect(viewA.getState().updateEntryMessage("summary", "4 more")).toBe(true);
+    flush();
+
+    const row = entryById(backing, "summary");
+    expect(row?.message).toBe("4 more");
+    expect(row?.archivedAt).not.toBeNull();
+  });
+
+  it("does not bring back an entry a sibling dismissed when this view archives it", async () => {
+    const backing = installLocalStorage(
+      seed([makeEntry({ id: "doomed" }), makeEntry({ id: "kept", timestamp: NOW - 2 * HOUR })])
+    );
+
+    const viewA = await openView();
+    const viewB = await openView();
+
+    viewB.getState().dismissEntry("doomed");
+    flush();
+
+    viewA.getState().archiveEntry("doomed");
+    flush();
+
+    expect(readBlob(backing).state.entries.map((e) => e.id)).toEqual(["kept"]);
+  });
+
+  it("does not treat the session-only summarized flag as an edit", async () => {
+    const backing = installLocalStorage(seed([makeEntry({ id: "row" })]));
+
+    const viewA = await openView();
+    const viewB = await openView();
+
+    viewB.getState().markIdsRead(["row"]);
+    flush();
+
+    viewA.getState().markSummarized(["row"]);
+    viewA.getState().addEntry({ type: "info", message: "from A" });
+    flush();
+
+    expect(entryById(backing, "row")?.seenAsToast).toBe(true);
+    expect(viewA.getState().entries.find((e) => e.id === "row")?.summarized).toBe(true);
+  });
+
+  it("clears only what this view knew, keeping a sibling's newer entries and snoozes", async () => {
+    const known = makeEntry({ id: "known", correlationId: "known-thread" });
+    const backing = installLocalStorage(seed([known], { "known-thread": NOW + DAY }));
+
+    const viewA = await openView();
+    const viewB = await openView();
+
+    const siblingId = viewB.getState().addEntry({
+      type: "error",
+      message: "from B",
+      correlationId: "sibling-thread",
+    });
+    viewB.getState().snoozeThread("sibling-thread", NOW + DAY);
+    flush();
+
+    viewA.getState().clearAll();
+    flush();
+
+    const written = readBlob(backing);
+    expect(written.state.entries.map((e) => e.id)).toEqual([siblingId]);
+    expect(written.state.snoozedThreads).toEqual({ "sibling-thread": NOW + DAY });
+  });
+
+  it("keeps a sibling's renewed snooze when this view clears the expired one", async () => {
+    const threaded = makeEntry({ id: "threaded", correlationId: "thread-1" });
+    const backing = installLocalStorage(seed([threaded], { "thread-1": NOW + HOUR }));
+
+    const viewA = await openView();
+    const viewB = await openView();
+
+    viewB.getState().snoozeThread("thread-1", NOW + DAY);
+    flush();
+
+    vi.setSystemTime(NOW + 2 * HOUR);
+    viewA.getState().clearExpiredSnoozes();
+    flush();
+
+    expect(readBlob(backing).state.snoozedThreads).toEqual({ "thread-1": NOW + DAY });
+  });
+
   it("holds the 200-entry cap, keeping both views' new entries", async () => {
     const old = Array.from({ length: 200 }, (_, i) =>
       makeEntry({ id: `old-${i}`, timestamp: NOW - DAY - i * 1000 })
