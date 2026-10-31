@@ -88,12 +88,25 @@ describe("nightly-publish gates (#15587)", () => {
     );
   });
 
-  it("publishes only after every packaged smoke passed", () => {
+  it("installs the Linux runtime libraries and xvfb before the Linux smoke", () => {
+    const { index } = packagedSmoke(build, "startsWith(matrix.os, 'ubuntu')");
+    const install = indexOf(
+      build,
+      (s) => s.if === "startsWith(matrix.os, 'ubuntu')" && /apt-get install[\s\S]*\bxvfb\b/.test(s.run ?? "")
+    );
+    expect(install).toBeGreaterThanOrEqual(0);
+    expect(install).toBeLessThan(index);
+  });
+
+  it("publishes only after every gate passed", () => {
     expect(publish.needs).toEqual(expect.arrayContaining(["build", "smoke-x64"]));
-    // An `always()`/`!cancelled()` condition would publish past a failed smoke.
-    expect(publish.if).toBeUndefined();
+    // An `always()`/`!cancelled()` condition would publish past a failed gate.
+    for (const [name, job] of Object.entries(workflow.jobs)) {
+      expect(job.if, name).toBeUndefined();
+      expect(job["continue-on-error"], name).toBeUndefined();
+    }
     for (const step of allSteps) {
-      if (runs(step, "run-packaged-smoke.mjs")) {
+      if (runs(step, "run-packaged-smoke.mjs") || runs(step, "check:preload-backdoors")) {
         expect(step["continue-on-error"], step.name).toBeUndefined();
       }
     }

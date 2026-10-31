@@ -12,16 +12,17 @@ name: Nightly Publish
 # through the Microsoft Store in the release workflow), so only macOS + Linux
 # (x64 and arm64, each on its native runner and its own feed) build here.
 #
-# Two release-hygiene gates stay, because a nightly client that can't boot
-# can't auto-update its way out. They are not a test suite:
+# Two release-hygiene gates run before anything reaches the feed, because a
+# nightly client that can't boot can't auto-update its way out. They are not a
+# test suite:
 # - `check:preload-backdoors` right after the build, as in the release
 #   workflows. The cron builds whatever `develop` points at, whether or not its
 #   CI run passed.
 # - The packaged launch smoke (`scripts/run-packaged-smoke.mjs`, #9246) on
 #   every binary a feed offers: the macOS arm64 and universal bundles on the
 #   build runner, the x64 bundle natively on Intel in `smoke-x64`, and each
-#   Linux AppImage on its own runner. `publish` needs all of them, and is the
-#   only job that uploads anything (the generic provider makes electron-builder's
+#   Linux AppImage on its own runner. `publish` needs all of them and is the
+#   only job that writes to R2 (the generic provider makes electron-builder's
 #   `--publish always` a no-op), so a failed smoke leaves the channel stale.
 #
 # No failure alerting by design: the old nightly's rolling `nightly-failure`
@@ -238,7 +239,7 @@ jobs:
       - name: Smoke test (packaged macOS)
         if: startsWith(matrix.os, 'macos')
         shell: bash
-        timeout-minutes: 15
+        timeout-minutes: 30
         env:
           NODE_ENV: production
           ELECTRON_ENABLE_LOGGING: "1"
@@ -297,6 +298,10 @@ jobs:
           # FUSE is unavailable on GitHub runners, so extract rather than mount.
           # The smoke runner supplies the APPDIR the AppImage runtime would set.
           (cd "$work" && "$appimage" --appimage-extract > /dev/null)
+          if [ ! -x "$work/squashfs-root/AppRun" ]; then
+            echo "::error::Extracted AppRun missing or not executable"
+            exit 1
+          fi
           PACKAGED_BINARY="$work/squashfs-root/AppRun" \
             xvfb-run --auto-servernum node scripts/run-packaged-smoke.mjs
 
