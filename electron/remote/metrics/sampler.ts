@@ -34,6 +34,14 @@ import {
 /** How often a host samples and streams its summary. */
 export const HOST_METRICS_INTERVAL_MS = 5_000;
 
+/**
+ * How long one sample waits on what other services answer (agents, projects,
+ * agent CLIs, forges) before reporting it unknown. CPU and memory are this
+ * machine's own reads, each command already bounded by its timeout, so they
+ * never wait on a slow service.
+ */
+export const HOST_SAMPLE_BUDGET_MS = 2_000;
+
 export interface ObservedAgents {
   working: number;
   waiting: number;
@@ -172,6 +180,8 @@ export class HostMetricsSampler {
   } | null = null;
   private pageSize: number | null = null;
   private pageSizeProbes = 0;
+  /** Reads still running past an earlier sample's budget. */
+  private readonly lingering = new Set<string>();
 
   constructor(private readonly sources: HostSampleSources) {}
 
@@ -183,6 +193,11 @@ export class HostMetricsSampler {
     this.previousCpus = cpus;
     const readers: SampleReaders = s.beginSample?.() ?? s;
 
+    let budgetTimer: ReturnType<typeof setTimeout> | undefined;
+    const budget = new Promise<void>((resolve) => {
+      budgetTimer = setTimeout(resolve, HOST_SAMPLE_BUDGET_MS);
+      budgetTimer.unref?.();
+    });
     const [clusters, resources, agents, projects, agentClis, forges] = await Promise.all([
       this.cpuClusters(),
       settle<{ memory: HostMemoryFields; cgroupCpu?: CgroupCpu | null } | null>(
@@ -196,22 +211,25 @@ export class HostMetricsSampler {
         if (read === null) this.previousSwap = null;
         return read ?? { memory: NO_MEMORY };
       }),
-      // A failed read is unknown, not zero: zero working agents lets an update restart the host.
-      settle<ObservedAgents | null>(() => readers.agents(), null),
-      settle<{ projectCount: number | null; worktreeCount: number | null }>(
+      // A failed or late read is unknown, not zero: zero working agents lets an update restart the host.
+      this.withinBudget<ObservedAgents | null>("agents", budget, () => readers.agents(), null),
+      this.withinBudget<{ projectCount: number | null; worktreeCount: number | null }>(
+        "projects",
+        budget,
         () => readers.projects(),
-        {
-          projectCount: null,
-          worktreeCount: null,
-        }
+        { projectCount: null, worktreeCount: null }
       ),
-      settle(() => s.agentClis(), []),
-      // A failed read is unknown, never "not connected".
-      settle<HostForgeObservation[] | null | undefined>(
-        async () => (s.forges ? await s.forges() : undefined),
-        null
-      ),
-    ]);
+      this.withinBudget("agentClis", budget, () => s.agentClis(), []),
+      // A failed or late read is unknown, never "not connected".
+      s.forges
+        ? this.withinBudget<HostForgeObservation[] | null>(
+            "forges",
+            budget,
+            () => s.forges!(),
+            null
+          )
+        : undefined,
+    ]).finally(() => clearTimeout(budgetTimer));
 
     let driver: DriveLeaseHolder | null;
     try {
@@ -264,6 +282,24 @@ export class HostMetricsSampler {
       agentClis,
       ...(forges !== undefined ? { forges } : {}),
     };
+  }
+
+  /**
+   * A read's answer if it comes within this sample's budget, `unknown` if not.
+   * A late read runs on, so the caches behind it are warm for a later sample,
+   * but its answer is never taken by one: it would be older than that sample
+   * says. Until it settles the read isn't started again.
+   */
+  private withinBudget<T>(
+    key: string,
+    budget: Promise<void>,
+    read: () => Promise<T>,
+    unknown: T
+  ): Promise<T> {
+    if (this.lingering.has(key)) return Promise.resolve(unknown);
+    this.lingering.add(key);
+    const answer = settle(read, unknown).finally(() => this.lingering.delete(key));
+    return Promise.race([answer, budget.then(() => unknown)]);
   }
 
   private async darwinMemory() {

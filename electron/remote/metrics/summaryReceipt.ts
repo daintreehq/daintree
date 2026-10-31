@@ -1,10 +1,23 @@
 import type { HostMetricsSummary } from "../../../shared/types/remoteHosts.js";
 import { elapsedSince, type ElapsedStamp } from "../link/elapsed.js";
 import type { SummaryFrameTiming } from "../link/messages.js";
+import { DEFAULT_PING_INTERVAL_MS } from "../link/session.js";
 import { HOST_METRICS_INTERVAL_MS } from "./sampler.js";
 
 /** Three missed samples; past this the figures describe a machine that may have changed. */
 export const HOST_LOAD_STALE_MS = 3 * HOST_METRICS_INTERVAL_MS;
+
+/**
+ * How high a frame's age bound may read before its sample is stale. The bound
+ * runs from when the ping the frame names left this Shell, and the host names
+ * the newest ping it had, which can have left up to a ping interval (and its
+ * trip) before the host posted: a sample within {@link HOST_LOAD_STALE_MS} can
+ * bound that much higher without being any older. The allowance is for how the
+ * bound is taken, never for age: a sample this Shell knows is older than the
+ * limit is stale whatever its bound says, and a fresh one is still at most
+ * this old by this Shell's clocks alone.
+ */
+export const HOST_LOAD_BOUND_STALE_MS = HOST_LOAD_STALE_MS + DEFAULT_PING_INTERVAL_MS;
 
 /**
  * When this Shell came by a summary, on its own clocks, and what the frame
@@ -55,9 +68,10 @@ export interface SampleFreshness {
 }
 
 /**
- * Whether a sample can be trusted now. A bounded age decides it outright.
- * Without one, a sample the host or this Shell already knows is too old is
- * stale for its age. A host that times its frames but couldn't bound this
+ * Whether a sample can be trusted now. A bounded age decides it, against the
+ * limit that allows for the ping it is taken from, unless the host and this
+ * Shell already know the sample is older than the limit itself. Without a
+ * bound, a sample known to be too old is stale for its age. A host that times its frames but couldn't bound this
  * one, as before any ping reached it or after a delay longer than the pings
  * remembered, is clock-uncertain. Only an older host's timestamp is left as
  * a fallback, fresh when it is near this Shell's clock as it always was, and
@@ -71,12 +85,12 @@ export function sampleFreshness(
 ): SampleFreshness {
   const receivedAt = receipt?.receivedAt ?? null;
   const since = receipt ? elapsedSince(receipt.at, now) : 0;
+  const atLeast = (receipt?.hostAgeMs ?? 0) + since;
   if (receipt?.maxAgeMs != null) {
     const ageMs = receipt.maxAgeMs + since;
-    const stale = ageMs > HOST_LOAD_STALE_MS;
+    const stale = ageMs > HOST_LOAD_BOUND_STALE_MS || atLeast > HOST_LOAD_STALE_MS;
     return { ageMs, stale, staleReason: stale ? "age-limit" : null, receivedAt };
   }
-  const atLeast = (receipt?.hostAgeMs ?? 0) + since;
   if (atLeast > HOST_LOAD_STALE_MS) {
     return { ageMs: null, stale: true, staleReason: "age-limit", receivedAt };
   }

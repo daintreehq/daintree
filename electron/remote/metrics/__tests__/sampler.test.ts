@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { HostMetricsSampler, type HostSampleSources } from "../sampler.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { HOST_SAMPLE_BUDGET_MS, HostMetricsSampler, type HostSampleSources } from "../sampler.js";
 import { MAX_HOST_SUMMARY_DRIVERS } from "../../../../shared/types/remoteHosts.js";
 
 function sources(overrides: Partial<HostSampleSources> = {}): HostSampleSources {
@@ -496,6 +496,93 @@ describe("HostMetricsSampler", () => {
     }
     // Linux never asks; the Mac asks once per sample until it gives up.
     expect(probed.filter((args) => args.includes("hw.perflevel0.name"))).toHaveLength(2);
+  });
+
+  describe("sample budget (#15735)", () => {
+    afterEach(() => vi.useRealTimers());
+
+    const after = <T>(ms: number, value: T) =>
+      new Promise<T>((resolve) => setTimeout(() => resolve(value), ms));
+
+    it("reports what other services don't answer within the budget as unknown, holding nothing else back", async () => {
+      vi.useFakeTimers();
+      const sampler = new HostMetricsSampler(
+        sources({
+          readText: async (path) =>
+            path === "/proc/meminfo" ? "MemTotal: 1000 kB\nMemAvailable: 400 kB\n" : null,
+          agents: () => after(5_000, { working: 8, waiting: 0, idle: 0 }),
+          projects: () => after(5_000, { projectCount: 4, worktreeCount: 9 }),
+          agentClis: () => after(5_000, [{ agentId: "claude", version: "2.1.0" }]),
+          forges: () => after(5_000, []),
+        })
+      );
+      let summary: Awaited<ReturnType<HostMetricsSampler["sample"]>> | null = null;
+      void sampler.sample().then((done) => (summary = done));
+      await vi.advanceTimersByTimeAsync(HOST_SAMPLE_BUDGET_MS - 1);
+      expect(summary).toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(summary).toMatchObject({
+        memoryTotalBytes: 1000 * 1024,
+        memoryUsedBytes: 600 * 1024,
+        cpuLogicalCoreCount: 1,
+        agentsObserved: null,
+        projectCount: null,
+        worktreeCount: null,
+        agentClis: [],
+        forges: null,
+      });
+    });
+
+    it("takes an answer that comes within the budget", async () => {
+      vi.useFakeTimers();
+      const sampler = new HostMetricsSampler(
+        sources({
+          agents: () => after(HOST_SAMPLE_BUDGET_MS - 1, { working: 8, waiting: 0, idle: 0 }),
+        })
+      );
+      const sampled = sampler.sample();
+      await vi.advanceTimersByTimeAsync(HOST_SAMPLE_BUDGET_MS - 1);
+      await expect(sampled).resolves.toMatchObject({
+        agentsObserved: { working: 8, waiting: 0, idle: 0 },
+      });
+    });
+
+    it("never starts a late read again while it runs, nor hands its answer to a later sample", async () => {
+      vi.useFakeTimers();
+      let calls = 0;
+      const sampler = new HostMetricsSampler(
+        sources({
+          agents: () => {
+            calls += 1;
+            return calls === 1
+              ? after(6_000, { working: 1, waiting: 0, idle: 0 })
+              : Promise.resolve({ working: 8, waiting: 0, idle: 0 });
+          },
+        })
+      );
+      const first = sampler.sample();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(first).resolves.toMatchObject({ agentsObserved: null });
+      // Still running from the first sample: neither joined nor started twice.
+      const second = sampler.sample();
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(second).resolves.toMatchObject({ agentsObserved: null });
+      expect(calls).toBe(1);
+      // Settled at 6 s with an old tally, which no sample reports.
+      await vi.advanceTimersByTimeAsync(1_000);
+      const third = sampler.sample();
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(third).resolves.toMatchObject({
+        agentsObserved: { working: 8, waiting: 0, idle: 0 },
+      });
+      expect(calls).toBe(2);
+    });
+
+    it("leaves no budget timer behind", async () => {
+      vi.useFakeTimers();
+      await new HostMetricsSampler(sources()).sample();
+      expect(vi.getTimerCount()).toBe(0);
+    });
   });
 
   it("keeps sampling when one source throws", async () => {
