@@ -30,6 +30,7 @@ import { evictDeadView, getAvailableMemoryMb } from "./ProjectViewEvictionContro
 import { deliverPowerPolicy } from "./powerPolicyDelivery.js";
 import { logError, logWarn } from "../utils/logger.js";
 import { isWebviewSrcAllowed } from "./webviewSrcGate.js";
+import { gateHtmlPreviewWebviewAttach } from "../setup/htmlPreviewSession.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { ViewEntry } from "./ProjectViewManagerTypes.js";
 import { rendererReloadNotice } from "./rendererReloadNotice.js";
@@ -90,6 +91,17 @@ export function setupViewHandlers(
     webPreferences: Electron.WebPreferences,
     params: Record<string, string>
   ) => {
+    const preview = gateHtmlPreviewWebviewAttach(webPreferences, params);
+    if (preview !== "not-preview") {
+      if (preview === "refused") {
+        console.warn(
+          `[ProjectViewManager] Blocked HTML preview webview: partition=${params.partition}`
+        );
+        event.preventDefault();
+      }
+      return;
+    }
+
     const isAllowedLocalhostUrl = isWebviewSrcAllowed(wc.id, params.src);
     const partition = params.partition ?? "";
     const isValidPartition =

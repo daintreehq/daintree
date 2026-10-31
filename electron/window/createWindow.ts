@@ -56,6 +56,7 @@ import { attachRendererConsoleCapture } from "./rendererConsoleCapture.js";
 import { attachRendererEditContextMenu } from "./rendererEditContextMenu.js";
 import { markPerformance } from "../utils/performance.js";
 import { registerProtocolsForSession, getDistPath } from "../setup/protocols.js";
+import { gateHtmlPreviewWebviewAttach } from "../setup/htmlPreviewSession.js";
 import { isDemoMode, isSmokeTest } from "../setup/environment.js";
 import { isE2EDeferRendererLoad, isE2EMode } from "../setup/runtimeFlags.js";
 import { SMOKE_BOOT_TIMEOUT_MS } from "../services/smokeTest.js";
@@ -511,6 +512,15 @@ export function setupBrowserWindow(
 
   // Harden webview security — on the app view's webContents
   appWebContents.on("will-attach-webview", (event, webPreferences, params) => {
+    const preview = gateHtmlPreviewWebviewAttach(webPreferences, params);
+    if (preview !== "not-preview") {
+      if (preview === "refused") {
+        console.warn(`[MAIN] Blocked HTML preview webview: partition=${params.partition}`);
+        event.preventDefault();
+      }
+      return;
+    }
+
     const isAllowedLocalhostUrl = isWebviewSrcAllowed(appWebContents.id, params.src);
     const partition = params.partition ?? "";
     const isValidPartition =

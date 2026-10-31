@@ -16,13 +16,17 @@ import {
  * on sub-resource responses), so sibling css/js/img assets keep the strict leaf
  * headers.
  *
- * The iframe element also sets sandbox="allow-scripts" (opaque origin, no
- * allow-same-origin); the `sandbox allow-scripts` directive here is
- * defense-in-depth if that attribute is ever dropped. `connect-src 'none'`
- * blocks fetch/XHR/WebSocket back to the scheme; the document can still execute
- * its own scripts and tag-load its own assets. 'unsafe-inline'/'unsafe-eval'
- * are harmless inside a fully isolated, network-less opaque origin and let
- * real-world report/chart pages run.
+ * The document is the top frame of its own `<webview>` guest, so `sandbox
+ * allow-scripts` here is what gives it an opaque origin (no allow-same-origin,
+ * no popups, no forms). `connect-src 'none'` blocks fetch/XHR/WebSocket; the
+ * document can still execute its own scripts and tag-load its own assets.
+ * 'unsafe-inline'/'unsafe-eval' let real-world report/chart pages run.
+ *
+ * CSP does not reach WebRTC: connect-src doesn't govern it, and Chromium 148
+ * ignores the `webrtc` directive. Peer connections are cut off by the preview
+ * session instead (htmlPreviewSession.ts): no UDP by WebRTC policy, and every
+ * TCP connection refused by its proxy. A TURN hostname is still looked up in
+ * DNS before the refused dial; no Electron API reaches that lookup.
  */
 function buildDaintreeHtmlDocHeaders(token: string, contentLength: number): Record<string, string> {
   const self = `daintree-html://${token}`;
@@ -35,9 +39,6 @@ function buildDaintreeHtmlDocHeaders(token: string, contentLength: number): Reco
     `font-src ${self} data:`,
     `media-src ${self} data: blob:`,
     "connect-src 'none'",
-    // WebRTC is not covered by connect-src, so block it explicitly — otherwise a
-    // rendered report could exfiltrate via an attacker-controlled STUN/TURN host.
-    "webrtc 'block'",
     "worker-src 'none'",
     "frame-src 'none'",
     "object-src 'none'",
@@ -48,12 +49,6 @@ function buildDaintreeHtmlDocHeaders(token: string, contentLength: number): Reco
     "Content-Type": "text/html; charset=utf-8",
     "Content-Length": String(contentLength),
     "Content-Security-Policy": csp,
-    "Cross-Origin-Resource-Policy": "cross-origin",
-    // The trusted renderer document is COEP `credentialless` (app:// headers +
-    // vite dev server), and a COEP document may only embed frames whose own
-    // document response carries a compatible COEP. Without this the iframe
-    // navigation dies with ERR_BLOCKED_BY_RESPONSE — a blank white frame.
-    "Cross-Origin-Embedder-Policy": "credentialless",
     "X-Content-Type-Options": "nosniff",
     // Belt-and-suspenders egress limits: no referrer leakage on any request the
     // page makes, and no speculative DNS lookups of hostnames in the markup.

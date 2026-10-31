@@ -45,6 +45,13 @@ const loggerMock = vi.hoisted(() => ({
 }));
 vi.mock("../../utils/logger.js", () => loggerMock);
 
+const previewGate = vi.hoisted(() => ({
+  verdict: "not-preview" as "not-preview" | "allowed" | "refused",
+}));
+vi.mock("../../setup/htmlPreviewSession.js", () => ({
+  gateHtmlPreviewWebviewAttach: vi.fn(() => previewGate.verdict),
+}));
+
 import {
   isWebviewSrcAllowed,
   setRemoteWebviewSrcGate,
@@ -510,8 +517,53 @@ function setup() {
   setupViewHandlers(host, { webContents: wc } as never, entry);
   const fire = (reason: string, exitCode: number) =>
     listeners.get("render-process-gone")!({}, { reason, exitCode });
-  return { fire };
+  const attach = (params: Record<string, string>, webPreferences: Electron.WebPreferences = {}) => {
+    const preventDefault = vi.fn();
+    listeners.get("will-attach-webview")!({ preventDefault }, webPreferences, params);
+    return { refused: preventDefault.mock.calls.length > 0, webPreferences };
+  };
+  return { fire, attach };
 }
+
+describe("ProjectViewHandlers webview attach (#15793)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    previewGate.verdict = "not-preview";
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  it("attaches a preview the preview gate allows, without the localhost rule refusing it", () => {
+    previewGate.verdict = "allowed";
+    const { attach } = setup();
+
+    const result = attach({
+      src: "daintree-html://tok/index.html",
+      partition: "daintree-html-preview",
+    });
+
+    expect(result.refused).toBe(false);
+  });
+
+  it("refuses a preview the preview gate refuses", () => {
+    previewGate.verdict = "refused";
+    const { attach } = setup();
+
+    expect(
+      attach({ src: "daintree-html://tok/index.html", partition: "persist:browser-x" }).refused
+    ).toBe(true);
+  });
+
+  it("keeps the localhost rule for everything that isn't a preview", () => {
+    const { attach } = setup();
+
+    expect(
+      attach({ src: "http://localhost:3000/", partition: "persist:browser-default" }).refused
+    ).toBe(false);
+    expect(
+      attach({ src: "https://example.com/", partition: "persist:browser-default" }).refused
+    ).toBe(true);
+  });
+});
 
 describe("ProjectViewHandlers render-process-gone recording (#12884)", () => {
   beforeEach(() => {

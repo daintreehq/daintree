@@ -95,27 +95,15 @@ describe("Daintree app CSP", () => {
     });
   });
 
-  describe("daintree-html: preview scheme in frame-src (#11191)", () => {
-    // The file panel mounts a `daintree-html://<token>/…` iframe to render HTML
-    // files. Without the scheme in frame-src the iframe cannot navigate at all;
-    // the framed document's own scripts/assets are governed by the per-document
-    // CSP the protocol handler serves, never this one.
-    it("allows daintree-html: in frame-src in production", () => {
-      const frameSrc = getDaintreeAppProdCSP().match(/frame-src ([^;]*);/)?.[1];
-      expect(frameSrc).toContain("daintree-html:");
-    });
-
-    it("allows daintree-html: in frame-src in development", () => {
-      const frameSrc = getDaintreeAppDevCSP().match(/frame-src ([^;]*);/)?.[1];
-      expect(frameSrc).toContain("daintree-html:");
-    });
-
-    it("does not add daintree-html: to script-src or connect-src", () => {
-      // The scheme is frame-only; the sandboxed document is isolated, so the
-      // trusted shell must never gain script/connect access to it.
-      const csp = getDaintreeAppProdCSP();
-      expect(csp.match(/script-src ([^;]*);/)?.[1]).not.toContain("daintree-html:");
-      expect(csp.match(/connect-src ([^;]*);/)?.[1]).not.toContain("daintree-html:");
+  describe("daintree-html: stays out of the shell CSP (#15793)", () => {
+    // HTML previews render in their own <webview> session, whose WebRTC
+    // lockdown an iframe in the app could never have. The shell must not be
+    // able to frame, script, or fetch the preview scheme in either mode.
+    it.each([
+      ["production", getDaintreeAppProdCSP],
+      ["development", getDaintreeAppDevCSP],
+    ])("no directive carries daintree-html: in %s", (_label, build) => {
+      expect(build()).not.toContain("daintree-html:");
     });
   });
 
@@ -158,7 +146,7 @@ describe("Daintree app CSP", () => {
       // Adding a scheme must widen the directive, not replace what was there.
       const frameSrc = frameSrcOf(getDaintreeAppProdCSP());
       expect(frameSrc).toContain("'self'");
-      expect(frameSrc).toContain("daintree-html:");
+      expect(frameSrc).toContain("http://localhost:*");
     });
   });
 
