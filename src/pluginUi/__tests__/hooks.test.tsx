@@ -704,6 +704,75 @@ describe("useDisclosure", () => {
     expect(onOpenChange).toHaveBeenCalledWith(true);
     expect(result.current.open).toBe(false);
   });
+
+  it("asks a controlled owner again after it declines a close", () => {
+    const onOpenChange = vi.fn();
+    const { result, rerender } = renderHook(() => useDisclosure({ open: true, onOpenChange }));
+    act(() => result.current.onClose());
+    rerender();
+    act(() => result.current.onClose());
+    expect(onOpenChange.mock.calls).toEqual([[false], [false]]);
+    act(() => result.current.onOpenChange(false));
+    expect(onOpenChange).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks a controlled owner again after it declines an open", () => {
+    const onOpenChange = vi.fn();
+    const { result, rerender } = renderHook(() => useDisclosure({ open: false, onOpenChange }));
+    act(() => result.current.onOpen());
+    rerender();
+    act(() => result.current.onOpenChange(true));
+    expect(onOpenChange.mock.calls).toEqual([[true], [true]]);
+  });
+
+  it("toggles from what a controlled owner rendered, not from a declined request", () => {
+    const onOpenChange = vi.fn();
+    const { result, rerender } = renderHook(() => useDisclosure({ open: false, onOpenChange }));
+    act(() => result.current.onToggle());
+    rerender();
+    act(() => result.current.onToggle());
+    expect(onOpenChange.mock.calls).toEqual([[true], [true]]);
+  });
+
+  it("asks again once the handler that was declined has returned, without a re-render", async () => {
+    const onOpenChange = vi.fn();
+    const { result } = renderHook(() => useDisclosure({ open: false, onOpenChange }));
+    act(() => result.current.onOpen());
+    await act(async () => {});
+    act(() => result.current.onOpen());
+    expect(onOpenChange.mock.calls).toEqual([[true], [true]]);
+  });
+
+  it("composes several requests to a controlled owner in one handler", () => {
+    const onOpenChange = vi.fn();
+    const { result } = renderHook(() => useDisclosure({ open: false, onOpenChange }));
+    act(() => {
+      result.current.onOpen();
+      result.current.onClose();
+      result.current.onClose();
+    });
+    expect(onOpenChange.mock.calls).toEqual([[true], [false]]);
+    onOpenChange.mockClear();
+    act(() => {
+      result.current.onToggle();
+      result.current.onToggle();
+    });
+    expect(onOpenChange.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it("follows an owner that accepts, then compares against the new value", () => {
+    const onOpenChange = vi.fn();
+    const { result, rerender } = renderHook(
+      ({ open }) => useDisclosure({ open, onOpenChange }),
+      { initialProps: { open: false } }
+    );
+    act(() => result.current.onOpen());
+    rerender({ open: true });
+    expect(result.current.open).toBe(true);
+    act(() => result.current.onOpen());
+    act(() => result.current.onToggle());
+    expect(onOpenChange.mock.calls).toEqual([[true], [false]]);
+  });
 });
 
 describe("useDebouncedValue", () => {
