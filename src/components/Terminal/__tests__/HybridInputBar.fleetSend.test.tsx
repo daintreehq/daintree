@@ -7,6 +7,9 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const submitMock = vi.hoisted(() => vi.fn<(id: string, text: string) => Promise<void>>());
+const submitWithImagesMock = vi.hoisted(() =>
+  vi.fn<(id: string, text: string, imagePaths: string[]) => Promise<void>>()
+);
 // When set, the composer's fleet send is held here instead of broadcast, so a
 // test can settle it at an exact point.
 const heldFleetSend = vi.hoisted(() => ({
@@ -32,6 +35,8 @@ vi.mock("@/clients", async (importOriginal) => {
     terminalClient: {
       ...actual.terminalClient,
       submit: (id: string, text: string) => submitMock(id, text),
+      submitWithImages: (id: string, text: string, imagePaths: string[]) =>
+        submitWithImagesMock(id, text, imagePaths),
     },
   };
 });
@@ -54,6 +59,7 @@ import {
 } from "@/store/fleetTargetOverridesStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { HybridInputBar, type HybridInputBarProps } from "../HybridInputBar";
+import { addImageChip } from "../inputEditorExtensions";
 import { composerUploadSurface, trackUpload } from "../uploads/pendingUploads";
 
 const WT_ID = "/repo/wt";
@@ -120,6 +126,7 @@ beforeEach(() => {
   __resetFleetTargetOverridesStoreForTesting();
   useFleetRunStore.getState()._reset();
   submitMock.mockReset().mockResolvedValue(undefined);
+  submitWithImagesMock.mockReset().mockResolvedValue(undefined);
   heldFleetSend.capture = null;
   Object.defineProperty(window, "electron", {
     configurable: true,
@@ -449,5 +456,152 @@ describe("HybridInputBar's fleet send with context tokens (#14953)", () => {
 
     await type(" please");
     expect(document.querySelector("[data-send-refused-caption]")).toBeNull();
+  });
+});
+
+describe("HybridInputBar's fleet send with image chips (#15600)", () => {
+  const IMAGE = "/tmp/daintree/shot.png";
+
+  async function pasteImage(view: EditorView, at = view.state.doc.length): Promise<void> {
+    await act(async () => {
+      view.dispatch({
+        changes: { from: at, insert: IMAGE },
+        effects: addImageChip.of({
+          from: at,
+          to: at + IMAGE.length,
+          filePath: IMAGE,
+          thumbnailUrl: "data:image/png;base64,",
+        }),
+        selection: { anchor: at + IMAGE.length },
+      });
+    });
+  }
+
+  const sentWithImages = () =>
+    submitWithImagesMock.mock.calls
+      .map(([id, text, paths]) => ({ id, text, paths }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+
+  it("attaches the draft's images on every armed pane", async () => {
+    const { view, type, pressEnter, settle, onSend } = await mount();
+    await type("look at ");
+    await pasteImage(view);
+    await type(" please");
+    await pressEnter();
+    await settle();
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(submitMock).not.toHaveBeenCalled();
+    expect(sentWithImages()).toEqual([
+      { id: "term-1", text: `look at ${IMAGE} please`, paths: [IMAGE] },
+      { id: "term-2", text: `look at ${IMAGE} please`, paths: [IMAGE] },
+    ]);
+    expect(view.state.doc.toString()).toBe("");
+  });
+
+  it("attaches nothing for a pane whose own text leaves the image out", async () => {
+    useFleetTargetOverridesStore.getState().setPayloadOverride("term-2", "no picture for you");
+    const { view, type, pressEnter, settle } = await mount();
+    await type("look at ");
+    await pasteImage(view);
+    await pressEnter();
+    await settle();
+
+    expect(sentWithImages()).toEqual([{ id: "term-1", text: `look at ${IMAGE}`, paths: [IMAGE] }]);
+    expect(submitMock.mock.calls).toEqual([["term-2", "no picture for you"]]);
+  });
+
+  it("keeps the draft and says why when the image would reach another host", async () => {
+    useFleetArmingStore.getState().armCrossHostTarget({
+      key: "host-fleet:studio:r-1",
+      hostId: "studio",
+      hostName: "Studio",
+      terminalId: "r-1",
+      title: "remote",
+    });
+    const remoteSubmit = vi.fn().mockResolvedValue(undefined);
+    Object.assign(window.electron, { hostMetrics: { submitFleet: remoteSubmit } });
+    const { view, type, pressEnter, settle, draft, onSend } = await mount();
+    await type("look at ");
+    await pasteImage(view);
+    await pressEnter();
+    await settle();
+
+    expect(remoteSubmit).not.toHaveBeenCalled();
+    expect(submitMock).not.toHaveBeenCalled();
+    expect(submitWithImagesMock).not.toHaveBeenCalled();
+    expect(onSend).not.toHaveBeenCalled();
+    expect(view.state.doc.toString()).toBe(`look at ${IMAGE}`);
+    expect(draft("term-1")).toBe(`look at ${IMAGE}`);
+    expect(document.querySelector("[data-send-refused-caption]")?.textContent).toContain(
+      "another host"
+    );
+  });
+
+  it("sends when the other host's agent is given text without the image", async () => {
+    const remote = "host-fleet:studio:r-1";
+    useFleetArmingStore.getState().armCrossHostTarget({
+      key: remote,
+      hostId: "studio",
+      hostName: "Studio",
+      terminalId: "r-1",
+      title: "remote",
+    });
+    useFleetTargetOverridesStore.getState().setPayloadOverride(remote, "described in words");
+    const remoteSubmit = vi.fn().mockResolvedValue(undefined);
+    Object.assign(window.electron, { hostMetrics: { submitFleet: remoteSubmit } });
+    const { view, type, pressEnter, settle } = await mount();
+    await type("look at ");
+    await pasteImage(view);
+    await pressEnter();
+    await settle();
+
+    expect(remoteSubmit).toHaveBeenCalledTimes(1);
+    expect(remoteSubmit.mock.calls[0]![0]).toMatchObject({ text: "described in words" });
+    expect(sentWithImages().map(({ id, paths }) => [id, paths])).toEqual([
+      ["term-1", [IMAGE]],
+      ["term-2", [IMAGE]],
+    ]);
+  });
+
+  it("attaches the draft's images to a slash command picked from the menu", async () => {
+    const { view, type, pressEnter, settle, onSend } = await mount();
+    await type("/compa");
+    await pasteImage(view, view.state.doc.length);
+    await act(async () => {
+      view.dispatch({ changes: { from: 6, insert: " " }, selection: { anchor: 6 } });
+    });
+    await settle();
+    expect(document.querySelector('[role="option"]')?.textContent).toContain("/compact");
+
+    await pressEnter();
+    await settle();
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(submitMock).not.toHaveBeenCalled();
+    expect(sentWithImages()).toEqual([
+      { id: "term-1", text: `/compact ${IMAGE}`, paths: [IMAGE] },
+      { id: "term-2", text: `/compact ${IMAGE}`, paths: [IMAGE] },
+    ]);
+  });
+
+  it("attaches the draft's images to a slash command picked from the menu on this pane alone", async () => {
+    useFleetArmingStore.getState().disarmId("term-2");
+    const { view, type, pressEnter, settle, onSend } = await mount();
+    await type("/compa");
+    await pasteImage(view, view.state.doc.length);
+    await act(async () => {
+      view.dispatch({ changes: { from: 6, insert: " " }, selection: { anchor: 6 } });
+    });
+    await settle();
+
+    await pressEnter();
+    await settle();
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onSend.mock.calls[0]![0]).toMatchObject({
+      text: `/compact ${IMAGE}`,
+      imagePaths: [IMAGE],
+    });
   });
 });
