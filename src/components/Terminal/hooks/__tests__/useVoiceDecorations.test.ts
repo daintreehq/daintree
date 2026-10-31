@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { useLayoutEffect } from "react";
 import { act, renderHook } from "@testing-library/react";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -9,6 +10,7 @@ import {
   interimWidgetField,
   pendingAIField,
   revealDictationStart,
+  setDictationFollow,
   VOICE_CARET_LEVEL_PROPERTY,
   voiceCaret,
 } from "../../inputEditorExtensions";
@@ -23,7 +25,8 @@ vi.mock("@/store", async () => {
 
 const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
 const { useTerminalInputStore } = await import("@/store/terminalInputStore");
-const { useDictationRangeStore } = await import("@/store/dictationRangeStore");
+const { useDictationRangeStore, subscribeDictationRangeTracking } =
+  await import("@/store/dictationRangeStore");
 const { useVoiceDecorations } = await import("../useVoiceDecorations");
 const { claimWaitingSend } = await import("@/services/voiceDraftSend");
 
@@ -203,7 +206,67 @@ describe("useVoiceDecorations", () => {
     view.destroy();
   });
 
-  it("keeps working when a send empties the draft while the session is still finishing (#15716)", () => {
+  it("follows nothing into the words a send took while the session finishes (#15716)", () => {
+    onTestFinished(subscribeDictationRangeTracking());
+    const sent = "x".repeat(389);
+    useTerminalInputStore.getState().setDraftInput(PANEL, sent);
+    // Every followed end the hook hands the editor, and the text it lands in.
+    const ends: Array<{ end: number; length: number }> = [];
+    const view = new EditorView({
+      parent: document.createElement("div"),
+      state: EditorState.create({
+        doc: sent,
+        extensions: [
+          interimWidgetField,
+          pendingAIField,
+          dictationFollowField,
+          voiceCaret,
+          EditorView.updateListener.of((update) => {
+            for (const tr of update.transactions) {
+              for (const effect of tr.effects) {
+                if (effect.is(setDictationFollow) && effect.value.end !== undefined) {
+                  ends.push({ end: effect.value.end, length: tr.newDoc.length });
+                }
+              }
+            }
+          }),
+        ],
+      }),
+    });
+    const editorViewRef = { current: view };
+    // The send goes between a render and its effects: it empties the editor
+    // and the draft after the render read the stores.
+    let sendOnCommit = false;
+    renderHook(() => {
+      useVoiceDecorations({ terminalId: PANEL, editorViewRef });
+      const status = useVoiceRecordingStore((s) => s.status);
+      useLayoutEffect(() => {
+        if (!sendOnCommit) return;
+        sendOnCommit = false;
+        view.dispatch({ changes: { from: 0, to: view.state.doc.length } });
+        useTerminalInputStore.getState().setDraftInput(PANEL, "");
+      }, [status]);
+    });
+    startDictation();
+    const target = { sessionId: "s1", panelId: PANEL, projectId: undefined };
+    act(() => useDictationRangeStore.getState().setAnchor(target, { from: 312, to: 312 }));
+    expect(view.state.field(dictationFollowField)).toEqual({ session: "s1", end: 312 });
+
+    sendOnCommit = true;
+    act(() => useVoiceRecordingStore.getState().setStatus("finishing"));
+
+    expect(view.state.doc.toString()).toBe("");
+    expect(useDictationRangeStore.getState().getAnchor(target)).toBeNull();
+    expect(ends.filter(({ end, length }) => end > length)).toEqual([]);
+    // The drain's last words land in the emptied composer, and the session ends.
+    act(() => view.dispatch({ changes: { from: 0, insert: "next" } }));
+    expect(view.state.doc.toString()).toBe("next");
+    act(() => useVoiceRecordingStore.getState().finishSession());
+    expect(view.state.field(dictationFollowField).session).toBeNull();
+    view.destroy();
+  });
+
+  it("ignores an anchor that doesn't fit the draft it is read with (#15716)", () => {
     const sent = "x".repeat(389);
     useTerminalInputStore.getState().setDraftInput(PANEL, sent);
     const view = mount(sent);
@@ -221,7 +284,7 @@ describe("useVoiceDecorations", () => {
     });
     // A position taken in the text that went, arriving after the send.
     act(() => useDictationRangeStore.getState().setAnchor(target, { from: 312, to: 312 }));
-    expect(view.state.field(dictationFollowField).end).not.toBe(312);
+    expect(view.state.field(dictationFollowField)).toEqual({ session: "s1", end: 0 });
 
     // The next words into the emptied composer.
     act(() => {
