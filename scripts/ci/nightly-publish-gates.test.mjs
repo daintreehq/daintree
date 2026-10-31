@@ -92,7 +92,9 @@ describe("nightly-publish gates (#15587)", () => {
     const { index } = packagedSmoke(build, "startsWith(matrix.os, 'ubuntu')");
     const install = indexOf(
       build,
-      (s) => s.if === "startsWith(matrix.os, 'ubuntu')" && /apt-get install[\s\S]*\bxvfb\b/.test(s.run ?? "")
+      (s) =>
+        s.if === "startsWith(matrix.os, 'ubuntu')" &&
+        /apt-get install[\s\S]*\bxvfb\b/.test(s.run ?? "")
     );
     expect(install).toBeGreaterThanOrEqual(0);
     expect(install).toBeLessThan(index);
@@ -115,7 +117,8 @@ describe("nightly-publish gates (#15587)", () => {
   it("uploads to R2 only from the publish job", () => {
     for (const [name, job] of Object.entries(workflow.jobs)) {
       if (name === "publish") continue;
-      for (const step of job.steps) expect(runs(step, "aws s3"), `${name}: ${step.name}`).toBe(false);
+      for (const step of job.steps)
+        expect(runs(step, "aws s3"), `${name}: ${step.name}`).toBe(false);
     }
   });
 
