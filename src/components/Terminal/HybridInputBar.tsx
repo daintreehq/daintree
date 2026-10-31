@@ -82,6 +82,7 @@ import {
 } from "./hooks/useVoiceWaitSubmit";
 import {
   COMPOSER_BORDER_CAPTION_CLASS,
+  VOICE_SEND_REOPENED_CAPTION,
   VoiceSubmitProgress,
   correctionStreamShare,
   voiceSubmitWaitCaption,
@@ -390,6 +391,7 @@ const VOICE_SUBMIT_OUTCOME_STATUS: Record<VoiceSubmitOutcome["kind"], string> = 
   sending: "Sending…",
   sent: "Sent",
   cancelled: "Send cancelled",
+  reopened: "Send reopened. This dictation adds to it, and the next send takes it all.",
   held: SEND_HELD_STATUS,
 };
 const VOICE_SEND_UNCLEANED_STATUS: Record<VoiceSendCleanup, string> = {
@@ -1502,6 +1504,27 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     ) {
       setAnnouncedVoiceAttempt(voiceSubmitAttempt);
     }
+    // A send the dictation started here reopened says so while that dictation
+    // is under way, its start included: the earlier words are still to go,
+    // with the new ones (#15703). Once it ends, the draft shows what is left.
+    const isVoicePendingHere = useVoiceRecordingStore(
+      (s) => s.pendingTarget?.panelId === voiceId && !(thisMachineOff && !voiceTarget)
+    );
+    const isDictatingHere = isVoiceActiveForPanel || isVoicePendingHere;
+    const reopenedVoiceAttempt =
+      voiceSubmitOutcome?.kind === "reopened" ? voiceSubmitOutcome.attempt : null;
+    const [retiredReopenAttempt, setRetiredReopenAttempt] = useState<number | null>(null);
+    if (
+      reopenedVoiceAttempt !== null &&
+      reopenedVoiceAttempt !== retiredReopenAttempt &&
+      !isDictatingHere
+    ) {
+      setRetiredReopenAttempt(reopenedVoiceAttempt);
+    }
+    const isSendReopened =
+      reopenedVoiceAttempt !== null &&
+      reopenedVoiceAttempt !== retiredReopenAttempt &&
+      isDictatingHere;
     // The wait's progress and its receipt own the shell's top border while on
     // screen, so the focus ring, which would run through the caption, waits.
     const [isVoiceSubmitPresenting, setIsVoiceSubmitPresenting] = useState(false);
@@ -1581,6 +1604,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       !showSendRefusedCaption &&
       !showScratchRefusalCaption &&
       !showFileReferenceCaption;
+    const showSendReopenedCaption =
+      isSendReopened &&
+      !isVoiceSubmitting &&
+      !isVoiceSubmitPresenting &&
+      !showVoiceSessionCaption &&
+      !showSendRefusedCaption &&
+      !showScratchRefusalCaption &&
+      !showFileReferenceCaption;
 
     const voiceSlotRef = useRef<HTMLSpanElement>(null);
     const voiceSlotFocusedRef = useRef(false);
@@ -1598,6 +1629,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // unannounced, as its receipt does.
     const voiceSendUncleaned =
       voiceSubmitOutcome?.kind === "sent" ? voiceSubmitOutcome.cleanup : undefined;
+    // A reopened send is told however short its wait was, for as long as its
+    // note shows: nothing else says the earlier words haven't gone (#15703).
     const voiceSubmitStatus = voiceSubmitWait
       ? showVoiceSubmitStatus
         ? voiceSubmitWait.phase === "polishing"
@@ -1606,9 +1639,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         : ""
       : voiceSendUncleaned
         ? VOICE_SEND_UNCLEANED_STATUS[voiceSendUncleaned]
-        : voiceSubmitOutcome?.attempt === announcedVoiceAttempt
-          ? VOICE_SUBMIT_OUTCOME_STATUS[voiceSubmitOutcome.kind]
-          : "";
+        : voiceSubmitOutcome?.kind === "reopened"
+          ? isSendReopened
+            ? VOICE_SUBMIT_OUTCOME_STATUS.reopened
+            : ""
+          : voiceSubmitOutcome?.attempt === announcedVoiceAttempt
+            ? VOICE_SUBMIT_OUTCOME_STATUS[voiceSubmitOutcome.kind]
+            : "";
     // Heard from whichever host holds the editor: a send from the Expanded
     // Editor waits there, and a live region outside its modal goes unheard.
     const voiceSubmitAnnouncer = (
@@ -1634,6 +1671,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           className="ml-auto mr-3 min-w-0 truncate text-xs text-text-secondary"
         >
           {unresolvedFileReferencesCaption(fileReferenceNote.references)}
+        </span>
+      ) : isSendReopened ? (
+        <span aria-hidden="true" className="ml-auto mr-3 text-xs text-text-secondary">
+          {VOICE_SEND_REOPENED_CAPTION}
         </span>
       ) : isSendRefused ? (
         <span aria-hidden="true" className="ml-auto mr-3 text-xs text-text-secondary">
@@ -2328,6 +2369,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 className={COMPOSER_BORDER_CAPTION_CLASS}
               >
                 {voiceSessionStatus}
+              </div>
+            )}
+            {showSendReopenedCaption && (
+              <div
+                aria-hidden="true"
+                data-send-reopened-caption=""
+                className={COMPOSER_BORDER_CAPTION_CLASS}
+              >
+                {VOICE_SEND_REOPENED_CAPTION}
               </div>
             )}
             {showSendRefusedCaption && (
