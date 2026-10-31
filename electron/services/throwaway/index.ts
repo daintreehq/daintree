@@ -152,11 +152,6 @@ export function getHostThrowawayRuns(): Promise<HostThrowawayRuns> {
   return creating;
 }
 
-/** The runs, when any throwaway call created them; teardown must not create them just to end them. */
-export function peekHostThrowawayRuns(): HostThrowawayRuns | null {
-  return instance;
-}
-
 /**
  * Offers this machine's throwaway runs to the relays (#14446), loading them on
  * the first call. The returned teardown ends every run, since no caller could

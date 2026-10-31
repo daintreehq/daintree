@@ -1391,7 +1391,7 @@ export async function reapPersistedLineages(userDataPath: string): Promise<void>
   await Promise.all(
     files.map((name) => {
       const source = path.join(userDataPath, name);
-      // A live `.json` is claimed first, exactly as reapShardLineage does. The
+      // A live `.json` is claimed first, exactly as ShardRecoveryCoordinator does. The
       // retry file the reaper writes for survivors it could not resolve would
       // otherwise land back on the path the next pty-host constructs its own
       // ledger at, and that host's first empty persist() unlinks it — the
@@ -1408,14 +1408,4 @@ export async function reapPersistedLineages(userDataPath: string): Promise<void>
 /** Reap a ledger file already moved aside by {@link claimShardLineageFile}. */
 export async function reapClaimedLineageFile(claimedPath: string): Promise<void> {
   await reapLineageFile(claimedPath);
-}
-
-/**
- * Reap one shard's ledger after its pty-host exited. The in-memory ledger died
- * with the host, so the persisted lineage is all that is left.
- */
-export async function reapShardLineage(userDataPath: string, shardService?: string): Promise<void> {
-  const claimed = claimShardLineageFile(userDataPath, shardService);
-  if (!claimed) return;
-  await reapLineageFile(claimed);
 }

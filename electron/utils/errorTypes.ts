@@ -149,17 +149,6 @@ export function isDaintreeError(error: unknown): error is DaintreeError {
   return error instanceof DaintreeError;
 }
 
-export function isPermissionError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const code = (error as NodeJS.ErrnoException).code;
-  return code === "EACCES" || code === "EPERM";
-}
-
-export function isNotFoundError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  return (error as NodeJS.ErrnoException).code === "ENOENT";
-}
-
 export function isTransientError(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const code = (error as NodeJS.ErrnoException).code;

@@ -25,7 +25,3 @@ export function unregisterPluginLaunchEntries(pluginId: string): void {
     if (config.pluginId === pluginId) LAUNCH_ENTRY_REGISTRY.delete(id);
   }
 }
-
-export function clearPluginLaunchEntryRegistry(): void {
-  LAUNCH_ENTRY_REGISTRY.clear();
-}

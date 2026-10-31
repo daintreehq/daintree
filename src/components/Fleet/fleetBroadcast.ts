@@ -5,8 +5,6 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import type { RecipeContext } from "@/utils/recipeVariables";
 import { getArmedCrossHostTargets } from "./crossHostFleet";
 
-export const FLEET_BROADCAST_HISTORY_KEY = "fleet-broadcast" as const;
-
 /**
  * Errno codes that mean the target PTY is permanently gone — the renderer
  * should auto-disarm so the user isn't typing into a dead pane. Other
@@ -55,15 +53,6 @@ export function classifyFleetRejectionReason(
     if (reason.includes(code)) return "permanent";
   }
   return "transient";
-}
-
-/**
- * Build a per-project fleet history key so broadcast history doesn't leak
- * across projects. Falls back to the global key when no project is active.
- */
-export function getFleetBroadcastHistoryKey(projectId: string | undefined): string {
-  if (!projectId) return FLEET_BROADCAST_HISTORY_KEY;
-  return `${FLEET_BROADCAST_HISTORY_KEY}:${projectId}`;
 }
 
 /**
