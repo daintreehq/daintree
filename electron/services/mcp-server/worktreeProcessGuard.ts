@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises";
 import type { ActionError } from "../../../shared/types/actions.js";
 import { isPathInside, pathComparisonKey } from "../../../shared/utils/path.js";
 
@@ -17,46 +18,93 @@ export interface TerminalProcessRecord {
   launchGeneration?: number;
 }
 
-/** A terminal the refusal names. */
-export interface WorktreeLiveTerminal {
-  terminalId: string;
-  /** Recorded as created by the calling session, so its exit is the caller's to wait for. */
+/** What the calling session is to a running terminal. */
+export interface TerminalAttribution {
+  /** This session launched the run now under the id. */
   createdByThisSession: boolean;
-  /** Closed and in its trash grace, with the process still running until it exits or expires. */
+  /** `terminal.closeOwned` would close it for this session. */
+  closableByThisSession: boolean;
+}
+
+/** A terminal the refusal names. */
+export interface WorktreeLiveTerminal extends TerminalAttribution {
+  terminalId: string;
+  /** Closed and in its trash grace, with the process running until it exits or the grace ends. */
   trashed: boolean;
   trashExpiresAt: number | null;
+}
+
+export interface WorktreeMatchOptions {
+  caseInsensitive: boolean;
+  /** A directory's canonical spelling; rejects for one that is gone. */
+  realpath: (path: string) => Promise<string>;
+}
+
+const HOST_MATCH_OPTIONS: WorktreeMatchOptions = {
+  caseInsensitive: process.platform === "win32",
+  realpath: (path) => realpath(path),
+};
+
+function cwdInside(cwd: string, roots: readonly string[], options: WorktreeMatchOptions): boolean {
+  const key = pathComparisonKey(cwd, options);
+  return roots.some((root) => isPathInside(key, root));
 }
 
 /**
  * Every terminal the pty host holds whose process has not exited and that sits
  * in the worktree: attributed to it, or spawned inside its directory. Both,
  * because a pane moved to another worktree keeps the directory it started in,
- * and a terminal spawned with an explicit cwd may be attributed elsewhere.
+ * and a terminal spawned with an explicit cwd may be attributed elsewhere. A
+ * spawn directory that only reaches the worktree through a symlink is matched
+ * on its canonical spelling.
  *
  * Anything short of a reported exit counts as running: a kill still waiting
  * on its exit, and a record that never said. Agent state, panel kind and the
  * assistant overlay are deliberately not consulted; a process is a process.
+ * One id reported twice, as two shards can during a move, is named once.
  */
-export function liveTerminalsInWorktree(
+export async function liveTerminalsInWorktree(
   records: readonly TerminalProcessRecord[],
   worktreeId: string,
-  options: { caseInsensitive: boolean }
-): TerminalProcessRecord[] {
-  const target = pathComparisonKey(worktreeId, options);
-  return records.filter((record) => {
-    if (record.isExited === true) return false;
-    if (
-      typeof record.worktreeId === "string" &&
-      pathComparisonKey(record.worktreeId, options) === target
-    ) {
-      return true;
-    }
-    return (
-      typeof record.cwd === "string" &&
-      record.cwd.length > 0 &&
-      isPathInside(pathComparisonKey(record.cwd, options), target)
-    );
+  options: WorktreeMatchOptions
+): Promise<TerminalProcessRecord[]> {
+  const canonicalRoot = await options.realpath(worktreeId).catch(() => worktreeId);
+  const roots = [
+    ...new Set([worktreeId, canonicalRoot].map((path) => pathComparisonKey(path, options))),
+  ];
+  const seen = new Set<string>();
+  const live = records.filter((record) => {
+    if (record.isExited === true || seen.has(record.id)) return false;
+    seen.add(record.id);
+    return true;
   });
+  const matched = await Promise.all(
+    live.map(async (record) => {
+      if (
+        typeof record.worktreeId === "string" &&
+        roots.includes(pathComparisonKey(record.worktreeId, options))
+      ) {
+        return true;
+      }
+      const cwd = record.cwd;
+      if (typeof cwd !== "string" || cwd.length === 0) return false;
+      if (cwdInside(cwd, roots, options)) return true;
+      const canonicalCwd = await options.realpath(cwd).catch(() => cwd);
+      return canonicalCwd !== cwd && cwdInside(canonicalCwd, roots, options);
+    })
+  );
+  return live.filter((_, index) => matched[index]);
+}
+
+function describeTerminal(terminal: WorktreeLiveTerminal): string {
+  const parts = [
+    terminal.createdByThisSession ? "created by this session" : "not created by this session",
+  ];
+  if (terminal.trashed) parts.push("closed and still in its trash grace");
+  else if (terminal.createdByThisSession && !terminal.closableByThisSession) {
+    parts.push("no longer closable by it");
+  }
+  return `'${terminal.terminalId}' (${parts.join(", ")})`;
 }
 
 /**
@@ -71,13 +119,14 @@ export function liveTerminalsInWorktree(
  * The refusal names every running terminal, including ones the caller does not
  * own. It is only reached after the caller's ownership of the worktree was
  * confirmed, so it lists the contents of something the caller already holds,
- * never an id it probed for.
+ * never an id it probed for. Its advice follows what the caller can do about
+ * each one: close it, wait for it, or leave it to whoever runs it.
  */
 export async function refuseWorktreeDeleteWhileRunning(
   worktreeId: string,
   readTerminalProcesses: (() => Promise<readonly TerminalProcessRecord[]>) | undefined,
-  createdByThisSession: (terminalId: string, launchGeneration: number | undefined) => boolean,
-  options: { caseInsensitive: boolean } = { caseInsensitive: process.platform === "win32" }
+  attribute: (terminalId: string, launchGeneration: number | undefined) => TerminalAttribution,
+  options: WorktreeMatchOptions = HOST_MATCH_OPTIONS
 ): Promise<ActionError | undefined> {
   let records: readonly TerminalProcessRecord[];
   try {
@@ -92,39 +141,36 @@ export async function refuseWorktreeDeleteWhileRunning(
       details: { reason: "terminal-processes-unreadable", worktreeId },
     };
   }
-  const live = liveTerminalsInWorktree(records, worktreeId, options);
+  const live = await liveTerminalsInWorktree(records, worktreeId, options);
   if (live.length === 0) return undefined;
   const terminals: WorktreeLiveTerminal[] = live.map((record) => {
     const trashed = record.isTrashed === true;
+    const { createdByThisSession, closableByThisSession } = attribute(
+      record.id,
+      record.launchGeneration
+    );
     return {
       terminalId: record.id,
-      createdByThisSession: createdByThisSession(record.id, record.launchGeneration),
+      createdByThisSession,
+      closableByThisSession,
       trashed,
       trashExpiresAt:
         trashed && typeof record.trashExpiresAt === "number" ? record.trashExpiresAt : null,
     };
   });
-  const described = terminals
-    .map(
-      (terminal) =>
-        `'${terminal.terminalId}' (` +
-        (terminal.createdByThisSession
-          ? "created by this session"
-          : "not created by this session") +
-        (terminal.trashed ? ", closed and still in its trash grace" : "") +
-        ")"
-    )
-    .join(", ");
-  const ownOpen = terminals.some((terminal) => terminal.createdByThisSession && !terminal.trashed);
-  const ownClosed = terminals.some((terminal) => terminal.createdByThisSession && terminal.trashed);
-  const foreign = terminals.some((terminal) => !terminal.createdByThisSession);
+  const closable = (terminal: WorktreeLiveTerminal) =>
+    terminal.closableByThisSession && !terminal.trashed;
+  const awaited = (terminal: WorktreeLiveTerminal) =>
+    terminal.createdByThisSession && terminal.trashed;
   const advice = [
-    ownOpen
-      ? "Close this session's terminals with 'terminal.closeOwned', then wait for their processes to exit."
-      : ownClosed
+    terminals.some(closable)
+      ? "Close this session's open terminals with 'terminal.closeOwned', then wait for their processes to exit."
+      : terminals.some(awaited)
         ? "Wait for this session's closed terminals to exit."
         : undefined,
-    foreign ? "Terminals this session did not create are not its to stop." : undefined,
+    terminals.some((terminal) => !closable(terminal) && !awaited(terminal))
+      ? "Terminals this session did not create, or no longer controls, are not its to stop."
+      : undefined,
   ].filter((part): part is string => part !== undefined);
   const count =
     terminals.length === 1
@@ -132,9 +178,10 @@ export async function refuseWorktreeDeleteWhileRunning(
       : `${terminals.length} terminals in it still have running processes`;
   return {
     code: "DISABLED",
-    message: [`Worktree '${worktreeId}' was not deleted: ${count}: ${described}.`, ...advice].join(
-      " "
-    ),
+    message: [
+      `Worktree '${worktreeId}' was not deleted: ${count}: ${terminals.map(describeTerminal).join(", ")}.`,
+      ...advice,
+    ].join(" "),
     details: { reason: "worktree-has-running-terminals", worktreeId, terminals },
   };
 }

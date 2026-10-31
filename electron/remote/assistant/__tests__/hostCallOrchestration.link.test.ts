@@ -924,9 +924,24 @@ describe("cleanup that keeps what it may not remove (#14169)", () => {
     const busy = await settled(call("worktree.deleteOwned", { worktreeId: "/wt/busy" }));
 
     expect(busy.result).toMatchObject({ isError: true });
-    const text = JSON.stringify(busy.result);
-    expect(text).toContain("DISABLED");
-    expect(text).toContain("user-shell");
+    // The Shell's caller gets the host's whole refusal, details included.
+    expect(JSON.parse((busy.result as { text: string }).text)).toMatchObject({
+      code: "DISABLED",
+      retriable: false,
+      details: {
+        reason: "worktree-has-running-terminals",
+        worktreeId: "/wt/busy",
+        terminals: [
+          {
+            terminalId: "user-shell",
+            createdByThisSession: false,
+            closableByThisSession: false,
+            trashed: false,
+            trashExpiresAt: null,
+          },
+        ],
+      },
+    });
     expect(asked).toEqual([]);
     expect(destination.count("worktree.delete")).toBe(0);
     expect(destination.terminals.has("user-shell")).toBe(true);

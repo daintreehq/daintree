@@ -16,7 +16,7 @@ import { relayOwnershipPrincipal } from "../resourceOwnership.js";
 import type { TerminalProcessRecord, WorktreeLiveTerminal } from "../worktreeProcessGuard.js";
 import type { AgentLastMessageResult } from "../../../../shared/types/agentLastMessage.js";
 import { encodeMessageCursor } from "../../claude/ClaudeMessageCursor.js";
-import { SESSION_GONE, CONFIRMATION_REQUIRED_CODE } from "../shared.js";
+import { SESSION_GONE, CONFIRMATION_REQUIRED_CODE, type DispatchEnvelope } from "../shared.js";
 import { RendererBridgeUnavailableError } from "../rendererBridge.js";
 import {
   toolErrorPayload,
@@ -1922,35 +1922,44 @@ describe("session-scoped resource ownership (#11909)", () => {
     describe("with processes still running in the worktree", () => {
       const WORKTREE = "/wt/task";
 
-      /** A session whose host reports `census.processes`, with main tracking generation 1. */
-      function processHarness(sessionId: string) {
-        const store = new RealSessionStore(() => {}, { launchGenerationOf: () => 1 });
+      /**
+       * A session whose host reports `census.processes`. Main stamps each
+       * launch with `generation.current`, as its spawn tracking would.
+       */
+      function processHarness(sessionId: string, options: { reader?: boolean } = {}) {
+        const generation = { current: 1 };
+        const store = new RealSessionStore(() => {}, {
+          launchGenerationOf: () => generation.current,
+        });
         liveStores.push(store);
         seedLiveSession(store, sessionId, "external");
         store.sessionOriginMap.set(sessionId, "external");
         const census: { processes: TerminalProcessRecord[] } = { processes: [] };
         const readTerminalProcesses = vi.fn(async () => census.processes);
-        const dispatchAction = vi.fn(async (actionId: string, args: unknown) => {
-          if (actionId === "terminal.new") {
-            return { result: { ok: true, result: { terminalId: "terminal-1" } } };
+        const dispatchAction = vi.fn(
+          async (actionId: string, args: unknown): Promise<DispatchEnvelope> => {
+            if (actionId === "terminal.new") {
+              return { result: { ok: true, result: { terminalId: "terminal-1" } } };
+            }
+            if (actionId === "terminal.close") {
+              const terminalId = (args as { terminalId: string }).terminalId;
+              return { result: { ok: true, result: { closedIds: [terminalId] } } };
+            }
+            return { result: { ok: true, result: null } };
           }
-          if (actionId === "terminal.close") {
-            const terminalId = (args as { terminalId: string }).terminalId;
-            return { result: { ok: true, result: { closedIds: [terminalId] } } };
-          }
-          return { result: { ok: true, result: null } };
-        });
+        );
         const deps = fakeDeps({
           sessionStore: store,
           dispatchAction,
           requestManifest: vi.fn().mockResolvedValue(ownedManifest()),
           getCachedManifest: vi.fn(() => ownedManifest()),
-          readTerminalProcesses,
+          readTerminalProcesses: options.reader === false ? undefined : readTerminalProcesses,
         });
         store.resourceOwnership.record(sessionId, [{ kind: "worktree", id: WORKTREE }]);
         return {
           store,
           census,
+          generation,
           dispatchAction,
           readTerminalProcesses,
           server: createSessionServer(sessionId, deps),
@@ -1963,24 +1972,36 @@ describe("session-scoped resource ownership (#11909)", () => {
         return dispatchAction.mock.calls.some(([actionId]) => actionId === "worktree.delete");
       }
 
+      type Refusal = {
+        code: string;
+        message: string;
+        details: { terminals: WorktreeLiveTerminal[] };
+      };
+      const refusalOf = (result: { content: unknown }) =>
+        toolErrorPayload(result) as unknown as Refusal;
+
+      async function launch(server: ReturnType<typeof createSessionServer>) {
+        await callTool(server, { name: "terminal.new", arguments: {} });
+      }
+
       /** Launch a terminal through this session and close it again, as a caller cleaning up would. */
       async function launchAndClose(server: ReturnType<typeof createSessionServer>) {
-        await callTool(server, { name: "terminal.new", arguments: {} });
+        await launch(server);
         await callTool(server, {
           name: "terminal.closeOwned",
           arguments: { terminalId: "terminal-1" },
         });
       }
 
-      const trashedOwnPane = (): TerminalProcessRecord => ({
+      const ownPane = (overrides: Partial<TerminalProcessRecord> = {}): TerminalProcessRecord => ({
         id: "terminal-1",
         worktreeId: WORKTREE,
         cwd: WORKTREE,
         isExited: false,
-        isTrashed: true,
-        trashExpiresAt: 1_700_000_020_000,
         launchGeneration: 1,
+        ...overrides,
       });
+      const trashedOwnPane = () => ownPane({ isTrashed: true, trashExpiresAt: 1_700_000_020_000 });
 
       it("refuses while a pane this session closed is still in its trash grace", async () => {
         const { store, census, dispatchAction, server } = processHarness("s-grace");
@@ -1992,19 +2013,18 @@ describe("session-scoped resource ownership (#11909)", () => {
         const result = await callTool(server, deleteCall);
 
         expect(result.isError).toBe(true);
-        const error = toolErrorPayload(result) as unknown as {
-          code: string;
-          details: { terminals: WorktreeLiveTerminal[] };
-        };
+        const error = refusalOf(result);
         expect(error.code).toBe("DISABLED");
         expect(error.details.terminals).toEqual([
           {
             terminalId: "terminal-1",
             createdByThisSession: true,
+            closableByThisSession: false,
             trashed: true,
             trashExpiresAt: 1_700_000_020_000,
           },
         ]);
+        expect(error.message).toContain("Wait for this session's closed terminals to exit.");
         expect(deleteDispatched(dispatchAction)).toBe(false);
         expect(store.resourceOwnership.owns("s-grace", "worktree", WORKTREE)).toBe(true);
       });
@@ -2013,7 +2033,8 @@ describe("session-scoped resource ownership (#11909)", () => {
         const { store, census, dispatchAction, server } = processHarness("s-exited");
         await launchAndClose(server);
         census.processes = [trashedOwnPane()];
-        await callTool(server, deleteCall);
+        expect((await callTool(server, deleteCall)).isError).toBe(true);
+        expect(deleteDispatched(dispatchAction)).toBe(false);
 
         census.processes = [{ ...trashedOwnPane(), isExited: true }];
         const result = await callTool(server, deleteCall);
@@ -2037,16 +2058,13 @@ describe("session-scoped resource ownership (#11909)", () => {
         const result = await callTool(server, deleteCall);
 
         expect(result.isError).toBe(true);
-        const error = toolErrorPayload(result) as unknown as {
-          code: string;
-          message: string;
-          details: { terminals: WorktreeLiveTerminal[] };
-        };
+        const error = refusalOf(result);
         expect(error.code).toBe("DISABLED");
         expect(error.details.terminals).toEqual([
           {
             terminalId: "user-shell",
             createdByThisSession: false,
+            closableByThisSession: false,
             trashed: false,
             trashExpiresAt: null,
           },
@@ -2073,6 +2091,51 @@ describe("session-scoped resource ownership (#11909)", () => {
         );
       });
 
+      it("tells a caller to close a pane of its own that is still open", async () => {
+        const { census, dispatchAction, server } = processHarness("s-open");
+        await launch(server);
+        census.processes = [ownPane()];
+
+        const error = refusalOf(await callTool(server, deleteCall));
+
+        expect(error.details.terminals).toEqual([
+          expect.objectContaining({ createdByThisSession: true, closableByThisSession: true }),
+        ]);
+        expect(error.message).toContain("'terminal.closeOwned'");
+        expect(deleteDispatched(dispatchAction)).toBe(false);
+      });
+
+      it("does not offer a close for a pane the person restored after this session closed it", async () => {
+        const { census, server } = processHarness("s-restored");
+        await launchAndClose(server);
+        // Same run, out of the trash again: the close already spent this session's hold.
+        census.processes = [ownPane({ isTrashed: false })];
+
+        const error = refusalOf(await callTool(server, deleteCall));
+
+        expect(error.details.terminals).toEqual([
+          expect.objectContaining({ createdByThisSession: true, closableByThisSession: false }),
+        ]);
+        expect(error.message).not.toContain("terminal.closeOwned");
+        expect(error.message).toContain("not its to stop");
+      });
+
+      it("does not claim a run the person respawned under this session's terminal id", async () => {
+        const { store, census, generation, server } = processHarness("s-respawned");
+        await launch(server);
+        // The ledger still holds the id, but the run under it is a later one.
+        generation.current = 2;
+        census.processes = [ownPane({ launchGeneration: 2 })];
+        expect(store.resourceOwnership.owns("s-respawned", "terminal", "terminal-1")).toBe(true);
+
+        const error = refusalOf(await callTool(server, deleteCall));
+
+        expect(error.details.terminals).toEqual([
+          expect.objectContaining({ createdByThisSession: false, closableByThisSession: false }),
+        ]);
+        expect(error.message).not.toContain("terminal.closeOwned");
+      });
+
       it("refuses, deleting nothing, when the host cannot say what runs there", async () => {
         const { readTerminalProcesses, dispatchAction, server } = processHarness("s-unread");
         readTerminalProcesses.mockRejectedValue(new Error("shard timed out"));
@@ -2080,6 +2143,19 @@ describe("session-scoped resource ownership (#11909)", () => {
         const result = await callTool(server, deleteCall);
 
         expect(result.isError).toBe(true);
+        expect(toolErrorPayload(result)).toMatchObject({
+          code: "EXECUTION_ERROR",
+          retriable: true,
+          details: { reason: "terminal-processes-unreadable" },
+        });
+        expect(dispatchAction).not.toHaveBeenCalled();
+      });
+
+      it("refuses, deleting nothing, when no reader is wired", async () => {
+        const { dispatchAction, server } = processHarness("s-noreader", { reader: false });
+
+        const result = await callTool(server, deleteCall);
+
         expect(toolErrorPayload(result)).toMatchObject({
           code: "EXECUTION_ERROR",
           details: { reason: "terminal-processes-unreadable" },

@@ -1519,33 +1519,38 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // session just closed that is still in its trash grace, or a terminal
         // it never owned. Asked of the pty-host after ownership is settled, so
         // an unowned id is still refused uniformly and never learns what runs
-        // in it, and before any question reaches the user. Asked again after
-        // the above-tier ask below, which can wait on the user for minutes.
-        // The delete's own D2 dialog opens inside the delegated dispatch, so a
-        // terminal started while that dialog is up is not seen here.
-        // Only an owned delete awaits anything here: every other call keeps the
-        // tick ordering it had, which a reply wait set up above depends on.
-        const guardedWorktreeId =
-          actionId === WORKTREE_DELETE_OWNED_TOOL ? ownedResourceId : undefined;
-        const refuseWorktreeInUse = async (
-          worktreeId: string
-        ): Promise<CallToolResult | undefined> => {
+        // in it, and before any question reaches the user. The delete's own D2
+        // dialog opens inside the delegated dispatch, so a terminal started
+        // while that dialog is up is not seen here. Only an owned delete
+        // awaits anything here: every other call keeps the tick ordering it
+        // had, which a reply wait set up above is sensitive to.
+        //
+        // Creation is read from the launch history, keyed by the run main
+        // tracks under the id, because a close releases the ledger record
+        // while the trashed process runs on — and a ledger record outlives a
+        // respawn the person made under the same id, so it never speaks for a
+        // run whose generation is known.
+        if (actionId === WORKTREE_DELETE_OWNED_TOOL && ownedResourceId !== undefined) {
           const refusal = await refuseWorktreeDeleteWhileRunning(
-            worktreeId,
+            ownedResourceId,
             deps.readTerminalProcesses,
-            (terminalId, launchGeneration) =>
-              (launchGeneration !== undefined &&
-                sessionStore.workerCreations.get(terminalId, launchGeneration)?.owner ===
-                  ownershipOwner) ||
-              ownedRecordFor("terminal", terminalId) !== undefined
+            (terminalId, launchGeneration) => {
+              const ledgerRecord = ownedRecordFor("terminal", terminalId) !== undefined;
+              const createdByThisSession =
+                launchGeneration === undefined
+                  ? ledgerRecord
+                  : sessionStore.workerCreations.get(terminalId, launchGeneration)?.owner ===
+                    ownershipOwner;
+              return {
+                createdByThisSession,
+                closableByThisSession: createdByThisSession && ledgerRecord,
+              };
+            }
           );
-          if (refusal === undefined) return undefined;
-          outcome = { kind: "result", value: { ok: false, error: refusal } };
-          return buildToolError(refusal);
-        };
-        if (guardedWorktreeId !== undefined) {
-          const worktreeInUse = await refuseWorktreeInUse(guardedWorktreeId);
-          if (worktreeInUse !== undefined) return worktreeInUse;
+          if (refusal !== undefined) {
+            outcome = { kind: "result", value: { ok: false, error: refusal } };
+            return buildToolError(refusal);
+          }
         }
 
         // The ask for a pane call above its tier (#12692). Placed after the
@@ -1556,10 +1561,6 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         if (approvalRequired) {
           const refusal = await askForApproval();
           if (refusal !== undefined) return refusal;
-          if (guardedWorktreeId !== undefined) {
-            const stillInUse = await refuseWorktreeInUse(guardedWorktreeId);
-            if (stillInUse !== undefined) return stillInUse;
-          }
         }
 
         // The assistant closing a panel it did not open, or one whose agent is
