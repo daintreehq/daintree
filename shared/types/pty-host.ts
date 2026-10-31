@@ -307,6 +307,7 @@ export type PtyHostRequest =
   | { type: "kill"; id: string; reason?: string; escalationDelayMs?: number }
   | { type: "trash"; id: string }
   | { type: "restore"; id: string }
+  | { type: "end-trash-grace"; id: string; requestId: string; expectedGeneration: number }
   | {
       type: "set-activity-tier";
       id: string;
@@ -976,6 +977,11 @@ export type PtyHostEvent =
       agentSessionId: string | null;
     }
   | {
+      type: "end-trash-grace-result";
+      requestId: string;
+      status: EndTrashGraceStatus;
+    }
+  | {
       type: "graceful-kill-by-project-result";
       requestId: string;
       results: Array<{ id: string; agentSessionId: string | null }>;
@@ -1083,6 +1089,14 @@ export type PtyHostResponseEvent = Exclude<
 export interface GracefulKillResult {
   sessionId: string | null;
 }
+
+/**
+ * What ending a trashed terminal's grace early did (#15728): `started` ran the
+ * trash expiry (graceful shutdown, then kill), which says nothing yet about
+ * the exit; `not-trashed` and `generation-mismatch` left it alone, because it
+ * was restored, already let go, or the id now names another incarnation.
+ */
+export type EndTrashGraceStatus = "started" | "not-trashed" | "generation-mismatch";
 
 /**
  * Which lifecycle boundary produced an `agent-session-captured` record. Only

@@ -182,6 +182,11 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
       ptyManager.restore(msg.id);
     },
 
+    "end-trash-grace": (msg) => {
+      const status = ptyManager.endTrashGrace(msg.id, msg.expectedGeneration);
+      sendEvent({ type: "end-trash-grace-result", requestId: msg.requestId, status });
+    },
+
     "kill-by-project": (msg) => {
       const killed = ptyManager.killByProject(msg.projectId);
       sendEvent({ type: "kill-by-project-result", requestId: msg.requestId, killed });

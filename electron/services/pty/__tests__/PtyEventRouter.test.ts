@@ -332,15 +332,15 @@ describe("routeHostEvent", () => {
     expect(state.pendingKillCount.has("t1")).toBe(false);
     expect(callbacks.trashIdsRemoved).toEqual([]);
     expect(onExit).not.toHaveBeenCalled();
-    expect(recordExit).toHaveBeenCalledExactlyOnceWith("t1", 0, 1);
+    expect(recordExit).toHaveBeenCalledExactlyOnceWith("t1", 0, 1, undefined);
 
-    routeHostEvent({ type: "exit", id: "t1", exitCode: 0, launchGeneration: 2 }, deps);
+    routeHostEvent({ type: "exit", id: "t1", exitCode: 0, signal: 9, launchGeneration: 2 }, deps);
 
     expect(state.pendingSpawns.has("t1")).toBe(false);
     expect(state.terminalPids.has("t1")).toBe(false);
     expect(callbacks.trashIdsRemoved).toEqual(["t1"]);
-    expect(onExit).toHaveBeenCalledExactlyOnceWith("t1", 0, undefined, undefined);
-    expect(recordExit).toHaveBeenLastCalledWith("t1", 0, 2);
+    expect(onExit).toHaveBeenCalledExactlyOnceWith("t1", 0, 9, undefined);
+    expect(recordExit).toHaveBeenLastCalledWith("t1", 0, 2, 9);
   });
 
   it("removes the pendingKillCount entry once it reaches zero", () => {

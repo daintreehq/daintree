@@ -69,9 +69,15 @@ export interface PtyEventRouterCallbacks {
   onTerminalPid?: (id: string, pid: number, launchGeneration?: number) => void;
   /**
    * Optional. Fires on every `exit` event so the lifecycle ledger can record
-   * the close against the exiting incarnation's generation. Pure side effect.
+   * the close against the exiting incarnation's generation, and main can keep
+   * the exit past the host's record of the terminal. Pure side effect.
    */
-  onTerminalExit?: (id: string, exitCode: number, launchGeneration?: number) => void;
+  onTerminalExit?: (
+    id: string,
+    exitCode: number,
+    launchGeneration?: number,
+    signal?: number
+  ) => void;
   /**
    * Optional. Fires for each terminal a `graceful-kill-by-project` captures, as
    * it settles rather than when the whole project has. Lets PtyClient answer
@@ -225,7 +231,12 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       if (!superseded) state.terminalPids.delete(event.id);
       if (callbacks.onTerminalExit) {
         try {
-          callbacks.onTerminalExit(event.id, event.exitCode, event.launchGeneration);
+          callbacks.onTerminalExit(
+            event.id,
+            event.exitCode,
+            event.launchGeneration,
+            event.signal
+          );
         } catch (err) {
           deps.logWarn(`[PtyClient] onTerminalExit threw for ${event.id}: ${String(err)}`);
         }
@@ -307,6 +318,10 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       broker.resolve(event.requestId, {
         sessionId: event.agentSessionId ?? null,
       });
+      return true;
+
+    case "end-trash-grace-result":
+      broker.resolve(event.requestId, event.status);
       return true;
 
     case "graceful-kill-by-project-result":
