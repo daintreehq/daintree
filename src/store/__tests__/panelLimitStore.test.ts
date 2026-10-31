@@ -299,6 +299,45 @@ describe("preflightSpawnBatchLimit", () => {
     expect(getPanelSlotReservations().unclaimed).toBe(0);
   });
 
+  it("grants against a hard limit lowered while the confirm was open", async () => {
+    usePanelLimitStore.setState({
+      confirmationLimit: 20,
+      hardLimit: 24,
+      warningsDisabled: false,
+      requestConfirmation: vi.fn(async () => {
+        usePanelLimitStore.setState({ hardLimit: 20 });
+        return true;
+      }),
+    });
+
+    const result = await preflightSpawnBatchLimit(() => 18, 4);
+
+    expect(result.allowed).toBe(2);
+    expect(getPanelSlotReservations().unclaimed).toBe(2);
+    result.grant?.release();
+  });
+
+  it("never grants more than the confirm offered, even when room opens up", async () => {
+    let open = 22;
+    const confirm = vi.fn(async () => {
+      open = 10;
+      return true;
+    });
+    usePanelLimitStore.setState({
+      confirmationLimit: 20,
+      hardLimit: 24,
+      warningsDisabled: false,
+      requestConfirmation: confirm,
+    });
+
+    // Trimmed to 2 when asked; the user agreed to 2, not to the 5 requested.
+    const result = await preflightSpawnBatchLimit(() => open, 5);
+
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ allowedCount: 2 }));
+    expect(result.allowed).toBe(2);
+    result.grant?.release();
+  });
+
   it("opens nothing when the confirm is accepted after the last slot went", async () => {
     let open = 18;
     usePanelLimitStore.setState({

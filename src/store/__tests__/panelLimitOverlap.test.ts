@@ -9,7 +9,7 @@
  * append.
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import type { TerminalRecipe } from "@shared/types/project";
 
 const { prewarmTerminalMock } = vi.hoisted(() => ({
@@ -89,16 +89,17 @@ const { usePanelLimitStore } = await import("../panelLimitStore");
 const { useRecipeStore } = await import("../recipeStore");
 const { countPanelLimitUsage, countPanelsTowardLimit } =
   await import("../slices/panelRegistry/panelCount");
-const { reservePanelSlots } = await import("../slices/panelRegistry/panelSlotReservations");
+const { getPanelSlotReservations, reservePanelSlots } =
+  await import("../slices/panelRegistry/panelSlotReservations");
 
 const HARD_LIMIT = 12;
 
-function threeShellRecipe(id: string): TerminalRecipe {
+function shellRecipe(id: string, shells = 3): TerminalRecipe {
   return {
     id,
     name: `Recipe ${id}`,
     projectId: "project-1",
-    terminals: [0, 1, 2].map((i) => ({
+    terminals: Array.from({ length: shells }, (_, i) => ({
       type: "terminal" as const,
       title: `${id} shell ${i}`,
       command: "echo",
@@ -110,7 +111,7 @@ function threeShellRecipe(id: string): TerminalRecipe {
 /** Panels a recipe run created, read from the registry rather than its results. */
 function recipePanelIds(): string[] {
   return Object.values(usePanelStore.getState().panelsById)
-    .filter((panel) => panel.cwd === "/wt")
+    .filter((panel) => panel.worktreeId === "wt-1")
     .map((panel) => panel.id);
 }
 
@@ -119,17 +120,23 @@ function committedCount(): number {
   return countPanelsTowardLimit(panelsById, panelIds);
 }
 
+const heldPrewarms: Array<() => void> = [];
+
 /** Hold every prewarm (and with it each recipe `addPanel`) until released. */
 function holdPrewarms(): () => void {
-  const releases: Array<() => void> = [];
   prewarmTerminalMock.mockImplementation(
-    () => new Promise<void>((resolve) => releases.push(resolve))
+    () => new Promise<void>((resolve) => heldPrewarms.push(resolve))
   );
-  return () => {
-    prewarmTerminalMock.mockResolvedValue(undefined);
-    for (const release of releases.splice(0)) release();
-  };
+  return releasePrewarms;
 }
+
+function releasePrewarms(): void {
+  prewarmTerminalMock.mockResolvedValue(undefined);
+  for (const release of heldPrewarms.splice(0)) release();
+}
+
+// A failed wait must not leave a run hanging into the next test.
+afterEach(releasePrewarms);
 
 async function openOtherPanels(count: number): Promise<void> {
   for (let i = 0; i < count; i++) {
@@ -150,7 +157,12 @@ describe("overlapping recipe runs and the hard panel limit (#15607)", () => {
     useRecipeStore.getState().reset();
     // Usage stamping writes through to disk and reloads; keep the list in memory.
     useRecipeStore.setState({
-      recipes: [threeShellRecipe("first"), threeShellRecipe("second")],
+      recipes: [
+        shellRecipe("first"),
+        shellRecipe("second"),
+        shellRecipe("solo", 1),
+        shellRecipe("duo", 2),
+      ],
       updateRecipe: vi.fn().mockResolvedValue(undefined),
     });
     usePanelLimitStore.setState({
@@ -192,6 +204,31 @@ describe("overlapping recipe runs and the hard panel limit (#15607)", () => {
     ]);
   });
 
+  it("admits two overlapping runs that fit together, counting each panel once", async () => {
+    const release = holdPrewarms();
+    const run = useRecipeStore.getState().runRecipeWithResults;
+
+    const solo = run("solo", "/wt", "wt-1");
+    await vi.waitFor(() => expect(recipePanelIds()).toHaveLength(1));
+    // The first run's panel is spawning and still held back from `panelIds`.
+    expect(countPanelLimitUsage(usePanelStore.getState())).toBe(HARD_LIMIT - 2);
+
+    const duo = run("duo", "/wt", "wt-1");
+    await vi.waitFor(() => expect(recipePanelIds()).toHaveLength(3));
+
+    release();
+    const [soloResults, duoResults] = await Promise.all([solo, duo]);
+
+    expect(soloResults.spawned).toHaveLength(1);
+    expect(duoResults.spawned).toHaveLength(2);
+    const { panelIds } = usePanelStore.getState();
+    for (const id of recipePanelIds()) {
+      expect(panelIds.filter((committed) => committed === id)).toHaveLength(1);
+    }
+    expect(committedCount()).toBe(HARD_LIMIT);
+    expect(getPanelSlotReservations()).toEqual({ unclaimed: 0, claimedIds: new Set() });
+  });
+
   it("refuses a single add that races an in-flight run at the limit", async () => {
     const release = holdPrewarms();
 
@@ -224,8 +261,11 @@ describe("overlapping recipe runs and the hard panel limit (#15607)", () => {
         ),
     });
     const first = useRecipeStore.getState().runRecipeWithResults("first", "/wt", "wt-1");
-    await vi.waitFor(() => expect(releases).toHaveLength(3));
-    usePanelStore.setState({ addPanel: realAddPanel });
+    try {
+      await vi.waitFor(() => expect(releases).toHaveLength(3));
+    } finally {
+      usePanelStore.setState({ addPanel: realAddPanel });
+    }
 
     for (const release of releases) release();
     const firstResults = await first;
@@ -261,6 +301,29 @@ describe("single adds and the live panel-limit count (#15607)", () => {
 
     expect(ids.filter((id) => id !== null)).toHaveLength(1);
     expect(committedCount()).toBe(HARD_LIMIT);
+    // The admitted add gave its slot back once it returned.
+    expect(getPanelSlotReservations()).toEqual({ unclaimed: 0, claimedIds: new Set() });
+  });
+
+  it("counts a panel a batch still holds back, with no grant behind it", async () => {
+    await openOtherPanels(HARD_LIMIT - 3);
+    const usage = () => countPanelLimitUsage(usePanelStore.getState());
+    const open = usage();
+
+    const token = usePanelStore.getState().beginSpawnBatch();
+    await usePanelStore.getState().addPanel({
+      kind: "browser",
+      requestedId: "browser-held-back",
+      cwd: "/",
+      bypassLimits: true,
+      browserUrl: "about:blank",
+    });
+
+    expect(committedCount()).toBe(open);
+    expect(usage()).toBe(open + 1);
+    usePanelStore.getState().flushSpawnBatch(token);
+    expect(committedCount()).toBe(open + 1);
+    expect(usage()).toBe(open + 1);
   });
 
   it("counts a granted slot once, from its claim through the batch to the flush", async () => {
