@@ -31,8 +31,8 @@ const ENV_OVERRIDES = {
 const MAX_STDOUT_LENGTH = 100_000_000;
 
 // strip-ansi 7 (ansi-regex 6.3): OSC sequences, then CSI and related.
-// eslint-disable-next-line no-control-regex -- matching terminal escapes is the point
 const ANSI_PATTERN =
+  // eslint-disable-next-line no-control-regex -- matching terminal escapes is the point
   /(?:\u001B\][^\u0007\u001B\u009C]*(?:\u0007|\u001B\\|\u009C))|[\u001B\u009B][[\]()#;?]*(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]/g;
 
 export interface LoginShellEnvironment {

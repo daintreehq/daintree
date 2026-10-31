@@ -1024,6 +1024,7 @@ describe("refreshPath — login shell lifecycle (#15565)", () => {
   // Captured before fake timers replace them: they let the leaf's dynamic
   // import land without moving the fake clock.
   const realSetTimeout = setTimeout;
+  const realNow = Date.now;
   let exitListenersBefore = 0;
 
   beforeEach(async () => {
@@ -1062,8 +1063,8 @@ describe("refreshPath — login shell lifecycle (#15565)", () => {
   }
 
   async function untilReal(predicate: () => boolean): Promise<void> {
-    const end = Date.now() + 5_000;
-    while (!predicate() && Date.now() < end) {
+    const end = realNow() + 5_000;
+    while (!predicate() && realNow() < end) {
       await new Promise((resolve) => realSetTimeout(resolve, 2));
     }
   }
