@@ -1597,6 +1597,9 @@ describe("ProjectViewManager — GC on deactivate", () => {
     manager.registerInitialView(initialView as never, "proj-a", "/path/a");
   });
 
+  // Real timers here: an efficiency debounce or purge left armed would fire after the test.
+  afterEach(() => manager.dispose());
+
   it("leaves the cached-time GC to the renderer, injecting nothing that could outlive activation (#15680)", async () => {
     await manager.switchTo("proj-b", "/path/b");
 
@@ -1638,7 +1641,6 @@ describe("ProjectViewManager — GC on deactivate", () => {
     expect(initialWc.navigationHistory.clear).toHaveBeenCalledOnce();
     // The freeze after it should still land despite clear() throwing
     expect(vi.mocked(freezeWebContents)).toHaveBeenCalledWith(initialWc);
-    manager.setEfficiencyFreeze(false);
   });
 
   it("skips flushStorageData, clearHistory, and the cached signal when webContents is destroyed at outer guard", async () => {

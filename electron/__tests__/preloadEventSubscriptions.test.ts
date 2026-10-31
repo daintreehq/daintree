@@ -460,6 +460,29 @@ describe("preload event subscriptions", () => {
       expect(fakeGc).not.toHaveBeenCalled();
     });
 
+    it("flushes and answers main even when scheduling the reclaim throws", async () => {
+      ipcRenderer.send.mockClear();
+      const flush = vi.fn();
+      const offFlush = app.onViewCachedFlush(flush);
+      const globals = globalThis as Record<string, unknown>;
+      const schedule = globals.requestIdleCallback;
+      globals.requestIdleCallback = () => {
+        throw new Error("renderer tearing down");
+      };
+      try {
+        expect(() => ipcRenderer.emit("app:view-cached", {}, { flushId: "reclaim-threw" })).toThrow(
+          "renderer tearing down"
+        );
+        expect(flush).toHaveBeenCalledTimes(1);
+        await vi.waitFor(() =>
+          expect(ipcRenderer.send).toHaveBeenCalledWith("app:view-cached-flushed", "reclaim-threw")
+        );
+      } finally {
+        globals.requestIdleCallback = schedule;
+        offFlush();
+      }
+    });
+
     it("keeps one pending collection through a cache storm", () => {
       ipcRenderer.emit("app:view-cached", {});
       ipcRenderer.emit("app:view-cached", {});
