@@ -135,11 +135,12 @@ describe("streaming past the buffer cap", () => {
       collapsed = reconcileCollapsedGroups(collapsed, rows, arrived.collapsedIds);
       stacks = pruneToLiveRows(stacks, rows);
 
+      // One assertion per set rather than per id: this runs after every update.
       const live = new Set(rows.map((msg) => msg.id));
       expect(collapsed.size).toBeLessThanOrEqual(rows.length);
       expect(stacks.size).toBeLessThanOrEqual(rows.length);
-      for (const id of collapsed) expect(live.has(id)).toBe(true);
-      for (const id of stacks.keys()) expect(live.has(id)).toBe(true);
+      expect([...collapsed].filter((id) => !live.has(id))).toEqual([]);
+      expect([...stacks.keys()].filter((id) => !live.has(id))).toEqual([]);
       return live;
     };
 
@@ -157,13 +158,13 @@ describe("streaming past the buffer cap", () => {
     stacks = new Map(stacks).set(stackOpened, { expanded: true });
 
     // A redux-logger style stream: one collapsed group with a child per
-    // frame, thousands of them, until the user's rows age out.
-    let groupsStreamed = 0;
+    // frame, enough to turn the whole buffer over twice, so the user's rows
+    // age out halfway through and the rest runs at the cap.
+    let updatesWhileUserRowsLive = 0;
     let userRowsLive = true;
-    while (groupsStreamed < 5_000) {
+    for (let groupsStreamed = 0; groupsStreamed < MAX_CONSOLE_ROWS; groupsStreamed++) {
       enqueue("startGroupCollapsed");
       enqueue("log", 1);
-      groupsStreamed++;
       const live = settle();
 
       const tail = liveRows().at(-2)!;
@@ -173,9 +174,11 @@ describe("streaming past the buffer cap", () => {
       expect(collapsed.has(expandedByUser)).toBe(false);
       expect(collapsed.has(collapsedByUser)).toBe(live.has(collapsedByUser));
       expect(stacks.has(stackOpened)).toBe(live.has(stackOpened));
-      if (!live.has(stackOpened)) userRowsLive = false;
+      if (live.has(stackOpened)) updatesWhileUserRowsLive++;
+      else userRowsLive = false;
     }
 
+    expect(updatesWhileUserRowsLive).toBeGreaterThan(0);
     expect(userRowsLive).toBe(false);
     expect(liveRows()).toHaveLength(MAX_CONSOLE_ROWS);
     expect(collapsed.has(collapsedByUser)).toBe(false);
