@@ -4,8 +4,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   _resetPendingUploadsForTests,
+  getHeldBackAttachments,
   getPendingUploads,
   hasPendingUploads,
+  holdBackAttachments,
+  holdComposerSend,
+  isComposerSendHeld,
+  takeHeldBackAttachments,
   trackUpload,
   UPLOAD_PROGRESS_DELAY_MS,
 } from "../pendingUploads";
@@ -85,6 +90,61 @@ describe("pending uploads", () => {
   it("keeps surfaces apart", () => {
     void trackUpload("composer:t1", "a", () => new Promise(() => {}));
     expect(hasPendingUploads("terminal:t1")).toBe(false);
+  });
+});
+
+describe("a composer's attachments (#15599)", () => {
+  beforeEach(() => {
+    _resetPendingUploadsForTests();
+  });
+
+  it("holds the send through an upload and past it, until every hold is released", async () => {
+    let finish!: () => void;
+    const releaseFirst = holdComposerSend("composer:t1");
+    const releaseSecond = holdComposerSend("composer:t1");
+    const upload = trackUpload(
+      "composer:t1",
+      "shot.png",
+      () => new Promise<void>((resolve) => (finish = resolve))
+    );
+    expect(isComposerSendHeld("composer:t1")).toBe(true);
+
+    finish();
+    await upload;
+    // The thumbnail is still to come: no chip, but no send either.
+    expect(hasPendingUploads("composer:t1")).toBe(false);
+    expect(getPendingUploads("composer:t1")).toEqual([]);
+    expect(isComposerSendHeld("composer:t1")).toBe(true);
+
+    releaseFirst();
+    releaseFirst();
+    expect(isComposerSendHeld("composer:t1")).toBe(true);
+    releaseSecond();
+    expect(isComposerSendHeld("composer:t1")).toBe(false);
+  });
+
+  it("holds only its own composer", () => {
+    holdComposerSend("composer:t1");
+    expect(isComposerSendHeld("composer:t2")).toBe(false);
+    expect(isComposerSendHeld("isolated-composer:t1")).toBe(false);
+  });
+
+  it("keeps held-back attachments in the order they came until they are taken", () => {
+    const shot = { type: "image", filePath: "/tmp/shot.png", thumbnailDataUrl: "data:x" } as const;
+    const notes = {
+      type: "file",
+      filePath: "/tmp/notes.md",
+      fileName: "notes.md",
+      fileSize: 3,
+    } as const;
+    holdBackAttachments("composer:t1", [shot]);
+    holdBackAttachments("composer:t1", [notes]);
+    holdBackAttachments("composer:t1", []);
+    expect(getHeldBackAttachments("composer:t2")).toEqual([]);
+
+    expect(takeHeldBackAttachments("composer:t1")).toEqual([shot, notes]);
+    expect(getHeldBackAttachments("composer:t1")).toEqual([]);
+    expect(takeHeldBackAttachments("composer:t1")).toEqual([]);
   });
 });
 

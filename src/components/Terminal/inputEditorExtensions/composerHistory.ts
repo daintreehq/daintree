@@ -20,6 +20,7 @@ import {
   undo,
   undoDepth,
 } from "@codemirror/commands";
+import { advanceComposerDraft } from "../composerDraftGeneration";
 import { correctionLandingEffects, outsideWrite, type CorrectionReview } from "./correctionReview";
 
 interface ChipEntryRange {
@@ -132,6 +133,9 @@ export function selectionAfterOutsideWrite(
  * a prompt that already went out or text that belongs somewhere else.
  */
 export function clearComposerHistory(view: EditorView): void {
+  // Ahead of the early returns: a draft with nothing to undo is still a
+  // different draft.
+  advanceComposerDraft(view);
   if (historyCompartment.get(view.state) === undefined) return;
   if (undoDepth(view.state) === 0 && redoDepth(view.state) === 0) return;
   view.dispatch({ effects: historyCompartment.reconfigure([]) });

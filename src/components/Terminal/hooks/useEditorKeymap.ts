@@ -6,6 +6,7 @@ import type { AutocompleteItem } from "../AutocompleteMenu";
 import type { ActiveCompletionContext } from "../hybridInputParsing";
 import { currentContextReferenceProvidersEffects } from "../inputEditorExtensions/contextReferenceChip";
 import { clearComposerHistory } from "../inputEditorExtensions/composerHistory";
+import { advanceComposerDraft } from "../composerDraftGeneration";
 import { rescanForgeReferences } from "../inputEditorExtensions/forgeReference";
 import { currentVoiceCaretEffects, setVoiceCaret } from "../inputEditorExtensions/voiceCaret";
 
@@ -361,6 +362,8 @@ export function useEditorKeymap({
       if (!latest) return false;
       const stashed = popStashedEditorState(latest.terminalId, latest.projectId);
       if (!stashed) return false;
+      // Kept apart from the history clear, which would drop the stash's own steps.
+      advanceComposerDraft(view);
       view.setState(stashed);
       // The stashed state carries the editable flag, the chip providers and
       // the references of when it was stashed, and none of a dictation's

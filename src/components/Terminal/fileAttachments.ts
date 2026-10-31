@@ -8,10 +8,16 @@ import {
   type TransferSourceKind,
 } from "@/lib/transferSources";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
-import { trackUpload } from "./uploads/pendingUploads";
+import {
+  holdBackAttachments,
+  holdComposerSend,
+  trackUpload,
+  type PreparedAttachment,
+} from "./uploads/pendingUploads";
 import { IMAGE_EXTENSIONS } from "./useTerminalFileTransfer";
 import { formatAtFileTokenForCwd } from "./hybridInputParsing";
 import { addImageChip, addFileDropChip } from "./inputEditorExtensions";
+import { composerDraftGeneration } from "./composerDraftGeneration";
 
 /**
  * A file headed for the composer, normalized across every provenance (OS drop,
@@ -64,14 +70,11 @@ export function fileAttachmentEntryFromSource(transfer: TransferSource): FileAtt
   };
 }
 
-type ResolvedFile =
-  | { type: "image"; filePath: string; thumbnailDataUrl: string }
-  | { type: "file"; filePath: string; fileName: string; fileSize: number | undefined };
-
 export interface InsertFileAttachmentsOptions {
   /**
    * Where uploads to a remote host show their progress chips. Sending from the
-   * composer waits until every one of them has resolved.
+   * composer waits until every attachment is in the draft, and attachments
+   * whose draft is gone by then are held back here.
    */
   uploadSurface?: string;
   /** Add to project: upload into this folder of the project instead of the inbox. */
@@ -89,7 +92,9 @@ export interface InsertFileAttachmentsOptions {
  * thumbnail resolves is left alone.
  *
  * In a remote window each upload runs under a chip on `uploadSurface`, and
- * nothing is inserted until every upload has settled.
+ * nothing is inserted until every upload has settled. A draft sent or replaced
+ * in the meantime gets none of them: they are held back on `uploadSurface`
+ * for the composer to offer.
  */
 export async function insertFileAttachments(
   editorViewRef: RefObject<EditorView | null>,
@@ -99,60 +104,87 @@ export async function insertFileAttachments(
   options: InsertFileAttachmentsOptions = {}
 ): Promise<void> {
   const { uploadSurface, destination, cwdProvider } = options;
-  const tracked = uploadSurface !== undefined && isRemoteWindow();
-  const materialized = await materializeTransferSources(
-    entries.map(({ source, filePath, hostId }) =>
-      hostId === undefined
-        ? { kind: source, path: filePath }
-        : { kind: source, path: filePath, hostId }
-    ),
-    tracked
-      ? (source, run) =>
-          trackUpload(uploadSurface, basename(source.path) || source.path, (progress) =>
-            run(destination ? { ...progress, destination } : progress)
-          )
-      : destination
-        ? (_source, run) => run({ destination })
-        : undefined
-  );
-  const resolved: ResolvedFile[] = [];
+  const release = uploadSurface === undefined ? undefined : holdComposerSend(uploadSurface);
+  const generation = composerDraftGeneration(view);
+  try {
+    const tracked = uploadSurface !== undefined && isRemoteWindow();
+    const materialized = await materializeTransferSources(
+      entries.map(({ source, filePath, hostId }) =>
+        hostId === undefined
+          ? { kind: source, path: filePath }
+          : { kind: source, path: filePath, hostId }
+      ),
+      tracked
+        ? (source, run) =>
+            trackUpload(uploadSurface, basename(source.path) || source.path, (progress) =>
+              run(destination ? { ...progress, destination } : progress)
+            )
+        : destination
+          ? (_source, run) => run({ destination })
+          : undefined
+    );
+    const prepared: PreparedAttachment[] = [];
 
-  for (const [index, { rawName, fileName, fileSize }] of entries.entries()) {
-    const result = materialized[index];
-    if (!result) continue;
-    const filePath = result.hostPath;
-    // Classified on the untrimmed name every provenance agrees on, never on
-    // the display name: a real file called `shot.png ` is not an image, and
-    // trimming first would make the same file classify one way from Finder
-    // and the other way from the tree.
-    //
-    // A dragged folder reaches this too. One whose name ends in an image
-    // extension fails the thumbnail and falls back to the file chip, which
-    // is the same recovery a corrupt image already takes.
-    if (IMAGE_EXTENSIONS.test(rawName)) {
-      if (result.thumbnail) {
-        resolved.push({ type: "image", filePath, thumbnailDataUrl: result.thumbnail });
-        continue;
+    for (const [index, { rawName, fileName, fileSize }] of entries.entries()) {
+      const result = materialized[index];
+      if (!result) continue;
+      const filePath = result.hostPath;
+      // Classified on the untrimmed name every provenance agrees on, never on
+      // the display name: a real file called `shot.png ` is not an image, and
+      // trimming first would make the same file classify one way from Finder
+      // and the other way from the tree.
+      //
+      // A dragged folder reaches this too. One whose name ends in an image
+      // extension fails the thumbnail and falls back to the file chip, which
+      // is the same recovery a corrupt image already takes.
+      if (IMAGE_EXTENSIONS.test(rawName)) {
+        if (result.thumbnail) {
+          prepared.push({ type: "image", filePath, thumbnailDataUrl: result.thumbnail });
+          continue;
+        }
+        try {
+          const { thumbnailDataUrl } = await window.electron.clipboard.thumbnailFromPath(filePath);
+          prepared.push({ type: "image", filePath, thumbnailDataUrl });
+        } catch {
+          prepared.push({ type: "file", filePath, fileName, fileSize });
+        }
+      } else {
+        prepared.push({ type: "file", filePath, fileName, fileSize });
       }
-      try {
-        const { thumbnailDataUrl } = await window.electron.clipboard.thumbnailFromPath(filePath);
-        resolved.push({ type: "image", filePath, thumbnailDataUrl });
-      } catch {
-        resolved.push({ type: "file", filePath, fileName, fileSize });
-      }
-    } else {
-      resolved.push({ type: "file", filePath, fileName, fileSize });
     }
+
+    if (prepared.length === 0) return;
+
+    // A thumbnail await above can outlive the editor it started in: the pane
+    // can unmount or remount (`useEditorFactory` destroys the view and nulls
+    // the ref) while an image resolves. Dispatching into the detached view
+    // would insert into a document nothing is showing any more.
+    if (editorViewRef.current !== view) return;
+
+    // The same editor can be showing a different draft by now, the one after
+    // a send that was already on its way. These were never meant for it.
+    if (composerDraftGeneration(view) !== generation) {
+      if (uploadSurface !== undefined) holdBackAttachments(uploadSurface, prepared);
+      return;
+    }
+
+    insertPreparedAttachments(view, prepared, cwdProvider?.() ?? cwd);
+  } finally {
+    release?.();
   }
+}
 
-  if (resolved.length === 0) return;
-
-  // A thumbnail await above can outlive the editor it started in: the pane
-  // can unmount or remount (`useEditorFactory` destroys the view and nulls
-  // the ref) while an image resolves. Dispatching into the detached view
-  // would insert into a document nothing is showing any more.
-  if (editorViewRef.current !== view) return;
-
+/**
+ * Inserts `prepared` at the caret of `view` as chips, in order, in a single
+ * transaction: images as their absolute path behind a thumbnail chip, anything
+ * else as an `@file` token relative to `cwd`.
+ */
+export function insertPreparedAttachments(
+  view: EditorView,
+  prepared: readonly PreparedAttachment[],
+  cwd: string
+): void {
+  if (prepared.length === 0) return;
   try {
     const cursor = view.state.selection.main.head;
     const imageEffects: ReturnType<typeof addImageChip.of>[] = [];
@@ -164,7 +196,7 @@ export async function insertFileAttachments(
     let insertText =
       cursor > 0 && !/[\s([{]/.test(view.state.doc.sliceString(cursor - 1, cursor)) ? " " : "";
 
-    for (const entry of resolved) {
+    for (const entry of prepared) {
       const from = cursor + insertText.length;
       if (entry.type === "image") {
         insertText += entry.filePath + " ";
@@ -177,7 +209,7 @@ export async function insertFileAttachments(
           })
         );
       } else {
-        const token = formatAtFileTokenForCwd(entry.filePath, cwdProvider?.() ?? cwd);
+        const token = formatAtFileTokenForCwd(entry.filePath, cwd);
         insertText += token + " ";
         fileEffects.push(
           addFileDropChip.of({
