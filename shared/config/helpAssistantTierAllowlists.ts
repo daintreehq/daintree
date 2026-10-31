@@ -138,6 +138,10 @@ export const CORE_TIER_TOOLS = [
   "terminal.close",
   // Several closes in one call, each run as the close above (owned for a pane).
   "terminal.closeMany",
+  // Waits for the processes of panels this session closed to exit, and can end
+  // their trash grace early (#15728). Only what this session closed, so it
+  // needs no owned twin.
+  "terminal.waitForExit",
   // Moves a pane this session launched to another preset of its agent, after
   // the user confirms (#14369). Owned for every origin: the unscoped
   // `terminal.restartOnPreset` is on no tier.

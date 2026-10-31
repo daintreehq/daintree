@@ -268,6 +268,9 @@ export interface SessionServerDepsSource {
   readTerminalCloseContext?: import("./sessionServer.js").SessionServerDeps["readTerminalCloseContext"];
   readClosedPanelProcess?: import("./sessionServer.js").SessionServerDeps["readClosedPanelProcess"];
   readTerminalProcesses?: import("./sessionServer.js").SessionServerDeps["readTerminalProcesses"];
+  waitForClosedPanelExits?: import("./sessionServer.js").SessionServerDeps["waitForClosedPanelExits"];
+  terminalGenerationOf?: import("./sessionServer.js").SessionServerDeps["terminalGenerationOf"];
+  trackedTerminalIds?: import("./sessionServer.js").SessionServerDeps["trackedTerminalIds"];
   /**
    * Whether the pty-host's record places a terminal as an agent pane of this
    * workspace (#12883). `false` for anything it cannot place.
@@ -1105,6 +1108,15 @@ export function createSessionServerDeps(
       : {}),
     ...(deps.readTerminalProcesses !== undefined
       ? { readTerminalProcesses: deps.readTerminalProcesses }
+      : {}),
+    ...(deps.waitForClosedPanelExits !== undefined
+      ? { waitForClosedPanelExits: deps.waitForClosedPanelExits }
+      : {}),
+    ...(deps.terminalGenerationOf !== undefined
+      ? { terminalGenerationOf: deps.terminalGenerationOf }
+      : {}),
+    ...(deps.trackedTerminalIds !== undefined
+      ? { trackedTerminalIds: deps.trackedTerminalIds }
       : {}),
     isTerminalInPinnedWorkspace,
     ...(deps.replyWaiter !== undefined ? { replyWaiter: deps.replyWaiter } : {}),

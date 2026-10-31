@@ -78,6 +78,12 @@ import { viewlessStatusArgsAreAnswerable } from "./terminalStatus.js";
 import { viewlessActionDanger } from "../viewless/viewlessActionCatalog.js";
 import { parseLastMessageReadArgs } from "./lastMessageArgs.js";
 import { withClosedPanelProcesses } from "./closedPanelProcesses.js";
+import type { ClosedPanelExitTarget } from "./closedPanelExits.js";
+import type { ActionError } from "../../../shared/types/actions.js";
+import {
+  DEFAULT_TERMINAL_EXIT_WAIT_MS,
+  TerminalWaitForExitArgsSchema,
+} from "../../../shared/types/terminalExitWait.js";
 import {
   WORKTREE_DELETE_OWNED_TOOL,
   refuseWorktreeDeleteWhileRunning,
@@ -152,6 +158,7 @@ import {
   PROJECT_RUN_COMMAND_TOOL,
   TERMINAL_GET_STATUS_TOOL,
   TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL,
+  TERMINAL_WAIT_FOR_EXIT_TOOL,
 } from "./sessionToolIds.js";
 import type { CallFacts, CallOutcome, CallerAdmission } from "./sessionCallFacts.js";
 import {
@@ -172,6 +179,7 @@ import {
   dispatchOwnedResource,
   filterTerminalListToOwned,
   prepareTerminalListDispatch,
+  noteClosedTerminals,
   readOwnedResourceId,
   recordOwnershipFromDispatch,
   type RendererOwnedResourceTool,
@@ -225,6 +233,9 @@ export const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
   // agent wrote and dispatches nothing, so a closed workspace is no reason to
   // refuse it.
   TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL,
+  // Reads exits main kept and asks the pty-host to end a trash grace (#15728):
+  // a closed pane's process outlives its view.
+  TERMINAL_WAIT_FOR_EXIT_TOOL,
   // Terminal notices live in main and read the pty-host, so arming one needs
   // no project view.
   TERMINAL_NOTIFY_WHEN_IDLE_TOOL,
@@ -681,6 +692,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     requestCloseApproval,
     readTerminalCloseContext,
     readClosedPanelProcess,
+    waitForClosedPanelExits,
   } = deps;
 
   const session = createSessionContext(sessionId, deps);
@@ -2326,6 +2338,112 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           return buildToolError(refusal);
         };
 
+        // Short-circuit: terminal.waitForExit runs in main (#15728). The exits
+        // it reports are ones main kept after the pty-host let a closed panel
+        // go, and its authority is the ownership ledger's record of what this
+        // owner closed, which no renderer can see. Never `danger: "confirm"`:
+        // ending a grace early only brings forward the stop the close already
+        // decided, for panels this caller closed itself.
+        if (actionId === TERMINAL_WAIT_FOR_EXIT_TOOL) {
+          emitToolCallStarted(false, false);
+          const parsed = TerminalWaitForExitArgsSchema.safeParse(args);
+          if (!parsed.success) {
+            const error: ActionError = {
+              code: "VALIDATION_ERROR",
+              message: `Invalid arguments: ${parsed.error.issues[0]?.message ?? "invalid input"}`,
+            };
+            outcome = { kind: "result", value: { ok: false, error } };
+            return buildToolError(error);
+          }
+          const targets: ClosedPanelExitTarget[] = [];
+          const closedIn = new Set<string | undefined>();
+          for (const terminalId of new Set(parsed.data.terminalIds)) {
+            const closed = sessionStore.resourceOwnership.closedRecord(ownershipOwner, terminalId);
+            if (closed === undefined) {
+              // One message for every miss, as for the owned tools: an id this
+              // caller never closed reads the same whoever's it is.
+              const error: ActionError = {
+                code: RESOURCE_NOT_OWNED_CODE,
+                message:
+                  `No terminal with id '${terminalId}' was closed by this session in the last ` +
+                  `10 minutes, so '${actionId}' will not wait for it. Nothing was waited for or ` +
+                  `stopped. Pass ids this connection closed with a close tool.`,
+              };
+              outcome = { kind: "result", value: { ok: false, error } };
+              return buildToolError(error);
+            }
+            targets.push({ terminalId, launchGeneration: closed.launchGeneration });
+            closedIn.add(closed.workspaceId);
+          }
+          const endGrace = parsed.data.endGrace === true;
+          // Stopping a process is a change main makes itself, so a relayed or
+          // viewless assistant answers to the drive rule for the project each
+          // panel was closed in (#13493) — one principal can hold sessions in
+          // several. Asked now, and again right before each grace is ended.
+          const refuseWrite =
+            deps.relay !== undefined
+              ? (projectId: string | undefined) => deps.relay!.refuseWrite(projectId)
+              : deps.refuseWrite;
+          const graceRefusal = () => {
+            if (refuseWrite === undefined) return null;
+            for (const workspaceId of closedIn) {
+              const refusal = refuseWrite(workspaceId);
+              if (refusal) return refusal;
+            }
+            return null;
+          };
+          if (endGrace) {
+            const refusal = graceRefusal();
+            if (refusal) return refuseRelayed(refusal);
+          }
+          if (waitForClosedPanelExits === undefined) {
+            const error: ActionError = {
+              code: EXECUTION_ERROR_CODE,
+              message: "The pty host is not available, so no exit can be observed.",
+            };
+            outcome = { kind: "result", value: { ok: false, error } };
+            return buildToolError(error);
+          }
+          try {
+            const result = await waitForClosedPanelExits(targets, {
+              timeoutMs: parsed.data.timeoutMs ?? DEFAULT_TERMINAL_EXIT_WAIT_MS,
+              endGrace,
+              signal: extra.signal,
+              authorizeEndGrace: () => {
+                const late = graceRefusal();
+                if (late) throw new RelayWriteRefused(late);
+              },
+            });
+            outcome = { kind: "result", value: { ok: true, result } };
+            // A wait can run up to a minute, so it keeps the grant that
+            // admitted it as the other waits do (#8442).
+            if (grantIssuedAt !== undefined || nativeGrantId !== undefined) {
+              if (grantIssuedAt !== undefined) {
+                sessionStore.grantCache.refresh(sessionId, actionId, grantIssuedAt);
+              }
+              if (nativeGrantId !== undefined) {
+                sessionStore.grantCache.refreshNativeGrant(nativeGrantId);
+              }
+              if (sessionStore.sessions.has(sessionId)) {
+                sessionStore.resetIdleTimer(sessionId);
+              } else if (sessionStore.httpSessions.has(sessionId)) {
+                sessionStore.resetHttpIdleTimer(sessionId);
+              }
+            }
+            return buildToolCallResult(result, {
+              structuredContent: result as unknown as Record<string, unknown>,
+            });
+          } catch (err) {
+            if (err instanceof RelayWriteRefused) return refuseRelayed(err.refusal);
+            outcome = { kind: "throw", error: err };
+            if (err instanceof McpError) throw err;
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message: formatErrorMessage(err, "waitForExit failed"),
+            });
+          }
+        }
+
         // Short-circuit: project.runCheck runs entirely in the main process
         // (#11548). The action manifest entry (renderer) carries schema, tier,
         // and audit metadata, but execution must stay here because (a) it
@@ -2696,6 +2814,22 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           };
         };
 
+        // The incarnation each named close reaches, read before it is sent: a
+        // successor launched under the id while the close is out is not the
+        // process the caller closed (#15728).
+        // `terminal.closeAll` names none, so every tracked id is read instead;
+        // a closed id missing from the read is noted with no incarnation.
+        const closeGenerations = new Map<string, number | undefined>();
+        if (CLOSE_TOOLS.has(actionId)) {
+          const named =
+            actionId === "terminal.closeAll"
+              ? (deps.trackedTerminalIds?.() ?? [])
+              : namedTerminalIds(args);
+          for (const terminalId of named) {
+            closeGenerations.set(terminalId, deps.terminalGenerationOf?.(terminalId));
+          }
+        }
+
         // An assistant target runs in main (#13496), with the notice and the
         // reply wait set up above around it like any send. Its refusals are
         // its own words, and a refused send cancels the notice in `finally`.
@@ -2796,6 +2930,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // — "this session created it" is a fact about the session, not about
           // its privileges.
           recordDispatchOwnership(envelope);
+          // What it closed, so it can wait for those processes to exit after
+          // `terminal.closeOwned` released them (#15728).
+          if (CLOSE_TOOLS.has(actionId)) {
+            noteClosedTerminals({ sessionId, sessionStore, ownershipOwner }, envelope, (id) =>
+              closeGenerations.get(id)
+            );
+          }
           settleRestartHold?.(envelope.result.ok);
           settleRestartHold = undefined;
           // Hand the notice what the action reported: the send's submission

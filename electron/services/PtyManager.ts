@@ -51,6 +51,7 @@ import {
   trackAgentSessionCapture,
 } from "./pty/agentSessionCaptureDelivery.js";
 import type {
+  EndTrashGraceStatus,
   FirstPromptCandidate,
   GracefulKillResult,
   TerminalResizeResult,
@@ -1061,6 +1062,19 @@ export class PtyManager extends EventEmitter {
    */
   restore(id: string): boolean {
     return this.registry.restore(id);
+  }
+
+  /**
+   * End a trashed terminal's grace now (#15728): the expiry its timer would
+   * run, graceful shutdown and kill included, only for the incarnation the
+   * caller closed. A restored or relaunched terminal is left alone.
+   */
+  endTrashGrace(id: string, expectedGeneration: number): EndTrashGraceStatus {
+    if (!this.registry.isInTrash(id)) return "not-trashed";
+    if (this.registry.get(id)?.getInfo().launchGeneration !== expectedGeneration) {
+      return "generation-mismatch";
+    }
+    return this.registry.expireTrashNow(id) ? "started" : "not-trashed";
   }
 
   /**

@@ -30,6 +30,11 @@ import type {
 } from "../../shared/types/ipc/mcpServer.js";
 import { SessionStore } from "./mcp-server/sessionStore.js";
 import { readClosedPanelProcess } from "./mcp-server/closedPanelProcesses.js";
+import {
+  resolveClosedTerminalGeneration,
+  waitForClosedPanelExits,
+} from "./mcp-server/closedPanelExits.js";
+import { getLifecycleLedger } from "./pty/lifecycleLedger.js";
 import { readPtyTerminalProcesses } from "./mcp-server/worktreeProcessGuard.js";
 import {
   helpOwnershipPrincipal,
@@ -495,6 +500,43 @@ export class McpServerService {
           return client ? client.getTerminalAsync(id, undefined, { strict: true }) : null;
         }),
       readTerminalProcesses: () => readPtyTerminalProcesses(getPtyClient()),
+      terminalGenerationOf: (terminalId) => {
+        const client = getPtyClient();
+        if (!client) return undefined;
+        return resolveClosedTerminalGeneration(terminalId, {
+          liveGeneration: (id) => client.getLiveGeneration(id),
+          latestExitGeneration: (id) => client.recentExits.latestGeneration(id),
+          ledgerEntry: (id) => getLifecycleLedger().getEntry(id),
+        });
+      },
+      // Running ones, and ones whose exit main kept, which a panel may still show.
+      trackedTerminalIds: () => {
+        const client = getPtyClient();
+        return client
+          ? [...new Set([...client.getTrackedTerminalIds(), ...client.recentExits.terminalIds()])]
+          : [];
+      },
+      // From exits main kept and the host's own records, never a guess: a
+      // record gone with no exit seen, or a host that never answered, is
+      // unknown.
+      waitForClosedPanelExits: (targets, options) => {
+        const client = getPtyClient();
+        if (!client) {
+          return Promise.resolve({
+            processes: targets.map(({ terminalId }) => ({
+              terminalId,
+              outcome: "unknown" as const,
+              ...(options.endGrace ? { graceEnded: false } : {}),
+            })),
+          });
+        }
+        return waitForClosedPanelExits(targets, options, {
+          findExit: (id, generation) => client.recentExits.find(id, generation),
+          onExit: (listener) => client.recentExits.onExit(listener),
+          readRecord: (id) => client.getTerminalAsync(id, undefined, { strict: true }),
+          endTrashGrace: (id, generation) => client.endTrashGrace(id, generation),
+        });
+      },
       isAgentPaneInWorkspace: (terminalId, workspaceId) =>
         isAgentPaneInWorkspace(getPtyClient(), terminalId, workspaceId),
       terminalNotify: this.terminalNotify,

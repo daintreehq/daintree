@@ -485,6 +485,8 @@ describe("workspace-bound external sessions (#11789)", () => {
         },
         // Executed through the injected notify service rather than a named dep.
         "terminal.notifyWhenIdle": { args: { terminalId: "t-1" } },
+        // Answers for panels this session closed, through main's exit wait (#15728).
+        "terminal.waitForExit": { args: { terminalIds: ["t-1"] } },
         // Executed through main's assistant control, for an assistant caller (#13496).
         "assistant.list": { args: {} },
         "assistant.start": { args: {} },
@@ -564,6 +566,34 @@ describe("workspace-bound external sessions (#11789)", () => {
           // back to the host base surface when the workspace is unreachable.
           expect(deps.requestManifest).not.toHaveBeenCalled();
         }
+      });
+
+      it("waits for a closed panel's exit at core with no live view (#15728)", async () => {
+        const result = {
+          processes: [{ terminalId: "t-1", outcome: "exited" as const, exitCode: 0 }],
+        };
+        const waitForClosedPanelExits = vi.fn(async () => result);
+        const deps = viewlessDeps({ waitForClosedPanelExits });
+        vi.mocked(deps.sessionStore.getTier).mockReturnValue("core");
+        deps.sessionStore.resourceOwnership.noteClosed(SESSION, [
+          { terminalId: "t-1", launchGeneration: 2 },
+        ]);
+        const server = createSessionServer(SESSION, deps);
+        await server.connect(makeMockTransport());
+
+        const answer = await callTool(server, {
+          name: "terminal.waitForExit",
+          arguments: { terminalIds: ["t-1"], endGrace: true },
+        });
+
+        expect(answer.isError).toBeFalsy();
+        expect(answer.structuredContent).toEqual(result);
+        expect(waitForClosedPanelExits).toHaveBeenCalledWith(
+          [{ terminalId: "t-1", launchGeneration: 2 }],
+          expect.objectContaining({ endGrace: true })
+        );
+        expect(deps.requestManifest).not.toHaveBeenCalled();
+        expect(deps.dispatchAction).not.toHaveBeenCalled();
       });
 
       it("still refuses a renderer action with no live view", async () => {

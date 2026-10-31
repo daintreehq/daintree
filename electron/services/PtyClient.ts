@@ -86,6 +86,7 @@ import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { routeHostEvent, type PtyEventRouterDeps } from "./pty/PtyEventRouter.js";
 import type { TerminalLaunchAttribution } from "./pty/TerminalLifecycleObserver.js";
 import { sendPtyHostRpc } from "./pty/PtyHostRpcFacade.js";
+import { RecentTerminalExits } from "./pty/RecentTerminalExits.js";
 import { mergeFlowControlSnapshots, mergeMemoryRollups } from "./pty/rollupMerge.js";
 import { HostSignalAggregator, type HostMemoryWarningPayload } from "./pty/HostSignalAggregator.js";
 import { HostMemoryPauseTracker } from "./pty/HostMemoryPauseTracker.js";
@@ -113,6 +114,7 @@ import type {
   HostThrottlePayload,
   MemoryRollup,
   GracefulKillResult,
+  EndTrashGraceStatus,
   AgentSessionCaptureFinishResult,
   PtyHostWorkerGovernanceSnapshot,
   TrimStateResult,
@@ -284,6 +286,8 @@ const MAX_MISSED_HEARTBEATS = 3;
  * before SIGKILL, after it), each bounded at 3s, plus the escalation grace.
  */
 const CLOSED_PROCESS_KILL_TIMEOUT_MS = 15_000;
+/** The host only starts the trash expiry and answers; the shutdown runs on after. */
+const END_TRASH_GRACE_TIMEOUT_MS = 5000;
 /** One run of Main's tree-kill helper for roots a disposing host handed over. */
 const HANDOFF_TREE_KILL_TIMEOUT_MS = 3000;
 /**
@@ -377,6 +381,12 @@ export class PtyClient extends EventEmitter {
    * per-terminal requests to the shard that actually holds the terminal.
    */
   private readonly terminalOwners = new Map<string, string>();
+  /**
+   * Exits the host reported, kept past the host's record of the terminal so a
+   * wait for a closed panel's process still finds one the trash already let go
+   * (#15728).
+   */
+  readonly recentExits = new RecentTerminalExits();
   /**
    * projectId → forced shard key. Written when a project shard exhausts its
    * crash budget (its terminals migrate to the default shard and stay there
@@ -828,13 +838,19 @@ export class PtyClient extends EventEmitter {
         // Lifecycle-ledger bookkeeping. Exits carry the host-adopted
         // launchGeneration so a stale exit arriving after a same-id respawn
         // closes its own incarnation, never the successor.
-        onTerminalExit: (id, exitCode, launchGeneration) => {
+        onTerminalExit: (id, exitCode, launchGeneration, signal) => {
           terminalCrashReapService.detachTerminal(id, launchGeneration);
           const ledger = getLifecycleLedger();
           const generation = launchGeneration ?? ledger.currentGeneration(id);
           if (generation !== undefined && ledger.currentGeneration(id) !== undefined) {
             ledger.recordClose(id, generation, "exit", exitCode);
           }
+          this.recentExits.record({
+            terminalId: id,
+            launchGeneration: generation,
+            exitCode,
+            signal,
+          });
         },
         // Per-terminal captures streamed while a graceful kill is still
         // running (#12180). Recorded only while a call for that project is in
@@ -1763,6 +1779,11 @@ export class PtyClient extends EventEmitter {
     return this.pendingSpawns.has(id);
   }
 
+  /** Every terminal id main is tracking, for a snapshot taken before a bulk close. */
+  getTrackedTerminalIds(): string[] {
+    return [...this.pendingSpawns.keys()];
+  }
+
   /**
    * The launch generation of the incarnation main is tracking under `id`, or
    * null for an unknown terminal. Lets a caller holding authority over one
@@ -2174,6 +2195,21 @@ export class PtyClient extends EventEmitter {
       return { sessionId: null };
     });
     return result.sessionId;
+  }
+
+  /**
+   * End a trashed terminal's grace now (#15728), only for the incarnation the
+   * caller closed. Null when the host did not answer: it may or may not have
+   * started, and the caller's wait finds out from the exit.
+   */
+  async endTrashGrace(id: string, expectedGeneration: number): Promise<EndTrashGraceStatus | null> {
+    if (this.isDisposed) return null;
+    return sendPtyHostRpc<EndTrashGraceStatus>(
+      this.shardForTerminal(id),
+      `end-trash-grace-${id}`,
+      (requestId) => ({ type: "end-trash-grace", id, requestId, expectedGeneration }),
+      { method: "end-trash-grace", timeoutMs: END_TRASH_GRACE_TIMEOUT_MS }
+    ).catch(() => null);
   }
 
   /**
@@ -3052,6 +3088,7 @@ export class PtyClient extends EventEmitter {
     this.isDisposed = true;
 
     getTrashedPidTracker().clearAll();
+    this.recentExits.clear();
     console.log("[PtyClient] Disposing...");
 
     for (const timer of this.shardRetirementTimers.values()) {

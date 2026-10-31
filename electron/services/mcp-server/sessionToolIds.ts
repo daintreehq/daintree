@@ -8,3 +8,4 @@ export const PROJECT_RUN_CHECK_TOOL = "project.runCheck";
 export const PROJECT_RUN_COMMAND_TOOL = "project.runCommand";
 export const TERMINAL_GET_STATUS_TOOL = "terminal.getStatus";
 export const TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL = "terminal.readLastMessageOwned";
+export const TERMINAL_WAIT_FOR_EXIT_TOOL = "terminal.waitForExit";

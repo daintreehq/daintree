@@ -10,6 +10,9 @@ const shared = vi.hoisted(() => ({
   // old grid). `null` = the PTY holds exactly what it was spawned with.
   ptyGeometryOverride: null as { cols: number | null; rows: number | null } | null,
   trashCallbacks: new Map<string, (id: string) => void>(),
+  // Ids the fake registry reports in the trash. Only the early-expiry tests
+  // fill it, so every other test keeps the registry reporting none.
+  inTrash: new Set<string>(),
   eventsEmit: vi.fn(),
   computeSpawnContext: vi.fn(),
   acquirePtyProcess: vi.fn(),
@@ -160,9 +163,18 @@ class MockTerminalRegistry {
   trash(id: string, onExpire: (id: string) => void): void {
     shared.trashCallbacks.set(id, onExpire);
   }
-  clearTrashTimeout(_id: string): void {}
-  isInTrash(_id: string): boolean {
-    return false;
+  clearTrashTimeout(id: string): void {
+    shared.inTrash.delete(id);
+  }
+  isInTrash(id: string): boolean {
+    return shared.inTrash.has(id);
+  }
+  expireTrashNow(id: string): boolean {
+    const onExpire = shared.trashCallbacks.get(id);
+    if (!shared.inTrash.has(id) || onExpire === undefined) return false;
+    onExpire(id);
+    shared.inTrash.delete(id);
+    return true;
   }
   getTrashExpiresAt(id: string): number | undefined {
     return trashExpiries.get(id);
@@ -250,6 +262,7 @@ describe("PtyManager lifecycle ledger", () => {
     shared.terminals.clear();
     shared.created.length = 0;
     shared.trashCallbacks.clear();
+    shared.inTrash.clear();
     shared.ptyGeometryOverride = null;
     shared.computeSpawnContext.mockReturnValue({
       env: {},
@@ -593,5 +606,45 @@ describe("PtyManager lifecycle ledger", () => {
       );
     });
     trashExpiries.clear();
+  });
+  describe("ending a trash grace early (#15728)", () => {
+    it("runs the trash expiry for the incarnation the caller closed", async () => {
+      const manager = new PtyManager();
+      manager.spawn("t1", spawnOptions({ launchAgentId: "claude", launchGeneration: 3 }));
+      shared.created[0]!.sessionId = "sess-1";
+      manager.trash("t1");
+      shared.inTrash.add("t1");
+
+      expect(manager.endTrashGrace("t1", 3)).toBe("started");
+      expect(manager.isInTrash("t1")).toBe(false);
+      await vi.waitFor(() => {
+        expect(shared.created[0]!.gracefulShutdownCalled).toBe(true);
+        expect(shared.eventsEmit).toHaveBeenCalledWith(
+          "agent-session:captured",
+          expect.objectContaining({ terminalId: "t1", boundary: "trash-expiry" })
+        );
+      });
+    });
+
+    it("leaves a relaunched incarnation under the same id alone", () => {
+      const manager = new PtyManager();
+      manager.spawn("t1", spawnOptions({ launchGeneration: 4 }));
+      manager.trash("t1");
+      shared.inTrash.add("t1");
+
+      expect(manager.endTrashGrace("t1", 3)).toBe("generation-mismatch");
+      expect(manager.isInTrash("t1")).toBe(true);
+      expect(shared.created[0]!.gracefulShutdownCalled).toBe(false);
+      expect(shared.created[0]!.kill).not.toHaveBeenCalled();
+    });
+
+    it("leaves a terminal that is not in the trash alone", () => {
+      const manager = new PtyManager();
+      manager.spawn("t1", spawnOptions({ launchGeneration: 3 }));
+
+      expect(manager.endTrashGrace("t1", 3)).toBe("not-trashed");
+      expect(manager.endTrashGrace("missing", 1)).toBe("not-trashed");
+      expect(shared.created[0]!.kill).not.toHaveBeenCalled();
+    });
   });
 });

@@ -327,6 +327,46 @@ describe("PtyClient lifecycle ledger", () => {
     expect(client.hasTerminal("t1")).toBe(false);
   });
 
+  it("keeps each incarnation's exit after the host forgets it, for a wait on a closed panel (#15728)", () => {
+    const client = createReadyClient();
+
+    client.spawn("t1", baseOptions);
+    client.kill("t1");
+    client.spawn("t1", baseOptions);
+    mockChild.emit("message", {
+      type: "exit",
+      id: "t1",
+      exitCode: 0,
+      signal: 9,
+      launchGeneration: 1,
+    });
+
+    expect(client.recentExits.find("t1", 1)).toMatchObject({ exitCode: 0, signal: 9 });
+    expect(client.recentExits.find("t1", 2)).toBeUndefined();
+
+    mockChild.emit("message", { type: "exit", id: "t1", exitCode: 3, launchGeneration: 2 });
+    expect(client.hasTerminal("t1")).toBe(false);
+    expect(client.recentExits.find("t1", 2)?.exitCode).toBe(3);
+  });
+
+  it("asks the host to end one incarnation's trash grace and answers what it did (#15728)", async () => {
+    const client = createReadyClient();
+    client.spawn("t1", baseOptions);
+
+    const answer = client.endTrashGrace("t1", 1);
+    const request = mockChild.postMessage.mock.calls
+      .map((call: unknown[]) => call[0] as { type?: string; requestId?: string })
+      .find((message) => message.type === "end-trash-grace");
+    expect(request).toMatchObject({ id: "t1", expectedGeneration: 1 });
+    mockChild.emit("message", {
+      type: "end-trash-grace-result",
+      requestId: request!.requestId,
+      status: "started",
+    });
+
+    await expect(answer).resolves.toBe("started");
+  });
+
   it("consumes restart suppression once and disarms it when a successor launches", () => {
     const client = createReadyClient();
     client.suppressExitForRestart("unknown");

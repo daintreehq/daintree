@@ -2321,6 +2321,92 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
   },
   {
     band: "reversible",
+    category: "terminal",
+    danger: "safe",
+    description:
+      "Wait, up to a deadline, for the processes of panels this session closed to exit. Each reports exited with its code, running at the deadline, or unknown. Can end their trash grace early instead of sitting it out. Use it before deleting their worktree.",
+    enabled: true,
+    examples: [
+      {
+        args: {
+          terminalIds: ["term-abc123"],
+          endGrace: true,
+        },
+        description: "You closed your panes and their processes must be gone before the delete.",
+      },
+    ],
+    id: "terminal.waitForExit",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        terminalIds: {
+          minItems: 1,
+          maxItems: 16,
+          type: "array",
+          items: {
+            type: "string",
+            minLength: 1,
+          },
+          description: "1-16 panels this session closed.",
+        },
+        timeoutMs: {
+          description: "Shared deadline, 0 to 60000; default 30000. 0 reads once.",
+          type: "integer",
+          minimum: 0,
+          maximum: 60000,
+        },
+        endGrace: {
+          description: "Start shutting down those still in the trash now, not when the grace ends.",
+          type: "boolean",
+        },
+      },
+      required: ["terminalIds"],
+    },
+    keywords: ["exit", "process", "trash", "stopped", "cleanup"],
+    kind: "command",
+    name: "terminal.waitForExit",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        processes: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              terminalId: {
+                type: "string",
+              },
+              outcome: {
+                type: "string",
+                enum: ["exited", "running", "unknown"],
+                description: "exited: the host saw it exit; running: still alive at the deadline.",
+              },
+              exitCode: {
+                type: "number",
+              },
+              signal: {
+                type: "number",
+              },
+              graceEnded: {
+                description: "With endGrace: true when this call started its shutdown.",
+                type: "boolean",
+              },
+            },
+            required: ["terminalId", "outcome"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["processes"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Wait for closed terminals to exit",
+  },
+  {
+    band: "reversible",
     category: "worktree",
     danger: "safe",
     description:

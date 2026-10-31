@@ -73,6 +73,28 @@ export interface OwnedResourceRecord {
   workspaceId?: string;
 }
 
+/**
+ * A terminal an owner closed (#15728), recorded from the close's trusted
+ * result. What lets the owner wait for its process to exit, and end its trash
+ * grace early, after `terminal.closeOwned` released the creation record.
+ */
+export interface ClosedTerminalRecord {
+  terminalId: string;
+  /** The incarnation that was closed, when main knew it. */
+  launchGeneration: number | undefined;
+  /**
+   * The workspace the close ran in, when known. One principal can hold
+   * sessions bound to several projects, so ending the grace asks this
+   * project's drive rule, not the asking session's.
+   */
+  workspaceId?: string;
+  closedAt: number;
+}
+
+/** Long enough to wait out the trash grace and then some; a wait never extends it. */
+export const CLOSED_TERMINAL_TTL_MS = 10 * 60 * 1000;
+const CLOSED_TERMINALS_PER_OWNER = 256;
+
 function resourceKey(kind: OwnedResourceKind, id: string): string {
   return `${kind}\u0000${id}`;
 }
@@ -155,6 +177,8 @@ export class ResourceOwnershipLedger {
    * nothing binds a principal again once it has left this set.
    */
   private readonly livePrincipals = new Set<string>();
+  /** owner → terminalId → what it closed, oldest first. */
+  private readonly closedByOwner = new Map<string, Map<string, ClosedTerminalRecord>>();
 
   /**
    * Bind a session to the principal its bearer resolved to at handshake
@@ -226,6 +250,62 @@ export class ResourceOwnershipLedger {
       added.push(record);
     }
     return added;
+  }
+
+  /**
+   * Note terminals this owner just closed, from the close's own result. A
+   * revoked principal notes nothing, as it records nothing. Bounded per owner
+   * and by age; the newest close of an id replaces an older one.
+   */
+  noteClosed(
+    owner: string,
+    closed: ReadonlyArray<{ terminalId: string; launchGeneration: number | undefined }>,
+    workspaceId?: string,
+    now: number = Date.now()
+  ): void {
+    if (closed.length === 0) return;
+    if (isPrincipalOwner(owner) && !this.livePrincipals.has(owner)) return;
+    let records = this.closedByOwner.get(owner);
+    if (records === undefined) {
+      records = new Map();
+      this.closedByOwner.set(owner, records);
+    }
+    for (const { terminalId, launchGeneration } of closed) {
+      if (terminalId.length === 0) continue;
+      records.delete(terminalId);
+      records.set(terminalId, {
+        terminalId,
+        launchGeneration,
+        ...(workspaceId !== undefined ? { workspaceId } : {}),
+        closedAt: now,
+      });
+    }
+    this.pruneClosed(owner, now);
+  }
+
+  /** What this owner closed under `terminalId`, while the record lasts. */
+  closedRecord(
+    owner: string,
+    terminalId: string,
+    now: number = Date.now()
+  ): ClosedTerminalRecord | undefined {
+    this.pruneClosed(owner, now);
+    return this.closedByOwner.get(owner)?.get(terminalId);
+  }
+
+  private pruneClosed(owner: string, now: number): void {
+    const records = this.closedByOwner.get(owner);
+    if (records === undefined) return;
+    for (const [terminalId, record] of records) {
+      if (
+        now - record.closedAt < CLOSED_TERMINAL_TTL_MS &&
+        records.size <= CLOSED_TERMINALS_PER_OWNER
+      ) {
+        break;
+      }
+      records.delete(terminalId);
+    }
+    if (records.size === 0) this.closedByOwner.delete(owner);
   }
 
   /**
@@ -317,12 +397,13 @@ export class ResourceOwnershipLedger {
    */
   clearAllSessions(): void {
     this.principalBySession.clear();
-    for (const owner of [...this.byOwner.keys()]) {
+    for (const owner of [...this.byOwner.keys(), ...this.closedByOwner.keys()]) {
       if (!isPrincipalOwner(owner)) this.dropOwner(owner);
     }
   }
 
   private dropOwner(owner: string): void {
+    this.closedByOwner.delete(owner);
     const owned = this.byOwner.get(owner);
     if (owned === undefined) return;
     for (const key of owned.keys()) {
