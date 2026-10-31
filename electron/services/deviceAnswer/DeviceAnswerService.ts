@@ -55,7 +55,10 @@ export interface DeviceAnswerServiceDeps {
    * set, each tagged with its machine. `read` is one run the device picked
    * from those left unread, to be read ahead of the rest of its machine's.
    */
-  listWaiting: (options: { hosts: boolean; read: DeviceRunRef | null }) => Promise<DeviceWaitingList>;
+  listWaiting: (options: {
+    hosts: boolean;
+    read: DeviceRunRef | null;
+  }) => Promise<DeviceWaitingList>;
   /**
    * Press the option labelled `label` in the run on `hostId` (`LOCAL_HOST_ID`
    * for this machine), for `device`, only into the question `questionId` was

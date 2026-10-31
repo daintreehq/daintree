@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const DIALOG = "❯ 1. Yes\n  2. No\n\n Esc to cancel";
 
-const ONE_RUN = [{ runId: "run-1", spawnedAt: 100, agentState: "waiting", workspaceId: "project-1" }];
+const ONE_RUN = [
+  { runId: "run-1", spawnedAt: 100, agentState: "waiting", workspaceId: "project-1" },
+];
 
 const state = {
   fleetRuns: ONE_RUN as Array<Record<string, unknown>>,

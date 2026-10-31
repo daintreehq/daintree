@@ -299,10 +299,7 @@ describe("listWaitingRuns past the screens it reads", () => {
       "no-reason",
     ]);
     // A hand-back parked comes after every hand-back left in front.
-    expect(omitted.map((run) => run.runId)).toEqual([
-      `idle-${MAX_LISTED_RUNS - 4}`,
-      "idle-parked",
-    ]);
+    expect(omitted.map((run) => run.runId)).toEqual([`idle-${MAX_LISTED_RUNS - 4}`, "idle-parked"]);
   });
 
   it("counts no unread run that stopped waiting, and no run that started while screens were read", async () => {

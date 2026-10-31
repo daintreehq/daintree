@@ -1,8 +1,5 @@
 import { DEVICE_ANSWER_ENDPOINT_PREFIX } from "../../ipc/endpoint.js";
-import type {
-  WaitingRunRef,
-  WaitingRuns,
-} from "../../services/deviceAnswer/deviceAnswerRuns.js";
+import type { WaitingRunRef, WaitingRuns } from "../../services/deviceAnswer/deviceAnswerRuns.js";
 import type { DeviceLeaseStanding } from "../../services/deviceAnswer/localDeviceAnswer.js";
 import type { LinkClientInfo } from "../link/messages.js";
 import type { LinkSession } from "../link/session.js";

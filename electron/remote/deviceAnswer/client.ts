@@ -64,9 +64,9 @@ export class DeviceAnswerHostsClient {
    * none of the rest. `read` names one host's run to read ahead of its others;
    * it goes to that host alone.
    */
-  listWaiting(options: { read?: (WaitingRunRef & { hostId: HostId }) | null } = {}): Promise<
-    HostWaitingRuns[]
-  > {
+  listWaiting(
+    options: { read?: (WaitingRunRef & { hostId: HostId }) | null } = {}
+  ): Promise<HostWaitingRuns[]> {
     const { read } = options;
     return Promise.all(
       this.deps.hosts().map(async ({ hostId, name }): Promise<HostWaitingRuns> => {
@@ -86,7 +86,9 @@ export class DeviceAnswerHostsClient {
           this.deps.touch(hostId);
           const raw = await session.call(
             DeviceAnswerLinkMethod.LIST,
-            read?.hostId === hostId ? { read: { runId: read.runId, spawnedAt: read.spawnedAt } } : {},
+            read?.hostId === hostId
+              ? { read: { runId: read.runId, spawnedAt: read.spawnedAt } }
+              : {},
             { timeoutMs: HOST_LIST_TIMEOUT_MS }
           );
           const parsed = DeviceAnswerListResultSchema.safeParse(raw);

@@ -234,9 +234,7 @@ export async function listWaitingRuns(
   // A run that moved on while its screen was read isn't listed on an old
   // word, and one left unread isn't counted once it has.
   const still = new Set(
-    (deps.fleet()?.runs ?? [])
-      .filter(isWaiting)
-      .map((row) => runKey(row.runId, row.spawnedAt))
+    (deps.fleet()?.runs ?? []).filter(isWaiting).map((row) => runKey(row.runId, row.spawnedAt))
   );
   const isStill = (run: WaitingRunRef) => still.has(runKey(run.runId, run.spawnedAt));
   const runs = views.filter(isStill).sort(compareWaitingRuns);

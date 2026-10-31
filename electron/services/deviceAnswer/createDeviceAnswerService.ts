@@ -62,7 +62,9 @@ async function listWaiting(options: {
     // Hosts that can't be read never hide this machine's own runs.
     remote
       ? Promise.resolve()
-          .then(() => remote.listWaiting({ read: read && !isLocalHostId(read.hostId) ? read : null }))
+          .then(() =>
+            remote.listWaiting({ read: read && !isLocalHostId(read.hostId) ? read : null })
+          )
           .catch((error: unknown) => {
             console.warn(
               "[DeviceAnswer] Couldn't list connected hosts:",

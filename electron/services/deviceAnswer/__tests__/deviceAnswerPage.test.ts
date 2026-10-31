@@ -447,7 +447,8 @@ describe("the paired device's page", () => {
     coverage: [{ ...here, listed: 2, waiting: 3 }],
     hosts: [],
   });
-  const CUT = "Showing 2 of 3 waiting agents on greg-studio. Pick one under Others waiting to read its screen.";
+  const CUT =
+    "Showing 2 of 3 waiting agents on greg-studio. Pick one under Others waiting to read its screen.";
   const live = () => document.getElementById("announce")!.textContent;
   const count = () => document.getElementById("count")!.textContent;
   const notes = () => document.getElementById("hosts")!;

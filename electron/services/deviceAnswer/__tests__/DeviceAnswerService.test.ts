@@ -93,7 +93,9 @@ async function setup(overrides: Partial<DeviceAnswerSettings> = {}) {
     { hostId: "mini", host: "Mini", status: "not-connected" },
   ];
   const listWaiting = vi.fn(
-    async (_options: Parameters<DeviceAnswerServiceDeps["listWaiting"]>[0]): Promise<DeviceWaitingList> => ({
+    async (
+      _options: Parameters<DeviceAnswerServiceDeps["listWaiting"]>[0]
+    ): Promise<DeviceWaitingList> => ({
       runs: [RUN],
       hosts,
     })
@@ -247,12 +249,20 @@ describe("DeviceAnswerService", () => {
       });
     const pick = (value: unknown) => `read=${encodeURIComponent(JSON.stringify(value))}`;
 
-    const { runId: _runId, spawnedAt: _spawnedAt, screen: _s, choices: _c, questionId: _q, ...rest } =
-      RUN;
+    const {
+      runId: _runId,
+      spawnedAt: _spawnedAt,
+      screen: _s,
+      choices: _c,
+      questionId: _q,
+      ...rest
+    } = RUN;
     const omitted = [{ ...rest, runId: "run-2", spawnedAt: 100 }];
     const coverage = [{ hostId: "local", host: "greg-studio", listed: 1, waiting: 2 }];
     listWaiting.mockResolvedValueOnce({ runs: [RUN], omitted, coverage, hosts: [] });
-    const picked = await get(`?hosts=1&${pick({ hostId: "local", runId: "run-2", spawnedAt: 100 })}`);
+    const picked = await get(
+      `?hosts=1&${pick({ hostId: "local", runId: "run-2", spawnedAt: 100 })}`
+    );
     expect(picked.status).toBe(200);
     expect(listWaiting).toHaveBeenLastCalledWith({
       hosts: true,
