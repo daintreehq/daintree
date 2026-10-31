@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
@@ -9,6 +9,7 @@ import {
   verifyWithRetries,
   findMetadataFiles,
   verifyAllFiles,
+  FETCH_TIMEOUT_MS,
 } from "./verify-r2-uploads.mjs";
 
 function makeResponse({ status = 200, contentLength = 100 }) {
@@ -105,6 +106,103 @@ describe("verifyFileUrl", () => {
     const result = await verifyFileUrl(entry, { fetch: fetchFn, publishUrl });
     expect(result).toContain("network error");
     expect(result).toContain("DNS lookup failed");
+  });
+});
+
+describe("per-request deadline", () => {
+  const publishUrl = "https://x.example/r/";
+  const entry = { url: "Daintree-1.0.0-mac.zip", size: 100 };
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("aborts a fetch that never settles and names the URL in the timeout error", async () => {
+    vi.useFakeTimers();
+    let signal;
+    const fetchFn = vi.fn((_url, init) => {
+      signal = init.signal;
+      return new Promise(() => {});
+    });
+    const pending = verifyFileUrl(entry, { fetch: fetchFn, publishUrl });
+    await vi.advanceTimersByTimeAsync(FETCH_TIMEOUT_MS - 1);
+    expect(signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await pending;
+    expect(signal.aborted).toBe(true);
+    expect(result).toContain("timed out");
+    expect(result).toContain("https://x.example/r/Daintree-1.0.0-mac.zip");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("clears the deadline timer after a fast response", async () => {
+    vi.useFakeTimers();
+    const fetchFn = vi.fn().mockResolvedValue(makeResponse({ status: 200, contentLength: 100 }));
+    const result = await verifyFileUrl(entry, { fetch: fetchFn, publishUrl });
+    expect(result).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("reports a rejection that is not a timeout as a network error", async () => {
+    const fetchFn = vi.fn().mockRejectedValue(new Error("ECONNRESET"));
+    const result = await verifyFileUrl(entry, { fetch: fetchFn, publishUrl });
+    expect(result).toContain("network error");
+    expect(result).not.toContain("timed out");
+  });
+
+  it("uses every attempt on a stalled fetch without waiting out real deadlines", async () => {
+    vi.useFakeTimers();
+    const signals = [];
+    const fetchFn = vi.fn((_url, init) => {
+      signals.push(init.signal);
+      return new Promise(() => {});
+    });
+    const sleepFn = vi.fn().mockResolvedValue(undefined);
+    const pending = verifyWithRetries(entry, {
+      fetch: fetchFn,
+      publishUrl,
+      sleep: sleepFn,
+      timeoutMs: 50,
+    });
+    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(50);
+    const result = await pending;
+    expect(fetchFn).toHaveBeenCalledTimes(3);
+    expect(signals.every((s) => s.aborted)).toBe(true);
+    expect(sleepFn).toHaveBeenCalledTimes(2);
+    expect(result).toContain("timed out");
+    expect(result).toContain("https://x.example/r/Daintree-1.0.0-mac.zip");
+  });
+
+  it("surfaces a timed-out binary as a failure from verifyAllFiles", async () => {
+    vi.useFakeTimers();
+    const dir = await mkdtemp(path.join(os.tmpdir(), "verify-r2-timeout-"));
+    try {
+      const yml = path.join(dir, "latest-mac.yml");
+      await writeFile(
+        yml,
+        "version: 1.0.0\nfiles:\n  - url: stalled.zip\n    sha512: aaa\n    size: 100\npath: stalled.zip\nsha512: aaa\nreleaseDate: 2024-01-01\n"
+      );
+      const fetchFn = vi.fn(() => new Promise(() => {}));
+      const pending = verifyAllFiles({
+        metadataFiles: [yml],
+        publishUrl,
+        fetch: fetchFn,
+        sleep: vi.fn().mockResolvedValue(undefined),
+        timeoutMs: 50,
+        log: vi.fn(),
+      });
+      for (let i = 0; i < 3; i++) await vi.advanceTimersByTimeAsync(50);
+      const failures = await pending;
+      expect(failures).toHaveLength(1);
+      expect(failures[0].filePath).toBe(yml);
+      expect(failures[0].message).toContain("timed out");
+      expect(failures[0].message).toContain("https://x.example/r/stalled.zip");
+    } finally {
+      vi.useRealTimers();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 
