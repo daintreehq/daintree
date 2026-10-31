@@ -65,7 +65,11 @@ describe("FileSearchService", () => {
     gitClientMock.env.mockReturnValue(gitClientMock);
     gitClientMock.checkIsRepo.mockResolvedValue(false);
     gitClientMock.revparse.mockRejectedValue(new Error("not a git repository"));
-    gitClientMock.raw.mockResolvedValue("");
+    // A non-repository cwd: `ls-files` exits non-zero, which is what sends the
+    // service to the disk walker. An empty successful listing means "all ignored".
+    gitClientMock.raw.mockRejectedValue(
+      new Error("fatal: not a git repository (or any of the parent directories): .git")
+    );
   });
 
   afterEach(() => {
@@ -150,6 +154,19 @@ describe("FileSearchService", () => {
 
     expect(result).toContain("src/app.ts");
     expect(gitClientMock.raw).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes an empty successful listing as the answer instead of walking the disk", async () => {
+    const dir = makeTempDir();
+    tempDirs.push(dir);
+    writeFile(path.join(dir, "private.txt"));
+    writeFile(path.join(dir, "src", "app.ts"));
+    gitRepo(dir, "");
+
+    const service = await createService();
+
+    await expect(service.search({ cwd: dir, query: "", limit: 10 })).resolves.toEqual([]);
+    await expect(service.listFiles(dir)).resolves.toEqual([]);
   });
 
   it("normalizes leading path syntax in queries", async () => {

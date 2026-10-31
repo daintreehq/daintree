@@ -10,17 +10,22 @@ type GitClient = {
   raw: ReturnType<typeof vi.fn<(args: string[]) => Promise<string>>>;
 };
 
-const createHardenedGitMock = vi.hoisted(() => vi.fn<(cwd: string) => GitClient>());
+const createStrictExitGitMock = vi.hoisted(() => vi.fn<(cwd: string) => GitClient>());
 
 vi.mock("../../utils/hardenedGit.js", () => ({
-  createHardenedGit: createHardenedGitMock,
+  createStrictExitGit: createStrictExitGitMock,
 }));
 
+// Defaults to a non-repository cwd: `ls-files` exits non-zero there, which is
+// what sends the service to the disk walker. An empty successful listing is a
+// different answer (everything under cwd is ignored) and lists nothing.
 function createGitClient(): GitClient {
   return {
     checkIsRepo: vi.fn(async () => false),
     revparse: vi.fn(async () => ""),
-    raw: vi.fn(async () => ""),
+    raw: vi.fn(async (): Promise<string> => {
+      throw new Error("fatal: not a git repository (or any of the parent directories): .git");
+    }),
   };
 }
 
@@ -77,7 +82,7 @@ describe("FileSearchService adversarial", () => {
     const gitClient = createGitClient();
     const listDeferred = createDeferred<string>();
     gitClient.raw.mockReturnValue(listDeferred.promise);
-    createHardenedGitMock.mockReturnValue(gitClient);
+    createStrictExitGitMock.mockReturnValue(gitClient);
 
     const service = await createService();
     const first = service.search({ cwd: dir, query: "read", limit: 5 });
@@ -100,7 +105,7 @@ describe("FileSearchService adversarial", () => {
     writeFile(path.join(visibleDir, "match.txt"));
 
     const gitClient = createGitClient();
-    createHardenedGitMock.mockReturnValue(gitClient);
+    createStrictExitGitMock.mockReturnValue(gitClient);
     const readdirSpy = vi.spyOn(fsPromises, "readdir");
     const originalReaddir =
       readdirSpy.getMockImplementation() ?? fsPromises.readdir.bind(fsPromises);
@@ -127,7 +132,7 @@ describe("FileSearchService adversarial", () => {
     const cwdClient = createGitClient();
     cwdClient.raw.mockResolvedValue("src/main.ts\0src/utils.ts\0");
 
-    createHardenedGitMock.mockImplementation((baseDir) => {
+    createStrictExitGitMock.mockImplementation((baseDir) => {
       if (baseDir === cwd) return cwdClient;
       throw new Error(`unexpected git client for ${baseDir}`);
     });
@@ -153,7 +158,7 @@ describe("FileSearchService adversarial", () => {
     async () => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "file-search-adv-"));
       tempDirs.push(dir);
-      createHardenedGitMock.mockReturnValue(createGitClient());
+      createStrictExitGitMock.mockReturnValue(createGitClient());
       // Deliberately not writeFile() here: its per-call recursive mkdirSync is
       // 19,999 redundant syscalls against a directory that already exists.
       for (let index = 0; index < 19_999; index++) {
@@ -180,7 +185,7 @@ describe("FileSearchService adversarial", () => {
     gitClient.checkIsRepo.mockResolvedValue(true);
     gitClient.revparse.mockResolvedValue(`${dir}\n`);
     gitClient.raw.mockResolvedValue("a.ts\0src/index.ts\0pkg/tool.ts\0");
-    createHardenedGitMock.mockReturnValue(gitClient);
+    createStrictExitGitMock.mockReturnValue(gitClient);
 
     const service = await createService();
 
@@ -204,7 +209,7 @@ describe("FileSearchService adversarial", () => {
   it("skips well-known noise dirs in the fallback walker", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "file-search-adv-"));
     tempDirs.push(dir);
-    createHardenedGitMock.mockReturnValue(createGitClient());
+    createStrictExitGitMock.mockReturnValue(createGitClient());
 
     writeFile(path.join(dir, "src", "real.ts"));
     writeFile(path.join(dir, "dist", "bundle.js"));
@@ -227,7 +232,7 @@ describe("FileSearchService adversarial", () => {
   it("normalises NFD filenames to NFC in the fallback walker", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "file-search-adv-"));
     tempDirs.push(dir);
-    createHardenedGitMock.mockReturnValue(createGitClient());
+    createStrictExitGitMock.mockReturnValue(createGitClient());
 
     // "café.ts" using NFD: e + combining acute (́)
     const nfdName = "café.ts";
