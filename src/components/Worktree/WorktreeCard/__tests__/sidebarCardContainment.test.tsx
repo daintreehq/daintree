@@ -211,7 +211,7 @@ function fills(container: HTMLElement): Element[] {
 
 describe("sidebar session well", () => {
   it("names the next action when empty rather than reporting the absence", () => {
-    const { container, unmount } = renderTerminals({ variant: "sidebar", total: 0 });
+    const { container, unmount } = renderTerminals({ variant: "grid", total: 0 });
     const text = container.textContent ?? "";
     expect(
       /no sessions/i.test(text),
@@ -224,7 +224,7 @@ describe("sidebar session well", () => {
   it("makes the empty tray actually actionable, since it presents itself as an action", () => {
     const onStartSession = vi.fn();
     const { container, unmount } = renderTerminals({
-      variant: "sidebar",
+      variant: "grid",
       total: 0,
       onStartSession,
     });
@@ -255,9 +255,9 @@ describe("sidebar session well", () => {
     // absence. It does NOT get a well: a well is a container, and with no
     // sessions there is nothing to contain.
     //
-    // The sidebar keeps its well in the same state, and that is the one place
-    // the rule bends: its cards are full-bleed with no border of their own,
-    // so the well doubles as what separates two adjacent cards.
+    // The sidebar draws no tray at all: repeated down a long list it was the
+    // largest share of the list's height, and the card plane and its gutter
+    // separate the cards. Starting a session stays in the card's menus.
     const grid = renderTerminals({ variant: "grid", total: 0 });
     expect(grid.container.firstElementChild, "grid empty tray did not render").not.toBeNull();
     expect(wellCount(grid.container)).toBe(0);
@@ -265,7 +265,7 @@ describe("sidebar session well", () => {
     grid.unmount();
 
     const sidebar = renderTerminals({ variant: "sidebar", total: 0 });
-    expect(wellCount(sidebar.container)).toBeGreaterThan(0);
+    expect(sidebar.container.firstElementChild).toBeNull();
     sidebar.unmount();
   });
 
@@ -295,13 +295,14 @@ describe("sidebar card containment", () => {
     // because a region touching both card edges binds to whatever is adjacent
     // to it. A well cannot: its inset and perimeter close it, so it belongs to
     // the card whose padding contains it. One, contained, at the bottom.
+    // A card with no sessions draws no tray, so no well either.
     for (const isExpanded of [false, true]) {
       for (const total of [0, 1]) {
         const { container, unmount } = renderTerminals({ variant: "sidebar", isExpanded, total });
         expect(
           wellCount(container),
-          `sidebar sessions (expanded=${isExpanded}, total=${total}) should be exactly one well`
-        ).toBe(1);
+          `sidebar sessions (expanded=${isExpanded}, total=${total}) should be ${total} well(s)`
+        ).toBe(total === 0 ? 0 : 1);
         unmount();
       }
     }

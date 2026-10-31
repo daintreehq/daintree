@@ -52,6 +52,7 @@ describe("selectButtonDescribedBy", () => {
     const ids = selectButtonDescribedBy(PATH, {
       lifecycle: true,
       alarm: true,
+      attention: true,
       devServer: true,
       external: true,
     })!.split(" ");
