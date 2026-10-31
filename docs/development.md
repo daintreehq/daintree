@@ -9,7 +9,7 @@ npm run build        # Production build
 npm run check        # typecheck + codegen/wiring guards + lint ratchet + format
 npm run fix          # Auto-fix lint/format
 npm test -- <path>    # Vitest, only the tests covering your change
-npm run test:watch   # Vitest watch mode
+npm run test:watch -- <path>  # Vitest watch mode
 npm run rebuild      # Rebuild node-pty for Electron
 npm run package      # Build + electron-builder
 ```
