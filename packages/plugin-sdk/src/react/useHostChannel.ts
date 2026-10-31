@@ -39,6 +39,7 @@ export function useHostChannel<TArgs = unknown, TResult = unknown>(
   const [error, setError] = useState<Error | null>(null);
   const [disconnected, setDisconnected] = useState(false);
   const callIdRef = useRef(0);
+  const committedTargetRef = useRef({ pluginId, channel });
   // The target changed and no call on the new target has cleared state yet.
   const resetPendingRef = useRef(false);
 
@@ -47,9 +48,13 @@ export function useHostChannel<TArgs = unknown, TResult = unknown>(
   // invoked. An insertion effect fires in the commit that changes the target,
   // even inside a hidden `<Activity>` where layout effects are disconnected,
   // and before any layout effect, so a child that invokes the new target from
-  // its own effect in the same commit always lands after the bump. StrictMode
-  // doesn't replay insertion effects, so a once-only first call survives.
+  // its own effect in the same commit always lands after the bump. Comparing
+  // with the last committed target keeps a replay (Fast Refresh reruns effects
+  // whatever their deps) from superseding a call on an unchanged target.
   useInsertionEffect(() => {
+    const committed = committedTargetRef.current;
+    if (committed.pluginId === pluginId && committed.channel === channel) return;
+    committedTargetRef.current = { pluginId, channel };
     callIdRef.current += 1;
     resetPendingRef.current = true;
   }, [pluginId, channel]);

@@ -595,6 +595,26 @@ describe("useHostChannel target change committed inside a hidden Activity", () =
     }
   );
 
+  it("keeps a call made on the new target while hidden when shown again, then applies it", async () => {
+    const next = deferred<{ from: string }>();
+    invokeMock.mockReturnValueOnce(next.promise);
+    const { view, show } = setup();
+
+    show("hidden", "b");
+    let pending!: Promise<{ from: string } | undefined>;
+    act(() => {
+      pending = view().invoke({});
+    });
+    show("visible", "b");
+    expect(view().loading).toBe(true);
+
+    await act(async () => {
+      next.resolve({ from: "b" });
+      await expect(pending).resolves.toEqual({ from: "b" });
+    });
+    expect(view().loading).toBe(false);
+  });
+
   it("drops an old call across an a-to-b-to-a round trip made while hidden", async () => {
     const old = deferred();
     invokeMock.mockReturnValueOnce(old.promise);
