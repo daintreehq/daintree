@@ -378,10 +378,64 @@ describe("a remote view's banners, host sink to Shell", () => {
       vi.advanceTimersByTime(15_000);
       await settle();
       expect(shellBanners()).toEqual([]);
-
-      vi.advanceTimersByTime(600_000);
-      await settle();
+      expect(vi.getTimerCount()).toBe(0);
       expect(view.reconcilesSent()).toHaveLength(2);
+
+      // Heard, so the next refusal starts its retries over.
+      hostWaiting(view.handle, "next wait", ["t3"]);
+      await settle();
+      view.busyFor(1);
+      notificationService.closeNotificationsForPanel("t3");
+      await settle();
+      vi.advanceTimersByTime(2_000);
+      await settle();
+      expect(shellBanners()).toEqual([]);
+    });
+
+    it("starts its retries over when the link resumes after they ran out", async () => {
+      const view = remoteView("view-12", 12);
+      hostWaiting(view.handle, "first wait", ["t1"]);
+      await settle();
+
+      view.setDown(true);
+      notificationService.closeNotificationsForPanel("t1");
+      await settle();
+      for (const wait of [2_000, 15_000, 60_000]) {
+        vi.advanceTimersByTime(wait);
+        await settle();
+      }
+      expect(view.reconcilesSent()).toHaveLength(3);
+      expect(vi.getTimerCount()).toBe(0);
+
+      view.setDown(false);
+      view.busyFor(1);
+      resume(view);
+      await settle();
+      expect(shellBanners()).toEqual(["Studio Mac: first wait"]);
+      vi.advanceTimersByTime(2_000);
+      await settle();
+      expect(shellBanners()).toEqual([]);
+    });
+
+    it("keeps no retry for a view with nothing closable, or once the sink is gone", async () => {
+      const view = remoteView("view-12", 12);
+      view.busyFor(1);
+      notificationService.showNativeNotification("Agent finished", "b", {
+        ownerWebContentsId: view.handle,
+        category: "completed",
+      });
+      await settle();
+      expect(vi.getTimerCount()).toBe(0);
+
+      hostWaiting(view.handle, "first wait", ["t1"]);
+      await settle();
+      view.holdCloses();
+      notificationService.closeNotificationsForPanel("t1");
+      await settle();
+      uninstall();
+      view.failHeldCloses();
+      await settle();
+      expect(vi.getTimerCount()).toBe(0);
     });
 
     it("stops after its last try while the link stays down, and when the view goes away", async () => {
@@ -396,7 +450,9 @@ describe("a remote view's banners, host sink to Shell", () => {
       notificationService.closeNotificationsForPanel("t1");
       notificationService.closeNotificationsForPanel("t2");
       await settle();
+      expect(vi.getTimerCount()).toBe(2);
       other.close();
+      expect(vi.getTimerCount()).toBe(1);
       for (const wait of [2_000, 15_000, 60_000, 600_000]) {
         vi.advanceTimersByTime(wait);
         await settle();

@@ -112,6 +112,7 @@ export function installRemoteNotificationSink(
   const unsure = new Set<number>();
   /** Each unsure view's pending retry, and how many it has had since a reconcile went through. */
   const retries = new Map<number, { timer: NodeJS.Timeout | null; tries: number }>();
+  let disposed = false;
 
   const stopRetrying = (handle: number): void => {
     const retry = retries.get(handle);
@@ -139,8 +140,10 @@ export function installRemoteNotificationSink(
   const markUnsure = (endpoint: ClientEndpoint) => (error: unknown) => {
     // A Shell from before closes existed refuses them, and always will; a
     // closed view's Shell takes its banners down itself.
+    // A view never shown a closable banner has nothing to reconcile.
     const code = (error as { code?: unknown } | null)?.code;
-    if (code === "UNSUPPORTED" || code === "VALIDATION" || endpoint.isClosed()) return;
+    if (code === "UNSUPPORTED" || code === "VALIDATION") return;
+    if (disposed || endpoint.isClosed() || !watched.has(endpoint.handle)) return;
     unsure.add(endpoint.handle);
     scheduleRetry(endpoint);
   };
@@ -209,11 +212,15 @@ export function installRemoteNotificationSink(
     if (!attached) return;
     for (const endpointId of endpointIds) {
       const endpoint = remoteView(getEndpointRegistry().get(endpointId));
-      if (endpoint && watched.has(endpoint.handle)) reconcile(endpoint);
+      if (!endpoint || !watched.has(endpoint.handle)) continue;
+      // A resume starts the retries over, however many the outage used up.
+      stopRetrying(endpoint.handle);
+      reconcile(endpoint);
     }
   });
 
   return () => {
+    disposed = true;
     disposeSink();
     disposeTransport?.();
     for (const watch of watched.values()) watch.dispose();
