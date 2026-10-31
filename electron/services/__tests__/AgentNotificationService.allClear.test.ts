@@ -491,7 +491,9 @@ describe("AgentNotificationService – all-clear", () => {
       setPtyClientRef(null);
     });
 
-    function seedFromPtyHost(terminals: Array<{ id: string; agentState?: string; isExited?: boolean }>) {
+    function seedFromPtyHost(
+      terminals: Array<{ id: string; agentState?: string; isExited?: boolean }>
+    ) {
       let answer!: () => void;
       agentNotificationService.dispose();
       setPtyClientRef({

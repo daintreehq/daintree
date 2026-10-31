@@ -1839,7 +1839,13 @@ describe("AgentNotificationService", () => {
       mockStore({ completedEnabled: true }, { terminals: [] });
       seedLegacyAppState({
         terminals: [
-          { id: "term-1", kind: "terminal", title: "Stale name", titleMode: "user", location: "dock" },
+          {
+            id: "term-1",
+            kind: "terminal",
+            title: "Stale name",
+            titleMode: "user",
+            location: "dock",
+          },
         ],
       });
       events.emit("agent:state-changed", {
@@ -1859,7 +1865,13 @@ describe("AgentNotificationService", () => {
 
     it("names a completed agent by the title the user gave its pane in the project's saved layout", () => {
       const call = completeOn(
-        { id: "term-1", kind: "terminal", title: "Auth refactor", titleMode: "user", location: "dock" },
+        {
+          id: "term-1",
+          kind: "terminal",
+          title: "Auth refactor",
+          titleMode: "user",
+          location: "dock",
+        },
         { agentId: "codex" }
       );
       expect(call?.[1]).toBe("Auth refactor finished its task");
@@ -3316,7 +3328,9 @@ describe("panel details come from the panel's per-project record (#15636)", () =
 
       transition("waiting", "working");
       vi.advanceTimersByTime(60_000);
-      saveProjectPanels([{ ...dockedAgent, worktreeId: "wt-2", title: "Renamed", titleMode: "user" }]);
+      saveProjectPanels([
+        { ...dockedAgent, worktreeId: "wt-2", title: "Renamed", titleMode: "user" },
+      ]);
       vi.advanceTimersByTime(120_000);
 
       expect(lastEscalationOptions().navigation?.context).toMatchObject({ worktreeId: "wt-2" });
@@ -3343,7 +3357,10 @@ describe("panel details come from the panel's per-project record (#15636)", () =
 
     it("escalates a panel docked during the wait, and not one moved out of the dock", () => {
       settings({ waitingEnabled: true, waitingEscalationEnabled: true });
-      saveProjectPanels([{ ...dockedAgent, location: "grid" }, { ...dockedAgent, id: "term-2" }]);
+      saveProjectPanels([
+        { ...dockedAgent, location: "grid" },
+        { ...dockedAgent, id: "term-2" },
+      ]);
 
       transition("waiting", "working", "term-1");
       transition("waiting", "working", "term-2");

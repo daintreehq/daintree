@@ -673,7 +673,13 @@ function buildGateBattery(): GateCase[] {
           ["panel-0", "claude"],
           ["panel-1", "codex"],
         ] as const) {
-          emit(h, { terminalId, agentId, worktreeId: "wt-0", state: "working", previousState: "idle" });
+          emit(h, {
+            terminalId,
+            agentId,
+            worktreeId: "wt-0",
+            state: "working",
+            previousState: "idle",
+          });
         }
         for (const [terminalId, agentId] of [
           ["panel-0", "claude"],

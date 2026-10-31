@@ -291,8 +291,11 @@ describe("useWatchedPanelNotifications", () => {
 
   describe("reporting the view's selected worktree", () => {
     const sync = () =>
-      (window.electron as unknown as { notification: { syncWatchedPanels: ReturnType<typeof vi.fn> } })
-        .notification.syncWatchedPanels;
+      (
+        window.electron as unknown as {
+          notification: { syncWatchedPanels: ReturnType<typeof vi.fn> };
+        }
+      ).notification.syncWatchedPanels;
 
     it("sends the selection with the initial watched set", () => {
       selection.state = { ...selection.state, activeWorktreeId: "/repo/wt-a" };
