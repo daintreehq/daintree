@@ -714,11 +714,40 @@ describe("startRemoteHosts", () => {
       summary,
     } as never);
     await startRemoteHosts({ hostMode: false });
-    registerRemoteService("hostMetrics", { receiptOf } as never);
+    registerRemoteService("hostMetrics", { receiptOf, cameOn: () => null } as never);
     const [deps] = control.installHostControl.mock.calls[0] as [
       { observeHosts(): Array<Record<string, unknown>> },
     ];
     expect(deps.observeHosts()[0]).toMatchObject({ summary, summaryReceipt: receipt });
+    await stopRemoteHosts();
+  });
+
+  it("hands host control whether each host's summary came on its open link (#15736)", async () => {
+    const summary = { sampledAt: 1 };
+    const current = { isOpen: true };
+    const cameOn = vi.fn((held: object, session: unknown) =>
+      held === summary ? session === current : null
+    );
+    m.hostEntries.push({
+      descriptor: { id: "control-on", name: "studio-01", lastSeenAt: 5 },
+      connection: { status: "disconnected" },
+      summary,
+    } as never);
+    await startRemoteHosts({ hostMode: false });
+    registerRemoteService("hostMetrics", { receiptOf: () => null, cameOn } as never);
+    const [deps] = control.installHostControl.mock.calls[0] as [
+      { observeHosts(): Array<Record<string, unknown>> },
+    ];
+    expect(deps.observeHosts()[0]).toMatchObject({ summaryFromCurrentLink: false });
+    expect(cameOn).toHaveBeenLastCalledWith(summary, null);
+
+    m.client.sessionFor.mockReturnValueOnce(current);
+    expect(deps.observeHosts()[0]).toMatchObject({ summaryFromCurrentLink: true });
+    expect(m.client.sessionFor).toHaveBeenLastCalledWith("control-on");
+
+    // A summary that came on no link says nothing either way.
+    cameOn.mockReturnValue(null);
+    expect(deps.observeHosts()[0]).not.toHaveProperty("summaryFromCurrentLink");
     await stopRemoteHosts();
   });
 

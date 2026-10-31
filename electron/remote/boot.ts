@@ -310,19 +310,24 @@ function startClient(options: StartRemoteHostsOptions): void {
   // Dictation into a host's pane reads the pane's context from that host (#14782).
   teardowns.push(installVoicePaneHostsClient({ sessionFor: client.sessionFor }));
   // This Shell's assistants' reach into its hosts: `host.list` and `host.call` (#13493).
-  const observeHosts = () =>
-    client.client.list().map(({ descriptor, connection, summary }) => ({
-      hostId: descriptor.id,
-      name: descriptor.name,
-      connection,
-      lastSeenAt: descriptor.lastSeenAt,
-      summary,
-      summaryReceipt: summary
-        ? (getRemoteService("hostMetrics")?.receiptOf(summary) ?? null)
-        : null,
-      lastHandshake: descriptor.lastHandshake,
-      disconnectedByPerson: client.client.isDisconnectedByPerson(descriptor.id),
-    }));
+  const observeHosts = () => {
+    const metrics = getRemoteService("hostMetrics");
+    return client.client.list().map(({ descriptor, connection, summary }) => {
+      const onLink =
+        summary && metrics ? metrics.cameOn(summary, client.sessionFor(descriptor.id)) : null;
+      return {
+        hostId: descriptor.id,
+        name: descriptor.name,
+        connection,
+        lastSeenAt: descriptor.lastSeenAt,
+        summary,
+        summaryReceipt: summary ? (metrics?.receiptOf(summary) ?? null) : null,
+        ...(onLink !== null ? { summaryFromCurrentLink: onLink } : {}),
+        lastHandshake: descriptor.lastHandshake,
+        disconnectedByPerson: client.client.isDisconnectedByPerson(descriptor.id),
+      };
+    });
+  };
   teardowns.push(
     installHostControl({
       observeHosts,

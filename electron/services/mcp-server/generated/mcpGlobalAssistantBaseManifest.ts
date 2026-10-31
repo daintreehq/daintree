@@ -400,21 +400,20 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                       },
                       stale: {
                         type: "boolean",
-                        description:
-                          "Too old to trust: the live figures below are null. Not a zero reading.",
+                        description: "Untrusted: live figures are null, not zero.",
                       },
                       staleReason: {
                         anyOf: [
                           {
                             type: "string",
-                            enum: ["age-limit", "clock-uncertain"],
+                            enum: ["age-limit", "clock-uncertain", "earlier-link"],
                           },
                           {
                             type: "null",
                           },
                         ],
                         description:
-                          "clock-uncertain: no age bound, and its timestamp is off this clock.",
+                          "clock-uncertain: no age bound, timestamp off this clock. earlier-link: prior link's.",
                       },
                       platform: {
                         type: "string",

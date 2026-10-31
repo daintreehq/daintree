@@ -528,6 +528,29 @@ describe("HostMetricsClient", () => {
     h.client.dispose();
   });
 
+  it("tells which link each summary came on, keeping the history across a reconnect (#15736)", () => {
+    const h = harness([descriptor("studio-01")]);
+    const before = { pingSentAt: () => null } as unknown as LinkSession;
+    const after = { pingSentAt: () => null } as unknown as LinkSession;
+    h.client.record("studio-01", summary(1, 3), before);
+    const old = h.client.latest("studio-01")!;
+    expect(h.client.cameOn(old, before)).toBe(true);
+    // Reconnected, or with no link open at all, it is what an earlier link brought.
+    expect(h.client.cameOn(old, after)).toBe(false);
+    expect(h.client.cameOn(old, null)).toBe(false);
+
+    h.client.record("studio-01", summary(2, 1), after);
+    const fresh = h.client.latest("studio-01")!;
+    expect(h.client.cameOn(fresh, after)).toBe(true);
+    expect(h.client.cameOn(old, after)).toBe(false);
+    expect(h.client.getSnapshots()).toEqual([{ hostId: "studio-01", history: [fresh, old] }]);
+
+    // One that came on no link, as this machine's own do, can't be told either way.
+    h.client.record("studio-01", summary(3));
+    expect(h.client.cameOn(h.client.latest("studio-01")!, after)).toBeNull();
+    expect(h.client.cameOn(summary(4), after)).toBeNull();
+  });
+
   it("presents attention only for hosts the user opted in to", async () => {
     const h = harness([descriptor("quiet"), descriptor("loud", true)]);
     h.client.start();
