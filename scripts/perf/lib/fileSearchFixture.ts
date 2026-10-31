@@ -234,6 +234,17 @@ function buildRepo(
     mkdirSync(dirname(absolute), { recursive: true });
     writeFileSync(absolute, contents);
   }
+  if (untrackedPaths.length > 0) {
+    // The service's own `ls-files --exclude-standard` reads the developer's
+    // global excludes, which the setup env above does not reach. `info/exclude`
+    // outranks them, so a global `*.md` cannot hide a planted path.
+    const infoDir = join(repoPath, ".git", "info");
+    mkdirSync(infoDir, { recursive: true });
+    appendFileSync(
+      join(infoDir, "exclude"),
+      untrackedPaths.map((relative) => `!/${relative}\n`).join("")
+    );
+  }
 
   return { path: repoPath, fileCount: relativePaths.length };
 }
