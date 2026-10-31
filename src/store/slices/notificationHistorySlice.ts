@@ -1,10 +1,14 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { persist, type StorageValue } from "zustand/middleware";
 import type { ActionId } from "@shared/types/actions";
 import type { NotificationActionVariant } from "@/store/notificationStore";
 import type { NotificationEventKind } from "@/lib/notify";
 import type { NotificationPluginSource } from "@shared/types/ipc/maps";
 import { createDebouncedSafeJSONStorage } from "@/store/persistence/safeStorage";
+import {
+  mergeRecordByWriterDelta,
+  type PersistWriteMergeContext,
+} from "@/store/persistence/persistWriteMerge";
 import { registerPersistedStore } from "@/store/persistence/persistedStoreRegistry";
 
 export interface NotificationHistoryAction {
@@ -267,6 +271,73 @@ interface PersistedNotificationHistoryShape {
    * tab, and are excluded from the unread badge count.
    */
   snoozedThreads?: Record<string, number>;
+}
+
+interface NormalizedNotificationHistory {
+  entries: Record<string, NotificationHistoryEntry>;
+  snoozedThreads: Record<string, number>;
+}
+
+/**
+ * Applies the hydration `merge`'s sanitize + prune to a persisted value at a
+ * fixed `now`, keyed by entry id. Every merge input goes through this so the
+ * writer-delta diff compares like-for-like: the baseline is the raw hydration
+ * read (possibly a v1 blob) while incoming is post-hydration memory, and
+ * without it the session-local `summarized` reset, a hydration-time prune or
+ * an expired snooze would all read as writer edits.
+ */
+function normalizeNotificationHistory(
+  value: StorageValue<unknown> | null,
+  now: number
+): NormalizedNotificationHistory {
+  const state =
+    value?.state && typeof value.state === "object"
+      ? (value.state as Partial<PersistedNotificationHistoryShape>)
+      : undefined;
+  const rawEntries = Array.isArray(state?.entries) ? state.entries : [];
+  const sanitized = rawEntries
+    .map(sanitizePersistedEntry)
+    .filter((e): e is NotificationHistoryEntry => e !== null);
+  const entries: Record<string, NotificationHistoryEntry> = {};
+  for (const entry of pruneNotificationEntries(sanitized, now)) {
+    entries[entry.id] ??= entry;
+  }
+  return { entries, snoozedThreads: sanitizeSnoozedThreads(state?.snoozedThreads, now) };
+}
+
+/**
+ * Baseline-aware three-way merge for notification-history writes across project
+ * views (#15534, the store #11351 left out). Every view persists one shared
+ * inbox, so a cached view's stale snapshot used to replace entries a sibling
+ * added, and revert rows it read, archived or dismissed. Entries merge per id
+ * and snoozes per thread: the writer's own adds, edits and deletions win, and
+ * everything it didn't touch keeps the sibling's on-disk state. The result is
+ * re-sorted newest first and re-pruned so the 200-entry cap holds across both
+ * views' additions.
+ */
+function mergeNotificationHistoryPersistedWrite({
+  baseline,
+  onDisk,
+  incoming,
+}: PersistWriteMergeContext<unknown>): StorageValue<unknown> {
+  // No shared value on disk yet → nothing to reconcile against.
+  if (!onDisk) return incoming;
+  const now = Date.now();
+  const base = normalizeNotificationHistory(baseline, now);
+  const inc = normalizeNotificationHistory(incoming, now);
+  const disk = normalizeNotificationHistory(onDisk, now);
+  const merged = Object.values(
+    mergeRecordByWriterDelta(base.entries, inc.entries, disk.entries)
+  ).sort((a, b) => b.timestamp - a.timestamp);
+  const state: PersistedNotificationHistoryShape = {
+    entries: pruneNotificationEntries(merged, now),
+    snoozedThreads: mergeRecordByWriterDelta(
+      base.snoozedThreads,
+      inc.snoozedThreads,
+      disk.snoozedThreads
+    ),
+  };
+  return { version: incoming.version, state };
 }
 
 interface NotificationHistoryState {
@@ -644,7 +715,9 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
       // because `migrate` can return a pre-v2 blob shape; the persist
       // middleware then funnels that through `merge`, which does its own
       // defensive coercion.
-      storage: createDebouncedSafeJSONStorage<unknown>(300),
+      storage: createDebouncedSafeJSONStorage<unknown>(300, {
+        mergeOnWrite: mergeNotificationHistoryPersistedWrite,
+      }),
       // Only persist entries + snoozedThreads — unreadCount is recomputed on
       // hydration, and evictedToInboxCount is a session-only discoverability
       // counter that resets to 0 on every fresh load.
