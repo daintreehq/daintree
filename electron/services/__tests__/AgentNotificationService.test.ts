@@ -3445,13 +3445,13 @@ describe("panel details come from the panel's per-project record (#15636)", () =
       expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
     });
 
-    it("needs no read for a project saved before its agent's first event", () => {
+    it("needs no read for a project saved before its agent's first event", async () => {
       settings({ waitingEnabled: true, waitingEscalationEnabled: true });
       coldProject();
       saveProjectPanels([dockedAgent], "project-cold");
 
       transition("waiting", "working");
-      vi.advanceTimersByTime(180_000);
+      await vi.advanceTimersByTimeAsync(180_000);
 
       expect(projectStoreMock.getProjectState).not.toHaveBeenCalled();
       expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);

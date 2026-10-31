@@ -236,20 +236,27 @@ describe("AgentNotificationService – all-clear", () => {
 
   type HostTerminal = { id: string; agentState?: string; isExited?: boolean; projectId?: string };
 
-  /** Restart the service against a PTY host whose terminal list answers when told to. */
+  /**
+   * Restart the service against a PTY host whose terminal list answers when
+   * told to; an Error makes the request fail instead.
+   */
   function seedFromPtyHost() {
-    let answer!: (terminals: HostTerminal[], degraded?: boolean) => void;
+    let answer!: (terminals: HostTerminal[] | Error, degraded?: boolean) => void;
     agentNotificationService.dispose();
     setPtyClientRef({
       getAllTerminalsWithCompletenessAsync: () =>
-        new Promise((resolve) => {
-          answer = (terminals, degraded = false) => resolve({ terminals, degraded });
+        new Promise((resolve, reject) => {
+          answer = (terminals, degraded = false) =>
+            terminals instanceof Error ? reject(terminals) : resolve({ terminals, degraded });
         }),
       getTerminalProjectId: () => null,
     } as never);
     agentNotificationService.initialize();
-    return (terminals: HostTerminal[], degraded?: boolean) => answer(terminals, degraded);
+    return (terminals: HostTerminal[] | Error, degraded?: boolean) => answer(terminals, degraded);
   }
+
+  const allClearEmits = (emitSpy: { mock: { calls: unknown[][] } }) =>
+    emitSpy.mock.calls.filter(([name]) => name === "agent:all-clear").length;
 
   it("fires all-clear when 2 agents go working then both complete", () => {
     const emitSpy = vi.spyOn(events, "emit");
@@ -590,6 +597,50 @@ describe("AgentNotificationService – all-clear", () => {
       runTwoAgents();
       await vi.advanceTimersByTimeAsync(600);
       answer([], true);
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(soundServiceMock.play).not.toHaveBeenCalled();
+    });
+
+    it("fires once when a completion re-arms the debounce while an all-clear is held", async () => {
+      const emitSpy = vi.spyOn(events, "emit");
+      const answer = seedFromPtyHost();
+      runTwoAgents();
+      await vi.advanceTimersByTimeAsync(600);
+      // An agent from before startup finishes, arming a fresh debounce.
+      emitStateChange("completed", "working", "term-early");
+      answer([]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(allClearEmits(emitSpy)).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(600);
+      expect(allClearEmits(emitSpy)).toBe(1);
+    });
+
+    it.each([
+      ["could not fully answer", (answer: ReturnType<typeof seedFromPtyHost>) => answer([], true)],
+      ["failed", (answer: ReturnType<typeof seedFromPtyHost>) => answer(new Error("host gone"))],
+    ])(
+      "abandons a pending all-clear when the host %s before its debounce ran out",
+      async (_label, settle) => {
+        const answer = seedFromPtyHost();
+        runTwoAgents();
+        settle(answer);
+        await vi.advanceTimersByTimeAsync(600);
+
+        expect(soundServiceMock.play).not.toHaveBeenCalled();
+      }
+    );
+
+    it("lets no later lone agent inherit the session an incomplete seed abandoned", async () => {
+      const answer = seedFromPtyHost();
+      runTwoAgents();
+      await vi.advanceTimersByTimeAsync(600);
+      answer([], true);
+      await vi.advanceTimersByTimeAsync(0);
+
+      emitStateChange("working", "idle", "term-3");
+      emitStateChange("completed", "working", "term-3");
       await vi.advanceTimersByTimeAsync(600);
 
       expect(soundServiceMock.play).not.toHaveBeenCalled();

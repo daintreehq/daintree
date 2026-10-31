@@ -109,6 +109,7 @@ describe("useWatchedPanelNotifications", () => {
   let subscribers: Array<(state: PanelStoreState) => void>;
   let currentState: PanelStoreState;
   let warnSpy: ReturnType<typeof vi.spyOn>;
+  let syncWatchedPanels: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -129,10 +130,11 @@ describe("useWatchedPanelNotifications", () => {
     fireWatchNotificationMock.mockReset();
     warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
+    syncWatchedPanels = vi.fn();
     Object.defineProperty(window, "electron", {
       value: {
         notification: {
-          syncWatchedPanels: vi.fn(),
+          syncWatchedPanels,
         },
       },
       writable: true,
@@ -290,12 +292,7 @@ describe("useWatchedPanelNotifications", () => {
   });
 
   describe("reporting the view's selected worktree", () => {
-    const sync = () =>
-      (
-        window.electron as unknown as {
-          notification: { syncWatchedPanels: ReturnType<typeof vi.fn> };
-        }
-      ).notification.syncWatchedPanels;
+    const sync = () => syncWatchedPanels;
 
     it("sends the selection with the initial watched set", () => {
       selection.state = { ...selection.state, activeWorktreeId: "/repo/wt-a" };

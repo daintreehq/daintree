@@ -499,20 +499,34 @@ class AgentNotificationService {
           );
         }
         // A host that didn't fully answer can't vouch that nothing is working.
-        this.settleAllClearHeldForSeed(!degraded);
+        this.settleAllClearForSeed(!degraded);
       },
       () => {
         if (this.activeSeedTouched !== touched) return;
         this.activeSeedTouched = null;
-        this.settleAllClearHeldForSeed(false);
+        this.settleAllClearForSeed(false);
       }
     );
   }
 
-  private settleAllClearHeldForSeed(seedIsComplete: boolean): void {
-    if (!this.allClearHeldForSeed) return;
+  private settleAllClearForSeed(seedIsComplete: boolean): void {
+    const held = this.allClearHeldForSeed;
     this.allClearHeldForSeed = false;
-    if (seedIsComplete && this.activeTerminalIds.size === 0) this.fireAllClear();
+    if (seedIsComplete) {
+      if (held && this.activeTerminalIds.size === 0) this.fireAllClear();
+      return;
+    }
+    // A host that didn't fully answer can't vouch that nothing is working, so
+    // an all-clear already in the making is abandoned, along with the session
+    // it closed when nothing is left working to carry it on.
+    if (this.allClearTimer) {
+      clearTimeout(this.allClearTimer);
+      this.allClearTimer = null;
+    }
+    if (this.activeTerminalIds.size === 0) {
+      this.peakConcurrentWorking = 0;
+      this.hasEverGoneWorking = false;
+    }
   }
 
   private readSavedPanels = (projectId: string) => projectStore.getProjectState(projectId);
@@ -724,10 +738,12 @@ class AgentNotificationService {
     // All conditions must hold to schedule the all-clear
     if (!this.hasEverGoneWorking || this.peakConcurrentWorking < 2 || activeCount > 0) return;
 
-    // Cancel any existing timer (rapid succession of completions)
+    // Cancel any existing timer (rapid succession of completions), and any
+    // all-clear held for the seed: this timer decides afresh.
     if (this.allClearTimer) {
       clearTimeout(this.allClearTimer);
     }
+    this.allClearHeldForSeed = false;
 
     this.allClearTimer = setTimeout(() => {
       this.allClearTimer = null;
