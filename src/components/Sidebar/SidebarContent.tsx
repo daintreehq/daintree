@@ -20,7 +20,10 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { boundedErrorText } from "@/utils/errorText";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
-import { ScrollIndicator } from "@/components/Worktree/ScrollIndicator";
+import {
+  ScrollIndicator,
+  SCROLL_INDICATOR_BAND_HEIGHT_PX,
+} from "@/components/Worktree/ScrollIndicator";
 import {
   useAgentLauncher,
   useWorktrees,
@@ -476,6 +479,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     keyboardCancelAnnouncement,
     isSortDisabled,
     dragDisabledReason,
+    isDragActive,
   } = useSidebarReorderSession({
     worktrees,
     dragStartOrder,
@@ -635,6 +639,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     hiddenBelow,
     revealAbove,
     revealBelow,
+    bandInsets,
+    handleBandWheel,
     scrollerRef: scrollIndicatorScrollerRef,
     handleScroll,
     handleItemsRendered,
@@ -643,7 +649,17 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     attentionWorktreeIds,
     virtuosoRef,
     smoothScroll: !skipMotion,
+    bandHeightPx: SCROLL_INDICATOR_BAND_HEIGHT_PX,
+    // A band would hide rows a drop can still land on.
+    paused: isDragActive,
   });
+
+  // Native focus scrolling (a row's toolbar button) parks its target clear
+  // of the bands too.
+  const scrollerStyle = {
+    scrollPaddingTop: bandInsets.top,
+    scrollPaddingBottom: bandInsets.bottom,
+  };
 
   const setScrollerElement = useCallback(
     (el: HTMLElement | Window | null) => {
@@ -1245,7 +1261,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               scrollerRef={setScrollerElement}
               onScroll={handleScroll}
               itemsRendered={handleItemsRendered}
-              className="absolute inset-0 overflow-y-auto scrollbar-none"
+              style={scrollerStyle}
+              // `z-0` makes the scroller a stacking context, so nothing raised
+              // inside a row can paint over the bands.
+              className="absolute inset-0 z-0 overflow-y-auto scrollbar-none"
             />
           ) : (
             <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
@@ -1264,7 +1283,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                 scrollerRef={setScrollerElement}
                 onScroll={handleScroll}
                 itemsRendered={handleItemsRendered}
-                className="absolute inset-0 overflow-y-auto scrollbar-none"
+                style={scrollerStyle}
+                className="absolute inset-0 z-0 overflow-y-auto scrollbar-none"
               />
             </SortableContext>
           )}
@@ -1278,6 +1298,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             count={hiddenAbove.count}
             attentionCount={hiddenAbove.attention}
             onClick={revealAbove}
+            onWheel={handleBandWheel}
             ariaHidden
             tabIndex={-1}
           />
@@ -1286,6 +1307,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             count={hiddenBelow.count}
             attentionCount={hiddenBelow.attention}
             onClick={revealBelow}
+            onWheel={handleBandWheel}
             ariaHidden
             tabIndex={-1}
           />

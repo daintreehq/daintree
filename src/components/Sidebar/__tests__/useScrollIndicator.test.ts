@@ -12,6 +12,8 @@ function params(
     attentionWorktreeIds?: ReadonlySet<string>;
     virtuosoRef?: { current: Pick<VirtuosoHandle, "scrollToIndex"> | null };
     smoothScroll?: boolean;
+    bandHeightPx?: number;
+    paused?: boolean;
   } = {}
 ) {
   return {
@@ -19,6 +21,8 @@ function params(
     attentionWorktreeIds: overrides.attentionWorktreeIds ?? NO_WAITING,
     virtuosoRef: overrides.virtuosoRef ?? { current: null },
     smoothScroll: overrides.smoothScroll ?? true,
+    bandHeightPx: overrides.bandHeightPx,
+    paused: overrides.paused,
   };
 }
 
@@ -567,5 +571,247 @@ describe("useScrollIndicator paging past a card taller than the viewport", () =>
     act(() => result.current.revealAbove());
     expect(scrollToIndex).not.toHaveBeenCalled();
     expect(scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ top: 400 }));
+  });
+});
+
+describe("useScrollIndicator with the pills' bands (issue #15805)", () => {
+  const BAND = 36;
+  // Twenty 30px collapsed rows, all mounted: short enough that a whole row
+  // fits behind a band.
+  const rows = Array.from({ length: 20 }, (_, i) => ({ kind: "row", worktreeId: `w${i}` }));
+  const geometry = makeRendered(
+    rows.map((_, index) => ({ index, offset: index * 30, size: 30, kind: "row" as Kind }))
+  );
+
+  function setup(
+    scrollTop: number,
+    overrides: { bandHeightPx?: number; paused?: boolean } = { bandHeightPx: BAND },
+    { waiting = [], clientHeight = 300 }: { waiting?: string[]; clientHeight?: number } = {}
+  ) {
+    const scrollToIndex = vi.fn<VirtuosoHandle["scrollToIndex"]>();
+    const scroller = makeScroller({ scrollTop, clientHeight, scrollHeight: 600 });
+    const scrollBy = vi.fn();
+    Object.defineProperty(scroller, "scrollBy", { value: scrollBy });
+    const attentionWorktreeIds: ReadonlySet<string> = new Set(waiting);
+    const hook = renderHook(
+      (props: { bandHeightPx?: number; paused?: boolean }) =>
+        useScrollIndicator(
+          params(rows, {
+            virtuosoRef: { current: { scrollToIndex } },
+            attentionWorktreeIds,
+            ...props,
+          })
+        ),
+      { initialProps: overrides }
+    );
+    act(() => hook.result.current.scrollerRef(scroller));
+    act(() => hook.result.current.handleItemsRendered(geometry));
+    return { ...hook, scroller, scrollToIndex, scrollBy };
+  }
+
+  function scrollTo(
+    scroller: HTMLElement,
+    result: { current: { handleScroll: () => void } },
+    top: number
+  ) {
+    scroller.scrollTop = top;
+    act(() => result.current.handleScroll());
+    flushFrames();
+  }
+
+  // Viewport [95, 395]. Bare, rows 0-2 are past the top and 14-19 past the
+  // bottom. Behind the bands the edges are 131 and 359, which takes row 3
+  // (90-120) and rows 12-13 (360-420) with them.
+  it("counts a row wholly behind a shown band as past that edge", () => {
+    const bare = setup(95, {});
+    expect(bare.result.current.hiddenAbove.count).toBe(3);
+    expect(bare.result.current.hiddenBelow.count).toBe(6);
+    expect(bare.result.current.bandInsets).toEqual({ top: 0, bottom: 0 });
+
+    const banded = setup(95);
+    expect(banded.result.current.hiddenAbove.count).toBe(4);
+    expect(banded.result.current.hiddenBelow.count).toBe(8);
+    expect(banded.result.current.bandInsets).toEqual({ top: BAND, bottom: BAND });
+  });
+
+  // Fed back into itself, the top band would keep counting row 0 (0-30) as
+  // hidden at scrollTop 0 and so never come down.
+  it("drops a band once nothing is past the bare edge, even with a row behind it", () => {
+    const { result, scroller } = setup(95);
+    expect(result.current.hiddenAbove.count).toBe(4);
+
+    scrollTo(scroller, result, 0);
+    expect(result.current.hiddenAbove.count).toBe(0);
+    expect(result.current.bandInsets.top).toBe(0);
+
+    // The same at the bottom: at the end of the list row 19 (570-600) would
+    // sit behind a held-over bottom band.
+    scrollTo(scroller, result, 300);
+    expect(result.current.hiddenBelow.count).toBe(0);
+    expect(result.current.hiddenAbove.count).toBe(11);
+    expect(result.current.bandInsets).toEqual({ top: BAND, bottom: 0 });
+  });
+
+  // Rows 3 and 12 are on screen bare and behind the bands with them.
+  it("counts and reveals a waiting worktree that only a band hides", () => {
+    const { result, scrollToIndex } = setup(95, { bandHeightPx: BAND }, { waiting: ["w3", "w12"] });
+    expect(result.current.hiddenAbove).toEqual({ count: 4, attention: 1 });
+    expect(result.current.hiddenBelow).toEqual({ count: 8, attention: 1 });
+
+    act(() => result.current.revealBelow());
+    expect(scrollToIndex).toHaveBeenLastCalledWith({
+      index: 12,
+      align: "center",
+      behavior: "smooth",
+    });
+    act(() => result.current.revealAbove());
+    expect(scrollToIndex).toHaveBeenLastCalledWith({
+      index: 3,
+      align: "center",
+      behavior: "smooth",
+    });
+  });
+
+  // Bare viewport [95, 395] with 66px bands: edges at 161 and 329.
+  it("re-measures when the band height changes", () => {
+    const { result, rerender, scrollToIndex } = setup(95);
+    rerender({ bandHeightPx: 66 });
+    expect(result.current.hiddenAbove.count).toBe(5);
+    expect(result.current.hiddenBelow.count).toBe(9);
+    expect(result.current.bandInsets).toEqual({ top: 66, bottom: 66 });
+
+    act(() => result.current.revealBelow());
+    expect(scrollToIndex).toHaveBeenLastCalledWith(
+      expect.objectContaining({ index: 11, align: "start", offset: -66 })
+    );
+  });
+
+  it("steps aside in a list too short to give up two bands", () => {
+    const { result } = setup(95, { bandHeightPx: BAND }, { clientHeight: 100 });
+    expect(result.current.hiddenAbove.count).toBe(0);
+    expect(result.current.hiddenBelow.count).toBe(0);
+    expect(result.current.bandInsets).toEqual({ top: 0, bottom: 0 });
+  });
+
+  it("gives only the edge with something past it a band", () => {
+    const { result } = setup(0);
+    expect(result.current.hiddenAbove.count).toBe(0);
+    // Bare viewport [0, 300]: rows 10-19 are past the bottom; the band takes
+    // row 9 (270-300) too.
+    expect(result.current.hiddenBelow.count).toBe(11);
+    expect(result.current.bandInsets).toEqual({ top: 0, bottom: BAND });
+  });
+
+  it("parks a paged-to row a band's height in from the edge it lands on", () => {
+    const { result, scrollToIndex } = setup(95);
+    act(() => result.current.revealBelow());
+    expect(scrollToIndex).toHaveBeenLastCalledWith(
+      expect.objectContaining({ index: 12, align: "start", offset: -BAND })
+    );
+    // Row 4 (120-150) is cut by the top band's edge at 131.
+    act(() => result.current.revealAbove());
+    expect(scrollToIndex).toHaveBeenLastCalledWith(
+      expect.objectContaining({ index: 4, align: "end", offset: BAND })
+    );
+  });
+
+  it("reports nothing and covers nothing while paused, and recounts on resume", () => {
+    const { result, rerender } = setup(95, { bandHeightPx: BAND, paused: true });
+    expect(result.current.hiddenAbove.count).toBe(0);
+    expect(result.current.hiddenBelow.count).toBe(0);
+    expect(result.current.bandInsets).toEqual({ top: 0, bottom: 0 });
+
+    rerender({ bandHeightPx: BAND, paused: false });
+    expect(result.current.hiddenAbove.count).toBe(4);
+    expect(result.current.bandInsets).toEqual({ top: BAND, bottom: BAND });
+  });
+
+  it("clears both pills the moment a drag starts, even with a scroll frame pending", () => {
+    const { result, rerender, scroller } = setup(95);
+    expect(result.current.hiddenAbove.count).toBe(4);
+
+    scroller.scrollTop = 120;
+    act(() => result.current.handleScroll());
+    rerender({ bandHeightPx: BAND, paused: true });
+    const cleared = { count: 0, attention: 0 };
+    expect(result.current.hiddenAbove).toEqual(cleared);
+    expect(result.current.hiddenBelow).toEqual(cleared);
+    expect(result.current.bandInsets).toEqual({ top: 0, bottom: 0 });
+
+    flushFrames();
+    expect(result.current.hiddenAbove).toEqual(cleared);
+    expect(result.current.hiddenBelow).toEqual(cleared);
+  });
+
+  it("hands a wheel over a band on to the list", () => {
+    const { result, scrollBy, scroller } = setup(95);
+    const wheel = (deltaY: number, deltaMode = 0, ctrlKey = false) =>
+      result.current.handleBandWheel({ deltaY, deltaMode, ctrlKey });
+
+    wheel(120);
+    expect(scrollBy).toHaveBeenLastCalledWith({ top: 120 });
+    wheel(-3, WheelEvent.DOM_DELTA_LINE);
+    expect(scrollBy).toHaveBeenLastCalledWith({ top: -120 });
+    Object.defineProperty(scroller, "clientHeight", { value: 240, configurable: true });
+    wheel(-2, WheelEvent.DOM_DELTA_PAGE);
+    expect(scrollBy).toHaveBeenLastCalledWith({ top: -480 });
+
+    scrollBy.mockClear();
+    wheel(120, 0, true);
+    wheel(0);
+    expect(scrollBy).not.toHaveBeenCalled();
+  });
+});
+
+describe("useScrollIndicator paging past a tall card between bands", () => {
+  const BAND = 36;
+  const rows = Array.from({ length: 5 }, (_, i) => ({ kind: "row", worktreeId: `w${i}` }));
+  const geometry = makeRendered([
+    { index: 0, offset: 0, size: 100, kind: "row" },
+    { index: 1, offset: 100, size: 100, kind: "row" },
+    { index: 2, offset: 200, size: 800, kind: "row" },
+    { index: 3, offset: 1000, size: 100, kind: "row" },
+    { index: 4, offset: 1100, size: 100, kind: "row" },
+  ]);
+
+  function setup(scrollTop: number, clientHeight = 300) {
+    const scroller = makeScroller({ scrollTop, clientHeight, scrollHeight: 1200 });
+    const scrollTo = vi.fn();
+    Object.defineProperty(scroller, "scrollTo", { value: scrollTo });
+    const { result } = renderHook(() =>
+      useScrollIndicator(
+        params(rows, {
+          virtuosoRef: { current: { scrollToIndex: vi.fn() } },
+          bandHeightPx: BAND,
+        })
+      )
+    );
+    act(() => result.current.scrollerRef(scroller));
+    act(() => result.current.handleItemsRendered(geometry));
+    return { result, scrollTo };
+  }
+
+  // Both bands are up, so 228px of the card shows between them; the step is
+  // that, so the strip that was behind the far band comes into view next.
+  it("steps by the space between the bands", () => {
+    const below = setup(200);
+    act(() => below.result.current.revealBelow());
+    expect(below.scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ top: 428 }));
+
+    const above = setup(700);
+    act(() => above.result.current.revealAbove());
+    expect(above.scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ top: 472 }));
+  });
+
+  // A 120px list still has room for both bands, with 48px between them. Any
+  // longer step would skip part of the card.
+  it("never steps further than what shows between the bands", () => {
+    const below = setup(200, 120);
+    act(() => below.result.current.revealBelow());
+    expect(below.scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ top: 248 }));
+
+    const above = setup(700, 120);
+    act(() => above.result.current.revealAbove());
+    expect(above.scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ top: 652 }));
   });
 });

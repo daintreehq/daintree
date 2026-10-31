@@ -33,17 +33,35 @@ function cancelDrag(data: Record<string, unknown>) {
   act(() => onDragCancel(event));
 }
 
-function startDrag() {
+function startDrag(data?: Record<string, unknown>) {
   const onDragStart = dndListener?.onDragStart;
   if (!onDragStart) throw new Error("useDndMonitor received no onDragStart listener");
   act(() =>
     onDragStart({
       active: {
         id: "drag",
-        data: { current: undefined },
+        data: { current: data },
         rect: { current: { initial: null, translated: null } },
       },
       activatorEvent: new Event("keydown"),
+    })
+  );
+}
+
+function endDrag(data?: Record<string, unknown>) {
+  const onDragEnd = dndListener?.onDragEnd;
+  if (!onDragEnd) throw new Error("useDndMonitor received no onDragEnd listener");
+  act(() =>
+    onDragEnd({
+      active: {
+        id: "drag",
+        data: { current: data },
+        rect: { current: { initial: null, translated: null } },
+      },
+      activatorEvent: new Event("pointerdown"),
+      collisions: null,
+      delta: { x: 0, y: 0 },
+      over: null,
     })
   );
 }
@@ -273,5 +291,27 @@ describe("useSidebarReorderSession — drag cancel", () => {
     advance(50);
 
     expect(result.current.keyboardCancelAnnouncement).toBe("");
+  });
+});
+
+// The sidebar hides its scroll pills' bands for the length of a drag, since a
+// band covers rows a drop can still land on.
+describe("useSidebarReorderSession — drag in flight", () => {
+  it.each([
+    ["a worktree sort", { type: "worktree-sort", worktreeId: "a" }],
+    ["anything else", { type: "terminal", terminalId: "t1" }],
+  ])("is active for %s from pickup until the drop or a cancel", (_label, data) => {
+    const { result } = renderSession();
+    expect(result.current.isDragActive).toBe(false);
+
+    startDrag(data);
+    expect(result.current.isDragActive).toBe(true);
+    endDrag(data);
+    expect(result.current.isDragActive).toBe(false);
+
+    startDrag(data);
+    expect(result.current.isDragActive).toBe(true);
+    cancelDrag(data);
+    expect(result.current.isDragActive).toBe(false);
   });
 });

@@ -151,6 +151,86 @@ describe("ScrollIndicator", () => {
     expect(event.defaultPrevented).toBe(true);
   });
 
+  // The band covers rows that are past the list's edge, so a press on it acts
+  // on nothing beneath and doesn't move focus, but still reads as an outside
+  // press to an open popover. Only the pill acts; a wheel scrolls the list.
+  describe("the band the pill sits in", () => {
+    const band = () => document.querySelector<HTMLElement>("[data-sidebar-scroll-indicator]")!;
+
+    it("takes a press on its empty part without acting or taking focus", () => {
+      render(<ScrollIndicator direction="below" count={2} onClick={onClick} />);
+      const press = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+      band().dispatchEvent(press);
+      fireEvent.click(band());
+
+      expect(press.defaultPrevented).toBe(true);
+      expect(onClick).not.toHaveBeenCalled();
+    });
+
+    // Radix dismisses an open popover from a document-level pointerdown.
+    it("lets a press reach the document, so an open popover closes", () => {
+      const onDocumentPointerDown = vi.fn();
+      document.addEventListener("pointerdown", onDocumentPointerDown);
+      try {
+        render(<ScrollIndicator direction="below" count={2} onClick={onClick} />);
+        fireEvent.pointerDown(band());
+        fireEvent.pointerDown(screen.getByRole("button"));
+        expect(onDocumentPointerDown).toHaveBeenCalledTimes(2);
+      } finally {
+        document.removeEventListener("pointerdown", onDocumentPointerDown);
+      }
+    });
+
+    it("hands a wheel anywhere over it to the list", () => {
+      const onWheel = vi.fn();
+      render(<ScrollIndicator direction="above" count={2} onClick={onClick} onWheel={onWheel} />);
+      fireEvent.wheel(band(), { deltaY: 40 });
+      fireEvent.wheel(screen.getByRole("button"), { deltaY: -40 });
+      expect(onWheel.mock.calls.map(([event]) => event.deltaY)).toEqual([40, -40]);
+    });
+
+    // Once the count drops, the rows it is uncovering are back on screen.
+    it("goes inert while it fades out", () => {
+      const onWheel = vi.fn();
+      const { rerender } = render(
+        <ScrollIndicator direction="below" count={2} onClick={onClick} onWheel={onWheel} />
+      );
+      mockUseAnimatedPresence.mockReturnValue({ isVisible: false, shouldRender: true });
+      rerender(<ScrollIndicator direction="below" count={0} onClick={onClick} onWheel={onWheel} />);
+
+      fireEvent.click(screen.getByRole("button"));
+      fireEvent.wheel(band(), { deltaY: 40 });
+      expect(onClick).not.toHaveBeenCalled();
+      expect(onWheel).not.toHaveBeenCalled();
+    });
+
+    // jsdom doesn't hit-test, so this reads the merged classes: the pill's
+    // primitive bakes in `pointer-events-auto`, which must give way on exit.
+    it("lets presses fall through to the rows while it fades out", () => {
+      const classes = (el: Element) => el.className.split(/\s+/);
+      const { rerender } = render(
+        <ScrollIndicator direction="below" count={2} onClick={onClick} />
+      );
+      expect(classes(band())).not.toContain("pointer-events-none");
+      expect(classes(screen.getByRole("button"))).toContain("pointer-events-auto");
+
+      mockUseAnimatedPresence.mockReturnValue({ isVisible: false, shouldRender: true });
+      rerender(<ScrollIndicator direction="below" count={0} onClick={onClick} />);
+      expect(classes(band())).toContain("pointer-events-none");
+      expect(classes(screen.getByRole("button"))).not.toContain("pointer-events-auto");
+      expect(classes(screen.getByRole("button"))).toContain("pointer-events-none");
+    });
+
+    it("leaves with the pill", () => {
+      const { rerender, container } = render(
+        <ScrollIndicator direction="below" count={2} onClick={onClick} />
+      );
+      expect(band()).not.toBeNull();
+      rerender(<ScrollIndicator direction="below" count={0} onClick={onClick} />);
+      expect(container.innerHTML).toBe("");
+    });
+  });
+
   it("uses scoped transition-[opacity,translate] instead of bare transition", () => {
     // `translate` (not `transform`) because Tailwind v4 translate-* utilities
     // emit the individual `translate` property, which a `transform` entry in
