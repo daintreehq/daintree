@@ -3,23 +3,37 @@ import path from "node:path";
 import { execa, type ResultPromise } from "execa";
 
 /**
- * Resolve the plugin project's local Vite binary. Both `package` (one-shot
+ * Resolve the Vite binary a plugin builds with. Both `package` (one-shot
  * `vite build`) and `dev` (`vite build --watch`) shell out to the same bin so a
- * plugin builds identically whichever command an author runs. Throws a
- * fix-it-yourself message when Vite isn't installed. Synchronous so
+ * plugin builds identically whichever command an author runs.
+ *
+ * Looks in `<dir>/node_modules/.bin` first, then in each ancestor's, nearest
+ * wins — the same order `npm run` puts on `PATH`. npm, Yarn (node-modules
+ * linker) and Bun workspaces hoist dependencies to the workspace root, so a
+ * member plugin has no `.bin` of its own; a plugin that does install Vite
+ * locally still uses its own even when an ancestor has another version. Only
+ * `node_modules/.bin` directories are consulted: never the global `PATH`,
+ * `npx`, or a network install.
+ *
+ * Throws a fix-it message when Vite isn't found. Synchronous so
  * {@link spawnViteWatch} can return the long-running `ResultPromise` directly
  * without an `async` wrapper — an `async` wrapper would unwrap the thenable and
  * resolve only on the watcher's *exit*, hanging the dev loop.
  */
 export function resolveViteBin(dir: string): string {
   const binName = process.platform === "win32" ? "vite.cmd" : "vite";
-  const bin = path.join(dir, "node_modules", ".bin", binName);
-  if (!existsSync(bin)) {
-    throw new Error(
-      `Couldn't find Vite at ${bin}. Run npm install in the plugin directory, or pass --skip-build.`
-    );
+  const start = path.resolve(dir);
+  for (let current = start; ;) {
+    const bin = path.join(current, "node_modules", ".bin", binName);
+    if (existsSync(bin)) return bin;
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
   }
-  return bin;
+  throw new Error(
+    `Couldn't find Vite in ${path.join(start, "node_modules", ".bin")} or any parent directory's node_modules/.bin. ` +
+      `Add vite as a dependency of the plugin (or of its workspace root) and install, or pass --skip-build.`
+  );
 }
 
 /** Run a one-shot `vite build` (or another arg set) to completion. */
