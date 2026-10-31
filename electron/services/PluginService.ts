@@ -5450,6 +5450,7 @@ export class PluginService {
     this.devArtifactWatcherRegistry?.stop(pluginId);
     const replacing = this.plugins.has(pluginId);
     if (replacing) this.unloadPlugin(pluginId, { reload: true });
+    let started = false;
     try {
       // Honor the user's persisted disabled intent — the dev path must not be a
       // trust escape hatch that force-loads a plugin the user turned off (#10518).
@@ -5466,8 +5467,16 @@ export class PluginService {
       }
       const session = this.devSessions.get(pluginId);
       if (session) session.sessionId = sessionId;
+      started = true;
       await this.activatePlugin(pluginId);
     } finally {
+      if (!started) {
+        // A start that loads nothing leaves no session, whichever one it was
+        // replacing: that plugin is unloaded, and the CLI that asked tears down
+        // on this error. Kept, it would sit in the runtime status unwatched.
+        this.devArtifactWatcherRegistry?.stop(pluginId);
+        if (this.devSessions.delete(pluginId)) this.emitRuntimeStatus(pluginId);
+      }
       if (replacing) this.settlePluginReload(pluginId);
     }
   }

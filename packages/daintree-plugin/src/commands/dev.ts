@@ -165,6 +165,20 @@ async function linkTargetsSession(link: DevLink): Promise<boolean> {
   } catch {
     return false;
   }
+  try {
+    await fs.stat(link.linkPath);
+  } catch {
+    // Dangling: the plugin dir was deleted or moved mid-session, leaving no
+    // identity to compare, so go by where the link says it points.
+    try {
+      const target = path.resolve(path.dirname(link.linkPath), await fs.readlink(link.linkPath));
+      return process.platform === "win32"
+        ? target.toLowerCase() === link.pluginDir.toLowerCase()
+        : target === link.pluginDir;
+    } catch {
+      return false;
+    }
+  }
   return isSameDirectory(link.linkPath, link.pluginDir);
 }
 
@@ -187,8 +201,8 @@ export async function linkDevPlugin(args: {
   const sessionId = randomUUID();
   const symlinkType = process.platform === "win32" ? "junction" : undefined;
 
-  // The marker goes first, so a link that can't be made leaves nothing behind
-  // but the marker this session can still take back.
+  // The marker goes first: one that can't be written leaves no link behind,
+  // and a link that can't be made takes the marker back off.
   await claimDevMarker(pluginId, markerPath, sessionId);
 
   let createdSymlink: boolean;
@@ -227,17 +241,14 @@ export async function linkDevPlugin(args: {
 
 /**
  * Remove what this session still owns. Idempotent and per-step best-effort (one
- * failing step must not strand the others, lesson #9322): the marker comes off
- * first so a half-torn-down state can never leave a dangling marker that
- * reroutes a future load through the dev worker. A link a newer session has
- * retargeted, and that session's marker, are left alone.
+ * failing step must not strand the others, lesson #9322). A link a newer
+ * session has retargeted, and that session's marker, are left alone. The link
+ * comes off first: the marker is what reserves this directory, so releasing it
+ * earlier would let a session starting here reuse the link and then lose it.
+ * Left behind on its own, the marker reroutes nothing — Daintree only ever
+ * reaches it through a link.
  */
 export async function cleanupDevLink(link: DevLink): Promise<void> {
-  try {
-    await removeOwnMarker(link.markerPath, link.sessionId);
-  } catch {
-    // best-effort — marker may already be gone
-  }
   if (link.createdSymlink) {
     try {
       // Checked as late as possible: a newer session may have retargeted the
@@ -246,6 +257,11 @@ export async function cleanupDevLink(link: DevLink): Promise<void> {
     } catch {
       // best-effort — symlink may already be gone
     }
+  }
+  try {
+    await removeOwnMarker(link.markerPath, link.sessionId);
+  } catch {
+    // best-effort — marker may already be gone
   }
 }
 

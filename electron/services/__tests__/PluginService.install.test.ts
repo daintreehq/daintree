@@ -1790,15 +1790,28 @@ describe("dev sessions — full-artifact reconcile (#12277)", () => {
       return service.listPlugins().some((p) => p.manifest.name === DEV_ID);
     }
 
+    /** The artifact watcher's live state for the dev plugin, if it has one. */
+    function watcherOf(service: PluginService): { realDir: string } | undefined {
+      return (
+        service as unknown as {
+          devArtifactWatcherRegistry: { states: Map<string, { realDir: string }> } | null;
+        }
+      ).devArtifactWatcherRegistry?.states.get(DEV_ID);
+    }
+
     it("ignores a stop from a session another one has since started", async () => {
       await writeDevPlugin();
       const service = new PluginService(pluginsRoot, "0.0.0");
       await service.loadDevPlugin(DEV_ID, "older");
       await service.loadDevPlugin(DEV_ID, "newer");
+      const newerWatcher = watcherOf(service);
+      expect(newerWatcher).toBeDefined();
 
       await service.stopDevSession(DEV_ID, "older");
       expect(devStatus(service)).toBeDefined();
       expect(isLoaded(service)).toBe(true);
+      // Still hot-reloading: the stale stop left the newer session's watcher be.
+      expect(watcherOf(service)).toBe(newerWatcher);
 
       await service.stopDevSession(DEV_ID, "newer");
       expect(devStatus(service)).toBeUndefined();
@@ -1807,18 +1820,69 @@ describe("dev sessions — full-artifact reconcile (#12277)", () => {
       service.dispose();
     });
 
-    it("ignores the older session's stop even when it is queued behind the newer start", async () => {
+    it("holds the older session's stop until the newer start lands, then ignores it", async () => {
       await writeDevPlugin();
       const service = new PluginService(pluginsRoot, "0.0.0");
       await service.loadDevPlugin(DEV_ID, "older");
 
-      await Promise.all([
-        service.loadDevPlugin(DEV_ID, "newer"),
-        service.stopDevSession(DEV_ID, "older"),
-      ]);
+      // Pause the newer start mid-load, before it has claimed the session.
+      let releaseLoad!: () => void;
+      const loadGate = new Promise<void>((resolve) => (releaseLoad = resolve));
+      const internals = service as unknown as {
+        loadPlugin: (...args: unknown[]) => Promise<unknown>;
+      };
+      const realLoad = internals.loadPlugin.bind(service);
+      const loadSpy = vi.spyOn(internals, "loadPlugin").mockImplementationOnce(async (...args) => {
+        await loadGate;
+        return realLoad(...args);
+      });
+      const starting = service.loadDevPlugin(DEV_ID, "newer");
+      await vi.waitFor(() => expect(loadSpy).toHaveBeenCalled());
+
+      let stopSettled = false;
+      const stopping = service.stopDevSession(DEV_ID, "older").then(() => {
+        stopSettled = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // Acting now, it would still find "older" as the owner and tear down.
+      expect(stopSettled).toBe(false);
+
+      releaseLoad();
+      await Promise.all([starting, stopping]);
 
       expect(devStatus(service)).toBeDefined();
       expect(isLoaded(service)).toBe(true);
+      expect(watcherOf(service)).toBeDefined();
+
+      service.dispose();
+    });
+
+    it("treats an untagged restart as unowned, so any tagged stop ends it", async () => {
+      await writeDevPlugin();
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      await service.loadDevPlugin(DEV_ID, "newer");
+      await service.loadDevPlugin(DEV_ID);
+
+      await service.stopDevSession(DEV_ID, "someone-else");
+
+      expect(devStatus(service)).toBeUndefined();
+      expect(isLoaded(service)).toBe(false);
+
+      service.dispose();
+    });
+
+    it("leaves no session behind when a takeover start fails to load", async () => {
+      await writeDevPlugin();
+      const service = new PluginService(pluginsRoot, "0.0.0");
+      await service.loadDevPlugin(DEV_ID, "older");
+      (
+        service as unknown as { records: { setEnabled(id: string, enabled: boolean): void } }
+      ).records.setEnabled(DEV_ID, false);
+
+      await expect(service.loadDevPlugin(DEV_ID, "newer")).rejects.toThrow(/Couldn't load/);
+
+      expect(devStatus(service)).toBeUndefined();
+      expect(watcherOf(service)).toBeUndefined();
 
       service.dispose();
     });
@@ -1869,12 +1933,7 @@ describe("dev sessions — full-artifact reconcile (#12277)", () => {
       await fs.symlink(older, linkPath);
 
       const service = new PluginService(pluginsRoot, "0.0.0");
-      const watchedDir = (): string | undefined =>
-        (
-          service as unknown as {
-            devArtifactWatcherRegistry: { states: Map<string, { realDir: string }> } | null;
-          }
-        ).devArtifactWatcherRegistry?.states.get(DEV_ID)?.realDir;
+      const watchedDir = (): string | undefined => watcherOf(service)?.realDir;
 
       await service.loadDevPlugin(DEV_ID, "older");
       await vi.waitFor(() => expect(watchedDir()).toBe(older));
