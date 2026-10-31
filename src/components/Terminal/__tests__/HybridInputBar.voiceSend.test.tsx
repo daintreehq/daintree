@@ -405,6 +405,33 @@ describe("HybridInputBar dictated send reopened by the next dictation (#14804, #
     expect(onSend).not.toHaveBeenCalled();
   });
 
+  it("keeps a selection made in the reopened draft when the first cleanup comes back unchanged", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const onSend = vi.fn();
+    act(() => {
+      dictate("hello wrld");
+    });
+    const view = await mount(onSend);
+    act(() => {
+      view.focus();
+    });
+    await pressEnter(view);
+    act(() => {
+      useVoiceRecordingStore.getState().setArming({ panelId: PANEL_ID });
+    });
+    expect(view.state.selection.main.head).toBe("hello wrld".length);
+
+    act(() => {
+      view.dispatch({ selection: { anchor: 0, head: "hello".length } });
+    });
+    await act(async () => {
+      pending.resolve({ action: "no_change", correctedText: "hello wrld" });
+    });
+
+    expect(view.state.selection.main).toMatchObject({ from: 0, to: "hello".length });
+  });
+
   it("leaves both passages unsent, and the note gone, when the next dictation stops without a send", async () => {
     const later = deferred<CorrectResult>();
     const onSend = vi.fn();

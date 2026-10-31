@@ -249,9 +249,14 @@ function callOffWait(
   if (!view) return;
   unlockAfterSend(view, at.editableCompartmentRef.current, refocus);
   if (kind !== "reopened") return;
-  // Over any selection a writer left for the composer to take as it syncs.
   const { key, draft } = live.composerDraft();
-  setPendingComposerSelection(key, draft, { from: draft.length, to: draft.length });
+  if (view.state.doc.toString() === draft) {
+    // Shown already: a hint left for it would undo a selection made since.
+    takePendingComposerSelection(key, draft);
+  } else {
+    // Over any selection a writer left for the composer to take as it syncs.
+    setPendingComposerSelection(key, draft, { from: draft.length, to: draft.length });
+  }
   view.dispatch({ selection: { anchor: view.state.doc.length } });
 }
 
