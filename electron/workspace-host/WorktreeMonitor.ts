@@ -2421,8 +2421,8 @@ export class WorktreeMonitor {
         const outcome = await this.updateGitStatus(forceRefresh);
         if (lifecycle.aborted) return;
         // Another pass held the slot, so this poll checked nothing. Counted as
-        // a success, it would reset the failures that pass's expiry and the
-        // polls after it are building toward the breaker.
+        // a success, it would reset the failure count that repeated expiry
+        // builds toward the breaker.
         if (outcome === "skipped") return;
         this.pollingStrategy.recordSuccess(Date.now() - startTime, queueDelayMs);
       } catch (_error) {

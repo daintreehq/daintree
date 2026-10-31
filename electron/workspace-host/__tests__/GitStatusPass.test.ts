@@ -738,16 +738,16 @@ describe("GitStatusPass", () => {
   describe("recovering a degraded card (#15645)", () => {
     const dirty = () =>
       makeChanges({
-        changes: [
-          { path: "/test/worktree/a.ts", status: "modified", insertions: 1, deletions: 0 },
-        ],
+        changes: [{ path: "/test/worktree/a.ts", status: "modified", insertions: 1, deletions: 0 }],
         changedFileCount: 1,
       });
 
     function makeSeededPass() {
       mockGetWorktreeChangesWithStats.mockResolvedValue(dirty());
       vi.mocked(categorizeWorktree).mockResolvedValue("active");
-      return makePass({}, { compute: vi.fn().mockResolvedValue(null) } as unknown as BaseDivergence);
+      return makePass({}, {
+        compute: vi.fn().mockResolvedValue(null),
+      } as unknown as BaseDivergence);
     }
 
     it("publishes an unchanged read in full once, replacing the degraded mood and summary", async () => {
