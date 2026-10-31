@@ -745,26 +745,40 @@ function windowFocusRanks(): Map<number, number> {
 }
 
 function singleTargetCandidates(channel: string, args: unknown[]): WebContents[] {
-  let pool = getShownAppWebContents().filter((wc) => isSingleTargetEligible(wc, channel, args));
-  // No window has a registered shown view (early boot, or a window that never
-  // registered one): any uncached renderer, still only one of them.
-  if (pool.length === 0) {
-    pool = getAllAppWebContents().filter((wc) => isSingleTargetEligible(wc, channel, args));
-  }
+  const pool: WebContents[] = [];
+  const seen = new Set<number>();
+  const shownIds = new Set<number>();
+  const consider = (wc: WebContents, shown: boolean): void => {
+    if (wc.isDestroyed() || seen.has(wc.id)) return;
+    seen.add(wc.id);
+    if (shown) shownIds.add(wc.id);
+    if (isSingleTargetEligible(wc, channel, args)) pool.push(wc);
+  };
+  for (const wc of getShownAppWebContents()) consider(wc, true);
+  // Uncached renderers that are no window's shown view: a cold switch points
+  // the window at the incoming view before it loads, while the outgoing one is
+  // still hydrated and listening until it is cached.
+  for (const wc of getAllAppWebContents()) consider(wc, false);
   if (pool.length <= 1) return pool;
 
   const sticky = singleTargetByChannel.get(channel);
   const focusRanks = windowFocusRanks();
-  const keyOf = (wc: WebContents): [number, number, number] => {
+  const keyOf = (wc: WebContents): number[] => {
     const win = getWindowForWebContents(wc);
     return [
       isViewHydrated(wc.id) ? 0 : 1,
+      shownIds.has(wc.id) ? 0 : 1,
       wc.id === sticky ? 0 : 1,
       (win && focusRanks.get(win.id)) ?? Number.MAX_SAFE_INTEGER,
     ];
   };
   const keyed = pool.map((wc) => ({ wc, key: keyOf(wc) }));
-  keyed.sort((a, b) => a.key[0] - b.key[0] || a.key[1] - b.key[1] || a.key[2] - b.key[2]);
+  keyed.sort((a, b) => {
+    for (let i = 0; i < a.key.length; i++) {
+      if (a.key[i] !== b.key[i]) return a.key[i] - b.key[i];
+    }
+    return 0;
+  });
   return keyed.map((entry) => entry.wc);
 }
 
@@ -775,14 +789,15 @@ function singleTargetCandidates(channel: string, args: unknown[]): WebContents[]
  * so even a visible-only broadcast played one copy per open window and kept
  * every window's context awake through a pulse train.
  *
- * Choice, in order: a view whose current document has hydrated (its listeners
- * are mounted) over one still booting; the renderer that took this channel
- * last, so focus moving between windows doesn't wake a second context; the
- * window focused right now; then focus history. Unfocused and minimised
- * windows still qualify, because another app being in front is the normal
- * case for an attention sound. Cached, crashed and withheld views never do.
- * The target is revalidated on every send, so a closed window simply loses
- * its turn, and a send that throws falls through to the next candidate.
+ * Candidates are the uncached app renderers. Choice, in order: a view whose
+ * current document has hydrated (its listeners are mounted) over one still
+ * booting; a window's shown view over one that is on its way out; the renderer
+ * that took this channel last, so focus moving between windows doesn't wake a
+ * second context; the window focused right now; then focus history. Unfocused
+ * and minimised windows still qualify, because another app being in front is
+ * the normal case for an attention sound. Cached, crashed and withheld views
+ * never do. The target is revalidated on every send, so a closed window simply
+ * loses its turn, and a send that throws falls through to the next candidate.
  *
  * Remote endpoints are other machines and each still gets its copy. Returns
  * whether a local renderer took the push.

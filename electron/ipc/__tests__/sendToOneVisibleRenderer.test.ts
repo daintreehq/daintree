@@ -347,4 +347,69 @@ describe("sendToOneVisibleRenderer", () => {
     expect(cached.view.send).not.toHaveBeenCalled();
     expect(remote.send).toHaveBeenCalledTimes(1);
   });
+  it("keeps playing in the outgoing view while a cold switch's incoming view loads", () => {
+    const a = openWindow({ focused: true });
+    // Cold switch: the window now points at the incoming view, not yet loaded;
+    // the outgoing one is hydrated, uncached, and still a registered view.
+    const incoming = makeView(a.win, { hydrated: false });
+    state.shown = state.shown.map((v) => (v === a.view ? incoming : v));
+    state.all.push(incoming);
+
+    sendToOneVisibleRenderer(channel, 1);
+
+    expect(a.view.send.mock.calls).toEqual([[channel, 1]]);
+    expect(incoming.send).not.toHaveBeenCalled();
+  });
+
+  it("prefers another window's shown view over a view on its way out", () => {
+    const a = openWindow({ focused: true });
+    const b = openWindow();
+    sendToOneVisibleRenderer(channel, 1);
+    expect(a.view.send).toHaveBeenCalledTimes(1);
+
+    const incoming = makeView(a.win, { hydrated: false });
+    state.shown = state.shown.map((v) => (v === a.view ? incoming : v));
+    state.all.push(incoming);
+    sendToOneVisibleRenderer(channel, 2);
+
+    expect(b.view.send.mock.calls).toEqual([[channel, 2]]);
+    expect(sendCount(a.view, incoming)).toBe(1);
+  });
+
+  it("skips a destroyed view still listed ahead of a live one", () => {
+    const dead = openWindow({ focused: true, hydrated: false });
+    const live = openWindow({ hydrated: false });
+    dead.view.destroyed = true;
+
+    expect(sendToOneVisibleRenderer(channel, 1)).toBe(true);
+
+    expect(dead.view.send).not.toHaveBeenCalled();
+    expect(live.view.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("forgets the sticky target when no renderer takes the push", () => {
+    const a = openWindow({ focused: true });
+    const b = openWindow();
+    sendToOneVisibleRenderer(channel, 1);
+    expect(a.view.send).toHaveBeenCalledTimes(1);
+
+    const fail = () => {
+      throw new Error("disposed");
+    };
+    a.view.send.mockImplementation(fail);
+    b.view.send.mockImplementation(fail);
+    const remote = remoteEndpoint(301);
+    getEndpointRegistry().add(remote);
+    expect(sendToOneVisibleRenderer(channel, 2)).toBe(false);
+    expect(remote.send).toHaveBeenCalledTimes(1);
+
+    a.view.send.mockReset();
+    b.view.send.mockReset();
+    a.win.focused = false;
+    b.win.focused = true;
+    sendToOneVisibleRenderer(channel, 3);
+
+    expect(b.view.send.mock.calls).toEqual([[channel, 3]]);
+    expect(a.view.send).not.toHaveBeenCalled();
+  });
 });
