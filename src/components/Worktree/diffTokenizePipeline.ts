@@ -42,8 +42,10 @@ export interface FastTokenizeOptions {
  * enhanced and cloned lines. Gaps up to this bound lex byte-for-byte as
  * before; a longer run of blank lines is shortened to it and still reads as a
  * line break and a blank line. The one shipped rule with a bounded quantifier
- * that can cross newlines, C++'s raw-string delimiter, spans at most 16
- * characters, so it can't tell a shortened run from the original. PHP's
+ * that can consume a run of bare newlines, C++'s raw-string delimiter, spans
+ * at most 16 characters, so it can't tell a shortened run from the original
+ * (C's character literal is bounded too, but needs a backslash before each
+ * newline, so blank filler never reaches it). PHP's
  * heredoc delimiter can, by comparing two newline-spanning runs through a
  * backreference, which no valid PHP produces.
  */
