@@ -247,7 +247,8 @@ describe("standing instruction through the launch builders", () => {
       systemPromptArgs: claudeArgs,
       presetArgs: presetPair,
     });
-    expect(cmd.indexOf(quoted)).toBeGreaterThan(cmd.indexOf("preset"));
+    expect(cmd).toContain("--append-system-prompt 'preset'");
+    expect(cmd.indexOf(quoted)).toBeGreaterThan(cmd.indexOf("'preset'"));
 
     const flags = buildAgentLaunchFlags({ customFlags: "--verbose" }, "claude", {
       systemPromptArgs: claudeArgs,

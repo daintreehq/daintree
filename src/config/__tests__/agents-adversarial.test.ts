@@ -210,6 +210,13 @@ describe("Adversarial: preset.args injection (Bug — unsanitized args array)", 
     ]);
     expect(result[0]!.args).toEqual(["--model", "claude-opus-4-6", "--verbose"]);
   });
+
+  it("keeps a multi-word element whole and flattens its line breaks to one space (#15638)", () => {
+    const result = getMergedPresets("claude", [
+      { id: "f1", name: "Prompted", args: ["--system-prompt", "first\r\n\nsecond  line", " "] },
+    ]);
+    expect(result[0]!.args).toEqual(["--system-prompt", "first second  line", " "]);
+  });
 });
 
 // ── adversarial: validatePreset whitespace-only name (Bug — check before trim) ──

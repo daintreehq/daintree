@@ -84,12 +84,17 @@ function sanitizePreset(preset: AgentPreset): AgentPreset | null {
   if (preset.id.length > 100) return null;
   if (!/^[a-zA-Z0-9_.-]+$/.test(preset.id)) return null; // Only safe ID chars
 
-  // Sanitize args array — filter out non-string, empty, injection-containing, or oversized entries
+  // Sanitize args array — filter out non-string, empty, injection-containing, or oversized entries.
+  // Each element is one argv token (#15638), so a line break inside one would
+  // reach the launch command, which the spawn refuses whole; it is flattened
+  // to a space, as a standing instruction's is.
   const sanitizeArgs = (args?: string[]): string[] | undefined => {
     if (!Array.isArray(args)) return undefined;
-    const safe = args.filter(
-      (a) => typeof a === "string" && a.length > 0 && a.length <= 10000 && !hasShellMetachar(a)
-    );
+    const safe = args
+      .filter(
+        (a) => typeof a === "string" && a.length > 0 && a.length <= 10000 && !hasShellMetachar(a)
+      )
+      .map((a) => a.replace(/[\r\n]+/g, " "));
     return safe.length > 0 ? safe : undefined;
   };
 
