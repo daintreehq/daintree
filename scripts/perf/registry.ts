@@ -89,6 +89,12 @@ function tsxScript(file: string, fixedArgs: string[] = [], env?: Record<string, 
   return (rest) => spawnNode(["--import", "tsx", scriptPath, ...fixedArgs, ...rest], env);
 }
 
+// Same as tsxScript, with `global.gc` exposed for retained-heap readings.
+function tsxScriptWithGc(file: string): Runner {
+  const scriptPath = path.join(perfDir, file);
+  return (rest) => spawnNode(["--expose-gc", "--import", "tsx", scriptPath, ...rest]);
+}
+
 function harness(mode: PerfMode): Runner {
   const scriptPath = path.join(perfDir, "run.ts");
   return (rest) =>
@@ -233,6 +239,12 @@ export const REGISTRY: Record<string, Command> = {
       "Assert the committed baseline files are usable — shape, provenance, no degenerate references",
     kind: "diagnostic",
     runner: tsxScript("verify-baselines.ts"),
+  },
+  "model-catalog": {
+    summary:
+      "models.dev catalog load through AgentModelCatalogService: stale-day refresh, warm start, retained heap, resolved-output oracle",
+    kind: "mechanism",
+    runner: tsxScriptWithGc("model-catalog-bench.ts"),
   },
   "cold-start": {
     summary: "Manual cold-start sampler (needs a packaged binary under release/)",
