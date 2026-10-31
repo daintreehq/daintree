@@ -84,12 +84,15 @@ describe("waitForRetiringReaders", () => {
   });
 
   it("gives up at the budget and reports what is still draining", async () => {
-    const { reader } = spawn();
-    reader.retire();
+    const drained = spawn();
+    const stuck = spawn();
+    drained.reader.retire();
+    stuck.reader.retire();
     let settled: number | undefined;
     void readerModule.waitForRetiringReaders(1_000).then((pending) => {
       settled = pending;
     });
+    drained.child.emit("exit", 0);
     await vi.advanceTimersByTimeAsync(999);
     expect(settled).toBeUndefined();
     await vi.advanceTimersByTimeAsync(1);

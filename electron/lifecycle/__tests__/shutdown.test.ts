@@ -931,6 +931,35 @@ describe("registerShutdownHandler", () => {
       expect(order.slice(-2)).toEqual(["reader-drained", "exit"]);
     });
 
+    it("starts the reader wait alongside the VAD drain, not after it", async () => {
+      let releaseVad!: () => void;
+      vadDrainMock.waitForRetiringVadProcesses.mockImplementationOnce(
+        () =>
+          new Promise<number>((resolve) => {
+            releaseVad = () => resolve(0);
+          })
+      );
+      let markReaderWaitStarted!: () => void;
+      const readerWaitStarted = new Promise<void>((resolve) => {
+        markReaderWaitStarted = resolve;
+      });
+      readerDrainMock.waitForRetiringReaders.mockImplementationOnce(async () => {
+        markReaderWaitStarted();
+        return 0;
+      });
+      const exited = new Promise<void>((resolve) => {
+        appMock.exit.mockImplementationOnce(() => resolve());
+      });
+
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await readerWaitStarted;
+      expect(appMock.exit).not.toHaveBeenCalled();
+      releaseVad();
+      await exited;
+    });
+
     it("exits cleanly when a reader is still draining at the budget", async () => {
       readerDrainMock.waitForRetiringReaders.mockResolvedValueOnce(1);
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});

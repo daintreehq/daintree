@@ -26,7 +26,7 @@ export const CAPTURE_DELIVERY_BUDGET_MS = 750;
 export const CAPTURE_PERSISTENCE_DRAIN_BUDGET_MS = 1_500;
 
 // Room the chain keeps after the PTY host exit wait (#13167) for IPC cleanup,
-// the database drains and the VAD drain that follow it. The wait itself is
+// the database drains and the VAD and Canopy reader drains that follow it. The wait itself is
 // capped to whatever of CLEANUP_TIMEOUT_MS is left minus this, so a slow host
 // costs the supervisor disarm, never a dirty exit.
 export const POST_PTY_TEARDOWN_RESERVE_MS = 2_000;
