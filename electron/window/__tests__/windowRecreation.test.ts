@@ -27,6 +27,7 @@ import { attachAppViewRendererGoneHandler } from "../appViewRendererGone.js";
 import { createWindowRecreation, type WindowRecreationDeps } from "../windowRecreation.js";
 import {
   buildOpenWindowRecords,
+  clearPendingWindowRecreation,
   initOpenWindowsTracker,
   resetOpenWindowsTrackerForTests,
   saveOpenWindowsNow,
@@ -35,6 +36,7 @@ import {
 } from "../openWindowsTracker.js";
 import type { ProjectViewManager } from "../ProjectViewManager.js";
 import type { WindowContext, WindowRegistry } from "../WindowRegistry.js";
+import { isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 
 interface FakeWindow {
   windowId: number;
@@ -112,13 +114,13 @@ type CreateWindowSpy = ReturnType<typeof vi.fn<WindowRecreationDeps["createWindo
 function wireWindow(
   fleet: ReturnType<typeof createFleet>,
   win: FakeWindow,
-  opts: { appWebContentsId?: number; onCreate?: (replacement: FakeWindow) => void } = {}
+  opts: { appWebContentsId?: number; setup?: (replacement: FakeWindow) => Promise<void> } = {}
 ) {
   let nextId = 100;
-  const createWindow: CreateWindowSpy = vi.fn(async (projectId, createOpts) => {
+  const createWindow: CreateWindowSpy = vi.fn(async (_projectId, createOpts) => {
     const replacement = fleet.open({ windowId: nextId++ });
     createOpts.onRegistered(replacement.windowId);
-    opts.onCreate?.(replacement);
+    await opts.setup?.(replacement);
     return "ok" as const;
   });
   const recreation = createWindowRecreation({
@@ -176,6 +178,7 @@ describe("OOM window recreation (#15564)", () => {
   afterEach(() => {
     resetOpenWindowsTrackerForTests();
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("rebuilds onto the project the window switched to, not the one it launched on", async () => {
@@ -227,28 +230,31 @@ describe("OOM window recreation (#15564)", () => {
   });
 
   it("brings back a scratch under its own id", async () => {
+    const scratchId = "4b1d6f3e-2c8a-4e5b-9f7d-0a1b2c3d4e5f";
+    expect(isScratchWorkspaceId(scratchId)).toBe(true);
     const win = fleet.open({ windowId: 1, activeProjectId: "proj-a" });
     const { createWindow, crashOom } = wireWindow(fleet, win);
-    win.activeProjectId = "scratch-7f3a";
+    win.activeProjectId = scratchId;
 
     crashOom();
     await vi.runAllTimersAsync();
 
-    expect(createWindow).toHaveBeenCalledWith("scratch-7f3a", expect.anything());
+    expect(createWindow).toHaveBeenCalledWith(scratchId, expect.anything());
     expect(createWindow.mock.calls[0]![1].remoteWorkspaceKey).toBeUndefined();
   });
 
   it("sends a host-scoped workspace back to its host, never to a local project with its id", async () => {
-    const win = fleet.open({ windowId: 1, activeProjectId: "proj-b" });
+    const projectB = "b".repeat(64);
+    const win = fleet.open({ windowId: 1, activeProjectId: projectB });
     const { createWindow, crashOom } = wireWindow(fleet, win);
-    win.activeProjectId = "devbox:proj-b";
+    win.activeProjectId = `devbox:${projectB}`;
 
     crashOom();
     await vi.runAllTimersAsync();
 
     expect(createWindow).toHaveBeenCalledWith(
       undefined,
-      expect.objectContaining({ remoteWorkspaceKey: "devbox:proj-b" })
+      expect.objectContaining({ remoteWorkspaceKey: `devbox:${projectB}` })
     );
   });
 
@@ -364,22 +370,34 @@ describe("OOM window recreation (#15564)", () => {
         { projectId: "proj-c", lastUsed: 1 },
       ],
     });
-    let duringSetup: OpenWindowRecord[] | undefined;
+    let replacement: FakeWindow | undefined;
+    let finishSetup: (() => void) | undefined;
     const { recreation, crashOom } = wireWindow(fleet, win, {
-      onCreate: (replacement) => {
-        // A save landing before setup binds the replacement's view.
-        saveOpenWindowsNow();
-        duringSetup = lastWritten();
-        replacement.activeProjectId = "proj-b";
-        replacement.views = [{ projectId: "proj-b", lastUsed: 1 }];
+      setup: (created) => {
+        replacement = created;
+        return new Promise<void>((resolve) => {
+          finishSetup = resolve;
+        });
       },
     });
+    expect(recreation.isRecreating()).toBe(false);
 
     crashOom();
     expect(recreation.isRecreating()).toBe(true);
     await vi.runAllTimersAsync();
 
-    expect(duringSetup).toEqual([{ projectId: "proj-b", backgroundProjectIds: ["proj-c"] }]);
+    // Setup is still running and has bound nothing: a save now (a focus
+    // change, the window's own registration) still names what it was showing.
+    saveOpenWindowsNow();
+    expect(lastWritten()).toEqual([{ projectId: "proj-b", backgroundProjectIds: ["proj-c"] }]);
+
+    replacement!.activeProjectId = "proj-b";
+    replacement!.views = [{ projectId: "proj-b", lastUsed: 1 }];
+    finishSetup!();
+    await vi.runAllTimersAsync();
+
+    // The held record is gone: the captured background list no longer rides
+    // along, and the manifest reads the replacement's own state.
     expect(lastWritten()).toEqual([{ projectId: "proj-b" }]);
   });
 
@@ -397,23 +415,28 @@ describe("OOM window recreation (#15564)", () => {
     expect(buildOpenWindowRecords(fleet.registry)).toEqual([{ projectId: null }]);
   });
 
-  it("lets go of the held record when the rebuild fails", async () => {
-    const win = fleet.open({ windowId: 1, activeProjectId: "proj-b" });
-    const createWindow: CreateWindowSpy = vi.fn(async (_projectId, createOpts) => {
-      fleet.open({ windowId: 100 });
-      createOpts.onRegistered(100);
-      throw new Error("setup failed");
+  it("keeps naming the captured workspace when the replacement's setup throws", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const win = fleet.open({
+      windowId: 1,
+      activeProjectId: "proj-b",
+      views: [
+        { projectId: "proj-b", lastUsed: 2 },
+        { projectId: "proj-c", lastUsed: 1 },
+      ],
     });
-    const recreation = createWindowRecreation({
-      windowRegistry: fleet.registry,
-      getWindowId: () => win.windowId,
-      createWindow,
+    const { crashOom } = wireWindow(fleet, win, {
+      setup: () => Promise.reject(new Error("project store threw")),
     });
 
-    const rebuild = recreation.prepare();
-    fleet.destroy(1);
-    await expect(rebuild()).rejects.toThrow("setup failed");
+    crashOom();
+    await vi.runAllTimersAsync();
 
+    // A throwing lookup is a failed boot, not a missing workspace.
+    expect(lastWritten()).toEqual([{ projectId: "proj-b", backgroundProjectIds: ["proj-c"] }]);
+
+    // The replacement closing lets the record go, as main.ts's `closed` does.
+    clearPendingWindowRecreation(100);
     expect(buildOpenWindowRecords(fleet.registry)).toEqual([{ projectId: null }]);
   });
 });

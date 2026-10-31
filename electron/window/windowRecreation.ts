@@ -19,7 +19,7 @@ import type { OpenWindowRecord } from "../services/persistence/windowManifest.js
 import {
   captureWindowRecord,
   clearPendingWindowRecreation,
-  saveOpenWindowsNow,
+  scheduleOpenWindowsSave,
   setPendingWindowRecreation,
 } from "./openWindowsTracker.js";
 
@@ -49,7 +49,8 @@ export interface WindowRecreation {
   /**
    * The window is being torn down to be rebuilt. Its `closed` save is skipped:
    * the manifest on disk still holds its record, and the replacement carries
-   * it from registration on.
+   * it from registration on. A replacement that closes lets go of the record
+   * with `clearPendingWindowRecreation`.
    */
   isRecreating: () => boolean;
 }
@@ -88,12 +89,14 @@ export function createWindowRecreation(deps: WindowRecreationDeps): WindowRecrea
               setPendingWindowRecreation(id, record);
             },
           });
-        } finally {
-          if (replacementId !== undefined) clearPendingWindowRecreation(replacementId);
           // Setup has bound the workspace (or found it gone) and queued the
-          // background restores, which the manifest now reads for itself.
+          // background restores, which the manifest now reads for itself. A
+          // setup that threw proves nothing about the workspace, so the
+          // replacement keeps naming it until it closes.
+          if (replacementId !== undefined) clearPendingWindowRecreation(replacementId);
+        } finally {
           // Nothing else saves until the next focus change or switch.
-          saveOpenWindowsNow();
+          scheduleOpenWindowsSave();
         }
       };
     },

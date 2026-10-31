@@ -253,12 +253,15 @@ describe("OOM recreation records (#15564)", () => {
       },
     ]);
     setPendingBackgroundRestores(2, ["a", "d"]);
-    initOpenWindowsTracker({
-      registry,
-      readOnly: false,
-      liveWorkspaceIds: () => new Set(["orphan"]),
-    });
+    const live = new Set(["orphan"]);
 
+    // The manifest hands the orphan to the primary window; a capture of that
+    // window describes what it held, not what the next save would assign it.
+    expect(buildOpenWindowRecords(registry, undefined, live)[0]).toEqual({
+      projectId: "a",
+      backgroundProjectIds: ["orphan"],
+    });
+    expect(captureWindowRecord(registry, 1)).toEqual({ projectId: "a" });
     expect(captureWindowRecord(registry, 2)).toEqual({
       projectId: "b",
       backgroundProjectIds: ["c", "d"],
@@ -274,14 +277,16 @@ describe("OOM recreation records (#15564)", () => {
       { projectId: "b", backgroundProjectIds: ["c"] },
     ]);
 
-    win.projectId = "b";
-    win.views = [["b", 1]];
+    // The person opened another project while setup ran: what the window
+    // shows wins, and the captured backgrounds wait for setup to hand over.
+    win.projectId = "x";
+    win.views = [["x", 1]];
     expect(buildOpenWindowRecords(registry)).toEqual([
-      { projectId: "b", backgroundProjectIds: ["c"] },
+      { projectId: "x", backgroundProjectIds: ["c"] },
     ]);
 
     clearPendingWindowRecreation(5);
-    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: "b" }]);
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: "x" }]);
   });
 
   it("leaves a host-scoped replacement's pending host intent unspent", () => {

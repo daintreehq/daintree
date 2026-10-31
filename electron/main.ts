@@ -144,6 +144,7 @@ import {
   readOpenWindowsManifestSync,
 } from "./services/persistence/readLastProjectId.js";
 import {
+  clearPendingWindowRecreation,
   enableOpenWindowsSaves,
   initOpenWindowsTracker,
   resumeOpenWindowsSaves,
@@ -596,11 +597,11 @@ if (!gotTheLock) {
   ): Promise<CreateWindowResult> {
     // An OOM rebuilds the window onto what it is showing then, never onto this
     // call's arguments (#15564). One instance serves both the startup view's
-    // handler and the manager's, so the window is rebuilt once.
-    let registeredWindowId: number | undefined;
+    // handler and the manager's, so the window is rebuilt once. `ctx` is read
+    // lazily: it is registered synchronously below, before any renderer can die.
     const recreation = createWindowRecreation({
       windowRegistry,
-      getWindowId: () => registeredWindowId,
+      getWindowId: () => ctx.windowId,
       createWindow: (projectId, recreateOpts) => createWindow(undefined, projectId, recreateOpts),
     });
     const { win, appView, loadRenderer, smokeTestTimer, smokeRendererUnresponsive } =
@@ -615,7 +616,6 @@ if (!gotTheLock) {
       });
     setMainWindow(win);
     const ctx = windowRegistry.register(win, { projectPath: initialProjectPath ?? undefined });
-    registeredWindowId = ctx.windowId;
     opts?.onRegistered?.(ctx.windowId);
     if (opts?.remoteWorkspaceKey) noteRemoteWindowRestore(ctx.windowId, opts.remoteWorkspaceKey);
     // A restored window only binds its workspace once setup reaches
@@ -637,6 +637,7 @@ if (!gotTheLock) {
     scheduleOpenWindowsSave();
     win.on("closed", () => {
       forgetRemoteWindowRestore(closedWindowId);
+      clearPendingWindowRecreation(closedWindowId);
       // A window torn down for an OOM rebuild keeps its record on disk until
       // its replacement, which carries that record, saves over it.
       if (!recreation.isRecreating()) saveOpenWindowsNow(closedWindowId);
