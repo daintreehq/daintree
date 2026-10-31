@@ -140,6 +140,17 @@ describe("usePanelRecoveryResponder", () => {
       expect(report.mock.calls).toEqual([[false], [true], [false], [true], [false]]);
     });
 
+    it("keeps holding until the last commit draft goes", () => {
+      renderHook(() => usePanelRecoveryResponder());
+      const { setDraft, clearWorktree } = useReviewCommitDraftStore.getState();
+      setDraft("/repo/a", "feat: a");
+      setDraft("/repo/b", "fix: b");
+      clearWorktree("/repo/a");
+      expect(report.mock.calls).toEqual([[false], [true]]);
+      clearWorktree("/repo/b");
+      expect(report.mock.calls).toEqual([[false], [true], [false]]);
+    });
+
     it("stops reporting on unmount", () => {
       const { unmount } = renderHook(() => usePanelRecoveryResponder());
       unmount();
