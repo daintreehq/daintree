@@ -23,6 +23,7 @@ import {
   ThrowawayCallPayloadSchema,
   type McpCallPayload,
 } from "../linkMethods.js";
+import type { RelayedNotice } from "../../../services/mcp-server/terminalNotify.js";
 import { MAX_CARRIED_DEPTH } from "../mcpRelayExecutor.js";
 import { MAX_RELAY_NOTICES_PER_SENDER } from "../relayNoticeOutbox.js";
 import { SenderSessions } from "../senderSessions.js";
@@ -778,11 +779,12 @@ describe("installHostMcpRelay results of tools with no output schema (#15730)", 
 });
 
 describe("installHostMcpRelay notices (#13500)", () => {
-  const notice = (callId = "call-1") => ({
+  const notice = (callId = "call-1"): RelayedNotice => ({
     helpSessionId: "help-1",
     callId,
     terminalId: "t-1",
-    observation: { kind: "closed" as const },
+    observation: { kind: "closed" },
+    lastTransitionAt: null,
   });
   const notifyCall = { tool: "terminal.notifyWhenIdle", args: { terminalId: "t-1" } };
   const status = (link: FakeLink, calls: Array<{ helpSessionId: string; callId: string }>) =>

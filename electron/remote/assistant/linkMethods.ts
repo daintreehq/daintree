@@ -358,6 +358,15 @@ export const RelayNoticeSchema = z
     observation: relayObservationSchema,
     /** It stopped without the done marker its prompt asked for; one more notice may follow. */
     awaitingHandback: z.boolean().optional(),
+    /**
+     * The host's `lastStateChange` for the state the notice reports, on the
+     * host's clock: what `terminal.getStatus` on the host answers as
+     * `lastTransitionAt`. Null when no transition matches the observation;
+     * absent from a host that predates it. A Shell that predates it strips it.
+     * One that is not a time is dropped rather than refusing the batch, which
+     * the host would take as final and lose every notice in it.
+     */
+    lastTransitionAt: z.number().nullable().optional().catch(undefined),
   })
   .strip();
 export type RelayNotice = z.infer<typeof RelayNoticeSchema>;

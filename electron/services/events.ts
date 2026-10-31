@@ -744,6 +744,8 @@ export type DaintreeEventMap = {
     handback: import("../../shared/types/handback.js").TerminalHandback;
     /** The code minted for the prompt, which names this marker on screen. */
     code?: string;
+    /** The pane's `lastStateChange` when the marker was seen: the state it was printed in. */
+    lastStateChange?: number;
     timestamp: number;
   };
 

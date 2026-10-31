@@ -416,6 +416,27 @@ describe("TerminalProcess handback requests (#12488)", () => {
     terminal.dispose();
   });
 
+  it("names the state a marker was printed in by the pane's own last transition (#15726)", async () => {
+    vi.useFakeTimers();
+    ptyOnDataCallback = null;
+    const seen: Array<number | undefined> = [];
+    const off = events.on("agent:handback-observed", (payload) =>
+      seen.push(payload.lastStateChange)
+    );
+    const terminal = createTerminal({ launchAgentId: "grok", handbackCode: "k7f3qa" });
+    const workingSince = Date.now() - 42_000;
+    terminal.getInfo().agentState = "working";
+    terminal.getInfo().lastStateChange = workingSince;
+
+    ptyOnDataCallback!("DAINTREE-DONE-k7f3qa: gave a fact END-k7f3qa\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(seen).toEqual([workingSince]);
+    off();
+    vi.useRealTimers();
+    terminal.dispose();
+  });
+
   it("keeps a code open while the agent works, reporting a changed capture once", async () => {
     vi.useFakeTimers();
     ptyOnDataCallback = null;

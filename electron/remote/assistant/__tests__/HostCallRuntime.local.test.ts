@@ -665,6 +665,7 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
   });
 
   it("types a notice the call armed into the run that made it, even one fired before it answered", async () => {
+    const stoppedAt = Date.parse("2026-10-18T09:59:30Z");
     answer = async (session) => {
       session.spec.deliverNotices([
         {
@@ -677,6 +678,7 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
             waitingReason: "prompt",
             handback: false,
           },
+          lastTransitionAt: stoppedAt,
         },
       ]);
       return { content: [], structuredContent: { terminalId: "t-site" } };
@@ -695,7 +697,10 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
     expect(queued[0]!.lane).toEqual({ helpSessionId: "a", terminalId: "t-a", projectId: "proj-1" });
     expect(queued[0]!.wake).toMatchObject({
       kind: "notice",
-      hostNotice: { hostName: "greg-mbp", notice: { terminalId: "t-site" } },
+      hostNotice: {
+        hostName: "greg-mbp",
+        notice: { terminalId: "t-site", lastTransitionAt: stoppedAt },
+      },
     });
     expect(queued[0]!.wake.recheck()).toEqual({ kind: "ready" });
 

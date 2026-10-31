@@ -147,6 +147,32 @@ describe("bridgePtyEvent", () => {
     expect(codes).toEqual(["k7f3qa", undefined, undefined]);
   });
 
+  it("forwards the pane's last transition with a handback, and drops one that is not a time (#15726)", () => {
+    const seen: Array<number | undefined> = [];
+    events.on("agent:handback-observed", (payload) => seen.push(payload.lastStateChange));
+    const handback = { message: "done", observedAt: 1_000, truncated: false };
+
+    for (const lastStateChange of [
+      900,
+      0,
+      1_792_317_600_123,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      "900",
+      undefined,
+    ]) {
+      bridgePtyEvent({
+        type: "agent-handback-observed",
+        terminalId: "term-1",
+        handback,
+        ...(lastStateChange !== undefined ? { lastStateChange: lastStateChange as number } : {}),
+        timestamp: 1_000,
+      });
+    }
+
+    expect(seen).toEqual([900, 0, 1_792_317_600_123, undefined, undefined, undefined, undefined]);
+  });
+
   it("forwards waitingReason from agent-state events", () => {
     const payloads: Array<{ waitingReason?: string }> = [];
     events.on("agent:state-changed", (payload) => {

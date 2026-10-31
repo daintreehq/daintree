@@ -103,6 +103,22 @@ describe("HostCallRuntime notices from hosts (#13500)", () => {
     expect(wake.recheck()).toEqual({ kind: "ready" });
   });
 
+  it("types a host's transition as it came, and a notice from a host that sends none (#15726)", async () => {
+    const AT = Date.parse("2026-10-18T06:12:00Z");
+    await runtime.call("a", LAUNCH, { tier: "core" });
+    runtime.receiveNotices("studio", {
+      notices: [
+        notice({ lastTransitionAt: AT }),
+        notice({ noticeId: "n-2", terminalId: "host-t-2", lastTransitionAt: null }),
+        notice({ noticeId: "n-3", terminalId: "host-t-3" }),
+      ],
+    });
+
+    const typed = queued.map(({ wake }) => wake.hostNotice!.notice);
+    expect(typed.map((n) => n.lastTransitionAt)).toEqual([AT, null, undefined]);
+    expect(typed[2]).not.toHaveProperty("lastTransitionAt");
+  });
+
   it("takes the host from the connection: a notice for a call to another host goes nowhere", async () => {
     await runtime.call("a", LAUNCH, { tier: "core" });
     runtime.receiveNotices("other", { notices: [notice()] });
