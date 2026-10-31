@@ -20,7 +20,11 @@ import {
   slicePausePositions,
 } from "@shared/utils/voicePausePositions";
 import { panelHasComposer } from "@/components/Terminal/terminalComposer";
-import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
+import {
+  useHelpPanelStore,
+  selectActiveSlot,
+  selectSlotTerminalIds,
+} from "@/store/helpPanelStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import {
@@ -95,6 +99,11 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { notify } from "@/lib/notify";
 import type { NotificationAction } from "@/store/notificationStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
+import { isProjectHomePresented } from "@/store/storeAccessors";
+import { getClosingIds } from "@/services/terminal/optimisticPanelCloseIds";
+import { buildFleetPanels } from "@/components/Terminal/contentGridFleetPanels";
+import { listVisiblePaneIds, pickRecentVisibleTarget } from "@/services/voiceFallbackTarget";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   OPENING_CHUNK_WINDOW,
@@ -4934,7 +4943,16 @@ class VoiceRecordingService {
       return;
     }
 
-    const target = this.getFocusedPanelTarget();
+    const focusedTarget = this.getFocusedPanelTarget();
+    if (focusedTarget) {
+      await this.startOrToggle(focusedTarget);
+      return;
+    }
+
+    // Nothing focused can take it, so the agent on screen the person was just
+    // in does (#15550). It comes forward with the keyboard in its composer, as
+    // if it had been focused, so they see where the words go (#14770).
+    const target = this.getVisibleFallbackTarget();
     if (!target) {
       useVoiceRecordingStore.getState().setLastError({
         severity: "fatal",
@@ -4951,6 +4969,8 @@ class VoiceRecordingService {
       return;
     }
 
+    usePanelStore.getState().activateTerminal(target.panelId);
+    revealDictationComposer(target.panelId);
     await this.startOrToggle(target);
   }
 
@@ -5410,6 +5430,48 @@ class VoiceRecordingService {
   private getFocusedPanelTarget(): VoiceRecordingTarget | null {
     const panelId = usePanelStore.getState().focusedId;
     return panelId ? this.getDictationTarget(panelId) : null;
+  }
+
+  /**
+   * Of the panes on screen that can take dictation, the one most recently
+   * focused, else the only one. Null when there is none, or several and none
+   * was focused.
+   */
+  private getVisibleFallbackTarget(): VoiceRecordingTarget | null {
+    const panels = usePanelStore.getState();
+    const { activeWorktreeId, isFleetScopeActive } = useWorktreeSelectionStore.getState();
+    const closing = getClosingIds();
+    // A fleet scope draws every worktree's armed panels in place of this
+    // worktree's grid; its cells are left to the focused path.
+    const fleetDrawn =
+      isFleetScopeActive &&
+      useFleetScopeFlagStore.getState().mode === "scoped" &&
+      buildFleetPanels(
+        useFleetArmingStore.getState().armOrder,
+        useFleetArmingStore.getState().armedIds,
+        panels.panelsById
+      ).some((panel) => !closing.has(panel.id));
+
+    const visibleIds = listVisiblePaneIds({
+      panelIds: panels.panelIds,
+      panelsById: panels.panelsById,
+      activeDockTerminalId: panels.activeDockTerminalId,
+      trashedTerminals: panels.trashedTerminals,
+      activeWorktreeId,
+      maximizedId: panels.maximizedId,
+      maximizeTarget: panels.maximizeTarget,
+      gridGroups: panels.getTabGroups("grid", activeWorktreeId ?? undefined),
+      helpTerminalIds: new Set(selectSlotTerminalIds(useHelpPanelStore.getState())),
+      gridHidden: isProjectHomePresented() || fleetDrawn,
+      isClosing: (id) => closing.has(id),
+    });
+
+    const targets = new Map<string, VoiceRecordingTarget>();
+    for (const id of visibleIds) {
+      const target = this.getDictationTarget(id);
+      if (target) targets.set(id, target);
+    }
+    return pickRecentVisibleTarget(targets, panels.mruList);
   }
 
   /** The pane as a dictation target, or null when it has no composer to show the words. */
