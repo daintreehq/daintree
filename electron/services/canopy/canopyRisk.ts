@@ -13,20 +13,59 @@ interface RiskyCommand {
   reason: string;
 }
 
+/**
+ * One option value: a quoted path, or a word that starts with neither a quote
+ * nor a dash. The two never overlap, and a value never reads as the next
+ * option, so a long row of options can't be split two ways and backtrack.
+ */
+const VALUE = String.raw`(?:"[^"]*"|'[^']*'|[^\s"'-]\S*)`;
+
+/**
+ * `git` and the global options that can sit before its subcommand (`-C <path>`,
+ * `-c key=value`, `--git-dir=<path>`, `--work-tree <path>`, `--no-pager`), so
+ * an agent working in a worktree through `git -C` is read like a bare `git`.
+ */
+const GIT = String.raw`\bgit(?:\s+(?:-[Cc]\s+${VALUE}|--(?:git-dir|work-tree|namespace)\s+${VALUE}|--[a-z][a-z-]*(?:=${VALUE})?|-[A-Za-z]))*\s+`;
+
+/** The rest of the command, up to the next pipe, `;`, `&` or line end. */
+const ARGS = String.raw`[^|;&\n]*`;
+
+function git(subcommand: string, flags = "i"): RegExp {
+  return new RegExp(GIT + subcommand, flags);
+}
+
 const RISKY: readonly RiskyCommand[] = [
   {
     pattern: /\brm\s+(?:-[a-z-]*[rf][a-z-]*\s+|--(?:recursive|force)\b)/i,
     reason: "Deletes files for good",
   },
   {
-    pattern: /\bgit\s+push\b[^|;&\n]*(?:--force\b|--force-with-lease\b|\s-f\b)/i,
+    // PowerShell's -Recurse/-Force (any unambiguous prefix) and cmd's /s.
+    pattern: /\b(?:Remove-Item|rd|rmdir)\b[^|;&\n]*\s(?:-(?:r[a-z]*|fo[a-z]*)|\/s)\b/i,
+    reason: "Deletes files for good",
+  },
+  {
+    // A force push, a remote branch delete, or a refspec that forces (`+main`)
+    // or deletes (`:main`).
+    pattern: git(String.raw`push\b${ARGS}\s(?:--force\b|--force-with-lease\b|-f\b|--delete\b|-d\b|[+:][A-Za-z_])`),
     reason: "Overwrites the remote branch",
   },
-  { pattern: /\bgit\s+reset\s+--hard\b/i, reason: "Discards uncommitted changes" },
-  { pattern: /\bgit\s+clean\s+-[a-z]*f/i, reason: "Deletes untracked files for good" },
-  { pattern: /\bgit\s+branch\s+-D\b/i, reason: "Deletes a branch with unmerged work" },
+  { pattern: git(String.raw`reset\b${ARGS}\s--hard\b`), reason: "Discards uncommitted changes" },
   {
-    pattern: /\bgit\s+(?:checkout|restore)\s+(?:--\s+)?\.(?:\s|$)/i,
+    pattern: git(String.raw`clean\b${ARGS}\s(?:-[a-z]*f|--force\b)`),
+    reason: "Deletes untracked files for good",
+  },
+  {
+    // Case matters here: `-d` refuses an unmerged branch, so only `-D` or a
+    // delete with a force (`-d -f`, `--delete --force`, `-df`) loses work.
+    pattern: git(
+      String.raw`branch\b(?:(?=${ARGS}\s-[A-Za-z]*D)|(?=${ARGS}\s(?:-[A-Za-z]*d|--delete\b))(?=${ARGS}\s(?:-[A-Za-z]*f|--force\b)))`,
+      ""
+    ),
+    reason: "Deletes a branch with unmerged work",
+  },
+  {
+    pattern: git(String.raw`(?:checkout|restore)\s+(?:--\s+)?\.(?:\s|$)`),
     reason: "Discards uncommitted changes",
   },
   { pattern: /\bdrop\s+(?:table|database|schema)\b/i, reason: "Deletes data for good" },
