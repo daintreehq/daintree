@@ -14,6 +14,7 @@ import { decode, encodeEnvelope } from "./projectSettingsCodec.js";
 import { Cache } from "../utils/cache.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { mergeBrowserAllowedHosts } from "../../shared/utils/urlUtils.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 export class ProjectSettingsManager {
   private notificationOverridesCache = new Map<string, Partial<NotificationSettings> | undefined>();
@@ -128,7 +129,7 @@ export class ProjectSettingsManager {
       this.notificationOverridesCache.delete(projectId);
       if (error instanceof SyntaxError) {
         console.error(`[ProjectSettingsManager] Failed to parse settings for ${projectId}:`, error);
-        const quarantinedPath = await this.quarantine(filePath, "corrupted");
+        const quarantinedPath = await this.quarantine(projectId, filePath, "corrupted");
         void this.broadcastCorruption(quarantinedPath);
         return { runCommands: [] };
       }
@@ -145,7 +146,11 @@ export class ProjectSettingsManager {
       console.warn(
         `[ProjectSettingsManager] settings.json for ${projectId} was written by a newer app (v${decoded.onDiskVersion} > current); quarantining`
       );
-      const quarantinedPath = await this.quarantine(filePath, `future-v${decoded.onDiskVersion}`);
+      const quarantinedPath = await this.quarantine(
+        projectId,
+        filePath,
+        `future-v${decoded.onDiskVersion}`
+      );
       void this.broadcastCorruption(quarantinedPath, "future-version");
       return { runCommands: [] };
     }
@@ -264,28 +269,42 @@ export class ProjectSettingsManager {
   }
 
   /**
-   * Best-effort quarantine. Returns the destination path on success and
-   * `null` if the rename failed — quarantine is a safety net, not a hard
-   * dependency for surfacing corruption to the renderer. Suffix collisions
-   * (e.g. when an earlier future-version quarantine already exists) get a
-   * timestamp tail so we never clobber a previous artifact.
+   * Move an unreadable settings file aside and return where it went. A failed
+   * rename **throws** rather than letting the caller hand out defaults: the
+   * next save would write them straight over bytes that were never preserved
+   * (mirrors ProjectFileStore.quarantineRecipes). Suffix collisions (e.g. when
+   * an earlier future-version quarantine already exists) get a timestamp tail
+   * so we never clobber a previous artifact.
    */
-  private async quarantine(filePath: string, suffix: string): Promise<string | null> {
+  private async quarantine(projectId: string, filePath: string, suffix: string): Promise<string> {
+    const base =
+      suffix === "corrupted" ? `${filePath}.corrupted.${Date.now()}` : `${filePath}.${suffix}`;
+    const quarantinePath = existsSync(base) ? `${base}.${Date.now()}` : base;
     try {
-      const base =
-        suffix === "corrupted" ? `${filePath}.corrupted.${Date.now()}` : `${filePath}.${suffix}`;
-      const quarantinePath = existsSync(base) ? `${base}.${Date.now()}` : base;
       await resilientRename(filePath, quarantinePath);
-      console.warn(`[ProjectSettingsManager] Quarantined settings file to ${quarantinePath}`);
-      return quarantinePath;
-    } catch {
-      return null;
+    } catch (error) {
+      console.error(
+        `[ProjectSettingsManager] Failed to quarantine settings for ${projectId}:`,
+        error
+      );
+      const reason = formatErrorMessage(error, "rename failed");
+      throw new Error(
+        `Settings file for project ${projectId} is unreadable and could not be moved aside (${reason}); leaving it untouched`,
+        { cause: error }
+      );
     }
+    console.warn(`[ProjectSettingsManager] Quarantined settings file to ${quarantinePath}`);
+    return quarantinePath;
   }
 
+  /**
+   * `beforeSave` is a file a save moved aside on its way to replacing it, so
+   * the save's settings, not defaults, are what take effect.
+   */
   private async broadcastCorruption(
-    quarantinedPath: string | null,
-    kind?: "future-version"
+    quarantinedPath: string,
+    kind?: "future-version",
+    beforeSave = false
   ): Promise<void> {
     try {
       // Lazy import keeps the workspace-host bundle clean of `BrowserWindow`.
@@ -296,16 +315,16 @@ export class ProjectSettingsManager {
       // corruption silently no-ops (the failed import is caught below), and
       // the main process surfaces the toast on its next read.
       const { broadcastToRenderer } = await import("../ipc/utils.js");
-      const message = quarantinedPath
-        ? `Project settings couldn't be read and have been preserved at ${quarantinedPath}. Defaults are in effect until you reload the project.`
-        : "Project settings couldn't be read. Defaults are in effect until you reload the project.";
       broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
         type: "error",
         title: kind === "future-version" ? "Settings file too new" : "Project settings corrupted",
-        message:
-          kind === "future-version"
-            ? `${quarantinedPath ? `Settings file written by a newer version of Daintree was quarantined to ${quarantinedPath}. ` : ""}Defaults are in effect until you reload with a newer build.`
-            : message,
+        message: beforeSave
+          ? kind === "future-version"
+            ? `Settings written by a newer version of Daintree were preserved at ${quarantinedPath} before saving.`
+            : `Project settings on disk couldn't be read and were preserved at ${quarantinedPath} before saving.`
+          : kind === "future-version"
+            ? `Settings file written by a newer version of Daintree was quarantined to ${quarantinedPath}. Defaults are in effect until you reload with a newer build.`
+            : `Project settings couldn't be read and have been preserved at ${quarantinedPath}. Defaults are in effect until you reload the project.`,
       });
     } catch (err) {
       console.warn("[ProjectSettingsManager] Failed to broadcast corruption toast:", err);
@@ -368,14 +387,28 @@ export class ProjectSettingsManager {
       if (isMissingFileError(error)) return undefined;
       throw error;
     }
+    let parsed: unknown;
     try {
       const stripped = content.startsWith(UTF8_BOM) ? content.slice(UTF8_BOM.length) : content;
-      const decoded = decode(JSON.parse(stripped));
-      return decoded.ok ? decoded.settings : undefined;
+      parsed = JSON.parse(stripped);
     } catch {
-      // Unparseable: there is nothing saved for the save to keep.
+      // Unparseable: there is nothing in it for the save to keep, but its bytes
+      // are moved aside before the save replaces them, or the save fails.
+      const quarantinedPath = await this.quarantine(projectId, filePath, "corrupted");
+      void this.broadcastCorruption(quarantinedPath, undefined, true);
       return undefined;
     }
+    const decoded = decode(parsed);
+    if (!decoded.ok) {
+      const quarantinedPath = await this.quarantine(
+        projectId,
+        filePath,
+        `future-v${decoded.onDiskVersion}`
+      );
+      void this.broadcastCorruption(quarantinedPath, "future-version", true);
+      return undefined;
+    }
+    return decoded.settings;
   }
 
   private async writeProjectSettings(projectId: string, settings: ProjectSettings): Promise<void> {

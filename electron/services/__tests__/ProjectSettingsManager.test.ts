@@ -5,11 +5,15 @@ import path from "path";
 import { ProjectSettingsManager } from "../ProjectSettingsManager.js";
 import { generateProjectId } from "../projectStorePaths.js";
 import { PROJECT_SETTINGS_SCHEMA_VERSION } from "../projectSettingsCodec.js";
-import { resilientAtomicWriteFile } from "../../utils/fs.js";
+import { resilientAtomicWriteFile, resilientRename } from "../../utils/fs.js";
 
 vi.mock("../../utils/fs.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../utils/fs.js")>();
-  return { ...actual, resilientAtomicWriteFile: vi.fn(actual.resilientAtomicWriteFile) };
+  return {
+    ...actual,
+    resilientAtomicWriteFile: vi.fn(actual.resilientAtomicWriteFile),
+    resilientRename: vi.fn(actual.resilientRename),
+  };
 });
 
 vi.mock("../CommandService.js", () => ({
@@ -514,6 +518,142 @@ describe("ProjectSettingsManager caching", () => {
     await vi.waitFor(() => expect(broadcastSpy).toHaveBeenCalledTimes(1));
     const [, payload] = broadcastSpy.mock.calls[0];
     expect(payload).toMatchObject({ type: "error", title: "Settings file too new" });
+  });
+
+  describe("a damaged file that can't be moved aside (#15613)", () => {
+    const damaged: Array<[string, () => string]> = [
+      ["unparseable JSON", () => "{{invalid json"],
+      [
+        "a future-version envelope",
+        () =>
+          JSON.stringify({
+            _schemaVersion: PROJECT_SETTINGS_SCHEMA_VERSION + 99,
+            runCommands: [{ id: "npm-dev", name: "dev", command: "npm run dev" }],
+          }),
+      ],
+    ];
+
+    it.each(damaged)(
+      "%s: refuses both the read and the next save, leaving the file in place",
+      async (_label, bytes) => {
+        const settingsPath = path.join(tempDir, projectId, "settings.json");
+        const original = bytes();
+        await fs.writeFile(settingsPath, original, "utf-8");
+        vi.mocked(resilientRename).mockRejectedValue(
+          Object.assign(new Error("EBUSY: locked"), { code: "EBUSY" })
+        );
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        try {
+          await expect(manager.getProjectSettings(projectId)).rejects.toThrow(
+            /leaving it untouched/
+          );
+          await expect(
+            manager.saveProjectSettings(projectId, { runCommands: [], devServerCommand: "x" })
+          ).rejects.toThrow(/leaving it untouched/);
+          await expect(
+            manager.changeVoiceDictionary(projectId, (entries) => [
+              ...entries,
+              { term: "Daintree", heardAs: ["dain tree"], source: "manual", addedAt: 1 },
+            ])
+          ).rejects.toThrow(/leaving it untouched/);
+        } finally {
+          vi.mocked(resilientRename).mockReset();
+          errorSpy.mockRestore();
+          warnSpy.mockRestore();
+        }
+
+        expect(await fs.readFile(settingsPath, "utf-8")).toBe(original);
+        const dirEntries = await fs.readdir(path.join(tempDir, projectId));
+        expect(dirEntries.filter((name) => name !== "settings.json")).toEqual([]);
+        // Nothing says "defaults are in effect" for a file that was never moved aside.
+        expect(broadcastSpy).not.toHaveBeenCalled();
+      }
+    );
+
+    it("recovers once a later read manages to move the file aside", async () => {
+      const settingsPath = path.join(tempDir, projectId, "settings.json");
+      await fs.writeFile(settingsPath, "{{invalid json", "utf-8");
+      vi.mocked(resilientRename).mockRejectedValueOnce(
+        Object.assign(new Error("EBUSY: locked"), { code: "EBUSY" })
+      );
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await expect(manager.getProjectSettings(projectId)).rejects.toThrow(/leaving it untouched/);
+      } finally {
+        errorSpy.mockRestore();
+      }
+
+      vi.mocked(resilientRename).mockImplementation(async (src, dest) => fs.rename(src, dest));
+      try {
+        expect(await manager.getProjectSettings(projectId)).toEqual({ runCommands: [] });
+        await manager.saveProjectSettings(projectId, { runCommands: [], devServerCommand: "x" });
+      } finally {
+        vi.mocked(resilientRename).mockReset();
+      }
+
+      const dirEntries = await fs.readdir(path.join(tempDir, projectId));
+      const quarantined = dirEntries.filter((name) => name.startsWith("settings.json.corrupted."));
+      expect(quarantined).toHaveLength(1);
+      expect(await fs.readFile(path.join(tempDir, projectId, quarantined[0]), "utf-8")).toBe(
+        "{{invalid json"
+      );
+      expect((await manager.getProjectSettings(projectId)).devServerCommand).toBe("x");
+    });
+
+    it("moves a damaged file aside before a save with no read ahead of it replaces it", async () => {
+      const settingsPath = path.join(tempDir, projectId, "settings.json");
+      await fs.writeFile(settingsPath, "{{invalid json", "utf-8");
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        await manager.saveProjectSettings(projectId, { runCommands: [], devServerCommand: "x" });
+      } finally {
+        warnSpy.mockRestore();
+      }
+
+      const dirEntries = await fs.readdir(path.join(tempDir, projectId));
+      const quarantined = dirEntries.filter((name) => name.startsWith("settings.json.corrupted."));
+      expect(quarantined).toHaveLength(1);
+      expect(await fs.readFile(path.join(tempDir, projectId, quarantined[0]), "utf-8")).toBe(
+        "{{invalid json"
+      );
+      expect((await manager.getProjectSettings(projectId)).devServerCommand).toBe("x");
+      await vi.waitFor(() => expect(broadcastSpy).toHaveBeenCalledTimes(1));
+      const [, payload] = broadcastSpy.mock.calls[0];
+      expect(payload).toMatchObject({ type: "error", title: "Project settings corrupted" });
+      expect(payload.message).toContain(quarantined[0]);
+      expect(payload.message).not.toMatch(/Defaults are in effect/);
+    });
+
+    it("moves a future-version file aside before a save replaces it, and says so", async () => {
+      const settingsPath = path.join(tempDir, projectId, "settings.json");
+      const newer = JSON.stringify({
+        _schemaVersion: PROJECT_SETTINGS_SCHEMA_VERSION + 1,
+        runCommands: [],
+      });
+      await fs.writeFile(settingsPath, newer, "utf-8");
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        await manager.saveProjectSettings(projectId, { runCommands: [], devServerCommand: "x" });
+      } finally {
+        warnSpy.mockRestore();
+      }
+
+      const preserved = path.join(
+        tempDir,
+        projectId,
+        `settings.json.future-v${PROJECT_SETTINGS_SCHEMA_VERSION + 1}`
+      );
+      expect(await fs.readFile(preserved, "utf-8")).toBe(newer);
+      expect((await manager.getProjectSettings(projectId)).devServerCommand).toBe("x");
+      await vi.waitFor(() => expect(broadcastSpy).toHaveBeenCalledTimes(1));
+      const [, payload] = broadcastSpy.mock.calls[0];
+      expect(payload).toMatchObject({ type: "error", title: "Settings file too new" });
+      expect(payload.message).not.toMatch(/Defaults are in effect/);
+    });
   });
 
   it("never caches a read that overlapped a write", async () => {

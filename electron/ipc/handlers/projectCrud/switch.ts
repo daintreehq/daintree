@@ -19,7 +19,7 @@ import {
 import { projectStore } from "../../../services/ProjectStore.js";
 import { mayWriteProjectState } from "../../../services/DriveLeaseService.js";
 import { probeGitMarker } from "../../../services/projectOpenPreflight.js";
-import { AppError } from "../../../utils/errorTypes.js";
+import { AppError, isAppError } from "../../../utils/errorTypes.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import {
   ProjectSwitchService,
@@ -35,7 +35,7 @@ import { refreshProjectMenuState } from "../../../projectMenuState.js";
 import { scheduleOpenWindowsSave } from "../../../window/openWindowsTracker.js";
 import { notificationService } from "../../../services/NotificationService.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
-import { logInfo } from "../../../utils/logger.js";
+import { logInfo, logWarn } from "../../../utils/logger.js";
 import { checkKernelPressureCritical } from "../../../services/SystemMemoryPressureMonitor.js";
 import {
   projectSwitchStatusTiming,
@@ -647,7 +647,7 @@ async function persistOutgoingProjectState(
   }
   // Queued so the read-merge-write can't clobber concurrent queued writers
   // (terminalLayout handlers) now that the persist runs alongside the swap.
-  await projectStore.enqueueProjectStateUpdate(previousProjectId, (existing) => {
+  const persisted = projectStore.enqueueProjectStateUpdate(previousProjectId, (existing) => {
     const tabGroupDelta = outgoingState.tabGroupDelta;
     const decodedTabGroupDelta =
       tabGroupDelta && outgoingState.tabGroups
@@ -736,6 +736,19 @@ async function persistOutgoingProjectState(
       activeWorktreeId: outgoingState.activeWorktreeId,
     };
   });
+  try {
+    await persisted;
+  } catch (error) {
+    // The outgoing project's state file can't be read or moved aside, so its
+    // save was refused to keep the file intact. Leaving stays allowed.
+    if (isAppError(error) && error.code === "PROJECT_STATE_UNREADABLE") {
+      logWarn(`[${logLabel}] Outgoing project state left unsaved: its state file is unreadable`, {
+        projectId: previousProjectId,
+      });
+      return;
+    }
+    throw error;
+  }
 }
 
 type ActivateOptions = {
