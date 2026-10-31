@@ -1204,6 +1204,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         observation: notice.observation,
         ...(pin.note !== undefined ? { note: pin.note } : {}),
         ...(notice.awaitingHandback === true ? { awaitingHandback: true } : {}),
+        ...(notice.lastTransitionAt !== undefined
+          ? { lastTransitionAt: notice.lastTransitionAt }
+          : {}),
       };
       queue(
         {

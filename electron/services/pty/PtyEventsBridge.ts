@@ -158,6 +158,9 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         ...(typeof event.code === "string" && HANDBACK_CODE_PATTERN.test(event.code)
           ? { code: event.code }
           : {}),
+        ...(typeof event.lastStateChange === "number" && Number.isFinite(event.lastStateChange)
+          ? { lastStateChange: event.lastStateChange }
+          : {}),
         timestamp: event.timestamp,
       });
       return true;

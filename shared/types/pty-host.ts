@@ -807,6 +807,8 @@ export type PtyHostEvent =
       terminalId: string;
       handback: TerminalHandback;
       code?: string;
+      /** The pane's `lastStateChange` when the marker was seen. */
+      lastStateChange?: number;
       timestamp: number;
     }
   | {

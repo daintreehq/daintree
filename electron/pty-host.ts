@@ -1121,6 +1121,7 @@ events.on("agent:handback-observed", (payload) => {
     terminalId: payload.terminalId,
     handback: payload.handback,
     ...(payload.code !== undefined ? { code: payload.code } : {}),
+    ...(payload.lastStateChange !== undefined ? { lastStateChange: payload.lastStateChange } : {}),
     timestamp: payload.timestamp,
   });
 });
