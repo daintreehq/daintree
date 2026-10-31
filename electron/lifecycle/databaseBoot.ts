@@ -10,11 +10,11 @@
 export async function initializeDatabaseForBoot(guard: {
   wasPreviousExitClean: () => boolean;
 }): Promise<void> {
-  // Dynamic import keeps the service off main.ts's static import graph and its
-  // sync probe off top-of-module evaluation; shutdown.ts and
-  // globalServicesInit.ts still pull it in eagerly. The 200ms startMaintenance()
-  // timer and suspend listener are the `database-maintenance` deferred task in
-  // globalServicesInit. See #8817.
+  // Dynamic import keeps a direct static edge out of the boot path and the sync
+  // probe off top-of-module evaluation; shutdown.ts and globalServicesInit.ts
+  // still pull the service in eagerly. The 5-minute maintenance tick and
+  // suspend listener start later, from the `database-maintenance` deferred task
+  // in globalServicesInit. See #8817.
   const { initializeDatabaseMaintenance } =
     await import("../services/DatabaseMaintenanceService.js");
   initializeDatabaseMaintenance(guard.wasPreviousExitClean());
