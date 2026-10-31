@@ -518,16 +518,17 @@ describe("mistral configuration", () => {
     // agent fails at startup. Built-ins per vibe/cli-rust/src/cli.rs in 3.0.4.
     const vibeBuiltins = new Set(["ask", "accept-edits", "smart-approve", "auto-approve"]);
     const presets = getAgentConfig("mistral")?.presets ?? [];
-    const selected = presets.flatMap((preset) => {
-      const args = preset.args ?? [];
-      const at = args.indexOf("--agent");
-      return at === -1 ? [] : [args[at + 1]];
-    });
+    const selected = presets.flatMap((preset) =>
+      (preset.args ?? []).flatMap((arg, i, args) => {
+        if (arg === "--agent") return [args[i + 1]];
+        return arg.startsWith("--agent=") ? [arg.slice("--agent=".length)] : [];
+      })
+    );
 
     expect(selected.length).toBeGreaterThan(0);
     for (const agent of selected) expect(vibeBuiltins.has(agent!)).toBe(true);
     for (const preset of presets) {
-      expect(`${preset.name} ${preset.description ?? ""}`).not.toMatch(/read-only/i);
+      expect(`${preset.name} ${preset.description ?? ""}`).not.toMatch(/\bread[-\s]*only\b/i);
     }
   });
 });
