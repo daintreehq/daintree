@@ -293,6 +293,13 @@ export interface MainProcessToastPayload {
    * `"watch"` always shows both an in-app toast and an OS native notification.
    */
   priority?: "high" | "low" | "watch";
+  /**
+   * Threaded through to `notify({ urgent })`: shown even during quiet hours
+   * and the startup quiet period. Only for a notice that loses its point if it
+   * waits, such as confirmed database corruption. Never set for a plugin's
+   * toast.
+   */
+  urgent?: boolean;
   action?: {
     label: string;
     /** IPC channel to invoke when the action button is clicked */

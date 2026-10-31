@@ -184,6 +184,7 @@ export function useMainProcessToastListener(): void {
         rateLimitLabel: payload.rateLimitLabel,
         priority: payload.priority,
         action,
+        ...(payload.urgent !== undefined ? { urgent: payload.urgent } : {}),
         ...(pluginActions ? { actions: pluginActions, urgent: false } : {}),
         ...(payload.replaceKey !== undefined ? { replaceKey: payload.replaceKey } : {}),
         // Where it came from and what it is about (#13818): the inbox row's

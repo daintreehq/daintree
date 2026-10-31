@@ -1,5 +1,7 @@
+import type { WebContents } from "electron";
 import { CHANNELS } from "../ipc/channels.js";
 import { getAllAppWebContents, isCachedViewWebContents } from "../window/webContentsRegistry.js";
+import { onMainFrameNavigationStart } from "../utils/mainFrameNavigation.js";
 import type { MainProcessToastPayload } from "../../shared/types/ipc/maps.js";
 import {
   getDatabaseMaintenanceService,
@@ -18,8 +20,10 @@ const VERIFICATION_KEY = "database-backups-suspended:verification";
 let unsubscribe: (() => void) | null = null;
 let pending: MainProcessToastPayload | null = null;
 // Views register before they load, so a live WebContents is no proof its toast
-// listener is mounted. Only one that has reported first-interactive is.
+// listener is mounted. Only one that has reported first-interactive is, until
+// a reload or a crash takes that listener away again.
 const readyRenderers = new Set<number>();
+const watchedRenderers = new WeakSet<WebContents>();
 
 export function formatBackupTime(writtenAt: number): string {
   return new Date(writtenAt).toLocaleString(undefined, {
@@ -54,12 +58,15 @@ export function buildDatabaseBackupNotice(notice: BackupSuspensionNotice): MainP
   // Persistent: the idle tick that sets these latches runs while the user is
   // away, so a timed toast would be gone before anyone saw it.
   if (notice.reason === "corruption") {
+    // Urgent: every minute it waits behind quiet hours is more work past the
+    // last recovery point.
     return {
       type: "warning",
       title: "Database damage detected",
       message: corruptionMessage(notice.backup),
       duration: 0,
       rateLimitKey: CORRUPTION_KEY,
+      urgent: true,
     };
   }
   return {
@@ -106,7 +113,16 @@ export function showDatabaseBackupNotice(notice: BackupSuspensionNotice): void {
 
 /** A renderer reported first-interactive, so its toast listener is mounted. */
 export function noteDatabaseNoticeRendererReady(webContentsId: number): void {
-  readyRenderers.add(webContentsId);
+  // Remote shells report first-interactive too, but are never sent this notice.
+  const wc = getAllAppWebContents().find((c) => c.id === webContentsId && !c.isDestroyed());
+  if (!wc) return;
+  readyRenderers.add(wc.id);
+  if (!watchedRenderers.has(wc)) {
+    watchedRenderers.add(wc);
+    const unready = () => readyRenderers.delete(wc.id);
+    onMainFrameNavigationStart(wc, unready);
+    wc.on("render-process-gone", unready);
+  }
   if (pending && deliver(pending)) pending = null;
 }
 

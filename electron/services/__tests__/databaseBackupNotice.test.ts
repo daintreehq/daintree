@@ -5,6 +5,8 @@ interface FakeWebContents {
   id: number;
   send: ReturnType<typeof vi.fn>;
   isDestroyed: () => boolean;
+  on: (event: string, listener: (...args: unknown[]) => void) => void;
+  emit: (event: string, ...args: unknown[]) => void;
 }
 
 const { views, cachedIds, suspensionListeners } = vi.hoisted(() => ({
@@ -50,7 +52,14 @@ function view(
   opts: { cached?: boolean; destroyed?: boolean; ready?: boolean } = {}
 ): FakeWebContents {
   if (opts.cached) cachedIds.add(id);
-  const wc = { id, send: vi.fn(), isDestroyed: () => opts.destroyed ?? false };
+  const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+  const wc: FakeWebContents = {
+    id,
+    send: vi.fn(),
+    isDestroyed: () => opts.destroyed ?? false,
+    on: (event, listener) => listeners.set(event, [...(listeners.get(event) ?? []), listener]),
+    emit: (event, ...args) => listeners.get(event)?.forEach((listener) => listener(...args)),
+  };
   views.push(wc);
   if (opts.ready ?? true) noteDatabaseNoticeRendererReady(id);
   return wc;
@@ -85,6 +94,11 @@ describe("databaseBackupNotice", () => {
       // Recovery can still fail or fall back to a fresh database.
       expect(message).not.toMatch(/will (be )?restore|has been restored|will recover/i);
       expect(duration).toBe(0);
+    });
+
+    it("is shown through quiet hours, since every minute it waits is unrecoverable work", () => {
+      expect(buildDatabaseBackupNotice(CORRUPTION).urgent).toBe(true);
+      expect(buildDatabaseBackupNotice(VERIFICATION).urgent).toBeUndefined();
     });
 
     it("promises no restore when there is no backup to restore", () => {
@@ -159,8 +173,14 @@ describe("databaseBackupNotice", () => {
     });
   });
 
-  it("formats different backup times differently", () => {
-    expect(formatBackupTime(WRITTEN_AT)).not.toBe(formatBackupTime(DAY_EARLIER));
+  it("formats the backup's local date and time", () => {
+    const local = new Date(2026, 9, 23, 14, 7).getTime();
+    const shown = formatBackupTime(local);
+
+    expect(shown).toContain("2026");
+    expect(shown).toContain("23");
+    expect(shown).toContain("07");
+    expect(formatBackupTime(local - 24 * 60 * 60 * 1000)).not.toContain("23");
   });
 
   describe("delivery", () => {
@@ -201,6 +221,45 @@ describe("databaseBackupNotice", () => {
       noteDatabaseNoticeRendererReady(8);
       noteDatabaseNoticeRendererReady(8);
       expect(toastsSentTo(loading)).toEqual([buildDatabaseBackupNotice(CORRUPTION)]);
+    });
+
+    it("stops sending to a renderer that reloads until it is interactive again", () => {
+      const reloading = view(14);
+      reloading.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+
+      showDatabaseBackupNotice(CORRUPTION);
+      expect(toastsSentTo(reloading)).toEqual([]);
+
+      noteDatabaseNoticeRendererReady(14);
+      expect(toastsSentTo(reloading)).toEqual([buildDatabaseBackupNotice(CORRUPTION)]);
+    });
+
+    it("stays ready through an in-page navigation", () => {
+      const page = view(15);
+      page.emit("did-start-navigation", { isMainFrame: true, isSameDocument: true });
+
+      showDatabaseBackupNotice(CORRUPTION);
+
+      expect(toastsSentTo(page)).toHaveLength(1);
+    });
+
+    it("stops sending to a renderer whose process died", () => {
+      const crashed = view(16);
+      crashed.emit("render-process-gone");
+
+      showDatabaseBackupNotice(CORRUPTION);
+      expect(toastsSentTo(crashed)).toEqual([]);
+
+      noteDatabaseNoticeRendererReady(16);
+      expect(toastsSentTo(crashed)).toHaveLength(1);
+    });
+
+    it("ignores a first-interactive from a sender with no local view", () => {
+      showDatabaseBackupNotice(CORRUPTION);
+      noteDatabaseNoticeRendererReady(-3);
+
+      const local = view(17);
+      expect(toastsSentTo(local)).toEqual([buildDatabaseBackupNotice(CORRUPTION)]);
     });
 
     it("keeps the notice when every send fails, for the next ready renderer", () => {
