@@ -9,7 +9,10 @@ import { MouseEvent, AriaAttributes, ReactElement, DOMAttributes, HTMLAttributes
  * resolves with the validated channel result on success, or `undefined` if
  * the host rejected the call (the rejection is surfaced via `error`). Only
  * the latest `invoke()` updates `loading` / `error` — stale earlier calls are
- * dropped to keep concurrent invocations coherent.
+ * dropped to keep concurrent invocations coherent. Changing `pluginId` or
+ * `channel` also supersedes calls made against the previous target: they
+ * resolve `undefined` and leave `loading`, `error` and `disconnected` alone.
+ * A target change clears `loading` / `error` but keeps `disconnected`.
  */
 interface UseHostChannelResult<TArgs, TResult> {
     invoke: (args: TArgs) => Promise<TResult | undefined>;
@@ -6821,7 +6824,9 @@ interface PluginSavedViewsProps extends PluginRootAttributes {
  * Concurrent `invoke()` calls keep only the latest result/error — stale
  * resolutions are dropped so a fast click that triggers two invokes never
  * lets the older response overwrite the newer one. `loading` reflects the
- * latest call only.
+ * latest call only. Changing `pluginId` or `channel` supersedes every call
+ * started against the previous target the same way, even before the new
+ * target is invoked: those calls resolve `undefined` and change nothing.
  *
  * In a window attached to another machine the plugin's host code runs there,
  * and the link can drop. A call that could not reach the host fails with
