@@ -135,6 +135,17 @@ describe("buildKeybindingWhenContext", () => {
     expect(buildKeybindingWhenContext(eventFrom(null)).modalOpen).toBe(true);
   });
 
+  it("reports modalOpen from a destructive alertdialog, so a !modalOpen binding stands down", () => {
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "alertdialog");
+    dialog.setAttribute("aria-modal", "true");
+    document.body.appendChild(dialog);
+
+    const ctx = buildKeybindingWhenContext(eventFrom(null));
+    expect(ctx.modalOpen).toBe(true);
+    expect(evaluate(parse("!textInputFocused && !modalOpen"), ctx)).toBe(false);
+  });
+
   // A page's dialog blocks only its own pane (#15037): a key typed into it
   // sees a modal, a key anywhere else doesn't.
   it("reports modalOpen for a page dialog only for keys inside it", () => {

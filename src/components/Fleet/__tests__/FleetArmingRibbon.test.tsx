@@ -747,6 +747,28 @@ describe("FleetArmingRibbon", () => {
     dispatchSpy.mockRestore();
   });
 
+  it("bare Escape Escape inside a destructive alertdialog leaves the fleet alone", async () => {
+    seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    const actionServiceModule = await import("@/services/ActionService");
+    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+    render(<FleetArmingRibbon />);
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "alertdialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.innerHTML = "<button>Cancel</button>";
+    document.body.appendChild(dialog);
+    const cancel = dialog.querySelector("button")!;
+    try {
+      fireEvent.keyDown(cancel, { key: "Escape" });
+      fireEvent.keyDown(cancel, { key: "Escape" });
+      expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
+    } finally {
+      dialog.remove();
+    }
+    dispatchSpy.mockRestore();
+  });
+
   it("bare Escape Escape inside a page dialog leaves the fleet alone", async () => {
     seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
     useFleetArmingStore.getState().armIds(["t1", "t2"]);

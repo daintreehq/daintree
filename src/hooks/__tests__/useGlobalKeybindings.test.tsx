@@ -3,6 +3,7 @@ import { render, act } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { _resetForTests, registerEscape } from "@/lib/escapeStack";
 import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
+import { APP_MODAL_SELECTOR } from "@/lib/appModal";
 import { PANE_DIALOG_ATTR } from "@/lib/paneDialog";
 import { claimVoiceWaitKeys } from "@/lib/voiceWaitKeys";
 import type { PaletteId } from "@/store/paletteStore";
@@ -908,6 +909,37 @@ describe("useGlobalKeybindings — palette Escape capture", () => {
     }
   });
 
+  it("routes bare Escape before the xterm guard when a destructive alertdialog is visible", () => {
+    vi.mocked(usePaletteStore.getState).mockReturnValue(makePaletteState(null));
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: undefined,
+      chordPrefix: false,
+      shouldConsume: false,
+    });
+
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "alertdialog");
+    dialog.setAttribute("aria-modal", "true");
+    const xterm = document.createElement("div");
+    xterm.className = "xterm";
+    dialog.appendChild(xterm);
+    document.body.appendChild(dialog);
+
+    try {
+      const escapeHandler = vi.fn();
+      registerEscape(escapeHandler);
+
+      render(<Host />);
+      const event = dispatchEscape(xterm);
+
+      expect(escapeHandler).toHaveBeenCalledTimes(1);
+      expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(true);
+    } finally {
+      dialog.remove();
+    }
+  });
+
   it("leaves Escape for a modal's registered dialog backstop", () => {
     const dialog = document.createElement("div");
     dialog.setAttribute("role", "dialog");
@@ -1740,7 +1772,7 @@ describe("useGlobalKeybindings — per-keystroke document scans", () => {
       act(() => {
         xterm.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
       });
-      expect(querySelector).toHaveBeenCalledWith('[role="dialog"][aria-modal="true"]');
+      expect(querySelector).toHaveBeenCalledWith(APP_MODAL_SELECTOR);
       expect(querySelector).toHaveBeenCalledWith(`[${ESCAPE_BACKSTOP_DIALOG_ATTR}]`);
       xterm.remove();
     } finally {

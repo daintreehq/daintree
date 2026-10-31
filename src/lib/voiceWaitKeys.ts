@@ -1,3 +1,5 @@
+import { APP_MODAL_SELECTOR } from "@/lib/appModal";
+
 /**
  * Enter and Escape for a voice send that is waiting on its transcript or its
  * cleanup (#14780). The wait locks the editor, and Chromium blurs a
@@ -25,10 +27,6 @@ const claims: VoiceWaitKeyClaim[] = [];
 const routed = new WeakSet<KeyboardEvent>();
 let listening = false;
 
-// A destructive AppDialog without a preview is an alertdialog.
-const MODAL_SELECTOR =
-  '[role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"]';
-
 function isWaitKey(event: KeyboardEvent): boolean {
   if (event.key !== "Enter" && event.key !== "Escape") return false;
   if (event.isComposing || event.keyCode === 229) return false;
@@ -53,7 +51,7 @@ function claimFor(event: KeyboardEvent): VoiceWaitKeyClaim | null {
   }
   // The keyboard is nowhere. A modal that doesn't hold a waiting composer owns
   // the page; past that, the one waiting composer, or the selected pane's.
-  const modals = document.querySelectorAll(MODAL_SELECTOR);
+  const modals = document.querySelectorAll(APP_MODAL_SELECTOR);
   const modal = modals.length > 0 ? modals[modals.length - 1]! : null;
   const candidates = modal
     ? claims.filter((claim) => {

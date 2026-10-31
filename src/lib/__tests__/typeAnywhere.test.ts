@@ -257,6 +257,16 @@ describe("hasBlockingOverlay", () => {
     expect(hasBlockingOverlay()).toBe(true);
   });
 
+  it("detects a modal alertdialog", () => {
+    document.body.innerHTML = `<div role="alertdialog" aria-modal="true"></div>`;
+    expect(hasBlockingOverlay()).toBe(true);
+  });
+
+  it("ignores a non-modal alertdialog", () => {
+    document.body.innerHTML = `<div role="alertdialog"></div>`;
+    expect(hasBlockingOverlay()).toBe(false);
+  });
+
   it("ignores a non-modal dialog", () => {
     document.body.innerHTML = `<div role="dialog"></div>`;
     expect(hasBlockingOverlay()).toBe(false);
