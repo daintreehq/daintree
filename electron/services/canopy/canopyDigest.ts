@@ -34,9 +34,10 @@ const MAX_PLAN_LINES = 10;
 
 /**
  * How each agent echoes the user's message at the start of a row: Claude
- * Code's `❯`, Codex's `›`, the `>` Gemini and its kin use, Kimi's mode glyphs.
- * Agents that echo in a bordered block (OpenCode, Crush) or whose echo is not
- * known have none, and their requests are not read.
+ * Code's `❯`, Codex's `›`, the `>` Gemini and its kin use. Agents that echo in
+ * a bordered block (OpenCode, Crush) or whose echo is not known (Kimi Code,
+ * whose transcript layout has not been captured) have none, and their requests
+ * are not read.
  */
 const ECHO: Readonly<Record<string, RegExp>> = {
   claude: /^❯\s+(\S.*)$/,
@@ -51,7 +52,6 @@ const ECHO: Readonly<Record<string, RegExp>> = {
   interpreter: /^>\s+(\S.*)$/,
   kiro: /^(?:\d+% )?!?>\s+(\S.*)$/,
   mistral: /^(?:❯|>)\s+(\S.*)$/,
-  kimi: /^(?:\S*@\S*)?(?:✨|💫|📋)\s+(\S.*)$/,
   cursor: /^→\s+(\S.*)$/,
   goose: /^(?:\( O\)>|🪿)\s+(\S.*)$/,
 };

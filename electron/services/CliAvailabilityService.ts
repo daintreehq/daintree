@@ -83,6 +83,20 @@ const WINDOWS_EXECUTABLE_PRIORITY = new Map<string, number>([
 const WINDOWS_APPENDED_EXTENSIONS = [".cmd", ".exe", ".bat", ".com"];
 
 /**
+ * Whether `p` names one location wherever it is resolved from. On Windows
+ * `isAbsolute` also accepts `\x` and `/x`, which land on whichever drive is
+ * current, so only a drive-qualified (`C:\x`) or UNC (`\\server\share`) path
+ * counts there.
+ */
+export function isFullyQualifiedPath(
+  p: string,
+  platform: NodeJS.Platform = process.platform
+): boolean {
+  if (platform !== "win32") return isAbsolute(p);
+  return /^[A-Za-z]:[\\/]/.test(p) || /^[\\/]{2}[^\\/]/.test(p);
+}
+
+/**
  * Synthesise probe paths for PyPI-distributed agents. Modern Python tool
  * installs land in well-known per-user locations: uv tool, pipx (current
  * and legacy layouts), and pip --user-shared `~/.local/bin`. We probe
@@ -490,6 +504,32 @@ export class CliAvailabilityService {
             return true;
           } catch {
             // File not found, continue
+          }
+        }
+      }
+
+      if (authCheck.configHome) {
+        const { envVar, defaultDir, paths } = authCheck.configHome;
+        const relocated = process.env[envVar];
+        const isRelocated = relocated !== undefined && relocated.trim() !== "";
+        // A root that isn't fully qualified resolves against the agent's
+        // working directory (or drive), which differs per terminal, so nothing
+        // here can confirm it.
+        const root = !isRelocated
+          ? join(home, defaultDir)
+          : isFullyQualifiedPath(relocated)
+            ? relocated
+            : null;
+        if (root !== null) {
+          for (const relPath of paths) {
+            const fullPath = join(root, relPath);
+            checkedPaths.push(fullPath);
+            try {
+              await access(fullPath, constants.R_OK);
+              return true;
+            } catch {
+              // File not found, continue
+            }
           }
         }
       }
