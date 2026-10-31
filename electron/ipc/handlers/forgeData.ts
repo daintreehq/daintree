@@ -36,6 +36,7 @@ import type {
   PRLookupResult,
   PRTooltipData,
   RateLimitDetails,
+  RepoRef,
   ReviewThread,
 } from "../../../shared/types/forge.js";
 import type {
@@ -562,9 +563,7 @@ async function handleForgeGetRepoStats(payload: {
   const stats = buildForgeRepositoryStats(commitCount, snapshot.counts);
   // A split blend's issue count belongs to another tracker, so no one key names
   // both counts' source.
-  if (!split) {
-    stats.repoKey = `${repoRef.host.toLowerCase()}/${repoRef.owner}/${repoRef.repo}`;
-  }
+  if (!split) stats.repoKey = repoKeyOf(repoRef);
 
   const fresh = snapshot.source === "network" && !snapshot.counts.stale && overrideClean;
 
@@ -622,6 +621,35 @@ async function handleForgeGetRepoStats(payload: {
   }
 
   return stats;
+}
+
+/** Machine-independent identity of a repository, so a Shell can match it across hosts (#14199). */
+function repoKeyOf(repoRef: RepoRef): string {
+  return `${repoRef.host.toLowerCase()}/${repoRef.owner}/${repoRef.repo}`;
+}
+
+/**
+ * The origin {@link handleForgeGetRepoStats} would stamp on its counts, read
+ * without polling the forge, so a view switched to this host can show its
+ * Shell's shared record before its first poll answers (#15546).
+ */
+async function handleForgeGetRepoKey(payload: { cwd: string }): Promise<string | null> {
+  checkRateLimit(CHANNELS.FORGE_GET_REPO_KEY, 10, 10_000);
+  if (!payload || typeof payload !== "object") return null;
+  if (typeof payload.cwd !== "string" || !payload.cwd.trim()) return null;
+  try {
+    const { repoRef } = await resolveForCwd(payload.cwd);
+    // A bound issues provider splits the issue count off, and one that fails to
+    // resolve still splits it (`readIssueOverrideCount` answers for it), so
+    // neither has one origin behind both counts.
+    const split = await resolveIssueOverrideForCwd(payload.cwd, repoRef.projectPath).then(
+      (context) => context !== null,
+      () => true
+    );
+    return split ? null : repoKeyOf(repoRef);
+  } catch {
+    return null;
+  }
 }
 
 async function handleForgeGetFirstPageCache(payload: {
@@ -1311,6 +1339,7 @@ export const forgeCapabilityDataNamespace = defineIpcNamespace({
   ops: {
     getRepoStats: op(CHANNELS.FORGE_GET_REPO_STATS, handleForgeGetRepoStats),
     getFirstPageCache: op(CHANNELS.FORGE_GET_FIRST_PAGE_CACHE, handleForgeGetFirstPageCache),
+    getRepoKey: op(CHANNELS.FORGE_GET_REPO_KEY, handleForgeGetRepoKey),
     getProjectHealth: op(CHANNELS.FORGE_GET_PROJECT_HEALTH, handleForgeGetProjectHealth),
     getIssueTooltip: op(CHANNELS.FORGE_GET_ISSUE_TOOLTIP, handleForgeGetIssueTooltip),
     getPRTooltip: op(CHANNELS.FORGE_GET_PR_TOOLTIP, handleForgeGetPRTooltip),

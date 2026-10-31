@@ -1,69 +1,63 @@
 /**
- * Device-shared newest observation of a repository's issue/PR counts, across
- * every host this machine's windows visit (issue #14199).
+ * The Shell's one record of a repository's issue/PR counts, shared by every
+ * view of that repository on every host this machine's windows visit
+ * (#14199, #15546).
  *
  * Each host polls with its own token and persists its own counts, keyed by its
- * own project path, so a window switched to a host that hasn't polled in a
- * while seeds from that host's old snapshot and then jumps. Every project view
- * — local or remote — runs on the `persist:daintree` partition with the same
- * document origin, so `localStorage` is the one place they all read. This is a
- * display hint only: nothing here reaches a host, and the host's own poll is
- * still what reconciles the toolbar.
+ * own project path, so without this a window switched between hosts shows each
+ * host's own numbers. Every project view — local or remote — runs on the
+ * `persist:daintree` partition with the same document origin, so
+ * `localStorage` is the one place they all read, and its `storage` event
+ * reaches every other view in every window. Nothing here reaches a host.
  *
- * Observations are keyed by provider, account and repository: counts belong to
- * the provider that reported them (#10761), and two accounts can legitimately
- * see different numbers for the same repo. Each host writes its own entry and
- * readers take the newest, so views in different renderer processes never race
- * on one slot. Aliases map a host's project path to the repository key its last
- * fresh poll reported, so a view can find the observation before its own poll
- * answers.
+ * Records are keyed by repository origin alone (`forge-host/owner/repo`): the
+ * forge account a host is signed in as doesn't split them. Each host writes
+ * its own entry and readers take the newest, so views in different renderer
+ * processes never race on one slot. "Newest" is the order this Shell received
+ * the readings in, on its own clock: each host stamps its counts on its own
+ * clock, and a host whose clock runs ahead would otherwise outrank every fresh
+ * poll from the others.
  *
  * Every storage access is best-effort — a blocked or full store reads as empty.
  */
 
-const OBSERVATION_PREFIX = "daintree:repo-stats:obs:";
-const ALIAS_PREFIX = "daintree:repo-stats:alias:";
+const RECORD_PREFIX = "daintree:repo-stats:origin:";
 
-// Observation times come from each host's clock; one far in the future would
-// outrank every real observation forever.
+// A stamp ahead of this Shell's clock (it stepped back since) would outrank
+// every real reading until the clock caught up; one this far ahead is junk.
 const MAX_CLOCK_LEAD_MS = 24 * 60 * 60 * 1000;
 
-export interface SharedRepoObservation {
+export interface SharedRepoStats {
   issueCount: number | null;
   prCount: number | null;
-  /** When the reporting host last read these counts from the forge, epoch ms. */
-  observedAt: number;
-  /** Host that made the observation (`local` for this machine). */
+  /** When this Shell received the reading, on its own clock. Orders the entries. */
+  receivedAt: number;
+  /** When each count was read from the forge, moved onto this Shell's clock. */
+  issueObservedAt: number;
+  prObservedAt: number;
+  /**
+   * The reporting host's `lastUpdated`, on its own clock, so a host never
+   * republishes a reading it already published (the poll's own answer and its
+   * broadcast) or replaces it with an older one.
+   */
+  sourceUpdatedAt: number;
+  /** Host that made the reading (`local` for this machine). */
   hostId: string;
 }
 
-export interface SharedRepoAlias {
-  providerId: string;
-  repoKey: string;
-}
-
-function observationScope(providerId: string, account: string, repoKey: string): string {
+function recordScope(repoKey: string): string {
   // The JSON array minus its closing bracket, so every host's entry for one
-  // repo shares this exact prefix.
-  return `${OBSERVATION_PREFIX}${JSON.stringify([providerId, account, repoKey]).slice(0, -1)},`;
+  // origin shares this exact prefix.
+  return `${RECORD_PREFIX}${JSON.stringify([repoKey]).slice(0, -1)},`;
 }
 
-function observationKey(
-  providerId: string,
-  account: string,
-  repoKey: string,
-  hostId: string
-): string {
-  return `${observationScope(providerId, account, repoKey)}${JSON.stringify(hostId)}]`;
-}
-
-function aliasKey(hostId: string, projectPath: string): string {
-  return `${ALIAS_PREFIX}${JSON.stringify([hostId, projectPath])}`;
+function recordKey(repoKey: string, hostId: string): string {
+  return `${recordScope(repoKey)}${JSON.stringify(hostId)}]`;
 }
 
 function readJson(key: string): unknown {
   try {
-    // storage-key: daintree:repo-stats:obs: daintree:repo-stats:alias:
+    // storage-key: daintree:repo-stats:origin:
     const raw = window.localStorage.getItem(key);
     if (raw === null) return null;
     const parsed: unknown = JSON.parse(raw);
@@ -73,12 +67,14 @@ function readJson(key: string): unknown {
   }
 }
 
-function writeJson(key: string, value: unknown): void {
+function writeJson(key: string, value: unknown): boolean {
   try {
-    // storage-key: daintree:repo-stats:obs: daintree:repo-stats:alias:
+    // storage-key: daintree:repo-stats:origin:
     window.localStorage.setItem(key, JSON.stringify(value));
+    return true;
   } catch {
-    // Quota or blocked storage: the toolbar falls back to the host's own seed.
+    // Quota or blocked storage: each view falls back to its host's own counts.
+    return false;
   }
 }
 
@@ -92,46 +88,44 @@ function isCount(value: unknown): value is number | null {
   return value === null || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0);
 }
 
-function isObservedAt(value: unknown): value is number {
-  return (
-    typeof value === "number" &&
-    Number.isFinite(value) &&
-    value > 0 &&
-    value <= Date.now() + MAX_CLOCK_LEAD_MS
-  );
+function isTime(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
-function parseObservation(v: unknown): SharedRepoObservation | null {
+function parseRecord(v: unknown): SharedRepoStats | null {
   if (!isPlainRecord(v)) return null;
   if (!isCount(v.issueCount) || !isCount(v.prCount)) return null;
-  if (!isObservedAt(v.observedAt) || typeof v.hostId !== "string") return null;
+  if (!isTime(v.receivedAt) || !isTime(v.issueObservedAt) || !isTime(v.prObservedAt)) return null;
+  if (!isTime(v.sourceUpdatedAt) || typeof v.hostId !== "string") return null;
+  const limit = Date.now() + MAX_CLOCK_LEAD_MS;
+  if (v.receivedAt > limit || v.issueObservedAt > limit || v.prObservedAt > limit) return null;
   return {
     issueCount: v.issueCount,
     prCount: v.prCount,
-    observedAt: v.observedAt,
+    receivedAt: v.receivedAt,
+    issueObservedAt: v.issueObservedAt,
+    prObservedAt: v.prObservedAt,
+    sourceUpdatedAt: v.sourceUpdatedAt,
     hostId: v.hostId,
   };
 }
 
-/** The newest observation of a repo made by any host other than `excludeHostId`. */
-export function readNewestSharedObservation(
-  providerId: string,
-  account: string,
-  repoKey: string,
-  excludeHostId: string
-): SharedRepoObservation | null {
-  const scope = observationScope(providerId, account, repoKey);
-  const own = observationKey(providerId, account, repoKey, excludeHostId);
-  let newest: SharedRepoObservation | null = null;
+function newer(a: SharedRepoStats, b: SharedRepoStats): boolean {
+  // Host id breaks a tie, so every view picks the same entry.
+  return a.receivedAt !== b.receivedAt ? a.receivedAt > b.receivedAt : a.hostId > b.hostId;
+}
+
+/** The origin's record: the newest reading any host made of it, as this Shell received them. */
+export function readSharedRepoStats(repoKey: string): SharedRepoStats | null {
+  const scope = recordScope(repoKey);
+  let newest: SharedRepoStats | null = null;
   try {
     const storage = window.localStorage;
     for (let i = 0; i < storage.length; i++) {
       const key = storage.key(i);
-      if (key === null || key === own || !key.startsWith(scope)) continue;
-      const observation = parseObservation(readJson(key));
-      if (observation && (newest === null || observation.observedAt > newest.observedAt)) {
-        newest = observation;
-      }
+      if (key === null || !key.startsWith(scope)) continue;
+      const record = parseRecord(readJson(key));
+      if (record && (newest === null || newer(record, newest))) newest = record;
     }
   } catch {
     return null;
@@ -139,39 +133,84 @@ export function readNewestSharedObservation(
   return newest;
 }
 
-/** Record this host's observation unless its entry already holds one at least as new. */
-export function publishSharedObservation(
-  providerId: string,
-  account: string,
-  repoKey: string,
-  observation: SharedRepoObservation
-): void {
-  if (parseObservation(observation) === null) return;
-  const key = observationKey(providerId, account, repoKey, observation.hostId);
-  const existing = parseObservation(readJson(key));
-  if (existing && existing.observedAt >= observation.observedAt) return;
-  writeJson(key, observation);
+export interface SharedRepoReading {
+  issueCount: number | null;
+  prCount: number | null;
+  /** The host's `lastUpdated` for the answer, on its clock. */
+  lastUpdated: number;
+  /** When the host last read each count, on its clock. */
+  issueRefreshedAt: number;
+  prRefreshedAt: number;
+  hostId: string;
 }
 
-export function readRepoAlias(hostId: string, projectPath: string): SharedRepoAlias | null {
-  const v = readJson(aliasKey(hostId, projectPath));
-  if (!isPlainRecord(v)) return null;
-  if (typeof v.providerId !== "string" || typeof v.repoKey !== "string") return null;
-  return { providerId: v.providerId, repoKey: v.repoKey };
-}
+const localListeners = new Map<string, Set<() => void>>();
 
-export function writeRepoAlias(hostId: string, projectPath: string, alias: SharedRepoAlias): void {
-  const existing = readRepoAlias(hostId, projectPath);
-  if (existing?.providerId === alias.providerId && existing.repoKey === alias.repoKey) return;
-  writeJson(aliasKey(hostId, projectPath), alias);
-}
-
-/** Forget a project's repository, once its counts no longer come from one repo. */
-export function clearRepoAlias(hostId: string, projectPath: string): void {
+function isLocalStorage(area: Storage | null): boolean {
   try {
-    // storage-key: daintree:repo-stats:obs: daintree:repo-stats:alias:
-    window.localStorage.removeItem(aliasKey(hostId, projectPath));
+    return area === window.localStorage;
   } catch {
-    // Blocked storage holds no alias to clear.
+    return false;
   }
+}
+
+/**
+ * Record a host's fresh reading as the origin's newest, unless that host
+ * already published it or a later one. Returns whether it was written.
+ */
+export function publishSharedRepoStats(
+  repoKey: string,
+  reading: SharedRepoReading,
+  now: number = Date.now()
+): boolean {
+  if (!isTime(reading.lastUpdated) || !isCount(reading.issueCount) || !isCount(reading.prCount)) {
+    return false;
+  }
+  const key = recordKey(repoKey, reading.hostId);
+  const existing = parseRecord(readJson(key));
+  if (existing && existing.sourceUpdatedAt >= reading.lastUpdated) return false;
+  // How old each count was when the host answered, measured on its own clock
+  // and carried onto this one.
+  const ageOf = (refreshedAt: number) => Math.max(0, reading.lastUpdated - refreshedAt);
+  const record: SharedRepoStats = {
+    issueCount: reading.issueCount,
+    prCount: reading.prCount,
+    receivedAt: now,
+    issueObservedAt: Math.max(1, now - ageOf(reading.issueRefreshedAt)),
+    prObservedAt: Math.max(1, now - ageOf(reading.prRefreshedAt)),
+    sourceUpdatedAt: reading.lastUpdated,
+    hostId: reading.hostId,
+  };
+  if (!writeJson(key, record)) return false;
+  // The `storage` event reaches every other document; views in this one hear
+  // it here.
+  for (const listener of [...(localListeners.get(repoKey) ?? [])]) listener();
+  return true;
+}
+
+/**
+ * Call `listener` whenever any view, in any window, may have changed the
+ * origin's record. It re-reads the store rather than trusting the event.
+ */
+export function subscribeSharedRepoStats(repoKey: string, listener: () => void): () => void {
+  const scope = recordScope(repoKey);
+  const onStorage = (event: StorageEvent) => {
+    if (!isLocalStorage(event.storageArea)) return;
+    // A null key is the whole store being cleared.
+    if (event.key !== null && !event.key.startsWith(scope)) return;
+    listener();
+  };
+  let listeners = localListeners.get(repoKey);
+  if (!listeners) {
+    listeners = new Set();
+    localListeners.set(repoKey, listeners);
+  }
+  listeners.add(listener);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener("storage", onStorage);
+    const current = localListeners.get(repoKey);
+    current?.delete(listener);
+    if (current?.size === 0) localListeners.delete(repoKey);
+  };
 }

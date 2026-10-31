@@ -1094,6 +1094,7 @@ export const CHANNELS = {
   FORGE_CLASSIFY_PUSH_ERROR: "forge:classify-push-error",
   FORGE_GET_REPO_STATS: "forge:get-repo-stats",
   FORGE_GET_FIRST_PAGE_CACHE: "forge:get-first-page-cache",
+  FORGE_GET_REPO_KEY: "forge:get-repo-key",
   FORGE_GET_PROJECT_HEALTH: "forge:get-project-health",
   FORGE_GET_ISSUE_TOOLTIP: "forge:get-issue-tooltip",
   FORGE_GET_PR_TOOLTIP: "forge:get-pr-tooltip",
