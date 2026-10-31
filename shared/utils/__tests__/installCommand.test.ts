@@ -22,6 +22,7 @@ describe("requiresShell", () => {
     ["a POSIX variable", "npm install -g foo --prefix=$HOME/.local"],
     ["a cmd.exe variable", "setup.exe /dir %LOCALAPPDATA%\\agent"],
     ["a home-relative word", "pipx install --path ~/agent"],
+    ["a bare home word", "agent init ~"],
   ])("needs a shell for %s", (_label, command) => {
     expect(requiresShell(command)).toBe(true);
   });
@@ -36,6 +37,11 @@ describe("requiresShell", () => {
     ["a version range", "npm install -g foo@~1.2.0"],
     ["a URL query string", "curl -fsSL -o setup.exe https://x/download?os=win&arch=x64"],
     ["a Windows path", "C:\\Tools\\setup.exe /quiet"],
+    [
+      "a percent-encoded URL",
+      "pipx install https://packages.example.com/Agent%20CLI%20Releases/agent.whl",
+    ],
+    ["a tilde version requirement", "cargo install ripgrep --version ~14.1"],
   ])("runs %s as a plain argv", (_label, command) => {
     expect(requiresShell(command)).toBe(false);
   });
