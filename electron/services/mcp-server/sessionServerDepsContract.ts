@@ -232,6 +232,11 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    * are noted with no incarnation, and their waits never match a kept exit.
    */
   terminalGenerationOf?: (terminalId: string) => number | undefined;
+  /**
+   * Every terminal id main tracks, read before `terminal.closeAll` (which
+   * names none) so its closes are noted with the incarnation each reached.
+   */
+  trackedTerminalIds?: () => readonly string[];
   waitForClosedPanelExits?: (
     targets: readonly import("./closedPanelExits.js").ClosedPanelExitTarget[],
     options: import("./closedPanelExits.js").ClosedPanelExitWaitOptions

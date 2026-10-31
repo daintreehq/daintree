@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RecentTerminalExits } from "../../pty/RecentTerminalExits.js";
 import {
   FINAL_READ_BUDGET_MS,
+  resolveClosedTerminalGeneration,
   waitForClosedPanelExits,
   type ClosedPanelExitDeps,
   type ClosedPanelExitRecord,
@@ -308,7 +309,9 @@ describe("waitForClosedPanelExits (#15728)", () => {
       0
     );
     expect(host.endGraceCalls).toEqual([]);
-    expect(result.processes).toEqual([{ terminalId: "t1", outcome: "running", graceEnded: false }]);
+    // Nor any record: the live one may be another incarnation's.
+    expect(host.reads).toBe(0);
+    expect(result.processes).toEqual([{ terminalId: "t1", outcome: "unknown", graceEnded: false }]);
   });
 
   it("keeps a still-unanswered read at the deadline as unknown, not running", async () => {
@@ -584,5 +587,63 @@ describe("waitForClosedPanelExits (#15728)", () => {
 
     const result = await settleWithin(wait, 0);
     expect(result.processes).toEqual([{ terminalId: "t1", outcome: "running" }]);
+  });
+});
+
+describe("resolveClosedTerminalGeneration (#15728)", () => {
+  function sources(
+    live: number | null,
+    exited: number | undefined,
+    entry?: { generation: number; closeReason?: string }
+  ) {
+    return {
+      liveGeneration: () => live,
+      latestExitGeneration: () => exited,
+      ledgerEntry: () => entry,
+    };
+  }
+
+  it("names the running incarnation first", () => {
+    expect(resolveClosedTerminalGeneration("t1", sources(4, 3, { generation: 4 }))).toBe(4);
+  });
+
+  it("names the one main saw exit once nothing runs", () => {
+    expect(
+      resolveClosedTerminalGeneration(
+        "t1",
+        sources(null, 3, { generation: 3, closeReason: "exit" })
+      )
+    ).toBe(3);
+  });
+
+  it("passes over a later launch the host refused, which ran nothing", () => {
+    expect(
+      resolveClosedTerminalGeneration(
+        "t1",
+        sources(null, 1, { generation: 2, closeReason: "spawn-failed:TERMINAL_ALREADY_LIVE" })
+      )
+    ).toBe(1);
+  });
+
+  it("names none while a later incarnation's exit hasn't arrived", () => {
+    expect(resolveClosedTerminalGeneration("t1", sources(null, 1, { generation: 2 }))).toBe(
+      undefined
+    );
+  });
+
+  it("falls back to the ledger's launch only when an exit ended it", () => {
+    expect(
+      resolveClosedTerminalGeneration(
+        "t1",
+        sources(null, undefined, { generation: 5, closeReason: "exit" })
+      )
+    ).toBe(5);
+    expect(
+      resolveClosedTerminalGeneration(
+        "t1",
+        sources(null, undefined, { generation: 5, closeReason: "spawn-failed:SPAWN_ERROR" })
+      )
+    ).toBeUndefined();
+    expect(resolveClosedTerminalGeneration("t1", sources(null, undefined))).toBeUndefined();
   });
 });

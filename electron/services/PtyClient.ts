@@ -1779,6 +1779,11 @@ export class PtyClient extends EventEmitter {
     return this.pendingSpawns.has(id);
   }
 
+  /** Every terminal id main is tracking, for a snapshot taken before a bulk close. */
+  getTrackedTerminalIds(): string[] {
+    return [...this.pendingSpawns.keys()];
+  }
+
   /**
    * The launch generation of the incarnation main is tracking under `id`, or
    * null for an unknown terminal. Lets a caller holding authority over one

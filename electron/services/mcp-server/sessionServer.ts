@@ -2817,9 +2817,15 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // The incarnation each named close reaches, read before it is sent: a
         // successor launched under the id while the close is out is not the
         // process the caller closed (#15728).
+        // `terminal.closeAll` names none, so every tracked id is read instead;
+        // a closed id missing from the read is noted with no incarnation.
         const closeGenerations = new Map<string, number | undefined>();
         if (CLOSE_TOOLS.has(actionId)) {
-          for (const terminalId of namedTerminalIds(args)) {
+          const named =
+            actionId === "terminal.closeAll"
+              ? (deps.trackedTerminalIds?.() ?? [])
+              : namedTerminalIds(args);
+          for (const terminalId of named) {
             closeGenerations.set(terminalId, deps.terminalGenerationOf?.(terminalId));
           }
         }
@@ -2928,7 +2934,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // `terminal.closeOwned` released them (#15728).
           if (CLOSE_TOOLS.has(actionId)) {
             noteClosedTerminals({ sessionId, sessionStore, ownershipOwner }, envelope, (id) =>
-              closeGenerations.has(id) ? closeGenerations.get(id) : deps.terminalGenerationOf?.(id)
+              closeGenerations.get(id)
             );
           }
           settleRestartHold?.(envelope.result.ok);

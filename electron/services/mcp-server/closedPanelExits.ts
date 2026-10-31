@@ -41,6 +41,39 @@ export interface ClosedPanelExitWaitOptions {
   authorizeEndGrace?: () => void;
 }
 
+/** Where main can tell which incarnation a terminal id names. */
+export interface TerminalGenerationSources {
+  /** The incarnation main is tracking as running, or null. */
+  liveGeneration(terminalId: string): number | null;
+  /** The incarnation whose exit main saw last under the id. */
+  latestExitGeneration(terminalId: string): number | undefined;
+  /** The lifecycle ledger's latest launch under the id, and how it ended. */
+  ledgerEntry(terminalId: string): { generation: number; closeReason?: string } | undefined;
+}
+
+/**
+ * The incarnation a close of `terminalId` reaches (#15728): the running one,
+ * else the one main saw exit. Undefined when that can't be told, which a wait
+ * then answers as unknown. The ledger's latest launch is newer than the last
+ * exit seen when a launch the host refused bumped it, which ran nothing and is
+ * passed over, or when a killed incarnation's exit hasn't arrived, which is
+ * not the one that exited.
+ */
+export function resolveClosedTerminalGeneration(
+  terminalId: string,
+  sources: TerminalGenerationSources
+): number | undefined {
+  const live = sources.liveGeneration(terminalId);
+  if (live !== null) return live;
+  const entry = sources.ledgerEntry(terminalId);
+  const exited = sources.latestExitGeneration(terminalId);
+  const refused = entry?.closeReason?.startsWith("spawn-failed") === true;
+  if (exited !== undefined && (entry === undefined || entry.generation <= exited || refused)) {
+    return exited;
+  }
+  return entry?.closeReason === "exit" ? entry.generation : undefined;
+}
+
 /** How long the answers still out at the deadline may take before they count as unanswered. */
 export const FINAL_READ_BUDGET_MS = 2000;
 
@@ -71,7 +104,8 @@ function settleBy<T>(promise: Promise<T>, fallback: T, until: number): Promise<T
  * closed incarnation, or a record it holds marked exited, is `exited`; a record
  * still alive when the deadline passes is `running`; anything else — a record
  * gone with no exit seen, an id that now names another incarnation, a read
- * nobody answered — is `unknown`. With `endGrace`, panels still in the trash
+ * nobody answered, a close whose incarnation main couldn't tell — is
+ * `unknown`. With `endGrace`, panels still in the trash
  * start their expiry now instead of when the grace ends; that starts the
  * shutdown and proves nothing, and `graceEnded` is left out for a panel whose
  * host never answered the request.
@@ -118,6 +152,10 @@ export async function waitForClosedPanelExits(
   if (options.signal?.aborted === true || pending.size === 0) wake();
 
   const observe = async (target: ClosedPanelExitTarget): Promise<Observation> => {
+    // No record or exit can be bound to a close whose incarnation is unknown.
+    if (target.launchGeneration === undefined) {
+      return { terminalId: target.terminalId, outcome: "unknown" };
+    }
     const known = deps.findExit(target.terminalId, target.launchGeneration);
     if (known !== undefined) return exited(known);
     let record: ClosedPanelExitRecord | null;
@@ -131,7 +169,6 @@ export async function waitForClosedPanelExits(
     const unknown: TerminalExitObservation = { terminalId: target.terminalId, outcome: "unknown" };
     if (record === null) return unknown;
     if (
-      target.launchGeneration !== undefined &&
       record.launchGeneration !== undefined &&
       record.launchGeneration !== target.launchGeneration
     ) {

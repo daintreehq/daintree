@@ -30,7 +30,11 @@ import type {
 } from "../../shared/types/ipc/mcpServer.js";
 import { SessionStore } from "./mcp-server/sessionStore.js";
 import { readClosedPanelProcess } from "./mcp-server/closedPanelProcesses.js";
-import { waitForClosedPanelExits } from "./mcp-server/closedPanelExits.js";
+import {
+  resolveClosedTerminalGeneration,
+  waitForClosedPanelExits,
+} from "./mcp-server/closedPanelExits.js";
+import { getLifecycleLedger } from "./pty/lifecycleLedger.js";
 import { readPtyTerminalProcesses } from "./mcp-server/worktreeProcessGuard.js";
 import {
   helpOwnershipPrincipal,
@@ -496,15 +500,16 @@ export class McpServerService {
           return client ? client.getTerminalAsync(id, undefined, { strict: true }) : null;
         }),
       readTerminalProcesses: () => readPtyTerminalProcesses(getPtyClient()),
-      // The live incarnation, or after its exit the one main saw exit: the
-      // ledger's latest launch may be a duplicate the host refused.
       terminalGenerationOf: (terminalId) => {
         const client = getPtyClient();
         if (!client) return undefined;
-        return (
-          client.getLiveGeneration(terminalId) ?? client.recentExits.latestGeneration(terminalId)
-        );
+        return resolveClosedTerminalGeneration(terminalId, {
+          liveGeneration: (id) => client.getLiveGeneration(id),
+          latestExitGeneration: (id) => client.recentExits.latestGeneration(id),
+          ledgerEntry: (id) => getLifecycleLedger().getEntry(id),
+        });
       },
+      trackedTerminalIds: () => getPtyClient()?.getTrackedTerminalIds() ?? [],
       // From exits main kept and the host's own records, never a guess: a
       // record gone with no exit seen, or a host that never answered, is
       // unknown.

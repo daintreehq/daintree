@@ -442,6 +442,43 @@ describe("session-scoped resource ownership (#11909)", () => {
       );
     });
 
+    it("reads every tracked incarnation before a closeAll, which names none", async () => {
+      let generations: Record<string, number> = { "terminal-1": 3, "terminal-2": 5 };
+      const manifest: ActionManifestEntry[] = [
+        ...ownedManifest(),
+        { ...makeManifestEntry("terminal.closeAll"), kind: "command", danger: "safe" },
+        { ...makeManifestEntry("terminal.waitForExit"), kind: "command", danger: "safe" },
+      ];
+      const { store, server } = waitHarness("s-close-all", {
+        requestManifest: vi.fn().mockResolvedValue(manifest),
+        getCachedManifest: vi.fn(() => manifest),
+        trackedTerminalIds: () => ["terminal-1", "terminal-2"],
+        terminalGenerationOf: (terminalId) => generations[terminalId],
+        dispatchAction: vi.fn(async () => {
+          generations = { "terminal-1": 4, "terminal-2": 6, "terminal-3": 9 };
+          return {
+            result: {
+              ok: true as const,
+              result: { closedIds: ["terminal-1", "terminal-2", "terminal-3"] },
+            },
+          };
+        }),
+      });
+      // `terminal.closeAll` is the assistant's alone, at full.
+      seedLiveSession(store, "s-close-all", "full");
+      store.sessionOriginMap.set("s-close-all", "help");
+
+      await callTool(server, { name: "terminal.closeAll", arguments: {} });
+
+      const ledger = store.resourceOwnership;
+      expect(ledger.closedRecord("s-close-all", "terminal-1")?.launchGeneration).toBe(3);
+      expect(ledger.closedRecord("s-close-all", "terminal-2")?.launchGeneration).toBe(5);
+      // Closed, but never read before the close: no incarnation to bind.
+      expect(ledger.closedRecord("s-close-all", "terminal-3")).toMatchObject({
+        launchGeneration: undefined,
+      });
+    });
+
     it("forwards a request to end the grace early", async () => {
       const { store, server, waitForClosedPanelExits } = waitHarness("s-end");
       store.resourceOwnership.noteClosed("s-end", [
