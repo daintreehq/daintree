@@ -195,6 +195,128 @@ describe("FileSearchService", () => {
     expect(result).toEqual(["a.ts", "src/", "README.md"]);
   });
 
+  describe("empty-query ranking", () => {
+    const collator = new Intl.Collator();
+
+    // The order the service has always promised: length, then locale, with
+    // collator ties left in listing order by the stable sort.
+    function fullSort(files: readonly string[]): string[] {
+      return [...files].sort((a, b) => a.length - b.length || collator.compare(a, b));
+    }
+
+    function seededRng(seed: number): () => number {
+      let state = seed >>> 0;
+      return () => {
+        state = (state * 1664525 + 1013904223) >>> 0;
+        return state / 2 ** 32;
+      };
+    }
+
+    // A tiny alphabet keeps hundreds of paths on a handful of lengths, so most
+    // comparisons reach the collator, and each pair here is one the collator
+    // calls equal at equal length (canonical singletons and their targets).
+    const ALPHABET = ["a", "b", "_", "Å", "Å", "Ω", "Ω", "K", "K"];
+
+    function randomListing(rng: () => number, count: number): string[] {
+      const paths: string[] = [];
+      for (let i = 0; i < count; i++) {
+        const segments = 1 + Math.floor(rng() * 3);
+        const parts: string[] = [];
+        for (let s = 0; s < segments; s++) {
+          const length = 1 + Math.floor(rng() * 3);
+          let part = "";
+          for (let c = 0; c < length; c++) part += ALPHABET[Math.floor(rng() * ALPHABET.length)];
+          parts.push(part);
+        }
+        paths.push(parts.join("/"));
+      }
+      return paths;
+    }
+
+    it("matches the full stable sort at limits 1, 50 and 100", async () => {
+      for (let seed = 1; seed <= 20; seed++) {
+        const dir = makeTempDir();
+        tempDirs.push(dir);
+        gitRepo(dir, `${randomListing(seededRng(seed), 400).join("\0")}\0`);
+        const service = await createService();
+
+        const pages = new Map<number, string[]>();
+        for (const limit of [1, 50, 100]) {
+          service.invalidate(dir);
+          pages.set(limit, await service.search({ cwd: dir, query: "", limit }));
+        }
+        const expected = fullSort(await service.listFiles(dir));
+
+        expect(expected.length).toBeGreaterThan(100);
+        for (const [limit, page] of pages) {
+          expect(page, `seed ${seed} limit ${limit}`).toEqual(expected.slice(0, limit));
+        }
+      }
+    });
+
+    it("keeps paths the collator calls equal in listing order", async () => {
+      const angstrom = "x/Å.ts";
+      const ring = "x/Å.ts";
+      expect(collator.compare(angstrom, ring)).toBe(0);
+
+      const results: string[][] = [];
+      for (const order of [[angstrom, ring], [ring, angstrom]]) {
+        const dir = makeTempDir();
+        tempDirs.push(dir);
+        gitRepo(dir, `${order.join("\0")}\0`);
+        const service = await createService();
+        results.push(await service.search({ cwd: dir, query: "", limit: 3 }));
+      }
+
+      expect(results).toEqual([
+        ["x/", angstrom, ring],
+        ["x/", ring, angstrom],
+      ]);
+    });
+
+    it("serves every limit as a prefix of one ranking without reloading", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      const listing = randomListing(seededRng(99), 300);
+      gitRepo(dir, `${listing.join("\0")}\0`);
+      const service = await createService();
+
+      // Cold at the smallest page: a ranking cut at the requested limit would
+      // leave nothing to serve the larger pages from.
+      const one = await service.search({ cwd: dir, query: "", limit: 1 });
+      const hundred = await service.search({ cwd: dir, query: "", limit: 100 });
+      const fifty = await service.search({ cwd: dir, query: "", limit: 50 });
+
+      expect(hundred).toHaveLength(100);
+      expect(fifty).toEqual(hundred.slice(0, 50));
+      expect(one).toEqual(hundred.slice(0, 1));
+      expect(gitClientMock.raw).toHaveBeenCalledTimes(1);
+
+      hundred.reverse();
+      fifty.length = 0;
+      await expect(service.search({ cwd: dir, query: "", limit: 100 })).resolves.toEqual(
+        [...hundred].reverse()
+      );
+    });
+
+    it("leaves the listing handed to listFiles unsorted", async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      gitRepo(dir, "src/components/Button.tsx\0a.ts\0README.md\0");
+      const service = await createService();
+
+      await service.search({ cwd: dir, query: "", limit: 3 });
+
+      expect(await service.listFiles(dir)).toEqual([
+        "src/components/Button.tsx",
+        "a.ts",
+        "README.md",
+        "src/components/",
+        "src/",
+      ]);
+    });
+  });
+
   describe("result limit consistency", () => {
     // Git lists paths in byte order, which puts `appZ` ahead of `app_a`; the
     // ranking breaks score ties by locale order, which puts `app_a` first. The

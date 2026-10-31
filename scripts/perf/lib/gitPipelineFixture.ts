@@ -147,14 +147,64 @@ export function installGitSpawnCounter(): void {
     const atMs = performance.now();
     processSpawnEvents.push({ atMs, executable: baseName });
     if (isGitExecutable(baseName)) {
-      spawnEvents.push({
-        atMs,
-        subcommand: extractSubcommand(options?.args ?? [file]),
-      });
+      const subcommand = extractSubcommand(options?.args ?? [file]);
+      spawnEvents.push({ atMs, subcommand });
+      const result = original.call(this, options);
+      if (lifetimeRecorder) {
+        const lifetime: GitProcessLifetime = {
+          subcommand,
+          spawnedAtMs: atMs,
+          closedAtMs: null,
+          exitCode: null,
+        };
+        lifetimeRecorder.push(lifetime);
+        this.once("close", (code: number | null) => {
+          lifetime.closedAtMs = performance.now();
+          lifetime.exitCode = code;
+        });
+      }
+      return result;
     }
     return original.call(this, options);
   };
   installedHook = proto.spawn;
+}
+
+// --- Git process lifetimes ---------------------------------------------------
+
+export interface GitProcessLifetime {
+  subcommand: string;
+  spawnedAtMs: number;
+  /** performance.now() at the child's `close`, or null if it never closed. */
+  closedAtMs: number | null;
+  exitCode: number | null;
+}
+
+let lifetimeRecorder: GitProcessLifetime[] | null = null;
+
+/**
+ * Record when each git child started and closed while `body` runs.
+ *
+ * Lets a scenario split a cold search into the subprocess's lifetime and the
+ * service work that runs after its output arrives. Extends the installed
+ * wrapper rather than patching again, which `spawnObserverMisses` would read as
+ * a blind observer. The `close` listener is attached before the wrapper hands
+ * the child back, so it fires ahead of simple-git's own handler; a child that
+ * never closes leaves `closedAtMs` null for the caller to count as a miss.
+ */
+export async function recordGitProcessLifetimes(
+  body: () => Promise<void>
+): Promise<GitProcessLifetime[]> {
+  installGitSpawnCounter();
+  if (lifetimeRecorder) throw new Error("git process lifetimes are already being recorded");
+  const recorded: GitProcessLifetime[] = [];
+  lifetimeRecorder = recorded;
+  try {
+    await body();
+  } finally {
+    lifetimeRecorder = null;
+  }
+  return recorded;
 }
 
 // --- Observer self-validation ------------------------------------------------
