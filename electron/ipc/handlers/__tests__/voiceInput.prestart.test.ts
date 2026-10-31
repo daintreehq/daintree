@@ -1421,7 +1421,10 @@ describe("voiceInput — keyterm target", () => {
       await correct({ sessionId: currentSessionId });
       expect(shared.correctionRecentPrompts).toEqual(PROMPTS);
 
-      const fullest = Array.from({ length: 6 }, (_, n) => `${n}`.repeat(1_000));
+      // Prose: a run of digits that long is an ID, which redaction blanks.
+      const fullest = Array.from({ length: 6 }, (_, n) =>
+        `prompt ${n} `.repeat(200).slice(0, 1_000)
+      );
       await correct({ recentPrompts: fullest });
       expect(shared.correctionRecentPrompts).toEqual(fullest);
     });
@@ -1442,6 +1445,50 @@ describe("voiceInput — keyterm target", () => {
 
       await correct({ terminalId: undefined });
       expect(shared.correctionRecentPrompts).toBeUndefined();
+    });
+
+    describe("a prompt holding a credential (#15596)", () => {
+      const KEY = `sk-proj-${"Q2w3E4r5".repeat(3)}`;
+      // Each too short to look like a key alone: only the wrap gives them away.
+      const WRAPPED = ["a7f3k9m2x8v1", "zq8wplmn"];
+
+      it("withholds a key pasted on one line, and the prompt with nothing else left", async () => {
+        await correct({
+          recentPrompts: [PROMPTS[0], `use this key: ${KEY}`, PROMPTS[1]],
+        });
+        expect(shared.correctionRecentPrompts).toEqual(PROMPTS);
+      });
+
+      it("withholds every line of a key wrapped across the prompt, keeping the rest", async () => {
+        const wrapped = [
+          "Deploy staging with",
+          `OPENAI_API_KEY=${KEY}`,
+          ...WRAPPED,
+          "",
+          "then run the smoke tests",
+        ].join("\n");
+        await correct({ recentPrompts: [PROMPTS[0], wrapped, PROMPTS[1]] });
+        const sent = shared.correctionRecentPrompts!;
+        expect(sent).toEqual([
+          PROMPTS[0],
+          "Deploy staging with\n\nthen run the smoke tests",
+          PROMPTS[1],
+        ]);
+        for (const piece of [KEY, ...WRAPPED]) {
+          expect(sent.join("\n")).not.toContain(piece);
+        }
+      });
+
+      it("sends none when every prompt held one", async () => {
+        await correct({ recentPrompts: [`TOKEN=${KEY}`, `password: hunter2`] });
+        expect(shared.correctionRecentPrompts).toBeUndefined();
+      });
+
+      it("passes a prompt with nothing to withhold through untouched", async () => {
+        const spaced = "Fix the  tests\r\n\r\n\r\nthen   push  ";
+        await correct({ recentPrompts: [spaced] });
+        expect(shared.correctionRecentPrompts).toEqual([spaced]);
+      });
     });
 
     it("still cleans up, without them, when they don't validate", async () => {

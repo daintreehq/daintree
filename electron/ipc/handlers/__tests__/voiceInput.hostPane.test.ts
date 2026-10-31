@@ -368,6 +368,27 @@ describe("voiceInput — dictating into a host's pane", () => {
     expectNoLocalReads();
   });
 
+  it("withholds a credential from the prompts sent to the host's terminal (#15596)", async () => {
+    await start(view);
+    const key = `ghp_${"a1B2".repeat(9)}`;
+    await getHandler(CHANNELS.VOICE_INPUT_CORRECT)(
+      { sender: view },
+      {
+        rawText: "fix the zoo stand store",
+        terminalId: TERMINAL,
+        recentPrompts: [
+          `export GITHUB_TOKEN=${key}`,
+          `Push with\nGITHUB_TOKEN=${key.slice(0, 20)}\n${key.slice(20)}\n\nthen open the PR`,
+          "Measure gpt-6.1-terra against Luna",
+        ],
+      }
+    );
+    const sent = shared.correctCalls[0]?.request.recentPrompts as string[];
+    expect(sent).toEqual(["Push with\n\nthen open the PR", "Measure gpt-6.1-terra against Luna"]);
+    expect(sent.join("\n")).not.toContain(key.slice(20));
+    expectNoLocalReads();
+  });
+
   it("cleans up a stopped dictation with what its host gave at the start and the stop", async () => {
     await start(view, TERMINAL, "prepared");
     await stop(view, "prepared");

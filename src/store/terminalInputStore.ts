@@ -28,12 +28,19 @@ function sentPromptKey(terminalId: string): string {
   return makeDraftKey(terminalId, getViewWorkspaceId() ?? undefined);
 }
 
+// A run a key can be made of, as cleanup's redaction reads one.
+const KEY_RUN_END_RE = /[A-Za-z0-9_\-+/=]+$/;
+const KEY_CHAR_RE = /^[A-Za-z0-9_\-+/=]/;
+
 // Cut when recorded, so a pasted wall of text is kept only as its opening; by
-// UTF-16 unit, never splitting a surrogate pair, whatever the language.
+// UTF-16 unit, never splitting a surrogate pair, whatever the language. A run
+// of key characters the cut goes through goes with it: the opening of a key is
+// too short for cleanup's redaction to know it for one.
 function boundSentPrompt(text: string): string {
   if (text.length <= VOICE_RECENT_PROMPT_MAX_CHARS) return text;
   let cut = text.slice(0, VOICE_RECENT_PROMPT_MAX_CHARS - 1);
   if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
+  if (KEY_CHAR_RE.test(text.charAt(cut.length))) cut = cut.replace(KEY_RUN_END_RE, "");
   return `${cut}…`;
 }
 

@@ -46,6 +46,45 @@ export function boundTerminalOutput(lines: readonly string[]): string | null {
   return text === "" ? null : text;
 }
 
+/** The prompts a cleanup request may carry, and how much redaction took from them. */
+export interface RedactedRecentPrompts {
+  prompts: string[];
+  withheldPrompts: number;
+  withheldLines: number;
+}
+
+/**
+ * Prepares the prompts recently sent to a terminal for the cleanup request,
+ * oldest first, each on its own: credential-shaped lines emptied as the
+ * terminal output's are, blank runs folded, and a prompt with nothing readable
+ * left dropped. A prompt redaction leaves alone goes exactly as it came, so its
+ * block in the request, and the cache behind it, are what they were.
+ */
+export function redactRecentPrompts(prompts: readonly string[]): RedactedRecentPrompts {
+  const kept: string[] = [];
+  let withheldLines = 0;
+  for (const prompt of prompts) {
+    const lines = prompt.split(/\r?\n/);
+    // Strict, because the prompt is sent as written.
+    const redacted = readTerminalLines(lines, true);
+    const changed = redacted.filter((line, index) => line !== lines[index]).length;
+    if (changed === 0) {
+      kept.push(prompt);
+      continue;
+    }
+    withheldLines += changed;
+    const folded: string[] = [];
+    for (const raw of redacted) {
+      const line = raw.trimEnd();
+      if (line === "" && (folded.length === 0 || folded[folded.length - 1] === "")) continue;
+      folded.push(line);
+    }
+    const text = folded.join("\n").trim();
+    if (text !== "") kept.push(text);
+  }
+  return { prompts: kept, withheldPrompts: prompts.length - kept.length, withheldLines };
+}
+
 /**
  * What the dictated terminal recently printed, ready to send with the cleanup
  * request. The caller has already decided the terminal may be read. A slow or
