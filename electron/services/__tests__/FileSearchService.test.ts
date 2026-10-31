@@ -260,7 +260,10 @@ describe("FileSearchService", () => {
       expect(collator.compare(angstrom, ring)).toBe(0);
 
       const results: string[][] = [];
-      for (const order of [[angstrom, ring], [ring, angstrom]]) {
+      for (const order of [
+        [angstrom, ring],
+        [ring, angstrom],
+      ]) {
         const dir = makeTempDir();
         tempDirs.push(dir);
         gitRepo(dir, `${order.join("\0")}\0`);
