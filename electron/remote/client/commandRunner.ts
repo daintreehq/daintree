@@ -88,8 +88,6 @@ export const defaultCommandRunner: CommandRunner = (command, args, options = {})
       return;
     }
     let source: fs.ReadStream | null = null;
-    let deadline: ReturnType<typeof setTimeout> | undefined;
-    let collectTimer: ReturnType<typeof setTimeout> | undefined;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
     let drainTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -175,11 +173,12 @@ export const defaultCommandRunner: CommandRunner = (command, args, options = {})
       finish();
     });
 
-    deadline = setTimeout(() => {
+    const deadline = setTimeout(() => {
       if (stopped) return;
       timedOut = true;
       stop();
     }, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-    if (options.collectForMs !== undefined) collectTimer = setTimeout(stop, options.collectForMs);
+    const collectTimer =
+      options.collectForMs !== undefined ? setTimeout(stop, options.collectForMs) : undefined;
     options.signal?.addEventListener("abort", onAbort, { once: true });
   });

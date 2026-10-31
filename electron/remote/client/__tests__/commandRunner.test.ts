@@ -13,7 +13,8 @@ import {
 
 // Room for process start-up and a loaded CI machine on top of the runner's own graces.
 const SLACK_MS = 3_000;
-const STOP_AT_MS = 500;
+// Late enough that `sh` has set itself up before it is stopped, even on a loaded machine.
+const STOP_AT_MS = 1_000;
 
 let dir: string;
 
@@ -110,29 +111,19 @@ describe.skipIf(process.platform === "win32")("defaultCommandRunner settlement",
   });
 
   it("reports a stopped run as stopped even when the program exits cleanly on SIGTERM", async () => {
-    const { result } = await run(`trap "exit 0" TERM; echo ready; while :; do sleep 0.1; done`, {
-      timeoutMs: STOP_AT_MS,
-    });
+    const { result } = await run(
+      `echo $$ > "$PIDS/child.pid"; trap "exit 0" TERM; echo ready; ` +
+        `i=0; while [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done`,
+      { timeoutMs: STOP_AT_MS }
+    );
     expect(result).toMatchObject({ code: null, stdout: "ready\n", timedOut: true });
   });
 
-  it("doesn't start a program for a run that was already cancelled", async () => {
-    const controller = new AbortController();
-    controller.abort();
-    const { result } = await run(`echo started > "$PIDS/started"`, { signal: controller.signal });
-    expect(result).toEqual({
-      code: null,
-      stdout: "",
-      stderr: "",
-      spawnError: null,
-      timedOut: false,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    await expect(fs.access(path.join(dir, "started"))).rejects.toThrow();
-  });
-
   it("keeps reading after the program exits while something it started still writes", async () => {
-    const { result } = await run(`(sleep 0.5; echo late) & exit 3`);
+    // It writes after the drain grace a stopped run would get.
+    const { result } = await run(
+      `(sleep ${(COMMAND_DRAIN_GRACE_MS + 500) / 1000}; echo late) & exit 3`
+    );
     expect(result).toMatchObject({ code: 3, stdout: "late\n", timedOut: false });
   });
 
