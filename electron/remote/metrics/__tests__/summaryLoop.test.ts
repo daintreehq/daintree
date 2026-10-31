@@ -118,19 +118,18 @@ describe("SummaryLoop on a busy host (#15735)", () => {
     expect(frames[2]!.summary.forges).toEqual([expect.objectContaining({ account: "greg" })]);
     expect(overlapped).toBe(false);
 
-    // The Shell's view of the first frame, in the worst ping phase: the ping it
-    // names left almost a full interval before the sample began, and each way
-    // takes 100 ms. It is still fresh when the next frame lands.
-    const pingSentAt = (nonce: number) => (nonce === 0 ? { wall: -4_900, mono: -4_900 } : null);
-    const received = frames[0]!.at + 100;
-    const receipt = receiveSummary(
-      { sampleAgeMs: frames[0]!.sampleAgeMs, afterPing: 0 },
-      pingSentAt,
-      { wall: received, mono: received }
-    );
-    const nextArrives = frames[1]!.at + 100;
-    expect(
-      sampleFreshness(frames[0]!.summary, receipt, { wall: nextArrives - 1, mono: nextArrives - 1 })
-    ).toMatchObject({ stale: false });
+    // The Shell's view of the first frame in the worst ping phase: posted just
+    // before the next ping reached the host, so it names the one sent 5 s
+    // earlier, at -3 s. Each way takes 100 ms. It reads fresh until the next
+    // frame lands, and still across one that is dropped.
+    const stamp = (ms: number): ElapsedStamp => ({ wall: ms, mono: ms });
+    const pingSentAt = (nonce: number) => (nonce === 0 ? stamp(-3_000) : null);
+    const timing = { sampleAgeMs: frames[0]!.sampleAgeMs, afterPing: 0 };
+    const receipt = receiveSummary(timing, pingSentAt, stamp(frames[0]!.at + 100));
+    expect(receipt.maxAgeMs).toBe(7_100);
+    const justBefore = (frame: (typeof frames)[number]) =>
+      sampleFreshness(frames[0]!.summary, receipt, stamp(frame.at + 99));
+    expect(justBefore(frames[1]!)).toMatchObject({ ageMs: 10_099, stale: false });
+    expect(justBefore(frames[2]!)).toMatchObject({ ageMs: 15_099, stale: false });
   });
 });

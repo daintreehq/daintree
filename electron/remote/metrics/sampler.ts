@@ -34,12 +34,7 @@ import {
 /** How often a host samples and streams its summary. */
 export const HOST_METRICS_INTERVAL_MS = 5_000;
 
-/**
- * How long one sample waits on what other services answer (agents, projects,
- * agent CLIs, forges) before reporting it unknown. CPU and memory are this
- * machine's own reads, each command already bounded by its timeout, so they
- * never wait on a slow service.
- */
+/** How long one sample waits on its reads before reporting what hasn't come as unknown. */
 export const HOST_SAMPLE_BUDGET_MS = 2_000;
 
 export interface ObservedAgents {
@@ -135,6 +130,9 @@ const NO_MEMORY: HostMemoryFields = {
 
 const NO_SWAP_RATES = { swapInBytesPerSec: null, swapOutBytesPerSec: null };
 
+/** CPU on a Linux host whose scope wasn't read: the machine's figures may not be what it has. */
+const UNKNOWN_SCOPE_CPU: CgroupCpu = { cores: null, logicalCores: null, percent: null };
+
 interface CgroupCpu {
   /** Cores the percentage is a share of, fractional under a quota. */
   cores: number | null;
@@ -199,18 +197,29 @@ export class HostMetricsSampler {
       budgetTimer.unref?.();
     });
     const [clusters, resources, agents, projects, agentClis, forges] = await Promise.all([
-      this.cpuClusters(),
-      settle<{ memory: HostMemoryFields; cgroupCpu?: CgroupCpu | null } | null>(
-        async () =>
-          s.platform === "darwin"
-            ? { memory: await this.darwinMemory() }
-            : this.linuxResources(cpus.length),
+      this.withinBudget("clusters", budget, () => this.cpuClusters(), NO_CLUSTERS),
+      this.withinBudget<{ memory: HostMemoryFields; cgroupCpu?: CgroupCpu | null } | null>(
+        "resources",
+        budget,
+        async () => {
+          try {
+            return s.platform === "darwin"
+              ? { memory: await this.darwinMemory() }
+              : await this.linuxResources(cpus.length);
+          } catch (error) {
+            // A failed reading must not leave a baseline the next one is measured across.
+            this.previousSwap = null;
+            throw error;
+          }
+        },
         null
-      ).then((read) => {
-        // A failed reading must not leave a baseline the next one is measured across.
-        if (read === null) this.previousSwap = null;
-        return read ?? { memory: NO_MEMORY };
-      }),
+      ).then(
+        (read) =>
+          read ?? {
+            memory: NO_MEMORY,
+            ...(s.platform === "darwin" ? {} : { cgroupCpu: UNKNOWN_SCOPE_CPU }),
+          }
+      ),
       // A failed or late read is unknown, not zero: zero working agents lets an update restart the host.
       this.withinBudget<ObservedAgents | null>("agents", budget, () => readers.agents(), null),
       this.withinBudget<{ projectCount: number | null; worktreeCount: number | null }>(

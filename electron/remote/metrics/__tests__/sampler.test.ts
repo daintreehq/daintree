@@ -531,6 +531,48 @@ describe("HostMetricsSampler", () => {
         agentClis: [],
         forges: null,
       });
+      await vi.runAllTimersAsync();
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("reads memory a slow resource read hasn't answered as unknown, and a Linux host's CPU scope with it", async () => {
+      vi.useFakeTimers();
+      const meminfo = "MemTotal: 1000 kB\nMemAvailable: 400 kB\n";
+      let meminfoReads = 0;
+      const sampler = new HostMetricsSampler(
+        sources({
+          readText: async (path) => {
+            if (path !== "/proc/meminfo") return null;
+            meminfoReads += 1;
+            return meminfoReads === 1 ? after(12_000, meminfo) : meminfo;
+          },
+        })
+      );
+      const first = sampler.sample();
+      await vi.advanceTimersByTimeAsync(HOST_SAMPLE_BUDGET_MS);
+      // The machine's cores may not be the host's when its cgroup wasn't read.
+      await expect(first).resolves.toMatchObject({
+        agentsObserved: { working: 2, waiting: 1, idle: 3 },
+        memoryTotalBytes: null,
+        memoryUsedBytes: null,
+        cpuLogicalCoreCount: null,
+        cpuCapacityCores: null,
+        cpuLoadAverage1m: null,
+      });
+      await vi.advanceTimersByTimeAsync(3_000);
+      const second = sampler.sample();
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(second).resolves.toMatchObject({ memoryTotalBytes: null });
+      expect(meminfoReads).toBe(1);
+      await vi.advanceTimersByTimeAsync(7_000);
+      const third = sampler.sample();
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(third).resolves.toMatchObject({
+        memoryTotalBytes: 1000 * 1024,
+        cpuLogicalCoreCount: 1,
+        metricsScope: "host",
+      });
+      expect(meminfoReads).toBe(2);
     });
 
     it("takes an answer that comes within the budget", async () => {
@@ -573,6 +615,32 @@ describe("HostMetricsSampler", () => {
       const third = sampler.sample();
       await vi.advanceTimersByTimeAsync(0);
       await expect(third).resolves.toMatchObject({
+        agentsObserved: { working: 8, waiting: 0, idle: 0 },
+      });
+      expect(calls).toBe(2);
+    });
+
+    it("starts a read that failed after the budget again", async () => {
+      vi.useFakeTimers();
+      let calls = 0;
+      const sampler = new HostMetricsSampler(
+        sources({
+          agents: () => {
+            calls += 1;
+            return calls === 1
+              ? new Promise((_, reject) =>
+                  setTimeout(() => reject(new Error("pty host down")), 6_000)
+                )
+              : Promise.resolve({ working: 8, waiting: 0, idle: 0 });
+          },
+        })
+      );
+      const first = sampler.sample();
+      await vi.advanceTimersByTimeAsync(6_000);
+      await expect(first).resolves.toMatchObject({ agentsObserved: null });
+      const second = sampler.sample();
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(second).resolves.toMatchObject({
         agentsObserved: { working: 8, waiting: 0, idle: 0 },
       });
       expect(calls).toBe(2);
