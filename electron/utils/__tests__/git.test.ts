@@ -891,7 +891,9 @@ describe("getWorktreeChangesWithStats per-file diff cache", () => {
     await getWorktreeChangesWithStats(cwd, true);
 
     (fs.stat as ReturnType<typeof vi.fn>).mockImplementation(async (p: string) =>
-      p.endsWith(pathJoin("src", "f1234.ts")) ? { mtimeMs: 2000, size: 60 } : { mtimeMs: 1000, size: 50 }
+      p.endsWith(pathJoin("src", "f1234.ts"))
+        ? { mtimeMs: 2000, size: 60 }
+        : { mtimeMs: 1000, size: 50 }
     );
     mockGit.diff.mockReset();
     mockGit.diff.mockResolvedValue("7\t3\tsrc/f1234.ts\n");

@@ -245,7 +245,9 @@ function canReplay(): boolean {
  * observable in-process; a replay of the identical commands against the
  * unchanged tree is the closest honest reading.
  */
-export function replayGitCpu(spawns: CapturedGitSpawn[]): { userMs: number; systemMs: number } | null {
+export function replayGitCpu(
+  spawns: CapturedGitSpawn[]
+): { userMs: number; systemMs: number } | null {
   if (spawns.length === 0) return { userMs: 0, systemMs: 0 };
   if (!canReplay()) return null;
   const out = execFileSync("python3", ["-c", REPLAY_SCRIPT], {

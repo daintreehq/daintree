@@ -66,9 +66,7 @@ describe("worktreeDiffStatCache", () => {
     publishTracked("/repo", ["/repo/a.ts"], id({ mtimeMs: 2000 }));
 
     expect(retainedTracked("/repo", ["/repo/a.ts", "/repo/b.ts"])).toEqual([]);
-    expect(retainedTracked("/repo", ["/repo/a.ts"], id({ mtimeMs: 2000 }))).toEqual([
-      "/repo/a.ts",
-    ]);
+    expect(retainedTracked("/repo", ["/repo/a.ts"], id({ mtimeMs: 2000 }))).toEqual(["/repo/a.ts"]);
     expect(getWorktreeDiffStatCacheStats().trackedEntries).toBe(1);
   });
 
@@ -194,7 +192,10 @@ describe("worktreeDiffStatCache", () => {
     expect(next.lookupUntracked("/repo/n2.md", 10, 6)).toBeUndefined();
     expect(next.lookupUntracked("/repo/n3.md", 10, 5)).toBeUndefined();
     expect(next.lookupTracked("/repo/a.ts", id())).toBeDefined();
-    expect(getWorktreeDiffStatCacheStats()).toMatchObject({ trackedEntries: 1, untrackedEntries: 2 });
+    expect(getWorktreeDiffStatCacheStats()).toMatchObject({
+      trackedEntries: 1,
+      untrackedEntries: 2,
+    });
   });
 
   it("accounts bytes back to zero as partitions leave", () => {
