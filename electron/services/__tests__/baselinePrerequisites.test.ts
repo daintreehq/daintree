@@ -32,10 +32,16 @@ describe("buildBaselinePrerequisites", () => {
     const severity = (tool: string) => specs.find((s) => s.tool === tool)?.severity;
 
     expect(specs.filter((s) => s.severity === "fatal").map((s) => s.tool)).toEqual(["git"]);
-    // Still listed with install commands, so a user choosing an npm route sees them.
-    expect(severity("node")).toBe("warn");
-    expect(severity("npm")).toBe("warn");
-    expect(specs.find((s) => s.tool === "node")?.installBlocks?.macos?.length).toBeGreaterThan(0);
+    // Still shown (a "silent" spec is hidden from the wizard) and still carrying
+    // install commands, so a user choosing an npm route sees them.
+    for (const tool of ["node", "npm"]) {
+      expect(severity(tool)).toBeDefined();
+      expect(severity(tool)).not.toBe("silent");
+    }
+    const nodeCommands = specs
+      .find((s) => s.tool === "node")
+      ?.installBlocks?.macos?.flatMap((b) => b.commands ?? []);
+    expect(nodeCommands?.length).toBeGreaterThan(0);
   });
 
   it.each(FAMILIES)("installs git with %s's own package manager", (family) => {

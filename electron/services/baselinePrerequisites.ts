@@ -2,7 +2,8 @@ import type { AgentInstallBlock } from "../../shared/config/agentRegistry.js";
 import type { PrerequisiteSpec } from "../../shared/types/ipc.js";
 import { getLinuxDistroFamily, type LinuxDistroFamily } from "../utils/linuxDistro.js";
 
-const NODE_MIN_VERSION_NOTE = "Requires Node.js v18.0.0 or later";
+const NODE_MIN_VERSION_NOTE =
+  "Only needed for npm-based agent installs and Node-based plugins. Requires Node.js v18.0.0 or later";
 const NPM_INCLUDED_NOTE = "npm is included with Node.js";
 
 interface LinuxHints {
@@ -220,8 +221,8 @@ export function buildBaselinePrerequisites(
       versionArgs: ["--version"],
       // Guidance, not a gate: Daintree's own Node work runs on Electron's
       // binary, and an external Node is needed only by npm agent installs and
-      // plugin MCP servers declaring `command: "node"`. An npm-installed agent
-      // that can't run without it still fails its own binary prerequisite.
+      // plugin MCP servers declaring `command: "node"`. Each agent declares its
+      // own binary as a prerequisite, so none needs a global Node gate.
       severity: "warn",
       minVersion: "18.0.0",
       installUrl: "https://nodejs.org",

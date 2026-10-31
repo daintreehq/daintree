@@ -252,7 +252,7 @@ describe("useSystemHealthCheck — hasFatalFailure", () => {
     return { ...makeResult(tool, severity), available: false, version: null };
   }
 
-  function mockTools(results: Record<string, ReturnType<typeof makeResult>>) {
+  function mockTools(results: Record<string, object>) {
     mockCheckTool.mockImplementation(async (spec: { tool: string }) => results[spec.tool]);
   }
 
@@ -282,6 +282,10 @@ describe("useSystemHealthCheck — hasFatalFailure", () => {
     const { result } = renderHook(() => useSystemHealthCheck());
 
     await waitFor(() => expect(result.current.allDone).toBe(true));
+    expect(result.current.checkStates.node).toMatchObject({
+      available: true,
+      meetsMinVersion: false,
+    });
     expect(result.current.hasFatalFailure).toBe(false);
   });
 

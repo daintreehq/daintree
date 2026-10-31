@@ -6,10 +6,15 @@ import {
   resetSystemHealthCheckCache,
   checkPrerequisite,
   getBaselinePrerequisites,
+  getHealthCheckSpecs,
 } from "../SystemHealthCheck.js";
 import { refreshPath } from "../../setup/environment.js";
 import { findOnPath } from "../../utils/findOnPath.js";
-import { setUserRegistry, type AgentConfig } from "../../../shared/config/agentRegistry.js";
+import {
+  getAgentIds,
+  setUserRegistry,
+  type AgentConfig,
+} from "../../../shared/config/agentRegistry.js";
 import { virtualWindowsFiles } from "../../utils/__tests__/helpers/virtualWindowsFs.js";
 
 vi.mock("child_process", () => ({
@@ -178,6 +183,25 @@ describe("resolvePrerequisites", () => {
   it("ignores unknown agent IDs gracefully", () => {
     const specs = resolvePrerequisites(["nonexistent"]);
     expect(specs.length).toBe(getBaselinePrerequisites().length);
+  });
+
+  it("keeps Node.js non-blocking with every built-in agent selected", () => {
+    // An agent declaring node (or npm) as fatal would bring back the global gate
+    // for users who never install through npm: the merge only ever raises severity.
+    const specs = resolvePrerequisites(getAgentIds());
+
+    expect(specs.find((s) => s.tool === "node")?.severity).not.toBe("fatal");
+    expect(specs.find((s) => s.tool === "npm")?.severity).not.toBe("fatal");
+    expect(specs.find((s) => s.tool === "git")?.severity).toBe("fatal");
+  });
+});
+
+describe("getHealthCheckSpecs", () => {
+  it("hands the wizard the resolved specs with Git as the only fatal baseline tool", async () => {
+    const specs = await getHealthCheckSpecs();
+
+    expect(specs.filter((s) => s.severity === "fatal").map((s) => s.tool)).toEqual(["git"]);
+    expect(specs.some((s) => s.tool === "node" && s.severity !== "silent")).toBe(true);
   });
 });
 
@@ -447,6 +471,8 @@ describe("runSystemHealthCheck", () => {
 
       expect(result.prerequisites.map((p) => p.tool)).toEqual(["git"]);
       expect(result.allRequired).toBe(true);
+      // Excluded before probing, not filtered out of the result afterwards.
+      expect(mockedFindOnPath.mock.calls.map((c) => c[0])).toEqual(["git"]);
     });
 
     it("still fails when Git is missing even though Node.js is present", async () => {
@@ -769,6 +795,7 @@ describe("runSystemHealthCheck", () => {
       const result = await runSystemHealthCheck();
 
       expect(result.prerequisites.find((p) => p.tool === "node")?.available).toBe(true);
+      expect(mockedExecFile.mock.calls.some((c) => c[0] === "xcode-select")).toBe(false);
     });
   });
 });

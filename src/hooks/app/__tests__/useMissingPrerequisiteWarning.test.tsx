@@ -84,7 +84,9 @@ describe("useMissingPrerequisiteWarning", () => {
   });
 
   it("stores prerequisites that are unavailable", async () => {
-    healthCheckMock.mockResolvedValue(health([MISSING_GIT, result({ tool: "node" })]));
+    healthCheckMock.mockResolvedValue(
+      health([MISSING_GIT, result({ tool: "other-tool", label: "Other tool" })])
+    );
 
     renderHook(() => useMissingPrerequisiteWarning(true));
 
@@ -94,14 +96,12 @@ describe("useMissingPrerequisiteWarning", () => {
   });
 
   it("stores a tool that exists but is below its minimum version", async () => {
-    healthCheckMock.mockResolvedValue(
-      health([result({ tool: "node", label: "Node.js", meetsMinVersion: false })])
-    );
+    healthCheckMock.mockResolvedValue(health([result({ meetsMinVersion: false })]));
 
     renderHook(() => useMissingPrerequisiteWarning(true));
 
     await waitFor(() =>
-      expect(useMissingPrerequisiteStore.getState().missing.map((m) => m.tool)).toEqual(["node"])
+      expect(useMissingPrerequisiteStore.getState().missing.map((m) => m.tool)).toEqual(["git"])
     );
   });
 
