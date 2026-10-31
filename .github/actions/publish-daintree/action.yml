@@ -67,10 +67,8 @@ runs:
       shell: bash
       run: ls -lah release/
 
-    - name: Install gate dependencies
-      shell: bash
-      run: npm install --no-save --no-audit --no-fund --ignore-scripts js-yaml semver
-
+    # js-yaml and semver come from the locked `npm ci` above. A bare
+    # `npm install <pkg>` here would re-resolve them from the registry (#15625).
     - name: Check version is monotonically increasing
       id: version-check
       shell: bash
