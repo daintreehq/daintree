@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { ErrorCode, McpError, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -27,7 +28,23 @@ export interface LaunchInNewWorktreeDeps {
    */
   callTool(name: string, args: Record<string, unknown>): Promise<CallToolResult>;
   signal: AbortSignal;
+  /**
+   * The create step's idempotency key, from {@link createStepRequestKey}.
+   * Without one, two different calls naming the same source would share the
+   * create step's cached answer: the second agent would land in the first
+   * call's worktree.
+   */
+  createRequestKey?: string;
   now?: () => number;
+}
+
+/**
+ * The create step's request key, scoped to the composite call that made it:
+ * a retry of the same call reuses the worktree its first try created, while
+ * a different call naming the same source gets one of its own.
+ */
+export function createStepRequestKey(callDedupKey: string): string {
+  return `${AGENT_LAUNCH_IN_NEW_WORKTREE_TOOL}:${createHash("sha256").update(callDedupKey).digest("hex")}`;
 }
 
 export interface LaunchInNewWorktreeAnswer {
@@ -210,7 +227,10 @@ export async function runLaunchInNewWorktree(
     };
   };
 
-  const createdResult = await deps.callTool(CREATE_TOOL, { source });
+  const createdResult = await deps.callTool(CREATE_TOOL, {
+    source,
+    ...(deps.createRequestKey !== undefined ? { requestKey: deps.createRequestKey } : {}),
+  });
   if (createdResult.isError === true) {
     const error = errorOf(createdResult);
     // The code is stamped only for a composite's own partial failure, never

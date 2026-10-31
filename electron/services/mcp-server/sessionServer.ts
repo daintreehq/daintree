@@ -78,6 +78,7 @@ import { viewlessStatusArgsAreAnswerable } from "./terminalStatus.js";
 import { viewlessActionDanger } from "../viewless/viewlessActionCatalog.js";
 import {
   AGENT_LAUNCH_IN_NEW_WORKTREE_TOOL,
+  createStepRequestKey,
   runLaunchInNewWorktree,
 } from "./launchInNewWorktree.js";
 import { parseLastMessageReadArgs } from "./lastMessageArgs.js";
@@ -1734,6 +1735,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                   stepOptions
                 ),
               signal: extra.signal,
+              ...(dedupKey !== undefined ? { createRequestKey: createStepRequestKey(dedupKey) } : {}),
             });
             outcome = { kind: "result", value: answer.outcome };
             return answer.result;

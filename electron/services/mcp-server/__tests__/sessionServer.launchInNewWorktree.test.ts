@@ -305,4 +305,54 @@ describe("agent.launchInNewWorktree through the session server (#15738)", () => 
     expect(second.structuredContent).toEqual(first.structuredContent);
     expect(dispatchAction.mock.calls.filter((c) => c[0] === "agent.launch")).toHaveLength(1);
   });
+
+  it("gives a different call naming the same source a worktree of its own", async () => {
+    // Without a create key scoped to the call, the second create would be
+    // answered from the first one's cache entry and both agents would share
+    // one tree.
+    const { dispatchAction, server } = harness({
+      "worktree.createWithRecipe": created,
+      "worktree.waitUntilReady": ready,
+      "agent.launch": launched,
+    });
+
+    await callTool(server, {
+      name: "agent.launchInNewWorktree",
+      arguments: { source: SOURCE, agentId: "claude" },
+    });
+    await callTool(server, {
+      name: "agent.launchInNewWorktree",
+      arguments: { source: SOURCE, agentId: "codex" },
+    });
+
+    expect(dispatchAction.mock.calls.filter((c) => c[0] === "worktree.createWithRecipe")).toHaveLength(
+      2
+    );
+  });
+
+  it("reuses the worktree its first try made when the same call is retried after a stop", async () => {
+    let launches = 0;
+    const { dispatchAction, server } = harness({
+      "worktree.createWithRecipe": created,
+      "worktree.waitUntilReady": ready,
+      "agent.launch": (args: Record<string, unknown>) =>
+        ++launches === 1
+          ? { result: { ok: false, error: { code: "EXECUTION_ERROR", message: "spawn failed" } } }
+          : launched(args),
+    });
+    const call = {
+      name: "agent.launchInNewWorktree",
+      arguments: { source: SOURCE, agentId: "claude", prompt: "Fix it" },
+    };
+
+    const first = await callTool(server, call);
+    const second = await callTool(server, call);
+
+    expect(toolErrorPayload(first).code).toBe("PARTIAL_SUCCESS");
+    expect(second.isError).toBeFalsy();
+    expect((second.structuredContent as Record<string, unknown>).worktreeId).toBe(WORKTREE);
+    expect(dispatchAction.mock.calls.filter((c) => c[0] === "worktree.createWithRecipe")).toHaveLength(
+      1
+    );
+  });
 });
