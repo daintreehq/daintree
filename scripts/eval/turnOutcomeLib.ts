@@ -1,20 +1,32 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { AssistantTurnRecord, TurnOutcomeClass } from "../../shared/types/ipc/mcpServer.js";
 
-export const TURN_OUTCOME_CLASS_ORDER: readonly TurnOutcomeClass[] = [
-  "answered",
-  "hedged",
-  "refused",
-  "docs-empty",
-  "tier-rejected",
-  "mcp-not-ready",
-  "agent-stuck",
-  "tool-error",
-  "reasoning-loop",
-  "hibernate-resume-stale",
-  "unknown",
-] as const;
+/**
+ * The evaluator's vocabulary, one entry per `TurnOutcomeClass`. The judge
+ * prompt lists these descriptions, and a unit test checks the keys against the
+ * union in shared/types/ipc/mcpServer.ts, since no typecheck project covers
+ * scripts/eval.
+ */
+export const TURN_OUTCOME_CLASS_DESCRIPTIONS: Readonly<Record<TurnOutcomeClass, string>> = {
+  answered: "the turn produced useful output and completed successfully",
+  hedged: "the agent expressed uncertainty without producing a concrete answer",
+  refused: "the agent declined to act or stated it cannot perform the request",
+  "docs-empty": "the agent reported it could not find the requested documentation or results",
+  "tier-rejected": "a tool dispatch was blocked because the session tier was not permitted",
+  "mcp-not-ready": "the MCP server was not ready at provision time",
+  "agent-stuck": "the watchdog fired a waiting→idle timeout — the agent went silent",
+  "tool-error": "the most recent tool dispatch resolved with an error",
+  "reasoning-loop":
+    "the agent called the same tool with the same arguments at least 3 times within the turn",
+  "hibernate-resume-stale": "an attempted resume produced no prior conversation",
+  unknown: "insufficient information to classify",
+};
+
+export const TURN_OUTCOME_CLASS_ORDER = Object.keys(
+  TURN_OUTCOME_CLASS_DESCRIPTIONS
+) as readonly TurnOutcomeClass[];
 
 export interface EvalOptions {
   storePath?: string;
@@ -94,27 +106,59 @@ export interface LoadedRecords {
 // Store path resolution
 // ---------------------------------------------------------------------------
 
-export function resolveStorePath(storePath?: string): string {
-  if (storePath) {
-    const resolved = path.isAbsolute(storePath) ? storePath : path.resolve(storePath);
-    return resolved;
-  }
+export const PROFILE_DB_FILE = "daintree.db";
 
-  const envDir = process.env.DAINTREE_USER_DATA;
-  if (envDir) {
-    if (envDir.endsWith(".json")) return envDir;
-    return path.join(envDir, "config.json");
-  }
-
-  const home = os.homedir();
-  const platform = os.platform();
+/** The packaged app's userData directory; dev builds use `daintree-dev` beside it. */
+export function defaultProfileDir(
+  platform: NodeJS.Platform = os.platform(),
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = os.homedir()
+): string {
   if (platform === "darwin") {
-    return path.join(home, "Library", "Application Support", "Daintree", "config.json");
+    return path.join(home, "Library", "Application Support", "Daintree");
   }
   if (platform === "win32") {
-    return path.join(home, "AppData", "Roaming", "Daintree", "config.json");
+    return path.join(env.APPDATA || path.join(home, "AppData", "Roaming"), "Daintree");
   }
-  return path.join(home, ".config", "Daintree", "config.json");
+  return path.join(env.XDG_CONFIG_HOME || path.join(home, ".config"), "Daintree");
+}
+
+function isDirectory(candidate: string): boolean {
+  try {
+    return fs.statSync(candidate).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function isExistingFile(candidate: string): boolean {
+  try {
+    return !fs.statSync(candidate).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve the daintree.db to read. `--store-path` may name a profile directory
+ * or a database file; DAINTREE_USER_DATA names a profile directory, as it does
+ * for the app. A path to any other file is returned as-is so the loader can
+ * say why it is not a turn-outcome source.
+ */
+export function resolveStorePath(
+  storePath?: string,
+  env: NodeJS.ProcessEnv = process.env
+): string {
+  if (storePath) {
+    const resolved = path.resolve(storePath);
+    return isDirectory(resolved) ? path.join(resolved, PROFILE_DB_FILE) : resolved;
+  }
+  const envDir = env.DAINTREE_USER_DATA;
+  if (envDir) {
+    const resolved = path.resolve(envDir);
+    return isExistingFile(resolved) ? resolved : path.join(resolved, PROFILE_DB_FILE);
+  }
+  return path.join(defaultProfileDir(os.platform(), env), PROFILE_DB_FILE);
 }
 
 // ---------------------------------------------------------------------------
@@ -126,7 +170,7 @@ const REQUIRED_RECORD_KEYS = ["id", "timestamp", "outcome"] as const;
 export function loadRecords(raw: unknown): LoadedRecords {
   const warnings: string[] = [];
   if (!Array.isArray(raw)) {
-    return { records: [], warnings: ["config key is not an array"] };
+    return { records: [], warnings: ["turn-outcome records are not an array"] };
   }
 
   const records: AssistantTurnRecord[] = [];
@@ -536,6 +580,94 @@ export function matchCalibration(
   return { matched, unmatched };
 }
 
+/**
+ * Pair calibration labels with judge predictions by record id. Only sampled
+ * records were judged, so a label whose record sits outside the sample has no
+ * pair even though it matched the store.
+ */
+export function joinCalibrationPairs(
+  judged: readonly AssistantTurnRecord[],
+  predictions: readonly TurnOutcomeClass[],
+  calibration: ReadonlyArray<{ record: AssistantTurnRecord; expected: TurnOutcomeClass }>
+): Array<{ predicted: TurnOutcomeClass; expected: TurnOutcomeClass }> {
+  const predictedById = new Map<string, TurnOutcomeClass>();
+  for (let i = 0; i < judged.length && i < predictions.length; i++) {
+    predictedById.set(judged[i].id, predictions[i]);
+  }
+  const pairs: Array<{ predicted: TurnOutcomeClass; expected: TurnOutcomeClass }> = [];
+  for (const entry of calibration) {
+    const predicted = predictedById.get(entry.record.id);
+    if (predicted) pairs.push({ predicted, expected: entry.expected });
+  }
+  return pairs;
+}
+
+// ---------------------------------------------------------------------------
+// Readiness
+// ---------------------------------------------------------------------------
+
+export const READY_KAPPA = 0.7;
+export const MIN_CALIBRATION_PAIRS = 20;
+
+export interface Readiness {
+  ready: boolean;
+  /** Calibration labels joined to judge predictions — the only count readiness reads. */
+  pairs: number;
+  kappa?: number;
+  /** Console verdict line. */
+  verdict: string;
+  /** Small-sample warning, set whenever a judged run has too few pairs. */
+  warning?: string;
+  exitCode: 0 | 1;
+}
+
+/**
+ * The single readiness verdict. The console line, the exit code, the report's
+ * `ready` and the small-sample warning all come from here, so they cannot
+ * disagree. A dry run judges nothing and keeps exiting 0.
+ */
+export function assessReadiness(input: {
+  dryRun: boolean;
+  calibrationLoaded: boolean;
+  pairs: number;
+  kappa?: number;
+}): Readiness {
+  const { dryRun, calibrationLoaded, pairs, kappa } = input;
+  if (dryRun) {
+    return {
+      ready: false,
+      pairs,
+      kappa,
+      verdict: "Readiness: not assessed (dry run)",
+      exitCode: 0,
+    };
+  }
+  const threshold = READY_KAPPA.toFixed(2);
+  const warning =
+    pairs < MIN_CALIBRATION_PAIRS
+      ? `Only ${pairs} calibration labels joined to judge predictions. Kappa estimates are unstable with fewer than ${MIN_CALIBRATION_PAIRS} pairs.`
+      : undefined;
+  let reason: string;
+  if (!calibrationLoaded) {
+    reason = "no calibration set given (--calibration-path)";
+  } else if (pairs === 0 || kappa === undefined) {
+    reason = "no calibration label matches a judged record";
+  } else if (pairs < MIN_CALIBRATION_PAIRS) {
+    reason = `${pairs} judge-calibration pairs, need at least ${MIN_CALIBRATION_PAIRS}`;
+  } else if (kappa < READY_KAPPA) {
+    reason = `kappa ${kappa.toFixed(3)} below the ${threshold} threshold`;
+  } else {
+    return {
+      ready: true,
+      pairs,
+      kappa,
+      verdict: `READY: kappa ${kappa.toFixed(3)} >= ${threshold} over ${pairs} judge-calibration pairs`,
+      exitCode: 0,
+    };
+  }
+  return { ready: false, pairs, kappa, verdict: `NOT READY: ${reason}`, warning, exitCode: 1 };
+}
+
 // ---------------------------------------------------------------------------
 // CLI argument parsing
 // ---------------------------------------------------------------------------
@@ -591,7 +723,9 @@ turnOutcome — Offline evaluation harness for the turn-outcome classifier
 Usage: tsx scripts/eval/turnOutcome.ts [options]
 
 Options:
-  --store-path <path>     Path to Daintree config.json (required unless --dry-run)
+  --store-path <path>     Daintree profile directory, or its daintree.db
+                          (default: $DAINTREE_USER_DATA, else the packaged
+                          app's profile; dev builds use a daintree-dev profile)
   --budget <n>            Max records to evaluate (default: 200, min: 10)
   --calibration-path <p>  Path to hand-labeled calibration JSON file
   --out-dir <dir>         Output directory for JSON report (default: .tmp/eval)
@@ -602,11 +736,15 @@ Options:
 
 Requires OPENAI_API_KEY env var (unless --dry-run).
 
-The harness reads the store, stratifies records by outcome class (floor
+The harness reads the mcpTurnOutcomeLog ring from the profile's daintree.db
+without writing to the profile, stratifies records by outcome class (floor
 allocation + proportional fill, without replacement), sends batches to a
 frontier-model judge via OpenAI Responses API with structured JSON output,
 then computes Cohen's kappa and a confusion matrix against the optional
 calibration set, plus PSI drift against a baseline distribution window.
+
+A judged run is ready when kappa >= 0.70 over at least 20 calibration labels
+joined to judge predictions by record id; it exits 1 otherwise.
 
 Calibration file format (JSON array):
   [{"recordId": "...", "expected": "answered"}, ...]
