@@ -679,10 +679,10 @@ describe("HostCallRuntime (#13493, #13496)", () => {
       });
 
       describe("a summary an earlier link brought (#15736)", () => {
-        // This runtime reads the real clock, so it is recent enough to pass for live.
+        // Ten milliseconds old by this runtime's clock: it would pass for live.
         const held = (agents: { working: number; waiting: number; idle: number }) =>
           ({
-            sampledAt: Date.now(),
+            sampledAt: 990,
             platform: "linux",
             cpuPercent: 80,
             cpuLogicalCoreCount: 8,
@@ -694,6 +694,13 @@ describe("HostCallRuntime (#13493, #13496)", () => {
             agentsObserved: agents,
           }) as never;
         const PREVIOUS = held({ working: 3, waiting: 1, idle: 0 });
+        const receipt = (receivedAt: number, maxAgeMs: number) => ({
+          receivedAt,
+          at: { wall: receivedAt, mono: receivedAt },
+          hostAgeMs: 0,
+          maxAgeMs,
+          timed: true,
+        });
 
         let listener: HostWatchListener | null;
         let unsubscribed: number;
@@ -712,14 +719,33 @@ describe("HostCallRuntime (#13493, #13496)", () => {
         });
 
         /** The dial connects; the summary still held is the one an earlier link brought. */
-        const reconnect = vi.fn(async (hostId: string) => {
+        const reconnect = async (hostId: string) => {
           hosts = hosts.map((h) =>
             h.hostId === hostId ? { ...h, connection: CONNECTED, summaryFromCurrentLink: false } : h
           );
-        });
+        };
+
+        const listing = (
+          connect: (hostId: string) => Promise<unknown>,
+          extra: Partial<HostCallRuntimeDeps> = {}
+        ) =>
+          dialing(connect, {
+            now: () => clock,
+            clock: () => ({ wall: clock, mono: clock }),
+            ...extra,
+          });
+
+        /** The studio's next observation: a summary the link open now brought. */
+        const arrive = (summary: never, from = receipt(clock, 0)) => {
+          hosts = hosts.map((h) =>
+            h.hostId === "studio"
+              ? { ...h, summary, summaryReceipt: from, summaryFromCurrentLink: true }
+              : h
+          );
+        };
 
         it("presents neither its load nor its agents as live after a redial", async () => {
-          const listed = await dialing(reconnect).list("a");
+          const listed = await listing(reconnect).list("a");
           if (!listed.ok) throw new Error("refused");
           expect(HostListResultSchema.parse(listed.value)).toEqual(listed.value);
           expect(listed.value.hosts[0]).toMatchObject({
@@ -744,7 +770,7 @@ describe("HostCallRuntime (#13493, #13496)", () => {
             host({ connection: CONNECTED, summary: PREVIOUS, summaryFromCurrentLink: false }),
           ];
           const connect = vi.fn(async () => undefined);
-          const listed = await dialing(connect, { watchHosts }).list("a");
+          const listed = await listing(connect, { watchHosts }).list("a");
           if (!listed.ok) throw new Error("refused");
           expect(connect).not.toHaveBeenCalled();
           expect(unsubscribed).toBe(0);
@@ -757,25 +783,72 @@ describe("HostCallRuntime (#13493, #13496)", () => {
         it("lists what the new link sends first when it comes soon after the dial", async () => {
           vi.useFakeTimers();
           try {
-            const pending = dialing(reconnect, { watchHosts }).list("a");
+            hosts = [
+              // Already current, and first: only the studio's own observation ends its wait.
+              host({
+                hostId: "elsewhere",
+                name: "laptop",
+                connection: CONNECTED,
+                summary: held({ working: 9, waiting: 9, idle: 9 }),
+                summaryFromCurrentLink: true,
+              }),
+              host({
+                summary: PREVIOUS,
+                summaryReceipt: receipt(400, 60_000),
+                summaryFromCurrentLink: false,
+              }),
+            ];
+            const pending = listing(reconnect, { watchHosts }).list("a");
             await vi.advanceTimersByTimeAsync(400);
             expect(listener).not.toBeNull();
-            hosts = hosts.map((h) => ({
-              ...h,
-              summary: held({ working: 0, waiting: 2, idle: 1 }),
-              summaryFromCurrentLink: true,
-            }));
+            expect(unsubscribed).toBe(0);
+
+            arrive(held({ working: 0, waiting: 2, idle: 1 }));
             listener?.summary("elsewhere");
+            expect(unsubscribed).toBe(0);
             listener?.summary("studio");
 
             const listed = await pending;
             if (!listed.ok) throw new Error("refused");
-            expect(listed.value.hosts[0]).toMatchObject({
+            expect(listed.value.hosts.find((h) => h.hostId === "studio")).toMatchObject({
               agentsObserved: { working: 0, waiting: 2, idle: 1 },
-              load: { stale: false, staleReason: null, cpuPercent: 80 },
+              // Its own receipt, not the expired one the earlier link's summary had.
+              load: { stale: false, staleReason: null, cpuPercent: 80, receivedAt: 1000, ageMs: 0 },
               agentClis: { coverage: "observed" },
             });
             expect(unsubscribed).toBe(1);
+            expect(vi.getTimerCount()).toBe(0);
+          } finally {
+            vi.useRealTimers();
+          }
+        });
+
+        it.each([
+          ["already held as it subscribes", false],
+          ["told synchronously as it subscribes", true],
+        ])("takes a first summary %s", async (_case, tell) => {
+          vi.useFakeTimers();
+          try {
+            const off = vi.fn();
+            const subscribe = (next: HostWatchListener) => {
+              arrive(held({ working: 1, waiting: 0, idle: 0 }));
+              if (tell) next.summary("studio");
+              return off;
+            };
+            let settled = false;
+            const pending = listing(reconnect, { watchHosts: subscribe })
+              .list("a")
+              .finally(() => (settled = true));
+            await vi.advanceTimersByTimeAsync(0);
+            expect(settled).toBe(true);
+            const listed = await pending;
+            if (!listed.ok) throw new Error("refused");
+            expect(listed.value.hosts[0]?.agentsObserved).toEqual({
+              working: 1,
+              waiting: 0,
+              idle: 0,
+            });
+            expect(off).toHaveBeenCalledTimes(1);
             expect(vi.getTimerCount()).toBe(0);
           } finally {
             vi.useRealTimers();
@@ -786,7 +859,7 @@ describe("HostCallRuntime (#13493, #13496)", () => {
           vi.useFakeTimers();
           try {
             let settled = false;
-            const pending = dialing(reconnect, { watchHosts })
+            const pending = listing(reconnect, { watchHosts })
               .list("a")
               .finally(() => (settled = true));
             await vi.advanceTimersByTimeAsync(1_000);
@@ -810,13 +883,38 @@ describe("HostCallRuntime (#13493, #13496)", () => {
           }
         });
 
-        it("stops waiting as soon as the host drops again", async () => {
+        it.each([
+          [
+            "drops again",
+            () => {
+              hosts = hosts.map((h) => ({ ...h, connection: { status: "disconnected" } }));
+            },
+          ],
+          [
+            "is removed",
+            () => {
+              hosts = [];
+            },
+          ],
+          [
+            "has its control switched off",
+            () => {
+              control.delete("studio");
+            },
+          ],
+        ])("stops waiting as soon as the host %s", async (_case, change) => {
           vi.useFakeTimers();
           try {
-            const pending = dialing(reconnect, { watchHosts }).list("a");
+            let settled = false;
+            const pending = listing(reconnect, { watchHosts })
+              .list("a")
+              .finally(() => (settled = true));
             await vi.advanceTimersByTimeAsync(100);
-            hosts = hosts.map((h) => ({ ...h, connection: { status: "disconnected" } }));
+            expect(settled).toBe(false);
+            change();
             listener?.changed();
+            await vi.advanceTimersByTimeAsync(0);
+            expect(settled).toBe(true);
 
             const listed = await pending;
             if (!listed.ok) throw new Error("refused");
@@ -828,10 +926,29 @@ describe("HostCallRuntime (#13493, #13496)", () => {
           }
         });
 
+        it("says the held one predates the link when it can't listen for the next", async () => {
+          vi.useFakeTimers();
+          try {
+            const listed = await listing(reconnect, {
+              watchHosts: () => {
+                throw new Error("nothing to hear with");
+              },
+            }).list("a");
+            if (!listed.ok) throw new Error("refused");
+            expect(listed.value.hosts[0]).toMatchObject({
+              agentsObserved: null,
+              load: { stale: true, staleReason: "earlier-link" },
+            });
+            expect(vi.getTimerCount()).toBe(0);
+          } finally {
+            vi.useRealTimers();
+          }
+        });
+
         it("lets the wait go when the runtime is disposed", async () => {
           vi.useFakeTimers();
           try {
-            const runtime = dialing(reconnect, { watchHosts });
+            const runtime = listing(reconnect, { watchHosts });
             const pending = runtime.list("a");
             await vi.advanceTimersByTimeAsync(100);
             expect(listener).not.toBeNull();

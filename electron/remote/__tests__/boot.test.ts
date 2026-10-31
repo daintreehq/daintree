@@ -730,7 +730,7 @@ describe("startRemoteHosts", () => {
     );
     m.hostEntries.push({
       descriptor: { id: "control-on", name: "studio-01", lastSeenAt: 5 },
-      connection: { status: "disconnected" },
+      connection: { status: "connected", rttMs: null },
       summary,
     } as never);
     await startRemoteHosts({ hostMode: false });
@@ -742,7 +742,10 @@ describe("startRemoteHosts", () => {
     expect(cameOn).toHaveBeenLastCalledWith(summary, null);
 
     m.client.sessionFor.mockReturnValueOnce(current);
-    expect(deps.observeHosts()[0]).toMatchObject({ summaryFromCurrentLink: true });
+    expect(deps.observeHosts()[0]).toMatchObject({
+      connection: { status: "connected" },
+      summaryFromCurrentLink: true,
+    });
     expect(m.client.sessionFor).toHaveBeenLastCalledWith("control-on");
 
     // A summary that came on no link says nothing either way.

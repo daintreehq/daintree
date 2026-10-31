@@ -2147,7 +2147,6 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       return Promise.resolve(host);
     }
     return new Promise((resolve) => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
       let off: (() => void) | null = null;
       let done = false;
       const finish = (observed: ObservedHost) => {
@@ -2171,7 +2170,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
           finish(now);
         }
       };
-      timer = setTimeout(end, FIRST_SAMPLE_MS);
+      const timer = setTimeout(end, FIRST_SAMPLE_MS);
       timer.unref?.();
       this.sampleWaits.add(end);
       try {

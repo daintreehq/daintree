@@ -525,6 +525,9 @@ describe("HostMetricsClient", () => {
     expect(bound).toBeLessThan(3_600_000);
     // The summary from before keeps the bound its own session gave it.
     expect(h.client.receiptOf(old)!.maxAgeMs).toBeGreaterThanOrEqual(3_600_000);
+    // And each is known by the session it came on (#15736).
+    expect(h.client.cameOn(fresh, after.client)).toBe(true);
+    expect(h.client.cameOn(old, after.client)).toBe(false);
     h.client.dispose();
   });
 
@@ -533,22 +536,28 @@ describe("HostMetricsClient", () => {
     const before = { pingSentAt: () => null } as unknown as LinkSession;
     const after = { pingSentAt: () => null } as unknown as LinkSession;
     h.client.record("studio-01", summary(1, 3), before);
+    const first = h.client.latest("studio-01")!;
+    h.client.record("studio-01", summary(2, 3), before);
     const old = h.client.latest("studio-01")!;
+    // Every summary one link brings is that link's.
+    expect(h.client.cameOn(first, before)).toBe(true);
     expect(h.client.cameOn(old, before)).toBe(true);
     // Reconnected, or with no link open at all, it is what an earlier link brought.
     expect(h.client.cameOn(old, after)).toBe(false);
     expect(h.client.cameOn(old, null)).toBe(false);
 
-    h.client.record("studio-01", summary(2, 1), after);
+    h.client.record("studio-01", summary(3, 1), after);
     const fresh = h.client.latest("studio-01")!;
     expect(h.client.cameOn(fresh, after)).toBe(true);
     expect(h.client.cameOn(old, after)).toBe(false);
-    expect(h.client.getSnapshots()).toEqual([{ hostId: "studio-01", history: [fresh, old] }]);
+    expect(h.client.getSnapshots()).toEqual([
+      { hostId: "studio-01", history: [fresh, old, first] },
+    ]);
 
     // One that came on no link, as this machine's own do, can't be told either way.
-    h.client.record("studio-01", summary(3));
+    h.client.record("studio-01", summary(4));
     expect(h.client.cameOn(h.client.latest("studio-01")!, after)).toBeNull();
-    expect(h.client.cameOn(summary(4), after)).toBeNull();
+    expect(h.client.cameOn(summary(5), after)).toBeNull();
   });
 
   it("presents attention only for hosts the user opted in to", async () => {
