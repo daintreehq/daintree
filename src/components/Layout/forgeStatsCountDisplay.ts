@@ -71,3 +71,12 @@ export function formatExactCount(display: number | string | null): string {
   const approximate = /^(\d+)\+$/.exec(display);
   return approximate ? `${formatCountExact(Number(approximate[1]))}+` : display;
 }
+
+/** `formatExactCount` plus its noun, singular for exactly one: `1 commit`, `23,645 commits`. */
+export function formatExactCountNoun(
+  display: number | string | null,
+  singular: string,
+  plural = `${singular}s`
+): string {
+  return `${formatExactCount(display)} ${display === 1 ? singular : plural}`;
+}

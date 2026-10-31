@@ -37,6 +37,7 @@ import {
   formatExactCount,
   formatForgeBadgeCount,
   resolveForgeDisplayCount,
+  formatExactCountNoun,
 } from "./forgeStatsCountDisplay";
 import {
   formatRateLimitCountdown,
@@ -1046,14 +1047,14 @@ export const ForgeStatsToolbarButton = memo(
             ariaLabel={
               isTokenError
                 ? tokenMissingLabel("issues")
-                : `${formatExactCount(issueDisplayCount)} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}${issuesStatusSuffix}`
+                : `${formatExactCountNoun(issueDisplayCount, "open issue", "open issues")}${freshnessSuffix(freshnessLevel, lastUpdated, now)}${issuesStatusSuffix}`
             }
             tooltipContent={
               isTokenError
                 ? tokenMissingLabel("issues")
                 : freshnessLevel === "fresh"
                   ? `Browse ${providerName} issues${exactSuffix(issueDisplayCount, "open")}${issuesStatusSuffix}`
-                  : `${formatExactCount(issueDisplayCount)} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}${issuesStatusSuffix}`
+                  : `${formatExactCountNoun(issueDisplayCount, "open issue", "open issues")}${freshnessSuffix(freshnessLevel, lastUpdated, now)}${issuesStatusSuffix}`
             }
             onContextMenuOpenChange={handleStatsMenuOpenChange}
             contextMenuContent={
@@ -1149,14 +1150,14 @@ export const ForgeStatsToolbarButton = memo(
             ariaLabel={
               isTokenError
                 ? tokenMissingLabel("pull requests")
-                : `${formatExactCount(prDisplayCount)} open pull requests${freshnessSuffix(freshnessLevel, lastUpdated, now)}${prsStatusSuffix}`
+                : `${formatExactCountNoun(prDisplayCount, "open pull request", "open pull requests")}${freshnessSuffix(freshnessLevel, lastUpdated, now)}${prsStatusSuffix}`
             }
             tooltipContent={
               isTokenError
                 ? tokenMissingLabel("pull requests")
                 : freshnessLevel === "fresh"
                   ? `Browse ${providerName} pull requests${exactSuffix(prDisplayCount, "open")}${prsStatusSuffix}`
-                  : `${formatExactCount(prDisplayCount)} open PRs${freshnessSuffix(freshnessLevel, lastUpdated, now)}${prsStatusSuffix}`
+                  : `${formatExactCountNoun(prDisplayCount, "open PR", "open PRs")}${freshnessSuffix(freshnessLevel, lastUpdated, now)}${prsStatusSuffix}`
             }
             onContextMenuOpenChange={handleStatsMenuOpenChange}
             contextMenuContent={
@@ -1241,11 +1242,11 @@ export const ForgeStatsToolbarButton = memo(
           count={commitCount}
           animKey={commitAnimKey}
           testId="forge-stat-pill-commits"
-          ariaLabel={`${formatExactCount(commitCount)} commits${freshnessSuffix(commitFreshnessLevel, lastUpdated, now)}`}
+          ariaLabel={`${formatExactCountNoun(commitCount, "commit")}${freshnessSuffix(commitFreshnessLevel, lastUpdated, now)}`}
           tooltipContent={
             commitFreshnessLevel === "fresh"
               ? `Browse git commits${exactSuffix(commitCount)}`
-              : `${formatExactCount(commitCount)} commits${freshnessSuffix(commitFreshnessLevel, lastUpdated, now)}`
+              : `${formatExactCountNoun(commitCount, "commit")}${freshnessSuffix(commitFreshnessLevel, lastUpdated, now)}`
           }
           onContextMenuOpenChange={handleStatsMenuOpenChange}
           contextMenuContent={
