@@ -1,13 +1,13 @@
 import { useMemo, useEffect, useRef, useState, useCallback } from "react";
 import { isPointerClaimed } from "@/lib/pointerClaim";
 import { FolderOpen, FolderPlus, Settings } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
 import { FolderDown } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { describeKeyCap } from "@/lib/kbdShortcut";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
-import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { KbdChord } from "@/components/ui/Kbd";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { formatFleetLiveness } from "@/lib/projectRowStatus";
@@ -23,13 +23,15 @@ import type {
   SearchableScratch,
 } from "@/hooks/useProjectSwitcherPalette";
 import { usePilotStore } from "@/store/pilotStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
+import { PROJECT_SWITCHER_SCRATCH_BAND_KEY } from "@/hooks/useProjectSwitcherPalette";
 import { pluralize } from "@/lib/pluralize";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { keyBelongsToField } from "@/hooks/useListboxCursor";
 import { HostNameText } from "@/components/Hosts/HostNameText";
-import { CommandTile, StatusSlotSpacer } from "./paletteTiles";
 import {
+  OTHER_HOSTS_BAND_OPTION_ID,
   OTHER_HOSTS_LIST_ID,
   OtherHostsSection,
   useCurrentHostName,
@@ -45,8 +47,24 @@ import {
   getProjectSwitcherEnterHint,
   modEnterOpensWindow,
 } from "./ProjectSwitcherRows";
-import { ProjectListContent } from "./ProjectSwitcherBands";
-import { ScratchSection } from "./ProjectSwitcherScratchSection";
+import {
+  bandOptionId,
+  deriveBrowseSections,
+  isBandHeaderStop,
+  ProjectListContent,
+} from "./ProjectSwitcherBands";
+import {
+  isScratchBandCollapsed,
+  SCRATCH_CREATE_OPTION_ID,
+  SCRATCH_LIST_ID,
+  ScratchSection,
+  scratchOptionId,
+} from "./ProjectSwitcherScratchSection";
+import {
+  liftScratches,
+  scratchLiftPlace,
+  type ScratchLiftPlace,
+} from "@/hooks/projectSwitcher/scratchLift";
 import {
   ProjectSwitcherConfirmDialogs,
   type ProjectSwitcherConfirmState,
@@ -74,6 +92,8 @@ export interface ProjectSwitcherPaletteProps extends ProjectSwitcherConfirmState
    */
   browseBands?: ProjectSwitcherBrowseBand[];
   selectedIndex: number;
+  /** See `UseProjectSwitcherPaletteReturn.cycleRequest`. */
+  cycleRequest?: number;
   onQueryChange: (query: string) => void;
   onSelectPrevious: () => void;
   onSelectNext: () => void;
@@ -178,11 +198,21 @@ function useWaitAgeTick(active: boolean): void {
 function ProjectSwitcherFooter({
   selectedRow,
   hostOption,
+  hintOverride,
+  inBrowse = false,
   canOpenWindow,
   onOpenPilot,
 }: {
+  /**
+   * Browse, where the list has bands: the footer teaches the band keys, which
+   * nothing else on screen would. A search has no bands, so it keeps the
+   * right-click hint instead.
+   */
+  inBrowse?: boolean;
   /** The other-hosts row under the cursor; it takes the hint over `selectedRow`. */
   hostOption?: OtherHostOption;
+  /** What Enter does on a stop that is not a workspace: a band header, the create row. */
+  hintOverride?: { keys: string; label: string };
   /**
    * Undefined when nothing is highlighted — an empty list, or every band folded
    * (#11943). Enter no-ops there, so naming it would be the footer promising an
@@ -200,9 +230,11 @@ function ProjectSwitcherFooter({
 
   const hasSelection = selectedRow !== undefined;
   const isScratchSelected = selectedRow?.kind === "scratch";
-  const hint: ReturnType<typeof getOtherHostEnterHint> = hostOption
-    ? getOtherHostEnterHint(hostOption, modifiers.meta)
-    : getProjectSwitcherEnterHint(selectedRow, modifiers.meta, canOpenWindow);
+  const hint: ReturnType<typeof getOtherHostEnterHint> = hintOverride
+    ? hintOverride
+    : hostOption
+      ? getOtherHostEnterHint(hostOption, modifiers.meta)
+      : getProjectSwitcherEnterHint(selectedRow, modifiers.meta, canOpenWindow);
 
   return (
     // Container-queried rather than fixed: the same footer serves the anchored
@@ -239,6 +271,22 @@ function ProjectSwitcherFooter({
         <span className="shrink-0" />
       )}
       <div className="flex shrink-0 items-center gap-3">
+        {inBrowse && (
+          <span
+            className="hidden shrink-0 items-center @min-[400px]/switcher-footer:inline-flex"
+            data-testid="project-switcher-band-keys-hint"
+          >
+            <span className="sr-only">
+              {isMac() ? "Option" : "Alt"} plus up or down arrow to jump between sections
+            </span>
+            <kbd aria-hidden="true" className={KBD_CLASS}>
+              {isMac() ? "⌥↑↓" : "Alt ↑↓"}
+            </kbd>
+            <span aria-hidden="true" className="ml-1.5">
+              Sections
+            </span>
+          </span>
+        )}
         {/*
           The switcher answers "which project", so the fleet-wide view belongs
           beside it rather than inside its list: adding a row would put a
@@ -255,7 +303,7 @@ function ProjectSwitcherFooter({
           {pilotShortcut && <KbdChord shortcut={pilotShortcut} />}
           <span className={pilotShortcut ? "ml-1.5" : undefined}>All agents</span>
         </button>
-        {hasSelection && !isScratchSelected && (
+        {!inBrowse && hasSelection && !isScratchSelected && (
           <span className="text-text-secondary shrink-0 @max-[520px]/switcher-footer:hidden">
             Right-click for more
           </span>
@@ -266,68 +314,110 @@ function ProjectSwitcherFooter({
 }
 
 /**
- * The plain commands under the divider — Project Settings, Open Project, Clone,
- * Create Folder. Full-bleed on purpose: they never take the roving cursor, so
- * they must not wear the ranked rows' card shape, which is what marks the
- * arrow-key domain (`PALETTE_ROW_CLASS`). Losing the inset means `px-3` is now
- * the row's own edge, landing its content on the header's and footer's column
- * instead of an inset nothing else in the palette shares.
+ * The palette-level commands — Open project, Clone, Create folder, Project
+ * settings — as one compact bar under the list rather than a stack of 48px
+ * rows. They act on the project list, not on a workspace in it, so they never
+ * take the roving cursor; they are reached by Tab, and the bar gives the list
+ * back the ~100px the stack used to hold in every window.
  *
- * The focus ring is inset for the same reason. The palette clips to
- * `overflow-hidden`, so a ring drawn outside a full-width row loses its left
- * and right sides at the dialog edge; `-outline-offset-2` keeps all four.
- * `palette-command-row` is not styling — like `palette-row` next to it, it is
- * the handle the `forced-colors: active` block in `index.css` needs, where a
- * global `outline-offset: 2px !important` would otherwise push the ring back
- * out past that same edge.
+ * Ghost buttons on the shared Button primitive, so their hover, focus ring and
+ * press are the app's own. Settings is the gear alone: it is the house glyph
+ * for project settings, and a fourth label would not fit the anchored tier.
  */
-/**
- * A palette-level command: the actions under the divider, which act on the
- * project list rather than on a workspace in it.
- *
- * Full-bleed rather than a card, because the cards above it are the arrow-key
- * domain and these rows are reached by Tab. That distinction is carried by the
- * focus ring, not by the shape — the shape only says which half of the palette
- * a row belongs to.
- */
-function ProjectCommandRow({
-  icon,
-  tone,
-  label,
-  onClick,
-  testId,
+function ProjectCommandBar({
+  onOpenProjectSettings,
+  onAddProject,
+  onCloneRepo,
+  onCreateFolder,
 }: {
-  icon: LucideIcon;
-  tone: "manage" | "create";
-  label: string;
-  onClick: () => void;
-  testId?: string;
+  onOpenProjectSettings?: () => void;
+  onAddProject?: () => void;
+  onCloneRepo?: () => void;
+  onCreateFolder?: () => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={PROJECT_ACTION_ROW_CLASS}
-      data-testid={testId}
-    >
-      <StatusSlotSpacer />
-      <CommandTile icon={icon} tone={tone} />
-      <span className="font-medium text-sm leading-tight">{label}</span>
-    </button>
+    <div className="flex items-center gap-1 px-2 py-1.5" data-testid="project-command-bar">
+      {onAddProject && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="px-2"
+          onClick={onAddProject}
+          data-testid="project-add-button"
+        >
+          <FolderOpen aria-hidden="true" />
+          Open project…
+        </Button>
+      )}
+      {onCloneRepo && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="px-2"
+          onClick={onCloneRepo}
+          data-testid="project-clone-button"
+        >
+          <FolderDown aria-hidden="true" />
+          Clone repository…
+        </Button>
+      )}
+      {onCreateFolder && (
+        <Button variant="ghost" size="sm" className="px-2" onClick={onCreateFolder}>
+          <FolderPlus aria-hidden="true" />
+          New folder…
+        </Button>
+      )}
+      {onOpenProjectSettings && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="ml-auto"
+              aria-label="Project settings…"
+              onClick={onOpenProjectSettings}
+              data-testid="project-settings-button"
+            >
+              <Settings aria-hidden="true" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Project settings…</TooltipContent>
+        </Tooltip>
+      )}
+    </div>
   );
 }
 
-const PROJECT_ACTION_ROW_CLASS = cn(
-  "palette-command-row w-full flex items-center gap-2 px-3 py-2 text-left transition-colors",
-  // Horizontal only. The rows above reserve a full border for their selected
-  // state, and matching it here keeps the two families' content boxes on the
-  // same pixel — but nothing ever draws a border on a command row, so the
-  // vertical halves were 2px of pure height, pushing the block off the 48px
-  // its tile and `py-2` add up to.
-  "border-x border-transparent",
-  "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary",
-  PALETTE_ROW_FOCUS_CLASS
-);
+/**
+ * One stop of the palette's single cursor. Every row the palette draws that
+ * Enter can act on is one of these, in the order the DOM draws them: the
+ * project rows and folded band headers, then the scratches (or Scratch's
+ * folded header), then the other hosts' rows. The arrow keys walk exactly this
+ * list, so nothing on screen is out of the keyboard's reach and nothing the
+ * keyboard reaches is off screen (#11071).
+ *
+ * `section` is the band a stop belongs to, which is what ⌥↑/⌥↓ jump between.
+ */
+type CursorStop =
+  | { key: string; kind: "row"; row: ProjectSwitcherRow; section: string }
+  | { key: string; kind: "band"; bandKey: string; section: string }
+  | { key: string; kind: "scratch"; scratch: SearchableScratch; section: string }
+  | { key: string; kind: "scratch-create"; section: string }
+  | { key: string; kind: "host"; option: OtherHostOption; section: string };
+
+/** The Other hosts band's key in the persisted fold map, like Scratch's. */
+const OTHER_HOSTS_BAND_KEY = "other-hosts";
+
+/** Where the cursor sits when it is not on a project row: a stop key, held for one query. */
+interface CursorClaim {
+  query: string;
+  key: string;
+  /** Placed for an empty result list rather than moved to; local results take it back. */
+  auto?: boolean;
+}
+
+/** A claim the next render resolves to the first stop of a band just unfolded. */
+const FIRST_OF_PREFIX = "first-of:";
 
 interface ProjectPaletteInnerProps {
   inputRef: React.RefObject<HTMLInputElement | null>;
@@ -336,6 +426,7 @@ interface ProjectPaletteInnerProps {
   results: ProjectSwitcherRow[];
   browseBands?: ProjectSwitcherBrowseBand[];
   selectedIndex: number;
+  cycleRequest?: number;
   mode?: ProjectSwitcherMode;
   onQueryChange: (query: string) => void;
   onSelect: (row: ProjectSwitcherRow, source?: ProjectSwitchSelectSource) => void;
@@ -386,6 +477,7 @@ function ProjectPaletteInner({
   results,
   browseBands,
   selectedIndex,
+  cycleRequest = 0,
   mode,
   onQueryChange,
   onSelect,
@@ -421,70 +513,298 @@ function ProjectPaletteInner({
   const projectSwitcherShortcut = useEffectiveCombo("project.switcherPalette");
   const fleetSummary = fleetLiveness ? formatFleetLiveness(fleetLiveness) : null;
 
-  // Other hosts' rows are the tail of the arrow-key order: ArrowDown off the
-  // last result enters them, and moving past either end wraps back into
-  // `results`, the same wrap the hook applies inside them. The hook owns the
-  // selection within `results`; this cursor exists only while it sits in the
-  // band, and only for the query it was set under. It holds a row's key, never
-  // its position: hosts connect and drop while the palette is open, and a
-  // position would hand Enter whichever row slid into it (#13290).
   const {
     groups: hostGroups,
     options: hostOptions,
     remoteNames,
   } = useOtherHostProjectOptions(query);
-  const [hostCursorState, setHostCursorState] = useState<{
-    query: string;
-    key: string;
-    /** Placed for an empty result list rather than moved to; local results take it back. */
-    auto?: boolean;
-  } | null>(null);
-  const claimedHostIndex =
-    hostCursorState !== null &&
-    hostCursorState.query === query &&
-    !(hostCursorState.auto && results.length > 0)
-      ? hostOptions.findIndex((option) => option.key === hostCursorState.key)
-      : -1;
-  // Nothing here matched: the first project another host offers is what Enter
+
+  // The RANKED list owns the scratches, and it trails the box by a commit.
+  // Hiding the pinned section on the live query instead would blank them for
+  // that frame — and for a user whose only workspaces are scratches, that frame
+  // reads as "no matches".
+  const isRankedSearch = rankedSearch ?? query.trim().length > 0;
+  const hasProjectPresentation =
+    (browseBands?.length ?? 0) > 0 || results.some((row) => row.kind === "project");
+  const hasProjectCommands = Boolean(
+    onOpenProjectSettings || onAddProject || onCloneRepo || onCreateFolder
+  );
+  const scratchCount = scratchResults?.length ?? 0;
+  const scratchesStandAlone = !isRankedSearch && !hasProjectPresentation && scratchCount > 0;
+  const showScratchSection = Boolean(onCreateScratch || scratchCount > 0);
+  const scratchIsOnlyAction =
+    !isRankedSearch && !hasProjectPresentation && scratchCount === 0 && !onAddProject;
+  const storedScratchCollapsed = usePreferencesStore(
+    (state) => state.projectSwitcherCollapsedBands[PROJECT_SWITCHER_SCRATCH_BAND_KEY]
+  );
+  const setBandCollapsed = usePreferencesStore((state) => state.setProjectSwitcherBandCollapsed);
+  const scratchCollapsed = isScratchBandCollapsed(
+    storedScratchCollapsed,
+    scratchCount,
+    scratchIsOnlyAction
+  );
+  const scratchInBrowse = showScratchSection && !isRankedSearch;
+  const [scratchCreating, setScratchCreating] = useState(false);
+  const collapsedBands = usePreferencesStore((state) => state.projectSwitcherCollapsedBands);
+  const hostsCollapsed = !isRankedSearch && collapsedBands[OTHER_HOSTS_BAND_KEY] === true;
+
+  // Scratches doing work are drawn in the band their work puts them in. Where
+  // each one goes is decided the first time the palette sees it and held for
+  // the open session, so a scratch that starts running doesn't jump under the
+  // pointer. The palette's content unmounts on close, which is what resets it.
+  //
+  // A lift is held as soon as it is seen. "Stays in Scratch" is held only once
+  // the palette has been open long enough for the stats push that follows an
+  // open to land — held on the first frame, a scratch whose agents had not
+  // reported yet would be pinned below the catalogue for the whole session.
+  const [liftHeld, setLiftHeld] = useState<Record<string, ScratchLiftPlace | null>>({});
+  const [liftSettled, setLiftSettled] = useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setLiftSettled(true), UI_DOHERTY_THRESHOLD);
+    return () => window.clearTimeout(timer);
+  }, []);
+  const liftFor = (scratch: SearchableScratch) =>
+    scratch.id in liftHeld ? liftHeld[scratch.id]! : scratchLiftPlace(scratch);
+  const unheldKey = (scratchResults ?? [])
+    .filter((scratch) => !(scratch.id in liftHeld))
+    .map((scratch) => {
+      const place = scratchLiftPlace(scratch);
+      return `${scratch.id}=${place ? `${place.band}:${place.tier}` : ""}`;
+    })
+    .filter((entry) => liftSettled || !entry.endsWith("="))
+    .join(" ");
+  useEffect(() => {
+    if (unheldKey === "") return;
+    setLiftHeld((prev) => {
+      const next = { ...prev };
+      for (const entry of unheldKey.split(" ")) {
+        const [id, place] = entry.split("=") as [string, string];
+        if (id in next) continue;
+        const [band, tier] = place.split(":");
+        next[id] = band ? { band: band as ScratchLiftPlace["band"], tier: Number(tier) } : null;
+      }
+      return next;
+    });
+  }, [unheldKey]);
+  const lifted = !isRankedSearch
+    ? liftScratches(results, browseBands ?? [], scratchResults ?? [], liftFor, collapsedBands)
+    : null;
+  const viewResults = lifted ? lifted.results : results;
+  const viewBands = lifted && lifted.bands.length > 0 ? lifted.bands : browseBands;
+  const pinnedScratches = lifted
+    ? (scratchResults ?? []).filter((scratch) => !lifted.liftedIds.has(scratch.id))
+    : (scratchResults ?? []);
+  const liftedScratchCount = lifted ? lifted.liftedIds.size : 0;
+
+  // Every stop, in drawn order, read off the same band layout the list renders
+  // (`deriveBrowseSections`), so the two cannot disagree about what is on
+  // screen — not even for the commit a search trails its query by (#11071).
+  const sections = deriveBrowseSections(viewResults, viewBands, isRankedSearch);
+  const stops: CursorStop[] = [];
+  const rowStop = (row: ProjectSwitcherRow, section: string): CursorStop => ({
+    key: `row:${row.id}`,
+    kind: "row",
+    row,
+    section,
+  });
+  if (sections) {
+    for (const section of sections) {
+      if (isBandHeaderStop(section)) {
+        stops.push({
+          key: `band:${section.key}`,
+          kind: "band",
+          bandKey: section.key,
+          section: section.key,
+        });
+      }
+      for (const row of section.items) stops.push(rowStop(row, section.key));
+    }
+  } else {
+    for (const row of viewResults) stops.push(rowStop(row, "results"));
+  }
+  if (scratchInBrowse) {
+    if (scratchCollapsed) {
+      stops.push({
+        key: `band:${PROJECT_SWITCHER_SCRATCH_BAND_KEY}`,
+        kind: "band",
+        bandKey: PROJECT_SWITCHER_SCRATCH_BAND_KEY,
+        section: PROJECT_SWITCHER_SCRATCH_BAND_KEY,
+      });
+    } else {
+      for (const scratch of pinnedScratches) {
+        stops.push({
+          key: `scratch:${scratch.id}`,
+          kind: "scratch",
+          scratch,
+          section: PROJECT_SWITCHER_SCRATCH_BAND_KEY,
+        });
+      }
+      // Not while its name field is open: the row it addresses is gone, and an
+      // active descendant must name something on screen.
+      if (onCreateScratch && !scratchCreating) {
+        stops.push({
+          key: "scratch-create",
+          kind: "scratch-create",
+          section: PROJECT_SWITCHER_SCRATCH_BAND_KEY,
+        });
+      }
+    }
+  }
+  if (hostsCollapsed && hostGroups.length > 0) {
+    stops.push({
+      key: `band:${OTHER_HOSTS_BAND_KEY}`,
+      kind: "band",
+      bandKey: OTHER_HOSTS_BAND_KEY,
+      section: OTHER_HOSTS_BAND_KEY,
+    });
+  } else {
+    for (const group of hostGroups) {
+      for (const option of group.options) {
+        stops.push({
+          key: `host:${option.key}`,
+          kind: "host",
+          option,
+          section: `host:${group.hostId}`,
+        });
+      }
+    }
+  }
+
+  // The hook owns the selection among `results`; anything else the cursor sits
+  // on is a claim held here, by key rather than position — hosts connect and
+  // drop while the palette is open, and a position would hand Enter whichever
+  // row slid into it (#13290). A claim belongs to the query it was made under.
+  const [claim, setClaim] = useState<CursorClaim | null>(null);
+  // An unfolded band's first row; an empty band (a group whose members are
+  // all above) has none, so its own header, which keeps the cursor in place.
+  const firstStopOf = (section: string) => {
+    // Other hosts is one band over several host sections.
+    const inBand = (stop: CursorStop) =>
+      section === OTHER_HOSTS_BAND_KEY ? stop.kind === "host" : stop.section === section;
+    const row = stops.findIndex((stop) => inBand(stop) && stop.kind !== "band");
+    if (row >= 0) return row;
+    return stops.findIndex((stop) => stop.section === section);
+  };
+  const claimLive = claim !== null && claim.query === query && !(claim.auto && results.length > 0);
+  const claimedIndex =
+    claim === null || !claimLive
+      ? -1
+      : claim.key.startsWith(FIRST_OF_PREFIX)
+        ? firstStopOf(claim.key.slice(FIRST_OF_PREFIX.length))
+        : stops.findIndex((stop) => stop.key === claim.key);
+  // Nothing local matched: the first project another host offers is what Enter
   // opens, the way the first result is when there are results. A search that
   // named only a host lands on that host's own row instead.
-  const firstHostProject = hostOptions.findIndex(
-    (option) => option.kind === "project" || option.kind === "worktree"
+  const firstHostProject = stops.findIndex(
+    (stop) =>
+      stop.kind === "host" && (stop.option.kind === "project" || stop.option.kind === "worktree")
   );
-  const defaultHostIndex =
-    results.length > 0
+  const firstHost = stops.findIndex((stop) => stop.kind === "host");
+  // A list with nothing local to land on: a scratch first, then another host.
+  // A list whose every band is folded keeps no default — that is a choice the
+  // user made, and Enter on a header they didn't pick would undo it.
+  const firstScratch = stops.findIndex(
+    (stop) => stop.kind === "scratch" || stop.kind === "scratch-create"
+  );
+  const defaultIndex =
+    viewResults.length > 0 || stops.some((stop) => stop.kind === "band")
       ? -1
-      : firstHostProject >= 0
-        ? firstHostProject
-        : (rankedSearch ?? query.trim().length > 0) && hostOptions.length > 0
-          ? 0
-          : -1;
-  const hostIndex = claimedHostIndex >= 0 ? claimedHostIndex : defaultHostIndex;
-  const hostCursor = hostIndex >= 0 ? hostIndex : null;
-  const activeHostOption: OtherHostOption | undefined =
-    hostCursor === null ? undefined : hostOptions[hostCursor];
+      : firstScratch >= 0
+        ? firstScratch
+        : firstHostProject >= 0
+          ? firstHostProject
+          : isRankedSearch && firstHost >= 0
+            ? firstHost
+            : -1;
+  const hookRow = results[selectedIndex];
+  const hookIndex = hookRow
+    ? stops.findIndex((stop) => stop.kind === "row" && stop.row.id === hookRow.id)
+    : -1;
+  const cursorIndex =
+    claimedIndex >= 0 ? claimedIndex : defaultIndex >= 0 ? defaultIndex : hookIndex;
+  const cursor: CursorStop | undefined = cursorIndex >= 0 ? stops[cursorIndex] : undefined;
+
+  // Opening lands on the first workspace that isn't where you are — the hook
+  // picks among projects, so when a lifted scratch comes before its pick (a
+  // waiting scratch above everything else), the cursor starts there instead.
+  // Once per open, and only in browse.
+  const [initialPicked, setInitialPicked] = useState(false);
+  const firstElsewhere = stops.findIndex((stop) =>
+    stop.kind === "row"
+      ? !stop.row.isActive && !(stop.row.kind === "project" && stop.row.isMissing)
+      : stop.kind === "scratch"
+        ? !stop.scratch.isActive
+        : stop.kind === "host"
+          ? stop.option.kind === "project" || stop.option.kind === "worktree"
+          : false
+  );
+  const elsewhereStop = firstElsewhere >= 0 ? stops[firstElsewhere] : undefined;
+  const hookOwnsElsewhere = elsewhereStop?.kind === "row" && results.includes(elsewhereStop.row);
+  const initialKey =
+    !initialPicked &&
+    claim === null &&
+    query === "" &&
+    !isRankedSearch &&
+    elsewhereStop !== undefined &&
+    !hookOwnsElsewhere &&
+    (hookIndex < 0 || firstElsewhere < hookIndex)
+      ? elsewhereStop.key
+      : null;
+  // Done once it has picked, once the lift has settled, or as soon as the user
+  // moves the cursor themselves — a late pick must never take it back.
+  useEffect(() => {
+    if (initialKey !== null) {
+      setClaim({ query: "", key: initialKey });
+      setInitialPicked(true);
+    } else if (liftSettled) {
+      setInitialPicked(true);
+    }
+  }, [initialKey, liftSettled]);
+
+  // An unfold's "first row" is resolved once and then held by key, so a row
+  // that arrives above it afterwards can't take Enter from the one landed on.
+  const resolvedFirstKey =
+    claim !== null && claim.key.startsWith(FIRST_OF_PREFIX) && claimedIndex >= 0
+      ? stops[claimedIndex]!.key
+      : null;
+  useEffect(() => {
+    if (resolvedFirstKey === null) return;
+    setClaim((prev) =>
+      prev !== null && prev.key.startsWith(FIRST_OF_PREFIX)
+        ? { query: prev.query, key: resolvedFirstKey }
+        : prev
+    );
+  }, [resolvedFirstKey]);
+
+  // The palette's shortcut pressed again steps the cursor one stop, the way ↓
+  // does — whatever kind of stop it is on and whatever kind comes next.
+  const [cycleSeen, setCycleSeen] = useState(cycleRequest);
+  const cyclePending = cycleRequest !== cycleSeen;
+  const cycleNextKey =
+    cyclePending && stops.length > 0
+      ? stops[cursorIndex < 0 ? 0 : (cursorIndex + 1) % stops.length]!.key
+      : null;
+  useEffect(() => {
+    if (!cyclePending) return;
+    if (cycleNextKey !== null) setClaim({ query, key: cycleNextKey });
+    setCycleSeen(cycleRequest);
+  }, [cyclePending, cycleNextKey, cycleRequest, query]);
+
   // The automatic pick is held by key like a chosen one, so a host answering
   // later, with rows drawn above it, can't move what Enter opens.
-  const defaultHostKey =
-    claimedHostIndex < 0 && defaultHostIndex >= 0 ? hostOptions[defaultHostIndex]!.key : null;
-  // A claim belongs to the query it was made under; left in place it would
-  // come back when the query is cleared, pointing Enter at a row nobody chose.
+  const defaultKey = claimedIndex < 0 && defaultIndex >= 0 ? stops[defaultIndex]!.key : null;
   useEffect(() => {
-    setHostCursorState((prev) => (prev !== null && prev.query !== query ? null : prev));
+    setClaim((prev) => (prev !== null && prev.query !== query ? null : prev));
   }, [query]);
   useEffect(() => {
-    if (defaultHostKey !== null) setHostCursorState({ query, key: defaultHostKey, auto: true });
-  }, [defaultHostKey, query]);
-  const setHostCursor = (index: number | null) => {
-    const option = index === null ? undefined : hostOptions[index];
-    setHostCursorState(option ? { query, key: option.key } : null);
-  };
-  const resultsCursor = hostCursor === null ? selectedIndex : -1;
+    if (defaultKey !== null) setClaim({ query, key: defaultKey, auto: true });
+  }, [defaultKey, query]);
 
   // The hook only steps relative to its own selection (its updater composes
-  // batched steps), so returning from the band is a walk the short way round.
+  // batched steps), so a surface without `onHoverRow` walks the short way round.
   const moveResultsSelectionTo = (target: number) => {
     const count = results.length;
+    if (count === 0) return;
     const from = selectedIndex >= 0 && selectedIndex < count ? selectedIndex : 0;
     const forward = (target - from + count) % count;
     const backward = (from - target + count) % count;
@@ -492,7 +812,111 @@ function ProjectPaletteInner({
     else for (let i = 0; i < backward; i += 1) onSelectPrevious();
   };
 
-  const activeHostOptionId = activeHostOption ? otherHostOptionId(activeHostOption) : null;
+  const moveTo = (stop: CursorStop | undefined) => {
+    if (!stop) return;
+    setInitialPicked(true);
+    // The hook selects among its own rows; anything else — a header, a
+    // scratch, a host, a scratch drawn in a project band — is a claim here.
+    if (stop.kind !== "row" || !results.includes(stop.row)) {
+      setClaim({ query, key: stop.key });
+      return;
+    }
+    setClaim(null);
+    if (onHoverRow) onHoverRow(stop.row.id);
+    else moveResultsSelectionTo(results.indexOf(stop.row));
+  };
+
+  /** The first stop of the band after (or before) the cursor's, wrapping. */
+  const jumpBand = (direction: 1 | -1) => {
+    const count = stops.length;
+    if (count === 0) return;
+    if (cursorIndex < 0) {
+      moveTo(stops[0]);
+      return;
+    }
+    const section = (index: number) => stops[index]!.section;
+    if (direction === 1) {
+      let next = cursorIndex + 1;
+      while (next < count && section(next) === section(cursorIndex)) next += 1;
+      moveTo(stops[next < count ? next : 0]);
+      return;
+    }
+    let start = cursorIndex;
+    while (start > 0 && section(start - 1) === section(cursorIndex)) start -= 1;
+    if (start < cursorIndex) {
+      moveTo(stops[start]);
+      return;
+    }
+    let previous = start > 0 ? start - 1 : count - 1;
+    while (previous > 0 && section(previous - 1) === section(previous)) previous -= 1;
+    moveTo(stops[previous]);
+  };
+
+  // Bands only exist with an empty query, which is also when ←/→ have no caret
+  // to move — so the horizontal arrows fold and unfold exactly where folding
+  // means something, and never take a key away from text editing.
+  const canFold = !isRankedSearch && query === "";
+  const foldableSection = (stop: CursorStop | undefined): string | null => {
+    if (!stop) return null;
+    if (stop.kind === "scratch" || stop.kind === "scratch-create") {
+      return PROJECT_SWITCHER_SCRATCH_BAND_KEY;
+    }
+    if (stop.kind === "host") return OTHER_HOSTS_BAND_KEY;
+    if (stop.kind === "band" && !isFoldedBand(stop.bandKey)) return stop.bandKey;
+    if (stop.kind === "row" && viewBands?.some((band) => band.key === stop.section)) {
+      return stop.section;
+    }
+    return null;
+  };
+  const isFoldedBand = (bandKey: string) =>
+    bandKey === PROJECT_SWITCHER_SCRATCH_BAND_KEY
+      ? scratchCollapsed
+      : bandKey === OTHER_HOSTS_BAND_KEY
+        ? hostsCollapsed
+        : (viewBands?.find((band) => band.key === bandKey)?.collapsed ?? false);
+  const fold = (bandKey: string) => {
+    setBandCollapsed(bandKey, true);
+    setClaim({ query, key: `band:${bandKey}` });
+  };
+  // A pointer fold goes through here too, so folding the band the cursor is in
+  // leaves the cursor on its header rather than dropping it back to the top.
+  const toggleBand = (bandKey: string, collapsed: boolean) => {
+    if (!collapsed) {
+      setBandCollapsed(bandKey, false);
+      if (cursor?.kind === "band" && cursor.bandKey === bandKey) unfold(bandKey);
+      return;
+    }
+    if (
+      cursor?.section === bandKey ||
+      (cursor?.kind === "host" && bandKey === OTHER_HOSTS_BAND_KEY)
+    ) {
+      fold(bandKey);
+    } else {
+      setBandCollapsed(bandKey, true);
+    }
+  };
+  const unfold = (bandKey: string) => {
+    setBandCollapsed(bandKey, false);
+    setClaim({ query, key: `${FIRST_OF_PREFIX}${bandKey}` });
+  };
+
+  const activeHostOption = cursor?.kind === "host" ? cursor.option : undefined;
+  const activeDescendant: string | undefined = !cursor
+    ? undefined
+    : cursor.kind === "row"
+      ? `project-option-${cursor.row.id}`
+      : cursor.kind === "band"
+        ? cursor.bandKey === OTHER_HOSTS_BAND_KEY
+          ? OTHER_HOSTS_BAND_OPTION_ID
+          : bandOptionId(cursor.bandKey)
+        : cursor.kind === "scratch"
+          ? scratchOptionId(cursor.scratch.id)
+          : cursor.kind === "scratch-create"
+            ? SCRATCH_CREATE_OPTION_ID
+            : otherHostOptionId(cursor.option);
+  const resultsCursor = cursor?.kind === "row" ? viewResults.indexOf(cursor.row) : -1;
+  const [createRequest, setCreateRequest] = useState(0);
+
   // Rows a host adds above the cursor push it down without changing its id, and
   // so do a listing host's header and a path line a query earns; the band's
   // shape is a reason to bring the cursor back into view too.
@@ -507,43 +931,20 @@ function ProjectPaletteInner({
     )
     .join("\n");
   useEffect(() => {
-    if (activeHostOptionId === null) return;
-    document.getElementById(activeHostOptionId)?.scrollIntoView?.({ block: "nearest" });
-  }, [activeHostOptionId, hostRowsShape]);
-
-  /**
-   * Puts the cursor on a position in the whole arrow-key order: `results`,
-   * then the other hosts' rows.
-   */
-  const moveCursorTo = (position: number) => {
-    if (position >= results.length) {
-      setHostCursor(position - results.length);
-      return;
-    }
-    setHostCursor(null);
-    if (onHoverRow) onHoverRow(results[position]!.id);
-    else moveResultsSelectionTo(position);
-  };
-
-  useEffect(() => {
-    if (hostCursor !== null) return;
-    if (listRef.current && selectedIndex >= 0 && selectedIndex < results.length) {
-      const selectedItem = listRef.current.querySelector(
-        `#project-option-${results[selectedIndex]!.id}`
-      );
-      // A row under the pointer was just claimed by it; revealing it would
-      // scroll a half-visible row out from under the pointer.
-      if (selectedItem && !isPointerClaimed(selectedItem)) {
-        selectedItem.scrollIntoView({ block: "nearest" });
-      }
-    }
-  }, [listRef, selectedIndex, results, hostCursor]);
+    if (activeDescendant === undefined) return;
+    const element = document.getElementById(activeDescendant);
+    // A row under the pointer was just claimed by it; revealing it would
+    // scroll a half-visible row out from under the pointer.
+    if (element && !isPointerClaimed(element)) element.scrollIntoView?.({ block: "nearest" });
+  }, [activeDescendant, hostRowsShape, results]);
 
   /** Rows that fit in the scroller, less one so a page keeps a row of context. */
   const pageStep = () => {
     const list = listRef.current;
     const scroller = list?.closest<HTMLElement>("[tabindex]") ?? list;
-    const row = list?.querySelector<HTMLElement>('[role="option"]');
+    // A row, not a band header: a folded first band would measure 24px and
+    // turn a page into half again as many rows as fit.
+    const row = list?.querySelector<HTMLElement>('[role="option"]:not([data-band-header])');
     if (!scroller || !row || row.offsetHeight === 0) return 5;
     return Math.max(1, Math.floor(scroller.clientHeight / row.offsetHeight) - 1);
   };
@@ -552,8 +953,8 @@ function ProjectPaletteInner({
    * Opens a row's context menu from the keyboard, anchored under its name. The
    * menu returns focus to the search box when it closes (see `ProjectListItem`).
    */
-  const openRowMenu = (rowId: string) => {
-    const row = document.getElementById(`project-option-${rowId}`);
+  const openMenuOn = (elementId: string) => {
+    const row = document.getElementById(elementId);
     if (!row) return;
     row.scrollIntoView({ block: "nearest" });
     const rect = row.getBoundingClientRect();
@@ -577,50 +978,55 @@ function ProjectPaletteInner({
       if (e.key === "Escape") e.stopPropagation();
       return;
     }
+    const count = stops.length;
     switch (e.key) {
       case "ArrowUp":
+      case "ArrowDown": {
+        if (count === 0) break;
         e.preventDefault();
         e.stopPropagation();
-        if (hostCursor !== null) {
-          if (hostCursor > 0) setHostCursor(hostCursor - 1);
-          else if (results.length > 0) {
-            setHostCursor(null);
-            moveResultsSelectionTo(results.length - 1);
-          } else setHostCursor(hostOptions.length - 1);
-        } else if (hostOptions.length > 0 && (results.length === 0 || selectedIndex <= 0)) {
-          setHostCursor(hostOptions.length - 1);
-        } else {
-          onSelectPrevious();
+        const direction = e.key === "ArrowDown" ? 1 : -1;
+        // ⌥↑/⌥↓ (Alt off macOS) move a band at a time — the quick-pick
+        // convention for jumping separators, and the difference between three
+        // presses and thirty in a long list.
+        if (e.altKey) {
+          jumpBand(direction);
+          break;
         }
+        const next =
+          cursorIndex < 0
+            ? direction === 1
+              ? 0
+              : count - 1
+            : (cursorIndex + direction + count) % count;
+        moveTo(stops[next]);
         break;
-      case "ArrowDown":
+      }
+      case "ArrowLeft": {
+        if (!canFold || e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) break;
+        const section = foldableSection(cursor);
+        if (section === null) break;
         e.preventDefault();
         e.stopPropagation();
-        if (hostCursor !== null) {
-          if (hostCursor < hostOptions.length - 1) setHostCursor(hostCursor + 1);
-          else if (results.length > 0) {
-            setHostCursor(null);
-            moveResultsSelectionTo(0);
-          } else setHostCursor(0);
-        } else if (
-          hostOptions.length > 0 &&
-          (results.length === 0 || selectedIndex >= results.length - 1)
-        ) {
-          setHostCursor(0);
-        } else {
-          onSelectNext();
-        }
+        fold(section);
         break;
-      // First and last, as in every other palette, counting the other hosts'
-      // rows as the tail of the list. Shift+Home selects the query instead, and
-      // an empty list leaves the keys to the caret.
+      }
+      case "ArrowRight": {
+        if (!canFold || e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) break;
+        if (cursor?.kind !== "band" || !isFoldedBand(cursor.bandKey)) break;
+        e.preventDefault();
+        e.stopPropagation();
+        unfold(cursor.bandKey);
+        break;
+      }
+      // First and last, as in every other palette, across every stop. Shift+Home
+      // selects the query instead, and an empty list leaves the keys to the caret.
       case "Home":
       case "End": {
-        const total = results.length + hostOptions.length;
-        if (keyBelongsToField(e) || total === 0) break;
+        if (keyBelongsToField(e) || count === 0) break;
         e.preventDefault();
         e.stopPropagation();
-        moveCursorTo(e.key === "Home" ? 0 : total - 1);
+        moveTo(stops[e.key === "Home" ? 0 : count - 1]);
         break;
       }
       // A page of rows rather than native scrolling, which would walk the
@@ -628,19 +1034,13 @@ function ProjectPaletteInner({
       // user can no longer see.
       case "PageUp":
       case "PageDown": {
-        const total = results.length + hostOptions.length;
-        if (total === 0) break;
+        if (count === 0) break;
         e.preventDefault();
         e.stopPropagation();
         const step = pageStep();
-        const from =
-          hostCursor !== null
-            ? results.length + hostCursor
-            : selectedIndex >= 0
-              ? selectedIndex
-              : 0;
-        moveCursorTo(
-          e.key === "PageDown" ? Math.min(total - 1, from + step) : Math.max(0, from - step)
+        const from = cursorIndex >= 0 ? cursorIndex : 0;
+        moveTo(
+          stops[e.key === "PageDown" ? Math.min(count - 1, from + step) : Math.max(0, from - step)]
         );
         break;
       }
@@ -650,22 +1050,38 @@ function ProjectPaletteInner({
       case "F10":
       case "ContextMenu": {
         if (e.key === "F10" && !e.shiftKey) break;
-        const target = hostCursor === null ? results[selectedIndex] : undefined;
-        if (target?.kind !== "project") break;
+        const target =
+          cursor?.kind === "row" && (cursor.row.kind === "project" || cursor.row.section)
+            ? `project-option-${cursor.row.id}`
+            : cursor?.kind === "scratch"
+              ? scratchOptionId(cursor.scratch.id)
+              : cursor?.kind === "band"
+                ? bandOptionId(cursor.bandKey)
+                : null;
+        if (target === null) break;
         e.preventDefault();
         e.stopPropagation();
-        openRowMenu(target.id);
+        openMenuOn(target);
         break;
       }
       case "Enter":
         e.preventDefault();
         e.stopPropagation();
-        if (activeHostOption) {
+        if (!cursor) break;
+        if (cursor.kind === "host") {
           // Same modifier as a click on the row: a new window on ⌘/Ctrl.
-          if (otherHostOptionCloses(activeHostOption)) onClose();
-          activateOtherHostOption(activeHostOption, isNewWindowClick(e));
-        } else if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
-          const selected = results[selectedIndex]!;
+          if (otherHostOptionCloses(cursor.option)) onClose();
+          activateOtherHostOption(cursor.option, isNewWindowClick(e));
+        } else if (cursor.kind === "band") {
+          // A folded header unfolds; an open empty one is only there to fold.
+          if (isFoldedBand(cursor.bandKey)) unfold(cursor.bandKey);
+          else fold(cursor.bandKey);
+        } else if (cursor.kind === "scratch-create") {
+          setCreateRequest((count) => count + 1);
+        } else if (cursor.kind === "scratch") {
+          onSelectScratch?.(cursor.scratch);
+        } else {
+          const selected = cursor.row;
           // Anything ⌘↵ can't open a window for falls through to the plain
           // switch rather than swallowing the keypress.
           if (
@@ -695,38 +1111,29 @@ function ProjectPaletteInner({
         // Projects only. Both paths confirm now, but the chord means "close
         // the project" — pointing it at a scratch row would overload one key
         // with a reversible close and an irreversible delete.
-        const target = hostCursor === null ? results[selectedIndex] : undefined;
-        if ((e.metaKey || e.ctrlKey) && onCloseProject && target?.kind === "project") {
+        if (
+          (e.metaKey || e.ctrlKey) &&
+          onCloseProject &&
+          cursor?.kind === "row" &&
+          cursor.row.kind === "project"
+        ) {
           e.preventDefault();
           e.stopPropagation();
-          onCloseProject(target.id);
+          onCloseProject(cursor.row.id);
         }
         break;
       }
     }
   };
 
-  const activeResult = hostCursor === null ? results[selectedIndex] : undefined;
-  const activeDescendant =
-    activeHostOptionId !== null
-      ? activeHostOptionId
-      : activeResult
-        ? `project-option-${activeResult.id}`
+  const footerRow: ProjectSwitcherRow | undefined =
+    cursor?.kind === "row"
+      ? cursor.row
+      : cursor?.kind === "scratch"
+        ? { kind: "scratch", ...cursor.scratch }
         : undefined;
-  // The RANKED list owns the scratches, and it trails the box by a commit.
-  // Hiding the pinned section on the live query instead would blank them for
-  // that frame — and for a user whose only workspaces are scratches, that frame
-  // reads as "no matches".
-  const isRankedSearch = rankedSearch ?? query.trim().length > 0;
-  const hasProjectPresentation =
-    (browseBands?.length ?? 0) > 0 || results.some((row) => row.kind === "project");
-  const hasProjectCommands = Boolean(
-    onOpenProjectSettings || onAddProject || onCloneRepo || onCreateFolder
-  );
-  const scratchesStandAlone =
-    !isRankedSearch && !hasProjectPresentation && (scratchResults?.length ?? 0) > 0;
 
-  useWaitAgeTick(results.length > 0 || (scratchResults?.length ?? 0) > 0);
+  useWaitAgeTick(results.length > 0 || scratchCount > 0);
 
   // "N results" once a search settles, the way `SearchablePalette` says it:
   // Doherty-gated so a fast typist hears one count, read when the timer fires
@@ -761,11 +1168,20 @@ function ProjectPaletteInner({
   useEffect(() => {
     if (!isRankedSearch || query.trim() === "") return;
     const timer = window.setTimeout(() => {
-      const count = resultCountRef.current;
-      if (count > 0) useAnnouncerStore.getState().announce(pluralize(count, "result"), "polite");
+      const settled = resultCountRef.current;
+      if (settled > 0)
+        useAnnouncerStore.getState().announce(pluralize(settled, "result"), "polite");
     }, UI_DOHERTY_THRESHOLD);
     return () => window.clearTimeout(timer);
   }, [query, isRankedSearch]);
+
+  // Groups, not options: a band holding only a host still giving its first
+  // list has no options, but it is still this popup's content.
+  const controls = [
+    "project-list",
+    ...(scratchInBrowse ? [SCRATCH_LIST_ID] : []),
+    ...(hostGroups.length > 0 ? [OTHER_HOSTS_LIST_ID] : []),
+  ].join(" ");
 
   return (
     <>
@@ -792,11 +1208,7 @@ function ProjectPaletteInner({
           aria-expanded={true}
           aria-haspopup="listbox"
           aria-label="Search workspaces"
-          aria-controls={
-            // Groups, not options: a band holding only a host still giving its
-            // first list has no options, but it is still this popup's content.
-            hostGroups.length > 0 ? `project-list ${OTHER_HOSTS_LIST_ID}` : "project-list"
-          }
+          aria-controls={controls}
           aria-activedescendant={activeDescendant}
         />
       </AppPaletteDialog.Header>
@@ -818,30 +1230,26 @@ function ProjectPaletteInner({
           !isRankedSearch && "min-h-0"
         )}
         /*
-         * No padding of its own — the bands carry all of it. Both halves matter.
-         *
-         * Horizontally, the band dividers are children of this scroller while
-         * the header and footer rules are not, so any inset here drew the
-         * palette's internal rules 4px shorter than its chrome rules. They are
-         * the same hairline doing the same job and have to be the same width.
-         *
-         * Vertically, this padding stacked on top of the first and last band's
-         * own, leaving the first band 4px lower than every band after it — the
-         * one rule-to-label gap in the palette that didn't match the rest.
-         *
-         * `space-y-0` for the same reason: the inherited 4px landed on one side
-         * of each divider only, so every rule sat off centre between the two
-         * bands it separates.
+         * No padding of its own — the bands carry all of it. Horizontally, the
+         * domain rules are children of this scroller while the header and
+         * footer rules are not, so any inset here drew them shorter than the
+         * chrome's. Vertically, it would stack on the first and last band's own.
          */
-        /*
-         * The shell's 60vh assumes a header, a body and a footer. This palette
-         * also stands up to four 48px command rows under the body, and at 60vh
-         * the ⌘⌥P modal ran past the bottom of a 1000px window, clipping
-         * "Create new folder…" and the footer with the Enter hint. The cap
-         * leaves room for that block below the modal's 15vh offset.
-         */
-        maxHeight={hasProjectCommands ? "max-h-[min(60vh,calc(85vh-20rem))]" : undefined}
+        maxHeight={
+          // Anchored, the palette hangs from the title bar with most of the
+          // window below it, so it sizes from the room Radix measures there
+          // less its own chrome. The modal sits 15vh down and keeps the shell's
+          // cap; it carries no commands.
+          mode === "dropdown"
+            ? "max-h-[min(72vh,calc(var(--radix-popover-content-available-height,85vh)-10rem))]"
+            : hasProjectCommands
+              ? "max-h-[min(60vh,calc(85vh-12rem))]"
+              : undefined
+        }
         scrollClassName="space-y-0"
+        // The short fade: at the full 32px a live row sliding under the edge
+        // read as disabled rather than as more list.
+        compactFade
         ariaLabel="Workspaces"
         activeDescendant={activeDescendant}
         onNavigationKeyDown={handleKeyDown}
@@ -851,8 +1259,10 @@ function ProjectPaletteInner({
         keepPointerFocusOnInput
       >
         <ProjectListContent
-          results={results}
-          browseBands={browseBands}
+          results={viewResults}
+          browseBands={viewBands}
+          isRankedSearch={isRankedSearch}
+          onToggleBand={toggleBand}
           selectedIndex={resultsCursor}
           query={query}
           onSelect={onSelect}
@@ -873,31 +1283,52 @@ function ProjectPaletteInner({
           onSelectNewWindow={onSelectNewWindow}
           onHoverProject={onHoverProject}
           onHoverProjectEnd={onHoverProjectEnd}
-          // A local row under the pointer takes the cursor back from the
-          // other-hosts band, or the highlight and Enter would stay remote.
+          // A local row under the pointer takes the cursor back from wherever
+          // a claim had put it, or the highlight and Enter would stay there.
+          // Through the cursor, so a scratch drawn in a project band — a row
+          // the hook doesn't select among — is claimed rather than handed to it.
           onHoverRow={
             onHoverRow
               ? (rowId) => {
-                  setHostCursor(null);
+                  const stop = stops.find(
+                    (candidate) => candidate.kind === "row" && candidate.row.id === rowId
+                  );
+                  if (stop) {
+                    moveTo(stop);
+                    return;
+                  }
+                  setClaim(null);
                   onHoverRow(rowId);
                 }
               : undefined
           }
+          onSaveScratchAsProject={onSaveAsProject}
+          onRequestDeleteScratch={onRequestDeleteScratch}
+          onRequestDeleteAllScratches={onRequestDeleteAllScratches}
+          onRenameScratch={onRenameScratch}
+          cursorBandKey={cursor?.kind === "band" ? cursor.bandKey : null}
+          onHoverBand={(bandKey) => setClaim({ query, key: `band:${bandKey}` })}
           onReturnFocus={() => inputRef.current?.focus()}
         />
-        {(onCreateScratch || (scratchResults && scratchResults.length > 0)) && (
+        {showScratchSection && (
           <>
             {/* Nothing above it to separate from once Scratch is the first content. */}
-            <AppPaletteDialog.Divider hidden={isRankedSearch || scratchesStandAlone} />
+            <AppPaletteDialog.Divider
+              hidden={isRankedSearch || (scratchesStandAlone && viewResults.length === 0)}
+            />
             <ScratchSection
-              scratches={scratchResults ?? []}
-              isSearching={isRankedSearch}
-              isOnlyAction={
-                !isRankedSearch &&
-                !hasProjectPresentation &&
-                (scratchResults?.length ?? 0) === 0 &&
-                !onAddProject
+              scratches={pinnedScratches}
+              collapsed={scratchCollapsed}
+              onCreatingChange={setScratchCreating}
+              liftedCount={liftedScratchCount}
+              cursorOnCreate={cursor?.kind === "scratch-create"}
+              onHoverCreate={() => setClaim({ query, key: "scratch-create" })}
+              createRequest={createRequest}
+              onToggleCollapsed={(collapsed) =>
+                toggleBand(PROJECT_SWITCHER_SCRATCH_BAND_KEY, collapsed)
               }
+              isSearching={isRankedSearch}
+              isOnlyAction={scratchIsOnlyAction}
               onCreate={onCreateScratch}
               onSelect={onSelectScratch}
               onRequestDelete={onRequestDeleteScratch}
@@ -905,6 +1336,14 @@ function ProjectPaletteInner({
               onRename={onRenameScratch}
               onSaveAsProject={onSaveAsProject}
               onReturnFocus={() => inputRef.current?.focus()}
+              cursorScratchId={cursor?.kind === "scratch" ? cursor.scratch.id : null}
+              cursorOnBand={
+                cursor?.kind === "band" && cursor.bandKey === PROJECT_SWITCHER_SCRATCH_BAND_KEY
+              }
+              onHoverScratch={(scratchId) => setClaim({ query, key: `scratch:${scratchId}` })}
+              onHoverBand={() =>
+                setClaim({ query, key: `band:${PROJECT_SWITCHER_SCRATCH_BAND_KEY}` })
+              }
             />
           </>
         )}
@@ -924,14 +1363,21 @@ function ProjectPaletteInner({
         <OtherHostsSection
           groups={hostGroups}
           query={query}
+          collapsed={hostsCollapsed}
+          // A search shows every match, so the band offers no fold there.
+          onToggleCollapsed={
+            isRankedSearch ? undefined : () => toggleBand(OTHER_HOSTS_BAND_KEY, !hostsCollapsed)
+          }
+          cursorOnBand={cursor?.kind === "band" && cursor.bandKey === OTHER_HOSTS_BAND_KEY}
+          onHoverBand={() => setClaim({ query, key: `band:${OTHER_HOSTS_BAND_KEY}` })}
           activeKey={activeHostOption?.key ?? null}
           onChosen={onClose}
           // Also turns an automatic pick under the pointer into a chosen one.
           onHoverKey={(key) =>
-            setHostCursorState((prev) =>
-              prev !== null && prev.key === key && prev.query === query && !prev.auto
+            setClaim((prev) =>
+              prev !== null && prev.key === `host:${key}` && prev.query === query && !prev.auto
                 ? prev
-                : { query, key }
+                : { query, key: `host:${key}` }
             )
           }
         />
@@ -940,49 +1386,27 @@ function ProjectPaletteInner({
       {hasProjectCommands && (
         <>
           <AppPaletteDialog.Divider />
-          <div>
-            {onOpenProjectSettings && (
-              <ProjectCommandRow
-                icon={Settings}
-                tone="manage"
-                label="Project settings…"
-                onClick={onOpenProjectSettings}
-              />
-            )}
-            {onAddProject && (
-              <ProjectCommandRow
-                icon={FolderOpen}
-                tone="create"
-                label="Open project…"
-                onClick={onAddProject}
-                testId="project-add-button"
-              />
-            )}
-            {onCloneRepo && (
-              <ProjectCommandRow
-                icon={FolderDown}
-                tone="create"
-                label="Clone repository…"
-                onClick={onCloneRepo}
-                testId="project-clone-button"
-              />
-            )}
-            {onCreateFolder && (
-              <ProjectCommandRow
-                icon={FolderPlus}
-                tone="create"
-                label="Create new folder…"
-                onClick={onCreateFolder}
-              />
-            )}
-          </div>
+          <ProjectCommandBar
+            onOpenProjectSettings={onOpenProjectSettings}
+            onAddProject={onAddProject}
+            onCloneRepo={onCloneRepo}
+            onCreateFolder={onCreateFolder}
+          />
         </>
       )}
 
       <AppPaletteDialog.Footer>
         <ProjectSwitcherFooter
-          selectedRow={activeResult}
+          selectedRow={footerRow}
           hostOption={activeHostOption}
+          inBrowse={!isRankedSearch && query === "" && stops.length > 1}
+          hintOverride={
+            cursor?.kind === "band"
+              ? { keys: "↵", label: isFoldedBand(cursor.bandKey) ? "to expand" : "to collapse" }
+              : cursor?.kind === "scratch-create"
+                ? { keys: "↵", label: "to create" }
+                : undefined
+          }
           canOpenWindow={onSelectNewWindow !== undefined}
           onOpenPilot={() => {
             onClose();
@@ -1040,6 +1464,7 @@ function ModalContent({
         results={innerProps.results}
         browseBands={innerProps.browseBands}
         selectedIndex={innerProps.selectedIndex}
+        cycleRequest={innerProps.cycleRequest}
         mode={mode}
         onQueryChange={innerProps.onQueryChange}
         onSelect={innerProps.onSelect}
@@ -1164,6 +1589,7 @@ function DropdownContent({
           results={innerProps.results}
           browseBands={innerProps.browseBands}
           selectedIndex={innerProps.selectedIndex}
+          cycleRequest={innerProps.cycleRequest}
           mode={mode}
           onQueryChange={onQueryChange}
           onSelect={innerProps.onSelect}
@@ -1207,6 +1633,7 @@ export function ProjectSwitcherPalette({
   results,
   browseBands,
   selectedIndex,
+  cycleRequest,
   onQueryChange,
   onSelectPrevious,
   onSelectNext,
@@ -1230,6 +1657,7 @@ export function ProjectSwitcherPalette({
   onHoverRow,
   onOpenProjectSettings,
   onDropdownCloseAutoFocus,
+  consumeCloseAutoFocusSuppression,
   dropdownAlign,
   children,
   rankedSearch,
@@ -1253,6 +1681,7 @@ export function ProjectSwitcherPalette({
         results={results}
         browseBands={browseBands}
         selectedIndex={selectedIndex}
+        cycleRequest={cycleRequest}
         onQueryChange={onQueryChange}
         onSelectPrevious={onSelectPrevious}
         onSelectNext={onSelectNext}
@@ -1276,6 +1705,9 @@ export function ProjectSwitcherPalette({
         onHoverRow={onHoverRow}
         onOpenProjectSettings={onOpenProjectSettings}
         onDropdownCloseAutoFocus={onDropdownCloseAutoFocus}
+        // Taken out of the rest spread on purpose: left in it, it rode into the
+        // confirm dialogs and never reached the dropdown that consumes it.
+        consumeCloseAutoFocusSuppression={consumeCloseAutoFocusSuppression}
         dropdownAlign={dropdownAlign}
         rankedSearch={rankedSearch}
         scratchResults={scratchResults}
@@ -1297,6 +1729,7 @@ export function ProjectSwitcherPalette({
         results={results}
         browseBands={browseBands}
         selectedIndex={selectedIndex}
+        cycleRequest={cycleRequest}
         onQueryChange={onQueryChange}
         onSelectPrevious={onSelectPrevious}
         onSelectNext={onSelectNext}

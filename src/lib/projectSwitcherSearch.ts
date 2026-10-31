@@ -436,6 +436,39 @@ export function scoreScratchQuery(query: string, name: string): number {
   return NAME_WEIGHT * nameScore;
 }
 
+/**
+ * A query of several words, matched word by word when the whole string finds
+ * nothing: "canopy back" for `canopy-model-backend`, "daily brief" for
+ * `DailyBrief`, "backend daintree" for a name read the other way round. Every
+ * word must land, in the name or the path (or, for a project, its group), and
+ * the row ranks below every whole-query match of the same kind. Null for a
+ * single word, which the whole-query scorer already owns.
+ */
+function queryWords(trimmed: string): string[] | null {
+  const words = trimmed.toLowerCase().split(/\s+/).filter(Boolean);
+  return words.length > 1 ? words : null;
+}
+
+function scoreWords(
+  words: readonly string[],
+  name: string,
+  path: string | null,
+  groupName?: string
+): { score: number; allInName: boolean } | null {
+  let score = 0;
+  let allInName = true;
+  const lowerGroup = groupName?.toLowerCase();
+  for (const word of words) {
+    const inName = scoreField(word, name);
+    const inPath = path === null ? 0 : scoreField(word, path);
+    const inGroup = word.length >= 2 && lowerGroup?.includes(word) ? 1 : 0;
+    if (inName === 0 && inPath === 0 && inGroup === 0) return null;
+    if (inName === 0) allInName = false;
+    score += NAME_WEIGHT * inName + inPath;
+  }
+  return { score, allInName };
+}
+
 /** Projects sort ahead of scratches once every earlier key has tied. */
 const KIND_RANK: Record<ProjectSwitcherRow["kind"], number> = { project: 0, scratch: 1 };
 
@@ -673,9 +706,25 @@ export function rankSwitcherMatches(
 
   const scored: RankedEntry[] = [];
 
+  const words = queryWords(trimmed);
+
   for (const project of projects) {
     const archived = project.isArchived ? 1 : 0;
     const score = scoreProjectQuery(trimmed, project.name, project.path);
+    if (score <= 0 && words) {
+      const byWord = scoreWords(words, project.name, project.path, project.groupName);
+      if (byWord) {
+        scored.push({
+          row: { kind: "project", ...project },
+          textClass: byWord.allInName ? TEXT_CLASS_FUZZY_NAME : TEXT_CLASS_PATH_ONLY,
+          archived,
+          activity: activityFor(project),
+          score: byWord.score,
+          recency: project.frecencyScore,
+        });
+        continue;
+      }
+    }
     if (score <= 0) {
       // A plain substring, and only from two characters: a group name is a
       // label over several projects, so a fuzzy or one-letter match would pull
@@ -723,6 +772,20 @@ export function rankSwitcherMatches(
   }
   for (const scratch of scratches) {
     const score = scoreScratchQuery(trimmed, scratch.name);
+    if (score <= 0 && words) {
+      const byWord = scoreWords(words, scratch.name, null);
+      if (byWord) {
+        scored.push({
+          row: { kind: "scratch", ...scratch },
+          textClass: TEXT_CLASS_FUZZY_NAME,
+          archived: 0,
+          activity: activityFor(scratch),
+          score: byWord.score,
+          recency: scratch.lastOpened,
+        });
+        continue;
+      }
+    }
     if (score <= 0) {
       if (!typoTolerant || !hasNearMissNameMatch(lowerQuery, scratch.name)) continue;
       scored.push({
@@ -747,6 +810,13 @@ export function rankSwitcherMatches(
 
   scored.sort((a, b) => {
     if (a.textClass !== b.textClass) return a.textClass - b.textClass;
+    // Within a class, the workspace you're already in goes last: Enter on it
+    // only closes the palette, so a shared prefix ("dai" from inside Daintree
+    // Website) must hand Enter to the other match. An exact name keeps its
+    // place — typing the whole name is asking for that row.
+    const aHere = a.row.isActive && a.textClass !== TEXT_CLASS_EXACT ? 1 : 0;
+    const bHere = b.row.isActive && b.textClass !== TEXT_CLASS_EXACT ? 1 : 0;
+    if (aHere !== bHere) return aHere - bHere;
     if (a.archived !== b.archived) return a.archived - b.archived;
     if (a.activity.activityClass !== b.activity.activityClass) {
       return a.activity.activityClass - b.activity.activityClass;

@@ -112,13 +112,18 @@ export const ROW_DOT_CLASS: Record<ProjectRowTone, string> = {
   // facts and the switcher's greys already carry the settled ones. Colour alone
   // could not separate them — a dashed ring reads as temporarily suspended at a
   // glance, and survives both high-contrast modes and a colour-blind reader.
-  snoozed: "border border-dashed border-daintree-text/40",
+  snoozed: "border border-dashed border-text-secondary",
   // Hollow, because "finished" and "suspended" are settled states rather than
   // live ones. It used to sit on every dormant row too, which made a ring the
   // most common mark in the list and left it competing with the filled dots
   // that mean something — dormant rows draw no dot at all now (#11692), so the
   // ring is back to marking the two muted states that earned a line.
-  muted: "border border-daintree-text/20",
+  //
+  // Drawn in the secondary text ink rather than a fifth of the primary: at a
+  // 1px stroke the faint ring measured ~1.4:1 against the palette, under the
+  // 3:1 a state mark owes (WCAG 1.4.11), so "1 finished" had a mark nobody
+  // could see. Hollow is what keeps it quieter than the filled dots.
+  muted: "border border-text-secondary",
   // Amber, like any other wait. Only ever reached with nothing running — a
   // live row hands the mark to the run — so this is a project that has fully
   // stopped and has the assistant sitting at its prompt. Who is waiting is the
@@ -153,8 +158,8 @@ export const ROW_MARK_COLOR: Record<ProjectRowTone, string> = {
   review: "var(--color-activity-completed)",
   working: "var(--color-activity-working)",
   running: "var(--color-activity-working)",
-  snoozed: "rgb(from var(--color-text-primary) r g b / 0.4)",
-  muted: "rgb(from var(--color-text-primary) r g b / 0.2)",
+  snoozed: "var(--color-text-secondary)",
+  muted: "var(--color-text-secondary)",
   assistant: "var(--color-status-warning)",
   "assistant-blocked": "var(--color-status-danger)",
 };

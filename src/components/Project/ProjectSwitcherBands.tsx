@@ -1,12 +1,13 @@
-import { useMemo } from "react";
-import { ChevronRight, Ellipsis } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { ChevronRight, Ellipsis, FolderUp, Pencil, Trash2 } from "lucide-react";
 import { FolderClosed } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { AppPaletteDialog, PaletteNoMatchHint } from "@/components/ui/AppPaletteDialog";
-import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
+import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import {
   ContextMenu,
   ContextMenuContent,
+  ContextMenuItem,
   ContextMenuRadioGroup,
   ContextMenuRadioItem,
   ContextMenuSeparator,
@@ -24,7 +25,6 @@ import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
 import type {
   ProjectBandKey,
   ProjectSwitcherBrowseBand,
-  ProjectSwitcherProjectRow,
   ProjectSwitcherRow,
   ProjectSwitchSelectSource,
   SearchableProject,
@@ -45,13 +45,14 @@ import {
 } from "@/lib/projectSort";
 import { pluralize } from "@/lib/pluralize";
 import { ProjectListItem, ScratchListItem } from "./ProjectSwitcherRows";
+import { ScratchNameEditor } from "./ProjectSwitcherScratchSection";
 import { BandCollapsedCount } from "./paletteTiles";
 
-interface ProjectSection {
+export interface ProjectSection {
   key: ProjectBandKey;
   label: string;
   /** The band's VISIBLE rows — empty while collapsed. Always rows of `results`. */
-  items: ProjectSwitcherProjectRow[];
+  items: ProjectSwitcherRow[];
   /** Projects the band holds whether or not they are on screen. */
   itemCount: number;
   collapsed: boolean;
@@ -134,7 +135,9 @@ function BandCollapseToggle({
       onClick={onToggle}
       aria-expanded={!collapsed}
       aria-controls={controlsId}
-      className="flex items-center gap-1.5 min-w-0 hover:text-text-secondary transition-colors"
+      // Fills the header's free width so the whole label run is the target,
+      // not a 12px chevron and a 10px word (WCAG 2.5.8).
+      className="flex min-h-6 flex-1 items-center gap-1.5 min-w-0 text-left hover:text-text-primary transition-colors"
     >
       <ChevronRight
         data-animated-chevron
@@ -151,6 +154,116 @@ function BandCollapseToggle({
 }
 
 /**
+ * What a folded band's header row draws: the same chevron, glyph and label the
+ * open header carries, as plain text rather than a button — folded, the whole
+ * row is the option the cursor lands on, and a button inside an option is not
+ * valid listbox content.
+ */
+function FoldedBandLabel({
+  label,
+  labelId,
+  itemCount,
+  leadingIcon,
+  open = false,
+}: {
+  label: string;
+  labelId: string;
+  itemCount: number;
+  leadingIcon?: React.ReactNode;
+  /** An open band with nothing in it: the header is its only row. */
+  open?: boolean;
+}) {
+  return (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <ChevronRight
+        data-animated-chevron
+        className={cn("w-3 h-3 shrink-0", open && "rotate-90")}
+        aria-hidden="true"
+      />
+      {leadingIcon}
+      <BandLabel label={label} labelId={labelId} />
+      <span className="sr-only">
+        {open ? ", empty" : `, folded, ${pluralize(itemCount, "project")}`}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * What a folded band says is still running inside it, beside its label. A
+ * folded band keeps its running projects in place rather than lifting them out,
+ * so the header is the only thing left to say they are there — whichever band
+ * it is. Neutral words beside the run hue's own mark, the pairing a running
+ * row's status line uses.
+ */
+function FoldedRollup({
+  bandKey,
+  activeAgentCount,
+  workingAssistantCount,
+}: {
+  bandKey: string;
+  activeAgentCount: number;
+  workingAssistantCount: number;
+}) {
+  if (activeAgentCount <= 0 && workingAssistantCount <= 0) return null;
+  return (
+    <span
+      className="flex min-w-0 items-center gap-1 normal-case tracking-normal text-text-secondary"
+      data-testid={`band-running-rollup-${bandKey.replace(":", "-")}`}
+    >
+      <span
+        className="workspace-mark h-1.5 w-1.5 shrink-0 rounded-full bg-activity-working"
+        aria-hidden="true"
+      />
+      <span className="truncate">
+        {formatFoldedLiveness(activeAgentCount, workingAssistantCount)}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * The header's two lives. Open, it is a pointer-only bar hidden from assistive
+ * technology: its fold, sort and group controls are not options, and the
+ * listbox may hold nothing else (the label still names the band through
+ * `aria-labelledby`, which reads hidden text it points at directly). Folded,
+ * the header is the band's only row, so it becomes an option — the cursor
+ * lands on it, Enter or → unfolds it, and that is how the keyboard reaches a
+ * folded band at all.
+ */
+function bandHeaderProps({
+  asOption: folded,
+  bandKey,
+  isCursor,
+  onToggle,
+  onHover,
+}: {
+  /** Folded, or open with nothing in it — see `isBandHeaderStop`. */
+  asOption: boolean;
+  bandKey: ProjectBandKey;
+  isCursor: boolean;
+  onToggle: () => void;
+  onHover?: (bandKey: ProjectBandKey) => void;
+}): React.HTMLAttributes<HTMLDivElement> & { "data-band-header": string } {
+  if (!folded) return { "aria-hidden": true, "data-band-header": bandKey };
+  return {
+    role: "option",
+    id: bandOptionId(bandKey),
+    "aria-selected": isCursor,
+    "data-band-header": bandKey,
+    onClick: onToggle,
+    onPointerMove: onHover && !isCursor ? () => onHover(bandKey) : undefined,
+  };
+}
+
+/** The header classes both lives share, so a fold never moves the label. */
+const BAND_HEADER_CLASS = cn(
+  PALETTE_SECTION_LABEL_CLASS,
+  "flex min-h-6 items-center justify-between gap-2 px-2 border border-transparent rounded-[var(--radius-sm)]"
+);
+const FOLDED_BAND_HEADER_CLASS = cn(PALETTE_ROW_CLASS, "cursor-pointer");
+
+/**
  * A band key made safe for an element id. Group keys carry a colon
  * (`group:<id>`), which is legal in an id but has to be escaped in every
  * selector that ever looks one up.
@@ -162,6 +275,11 @@ function bandDomKey(key: ProjectBandKey): string {
 /** Stable `aria-controls` target for a band's rows. */
 function bandListId(key: ProjectBandKey): string {
   return `project-section-list-${bandDomKey(key)}`;
+}
+
+/** The id a folded band's header row carries as an option. */
+export function bandOptionId(key: string): string {
+  return `band-option-${key.replace(":", "-")}`;
 }
 
 // Keyed by mode rather than a list, so the lookup below is total: a new mode in
@@ -235,6 +353,9 @@ function SortableBandHeader({
   workingAssistantCount = 0,
   onToggleCollapsed,
   onReturnFocus,
+  isCursor = false,
+  onHoverBand,
+  isEmpty = false,
 }: {
   bandKey: ProjectBandKey;
   headerId: string;
@@ -252,7 +373,13 @@ function SortableBandHeader({
   workingAssistantCount?: number;
   onToggleCollapsed: () => void;
   onReturnFocus?: () => void;
+  /** The palette's cursor is on this band's header row. */
+  isCursor?: boolean;
+  /** Open with no rows of its own: the header is the band's only stop. */
+  isEmpty?: boolean;
+  onHoverBand?: (bandKey: ProjectBandKey) => void;
 }) {
+  const folded = collapsed && collapsible;
   const active = OTHER_PROJECTS_SORT_OPTIONS[sortMode];
   const ActiveIcon = active.Icon;
   const isOther = bandKey === "other";
@@ -284,14 +411,33 @@ function SortableBandHeader({
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
-          role="presentation"
+          {...bandHeaderProps({
+            asOption: folded || (collapsible && isEmpty),
+            bandKey,
+            isCursor,
+            onToggle: onToggleCollapsed,
+            onHover: onHoverBand,
+          })}
           className={cn(
-            PALETTE_SECTION_LABEL_CLASS,
-            "group/band-header flex items-center justify-between gap-2 px-2 py-1 normal-case tracking-normal"
+            BAND_HEADER_CLASS,
+            (folded || (collapsible && isEmpty)) && FOLDED_BAND_HEADER_CLASS,
+            "group/band-header normal-case tracking-normal"
           )}
         >
-          <div className="flex min-w-0 items-center gap-2">
-            {collapsible ? (
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            {folded || (collapsible && isEmpty) ? (
+              <FoldedBandLabel
+                label={label}
+                labelId={headerId}
+                itemCount={itemCount}
+                open={!folded}
+                leadingIcon={
+                  group ? (
+                    <FolderClosed className="w-3 h-3 shrink-0" aria-hidden="true" />
+                  ) : undefined
+                }
+              />
+            ) : collapsible ? (
               <BandCollapseToggle
                 collapsed={collapsed}
                 label={label}
@@ -311,29 +457,16 @@ function SortableBandHeader({
             ) : (
               <BandLabel label={label} labelId={headerId} />
             )}
-            {collapsed && (activeAgentCount > 0 || workingAssistantCount > 0) && (
-              // A folded group keeps its running projects in place rather than
-              // lifting them out, so the header is the only thing left to say
-              // they are there. Neutral words beside the run hue's own mark —
-              // the same pairing a running row's status line uses. Assistants
-              // are named apart from agents, as everywhere else: they are live
-              // work, but not runs the user launched.
-              <span
-                className="flex min-w-0 items-center gap-1 text-text-secondary"
-                data-testid={`band-running-rollup-${bandDomKey(bandKey)}`}
-              >
-                <span
-                  className="workspace-mark h-1.5 w-1.5 shrink-0 rounded-full bg-activity-working"
-                  aria-hidden="true"
-                />
-                <span className="truncate">
-                  {formatFoldedLiveness(activeAgentCount, workingAssistantCount)}
-                </span>
-              </span>
+            {collapsed && (
+              <FoldedRollup
+                bandKey={bandKey}
+                activeAgentCount={activeAgentCount}
+                workingAssistantCount={workingAssistantCount}
+              />
             )}
           </div>
           <div className="flex shrink-0 items-center gap-1">
-            {group && (
+            {group && !folded && !isEmpty && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
@@ -376,7 +509,9 @@ function SortableBandHeader({
                         : `band-sort-trigger-${bandDomKey(bandKey)}`
                     }
                     aria-label={`Sort ${sortLabel}, currently ${active.label}`}
-                    className="flex shrink-0 items-center gap-1 text-text-secondary hover:text-text-primary transition-colors"
+                    // 24px tall for the pointer target floor, pulled into the
+                    // header's line so it doesn't grow it.
+                    className="-my-1 flex min-h-6 shrink-0 items-center gap-1 rounded-[var(--radius-sm)] px-1 text-text-secondary hover:text-text-primary transition-colors"
                   >
                     <ActiveIcon className="w-3 h-3" aria-hidden="true" />
                     {active.label}
@@ -511,71 +646,65 @@ interface ProjectListContentProps {
   onHoverRow?: (rowId: string) => void;
   /** Hands focus back to the search box after the sort menu closes. */
   onReturnFocus?: () => void;
+  /** The folded band whose header row holds the palette's cursor, if any. */
+  cursorBandKey?: string | null;
+  /** Moves the palette's cursor onto a folded band's header row. */
+  onHoverBand?: (bandKey: ProjectBandKey) => void;
+  /**
+   * Whether `results` is the ranked list. It trails the query by a commit, and
+   * it — not the live query — decides bands or flat, so the list and the
+   * palette's cursor read the same layout. Defaults to the live query.
+   */
+  isRankedSearch?: boolean;
+  /** Folds or unfolds a band; the palette routes it so the cursor can follow. */
+  onToggleBand?: (bandKey: ProjectBandKey, collapsed: boolean) => void;
+  /** A scratch drawn in a band keeps the actions it has in the Scratch section. */
+  onSaveScratchAsProject?: (scratchId: string) => void;
+  onRequestDeleteScratch?: (scratchId: string) => void;
+  onRequestDeleteAllScratches?: () => void;
+  onRenameScratch?: (scratchId: string, name: string) => void;
 }
 
-export function ProjectListContent({
-  results,
-  browseBands,
-  selectedIndex,
-  query,
-  onSelect,
-  listRef,
-  canAddProject,
-  canCreateScratch,
-  scratchesStandAlone,
-  hasOtherHostResults,
-  sharedNameHost,
-  onStopProject,
-  onCloseProject,
-  onSleepProject,
-  onRestartProject,
-  onLocateProject,
-  onMoveOrRenameProject,
-  onTogglePinProject,
-  onCopyPath,
-  onSelectNewWindow,
-  onHoverProject,
-  onHoverProjectEnd,
-  onHoverRow,
-  onReturnFocus,
-}: ProjectListContentProps) {
-  const isSearching = query.trim().length > 0;
-
-  // Mounted here, once for the whole list, rather than per row: sixty timers in
-  // a hundred-project list would all fire for the same reason. It has to be a
-  // component that renders the rows, too — the clock is state, so a tick re-runs
-  // THIS body and the changed `nowMs` is what invalidates each auto-memoized
-  // row. A tick held at the palette root re-renders the root and stops there.
-  const nowMs = useGlobalMinuteClock();
-
-  // Bands are contiguous runs of `results`, never a re-filter of it. The hook
-  // has already sorted by section, so walking the array once and cutting where
-  // `section` changes reproduces the grouping without building a second,
-  // narrower list — the thing that stranded the highlight and let Enter commit
-  // an off-screen project (#11071). Every row in every band is still a row of
-  // `results`, at the same index the arrow keys use.
-  const sections = useMemo<ProjectSection[] | null>(() => {
-    if (isSearching) return null;
-
+/**
+ * The browse layout the list draws and the palette's cursor walks: one
+ * derivation, so the two never disagree about which rows and headers are on
+ * screen (#11071). Null means the flat list — a ranked search, or props that
+ * fail the check at the end.
+ *
+ * Bands are contiguous runs of `results`, never a re-filter of it. The hook
+ * has already sorted by section, so walking the array once and cutting where
+ * `section` changes reproduces the grouping without building a second,
+ * narrower list — the thing that stranded the highlight and let Enter commit
+ * an off-screen project (#11071). Every row in every band is still a row of
+ * `results`, at the same index the arrow keys use.
+ */
+export function deriveBrowseSections(
+  results: readonly ProjectSwitcherRow[],
+  browseBands: readonly ProjectSwitcherBrowseBand[] | undefined,
+  ranked: boolean
+): ProjectSection[] | null {
+  if (ranked) return null;
+  {
     const bands: ProjectSection[] = [];
     for (const row of results) {
-      // Browse is projects only — scratches ride the pinned section below. A
-      // non-project row here would mean that changed, so drop the whole band
-      // layout rather than skipping the row: the flat branch still renders
-      // everything, where dropping one would strand the highlight on a row that
-      // isn't on screen (#11071).
-      if (row.kind !== "project") return null;
+      // Browse rows are projects, plus any scratch lifted into a band for the
+      // work it is doing. A row with no band would mean something else changed,
+      // so drop the whole band layout rather than skipping the row: the flat
+      // branch still renders everything, where dropping one would strand the
+      // highlight on a row that isn't on screen (#11071).
+      const section = row.section;
+      if (section === undefined) return null;
       const last = bands.at(-1);
-      if (last && last.key === row.section) {
+      if (last && last.key === section) {
         last.items.push(row);
         last.itemCount += 1;
       } else {
         bands.push({
-          key: row.section,
+          key: section,
           // A group band read off `results` has no name to show — only the
           // declared bands carry one — and this fallback is never the path a
           // real switcher takes once groups exist.
-          label: isGroupBandKey(row.section) ? "" : PROJECT_SECTION_LABELS[row.section],
+          label: isGroupBandKey(section) ? "" : PROJECT_SECTION_LABELS[section],
           items: [row],
           itemCount: 1,
           collapsed: false,
@@ -631,7 +760,74 @@ export function ProjectListContent({
     }
     if (cursor !== results.length) return null;
     return merged;
-  }, [results, isSearching, browseBands]);
+  }
+}
+
+/**
+ * Whether a band's header is itself a stop for the palette's cursor: folded,
+ * it is the band's only row; open but holding nothing (a group whose members
+ * are all lifted above, or a new one), it is the only thing there to fold.
+ */
+export function isBandHeaderStop(
+  section: Pick<ProjectSection, "collapsed" | "collapsible" | "items">
+): boolean {
+  return section.collapsible && (section.collapsed || section.items.length === 0);
+}
+
+export function ProjectListContent({
+  results,
+  browseBands,
+  selectedIndex,
+  query,
+  onSelect,
+  listRef,
+  canAddProject,
+  canCreateScratch,
+  scratchesStandAlone,
+  hasOtherHostResults,
+  sharedNameHost,
+  onStopProject,
+  onCloseProject,
+  onSleepProject,
+  onRestartProject,
+  onLocateProject,
+  onMoveOrRenameProject,
+  onTogglePinProject,
+  onCopyPath,
+  onSelectNewWindow,
+  onHoverProject,
+  onHoverProjectEnd,
+  onHoverRow,
+  onReturnFocus,
+  cursorBandKey = null,
+  onHoverBand,
+  isRankedSearch,
+  onToggleBand,
+  onSaveScratchAsProject,
+  onRequestDeleteScratch,
+  onRequestDeleteAllScratches,
+  onRenameScratch,
+}: ProjectListContentProps) {
+  // A scratch drawn in a band renames in place, as it does in its own section.
+  // The name is frozen when editing starts, for the same reason it is there.
+  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
+  // Radix hands focus back to the menu's trigger on close, which for a rename
+  // is the row the field just replaced — it would blur the field before typing.
+  const skipMenuFocusRestore = useRef(false);
+  const isSearching = query.trim().length > 0;
+  const ranked = isRankedSearch ?? isSearching;
+
+  // Mounted here, once for the whole list, rather than per row: sixty timers in
+  // a hundred-project list would all fire for the same reason. It has to be a
+  // component that renders the rows, too — the clock is state, so a tick re-runs
+  // THIS body and the changed `nowMs` is what invalidates each auto-memoized
+  // row. A tick held at the palette root re-renders the root and stops there.
+  const nowMs = useGlobalMinuteClock();
+
+  const sections = useMemo(
+    () => deriveBrowseSections(results, browseBands, ranked),
+    [results, browseBands, ranked]
+  );
 
   // `results` is already scoped by the hook to exactly the rows this mode
   // renders, so it doubles as the arrow-key domain. Never re-filter it here:
@@ -651,15 +847,96 @@ export function ProjectListContent({
     return (
       <div key={`${row.kind}-${row.id}`} role="presentation">
         {row.kind === "scratch" ? (
-          <ScratchListItem
-            scratch={row}
-            isSelected={isSelected}
-            nowMs={nowMs}
-            highlightQuery={isSearching ? query : undefined}
-            showCurrentLabel={!hasBands}
-            onSelect={onSelect}
-            onHoverRow={onHoverRow}
-          />
+          // Lifted into a band, a scratch is the Scratch section's row in
+          // another place, so it keeps that row's save and delete. A ranked
+          // search row stays action-free: search is for reaching a scratch.
+          renaming?.id === row.id && onRenameScratch ? (
+            <ScratchNameEditor
+              initialValue={renaming.name}
+              ariaLabel="Scratch name"
+              testId="scratch-rename-input"
+              onCommit={(name) => {
+                const original = renaming.name;
+                setRenaming(null);
+                const trimmed = name.trim();
+                if (trimmed && trimmed !== original) onRenameScratch(row.id, trimmed);
+              }}
+              onCancel={() => setRenaming(null)}
+              commitOnBlur
+              onReturnFocus={onReturnFocus}
+            />
+          ) : hasBands && (onSaveScratchAsProject || onRequestDeleteScratch || onRenameScratch) ? (
+            <ContextMenu>
+              <ContextMenuTrigger asChild>
+                <ScratchListItem
+                  scratch={row}
+                  isSelected={isSelected}
+                  nowMs={nowMs}
+                  showCurrentLabel={row.section !== "current"}
+                  onSelect={onSelect}
+                  onHoverRow={onHoverRow}
+                  menuTarget
+                />
+              </ContextMenuTrigger>
+              <ContextMenuContent
+                onCloseAutoFocus={(event) => {
+                  if (skipMenuFocusRestore.current) {
+                    skipMenuFocusRestore.current = false;
+                    event.preventDefault();
+                    return;
+                  }
+                  if (!onReturnFocus) return;
+                  requestAnimationFrame(() => {
+                    const active = document.activeElement;
+                    if (active === null || active === document.body) onReturnFocus();
+                  });
+                }}
+              >
+                {onRenameScratch && (
+                  <ContextMenuItem
+                    onSelect={() => {
+                      skipMenuFocusRestore.current = true;
+                      setRenaming({ id: row.id, name: row.name });
+                    }}
+                  >
+                    <Pencil className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                    Rename scratch
+                  </ContextMenuItem>
+                )}
+                {onSaveScratchAsProject && (
+                  <ContextMenuItem onSelect={() => onSaveScratchAsProject(row.id)}>
+                    <FolderUp className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                    Save as project…
+                  </ContextMenuItem>
+                )}
+                {(onSaveScratchAsProject || onRenameScratch) && onRequestDeleteScratch && (
+                  <ContextMenuSeparator />
+                )}
+                {onRequestDeleteScratch && (
+                  <ContextMenuItem destructive onSelect={() => onRequestDeleteScratch(row.id)}>
+                    <Trash2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                    Delete scratch…
+                  </ContextMenuItem>
+                )}
+                {onRequestDeleteAllScratches && (
+                  <ContextMenuItem destructive onSelect={onRequestDeleteAllScratches}>
+                    <Trash2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                    Delete all scratch workspaces…
+                  </ContextMenuItem>
+                )}
+              </ContextMenuContent>
+            </ContextMenu>
+          ) : (
+            <ScratchListItem
+              scratch={row}
+              isSelected={isSelected}
+              nowMs={nowMs}
+              highlightQuery={isSearching ? query : undefined}
+              showCurrentLabel={!hasBands || row.section !== "current"}
+              onSelect={onSelect}
+              onHoverRow={onHoverRow}
+            />
+          )
         ) : (
           <ProjectListItem
             project={row}
@@ -710,7 +987,11 @@ export function ProjectListContent({
           sections.map((section, sectionIdx) => {
             const headerId = `project-section-${bandDomKey(section.key)}`;
             const listId = bandListId(section.key);
-            const toggle = () => setBandCollapsed(section.key, !section.collapsed);
+            const toggle = () =>
+              onToggleBand
+                ? onToggleBand(section.key, !section.collapsed)
+                : setBandCollapsed(section.key, !section.collapsed);
+            const headerIsStop = isBandHeaderStop(section);
 
             // Bands wrap options, so they can't be bare `div`s inside the
             // listbox: each is a `group` named by its own visible header. Every
@@ -719,21 +1000,25 @@ export function ProjectListContent({
             // violation, so a band without a header would have to flatten away.
             return (
               <div key={section.key} role="presentation">
-                {sectionIdx > 0 && <AppPaletteDialog.Divider />}
                 <div
                   role="group"
                   aria-labelledby={headerId}
                   /*
-                   * One value on all four bands. The first/last overrides used
-                   * to buy the run of bands some end padding, but the scroller
-                   * carries that now — and while they were here a folded last
-                   * band sat 8px below its own label and 4px above it, which is
-                   * exactly the lopsided gap a collapsed band makes obvious.
+                   * No rule between bands. Each one used to sit in its own
+                   * hairline box, which over six or seven bands turned the list
+                   * into a stack of compartments where a third of the height
+                   * was headers and rules. The label alone separates them, with
+                   * a little extra air above every band after the first; the
+                   * full-width rules are kept for the boundaries between kinds
+                   * of thing (Scratch, other hosts, the commands).
                    */
-                  className="px-1 py-1"
+                  className={cn("px-1 pb-0.5", sectionIdx > 0 ? "pt-1.5" : "pt-1")}
                 >
                   {section.key === "other" || section.group ? (
                     <SortableBandHeader
+                      isCursor={cursorBandKey === section.key}
+                      onHoverBand={onHoverBand}
+                      isEmpty={section.items.length === 0}
                       bandKey={section.key}
                       headerId={headerId}
                       label={section.label}
@@ -753,16 +1038,39 @@ export function ProjectListContent({
                     />
                   ) : (
                     <div
+                      {...bandHeaderProps({
+                        asOption: headerIsStop,
+                        bandKey: section.key,
+                        isCursor: cursorBandKey === section.key,
+                        onToggle: toggle,
+                        onHover: onHoverBand,
+                      })}
                       className={cn(
-                        PALETTE_SECTION_LABEL_CLASS,
                         // `px-2` matches the row padding below rather than the
                         // wrapper's old inset: both now start from the bare band
                         // edge, so the label and the rows' status column share
                         // the palette's 12px rail (#11943).
-                        "flex items-center justify-between gap-2 px-2 py-1"
+                        BAND_HEADER_CLASS,
+                        headerIsStop && FOLDED_BAND_HEADER_CLASS
                       )}
                     >
-                      {section.collapsible ? (
+                      {headerIsStop ? (
+                        <span className="flex min-w-0 items-center gap-2">
+                          <FoldedBandLabel
+                            label={section.label}
+                            labelId={headerId}
+                            itemCount={section.itemCount}
+                            open={!section.collapsed}
+                          />
+                          {section.collapsed && (
+                            <FoldedRollup
+                              bandKey={section.key}
+                              activeAgentCount={section.activeAgentCount ?? 0}
+                              workingAssistantCount={section.workingAssistantCount ?? 0}
+                            />
+                          )}
+                        </span>
+                      ) : section.collapsible ? (
                         <BandCollapseToggle
                           collapsed={section.collapsed}
                           label={section.label}

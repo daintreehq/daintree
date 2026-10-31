@@ -195,7 +195,18 @@ function sectionForProject(project: SearchableProject): ProjectBandKey {
  * states — the row would look mis-ranked, and the explanation would be
  * invisible.
  */
-function attentionClass(project: SearchableProject): number {
+export function attentionClass(
+  project: Pick<
+    SearchableProject,
+    | "blockedAgentCount"
+    | "waitingAgentCount"
+    | "assistantState"
+    | "assistantWaitingReason"
+    | "assistantStateSince"
+    | "isActive"
+    | "lastOpened"
+  >
+): number {
   if (project.blockedAgentCount > 0) return 0;
   if (project.waitingAgentCount > 0) return 1;
   const assistant = classifyAssistantActivity(project);

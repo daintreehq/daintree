@@ -543,9 +543,8 @@ AppPaletteDialog.Header = function AppPaletteHeader({
  * absent: the container is a real tab stop (see `tabIndex` below) and palettes
  * such as the project switcher render controls after it that must stay
  * reachable by native traversal. Space is left to the browser so the region
- * keeps its native scrolling. The horizontal arrows were here for the one
- * palette with collapsible groups and left with it (#11669); no list on this
- * shell has a horizontal axis now.
+ * keeps its native scrolling. The horizontal arrows are forwarded for the
+ * project switcher's foldable bands; no list on this shell scrolls sideways.
  *
  * The page keys are forwarded rather than left to native scrolling, so a
  * palette CAN bind them: scrolling the viewport without moving the selection
@@ -567,6 +566,13 @@ const BODY_NAVIGATION_KEYS = new Set([
   // honest once focus is on the region; palettes that ignore the key are
   // unaffected, and unmodified Backspace still falls through untouched.
   "Backspace",
+  // The project switcher folds and unfolds its bands on the horizontal arrows
+  // and opens a row's menu from the keyboard; a palette with no case for them
+  // leaves them to the browser exactly as before.
+  "ArrowLeft",
+  "ArrowRight",
+  "F10",
+  "ContextMenu",
 ]);
 
 /**
@@ -641,6 +647,13 @@ interface AppPaletteBodyProps {
    * Tab still reaches the region (see `tabIndex` below).
    */
   keepPointerFocusOnInput?: boolean;
+  /**
+   * The 16px edge fade instead of the 32px one, for a long list of short rows:
+   * at the full depth a live row half under the edge reads as disabled rather
+   * than as more list. The scroll padding follows it so the row Enter acts on
+   * still clears the fade.
+   */
+  compactFade?: boolean;
 }
 
 AppPaletteDialog.Body = function AppPaletteBody({
@@ -657,6 +670,7 @@ AppPaletteDialog.Body = function AppPaletteBody({
   onNavigationKeyDown,
   scrollClassName = "p-2 space-y-1",
   keepPointerFocusOnInput = false,
+  compactFade = false,
 }: AppPaletteBodyProps) {
   const handlePointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
@@ -695,6 +709,7 @@ AppPaletteDialog.Body = function AppPaletteBody({
       aria-activedescendant={activeDescendant}
       onKeyDown={handleKeyDown}
       onPointerDown={handlePointerDown}
+      compact={compactFade}
       className={cn(
         maxHeight,
         // Floor sized off the row rhythm, not a round number: `p-2` (16) + a
@@ -721,7 +736,7 @@ AppPaletteDialog.Body = function AppPaletteBody({
         // active row into view with `block: "nearest"`, which honours scroll
         // padding — without it the row Enter will act on parks under the fade
         // and reads as disabled.
-        "scroll-py-8",
+        compactFade ? "scroll-py-4" : "scroll-py-8",
         scrollClassName
       )}
     >
