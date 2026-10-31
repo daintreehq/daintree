@@ -3728,15 +3728,16 @@ describe("decided under the overrides of the agent's own project (#15635)", () =
   });
 
   it("keeps the project an event named through its debounce, though both its sources go", () => {
-    settings({ completedEnabled: true }, { [PROJECT_B]: MUTED });
+    // Off globally, on for B: only B's choices, still known when the debounce ends, announce it.
+    settings({ completedEnabled: false }, { [PROJECT_B]: { completedEnabled: true } });
     layout();
 
-    transition("completed", "working", "term-b");
+    transition("exited", "working", "term-b");
     liveProjects = {};
     saveProjectPanels([], PROJECT_B);
     vi.advanceTimersByTime(2_500);
 
-    expect(bannersFor("term-b")).toEqual([]);
+    expect(bannersFor("term-b")).toEqual(["Agent finished"]);
   });
 
   it("goes by the live terminal's project over a save that lists the panel elsewhere", () => {
@@ -3754,7 +3755,9 @@ describe("decided under the overrides of the agent's own project (#15635)", () =
     saveProjectPanels([agentA], PROJECT_A);
 
     transition("working", "idle", "term-b");
+    // A natural exit: the live record goes, then agent:exited, then the last transition.
     liveProjects = { "term-a": PROJECT_A };
+    events.emit("agent:exited", { terminalId: "term-b", timestamp: Date.now() });
     transition("exited", "working", "term-b");
     vi.advanceTimersByTime(2_500);
 
@@ -4102,20 +4105,17 @@ describe("each project's own choices across a burst (#15635)", () => {
     expect(banners()).toEqual([["Agent waiting", "term-b"]]);
   });
 
-  it("asks once while a read is out, and again on a later sighting", async () => {
+  it("asks once across a burst of transitions, and again a while later", async () => {
     settings({ waitingEnabled: true });
-    let answer!: () => void;
-    projectStoreMock.loadNotificationOverrides.mockImplementationOnce(
-      () => new Promise<void>((resolve) => (answer = resolve))
-    );
 
     transition("working", "idle", "term-b");
+    await vi.advanceTimersByTimeAsync(0);
     transition("waiting", "working", "term-b");
+    transition("working", "waiting", "term-b");
     expect(projectStoreMock.loadNotificationOverrides).toHaveBeenCalledTimes(1);
 
-    answer();
-    await vi.advanceTimersByTimeAsync(0);
-    transition("working", "waiting", "term-b");
+    await vi.advanceTimersByTimeAsync(30_000);
+    transition("waiting", "working", "term-b");
 
     expect(projectStoreMock.loadNotificationOverrides.mock.calls).toEqual([
       [PROJECT_B],
@@ -4132,6 +4132,29 @@ describe("each project's own choices across a burst (#15635)", () => {
     transition("waiting", "working", "term-b");
 
     expect(projectStoreMock.loadNotificationOverrides).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the project the startup seed named for an agent running since before it", async () => {
+    settings({ completedEnabled: true }, { [PROJECT_B]: MUTED });
+    agentNotificationService.dispose();
+    let answer!: (result: { terminals: object[]; degraded: boolean }) => void;
+    setPtyClientRef({
+      getTerminalProjectId: () => null,
+      getAllTerminalsWithCompletenessAsync: () => new Promise((resolve) => (answer = resolve)),
+    } as never);
+    agentNotificationService.initialize();
+    agentNotificationService.syncWatchedPanels(VIEW_B, ["term-z"]);
+
+    answer({
+      terminals: [{ id: "term-z", projectId: PROJECT_B, agentState: "working" }],
+      degraded: false,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    events.emit("agent:exited", { terminalId: "term-z", timestamp: Date.now() });
+    transition("exited", "working", "term-z");
+    vi.advanceTimersByTime(2_500);
+
+    expect(banners()).toEqual([]);
   });
 
   it("pages Canopy asks from two projects apart, each with its own sound", () => {

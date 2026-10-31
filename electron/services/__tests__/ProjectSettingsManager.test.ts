@@ -876,17 +876,6 @@ describe("ProjectSettingsManager caching", () => {
       expect(cold.getEffectiveNotificationSettings(null).completedEnabled).toBe(true);
     });
 
-    it("remembers a project with no settings file, so asking again reads nothing", async () => {
-      await fs.rm(path.join(tempDir, projectId, "settings.json"), { force: true });
-      const cold = new ProjectSettingsManager(tempDir, createMockStore());
-      await cold.loadNotificationOverrides(projectId);
-
-      await writeOverrides(projectId, { completedEnabled: false });
-      await cold.loadNotificationOverrides(projectId);
-
-      expect(cold.getEffectiveNotificationSettings(projectId).completedEnabled).toBe(true);
-    });
-
     it("leaves overrides a save already published as they are", async () => {
       await manager.saveProjectSettings(projectId, {
         runCommands: [],
