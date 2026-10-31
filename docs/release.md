@@ -71,6 +71,8 @@ xcrun notarytool history \
   --issuer 193e486e-1945-4dcd-9bb5-ae68d41441ef
 ```
 
+For one submission, such as the ID a timed-out build logged, use `info <id>` for its status or `log <id>` for Apple's report, with the same `--key`, `--key-id` and `--issuer` flags.
+
 ## macOS Notarization
 
 Notarization is enabled. All CI builds are signed and submitted to Apple's notarization service automatically.
@@ -82,7 +84,8 @@ Notarization is enabled. All CI builds are signed and submitted to Apple's notar
 - `APPLE_API_KEY` env var = **file path** to .p8 (not content, not Key ID)
 - `APPLE_API_KEY_ID` = 10-character Key ID
 - `APPLE_API_ISSUER` = Issuer UUID
-- The hook submits and waits as **two separate steps**: `notarytool submit` (120s exec timeout) then `notarytool wait --timeout 1800` (`WAIT_TIMEOUT_SECONDS`), bounded so an Apple delay can't block CI indefinitely. It persists a resumable `.notarization-state.json` in the out dir, so a re-run can reattach to an in-flight submission instead of resubmitting, and staples each arch on success.
+- The hook submits and waits as **two separate steps**: `notarytool submit` (120s exec timeout) then `notarytool wait --timeout 1800` (`WAIT_TIMEOUT_SECONDS`), bounded so an Apple delay can't block CI indefinitely, and staples each arch on success. A wait timeout fails the build with the submission ID in the log; the submission keeps going on Apple's side and can be checked by hand with `xcrun notarytool info <id>` (or `notarytool log <id>` for the report).
+- A workflow re-run does **not** reattach. The hook records each arch's submission in `.notarization-state.json` in the out dir (`release/`), but CI runners start from a clean checkout and nothing carries `release/` or the signed bundle across attempts, so a re-run rebuilds, re-signs and submits again, waiting behind the same Apple queue. The state only helps a re-run in the same out dir: a `submitted` or `accepted` entry is resumed (wait, or staple only) when its recorded CDHash (one per slice for a universal build) matches the bundle now at the app path. A rebuilt bundle with a different code signature, an entry with no recorded CDHash, or a bundle whose signature can't be read starts a fresh submission instead.
 
 ### Skip notarization flag
 
