@@ -37,7 +37,13 @@ export function SettingsLoadErrorBanner({
     </Button>
   );
   return (
-    <Callout severity="error" role="alert" id={id} title={title} action={onDiscard ? undefined : retry}>
+    <Callout
+      severity="error"
+      role="alert"
+      id={id}
+      title={title}
+      action={onDiscard ? undefined : retry}
+    >
       <p className="select-text">{message}</p>
       {/* Two ways forward sit under the words, Retry first: a landing on the banner
           focuses its first button, and that mustn't be the one that drops the edit. */}
