@@ -202,6 +202,25 @@ describe("buildGitRemoteOperationPreview", () => {
     });
   });
 
+  // Fail closed: a range read that names no tip gives an approval nothing to
+  // pin to, so the preview offers none rather than one missing its commit.
+  it("carries no push review when the range read names no tip", async () => {
+    const { listPushCommits } = stubGit({ currentBranch: "topic" });
+    listPushCommits.mockResolvedValueOnce({
+      destination: { remote: "origin", branch: "topic" },
+      rangeBasis: "tracked" as const,
+      commits: [],
+      total: 0,
+      behind: 0,
+      headOid: "",
+    });
+
+    const preview = await buildGitRemoteOperationPreview("/repo", "push");
+
+    expect(preview.pushRange).not.toBeNull();
+    expect(preview.pushReview).toBeNull();
+  });
+
   it("carries no push review for a pull-rebase", async () => {
     stubGit({ currentBranch: "topic" });
     const preview = await buildGitRemoteOperationPreview("/repo", "pull-rebase");
@@ -392,6 +411,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         trackedChangeCount: 0,
         conflictCount: 0,
         pushRange: null,
+        pushReview: null,
         rebaseRange: null,
       },
       "none",
@@ -422,6 +442,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         trackedChangeCount: 0,
         conflictCount: 0,
         pushRange: null,
+        pushReview: null,
         rebaseRange: null,
       },
       "none",
@@ -446,6 +467,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         trackedChangeCount: 0,
         conflictCount: 0,
         pushRange: null,
+        pushReview: null,
         rebaseRange: null,
       },
       "none",
@@ -469,6 +491,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         trackedChangeCount: 0,
         conflictCount: 0,
         pushRange: null,
+        pushReview: null,
         rebaseRange: null,
       },
       "Nothing to publish — the destination already has everything on this branch.",
@@ -495,6 +518,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         trackedChangeCount: 0,
         conflictCount: 0,
         pushRange: null,
+        pushReview: null,
         rebaseRange: null,
       },
       "none",
@@ -519,6 +543,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         trackedChangeCount: 0,
         conflictCount: 0,
         pushRange: null,
+        pushReview: null,
         rebaseRange: null,
       },
       "none",
@@ -541,6 +566,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         trackedChangeCount: 0,
         conflictCount: 0,
         pushRange: null,
+        pushReview: null,
         rebaseRange: null,
       },
       "No local commits found on this branch.",
@@ -568,6 +594,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         trackedChangeCount: 0,
         conflictCount: 0,
         pushRange: null,
+        pushReview: null,
         rebaseRange: null,
       },
       "none",
@@ -592,6 +619,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         trackedChangeCount: 0,
         conflictCount: 0,
         pushRange: { total: 4, rangeBasis: "tracked" as const, behind: 0 },
+        pushReview: null,
         rebaseRange: null,
       },
       "none",
@@ -614,6 +642,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         trackedChangeCount: 0,
         conflictCount: 0,
         pushRange: { total: 1, rangeBasis: "tracked" as const, behind: 0 },
+        pushReview: null,
         rebaseRange: null,
       },
       "none",
@@ -638,6 +667,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         trackedChangeCount: 0,
         conflictCount: 0,
         pushRange: null,
+        pushReview: null,
         rebaseRange: null,
       },
       "none",
@@ -662,6 +692,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         trackedChangeCount: 0,
         conflictCount: 0,
         pushRange: { total: 0, rangeBasis: "creates" as const, behind: 0 },
+        pushReview: null,
         rebaseRange: null,
       },
       "none",
@@ -684,6 +715,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         trackedChangeCount: 0,
         conflictCount: 0,
         pushRange: { total: 0, rangeBasis: "unverified" as const, behind: 0 },
+        pushReview: null,
         rebaseRange: null,
       },
       "none",
@@ -710,6 +742,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         trackedChangeCount: 0,
         conflictCount: 0,
         pushRange: { total: 0, rangeBasis: "unverified" as const, behind: 0 },
+        pushReview: null,
         rebaseRange: null,
       },
       "Nothing to publish — the destination already has everything on this branch.",
@@ -737,6 +770,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         trackedChangeCount: 0,
         conflictCount: 0,
         pushRange: { total: 0, rangeBasis: "tracked" as const, behind: 0 },
+        pushReview: null,
         rebaseRange: null,
       },
       "Nothing to publish — the destination already has everything on this branch.",
@@ -765,6 +799,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         trackedChangeCount: 0,
         conflictCount: 0,
         pushRange: null,
+        pushReview: null,
         rebaseRange: null,
       },
       "No local commits to replay.",
@@ -788,6 +823,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         trackedChangeCount: 0,
         conflictCount: 0,
         pushRange: null,
+        pushReview: null,
         rebaseRange: { total: 0, rangeBasis: "tracked", behind: 0, incoming: [] },
       },
       "No local commits to replay.",
@@ -813,6 +849,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         trackedChangeCount: 0,
         conflictCount: 0,
         pushRange: null,
+        pushReview: null,
         rebaseRange: { total: 0, rangeBasis: "tracked", behind: 4, incoming: [] },
       },
       "No local commits to replay.",
@@ -839,6 +876,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         trackedChangeCount: 0,
         conflictCount: 0,
         pushRange: null,
+        pushReview: null,
         rebaseRange: { total: 0, rangeBasis: "unfetched", behind: 0, incoming: [] },
       },
       "No local commits to replay.",
@@ -871,6 +909,7 @@ describe("formatGitRemoteOperationPreviewLines — blocking context", () => {
     pullSource: { remote: "origin", branch: "main" },
     commits: [{ hash: "abcdef1234567", message: "First", author: "Ada" }],
     pushRange: null,
+    pushReview: null,
     rebaseRange: null,
   };
 

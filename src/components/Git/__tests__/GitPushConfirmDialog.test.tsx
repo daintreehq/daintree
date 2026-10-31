@@ -445,6 +445,63 @@ describe("GitPushConfirmDialog", () => {
     expect(decision).toEqual({ confirmed: true, review: shown });
   });
 
+  // A second request for the SAME worktree must read its own preview: the
+  // worktree may have moved since the first, and the approval carries whatever
+  // the dialog shows. Reusing the first read would pin the push to a commit the
+  // branch has already left.
+  it("re-reads the preview when a request supersedes another for the same worktree", async () => {
+    const first = { ...reviewOf("main"), headOid: "1".repeat(40) };
+    const second = { ...reviewOf("main"), headOid: "2".repeat(40) };
+    const loaded = (review: GitPushReview, message: string) => ({
+      branch: "main",
+      destination: { remote: "origin", branch: "main" },
+      pullSource: { remote: "origin", branch: "main" },
+      commits: [{ hash: review.headOid, message, author: "Ada" }],
+      pushRange: { total: 1, rangeBasis: "tracked" as const },
+      pushReview: review,
+    });
+    mocks.buildPreview.mockResolvedValueOnce(loaded(first, "Before"));
+    render(<GitPushConfirmDialog />);
+
+    let superseded: GitPushConfirmResult | undefined;
+    await act(async () => {
+      void useGitPushConfirmStore
+        .getState()
+        .requestConfirmation("/repo")
+        .then((result) => {
+          superseded = result;
+        });
+    });
+    expect(screen.getByText("Before")).toBeTruthy();
+
+    const reread = deferred<ReturnType<typeof loaded>>();
+    mocks.buildPreview.mockReturnValueOnce(reread.promise);
+    let decision: GitPushConfirmResult | undefined;
+    await act(async () => {
+      void useGitPushConfirmStore
+        .getState()
+        .requestConfirmation("/repo")
+        .then((result) => {
+          decision = result;
+        });
+    });
+
+    expect(superseded).toEqual({ confirmed: false, review: null });
+    expect(mocks.buildPreview).toHaveBeenCalledTimes(2);
+    // Until its own read lands, the first request's rows can't be approved.
+    expect(pushButton().getAttribute("aria-disabled")).toBe("true");
+
+    await act(async () => {
+      reread.resolve(loaded(second, "After"));
+    });
+    expect(screen.getByText("After")).toBeTruthy();
+    await act(async () => {
+      pushButton().click();
+    });
+
+    expect(decision).toEqual({ confirmed: true, review: second });
+  });
+
   it("declines with no review when cancelled", async () => {
     mocks.buildPreview.mockResolvedValue({
       branch: "main",
@@ -619,6 +676,7 @@ describe("GitPushConfirmDialog", () => {
       pullSource: null,
       commits: [{ hash: "abcdef12", message: "Local", author: "Ada" }],
       pushRange: { total: 1, rangeBasis: "tracked" as const, behind: 0 },
+      pushReview: reviewOf("topic"),
     };
 
     expect(await describes(base)).toBe(true);

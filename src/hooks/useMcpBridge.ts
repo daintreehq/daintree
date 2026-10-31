@@ -133,8 +133,9 @@ const TIMEOUT_RESULT: ActionDispatchResult = {
 };
 
 /**
- * An approved push whose confirm measured nothing (#15646): the read failed, or
- * found no branch or destination. The approval then names no branch, commit or
+ * An approved push whose confirm measured nothing (#15646): the read failed,
+ * found no branch or destination, or never ran because the worktree didn't
+ * resolve when the modal opened. The approval then names no branch, commit or
  * destination, and a push is only ever allowed to publish what one did — so it
  * is refused rather than run against whatever the worktree holds now. The
  * modal still allowed the click, with its "couldn't verify" warning, because a
@@ -145,7 +146,7 @@ const UNREVIEWED_PUSH_RESULT: ActionDispatchResult = {
   error: {
     code: "CONFIRMATION_REQUIRED",
     message:
-      "Push refused: the confirmation couldn't read what this push would publish, so the approval covers no branch, commit or destination. Nothing was pushed. Call again once the worktree has a branch with a push destination to raise a fresh confirmation.",
+      "Push refused: the confirmation couldn't read what this push would publish, so the approval covers no branch, commit or destination. Nothing was pushed. Call again to raise a fresh confirmation with the push's preview.",
   },
 };
 
@@ -1618,7 +1619,17 @@ export function useMcpBridge(): void {
               // An approved push runs only on the review it was shown. With
               // none, the approval covers no particular push, and `git.push`
               // would otherwise run on whatever the worktree holds now.
-              if (previewTarget?.kind === "gitPush" && approvedPush === undefined) {
+              //
+              // Keyed on the action, not on whether a preview target resolved:
+              // a worktree id this view didn't know yet when the modal opened,
+              // or no active worktree then, gets no preview at all, and either
+              // can resolve by the time the dispatch runs. Only a malformed
+              // selector is let through, to fail the action's own validation.
+              if (
+                actionId === "git.push" &&
+                approvedPush === undefined &&
+                readGitLocationArg(args).state !== "invalid"
+              ) {
                 window.electron.mcpBridge.sendDispatchActionResponse({
                   requestId,
                   result: UNREVIEWED_PUSH_RESULT,

@@ -624,12 +624,17 @@ describe("list-push-commits — publish range", () => {
     const result = await listPushCommits(git);
 
     expect(result.headOid).toBe(LOCAL_TIP);
-    const rangeReads = [
-      ...argvOf(git.log),
-      ...argvOf(git.raw).filter((args) => args[0] === "rev-list"),
-    ].flat();
-    expect(rangeReads.some((a) => a.includes(LOCAL_TIP))).toBe(true);
-    expect(rangeReads.some((a) => a.includes(MOVED_TIP) || a.includes(LOCAL_REF))).toBe(false);
+    // Exactly the three reads the preview makes — rows, tail count, lead —
+    // each against the one tip, and the branch itself resolved only once.
+    expect(argvOf(git.log)).toEqual([["--max-count=5", `${PUSH_REF}..${LOCAL_TIP}`]]);
+    expect(argvOf(git.raw).filter((args) => args[0] === "rev-list")).toEqual([
+      ["rev-list", "--count", `${PUSH_REF}..${LOCAL_TIP}`],
+      ["rev-list", "--count", `${LOCAL_TIP}..${PUSH_REF}`],
+    ]);
+    const branchReads = argvOf(git.raw).filter(
+      (args) => args[0] === "rev-parse" && args.some((a) => a.startsWith(LOCAL_REF))
+    );
+    expect(branchReads).toHaveLength(1);
   });
 
   it("refuses to preview a branch that resolves to no commit", async () => {
@@ -1084,6 +1089,36 @@ describe("git push as an operation", () => {
     await expect(push({ opId: "op-other", setUpstream: true })).rejects.toMatchObject({
       code: "VALIDATION",
     });
+    releasePush();
+    await first;
+    expect(pushCalls).toBe(1);
+  });
+
+  // A review is part of what was asked for (#15646): a push approved under one
+  // review must never be answered with the outcome of a push run under another.
+  it("refuses to join a running push that carries a different review", async () => {
+    const first = push({ opId: "op-first" });
+    await pushStarted();
+    await expect(
+      push({
+        opId: "op-reviewed",
+        expectedBranch: "topic",
+        expectedHeadOid: "a".repeat(40),
+        expectedRemote: "origin",
+        expectedRemoteBranch: "topic",
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    releasePush();
+    await first;
+    expect(pushCalls).toBe(1);
+  });
+
+  it("refuses a partial review before it could join a running push", async () => {
+    const first = push({ opId: "op-first" });
+    await pushStarted();
+    await expect(push({ opId: "op-first", expectedBranch: "topic" })).rejects.toThrow(
+      /Invalid push review/
+    );
     releasePush();
     await first;
     expect(pushCalls).toBe(1);

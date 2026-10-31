@@ -2251,6 +2251,54 @@ describe("useMcpBridge", () => {
     await dispatched;
 
     expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: "req-unmeasured",
+        confirmationDecision: "approved",
+        result: expect.objectContaining({
+          ok: false,
+          error: expect.objectContaining({ code: "CONFIRMATION_REQUIRED" }),
+        }),
+      })
+    );
+  });
+
+  // A worktree id this view hadn't indexed when the modal opened gets no
+  // preview; by the click it may resolve, and the push would then run on a
+  // worktree nobody was shown. The approval covers nothing, so it is refused.
+  it("refuses an approved push whose worktree only resolved after the modal opened", async () => {
+    setWorktreePathIndexAccessor(() => new Map());
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({ id: "git.push", name: "git.push", title: "Push" })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: true, result: undefined });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-late-worktree",
+      actionId: "git.push",
+      args: { worktreeId: "wt-new" },
+    });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.requestId).toBe("req-late-worktree");
+    });
+    expect(mocks.buildGitPreview).not.toHaveBeenCalled();
+    setWorktreePathIndexAccessor(() => new Map([["wt-new", "/repo/new"]]));
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: "req-late-worktree",
+        result: expect.objectContaining({
+          ok: false,
+          error: expect.objectContaining({ code: "CONFIRMATION_REQUIRED" }),
+        }),
+      })
+    );
   });
 
   it("previews and pins git.pullRebase the same way as git.push (#11538)", async () => {

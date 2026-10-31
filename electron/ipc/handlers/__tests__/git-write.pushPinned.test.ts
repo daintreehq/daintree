@@ -264,17 +264,26 @@ describe("approved push — publishes what was reviewed or nothing", () => {
     expect(remoteTip(fixture.bare, "refs/heads/topic")).toBe(fixture.published);
   });
 
-  it("refuses a switch to another branch sitting on the same commit", async () => {
-    // Every OID check passes here; only the branch name tells them apart.
+  it("refuses a switch to another branch at the same commit, going to the same destination", async () => {
+    // `twin` sits on the reviewed commit and pushes to `origin/topic`, so the
+    // tip and destination checks both pass: only the branch name tells them
+    // apart, and a push of the reviewed commit there would publish exactly
+    // what was shown, under a branch nobody approved pushing.
     const fixture = makeFixture();
+    git(fixture.repo, ["config", "push.default", "upstream"]);
     const shown = await preview(fixture.repo, "topic");
     git(fixture.repo, ["checkout", "-q", "-b", "twin"]);
+    git(fixture.repo, ["branch", "-q", "--set-upstream-to=origin/topic", "twin"]);
+    expect(await preview(fixture.repo, "twin")).toMatchObject({
+      destination: shown.destination,
+      headOid: shown.headOid,
+    });
 
     const error = await rejection(approvedPush(fixture.repo, "topic", shown));
 
     expectStale(error);
+    expect(error).toMatch(/switched from 'topic' to 'twin'/);
     expect(remoteTip(fixture.bare, "refs/heads/topic")).toBe(fixture.published);
-    expect(remoteTip(fixture.bare, "refs/heads/twin")).toBeNull();
   });
 
   it("refuses when the branch was rewritten to a different commit", async () => {
@@ -332,9 +341,12 @@ describe("approved push — publishes what was reviewed or nothing", () => {
     expect(git(fixture.repo, ["rev-parse", "topic"])).toBe(late);
   });
 
-  it("succeeds with nothing to publish when the destination already has the commit", async () => {
+  it("runs a push with nothing to publish, and still records the tracking it establishes", async () => {
+    // Untracked, so the destination is the single remote's same-name branch and
+    // the push has to write tracking even though it transfers no commits.
     const fixture = makeFixture();
     git(fixture.repo, ["push", "-q", "origin", "topic"]);
+    git(fixture.repo, ["branch", "-q", "--unset-upstream", "topic"]);
 
     const shown = await preview(fixture.repo, "topic");
     expect(shown.commits).toEqual([]);
@@ -342,6 +354,7 @@ describe("approved push — publishes what was reviewed or nothing", () => {
     await approvedPush(fixture.repo, "topic", shown);
 
     expect(remoteTip(fixture.bare, "refs/heads/topic")).toBe(fixture.reviewed);
+    expect(upstreamOf(fixture.repo, "topic")).toBe("refs/remotes/origin/topic");
   });
 
   it("leaves a remote that advanced to git's own rejection, with the lease captured", async () => {
@@ -414,6 +427,8 @@ describe("approved push — publishes what was reviewed or nothing", () => {
     git(fixture.repo, ["fetch", "-q", "origin"]);
     git(fixture.repo, ["config", "push.default", "current"]);
     git(fixture.repo, ["branch", "-q", "--set-upstream-to=origin/release/topic", "topic"]);
+    // A second merge value, so only a replacement (not a plain set) leaves one.
+    git(fixture.repo, ["config", "--add", "branch.topic.merge", "refs/heads/elsewhere"]);
 
     const shown = await preview(fixture.repo, "topic");
     expect(shown.destination).toEqual({ remote: "origin", branch: "topic" });
@@ -452,22 +467,31 @@ describe("approved push — publishes what was reviewed or nothing", () => {
     });
   }
 
-  it("refuses a review missing one of its fields, and pushes nothing", async () => {
-    const fixture = makeFixture();
-    const shown = await preview(fixture.repo, "topic");
-
-    const error = await rejection(
-      getHandler("git:push")(FAKE_EVENT, {
-        cwd: fixture.repo,
+  for (const missing of [
+    "expectedBranch",
+    "expectedHeadOid",
+    "expectedRemote",
+    "expectedRemoteBranch",
+  ] as const) {
+    it(`refuses a review without ${missing}, and pushes nothing`, async () => {
+      const fixture = makeFixture();
+      const shown = await preview(fixture.repo, "topic");
+      const review: Record<string, string> = {
         expectedBranch: "topic",
         expectedHeadOid: shown.headOid,
         expectedRemote: "origin",
-      })
-    );
+        expectedRemoteBranch: "topic",
+      };
+      delete review[missing];
 
-    expect(error).toMatch(/Invalid push review/);
-    expect(remoteTip(fixture.bare, "refs/heads/topic")).toBe(fixture.published);
-  });
+      const error = await rejection(
+        getHandler("git:push")(FAKE_EVENT, { cwd: fixture.repo, ...review })
+      );
+
+      expect(error).toMatch(/Invalid push review/);
+      expect(remoteTip(fixture.bare, "refs/heads/topic")).toBe(fixture.published);
+    });
+  }
 
   it("pushes nothing and refuses when a pinned field is malformed", async () => {
     const fixture = makeFixture();

@@ -980,6 +980,13 @@ describe("ActionService", () => {
           confirmed: true,
           contextOverride: { hostApprovedPush: approval },
         });
+        const forged = { ...approval, review: { ...approval.review, headOid: "b".repeat(40) } };
+        await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+          hostApprovedPush: approval,
+          contextOverride: { hostApprovedPush: forged },
+        });
 
         expect(mockRun).toHaveBeenNthCalledWith(
           1,
@@ -990,6 +997,11 @@ describe("ActionService", () => {
           2,
           undefined,
           expect.objectContaining({ hostApprovedPush: undefined })
+        );
+        expect(mockRun).toHaveBeenNthCalledWith(
+          3,
+          undefined,
+          expect.objectContaining({ hostApprovedPush: approval })
         );
       });
 
