@@ -1273,10 +1273,11 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
   });
 
   // The failure #11587 actually reports: an agent rewrites ./img/arch.png while
-  // spec.md itself is untouched. The silent re-read sees identical markdown, so a
-  // bytes-changed gate would hold the token still and the stale image would stay
-  // on screen. Only markdown opts out of that gate — this is what pins it.
-  it("advances the token on a silent re-read even when the markdown bytes are unchanged", async () => {
+  // spec.md itself is untouched. Worktree ticks reach each image on their own
+  // (#15678), but window focus regain covers a write no watcher saw, and the
+  // re-read it triggers sees identical markdown — so the token has to move on
+  // the focus itself, not on whether the bytes did.
+  it("advances the token on window focus even when the markdown bytes are unchanged", async () => {
     renderPane("/repo/docs/spec.md", "rendered");
     await screen.findByTestId("markdown-viewer-mock");
     const before = markdownViewerProps.current?.cacheBust;

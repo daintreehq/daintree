@@ -64,7 +64,10 @@ export function tickMayTouchFile(
  * containing worktree (every tick counts). `scopable` is the caller's own veto:
  * false whenever the directories the watcher names might not be the ones the
  * file is read through (a symlinked ancestor), or when a re-read is wanted
- * regardless (the last read failed and any tick is a chance to recover).
+ * regardless (the last read failed and any tick is a chance to recover). It
+ * may instead be a predicate over the count the cursor stood at when the tick
+ * arrived, for a consumer whose proof that it is scopable belongs to one
+ * refresh and lapses with the next.
  *
  * The cursor starts at whatever record is current on mount, because mounting
  * reads the file explicitly and so covers every burst up to it.
@@ -73,7 +76,7 @@ export function useFileChangeCount(
   trigger: unknown,
   signal: FileChangeSignal | undefined,
   relativePath: string | null,
-  scopable: boolean
+  scopable: boolean | ((count: number) => boolean)
 ): number {
   const [cursor, setCursor] = useState<Cursor>(() => ({
     trigger,
@@ -85,7 +88,7 @@ export function useFileChangeCount(
   const touches =
     signal === undefined ||
     !relativePath ||
-    !scopable ||
+    !(typeof scopable === "function" ? scopable(cursor.count) : scopable) ||
     tickMayTouchFile(signal, cursor.at, cursor.gitTick, relativePath);
   const next: Cursor = {
     trigger,
