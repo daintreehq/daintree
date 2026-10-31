@@ -30,6 +30,7 @@ import {
   BLUE_YELLOW_OVERRIDES,
   ALL_CVD_TOKENS,
 } from "../../../src/theme/applyAppTheme";
+import { getColorVisionWrites } from "../../../shared/theme/colorVisionOverrides.js";
 import { parseAppThemeContent } from "../../../electron/utils/appThemeImporter";
 import { AGENT_REGISTRY } from "../../../shared/config/agentRegistry";
 import { BRAND_MARK_SURFACES, resolveBrandMarkInk } from "../../../src/lib/brandIcon";
@@ -822,14 +823,17 @@ export function runThemeSwitchChain(stand: RootStandIn, grade: boolean): SwitchP
     applyColorVisionMode(stand.root, mode, last);
     cvdOverridden += Object.keys(overrides).length;
     if (!grade) continue;
-    for (const [token, value] of Object.entries(overrides)) {
+    // The syntax and graphical status inks are the map's seeds fitted to this
+    // theme's floors, so each token is held to what the mode writes over it.
+    const writes = getColorVisionWrites(mode, last);
+    for (const token of Object.keys(overrides)) {
       const declared = stand.declared.get(token);
       // A text ink's map entry is the raw override standing in for the ink the
       // mode lifts against this theme, so all it owes here is to have replaced
       // the theme's own.
       if (LIFTED_TEXT_INK.test(token)) {
         if (declared === undefined || declared === base[token]) cvdMisses += 1;
-      } else if (declared !== value) {
+      } else if (declared !== writes[token]) {
         cvdMisses += 1;
       }
     }

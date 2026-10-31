@@ -1,11 +1,23 @@
 /**
- * Color-vision-deficiency override maps extracted from the runtime applyAppTheme
- * module so they can be tested without importing DOM-coupled renderer code.
+ * Color-vision-deficiency override maps, and the writes a mode makes over a
+ * theme, kept out of the runtime applyAppTheme module so they can be tested
+ * without importing DOM-coupled renderer code.
  *
  * Each map stores hardcoded hex values that replace theme tokens when a CVD mode
  * is active. The maps are hand-authored to maintain distinguishability under
  * protanopia / deuteranopia (red-green) and tritanopia (blue-yellow).
  */
+
+import {
+  STATUS_INK_CONTRAST,
+  STATUS_TEXT_INKS,
+  SYNTAX_CANVAS_FLOORS,
+  SYNTAX_CANVAS_SURFACE,
+  isHexColor,
+} from "./contrast.js";
+import { liftToContrast } from "./oklch.js";
+import { deriveDestructiveAction, deriveDiffTextInks, deriveStatusTextInks } from "./themes.js";
+import type { AppColorScheme, AppThemeTokenKey, ColorVisionMode } from "./types.js";
 
 // Status base token -> its derived surface-wash token. When CVD mode patches a
 // status base color, the pre-baked surface rgba (computed from the *original*
@@ -184,3 +196,86 @@ export const ALL_CVD_TOKENS: ReadonlySet<string> = new Set([
   ...Object.keys(RED_GREEN_OVERRIDES),
   ...Object.keys(BLUE_YELLOW_OVERRIDES),
 ]);
+
+const COLOR_VISION_OVERRIDES: Partial<Record<ColorVisionMode, Record<string, string>>> = {
+  "red-green": RED_GREEN_OVERRIDES,
+  "blue-yellow": BLUE_YELLOW_OVERRIDES,
+};
+
+// Each text ink lifted from a status ink, beside the status ink it follows.
+const LIFTED_TEXT_INKS: ReadonlyArray<readonly [AppThemeTokenKey, AppThemeTokenKey]> = [
+  ["diff-text-insert", "status-success"],
+  ["diff-text-delete", "status-danger"],
+  ...(Object.entries(STATUS_TEXT_INKS) as Array<[AppThemeTokenKey, AppThemeTokenKey]>).map(
+    ([status, text]) => [text, status] as const
+  ),
+];
+
+// Headroom over each floor for the compositor rounding a channel the other way,
+// the same margin the theme's own derived inks take.
+const FIT_HEADROOM = 0.05;
+
+/**
+ * Everything a colour-vision mode writes over `scheme`. The maps hold one hex per
+ * token for both polarities, so each syntax and graphical status ink a mode swaps
+ * in is moved along lightness, at its own hue, until it holds the floor this
+ * theme's own ink is held to on this theme's surfaces (#15580). The text inks and
+ * the destructive fill that follow a status ink are then derived from the ink the
+ * mode actually paints, the way the theme derives its own; one whose status ink
+ * the mode leaves alone keeps the theme's. Without a scheme the map's raw values
+ * are all there is.
+ */
+export function getColorVisionWrites(
+  mode: ColorVisionMode,
+  scheme?: AppColorScheme
+): Record<string, string> {
+  const overrides = COLOR_VISION_OVERRIDES[mode];
+  if (!overrides) return {};
+  const writes = { ...overrides };
+  if (!scheme) return writes;
+  const effective: Partial<Record<AppThemeTokenKey, string>> = { ...scheme.tokens };
+  for (const [name, value] of Object.entries(overrides)) {
+    effective[name.slice("--theme-".length) as AppThemeTokenKey] = value;
+  }
+
+  const fit = (
+    token: AppThemeTokenKey,
+    surfaces: readonly AppThemeTokenKey[],
+    minimum: number
+  ): void => {
+    const seed = overrides[`--theme-${token}`];
+    if (seed === undefined) return;
+    // A surface the hex maths can't read (a custom theme's `color-mix()`) is left
+    // out rather than guessed at; with none left the raw value stands.
+    const backdrops = surfaces
+      .map((surface) => scheme.tokens[surface])
+      .filter((value): value is string => typeof value === "string" && isHexColor(value));
+    let ink = liftToContrast(seed, backdrops, minimum + FIT_HEADROOM, scheme.type);
+    // A custom surface can leave room for the floor but not the headroom over it
+    // (a dark canvas at #767676 takes white to 4.54:1); the floor still holds.
+    if (ink === seed) ink = liftToContrast(seed, backdrops, minimum, scheme.type);
+    effective[token] = ink;
+    writes[`--theme-${token}`] = ink;
+  };
+  for (const [token, floor] of SYNTAX_CANVAS_FLOORS) fit(token, [SYNTAX_CANVAS_SURFACE], floor);
+  for (const token of STATUS_INK_CONTRAST.inks) {
+    fit(token, STATUS_INK_CONTRAST.surfaces, STATUS_INK_CONTRAST.minimum);
+  }
+
+  const inks: Partial<Record<AppThemeTokenKey, string>> = {
+    ...deriveDiffTextInks(effective, scheme.type),
+    ...deriveStatusTextInks(effective, scheme.type),
+  };
+  for (const [token, status] of LIFTED_TEXT_INKS) {
+    const ink = inks[token];
+    if (`--theme-${status}` in overrides && ink !== undefined) writes[`--theme-${token}`] = ink;
+  }
+  // The destructive button's fills are derived from the danger ink too, so a mode
+  // that swaps the danger hue re-derives them rather than leaving the old red.
+  if ("--theme-status-danger" in overrides) {
+    for (const [token, value] of Object.entries(deriveDestructiveAction(effective, scheme.type))) {
+      if (value !== undefined) writes[`--theme-${token}`] = value;
+    }
+  }
+  return writes;
+}
