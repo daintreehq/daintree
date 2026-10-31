@@ -32,22 +32,27 @@ vi.mock("../DatabaseMaintenanceService.js", () => ({
 import { CHANNELS } from "../../ipc/channels.js";
 import {
   buildDatabaseBackupNotice,
-  flushPendingDatabaseBackupNotice,
   formatBackupTime,
   installDatabaseBackupNotice,
+  noteDatabaseNoticeRendererReady,
   resetDatabaseBackupNoticeForTest,
   showDatabaseBackupNotice,
 } from "../databaseBackupNotice.js";
 
 const WRITTEN_AT = Date.UTC(2026, 9, 30, 14, 5);
+const DAY_EARLIER = WRITTEN_AT - 24 * 60 * 60 * 1000;
 const SAVED = { kind: "saved", writtenAt: WRITTEN_AT } as const;
 const CORRUPTION: BackupSuspensionNotice = { reason: "corruption", backup: SAVED };
 const VERIFICATION: BackupSuspensionNotice = { reason: "verification", backup: SAVED };
 
-function view(id: number, opts: { cached?: boolean; destroyed?: boolean } = {}): FakeWebContents {
+function view(
+  id: number,
+  opts: { cached?: boolean; destroyed?: boolean; ready?: boolean } = {}
+): FakeWebContents {
   if (opts.cached) cachedIds.add(id);
   const wc = { id, send: vi.fn(), isDestroyed: () => opts.destroyed ?? false };
   views.push(wc);
+  if (opts.ready ?? true) noteDatabaseNoticeRendererReady(id);
   return wc;
 }
 
@@ -73,6 +78,7 @@ describe("databaseBackupNotice", () => {
       const { message, duration } = buildDatabaseBackupNotice(CORRUPTION);
 
       expect(message).toContain(formatBackupTime(WRITTEN_AT));
+      expect(message).not.toContain(formatBackupTime(DAY_EARLIER));
       expect(message).toMatch(/relaunching will try to recover from that backup/i);
       expect(message).toMatch(/successful restore won't include changes made since/i);
       expect(message).toMatch(/if the backup can't be used, the database starts fresh/i);
@@ -114,12 +120,36 @@ describe("databaseBackupNotice", () => {
       expect(payload.message).toMatch(/stopped making them/i);
       expect(payload.message).not.toMatch(/restor|recover|relaunch|restart|corrupt|damage/i);
       expect(payload.title).not.toBe(buildDatabaseBackupNotice(CORRUPTION).title);
+      // Raised by an idle tick while the user is away: a timed toast would be gone.
+      expect(payload.duration).toBe(0);
     });
 
     it("names when the kept backup was written", () => {
-      expect(buildDatabaseBackupNotice(VERIFICATION).message).toContain(
-        formatBackupTime(WRITTEN_AT)
-      );
+      const { message } = buildDatabaseBackupNotice(VERIFICATION);
+
+      expect(message).toContain(formatBackupTime(WRITTEN_AT));
+      expect(message).not.toContain(formatBackupTime(DAY_EARLIER));
+      expect(message).toMatch(/changes made since then aren't backed up/i);
+    });
+
+    it("says nothing is backed up when no backup exists", () => {
+      const { message } = buildDatabaseBackupNotice({
+        reason: "verification",
+        backup: { kind: "missing" },
+      });
+
+      expect(message).toMatch(/no earlier backup exists/i);
+      expect(message).not.toMatch(/existing backup/i);
+    });
+
+    it("keeps the existing backup without a time when its metadata is unreadable", () => {
+      const { message } = buildDatabaseBackupNotice({
+        reason: "verification",
+        backup: { kind: "unreadable" },
+      });
+
+      expect(message).toMatch(/existing backup is kept/i);
+      expect(message).not.toMatch(/no earlier backup|, saved /i);
     });
 
     it("rate-limits apart from the corruption notice", () => {
@@ -127,6 +157,10 @@ describe("databaseBackupNotice", () => {
         buildDatabaseBackupNotice(CORRUPTION).rateLimitKey
       );
     });
+  });
+
+  it("formats different backup times differently", () => {
+    expect(formatBackupTime(WRITTEN_AT)).not.toBe(formatBackupTime(DAY_EARLIER));
   });
 
   describe("delivery", () => {
@@ -151,13 +185,48 @@ describe("databaseBackupNotice", () => {
 
     it("holds the notice while no window is open and delivers it once one is interactive", () => {
       showDatabaseBackupNotice(CORRUPTION);
-      flushPendingDatabaseBackupNotice();
 
       const reopened = view(4);
-      flushPendingDatabaseBackupNotice();
-      flushPendingDatabaseBackupNotice();
+      noteDatabaseNoticeRendererReady(4);
 
       expect(toastsSentTo(reopened)).toEqual([buildDatabaseBackupNotice(CORRUPTION)]);
+    });
+
+    it("waits for a loading window's first-interactive instead of sending into it", () => {
+      const loading = view(8, { ready: false });
+
+      showDatabaseBackupNotice(CORRUPTION);
+      expect(toastsSentTo(loading)).toEqual([]);
+
+      noteDatabaseNoticeRendererReady(8);
+      noteDatabaseNoticeRendererReady(8);
+      expect(toastsSentTo(loading)).toEqual([buildDatabaseBackupNotice(CORRUPTION)]);
+    });
+
+    it("keeps the notice when every send fails, for the next ready renderer", () => {
+      const closing = view(9);
+      closing.send.mockImplementation(() => {
+        throw new Error("Render frame was disposed");
+      });
+
+      showDatabaseBackupNotice(CORRUPTION);
+      const next = view(10);
+
+      expect(toastsSentTo(next)).toEqual([buildDatabaseBackupNotice(CORRUPTION)]);
+    });
+
+    it("counts a notice delivered when one of several recipients fails", () => {
+      const closing = view(11);
+      closing.send.mockImplementation(() => {
+        throw new Error("Render frame was disposed");
+      });
+      const other = view(12);
+
+      showDatabaseBackupNotice(CORRUPTION);
+      const later = view(13);
+
+      expect(toastsSentTo(other)).toHaveLength(1);
+      expect(toastsSentTo(later)).toEqual([]);
     });
 
     it("keeps a held corruption notice over a later backups-stopped one", () => {
@@ -165,7 +234,6 @@ describe("databaseBackupNotice", () => {
       showDatabaseBackupNotice(VERIFICATION);
 
       const reopened = view(5);
-      flushPendingDatabaseBackupNotice();
 
       expect(toastsSentTo(reopened)).toEqual([buildDatabaseBackupNotice(CORRUPTION)]);
     });
@@ -175,7 +243,6 @@ describe("databaseBackupNotice", () => {
       showDatabaseBackupNotice(CORRUPTION);
 
       const reopened = view(6);
-      flushPendingDatabaseBackupNotice();
 
       expect(toastsSentTo(reopened)).toEqual([buildDatabaseBackupNotice(CORRUPTION)]);
     });

@@ -26,7 +26,7 @@ import {
 } from "../../../services/plugin/projectLayoutSeeds.js";
 import { relaunchApp } from "../../../lifecycle/appRelaunch.js";
 import { getDatabaseMaintenanceService } from "../../../services/DatabaseMaintenanceService.js";
-import { flushPendingDatabaseBackupNotice } from "../../../services/databaseBackupNotice.js";
+import { noteDatabaseNoticeRendererReady } from "../../../services/databaseBackupNotice.js";
 import { USAGE_WINDOW_MS, MAX_USES_PER_ENTRY } from "../../../../shared/utils/actionUsage.js";
 
 export const CRASH_CRITICAL_FIELDS = new Set([
@@ -1271,8 +1271,8 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         webContentsId: ctx.webContentsId,
       });
       signalFirstInteractive(ctx.webContentsId);
-      // A backup suspension raised while no window was open waits for this one.
-      flushPendingDatabaseBackupNotice();
+      // A backup suspension raised while no window could show it waits for this one.
+      noteDatabaseNoticeRendererReady(ctx.webContentsId);
       // Close the cold-start timeline for a view this window's manager
       // cold-started (input-ready log + trace mark); no-op for warm views.
       // Same per-window resolution as APP_VIEW_PAINTED below.

@@ -17,6 +17,9 @@ const VERIFICATION_KEY = "database-backups-suspended:verification";
 
 let unsubscribe: (() => void) | null = null;
 let pending: MainProcessToastPayload | null = null;
+// Views register before they load, so a live WebContents is no proof its toast
+// listener is mounted. Only one that has reported first-interactive is.
+const readyRenderers = new Set<number>();
 
 export function formatBackupTime(writtenAt: number): string {
   return new Date(writtenAt).toLocaleString(undefined, {
@@ -75,30 +78,35 @@ export function buildDatabaseBackupNotice(notice: BackupSuspensionNotice): MainP
  * since cached project views would each raise their own.
  */
 function deliver(payload: MainProcessToastPayload): boolean {
-  const live = getAllAppWebContents().filter((wc) => !wc.isDestroyed());
-  if (live.length === 0) return false;
-  const visible = live.filter((wc) => !isCachedViewWebContents(wc.id));
-  for (const wc of visible.length > 0 ? visible : live) {
+  const ready = getAllAppWebContents().filter(
+    (wc) => !wc.isDestroyed() && readyRenderers.has(wc.id)
+  );
+  const visible = ready.filter((wc) => !isCachedViewWebContents(wc.id));
+  let delivered = false;
+  for (const wc of visible.length > 0 ? visible : ready) {
     try {
       wc.send(CHANNELS.NOTIFICATION_SHOW_TOAST, payload);
+      delivered = true;
     } catch {
       // A view torn down mid-send; the others still get it.
     }
   }
-  return true;
+  return delivered;
 }
 
 export function showDatabaseBackupNotice(notice: BackupSuspensionNotice): void {
   const payload = buildDatabaseBackupNotice(notice);
   if (deliver(payload)) return;
-  // macOS keeps running with every window closed. Hold the notice for the
-  // next window rather than tell no one; corruption outranks a held
+  // No window ready to show it: macOS keeps running with every window closed,
+  // and a reopened one may still be loading. Hold the notice for the next
+  // ready renderer rather than tell no one; corruption outranks a held
   // "backups stopped".
   if (pending?.rateLimitKey !== CORRUPTION_KEY) pending = payload;
 }
 
-/** Called once a renderer is interactive, so its toast listener is mounted. */
-export function flushPendingDatabaseBackupNotice(): void {
+/** A renderer reported first-interactive, so its toast listener is mounted. */
+export function noteDatabaseNoticeRendererReady(webContentsId: number): void {
+  readyRenderers.add(webContentsId);
   if (pending && deliver(pending)) pending = null;
 }
 
@@ -113,4 +121,5 @@ export function resetDatabaseBackupNoticeForTest(): void {
   unsubscribe?.();
   unsubscribe = null;
   pending = null;
+  readyRenderers.clear();
 }

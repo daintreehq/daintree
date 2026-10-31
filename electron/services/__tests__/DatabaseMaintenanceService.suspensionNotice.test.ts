@@ -200,6 +200,34 @@ describe("DatabaseMaintenanceService backup suspension notices", () => {
     expect(notices).toEqual([{ reason: "verification", backup: SAVED }]);
   });
 
+  // The tick stops backing up once suspended, so further failures can only be
+  // driven directly: the notice must not depend on that guard to stay single.
+  const failVerification = (verdict: "corrupt" | "unknown") =>
+    (
+      service as unknown as { onBackupVerifyFailed(verdict: string, backupPath: string): void }
+    ).onBackupVerifyFailed(verdict, BACKUP_PATH);
+
+  it("reports stopped backups once however many failures follow the latch", async () => {
+    mockDbModule.probeDbFile.mockReturnValue("unknown");
+    startSession(false);
+    await idleTicks(4);
+
+    failVerification("unknown");
+    failVerification("corrupt");
+
+    expect(notices).toEqual([{ reason: "verification", backup: SAVED }]);
+  });
+
+  it("does not follow a corruption notice with a backups-stopped one", async () => {
+    quickCheckReturns(CORRUPT_RESULT);
+    startSession(true);
+    await idleTicks(1);
+
+    for (let i = 0; i < 3; i++) failVerification("unknown");
+
+    expect(notices).toEqual([{ reason: "corruption", backup: SAVED }]);
+  });
+
   it("reports stopped backups when candidates repeatedly cannot be verified at all", async () => {
     mockDbModule.probeDbFile.mockReturnValue("unknown");
     startSession(false);

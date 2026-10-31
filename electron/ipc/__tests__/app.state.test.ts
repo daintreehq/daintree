@@ -164,7 +164,7 @@ vi.mock("../../window/deferredInitQueue.js", () => ({
 }));
 
 vi.mock("../../services/databaseBackupNotice.js", () => ({
-  flushPendingDatabaseBackupNotice: vi.fn(),
+  noteDatabaseNoticeRendererReady: vi.fn(),
 }));
 
 vi.mock("../../utils/performance.js", () => ({
@@ -203,7 +203,7 @@ vi.mock("../../ipc/utils.js", async (importOriginal) => {
 });
 
 import { registerAppStateHandlers } from "../handlers/app/state.js";
-import { flushPendingDatabaseBackupNotice } from "../../services/databaseBackupNotice.js";
+import { noteDatabaseNoticeRendererReady } from "../../services/databaseBackupNotice.js";
 import { CHANNELS } from "../channels.js";
 import { consumePrefetchedHydrateResult } from "../../services/prefetchHydrateCache.js";
 import {
@@ -2490,8 +2490,8 @@ describe("app:set-state grid layout patch (#14700)", () => {
 });
 
 describe("app:first-interactive handler", () => {
-  it("releases a database backup notice held while no window was open", async () => {
-    vi.mocked(flushPendingDatabaseBackupNotice).mockClear();
+  it("marks the sender ready for a held database backup notice", async () => {
+    vi.mocked(noteDatabaseNoticeRendererReady).mockClear();
     ipcHandlers.clear();
     const cleanup = registerAppStateHandlers();
     const handler = ipcHandlers.get(CHANNELS.APP_FIRST_INTERACTIVE);
@@ -2500,6 +2500,6 @@ describe("app:first-interactive handler", () => {
     await handler(makeInvokeEvent(7));
     cleanup();
 
-    expect(flushPendingDatabaseBackupNotice).toHaveBeenCalledTimes(1);
+    expect(noteDatabaseNoticeRendererReady).toHaveBeenCalledExactlyOnceWith(7);
   });
 });
