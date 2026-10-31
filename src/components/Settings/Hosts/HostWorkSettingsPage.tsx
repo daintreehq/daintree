@@ -19,7 +19,7 @@ import {
   isIdleShellThresholdMinutes,
   type IdleShellThresholdMinutes,
 } from "@shared/types/ipc/idleBackgroundAutoClose";
-import { isSensitiveEnvKey } from "@shared/utils/envVars";
+import { isSecretEnvEntry } from "@/utils/secretDetection";
 import { canopyLocalOn, canopyStopOn } from "@/components/Canopy/canopyTerms";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
@@ -941,7 +941,8 @@ function HostEnvironmentSection({
               row={row}
               position={index + 1}
               error={rowErrors[row.id]}
-              sensitive={isSensitiveEnvKey(row.key)}
+              // Name or value, as the global editor masks; a reveal holds while the row is edited.
+              sensitive={isSecretEnvEntry(row.key, row.value)}
               revealed={revealed.has(row.id)}
               onToggleReveal={() =>
                 setRevealed((prev) => {
