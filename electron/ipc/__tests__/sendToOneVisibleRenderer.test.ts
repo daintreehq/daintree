@@ -24,6 +24,8 @@ const state = vi.hoisted(() => ({
   cached: new Set<number>(),
   windowOf: new Map<number, unknown>(),
   focusOrder: [] as unknown[],
+  /** Window id → the webContents id of the outgoing view its cold switch holds. */
+  bridgeOf: new Map<number, number>(),
   hasRegistry: true,
 }));
 
@@ -50,6 +52,17 @@ vi.mock("../../window/windowRef.js", () => ({
       ? {
           focusOrder: () =>
             (state.focusOrder as FakeWindow[]).map((browserWindow) => ({ browserWindow })),
+          getByWindowId: (windowId: number) => ({
+            services: {
+              projectViewManager: {
+                getOutgoingBridgeProjectId: () => {
+                  const wcId = state.bridgeOf.get(windowId);
+                  return wcId === undefined ? null : `project-of-${wcId}`;
+                },
+                getProjectIdForWebContents: (wcId: number) => `project-of-${wcId}`,
+              },
+            },
+          }),
         }
       : null
   ),
@@ -107,6 +120,25 @@ function closeWindow(entry: { win: FakeWindow; view: FakeView }) {
   state.focusOrder = state.focusOrder.filter((w) => w !== entry.win);
 }
 
+/**
+ * Cold switch: the window now points at an incoming view that hasn't loaded,
+ * and holds the outgoing one on screen — hydrated, uncached, still registered.
+ */
+function coldSwitch(entry: { win: FakeWindow; view: FakeView }): FakeView {
+  const incoming = makeView(entry.win, { hydrated: false });
+  state.shown = state.shown.map((v) => (v === entry.view ? incoming : v));
+  state.all.push(incoming);
+  state.bridgeOf.set(entry.win.id, entry.view.id);
+  return incoming;
+}
+
+/** A background restore: registered and uncached, but never a window's shown view. */
+function backgroundRestore(win: FakeWindow): FakeView {
+  const view = makeView(win);
+  state.all.push(view);
+  return view;
+}
+
 function remoteEndpoint(handle: number): ClientEndpoint & { send: Mock<(f: HostFrame) => void> } {
   return {
     endpointId: `remote-view:${handle}`,
@@ -135,6 +167,7 @@ beforeEach(() => {
   state.cached.clear();
   state.windowOf.clear();
   state.focusOrder = [];
+  state.bridgeOf.clear();
   state.hasRegistry = true;
   _resetViewHydrationForTesting();
   _resetEndpointRegistryForTesting();
@@ -349,11 +382,7 @@ describe("sendToOneVisibleRenderer", () => {
   });
   it("keeps playing in the outgoing view while a cold switch's incoming view loads", () => {
     const a = openWindow({ focused: true });
-    // Cold switch: the window now points at the incoming view, not yet loaded;
-    // the outgoing one is hydrated, uncached, and still a registered view.
-    const incoming = makeView(a.win, { hydrated: false });
-    state.shown = state.shown.map((v) => (v === a.view ? incoming : v));
-    state.all.push(incoming);
+    const incoming = coldSwitch(a);
 
     sendToOneVisibleRenderer(channel, 1);
 
@@ -367,9 +396,7 @@ describe("sendToOneVisibleRenderer", () => {
     sendToOneVisibleRenderer(channel, 1);
     expect(a.view.send).toHaveBeenCalledTimes(1);
 
-    const incoming = makeView(a.win, { hydrated: false });
-    state.shown = state.shown.map((v) => (v === a.view ? incoming : v));
-    state.all.push(incoming);
+    const incoming = coldSwitch(a);
     sendToOneVisibleRenderer(channel, 2);
 
     expect(b.view.send.mock.calls).toEqual([[channel, 2]]);
@@ -379,6 +406,14 @@ describe("sendToOneVisibleRenderer", () => {
   it("skips a destroyed view still listed ahead of a live one", () => {
     const dead = openWindow({ focused: true, hydrated: false });
     const live = openWindow({ hydrated: false });
+    // Electron throws reading a destroyed webContents' properties.
+    const deadId = dead.view.id;
+    Object.defineProperty(dead.view, "id", {
+      get: () => {
+        if (dead.view.destroyed) throw new Error("Object has been destroyed");
+        return deadId;
+      },
+    });
     dead.view.destroyed = true;
 
     expect(sendToOneVisibleRenderer(channel, 1)).toBe(true);
@@ -411,5 +446,27 @@ describe("sendToOneVisibleRenderer", () => {
 
     expect(b.view.send.mock.calls).toEqual([[channel, 3]]);
     expect(a.view.send).not.toHaveBeenCalled();
+  });
+  it("never picks a background restore, even hydrated, over a booting shown view", () => {
+    const a = openWindow({ focused: true, hydrated: false });
+    const restoring = backgroundRestore(a.win);
+
+    sendToOneVisibleRenderer(channel, 1);
+
+    expect(a.view.send).toHaveBeenCalledTimes(1);
+    expect(restoring.send).not.toHaveBeenCalled();
+  });
+
+  it("prefers a cold switch's outgoing view over a background restore in the focused window", () => {
+    const a = openWindow({ focused: true });
+    const incoming = coldSwitch(a);
+    const restoring = backgroundRestore(a.win);
+    // Listed ahead of the outgoing view, so only the bridge rule keeps it out.
+    state.all = [restoring, ...state.all.filter((v) => v !== restoring)];
+
+    sendToOneVisibleRenderer(channel, 1);
+
+    expect(a.view.send).toHaveBeenCalledTimes(1);
+    expect(sendCount(incoming, restoring)).toBe(0);
   });
 });

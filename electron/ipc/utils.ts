@@ -744,6 +744,15 @@ function windowFocusRanks(): Map<number, number> {
   return ranks;
 }
 
+/** The view a cold switch is holding on screen while the incoming one loads. */
+function isOutgoingBridge(wc: WebContents): boolean {
+  const win = getWindowForWebContents(wc);
+  if (!win || win.isDestroyed()) return false;
+  const pvm = getWindowRegistry()?.getByWindowId(win.id)?.services.projectViewManager;
+  const outgoing = pvm?.getOutgoingBridgeProjectId() ?? null;
+  return outgoing !== null && pvm?.getProjectIdForWebContents(wc.id) === outgoing;
+}
+
 function singleTargetCandidates(channel: string, args: unknown[]): WebContents[] {
   const pool: WebContents[] = [];
   const seen = new Set<number>();
@@ -755,10 +764,20 @@ function singleTargetCandidates(channel: string, args: unknown[]): WebContents[]
     if (isSingleTargetEligible(wc, channel, args)) pool.push(wc);
   };
   for (const wc of getShownAppWebContents()) consider(wc, true);
-  // Uncached renderers that are no window's shown view: a cold switch points
-  // the window at the incoming view before it loads, while the outgoing one is
-  // still hydrated and listening until it is cached.
-  for (const wc of getAllAppWebContents()) consider(wc, false);
+  // A cold switch points the window at the incoming view before it loads,
+  // while the outgoing one stays on screen, hydrated and listening. Other
+  // uncached views are left out: a background restore is never attached, and
+  // the efficiency sweep can freeze it before it is parked, so a send would
+  // succeed and play late.
+  const all = getAllAppWebContents();
+  for (const wc of all) {
+    if (!wc.isDestroyed() && !seen.has(wc.id) && isOutgoingBridge(wc)) consider(wc, false);
+  }
+  // No window has a registered shown view (early boot, or a window that never
+  // registered one): any uncached renderer, still only one of them.
+  if (pool.length === 0) {
+    for (const wc of all) consider(wc, false);
+  }
   if (pool.length <= 1) return pool;
 
   const sticky = singleTargetByChannel.get(channel);
@@ -789,15 +808,16 @@ function singleTargetCandidates(channel: string, args: unknown[]): WebContents[]
  * so even a visible-only broadcast played one copy per open window and kept
  * every window's context awake through a pulse train.
  *
- * Candidates are the uncached app renderers. Choice, in order: a view whose
- * current document has hydrated (its listeners are mounted) over one still
- * booting; a window's shown view over one that is on its way out; the renderer
- * that took this channel last, so focus moving between windows doesn't wake a
- * second context; the window focused right now; then focus history. Unfocused
- * and minimised windows still qualify, because another app being in front is
- * the normal case for an attention sound. Cached, crashed and withheld views
- * never do. The target is revalidated on every send, so a closed window simply
- * loses its turn, and a send that throws falls through to the next candidate.
+ * Candidates are each window's shown view and any outgoing view a cold switch
+ * still holds on screen. Choice, in order: a view whose current document has
+ * hydrated (its listeners are mounted) over one still booting; a window's
+ * shown view over one on its way out; the renderer that took this channel
+ * last, so focus moving between windows doesn't wake a second context; the
+ * window focused right now; then focus history. Unfocused and minimised
+ * windows still qualify, because another app being in front is the normal
+ * case for an attention sound. Cached, crashed and withheld views never do.
+ * The target is revalidated on every send, so a closed window simply loses
+ * its turn, and a send that throws falls through to the next candidate.
  *
  * Remote endpoints are other machines and each still gets its copy. Returns
  * whether a local renderer took the push.
