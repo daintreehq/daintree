@@ -26,8 +26,13 @@ import {
   withResolvedWorkspace,
 } from "../shared.js";
 import { TOOL_RESULT_TEXT_MAX_BYTES } from "../toolCallResult.js";
-import { SessionBindingError, RendererBridgeUnavailableError } from "../rendererBridge.js";
+import {
+  SessionBindingError,
+  RendererBridgeUnavailableError,
+  NoFrontendAttachedError,
+} from "../rendererBridge.js";
 import { setMcpDriveTargetResolver } from "../driveTarget.js";
+import { MCP_EXTERNAL_BASE_MANIFEST } from "../generated/mcpExternalBaseManifest.js";
 import {
   fakeSessionStore,
   fakeDeps,
@@ -747,6 +752,29 @@ describe("structuredContent for terminal query actions (#10676)", () => {
     const result = await callTool(server, { name: "terminal.list", arguments: {} });
 
     expect(structuredOf(result)).toBeUndefined();
+    expect(JSON.parse(textOf(result))).toEqual(payload);
+  });
+
+  it("emits structuredContent for a windowless-only tool when no frontend is attached (#15731)", async () => {
+    // `agent.listModels` is in the viewless catalog but not the external tier, so
+    // the cold-cache lookup under NoFrontendAttachedError used to find no entry
+    // and the same call answered as JSON text only.
+    // Pinned so the test fails loudly, rather than silently passing without the
+    // fix, if the tool ever joins the external tier the old lookup read.
+    expect(MCP_EXTERNAL_BASE_MANIFEST.some((e) => e.id === "agent.listModels")).toBe(false);
+    const payload = { agents: [{ agentId: "codex", models: [] }] };
+    const server = createSessionServer(
+      "sc-viewless-only",
+      fakeDeps({
+        sessionStore: fakeSessionStore("full"),
+        getCachedManifest: vi.fn(() => null),
+        requestManifest: vi.fn().mockRejectedValue(new NoFrontendAttachedError("ws-1")),
+        dispatchAction: vi.fn().mockResolvedValue({ result: { ok: true, result: payload } }),
+      })
+    );
+    const result = await callTool(server, { name: "agent.listModels", arguments: {} });
+
+    expect(structuredOf(result)).toEqual(payload);
     expect(JSON.parse(textOf(result))).toEqual(payload);
   });
 

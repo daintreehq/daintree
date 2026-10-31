@@ -8,7 +8,7 @@ import {
   McpRouteBindingError,
   NoFrontendAttachedError,
 } from "./rendererBridge.js";
-import { getExternalBaseManifest } from "./baseManifest.js";
+import { getExternalBaseManifest, getViewlessHelpBaseManifest } from "./baseManifest.js";
 import {
   shouldExposeTool,
   type SessionSurfacePolicy,
@@ -194,9 +194,12 @@ export async function lookupManifestEntry(
       // No frontend is attached, which is not a route that went away: the
       // dispatch can still run in main, or say it needs a frontend. The host's
       // base surface describes the built-in actions it covers, so their danger
-      // and output schema stay known.
+      // and output schema stay known. The external tier alone leaves out a tool
+      // main runs without a view (`agent.listModels`), which would then answer
+      // as JSON text here and in `structured` on a host with a window open
+      // (#15731), so the viewless catalog is read too.
       if (err instanceof NoFrontendAttachedError) {
-        return getExternalBaseManifest().find((e) => e.id === actionId);
+        return getViewlessHelpBaseManifest().find((e) => e.id === actionId);
       }
       // A route that is gone is not a manifest that is merely unavailable
       // (#12082). Collapsing it to `undefined` here makes the bound-session

@@ -2612,9 +2612,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // under the skip there is no typed-name gate either. The grant's use is
         // still spent. The assistant's protected close (#12881) settles the
         // preference above, where it would otherwise ask.
-        // With no frontend attached the host's base surface describes only the
-        // external tier, so an action the host runs itself is read from its own
-        // catalog, which restates each one's renderer danger (#13495).
+        // With no frontend attached the lookup reads the host's generated base
+        // surface; an action it lacks that the host runs itself falls back to its
+        // own catalog, which restates each one's renderer danger (#13495).
         const declaredDanger = entry?.danger ?? viewlessActionDanger(actionId);
         const confirmGated =
           declaredDanger !== undefined &&
