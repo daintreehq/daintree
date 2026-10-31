@@ -179,19 +179,14 @@ describe("diff token oracle", () => {
   it("catches the same attack built from genuine holes rather than undefined", () => {
     // The production tree is holey outside the hunks, so the attack has to be
     // rejected in that representation too, not only as `.fill(undefined)`.
+    // The one entry is the REAL first line, so the content term can only fire
+    // by noticing the rendered lines that are missing.
     const real = realTokens();
     const holey = {
       old: new Array(real.old.length),
       new: new Array(real.new.length),
     } as unknown as HunkTokens;
-    holey.old[0] = [
-      {
-        type: "element",
-        tagName: "span",
-        properties: { className: ["token", "keyword"] },
-        children: [{ type: "text", value: "const" }],
-      },
-    ] as never;
+    holey.old[0] = real.old[0]!;
 
     const grade = gradeTokens(holey, HUNKS, "required", RESERVED);
     expect(grade.tokenLineMisses).toBe(0);

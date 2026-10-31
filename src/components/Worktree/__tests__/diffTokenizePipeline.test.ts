@@ -11,7 +11,7 @@ import {
   tokenize,
 } from "react-diff-view";
 import type { HunkData, HunkTokens, TokenizeEnhancer } from "react-diff-view";
-import { tokenizeFast } from "../diffTokenizePipeline";
+import { MAX_GAP_FILLER_LINES, tokenizeFast, type RefractorLike } from "../diffTokenizePipeline";
 import { ensureLanguage, refractorAdapter } from "../diffRefractor";
 import { suppressFullLineEdits } from "../diffEditSuppression";
 import { runDiffTokenize } from "../diffTokenizer";
@@ -339,14 +339,54 @@ describe("tokenizeFast across gaps between hunks", () => {
     it(`lexes ${c.name} (${c.language}) the same however far apart the hunks are`, () => {
       // Gaps at, just over, and far over the collapse bound, after a hunk at
       // the top of the file and after one that has a leading gap of its own.
-      for (const headAt of [1, 2, 8, 9, 10, 300]) {
-        for (const gap of [0, 1, 2, 7, 8, 9, 10, 400]) {
+      for (const headAt of [1, 2, 16, 17, 18, 300]) {
+        for (const gap of [0, 1, 2, 15, 16, 17, 18, 400]) {
           const hunks = hunksOf(twoHunkDiff(c.head, c.tail, headAt, headAt + c.head.length + gap));
           expectParity(hunks, c.language);
         }
       }
     });
   }
+
+  it("keeps a C++ raw-string delimiter from matching across shortened gaps", async () => {
+    await ensureLanguage("cpp");
+    // `[^()\\ ]{0,16}` accepts newlines, so a cap under 16 would let these three
+    // carried lines join into a raw string the full gaps keep apart.
+    const diff = [
+      "diff --git a/a.cpp b/a.cpp",
+      "--- a/a.cpp",
+      "+++ b/a.cpp",
+      "@@ -100,1 +100,1 @@",
+      ' auto s = R"',
+      "@@ -200,1 +200,1 @@",
+      " (payload)",
+      "@@ -300,1 +300,1 @@",
+      ' ";',
+      "",
+    ].join("\n");
+    expectParity(hunksOf(diff), "cpp");
+  });
+
+  it("lexes the same text for a hunk at line 100,000 as at line 100", () => {
+    const lexed: string[] = [];
+    const recording: RefractorLike = {
+      highlight: (code, language) => {
+        lexed.push(code);
+        return refractorAdapter.highlight(code, language);
+      },
+    };
+    for (const at of [100, 100_000]) {
+      tokenizeFast(hunksOf(deepDiff(at)), {
+        highlight: true,
+        refractor: recording,
+        language: "typescript",
+      });
+    }
+    // Old and new side per call; the leading gap shrinks to the cap either way.
+    expect(lexed).toHaveLength(4);
+    expect(lexed.slice(2)).toEqual(lexed.slice(0, 2));
+    expect(lexed[0]!.startsWith("\n".repeat(MAX_GAP_FILLER_LINES) + " ")).toBe(true);
+  });
 
   it("keeps edit marks and picked ranges on the right lines past a gap", () => {
     const head = hunksOf(TS_DIFF);
@@ -385,8 +425,7 @@ describe("tokenizeFast malformed hunks", () => {
   it("still turns a last line number that is not a valid length into a null pass", async () => {
     for (const bad of [Number.NaN, -1, 2.5, 2 ** 32]) {
       const hunks = hunksOf(deepDiff(10));
-      const last = hunks[0]!.changes[hunks[0]!.changes.length - 1]! as { newLineNumber: number };
-      last.newLineNumber = bad;
+      Object.assign(hunks[0]!.changes[hunks[0]!.changes.length - 1]!, { newLineNumber: bad });
       const options = { highlight: true, refractor: refractorAdapter, language: "typescript" };
       expect(() => tokenizeFast(hunks, options), String(bad)).toThrow(RangeError);
       const result = await runDiffTokenize({
@@ -446,7 +485,7 @@ describe("tokenizeFast result size", () => {
     // Only the varint widths of the larger indices differ.
     expect(deep.byteLength).toBeLessThan(near.byteLength * 1.1);
 
-    const received = deserialize(deep) as HunkTokens;
+    const received: HunkTokens = deserialize(deep);
     const rendered = renderedSlots(hunksOf(deepDiff(100_000)));
     for (const side of ["old", "new"] as const) {
       expect(received[side].length).toBe(deepTokens[side].length);

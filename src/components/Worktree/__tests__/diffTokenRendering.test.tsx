@@ -2,7 +2,7 @@
 import { deserialize, serialize } from "node:v8";
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { Diff, Hunk, parseDiff } from "react-diff-view";
+import { Diff, getChangeKey, Hunk, parseDiff } from "react-diff-view";
 import type { HunkData, HunkTokens, ViewType } from "react-diff-view";
 import { runDiffTokenize } from "../diffTokenizer";
 
@@ -36,13 +36,14 @@ async function clonedTokens(hunks: HunkData[]): Promise<HunkTokens> {
     extraRanges: null,
   });
   expect(result.tokens).not.toBeNull();
-  return deserialize(serialize(result.tokens)) as HunkTokens;
+  const cloned: HunkTokens = deserialize(serialize(result.tokens));
+  return cloned;
 }
 
 describe("sparse token trees in the real diff table", () => {
   for (const viewType of ["unified", "split"] as ViewType[]) {
     it(`highlights every rendered line in the ${viewType} view`, async () => {
-      const hunks = parseDiff(DIFF)[0]!.hunks;
+      const hunks: HunkData[] = parseDiff(DIFF)[0]!.hunks;
       const tokens = await clonedTokens(hunks);
       // Holey: far fewer entries than the 5,003-line extent.
       expect(tokens.new.length).toBe(5_003);
@@ -54,18 +55,22 @@ describe("sparse token trees in the real diff table", () => {
         </Diff>
       );
 
-      const cells = [...container.querySelectorAll("td.diff-code:not(.diff-code-omit)")];
-      const contents = hunks.flatMap((hunk) => hunk.changes.map((change) => change.content));
+      const cells = [
+        ...container.querySelectorAll<HTMLElement>("td.diff-code:not(.diff-code-omit)"),
+      ];
+      const changes = hunks.flatMap((hunk) => hunk.changes);
+      const contentByKey = new Map(changes.map((change) => [getChangeKey(change), change.content]));
       // Split view draws a context line on both sides.
-      const contextLines = hunks.flatMap((hunk) => hunk.changes).filter((c) => c.type === "normal");
+      const contextLines = changes.filter((change) => change.type === "normal").length;
       expect(cells.length).toBe(
-        viewType === "split" ? contents.length + contextLines.length : contents.length
+        viewType === "split" ? changes.length + contextLines : changes.length
       );
       for (const cell of cells) {
-        expect(contents).toContain(cell.textContent);
-        expect(cell.querySelector(".token.keyword")?.textContent, cell.textContent ?? "").toBe(
-          "const"
-        );
+        // Each row's tokens rebuild that row's own line, so a tree read from the
+        // wrong side or the wrong index shows up as the wrong text.
+        const key = cell.dataset.changeKey ?? "";
+        expect(cell.textContent, key).toBe(contentByKey.get(key));
+        expect(cell.querySelector(".token.keyword")?.textContent, key).toBe("const");
       }
 
       // The deep pair carries its word-level edit marks, on the deep lines.

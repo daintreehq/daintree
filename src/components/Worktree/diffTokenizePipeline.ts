@@ -17,10 +17,10 @@ import type {
  * single-pass algorithms and structural sharing (safe: every downstream phase,
  * including the library's own `pickRanges`/`markEdits` enhancers, copies nodes
  * instead of mutating them). Unlike the library it lexes only those lines and
- * leaves every other absolute line a hole, so cost follows the size of the
- * diff rather than how deep in the file it sits. Edit detection stays on the
- * library's enhancers so ranking semantics can't drift — only the tree
- * plumbing is reimplemented.
+ * leaves every other absolute line a hole, so lexing, enhancing and cloning
+ * follow the size of the diff and depth in the file costs one hole per line.
+ * Edit detection stays on the library's enhancers so ranking semantics can't
+ * drift — only the tree plumbing is reimplemented.
  */
 
 export interface RefractorLike {
@@ -39,12 +39,15 @@ export interface FastTokenizeOptions {
  *
  * The library lexes one empty line per absolute line above and between the
  * hunks, so a one-line change at line 100,000 cost 100,000 lexed, split,
- * enhanced and cloned lines. A gap only ever reaches the lexer as a run of
- * newlines, and no shipped grammar counts newlines: the boundaries they see
- * are "line break" and "blank line". Gaps up to this bound lex byte-for-byte
- * as before; a longer run is shortened to it, which keeps both boundaries.
+ * enhanced and cloned lines. Gaps up to this bound lex byte-for-byte as
+ * before; a longer run of blank lines is shortened to it and still reads as a
+ * line break and a blank line. The one shipped rule with a bounded quantifier
+ * that can cross newlines, C++'s raw-string delimiter, spans at most 16
+ * characters, so it can't tell a shortened run from the original. PHP's
+ * heredoc delimiter can, by comparing two newline-spanning runs through a
+ * backreference, which no valid PHP produces.
  */
-export const MAX_GAP_FILLER_LINES = 8;
+export const MAX_GAP_FILLER_LINES = 16;
 
 const MAX_ARRAY_LENGTH = 2 ** 32 - 1;
 
@@ -64,10 +67,10 @@ function toSideText(
 ): SideText {
   if (changes.length === 0) return EMPTY_SIDE;
   // Mirrors the library: lines run from 1 to the LAST change's line number,
-  // so absolute line numbers in edit ranges stay aligned. The dense array this
-  // replaced was `new Array(lastLine)`: a non-number made a one-slot array no
-  // line fell inside, and a number that is not a valid length threw (which
-  // runDiffTokenize turns into a null pass). Both outcomes are kept.
+  // so absolute line numbers in edit ranges stay aligned. A non-number (which
+  // parseDiff and the expansion helpers never produce) leaves the side empty;
+  // a number that is not a valid length throws, as the `new Array(lastLine)`
+  // this replaced did, and runDiffTokenize turns that into a null pass.
   const lastLine: unknown = computeLineNumber(changes[changes.length - 1]!);
   if (typeof lastLine !== "number") return EMPTY_SIDE;
   if (!Number.isInteger(lastLine) || lastLine < 0 || lastLine > MAX_ARRAY_LENGTH) {
@@ -105,8 +108,9 @@ function toSideText(
  * Place each lexed line at its absolute index. Gap filler and every line no
  * hunk carries stay holes: react-diff-view only reads `tokens[side][line - 1]`
  * for rendered changes, every enhancer walks lines with `.map` (which skips
- * holes), and structured clone writes a holey array in its sparse form, so
- * neither the worker nor the main thread pays for lines nobody renders.
+ * holes), and structured clone writes a holey array in its sparse form. An
+ * unrendered line still costs a slot per array and a step per `.map`, which
+ * is pointer-sized work rather than a lexed, split, cloned and retained entry.
  */
 function scatter<T>(lexed: T[], side: SideText): T[] {
   const out = new Array<T>(side.length);

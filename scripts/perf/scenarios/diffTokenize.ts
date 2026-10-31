@@ -1438,7 +1438,7 @@ export const diffTokenizeScenarios: PerfScenario[] = [
     ],
     // Depth IS the workload. A fixture that quietly placed every hunk near the
     // top of the file would report flat readings with every predicate at zero.
-    workloadFloors: { deepestHunkLine: 100_000, depthCount: 3, changedLines: 30 },
+    workloadFloors: { hunkDepthLines: 100_000, depthCount: 3, changedLines: 30 },
     async run() {
       const prepared = DEEP_HUNK_LINES.map((atLine) => ({ atLine, hunks: deepHunkFor(atLine) }));
       // The floors only see the deepest depth and the totals, so a middle depth
@@ -1467,7 +1467,7 @@ export const diffTokenizeScenarios: PerfScenario[] = [
       let depthCount = 0;
       let tokenizeMisses = 0;
       let changedLines = 0;
-      let deepestHunkLine = 0;
+      let hunkDepthLines = 0;
       let tokenGrade = emptyTokenGrade();
 
       for (const { atLine, hunks } of prepared) {
@@ -1497,7 +1497,7 @@ export const diffTokenizeScenarios: PerfScenario[] = [
         );
         for (const hunk of hunks) {
           for (const change of hunk.changes) if (change.type !== "normal") changedLines += 1;
-          deepestHunkLine = Math.max(deepestHunkLine, hunk.oldStart, hunk.newStart);
+          hunkDepthLines = Math.max(hunkDepthLines, hunk.oldStart, hunk.newStart);
         }
 
         metrics[`tokenizeMsAtLine${atLine}`] = tokenizeMs;
@@ -1512,7 +1512,7 @@ export const diffTokenizeScenarios: PerfScenario[] = [
         metrics: {
           ...metrics,
           depthCount,
-          deepestHunkLine,
+          hunkDepthLines,
           changedLines,
           tokenizeMisses,
           ...tokenGrade,
