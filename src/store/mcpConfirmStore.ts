@@ -206,11 +206,20 @@ export interface PendingMcpConfirm {
    */
   decisionEndsAt?: number;
   /**
-   * The request timed out while it was on screen. It stays up, inert, until
-   * dismissed, so a question someone was partway through answering says it
-   * expired rather than vanishing; the caller was already told it timed out.
+   * The request timed out while it was on screen and nothing was waiting to
+   * take its place. It stays up, inert, until dismissed or until another
+   * request arrives, so a question someone was partway through answering says
+   * it expired rather than vanishing; the caller was already told it timed out.
    */
   expired?: true;
+  /**
+   * The request that timed out on screen just before this one was brought up
+   * in its place (#15700), as its dialog named it. The queue moves on from an
+   * expired request instead of holding everything behind it until it is
+   * closed, so this is how the person still learns that it expired and nothing
+   * ran. It goes when this request does.
+   */
+  followsExpired?: { actionTitle: string; subject?: string };
 }
 
 /**
@@ -306,11 +315,12 @@ interface McpConfirmActions {
     remainingMs: number | null
   ) => void;
   /**
-   * The request's time ran out: tell the caller it timed out. A request that
-   * was on screen stays up as expired; one nobody saw just goes.
+   * The request's time ran out: tell the caller it timed out. One nobody saw
+   * just goes. One that was on screen gives way to the next request, which
+   * says it expired, or stays up as expired when nothing is waiting.
    */
   expire: (requestId: string) => void;
-  /** Close an expired request and move on to the next. */
+  /** Close an expired request that nothing was waiting to replace. */
   dismiss: (requestId: string) => void;
   drop: (requestId: string) => void;
   reset: () => void;
@@ -375,7 +385,17 @@ function requestHold(requestId: string, phase: "queued" | "shown"): void {
   );
 }
 
-function advance(set: (partial: Partial<McpConfirmState>) => void, queue: PendingMcpConfirm[]) {
+/**
+ * Show the next request. `expiredOnScreen` is a request that timed out while
+ * it was up: the next one takes its place at once and names it (#15700), so
+ * nothing queued is ever charged for time spent behind a dialog that can no
+ * longer be answered. With nothing to take its place it stays up, expired.
+ */
+function advance(
+  set: (partial: Partial<McpConfirmState>) => void,
+  queue: PendingMcpConfirm[],
+  expiredOnScreen?: PendingMcpConfirm
+) {
   // A request whose time ran out while it waited was never on screen. Main has
   // let it go, so it goes unseen rather than opening only to close again.
   const now = Date.now();
@@ -387,7 +407,25 @@ function advance(set: (partial: Partial<McpConfirmState>) => void, queue: Pendin
     start += 1;
   }
   const [next, ...rest] = queue.slice(start);
-  set(next === undefined ? { current: null, queue: [] } : { current: next, queue: rest });
+  if (next === undefined) {
+    set({ current: expiredOnScreen ? { ...expiredOnScreen, expired: true } : null, queue: [] });
+    return;
+  }
+  set({
+    current:
+      expiredOnScreen === undefined
+        ? next
+        : {
+            ...next,
+            followsExpired: {
+              actionTitle: expiredOnScreen.actionTitle,
+              ...(expiredOnScreen.subject === undefined
+                ? {}
+                : { subject: expiredOnScreen.subject }),
+            },
+          },
+    queue: rest,
+  });
 }
 
 export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((set, get) => ({
@@ -398,6 +436,9 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
     const { current, queue } = get();
     if (current === null) {
       set({ current: item });
+    } else if (current.expired) {
+      // Nothing waits behind a request that can no longer be answered.
+      advance(set, [...queue, item], current);
     } else {
       set({ queue: [...queue, item] });
     }
@@ -460,11 +501,7 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
       set({ queue: queue.filter((queued) => queued.requestId !== requestId) });
       return;
     }
-    if (unseen) {
-      advance(set, queue);
-      return;
-    }
-    set({ current: { ...current, expired: true } });
+    advance(set, queue, unseen ? undefined : current);
   },
 
   dismiss: (requestId) => {
@@ -475,8 +512,7 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
 
   resolveCurrent: (decision, selectedTargetIds, scope, unseen) => {
     const { current, queue } = get();
-    // An expired request was already answered as a timeout; only dismissing it
-    // moves the queue on.
+    // An expired request was already answered as a timeout.
     if (current === null || current.expired) return;
     const resolve = resolvers.get(current.requestId);
     forget(current.requestId);
@@ -550,7 +586,7 @@ function patchItem(requestId: string, patch: Partial<PendingMcpConfirm>): void {
 export function requestMcpConfirmation(
   item: Omit<
     PendingMcpConfirm,
-    "enqueuedAt" | "deadlineAt" | "shownAt" | "decisionEndsAt" | "expired"
+    "enqueuedAt" | "deadlineAt" | "shownAt" | "decisionEndsAt" | "expired" | "followsExpired"
   >,
   deadline?: McpConfirmDeadline
 ): Promise<McpConfirmResolution> {

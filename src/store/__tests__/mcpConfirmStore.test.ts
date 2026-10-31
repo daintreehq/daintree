@@ -5,6 +5,11 @@ import {
   useMcpConfirmStore,
   type McpConfirmHold,
 } from "../mcpConfirmStore";
+import {
+  MCP_CONFIRM_DECISION_MS,
+  MCP_CONFIRM_QUEUE_HOLD_MS,
+  MCP_DISPATCH_TIMEOUT_MS,
+} from "@shared/config/mcpConfirmWindow";
 
 function pendingFixture(overrides: { requestId?: string; actionId?: string } = {}) {
   return {
@@ -15,6 +20,15 @@ function pendingFixture(overrides: { requestId?: string; actionId?: string } = {
     argsSummary: '{"worktreeId":"wt-1"}',
     danger: "confirm" as const,
   };
+}
+
+async function expectStillPending(promise: Promise<unknown>): Promise<void> {
+  let settled = false;
+  void promise.then(() => {
+    settled = true;
+  });
+  await Promise.resolve();
+  expect(settled).toBe(false);
 }
 
 describe("mcpConfirmStore", () => {
@@ -345,9 +359,8 @@ describe("mcpConfirmStore", () => {
       expect(await live).toEqual({ decision: "rejected" });
     });
 
-    it("keeps a request that expired on screen until it is dismissed, and never answers it again", async () => {
+    it("keeps a request that expired on screen with nothing behind it until it is dismissed, and never answers it again", async () => {
       const expiring = requestMcpConfirmation(pendingFixture({ requestId: "a" }));
-      const next = requestMcpConfirmation(pendingFixture({ requestId: "b" }));
       useMcpConfirmStore.getState().markShown("a");
 
       useMcpConfirmStore.getState().expire("a");
@@ -358,14 +371,94 @@ describe("mcpConfirmStore", () => {
       });
 
       useMcpConfirmStore.getState().resolveCurrent("approved");
-      expect(useMcpConfirmStore.getState().current?.requestId).toBe("a");
-
+      useMcpConfirmStore.getState().expire("a");
       useMcpConfirmStore.getState().dismiss("b");
       expect(useMcpConfirmStore.getState().current?.requestId).toBe("a");
       useMcpConfirmStore.getState().dismiss("a");
-      expect(useMcpConfirmStore.getState().current?.requestId).toBe("b");
+      expect(useMcpConfirmStore.getState().current).toBeNull();
+    });
+
+    it("keeps an expired request up when everything queued behind it has run out unseen", async () => {
+      vi.useFakeTimers();
+      const expiring = requestMcpConfirmation(pendingFixture({ requestId: "a" }));
+      const stale = requestMcpConfirmation(pendingFixture({ requestId: "b" }), {
+        deadlineAt: Date.now() + 30_000,
+      });
+      useMcpConfirmStore.getState().markShown("a");
+
+      vi.advanceTimersByTime(30_000);
+      useMcpConfirmStore.getState().expire("a");
+
+      expect(await expiring).toEqual({ decision: "timeout" });
+      expect(await stale).toEqual({ decision: "timeout", unseen: true });
+      expect(useMcpConfirmStore.getState().current).toMatchObject({
+        requestId: "a",
+        expired: true,
+      });
+      expect(useMcpConfirmStore.getState().queue).toHaveLength(0);
+    });
+
+    it("brings up the next request as soon as the one on screen expires, with its queue time intact (#15700)", async () => {
+      vi.useFakeTimers();
+      const holds = ["a", "b", "c"].map(() => controlledHold());
+      const asked = Date.now();
+      const [first, second, third] = ["a", "b", "c"].map((requestId, index) =>
+        requestMcpConfirmation(pendingFixture({ requestId }), {
+          deadlineAt: asked + MCP_DISPATCH_TIMEOUT_MS,
+          hold: holds[index]!.hold,
+        })
+      );
+      for (const { asks } of holds) asks[0]!.answer(MCP_CONFIRM_QUEUE_HOLD_MS);
+      await Promise.resolve();
+
+      useMcpConfirmStore.getState().markShown("a");
+      vi.advanceTimersByTime(MCP_CONFIRM_DECISION_MS);
+      useMcpConfirmStore.getState().expire("a");
+
+      expect(await first).toEqual({ decision: "timeout" });
+      const state = useMcpConfirmStore.getState();
+      expect(state.current).toMatchObject({
+        requestId: "b",
+        deadlineAt: asked + MCP_CONFIRM_QUEUE_HOLD_MS,
+      });
+      expect(state.current?.expired).toBeUndefined();
+      expect(state.current?.followsExpired).toEqual({ actionTitle: "Delete Worktree" });
+      expect(state.queue.map((item) => item.requestId)).toEqual(["c"]);
+      await expectStillPending(second);
+
+      // Shown now, so its own decision window starts now.
+      useMcpConfirmStore.getState().markShown("b");
+      expect(holds[1]!.asks.map((ask) => ask.phase)).toEqual(["queued", "shown"]);
       useMcpConfirmStore.getState().resolveCurrent("approved");
-      expect(await next).toEqual({ decision: "approved" });
+      expect(await second).toEqual({ decision: "approved" });
+      // Brought up by an answer, not an expiry, so it names nothing that expired.
+      expect(useMcpConfirmStore.getState().current).toMatchObject({ requestId: "c" });
+      expect(useMcpConfirmStore.getState().current?.followsExpired).toBeUndefined();
+      useMcpConfirmStore.getState().resolveCurrent("rejected");
+      expect(await third).toEqual({ decision: "rejected" });
+    });
+
+    it("never holds a request that arrives while an expired one is up behind it (#15700)", async () => {
+      const expiring = requestMcpConfirmation({
+        ...pendingFixture({ requestId: "a" }),
+        subject: "feature/x",
+      });
+      useMcpConfirmStore.getState().markShown("a");
+      useMcpConfirmStore.getState().expire("a");
+      expect(await expiring).toEqual({ decision: "timeout" });
+      expect(useMcpConfirmStore.getState().current).toMatchObject({ requestId: "a", expired: true });
+
+      const arriving = requestMcpConfirmation(pendingFixture({ requestId: "b" }));
+      const state = useMcpConfirmStore.getState();
+      expect(state.current).toMatchObject({
+        requestId: "b",
+        followsExpired: { actionTitle: "Delete Worktree", subject: "feature/x" },
+      });
+      expect(state.current?.expired).toBeUndefined();
+      expect(state.queue).toHaveLength(0);
+      await expectStillPending(arriving);
+      useMcpConfirmStore.getState().resolveCurrent("approved");
+      expect(await arriving).toEqual({ decision: "approved" });
     });
 
     it("moves straight on from a request that expired before anyone saw it", async () => {
