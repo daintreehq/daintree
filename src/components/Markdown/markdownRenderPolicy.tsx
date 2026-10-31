@@ -24,6 +24,7 @@ import {
 } from "@/components/Worktree/diffRefractor";
 import { isPathInside } from "@shared/utils/path";
 import { buildDaintreeFileUrl } from "@/components/FileViewer/filePreviewKinds";
+import { MarkdownImageTrackingContext, TrackedMarkdownImage } from "./markdownImageRefresh";
 import { MermaidDiagram } from "./mermaid/MermaidDiagram";
 import { canonicalLang } from "./fenceLanguage";
 import { hastText } from "./hastText";
@@ -185,6 +186,18 @@ const LOCAL_IMAGE_PREFIX = "daintree-file:";
 
 function MarkdownImage({ node: _node, src, ...props }: ComponentProps<"img"> & ExtraProps) {
   const cacheBust = useContext(MarkdownImageCacheBust);
+  const tracking = useContext(MarkdownImageTrackingContext);
+  // A host that watches the worktree moves `cacheBust` only on a foreground
+  // refresh, and each image adds the ticks that could have touched its own
+  // file, so an unrelated write refetches nothing (#15678).
+  if (
+    tracking !== null &&
+    cacheBust !== undefined &&
+    typeof src === "string" &&
+    src.startsWith(LOCAL_IMAGE_PREFIX)
+  ) {
+    return <TrackedMarkdownImage {...props} src={src} epoch={cacheBust} tracking={tracking} />;
+  }
   // Only `urlTransform` mints daintree-file:// URLs — remote and data: sources
   // pass through the default sanitizer, which never yields that scheme.
   //

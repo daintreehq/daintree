@@ -1,6 +1,9 @@
 import { app } from "electron";
 import { getDevServerOrigins } from "../../../shared/config/devServer.js";
-import { PREVIEW_REFUSAL_HEADER } from "../../../shared/types/ipc/files.js";
+import {
+  PATH_CANONICAL_HEADER,
+  PREVIEW_REFUSAL_HEADER,
+} from "../../../shared/types/ipc/files.js";
 
 /**
  * The origin allowed to read this response via cross-origin fetch(), or null
@@ -34,9 +37,13 @@ export function trustedAppCorsOrigin(request: GlobalRequest): string | null {
 
 /**
  * Let the app read a response, including why a remote window's host refused
- * it: a header the viewer's probe can't see unless it is exposed.
+ * it and whether a Markdown image's path is canonical: headers the viewer's
+ * probes can't see unless they are exposed.
  */
 export function grantAppCors(response: Response, corsOrigin: string): void {
   response.headers.set("Access-Control-Allow-Origin", corsOrigin);
-  response.headers.set("Access-Control-Expose-Headers", PREVIEW_REFUSAL_HEADER);
+  response.headers.set(
+    "Access-Control-Expose-Headers",
+    `${PREVIEW_REFUSAL_HEADER}, ${PATH_CANONICAL_HEADER}`
+  );
 }

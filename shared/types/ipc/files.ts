@@ -53,6 +53,14 @@ export type PreviewRefusal = "driven-elsewhere" | "outside-project";
 
 export const PREVIEW_REFUSAL_HEADER = "X-Daintree-Refusal";
 
+/**
+ * A `daintree-file:` HEAD answer's `pathIsCanonical` (see `FileReadResult`),
+ * as `"true"` or `"false"`. Lets a Markdown image scope its refreshes to the
+ * directories a change tick names, decided by the same containment the image
+ * is served through. Absent (a remote host, an older main) means not canonical.
+ */
+export const PATH_CANONICAL_HEADER = "X-Daintree-Path-Canonical";
+
 export function isPreviewRefusal(value: unknown): value is PreviewRefusal {
   return value === "driven-elsewhere" || value === "outside-project";
 }
