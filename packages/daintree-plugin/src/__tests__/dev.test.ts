@@ -134,6 +134,20 @@ describe("cleanupDevLink", () => {
     await expect(cleanupDevLink(link)).resolves.toBeUndefined();
   });
 
+  it("leaves a link retargeted by a newer session, and its marker, alone", async () => {
+    const otherDir = path.join(tmpDir, "other-worktree");
+    await fs.mkdir(otherDir, { recursive: true });
+    const older = await linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" });
+    const newer = await linkDevPlugin({ pluginDir: otherDir, pluginsRoot, pluginId: "acme.demo" });
+
+    await cleanupDevLink(older);
+
+    expect(path.resolve(pluginsRoot, await fs.readlink(newer.linkPath))).toBe(otherDir);
+    await expect(fs.access(path.join(otherDir, ".dev-marker"))).resolves.toBeUndefined();
+    // The older session cleans up the marker in its own directory instead.
+    expect(await lstatSafe(path.join(pluginDir, ".dev-marker"))).toBeNull();
+  });
+
   it("leaves a reused (not created) symlink in place", async () => {
     await linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" });
     const reused = await linkDevPlugin({ pluginDir, pluginsRoot, pluginId: "acme.demo" });
@@ -297,6 +311,80 @@ describe("runDev", () => {
       expect(first.kill).toHaveBeenCalled();
       expect(vi.mocked(sendCliRequest).mock.calls.map((c) => c[0])).toContain("plugin.dev.stop");
       expect(await lstatSafe(path.join(pluginsRoot, "acme.demo"))).toBeNull();
+    });
+  });
+
+  describe("overlapping sessions for one plugin id", () => {
+    let otherDir: string;
+
+    beforeEach(async () => {
+      otherDir = path.join(tmpDir, "other-worktree");
+      await fs.mkdir(otherDir, { recursive: true });
+      await fs.copyFile(path.join(pluginDir, "plugin.json"), path.join(otherDir, "plugin.json"));
+    });
+
+    /** Run a session up to its keep-alive wait; `stop()` ends it and awaits teardown. */
+    async function startSession(dir: string): Promise<{ stop: () => Promise<void> }> {
+      const controller = new AbortController();
+      const spawnedBefore = spawnViteWatchMock.mock.calls.length;
+      const done = runDev({ dir, pluginsRoot, keepAliveSignal: controller.signal, metrics: false });
+      done.catch(() => {});
+      await vi.waitFor(() => expect(spawnViteWatchMock.mock.calls.length).toBe(spawnedBefore + 1));
+      return {
+        stop: async () => {
+          controller.abort();
+          await done;
+        },
+      };
+    }
+
+    function methodsSince(index: number): string[] {
+      return vi
+        .mocked(sendCliRequest)
+        .mock.calls.slice(index)
+        .map((c) => c[0]);
+    }
+
+    it("an older session's exit leaves a newer session from another directory running", async () => {
+      const older = await startSession(pluginDir);
+      const newer = await startSession(otherDir);
+      const callsBeforeOlderStop = vi.mocked(sendCliRequest).mock.calls.length;
+
+      await older.stop();
+
+      const linkPath = path.join(pluginsRoot, "acme.demo");
+      expect(path.resolve(pluginsRoot, await fs.readlink(linkPath))).toBe(otherDir);
+      await expect(fs.access(path.join(otherDir, ".dev-marker"))).resolves.toBeUndefined();
+      expect(await lstatSafe(path.join(pluginDir, ".dev-marker"))).toBeNull();
+      // The host session now belongs to the newer directory; nothing may unload it.
+      expect(methodsSince(callsBeforeOlderStop)).not.toContain("plugin.dev.stop");
+
+      const callsBeforeNewerStop = vi.mocked(sendCliRequest).mock.calls.length;
+      await newer.stop();
+      expect(methodsSince(callsBeforeNewerStop)).toContain("plugin.dev.stop");
+      expect(await lstatSafe(linkPath)).toBeNull();
+      expect(await lstatSafe(path.join(otherDir, ".dev-marker"))).toBeNull();
+    });
+
+    it("refuses a second session in the same directory and leaves the first running", async () => {
+      const first = await startSession(pluginDir);
+      const callsBeforeSecond = vi.mocked(sendCliRequest).mock.calls.length;
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(
+        runDev({ dir: pluginDir, pluginsRoot, keepAliveSignal: controller.signal, metrics: false })
+      ).rejects.toThrow(/already running/);
+
+      expect(methodsSince(callsBeforeSecond)).toEqual([]);
+      const linkPath = path.join(pluginsRoot, "acme.demo");
+      expect(path.resolve(pluginsRoot, await fs.readlink(linkPath))).toBe(pluginDir);
+      await expect(fs.access(path.join(pluginDir, ".dev-marker"))).resolves.toBeUndefined();
+
+      await first.stop();
+      expect(methodsSince(callsBeforeSecond)).toContain("plugin.dev.stop");
+      expect(await lstatSafe(linkPath)).toBeNull();
+      expect(await lstatSafe(path.join(pluginDir, ".dev-marker"))).toBeNull();
     });
   });
 
