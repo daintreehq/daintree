@@ -716,7 +716,38 @@ describe("registerDiagnosticsHandlers", () => {
 
       expect(appendedNames()).toEqual(["diagnostics.json", "daintree.log"]);
       expect(appendedContent("daintree.log")).toBe(reviewed);
+
+      // A completed save lets go of the read, so saving again rereads.
+      archiverMock().append.mockClear();
+      await save(collectedAtMs);
+      expect(appendedNames()).toEqual(["diagnostics.json", "daintree.log", "daintree.log.1"]);
       cleanup();
+    });
+
+    it("keeps the review's read when the native save dialog outlasts the hold", async () => {
+      const reviewed = line(Date.now() - 60_000, "reviewed");
+      logFiles({ "daintree.log": reviewed });
+      const cleanup = registerDiagnosticsHandlers(deps);
+      const { collectedAtMs } = await collect();
+      logFiles({ "daintree.log.1": reviewed });
+
+      // The hold is released while the user is still choosing where to save.
+      dialogMock.showSaveDialog.mockImplementationOnce(() => {
+        cleanup();
+        return Promise.resolve({ filePath: "/tmp/diagnostics.zip", canceled: false });
+      });
+      await getHandlerFn("system:save-diagnostics-bundle")(
+        {},
+        {
+          payload: { metadata: {} },
+          enabledSections: { metadata: true, logs: true },
+          replacements: [],
+          timeWindowStartMs: null,
+          collectedAtMs,
+        }
+      );
+
+      expect(appendedNames()).toEqual(["diagnostics.json", "daintree.log"]);
     });
 
     it("rereads the files, still cut at the review, once the held read is released", async () => {

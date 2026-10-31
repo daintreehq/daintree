@@ -504,6 +504,11 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
     json = applyReplacements(json, savePayload.replacements as ReplacementRule[]);
 
     const includeLogs = savePayload.enabledSections.logs !== false;
+    // Taken before the native dialog, which can stay open past the hold's expiry.
+    const held =
+      reviewSources !== null && reviewSources.collectedAtMs === savePayload.collectedAtMs
+        ? reviewSources
+        : null;
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const win = deps.windowRegistry?.getPrimary()?.browserWindow ?? deps.mainWindow;
@@ -519,12 +524,9 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
     if (canceled || !filePath) return false;
 
     const { readBundleSources, buildBundleMembers, writeBundleZip } = await getDiagnosticsBundle();
-    const held =
-      reviewSources !== null && reviewSources.collectedAtMs === savePayload.collectedAtMs
-        ? reviewSources
-        : null;
-    // Without the review's own read (it expired), the files are read again and
-    // the ceiling still keeps out anything dated after the review.
+    // Without the review's own read (it expired, or a review in another view
+    // replaced it), the files are read again and the ceiling still keeps out
+    // anything dated after the review.
     const members = includeLogs
       ? buildBundleMembers(
           held?.sources ?? (await readBundleSources(getBundleDirs())),
