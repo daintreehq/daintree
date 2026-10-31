@@ -1,6 +1,6 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { PluginHostApi } from "../../../../shared/types/plugin.js";
+import type { PluginFsReadFilesEntry, PluginHostApi } from "../../../../shared/types/plugin.js";
 import {
   CHANNELS,
   DocumentAttachArgsSchema,
@@ -53,10 +53,27 @@ import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
  * `node:fs` on a document path anywhere in this plugin.
  */
 
+/**
+ * Stands in for a revision when the file is over the editor's ceiling: such a
+ * file is never read whole, so it has no hash. Never a valid sha256 hex string.
+ */
+const OVERSIZED = "oversized";
+
+type BoundedRead =
+  | { status: "ok"; bytes: Uint8Array }
+  | { status: "refused"; reason: "NOT_A_FILE" | "SYMLINK" | "TOO_LARGE" }
+  | { status: "unavailable" };
+
+type DiskState =
+  { status: "ok"; revision: string } | { status: "too-large" } | { status: "unavailable" };
+
 interface OpenDocument {
   identity: DocumentIdentity;
   panelIds: Set<string>;
-  /** Last revision this side observed, so a wake resync can tell a change from a re-read. */
+  /**
+   * Last revision this side observed (or `OVERSIZED`), so a wake resync can
+   * tell a change from a re-read.
+   */
   lastRevision: string | null;
   /** The watch being created or already created; one per document, shared by every panel. */
   watch: Promise<() => void> | null;
@@ -110,14 +127,51 @@ export async function activate(
     });
   };
 
-  const readCurrentRevision = async (identity: DocumentIdentity): Promise<string | null> => {
+  /**
+   * Every document read goes through here, never the uncapped `readFileBytes`:
+   * the host stops at the ceiling (one byte past it, to tell), including for a
+   * file that grows while it is being read, so nothing over the editor's
+   * limit is ever held, hashed or sent to the renderer.
+   */
+  const readBounded = async (filePath: string): Promise<BoundedRead> => {
+    const readFiles = host.fs.readFiles;
+    if (!readFiles) return { status: "unavailable" };
+    let entry: PluginFsReadFilesEntry<Uint8Array> | undefined;
     try {
-      const bytes = await host.fs.readFileBytes(identity.filePath);
-      return sha256Hex(bytes);
+      [entry] = await readFiles([filePath], {
+        encoding: "bytes",
+        maxBytesPerFile: MAX_EDITABLE_BYTES,
+      });
     } catch {
-      return null;
+      return { status: "unavailable" };
+    }
+    if (!entry) return { status: "unavailable" };
+    if (entry.ok) {
+      return entry.content.byteLength > MAX_EDITABLE_BYTES
+        ? { status: "refused", reason: "TOO_LARGE" }
+        : { status: "ok", bytes: entry.content };
+    }
+    switch (entry.error.code) {
+      case "TOO_LARGE":
+        return { status: "refused", reason: "TOO_LARGE" };
+      case "NOT_A_FILE":
+        return { status: "refused", reason: "NOT_A_FILE" };
+      case "TARGET_IS_SYMLINK":
+        return { status: "refused", reason: "SYMLINK" };
+      default:
+        return { status: "unavailable" };
     }
   };
+
+  const readDiskState = async (identity: DocumentIdentity): Promise<DiskState> => {
+    const read = await readBounded(identity.filePath);
+    if (read.status === "ok") return { status: "ok", revision: sha256Hex(read.bytes) };
+    if (read.status === "refused" && read.reason === "TOO_LARGE") return { status: "too-large" };
+    return { status: "unavailable" };
+  };
+
+  const observedToken = (state: DiskState): string | null =>
+    state.status === "ok" ? state.revision : state.status === "too-large" ? OVERSIZED : null;
 
   const isSymlinkTarget = async (filePath: string): Promise<boolean | null> => {
     // `stat` follows links, so the directory listing's own classification is
@@ -206,16 +260,18 @@ export async function activate(
       const stillOpen = () => documents.get(key) === doc && doc.panelIds.has(panelId);
       const symlink = await isSymlinkTarget(identity.filePath);
       if (symlink === true) return { status: "refused", reason: "SYMLINK" };
-      let bytes: Uint8Array;
-      try {
-        bytes = await host.fs.readFileBytes(identity.filePath);
-      } catch (error) {
-        if (/EISDIR|NOT_A_FILE/i.test(String(error)))
-          return { status: "refused", reason: "NOT_A_FILE" };
-        return { status: "unavailable" };
+      const read = await readBounded(identity.filePath);
+      if (read.status === "unavailable") return read;
+      if (read.status === "refused") {
+        // Still watched while it is too large, so the view learns when it
+        // shrinks back under the ceiling.
+        if (read.reason === "TOO_LARGE" && stillOpen()) {
+          doc.lastRevision = OVERSIZED;
+          ensureWatch(doc);
+        }
+        return read;
       }
-      if (bytes.length > MAX_EDITABLE_BYTES) return { status: "refused", reason: "TOO_LARGE" };
-      const decoded = decodeDocument(bytes);
+      const decoded = decodeDocument(read.bytes);
       if (!decoded.ok) return { status: "refused", reason: decoded.reason };
 
       if (stillOpen()) {
@@ -245,11 +301,11 @@ export async function activate(
       requires: ["fs:project-read"],
     },
     async (_ctx, { identity }): Promise<DocumentRevalidateResult> => {
-      const revision = await readCurrentRevision(identity);
-      if (revision === null) return { status: "unavailable" };
+      const state = await readDiskState(identity);
       const doc = documents.get(identityKey(identity));
-      if (doc) doc.lastRevision = revision;
-      return { status: "ok", revision };
+      const token = observedToken(state);
+      if (doc && token !== null) doc.lastRevision = token;
+      return state;
     }
   );
 
@@ -271,14 +327,11 @@ export async function activate(
         return { status: "refused", reason: "TOO_LARGE" };
 
       const doc = documents.get(identityKey(identity));
-      const conflictFromDisk = async (): Promise<DocumentSaveResult> => {
-        let bytes: Uint8Array;
-        try {
-          bytes = await host.fs.readFileBytes(identity.filePath);
-        } catch {
-          return { status: "unavailable" };
-        }
-        const revision = sha256Hex(bytes);
+      const tooLarge = (): DocumentSaveResult => {
+        if (doc) doc.lastRevision = OVERSIZED;
+        return { status: "too-large" };
+      };
+      const conflictFrom = (bytes: Uint8Array, revision: string): DocumentSaveResult => {
         if (doc) doc.lastRevision = revision;
         const decoded = decodeDocument(bytes);
         return {
@@ -289,16 +342,23 @@ export async function activate(
           eol: decoded.ok ? decoded.document.eol : eol,
         };
       };
+      const conflictFromDisk = async (): Promise<DocumentSaveResult> => {
+        const read = await readBounded(identity.filePath);
+        if (read.status === "refused" && read.reason === "TOO_LARGE") return tooLarge();
+        if (read.status !== "ok") return { status: "unavailable" };
+        return conflictFrom(read.bytes, sha256Hex(read.bytes));
+      };
 
-      if (unchanged) {
-        // An unedited save writes nothing — but it still proves the disk is
-        // where the caller thinks it is, because "nothing to do" must never
-        // read as "saved" over an external change.
-        const current = await readCurrentRevision(identity);
-        if (current === null) return { status: "unavailable" };
-        if (current !== expectedRevision) return conflictFromDisk();
-        return { status: "saved", revision: current, wrote: false };
-      }
+      // Proves the disk is where the caller thinks it is before anything is
+      // written, and an unedited save never reads as "saved" over an external
+      // change. Bounded here so a file that has grown past the ceiling is
+      // caught before the host's revision compare, which reads the whole target.
+      const snapshot = await readBounded(identity.filePath);
+      if (snapshot.status === "refused" && snapshot.reason === "TOO_LARGE") return tooLarge();
+      if (snapshot.status !== "ok") return { status: "unavailable" };
+      const current = sha256Hex(snapshot.bytes);
+      if (current !== expectedRevision) return conflictFrom(snapshot.bytes, current);
+      if (unchanged) return { status: "saved", revision: current, wrote: false };
 
       try {
         const { revision } = await host.fs.writeFile(identity.filePath, contents, {
@@ -477,8 +537,9 @@ export async function activate(
   // the views revalidate where the disk moved.
   const disposeWake = await host.onDidWake(() => {
     for (const [key, doc] of documents) {
-      void readCurrentRevision(doc.identity).then((revision) => {
-        if (revision === null || revision !== doc.lastRevision) notifyChanged(key);
+      void readDiskState(doc.identity).then((state) => {
+        const token = observedToken(state);
+        if (token === null || token !== doc.lastRevision) notifyChanged(key);
       });
     }
   });

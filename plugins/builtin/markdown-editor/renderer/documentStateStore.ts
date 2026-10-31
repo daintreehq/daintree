@@ -19,14 +19,24 @@ export interface DocumentBase {
 
 export type DocumentRefusal = "NOT_MARKDOWN" | "NOT_UTF8" | "TOO_LARGE" | "SYMLINK" | "NOT_A_FILE";
 
-export interface DocumentConflict {
-  /** The revision on disk when the conflict was detected. */
-  revision: string;
-  /** The disk text, when it decoded; null when it did not or could not be read. */
-  text: string | null;
-  hasBom: boolean;
-  eol: Eol;
-}
+export type DocumentConflict =
+  | {
+      tooLarge: false;
+      /** The revision on disk when the conflict was detected. */
+      revision: string;
+      /** The disk text, when it decoded; null when it did not or could not be read. */
+      text: string | null;
+      hasBom: boolean;
+      eol: Eol;
+    }
+  | {
+      /** The disk file grew past the editor's ceiling: never read whole, so no revision or text. */
+      tooLarge: true;
+      revision: null;
+      text: null;
+      hasBom: boolean;
+      eol: Eol;
+    };
 
 export interface DocumentRecord {
   identity: DocumentIdentity;
