@@ -1037,8 +1037,13 @@ export const SETTINGS_REGISTRY = [
     id: "worktree",
     scope: "global",
     group: "Terminal",
-    settings: ["worktreeConfig", "storage:daintree-preferences"],
+    settings: [
+      "worktreeConfig",
+      "storage:daintree-preferences",
+      "storage:daintree-worktree-filters*",
+    ],
     sectionSettings: {
+      "Worktree sidebar": SECTION_SETTINGS.worktreeSidebar,
       "Worktree path pattern": SECTION_SETTINGS.worktreePathPattern,
       "Always-hidden files": SECTION_SETTINGS.clientPreferences,
     },
@@ -1061,6 +1066,23 @@ export const SETTINGS_REGISTRY = [
       "junk files",
     ],
     sections: [
+      {
+        id: "worktree-sidebar-density",
+        section: "Worktree sidebar",
+        title: "Sidebar density",
+        description:
+          "Comfortable gives each fact about a worktree its own line; Compact fits more worktrees on screen",
+        keywords: [
+          "density",
+          "compact",
+          "comfortable",
+          "dense",
+          "spacing",
+          "sidebar",
+          "worktree cards",
+          "view",
+        ],
+      },
       {
         id: "worktree-path-pattern",
         section: "Worktree path pattern",

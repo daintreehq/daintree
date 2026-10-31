@@ -12,6 +12,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { FolderGit2, FolderOpen, GitBranchPlus, RefreshCw, Ruler, Settings } from "lucide-react";
+import { WorktreeDensitySubmenu } from "@/components/Worktree/WorktreeDensitySubmenu";
 import { ResizeHandle } from "@/components/ui/ResizeHandle";
 import { useSplitterKeys } from "@/hooks/useSplitterKeys";
 
@@ -215,6 +216,7 @@ export function Sidebar({
               <RefreshCw className={ICON_CLASS} />
               Refresh sidebar
             </ContextMenuActionItem>
+            <WorktreeDensitySubmenu iconClassName={ICON_CLASS} />
             <ContextMenuSeparator />
           </>
         )}

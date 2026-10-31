@@ -18,6 +18,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FileBrowserVisibilitySettings } from "./FileBrowserVisibilitySettings";
+import { WorktreeSidebarDensitySettings } from "./WorktreeSidebarDensitySettings";
 import { SettingsActions, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { SettingsSection } from "./SettingsSection";
@@ -227,6 +228,8 @@ export function WorktreeSettingsTab() {
 
   return (
     <div className="space-y-8">
+      <WorktreeSidebarDensitySettings />
+
       <SettingsSection
         id={PATH_PATTERN_SECTION_ID}
         title="Path pattern"

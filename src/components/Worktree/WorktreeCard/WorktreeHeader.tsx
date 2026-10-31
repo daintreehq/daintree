@@ -46,6 +46,8 @@ export interface WorktreeHeaderProps {
   worktree: WorktreeState;
   isActive: boolean;
   variant?: "sidebar" | "grid";
+  /** Sidebar only: compact packs the stack; comfortable gives each fact a line. */
+  density?: "comfortable" | "compact";
   isMuted?: boolean;
   isProjectNotificationsMuted?: boolean;
   isMainWorktree: boolean;
@@ -89,6 +91,13 @@ export interface WorktreeHeaderProps {
 
   /** A setup or lifecycle run that failed or is waiting on approval; drawn in the title row's attention column. */
   lifecycleAlarm?: { tone: "error" | "warning"; label: string } | null;
+  /**
+   * The open card's own body already shows the git state (Details' resting
+   * row says "Conflicts need review") or the setup alarm (its recovery and
+   * approval blocks), so the title-row mark would say it a second time.
+   */
+  gitStateShownInBody?: boolean;
+  lifecycleAlarmShownInBody?: boolean;
 
   /** The presentation profile quiets git detail (#13777); see `NonMainSecondaryRow`. */
   quietGit?: boolean;
@@ -100,6 +109,7 @@ export function WorktreeHeader({
   worktree,
   isActive,
   variant = "sidebar",
+  density = "compact",
   isMuted,
   isProjectNotificationsMuted,
   isMainWorktree,
@@ -132,9 +142,13 @@ export function WorktreeHeader({
   badges,
   gitStateIndicator,
   lifecycleAlarm,
+  gitStateShownInBody = false,
+  lifecycleAlarmShownInBody = false,
   quietGit = false,
   menu,
 }: WorktreeHeaderProps) {
+  const showGitStateMark = !!gitStateIndicator && variant === "sidebar" && !gitStateShownInBody;
+  const showLifecycleMark = !!lifecycleAlarm && variant === "sidebar" && !lifecycleAlarmShownInBody;
   // The headline cascade lives in `getWorktreeHeadline` so the compact surfaces
   // that list worktrees render the same title this card does. PR-originated
   // worktrees (created from the PR dropdown, #8888) invert the default
@@ -205,7 +219,15 @@ export function WorktreeHeader({
   // name took 60% of the active card's title row at the default width and the
   // whole of it at the narrowest. Below 28rem the glyphs stay and the words
   // move to their tooltips and accessible names.
-  const compactTrailingLabel = variant === "sidebar" ? "hidden @md/card:inline" : undefined;
+  // A comfortable card keeps the words down to 20rem: it has the extra line
+  // budget, and the name is the part of a dev server worth reading.
+  const isCompact = variant === "sidebar" && density === "compact";
+  const compactTrailingLabel =
+    variant !== "sidebar"
+      ? undefined
+      : isCompact
+        ? "hidden @md/card:inline"
+        : "hidden @xs/card:inline";
   // Below 20rem healthy infrastructure gives way entirely; a failure never
   // does. Every glyph it hides is also reachable from the card's menus.
   const narrowHide = variant === "sidebar" ? "hidden @xs/card:inline-flex" : undefined;
@@ -254,6 +276,9 @@ export function WorktreeHeader({
     worktree.baseCompareRef,
     worktree.baseMatchesUpstream,
   ]);
+  const isAlarmShownInStack =
+    collapsedAlarm.kind === "auth-failed" ||
+    (collapsedAlarm.kind === "ci-failed" && !isMainStandardLayout);
 
   // Quiet git detail (#13777) keeps the headline's words and moves the issue or
   // PR mark and the branch into its tooltip. A cold PR headline with no title
@@ -540,7 +565,7 @@ export function WorktreeHeader({
             the column does not move with the title's length. Drift alone is
             ambient, not an alarm (tier 1): most branches are a few commits
             behind their base, and a pill on each buried the one that failed. */}
-        {gitStateIndicator && variant === "sidebar" && (
+        {gitStateIndicator && showGitStateMark && (
           <AttentionMark
             tone={gitStateIndicator.tone}
             label={gitStateIndicator.label}
@@ -549,14 +574,14 @@ export function WorktreeHeader({
             revealed={isKeyboardFocused}
           />
         )}
-        {lifecycleAlarm && variant === "sidebar" && (
+        {lifecycleAlarm && showLifecycleMark && (
           <AttentionMark
             tone={lifecycleAlarm.tone}
             label={lifecycleAlarm.label}
             Icon={SEVERITY_GLYPH[lifecycleAlarm.tone]}
             testId="worktree-lifecycle-mark"
             // One reveal at a time: the leftmost mark speaks for the column.
-            revealed={isKeyboardFocused && !gitStateIndicator}
+            revealed={isKeyboardFocused && !showGitStateMark}
           />
         )}
         {variant === "sidebar" && (
@@ -565,22 +590,30 @@ export function WorktreeHeader({
             {[gitStateIndicator?.label, lifecycleAlarm?.label].filter(Boolean).join(". ")}
           </span>
         )}
+        {/* An open card raises the pill only for an alarm its own lines don't
+            already show: a failed CI is on the PR badge (stack or headline) of
+            every non-main card, and a failed sign-in on its sync line, so a
+            pill there would say the same thing twice on one card. */}
         {(isCollapsed || variant === "sidebar") && (
           <CollapsedAlarmPill
-            alarm={collapsedAlarm.tier >= 2 ? collapsedAlarm : NO_ALARM}
+            alarm={
+              collapsedAlarm.tier >= 2 && (isCollapsed || !isAlarmShownInStack)
+                ? collapsedAlarm
+                : NO_ALARM
+            }
             detail={collapsedAlarmDetail}
             descriptionId={collapsedAlarmDescriptionId(worktree.id)}
             revealed={
               isKeyboardFocused &&
-              (variant !== "sidebar" || (!gitStateIndicator && !lifecycleAlarm))
+              (variant !== "sidebar" || (!showGitStateMark && !showLifecycleMark))
             }
           />
         )}
 
-        {/* The sidebar draws session state here in both modes, so a waiting
-            ring always lands in the same column of every card's first line:
-            the one place to look for "does anything need me". */}
-        {(isCollapsed || variant === "sidebar") && visibleStates.length > 0 && (
+        {/* The compact card draws session state here in both modes, so a
+            waiting ring always lands in the same column of every card's first
+            line. An open comfortable card draws it on its Sessions row. */}
+        {(isCollapsed || isCompact) && visibleStates.length > 0 && (
           <CollapsedSessionIndicators
             visibleStates={visibleStates}
             sessionAriaLabel={sessionAriaLabel}
@@ -603,6 +636,7 @@ export function WorktreeHeader({
       {!isCollapsed && isMainStandardLayout && (
         <MainWorktreeSecondaryRow
           variant={variant}
+          density={density}
           branchLabel={branchLabel}
           isActive={isActive}
           isMuted={isMuted}
@@ -633,6 +667,7 @@ export function WorktreeHeader({
           hasPlanFile) && (
           <NonMainSecondaryRow
             variant={variant}
+            density={density}
             worktree={worktree}
             branchLabel={branchLabel}
             isActive={isActive}
@@ -653,10 +688,7 @@ export function WorktreeHeader({
           without squeezing the headline out of the row above. */}
       {!isCollapsed && pluginStatuses.length > 0 && (
         <div
-          className={cn(
-            "flex flex-wrap items-center gap-1 px-1",
-            variant === "sidebar" ? "mt-1" : "mt-1.5"
-          )}
+          className={cn("flex flex-wrap items-center gap-1 px-1", isCompact ? "mt-1" : "mt-1.5")}
         >
           <WorktreePluginStatusChips worktreeId={worktree.id} statuses={pluginStatuses} />
         </div>

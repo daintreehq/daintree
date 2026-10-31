@@ -72,6 +72,7 @@ interface RenderOverrides {
   hasPlanFile?: boolean;
   quietGit?: boolean;
   variant?: "sidebar" | "grid";
+  density?: "comfortable" | "compact";
 }
 
 function renderRow(overrides: RenderOverrides = {}) {
@@ -90,6 +91,7 @@ function renderRow(overrides: RenderOverrides = {}) {
         hasPlanFile={overrides.hasPlanFile ?? false}
         quietGit={overrides.quietGit}
         variant={overrides.variant}
+        density={overrides.density}
         badges={{ onOpenPlan: vi.fn() }}
       />
     </TooltipProvider>
@@ -516,14 +518,31 @@ describe("NonMainSecondaryRow — sidebar identity row", () => {
     upstreamBadgeProps.length = 0;
   });
 
-  it("leaves ambient drift to Details and keeps the branch on the card", () => {
+  it("keeps upstream drift on the identity row and leaves the base relationship to Details", () => {
     const { container } = renderRow({
       hasDisplayTitle: true,
       hasUpstreamDelta: true,
-      worktree: { ...baseWorktree, aheadCount: 2, behindCount: 3 } as WorktreeState,
+      worktree: {
+        ...baseWorktree,
+        aheadCount: 2,
+        behindCount: 3,
+        baseBranchName: "develop",
+        baseBehindCount: 6,
+      } as WorktreeState,
+    });
+    expect(upstreamBadgeProps).toHaveLength(1);
+    expect(upstreamBadgeProps[0]).toMatchObject({ aheadCount: 2, behindCount: 3 });
+    expect(upstreamBadgeProps[0]?.baseBranchName).toBeUndefined();
+    expect(container.textContent).toContain("feature/test");
+  });
+
+  it("leaves drift against the base alone to Details", () => {
+    renderRow({
+      hasDisplayTitle: true,
+      hasUpstreamDelta: true,
+      worktree: { ...baseWorktree, baseBranchName: "develop", baseBehindCount: 6 } as WorktreeState,
     });
     expect(upstreamBadgeProps).toHaveLength(0);
-    expect(container.textContent).toContain("feature/test");
   });
 
   it("keeps a failed fetch on the card", () => {
@@ -532,5 +551,44 @@ describe("NonMainSecondaryRow — sidebar identity row", () => {
       worktree: { ...baseWorktree, fetchNetworkFailed: true } as WorktreeState,
     });
     expect(upstreamBadgeProps).not.toHaveLength(0);
+  });
+});
+
+describe("NonMainSecondaryRow — comfortable sidebar sync line", () => {
+  beforeEach(() => {
+    upstreamBadgeProps.length = 0;
+  });
+
+  it("gives the sync line no row while the branch is level with its upstream and base", () => {
+    renderRow({
+      density: "comfortable",
+      hasDisplayTitle: true,
+      worktree: {
+        ...baseWorktree,
+        baseBranchName: "develop",
+        lastFetchedAt: 1,
+      } as WorktreeState,
+    });
+    expect(upstreamBadgeProps).toHaveLength(0);
+  });
+
+  it("gives drift against the base a row, with the base named", () => {
+    renderRow({
+      density: "comfortable",
+      hasDisplayTitle: true,
+      hasUpstreamDelta: true,
+      worktree: { ...baseWorktree, baseBranchName: "develop", baseBehindCount: 6 } as WorktreeState,
+    });
+    expect(upstreamBadgeProps).toHaveLength(1);
+    expect(upstreamBadgeProps[0]?.baseBranchName).toBe("develop");
+  });
+
+  it("gives a failed fetch a row even with no drift", () => {
+    renderRow({
+      density: "comfortable",
+      hasDisplayTitle: true,
+      worktree: { ...baseWorktree, fetchNetworkFailed: true } as WorktreeState,
+    });
+    expect(upstreamBadgeProps).toHaveLength(1);
   });
 });

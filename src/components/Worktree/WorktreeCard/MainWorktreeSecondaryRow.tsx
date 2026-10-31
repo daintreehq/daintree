@@ -11,6 +11,8 @@ import { bucketCountPhrase } from "@/lib/agentStateVocabulary";
 interface MainWorktreeSecondaryRowProps {
   /** The sidebar sets its card's lines closer together than the grid does. */
   variant?: "sidebar" | "grid";
+  /** The compact sidebar card sets them closer still. */
+  density?: "comfortable" | "compact";
   branchLabel: string;
   isActive: boolean;
   isMuted?: boolean;
@@ -31,6 +33,7 @@ interface MainWorktreeSecondaryRowProps {
 
 export function MainWorktreeSecondaryRow({
   variant = "sidebar",
+  density = "compact",
   branchLabel,
   isActive,
   isMuted,
@@ -57,7 +60,7 @@ export function MainWorktreeSecondaryRow({
     <div
       className={cn(
         "flex items-center gap-2 px-1 empty:hidden",
-        variant === "sidebar" ? "mt-1" : "mt-2.5"
+        variant !== "sidebar" ? "mt-2.5" : density === "compact" ? "mt-1" : "mt-1.5"
       )}
       data-testid="main-worktree-meta-row"
     >

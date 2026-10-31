@@ -154,6 +154,12 @@ export interface WorktreeMenuItemsProps {
    */
   worktree?: WorktreeState;
   components: WorktreeMenuComponents;
+  /**
+   * The sidebar's View ▸ density submenu, placed with Organize so a
+   * presentation choice never sits under the destructive group. Only the
+   * sidebar card's context menu passes one.
+   */
+  viewSubmenu?: React.ReactNode;
   launchAgents: WorktreeLaunchAgentItem[];
   recipes: Array<{ id: string; name: string }>;
   runningRecipeId: string | null;
@@ -308,6 +314,7 @@ function joinGroups(groups: React.ReactNode[][], Separator: MenuComponent): Reac
 export function WorktreeMenuItems({
   worktree,
   components: C,
+  viewSubmenu,
   launchAgents,
   recipes,
   runningRecipeId,
@@ -1380,7 +1387,7 @@ export function WorktreeMenuItems({
     [
       compact(launchSub, openSub, !quietGit && reviewSub, gitSub),
       compact(sessionsSub, recipesSub, runtimeSub),
-      compact(linkedWorkSub, copySub, organizeSub, extensionsSub),
+      compact(linkedWorkSub, copySub, organizeSub, viewSubmenu, extensionsSub),
       compact(deleteItem),
     ],
     C.Separator

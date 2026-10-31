@@ -71,6 +71,7 @@ import { notifyAttachmentFailure } from "./WorktreeCard/notifyAttachmentFailure"
 import { WorktreeHeader } from "./WorktreeCard/WorktreeHeader";
 import { WorktreeTerminalSection } from "./WorktreeCard/WorktreeTerminalSection";
 import { deriveSetupAlarm } from "./WorktreeCard/setupAlarm";
+import { syncLineHasNews } from "./WorktreeCard/syncLineNews";
 import { WslGitBanner } from "./WorktreeCard/WslGitBanner";
 import type { AggregateCounts } from "./WorktreeCard/aggregateCounts";
 import { useInputReceiptKey } from "./WorktreeCard/hooks/useInputReceiptKey";
@@ -78,6 +79,7 @@ import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
 import { copyWithToast } from "@/lib/copyWithToast";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { WorktreeDensitySubmenu } from "./WorktreeDensitySubmenu";
 import {
   CONTEXT_COMPONENTS,
   WorktreeMenuItems,
@@ -244,6 +246,9 @@ export function WorktreeCard({
     (state) => state.worktreeLabelColors[worktree.id] ?? null
   );
   const customTitle = useWorktreeFilterStore((state) => state.worktreeCustomTitles[worktree.id]);
+  // The sidebar card has two densities; the grid card has its own layout.
+  const cardDensity = useWorktreeFilterStore((state) => state.cardDensity);
+  const isCompactCard = variant === "sidebar" && cardDensity === "compact";
   const labelAriaSuffix = labelColor
     ? `, Label colour: ${worktreeLabelDisplayName(labelColor)}`
     : "";
@@ -1108,10 +1113,25 @@ export function WorktreeCard({
   };
 
   const lifecycleAlarm = deriveSetupAlarm(worktree, lifecycleLabel, Boolean(isLifecycleRunning));
-  // Details and Sessions share one footer row while both are closed: two
-  // disclosures that each used a full row to say one line.
+  // What the open card's body is already saying, so the title row's marks
+  // don't repeat it. Details' resting row names a conflict unless deleting or
+  // a lifecycle label outranks it there; the setup recovery and approval blocks
+  // sit outside the disclosure, so an open card always shows them.
+  const restingRowShowsLifecycle =
+    Boolean(lifecycleLabel) &&
+    (Boolean(isLifecycleRunning) || worktree.lifecycleStatus?.state !== "success");
+  const gitStateShownInBody =
+    !effectiveIsCollapsed &&
+    !isExpanded &&
+    gitStateIndicator?.kind === "conflicted" &&
+    reviewState === "conflicted" &&
+    !isBeingDeleted &&
+    !restingRowShowsLifecycle;
+  const lifecycleAlarmShownInBody = !effectiveIsCollapsed;
+  // On the compact card Details and Sessions share one footer row while both
+  // are closed: two disclosures that each used a full row to say one line.
   const isSessionsFooterInline =
-    variant === "sidebar" && !isExpanded && !isTerminalsExpanded && terminalCounts.total > 0;
+    isCompactCard && !isExpanded && !isTerminalsExpanded && terminalCounts.total > 0;
 
   const ariaStatusParts: string[] = [spineState];
   if (gitStateIndicator) {
@@ -1188,6 +1208,7 @@ export function WorktreeCard({
           // this — the class alone is on both variants, and that file is
           // unlayered, so an unscoped rule silently repaints the grid card.
           data-variant={variant}
+          data-density={variant === "sidebar" ? cardDensity : undefined}
           data-active={isActive && variant === "sidebar" ? "true" : undefined}
           data-has-grip={variant === "sidebar" && hasRowDragHandle ? "true" : undefined}
           data-hoverable={!isActive && variant === "sidebar" ? "true" : undefined}
@@ -1548,7 +1569,13 @@ export function WorktreeCard({
                   under the cursor. */}
               <div
                 className={cn(
-                  effectiveIsCollapsed ? "py-1" : variant === "sidebar" ? "pt-3" : "pt-2",
+                  effectiveIsCollapsed
+                    ? "py-1"
+                    : variant !== "sidebar"
+                      ? "pt-2"
+                      : isCompactCard
+                        ? "pt-3"
+                        : "pt-3.5",
                   variant === "grid" && "pr-5"
                 )}
               >
@@ -1556,6 +1583,7 @@ export function WorktreeCard({
                   worktree={worktree}
                   isActive={isActive}
                   variant={variant}
+                  density={cardDensity}
                   isMuted={isMuted}
                   isProjectNotificationsMuted={isProjectNotificationsMuted}
                   isMainWorktree={isMainWorktree}
@@ -1599,6 +1627,8 @@ export function WorktreeCard({
                   }}
                   gitStateIndicator={gitStateIndicator}
                   lifecycleAlarm={lifecycleAlarm}
+                  gitStateShownInBody={gitStateShownInBody}
+                  lifecycleAlarmShownInBody={lifecycleAlarmShownInBody}
                   quietGit={quietGit}
                   menu={menuActions}
                 />
@@ -1611,15 +1641,24 @@ export function WorktreeCard({
                 />
               </div>
 
-              {/* Sidebar pt-1: with the Details row's own 4px that is 8px
+              {/* Compact pt-1: with the Details row's own 4px that is 8px
                   between the identity rows and the activity row, twice the 4px
                   between the identity rows themselves, so the card reads as two
-                  groups rather than three equal lines. The grid's pt-2 does the
-                  same job against its taller metadata stack. */}
+                  groups rather than three equal lines. Comfortable keeps the
+                  same ratio at its own scale: 12px against its 4px line gap,
+                  and 14px at the card's edges so the edge stays the largest
+                  gap on the card. The grid's pt-2 does the same job against
+                  its taller metadata stack. */}
               {!effectiveIsCollapsed && (
                 <div
                   id={`worktree-body-${worktree.id}`}
-                  className={variant === "sidebar" ? "pb-3 pt-1" : "pb-2.5 pt-2"}
+                  className={
+                    variant !== "sidebar"
+                      ? "pb-2.5 pt-2"
+                      : isCompactCard
+                        ? "pb-3 pt-1"
+                        : "pb-3.5 pt-2"
+                  }
                 >
                   {worktree.isWslPath && !worktree.wslGitOptIn && !worktree.wslGitDismissed && (
                     <WslGitBanner
@@ -1685,7 +1724,10 @@ export function WorktreeCard({
                         onResourceTeardown={hasTeardownCommand ? handleResourceTeardown : undefined}
                         onResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
                         syncDetail={
-                          variant === "sidebar" && !quietGit && !isMainWorktree ? (
+                          variant === "sidebar" &&
+                          !quietGit &&
+                          !isMainWorktree &&
+                          (isCompactCard || !syncLineHasNews(worktree)) ? (
                             <QuietGitDetails
                               worktree={worktree}
                               branchLabel={branchLabel}
@@ -1699,11 +1741,12 @@ export function WorktreeCard({
 
                     <WorktreeTerminalSection
                       variant={variant}
+                      density={cardDensity}
                       worktreeId={worktree.id}
                       onStartSession={() => handleOpenPanelPalette("user")}
                       isExpanded={isTerminalsExpanded}
                       inline={isSessionsFooterInline}
-                      stateGlyphsElsewhere={variant === "sidebar"}
+                      stateGlyphsElsewhere={isCompactCard}
                       counts={terminalCounts}
                       terminals={worktreeTerminals}
                       onToggle={handleToggleTerminals}
@@ -1761,6 +1804,11 @@ export function WorktreeCard({
           components={CONTEXT_COMPONENTS}
           isPinned={isPinned}
           {...menuActions}
+          viewSubmenu={
+            variant === "sidebar" ? (
+              <WorktreeDensitySubmenu key="view" iconClassName="mr-2 h-3.5 w-3.5 shrink-0" />
+            ) : undefined
+          }
         />
       </ContextMenuContent>
     </ContextMenu>
