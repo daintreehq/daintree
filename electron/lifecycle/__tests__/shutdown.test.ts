@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const appMock = vi.hoisted(() => ({
   on: vi.fn(),
   exit: vi.fn(),
+  quit: vi.fn(),
   getPath: vi.fn(() => "/tmp/test-shutdown"),
 }));
 
@@ -140,6 +141,7 @@ vi.mock("../../ipc/utils.js", () => ({
 
 const signalShutdownMock = vi.hoisted(() => ({
   isSignalShutdown: vi.fn(() => false),
+  setSignalShutdown: vi.fn(),
   clearSafetyBeltTimer: vi.fn(),
 }));
 
@@ -611,6 +613,132 @@ describe("registerShutdownHandler", () => {
     } finally {
       setExitConfirmationPending(false);
     }
+  });
+
+  describe("termination while the quit warning is open (#15563)", () => {
+    async function setupOpenWarning() {
+      let answer: (confirmed: boolean) => void = () => {};
+      quitWarningMock.getActiveAgentCount.mockReturnValue(1);
+      quitWarningMock.showQuitWarning.mockImplementationOnce(
+        () => new Promise<boolean>((resolve) => (answer = resolve))
+      );
+      const ctx = await setup({
+        windowRegistry: {
+          getPrimary: () => ({ browserWindow: {} as Electron.BrowserWindow }),
+        } as unknown as ShutdownDeps["windowRegistry"],
+      });
+      const coordinator = await import("../shutdownCoordinator.js");
+      const userQuit = ctx.beforeQuitCb(makeEvent());
+      expect(quitWarningMock.showQuitWarning).toHaveBeenCalledOnce();
+      expect(coordinator.getActiveShutdown()).toBeNull();
+      return { ...ctx, coordinator, userQuit, answer: (confirmed: boolean) => answer(confirmed) };
+    }
+
+    function nextExit() {
+      return new Promise<void>((resolve) => {
+        appMock.exit.mockImplementationOnce(() => resolve());
+      });
+    }
+
+    it.each([
+      ["Quit Anyway", true],
+      ["Cancel", false],
+    ])(
+      "lets a signal claim the shutdown at once, and the warning's late %s adds no second chain",
+      async (_answer, confirmed) => {
+        const { beforeQuitCb, coordinator, userQuit, answer } = await setupOpenWarning();
+        const exited = nextExit();
+
+        signalShutdownMock.isSignalShutdown.mockReturnValue(true);
+        const signalQuit = makeEvent();
+        void beforeQuitCb(signalQuit);
+
+        // Claimed inside the signal's own app.quit(), with the warning still open.
+        expect(signalQuit.preventDefault).toHaveBeenCalled();
+        expect(coordinator.getActiveShutdown()).toMatchObject({
+          initiator: "app-quit",
+          phase: "cleaning",
+        });
+        expect(deferredInitQueueMock.haltDeferredQueue).toHaveBeenCalledOnce();
+
+        answer(confirmed);
+        await userQuit;
+        await exited;
+
+        expect(deferredInitQueueMock.haltDeferredQueue).toHaveBeenCalledOnce();
+        expect(openWindowsTrackerMock.freezeAndSnapshotOpenWindows).toHaveBeenCalledOnce();
+        expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledOnce();
+        expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(0);
+      }
+    );
+
+    it("does the same for a Windows session-end", async () => {
+      const originalPlatform = process.platform;
+      vi.doMock("../../projectMenuState.js", () => ({ refreshProjectMenuState: vi.fn() }));
+      vi.doMock("../../windowMenuState.js", () => ({
+        noteWindowClosing: vi.fn(),
+        refreshOpenWindowMenu: vi.fn(),
+      }));
+      vi.doMock("../../setup/deepLinkInstall.js", () => ({
+        extractDaintreeUrl: vi.fn(),
+        handleDaintreeUrl: vi.fn(),
+      }));
+
+      try {
+        const { beforeQuitCb, coordinator, userQuit, answer } = await setupOpenWarning();
+        const { registerWindowSessionEndHandler } = await import("../appLifecycle.js");
+        const win = { on: vi.fn() };
+        Object.defineProperty(process, "platform", { value: "win32" });
+        try {
+          registerWindowSessionEndHandler(win as unknown as Electron.BrowserWindow);
+        } finally {
+          Object.defineProperty(process, "platform", { value: originalPlatform });
+        }
+        const sessionEnd = win.on.mock.calls.find(([name]) => name === "session-end")![1] as () => void;
+
+        signalShutdownMock.setSignalShutdown.mockImplementationOnce(() => {
+          signalShutdownMock.isSignalShutdown.mockReturnValue(true);
+        });
+        const sessionEndQuit = makeEvent();
+        appMock.quit.mockImplementationOnce(() => void beforeQuitCb(sessionEndQuit));
+        const exited = nextExit();
+
+        sessionEnd();
+
+        expect(sessionEndQuit.preventDefault).toHaveBeenCalled();
+        expect(coordinator.getActiveShutdown()?.initiator).toBe("app-quit");
+        expect(deferredInitQueueMock.haltDeferredQueue).toHaveBeenCalledOnce();
+
+        answer(false);
+        await userQuit;
+        await exited;
+
+        expect(deferredInitQueueMock.haltDeferredQueue).toHaveBeenCalledOnce();
+        expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(0);
+      } finally {
+        vi.doUnmock("../../projectMenuState.js");
+        vi.doUnmock("../../windowMenuState.js");
+        vi.doUnmock("../../setup/deepLinkInstall.js");
+      }
+    });
+
+    it("still absorbs a second quit without a signal, and Cancel leaves the app running", async () => {
+      const { beforeQuitCb, coordinator, userQuit, answer } = await setupOpenWarning();
+
+      const secondQuit = makeEvent();
+      await beforeQuitCb(secondQuit);
+
+      expect(secondQuit.preventDefault).toHaveBeenCalled();
+      expect(quitWarningMock.showQuitWarning).toHaveBeenCalledOnce();
+      expect(coordinator.getActiveShutdown()).toBeNull();
+
+      answer(false);
+      await userQuit;
+
+      expect(coordinator.getActiveShutdown()).toBeNull();
+      expect(deferredInitQueueMock.haltDeferredQueue).not.toHaveBeenCalled();
+      expect(appMock.exit).not.toHaveBeenCalled();
+    });
   });
 
   it("does not ask about attached Shells when there is no window to ask in", async () => {

@@ -163,8 +163,9 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
     const canShowDialog =
       !isE2EMode && !isSignalShutdown() && deps.windowRegistry?.getPrimary()?.browserWindow != null;
 
-    // A signal never waits on the update dialog.
-    if (isConfirmingQuit || (isExitConfirmationPending() && !isSignalShutdown())) {
+    // A signal never waits on an open confirmation, the quit warning's included:
+    // it claims the shutdown now, and the warning's late answer finds it owned.
+    if (!isSignalShutdown() && (isConfirmingQuit || isExitConfirmationPending())) {
       event.preventDefault();
       return;
     }
