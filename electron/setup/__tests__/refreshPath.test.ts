@@ -203,6 +203,8 @@ describe("refreshPath", () => {
       await refreshPromise;
 
       expect(process.env.PATH).toBe("/original/path");
+      // Let the kill grace run so the read is released inside this test.
+      await vi.advanceTimersByTimeAsync(500);
     } finally {
       vi.useRealTimers();
     }
@@ -1019,23 +1021,33 @@ describe("refreshPath — Linux fallback bin dirs", () => {
 
 describe("refreshPath — login shell lifecycle (#15565)", () => {
   const savedShell = process.env.SHELL;
-  // Captured before fake timers replace it: lets the leaf's dynamic import
-  // land without moving the fake clock.
-  const realSetImmediate = setImmediate;
+  // Captured before fake timers replace them: they let the leaf's dynamic
+  // import land without moving the fake clock.
+  const realSetTimeout = setTimeout;
+  let exitListenersBefore = 0;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
+    const fsModule = await import("fs");
+    vi.mocked(fsModule.existsSync).mockReturnValue(false);
     savedPath = process.env.PATH;
     delete process.env.DAINTREE_SHELL_PROBE;
     process.env.SHELL = "/bin/zsh";
     process.env.PATH = "/orig";
     Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+    exitListenersBefore = process.listenerCount("exit");
     vi.useFakeTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // Every read releases once its shells are gone and their grace has run.
+    shellsIgnoreSigterm = false;
+    shellsIgnoreSigkill = false;
+    for (const child of [...liveShells.values()]) endShell(child, null, "SIGKILL");
+    await vi.advanceTimersByTimeAsync(11_000);
     vi.useRealTimers();
+    expect(process.listenerCount("exit")).toBe(exitListenersBefore);
     process.env.PATH = savedPath;
     if (savedShell === undefined) delete process.env.SHELL;
     else process.env.SHELL = savedShell;
@@ -1049,20 +1061,23 @@ describe("refreshPath — login shell lifecycle (#15565)", () => {
     return { refreshPath, getShellEnvironmentObservation };
   }
 
-  async function untilSpawned(count: number): Promise<void> {
-    for (let i = 0; i < 500 && spawnedShells().length < count; i++) {
-      await new Promise((resolve) => realSetImmediate(resolve));
+  async function untilReal(predicate: () => boolean): Promise<void> {
+    const end = Date.now() + 5_000;
+    while (!predicate() && Date.now() < end) {
+      await new Promise((resolve) => realSetTimeout(resolve, 2));
     }
+  }
+
+  async function untilSpawned(count: number): Promise<void> {
+    await untilReal(() => spawnedShells().length >= count);
     expect(spawnedShells()).toHaveLength(count);
   }
 
   // A refresh that spawns nothing still crosses the leaf's dynamic import.
-  async function settleWithoutTimers(promise: Promise<void>): Promise<void> {
+  async function settleWithoutTimers(promise: Promise<unknown>): Promise<void> {
     let done = false;
     void promise.then(() => (done = true));
-    for (let i = 0; i < 500 && !done; i++) {
-      await new Promise((resolve) => realSetImmediate(resolve));
-    }
+    await untilReal(() => done);
     expect(done).toBe(true);
   }
 
@@ -1070,6 +1085,24 @@ describe("refreshPath — login shell lifecycle (#15565)", () => {
     return killSpy()
       .mock.calls.filter(([pid]) => pid < 0)
       .map(([pid, signal]) => [pid, signal]);
+  }
+
+  // A shell that exits at once while something it started keeps its output
+  // pipe open, ignoring SIGTERM: only the group's SIGKILL closes it.
+  function spawnShellThatLeavesAChild(): MockChild[] {
+    const spawned: MockChild[] = [];
+    spawnMock.mockImplementation(() => {
+      const child = createMockChild();
+      spawned.push(child);
+      queueMicrotask(() => child.emit("exit", 0, null));
+      return child;
+    });
+    killSpy().mockImplementation((pid: number, signal?: string | number) => {
+      const child = spawned.find((c) => c.pid === -pid);
+      if (child && signal === "SIGKILL") child.emit("close", null, "SIGKILL");
+      return true;
+    });
+    return spawned;
   }
 
   it("terminates a login shell that never exits at the deadline, then SIGKILLs its group", async () => {
@@ -1108,7 +1141,7 @@ describe("refreshPath — login shell lifecycle (#15565)", () => {
 
     // Focus, wake, launcher and wizard-poll refreshes inside the kill grace.
     await settleWithoutTimers(refreshPath());
-    await settleWithoutTimers(Promise.all([refreshPath(), refreshPath()]).then(() => {}));
+    await settleWithoutTimers(Promise.all([refreshPath(), refreshPath()]));
     await settleWithoutTimers(refreshPath());
     expect(spawnedShells()).toHaveLength(1);
     expect(process.env.PATH).toBe("/orig");
@@ -1146,7 +1179,53 @@ describe("refreshPath — login shell lifecycle (#15565)", () => {
     expect(process.env.PATH).toBe("/orig");
   });
 
+  it("holds the read through the grace when the shell exited but its group still holds the output", async () => {
+    const spawned = spawnShellThatLeavesAChild();
+    const { refreshPath } = await loadRefreshPath();
+
+    const first = refreshPath();
+    await untilSpawned(1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await first;
+    expect(groupSignals()).toEqual([[-spawned[0]!.pid, "SIGTERM"]]);
+    expect(process.env.PATH).toBe("/orig");
+
+    await settleWithoutTimers(refreshPath());
+    expect(spawnedShells()).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(groupSignals()).toEqual([
+      [-spawned[0]!.pid, "SIGTERM"],
+      [-spawned[0]!.pid, "SIGKILL"],
+    ]);
+    const next = refreshPath();
+    await untilSpawned(2);
+    await vi.advanceTimersByTimeAsync(10_500);
+    await next;
+  });
+
+  it("kills a read's process group when Daintree exits mid-read", async () => {
+    const spawned = spawnShellThatLeavesAChild();
+    const before = process.listeners("exit");
+    const { refreshPath } = await loadRefreshPath();
+
+    const refresh = refreshPath();
+    await untilSpawned(1);
+    const added = process.listeners("exit").filter((listener) => !before.includes(listener));
+    expect(added).toHaveLength(1);
+
+    (added[0] as () => void)();
+    expect(groupSignals()).toEqual([[-spawned[0]!.pid, "SIGKILL"]]);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await refresh;
+  });
+
   it("ignores an answer the shell gives after the deadline", async () => {
+    const fsModule = await import("fs");
+    vi.mocked(fsModule.existsSync).mockImplementation(
+      (p) => String(p) === "/home/testuser/.volta/bin"
+    );
     shellsIgnoreSigterm = true;
     let answer!: (env: Record<string, string>) => void;
     loginShellMock.mockReturnValue(new Promise((resolve) => (answer = resolve)));
@@ -1156,7 +1235,7 @@ describe("refreshPath — login shell lifecycle (#15565)", () => {
     await untilSpawned(1);
     await vi.advanceTimersByTimeAsync(10_000);
     await first;
-    const pathAfterTimeout = process.env.PATH;
+    expect(process.env.PATH).toBe(["/home/testuser/.volta/bin", "/orig"].join(path.delimiter));
 
     // A refresh that has already begun when the late answer lands.
     const second = refreshPath();
@@ -1164,7 +1243,7 @@ describe("refreshPath — login shell lifecycle (#15565)", () => {
     await settleWithoutTimers(second);
     await vi.advanceTimersByTimeAsync(500);
 
-    expect(process.env.PATH).toBe(pathAfterTimeout);
+    expect(process.env.PATH).toBe(["/home/testuser/.volta/bin", "/orig"].join(path.delimiter));
     expect(getShellEnvironmentObservation()).toBeUndefined();
     expect(spawnedShells()).toHaveLength(1);
   });
@@ -1196,42 +1275,30 @@ describe("refreshPath — login shell lifecycle (#15565)", () => {
     expect(groupSignals()).toEqual([]);
   });
 
-  it("signals the group when the shell has exited but something it started holds the output open", async () => {
-    let child!: MockChild;
-    spawnMock.mockImplementation(() => {
-      child = createMockChild();
-      liveShells.set(child.pid, child);
-      // The shell exits; a background child keeps the pipe, so no close.
-      queueMicrotask(() => child.emit("exit", 0, null));
-      return child;
-    });
-    const { refreshPath } = await loadRefreshPath();
-
-    const refresh = refreshPath();
-    await untilSpawned(1);
-    await vi.advanceTimersByTimeAsync(10_000);
-    await refresh;
-
-    expect(groupSignals()).toEqual([[-child.pid, "SIGTERM"]]);
-    expect(process.env.PATH).toBe("/orig");
-  });
-
-  it("runs the unnamed chain after a failed named shell, all inside one deadline", async () => {
+  it("gives the named shell and every fallback one budget between them", async () => {
     userInfoMock.mockReturnValue({ shell: "/opt/homebrew/bin/fish" });
     loginShellMock.mockImplementation((shell) =>
       shell === "/opt/homebrew/bin/fish"
         ? new Promise(() => {})
-        : Promise.reject(new Error("exit 1"))
+        : new Promise((_resolve, reject) => setTimeout(() => reject(new Error("exit 1")), 6_000))
     );
     const { refreshPath, getShellEnvironmentObservation } = await loadRefreshPath();
 
     const refresh = refreshPath();
+    await untilSpawned(1);
+    await vi.advanceTimersByTimeAsync(6_000);
     await untilSpawned(2);
     expect(spawnedShells()).toEqual(["/bin/zsh", "/opt/homebrew/bin/fish"]);
-    await vi.advanceTimersByTimeAsync(10_500);
+    const fishPid = [...liveShells.keys()][0];
+
+    await vi.advanceTimersByTimeAsync(3_999);
+    expect(groupSignals()).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(groupSignals()).toEqual([[-fishPid!, "SIGTERM"]]);
+    await vi.advanceTimersByTimeAsync(500);
     await refresh;
 
-    // Killed at the deadline, and the zsh/bash fallbacks never start.
+    // The zsh/bash fallbacks never start after the deadline.
     expect(spawnedShells()).toEqual(["/bin/zsh", "/opt/homebrew/bin/fish"]);
     expect(getShellEnvironmentObservation()).toBeUndefined();
   });
@@ -1250,27 +1317,76 @@ describe("refreshPath — login shell lifecycle (#15565)", () => {
     expect(process.env.PATH).toBe("/orig");
   });
 
-  it("spawns -ilc with shell-env's overrides, in its own process group", async () => {
-    loginShellMock.mockResolvedValue({ PATH: "/usr/bin" });
+  it("settles the unnamed shells once, as shell-env did on import", async () => {
+    delete process.env.SHELL;
+    userInfoMock.mockReturnValue({ shell: "/bin/bash" });
+    loginShellMock.mockRejectedValue(new Error("exit 1"));
+    const { refreshPath } = await loadRefreshPath();
+
+    const first = refreshPath();
+    await untilSpawned(2);
+    await first;
+    userInfoMock.mockReturnValue({ shell: "/opt/homebrew/bin/fish" });
+    const second = refreshPath();
+    await untilSpawned(4);
+    await second;
+
+    expect(spawnedShells()).toEqual(["/bin/bash", "/bin/zsh", "/bin/bash", "/bin/zsh"]);
+  });
+
+  it("reads a section with no closing delimiter, less its final CRLF", async () => {
+    spawnMock.mockImplementation(() => {
+      const child = createMockChild();
+      queueMicrotask(() => {
+        child.stdout.emit("data", `${SHELL_ENV_DELIMITER}PATH=/crlf/bin\r\n`);
+        child.emit("exit", 0, null);
+        child.emit("close", 0, null);
+      });
+      return child;
+    });
     const { refreshPath } = await loadRefreshPath();
 
     const refresh = refreshPath();
     await untilSpawned(1);
     await refresh;
 
-    const [shell, args, options] = spawnMock.mock.calls[0] as [
-      string,
-      string[],
-      { detached: boolean; env: NodeJS.ProcessEnv },
-    ];
-    expect(shell).toBe("/bin/zsh");
-    expect(args[1]).toContain("command env");
-    expect(options.detached).toBe(true);
-    expect(options.env).toMatchObject({
-      DISABLE_AUTO_UPDATE: "true",
-      ZSH_TMUX_AUTOSTARTED: "true",
-      ZSH_TMUX_AUTOSTART: "false",
-    });
+    expect(process.env.PATH).toBe("/crlf/bin");
+  });
+
+  it("spawns -ilc in its own process group, with shell-env's overrides winning over inherited values", async () => {
+    const names = ["DISABLE_AUTO_UPDATE", "ZSH_TMUX_AUTOSTARTED", "ZSH_TMUX_AUTOSTART"];
+    const saved = Object.fromEntries(
+      [...names, "DAINTREE_LOGIN_SHELL_TEST"].map((name) => [name, process.env[name]])
+    );
+    for (const name of names) process.env[name] = "inherited";
+    process.env.DAINTREE_LOGIN_SHELL_TEST = "kept";
+    loginShellMock.mockResolvedValue({ PATH: "/usr/bin" });
+
+    try {
+      const { refreshPath } = await loadRefreshPath();
+      const refresh = refreshPath();
+      await untilSpawned(1);
+      await refresh;
+
+      const [shell, args, options] = spawnMock.mock.calls[0] as [
+        string,
+        string[],
+        { detached: boolean; env: NodeJS.ProcessEnv },
+      ];
+      expect(shell).toBe("/bin/zsh");
+      expect(args[1]).toContain("command env");
+      expect(options.detached).toBe(true);
+      expect(options.env.DAINTREE_LOGIN_SHELL_TEST).toBe("kept");
+      for (const name of names) {
+        expect(options.env[name]).toBeDefined();
+        expect(options.env[name]).not.toBe("inherited");
+      }
+    } finally {
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
   });
 
   it("moves on to the next shell when one cannot be spawned", async () => {

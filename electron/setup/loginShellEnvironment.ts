@@ -31,8 +31,9 @@ const ENV_OVERRIDES = {
 const MAX_STDOUT_LENGTH = 100_000_000;
 
 // strip-ansi 7 (ansi-regex 6.3): OSC sequences, then CSI and related.
+// eslint-disable-next-line no-control-regex -- matching terminal escapes is the point
 const ANSI_PATTERN =
-  /(?:\u001B\][^\u0007\u001B\u009C]*(?:\u0007|\u001B\|\u009C))|[\u001B\u009B][[\]()#;?]*(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]/g;
+  /(?:\u001B\][^\u0007\u001B\u009C]*(?:\u0007|\u001B\\|\u009C))|[\u001B\u009B][[\]()#;?]*(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]/g;
 
 export interface LoginShellEnvironment {
   /** What the shell printed, or this process's own environment when every shell failed. */
@@ -83,7 +84,6 @@ function startRead(
   let attempt: ChildProcess | null = null;
   // The timed-out shell whose group is still owed SIGKILL.
   let killTarget: ChildProcess | null = null;
-  let killTimer: NodeJS.Timeout | undefined;
   let resolveResult!: (value: LoginShellEnvironment | null) => void;
   const result = new Promise<LoginShellEnvironment | null>((resolve) => {
     resolveResult = resolve;
@@ -92,8 +92,8 @@ function startRead(
   // Stands in for execa's `cleanup`: a shell still running when Daintree exits
   // goes with it.
   const onAppExit = () => {
-    if (liveShell) signalGroup(liveShell, "SIGKILL");
-    if (killTarget && killTarget !== liveShell) signalGroup(killTarget, "SIGKILL");
+    if (attempt) signalGroup(attempt, "SIGKILL");
+    if (killTarget && killTarget !== attempt) signalGroup(killTarget, "SIGKILL");
   };
   process.on("exit", onAppExit);
 
@@ -113,14 +113,16 @@ function startRead(
 
   const deadline = setTimeout(() => {
     const shell = attempt;
+    // Claimed before the result settles, so the read is not released while
+    // the group is still owed its SIGKILL.
+    killTarget = shell;
     finish(null);
     if (!shell) return;
     // The group, not just the shell: whatever the profile was blocked on would
     // otherwise outlive it. The shell exiting early cancels nothing, since what
     // it started may still be running.
-    killTarget = shell;
     signalGroup(shell, "SIGTERM");
-    killTimer = setTimeout(() => {
+    const killTimer = setTimeout(() => {
       signalGroup(shell, "SIGKILL");
       killTarget = null;
       releaseIfIdle();

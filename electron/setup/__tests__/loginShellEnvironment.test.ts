@@ -63,9 +63,14 @@ describe.skipIf(process.platform === "win32")("readLoginShellEnvironment (real p
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-login-shell-"));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // A timed-out read's SIGKILL lands inside this test, not the next one.
+    await new Promise((resolve) => setTimeout(resolve, KILL_GRACE_MS + 100));
     for (const shell of fs.readdirSync(dir).filter((f) => f.endsWith(".starts"))) {
       for (const pid of starts(path.join(dir, shell.replace(/\.starts$/, "")))) {
+        // Only a leader still running: an emptied or orphaned group is not
+        // this worker's to signal.
+        if (!isAlive(pid)) continue;
         try {
           process.kill(-pid, "SIGKILL");
         } catch {
@@ -84,26 +89,56 @@ describe.skipIf(process.platform === "win32")("readLoginShellEnvironment (real p
       `printf 'motd banner\\n'\n[ "$1" = "-ilc" ] || exit 9\nexec /bin/bash -c "$2"`
     );
     const { readLoginShellEnvironment } = await import("../loginShellEnvironment.js");
+    const names = ["DISABLE_AUTO_UPDATE", "ZSH_TMUX_AUTOSTARTED", "ZSH_TMUX_AUTOSTART"];
+    const saved = Object.fromEntries(
+      [...names, "DAINTREE_LOGIN_SHELL_TEST"].map((name) => [name, process.env[name]])
+    );
+    for (const name of names) process.env[name] = "inherited";
+    process.env.DAINTREE_LOGIN_SHELL_TEST = "kept";
 
-    const read = await readLoginShellEnvironment(shell, options);
+    try {
+      const read = await readLoginShellEnvironment(shell, options);
 
-    expect(read?.namedShell).toBe(shell);
-    expect(read?.env.PATH).toBe(process.env.PATH);
-    expect(read?.env.DISABLE_AUTO_UPDATE).toBe("true");
-    expect(read?.env.ZSH_TMUX_AUTOSTART).toBe("false");
-    expect(read?.env).not.toHaveProperty("motd banner");
+      expect(read?.namedShell).toBe(shell);
+      expect(read?.env.PATH).toBe(process.env.PATH);
+      expect(read?.env.DAINTREE_LOGIN_SHELL_TEST).toBe("kept");
+      // shell-env's overrides win over what this process would pass down.
+      for (const name of names) {
+        expect(read?.env[name]).toBeDefined();
+        expect(read?.env[name]).not.toBe("inherited");
+      }
+      expect(read?.env).not.toHaveProperty("motd banner");
+    } finally {
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
   });
 
-  it("strips ANSI codes and keeps '=' inside values", async () => {
+  it("strips CSI and OSC codes, whichever terminator ends them, and keeps '=' inside values", async () => {
     const shell = standInShell(
       "colourful",
-      `printf '%s' "${DELIMITER}"\nprintf '\\033[1;32mGREETING=a=b\\033[0m\\nPATH=/x/bin\\n'\nprintf '%s' "${DELIMITER}"`
+      [
+        `printf '%s' "${DELIMITER}"`,
+        `printf '\\033[1;32mGREETING=a=b\\033[0m\\nPATH=/x/bin\\n'`,
+        `printf '\\033]0;window title\\007OSC_BEL=1\\n'`,
+        `printf 'OSC_ST=\\033]8;;http://x\\033\\\\link\\033]8;;\\033\\\\\\n'`,
+        `printf 'OSC_C1=a\\033]0;t\\302\\234b\\n'`,
+        `printf '%s' "${DELIMITER}"`,
+      ].join("\n")
     );
     const { readLoginShellEnvironment } = await import("../loginShellEnvironment.js");
 
     const read = await readLoginShellEnvironment(shell, options);
 
-    expect(read?.env).toEqual({ GREETING: "a=b", PATH: "/x/bin" });
+    expect(read?.env).toEqual({
+      GREETING: "a=b",
+      PATH: "/x/bin",
+      OSC_BEL: "1",
+      OSC_ST: "link",
+      OSC_C1: "ab",
+    });
   });
 
   it("kills a shell that never exits, and what its profile was blocked on, at the deadline", async () => {
@@ -127,7 +162,7 @@ describe.skipIf(process.platform === "win32")("readLoginShellEnvironment (real p
   });
 
   it("escalates to SIGKILL for a shell that ignores SIGTERM", async () => {
-    const shell = standInShell("stubborn", `trap '' TERM\nwhile :; do sleep 0.05; done`);
+    const shell = standInShell("stubborn", `trap '' TERM\nread never`);
     const { readLoginShellEnvironment } = await import("../loginShellEnvironment.js");
 
     expect(await readLoginShellEnvironment(shell, options)).toBeNull();
@@ -138,7 +173,7 @@ describe.skipIf(process.platform === "win32")("readLoginShellEnvironment (real p
   });
 
   it("starts no second shell while a timed-out one is still exiting, and one after it has gone", async () => {
-    const shell = standInShell("stubborn", `trap '' TERM\nwhile :; do sleep 0.05; done`);
+    const shell = standInShell("stubborn", `trap '' TERM\nread never`);
     const { readLoginShellEnvironment } = await import("../loginShellEnvironment.js");
 
     expect(await readLoginShellEnvironment(shell, options)).toBeNull();

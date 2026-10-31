@@ -938,7 +938,7 @@ describe("reset-data", () => {
 
 describe("kickOffEarlyPathRefresh", () => {
   let shellReadCount = 0;
-  let shellReadMode: "path" | "throw" | "timeout" = "path";
+  let shellReadMode: "path" | "throw" | "timeout" | "late" = "path";
   let savedPath: string | undefined;
 
   beforeEach(() => {
@@ -959,6 +959,19 @@ describe("kickOffEarlyPathRefresh", () => {
         }
         if (shellReadMode === "timeout") {
           return null;
+        }
+        if (shellReadMode === "late") {
+          // An answer after the outer 10s race but before the read's own deadline.
+          return new Promise((resolve) =>
+            setTimeout(
+              () =>
+                resolve({
+                  env: { PATH: "/late/login-shell", CLAUDE_CONFIG_DIR: "/late/claude" },
+                  namedShell: "/bin/zsh",
+                }),
+              10_001
+            )
+          );
         }
         return { env: { PATH: "/from/login-shell" } };
       }),
@@ -988,12 +1001,35 @@ describe("kickOffEarlyPathRefresh", () => {
     await Promise.all([p1, p2]);
     // The shell must only be read once even with two concurrent kick-offs.
     expect(shellReadCount).toBe(1);
+    // A later window's startup reuses the settled gate.
+    expect(env.kickOffEarlyPathRefresh()).toBe(p1);
+    expect(shellReadCount).toBe(1);
   });
 
   it("concurrent refreshPath callers share one in-flight login shell read", async () => {
     const env = await import("../environment.js");
     await Promise.all([env.refreshPath(), env.refreshPath(), env.refreshPath()]);
     expect(shellReadCount).toBe(1);
+  });
+
+  it("drops an answer that lands after the refresh timed out", async () => {
+    shellReadMode = "late";
+    vi.useFakeTimers();
+    try {
+      const env = await import("../environment.js");
+      const { getShellEnvironmentObservation } = await import("../shellEnvironmentObservation.js");
+      const refresh = env.refreshPath();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await refresh;
+      // However late the read's timer was armed, let its answer land.
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(shellReadCount).toBe(1);
+      expect(process.env.PATH).toBe("/old/path");
+      expect(getShellEnvironmentObservation()).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("kick-off leaves PATH unchanged when the login shell read gives nothing", async () => {
