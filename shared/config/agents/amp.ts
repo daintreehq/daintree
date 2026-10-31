@@ -119,10 +119,12 @@ export const config: AgentConfig = {
     args: [],
   },
   authCheck: {
-    // `amp login` writes OAuth tokens to ~/.amp/oauth/. Keychain-only
-    // installs leave that directory absent — those users get
-    // `authConfirmed: false` but remain launchable.
-    configPathsAll: [".amp/oauth"],
+    // Amp documents its credentials file as ~/.local/share/amp/secrets.json
+    // (home-relative on macOS, Linux and Windows; https://ampcode.com/security).
+    // Existence-only: the file is never read. ~/.amp/oauth is kept as a legacy
+    // fallback. Installs with neither get `authConfirmed: false` but remain
+    // launchable.
+    configPathsAll: [".local/share/amp/secrets.json", ".amp/oauth"],
     envVar: "AMP_API_KEY",
   },
   prerequisites: [

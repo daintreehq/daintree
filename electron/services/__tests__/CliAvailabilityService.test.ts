@@ -785,6 +785,28 @@ describe("CliAvailabilityService", () => {
       expect(result.copilot).toBe("ready");
     });
 
+    it("confirms Amp auth from the documented secrets.json and stays unauthenticated without it", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (cmdOf(args) === "amp") return Buffer.from("");
+        throw new Error("not found");
+      });
+
+      const secrets = join(homedir(), ".local/share/amp/secrets.json");
+      mockedAccess.mockImplementation(async (path) => {
+        if (String(path) === secrets) return;
+        throw new Error("ENOENT");
+      });
+      const present = await service.checkAvailability();
+      expect(present.amp).toBe("ready");
+
+      mockedAccess.mockRejectedValue(new Error("ENOENT"));
+      const absent = await new CliAvailabilityService().checkAvailability();
+      expect(absent.amp).toBe("unauthenticated");
+    });
+
     it("does NOT probe the bogus Antigravity path (.antigravity/oauth_creds.json)", async () => {
       const { access } = await import("fs/promises");
       const mockedAccess = vi.mocked(access);
