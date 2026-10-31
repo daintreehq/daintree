@@ -1054,7 +1054,7 @@ describe("HybridInputBar stop-and-send pressed again while its send waits (#1570
       await act(async () => {
         pressStopAndSend();
       });
-      expect(sendElsewhere).toHaveBeenCalledWith({ spoken: false });
+      expect(sendElsewhere).toHaveBeenCalledWith({ spoken: false, asker: "stop_and_send_key" });
       expect(onSend).not.toHaveBeenCalled();
 
       act(() => {

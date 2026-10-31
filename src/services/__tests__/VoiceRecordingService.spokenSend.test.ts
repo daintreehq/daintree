@@ -707,7 +707,7 @@ describe("VoiceRecordingService — the session panel's Send (#14920)", () => {
 
     await voiceRecordingService.stopAndSend();
 
-    expect(handler).toHaveBeenCalledWith({ spoken: false });
+    expect(handler).toHaveBeenCalledWith({ spoken: false, asker: "stop_and_send_key" });
     expect(sendNow).not.toHaveBeenCalled();
   });
 
