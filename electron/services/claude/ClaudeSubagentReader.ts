@@ -264,10 +264,20 @@ const EMPTY_META: SubagentMeta = {
   createdAt: null,
 };
 
+/**
+ * A copy that owns its characters. V8 can keep a slice as a view into the
+ * string it was cut from, so a capped field or preview headed for a cache
+ * would otherwise hold the whole original while being charged for the slice.
+ * UTF-16 in and out, so lone surrogates survive the copy unchanged.
+ */
+function detached(value: string): string {
+  return Buffer.from(value, "utf16le").toString("utf16le");
+}
+
 function asText(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed.slice(0, META_FIELD_MAX_CHARS) : null;
+  return trimmed.length > 0 ? detached(trimmed.slice(0, META_FIELD_MAX_CHARS)) : null;
 }
 
 /**
@@ -450,7 +460,9 @@ interface ProbeSummary {
 
 function summarizeProbe(probe: Probe): ProbeSummary {
   return {
-    preview: recordText(probe.first?.message ?? null).slice(0, SUBAGENT_MESSAGE_MAX_CHARS),
+    preview: detached(
+      recordText(probe.first?.message ?? null).slice(0, SUBAGENT_MESSAGE_MAX_CHARS)
+    ),
     firstTimestamp: probe.first?.timestamp ?? null,
     last: classifyLast(probe.last),
     partialTail: probe.partialTail,

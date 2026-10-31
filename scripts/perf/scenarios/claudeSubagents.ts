@@ -58,8 +58,8 @@ import {
  *
  * Every row either arm returns is graded twice, outside the timed brackets:
  * against the other arm, and against the fixture's own record of what it
- * wrote. After the sweeps a supplemental session, sharing the same warm
- * caches, takes the mutations the cache has to see through — an appended
+ * wrote. After the sweeps a supplemental session, listed until its targets
+ * are cached, takes the mutations the cache has to see through — an appended
  * transcript, an atomic replace that keeps size and mtime, a sidecar that
  * arrives late, symlinked transcript and sidecar, a status that ages out with
  * no write, and newest children that cannot be read (an injected EACCES on
@@ -243,8 +243,8 @@ interface OracleResult extends Pick<
 
 /**
  * The mutations a cache has to see through, on a supplemental session of 53
- * children that shares both arms' caches with the measured workload, so every
- * step runs against a cache as full as the scenario left it.
+ * children listed through both arms after their caches are emptied, so the
+ * targets are cached before they change.
  *
  * Each step lists through both arms and charges its own term for any row
  * that differs between them or from the fixture's record — and the record is
@@ -330,6 +330,15 @@ async function mutationOracle(
       result.expectedRowMisses += unchanged.expectedMisses;
     }
 
+    // The append, replace and symlink steps test a cached entry being seen
+    // through, which is vacuous unless the targets are cached to begin with.
+    // An unchanged re-list that opens nothing is the proof; without it each of
+    // those steps is charged a miss rather than passing on a cold read.
+    const warmMark = fsMark();
+    await current.list(dir, baseNowMs);
+    const warm = fsSince(warmMark);
+    const uncached = warm.transcriptOpens === 0 && warm.sidecarOpens === 0 ? 0 : 1;
+
     // A status that ages out with no write: the cached probe must not carry it.
     const fresh = await grade(baseNowMs);
     const aged = await grade(baseNowMs + POLL_MS);
@@ -357,7 +366,7 @@ async function mutationOracle(
     );
     await fsp.utimes(appended.file, new Date(appended.mtimeMs), new Date(appended.mtimeMs));
     appended.ending = "ended";
-    result.appendMisses += (await grade(baseNowMs)).misses;
+    result.appendMisses += (await grade(baseNowMs)).misses + uncached;
 
     // Atomic replace keeping size and mtime: only the inode and ctime change.
     const replaced = at(2);
@@ -381,7 +390,7 @@ async function mutationOracle(
       after.size === before.size &&
       Math.round(after.mtimeMs) === Math.round(before.mtimeMs) &&
       after.ino !== before.ino;
-    result.atomicReplaceMisses += (await grade(baseNowMs)).misses + (qualified ? 0 : 1);
+    result.atomicReplaceMisses += (await grade(baseNowMs)).misses + (qualified ? 0 : 1) + uncached;
 
     // A sidecar written after its transcript was already listed.
     const late = at(3);
@@ -417,12 +426,11 @@ async function mutationOracle(
       JSON.stringify({ description: "Planted", agentType: "Explore" })
     );
     const linkedMetaFile = linkedMeta.file.replace(/\.jsonl$/, ".meta.json");
+    // Asked of a scratch path first, so a platform that refuses leaves both
+    // originals untouched rather than half swapped under the later steps.
     let linked = true;
     try {
-      await fsp.rm(linkedTranscript.file);
-      await fsp.symlink(outsideTranscript, linkedTranscript.file);
-      await fsp.rm(linkedMetaFile);
-      await fsp.symlink(outsideMeta, linkedMetaFile);
+      await fsp.symlink(outsideMeta, path.join(top, "symlink-probe"));
     } catch (error) {
       // Windows refuses an unprivileged symlink. That is reported, never
       // passed as though the case had run.
@@ -431,9 +439,13 @@ async function mutationOracle(
       result.skippedOracleSteps += 1;
     }
     if (linked) {
+      await fsp.rm(linkedTranscript.file);
+      await fsp.symlink(outsideTranscript, linkedTranscript.file);
+      await fsp.rm(linkedMetaFile);
+      await fsp.symlink(outsideMeta, linkedMetaFile);
       excluded.add(linkedTranscript.id);
       linkedMeta.sidecar = null;
-      result.symlinkMisses += (await grade(baseNowMs)).misses;
+      result.symlinkMisses += (await grade(baseNowMs)).misses + uncached;
     }
 
     // A newest child that turns out unreadable: it costs its row and the next
@@ -525,7 +537,7 @@ const WORKLOADS: readonly Workload[] = [
 ];
 
 function scenarioDescription(workload: Workload): string {
-  return `${workload.description} Real transcripts (72-900 KiB, most past 128 KiB at each end) and ~230-byte sidecars, driven through listSubagentsInDir in sweeps of one list per session, against the frozen pre-#15681 reader in the same run. Predicates grade the apparatus and the rows, never the speed-up: the fs observer must see both readers' own open binding, every row from either arm must match the other and the fixture's record, and a supplemental session sharing the warm caches must come through an append, an atomic replace that keeps size and mtime, a late sidecar, symlinks, a status that ages out with no write, and unreadable newest children. Windows skips the symlink step and the chmod variant of the unreadable step, and reports how many it skipped.`;
+  return `${workload.description} Real transcripts (72-900 KiB, most past 128 KiB at each end) and ~230-byte sidecars, driven through listSubagentsInDir in sweeps of one list per session, against the frozen pre-#15681 reader in the same run. Predicates grade the apparatus and the rows, never the speed-up: the fs observer must see both readers' own open binding, every row from either arm must match the other and the fixture's record, and a supplemental session, listed once its targets are cached, must come through an append, an atomic replace that keeps size and mtime, a late sidecar, symlinks, a status that ages out with no write, and unreadable newest children. Windows skips the symlink step and the chmod variant of the unreadable step, and reports how many it skipped.`;
 }
 
 function scenarioFor(workload: Workload): PerfScenario {
@@ -603,6 +615,11 @@ function scenarioFor(workload: Workload): PerfScenario {
         grade(coldCurrent.rows, coldReference.rows, coldCurrent.nows);
         grade(measured.current.rows, measured.reference.rows, measured.current.nows);
 
+        // Emptied first, so the oracle's targets are admitted: PERF-418 leaves
+        // the current cache full of warm entries, which refuses newcomers.
+        // Correctness under that pressure is what the measured sweeps graded.
+        current.reset();
+        reference.reset();
         const oracle = await mutationOracle(store.root, current, reference, store.baseNowMs);
 
         const currentReading = readings.current;

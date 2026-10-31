@@ -1,5 +1,5 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { chmod, mkdtemp, mkdir, rename, rm, symlink, writeFile, utimes } from "fs/promises";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import { chmod, lstat, mkdtemp, mkdir, rename, rm, symlink, writeFile, utimes } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 import {
@@ -23,9 +23,26 @@ import {
   SUBAGENT_TRANSCRIPT_MESSAGE_LIMIT,
 } from "../../../../shared/types/ipc/agentSubagents.js";
 
+/** Every path the reader opens, so a test can tell a cache hit from a re-read. */
+const opened = vi.hoisted(() => ({ paths: [] as string[] }));
+
+vi.mock("fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("fs/promises")>();
+  const open = (async (...args: Parameters<typeof actual.open>) => {
+    opened.paths.push(String(args[0]));
+    return actual.open(...args);
+  }) as typeof actual.open;
+  return { ...actual, open, default: { ...actual, open } };
+});
+
+function opensOf(suffix: string): number {
+  return opened.paths.filter((file) => file.endsWith(suffix)).length;
+}
+
 let root: string;
 
 beforeEach(async () => {
+  opened.paths.length = 0;
   __resetClaudeSubagentCaches();
   root = await mkdtemp(path.join(tmpdir(), "claude-subagents-"));
 });
@@ -607,9 +624,16 @@ describe("listSubagentsInDir past what it shows", () => {
     expect(rows[0]?.id).toBe(`c${String(SUBAGENT_LIST_LIMIT + 9).padStart(4, "0")}`);
     expect(rows.at(-1)?.id).toBe("c0010");
     // The ten oldest were ranked by their `lstat` and never opened.
+    expect(opensOf(".jsonl")).toBe(SUBAGENT_LIST_LIMIT);
+    expect(opensOf(".meta.json")).toBe(SUBAGENT_LIST_LIMIT);
     const stats = __claudeSubagentCacheStats();
     expect(stats.probes.entries).toBe(SUBAGENT_LIST_LIMIT);
     expect(stats.sidecars.entries).toBe(SUBAGENT_LIST_LIMIT);
+
+    // Nothing changed on disk, so the next poll opens nothing at all.
+    opened.paths.length = 0;
+    expect(await listSubagentsInDir(dir)).toEqual(rows);
+    expect(opened.paths).toEqual([]);
   });
 
   it.skipIf(!enforcesModeBits)(
@@ -679,6 +703,32 @@ describe("listSubagentsInDir past what it shows", () => {
     expect((await listSubagentsInDir(dir))[0]?.label).toBe("bbbb");
   });
 
+  it("re-reads a sidecar rewritten in place under the same size and mtime", async () => {
+    const dir = await makeSubagentsDir("/Users/x/Projects/demo");
+    await writeChild(dir, "aaa1", [userRecord("go")]);
+    const meta = path.join(dir, "agent-aaa1.meta.json");
+    const at = new Date(BASE_SECONDS * 1000);
+    await writeFile(meta, JSON.stringify({ description: "aaaa" }));
+    await utimes(meta, at, at);
+    const before = await lstat(meta);
+    expect((await listSubagentsInDir(dir))[0]?.label).toBe("aaaa");
+
+    // Same inode, size and mtime: only the ctime can tell. A coarse ctime
+    // clock can put both writes in one tick, so touch until it moves.
+    await writeFile(meta, JSON.stringify({ description: "bbbb" }));
+    let after = before;
+    for (let attempt = 0; attempt < 200 && after.ctimeMs === before.ctimeMs; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      await utimes(meta, at, at);
+      after = await lstat(meta);
+    }
+    expect(after.ino).toBe(before.ino);
+    expect(after.size).toBe(before.size);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+    expect(after.ctimeMs).not.toBe(before.ctimeMs);
+    expect((await listSubagentsInDir(dir))[0]?.label).toBe("bbbb");
+  });
+
   it("stops trusting a sidecar that has been swapped for a symlink", async () => {
     const dir = await makeSubagentsDir("/Users/x/Projects/demo");
     await writeChild(dir, "aaa1", [userRecord("go")], { description: "Real" });
@@ -705,11 +755,12 @@ describe("listSubagentsInDir past what it shows", () => {
 
     const fresh = await listSubagentsInDir(dir, { now: () => at + 1_000 });
     expect(fresh[0]?.status).toEqual({ type: "working" });
+    opened.paths.length = 0;
     const later = await listSubagentsInDir(dir, {
       now: () => at + CLAUDE_SUBAGENT_ACTIVE_WINDOW_MS + 1,
     });
     expect(later[0]?.status).toEqual({ type: "unknown", reason: "stale" });
-    expect(__claudeSubagentCacheStats().probes.entries).toBe(1);
+    expect(opensOf(".jsonl")).toBe(0);
   });
 });
 
@@ -748,6 +799,37 @@ describe("WarmCache", () => {
     expect(cache.get("a", "v1", HOUR)).toBeUndefined();
     expect(cache.get("b", "v1", HOUR)).toBe("b");
     expect(cache.get("c", "v1", HOUR)).toBe("c");
+  });
+
+  it("renews an entry each time it is used, and evicts in order of last use", () => {
+    const cache = new WarmCache<string>(2, 1_000_000);
+    cache.set("a", "v1", "a", 10, 0);
+    cache.set("b", "v1", "b", 10, 1);
+    expect(cache.get("a", "v1", 20_000)).toBe("a");
+
+    // `b` was last used at 1 ms, so it is cold and goes first; `a` was renewed.
+    cache.set("c", "v1", "c", 10, 35_000);
+    expect(cache.get("b", "v1", 35_000)).toBeUndefined();
+
+    // Ten seconds later `a` is still inside its renewed warm window.
+    cache.set("d", "v1", "d", 10, 45_000);
+    expect(cache.get("d", "v1", 45_000)).toBeUndefined();
+    expect(cache.get("a", "v1", 45_000)).toBe("a");
+    expect(cache.get("c", "v1", 45_000)).toBe("c");
+  });
+
+  it("keeps its byte count exact across replacement and refusal", () => {
+    const cache = new WarmCache<string>(2, 100);
+    cache.set("a", "v1", "a", 30, 0);
+    cache.set("a", "v2", "a2", 50, 0);
+    expect(cache.stats()).toEqual({ entries: 1, bytes: 50 });
+
+    cache.set("b", "v1", "b", 60, 0);
+    cache.set("big", "v1", "big", 101, 0);
+    expect(cache.stats()).toEqual({ entries: 1, bytes: 50 });
+
+    expect(cache.get("a", "v1", 0)).toBeUndefined();
+    expect(cache.stats()).toEqual({ entries: 0, bytes: 0 });
   });
 
   it("never holds more bytes than its cap", () => {

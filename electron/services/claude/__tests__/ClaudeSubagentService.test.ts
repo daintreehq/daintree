@@ -262,6 +262,11 @@ describe("readClaudeSubagentTranscript", () => {
       getTerminalAsync.mockResolvedValue(claudeTerminal());
       const files = await seedPastTheLimit();
       const newest = files.at(-1) as string;
+      await expect(readClaudeSubagentTranscript("t1", "c0000")).resolves.toEqual({
+        status: "unavailable",
+        reason: "subagent-not-found",
+      });
+
       await chmod(newest, 0o000);
       try {
         await expect(readClaudeSubagentTranscript("t1", "c0000")).resolves.toMatchObject({
