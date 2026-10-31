@@ -650,7 +650,10 @@ export class ClientFileTransport {
   openBody(hostId: HostId, streamId: string, options: OpenBodyOptions): HostFileBody {
     const session = this.hosts.get(hostId)?.session ?? null;
     const depth = Math.max(1, Math.min(options.pullDepth ?? 1, this.pullDepth));
-    const body: PreviewBody = new PreviewBody({
+    // Assigned after construction: a body opened with no live session stops,
+    // and forgets itself, inside its constructor.
+    let body: PreviewBody | null = null;
+    body = new PreviewBody({
       session,
       hostId,
       streamId,
@@ -665,10 +668,10 @@ export class ClientFileTransport {
         }
       },
       forget: () => {
-        if (this.bodies.get(streamId)?.body === body) this.bodies.delete(streamId);
+        if (body && this.bodies.get(streamId)?.body === body) this.bodies.delete(streamId);
       },
     });
-    if (depth > 1 && session) this.bodies.set(streamId, { session, body });
+    if (depth > 1 && session?.isOpen) this.bodies.set(streamId, { session, body });
     return body;
   }
 

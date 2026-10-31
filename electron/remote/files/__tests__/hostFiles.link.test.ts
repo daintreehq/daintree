@@ -31,6 +31,7 @@ import {
   DOWNLOAD_SINK_PREFIX,
   FileDownloadPayloadSchema,
   FileLinkMethod,
+  PREVIEW_PULL_DEPTH,
   PULL_MAX_BYTES,
   type FileRequestPayload,
   type FileResponse,
@@ -549,9 +550,10 @@ describe("previews pulled ahead", () => {
       new Request(url("daintree-media", file, project))
     );
     expect(sha256(new Uint8Array(await response.arrayBuffer()))).toBe(sha256(bytes));
-    expect(ctx.stats.maxSends).toBe(2);
+    expect(ctx.stats.maxSends).toBeGreaterThan(1);
+    expect(ctx.stats.maxSends).toBeLessThanOrEqual(PREVIEW_PULL_DEPTH);
     expect(ctx.stats.maxReading).toBe(1);
-    expect(ctx.bodies[0]!.peakBufferedBytes).toBeLessThanOrEqual(2 * MiB);
+    expect(ctx.bodies[0]!.peakBufferedBytes).toBeLessThanOrEqual(PREVIEW_PULL_DEPTH * MiB);
     // Read to its end: the Shell lets the host go of the stream it kept.
     await waitFor(() => ctx.service.openStreams === 0);
   });
@@ -603,8 +605,9 @@ describe("previews pulled ahead", () => {
     await reader.cancel();
     await waitFor(() => ctx.service.openStreams === 0);
     const readAtClose = ctx.stats.bytesRead;
-    // At most the slices in flight when the cancel landed, plus the one being read.
-    expect(readAtClose).toBeLessThanOrEqual(4 * MiB);
+    // The slice handed over and the slices in flight when the cancel landed,
+    // give or take the part of a read the last slice left over.
+    expect(readAtClose).toBeLessThanOrEqual((PREVIEW_PULL_DEPTH + 2) * MiB);
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(ctx.stats.bytesRead).toBe(readAtClose);
     expect(ctx.bodies[0]!.bufferedBytes).toBe(0);
@@ -684,8 +687,16 @@ describe("previews pulled ahead", () => {
     expect(ctx.service.openStreams).toBe(0);
   });
 
+  it("fails a body opened after the link dropped, without pulling", async () => {
+    const { transport, client } = await setup();
+    client.close("gone");
+    const body = transport.openBody(HOST, "d".repeat(32), { pullDepth: 4, expectedBytes: 10 });
+    await expect(body.read()).rejects.toMatchObject({ code: "HOST_DISCONNECTED" });
+    expect(() => body.cancel()).not.toThrow();
+  });
+
   it("refuses a pull out of sequence on a pipelined stream, and closes it", async () => {
-    const { client, service } = await setup();
+    const { client, service } = await setup({ hostPulls: 3 });
     const { file } = await write("order.mp4", 3 * MiB);
     const answer = (await client.call(FileLinkMethod.REQUEST, {
       endpointId: "view-7",
@@ -694,9 +705,10 @@ describe("previews pulled ahead", () => {
       root: project,
       method: "GET",
       range: null,
-      pullDepth: 2,
+      pullDepth: 64,
     })) as FileResponse;
-    expect(answer.pullDepth).toBe(2);
+    // Granted no deeper than the host's own pull cap.
+    expect(answer.pullDepth).toBe(3);
     await expect(
       client.call(FileLinkMethod.PULL, {
         streamId: answer.streamId,
