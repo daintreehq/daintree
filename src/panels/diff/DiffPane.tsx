@@ -1,13 +1,4 @@
-import {
-  lazy,
-  Suspense,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-} from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -87,11 +78,8 @@ import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { usePanelStore } from "@/store/panelStore";
-import {
-  usePreferencesStore,
-  type DiffFontSize,
-  type DiffViewType,
-} from "@/store/preferencesStore";
+import { usePreferencesStore, type DiffViewType } from "@/store/preferencesStore";
+import { diffFontStyle } from "@/components/Worktree/diffFontSize";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
@@ -156,14 +144,6 @@ const GENERIC_AUDIO_ERROR: MediaPreviewError = {
   title: "This audio file couldn't be played",
   description:
     "The format is supported but the codec may not be. Open it in your default app to play it.",
-};
-
-// The S/M/L rungs are the shared type steps, so the preference keeps meaning the
-// same sizes it always did while still tracking the scale.
-const DIFF_FONT_SIZE: Record<DiffFontSize, string> = {
-  s: "var(--text-2xs)",
-  m: "var(--text-xs)",
-  l: "var(--text-sm)",
 };
 
 // react-markdown plus the remark pipeline behind it are several hundred KB that
@@ -299,9 +279,7 @@ export function DiffPane({
   const setDiffFullFile = usePreferencesStore((s) => s.setDiffFullFile);
   const diffShowFileList = usePreferencesStore((s) => s.diffShowFileList);
   const diffFontSize = usePreferencesStore((s) => s.diffFontSize);
-  const diffFontStyle: CSSProperties & Record<"--diff-font-size", string> = {
-    "--diff-font-size": DIFF_FONT_SIZE[diffFontSize],
-  };
+  const fontStyle = diffFontStyle(diffFontSize);
   const setDiffShowFileList = usePreferencesStore((s) => s.setDiffShowFileList);
 
   const filePath = panel?.filePath;
@@ -1340,7 +1318,7 @@ export function DiffPane({
             makes the size preference reach the rendered diff. */}
         <div
           className="relative flex-1 min-w-0 min-h-0 flex flex-col"
-          style={diffFontStyle}
+          style={fontStyle}
           data-testid="diff-pane-body"
         >
           <div ref={scrollRootRef} className="flex-1 min-h-0 overflow-auto diff-scroll-root">

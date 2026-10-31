@@ -496,8 +496,13 @@ describe("DiffViewer directional context expansion", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Expand down/ }));
 
-    // 97 hidden - 50 revealed = 47 left, below the cap → single expander.
-    expect(screen.getByRole("button", { name: "Expand 47 lines" })).toBeTruthy();
+    // 97 hidden - 20 revealed = 77 left, still past the cap.
+    expect(screen.getByRole("button", { name: "Expand all 77" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /Expand down/ }));
+
+    // 77 - 20 = 57 left, below the cap → single expander.
+    expect(screen.getByRole("button", { name: "Expand 57 lines" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Expand down/ })).toBeNull();
   });
 
@@ -506,7 +511,7 @@ describe("DiffViewer directional context expansion", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Expand up/ }));
 
-    expect(screen.getByRole("button", { name: "Expand 47 lines" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Expand all 77" })).toBeTruthy();
   });
 });
 

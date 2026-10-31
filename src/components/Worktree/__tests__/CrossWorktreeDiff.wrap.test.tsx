@@ -32,6 +32,11 @@ const preferences = {
   diffIgnoreWhitespace: false,
   diffWrapLines: null as boolean | null,
   setDiffWrapLines: vi.fn(),
+  diffViewType: "split",
+  setDiffViewType: vi.fn(),
+  diffShowFileList: true,
+  setDiffShowFileList: vi.fn(),
+  diffFontSize: "m",
 };
 vi.mock("@/store/preferencesStore", () => ({
   usePreferencesStore: (selector: (state: unknown) => unknown) => selector(preferences),
@@ -54,10 +59,27 @@ vi.mock("@/components/ui/AppDialog", () => {
   return { AppDialog };
 });
 
+// The comparison controls ride in the viewer's file header, so the stand-in
+// renders the header slots the real one draws.
 vi.mock("../DiffViewer", () => ({
-  DiffViewer: ({ diff, wrapLines }: { diff: string; wrapLines?: boolean }) => (
-    <div data-testid="diff-viewer" data-wrap-lines={String(wrapLines)}>
-      {diff}
+  DiffFilePath: ({ path }: { path: string }) => <span>{path}</span>,
+  DiffViewer: ({
+    diff,
+    wrapLines,
+    headerLeading,
+    headerActions,
+  }: {
+    diff: string;
+    wrapLines?: boolean;
+    headerLeading?: ReactNode;
+    headerActions?: ReactNode;
+  }) => (
+    <div>
+      {headerLeading}
+      {headerActions}
+      <div data-testid="diff-viewer" data-wrap-lines={String(wrapLines)}>
+        {diff}
+      </div>
     </div>
   ),
 }));
@@ -245,10 +267,8 @@ async function setupSteppingComparison() {
 }
 
 describe("CrossWorktreeDiff file stepping", () => {
-  it("`]` with no selection opens the first file", async () => {
+  it("opens the first file in list order once the comparison lands", async () => {
     await setupSteppingComparison();
-
-    fireEvent.keyDown(window, { key: "]" });
 
     await waitFor(() => {
       expect(screen.getByTestId("cross-worktree-file-position").textContent).toBe("1 of 3");
@@ -265,8 +285,6 @@ describe("CrossWorktreeDiff file stepping", () => {
 
   it("steps forward and back through the comparison set", async () => {
     await setupSteppingComparison();
-
-    fireEvent.keyDown(window, { key: "]" });
     await waitFor(() => {
       expect(screen.getByTestId("cross-worktree-file-position").textContent).toBe("1 of 3");
     });
@@ -292,13 +310,15 @@ describe("CrossWorktreeDiff file stepping", () => {
 
   it("does not step past either end", async () => {
     await setupSteppingComparison();
+    await waitFor(() => {
+      expect(screen.getByTestId("cross-worktree-file-position").textContent).toBe("1 of 3");
+    });
 
-    // `[` with nothing selected is a no-op (no file fetch happens).
+    // `[` on the first file is a no-op (no file fetch happens).
     const callsBefore = mockCompareWorktrees.mock.calls.length;
     fireEvent.keyDown(window, { key: "[" });
     expect(mockCompareWorktrees.mock.calls.length).toBe(callsBefore);
 
-    fireEvent.keyDown(window, { key: "]" }); // 1 of 3
     fireEvent.keyDown(window, { key: "]" }); // 2 of 3
     fireEvent.keyDown(window, { key: "]" }); // 3 of 3
     await waitFor(() => {

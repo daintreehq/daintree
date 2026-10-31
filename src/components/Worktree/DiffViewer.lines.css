@@ -140,6 +140,14 @@
   color: var(--color-status-success);
 }
 
+/* The number on a changed row is read, not just seen: at the status hue over
+   its own tint it falls under the text floor (about 3.9:1 on Daintree), so it
+   takes secondary ink and the +/- marker beside it keeps the hue. */
+.diff-viewer .diff-gutter-insert .diff-line-number,
+.diff-viewer .diff-gutter-delete .diff-line-number {
+  color: var(--color-text-secondary);
+}
+
 /* Deleted lines */
 .diff-viewer .diff-code-delete {
   background: color-mix(in oklab, var(--color-status-danger) 12%, transparent);
@@ -347,12 +355,12 @@
 
 .diff-viewer .diff-hunk-header-text {
   white-space: pre;
-  opacity: 0.85;
 }
 
+/* Secondary at full strength: the count is the only sign that code is
+   missing here, so it cannot sit below the text contrast floor. */
 .diff-viewer .diff-hunk-header-hidden-count {
-  color: var(--color-text-muted, var(--color-text-primary));
-  opacity: 0.6;
+  color: var(--color-text-secondary);
   white-space: nowrap;
 }
 

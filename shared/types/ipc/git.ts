@@ -106,4 +106,10 @@ export interface GitCompareWorktreesPayload {
   useMergeBase?: boolean;
   /** When true, passes --ignore-all-space so whitespace-only changes are omitted */
   ignoreWhitespace?: boolean;
+  /**
+   * Unchanged lines around each change in a file diff (git's `-U`). Large
+   * enough to cover the file, the diff carries the right side's committed
+   * text in full: the source a reader expands hidden context from.
+   */
+  contextLines?: number;
 }
