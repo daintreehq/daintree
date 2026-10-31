@@ -13,6 +13,7 @@ import { materialize } from "@/services/materialize";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { holdBackAttachments, holdComposerSend, trackUpload } from "../uploads/pendingUploads";
 import { composerDraftGeneration } from "../inputEditorExtensions/composerDraftGeneration";
+import { referenceSeparatorAt } from "../referenceSeparator";
 
 /**
  * `thisMachineOff`: the composer types to a terminal on another host, where a
@@ -77,31 +78,33 @@ export function usePasteExtensions(
           // The caret is read after the save, never before: typing may have
           // moved it. A view destroyed meanwhile takes the dispatch silently.
           const cursor = view.state.selection.main.head;
+          const lead = referenceSeparatorAt(view.state, cursor);
+          const from = cursor + lead.length;
           if (!thumbnail) {
             // No preview to put behind an image chip, so reference it the way
             // any other file is referenced.
             const token = formatAtFileTokenForCwd(filePath, cwdRef.current);
             view.dispatch({
-              changes: { from: cursor, insert: token + " " },
+              changes: { from: cursor, insert: lead + token + " " },
               effects: addFileDropChip.of({
-                from: cursor,
-                to: cursor + token.length,
+                from,
+                to: from + token.length,
                 filePath,
                 fileName,
               }),
-              selection: { anchor: cursor + token.length + 1 },
+              selection: { anchor: from + token.length + 1 },
             });
             return;
           }
           view.dispatch({
-            changes: { from: cursor, insert: filePath + " " },
+            changes: { from: cursor, insert: lead + filePath + " " },
             effects: addImageChip.of({
-              from: cursor,
-              to: cursor + filePath.length,
+              from,
+              to: from + filePath.length,
               filePath,
               thumbnailUrl: thumbnail,
             }),
-            selection: { anchor: cursor + filePath.length + 1 },
+            selection: { anchor: from + filePath.length + 1 },
           });
         } catch {
           // Empty clipboard, editor destroyed mid-IPC, etc. — nothing to do.
@@ -150,7 +153,7 @@ export function usePasteExtensions(
           // typing or a `cd` in between lands the paste where the user now is.
           const cursor = view.state.selection.main.head;
           const effects: ReturnType<typeof addFileDropChip.of>[] = [];
-          let insertText = "";
+          let insertText = referenceSeparatorAt(view.state, cursor);
           for (const { filePath, fileName, fileSize } of pasted) {
             const token = formatAtFileTokenForCwd(filePath, cwdRef.current);
             const from = cursor + insertText.length;

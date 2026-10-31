@@ -42,7 +42,11 @@ const { advanceComposerDraft } =
 
 const CWD = "/Users/greg/Projects/daintree";
 
-/** `head` may be a getter, for a caret that moves while a paste resolves. */
+/**
+ * `head` may be a getter, for a caret that moves while a paste resolves. The
+ * text before the caret is whitespace, so no separator is inserted; the
+ * boundary behaviour has its own suite against a real EditorState.
+ */
 function fakeView(head: number | (() => number) = 0) {
   const dispatch = vi.fn();
   const main = {
@@ -51,7 +55,10 @@ function fakeView(head: number | (() => number) = 0) {
     },
   };
   const view = {
-    state: { selection: { main } },
+    state: {
+      selection: { main },
+      doc: { sliceString: (from: number, to: number) => " ".repeat(Math.max(0, to - from)) },
+    },
     dispatch,
   } as unknown as EditorView;
   return { view, dispatch, head: main.head };
