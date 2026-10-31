@@ -613,6 +613,29 @@ describe("the paired device's page", () => {
     expect(live()).toBe("Unpaired. This device was removed from Daintree on greg-studio.");
   });
 
+  it("still says the pairing ended when two requests in flight are both refused", async () => {
+    await openPage(capped());
+    const refusals: Array<() => void> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise((resolve) => {
+            refusals.push(() =>
+              resolve({ ok: false, status: 401, json: async () => ({ error: "Not paired." }) })
+            );
+          })
+      )
+    );
+    // An answer, and the next read while it is still out.
+    button(document.querySelector(".run")!, "Yes").click();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(refusals).toHaveLength(2);
+    for (const refuse of refusals) refuse();
+    await vi.advanceTimersByTimeAsync(60);
+    expect(live()).toBe(document.getElementById("pair-ended")!.textContent);
+  });
+
   it("keeps a host's pick while the host list can't be read, and lets it go once the host has left", async () => {
     const studio = { hostId: "studio-03", host: "Studio" };
     const waiting: Record<string, unknown> = {

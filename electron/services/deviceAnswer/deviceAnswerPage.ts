@@ -132,6 +132,7 @@ const SCRIPT = String.raw`
   };
 
   const save = (value) => {
+    const was = token;
     token = value;
     if (!value) {
       // Nothing read under the old pairing is offered under the next one.
@@ -143,10 +144,13 @@ const SCRIPT = String.raw`
       hostRead.clear();
       hostDownSince.clear();
       hostsSaid = null;
-      // Nothing about the agents of a pairing that ended is still to be said.
-      clearTimeout(sayTimer);
-      saying = null;
-      $("announce").textContent = "";
+      // Nothing about the agents of a pairing that ended is still to be said;
+      // a later refusal of the same ending keeps what it said of the end.
+      if (was) {
+        clearTimeout(sayTimer);
+        saying = null;
+        $("announce").textContent = "";
+      }
       limitsSaid = "";
       beyond = 0;
       uncounted = false;
