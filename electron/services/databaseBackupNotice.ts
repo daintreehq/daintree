@@ -1,7 +1,8 @@
 import type { WebContents } from "electron";
 import { CHANNELS } from "../ipc/channels.js";
 import { getAllAppWebContents, isCachedViewWebContents } from "../window/webContentsRegistry.js";
-import { onMainFrameNavigationStart } from "../utils/mainFrameNavigation.js";
+import { watchMainFrameDocument } from "../utils/mainFrameNavigation.js";
+import { onWebContentsDestroyed } from "../window/webContentsDestroyed.js";
 import type { MainProcessToastPayload } from "../../shared/types/ipc/maps.js";
 import {
   getDatabaseMaintenanceService,
@@ -23,7 +24,8 @@ let pending: MainProcessToastPayload | null = null;
 // listener is mounted. Only one that has reported first-interactive is, until
 // a reload or a crash takes that listener away again.
 const readyRenderers = new Set<number>();
-const watchedRenderers = new WeakSet<WebContents>();
+const leavingRenderers = new Set<number>();
+const watchedRenderers = new Set<number>();
 
 export function formatBackupTime(writtenAt: number): string {
   return new Date(writtenAt).toLocaleString(undefined, {
@@ -111,19 +113,57 @@ export function showDatabaseBackupNotice(notice: BackupSuspensionNotice): void {
   if (pending?.rateLimitKey !== CORRUPTION_KEY) pending = payload;
 }
 
+function flushPending(): void {
+  if (pending && deliver(pending)) pending = null;
+}
+
+/**
+ * Same lifecycle as deepLinkInstall's painted views: a navigation that replaces
+ * the document (or a crash) takes the listener with it until the next
+ * first-interactive, while one the app cancels (a dropped file, a stray link)
+ * leaves the same document, and its listener, in place.
+ */
+function watchRenderer(wc: WebContents): void {
+  const id = wc.id;
+  if (watchedRenderers.has(id)) return;
+  watchedRenderers.add(id);
+  watchMainFrameDocument(wc, {
+    onLeaving: () => {
+      if (readyRenderers.delete(id)) leavingRenderers.add(id);
+    },
+    onReplaced: () => {
+      readyRenderers.delete(id);
+      leavingRenderers.delete(id);
+    },
+    onSettled: () => {
+      if (!leavingRenderers.has(id)) return;
+      // A renderer dying mid-navigation stops loading before Electron reports
+      // it gone, so decide a turn later, once a crash or newer load shows.
+      setImmediate(() => {
+        if (!leavingRenderers.has(id)) return;
+        if (wc.isDestroyed() || wc.isCrashed() || wc.isLoading()) return;
+        leavingRenderers.delete(id);
+        readyRenderers.add(id);
+        flushPending();
+      });
+    },
+  });
+  onWebContentsDestroyed(wc, () => {
+    readyRenderers.delete(id);
+    leavingRenderers.delete(id);
+    watchedRenderers.delete(id);
+  });
+}
+
 /** A renderer reported first-interactive, so its toast listener is mounted. */
 export function noteDatabaseNoticeRendererReady(webContentsId: number): void {
   // Remote shells report first-interactive too, but are never sent this notice.
   const wc = getAllAppWebContents().find((c) => c.id === webContentsId && !c.isDestroyed());
   if (!wc) return;
+  watchRenderer(wc);
+  leavingRenderers.delete(wc.id);
   readyRenderers.add(wc.id);
-  if (!watchedRenderers.has(wc)) {
-    watchedRenderers.add(wc);
-    const unready = () => readyRenderers.delete(wc.id);
-    onMainFrameNavigationStart(wc, unready);
-    wc.on("render-process-gone", unready);
-  }
-  if (pending && deliver(pending)) pending = null;
+  flushPending();
 }
 
 /** Idempotent. Install before maintenance starts, so no latch fires unheard. */
@@ -138,4 +178,6 @@ export function resetDatabaseBackupNoticeForTest(): void {
   unsubscribe = null;
   pending = null;
   readyRenderers.clear();
+  leavingRenderers.clear();
+  watchedRenderers.clear();
 }

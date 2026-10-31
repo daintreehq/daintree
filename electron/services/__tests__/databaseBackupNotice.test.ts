@@ -4,8 +4,13 @@ import type { BackupSuspensionNotice } from "../DatabaseMaintenanceService.js";
 interface FakeWebContents {
   id: number;
   send: ReturnType<typeof vi.fn>;
+  loading: boolean;
   isDestroyed: () => boolean;
+  isCrashed: () => boolean;
+  isLoading: () => boolean;
   on: (event: string, listener: (...args: unknown[]) => void) => void;
+  once: (event: string, listener: (...args: unknown[]) => void) => void;
+  removeListener: (event: string, listener: (...args: unknown[]) => void) => void;
   emit: (event: string, ...args: unknown[]) => void;
 }
 
@@ -56,14 +61,26 @@ function view(
   const wc: FakeWebContents = {
     id,
     send: vi.fn(),
+    loading: false,
     isDestroyed: () => opts.destroyed ?? false,
+    isCrashed: () => false,
+    isLoading: () => wc.loading,
     on: (event, listener) => listeners.set(event, [...(listeners.get(event) ?? []), listener]),
-    emit: (event, ...args) => listeners.get(event)?.forEach((listener) => listener(...args)),
+    once: (event, listener) => wc.on(event, listener),
+    removeListener: (event, listener) =>
+      listeners.set(
+        event,
+        (listeners.get(event) ?? []).filter((l) => l !== listener)
+      ),
+    emit: (event, ...args) => [...(listeners.get(event) ?? [])].forEach((l) => l(...args)),
   };
   views.push(wc);
   if (opts.ready ?? true) noteDatabaseNoticeRendererReady(id);
   return wc;
 }
+
+const DOCUMENT_NAVIGATION = { isMainFrame: true, isSameDocument: false };
+const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 const toastsSentTo = (wc: FakeWebContents) =>
   wc.send.mock.calls
@@ -223,15 +240,39 @@ describe("databaseBackupNotice", () => {
       expect(toastsSentTo(loading)).toEqual([buildDatabaseBackupNotice(CORRUPTION)]);
     });
 
-    it("stops sending to a renderer that reloads until it is interactive again", () => {
+    it("stops sending to a renderer that reloads until it is interactive again", async () => {
       const reloading = view(14);
-      reloading.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+      reloading.emit("did-start-navigation", DOCUMENT_NAVIGATION);
 
       showDatabaseBackupNotice(CORRUPTION);
+      reloading.emit("did-navigate");
+      reloading.emit("did-stop-loading");
+      await nextTurn();
       expect(toastsSentTo(reloading)).toEqual([]);
 
       noteDatabaseNoticeRendererReady(14);
       expect(toastsSentTo(reloading)).toEqual([buildDatabaseBackupNotice(CORRUPTION)]);
+    });
+
+    it("trusts a renderer again once a navigation it never committed settles", async () => {
+      // The app's will-navigate guard cancels a dropped file or a stray link:
+      // the same document, and its listener, stay, and never report ready again.
+      const page = view(18);
+      page.emit("did-start-navigation", DOCUMENT_NAVIGATION);
+      page.loading = true;
+
+      showDatabaseBackupNotice(CORRUPTION);
+      expect(toastsSentTo(page)).toEqual([]);
+
+      // Still loading when the turn comes: a newer load may yet replace it.
+      page.emit("did-stop-loading");
+      await nextTurn();
+      expect(toastsSentTo(page)).toEqual([]);
+
+      page.loading = false;
+      page.emit("did-stop-loading");
+      await nextTurn();
+      expect(toastsSentTo(page)).toEqual([buildDatabaseBackupNotice(CORRUPTION)]);
     });
 
     it("stays ready through an in-page navigation", () => {
@@ -243,9 +284,11 @@ describe("databaseBackupNotice", () => {
       expect(toastsSentTo(page)).toHaveLength(1);
     });
 
-    it("stops sending to a renderer whose process died", () => {
+    it("stops sending to a renderer whose process died", async () => {
       const crashed = view(16);
       crashed.emit("render-process-gone");
+      crashed.emit("did-stop-loading");
+      await nextTurn();
 
       showDatabaseBackupNotice(CORRUPTION);
       expect(toastsSentTo(crashed)).toEqual([]);
@@ -256,10 +299,15 @@ describe("databaseBackupNotice", () => {
 
     it("ignores a first-interactive from a sender with no local view", () => {
       showDatabaseBackupNotice(CORRUPTION);
-      noteDatabaseNoticeRendererReady(-3);
+      noteDatabaseNoticeRendererReady(19);
 
-      const local = view(17);
-      expect(toastsSentTo(local)).toEqual([buildDatabaseBackupNotice(CORRUPTION)]);
+      // Registered later but not yet interactive: the earlier report must not count.
+      const loading = view(19, { ready: false });
+      showDatabaseBackupNotice(VERIFICATION);
+      expect(toastsSentTo(loading)).toEqual([]);
+
+      noteDatabaseNoticeRendererReady(19);
+      expect(toastsSentTo(loading)).toEqual([buildDatabaseBackupNotice(CORRUPTION)]);
     });
 
     it("keeps the notice when every send fails, for the next ready renderer", () => {
