@@ -304,7 +304,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
           // (it wins over the well's via `cn`'s tailwind-merge), and the
           // border is reserved as transparent when it isn't drawn. Collapsed
           // is the value to keep: the metadata cluster above is spaced
-          // against this row's 4px specifically — see the `pt-2` note in
+          // against this row's 4px specifically — see the body padding note in
           // `WorktreeCard.tsx`. Reserving the border also puts the collapsed
           // row's text on the same x as the sessions row below it, which
           // always sits inside a well.

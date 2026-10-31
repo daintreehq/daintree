@@ -1507,10 +1507,16 @@ export function WorktreeCard({
                 "pe-4"
               )}
             >
-              {/* Expanded, pt-2 only: the body below supplies the gap to the
-                  next row. Both spending 8px put 16px between the branch line
-                  and the commit row, which read as a break in the middle of one
-                  cluster rather than as the space between two.
+              {/* Expanded, top padding only: the body below supplies the gap
+                  to the next row. Both spending 8px put 16px between the branch
+                  line and the commit row, which read as a break in the middle of
+                  one cluster rather than as the space between two.
+
+                  The sidebar's 12px (here and as the body's bottom padding) is
+                  the card's outer edge, and it has to be the largest gap on the
+                  card: 4px inside the identity rows, 8px before the activity
+                  row, 12px to the divider. At 8px the edge was barely wider than
+                  the gaps inside, so the divider alone said where a card ended.
 
                   Collapsed, there is no body below, so nothing supplies the
                   bottom gap and this padding is the card's whole vertical
@@ -1542,7 +1548,10 @@ export function WorktreeCard({
                   appears when the pointer arrives shifts the header sideways
                   under the cursor. */}
               <div
-                className={cn(effectiveIsCollapsed ? "py-1" : "pt-2", variant === "grid" && "pr-5")}
+                className={cn(
+                  effectiveIsCollapsed ? "py-1" : variant === "sidebar" ? "pt-3" : "pt-2",
+                  variant === "grid" && "pr-5"
+                )}
               >
                 <WorktreeHeader
                   worktree={worktree}
@@ -1603,17 +1612,15 @@ export function WorktreeCard({
                 />
               </div>
 
-              {/* pt-2, not pt-1. With the collapsed Details row's own 4px that
-                  puts 12px between the metadata cluster and the body, against
-                  2px between the metadata lines themselves — a 6:1 outer-to-
-                  inner ratio where the convention is 2:1 to 3:1, and 8-12px is
-                  where an 11px line stops reading as part of the block above
-                  it. At 4px the cluster was crowded against the body and the
-                  whole card read as one undifferentiated mass. */}
+              {/* Sidebar pt-1: with the Details row's own 4px that is 8px
+                  between the identity rows and the activity row, twice the 4px
+                  between the identity rows themselves, so the card reads as two
+                  groups rather than three equal lines. The grid's pt-2 does the
+                  same job against its taller metadata stack. */}
               {!effectiveIsCollapsed && (
                 <div
                   id={`worktree-body-${worktree.id}`}
-                  className={variant === "sidebar" ? "pb-2 pt-0.5" : "pb-2.5 pt-2"}
+                  className={variant === "sidebar" ? "pb-3 pt-1" : "pb-2.5 pt-2"}
                 >
                   {worktree.isWslPath && !worktree.wslGitOptIn && !worktree.wslGitDismissed && (
                     <WslGitBanner
