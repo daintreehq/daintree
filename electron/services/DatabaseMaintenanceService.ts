@@ -89,7 +89,9 @@ class DatabaseMaintenanceService {
     const verdict = probeDbFile(dbPath);
     if (verdict === "ok") {
       clearRecoveryPending(dbPath);
-      console.log("[DatabaseMaintenance] Database passed its full check — clearing pending recovery");
+      console.log(
+        "[DatabaseMaintenance] Database passed its full check — clearing pending recovery"
+      );
     } else if (verdict === "corrupt") {
       this.recoverCorruptDb(dbPath);
     } else {

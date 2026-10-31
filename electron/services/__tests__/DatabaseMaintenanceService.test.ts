@@ -937,7 +937,8 @@ describe("DatabaseMaintenanceService", () => {
   });
   describe("confirmed corruption across a clean restart", () => {
     const DB_PATH = "/fake/daintree.db";
-    const CORRUPT_RESULT = "*** in database main *** Tree 3 page 37 cell 2: Offset 65535 out of range";
+    const CORRUPT_RESULT =
+      "*** in database main *** Tree 3 page 37 cell 2: Offset 65535 out of range";
     const RESET_RECOVERY = { kind: "reset-to-fresh" as const, quarantinedPath: "/fake/x.corrupt" };
     let markerOnDisk: boolean;
     let liveVerdict: "ok" | "corrupt" | "unknown";
