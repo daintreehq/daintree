@@ -113,12 +113,6 @@ const chmodMock = vi.hoisted(() =>
 const readFileMock = vi.hoisted(() =>
   vi.fn<(path: string) => Promise<string>>(() => Promise.resolve("log line"))
 );
-const statMock = vi.hoisted(() =>
-  vi.fn<(path: string) => Promise<{ mtimeMs: number }>>(() =>
-    Promise.resolve({ mtimeMs: Date.now() })
-  )
-);
-const existsSyncMock = vi.hoisted(() => vi.fn<(path: string) => boolean>(() => false));
 const readdirMock = vi.hoisted(() =>
   vi.fn<(path: string) => Promise<string[]>>(() => Promise.resolve([]))
 );
@@ -128,10 +122,8 @@ vi.mock("node:fs", () => ({
     readFile: readFileMock,
     readdir: readdirMock,
     chmod: chmodMock,
-    stat: statMock,
   },
   createWriteStream: createWriteStreamMock,
-  existsSync: existsSyncMock,
 }));
 
 vi.mock("../../../utils/logger.js", () => ({
@@ -244,9 +236,7 @@ describe("registerDiagnosticsHandlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // clearAllMocks resets call data but not implementations, so restore the
-    // defaults each test to keep the rotated-log tests isolated.
-    existsSyncMock.mockReturnValue(false);
-    statMock.mockResolvedValue({ mtimeMs: Date.now() });
+    // defaults each test to keep the log-file tests isolated.
     readFileMock.mockResolvedValue("log line");
     readdirMock.mockResolvedValue([]);
     // The metrics handlers read through a 5s shared cache; clear it so each
@@ -637,6 +627,144 @@ describe("registerDiagnosticsHandlers", () => {
   });
 
   describe("handleCollectDiagnosticsForReview", () => {
+    const T0 = Date.parse("2026-10-31T08:00:00.000Z");
+    const line = (ms: number, text: string) => `[${new Date(ms).toISOString()}] [INFO] ${text}\n`;
+    const enoent = () => Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+    const logFiles = (files: Record<string, string>) =>
+      readFileMock.mockImplementation((p: string) => {
+        const content = files[path.basename(p)];
+        return content === undefined ? enoent() : Promise.resolve(content);
+      });
+    const appendedNames = () =>
+      archiverMock().append.mock.calls.map((c: unknown[]) => (c[1] as { name: string }).name);
+    const appendedContent = (name: string) =>
+      archiverMock().append.mock.calls.find(
+        (c: unknown[]) => (c[1] as { name: string }).name === name
+      )?.[0] as string | undefined;
+
+    async function collect(): Promise<DiagnosticsReviewPayload> {
+      return (await getHandlerFn(
+        "system:collect-diagnostics-for-review"
+      )()) as DiagnosticsReviewPayload;
+    }
+
+    async function save(collectedAtMs: number): Promise<void> {
+      dialogMock.showSaveDialog.mockResolvedValueOnce({
+        filePath: "/tmp/diagnostics.zip",
+        canceled: false,
+      });
+      await getHandlerFn("system:save-diagnostics-bundle")(
+        {},
+        {
+          payload: { metadata: {} },
+          enabledSections: { metadata: true, logs: true },
+          replacements: [],
+          timeWindowStartMs: null,
+          collectedAtMs,
+        }
+      );
+    }
+
+    it("lists the log files each offered window would save, cut where collection began", async () => {
+      const recent = line(T0 - 10 * 60_000, "recent");
+      const earlier = line(T0 - 2 * 60 * 60_000, "earlier");
+      const atCutoff = line(T0, "at the cutoff");
+      const rotated = line(T0 - 2 * 24 * 60 * 60_000, "old");
+      logFiles({
+        "daintree.log": earlier + recent + atCutoff + line(T0 + 30_000, "logged while collecting"),
+        "daintree.log.1": rotated,
+      });
+      // Collection takes a minute; the cutoff is when it began, not when it ended.
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(T0);
+      collectDiagnosticsWithKeysMock.mockImplementationOnce(() => {
+        nowSpy.mockReturnValue(T0 + 60_000);
+        return Promise.resolve({ payload: { metadata: {} }, sectionKeys: ["metadata"] });
+      });
+
+      try {
+        registerDiagnosticsHandlers(deps);
+        const result = await collect();
+
+        expect(result.collectedAtMs).toBe(T0);
+        expect(result.logMembers["30m"]).toEqual([
+          { name: "daintree.log", bytes: Buffer.byteLength(recent + atCutoff) },
+        ]);
+        expect(result.logMembers.full).toEqual([
+          { name: "daintree.log", bytes: Buffer.byteLength(earlier + recent + atCutoff) },
+          { name: "daintree.log.1", bytes: Buffer.byteLength(rotated) },
+        ]);
+        // No version change observed, so there is no update window to list.
+        expect(Object.keys(result.logMembers).sort()).toEqual(["30m", "5m", "full", "launch"]);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it("saves the files the review read, even after they rotate and grow", async () => {
+      const reviewed = line(Date.now() - 60_000, "reviewed");
+      logFiles({ "daintree.log": reviewed });
+      const cleanup = registerDiagnosticsHandlers(deps);
+      const { collectedAtMs } = await collect();
+
+      // Rotation moves the reviewed line to .1, and a batch dated before the
+      // cutoff lands late: neither was in the files the dialog listed.
+      logFiles({
+        "daintree.log": line(collectedAtMs - 1, "flushed after the review read"),
+        "daintree.log.1": reviewed,
+      });
+      await save(collectedAtMs);
+
+      expect(appendedNames()).toEqual(["diagnostics.json", "daintree.log"]);
+      expect(appendedContent("daintree.log")).toBe(reviewed);
+
+      // A completed save lets go of the read, so saving again rereads.
+      archiverMock().append.mockClear();
+      await save(collectedAtMs);
+      expect(appendedNames()).toEqual(["diagnostics.json", "daintree.log", "daintree.log.1"]);
+      cleanup();
+    });
+
+    it("keeps the review's read when the native save dialog outlasts the hold", async () => {
+      const reviewed = line(Date.now() - 60_000, "reviewed");
+      logFiles({ "daintree.log": reviewed });
+      const cleanup = registerDiagnosticsHandlers(deps);
+      const { collectedAtMs } = await collect();
+      logFiles({ "daintree.log.1": reviewed });
+
+      // The hold is released while the user is still choosing where to save.
+      dialogMock.showSaveDialog.mockImplementationOnce(() => {
+        cleanup();
+        return Promise.resolve({ filePath: "/tmp/diagnostics.zip", canceled: false });
+      });
+      await getHandlerFn("system:save-diagnostics-bundle")(
+        {},
+        {
+          payload: { metadata: {} },
+          enabledSections: { metadata: true, logs: true },
+          replacements: [],
+          timeWindowStartMs: null,
+          collectedAtMs,
+        }
+      );
+
+      expect(appendedNames()).toEqual(["diagnostics.json", "daintree.log"]);
+    });
+
+    it("rereads the files, still cut at the review, once the held read is released", async () => {
+      logFiles({ "daintree.log": line(Date.now() - 60_000, "reviewed") });
+      const cleanup = registerDiagnosticsHandlers(deps);
+      const { collectedAtMs } = await collect();
+      cleanup();
+
+      const rotated = line(collectedAtMs - 1, "rotated in");
+      logFiles({ "daintree.log.1": rotated + line(collectedAtMs + 1, "after the review") });
+      registerDiagnosticsHandlers(deps);
+      await save(collectedAtMs);
+
+      expect(appendedNames()).toEqual(["diagnostics.json", "daintree.log.1"]);
+      expect(appendedContent("daintree.log.1")).toBe(rotated);
+    });
+
     it("carries the version boundary and oldest retained log time", async () => {
       getVersionFirstRunBoundaryMock.mockReturnValueOnce({ version: "0.39.0", firstRunAtMs: 1234 });
       readOldestRetainedLogMsMock.mockResolvedValueOnce(999);
@@ -651,101 +779,84 @@ describe("registerDiagnosticsHandlers", () => {
   });
 
   describe("save-bundle time window", () => {
-    const logPath = (file: string) => path.normalize(path.join("/logs", file));
-    const readPaths = () =>
-      readFileMock.mock.calls.map((c: unknown[]) => path.normalize(c[0] as string));
+    const at = (ms: number) => new Date(ms).toISOString();
+    const appendedNames = () =>
+      archiverMock().append.mock.calls.map((c: unknown[]) => (c[1] as { name: string }).name);
+    const appendedContent = (name: string) =>
+      archiverMock().append.mock.calls.find(
+        (c: unknown[]) => (c[1] as { name: string }).name === name
+      )?.[0] as string | undefined;
 
-    it("skips rotated logs whose mtime predates the window, keeps recent ones", async () => {
-      existsSyncMock.mockImplementation(
-        (p: string): boolean =>
-          path.normalize(p) === logPath("daintree.log") ||
-          path.normalize(p) === logPath("daintree.log.1") ||
-          path.normalize(p) === logPath("daintree.log.2")
-      );
-      // Window cutoff = 5000ms. .1 is older (skip), .2 is newer (keep).
-      statMock.mockImplementation((p: string): Promise<{ mtimeMs: number }> =>
-        Promise.resolve({
-          mtimeMs: path.normalize(p) === logPath("daintree.log.1") ? 4000 : 6000,
-        })
-      );
+    function logFiles(files: Record<string, string>): void {
+      readFileMock.mockImplementation((p: string) => {
+        const content = files[path.basename(p)];
+        return content === undefined
+          ? Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" }))
+          : Promise.resolve(content);
+      });
+    }
+
+    async function saveBundle(
+      timeWindowStartMs: number | null,
+      collectedAtMs?: number
+    ): Promise<void> {
       dialogMock.showSaveDialog.mockResolvedValueOnce({
         filePath: "/tmp/diagnostics.zip",
         canceled: false,
       });
-
       registerDiagnosticsHandlers(deps);
-      const handler = getHandlerFn("system:save-diagnostics-bundle");
-      await handler(
+      await getHandlerFn("system:save-diagnostics-bundle")(
         {},
         {
           payload: { metadata: {} },
           enabledSections: { metadata: true, logs: true },
           replacements: [],
-          timeWindowStartMs: 5000,
+          timeWindowStartMs,
+          collectedAtMs,
         }
       );
+    }
 
-      const paths = readPaths();
-      expect(paths).toContain(logPath("daintree.log"));
-      expect(paths).toContain(logPath("daintree.log.2"));
-      expect(paths).not.toContain(logPath("daintree.log.1"));
+    it("holds the active and rotated logs to the window by their entries' own times", async () => {
+      logFiles({
+        "daintree.log": `[${at(4000)}] [INFO] old active\n[${at(6000)}] [INFO] new active\n`,
+        "daintree.log.1": `[${at(4000)}] [INFO] old rotated\n`,
+        "daintree.log.2": `[${at(4500)}] [INFO] older\n[${at(5500)}] [INFO] straddles\n`,
+      });
+
+      await saveBundle(5000);
+
+      expect(appendedContent("daintree.log")).toBe(`[${at(6000)}] [INFO] new active\n`);
+      expect(appendedNames()).not.toContain("daintree.log.1");
+      expect(appendedContent("daintree.log.2")).toBe(`[${at(5500)}] [INFO] straddles\n`);
     });
 
-    it("includes all rotated logs and never stats them when the window is full history", async () => {
-      existsSyncMock.mockImplementation(
-        (p: string): boolean =>
-          path.normalize(p) === logPath("daintree.log") ||
-          path.normalize(p) === logPath("daintree.log.1") ||
-          path.normalize(p) === logPath("daintree.log.2")
-      );
-      dialogMock.showSaveDialog.mockResolvedValueOnce({
-        filePath: "/tmp/diagnostics.zip",
-        canceled: false,
+    it("keeps every retained log line, undated ones too, when the window is full history", async () => {
+      logFiles({
+        "daintree.log": `[${at(4000)}] [INFO] active\n`,
+        "daintree.log.1": "an undated fragment\n",
+        "daintree.log.2": `[${at(1000)}] [INFO] oldest\n`,
       });
 
-      registerDiagnosticsHandlers(deps);
-      const handler = getHandlerFn("system:save-diagnostics-bundle");
-      await handler(
-        {},
-        {
-          payload: { metadata: {} },
-          enabledSections: { metadata: true, logs: true },
-          replacements: [],
-          timeWindowStartMs: null,
-        }
-      );
+      await saveBundle(null);
 
-      const paths = readPaths();
-      expect(paths).toContain(logPath("daintree.log.1"));
-      expect(paths).toContain(logPath("daintree.log.2"));
-      expect(statMock).not.toHaveBeenCalled();
+      expect(appendedNames()).toEqual([
+        "diagnostics.json",
+        "daintree.log",
+        "daintree.log.1",
+        "daintree.log.2",
+      ]);
+      expect(appendedContent("daintree.log.1")).toBe("an undated fragment\n");
     });
 
-    it("includes a rotated log when its stat fails rather than dropping it", async () => {
-      existsSyncMock.mockImplementation(
-        (p: string): boolean =>
-          path.normalize(p) === logPath("daintree.log") ||
-          path.normalize(p) === logPath("daintree.log.1")
-      );
-      statMock.mockRejectedValue(new Error("stat failed"));
-      dialogMock.showSaveDialog.mockResolvedValueOnce({
-        filePath: "/tmp/diagnostics.zip",
-        canceled: false,
+    it("leaves out log lines dated after the review was collected", async () => {
+      logFiles({
+        "daintree.log": `[${at(6000)}] [INFO] reviewed\n[${at(8000)}] [INFO] logged while open\n`,
       });
 
-      registerDiagnosticsHandlers(deps);
-      const handler = getHandlerFn("system:save-diagnostics-bundle");
-      await handler(
-        {},
-        {
-          payload: { metadata: {} },
-          enabledSections: { metadata: true, logs: true },
-          replacements: [],
-          timeWindowStartMs: 5000,
-        }
-      );
+      await saveBundle(null, 7000);
 
-      expect(readPaths()).toContain(logPath("daintree.log.1"));
+      expect(appendedContent("daintree.log")).toBe(`[${at(6000)}] [INFO] reviewed\n`);
     });
   });
 
@@ -769,7 +880,7 @@ describe("registerDiagnosticsHandlers", () => {
         {
           payload: { metadata: {} },
           enabledSections: { metadata: true, logs },
-          replacements: [{ find: "/Users/alice", replace: "~" }],
+          replacements: [{ find: "acme-plan", replace: "[PROJECT]" }],
           timeWindowStartMs,
         }
       );
@@ -802,17 +913,17 @@ describe("registerDiagnosticsHandlers", () => {
             JSON.stringify({
               timestamp: 7000,
               errorStack: "at /Users/alice/app.js",
+              errorMessage: "acme-plan failed",
               recentActions: [{ actionId: "terminal.sendText", args: { text: "secret prompt" } }],
             })
           );
         }
-        return Promise.resolve(`log for ${file}`);
+        // Each PTY host log restarted after the window opened at 5000.
+        return Promise.resolve(`[${new Date(9000).toISOString()}] [START] log for ${file}\n`);
       });
     });
 
     it("adds in-window crash records by their own timestamp and every pty-host log", async () => {
-      // mtime says everything is recent; only the record timestamp may exclude.
-      statMock.mockResolvedValue({ mtimeMs: 9000 });
       await saveBundle(true, 5000);
 
       const names = appendedNames();
@@ -901,19 +1012,24 @@ describe("registerDiagnosticsHandlers", () => {
       expect(names).toEqual(["crashes/crash-2000-b.json"]);
     });
 
-    it("drops breadcrumb args and applies replacements to crash records", async () => {
+    it("drops breadcrumb args, scrubs paths and applies replacements to crash records", async () => {
       await saveBundle(true, null);
 
       const content = appendedContent("crashes/crash-7000-c.json") ?? "";
       expect(content).toContain("terminal.sendText");
       expect(content).not.toContain("secret prompt");
-      expect(content).not.toContain("/Users/alice");
+      expect(content).toContain("at /Users/USER/app.js");
+      expect(content).toContain("[PROJECT] failed");
       expect(appendedNames()).toContain("crashes/crash-1000-a.json");
     });
 
-    it("skips a pty-host log last written before the window", async () => {
-      statMock.mockImplementation((p: string) =>
-        Promise.resolve({ mtimeMs: path.basename(p) === "pty-host-shard1.log" ? 1000 : 9000 })
+    it("skips a pty-host log whose entries all predate the window", async () => {
+      readFileMock.mockImplementation((p: string) =>
+        Promise.resolve(
+          path.basename(p) === "pty-host-shard1.log"
+            ? `[${new Date(1000).toISOString()}] [START] pid=1\n`
+            : `[${new Date(9000).toISOString()}] [START] pid=2\n`
+        )
       );
       await saveBundle(true, 5000);
 
