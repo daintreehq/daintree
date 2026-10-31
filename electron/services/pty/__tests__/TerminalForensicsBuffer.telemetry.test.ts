@@ -102,6 +102,7 @@ const ENV_KEYS = [
 let logDir: string;
 let originalParentPort: PropertyDescriptor | undefined;
 let originalEnv: Partial<Record<(typeof ENV_KEYS)[number], string>>;
+let exitListeners: Set<unknown>;
 const loaded: LoggerModule[] = [];
 const teardown: Array<() => Promise<unknown> | void> = [];
 
@@ -130,11 +131,15 @@ function splitBytes(bytes: Buffer, seed: number): Buffer[] {
 /** Sentry core's `safeJoin`: what `formatConsoleArgs` uses outside a REPL. */
 function sentryJoin(args: unknown[]): string {
   return args
-    .map((value) =>
-      value === null || (typeof value !== "object" && typeof value !== "function")
-        ? String(value)
-        : JSON.stringify(value)
-    )
+    .map((value) => {
+      if (value === null || (typeof value !== "object" && typeof value !== "function")) {
+        return String(value);
+      }
+      if (value instanceof Error) {
+        return value.message ? `${value.name}: ${value.message}` : value.name;
+      }
+      return JSON.stringify(value);
+    })
     .join(" ");
 }
 
@@ -336,6 +341,7 @@ beforeEach(() => {
   originalEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
   logDir = mkdtempSync(join(tmpdir(), "daintree-forensics-telemetry-"));
   process.env.DAINTREE_USER_DATA = logDir;
+  exitListeners = new Set(process.listeners("exit"));
   // The lifecycle arms handshake and health timers on start; none must fire.
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
 });
@@ -345,6 +351,11 @@ afterEach(async () => {
   for (const logger of loaded.splice(0)) {
     await logger.flushLogFileWritesForTesting();
     logger.resetLoggerStateForTesting();
+  }
+  // Every fresh logger module registers its own exit flush; once drained they
+  // would only pile up past Node's listener limit across the cases.
+  for (const listener of process.listeners("exit")) {
+    if (!exitListeners.has(listener)) process.off("exit", listener);
   }
   vi.useRealTimers();
   vi.restoreAllMocks();

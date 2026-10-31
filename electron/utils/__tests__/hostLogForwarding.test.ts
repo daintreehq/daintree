@@ -27,6 +27,9 @@ const loaded: LoggerModule[] = [];
 /** `parentPort` is process-global; put back whatever was there. */
 let originalParentPort: PropertyDescriptor | undefined;
 
+/** Each loaded module registers its own exit flush; only these get removed. */
+let exitListeners: Set<unknown>;
+
 /** Physical lines are not records — a pretty-printed context spans several. */
 const RECORD_PREFIX = /^\[\d{4}-\d{2}-\d{2}T[^\]]+\] \[(DEBUG|INFO|WARN|ERROR)\] /;
 
@@ -86,6 +89,7 @@ function captureSentEvents(): { events: HostLogEvent[]; postMessage: (value: unk
 
 beforeEach(() => {
   originalParentPort = Object.getOwnPropertyDescriptor(process, "parentPort");
+  exitListeners = new Set(process.listeners("exit"));
   rmSync(TEST_LOG_DIR, { recursive: true, force: true });
   mkdirSync(TEST_LOG_DIR, { recursive: true });
   // Both roles resolve the same file — a host through the environment, main
@@ -102,6 +106,9 @@ afterEach(async () => {
     logger.resetLoggerStateForTesting();
   }
   loaded.length = 0;
+  for (const listener of process.listeners("exit")) {
+    if (!exitListeners.has(listener)) process.off("exit", listener);
+  }
   vi.restoreAllMocks();
   delete (process as { parentPort?: unknown }).parentPort;
   if (originalParentPort) {
