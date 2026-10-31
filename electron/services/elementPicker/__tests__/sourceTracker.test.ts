@@ -278,6 +278,59 @@ describe("SourceTracker", () => {
     expect(t.readRevision.mock.calls).toEqual([[at(0)]]);
   });
 
+  it("brings back a held file it gave up, checked against the revision it last read", async () => {
+    const t = tracker({}, true);
+    const at = (index: number) => path.join("/repo", `d${index}`, "x.svelte");
+    for (let index = 0; index <= MAX_WATCHED_DIRECTORIES; index++) {
+      t.subject.observe(at(index), ref(`d${index}/x.svelte`), revision(1));
+    }
+    await t.settle();
+    expect(t.disposed).toEqual([path.dirname(at(0))]);
+
+    // Edited while nothing watched it.
+    t.disk.set(at(0), revision(2));
+    t.subject.hold([ref("d0/x.svelte").path]);
+    expect(t.subject.usage()).toEqual({
+      files: MAX_WATCHED_DIRECTORIES,
+      directories: MAX_WATCHED_DIRECTORIES,
+    });
+    expect(t.disposed).toEqual([path.dirname(at(0)), path.dirname(at(1))]);
+    await t.settle();
+    expect(t.changes).toEqual([{ file: ref("d0/x.svelte"), revision: revision(2) }]);
+
+    // Holding it again changes nothing that is already in place.
+    t.readRevision.mockClear();
+    t.subject.hold([ref("d0/x.svelte").path]);
+    await t.settle();
+    expect(t.readRevision).not.toHaveBeenCalled();
+  });
+
+  it("tracks a new selection's file once held, though held files filled the caps when it was read", async () => {
+    const t = tracker({}, true);
+    const at = (index: number) => path.join("/repo", `d${index}`, "x.svelte");
+    const pinned = Array.from({ length: MAX_WATCHED_DIRECTORIES }, (_, index) => ref(`d${index}/x.svelte`).path);
+    t.subject.hold(pinned);
+    for (let index = 0; index < MAX_WATCHED_DIRECTORIES; index++) {
+      t.subject.observe(at(index), ref(`d${index}/x.svelte`), revision(1));
+    }
+    const selected = path.join("/repo", "selected", "x.svelte");
+    t.subject.observe(selected, ref("selected/x.svelte"), revision(1));
+    expect(t.listeners.has(path.dirname(selected))).toBe(false);
+
+    t.subject.hold([ref("selected/x.svelte").path, ...pinned]);
+    expect(t.subject.usage()).toEqual({
+      files: MAX_WATCHED_DIRECTORIES,
+      directories: MAX_WATCHED_DIRECTORIES,
+    });
+    expect(t.listeners.has(path.dirname(selected))).toBe(true);
+    expect(t.disposed).toEqual([path.dirname(at(MAX_WATCHED_DIRECTORIES - 1))]);
+    await t.settle();
+    t.disk.set(selected, revision(2));
+    t.listeners.get(path.dirname(selected))!(selected);
+    await t.settle();
+    expect(t.changes).toEqual([{ file: ref("selected/x.svelte"), revision: revision(2) }]);
+  });
+
   it("survives a watch that fails", () => {
     const failing = tracker();
     failing.subject.observe(
