@@ -874,6 +874,10 @@ export interface GeneratedIpcInvokeMap {
           reason: "failed" | "cancelled" | "busy" | "budget-exhausted" | "unknown-workspace";
         };
   };
+  "element-picker:hold-sources": {
+    args: [payload: { workspaceId: string; paths: string[] }];
+    result: void;
+  };
   "element-picker:reselect": {
     args: [
       payload: {

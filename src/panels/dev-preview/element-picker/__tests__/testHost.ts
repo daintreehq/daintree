@@ -217,6 +217,7 @@ export function createFakeHost() {
         })),
       })
     ),
+    holdSources: vi.fn(async (_request: { workspaceId: string; paths: string[] }) => undefined),
     onEvent: vi.fn((callback: (payload: ElementPickerPushPayload) => void) => {
       eventListeners.add(callback);
       return () => {

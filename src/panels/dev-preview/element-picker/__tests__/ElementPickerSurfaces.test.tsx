@@ -15,7 +15,7 @@ const context = vi.hoisted(() => ({
 import { ElementPickerDrawer, ElementPickerToolbar } from "../ElementPickerSurfaces";
 import { HMR_SETTLE_MS, type InspectorController } from "../inspectorController";
 import { ELEMENT_PICKER_TOOL_ID } from "../toolId";
-import { citedRevisions } from "../selection";
+import { citedRevisions, type PickedSelection } from "../selection";
 import {
   __resetDevPreviewToolSessionsForTests,
   peekDevPreviewToolSession,
@@ -1741,6 +1741,113 @@ describe("revision checks before a request goes", () => {
     expect(
       screen.getByRole("group", { name: "Request text" }).closest('[role="status"]')
     ).toBeNull();
+  });
+});
+
+describe("keeping the selection's files watched", () => {
+  const key = () => composerMemoryKey("preview-1", "wt-1");
+
+  async function readySelection() {
+    await mountSelected();
+    const controller = session();
+    const state = controller.getSnapshot().selection;
+    if (state.status !== "ready") throw new Error("not ready");
+    await waitFor(() => expect(host.calls("holdSources")).not.toHaveLength(0));
+    return { controller, selection: state.selection };
+  }
+
+  /** The same selection about other files, as an older pick of another element would be. */
+  function elsewhere(selection: PickedSelection, name: string): PickedSelection {
+    const moved = JSON.stringify(selection)
+      .replaceAll(FILE, `src/${name}/+page.svelte`)
+      .replaceAll(CARD_FILE, `src/${name}/Card.svelte`);
+    return { ...(JSON.parse(moved) as PickedSelection), selectionId: `${name}-selection` };
+  }
+
+  const delivery = (id: string, subject: PickedSelection, status: "queued" | "sent") => ({
+    id,
+    instruction: "Make it bigger",
+    subject: { selection: subject, scope: 0 },
+    state: { status },
+    title: "claude",
+    terminalId: "term-1",
+  });
+
+  it("holds the element's own file first, then the rest of the selection's, sending only a change", async () => {
+    const { selection } = await readySelection();
+    // A workspace opens holding nothing, so there was nothing to send before.
+    expect(host.calls("holdSources")).toEqual([{ workspaceId: WORKSPACE, paths: [FILE, CARD_FILE] }]);
+
+    // Pinning the same selection to a draft holds nothing new.
+    act(() => updateComposerMemory(key(), { draft: "Make it", pinned: { selection, scope: 0 } }));
+    act(() => updateComposerMemory(key(), { draft: "Make it bigger" }));
+    expect(host.calls("holdSources")).toHaveLength(1);
+  });
+
+  it("keeps holding what a draft is pinned to after the selection goes, and lets go with the draft", async () => {
+    const { controller, selection } = await readySelection();
+    act(() => updateComposerMemory(key(), { draft: "Make it", pinned: { selection, scope: 0 } }));
+    await act(async () => controller.clearSelection());
+    expect(host.calls("holdSources")).toHaveLength(1);
+
+    act(() => updateComposerMemory(key(), { draft: "", pinned: null }));
+    expect(host.calls("holdSources").at(-1)).toEqual({ workspaceId: WORKSPACE, paths: [] });
+  });
+
+  it("ranks the draft's pin, then waiting requests newest first, and skips settled ones and other apps", async () => {
+    const { selection } = await readySelection();
+    const older = elsewhere(selection, "older");
+    const newer = elsewhere(selection, "newer");
+    const drafted = elsewhere(selection, "drafted");
+    const settled = elsewhere(selection, "settled");
+    const otherApp = { ...elsewhere(selection, "other"), workspaceId: "ws-gone", appPath: "apps/other" };
+    act(() =>
+      updateComposerMemory(key(), {
+        draft: "Make it bigger",
+        pinned: { selection: drafted, scope: 0 },
+        deliveries: [
+          delivery("r0", settled, "sent"),
+          delivery("r1", older, "queued"),
+          delivery("r2", otherApp, "queued"),
+          delivery("r3", newer, "queued"),
+        ],
+      })
+    );
+    expect(host.calls("holdSources").at(-1)).toEqual({
+      workspaceId: WORKSPACE,
+      paths: [
+        FILE,
+        CARD_FILE,
+        "src/drafted/+page.svelte",
+        "src/drafted/Card.svelte",
+        "src/newer/+page.svelte",
+        "src/newer/Card.svelte",
+        "src/older/+page.svelte",
+        "src/older/Card.svelte",
+      ],
+    });
+  });
+
+  it("holds nothing for another preview's or worktree's composer", async () => {
+    const { selection } = await readySelection();
+    const pinned = { selection: elsewhere(selection, "drafted"), scope: 0 };
+    act(() => {
+      updateComposerMemory(composerMemoryKey("preview-2", "wt-1"), { draft: "x", pinned });
+      updateComposerMemory(composerMemoryKey("preview-1", "wt-2"), { draft: "x", pinned });
+    });
+    expect(host.calls("holdSources")).toHaveLength(1);
+  });
+
+  it("stops holding when the picker is switched off", async () => {
+    const { selection } = await readySelection();
+    switchOff();
+    act(() =>
+      updateComposerMemory(key(), {
+        draft: "x",
+        pinned: { selection: elsewhere(selection, "drafted"), scope: 0 },
+      })
+    );
+    expect(host.calls("holdSources")).toHaveLength(1);
   });
 });
 

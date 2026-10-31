@@ -27,6 +27,7 @@ import { AppError } from "../../utils/errorTypes.js";
 import { getSitePreviewBridge } from "../../services/SitePreviewBridge.js";
 import { ElementPickerFrameworkSchema } from "../../../shared/elementPicker/source.js";
 import type { IpcContext } from "../types.js";
+import { ELEMENT_PICKER_MAX_HELD_SOURCES } from "../../../shared/types/ipc/elementPicker.js";
 import type {
   ElementPickerBindingState,
   ElementPickerProjectOutcome,
@@ -100,6 +101,13 @@ const sourceRevisionsSchema = z
   .object({
     workspaceId: workspaceIdSchema,
     paths: z.array(z.string().min(1).max(1024)).max(128),
+  })
+  .strict();
+
+const holdSourcesSchema = z
+  .object({
+    workspaceId: workspaceIdSchema,
+    paths: z.array(z.string().min(1).max(1024)).max(ELEMENT_PICKER_MAX_HELD_SOURCES),
   })
   .strict();
 
@@ -258,6 +266,15 @@ export const elementPickerNamespace = defineIpcNamespace({
           payload.workspaceId,
           payload.paths
         );
+      },
+      { withContext: true }
+    ),
+    holdSources: opValidated(
+      ELEMENT_PICKER_METHOD_CHANNELS.holdSources,
+      holdSourcesSchema,
+      async (ctx, payload): Promise<void> => {
+        const owner = ownerOf(ctx);
+        await (await workspaceService()).holdSources(owner, payload.workspaceId, payload.paths);
       },
       { withContext: true }
     ),

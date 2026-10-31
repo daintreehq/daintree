@@ -8,6 +8,7 @@ export const ELEMENT_PICKER_METHOD_CHANNELS = {
   resolve: "element-picker:resolve",
   describeProject: "element-picker:describe-project",
   sourceRevisions: "element-picker:source-revisions",
+  holdSources: "element-picker:hold-sources",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof ELEMENT_PICKER_METHOD_CHANNELS;

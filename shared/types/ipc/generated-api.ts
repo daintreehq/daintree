@@ -401,6 +401,9 @@ export interface GeneratedElectronAPI {
     describeProject(
       ...args: IpcInvokeMap["element-picker:describe-project"]["args"]
     ): Promise<IpcInvokeMap["element-picker:describe-project"]["result"]>;
+    holdSources(
+      ...args: IpcInvokeMap["element-picker:hold-sources"]["args"]
+    ): Promise<IpcInvokeMap["element-picker:hold-sources"]["result"]>;
     openWorkspace(
       ...args: IpcInvokeMap["element-picker:workspace-open"]["args"]
     ): Promise<IpcInvokeMap["element-picker:workspace-open"]["result"]>;

@@ -84,6 +84,7 @@ function fakeHost() {
     sourceRevisions: vi.fn(async (_id: string, paths: readonly string[]) =>
       paths.map((p) => ({ path: p, revision: REVISION }))
     ),
+    holdSources: vi.fn(async (_id: string, _paths: readonly string[]) => undefined),
   };
   return { host, registered, gate };
 }
@@ -391,11 +392,15 @@ describe("ElementPickerWorkspaceService leases", () => {
       await expect(
         svc.sourceRevisions(stranger, workspaceId, ["src/a.svelte"])
       ).rejects.toMatchObject(closed);
+      await expect(svc.holdSources(stranger, workspaceId, ["src/a.svelte"])).rejects.toMatchObject(
+        closed
+      );
       expect(svc.close(stranger, workspaceId)).toEqual({ closed: false });
     }
     expect(host.resolve).not.toHaveBeenCalled();
     expect(host.describeProject).not.toHaveBeenCalled();
     expect(host.sourceRevisions).not.toHaveBeenCalled();
+    expect(host.holdSources).not.toHaveBeenCalled();
     expect(host.releaseWorkspace).not.toHaveBeenCalled();
 
     expect(svc.get(owner, workspaceId)).toMatchObject({
@@ -407,6 +412,10 @@ describe("ElementPickerWorkspaceService leases", () => {
     await expect(svc.sourceRevisions(owner, workspaceId, ["src/a.svelte"])).resolves.toEqual({
       revisions: [{ path: "src/a.svelte", revision: REVISION }],
     });
+    await expect(
+      svc.holdSources(owner, workspaceId, ["src/b.svelte", "src/a.svelte"])
+    ).resolves.toBeUndefined();
+    expect(host.holdSources).toHaveBeenCalledWith(workspaceId, ["src/b.svelte", "src/a.svelte"]);
   });
 
   it("closes a workspace for its owner, after which it reads as closed", async () => {

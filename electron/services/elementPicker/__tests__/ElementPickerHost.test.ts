@@ -32,6 +32,7 @@ import type { SourceChange } from "../sourceTracker.js";
 import { revisionOf, type SourceMapProvider } from "../sourceAccess.js";
 import { createSourceMapSymbolicator, symbolicatedResult } from "../worker/symbolication.js";
 import { COORDINATE_CONVENTIONS } from "../../../../shared/elementPicker/coordinates.js";
+import { ELEMENT_PICKER_MAX_HELD_SOURCES } from "../../../../shared/types/ipc/elementPicker.js";
 import type { SourceCandidate } from "../../../../shared/elementPicker/source.js";
 import type { SelectionObservation } from "../../../../shared/elementPicker/observation.js";
 import type { ResolutionResult } from "../../../../shared/elementPicker/resolution.js";
@@ -1305,6 +1306,43 @@ describe("ElementPickerHost project context", () => {
       status: "unavailable",
       reason: "cancelled",
     });
+  });
+});
+
+describe("ElementPickerHost held sources", () => {
+  it("takes the view's list without reading anything or starting the host", async () => {
+    const { host, children } = harness();
+    const id = await workspace(host);
+    await expect(host.holdSources(id, ["app/src/App.svelte", "app/src/Missing.svelte"])).resolves.toBeUndefined();
+    await expect(host.holdSources(id, [])).resolves.toBeUndefined();
+    expect(children).toHaveLength(0);
+    expect(host.running).toBe(false);
+  });
+
+  it("refuses a list past its bound or holding anything but paths", async () => {
+    const { host } = harness();
+    const id = await workspace(host);
+    const tooMany = Array.from(
+      { length: ELEMENT_PICKER_MAX_HELD_SOURCES + 1 },
+      (_, index) => `app/src/F${index}.svelte`
+    );
+    await expect(host.holdSources(id, tooMany)).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    await expect(
+      host.holdSources(id, ["app/src/App.svelte", 7] as unknown as string[])
+    ).rejects.toMatchObject({ code: "INVALID_REQUEST" });
+    await expect(
+      host.holdSources(id, tooMany.slice(0, ELEMENT_PICKER_MAX_HELD_SOURCES))
+    ).resolves.toBeUndefined();
+  });
+
+  it("refuses an unknown or released workspace, and anything once disposed", async () => {
+    const { host } = harness();
+    const id = await workspace(host);
+    await expect(host.holdSources("nope", [])).rejects.toMatchObject({ code: "UNKNOWN_WORKSPACE" });
+    host.releaseWorkspace(id);
+    await expect(host.holdSources(id, [])).rejects.toMatchObject({ code: "UNKNOWN_WORKSPACE" });
+    await host.dispose();
+    await expect(host.holdSources(id, [])).rejects.toMatchObject({ code: "HOST_DISPOSED" });
   });
 });
 

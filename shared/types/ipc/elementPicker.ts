@@ -6,8 +6,8 @@
  * the preview's page, and everything the page says, belongs to the machine
  * showing the preview (`bind`, `reselect`, the `event` push); reading the
  * project's source belongs to the machine holding the worktree (the
- * workspace, `resolve`, `describeProject`, `sourceRevisions` and the
- * `source-changed` push). Lifecycle calls on a binding (detach, mode, clearing
+ * workspace, `resolve`, `describeProject`, `sourceRevisions`, `holdSources`
+ * and the `source-changed` push). Lifecycle calls on a binding (detach, mode, clearing
  * the selection or the hover) are the site-preview bridge's.
  *
  * Structural only, and free of any `electron/` import: the schemas that
@@ -179,6 +179,22 @@ export interface ElementPickerSourceRevisionsRequest {
 export interface ElementPickerSourceRevisionsResult {
   /** In request order; null for a file that is gone, unreadable, outside the app or past the size cap. */
   revisions: Array<{ path: string; revision: FileRevision | null }>;
+}
+
+/**
+ * Most paths one hold names. Past the files a workspace tracks, because a file
+ * ranked early may not fit the directory cap while later ones still do.
+ */
+export const ELEMENT_PICKER_MAX_HELD_SOURCES = 512;
+
+export interface ElementPickerHoldSourcesRequest {
+  workspaceId: string;
+  /**
+   * `SourceFileRef` paths the view holds a selection on, most important
+   * first; replaces the previous list. Their place in the workspace's source
+   * tracker, never proof: the send-time revision check stays the authority.
+   */
+  paths: string[];
 }
 
 /** A file a resolve read changed on disk: typically an agent editing what the user selected. */
