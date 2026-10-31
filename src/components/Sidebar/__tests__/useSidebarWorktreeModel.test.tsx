@@ -242,32 +242,37 @@ describe("useSidebarWorktreeModel — main card aggregate counts", () => {
   it("moves with each count and keeps its identity across pushes that move none", () => {
     // A fresh object here re-renders the main card through its memoized row.
     seedAgentPanel("agent-a", "a");
-    pushFleet([run("agent-a", { agentState: "working" }), run("x", { agentState: "working" })]);
+    pushFleet([run("agent-a", { agentState: "idle" }), run("x", { agentState: "working" })]);
     const { result } = renderModel();
-    const working = result.current.mainWorktreeAggregateCounts;
-    expect(working).toEqual({ worktrees: 2, working: 1, waiting: 0, finished: 0 });
+    const idle = result.current.mainWorktreeAggregateCounts;
+    expect(idle).toEqual({ worktrees: 2, working: 0, waiting: 0, finished: 0 });
 
-    pushFleet([run("agent-a", { agentState: "working" }), run("x", { agentState: "idle" })]);
-    pushFleet([run("agent-a", { agentState: "working", title: "renamed" })]);
-    expect(result.current.mainWorktreeAggregateCounts).toBe(working);
+    pushFleet([run("agent-a", { agentState: "idle" }), run("x", { agentState: "idle" })]);
+    pushFleet([run("agent-a", { agentState: "idle", title: "renamed" })]);
+    expect(result.current.mainWorktreeAggregateCounts).toBe(idle);
 
-    pushFleet([run("agent-a", { agentState: "waiting", waitingReason: "approval" })]);
-    const waiting = result.current.mainWorktreeAggregateCounts;
-    expect(waiting).toEqual({ worktrees: 2, working: 0, waiting: 1, finished: 0 });
-
-    pushFleet([
-      run("agent-a", {
-        agentState: "waiting",
-        waitingReason: "prompt",
-        handBack: { stoppedAt: 1 },
-      }),
-    ]);
-    expect(result.current.mainWorktreeAggregateCounts).toEqual({
-      worktrees: 2,
-      working: 0,
-      waiting: 0,
-      finished: 1,
-    });
+    // Each step moves exactly one count off the idle baseline, so every count
+    // is checked on its own.
+    const states: Array<
+      [Partial<FleetRunRow>, { working: number; waiting: number; finished: number }]
+    > = [
+      [{ agentState: "working" }, { working: 1, waiting: 0, finished: 0 }],
+      [{ agentState: "idle" }, { working: 0, waiting: 0, finished: 0 }],
+      [
+        { agentState: "waiting", waitingReason: "approval" },
+        { working: 0, waiting: 1, finished: 0 },
+      ],
+      [{ agentState: "idle" }, { working: 0, waiting: 0, finished: 0 }],
+      [
+        { agentState: "waiting", waitingReason: "prompt", handBack: { stoppedAt: 1 } },
+        { working: 0, waiting: 0, finished: 1 },
+      ],
+      [{ agentState: "idle" }, { working: 0, waiting: 0, finished: 0 }],
+    ];
+    for (const [overrides, counts] of states) {
+      pushFleet([run("agent-a", overrides)]);
+      expect(result.current.mainWorktreeAggregateCounts).toEqual({ worktrees: 2, ...counts });
+    }
   });
 
   it("follows the worktree count and drops out with only the main worktree", () => {
