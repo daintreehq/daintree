@@ -1,9 +1,6 @@
 import { app } from "electron";
 import { getDevServerOrigins } from "../../../shared/config/devServer.js";
-import {
-  PATH_CANONICAL_HEADER,
-  PREVIEW_REFUSAL_HEADER,
-} from "../../../shared/types/ipc/files.js";
+import { PATH_CANONICAL_HEADER, PREVIEW_REFUSAL_HEADER } from "../../../shared/types/ipc/files.js";
 
 /**
  * The origin allowed to read this response via cross-origin fetch(), or null

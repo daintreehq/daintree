@@ -264,7 +264,10 @@ describe("a rendered Markdown pane on worktree ticks (#15678)", () => {
     const reads = readMock.mock.calls.length;
     const before = imageSrcs(view.container);
 
-    readMock.mockResolvedValue({ content: DOC.replace("# Spec", "# Spec v2"), pathIsCanonical: true });
+    readMock.mockResolvedValue({
+      content: DOC.replace("# Spec", "# Spec v2"),
+      pathIsCanonical: true,
+    });
     await applyTick(view, ["docs"]);
 
     await waitFor(() => expect(view.container.querySelector("h1")?.textContent).toBe("Spec v2"));
