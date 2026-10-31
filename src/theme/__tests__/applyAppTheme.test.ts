@@ -395,7 +395,9 @@ describe("applyColorVisionMode status text inks", () => {
       }
       expect(ink, text).not.toBe(scheme.tokens[text]);
       expectOnHue(ink, hue, text);
-      for (const backdrop of resolveStatusTextBackdrops(hue, scheme.tokens)) {
+      // The letter's wash is the status ink the mode paints, fitted to this theme.
+      const painted = root.style.getPropertyValue(`--theme-${status}`);
+      for (const backdrop of resolveStatusTextBackdrops(painted, scheme.tokens)) {
         expect(
           contrastRatio(ink, backdrop.hex),
           `${text} on ${backdrop.label}`

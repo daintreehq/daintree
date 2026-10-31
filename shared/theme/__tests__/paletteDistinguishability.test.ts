@@ -10,8 +10,13 @@ import {
   differenceEuclidean,
 } from "culori";
 import { BUILT_IN_APP_SCHEMES } from "../themes.js";
+import { hexToOklch } from "../oklch.js";
 import { WORKTREE_COLOR_PALETTE } from "../worktreeColors.js";
-import { RED_GREEN_OVERRIDES, BLUE_YELLOW_OVERRIDES } from "../colorVisionOverrides.js";
+import {
+  RED_GREEN_OVERRIDES,
+  BLUE_YELLOW_OVERRIDES,
+  getColorVisionWrites,
+} from "../colorVisionOverrides.js";
 import type { AppThemeTokenKey } from "../types.js";
 
 // eslint-disable-next-line react-hooks/rules-of-hooks -- culori config, not a React hook
@@ -349,6 +354,96 @@ describe("palette distinguishability", () => {
     testOverrideMap("RED_GREEN_OVERRIDES", RED_GREEN_UNIQUE, ["protanopia", "deuteranopia"]);
 
     testOverrideMap("BLUE_YELLOW_OVERRIDES", BLUE_YELLOW_UNIQUE, ["tritanopia"]);
+  });
+
+  describe("CVD writes fitted to each theme (#15580)", () => {
+    // A mode fits its syntax and status inks to each theme's surfaces before
+    // writing them, which moves each along lightness and can shed chroma, so the
+    // colours it actually paints are measured here, theme by theme.
+    const MODES = [
+      ["red-green", RED_GREEN_OVERRIDES, ["protanopia", "deuteranopia"]],
+      ["blue-yellow", BLUE_YELLOW_OVERRIDES, ["tritanopia"]],
+    ] as const;
+    const signalTokens = (map: Record<string, string>) =>
+      Object.keys(map).filter(
+        (token) => !token.endsWith("-surface") && !token.endsWith("-background")
+      );
+
+    // Seeds this close on the OKLab a/b plane are one colour at two lightnesses:
+    // blue-yellow's sky blue and blue (7.8° apart in hue), or the greys. Fitting
+    // moves each to the lightness its floor needs, which can bring the two
+    // together on a theme where both have to move the same way; red-green already
+    // paints function, number and link in one blue. Seeds of different hues stay
+    // measured, and the static block above still holds every seed pair apart.
+    const SAME_FAMILY_CHROMA_DISTANCE = 0.03;
+    function oneFamily(a: string, b: string): boolean {
+      const plane = (hex: string) => {
+        const { c, h } = hexToOklch(hex)!;
+        return [c * Math.cos((h * Math.PI) / 180), c * Math.sin((h * Math.PI) / 180)] as const;
+      };
+      const [aa, ab] = plane(a);
+      const [ba, bb] = plane(b);
+      return Math.hypot(aa - ba, ab - bb) < SAME_FAMILY_CHROMA_DISTANCE;
+    }
+
+    function collapsedPairs(
+      label: string,
+      colors: ReadonlyArray<{ token: string; value: string; seed?: string }>,
+      deficiencies: readonly Deficiency[]
+    ): string[] {
+      const failures: string[] = [];
+      for (const deficiency of deficiencies) {
+        const filter = cvdFilter(deficiency);
+        const simulated = colors.map(({ token, value, seed }) => {
+          const parsed = parseColor(value);
+          if (!parsed) failures.push(`${label}: could not parse ${token}=${value}`);
+          return { token, value, seed, color: parsed ? filter(parsed) : undefined };
+        });
+        for (let i = 0; i < simulated.length; i++) {
+          for (let j = i + 1; j < simulated.length; j++) {
+            const a = simulated[i]!;
+            const b = simulated[j]!;
+            if (!a.color || !b.color) continue;
+            if (a.seed !== undefined && b.seed !== undefined && oneFamily(a.seed, b.seed)) continue;
+            const d = differenceEuclidean("oklab")(a.color, b.color);
+            if (d < JND_FLOOR) {
+              failures.push(
+                `${label} ${deficiency}: ${a.token} ${a.value} - ${b.token} ${b.value} = ${d.toFixed(4)}`
+              );
+            }
+          }
+        }
+      }
+      return failures;
+    }
+
+    for (const [mode, overrides, deficiencies] of MODES) {
+      it(`${mode}: no two fitted override colours collapse on any built-in theme`, () => {
+        const failures = BUILT_IN_APP_SCHEMES.flatMap((scheme) => {
+          const writes = getColorVisionWrites(mode, scheme);
+          const colors = signalTokens(overrides).map((token) => ({
+            token,
+            value: writes[token]!,
+            seed: overrides[token]!,
+          }));
+          return collapsedPairs(`${mode} on ${scheme.id}`, colors, deficiencies);
+        });
+        expect(failures, failures.join("\n")).toEqual([]);
+      });
+
+      it(`${mode}: the four status inks it leaves on screen stay apart on every built-in theme`, () => {
+        const failures = BUILT_IN_APP_SCHEMES.flatMap((scheme) => {
+          const writes = getColorVisionWrites(mode, scheme);
+          // Every pair is measured here: the four are one signal set, whatever their seeds.
+          const colors = STATUS_TOKENS.map((token) => ({
+            token,
+            value: writes[`--theme-${token}`] ?? scheme.tokens[token],
+          }));
+          return collapsedPairs(`${mode} on ${scheme.id}`, colors, deficiencies);
+        });
+        expect(failures, failures.join("\n")).toEqual([]);
+      });
+    }
   });
 
   describe("CVD diff token coverage", () => {

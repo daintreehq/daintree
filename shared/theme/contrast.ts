@@ -76,6 +76,25 @@ export const STATUS_TEXT_INKS = {
 
 export const STATUS_TEXT_CONTRAST = { minimum: 4.5, washOpacity: 0.15 } as const;
 
+// The graphical status inks (dots, icons, borders) hold the 3:1 non-text floor on
+// every surface they sit on. Exported because the colour-vision modes fit the
+// status inks they swap in to this same contract (#15580).
+export const STATUS_INK_CONTRAST = {
+  minimum: 3.0,
+  inks: ["status-success", "status-warning", "status-danger", "status-info"],
+  surfaces: [
+    "surface-panel",
+    "surface-grid",
+    "surface-sidebar",
+    "surface-canvas",
+    "surface-panel-elevated",
+  ],
+} as const satisfies {
+  minimum: number;
+  inks: readonly AppThemeTokenKey[];
+  surfaces: readonly AppThemeTokenKey[];
+};
+
 const CONTRAST_PAIRS: Array<{
   foreground: AppThemeTokenKey;
   background: AppThemeTokenKey;
@@ -127,26 +146,13 @@ const CONTRAST_PAIRS: Array<{
   // dark links are bright by construction (and arashiyama's deliberate 4.38 must
   // not regress).
   { foreground: "text-link", background: "surface-canvas", minimum: 4.5, appliesTo: "light" },
-  { foreground: "status-success", background: "surface-panel", minimum: 3.0 },
-  { foreground: "status-success", background: "surface-grid", minimum: 3.0 },
-  { foreground: "status-success", background: "surface-sidebar", minimum: 3.0 },
-  { foreground: "status-success", background: "surface-canvas", minimum: 3.0 },
-  { foreground: "status-success", background: "surface-panel-elevated", minimum: 3.0 },
-  { foreground: "status-warning", background: "surface-panel", minimum: 3.0 },
-  { foreground: "status-warning", background: "surface-grid", minimum: 3.0 },
-  { foreground: "status-warning", background: "surface-sidebar", minimum: 3.0 },
-  { foreground: "status-warning", background: "surface-canvas", minimum: 3.0 },
-  { foreground: "status-warning", background: "surface-panel-elevated", minimum: 3.0 },
-  { foreground: "status-danger", background: "surface-panel", minimum: 3.0 },
-  { foreground: "status-danger", background: "surface-grid", minimum: 3.0 },
-  { foreground: "status-danger", background: "surface-sidebar", minimum: 3.0 },
-  { foreground: "status-danger", background: "surface-canvas", minimum: 3.0 },
-  { foreground: "status-danger", background: "surface-panel-elevated", minimum: 3.0 },
-  { foreground: "status-info", background: "surface-panel", minimum: 3.0 },
-  { foreground: "status-info", background: "surface-grid", minimum: 3.0 },
-  { foreground: "status-info", background: "surface-sidebar", minimum: 3.0 },
-  { foreground: "status-info", background: "surface-canvas", minimum: 3.0 },
-  { foreground: "status-info", background: "surface-panel-elevated", minimum: 3.0 },
+  ...STATUS_INK_CONTRAST.inks.flatMap((foreground) =>
+    STATUS_INK_CONTRAST.surfaces.map((background) => ({
+      foreground,
+      background,
+      minimum: STATUS_INK_CONTRAST.minimum,
+    }))
+  ),
   ACCENT_CONTRAST_PAIR,
   // The high-contrast neutral CTA — the standard dialog primary action (#11963) — fills
   // itself with the theme's own body-text colour and paints its label in the inverse.
@@ -372,10 +378,24 @@ const DISTINCTNESS_FLOOR = 0.03;
 // → AA 4.5:1; de-emphasized roles (comment, quote) get a relaxed legible floor.
 const SYNTAX_CANVAS_MIN_CONTRAST = 4.5;
 const SYNTAX_CANVAS_SOFT_MIN_CONTRAST = 3.0;
-const SYNTAX_CANVAS_SURFACE: AppThemeTokenKey = "surface-canvas";
+export const SYNTAX_CANVAS_SURFACE: AppThemeTokenKey = "surface-canvas";
 // Roles that aren't legibility-bearing foreground code text on the canvas:
 // chip is a fill/badge, not a glyph color, so it's excluded from the render check.
 const SYNTAX_CANVAS_SKIP: ReadonlySet<AppThemeTokenKey> = new Set(["syntax-chip"]);
+
+// Each syntax role painted as code on the canvas, with the floor it holds there.
+// Exported because the colour-vision modes fit the syntax inks they swap in to
+// the same floors (#15580).
+export const SYNTAX_CANVAS_FLOORS: ReadonlyArray<readonly [AppThemeTokenKey, number]> =
+  TERMINAL_SYNTAX_ROLES.filter((role) => !SYNTAX_CANVAS_SKIP.has(role)).map(
+    (role) =>
+      [
+        role,
+        SOFT_LEGIBILITY_ROLES.has(role)
+          ? SYNTAX_CANVAS_SOFT_MIN_CONTRAST
+          : SYNTAX_CANVAS_MIN_CONTRAST,
+      ] as const
+  );
 
 interface DistinctnessPair {
   a: AppThemeTokenKey;
@@ -465,14 +485,10 @@ function getTerminalSyntaxWarnings(scheme: AppColorScheme): AppThemeValidationWa
   // passes the dark-terminal check can be invisible on the canvas it renders on.
   const canvas = scheme.tokens[SYNTAX_CANVAS_SURFACE];
   if (typeof canvas === "string" && isHexColor(canvas)) {
-    for (const tokenKey of TERMINAL_SYNTAX_ROLES) {
-      if (SYNTAX_CANVAS_SKIP.has(tokenKey)) continue;
+    for (const [tokenKey, floor] of SYNTAX_CANVAS_FLOORS) {
       const fg = scheme.tokens[tokenKey];
       if (typeof fg !== "string" || !isHexColor(fg)) continue; // terminal loop already reported non-hex/missing
       const ratio = contrastRatio(fg, canvas);
-      const floor = SOFT_LEGIBILITY_ROLES.has(tokenKey)
-        ? SYNTAX_CANVAS_SOFT_MIN_CONTRAST
-        : SYNTAX_CANVAS_MIN_CONTRAST;
       if (ratio < floor) {
         warnings.push({
           kind: "terminal-legibility",
