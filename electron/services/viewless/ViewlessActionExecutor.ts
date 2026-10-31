@@ -275,10 +275,12 @@ export interface ViewlessApprovalAsk {
 /**
  * The person's answer. An approval covers this call until `deadline` (this
  * host's clock), and nothing after it: a change the call has not reached by
- * then is refused.
+ * then is refused. `skip-preference` marks one nobody was asked for, under the
+ * asking assistant's own "Never ask" (#15698), which covers the call the same way.
  */
 export type ViewlessApprovalDecision =
-  { decision: "approved"; deadline: number } | { decision: "rejected" | "timeout" | "unavailable" };
+  | { decision: "approved"; deadline: number; authorization?: "skip-preference" }
+  | { decision: "rejected" | "timeout" | "unavailable" };
 
 /** A preview to put to the person, or the answer the call gets without asking. */
 export type ViewlessApprovalPreview =

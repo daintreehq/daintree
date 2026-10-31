@@ -12,6 +12,7 @@ import { SessionStore } from "../sessionStore.js";
 import { RelayDrivenElsewhereError } from "../rendererBridge.js";
 import { RELAY_CALL_ID_META_KEY } from "../shared.js";
 import { relayNoticePane, type OwnPane, type TerminalNotifyHandlers } from "../terminalNotify.js";
+import type { HostCallContext } from "../hostControlTools.js";
 
 function entry(
   id: string,
@@ -404,6 +405,57 @@ describe("a relayed session (#13493)", () => {
     );
   });
 
+  it("records a call its Shell ran under its own assistant's Never ask as that, not as unasked (#15698)", async () => {
+    // A recipe makes an agent's create confirm-gated.
+    const manifest = [...MANIFEST, entry("worktree.createWithRecipe", "command")];
+    const skipped = {
+      result: { ok: true, result: { ran: true } },
+      authorization: "skip-preference",
+    };
+    const answering = (answer: unknown) => ({
+      requestManifest: vi.fn().mockResolvedValue(manifest),
+      getCachedManifest: vi.fn(() => manifest),
+      dispatchAction: vi.fn().mockResolvedValue(answer),
+    });
+    const create = (harness: Harness) =>
+      harness.client.callTool({
+        name: "worktree.createWithRecipe",
+        arguments: { recipeId: "inrepo-work" },
+        _meta: { [RELAY_CALL_ID_META_KEY]: "call-123" },
+      });
+    const recorded = (harness: Harness) =>
+      (harness.deps.appendAuditRecord as ReturnType<typeof vi.fn>).mock.calls.map(
+        ([record]) => record as Record<string, unknown>
+      );
+
+    const relay = await relayed("full", answering(skipped));
+    await create(relay);
+    // Its Shell's answer that says no skip records none.
+    const asked = await relayed("full", answering({ result: { ok: true, result: { ran: true } } }));
+    await create(asked);
+    // The same answer for a session that isn't relayed speaks for nobody's preference.
+    const plain = await relayed("full", answering(skipped), false);
+    await create(plain);
+
+    expect(relay.deps.dispatchAction).toHaveBeenCalledWith(
+      "worktree.createWithRecipe",
+      expect.objectContaining({ recipeId: "inrepo-work" }),
+      false,
+      undefined,
+      "call-123"
+    );
+    expect(recorded(relay)).toEqual([
+      expect.objectContaining({
+        toolId: "worktree.createWithRecipe",
+        authorization: "skip-preference",
+      }),
+    ]);
+    expect(recorded(asked)).toHaveLength(1);
+    expect(recorded(asked)[0]).not.toHaveProperty("authorization");
+    expect(recorded(plain)).toHaveLength(1);
+    expect(recorded(plain)[0]).not.toHaveProperty("authorization");
+  });
+
   it("ignores a callId on a session that isn't relayed", async () => {
     const plain = await relayed("core", {}, false);
     await plain.client.callTool({
@@ -476,7 +528,79 @@ describe("host.call on this machine's own assistant session (#13493)", () => {
     const result = await client.callTool({ name: "host.call", arguments: args });
     expect(result.isError).not.toBe(true);
     expect(result.structuredContent).toMatchObject({ outcome: "ok", callId: "c1" });
-    expect(run).toHaveBeenCalledWith("host.call", args, { tier: "full" });
+    expect(run).toHaveBeenCalledWith("host.call", args, {
+      tier: "full",
+      noteSkipPreference: expect.any(Function),
+    });
+  });
+
+  it("records a host.call whose call ran there under this machine's own Never ask (#15698)", async () => {
+    const store = new SessionStore(() => {});
+    const sessionId = "help-transport";
+    store.sessionTierMap.set(sessionId, "full");
+    store.sessionOriginMap.set(sessionId, "help");
+    store.sessionHelpIdMap.set(sessionId, "help-1");
+    let skipOnCall = true;
+    const run = vi.fn(async (_tool: string, _args: unknown, context?: HostCallContext) => {
+      if (skipOnCall) context?.noteSkipPreference?.();
+      return {
+        ok: true as const,
+        value: {
+          outcome: "ok" as const,
+          detail: null,
+          retryAfterMs: null,
+          callId: "c1",
+          result: { isError: false, structured: {}, text: null },
+        },
+      };
+    });
+    const appendAuditRecord = vi.fn();
+    const server = createSessionServer(sessionId, {
+      sessionStore: store,
+      requestManifest: vi.fn().mockResolvedValue(MANIFEST),
+      dispatchAction: vi.fn(),
+      handleWaitUntilIdle: vi.fn(),
+      handleWaitUntilIdleBatch: vi.fn(),
+      handleSkillsSearch: vi.fn(() => ({ skills: [] })),
+      handleSkillsLoad: vi.fn(),
+      handleProjectRunCheck: vi.fn(),
+      handleProjectRunCommand: vi.fn(),
+      handleTerminalGetStatusViewless: vi.fn(),
+      handleTerminalReadLastMessageOwned: vi.fn(),
+      isTerminalIdInUse: vi.fn(() => false),
+      appendAuditRecord,
+      getCachedManifest: vi.fn(() => MANIFEST),
+      hostControl: { isCallReachable: () => true, run },
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    store.relaySessions.set(sessionId, { transport: serverTransport, server });
+    const client = new Client({ name: "test", version: "1.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    open.push({
+      client,
+      store,
+      deps: {} as SessionServerDeps,
+      close: async () => {
+        await client.close();
+        store.drain();
+        store.grantCache.dispose();
+      },
+    });
+
+    const args = {
+      hostId: "studio",
+      projectId: "p",
+      tool: "worktree.deleteOwned",
+      args: { worktreeId: "/wt/x" },
+    };
+    await client.callTool({ name: "host.call", arguments: args });
+    skipOnCall = false;
+    await client.callTool({ name: "host.call", arguments: args });
+
+    const [skipped, asked] = appendAuditRecord.mock.calls.map(([record]) => record);
+    expect(skipped).toMatchObject({ toolId: "host.call", authorization: "skip-preference" });
+    expect(asked).toMatchObject({ toolId: "host.call" });
+    expect(asked).not.toHaveProperty("authorization");
   });
 });
 

@@ -6,6 +6,10 @@ const m = vi.hoisted(() => ({
   showHostNotification: vi.fn(() => true),
   // Hosts this Shell's assistant has a `host.call` out to right now (#13493).
   callsOut: new Set<string>(),
+  // This Shell's runtime's verdict on a host's dispatch of one of its calls (#15698).
+  skipsRelayedDispatch: vi.fn((_hostId: string, _dispatch: unknown) => false),
+  // The project each view of this Shell shows, keyed as the Shell keys it.
+  viewProjects: new Map<number, string>(),
 }));
 
 vi.mock("../../../services/McpServerService.js", () => ({
@@ -19,14 +23,21 @@ vi.mock("../../runtime.js", () => ({
     key === "remoteHostsClient"
       ? { list: () => [{ descriptor: { id: "studio", name: "Studio Mac" } }] }
       : key === "hostCallRelayClient"
-        ? { hasCallInFlight: (hostId: string) => m.callsOut.has(hostId) }
+        ? {
+            hasCallInFlight: (hostId: string) => m.callsOut.has(hostId),
+            skipsRelayedDispatch: m.skipsRelayedDispatch,
+          }
         : undefined,
+}));
+vi.mock("../../../window/webContentsRegistry.js", () => ({
+  getProjectForWebContents: (webContentsId: number) => m.viewProjects.get(webContentsId) ?? null,
 }));
 vi.mock("../../hybrid/notifications.js", () => ({
   NOTIFICATION_SHOW_METHOD: "notification.show",
   showHostNotification: m.showHostNotification,
 }));
 
+import { toHostScopedKey } from "../../../../shared/types/remoteHosts.js";
 import {
   _resetReverseRequestMethodsForTesting,
   answerReverseRequest,
@@ -45,6 +56,8 @@ function ask(method: string, payload: unknown = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   m.callsOut.clear();
+  m.skipsRelayedDispatch.mockReturnValue(false);
+  m.viewProjects.clear();
   _resetReverseRequestMethodsForTesting();
 });
 
@@ -210,6 +223,172 @@ describe("view reverse requests", () => {
       expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({ fixedDeadline: true });
     }
   );
+
+  describe("this Shell's own assistant's relayed call (#15698)", () => {
+    const relayedDelete = {
+      actionId: "worktree.delete",
+      args: { worktreeId: "/srv/wt" },
+      confirmed: false,
+      sessionOrigin: "external",
+      relayed: true,
+      relayCall: { callId: "call-1", helpSessionId: "help-a" },
+    };
+
+    beforeEach(() => {
+      installViewReverseRequests();
+      m.callsOut.add("studio");
+      m.viewProjects.set(11, toHostScopedKey("studio", "proj-2"));
+      m.dispatchActionForHost.mockResolvedValue({ result: { ok: true, result: 1 } });
+      m.requestManifestForHost.mockResolvedValue([
+        { id: "worktree.delete", danger: "confirm" },
+        { id: "agent.launch", danger: "safe" },
+      ]);
+    });
+
+    it("runs it without a dialog when this Shell matches it to its own call under Never ask", async () => {
+      m.skipsRelayedDispatch.mockReturnValue(true);
+
+      const answer = await ask("mcp:dispatch-action", relayedDelete);
+
+      // Matched against this view's own project on that host, never one the host names.
+      expect(m.skipsRelayedDispatch).toHaveBeenCalledWith("studio", {
+        callId: "call-1",
+        helpSessionId: "help-a",
+        projectId: "proj-2",
+        actionId: "worktree.delete",
+        args: { worktreeId: "/srv/wt" },
+      });
+      expect(m.dispatchActionForHost).toHaveBeenCalledWith(
+        11,
+        "worktree.delete",
+        { worktreeId: "/srv/wt" },
+        true,
+        undefined,
+        "external",
+        { authorization: "skip-preference", fixedDeadline: true },
+        { userAgent: 'Your assistant, through host "Studio Mac"', token4LastChars: "" }
+      );
+      // Said back, so the host's audit reads it as run under the skip.
+      expect(answer).toEqual({ result: { ok: true, result: 1 }, authorization: "skip-preference" });
+    });
+
+    it("asks when this Shell won't skip it: Always ask, or not a call of its own", async () => {
+      const answer = await ask("mcp:dispatch-action", relayedDelete);
+
+      expect(m.skipsRelayedDispatch).toHaveBeenCalledTimes(1);
+      expect(m.dispatchActionForHost.mock.calls[0]?.[3]).toBe(false);
+      expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({ fixedDeadline: true });
+      expect(answer).toEqual({ result: { ok: true, result: 1 } });
+    });
+
+    it("lets a decision from the view speak over the skip it was sent with", async () => {
+      m.skipsRelayedDispatch.mockReturnValue(true);
+      m.dispatchActionForHost.mockResolvedValue({
+        result: { ok: true, result: 1 },
+        confirmationDecision: "approved",
+      });
+
+      const answer = await ask("mcp:dispatch-action", relayedDelete);
+
+      expect(m.dispatchActionForHost.mock.calls[0]?.[3]).toBe(true);
+      expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({
+        authorization: "skip-preference",
+        fixedDeadline: true,
+      });
+      expect(answer).toEqual({ result: { ok: true, result: 1 }, confirmationDecision: "approved" });
+    });
+
+    it("goes by the danger the view resolves for these arguments, as its dialog does", async () => {
+      m.skipsRelayedDispatch.mockReturnValue(true);
+      m.requestManifestForHost.mockResolvedValue([
+        { id: "worktree.createWithRecipe", danger: "safe" },
+      ]);
+      const create = (args: Record<string, unknown>) => ({
+        ...relayedDelete,
+        actionId: "worktree.createWithRecipe",
+        args,
+      });
+
+      // A recipe makes the agent's call confirm-gated.
+      await ask("mcp:dispatch-action", create({ recipeId: "inrepo-work" }));
+      await ask("mcp:dispatch-action", create({}));
+
+      expect(m.skipsRelayedDispatch).toHaveBeenCalledTimes(1);
+      expect(m.dispatchActionForHost.mock.calls.map((call) => call[3])).toEqual([true, false]);
+    });
+
+    it("takes a call named within the link's own bounds, and refuses one past them", async () => {
+      await ask("mcp:dispatch-action", {
+        ...relayedDelete,
+        relayCall: { callId: "c".repeat(256), helpSessionId: "h".repeat(256) },
+      });
+      for (const relayCall of [
+        { callId: "c".repeat(257), helpSessionId: "help-a" },
+        { callId: "call-1", helpSessionId: "h".repeat(257) },
+      ]) {
+        await expect(
+          ask("mcp:dispatch-action", { ...relayedDelete, relayCall })
+        ).rejects.toMatchObject({ code: "VALIDATION" });
+      }
+      expect(m.dispatchActionForHost).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves a call this view wouldn't ask about as it is, and its record unmarked", async () => {
+      m.skipsRelayedDispatch.mockReturnValue(true);
+
+      const answer = await ask("mcp:dispatch-action", {
+        ...relayedDelete,
+        actionId: "agent.launch",
+        args: { agentId: "claude" },
+      });
+
+      expect(m.skipsRelayedDispatch).not.toHaveBeenCalled();
+      expect(m.dispatchActionForHost.mock.calls[0]?.[3]).toBe(false);
+      expect(answer).toEqual({ result: { ok: true, result: 1 } });
+    });
+
+    it("asks when the view's actions can't be read", async () => {
+      m.skipsRelayedDispatch.mockReturnValue(true);
+      m.requestManifestForHost.mockRejectedValue(new Error("view gone"));
+
+      await ask("mcp:dispatch-action", relayedDelete);
+
+      expect(m.skipsRelayedDispatch).not.toHaveBeenCalled();
+      expect(m.dispatchActionForHost.mock.calls[0]?.[3]).toBe(false);
+    });
+
+    it.each([
+      ["no call named", { relayCall: undefined }],
+      ["an approval-only request", { approvalOnly: true }],
+    ])("asks without consulting the runtime for %s", async (_label, fields) => {
+      m.skipsRelayedDispatch.mockReturnValue(true);
+
+      await ask("mcp:dispatch-action", { ...relayedDelete, ...fields });
+
+      expect(m.skipsRelayedDispatch).not.toHaveBeenCalled();
+      expect(m.dispatchActionForHost.mock.calls[0]?.[3]).toBe(false);
+    });
+
+    it.each([
+      ["another host's project", toHostScopedKey("elsewhere", "proj-2")],
+      ["one of this machine's own projects", "a".repeat(64)],
+    ])("asks in a view showing %s", async (_label, viewProject) => {
+      m.skipsRelayedDispatch.mockReturnValue(true);
+      m.viewProjects.set(11, viewProject);
+
+      await ask("mcp:dispatch-action", relayedDelete);
+
+      expect(m.skipsRelayedDispatch).not.toHaveBeenCalled();
+      expect(m.dispatchActionForHost.mock.calls[0]?.[3]).toBe(false);
+    });
+
+    it("refuses a malformed call name", async () => {
+      await expect(
+        ask("mcp:dispatch-action", { ...relayedDelete, relayCall: { callId: "call-1" } })
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+      expect(m.dispatchActionForHost).not.toHaveBeenCalled();
+    });
+  });
 
   it("still raises an approval-only request's dialog under Never ask", async () => {
     installViewReverseRequests();

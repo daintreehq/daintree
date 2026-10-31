@@ -418,13 +418,16 @@ export type RelayApprovePayload = z.infer<typeof RelayApprovePayloadSchema>;
 /**
  * `refused`: the Shell couldn't put it to anyone — the call isn't one of its
  * own in flight, its assistant's window is gone, or it doesn't ask about that
- * action. Nothing was approved.
+ * action. Nothing was approved. `skip-preference`: nobody was asked, because
+ * the assistant that made the call runs with Daintree's confirmations skipped
+ * on the Shell (#15698); it covers the call as an approval would. A host from
+ * before it reads it as no answer, and refuses the call.
  */
 export const RelayApproveAnswerSchema = z
   .object({
     approvalId: z.string().regex(/^[A-Za-z0-9-]{1,64}$/),
     argsHash,
-    decision: z.enum(["approved", "rejected", "timeout", "refused"]),
+    decision: z.enum(["approved", "rejected", "timeout", "refused", "skip-preference"]),
   })
   .strip();
 export type RelayApproveAnswer = z.infer<typeof RelayApproveAnswerSchema>;

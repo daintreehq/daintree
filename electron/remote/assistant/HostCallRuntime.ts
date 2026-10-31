@@ -46,7 +46,10 @@ import {
   type HostId,
   type HostMetricsSummary,
 } from "../../../shared/types/remoteHosts.js";
-import type { HostControlRuntimeHandle } from "../../services/mcp-server/hostControlTools.js";
+import type {
+  HostCallContext,
+  HostControlRuntimeHandle,
+} from "../../services/mcp-server/hostControlTools.js";
 import type {
   HostInventoryHost,
   HostInventorySnapshot,
@@ -93,6 +96,8 @@ import {
   type ThrowawayCallPayload,
 } from "./linkMethods.js";
 import { canonicalArgsHash } from "../../services/mcp-server/sessionDedup.js";
+import { OWNED_RESOURCE_TOOLS } from "../../services/mcp-server/sessionCallOwnership.js";
+import { HOST_ALWAYS_ASKS_ACTION_IDS } from "../client/hostDispatchableActions.js";
 import type { McpConfirmationDecision } from "../../../shared/types/ipc/mcpServer.js";
 import { createLogger } from "../../utils/logger.js";
 
@@ -204,6 +209,13 @@ export interface HostCallRuntimeDeps {
    */
   askApproval?(ask: RelayApprovalQuestion): Promise<McpConfirmationDecision | null>;
   /**
+   * Whether a help session's assistant runs with Daintree's confirmations
+   * skipped here (#15698): the person's own preference on this machine, read
+   * at each ask, never anything a host says. Absent, or throwing, every
+   * relayed call that would ask still asks.
+   */
+  confirmationsSkipped?(helpSessionId: string): boolean;
+  /**
    * Makes sure one of this machine's projects is on a host, with no window
    * (#14140): the Shell's switch service. Absent, no project is ever brought.
    */
@@ -286,21 +298,30 @@ interface CallInFlight {
   projectId: string | null;
   tool: string;
   args: Record<string, unknown>;
+  /** The tier it was sent at, which the host holds a resend of it to. */
+  tier: "core" | "full";
   run: OpenRun;
-  /** A host asked about it once already: an approval is for the call, not each ask. */
+  /**
+   * A host asked about it, or ran it under the skip preference, once already:
+   * an approval or a skip is for the call, not each ask or dispatch.
+   */
   asked: boolean;
+  /** It runs under the skip preference (#15698), so a resend that joins it later does too. */
+  skipped: boolean;
+  /**
+   * Tells each `host.call` send still out for it that it ran under the skip
+   * preference, for that send's audit record (#15698).
+   */
+  skipNotes: Set<() => void>;
   /** Sends of it still out, a resend's included; the record goes with the last. */
   sends: number;
 }
 
 /**
- * The confirm-gated actions a host may ask this Shell to approve (#13501),
- * each with the owned tool that stands in for it, whose delegate the host
- * rebuilds from the id alone.
+ * The confirm-gated actions a host may ask this Shell to approve (#13501):
+ * the ones its own form of the action can preview with no view there.
  */
-const RELAY_APPROVABLE: Readonly<Record<string, { ownedTool: string; idArg: string }>> = {
-  "worktree.delete": { ownedTool: "worktree.deleteOwned", idArg: "worktreeId" },
-};
+const RELAY_APPROVABLE: ReadonlySet<string> = new Set(["worktree.delete"]);
 
 /** What a host's MCP server runs a call with: its arguments less the request's own keys. */
 function relayedActionArgs(args: Record<string, unknown>): Record<string, unknown> {
@@ -309,24 +330,65 @@ function relayedActionArgs(args: Record<string, unknown>): Record<string, unknow
 }
 
 /**
+ * The action a call runs on the host, with exactly its arguments: its own
+ * tool as sent, or the action an `*Owned` tool stands in for, rebuilt from
+ * the id and the fields it forwards just as the host's server rebuilds it.
+ */
+function actionHashesOf(call: CallInFlight, actionId: string): string | null {
+  const owned = Object.hasOwn(OWNED_RESOURCE_TOOLS, call.tool)
+    ? OWNED_RESOURCE_TOOLS[call.tool]
+    : undefined;
+  // An owned tool's arguments are always rebuilt, even one that delegates to itself.
+  if (owned === undefined) {
+    return call.tool === actionId
+      ? canonicalArgsHash(actionId, relayedActionArgs(call.args))
+      : null;
+  }
+  if (owned.executor !== "renderer" || owned.delegateTo !== actionId || owned.reveals === true) {
+    return null;
+  }
+  const id = call.args[owned.idArg];
+  if (typeof id !== "string") return null;
+  const delegateArgs: Record<string, unknown> = {};
+  for (const key of owned.forwardArgs ?? []) {
+    if (Object.hasOwn(call.args, key)) delegateArgs[key] = call.args[key];
+  }
+  delegateArgs[owned.delegateIdArg ?? owned.idArg] = id;
+  return canonicalArgsHash(actionId, delegateArgs);
+}
+
+/**
+ * Whether two sends under one callId are the same call, which the host runs
+ * once for both: its ledger's own identity, the arguments whole.
+ */
+function sameCall(
+  a: Pick<CallInFlight, "tool" | "projectId" | "tier" | "args">,
+  b: Pick<CallInFlight, "tool" | "projectId" | "tier" | "args">
+): boolean {
+  return (
+    a.tool === b.tool &&
+    a.projectId === b.projectId &&
+    a.tier === b.tier &&
+    canonicalArgsHash(a.tool, a.args) === canonicalArgsHash(b.tool, b.args)
+  );
+}
+
+/** Whether a host is running exactly this call: the same action with the same arguments. */
+function runsAsCall(call: CallInFlight, actionId: string, args: unknown): boolean {
+  if (args === null || typeof args !== "object" || Array.isArray(args)) return false;
+  const expected = actionHashesOf(call, actionId);
+  return expected !== null && canonicalArgsHash(actionId, args) === expected;
+}
+
+/**
  * Whether a host's ask is about exactly the call this Shell made: the same
  * action with the same arguments, or the plain action an owned tool stands
  * in for, on the same id and nothing else.
  */
 function asksAboutCall(call: CallInFlight, payload: RelayApprovePayload): boolean {
-  if (!Object.hasOwn(RELAY_APPROVABLE, payload.actionId)) return false;
-  const asked = canonicalArgsHash(payload.actionId, payload.args);
-  if (asked !== payload.argsHash) return false;
-  if (call.tool === payload.actionId) {
-    return canonicalArgsHash(call.tool, relayedActionArgs(call.args)) === asked;
-  }
-  const { ownedTool, idArg } = RELAY_APPROVABLE[payload.actionId]!;
-  const id = call.args[idArg];
-  return (
-    call.tool === ownedTool &&
-    typeof id === "string" &&
-    canonicalArgsHash(payload.actionId, { [idArg]: id }) === asked
-  );
+  if (!RELAY_APPROVABLE.has(payload.actionId)) return false;
+  if (canonicalArgsHash(payload.actionId, payload.args) !== payload.argsHash) return false;
+  return runsAsCall(call, payload.actionId, payload.args);
 }
 
 /** A call that may arm notices on its host, and the run here that made it. */
@@ -803,6 +865,67 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   }
 
   /**
+   * Whether a host's dispatch into this Shell's view of its project is one
+   * of this Shell's own assistants' calls to that host, running with that
+   * assistant's Daintree confirmations skipped here (#15698). True only for
+   * the call still out from the run that made it, in that view's project,
+   * about exactly that call's action and arguments, while the person's
+   * control switch for the host is on. The skip is this Shell's own
+   * preference, read now: nothing the host sends turns it on. The host is
+   * the connection's, never the payload's.
+   */
+  skipsRelayedDispatch(
+    hostId: HostId,
+    dispatch: {
+      callId: string;
+      helpSessionId: string;
+      projectId: string;
+      actionId: string;
+      args: unknown;
+    }
+  ): boolean {
+    const call = this.callsInFlight.get(dispatch.callId);
+    if (
+      this.disposed ||
+      call === undefined ||
+      call.asked ||
+      call.hostId !== hostId ||
+      call.helpSessionId !== dispatch.helpSessionId ||
+      call.projectId !== dispatch.projectId ||
+      !runsAsCall(call, dispatch.actionId, dispatch.args) ||
+      !this.stillRunning(call.run) ||
+      !this.controlOn(hostId) ||
+      !this.skipsConfirmations(call, dispatch.actionId)
+    ) {
+      return false;
+    }
+    this.grantSkip(call);
+    return true;
+  }
+
+  /** Spends a call's one ask on the skip, and tells every send of it still out. */
+  private grantSkip(call: CallInFlight): void {
+    call.asked = true;
+    call.skipped = true;
+    for (const note of call.skipNotes) note();
+  }
+
+  /**
+   * Whether the assistant that made a call runs with Daintree's
+   * confirmations skipped, for an action that may skip at all: one that would
+   * move this window always asks. A failed read keeps the dialog.
+   */
+  private skipsConfirmations(call: CallInFlight, actionId: string): boolean {
+    if (HOST_ALWAYS_ASKS_ACTION_IDS.has(actionId)) return false;
+    try {
+      return this.deps.confirmationsSkipped?.(call.helpSessionId) === true;
+    } catch (error) {
+      logger.warn("Couldn't read the assistant's confirmations preference", { error });
+      return false;
+    }
+  }
+
+  /**
    * Whether a call to `hostId` from an assistant still running here may yet
    * send a notice (#13500). The host can't dial this Shell, so its link stays
    * open for as long as the call's notices are taken, unless the host said it
@@ -926,8 +1049,10 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * only for a call still out to that host from the run that made it, about
    * exactly that call's action and arguments, once per call, and only while
    * the person's control switch for the host is on; asked in that
-   * assistant's own window. Anything else is `refused`, which approves
-   * nothing. The host is the connection's, never the payload's.
+   * assistant's own window, unless that assistant runs with Daintree's
+   * confirmations skipped here (#15698), when nobody is asked and the answer
+   * says so. Anything else is `refused`, which approves nothing. The host is
+   * the connection's, never the payload's.
    */
   async receiveApproval(hostId: HostId, payload: RelayApprovePayload): Promise<RelayApproveAnswer> {
     const answer = (decision: RelayApproveAnswer["decision"]): RelayApproveAnswer => ({
@@ -952,6 +1077,12 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       return answer("refused");
     }
     call.asked = true;
+    // The person's own "Never ask" covers their assistant's call on a host as
+    // it does one here (#15698): nobody is asked, and the host is told so.
+    if (this.skipsConfirmations(call, payload.actionId)) {
+      this.grantSkip(call);
+      return answer("skip-preference");
+    }
     let decision: McpConfirmationDecision | null;
     try {
       decision = await ask({
@@ -1224,7 +1355,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   call(
     helpSessionId: string,
     args: HostCallArgs,
-    context: { tier: "core" | "full" }
+    context: HostCallContext
   ): Promise<HostControlOutcome<HostCallResult>> {
     return this.settle(helpSessionId, async (caller) => {
       const projectId = args.projectId;
@@ -1295,14 +1426,19 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       const noted = resend
         ? NOTHING_NOTED
         : this.noteCall(callId, args.hostId, caller, args.tool, toolArgs);
-      const sendDone = this.trackSend(callId, {
-        hostId: args.hostId,
-        helpSessionId,
-        projectId,
-        tool: args.tool,
-        args: toolArgs,
-        run: caller,
-      });
+      const sendDone = this.trackSend(
+        callId,
+        {
+          hostId: args.hostId,
+          helpSessionId,
+          projectId,
+          tool: args.tool,
+          args: toolArgs,
+          tier: context.tier,
+          run: caller,
+        },
+        context.noteSkipPreference
+      );
       let answer: McpCallAnswer;
       try {
         answer = local
@@ -1350,17 +1486,33 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * send is still out is the same call and shares that record, so an approval
    * the host is asking for still counts.
    */
-  private trackSend(callId: string, record: Omit<CallInFlight, "asked" | "sends">): () => void {
+  private trackSend(
+    callId: string,
+    record: Omit<CallInFlight, "asked" | "sends" | "skipped" | "skipNotes">,
+    noteSkip?: () => void
+  ): () => void {
     const { hostId, helpSessionId } = record;
     this.callsOut.set(hostId, (this.callsOut.get(hostId) ?? 0) + 1);
     const sharing = this.callsInFlight.get(callId);
     const inFlight: CallInFlight =
       sharing !== undefined && sharing.hostId === hostId && sharing.helpSessionId === helpSessionId
         ? sharing
-        : { ...record, asked: false, sends: 0 };
+        : { ...record, asked: false, sends: 0, skipped: false, skipNotes: new Set() };
     inFlight.sends += 1;
     if (inFlight !== sharing) this.callsInFlight.set(callId, inFlight);
+    // Each send's own, so a send that settled, having written its record, is
+    // told nothing; and only a send of the same call, since the host refuses a
+    // different one under that callId as a conflict, which ran nothing.
+    const note =
+      noteSkip !== undefined && (inFlight === sharing ? sameCall(inFlight, record) : true)
+        ? () => noteSkip()
+        : undefined;
+    if (note !== undefined) {
+      if (inFlight.skipped) note();
+      else inFlight.skipNotes.add(note);
+    }
     return () => {
+      if (note !== undefined) inFlight.skipNotes.delete(note);
       const left = (this.callsOut.get(hostId) ?? 1) - 1;
       if (left > 0) this.callsOut.set(hostId, left);
       else this.callsOut.delete(hostId);
@@ -1475,6 +1627,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       projectId: null,
       tool: args.tool,
       args: parsed.data.args,
+      tier: context.tier,
       run: caller,
     });
     let answer: ThrowawayCallAnswer;

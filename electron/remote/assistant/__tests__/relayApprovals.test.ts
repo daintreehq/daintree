@@ -53,6 +53,39 @@ describe("askShellApproval (#13501)", () => {
     });
   });
 
+  it("takes the Shell's own Never ask as covering the call, marked as the skip it is (#15698)", async () => {
+    let clock = 1_000;
+    const skipped = (payload: Record<string, unknown>) => ({
+      approvalId: payload.approvalId,
+      argsHash: payload.argsHash,
+      decision: "skip-preference",
+    });
+
+    await expect(
+      askShellApproval(linkAnswering(skipped), ASK, { now: () => clock, windowMs: 40_000 })
+    ).resolves.toEqual({
+      decision: "approved",
+      deadline: 41_000,
+      authorization: "skip-preference",
+    });
+
+    // Bound to the ask like any answer, and covering nothing once late.
+    await expect(
+      askShellApproval(
+        linkAnswering((payload) => ({ ...skipped(payload), approvalId: "someone-else" })),
+        ASK
+      )
+    ).resolves.toEqual({ decision: "unavailable" });
+    const late = linkAnswering((payload) => {
+      clock = 42_000;
+      return skipped(payload);
+    });
+    clock = 1_000;
+    await expect(
+      askShellApproval(late, ASK, { now: () => clock, windowMs: 40_000 })
+    ).resolves.toEqual({ decision: "timeout" });
+  });
+
   it("counts nobody's approval in an answer that doesn't echo the ask", async () => {
     for (const answer of [
       { approvalId: "someone-else", argsHash: HASH, decision: "approved" },
