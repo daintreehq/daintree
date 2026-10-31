@@ -240,7 +240,10 @@ describe("useHostChannel when its target changes with a call in flight", () => {
   it.each([
     ["success", (d: Deferred<unknown>) => d.resolve({ from: "a" })],
     ["ordinary failure", (d: Deferred<unknown>) => d.reject(new Error("a failed"))],
-    ["HOST_DISCONNECTED failure", (d: Deferred<unknown>) => d.reject(codedError("HOST_DISCONNECTED"))],
+    [
+      "HOST_DISCONNECTED failure",
+      (d: Deferred<unknown>) => d.reject(codedError("HOST_DISCONNECTED")),
+    ],
   ])("drops an old %s after an a-to-b-to-a change with no new invoke", async (_label, settle) => {
     const old = deferred();
     invokeMock.mockReturnValueOnce(old.promise);
