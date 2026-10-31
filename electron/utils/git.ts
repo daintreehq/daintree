@@ -9,6 +9,11 @@ import { Cache } from "./cache.js";
 import { createHardenedGit, createWslHardenedGit } from "./hardenedGit.js";
 import type { WslGitInvocation } from "./hardenedGit.js";
 import { getGitDir } from "./gitUtils.js";
+import {
+  beginDiffStatPass,
+  clearWorktreeDiffStatCache,
+  getWorktreeDiffStatCacheStats,
+} from "./worktreeDiffStatCache.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { TimeoutError, timeoutSignal, withTimeout } from "./withTimeout.js";
 
@@ -80,19 +85,6 @@ export interface DiffStat {
   deletions: number | null;
 }
 
-// Per-file diff stat cache: skips redundant `git diff --numstat` work for files
-// whose (HEAD OID, status code, path, mtime, size) tuple is unchanged since last
-// refresh. HEAD OID participates in the key, so commits/resets/checkouts
-// self-invalidate; the porcelain XY code catches index-only moves that leave
-// the file itself untouched (`git rm --cached` turns a modification into a
-// deletion). With those in the key no TTL is needed — a timed expiry would only
-// re-spawn the diff for an answer that cannot have changed. LRU maxSize bounds
-// memory.
-const PER_FILE_DIFF_STAT_CACHE = new Cache<string, DiffStat>({
-  maxSize: 2000,
-  defaultTTL: Number.POSITIVE_INFINITY,
-});
-
 // Budget for pathspec characters per `git diff` spawn. Windows caps the whole
 // command line at 32,767 chars, and the hardened `-c` config plus the binary
 // path take a few KB of that.
@@ -117,31 +109,21 @@ function batchPathsForArgv(paths: string[]): string[][] {
   return batches;
 }
 
-function makeFileStatCacheKey(
-  headOid: string,
-  statusCode: string,
-  absolutePath: string,
-  mtimeMs: number,
-  size: number
-): string {
-  return `${headOid}:${statusCode}:${absolutePath}:${mtimeMs}:${size}`;
-}
-
-// Untracked-file line counts are a pure function of file content, so the key
-// deliberately excludes HEAD OID — commits must not thrash these entries. The
-// prefix keeps them disjoint from tracked-diff keys in the shared cache.
-function makeUntrackedLineCountCacheKey(
-  absolutePath: string,
-  mtimeMs: number,
-  size: number
-): string {
-  return `untracked:${absolutePath}:${mtimeMs}:${size}`;
-}
-
 // Test-only: clear the per-file diff stat cache between cases. Production code
-// relies on (HEAD OID, mtime, size) self-invalidation and LRU eviction.
+// relies on per-pass snapshot replacement (worktreeDiffStatCache.ts).
 export function __clearPerFileDiffStatCacheForTesting(): void {
-  PER_FILE_DIFF_STAT_CACHE.clear();
+  clearWorktreeDiffStatCache();
+}
+
+export function __getPerFileDiffStatCacheStatsForPerf(): {
+  entries: number;
+  estimatedBytes: number;
+} {
+  const stats = getWorktreeDiffStatCacheStats();
+  return {
+    entries: stats.trackedEntries + stats.untrackedEntries,
+    estimatedBytes: stats.estimatedBytes,
+  };
 }
 
 // Cache last-commit metadata keyed on HEAD OID. The log output is a pure
@@ -184,7 +166,7 @@ export function __clearLastCommitLogCacheForTesting(): void {
 export type DiffStatMode = "staged" | "unstaged";
 
 // Cache for staging-view diff stats keyed on `(cwd, headOid, mode)`. The
-// dashboard's PER_FILE_DIFF_STAT_CACHE requires per-file (mtime, size) keys
+// dashboard's per-file diff stat cache requires per-file (mtime, size) keys
 // to participate; for the staging view we issue a single batched numstat per
 // mode and the surrounding rate limit already gates refresh frequency, so a
 // short TTL keyed on cwd is sufficient.
@@ -926,6 +908,15 @@ export async function getWorktreeChangesWithStats(
         }
       }
 
+      // Per-file numstat results are reused while a file's (HEAD OID, status
+      // code, path, mtime, size) identity is unchanged. HEAD OID makes commits,
+      // resets and checkouts self-invalidate; the porcelain XY code catches
+      // index-only moves that leave the file untouched (`git rm --cached` turns
+      // a modification into a deletion). With those compared, no TTL is
+      // needed: a timed expiry would only re-spawn the diff for an answer that
+      // cannot have changed.
+      const diffStatPass = beginDiffStatPass(gitRoot, cwd);
+
       // Deduplicate: a partially-staged file appears in both `modified` and
       // `staged`; double-counting would stat and diff the same path twice.
       const trackedChangedFiles = [
@@ -987,9 +978,12 @@ export async function getWorktreeChangesWithStats(
           const statusCode = statusCodeByRel.get(rel) ?? "";
           fileMetaByRel.set(rel, { absolutePath, statusCode, mtimeMs, size });
           absPathToMeta.set(absolutePath, { mtimeMs, size });
-          const cached = PER_FILE_DIFF_STAT_CACHE.get(
-            makeFileStatCacheKey(headOid, statusCode, absolutePath, mtimeMs, size)
-          );
+          const cached = diffStatPass.lookupTracked(absolutePath, {
+            headOid,
+            statusCode,
+            mtimeMs,
+            size,
+          });
           if (cached) {
             hitStats.set(absolutePath, cached);
           } else {
@@ -1030,22 +1024,19 @@ export async function getWorktreeChangesWithStats(
 
       const diffStats = parseNumstat(diffOutput, gitRoot);
 
+      // Kept in status order, hits and fresh rows alike, so a capped snapshot
+      // retains the same prefix every pass. A path whose batch failed, or that
+      // produced no row, is never kept: it must not be remembered as 0/0.
       if (useScopedDiff) {
-        for (const rel of diffedPaths) {
+        const diffedSet = new Set(diffedPaths);
+        for (const rel of trackedChangedFiles) {
           const meta = fileMetaByRel.get(rel);
           if (!meta) continue;
-          const stats = diffStats.get(meta.absolutePath);
+          const stats =
+            hitStats.get(meta.absolutePath) ??
+            (diffedSet.has(rel) ? diffStats.get(meta.absolutePath) : undefined);
           if (!stats) continue;
-          PER_FILE_DIFF_STAT_CACHE.set(
-            makeFileStatCacheKey(
-              headOid,
-              meta.statusCode,
-              meta.absolutePath,
-              meta.mtimeMs,
-              meta.size
-            ),
-            stats
-          );
+          diffStatPass.keepTracked(meta.absolutePath, { headOid, ...meta }, stats);
         }
       }
 
@@ -1068,10 +1059,13 @@ export async function getWorktreeChangesWithStats(
             return null;
           }
 
-          const cacheKey = makeUntrackedLineCountCacheKey(filePath, stats.mtimeMs, stats.size);
-          const cached = PER_FILE_DIFF_STAT_CACHE.get(cacheKey);
-          if (cached && cached.insertions !== null) {
-            return cached.insertions;
+          // Untracked line counts are a pure function of file content, so
+          // their identity deliberately excludes HEAD OID: commits must not
+          // discard them.
+          const cached = diffStatPass.lookupUntracked(filePath, stats.mtimeMs, stats.size);
+          if (cached !== undefined) {
+            diffStatPass.keepUntracked(filePath, stats.mtimeMs, stats.size, cached);
+            return cached;
           }
 
           const buffer = await perFile(() => readFileBounded(filePath));
@@ -1092,7 +1086,7 @@ export async function getWorktreeChangesWithStats(
             lineCount++;
           }
 
-          PER_FILE_DIFF_STAT_CACHE.set(cacheKey, { insertions: lineCount, deletions: 0 });
+          diffStatPass.keepUntracked(filePath, stats.mtimeMs, stats.size, lineCount);
 
           return lineCount;
         } catch (_error) {
@@ -1258,6 +1252,7 @@ export async function getWorktreeChangesWithStats(
       // must not publish what it half-read.
       options.signal?.throwIfAborted();
       if (!options.abandonSignal?.aborted) {
+        diffStatPass.publish();
         GIT_WORKTREE_CHANGES_CACHE.set(cwd, result, cacheTTL);
       }
       return result;

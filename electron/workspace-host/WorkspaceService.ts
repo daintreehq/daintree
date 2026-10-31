@@ -86,6 +86,10 @@ import {
   parseIndexGitlinks,
 } from "../utils/submoduleInventory.js";
 import { invalidateGitStatusCache } from "../utils/git.js";
+import {
+  clearWorktreeDiffStatCache,
+  releaseWorktreeDiffStats,
+} from "../utils/worktreeDiffStatCache.js";
 import { StatusTimingRecorder } from "./StatusTimingRecorder.js";
 import { WorktreeEmitGate } from "./WorktreeEmitGate.js";
 import { branchRefName, readBranchCommitterDates } from "../utils/branchCommitterDates.js";
@@ -1725,6 +1729,12 @@ export class WorkspaceService {
     clearGitDirCache(monitor.path);
     clearGitCommonDirCache(monitor.path);
     invalidateGitStatusCache(monitor.path);
+    // Retained under the canonical toplevel, which the monitor path may be a
+    // symlinked spelling of; releasing by the path a pass was asked about
+    // finds it even before this monitor has stored a snapshot.
+    releaseWorktreeDiffStats(monitor.path);
+    const canonicalRoot = monitor.getWorktreeChanges()?.rootPath;
+    if (canonicalRoot && canonicalRoot !== monitor.path) releaseWorktreeDiffStats(canonicalRoot);
 
     // Drop the in-memory wsl-git opt-in entry (keyed by monitor.id, matching
     // the lookup shape used by `enrichWorktreeWithWsl`) and tell main to
@@ -6183,6 +6193,7 @@ export class WorkspaceService {
     }
     this.monitors.clear();
     this.backgroundGitWatcherLru.clear();
+    clearWorktreeDiffStatCache();
     this.agentActiveWorktreeIds.clear();
     // Drop in-flight fetch chains and per-repo failure state — the next
     // project's monitors get a clean coordinator and stale completions are
@@ -6351,6 +6362,7 @@ export class WorkspaceService {
     }
     this.monitors.clear();
     this.backgroundGitWatcherLru.clear();
+    clearWorktreeDiffStatCache();
     this.agentActiveWorktreeIds.clear();
     this.authFailureConfirmedNotified.clear();
     this.pollQueue.clear();

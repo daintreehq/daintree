@@ -3,23 +3,37 @@ import type { PerfScenario, ScenarioSample } from "../types";
 import type PQueueType from "p-queue";
 import type { WorktreeMonitor } from "../../../electron/workspace-host/WorktreeMonitor";
 import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import type { WorktreeChanges } from "../../../shared/types/git";
+import { armBystanderProbe } from "../lib/bystander";
 import {
   IGNORED_BURST_DIR,
   SCALING_WORKTREE_COUNTS,
   allSpawnMark,
   allSpawnsSince,
+  captureGitArgv,
   checkoutStormBranch,
   clearCachedGitDir,
   createMonitorHarness,
   getGitPipelineFixture,
   gitSpawnMark,
   gitSpawnsSince,
+  loadGitStatusModule,
   loadPipelineModules,
   nonGitSpawnCount,
+  numstatPathspecs,
   sleep,
   spawnObserverMisses,
   withGitDirProbeFault,
 } from "../lib/gitPipelineFixture";
+import {
+  editDirtyFile,
+  getLargeChangesetFixture,
+  oracleMisses,
+  oracleNumstat,
+  replayGitCpu,
+  resultCounts,
+  type LargeChangesetShape,
+} from "../lib/largeChangesetFixture";
 import {
   EmitRecorder,
   PIPELINE_QUIESCE_SETTLE_MS,
@@ -302,6 +316,180 @@ async function ensureWarm(harness: ScalingHarness): Promise<void> {
   await runRefreshCycle(harness, harness.monitors.length);
   harness.warmedAt = performance.now();
 }
+
+// --- Large-changeset diff-stat retention (PERF-108/109) -----------------------
+
+const LARGE_SINGLE_SHAPE: LargeChangesetShape = {
+  trackedFiles: 2_500,
+  worktrees: 0,
+  dirtyPerWorktree: 2_500,
+};
+const LARGE_SIBLING_SHAPE: LargeChangesetShape = {
+  trackedFiles: 1_000,
+  worktrees: 4,
+  dirtyPerWorktree: 1_000,
+};
+/**
+ * Untimed rounds before the first measurement. Two, not one: a bounded LRU
+ * only reaches its steady-state miss pattern on the second pass over a set
+ * larger than itself, and measuring the first would price a cold cache.
+ */
+const LARGE_PRIME_ROUNDS = 2;
+/** Idle bystander control taken before each round, as PERF-163 does. */
+const LARGE_IDLE_CONTROL_MS = 150;
+const primedLargeFixtures = new Set<string>();
+let largeEditMarker = 0;
+
+/**
+ * One measured round of forced status passes over every dirty worktree of a
+ * shape, in sequence, each against a cache left warm by the rounds before.
+ *
+ * The passes call `getWorktreeChangesWithStats` directly: the subject is the
+ * per-file numstat reuse inside it, and a monitor would add snapshot emission
+ * without changing what is diffed. PERF-103 stays the monitor-level reading.
+ *
+ * Every reading is paired with the same evidence:
+ *  - `numstatOracleMisses`: every returned count equals a fresh uncached
+ *    `git diff --numstat` of that worktree, so a cache that answers fast and
+ *    wrong scores misses.
+ *  - `statusPassMisses`: one status start per pass and the whole dirty set
+ *    returned, so a pass that skipped work cannot read as a fast one.
+ *  - `editFreshnessMisses` / `numstatObserverMisses`: after the round, one
+ *    already-dirty file is edited and passed again. Its counts must change to
+ *    the oracle's, and the argv observer must see that path diffed — which is
+ *    what lets a zero `numstatFilesDiffed` mean "reused" rather than "the
+ *    observer went blind". One untimed round in measured order follows, so
+ *    the next measured round sees uninterrupted rounds, not that extra pass.
+ *
+ * `passLongestStallMs` is the longest gap between bystander observations
+ * across the round: an upper bound on its longest synchronous block, read
+ * against `idleLongestStallMs` from the same probe over an idle window first.
+ */
+async function runLargeChangesetRound(shape: LargeChangesetShape): Promise<ScenarioSample> {
+  const { getWorktreeChangesWithStats, __getPerFileDiffStatCacheStatsForPerf } =
+    await loadGitStatusModule();
+  const fixture = getLargeChangesetFixture(shape);
+  const pass = (path: string) => getWorktreeChangesWithStats(path, { forceRefresh: true });
+
+  if (!primedLargeFixtures.has(fixture.root)) {
+    for (let round = 0; round < LARGE_PRIME_ROUNDS; round++) {
+      for (const path of fixture.worktreePaths) await pass(path);
+    }
+    primedLargeFixtures.add(fixture.root);
+  }
+
+  const observerMisses = spawnObserverMisses();
+  (globalThis as { gc?: () => void }).gc?.();
+  const idleProbe = await armBystanderProbe();
+  try {
+    await sleep(LARGE_IDLE_CONTROL_MS);
+  } finally {
+    idleProbe.stop();
+  }
+  const idle = idleProbe.stop();
+  const probe = await armBystanderProbe();
+  const stopCapture = captureGitArgv();
+  const mark = gitSpawnMark();
+  const results: WorktreeChanges[] = [];
+  const passDurations: number[] = [];
+  const start = performance.now();
+  for (const path of fixture.worktreePaths) {
+    const passStart = performance.now();
+    results.push(await pass(path));
+    passDurations.push(performance.now() - passStart);
+  }
+  const durationMs = performance.now() - start;
+  const stall = probe.stop();
+  const spawns = stopCapture();
+  const window = gitSpawnsSince(mark);
+
+  const passCount = fixture.worktreePaths.length;
+  let numstatSpawns = 0;
+  let numstatFilesDiffed = 0;
+  for (const spawn of spawns) {
+    const paths = numstatPathspecs(spawn);
+    if (paths === null) continue;
+    numstatSpawns++;
+    numstatFilesDiffed += paths.length;
+  }
+
+  let numstatOracleMisses = 0;
+  let dirtyTrackedFiles = 0;
+  let shortResults = 0;
+  results.forEach((result, i) => {
+    const actual = resultCounts(result);
+    dirtyTrackedFiles += actual.size;
+    if (actual.size < fixture.dirtyFiles.length) shortResults++;
+    numstatOracleMisses += oracleMisses(oracleNumstat(fixture.worktreePaths[i]), actual);
+  });
+  const statusSpawns = window.bySubcommand["status"] ?? 0;
+  const retained = __getPerFileDiffStatCacheStatsForPerf();
+  const cpu = replayGitCpu(spawns);
+
+  const marker = ++largeEditMarker;
+  const editIndex = marker % passCount;
+  const editPath = fixture.worktreePaths[editIndex];
+  const editRel = fixture.dirtyFiles[(marker * 7919) % fixture.dirtyFiles.length];
+  const before = resultCounts(results[editIndex]).get(editRel);
+  editDirtyFile(editPath, editRel, marker);
+  const stopEditCapture = captureGitArgv();
+  const edited = resultCounts(await pass(editPath)).get(editRel);
+  const editSpawns = stopEditCapture();
+  const want = oracleNumstat(editPath, [editRel]).get(editRel);
+  const editFresh =
+    edited !== undefined &&
+    want !== undefined &&
+    edited.insertions === want.insertions &&
+    edited.deletions === want.deletions &&
+    edited.insertions !== before?.insertions;
+  const editObserved = editSpawns.some((spawn) => numstatPathspecs(spawn)?.includes(editRel));
+  for (const path of fixture.worktreePaths) await pass(path);
+
+  return {
+    durationMs,
+    metrics: {
+      passCount,
+      worktreeCount: passCount,
+      dirtyTrackedFiles,
+      gitSpawns: window.count,
+      statusSpawns,
+      numstatSpawns,
+      numstatFilesDiffed,
+      numstatFilesDiffedPerPass: numstatFilesDiffed / passCount,
+      passDurationMs: durationMs / passCount,
+      maxPassDurationMs: Math.max(...passDurations),
+      passLongestStallMs: stall.longestStallMs,
+      passBlockedMs: stall.blockedMs,
+      idleLongestStallMs: idle.longestStallMs,
+      idleBlockedMs: idle.blockedMs,
+      retainedCacheEntryCount: retained.entries,
+      retainedCacheBytes: retained.estimatedBytes,
+      ...(cpu
+        ? {
+            replayGitCpuMsPerPass: (cpu.userMs + cpu.systemMs) / passCount,
+            replayGitUserCpuMsPerPass: cpu.userMs / passCount,
+            replayGitSystemCpuMsPerPass: cpu.systemMs / passCount,
+          }
+        : {}),
+      numstatOracleMisses,
+      statusPassMisses: Math.abs(statusSpawns - passCount) + shortResults,
+      editFreshnessMisses: editFresh ? 0 : 1,
+      numstatObserverMisses: editObserved ? 0 : 1,
+      spawnObserverMisses: observerMisses,
+      probeMisses: stall.probeMisses + idle.probeMisses,
+    },
+    ...(cpu ? {} : { notes: "git child CPU replay unavailable here (needs python3 on POSIX)" }),
+  };
+}
+
+const LARGE_CHANGESET_CORRECTNESS = [
+  "numstatOracleMisses",
+  "statusPassMisses",
+  "editFreshnessMisses",
+  "numstatObserverMisses",
+  "spawnObserverMisses",
+  "probeMisses",
+] as const;
 
 export const gitPipelineScenarios: PerfScenario[] = [
   {
@@ -935,5 +1123,31 @@ export const gitPipelineScenarios: PerfScenario[] = [
         await clearCachedGitDir(fixture.faultPath);
       }
     },
+  },
+  {
+    id: "PERF-108",
+    name: "Git Repeated Status Passes (2,500-file changeset)",
+    description:
+      "Forced full passes over one worktree with 2,500 stable modified files: how much numstat work a warm pass still does once the changeset is large.",
+    tier: "heavy",
+    modes: ["smoke", "ci", "nightly"],
+    iterations: { smoke: 5, ci: 8, nightly: 12 },
+    warmups: 1,
+    correctness: LARGE_CHANGESET_CORRECTNESS,
+    workloadFloors: { dirtyTrackedFiles: 2_500 },
+    run: () => runLargeChangesetRound(LARGE_SINGLE_SHAPE),
+  },
+  {
+    id: "PERF-109",
+    name: "Git Repeated Status Passes (4 sibling worktrees x 1,000 files)",
+    description:
+      "One forced pass per sibling worktree of one repo, each with 1,000 stable modified files, sharing one process: whether siblings evict each other's numstat results.",
+    tier: "heavy",
+    modes: ["smoke", "ci", "nightly"],
+    iterations: { smoke: 5, ci: 8, nightly: 12 },
+    warmups: 1,
+    correctness: LARGE_CHANGESET_CORRECTNESS,
+    workloadFloors: { dirtyTrackedFiles: 4_000, worktreeCount: 4 },
+    run: () => runLargeChangesetRound(LARGE_SIBLING_SHAPE),
   },
 ];
