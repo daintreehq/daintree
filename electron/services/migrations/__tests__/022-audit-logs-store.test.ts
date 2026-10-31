@@ -138,6 +138,39 @@ describe("migration022 — audit logs store", () => {
     expect(auditLogsStoreMock.set).toHaveBeenCalledWith("mcpAuditLog", [auditRecord]);
   });
 
+  it("warns and leaves a malformed non-array ring in config.json (#15615)", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const data: Record<string, unknown> = {
+      mcpServer: { auditEnabled: true, auditLog: { not: "an array" }, turnOutcomeLog: [turnRecord] },
+    };
+    const store = makeStoreMock(data);
+
+    migration022.up(store);
+
+    expect(auditLogsStoreMock.set).toHaveBeenCalledTimes(1);
+    expect(auditLogsStoreMock.set).toHaveBeenCalledWith("mcpTurnOutcomeLog", [turnRecord]);
+    expect(data.mcpServer).toEqual({ auditEnabled: true, auditLog: { not: "an array" } });
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("mcpServer.auditLog"));
+    warnSpy.mockRestore();
+  });
+
+  it("leaves the rings in config.json when the audit-logs store is not durable", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    Object.assign(auditLogsStoreMock, { path: "" });
+    const data: Record<string, unknown> = { mcpServer: { auditLog: [auditRecord] } };
+    const store = makeStoreMock(data);
+
+    try {
+      migration022.up(store);
+    } finally {
+      delete (auditLogsStoreMock as { path?: string }).path;
+      warnSpy.mockRestore();
+    }
+
+    expect(auditLogsStoreMock.set).not.toHaveBeenCalled();
+    expect(data.mcpServer).toEqual({ auditLog: [auditRecord] });
+  });
+
   it("has version 22", () => {
     expect(migration022.version).toBe(22);
   });

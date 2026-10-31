@@ -162,19 +162,32 @@ describe("migration023 — audit rings to audit-logs store", () => {
     expect("auditLog" in (data.plugins as object)).toBe(false);
   });
 
-  it("warns and strips a corrupt non-array ring without writing to the audit-logs store", () => {
+  it("warns and leaves a malformed non-array ring in config.json (#15615)", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const data: Record<string, unknown> = {
       runHistory: { records: "corrupt-string" },
+      forgeAudit: { auditEnabled: true, auditLog: [forgeRecord] },
     };
     const store = makeStoreMock(data);
 
     migration023.up(store);
 
-    expect(auditLogsStoreMock.set).not.toHaveBeenCalled();
-    expect("records" in (data.runHistory as object)).toBe(false);
+    expect(auditLogsStoreMock.set).toHaveBeenCalledTimes(1);
+    expect(auditLogsStoreMock.set).toHaveBeenCalledWith("forgeAuditLog", [forgeRecord]);
+    expect(data.runHistory).toEqual({ records: "corrupt-string" });
+    expect(data.forgeAudit).toEqual({ auditEnabled: true });
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("runHistory.records"));
     warnSpy.mockRestore();
+  });
+
+  it("moves a ring whose first record is null without throwing", () => {
+    const data: Record<string, unknown> = { runHistory: { records: [null, runRecord] } };
+    const store = makeStoreMock(data);
+
+    migration023.up(store);
+
+    expect(auditLogsStoreMock.set).toHaveBeenCalledWith("runHistoryRecords", [null, runRecord]);
+    expect("records" in (data.runHistory as object)).toBe(false);
   });
 
   it("tolerates a corrupt audit-logs store value when merging", () => {

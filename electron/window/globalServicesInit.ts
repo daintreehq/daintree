@@ -101,7 +101,7 @@ import { getProjectPresenceTracker } from "../services/ProjectPresenceTracker.js
 import { getCompositeMemorySnapshot } from "../services/memoryAccounting.js";
 import { scratchStore } from "../services/ScratchStore.js";
 import { registerCommands } from "../services/commands/index.js";
-import { store, wasStoreFreshAtBoot } from "../store.js";
+import { hasLegacyAuditRingSources, store, wasStoreFreshAtBoot } from "../store.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
 import type { IdleBackgroundAutoCloseService } from "../services/IdleBackgroundAutoCloseService.js";
@@ -521,6 +521,19 @@ export async function initGlobalServices(
     dialog.showErrorBox("Migration failed", lines.join("\n"));
     app.exit(1);
     return "exit-requested";
+  }
+
+  // Audit rings from before the SQLite move (#15615). Before anything can
+  // hydrate a ring owner, whose first write replaces the ring wholesale; a
+  // failure leaves every source in place for the next boot.
+  if (hasLegacyAuditRingSources()) {
+    try {
+      const { importLegacyAuditRings } =
+        await import("../services/persistence/legacyAuditRingImport.js");
+      importLegacyAuditRings();
+    } catch (error) {
+      console.error("[MAIN] Legacy audit ring import failed:", error);
+    }
   }
 
   // Adaptive-recovery + watchdog E2E seams (#9599), gated on
