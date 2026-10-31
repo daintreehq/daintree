@@ -195,6 +195,15 @@ describe("recordHistory", () => {
     expect(loadHistory(KEY)).toEqual(next);
   });
 
+  it("builds on a newer stored list rather than the one it was given", () => {
+    const backing = installStorage({});
+    backing.set(KEY, JSON.stringify([item("b"), item("a")]));
+
+    const next = recordHistory(KEY, "c", [item("a")]);
+
+    expect(next.map((h) => h.command)).toEqual(["c", "b", "a"]);
+  });
+
   it("keeps the list it was given when storage can no longer be read", () => {
     installStorage({
       getItem: () => {

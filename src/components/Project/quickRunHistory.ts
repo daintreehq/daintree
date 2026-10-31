@@ -81,17 +81,19 @@ export function loadHistory(key: string): HistoryItem[] {
 }
 
 /**
- * Puts `command` at the front of `previous`, the list the panel is showing, and
- * persists the result. Never throws, and a list that can't be persisted is still
- * returned and kept for the session. It doesn't re-read storage, so a read that
- * starts failing mid-session can't empty a list already on screen.
+ * Puts `command` at the front of the stored list and persists the result.
+ * Never throws, and a list that can't be persisted is still returned and kept
+ * for the session. Storage is read again because a panel reopened while this
+ * launch was pending may have recorded since; `previous`, the list on screen,
+ * stands in when storage yields nothing, as it does once reads start failing.
  */
 export function recordHistory(
   key: string,
   command: string,
   previous: readonly HistoryItem[]
 ): HistoryItem[] {
-  const next = appendHistory(previous, command, Date.now());
+  const stored = loadHistory(key);
+  const next = appendHistory(stored.length > 0 ? stored : previous, command, Date.now());
   const serialized = JSON.stringify(next);
   if (getStorage().setItem(key, serialized) === "quota") unsaved.set(key, serialized);
   else unsaved.delete(key);
