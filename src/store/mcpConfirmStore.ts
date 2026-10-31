@@ -214,12 +214,14 @@ export interface PendingMcpConfirm {
   expired?: true;
   /**
    * The request that timed out on screen just before this one was brought up
-   * in its place (#15700), as its dialog named it. The queue moves on from an
-   * expired request instead of holding everything behind it until it is
-   * closed, so this is how the person still learns that it expired and nothing
-   * ran. It goes when this request does.
+   * in its place (#15700). The queue moves on from an expired request instead
+   * of holding everything behind it until it is closed, so this is how the
+   * person still learns that it expired and nothing ran. Kept whole: if this
+   * one goes before anyone sees it, the expired one is passed on to the next,
+   * or comes back up as expired when nothing is left. It goes when this
+   * request is seen and goes.
    */
-  followsExpired?: { actionTitle: string; subject?: string };
+  followsExpired?: PendingMcpConfirm;
 }
 
 /**
@@ -412,20 +414,15 @@ function advance(
     return;
   }
   set({
-    current:
-      expiredOnScreen === undefined
-        ? next
-        : {
-            ...next,
-            followsExpired: {
-              actionTitle: expiredOnScreen.actionTitle,
-              ...(expiredOnScreen.subject === undefined
-                ? {}
-                : { subject: expiredOnScreen.subject }),
-            },
-          },
+    current: expiredOnScreen === undefined ? next : { ...next, followsExpired: expiredOnScreen },
     queue: rest,
   });
+}
+
+/** An expired request as the next one carries it, without its own predecessor. */
+function asPredecessor(item: PendingMcpConfirm): PendingMcpConfirm {
+  const { followsExpired: _seenWithIt, ...rest } = item;
+  return rest;
 }
 
 export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((set, get) => ({
@@ -438,7 +435,7 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
       set({ current: item });
     } else if (current.expired) {
       // Nothing waits behind a request that can no longer be answered.
-      advance(set, [...queue, item], current);
+      advance(set, [...queue, item], asPredecessor(current));
     } else {
       set({ queue: [...queue, item] });
     }
@@ -501,7 +498,9 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
       set({ queue: queue.filter((queued) => queued.requestId !== requestId) });
       return;
     }
-    advance(set, queue, unseen ? undefined : current);
+    // One that goes unseen in place of a request that expired on screen passes
+    // that request on: nobody has read the note about it yet.
+    advance(set, queue, unseen ? current.followsExpired : asPredecessor(current));
   },
 
   dismiss: (requestId) => {

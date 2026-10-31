@@ -39,6 +39,7 @@ import {
   resolveAssistantAgentSkip,
 } from "@shared/utils/assistantDaintreeConfirmations";
 import { selectActiveSlot, useHelpPanelStore } from "@/store/helpPanelStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { getAgentConfig } from "@/config/agents";
 import type { HelpAssistantDaintreeConfirmations } from "@shared/types/ipc/api";
 import { logError } from "@/utils/logger";
@@ -98,7 +99,7 @@ const EXPIRED_HINT = "Timed out before an answer, so nothing ran";
  * it (#15700). Names it as its own dialog did, and says "previous" because the
  * two can share a title.
  */
-function followsExpiredText(expired: NonNullable<PendingMcpConfirm["followsExpired"]>) {
+function followsExpiredText(expired: Pick<PendingMcpConfirm, "actionTitle" | "subject">) {
   const name = expired.subject
     ? `${expired.actionTitle} '${expired.subject}'`
     : `'${expired.actionTitle}'`;
@@ -195,6 +196,42 @@ export function McpConfirmDialog() {
     document.addEventListener("visibilitychange", observe);
     return () => document.removeEventListener("visibilitychange", observe);
   }, [currentRequestId, markShown]);
+
+  // The request a pointer press began on (#15700). The confirm button stays the
+  // same element when an expiry brings up the next request, so a press held
+  // through that and its cooldown would release onto a question it never began
+  // on. A key press clears it: keyboard activation starts on what is current.
+  const pressedForRef = useRef<string | null>(null);
+  const hasRequest = currentRequestId !== null;
+  useEffect(() => {
+    if (!hasRequest) return;
+    const onPointerDown = () => {
+      pressedForRef.current = useMcpConfirmStore.getState().current?.requestId ?? null;
+    };
+    const onKeyDown = () => {
+      pressedForRef.current = null;
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+      pressedForRef.current = null;
+    };
+  }, [hasRequest]);
+
+  // A request brought up in place of one that expired says so once, through
+  // the announcer rather than a live region (#15700): two in a row can say the
+  // same words, and a dialog reopened from beside the requester mounts with
+  // them already there.
+  const promotedByExpiry =
+    current?.followsExpired !== undefined && !current.expired
+      ? `${followsExpiredText(current.followsExpired)}. Now asking: ${confirmTitle(current)}`
+      : null;
+  useEffect(() => {
+    if (promotedByExpiry === null) return;
+    useAnnouncerStore.getState().announce(promotedByExpiry, "polite");
+  }, [currentRequestId, promotedByExpiry]);
 
   // Which rows of a selectable confirmation are still checked (#12123). Every
   // target starts checked: these are the exact finite ids the caller already
@@ -374,6 +411,8 @@ export function McpConfirmDialog() {
     cancelLabel: expired ? "Close" : "Cancel",
     onConfirm: () => {
       if (expired) return;
+      const pressedFor = pressedForRef.current;
+      if (pressedFor !== null && pressedFor !== current.requestId) return;
       resolveOnce(
         current.requestId,
         "approved",
@@ -430,15 +469,9 @@ export function McpConfirmDialog() {
   const body = (
     <div className="space-y-4">
       {/* Mounted for the whole request, so the expiry is a change a screen
-          reader announces rather than a live region that arrived already full.
-          The dialog stays mounted across a promotion, so the same holds for a
-          request brought up in place of one that expired. */}
+          reader announces rather than a live region that arrived already full. */}
       <span role="status" className="sr-only">
-        {expired
-          ? EXPIRED_HINT
-          : followsExpired
-            ? `${followsExpiredText(followsExpired)}. Now asking: ${confirmTitle(current)}`
-            : ""}
+        {expired ? EXPIRED_HINT : ""}
       </span>
 
       {followsExpired && (
