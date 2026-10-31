@@ -1784,13 +1784,21 @@ export class ProjectStore {
     return this.settingsManager.addBrowserAllowedHost(projectId, hostname);
   }
 
+  /**
+   * The settings `projectId`'s overrides make of the globals. Named by the
+   * caller, never read off `currentProjectId`: that names whichever window
+   * switched last, not the project a notification is about (#15635). `null`
+   * is the globals alone.
+   */
   getEffectiveNotificationSettings(
+    projectId: string | null,
     globalChoices?: Partial<NotificationSettings>
   ): NotificationSettings {
-    return this.settingsManager.getEffectiveNotificationSettings(
-      this.getCurrentProjectId(),
-      globalChoices
-    );
+    return this.settingsManager.getEffectiveNotificationSettings(projectId, globalChoices);
+  }
+
+  async loadNotificationOverrides(projectId: string): Promise<void> {
+    return this.settingsManager.loadNotificationOverrides(projectId);
   }
 
   async isProjectNotificationsMuted(projectId: string): Promise<boolean> {

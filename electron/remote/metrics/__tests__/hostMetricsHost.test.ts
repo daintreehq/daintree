@@ -555,6 +555,47 @@ describe("installHostMetricsHostWith", () => {
     dispose();
   });
 
+  it("judges a waiting agent for that Shell under its own project's overrides", async () => {
+    const server = new FakeServer();
+    const asked: Array<string | null> = [];
+    const d = deps({
+      notificationSettings: (projectId) => {
+        asked.push(projectId);
+        return projectId === "muted"
+          ? { ...NO_QUIET_HOURS, waitingEnabled: false }
+          : NO_QUIET_HOURS;
+      },
+    });
+    const dispose = installHostMetricsHostWith(server, d);
+    const legacy = await pair();
+    server.attach(legacy.host, "legacy");
+    const heard: string[] = [];
+    legacy.client.registerCallHandler(
+      MetricsLinkMethod.ATTENTION,
+      AttentionPayloadSchema,
+      (body) => {
+        heard.push(body.terminalId);
+        return null;
+      }
+    );
+    const event = (terminalId: string, projectId: string | null): WaitingEvent => ({
+      kind: "waiting",
+      terminalId,
+      projectId,
+      projectName: null,
+      agentName: null,
+    });
+
+    d.fireWaiting(event("in-muted", "muted"));
+    d.fireWaiting(event("in-other", "other"));
+    d.fireWaiting(event("in-none", null));
+
+    await waitFor(() => heard.length === 2);
+    expect(heard).toEqual(["in-other", "in-none"]);
+    expect(asked).toEqual(["muted", "other", null]);
+    dispose();
+  });
+
   it("keeps each Shell's reminder cooldown apart from another's", async () => {
     const server = new FakeServer();
     let clock = new Date(2026, 8, 25, 12, 0).getTime();

@@ -69,10 +69,13 @@ export interface MetricsHostDeps {
   /** Told when one of this host's agents goes from working to waiting. */
   onAgentWaiting(listener: (payload: WaitingEvent) => void): () => void;
   /**
-   * This host's own notification settings, which decide only for a Shell that
-   * never sent its own choices (one from before #14701).
+   * This host's own notification settings under `projectId`'s overrides,
+   * which decide only for a Shell that never sent its own choices (one from
+   * before #14701).
    */
-  notificationSettings(): Pick<
+  notificationSettings(
+    projectId: string | null
+  ): Pick<
     NotificationSettings,
     | "enabled"
     | "waitingEnabled"
@@ -114,10 +117,11 @@ export function waitingPolicy(
 /** This host's own verdict; one it can't read announces nothing. */
 function hostWaitingPolicy(
   deps: Pick<MetricsHostDeps, "notificationSettings">,
+  projectId: string | null,
   now: number
 ): ReturnType<typeof waitingPolicy> {
   try {
-    return waitingPolicy(deps.notificationSettings(), new Date(now));
+    return waitingPolicy(deps.notificationSettings(projectId), new Date(now));
   } catch (error) {
     const suppressedCount = logLimiter.take("read-notification-settings");
     if (suppressedCount !== null) {
@@ -273,7 +277,7 @@ export function installHostMetricsHostWith(
       if (last !== undefined && now - last < ATTENTION_COOLDOWN_MS) continue;
       let quiet = false;
       if (!deps.shellDecides(ctx.client.clientId)) {
-        hostPolicy ??= hostWaitingPolicy(deps, now);
+        hostPolicy ??= hostWaitingPolicy(deps, event.projectId, now);
         if (hostPolicy === "silent") continue;
         quiet = hostPolicy === "quiet";
       }
@@ -388,7 +392,7 @@ export async function installHostMetricsHost(server: MetricsSessionSource): Prom
         });
       });
     },
-    notificationSettings: () => projectStore.getEffectiveNotificationSettings(),
+    notificationSettings: (projectId) => projectStore.getEffectiveNotificationSettings(projectId),
     shellDecides: (clientId) => agentNotificationService.hasShellPolicy(clientId),
     now: Date.now,
   });

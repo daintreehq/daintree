@@ -16,8 +16,17 @@ import { CHANNELS } from "../ipc/channels.js";
 import { mergeBrowserAllowedHosts } from "../../shared/utils/urlUtils.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
+/** How long a read that found no settings file answers for its project's alert overrides. */
+const NO_SETTINGS_FILE_TTL_MS = 30_000;
+
 export class ProjectSettingsManager {
   private notificationOverridesCache = new Map<string, Partial<NotificationSettings> | undefined>();
+  /**
+   * When a read last found no settings file, and so no overrides, for a
+   * project. Kept apart from the cache and bounded, so a file that appears
+   * later is still read.
+   */
+  private readonly noSettingsFileAt = new Map<string, number>();
   private readonly settingsCache = new Cache<string, ProjectSettings>({
     maxSize: 20,
     defaultTTL: 30_000,
@@ -42,14 +51,14 @@ export class ProjectSettingsManager {
    * them (a Shell's alert choices, #14701); the overrides still apply.
    */
   getEffectiveNotificationSettings(
-    currentProjectId: string | null,
+    projectId: string | null,
     globalChoices?: Partial<NotificationSettings>
   ): NotificationSettings {
     const own = this.store.get("notificationSettings");
     const global = globalChoices ? { ...own, ...globalChoices } : own;
-    if (!currentProjectId) return global;
+    if (!projectId) return global;
 
-    const overrides = this.notificationOverridesCache.get(currentProjectId);
+    const overrides = this.notificationOverridesCache.get(projectId);
     if (!overrides) return global;
 
     return {
@@ -73,6 +82,19 @@ export class ProjectSettingsManager {
       quietHoursEndMin: global.quietHoursEndMin,
       quietHoursWeekdays: global.quietHoursWeekdays,
     };
+  }
+
+  /**
+   * Read `projectId`'s settings if no read or save has reached its alert
+   * overrides yet, so its agents' alerts go by them rather than the globals.
+   */
+  async loadNotificationOverrides(projectId: string): Promise<void> {
+    if (this.notificationOverridesCache.has(projectId)) return;
+    const missingAt = this.noSettingsFileAt.get(projectId);
+    if (missingAt !== undefined && Date.now() - missingAt < NO_SETTINGS_FILE_TTL_MS) return;
+    await this.getProjectSettings(projectId);
+    if (this.notificationOverridesCache.has(projectId)) this.noSettingsFileAt.delete(projectId);
+    else this.noSettingsFileAt.set(projectId, Date.now());
   }
 
   /**
@@ -215,6 +237,7 @@ export class ProjectSettingsManager {
       (this.writeGenerations.get(projectId) ?? 0) !== generation;
     if (!overlappedWrite) {
       this.notificationOverridesCache.set(projectId, settings.notificationOverrides);
+      this.noSettingsFileAt.delete(projectId);
       this.settingsCache.set(projectId, settings);
     }
 
@@ -581,6 +604,7 @@ export class ProjectSettingsManager {
     // Published only once the write lands, so a failed save leaves the last
     // saved overrides in effect.
     this.notificationOverridesCache.set(projectId, runtimeSettings.notificationOverrides);
+    this.noSettingsFileAt.delete(projectId);
 
     // Invalidate after durable write succeeds. Dynamic import avoids
     // expanding the static module graph for tests that mock ProjectStore.
