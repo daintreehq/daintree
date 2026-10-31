@@ -1938,173 +1938,188 @@ describe("useTerminalFileTransfer hook", () => {
 
     // A clipboard image crosses the same link a drop does, through either the
     // DOM paste event or the paster the paste keys call, so it lands under the
-    // same rules. Only the key route reports an outcome.
-    const pasteThroughEvent = async (): Promise<{ outcome: Promise<unknown> }> => {
+    // same rules. Only the key route reports an outcome; the event has none.
+    interface StartedPaste {
+      reports: (outcome: "inserted" | "failed") => Promise<void>;
+    }
+    const pasteThroughEvent = async (): Promise<StartedPaste> => {
       await pasteImage();
-      return { outcome: Promise.resolve(undefined) };
+      return { reports: async () => {} };
     };
-    const pasteThroughKey = async (): Promise<{ outcome: Promise<unknown> }> => {
+    const pasteThroughKey = async (): Promise<StartedPaste> => {
       const outcome = getClipboardImagePaster("term-1")!();
       await act(async () => {
         await settle();
       });
-      return { outcome };
+      return { reports: (expected) => expect(outcome).resolves.toBe(expected) };
     };
 
     describe.each([
-      {
-        route: "the paste event",
-        paste: pasteThroughEvent,
-        inserted: undefined,
-        withheld: undefined,
-      },
-      { route: "a paste key", paste: pasteThroughKey, inserted: "inserted", withheld: "failed" },
-    ])(
-      "a clipboard image pasted through $route that lands late",
-      ({ paste, inserted, withheld }) => {
-        const CLIP = "/tmp/daintree-clipboard/clip.png";
+      { route: "the paste event", paste: pasteThroughEvent },
+      { route: "a paste key", paste: pasteThroughKey },
+    ])("a clipboard image pasted through $route that lands late", ({ paste }) => {
+      const CLIP = "/tmp/daintree-clipboard/clip.png";
 
-        afterEach(() => {
-          _resetCtrlVImagePasteForTests();
+      afterEach(() => {
+        _resetCtrlVImagePasteForTests();
+      });
+
+      it("types the path when the terminal is still the one it was pasted into", async () => {
+        const { release } = holdMaterialize();
+        renderFileTransferHook({ detectedAgentId: "claude" });
+        const pasted = await paste();
+        await release();
+
+        expect(lastWrittenPayload()).toBe(`${formatAtFileToken(CLIP)} `);
+        expect(notify).not.toHaveBeenCalled();
+        await pasted.reports("inserted");
+      });
+
+      it("offers the path instead of typing it when the user typed meanwhile", async () => {
+        const { release } = holdMaterialize();
+        const onInput = vi.fn();
+        renderFileTransferHook({ detectedAgentId: "claude", onInput });
+        const pasted = await paste();
+
+        terminalInstanceService.notifyUserInput("term-1", "x");
+        await release();
+
+        expect(terminalClient.write).not.toHaveBeenCalled();
+        expect(onInput).not.toHaveBeenCalled();
+        expect(notice()).toMatchObject({
+          title: "File not inserted",
+          message: "The terminal's input changed before the transfer finished.",
+          labels: ["Insert path", "Copy path"],
         });
+        await pasted.reports("failed");
+        await notice().act("Copy path");
+        expect(copyWithToast).toHaveBeenCalledWith("Path", CLIP);
+      });
 
-        it("types the path when the terminal is still the one it was pasted into", async () => {
-          const { release } = holdMaterialize();
-          renderFileTransferHook({ detectedAgentId: "claude" });
-          const { outcome } = await paste();
-          await release();
+      it("offers the path when the agent exited to a shell meanwhile", async () => {
+        const { release } = holdMaterialize();
+        const { rerender } = renderFileTransferHook({ launchAgentId: "claude" });
+        const pasted = await paste();
 
-          expect(lastWrittenPayload()).toBe(`${formatAtFileToken(CLIP)} `);
-          expect(notify).not.toHaveBeenCalled();
-          await expect(outcome).resolves.toBe(inserted);
+        rerender({ launchAgentId: "claude", agentState: "exited" });
+        await release();
+
+        expect(terminalClient.write).not.toHaveBeenCalled();
+        expect(notice().message).toBe(
+          "The agent in the terminal changed before the transfer finished."
+        );
+        await pasted.reports("failed");
+      });
+
+      it("offers the path when another agent took the terminal meanwhile", async () => {
+        const { release } = holdMaterialize();
+        const { rerender } = renderFileTransferHook({ detectedAgentId: "claude" });
+        const pasted = await paste();
+
+        rerender({ detectedAgentId: "codex" });
+        await release();
+
+        expect(terminalClient.write).not.toHaveBeenCalled();
+        expect(notice().message).toBe(
+          "The agent in the terminal changed before the transfer finished."
+        );
+        await pasted.reports("failed");
+      });
+
+      it("offers the path when the agent restarted under the same name", async () => {
+        panelState.panelsById = { "term-1": { restartKey: 1 } };
+        const { release } = holdMaterialize();
+        renderFileTransferHook({ detectedAgentId: "claude" });
+        const pasted = await paste();
+
+        panelState.panelsById = { "term-1": { restartKey: 2 } };
+        await release();
+
+        expect(terminalClient.write).not.toHaveBeenCalled();
+        expect(notice().message).toBe(
+          "The agent in the terminal changed before the transfer finished."
+        );
+        await pasted.reports("failed");
+      });
+
+      it("offers the path when the pane moved to another worktree", async () => {
+        panelState.panelsById = { "term-1": { worktreeId: "wt-a" } };
+        const { release } = holdMaterialize();
+        renderFileTransferHook({ detectedAgentId: "claude" });
+        const pasted = await paste();
+
+        panelState.panelsById = { "term-1": { worktreeId: "wt-b" } };
+        await release();
+
+        expect(terminalClient.write).not.toHaveBeenCalled();
+        expect(notice().message).toBe(
+          "The terminal moved to another worktree before the transfer finished."
+        );
+        await pasted.reports("failed");
+      });
+
+      it("only offers a copy once the PTY has exited", async () => {
+        panelState.panelsById = { "term-1": { hasPty: true } };
+        const { release } = holdMaterialize();
+        renderFileTransferHook({ detectedAgentId: "claude" });
+        const pasted = await paste();
+
+        panelState.panelsById = { "term-1": { hasPty: false, runtimeStatus: "exited" } };
+        await release();
+
+        expect(terminalClient.write).not.toHaveBeenCalled();
+        expect(notice()).toMatchObject({
+          message: "The terminal isn't taking input.",
+          labels: ["Copy path"],
         });
+        await pasted.reports("failed");
+      });
 
-        it("offers the path instead of typing it when the user typed meanwhile", async () => {
-          const { release } = holdMaterialize();
-          const onInput = vi.fn();
-          renderFileTransferHook({ detectedAgentId: "claude", onInput });
-          const { outcome } = await paste();
+      it("inserts the offered path, formatted for what runs now, when asked", async () => {
+        const { release } = holdMaterialize();
+        const { rerender } = renderFileTransferHook({ detectedAgentId: "claude" });
+        const pasted = await paste();
+        rerender({});
+        await release();
+        expect(terminalClient.write).not.toHaveBeenCalled();
+        await pasted.reports("failed");
 
-          terminalInstanceService.notifyUserInput("term-1", "x");
-          await release();
+        await notice().act("Insert path");
 
-          expect(terminalClient.write).not.toHaveBeenCalled();
-          expect(onInput).not.toHaveBeenCalled();
-          expect(notice()).toMatchObject({
-            title: "File not inserted",
-            message: "The terminal's input changed before the transfer finished.",
-            labels: ["Insert path", "Copy path"],
-          });
-          await expect(outcome).resolves.toBe(withheld);
-          await notice().act("Copy path");
-          expect(copyWithToast).toHaveBeenCalledWith("Path", CLIP);
+        expect(terminalClient.write).toHaveBeenCalledTimes(1);
+        expect(lastWrittenPayload()).toBe(`${quoteLaunchArgOptional(CLIP)} `);
+      });
+
+      it("offers the path when the input locked and unlocked again meanwhile", async () => {
+        const { release } = holdMaterialize();
+        const { rerender } = renderFileTransferHook({ detectedAgentId: "claude" });
+        const pasted = await paste();
+
+        rerender({ detectedAgentId: "claude", isInputLocked: true });
+        rerender({ detectedAgentId: "claude", isInputLocked: false });
+        await release();
+
+        expect(terminalClient.write).not.toHaveBeenCalled();
+        expect(notice()).toMatchObject({
+          message: "The terminal was locked before the transfer finished.",
+          labels: ["Insert path", "Copy path"],
         });
+        await pasted.reports("failed");
+      });
 
-        it("offers the path when the agent exited to a shell meanwhile", async () => {
-          const { release } = holdMaterialize();
-          const { rerender } = renderFileTransferHook({ launchAgentId: "claude" });
-          const { outcome } = await paste();
+      it("still types the path when only the cwd moved", async () => {
+        const { release } = holdMaterialize(() => `${CWD}/shots/clip.png`);
+        let cwd = "/srv/elsewhere";
+        renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => cwd });
+        const pasted = await paste();
+        cwd = CWD;
+        await release();
 
-          rerender({ launchAgentId: "claude", agentState: "exited" });
-          await release();
-
-          expect(terminalClient.write).not.toHaveBeenCalled();
-          expect(notice().message).toBe(
-            "The agent in the terminal changed before the transfer finished."
-          );
-          await expect(outcome).resolves.toBe(withheld);
-        });
-
-        it("offers the path when another agent took the terminal meanwhile", async () => {
-          const { release } = holdMaterialize();
-          const { rerender } = renderFileTransferHook({ detectedAgentId: "claude" });
-          const { outcome } = await paste();
-
-          rerender({ detectedAgentId: "codex" });
-          await release();
-
-          expect(terminalClient.write).not.toHaveBeenCalled();
-          expect(notice().message).toBe(
-            "The agent in the terminal changed before the transfer finished."
-          );
-          await expect(outcome).resolves.toBe(withheld);
-        });
-
-        it("offers the path when the agent restarted under the same name", async () => {
-          panelState.panelsById = { "term-1": { restartKey: 1 } };
-          const { release } = holdMaterialize();
-          renderFileTransferHook({ detectedAgentId: "claude" });
-          const { outcome } = await paste();
-
-          panelState.panelsById = { "term-1": { restartKey: 2 } };
-          await release();
-
-          expect(terminalClient.write).not.toHaveBeenCalled();
-          expect(notice().message).toBe(
-            "The agent in the terminal changed before the transfer finished."
-          );
-          await expect(outcome).resolves.toBe(withheld);
-        });
-
-        it("offers the path when the pane moved to another worktree", async () => {
-          panelState.panelsById = { "term-1": { worktreeId: "wt-a" } };
-          const { release } = holdMaterialize();
-          renderFileTransferHook({ detectedAgentId: "claude" });
-          const { outcome } = await paste();
-
-          panelState.panelsById = { "term-1": { worktreeId: "wt-b" } };
-          await release();
-
-          expect(terminalClient.write).not.toHaveBeenCalled();
-          expect(notice().message).toBe(
-            "The terminal moved to another worktree before the transfer finished."
-          );
-          await expect(outcome).resolves.toBe(withheld);
-        });
-
-        it("only offers a copy once the PTY has exited", async () => {
-          panelState.panelsById = { "term-1": { hasPty: true } };
-          const { release } = holdMaterialize();
-          renderFileTransferHook({ detectedAgentId: "claude" });
-          const { outcome } = await paste();
-
-          panelState.panelsById = { "term-1": { hasPty: false, runtimeStatus: "exited" } };
-          await release();
-
-          expect(terminalClient.write).not.toHaveBeenCalled();
-          expect(notice()).toMatchObject({
-            message: "The terminal isn't taking input.",
-            labels: ["Copy path"],
-          });
-          await expect(outcome).resolves.toBe(withheld);
-        });
-
-        it("inserts the offered path, formatted for what runs now, when asked", async () => {
-          const { release } = holdMaterialize();
-          const { rerender } = renderFileTransferHook({ detectedAgentId: "claude" });
-          await paste();
-          rerender({});
-          await release();
-
-          await notice().act("Insert path");
-
-          expect(lastWrittenPayload()).toBe(`${quoteLaunchArgOptional(CLIP)} `);
-        });
-
-        it("still types the path when only the cwd moved", async () => {
-          const { release } = holdMaterialize(() => `${CWD}/shots/clip.png`);
-          let cwd = "/srv/elsewhere";
-          renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => cwd });
-          const { outcome } = await paste();
-          cwd = CWD;
-          await release();
-
-          expect(lastWrittenPayload().trimEnd()).toBe("@shots/clip.png");
-          expect(notify).not.toHaveBeenCalled();
-          await expect(outcome).resolves.toBe(inserted);
-        });
-      }
-    );
+        expect(lastWrittenPayload().trimEnd()).toBe("@shots/clip.png");
+        expect(notify).not.toHaveBeenCalled();
+        await pasted.reports("inserted");
+      });
+    });
   });
 
   describe("where a drop on an agent terminal goes", () => {
