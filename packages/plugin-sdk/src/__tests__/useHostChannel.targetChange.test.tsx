@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { StrictMode, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
+import { Activity, StrictMode, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, renderHook } from "@testing-library/react";
 import { useHostChannel } from "../react/useHostChannel";
@@ -28,6 +28,12 @@ interface Target {
   pluginId: string;
   channel: string;
 }
+
+const OLD_OUTCOMES: Array<[string, (d: Deferred<unknown>) => void]> = [
+  ["success", (d) => d.resolve({ from: "a" })],
+  ["ordinary failure", (d) => d.reject(new Error("old target failed"))],
+  ["HOST_DISCONNECTED failure", (d) => d.reject(codedError("HOST_DISCONNECTED"))],
+];
 
 let invokeMock: ReturnType<typeof vi.fn>;
 
@@ -120,60 +126,78 @@ describe("useHostChannel when its target changes with a call in flight", () => {
     expect(result.current.loading).toBe(false);
   });
 
-  it("protects a pluginId-only change the same way", async () => {
-    const old = deferred();
-    invokeMock.mockReturnValueOnce(old.promise);
-    const { result, rerender } = renderTarget({ pluginId: "acme.one", channel: "query" });
+  it.each([
+    ["success", OLD_OUTCOMES[0][1], true],
+    ["ordinary failure", OLD_OUTCOMES[1][1], true],
+    ["HOST_DISCONNECTED failure", OLD_OUTCOMES[2][1], false],
+  ] as const)(
+    "protects a pluginId-only change from an old %s the same way",
+    async (_label, settle, seedDisconnected) => {
+      if (seedDisconnected) invokeMock.mockRejectedValueOnce(codedError("HOST_DISCONNECTED"));
+      const old = deferred();
+      invokeMock.mockReturnValueOnce(old.promise);
+      const { result, rerender } = renderTarget({ pluginId: "acme.one", channel: "query" });
 
-    let pending!: Promise<{ from: string } | undefined>;
-    act(() => {
-      pending = result.current.invoke({});
-    });
-    rerender({ pluginId: "acme.two", channel: "query" });
+      if (seedDisconnected) {
+        await act(async () => {
+          await result.current.invoke({});
+        });
+      }
+      expect(result.current.disconnected).toBe(seedDisconnected);
 
-    await act(async () => {
-      old.reject(codedError("HOST_DISCONNECTED", "old plugin disconnected"));
-      await expect(pending).resolves.toBeUndefined();
-    });
+      let pending!: Promise<{ from: string } | undefined>;
+      act(() => {
+        pending = result.current.invoke({});
+      });
+      rerender({ pluginId: "acme.two", channel: "query" });
 
-    expect(result.current.error).toBeNull();
-    expect(result.current.loading).toBe(false);
-    expect(result.current.disconnected).toBe(false);
-  });
+      await act(async () => {
+        settle(old);
+        await expect(pending).resolves.toBeUndefined();
+      });
 
-  it("keeps a first new-target call in flight when the old call fails first, then applies it", async () => {
-    const old = deferred();
-    const next = deferred<{ from: string }>();
-    invokeMock.mockReturnValueOnce(old.promise).mockReturnValueOnce(next.promise);
-    const { result, rerender } = renderTarget({ pluginId: "acme.p", channel: "a" });
+      expect(result.current.error).toBeNull();
+      expect(result.current.loading).toBe(false);
+      expect(result.current.disconnected).toBe(seedDisconnected);
+    }
+  );
 
-    let oldPending!: Promise<{ from: string } | undefined>;
-    act(() => {
-      oldPending = result.current.invoke({});
-    });
-    rerender({ pluginId: "acme.p", channel: "b" });
+  it.each(OLD_OUTCOMES)(
+    "keeps a first new-target call in flight when an old %s settles first, then applies it",
+    async (_label, settle) => {
+      const old = deferred();
+      const next = deferred<{ from: string }>();
+      invokeMock.mockReturnValueOnce(old.promise).mockReturnValueOnce(next.promise);
+      const { result, rerender } = renderTarget({ pluginId: "acme.p", channel: "a" });
 
-    let nextPending!: Promise<{ from: string } | undefined>;
-    act(() => {
-      nextPending = result.current.invoke({});
-    });
-    expect(invokeMock).toHaveBeenLastCalledWith("acme.p", "b", {});
+      let oldPending!: Promise<{ from: string } | undefined>;
+      act(() => {
+        oldPending = result.current.invoke({});
+      });
+      rerender({ pluginId: "acme.p", channel: "b" });
 
-    await act(async () => {
-      old.reject(codedError("HOST_DISCONNECTED"));
-      await expect(oldPending).resolves.toBeUndefined();
-    });
-    expect(result.current.loading).toBe(true);
-    expect(result.current.error).toBeNull();
-    expect(result.current.disconnected).toBe(false);
+      let nextPending!: Promise<{ from: string } | undefined>;
+      act(() => {
+        nextPending = result.current.invoke({});
+      });
+      expect(invokeMock).toHaveBeenLastCalledWith("acme.p", "b", {});
 
-    await act(async () => {
-      next.resolve({ from: "b" });
-      await expect(nextPending).resolves.toEqual({ from: "b" });
-    });
-    expect(result.current.loading).toBe(false);
-    expect(result.current.error).toBeNull();
-  });
+      await act(async () => {
+        settle(old);
+        await expect(oldPending).resolves.toBeUndefined();
+      });
+      expect(result.current.loading).toBe(true);
+      expect(result.current.error).toBeNull();
+      expect(result.current.disconnected).toBe(false);
+
+      await act(async () => {
+        next.resolve({ from: "b" });
+        await expect(nextPending).resolves.toEqual({ from: "b" });
+      });
+      expect(result.current.loading).toBe(false);
+      expect(result.current.error).toBeNull();
+    }
+  );
 
   it("drops an old success that settles after the first new-target call failed", async () => {
     const old = deferred<{ from: string }>();
@@ -237,33 +261,45 @@ describe("useHostChannel when its target changes with a call in flight", () => {
     });
     expect(result.current.loading).toBe(false);
   });
-  it.each([
-    ["success", (d: Deferred<unknown>) => d.resolve({ from: "a" })],
-    ["ordinary failure", (d: Deferred<unknown>) => d.reject(new Error("a failed"))],
-    [
-      "HOST_DISCONNECTED failure",
-      (d: Deferred<unknown>) => d.reject(codedError("HOST_DISCONNECTED")),
-    ],
-  ])("drops an old %s after an a-to-b-to-a change with no new invoke", async (_label, settle) => {
-    const old = deferred();
-    invokeMock.mockReturnValueOnce(old.promise);
+  it.each(OLD_OUTCOMES)(
+    "drops an old %s after an a-to-b-to-a change with no new invoke",
+    async (_label, settle) => {
+      const old = deferred();
+      invokeMock.mockReturnValueOnce(old.promise);
+      const { result, rerender } = renderTarget({ pluginId: "acme.p", channel: "a" });
+
+      let pending!: Promise<{ from: string } | undefined>;
+      act(() => {
+        pending = result.current.invoke({});
+      });
+      rerender({ pluginId: "acme.p", channel: "b" });
+      rerender({ pluginId: "acme.p", channel: "a" });
+      expect(result.current.loading).toBe(false);
+
+      await act(async () => {
+        settle(old);
+        await expect(pending).resolves.toBeUndefined();
+      });
+      expect(result.current.error).toBeNull();
+      expect(result.current.loading).toBe(false);
+      expect(result.current.disconnected).toBe(false);
+    }
+  );
+
+  it("clears an earlier error on a target change with no new invoke, and keeps disconnected", async () => {
+    invokeMock.mockRejectedValueOnce(codedError("HOST_DISCONNECTED", "a disconnected"));
     const { result, rerender } = renderTarget({ pluginId: "acme.p", channel: "a" });
 
-    let pending!: Promise<{ from: string } | undefined>;
-    act(() => {
-      pending = result.current.invoke({});
-    });
-    rerender({ pluginId: "acme.p", channel: "b" });
-    rerender({ pluginId: "acme.p", channel: "a" });
-    expect(result.current.loading).toBe(false);
-
     await act(async () => {
-      settle(old);
-      await expect(pending).resolves.toBeUndefined();
+      await result.current.invoke({});
     });
+    expect(result.current.error?.message).toBe("a disconnected");
+    expect(result.current.disconnected).toBe(true);
+
+    rerender({ pluginId: "acme.p", channel: "b" });
     expect(result.current.error).toBeNull();
     expect(result.current.loading).toBe(false);
-    expect(result.current.disconnected).toBe(false);
+    expect(result.current.disconnected).toBe(true);
   });
 
   it("does not let a stale ordinary failure clear a disconnected flag a real call set", async () => {
@@ -402,6 +438,19 @@ describe("useHostChannel first call from an effect", () => {
 describe("useHostChannel first new-target call from a child's effect", () => {
   type Phase = "passive" | "layout";
 
+  function fireOncePerTarget(
+    firedFor: { current: string | null },
+    pluginId: string,
+    channel: string,
+    invoke: (args: object) => Promise<unknown>,
+    onSettle: (value: unknown) => void
+  ) {
+    const key = `${pluginId}\u0000${channel}`;
+    if (firedFor.current === key) return;
+    firedFor.current = key;
+    void invoke({}).then(onSettle);
+  }
+
   function Child({
     target,
     invoke,
@@ -414,13 +463,13 @@ describe("useHostChannel first new-target call from a child's effect", () => {
     onSettle: (value: unknown) => void;
   }) {
     const firedFor = useRef<string | null>(null);
-    const useChosenEffect = phase === "layout" ? useLayoutEffect : useEffect;
-    useChosenEffect(() => {
-      const key = `${target.pluginId}\u0000${target.channel}`;
-      if (firedFor.current === key) return;
-      firedFor.current = key;
-      void invoke({}).then(onSettle);
-    }, [invoke, target.pluginId, target.channel, onSettle]);
+    const { pluginId, channel } = target;
+    useLayoutEffect(() => {
+      if (phase === "layout") fireOncePerTarget(firedFor, pluginId, channel, invoke, onSettle);
+    }, [phase, pluginId, channel, invoke, onSettle]);
+    useEffect(() => {
+      if (phase === "passive") fireOncePerTarget(firedFor, pluginId, channel, invoke, onSettle);
+    }, [phase, pluginId, channel, invoke, onSettle]);
     return null;
   }
 
@@ -488,4 +537,84 @@ describe("useHostChannel first new-target call from a child's effect", () => {
       expect(onSettle).toHaveBeenNthCalledWith(2, { from: "b" });
     }
   );
+});
+
+describe("useHostChannel target change committed inside a hidden Activity", () => {
+  interface HookView {
+    invoke: (args: object) => Promise<{ from: string } | undefined>;
+    loading: boolean;
+    error: Error | null;
+    disconnected: boolean;
+  }
+
+  function Reporter({ target, report }: { target: Target; report: (view: HookView) => void }) {
+    report(useHostChannel<object, { from: string }>(target.pluginId, target.channel));
+    return null;
+  }
+
+  function setup() {
+    let view!: HookView;
+    const report = (next: HookView) => {
+      view = next;
+    };
+    const ui = (mode: "visible" | "hidden", channel: string) => (
+      <Activity mode={mode}>
+        <Reporter target={{ pluginId: "acme.p", channel }} report={report} />
+      </Activity>
+    );
+    const { rerender } = render(ui("visible", "a"));
+    return {
+      view: () => view,
+      show: (mode: "visible" | "hidden", channel: string) => rerender(ui(mode, channel)),
+    };
+  }
+
+  it.each(OLD_OUTCOMES)(
+    "drops an old %s that settles while hidden, and resets loading when shown again",
+    async (_label, settle) => {
+      const old = deferred();
+      invokeMock.mockReturnValueOnce(old.promise);
+      const { view, show } = setup();
+
+      let pending!: Promise<{ from: string } | undefined>;
+      act(() => {
+        pending = view().invoke({});
+      });
+      show("hidden", "a");
+      show("hidden", "b");
+
+      await act(async () => {
+        settle(old);
+        await expect(pending).resolves.toBeUndefined();
+      });
+
+      show("visible", "b");
+      expect(view().loading).toBe(false);
+      expect(view().error).toBeNull();
+      expect(view().disconnected).toBe(false);
+    }
+  );
+
+  it("drops an old call across an a-to-b-to-a round trip made while hidden", async () => {
+    const old = deferred();
+    invokeMock.mockReturnValueOnce(old.promise);
+    const { view, show } = setup();
+
+    let pending!: Promise<{ from: string } | undefined>;
+    act(() => {
+      pending = view().invoke({});
+    });
+    show("hidden", "a");
+    show("hidden", "b");
+    show("hidden", "a");
+    show("visible", "a");
+    expect(view().loading).toBe(false);
+
+    await act(async () => {
+      old.reject(codedError("HOST_DISCONNECTED", "old a disconnected"));
+      await expect(pending).resolves.toBeUndefined();
+    });
+    expect(view().error).toBeNull();
+    expect(view().disconnected).toBe(false);
+  });
 });

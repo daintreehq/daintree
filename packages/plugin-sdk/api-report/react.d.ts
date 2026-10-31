@@ -12,7 +12,8 @@ import { MouseEvent, AriaAttributes, ReactElement, DOMAttributes, HTMLAttributes
  * dropped to keep concurrent invocations coherent. Changing `pluginId` or
  * `channel` also supersedes calls made against the previous target: they
  * resolve `undefined` and leave `loading`, `error` and `disconnected` alone.
- * A target change clears `loading` / `error` but keeps `disconnected`.
+ * The change resets `loading` / `error` for the new target (a call already
+ * started on it keeps its own) and keeps `disconnected`.
  */
 interface UseHostChannelResult<TArgs, TResult> {
     invoke: (args: TArgs) => Promise<TResult | undefined>;

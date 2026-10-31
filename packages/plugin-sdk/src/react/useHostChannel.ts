@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useInsertionEffect, useLayoutEffect, useRef, useState } from "react";
 import type { UseHostChannelResult } from "../../../../shared/types/plugin-sdk-react.js";
 import { getPluginHostBridge } from "./hostBridge.js";
 import { isHostLinkError, toHostCallError } from "./hostErrors.js";
@@ -38,45 +38,53 @@ export function useHostChannel<TArgs = unknown, TResult = unknown>(
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [disconnected, setDisconnected] = useState(false);
-  // The latest call's id and the target it was made against. The id is never
-  // reset, so every later call outranks any earlier one still in flight.
-  const latestCallRef = useRef({ id: 0, pluginId, channel });
+  const callIdRef = useRef(0);
+  // The target changed and no call on the new target has cleared state yet.
+  const resetPendingRef = useRef(false);
 
-  // A target change supersedes calls made against the previous target by
-  // advancing the id, but only when the latest call isn't already against the
-  // new target: a child's effect can invoke the new target before this effect
-  // runs, and StrictMode replays this effect with the same target. Bumping
-  // unconditionally would drop that first call and leave `loading` stuck.
-  // Layout timing commits the bump before any IPC reply can settle.
+  // A target change supersedes every call made against the previous target by
+  // advancing the never-reset call counter, even before the new target is
+  // invoked. An insertion effect fires in the commit that changes the target,
+  // even inside a hidden `<Activity>` where layout effects are disconnected,
+  // and before any layout effect, so a child that invokes the new target from
+  // its own effect in the same commit always lands after the bump. StrictMode
+  // doesn't replay insertion effects, so a once-only first call survives.
+  useInsertionEffect(() => {
+    callIdRef.current += 1;
+    resetPendingRef.current = true;
+  }, [pluginId, channel]);
+
+  // Insertion effects can't set state, so the reset waits for layout, which
+  // also runs when a hidden `<Activity>` is shown again. A call already made on
+  // the new target cleared the flag, so its `loading` survives.
   useLayoutEffect(() => {
-    const latest = latestCallRef.current;
-    if (latest.pluginId === pluginId && latest.channel === channel) return;
-    latestCallRef.current = { id: latest.id + 1, pluginId, channel };
+    if (!resetPendingRef.current) return;
+    resetPendingRef.current = false;
     setLoading(false);
     setError(null);
   }, [pluginId, channel]);
 
   const invoke = useCallback(
     async (args: TArgs): Promise<TResult | undefined> => {
-      const callId = latestCallRef.current.id + 1;
-      latestCallRef.current = { id: callId, pluginId, channel };
+      const callId = ++callIdRef.current;
+      resetPendingRef.current = false;
       setLoading(true);
       setError(null);
       try {
         const result = (await getPluginHostBridge().invoke(pluginId, channel, args)) as TResult;
         // Drop the result of a superseded call so a slow earlier invoke can't
         // overwrite the latest state.
-        if (callId !== latestCallRef.current.id) return undefined;
+        if (callId !== callIdRef.current) return undefined;
         setDisconnected(false);
         return result;
       } catch (err) {
-        if (callId !== latestCallRef.current.id) return undefined;
+        if (callId !== callIdRef.current) return undefined;
         const wrapped = toHostCallError(err);
         setError(wrapped);
         setDisconnected(isHostLinkError(wrapped));
         return undefined;
       } finally {
-        if (callId === latestCallRef.current.id) {
+        if (callId === callIdRef.current) {
           setLoading(false);
         }
       }
