@@ -855,15 +855,17 @@ export function generateAgentCommand(
     }
   }
 
-  // Add --model flag if a specific model was selected for this launch, and
-  // this launch's shape is one the CLI honours it on (#15569)
-  if (
-    options?.modelId &&
-    canSelectAgentModel(agentId, {
-      interactive: options.interactive,
-      initialPrompt: options.initialPrompt,
-    })
-  ) {
+  // A launch whose shape the CLI ignores `--model` on (#15569) carries none:
+  // not the selected model, nor one a preset, recipe or settings flag adds.
+  const selectsModel = canSelectAgentModel(agentId, {
+    interactive: options?.interactive,
+    initialPrompt: options?.initialPrompt,
+  });
+  const keepArgs = (args: readonly string[]): readonly string[] =>
+    selectsModel ? args : (withoutModelArgs(args, anyModel, identityWord, new Set()) ?? args);
+
+  // Add --model flag if a specific model was selected for this launch
+  if (options?.modelId && selectsModel) {
     parts.push(
       "--model",
       /^[A-Za-z0-9_.:/-]+$/.test(options.modelId) ? options.modelId : quoteAgentArg(options.modelId)
@@ -871,17 +873,17 @@ export function generateAgentCommand(
   }
 
   // Add preset-level args (env overrides applied separately via spawn env)
-  for (const arg of options?.presetArgs ?? []) {
+  for (const arg of keepArgs(options?.presetArgs ?? [])) {
     parts.push(isSafeShellOption(arg) ? arg : quoteAgentArg(arg));
   }
 
   // Add recipe-level args (per-terminal overrides from recipe editor)
-  for (const arg of parseLaunchArgs(options?.recipeArgs)) {
+  for (const arg of keepArgs(parseLaunchArgs(options?.recipeArgs))) {
     parts.push(isSafeShellOption(arg) ? arg : quoteAgentArg(arg));
   }
 
   // Add flags, escaping non-flag values
-  for (const flag of flags) {
+  for (const flag of keepArgs(flags)) {
     if (isSafeShellOption(flag)) {
       parts.push(flag);
     } else {
@@ -1127,9 +1129,13 @@ export function buildAgentLaunchFlags(
 
   // generateAgentFlags dedupes the decorations pair against its own output
   // only; a preset's args (pushed above) can carry it too. Converge on one.
-  return reconcileDecorationFlags(flags, agentId, resolveKeepDecorations(entry)).flatMap((flag) =>
-    flag === RECIPE_ARGS_SLOT ? recipeArgs : [flag]
-  );
+  const launchFlags = reconcileDecorationFlags(
+    flags,
+    agentId,
+    resolveKeepDecorations(entry)
+  ).flatMap((flag) => (flag === RECIPE_ARGS_SLOT ? recipeArgs : [flag]));
+  // A preset, recipe or settings flag can name a model too.
+  return replayableLaunchFlags(launchFlags, agentId) ?? launchFlags;
 }
 
 /**
@@ -1525,12 +1531,18 @@ function withoutModelArgs(
       kept.push(...words.slice(i));
       break;
     }
-    if (word === MODEL_FLAG && i + 1 < words.length) {
+    if (word === MODEL_FLAG && i + 1 < words.length && words[i + 1] !== "--") {
       const modelId = unquote(words[i + 1]!);
       if (shouldDrop(modelId)) {
         dropped.add(modelId);
         changed = true;
         i++;
+        continue;
+      }
+    } else if (word === MODEL_FLAG) {
+      // No value follows: an empty id, which only a drop-everything rule takes.
+      if (shouldDrop("")) {
+        changed = true;
         continue;
       }
     } else if (word.startsWith(`${MODEL_FLAG}=`)) {
@@ -1610,7 +1622,7 @@ const anyModel = () => true;
  * agent that takes one only on a new headless run (#15569), which a restart or
  * resume never is. Saved panes from before that rule still carry one.
  */
-function replayableLaunchFlags(
+export function replayableLaunchFlags(
   flags: readonly string[] | undefined,
   agentId: string
 ): string[] | undefined {
@@ -1682,8 +1694,11 @@ export function dropUnselectedAgentModel<
     next.agentModelId = undefined;
     changed = true;
     const generated = launch.titleMode === undefined || launch.titleMode === "default";
-    if (generated && launch.title === getAgentDisplayTitle(agentId, modelId)) {
-      next.title = getAgentDisplayTitle(agentId);
+    const modelTitle = getAgentDisplayTitle(agentId, modelId);
+    const bareTitle = getAgentDisplayTitle(agentId);
+    // Also when decorated after it, as a duplicate's " (copy)" is.
+    if (generated && modelTitle !== bareTitle && launch.title?.startsWith(modelTitle)) {
+      next.title = bareTitle + launch.title.slice(modelTitle.length);
     }
   }
   return changed ? next : launch;

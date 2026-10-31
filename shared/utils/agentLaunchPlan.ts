@@ -8,6 +8,7 @@ import {
   buildAgentLaunchFlags,
   generateAgentCommand,
   mintAssignedSessionId,
+  replayableLaunchFlags,
   resolveEffectivePresetId,
   type AgentSettings,
 } from "../types/agentSettings.js";
@@ -342,8 +343,11 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
     if (extraFlags?.length) {
       command = appendCallerLaunchFlagsToCommand(command, extraFlags, input.shellDialect);
       if (isAgent) {
-        launchFlags = [...(launchFlags ?? []), ...extraFlags];
-        callerLaunchFlags = extraFlags;
+        // Only a headless run may pass the agent a `--model` it takes on no
+        // replay (#15569); the flags kept for restart and resume drop it.
+        const replayable = replayableLaunchFlags(extraFlags, agentId) ?? [];
+        launchFlags = [...(launchFlags ?? []), ...replayable];
+        callerLaunchFlags = replayable.length > 0 ? replayable : undefined;
       }
     }
   }

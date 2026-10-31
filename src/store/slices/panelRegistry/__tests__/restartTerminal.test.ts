@@ -2940,8 +2940,19 @@ describe("restartTerminal with a retired Copilot model (#15652)", () => {
       const payload = mockSpawn.mock.calls[0]![0];
       expect(payload.command).toBe("vibe --trust");
       expect(payload.agentLaunchFlags).toEqual(["--trust"]);
+      expect(payload.title).toBe("Mistral Vibe");
       expect(paneAfterRestart().agentModelId).toBeUndefined();
+      expect(paneAfterRestart().title).toBe("Mistral Vibe");
       expect(notifyRetiredModelDroppedMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps a rename the pane got rather than resetting it", async () => {
+      show({ ...vibeWithModel, title: "Vibe: docs", titleMode: "user" });
+
+      await usePanelStore.getState().restartTerminal("test-1");
+
+      expect(mockSpawn.mock.calls[0]![0].title).toBe("Vibe: docs");
+      expect(paneAfterRestart().title).toBe("Vibe: docs");
     });
   });
 

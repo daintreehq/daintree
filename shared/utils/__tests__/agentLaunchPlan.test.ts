@@ -405,6 +405,18 @@ describe("buildAgentLaunchPlan", () => {
       expect(plan.launchFlags).not.toContain("--model");
     });
 
+    it("keeps a caller's own --model on a headless run's command, not in its replay flags", async () => {
+      const plan = await vibe({
+        prompt: "Fix the bug",
+        interactive: false,
+        agentLaunchFlags: ["--model", "devstral-2", "--agent", "auto-approve"],
+      });
+
+      expect(plan.command).toContain("--model devstral-2");
+      expect(plan.launchFlags).toEqual(["--trust", "--agent", "auto-approve"]);
+      expect(plan.callerLaunchFlags).toEqual(["--agent", "auto-approve"]);
+    });
+
     it("claims no model for a headless launch with no prompt, which runs interactive", async () => {
       const plan = await vibe({ modelId: "devstral-small", prompt: "  ", interactive: false });
 

@@ -105,6 +105,40 @@ describe("restartTerminalWithoutView", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  it("leaves a pane holding a Vibe model a restart can't select for a view to restart (#15569)", async () => {
+    const { deps, invoke } = setup(
+      {
+        id: "t1",
+        launchAgentId: "mistral",
+        title: "Mistral Vibe (Small)",
+        command: "vibe --trust --model devstral-small",
+        agentModelId: "devstral-small",
+        agentLaunchFlags: ["--trust"],
+      },
+      { agentState: "working", launchAgentId: "mistral" },
+      "sess-123"
+    );
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("unsupported");
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("relaunches a Vibe pane that holds no model", async () => {
+    const { deps, invoke } = setup(
+      {
+        id: "t1",
+        launchAgentId: "mistral",
+        command: "vibe --trust",
+        agentLaunchFlags: ["--trust"],
+      },
+      { agentState: "working", launchAgentId: "mistral" },
+      null
+    );
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("restarted");
+    expect(spawned(invoke).command).toBe("vibe --trust");
+  });
+
   it("relaunches a pane on a model Copilot still offers (#15652)", async () => {
     const { deps, invoke } = setup(
       {

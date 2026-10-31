@@ -128,6 +128,23 @@ function titleAtSpawn(
 }
 
 /**
+ * `live`, or the title the saved-launch cleanup gave the pane in its place when
+ * it took out a model the restart can't select and reset the generated title
+ * naming it (#15569). Only while the pane still shows the title the cleanup
+ * read: a rename since then belongs to whoever made it. Returns `live` itself
+ * when nothing changes.
+ */
+function withCleanedModelTitle<T extends { title: string; titleMode?: PanelTitleMode }>(
+  live: T,
+  saved: { title: string; titleMode?: PanelTitleMode },
+  cleaned: { title: string }
+): T | { title: string; titleMode?: PanelTitleMode } {
+  if (cleaned.title === saved.title) return live;
+  if (live.title !== saved.title || live.titleMode !== saved.titleMode) return live;
+  return { title: cleaned.title, titleMode: live.titleMode };
+}
+
+/**
  * Where a respawn of the pane starts (#14954). A live move refiles a pane
  * without touching its process, so `cwd` can still name the worktree it left;
  * a new process belongs in the one it is filed under, by Duplicate's rule
@@ -1057,6 +1074,11 @@ export const createRestartActions = (
         if (!t || !isPtyPanel(t)) return state;
         const updated = {
           ...t,
+          ...withCleanedModelTitle(
+            { title: t.title, titleMode: t.titleMode },
+            _currentTerminalRaw,
+            currentTerminal
+          ),
           location: targetLocation,
           cwd: launchCwd,
           restartKey: (t.restartKey ?? 0) + 1,
@@ -1956,9 +1978,10 @@ async function respawnAgentOnPreset(
     });
 
     const liveTitle = titleAtSpawn(get, id, terminal);
+    const currentTitle = withCleanedModelTitle(liveTitle, livePanel, terminal);
     const fallbackTitle =
       mode.kind === "switch"
-        ? presetSwitchTitle(liveTitle, {
+        ? presetSwitchTitle(currentTitle, {
             agentId: effectiveAgentId,
             modelId: terminal.agentModelId,
             leftPresets: [terminal.agentPresetId, terminal.originalPresetId].map((presetId) =>
@@ -1974,7 +1997,7 @@ async function respawnAgentOnPreset(
             ),
             nextPreset,
           })
-        : liveTitle;
+        : currentTitle;
     if (fallbackTitle !== liveTitle) {
       switchedTitle = fallbackTitle;
       updateAndSaveTerminal(set, id, (t) => ({

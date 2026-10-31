@@ -453,6 +453,7 @@ describe("agentActions adversarial", () => {
     ["an interactive launch", { model: "devstral-small", prompt: "Fix the bug" }],
     ["a headless launch with no prompt", { model: "devstral-small", interactive: false }],
     ["a model in its verbatim flags", { agentLaunchFlags: ["--model=devstral-small"] }],
+    ["a two-word model flag", { agentLaunchFlags: ["--model", "devstral-small"] }],
   ])(
     "agent.launch refuses a Vibe model on %s, which Vibe ignores or rejects (#15569)",
     async (_label, args) => {
@@ -480,7 +481,11 @@ describe("agentActions adversarial", () => {
     });
     expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
       "mistral",
-      expect.objectContaining({ modelId: "devstral-small", interactive: false })
+      expect.objectContaining({
+        modelId: "devstral-small",
+        interactive: false,
+        prompt: "Fix the bug",
+      })
     );
   });
 

@@ -302,6 +302,7 @@ describe("launches replaying a Vibe model that only a headless run takes (#15569
 
     const [launch] = await launchedCopilot("mistral");
     expect(launch!.pane.agentModelId).toBe("devstral-small");
+    expect(launch!.spawn.agentModelId).toBe("devstral-small");
     expect(launch!.spawn.command).toBe(headlessVibe.command);
     expect(launch!.pane.title).toBe("Mistral Vibe (Small)");
   });

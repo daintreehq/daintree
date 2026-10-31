@@ -72,18 +72,50 @@ describe("dropUnselectedAgentModel", () => {
     });
   });
 
-  it("leaves a title someone chose, even one spelling the generated form", () => {
-    const named = {
+  it.each(["custom", "user"])(
+    "leaves a %s title, even one spelling the generated form",
+    (titleMode) => {
+      const named = {
+        agentModelId: "devstral-small",
+        command: "vibe --trust",
+        title: "Mistral Vibe (Small)",
+        titleMode,
+      };
+
+      expect(dropUnselectedAgentModel("mistral", named)).toEqual({
+        ...named,
+        agentModelId: undefined,
+      });
+    }
+  );
+
+  it("resets a generated title decorated after the model, as a duplicate's is", () => {
+    const copy = {
       agentModelId: "devstral-small",
       command: "vibe --trust",
-      title: "Mistral Vibe (Small)",
-      titleMode: "custom",
+      title: "Mistral Vibe (Small) (copy)",
+      titleMode: "default",
     };
 
-    expect(dropUnselectedAgentModel("mistral", named)).toEqual({
-      ...named,
-      agentModelId: undefined,
-    });
+    expect(dropUnselectedAgentModel("mistral", copy).title).toBe("Mistral Vibe (copy)");
+  });
+
+  it("clears a model the command doesn't pass, even when it passes another", () => {
+    const launch = {
+      agentModelId: "devstral-small",
+      command: "vibe --trust --model devstral-2 --prompt 'say --model devstral-small'",
+    };
+
+    expect(dropUnselectedAgentModel("mistral", launch).agentModelId).toBeUndefined();
+  });
+
+  it("reads a quoted id the command passes as the same model", () => {
+    const launch = {
+      agentModelId: "devstral-small",
+      command: "vibe --trust --model 'devstral-small' --prompt 'Fix the bug'",
+    };
+
+    expect(dropUnselectedAgentModel("mistral", launch)).toBe(launch);
   });
 
   it("leaves agents that take a model on every launch exactly as saved", () => {
@@ -118,6 +150,15 @@ describe("replaying flags saved with a Vibe model (#15569)", () => {
   it("starts over without it, which an interactive session ignores or rejects", () => {
     expect(buildLaunchCommandFromFlags("vibe", "mistral", saved)).toBe(
       "vibe --trust --agent 'accept-edits'"
+    );
+  });
+
+  it("drops a --model saved with no value, without swallowing the -- that follows", () => {
+    expect(buildResumeCommand("mistral", "s-1", ["--trust", "--model"])).toBe(
+      "vibe --trust --resume s-1"
+    );
+    expect(buildLaunchCommandFromFlags("vibe", "mistral", ["--model", "--", "--model=local"])).toBe(
+      "vibe -- --model=local"
     );
   });
 
