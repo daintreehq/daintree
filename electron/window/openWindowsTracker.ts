@@ -304,6 +304,7 @@ function collectWindowRecords(
       projectId = null;
       pvm = undefined;
     }
+    const showing = projectId !== null;
 
     const pendingRemote = pendingRemoteRestores.get(ctx.windowId);
     if (pendingRemote !== undefined) {
@@ -314,11 +315,16 @@ function collectWindowRecords(
       else pendingRemoteRestores.delete(ctx.windowId);
     }
 
-    // Read after the host intent, which a host-scoped recreation also sets:
-    // a foreground taken from here would read as "showing something" above
-    // and spend it.
+    // Spent, like the host intent, once the window shows a workspace of its
+    // own: setup binds the view and queues the backgrounds it carried in one
+    // synchronous step, and a replacement whose setup threw shows something
+    // only once the person has moved on. Decided on what the manager reports,
+    // not on the host intent above, which a host-scoped recreation also sets.
     const recreation = pendingWindowRecreations.get(ctx.windowId);
-    if (projectId === null && recreation) projectId = recreation.projectId;
+    if (recreation) {
+      if (showing) pendingWindowRecreations.delete(ctx.windowId);
+      else if (projectId === null) projectId = recreation.projectId;
+    }
 
     if (projectId !== null) claimed.add(projectId);
     windows.push({ windowId: ctx.windowId, projectId, pvm });

@@ -27,7 +27,6 @@ import { attachAppViewRendererGoneHandler } from "../appViewRendererGone.js";
 import { createWindowRecreation, type WindowRecreationDeps } from "../windowRecreation.js";
 import {
   buildOpenWindowRecords,
-  clearPendingWindowRecreation,
   initOpenWindowsTracker,
   resetOpenWindowsTrackerForTests,
   saveOpenWindowsNow,
@@ -425,8 +424,12 @@ describe("OOM window recreation (#15564)", () => {
         { projectId: "proj-c", lastUsed: 1 },
       ],
     });
+    let replacement: FakeWindow | undefined;
     const { crashOom } = wireWindow(fleet, win, {
-      setup: () => Promise.reject(new Error("project store threw")),
+      setup: (created) => {
+        replacement = created;
+        return Promise.reject(new Error("project store threw"));
+      },
     });
 
     crashOom();
@@ -435,8 +438,13 @@ describe("OOM window recreation (#15564)", () => {
     // A throwing lookup is a failed boot, not a missing workspace.
     expect(lastWritten()).toEqual([{ projectId: "proj-b", backgroundProjectIds: ["proj-c"] }]);
 
-    // The replacement closing lets the record go, as main.ts's `closed` does.
-    clearPendingWindowRecreation(100);
+    // The person opens another project there: the record, and the background
+    // list it carried, are spent rather than following the window around.
+    replacement!.activeProjectId = "proj-x";
+    replacement!.views = [{ projectId: "proj-x", lastUsed: 1 }];
+    expect(buildOpenWindowRecords(fleet.registry)).toEqual([{ projectId: "proj-x" }]);
+    replacement!.activeProjectId = null;
+    replacement!.views = [];
     expect(buildOpenWindowRecords(fleet.registry)).toEqual([{ projectId: null }]);
   });
 });

@@ -277,16 +277,15 @@ describe("OOM recreation records (#15564)", () => {
       { projectId: "b", backgroundProjectIds: ["c"] },
     ]);
 
-    // The person opened another project while setup ran: what the window
-    // shows wins, and the captured backgrounds wait for setup to hand over.
+    // The window shows a workspace of its own (setup bound one and queued
+    // the backgrounds, or the person opened another after a failed setup):
+    // what it shows wins, and the record is spent for good.
     win.projectId = "x";
     win.views = [["x", 1]];
-    expect(buildOpenWindowRecords(registry)).toEqual([
-      { projectId: "x", backgroundProjectIds: ["c"] },
-    ]);
-
-    clearPendingWindowRecreation(5);
     expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: "x" }]);
+    win.projectId = null;
+    win.views = [];
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: null }]);
   });
 
   it("leaves a host-scoped replacement's pending host intent unspent", () => {
@@ -299,6 +298,20 @@ describe("OOM recreation records (#15564)", () => {
     clearPendingWindowRecreation(5);
 
     expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: remote }]);
+  });
+
+  it("keeps a host-scoped replacement's backgrounds while it waits on the picker for its host", () => {
+    const remote = `studio-01:${"a".repeat(64)}`;
+    const registry = makeRegistry([{ windowId: 5, projectId: null }]);
+    setPendingRemoteRestore(5, remote);
+    setPendingWindowRecreation(5, { projectId: remote, backgroundProjectIds: ["c"] });
+
+    expect(buildOpenWindowRecords(registry)).toEqual([
+      { projectId: remote, backgroundProjectIds: ["c"] },
+    ]);
+    expect(buildOpenWindowRecords(registry)).toEqual([
+      { projectId: remote, backgroundProjectIds: ["c"] },
+    ]);
   });
 });
 

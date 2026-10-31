@@ -119,14 +119,36 @@ describe("main.ts OOM recreation wiring (#15564)", () => {
     );
     expect(saves).toHaveLength(1);
 
-    const guard = saves[0]!.parent.parent;
-    expect(ts.isIfStatement(guard)).toBe(true);
-    expect((guard as ts.IfStatement).expression.getText()).toBe(
-      `!${recreationName}.isRecreating()`
-    );
+    // The save sits in the then-branch of `if (!<recreation>.isRecreating())`,
+    // braces or not.
+    let branch: ts.Node = saves[0]!;
+    while (!ts.isIfStatement(branch.parent)) branch = branch.parent;
+    const guard = branch.parent as ts.IfStatement;
+    expect(guard.thenStatement).toBe(branch);
+    const condition = guard.expression;
+    expect(
+      ts.isPrefixUnaryExpression(condition) &&
+        condition.operator === ts.SyntaxKind.ExclamationToken &&
+        ts.isCallExpression(condition.operand) &&
+        ts.isPropertyAccessExpression(condition.operand.expression) &&
+        condition.operand.expression.expression.getText() === recreationName &&
+        condition.operand.expression.name.text === "isRecreating"
+    ).toBe(true);
 
+    // ...inside the window's `closed` listener.
     let listener: ts.Node = guard;
     while (!ts.isArrowFunction(listener)) listener = listener.parent;
+    const subscription = listener.parent;
+    expect(
+      ts.isCallExpression(subscription) &&
+        ts.isPropertyAccessExpression(subscription.expression) &&
+        subscription.expression.name.text === "on" &&
+        subscription.arguments[0] !== undefined &&
+        ts.isStringLiteral(subscription.arguments[0]) &&
+        subscription.arguments[0].text === "closed" &&
+        subscription.arguments[1] === listener
+    ).toBe(true);
+
     const clears = find(
       listener,
       (node): node is ts.CallExpression =>
