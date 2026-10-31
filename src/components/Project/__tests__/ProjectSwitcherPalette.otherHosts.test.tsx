@@ -460,7 +460,7 @@ describe("ProjectSwitcherPalette other-host rows", () => {
   it("says in the footer what Enter does on an other-host row", () => {
     render(<Harness />);
     press("ArrowUp");
-    expect(screen.getByTestId("palette-footer").textContent).toContain("Open on studio-02");
+    expect(screen.getByTestId("palette-footer").textContent).toContain("to open on studio-02");
   });
 
   it("keeps the palette open for Retry", () => {
@@ -474,7 +474,7 @@ describe("ProjectSwitcherPalette other-host rows", () => {
     hostOptions.value = band([API, retry]);
     render(<Harness />);
     press("ArrowUp");
-    expect(screen.getByTestId("palette-footer").textContent).toContain("Retry");
+    expect(screen.getByTestId("palette-footer").textContent).toContain("to retry");
     press("Enter");
     expect(activateOtherHostOption).toHaveBeenCalledWith(retry, false);
     expect(onClose).not.toHaveBeenCalled();

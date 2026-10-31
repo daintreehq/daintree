@@ -133,6 +133,7 @@ export function QuickSwitcherItem({
     ? [runtime, item.isBackground ? "Backgrounded" : null].filter(Boolean).join(" · ") || null
     : null;
   const shortened = item.type === "worktree" && item.subtitle ? shortenPath(item.subtitle) : null;
+  const hasDetail = !!terminalDetail || (isPlugin && !!item.subtitle) || shortened !== null;
 
   return (
     <button
@@ -143,7 +144,8 @@ export function QuickSwitcherItem({
       onPointerMove={onHover}
       className={cn(
         PALETTE_ROW_CLASS,
-        "group w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
+        "group w-full flex items-center gap-3 px-3 rounded-[var(--radius-md)] text-left",
+        hasDetail ? "py-2" : "py-1.5",
         "text-text-secondary"
       )}
       onClick={() => onSelect(item)}
