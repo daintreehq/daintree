@@ -1,18 +1,52 @@
-import { describe, expect, it } from "vitest";
-import { markEdits, parseDiff, pickRanges, tokenize } from "react-diff-view";
-import type { HunkData, TokenizeEnhancer } from "react-diff-view";
-import { tokenizeFast } from "../diffTokenizePipeline";
-import { refractorAdapter } from "../diffRefractor";
+import { deserialize, serialize } from "node:v8";
+import { beforeAll, describe, expect, it } from "vitest";
+import {
+  computeNewLineNumber,
+  computeOldLineNumber,
+  isDelete,
+  isInsert,
+  markEdits,
+  parseDiff,
+  pickRanges,
+  tokenize,
+} from "react-diff-view";
+import type { HunkData, HunkTokens, TokenizeEnhancer } from "react-diff-view";
+import { MAX_GAP_FILLER_LINES, tokenizeFast, type RefractorLike } from "../diffTokenizePipeline";
+import { ensureLanguage, refractorAdapter } from "../diffRefractor";
 import { suppressFullLineEdits } from "../diffEditSuppression";
 import { runDiffTokenize } from "../diffTokenizer";
 
-// The fast pipeline exists purely for speed — its output must be
-// indistinguishable from react-diff-view's tokenize for every shape the
-// review workspace produces. Each case runs both implementations on the same
-// hunks and requires deep equality.
+// The fast pipeline exists purely for speed — every line the review workspace
+// renders must get exactly the tokens react-diff-view's tokenize gives it. The
+// library also fills every other absolute line with an empty entry; the fast
+// pipeline leaves those as holes, which is the whole point, so parity is
+// graded on the lines a change actually looks up, plus "nothing else".
 
 function hunksOf(diffText: string): HunkData[] {
   return parseDiff(diffText)[0]!.hunks;
+}
+
+/** The slots react-diff-view reads: old for normal/delete, new for normal/insert. */
+function renderedSlots(hunks: HunkData[]): { old: Set<number>; new: Set<number> } {
+  const old = new Set<number>();
+  const now = new Set<number>();
+  for (const change of hunks.flatMap((hunk) => hunk.changes)) {
+    if (!isInsert(change)) old.add(computeOldLineNumber(change) - 1);
+    if (!isDelete(change)) now.add(computeNewLineNumber(change) - 1);
+  }
+  return { old, new: now };
+}
+
+function expectRenderedParity(fast: HunkTokens, lib: HunkTokens, hunks: HunkData[]): void {
+  const rendered = renderedSlots(hunks);
+  for (const side of ["old", "new"] as const) {
+    expect(fast[side].length).toBe(lib[side].length);
+    for (const at of rendered[side]) {
+      expect(fast[side][at], `${side} line ${at + 1}`).toEqual(lib[side][at]);
+    }
+    const carried = Object.keys(fast[side]).map(Number);
+    expect(carried.filter((at) => !rendered[side].has(at))).toEqual([]);
+  }
 }
 
 function expectParity(
@@ -22,7 +56,31 @@ function expectParity(
 ): void {
   const fast = tokenizeFast(hunks, { highlight, refractor: refractorAdapter, language, enhancers });
   const lib = tokenize(hunks, { highlight, refractor: refractorAdapter, language, enhancers });
-  expect(fast).toEqual(lib);
+  expectRenderedParity(fast, lib, hunks);
+}
+
+function editEnhancers(hunks: HunkData[]): TokenizeEnhancer[] {
+  return [markEdits(hunks, { type: "block" }), suppressFullLineEdits()];
+}
+
+/**
+ * Two context-only hunks: `head` from line `headAt` and `tail` from line
+ * `tailAt`, on both sides. The library lexes every line above and between them
+ * as an empty line; the fast pipeline collapses those runs.
+ */
+function twoHunkDiff(head: string[], tail: string[], headAt: number, tailAt: number): string {
+  const hunk = (at: number, lines: string[]) => [
+    `@@ -${at},${lines.length} +${at},${lines.length} @@`,
+    ...lines.map((line) => ` ${line}`),
+  ];
+  return [
+    "diff --git a/f b/f",
+    "--- a/f",
+    "+++ b/f",
+    ...hunk(headAt, head),
+    ...hunk(tailAt, tail),
+    "",
+  ].join("\n");
 }
 
 const TS_DIFF = `diff --git a/src/a.ts b/src/a.ts
@@ -181,6 +239,259 @@ index 1111111..2222222 100644
     expectParity(hunks, "typescript", {
       enhancers: [markEdits(hunks, { type: "block" }), suppressFullLineEdits()],
     });
+  });
+});
+
+/** A one-pair hunk at `at`: three context lines, one delete, one insert, one context. */
+function deepDiff(at: number): string {
+  return [
+    "diff --git a/src/deep.ts b/src/deep.ts",
+    "--- a/src/deep.ts",
+    "+++ b/src/deep.ts",
+    `@@ -${at},5 +${at},5 @@`,
+    "   const ctx_0 = resolve(0);",
+    "   const ctx_1 = resolve(1);",
+    "   const ctx_2 = resolve(2);",
+    "-  const value = legacyCompute(1, { retries: 3 });",
+    '+  const value = compute(1, { retries: 3, backoff: "expo" });',
+    "   return aggregate(value);",
+    "",
+  ].join("\n");
+}
+
+// Constructs that carry lexer state from one hunk into the next, so the run of
+// blank lines between them is inside a token. Each must lex the second hunk the
+// same whether the gap is one line or hundreds.
+const GAP_CASES: ReadonlyArray<{
+  name: string;
+  language: string;
+  head: string[];
+  tail: string[];
+}> = [
+  {
+    name: "a block comment",
+    language: "typescript",
+    head: ["const a = 1;", "/* opened here"],
+    tail: ["closed here */", "const b = 2;"],
+  },
+  {
+    name: "a template literal",
+    language: "typescript",
+    head: ["const t = `start ${a}"],
+    tail: ["end ${b}`;", "return t;"],
+  },
+  {
+    name: "a JSX element",
+    language: "tsx",
+    head: ["return (", '  <div className="x">'],
+    tail: ["  </div>", ");"],
+  },
+  {
+    name: "a fenced code block",
+    language: "markdown",
+    head: ["# Title", "", "```ts"],
+    tail: ["const x = 1;", "```", "after **bold** text"],
+  },
+  {
+    name: "an indented code block after blank lines",
+    language: "markdown",
+    head: ["Paragraph text", "- item"],
+    tail: ["    indented code", "", "> quote"],
+  },
+  {
+    name: "a docstring",
+    language: "python",
+    head: ["def f():", '    """Doc opened'],
+    tail: ['    still doc"""', "    return 1"],
+  },
+  {
+    name: "a block scalar",
+    language: "yaml",
+    head: ["key: |", "  text line"],
+    tail: ["  more text", "other: 1"],
+  },
+  {
+    name: "a heredoc",
+    language: "bash",
+    head: ["cat <<EOF", "body $HOME"],
+    tail: ["EOF", "echo done"],
+  },
+  {
+    name: "a markup comment",
+    language: "markup",
+    head: ["<div>", "<!-- opened"],
+    tail: ["closed -->", "</div>"],
+  },
+  {
+    name: "a css comment",
+    language: "css",
+    head: [".a { color: red; }", "/* opened"],
+    tail: ["closed */", ".b { margin: 0; }"],
+  },
+];
+
+describe("tokenizeFast across gaps between hunks", () => {
+  beforeAll(async () => {
+    await Promise.all(GAP_CASES.map((c) => ensureLanguage(c.language)));
+  });
+
+  for (const c of GAP_CASES) {
+    it(`lexes ${c.name} (${c.language}) the same however far apart the hunks are`, () => {
+      // Gaps at, just over, and far over the collapse bound, after a hunk at
+      // the top of the file and after one that has a leading gap of its own.
+      for (const headAt of [1, 2, 16, 17, 18, 300]) {
+        for (const gap of [0, 1, 2, 15, 16, 17, 18, 400]) {
+          const hunks = hunksOf(twoHunkDiff(c.head, c.tail, headAt, headAt + c.head.length + gap));
+          expectParity(hunks, c.language);
+        }
+      }
+    });
+  }
+
+  it("keeps a C++ raw-string delimiter from matching across shortened gaps", async () => {
+    await ensureLanguage("cpp");
+    // `[^()\\ ]{0,16}` accepts newlines, so a cap under 16 would let these three
+    // carried lines join into a raw string the full gaps keep apart.
+    const diff = [
+      "diff --git a/a.cpp b/a.cpp",
+      "--- a/a.cpp",
+      "+++ b/a.cpp",
+      "@@ -100,1 +100,1 @@",
+      ' auto s = R"',
+      "@@ -200,1 +200,1 @@",
+      " (payload)",
+      "@@ -300,1 +300,1 @@",
+      ' ";',
+      "",
+    ].join("\n");
+    expectParity(hunksOf(diff), "cpp");
+  });
+
+  it("lexes the same text for a hunk at line 100,000 as at line 100", () => {
+    const lexed: string[] = [];
+    const recording: RefractorLike = {
+      highlight: (code, language) => {
+        lexed.push(code);
+        return refractorAdapter.highlight(code, language);
+      },
+    };
+    for (const at of [100, 100_000]) {
+      tokenizeFast(hunksOf(deepDiff(at)), {
+        highlight: true,
+        refractor: recording,
+        language: "typescript",
+      });
+    }
+    // Old and new side per call; the leading gap shrinks to the cap either way.
+    expect(lexed).toHaveLength(4);
+    expect(lexed.slice(2)).toEqual(lexed.slice(0, 2));
+    expect(lexed[0]!.startsWith("\n".repeat(MAX_GAP_FILLER_LINES) + " ")).toBe(true);
+  });
+
+  it("keeps edit marks and picked ranges on the right lines past a gap", () => {
+    const head = hunksOf(TS_DIFF);
+    const hunks = [...head, ...hunksOf(deepDiff(900))];
+    expectParity(hunks, "typescript", {
+      enhancers: [
+        ...editEnhancers(hunks),
+        pickRanges(
+          [{ type: "searchMark", lineNumber: 903, start: 8, length: 5 }],
+          [{ type: "searchMark", lineNumber: 904, start: 2, length: 9 }]
+        ),
+      ],
+    });
+  });
+});
+
+describe("tokenizeFast malformed hunks", () => {
+  it("drops lines past an unordered last hunk, as the library does", () => {
+    const hunks = [...hunksOf(deepDiff(50)), ...hunksOf(deepDiff(10))];
+    expectParity(hunks, "typescript", { enhancers: editEnhancers(hunks) });
+    const fast = tokenizeFast(hunks, {
+      highlight: true,
+      refractor: refractorAdapter,
+      language: "typescript",
+      enhancers: editEnhancers(hunks),
+    });
+    expect(fast.new.length).toBe(14);
+    expect(fast.new[50]).toBeUndefined();
+  });
+
+  it("lets a later hunk win a line two hunks both claim, as the library does", () => {
+    const hunks = [...hunksOf(deepDiff(10)), ...hunksOf(deepDiff(12))];
+    expectParity(hunks, "typescript", { enhancers: editEnhancers(hunks) });
+  });
+
+  it("still turns a last line number that is not a valid length into a null pass", async () => {
+    for (const bad of [Number.NaN, -1, 2.5, 2 ** 32]) {
+      const hunks = hunksOf(deepDiff(10));
+      Object.assign(hunks[0]!.changes[hunks[0]!.changes.length - 1]!, { newLineNumber: bad });
+      const options = { highlight: true, refractor: refractorAdapter, language: "typescript" };
+      expect(() => tokenizeFast(hunks, options), String(bad)).toThrow(RangeError);
+      const result = await runDiffTokenize({
+        hunks,
+        language: "typescript",
+        highlight: true,
+        extraRanges: null,
+      });
+      expect(result.tokens, String(bad)).toBeNull();
+    }
+  });
+
+  it("treats a missing last line number as a side with no lines in range", () => {
+    const hunks = hunksOf(deepDiff(10));
+    const last = hunks[0]!.changes[hunks[0]!.changes.length - 1]! as { newLineNumber?: number };
+    delete last.newLineNumber;
+    const tokens = tokenizeFast(hunks, {
+      highlight: true,
+      refractor: refractorAdapter,
+      language: "typescript",
+    });
+    expect(tokens.new.length).toBe(1);
+    expect(Object.keys(tokens.new)).toEqual([]);
+    expect(Object.keys(tokens.old).length).toBe(5);
+  });
+});
+
+describe("tokenizeFast result size", () => {
+  const tokensAt = (at: number): HunkTokens => {
+    const hunks = hunksOf(deepDiff(at));
+    return tokenizeFast(hunks, {
+      highlight: true,
+      refractor: refractorAdapter,
+      language: "typescript",
+      enhancers: editEnhancers(hunks),
+    });
+  };
+
+  it("holds only the lines the hunk renders, wherever it sits", () => {
+    for (const at of [1, 100, 20_000]) {
+      const hunks = hunksOf(deepDiff(at));
+      const tokens = tokensAt(at);
+      const rendered = renderedSlots(hunks);
+      for (const side of ["old", "new"] as const) {
+        expect(tokens[side].length).toBe(at + 4);
+        expect(Object.keys(tokens[side]).map(Number)).toEqual(
+          [...rendered[side]].sort((a, b) => a - b)
+        );
+      }
+    }
+  });
+
+  it("clones to the same size at line 100,000 as at line 100, holes intact", () => {
+    const near = serialize(tokensAt(100));
+    const deepTokens = tokensAt(100_000);
+    const deep = serialize(deepTokens);
+    // Only the varint widths of the larger indices differ.
+    expect(deep.byteLength).toBeLessThan(near.byteLength * 1.1);
+
+    const received: HunkTokens = deserialize(deep);
+    const rendered = renderedSlots(hunksOf(deepDiff(100_000)));
+    for (const side of ["old", "new"] as const) {
+      expect(received[side].length).toBe(deepTokens[side].length);
+      expect(Object.keys(received[side])).toEqual(Object.keys(deepTokens[side]));
+      for (const at of rendered[side]) expect(received[side][at]).toEqual(deepTokens[side][at]);
+    }
   });
 });
 
