@@ -26,6 +26,7 @@ import {
   buildLaunchIdentity,
 } from "../../../shared/utils/agentLaunchPlan.js";
 import {
+  launchModelRefusal,
   resolveAgentLaunchKind,
   unknownAgentIdMessage,
 } from "../../../shared/utils/agentLaunchValidation.js";
@@ -242,6 +243,13 @@ export async function runAgentLaunch(
       "agentLaunchFlags already sets this agent's system-prompt instruction. Pass it in systemPrompt or agentLaunchFlags, not both."
     );
   }
+  const modelRefusal = launchModelRefusal(agentId, {
+    model: args.model,
+    interactive: args.interactive,
+    prompt: args.prompt,
+    agentLaunchFlags: args.agentLaunchFlags,
+  });
+  if (modelRefusal) return failure("VALIDATION_ERROR", modelRefusal);
   if (args.handback === true && (args.prompt === undefined || args.prompt.trim() === "")) {
     return failure(
       "VALIDATION_ERROR",
@@ -431,7 +439,7 @@ export async function runAgentLaunch(
           ? {
               launchAgentId,
               agentLaunchFlags: plan.launchFlags,
-              agentModelId: args.model,
+              agentModelId: plan.modelId,
               agentSessionId: plan.assignedSessionId,
               agentPresetId: plan.preset?.id,
               agentPresetColor: plan.preset?.color,
@@ -459,7 +467,7 @@ export async function runAgentLaunch(
     agentSessionId: plan.assignedSessionId,
     agentLaunchFlags: plan.launchFlags,
     callerLaunchFlags: plan.callerLaunchFlags,
-    agentModelId: args.model,
+    agentModelId: plan.modelId,
     agentPresetId: plan.preset?.id,
     agentPresetColor: plan.preset?.color,
     originalPresetId: plan.preset?.id,

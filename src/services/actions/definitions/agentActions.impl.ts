@@ -34,7 +34,7 @@ import { userAgentRegistryClient } from "@/clients/userAgentRegistryClient";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { isAgentToolbarVisible } from "@shared/utils/agentPinned";
 import { buildAvailableAgentListing, listedAgentIds } from "@shared/utils/agentListing";
-import { unknownAgentIdMessage } from "@/utils/agentLaunchValidation";
+import { launchModelRefusal, unknownAgentIdMessage } from "@/utils/agentLaunchValidation";
 import { isAgentInstalled } from "@shared/utils/agentAvailability";
 import { hasSystemPromptOverride, resolveSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
@@ -381,6 +381,13 @@ export const agentActionRuns = {
         "agentLaunchFlags already sets this agent's system-prompt instruction. Pass it in systemPrompt or agentLaunchFlags, not both."
       );
     }
+    const modelRefusal = launchModelRefusal(agentId, {
+      model,
+      interactive,
+      prompt,
+      agentLaunchFlags,
+    });
+    if (modelRefusal) throw new UnactionableTargetError(modelRefusal);
     // The handback instruction rides the prompt, so there is nothing to attach
     // it to without one — and a blank prompt is dropped by the launcher
     // (#12488).

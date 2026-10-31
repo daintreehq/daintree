@@ -354,6 +354,19 @@ describe("buildAgentLaunchFlags", () => {
     const flags = buildAgentLaunchFlags({}, "claude");
     expect(flags).not.toContain("--model");
   });
+
+  it("never persists --model for Mistral Vibe, whose restart and resume reject or ignore it (#15569)", () => {
+    const flags = buildAgentLaunchFlags({}, "mistral", { modelId: "devstral-small" });
+    expect(flags).toEqual(["--trust"]);
+  });
+
+  it("never persists a Vibe --model a preset or recipe adds either (#15569)", () => {
+    const flags = buildAgentLaunchFlags({}, "mistral", {
+      presetArgs: ["--model", "devstral-2", "--agent", "accept-edits"],
+      recipeArgs: "--model=local",
+    });
+    expect(flags).toEqual(["--trust", "--agent", "accept-edits"]);
+  });
 });
 
 describe("generateAgentCommand copilot prompt injection", () => {
@@ -616,6 +629,46 @@ describe("generateAgentCommand with modelId", () => {
     const modelIdx = cmd.indexOf("--model");
     const promptIdx = cmd.indexOf("Fix the bug");
     expect(modelIdx).toBeLessThan(promptIdx);
+  });
+
+  describe("Mistral Vibe (#15569)", () => {
+    forcePosixPlatform();
+
+    it("leaves --model off an interactive launch, which Vibe ignores or rejects", () => {
+      const bare = generateAgentCommand("vibe", {}, "mistral", { modelId: "devstral-small" });
+      const seeded = generateAgentCommand("vibe", {}, "mistral", {
+        modelId: "devstral-small",
+        initialPrompt: "Fix the bug",
+      });
+      expect(bare).toBe("vibe --trust");
+      expect(seeded).toBe("vibe --trust 'Fix the bug'");
+    });
+
+    it("drops a --model a preset, recipe or settings flag adds to an interactive launch", () => {
+      const cmd = generateAgentCommand("vibe", { customFlags: "--model=local" }, "mistral", {
+        presetArgs: ["--model", "devstral-2", "--agent", "accept-edits"],
+        recipeArgs: "--model devstral-small",
+      });
+      expect(cmd).toBe("vibe --trust --agent 'accept-edits'");
+    });
+
+    it("keeps a preset's --model on a headless launch, where Vibe takes it", () => {
+      const cmd = generateAgentCommand("vibe", {}, "mistral", {
+        presetArgs: ["--model", "devstral-2"],
+        initialPrompt: "Fix the bug",
+        interactive: false,
+      });
+      expect(cmd).toBe("vibe --trust --model 'devstral-2' --prompt 'Fix the bug'");
+    });
+
+    it("passes --model to a headless launch, ahead of --prompt", () => {
+      const cmd = generateAgentCommand("vibe", {}, "mistral", {
+        modelId: "devstral-small",
+        initialPrompt: "Fix the bug",
+        interactive: false,
+      });
+      expect(cmd).toBe("vibe --trust --model devstral-small --prompt 'Fix the bug'");
+    });
   });
 });
 

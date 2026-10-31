@@ -21,6 +21,7 @@ import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { ResumeOnRestart } from "@shared/types/agentSettings";
 import { getAgentConfig, sanitizeAgentEnv } from "@/config/agents";
+import { canSelectAgentModel } from "@shared/config/agentRegistry";
 import type { AgentPreset } from "@/config/agents";
 import {
   generateAgentCommand,
@@ -823,7 +824,9 @@ export function buildArgsForRespawn(
     const injectedFromEmpty = presetWasStale
       ? [
           ...reconcileFlags([
-            ...(saved.agentModelId ? ["--model", saved.agentModelId] : []),
+            ...(saved.agentModelId && canSelectAgentModel(agentId)
+              ? ["--model", saved.agentModelId]
+              : []),
             ...staleSystemPromptArgs,
           ]),
           ...callerLaunchFlags,

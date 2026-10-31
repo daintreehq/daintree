@@ -4,6 +4,7 @@ import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js
 import {
   buildResumeCommand,
   dropRetiredAgentModel,
+  dropUnselectedAgentModel,
   stripAssignedSessionIdArgs,
   supportsSessionIdAssignment,
 } from "../../../shared/types/agentSettings.js";
@@ -28,7 +29,7 @@ export type ViewlessRestartOutcome =
  * saved launch otherwise. A pane the view would refuse to restart is left as it
  * is: one waiting for input, one held for recovery, and an agent that already
  * quit to its shell. So is one saved with a retired model, whose drop needs a
- * view to show it. An input lock is a view's own preference, kept in that
+ * view to show it, and one holding a model a restart can't select. An input lock is a view's own preference, kept in that
  * view, so with no view there is none to honour.
  */
 export async function restartTerminalWithoutView(
@@ -58,6 +59,12 @@ export async function restartTerminalWithoutView(
   // drops it with a notice saying so. With no view, nobody would see the drop,
   // so the pane keeps running until one restarts it.
   if (dropRetiredAgentModel(agentId, snapshot).droppedModelIds.length > 0) return "unsupported";
+  // So does a model a restart can't select (#15569): a view's restart takes it
+  // out of the launch, the record and the title together, which this host's
+  // session-only update can't.
+  if (dropUnselectedAgentModel(agentId, snapshot, { replay: true }) !== snapshot) {
+    return "unsupported";
+  }
 
   // The reads above wait on the pty-host and the disk; the terminal may have
   // been relaunched meanwhile, and its successor isn't the one that leaked.

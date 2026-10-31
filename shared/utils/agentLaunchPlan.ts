@@ -1,4 +1,5 @@
 import {
+  canSelectAgentModel,
   getAgentDisplayTitle,
   type AgentConfig,
   type AgentPreset,
@@ -7,6 +8,7 @@ import {
   buildAgentLaunchFlags,
   generateAgentCommand,
   mintAssignedSessionId,
+  replayableLaunchFlags,
   resolveEffectivePresetId,
   type AgentSettings,
 } from "../types/agentSettings.js";
@@ -93,6 +95,12 @@ export interface AgentLaunchPlan {
   title: string;
   /** "custom" when the title is the caller's name or a preset's, so detection keeps it. */
   titleMode: "custom" | undefined;
+  /**
+   * The model the command selects: the requested one, unless this launch's
+   * shape is one the agent's `--model` doesn't apply to (#15569). The pane
+   * records this, never the raw request.
+   */
+  modelId: string | undefined;
   /**
    * The preset id the launch would need but couldn't find while its inventory
    * was still unread. Set only on a plan that resolved nothing: the caller must
@@ -199,9 +207,18 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
       cliDetail: undefined,
       title: agentConfig?.name ?? "Terminal",
       titleMode: undefined,
+      modelId: undefined,
       unloadedPresetId,
     };
   }
+
+  const interactive = options?.interactive ?? true;
+  const modelId =
+    isAgent &&
+    options?.modelId &&
+    canSelectAgentModel(agentId, { interactive, initialPrompt: options.prompt })
+      ? options.modelId
+      : undefined;
 
   if (agentConfig) {
     const entry = input.settings?.agents?.[agentId] ?? {};
@@ -295,9 +312,9 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
     assignedSessionId = isAgent ? mintAssignedSessionId(agentId) : undefined;
     command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
       initialPrompt: options?.prompt,
-      interactive: options?.interactive ?? true,
+      interactive,
       clipboardDirectory,
-      modelId: options?.modelId,
+      modelId,
       systemPromptArgs: options?.systemPromptArgs,
       presetArgs: preset?.args,
       globalSkipPermissions,
@@ -308,7 +325,7 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
     // Process-level flags, persisted for session resume.
     if (isAgent) {
       launchFlags = buildAgentLaunchFlags(effectiveEntry, agentId, {
-        modelId: options?.modelId,
+        modelId,
         systemPromptArgs: options?.systemPromptArgs,
         presetArgs: preset?.args,
         globalSkipPermissions,
@@ -326,16 +343,18 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
     if (extraFlags?.length) {
       command = appendCallerLaunchFlagsToCommand(command, extraFlags, input.shellDialect);
       if (isAgent) {
-        launchFlags = [...(launchFlags ?? []), ...extraFlags];
-        callerLaunchFlags = extraFlags;
+        // Only a headless run may pass the agent a `--model` it takes on no
+        // replay (#15569); the flags kept for restart and resume drop it.
+        const replayable = replayableLaunchFlags(extraFlags, agentId) ?? [];
+        launchFlags = [...(launchFlags ?? []), ...replayable];
+        callerLaunchFlags = replayable.length > 0 ? replayable : undefined;
       }
     }
   }
 
-  const baseTitle =
-    options?.modelId && isAgent
-      ? getAgentDisplayTitle(agentId, options.modelId)
-      : (agentConfig?.name ?? "Terminal");
+  const baseTitle = modelId
+    ? getAgentDisplayTitle(agentId, modelId)
+    : (agentConfig?.name ?? "Terminal");
 
   const stampedPresetTitle = isAgent ? agentPresetTitle(baseTitle, preset) : undefined;
   const presetTitle = stampedPresetTitle ?? baseTitle;
@@ -356,6 +375,7 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
     // Any non-default title is pinned so the agent-detected title sync can't
     // clobber it with the bare agent name.
     titleMode: trimmedName || hasPresetTitle ? "custom" : undefined,
+    modelId,
     unloadedPresetId: undefined,
   };
 }

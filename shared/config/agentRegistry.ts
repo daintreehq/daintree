@@ -690,6 +690,14 @@ export interface AgentConfig {
    */
   retiredModels?: Readonly<Record<string, string>>;
   /**
+   * Narrows which launches the CLI's `--model` takes effect on. Unset, every
+   * launch takes it. `"new-headless-session"`: only a one-shot run that starts
+   * a new conversation, as Mistral Vibe's flag (3.0.4+) does; its interactive
+   * sessions ignore the flag, earlier releases reject it, and a resume refuses
+   * it, so no restart or resume may replay one (#15569).
+   */
+  modelSelection?: "new-headless-session";
+  /**
    * Model the Daintree assistant launches this agent with until the user picks
    * one (no entry in `HelpAssistantSettings.modelIds`). Unset means the CLI's own
    * default.
@@ -1357,6 +1365,31 @@ export function resolveAssistantModelId(
 }
 
 /** Whether `agentId` declares `modelId` retired (see `AgentConfig.retiredModels`). */
+/** The shape of one launch, as far as model selection cares. */
+export interface AgentModelLaunchShape {
+  /** Omitted means interactive, the default for every launch. */
+  interactive?: boolean;
+  /** The prompt the command carries; a headless run needs one to be headless. */
+  initialPrompt?: string;
+}
+
+/**
+ * Whether a launch of this shape can select a model with `--model` (see
+ * `AgentConfig.modelSelection`). With no shape, the question is about a
+ * replay (a restart or resume), which is never a new headless run.
+ */
+export function canSelectAgentModel(
+  agentId: string | undefined,
+  launch: AgentModelLaunchShape = {}
+): boolean {
+  if (!agentId) return true;
+  const selection = getEffectiveAgentConfig(agentId)?.modelSelection;
+  if (selection === "new-headless-session") {
+    return launch.interactive === false && Boolean(launch.initialPrompt?.trim());
+  }
+  return true;
+}
+
 export function isRetiredAgentModel(
   agentId: string | undefined,
   modelId: string | undefined

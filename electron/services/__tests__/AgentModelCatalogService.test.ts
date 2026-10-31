@@ -230,6 +230,23 @@ describe("AgentModelCatalogService", () => {
     expect(result.models.map((m) => m.id)).not.toContain("gemini-2.5-pro");
   });
 
+  it("offers only Vibe's config aliases, never Mistral's provider IDs, which its --model can't take (#15569)", async () => {
+    const service = new AgentModelCatalogService({
+      cachePath,
+      fetchImpl: mockFetch({
+        ...makeCatalog(),
+        mistral: {
+          name: "Mistral",
+          models: { "mistral-large-latest": chatModel("Mistral Large", 128_000) },
+        },
+      }),
+    });
+
+    const result = await service.getResolvedModels("mistral");
+
+    expect(result.models.map((m) => m.id)).toEqual(bundledIdsFor("mistral"));
+  });
+
   it("serves Copilot's bundled list untouched, since models.dev can't speak for a multi-provider CLI", async () => {
     const service = new AgentModelCatalogService({
       cachePath,

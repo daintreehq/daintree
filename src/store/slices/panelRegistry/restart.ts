@@ -26,6 +26,7 @@ import {
 import {
   agentClipboardDirectory,
   dropRetiredAgentModel,
+  dropUnselectedAgentModel,
   supportsCrossDirectoryResume,
 } from "@shared/types/agentSettings";
 import { notifyRetiredModelDropped } from "@/services/terminal/retiredModelNotice";
@@ -124,6 +125,23 @@ function titleAtSpawn(
   const panel = get().panelsById[id];
   const source = panel && isPtyPanel(panel) ? panel : captured;
   return { title: source.title, titleMode: source.titleMode };
+}
+
+/**
+ * `live`, or the title the saved-launch cleanup gave the pane in its place when
+ * it took out a model the restart can't select and reset the generated title
+ * naming it (#15569). Only while the pane still shows the title the cleanup
+ * read: a rename since then belongs to whoever made it. Returns `live` itself
+ * when nothing changes.
+ */
+function withCleanedModelTitle<T extends { title: string; titleMode?: PanelTitleMode }>(
+  live: T,
+  saved: { title: string; titleMode?: PanelTitleMode },
+  cleaned: { title: string }
+): T | { title: string; titleMode?: PanelTitleMode } {
+  if (cleaned.title === saved.title) return live;
+  if (live.title !== saved.title || live.titleMode !== saved.titleMode) return live;
+  return { title: cleaned.title, titleMode: live.titleMode };
 }
 
 /**
@@ -536,12 +554,19 @@ export const createRestartActions = (
       logWarn("[TerminalStore] Terminal no longer exists or was trashed", { id });
       return;
     }
-    // A pane saved with a retired model fails on every start (#15652). Each
-    // command below (fresh, resume, the saved one as a fallback) and the state
-    // the restart persists read these cleaned fields, so none can replay it.
-    const { launch: currentTerminal, droppedModelIds: droppedFromSaved } = dropRetiredAgentModel(
+    // A pane saved with a retired model fails on every start (#15652), and a
+    // restart never selects a model for an agent that takes one only on a new
+    // headless run (#15569). Each command below (fresh, resume, the saved one
+    // as a fallback) and the state the restart persists read these cleaned
+    // fields, so none can replay it.
+    const { launch: withoutRetired, droppedModelIds: droppedFromSaved } = dropRetiredAgentModel(
       _currentTerminalRaw.launchAgentId,
       _currentTerminalRaw
+    );
+    const currentTerminal = dropUnselectedAgentModel(
+      _currentTerminalRaw.launchAgentId,
+      withoutRetired,
+      { replay: true }
     );
     const droppedModelIds = new Set(droppedFromSaved);
 
@@ -1049,6 +1074,11 @@ export const createRestartActions = (
         if (!t || !isPtyPanel(t)) return state;
         const updated = {
           ...t,
+          ...withCleanedModelTitle(
+            { title: t.title, titleMode: t.titleMode },
+            _currentTerminalRaw,
+            currentTerminal
+          ),
           location: targetLocation,
           cwd: launchCwd,
           restartKey: (t.restartKey ?? 0) + 1,
@@ -1685,11 +1715,15 @@ async function respawnAgentOnPreset(
     return { success: false, error: "panel is not a PTY panel" };
   }
   // The new preset's launch is built from these fields, so a retired model
-  // saved on the pane doesn't follow it onto the new preset (#15652).
-  const { launch: terminal, droppedModelIds: droppedFromSaved } = dropRetiredAgentModel(
+  // saved on the pane doesn't follow it onto the new preset (#15652), nor
+  // does a model the agent takes only on a new headless run (#15569).
+  const { launch: withoutRetired, droppedModelIds: droppedFromSaved } = dropRetiredAgentModel(
     livePanel.launchAgentId,
     livePanel
   );
+  const terminal = dropUnselectedAgentModel(livePanel.launchAgentId, withoutRetired, {
+    replay: true,
+  });
   if (terminal.isRestarting) {
     return { success: false, error: "already restarting" };
   }
@@ -1944,9 +1978,10 @@ async function respawnAgentOnPreset(
     });
 
     const liveTitle = titleAtSpawn(get, id, terminal);
+    const currentTitle = withCleanedModelTitle(liveTitle, livePanel, terminal);
     const fallbackTitle =
       mode.kind === "switch"
-        ? presetSwitchTitle(liveTitle, {
+        ? presetSwitchTitle(currentTitle, {
             agentId: effectiveAgentId,
             modelId: terminal.agentModelId,
             leftPresets: [terminal.agentPresetId, terminal.originalPresetId].map((presetId) =>
@@ -1962,7 +1997,7 @@ async function respawnAgentOnPreset(
             ),
             nextPreset,
           })
-        : liveTitle;
+        : currentTitle;
     if (fallbackTitle !== liveTitle) {
       switchedTitle = fallbackTitle;
       updateAndSaveTerminal(set, id, (t) => ({
@@ -2043,7 +2078,7 @@ async function respawnAgentOnPreset(
         ...(switchedTitle &&
         t.title === switchedTitle.title &&
         t.titleMode === switchedTitle.titleMode
-          ? { title: terminal.title, titleMode: terminal.titleMode }
+          ? { title: livePanel.title, titleMode: livePanel.titleMode }
           : {}),
       };
       if (toolsError !== null && isPtyPanel(rolledBack)) {

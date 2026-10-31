@@ -1,5 +1,6 @@
 /**
- * Launches that replay a saved Copilot model through `addPanel` (#15652): a
+ * Launches that replay a saved model through `addPanel`: a retired Copilot
+ * model (#15652), and a Vibe model only a new headless run takes (#15569). A
  * recipe, a duplicate, a reconnect. The real recipe store, duplication builder
  * and `addPanel` run against a mocked transport, so what reaches the spawn is
  * what would run.
@@ -99,18 +100,22 @@ async function settle(): Promise<void> {
   for (let i = 0; i < 100; i++) await Promise.resolve();
 }
 
-function copilotPanes(): PtyPanelData[] {
+function panesOf(agentId: string): PtyPanelData[] {
   return Object.values(usePanelStore.getState().panelsById).filter(
-    (panel): panel is PtyPanelData => "launchAgentId" in panel && panel.launchAgentId === "copilot"
+    (panel): panel is PtyPanelData => "launchAgentId" in panel && panel.launchAgentId === agentId
   );
 }
 
-/** The saved launch and what the spawn was handed, for each Copilot pane. */
-async function launchedCopilot(): Promise<
-  Array<{ pane: PtyPanelData; spawn: Record<string, unknown> }>
-> {
+function copilotPanes(): PtyPanelData[] {
+  return panesOf("copilot");
+}
+
+/** The saved launch and what the spawn was handed, for each pane of the agent. */
+async function launchedCopilot(
+  agentId = "copilot"
+): Promise<Array<{ pane: PtyPanelData; spawn: Record<string, unknown> }>> {
   await settle();
-  return copilotPanes().map((pane) => ({
+  return panesOf(agentId).map((pane) => ({
     pane,
     spawn: terminalClient.spawn.mock.calls.find(
       ([payload]) => (payload as { id: string }).id === pane.id
@@ -254,5 +259,51 @@ describe("launches replaying a retired Copilot model (#15652)", () => {
     expect(pane.agentModelId).toBe("claude-opus-4.6");
     expect(pane.agentLaunchFlags).toEqual(["--model", "claude-opus-4.6"]);
     expect(notifyRetiredModelDroppedMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("launches replaying a Vibe model that only a headless run takes (#15569)", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    useRecipeStore.getState().reset();
+    await usePanelStore.getState().reset();
+    usePanelStore.setState({ panelsById: {}, panelIds: [], focusedId: null });
+  });
+
+  const headlessVibe = {
+    id: "vibe-1",
+    kind: "terminal",
+    launchAgentId: "mistral",
+    title: "Mistral Vibe (Small)",
+    cwd: "/repo",
+    cols: 80,
+    rows: 24,
+    location: "grid",
+    worktreeId: "wt-1",
+    agentState: "idle",
+    agentModelId: "devstral-small",
+    agentLaunchFlags: ["--trust"],
+    command: "vibe --trust --model devstral-small --prompt 'Fix the bug'",
+  } as unknown as PtyPanelData;
+
+  it("duplicates a headless pane as an interactive one that claims no model", async () => {
+    const options = await buildPanelDuplicateOptions(headlessVibe, "grid");
+    await usePanelStore.getState().addPanel(options);
+
+    const [launch] = await launchedCopilot("mistral");
+    expectNoModel(launch!);
+    expect(launch!.pane.title).toBe("Mistral Vibe");
+    expect(notifyRetiredModelDroppedMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a fresh headless launch's model, which its command selects", async () => {
+    const { id: _id, ...fresh } = headlessVibe as unknown as Record<string, unknown>;
+    await usePanelStore.getState().addPanel(fresh as never);
+
+    const [launch] = await launchedCopilot("mistral");
+    expect(launch!.pane.agentModelId).toBe("devstral-small");
+    expect(launch!.spawn.agentModelId).toBe("devstral-small");
+    expect(launch!.spawn.command).toBe(headlessVibe.command);
+    expect(launch!.pane.title).toBe("Mistral Vibe (Small)");
   });
 });
