@@ -503,6 +503,14 @@ describe("forgeProviderRegistry — installed plugins' providers (#15583)", () =
     expect(getForgeProviderUnavailableError("gitea")).toBe(error);
   });
 
+  it("resolves a bare id shared with a built-in to the built-in, as the resolver does", () => {
+    registerForgeProviders("acme.github", [makeContribution("github", ["github.com"])], {
+      builtin: false,
+    });
+    expect(getForgeProviderUnavailableError("github")).toBeNull();
+    expect(getForgeProviderUnavailableError("acme.github.github")).toContain("acme.github");
+  });
+
   it("leaves unknown ids to the caller's own missing-provider handling", () => {
     expect(getForgeProviderUnavailableError("acme.nope.nope")).toBeNull();
     expect(getForgeProviderUnavailableError("")).toBeNull();

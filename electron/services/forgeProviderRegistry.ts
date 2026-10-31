@@ -295,15 +295,20 @@ function findContribution(namespacedId: string): ForgeProviderContribution | und
  */
 export function getForgeProviderUnavailableError(providerId: string): string | null {
   if (typeof providerId !== "string" || providerId.length === 0) return null;
+  // First match in registration order, like the resolver's `findById`, so a
+  // bare id a built-in and an installed plugin share names the same provider
+  // the resolver would pick.
   for (const [pluginId, { contributions, builtin }] of PLUGIN_FORGE_PROVIDERS) {
-    if (builtin) continue;
     for (const contribution of contributions) {
       if (
-        makeForgeProviderId(pluginId, contribution.id) === providerId ||
-        contribution.id === providerId
+        makeForgeProviderId(pluginId, contribution.id) !== providerId &&
+        contribution.id !== providerId
       ) {
-        return `Forge provider "${contribution.name}" can't run: it comes from the installed plugin "${pluginId}", and forge providers currently run only as built-in plugins.`;
+        continue;
       }
+      return builtin
+        ? null
+        : `Forge provider "${contribution.name}" can't run: it comes from the installed plugin "${pluginId}", and forge providers currently run only as built-in plugins.`;
     }
   }
   return null;
