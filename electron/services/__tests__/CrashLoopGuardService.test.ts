@@ -17,7 +17,11 @@ vi.mock("electron", () => ({
 
 vi.mock("../../utils/fs.js", () => utilsMock);
 
-import { CrashLoopGuardService, isSafeModeActive } from "../CrashLoopGuardService.js";
+import {
+  CRASH_WINDOW_MS,
+  CrashLoopGuardService,
+  isSafeModeActive,
+} from "../CrashLoopGuardService.js";
 
 describe("isSafeModeActive", () => {
   let tmpDir: string;
@@ -227,6 +231,53 @@ describe("CrashLoopGuardService", () => {
     guard4.initialize();
 
     expect(guard4.isSafeMode()).toBe(false);
+  });
+
+  it("reports an unclean previous exit even when that session launched outside the crash window", () => {
+    const now = Date.now();
+    writeState({
+      version: 1,
+      crashes: 0,
+      launches: [now - CRASH_WINDOW_MS - 60_000],
+      cleanExit: false,
+      lastReset: now - CRASH_WINDOW_MS - 60_000,
+    });
+
+    const guard = new CrashLoopGuardService();
+    guard.initialize();
+
+    expect(guard.wasPreviousExitClean()).toBe(false);
+    expect(guard.getCrashCount()).toBe(0);
+    expect(guard.isSafeMode()).toBe(false);
+  });
+
+  it("reports an unclean previous exit for a crash inside the crash window", () => {
+    const guard1 = new CrashLoopGuardService();
+    guard1.initialize();
+
+    const guard2 = new CrashLoopGuardService();
+    guard2.initialize();
+
+    expect(guard2.wasPreviousExitClean()).toBe(false);
+    expect(guard2.getCrashCount()).toBe(1);
+  });
+
+  it("reports a clean previous exit after markCleanExit", () => {
+    const guard1 = new CrashLoopGuardService();
+    guard1.initialize();
+    guard1.markCleanExit();
+
+    const guard2 = new CrashLoopGuardService();
+    guard2.initialize();
+
+    expect(guard2.wasPreviousExitClean()).toBe(true);
+  });
+
+  it("reports a clean previous exit on a fresh install", () => {
+    const guard = new CrashLoopGuardService();
+    guard.initialize();
+
+    expect(guard.wasPreviousExitClean()).toBe(true);
   });
 
   it("handles corrupted state file gracefully", () => {
