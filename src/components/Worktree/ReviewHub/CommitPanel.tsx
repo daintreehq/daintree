@@ -115,6 +115,13 @@ interface CommitPanelProps {
   commitMessage: string;
   onCommitMessageChange: (message: string) => void;
   /**
+   * The composer shows only the worktree note's seed. The seed is never a
+   * draft (#7884), so stepping back out of a history recall hands it to
+   * `onRestoreCommitSeed` instead of storing it through `onCommitMessageChange`.
+   */
+  isCommitMessageSeed?: boolean;
+  onRestoreCommitSeed?: (message: string) => void;
+  /**
    * Resolves once the commit lands. Clearing `commitMessage` is the parent's
    * job: only it can tell whether the draft is still the one committed.
    */
@@ -148,6 +155,8 @@ export function CommitPanel({
   currentBranch,
   commitMessage,
   onCommitMessageChange,
+  isCommitMessageSeed = false,
+  onRestoreCommitSeed,
   onCommit,
   onCommitAndPush,
   onFocusBlocker,
@@ -272,6 +281,7 @@ export function CommitPanel({
   const historyIndexRef = useRef(-1);
   const isFetchingHistoryRef = useRef(false);
   const draftBeforeHistoryRef = useRef("");
+  const seedBeforeHistoryRef = useRef(false);
   const pendingFirstApplyRef = useRef(false);
   const appliedHistoryMessageRef = useRef<string | null>(null);
 
@@ -280,6 +290,7 @@ export function CommitPanel({
     historyIndexRef.current = -1;
     isFetchingHistoryRef.current = false;
     draftBeforeHistoryRef.current = "";
+    seedBeforeHistoryRef.current = false;
     pendingFirstApplyRef.current = false;
     appliedHistoryMessageRef.current = null;
   }, [worktreePath]);
@@ -443,6 +454,7 @@ export function CommitPanel({
               pendingFirstApplyRef.current = false;
             } else {
               draftBeforeHistoryRef.current = visibleMessage;
+              seedBeforeHistoryRef.current = isCommitMessageSeed;
               pendingFirstApplyRef.current = true;
             }
           }
@@ -500,7 +512,11 @@ export function CommitPanel({
           if (historyIndexRef.current < 0) {
             pendingFirstApplyRef.current = false;
             appliedHistoryMessageRef.current = null;
-            onCommitMessageChange(draftBeforeHistoryRef.current);
+            if (seedBeforeHistoryRef.current && onRestoreCommitSeed) {
+              onRestoreCommitSeed(draftBeforeHistoryRef.current);
+            } else {
+              onCommitMessageChange(draftBeforeHistoryRef.current);
+            }
           } else {
             const messages = historyMessagesRef.current!;
             applyHistoryMessage(messages[historyIndexRef.current]!);
@@ -535,6 +551,8 @@ export function CommitPanel({
       fetchHistoryMessages,
       applyHistoryMessage,
       onCommitMessageChange,
+      isCommitMessageSeed,
+      onRestoreCommitSeed,
     ]
   );
 

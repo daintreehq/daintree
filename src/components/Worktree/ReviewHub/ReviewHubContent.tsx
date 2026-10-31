@@ -290,6 +290,16 @@ export function ReviewHubContent({
     },
     [worktreePath]
   );
+  // Stepping back out of a history recall returns the seed it covered as a
+  // seed, and the recalled message stored in its place goes (#7884, #15574).
+  const isCommitMessageSeed = commitDraft === undefined && commitMessage !== "";
+  const restoreCommitSeed = useCallback(
+    (message: string) => {
+      useReviewCommitDraftStore.getState().setDraft(worktreePath, "");
+      setCommitSeed(message === "" ? null : { worktreePath, message });
+    },
+    [worktreePath]
+  );
   // Only the draft that was committed goes: the hub can close, reopen and be
   // typed into again, or move to another worktree, while a commit and push run.
   const dropCommittedMessage = useCallback((committedPath: string, message: string) => {
@@ -2258,6 +2268,8 @@ export function ReviewHubContent({
               currentBranch={status.currentBranch}
               commitMessage={commitMessage}
               onCommitMessageChange={handleCommitMessageChange}
+              isCommitMessageSeed={isCommitMessageSeed}
+              onRestoreCommitSeed={restoreCommitSeed}
               onCommit={handleCommit}
               onCommitAndPush={handleCommitAndPush}
               onFocusBlocker={handleFocusBlocker}
