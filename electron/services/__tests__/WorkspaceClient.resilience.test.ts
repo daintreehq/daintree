@@ -275,6 +275,59 @@ describe("WorkspaceClient multi-process manager", () => {
     });
   });
 
+  describe("createWorktree start commit (#15733)", () => {
+    async function loadedProject(rootPath: string): Promise<MockHost> {
+      const load = client.loadProject(rootPath, 1);
+      await readyAndResolveLoad(0);
+      await load;
+      return h(0);
+    }
+
+    async function createWith(answer: Record<string, unknown>) {
+      const host = await loadedProject("/project-a");
+      host.sendWithResponse.mockClear();
+      const pending = client.createWorktree("/project-a", {
+        baseBranch: "origin/main",
+        newBranch: "topic",
+        path: "/project-a-topic",
+        fromRemote: true,
+        fetchBase: true,
+      });
+      await tick();
+      const request = host.getLastRequest()!;
+      host.resolveRequest(request.requestId, answer);
+      return { request, result: await pending };
+    }
+
+    it("forwards fetchBase and passes the host's start commit on", async () => {
+      const startCommit = "a".repeat(40);
+      const { request, result } = await createWith({
+        worktreeId: "/project-a-topic",
+        branch: "topic",
+        setupState: "pending",
+        startCommit,
+      });
+
+      expect(request).toMatchObject({ type: "create-worktree", options: { fetchBase: true } });
+      expect(result).toEqual({
+        worktreeId: "/project-a-topic",
+        branch: "topic",
+        setupState: "pending",
+        startCommit,
+      });
+    });
+
+    it("invents no start commit when the host reported none", async () => {
+      const { result } = await createWith({
+        worktreeId: "/project-a-topic",
+        branch: "topic",
+        setupState: "pending",
+      });
+
+      expect(result).not.toHaveProperty("startCommit");
+    });
+  });
+
   describe("loadProject", () => {
     it("creates a new host process for a new project", async () => {
       const loadPromise = client.loadProject("/project-a", 1);

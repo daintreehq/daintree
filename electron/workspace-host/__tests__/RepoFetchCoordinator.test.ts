@@ -1478,13 +1478,26 @@ describe("RepoFetchCoordinator.fetchRefCommit (#15733)", () => {
     timeoutMs: 20_000,
   };
 
-  /** A git whose fetch resolves and whose rev-parse names {@link COMMIT}. */
-  function refGit(): MockGit {
+  /** A git whose fetch resolves and whose rev-parse prints `revParse`. */
+  function refGit(revParse = `${COMMIT}\n`): MockGit {
     const git = makeMockGit(() => Promise.resolve());
     git.raw.mockImplementation((args: string[]) =>
-      Promise.resolve(args[0] === "rev-parse" ? `${COMMIT}\n` : "")
+      Promise.resolve(args[0] === "rev-parse" ? revParse : "")
     );
     return git;
+  }
+
+  /** A git whose every command hangs until its signal aborts, as a real stalled fetch does. */
+  function stalledGitFactory() {
+    return (_cwd: string, opts: { signal: AbortSignal }) =>
+      makeMockGit(
+        () =>
+          new Promise<void>((_, reject) => {
+            opts.signal.addEventListener("abort", () => reject(new Error("aborted")), {
+              once: true,
+            });
+          })
+      );
   }
 
   beforeEach(() => {
@@ -1519,14 +1532,42 @@ describe("RepoFetchCoordinator.fetchRefCommit (#15733)", () => {
       ],
       ["rev-parse", "--verify", "refs/remotes/origin/develop^{commit}"],
     ]);
+    // The budget timer goes with the call; a leftover would abort nothing but
+    // still hold the event loop for its full budget.
+    expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("fetches even inside the window a background fetch's success opened, and records nothing", async () => {
+  it("accepts a SHA-256 commit id", async () => {
+    const sha256 = "d".repeat(64);
+    mockCreateBackgroundFetchGit.mockReturnValue(refGit(sha256));
+
+    await expect(new RepoFetchCoordinator().fetchRefCommit(REQUEST)).resolves.toBe(sha256);
+  });
+
+  it.each([
+    ["nothing", ""],
+    ["a non-hex word", "not-a-commit"],
+    ["an abbreviated id", "c0ffee1"],
+    ["two lines", `${COMMIT}\n${COMMIT}`],
+  ])("refuses a rev-parse that prints %s instead of one commit id", async (_label, output) => {
+    mockCreateBackgroundFetchGit.mockReturnValue(refGit(output));
+
+    await expect(new RepoFetchCoordinator().fetchRefCommit(REQUEST)).rejects.toThrow(
+      "git named no commit for refs/remotes/origin/develop"
+    );
+  });
+
+  it("records nothing, so it neither opens nor reuses a background recency window", async () => {
     const git = refGit();
     mockCreateBackgroundFetchGit.mockReturnValue(git);
     const coord = new RepoFetchCoordinator();
+
+    await coord.fetchRefCommit(REQUEST);
+    expect(coord.getLastSuccessfulFetch("/repo/.git")).toBeNull();
+
     await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
     const recordedAt = coord.getLastSuccessfulFetch("/repo/.git");
+    await vi.advanceTimersByTimeAsync(1_000);
     git.raw.mockClear();
 
     await coord.fetchRefCommit(REQUEST);
@@ -1548,10 +1589,9 @@ describe("RepoFetchCoordinator.fetchRefCommit (#15733)", () => {
         })
     );
     const refFetchGit = refGit();
-    const answer = refFetchGit.raw.getMockImplementation()!;
     refFetchGit.raw.mockImplementation((args: string[]) => {
       order.push(args[0]!);
-      return answer(args);
+      return Promise.resolve(args[0] === "rev-parse" ? COMMIT : "");
     });
     mockCreateBackgroundFetchGit
       .mockReturnValueOnce(backgroundGit)
@@ -1569,6 +1609,39 @@ describe("RepoFetchCoordinator.fetchRefCommit (#15733)", () => {
     expect(order).toEqual(["background-done", "fetch", "rev-parse"]);
   });
 
+  it("holds a later background fetch of the same repo until it has read its commit", async () => {
+    let releaseFetch!: () => void;
+    const order: string[] = [];
+    const refFetchGit = refGit();
+    refFetchGit.raw.mockImplementation((args: string[]) => {
+      if (args[0] === "fetch") {
+        return new Promise<string>((resolve) => {
+          releaseFetch = () => resolve("");
+        });
+      }
+      order.push("rev-parse");
+      return Promise.resolve(COMMIT);
+    });
+    const backgroundGit = makeMockGit(() => {
+      order.push("background-fetch");
+      return Promise.resolve();
+    });
+    mockCreateBackgroundFetchGit
+      .mockReturnValueOnce(refFetchGit)
+      .mockReturnValueOnce(backgroundGit);
+    const coord = new RepoFetchCoordinator();
+
+    const fresh = coord.fetchRefCommit(REQUEST);
+    await vi.waitFor(() => expect(refFetchGit.raw).toHaveBeenCalled());
+    const background = coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(backgroundGit.raw).not.toHaveBeenCalled();
+
+    releaseFetch();
+    await Promise.all([fresh, background]);
+    expect(order).toEqual(["rev-parse", "background-fetch"]);
+  });
+
   it("rejects with git's own error, and the next fetch of the repo still runs", async () => {
     const failing = makeMockGit(() =>
       Promise.reject(new Error("fatal: couldn't find remote ref refs/heads/develop"))
@@ -1578,35 +1651,49 @@ describe("RepoFetchCoordinator.fetchRefCommit (#15733)", () => {
     const coord = new RepoFetchCoordinator();
 
     await expect(coord.fetchRefCommit(REQUEST)).rejects.toThrow("couldn't find remote ref");
+    expect(vi.getTimerCount()).toBe(0);
     const next = await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
 
     expect(next.status).toBe("success");
   });
 
-  it("gives up within its budget while queued, and never starts the fetch afterwards", async () => {
-    const stuck = makeMockGit(() => new Promise<void>(() => {}));
-    mockCreateBackgroundFetchGit.mockReturnValue(stuck);
+  it("counts finding the git directory against its budget", async () => {
+    mockGetGitCommonDir.mockReturnValue(new Promise<string>(() => {}));
+
+    const fresh = new RepoFetchCoordinator().fetchRefCommit({ ...REQUEST, timeoutMs: 5_000 });
+    const settled = expect(fresh).rejects.toThrow("didn't finish within 5s");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await settled;
+
+    expect(mockCreateBackgroundFetchGit).not.toHaveBeenCalled();
+  });
+
+  it("gives up within its budget while queued, and never starts git once its turn comes", async () => {
+    mockCreateBackgroundFetchGit.mockImplementation(stalledGitFactory());
     const coord = new RepoFetchCoordinator();
-    void coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
-    await vi.waitFor(() => expect(stuck.raw).toHaveBeenCalled());
+    const background = coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    await vi.waitFor(() => expect(mockCreateBackgroundFetchGit).toHaveBeenCalledTimes(1));
 
     const fresh = coord.fetchRefCommit({ ...REQUEST, timeoutMs: 5_000 });
     const settled = expect(fresh).rejects.toThrow("didn't finish within 5s");
     await vi.advanceTimersByTimeAsync(5_000);
     await settled;
 
-    // The background fetch's own 60s abort frees the chain; the abandoned
-    // link must not start a git process when it finally gets its turn.
+    // The background fetch's own 60s abort frees the chain, which hands the
+    // abandoned link its turn.
     await vi.advanceTimersByTimeAsync(60_000);
+    await background;
+    await vi.advanceTimersByTimeAsync(0);
     expect(mockCreateBackgroundFetchGit).toHaveBeenCalledTimes(1);
   });
 
   it("stops a running fetch when the coordinator is destroyed", async () => {
     let signal: AbortSignal | undefined;
+    const factory = stalledGitFactory();
     mockCreateBackgroundFetchGit.mockImplementation(
-      (_cwd: string, opts: { signal: AbortSignal }) => {
+      (cwd: string, opts: { signal: AbortSignal }) => {
         signal = opts.signal;
-        return makeMockGit(() => new Promise<void>(() => {}));
+        return factory(cwd, opts);
       }
     );
     const coord = new RepoFetchCoordinator();

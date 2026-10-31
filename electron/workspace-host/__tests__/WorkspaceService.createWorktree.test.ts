@@ -1601,16 +1601,16 @@ describe("WorkspaceService.createWorktree", () => {
       );
     });
 
-    it("fetches a local base from its exact branch's upstream, not a branch nested under it", async () => {
+    it("fetches a local base from its own upstream, whatever remote and name that is", async () => {
       const fetchSpy = spyFetch().mockResolvedValue(FETCHED);
+      mockSimpleGit.getRemotes.mockResolvedValueOnce([
+        { name: "origin", refs: { fetch: "url", push: "url" } },
+        { name: "fork", refs: { fetch: "url", push: "url" } },
+      ]);
       mockSimpleGit.raw.mockImplementation((args: string[]) => {
         if (args[0] === "for-each-ref") {
           return Promise.resolve(
-            [
-              "refs/heads/develop/old\0refs/remotes/fork/develop/old\0fork\0refs/heads/develop/old",
-              "refs/heads/develop\0refs/remotes/origin/develop\0origin\0refs/heads/develop",
-              "",
-            ].join("\n")
+            "refs/heads/develop\0refs/remotes/fork/release\0fork\0refs/heads/release\n"
           );
         }
         return Promise.resolve(undefined);
@@ -1623,14 +1623,69 @@ describe("WorkspaceService.createWorktree", () => {
         fetchBase: true,
       });
 
-      expect(fetchSpy).toHaveBeenCalledWith(
+      expect(fetchSpy).toHaveBeenCalledWith({
+        cwd: "/test/root",
+        remote: "fork",
+        sourceRef: "refs/heads/release",
+        trackingRef: "refs/remotes/fork/release",
+        timeoutMs: expect.any(Number),
+      });
+      expect(lastWorktreeAddCall(mockSimpleGit.raw)?.at(-1)).toBe(FETCHED);
+    });
+
+    it.each([
+      [
+        "only a branch nested under it",
+        "refs/heads/develop/old\0refs/remotes/origin/develop/old\0origin\0refs/heads/develop/old\n",
+      ],
+      ["nothing at all", ""],
+    ])("refuses a local base when the listing has %s, before fetching", async (_label, listing) => {
+      const fetchSpy = spyFetch();
+      mockSimpleGit.raw.mockImplementation((args: string[]) =>
+        Promise.resolve(args[0] === "for-each-ref" ? listing : undefined)
+      );
+
+      await service.createWorktree("req-fresh-no-local", "/test/root", {
+        baseBranch: "develop",
+        newBranch: "topic",
+        path: "/test/worktree-fresh-no-local",
+        fetchBase: true,
+      });
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(lastWorktreeAddCall(mockSimpleGit.raw)).toBeUndefined();
+      expect(mockSendEvent).toHaveBeenCalledWith(
         expect.objectContaining({
-          remote: "origin",
-          sourceRef: "refs/heads/develop",
-          trackingRef: "refs/remotes/origin/develop",
+          type: "create-worktree-result",
+          success: false,
+          error: expect.stringContaining("it isn't a local branch"),
         })
       );
-      expect(lastWorktreeAddCall(mockSimpleGit.raw)?.at(-1)).toBe(FETCHED);
+    });
+
+    it("never tracks, even when the new branch is the remote base's counterpart", async () => {
+      // Without a fresh base this exact shape emits `--track` (see "keeps
+      // --track when the new branch IS the remote base's counterpart").
+      spyFetch().mockResolvedValue(FETCHED);
+
+      await service.createWorktree("req-fresh-counterpart", "/test/root", {
+        baseBranch: "origin/topic",
+        newBranch: "topic",
+        path: "/test/worktree-fresh-counterpart",
+        fromRemote: true,
+        fetchBase: true,
+      });
+
+      expect(lastWorktreeAddCall(mockSimpleGit.raw)).toEqual([
+        "worktree",
+        "add",
+        "-b",
+        "topic",
+        "--no-track",
+        "--end-of-options",
+        "/test/worktree-fresh-counterpart",
+        FETCHED,
+      ]);
     });
 
     it("fails with the fetch's reason, secrets scrubbed, and creates nothing", async () => {
@@ -1648,9 +1703,9 @@ describe("WorkspaceService.createWorktree", () => {
         fetchBase: true,
       });
 
-      const result = mockSendEvent.mock.calls
-        .map((call: unknown[]) => call[0] as { type: string; requestId?: string; error?: string })
-        .find((event) => event.type === "create-worktree-result");
+      const events: Array<{ type: string; requestId?: string; error?: string }> =
+        mockSendEvent.mock.calls.map((call: unknown[]) => call[0]);
+      const result = events.find((event) => event.type === "create-worktree-result");
       expect(result).toMatchObject({ requestId: "req-fresh-fail", success: false });
       expect(result?.error).toContain("Couldn't fetch base 'origin/main' from 'origin'");
       expect(result?.error).toContain("unable to access");

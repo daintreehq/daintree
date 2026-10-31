@@ -216,6 +216,29 @@ export const workflowCreationActionRuns = {
     // the caller's evidence that no fetched start was confirmed.
     const startCommitField =
       created.startCommit !== undefined ? { startCommit: created.startCommit } : {};
+    // A host from before `fetchBase` strips the option and branches from the
+    // last-fetched ref. A remote view can reach one, and its answer then lacks
+    // the commit: stop before any recipe work runs on what may be a stale base.
+    if (fetchBase && created.startCommit === undefined) {
+      throw partialSuccessError(
+        "The worktree was created, but the host didn't confirm it fetched the base first, so the branch may start from a stale commit. That host may need a newer Daintree. Check the branch before working in it.",
+        {
+          worktreeId,
+          worktreePath: path,
+          branch: effectiveBranch,
+          requestedBranch,
+          effectiveBranch,
+          recipeLaunched: false,
+          spawnedTerminalCount: 0,
+          spawnedTerminalIds: [],
+          failedTerminalCount: 0,
+          setupState,
+          assignedToSelf: false,
+          assignedUsername: null,
+          assignmentError: null,
+        }
+      );
+    }
 
     let recipeLaunched = false;
     let spawnedTerminalCount = 0;

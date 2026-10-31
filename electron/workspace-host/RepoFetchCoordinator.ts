@@ -478,14 +478,8 @@ const REF_FETCH_STOPPED_MESSAGE = "The fetch was stopped because the project clo
    */
   async fetchRefCommit(opts: RefCommitFetch): Promise<string> {
     const baseGenerationAtStart = this.baseGeneration;
-    const commonDir = await getGitCommonDir(opts.cwd, { logErrors: false });
-    if (!commonDir) {
-      throw new Error(`Couldn't find the git directory for '${opts.cwd}'`);
-    }
-    if (this.baseGeneration !== baseGenerationAtStart) {
-      throw new Error(REF_FETCH_STOPPED_MESSAGE);
-    }
-
+    // The budget starts here, not at the git spawn: finding the common dir and
+    // waiting for the chain are part of what the caller is kept waiting for.
     const controller = new AbortController();
     this.inFlightControllers.add(controller);
     let timedOut = false;
@@ -494,42 +488,52 @@ const REF_FETCH_STOPPED_MESSAGE = "The fetch was stopped because the project clo
       controller.abort();
     }, opts.timeoutMs);
     // Settles the caller as soon as the budget runs out or teardown aborts,
-    // even while this link still waits behind another fetch on the chain.
+    // even while the work below still waits on the common dir or the chain.
     const abandoned = new Promise<never>((_, reject) => {
       controller.signal.addEventListener("abort", () => reject(new Error("aborted")), {
         once: true,
       });
     });
-    const run = (this.chains.get(commonDir) ?? Promise.resolve()).then(async () => {
-      if (controller.signal.aborted) throw new Error("aborted");
-      const git = await createBackgroundFetchGit(opts.cwd, { signal: controller.signal });
-      await git.raw([
-        "fetch",
-        "--no-tags",
-        "--no-prune",
-        "--no-auto-gc",
-        "--no-write-fetch-head",
-        "--",
-        opts.remote,
-        `+${opts.sourceRef}:${opts.trackingRef}`,
-      ]);
-      const commit = String(
-        await git.raw(["rev-parse", "--verify", `${opts.trackingRef}^{commit}`])
-      ).trim();
-      if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i.test(commit)) {
-        throw new Error(`git named no commit for ${opts.trackingRef} after fetching it`);
+    const work = async (): Promise<string> => {
+      const commonDir = await getGitCommonDir(opts.cwd, { logErrors: false });
+      if (!commonDir) {
+        throw new Error(`Couldn't find the git directory for '${opts.cwd}'`);
       }
-      return commit;
-    });
-    this.chains.set(
-      commonDir,
-      run.then(
-        () => undefined,
-        () => undefined
-      )
-    );
+      if (this.baseGeneration !== baseGenerationAtStart || controller.signal.aborted) {
+        throw new Error(REF_FETCH_STOPPED_MESSAGE);
+      }
+      const run = (this.chains.get(commonDir) ?? Promise.resolve()).then(async () => {
+        if (controller.signal.aborted) throw new Error("aborted");
+        const git = await createBackgroundFetchGit(opts.cwd, { signal: controller.signal });
+        await git.raw([
+          "fetch",
+          "--no-tags",
+          "--no-prune",
+          "--no-auto-gc",
+          "--no-write-fetch-head",
+          "--",
+          opts.remote,
+          `+${opts.sourceRef}:${opts.trackingRef}`,
+        ]);
+        const commit = String(
+          await git.raw(["rev-parse", "--verify", `${opts.trackingRef}^{commit}`])
+        ).trim();
+        if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i.test(commit)) {
+          throw new Error(`git named no commit for ${opts.trackingRef} after fetching it`);
+        }
+        return commit;
+      });
+      this.chains.set(
+        commonDir,
+        run.then(
+          () => undefined,
+          () => undefined
+        )
+      );
+      return run;
+    };
     try {
-      return await Promise.race([run, abandoned]);
+      return await Promise.race([work(), abandoned]);
     } catch (error) {
       if (timedOut) {
         throw new Error(`The fetch didn't finish within ${Math.ceil(opts.timeoutMs / 1000)}s`, {

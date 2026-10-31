@@ -642,6 +642,64 @@ describe("worktree.createWithRecipe", () => {
     expect(result.startCommit).toBe(startCommit);
   });
 
+  it("keeps the fetched start commit on the partial result when the recipe then fails", async () => {
+    const startCommit = "e".repeat(40);
+    worktreeClientMock.create.mockResolvedValue({
+      worktreeId: "wt-new",
+      branch: "feature/foo",
+      setupState: "pending",
+      startCommit,
+    });
+    setRecipe("recipe-1", async () => {
+      throw new Error("recipe boom");
+    });
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+
+    const error = await def
+      .run({ source: newBranch("feature/foo", { fetchBase: true }), recipeId: "recipe-1" }, {
+        dispatchSource: "agent",
+      } as never)
+      .then(
+        () => null,
+        (err: unknown) => err as Error
+      );
+
+    const message = error?.message ?? "";
+    expect(message).toMatch(/^PARTIAL_SUCCESS:/);
+    const payload = JSON.parse(message.slice(message.indexOf("{")));
+    expect(payload.partialResult.startCommit).toBe(startCommit);
+  });
+
+  it("stops before the recipe when a fresh base was asked for but the host confirmed none", async () => {
+    // A host from before fetchBase strips the option and answers without the
+    // commit; that worktree may sit on a stale base.
+    worktreeClientMock.create.mockResolvedValue({
+      worktreeId: "wt-new",
+      branch: "feature/foo",
+      setupState: "pending",
+    });
+    const runRecipeWithResults = setRecipe("recipe-1");
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+
+    const error = await def
+      .run(
+        { source: newBranch("feature/foo", { fetchBase: true }), recipeId: "recipe-1" },
+        {} as never
+      )
+      .then(
+        () => null,
+        (err: unknown) => err as Error
+      );
+
+    const message = error?.message ?? "";
+    expect(message).toMatch(/^PARTIAL_SUCCESS:/);
+    const payload = JSON.parse(message.slice(message.indexOf("{")));
+    expect(payload.message).toContain("didn't confirm it fetched the base");
+    expect(payload.partialResult).toMatchObject({ worktreeId: "wt-new", recipeLaunched: false });
+    expect(payload.partialResult).not.toHaveProperty("startCommit");
+    expect(runRecipeWithResults).not.toHaveBeenCalled();
+  });
+
   it("leaves fetchBase off the request, and startCommit off the result, unless asked", async () => {
     const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
 

@@ -187,13 +187,13 @@ describe("WorkspaceService.createWorktree with fetchBase (#15733)", () => {
   });
 
   it("suffixes a taken name from the fetched commit rather than reusing the older branch", async () => {
-    // Unchecked-out, so without a fresh base `suffix` would reuse it as is.
+    // Unchecked-out, and the base is local (no `fromRemote`), so without a
+    // fresh base `suffix` would check this stale branch out as is.
     git(worker, "branch", "--no-track", "topic", staleCommit);
 
     const { result, worktreePath } = await create({
-      baseBranch: "origin/main",
+      baseBranch: "main",
       newBranch: "topic",
-      fromRemote: true,
       fetchBase: true,
     });
 
