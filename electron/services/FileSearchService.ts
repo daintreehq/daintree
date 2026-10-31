@@ -592,6 +592,8 @@ export class FileSearchService {
       // A successful listing is the answer even when it is empty: inside a work
       // tree, empty means everything under cwd is ignored, and the walker below
       // doesn't read .gitignore, so falling through would list exactly those files.
+      // That includes a folder a parent repository ignores (a home directory
+      // tracked with `*`): git can't tell that apart from an ignored subtree.
       return await loadGitFiles(cwd);
     } catch {
       // Not inside a work tree, or git can't run here: walk the disk instead.

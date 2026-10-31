@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -126,6 +126,35 @@ describe("FileSearchService against real git", () => {
     await expect(service.listFiles(path.join(repo, "scratch"))).resolves.toEqual(["notes.md"]);
   });
 
+  // Deliberate: git can't tell an ignored generated folder from an unrelated
+  // project that a home-directory repository happens to cover with `*`, so both
+  // get git's answer rather than a walker that would list every ignored name.
+  it("lists nothing from a folder that a parent repository ignores with `*`", async () => {
+    const outer = path.join(root, "outer");
+    makeRepo(outer);
+    writeFile(path.join(outer, ".gitignore"), "*\n");
+    const project = path.join(outer, "project");
+    writeFile(path.join(project, "src", "main.ts"));
+
+    expect(git(project, ...LS_FILES)).toBe("");
+
+    const service = await createService();
+    await expect(service.listFiles(project)).resolves.toEqual([]);
+  });
+
+  it("still lists an independent repository nested under an ignoring parent", async () => {
+    const outer = path.join(root, "outer");
+    makeRepo(outer);
+    writeFile(path.join(outer, ".gitignore"), "*\n");
+    const inner = path.join(outer, "inner");
+    makeRepo(inner);
+    writeFile(path.join(inner, "src", "main.ts"));
+
+    const service = await createService();
+    const files = await service.listFiles(inner);
+    expect([...files].sort()).toEqual(["src/", "src/main.ts"]);
+  });
+
   it("falls back to the disk walker in a directory outside any repository", async () => {
     const plain = path.join(root, "plain");
     writeFile(path.join(plain, "a.txt"));
@@ -133,7 +162,10 @@ describe("FileSearchService against real git", () => {
     writeFile(path.join(plain, "node_modules", "dep", "index.js"));
 
     // The precondition this case exists for: git fails rather than answering.
-    expect(() => git(plain, ...LS_FILES)).toThrow();
+    const probe = spawnSync("git", LS_FILES, { cwd: plain, env: fixtureEnv(), encoding: "utf8" });
+    expect(probe.status).toBe(128);
+    expect(probe.stdout).toBe("");
+    expect(probe.stderr).toMatch(/not a git repository/i);
 
     const service = await createService();
     const files = await service.listFiles(plain);
