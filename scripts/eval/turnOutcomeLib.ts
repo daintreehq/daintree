@@ -145,10 +145,7 @@ function isExistingFile(candidate: string): boolean {
  * for the app. A path to any other file is returned as-is so the loader can
  * say why it is not a turn-outcome source.
  */
-export function resolveStorePath(
-  storePath?: string,
-  env: NodeJS.ProcessEnv = process.env
-): string {
+export function resolveStorePath(storePath?: string, env: NodeJS.ProcessEnv = process.env): string {
   if (storePath) {
     const resolved = path.resolve(storePath);
     return isDirectory(resolved) ? path.join(resolved, PROFILE_DB_FILE) : resolved;

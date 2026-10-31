@@ -44,8 +44,7 @@ function loadDatabaseSync(): DatabaseSyncCtor {
   // getBuiltinModule keeps the bundler and vitest out of the resolution, and
   // node:sqlite avoids better-sqlite3, whose binary is built for Electron's ABI.
   const sqlite = process.getBuiltinModule("node:sqlite") as
-    | { DatabaseSync?: DatabaseSyncCtor }
-    | undefined;
+    { DatabaseSync?: DatabaseSyncCtor } | undefined;
   if (!sqlite?.DatabaseSync) {
     throw new Error("node:sqlite is not available in this Node runtime (Node 22.13+ is required)");
   }

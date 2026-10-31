@@ -18,7 +18,11 @@ import {
   resolveStorePath,
   stratifiedSample,
 } from "./turnOutcomeLib.js";
-import { TURN_OUTCOME_RING, TurnOutcomeSourceError, readTurnOutcomeRing } from "./turnOutcomeSource.js";
+import {
+  TURN_OUTCOME_RING,
+  TurnOutcomeSourceError,
+  readTurnOutcomeRing,
+} from "./turnOutcomeSource.js";
 import type { AssistantTurnRecord, TurnOutcomeClass } from "../../shared/types/ipc/mcpServer.js";
 
 export interface JudgeResult {
@@ -156,9 +160,7 @@ export async function runTurnOutcomeEval(argv: string[], deps: RunDeps): Promise
     if (judgeFailures > 0) {
       warnings.push(`Judge failed on ${judgeFailures} records (see report for IDs)`);
     }
-    log(
-      `Judge completed: ${judgePredictions.length} classifications, ${judgeFailures} failures`
-    );
+    log(`Judge completed: ${judgePredictions.length} classifications, ${judgeFailures} failures`);
   } else if (options.dryRun) {
     log("Dry run — skipping judge API calls.");
   }

@@ -100,7 +100,9 @@ describe("runTurnOutcomeEval", () => {
       sampleMetadata: { sampled: 30, classCountsBefore: { "reasoning-loop": 10 } },
       distribution: { total: 30, counts: { answered: 10, "reasoning-loop": 10, "tool-error": 10 } },
     });
-    expect(report.warnings).toContainEqual(expect.stringContaining('unknown outcome "not-a-class"'));
+    expect(report.warnings).toContainEqual(
+      expect.stringContaining('unknown outcome "not-a-class"')
+    );
   });
 
   it("fails non-zero, naming the path, when the profile has no database", async () => {
@@ -199,13 +201,18 @@ describe("runTurnOutcomeEval", () => {
     expect(report.ready).toBe(true);
     expect(code).toBe(0);
     expect(logs).toContainEqual(expect.stringMatching(/^READY: kappa 1\.000/));
-    expect(report.warnings).not.toContainEqual(expect.stringContaining("calibration labels joined"));
+    expect(report.warnings).not.toContainEqual(
+      expect.stringContaining("calibration labels joined")
+    );
   });
 
   it("fails a judged run whose calibration set misses the sample", async () => {
     writeProfile(turns(12, ["answered", "hedged"]));
     const calibrationPath = path.join(tmp, "calibration.json");
-    fs.writeFileSync(calibrationPath, JSON.stringify([{ recordId: "elsewhere", expected: "hedged" }]));
+    fs.writeFileSync(
+      calibrationPath,
+      JSON.stringify([{ recordId: "elsewhere", expected: "hedged" }])
+    );
     const { deps, logs } = harness({ OPENAI_API_KEY: "test-key" });
 
     const code = await runTurnOutcomeEval(
@@ -214,7 +221,11 @@ describe("runTurnOutcomeEval", () => {
     );
 
     expect(code).toBe(1);
-    expect(readReport()).toMatchObject({ ready: false, calibrationPairs: 0, calibrationMatched: 0 });
+    expect(readReport()).toMatchObject({
+      ready: false,
+      calibrationPairs: 0,
+      calibrationMatched: 0,
+    });
     expect(logs).toContain("NOT READY: no calibration label matches a judged record");
   });
 });

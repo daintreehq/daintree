@@ -51,7 +51,9 @@ function readTurnOutcomeUnion(): string[] {
     if (!ts.isUnionTypeNode(node.type)) throw new Error("TurnOutcomeClass is no longer a union");
     members = node.type.types.map((member) => {
       if (!ts.isLiteralTypeNode(member) || !ts.isStringLiteral(member.literal)) {
-        throw new Error(`TurnOutcomeClass member is not a string literal: ${member.getText(source)}`);
+        throw new Error(
+          `TurnOutcomeClass member is not a string literal: ${member.getText(source)}`
+        );
       }
       return member.literal.text;
     });
