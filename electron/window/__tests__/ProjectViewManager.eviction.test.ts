@@ -278,6 +278,13 @@ import {
   _resetDictationViewHoldsForTests,
   holdDictationView,
 } from "../../services/voice/dictationViewHold.js";
+import {
+  _resetCachedViewFlushForTests,
+  isCachedViewFlushPending,
+  recordCachedViewFlushArmed,
+  settleCachedViewFlush,
+} from "../../services/cachedViewFlush.js";
+import { CHANNELS } from "../../ipc/channels.js";
 
 // The shared snapshot is module-level state; without a reset, a test could be
 // served metrics cached by the previous test's differently-mocked sweep.
@@ -4451,6 +4458,89 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
         toHostScopedKey("studio-01", "proj-r"),
         "proj-c",
       ]);
+    });
+  });
+
+  describe("views still flushing unsaved edits on their cached edge (#15633)", () => {
+    beforeEach(() => _resetCachedViewFlushForTests());
+    afterEach(() => _resetCachedViewFlushForTests());
+
+    const wcFor = (mgr: ProjectViewManager, projectId: string) =>
+      mgr.getAllViews().find((v) => v.projectId === projectId)!.view.webContents;
+    const flushIdSentTo = (wc: Electron.WebContents) =>
+      (
+        vi
+          .mocked(wc.send)
+          .mock.calls.filter(([channel]) => channel === CHANNELS.APP_VIEW_CACHED)
+          .at(-1)?.[1] as { flushId?: string } | undefined
+      )?.flushId;
+
+    /** proj-a and proj-b cached, proj-c active; proj-b was left with Settings open. */
+    async function seedWithFlushingView(mgr: ProjectViewManager) {
+      const wcA = createMockWebContents();
+      mgr.registerInitialView(
+        { webContents: wcA, setBounds: vi.fn() } as never,
+        "proj-a",
+        "/path/a"
+      );
+      await mgr.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+      recordCachedViewFlushArmed(wcFor(mgr, "proj-b"), true);
+      await mgr.switchTo("proj-c", "/path/c");
+      await flushImmediates();
+      return wcFor(mgr, "proj-b");
+    }
+
+    it("keeps the view until its flush has reached main, then reclaims it", async () => {
+      const mgr = makeManager(3);
+      const wcB = await seedWithFlushingView(mgr);
+      expect(isCachedViewFlushPending(wcB)).toBe(true);
+
+      mgr.setCachedViewLimit(1);
+
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-b", "proj-c"]);
+      expect(evictedProjectIds()).toEqual(["proj-a"]);
+      expect(skippedLog()?.flushHeldProjectIds).toEqual(["proj-b"]);
+      expect(wcB.close).not.toHaveBeenCalled();
+
+      // The renderer answers only once its last save step has returned from main.
+      settleCachedViewFlush(wcB, flushIdSentTo(wcB));
+      await flushImmediates();
+
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+      expect(wcB.close).toHaveBeenCalled();
+    });
+
+    it("keeps it through the forced reclaim", async () => {
+      const mgr = makeManager(3);
+      mgr.setMemoryPressurePolicy(BAND);
+      setAvailableMb(2500);
+      await seedWithFlushingView(mgr);
+
+      mgr.reclaimCachedViewsUnderPressure();
+
+      expect(evictedProjectIds()).toEqual(["proj-a"]);
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-b", "proj-c"]);
+    });
+
+    it("won't hand it to another window mid-flush", async () => {
+      const mgr = makeManager(3);
+      const wcB = await seedWithFlushingView(mgr);
+
+      expect(mgr.releaseCachedView("proj-b")).toBe(false);
+      expect(mgr.canReleaseCachedView("proj-a")).toBe(true);
+
+      settleCachedViewFlush(wcB, flushIdSentTo(wcB));
+      expect(mgr.canReleaseCachedView("proj-b")).toBe(true);
+    });
+
+    it("holds nothing for a view whose renderer has no flush registered", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+
+      expect(isCachedViewFlushPending(wcFor(mgr, "proj-b"))).toBe(false);
+      mgr.setCachedViewLimit(1);
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
     });
   });
 

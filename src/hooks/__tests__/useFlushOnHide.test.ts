@@ -19,19 +19,23 @@ function fireVisibilityChange(): void {
   document.dispatchEvent(new Event("visibilitychange"));
 }
 
-// Mirrors preload: `isViewCached` is the latch, the three edges are non-replaying.
+// Mirrors preload: `isViewCached` is the latch, and a cached edge runs every
+// registered flusher and settles once they all have.
 function installViewLifecycle(latchedCached = false) {
-  const handlers = { cached: [] as Array<() => void>, warm: [] as Array<() => void> };
+  const flushers = new Set<() => unknown>();
+  const warm: Array<() => void> = [];
   let latched = latchedCached;
   vi.stubGlobal("electron", {
     app: {
       isViewCached: () => latched,
-      onViewCached: (cb: () => void) => {
-        handlers.cached.push(cb);
-        return () => {};
+      onViewCached: () => () => {},
+      onViewCachedFlush: (cb: () => unknown) => {
+        const flush = () => cb();
+        flushers.add(flush);
+        return () => flushers.delete(flush);
       },
       onViewWarmActivated: (cb: () => void) => {
-        handlers.warm.push(cb);
+        warm.push(cb);
         return () => {};
       },
       onViewRevealed: () => () => {},
@@ -40,12 +44,13 @@ function installViewLifecycle(latchedCached = false) {
   return {
     cache: () => {
       latched = true;
-      for (const cb of handlers.cached) cb();
+      return Promise.allSettled(Array.from(flushers, (flush) => flush()));
     },
     activate: () => {
       latched = false;
-      for (const cb of handlers.warm) cb();
+      for (const cb of warm) cb();
     },
+    flusherCount: () => flushers.size,
   };
 }
 
@@ -225,6 +230,36 @@ describe("useFlushOnHide", () => {
 
     expect(disabled).not.toHaveBeenCalled();
     expect(unmounted).not.toHaveBeenCalled();
+  });
+
+  it("hands the cached edge the callback's promise, so main can wait for it", async () => {
+    const lifecycle = installViewLifecycle();
+    let finish!: () => void;
+    const fn = vi.fn(() => new Promise<void>((resolve) => (finish = resolve)));
+    renderHook(() => useFlushOnHide(fn, true));
+
+    let settled = false;
+    const edge = lifecycle.cache().then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+
+    finish();
+    await edge;
+    expect(settled).toBe(true);
+  });
+
+  it("drops its cached-edge subscription when disabled", () => {
+    const lifecycle = installViewLifecycle();
+    const { rerender } = renderHook(({ enabled }) => useFlushOnHide(vi.fn(), enabled), {
+      initialProps: { enabled: true },
+    });
+    expect(lifecycle.flusherCount()).toBe(1);
+
+    rerender({ enabled: false });
+    expect(lifecycle.flusherCount()).toBe(0);
   });
 
   it("still fires on a window hide while the view is not cached", () => {

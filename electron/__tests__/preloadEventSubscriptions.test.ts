@@ -53,6 +53,7 @@ interface PluginBridge {
 
 interface AppBridge {
   isViewCached: () => boolean;
+  onViewCachedFlush: (cb: () => unknown) => () => void;
   onPanelGridConfigChanged: (cb: (payload: unknown) => void) => () => void;
 }
 
@@ -381,6 +382,79 @@ describe("preload event subscriptions", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe("cached-edge flush (#15633)", () => {
+    const sentOn = (channel: string) =>
+      ipcRenderer.send.mock.calls.filter(([sent]) => sent === channel).map(([, arg]) => arg);
+    const flushed = () => sentOn("app:view-cached-flushed");
+
+    beforeEach(() => ipcRenderer.send.mockClear());
+
+    it("tells main when the first flush is registered and when the last one goes", () => {
+      const offA = app.onViewCachedFlush(() => {});
+      const offB = app.onViewCachedFlush(() => {});
+      expect(sentOn("app:view-cached-flush-armed")).toEqual([true]);
+
+      offA();
+      offA();
+      expect(sentOn("app:view-cached-flush-armed")).toEqual([true]);
+      offB();
+      expect(sentOn("app:view-cached-flush-armed")).toEqual([true, false]);
+    });
+
+    it("answers main's flush id only once every flush has settled", async () => {
+      let finishSlow!: () => void;
+      const slow = vi.fn(() => new Promise<void>((resolve) => (finishSlow = resolve)));
+      const failing = vi.fn(() => Promise.reject(new Error("save failed")));
+      const throwing = vi.fn(() => {
+        throw new Error("boom");
+      });
+      const offs = [slow, failing, throwing].map((flush) => app.onViewCachedFlush(flush));
+      try {
+        ipcRenderer.emit("app:view-cached", {}, { flushId: "edge-1" });
+        expect(slow).toHaveBeenCalledTimes(1);
+        expect(failing).toHaveBeenCalledTimes(1);
+        expect(throwing).toHaveBeenCalledTimes(1);
+
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(flushed()).toEqual([]);
+
+        finishSlow();
+        await vi.waitFor(() => expect(flushed()).toEqual(["edge-1"]));
+      } finally {
+        for (const off of offs) off();
+        ipcRenderer.emit("app:view-warm-activated", {});
+      }
+    });
+
+    it("answers at once with nothing registered, and keeps a started flush after unsubscribing", async () => {
+      ipcRenderer.emit("app:view-cached", {}, { flushId: "empty" });
+      await vi.waitFor(() => expect(flushed()).toEqual(["empty"]));
+
+      let finish!: () => void;
+      const off = app.onViewCachedFlush(() => new Promise<void>((resolve) => (finish = resolve)));
+      ipcRenderer.emit("app:view-cached", {}, { flushId: "held" });
+      off();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(flushed()).toEqual(["empty"]);
+
+      finish();
+      await vi.waitFor(() => expect(flushed()).toEqual(["empty", "held"]));
+      ipcRenderer.emit("app:view-warm-activated", {});
+    });
+
+    it("still flushes on an edge main isn't holding, without answering it", async () => {
+      const flush = vi.fn();
+      const off = app.onViewCachedFlush(flush);
+      ipcRenderer.emit("app:view-cached", {});
+      off();
+
+      expect(flush).toHaveBeenCalledTimes(1);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(flushed()).toEqual([]);
+      ipcRenderer.emit("app:view-warm-activated", {});
+    });
   });
 
   it("still latches the cached state when clearing the cache throws", () => {
