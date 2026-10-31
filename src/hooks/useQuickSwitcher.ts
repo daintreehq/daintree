@@ -5,6 +5,7 @@ import { usePanelStore } from "@/store";
 import { useWorktrees } from "./useWorktrees";
 import { useWorktreeSelectionStore } from "@/store";
 import { isPtyPanel, type PanelKind } from "@shared/types/panel";
+import type { AgentState } from "@shared/types/agent";
 import { isQuickSwitchablePanel } from "@/utils/quickSwitcher";
 import { useSearchablePalette, type FuseResultMatch } from "./useSearchablePalette";
 import { usePaletteStore } from "@/store/paletteStore";
@@ -25,6 +26,18 @@ export interface QuickSwitcherItem {
   terminalKind?: PanelKind;
   chrome?: TerminalChromeDescriptor;
   worktreeId?: string;
+  /**
+   * Where a panel lives — its worktree's name, or its cwd outside one. Drawn
+   * beside the title rather than under it: three agents all titled "Claude"
+   * differ only here, so it belongs on the line the eye scans.
+   */
+  context?: string;
+  /** A panel parked in the background rather than in the grid or dock. */
+  isBackground?: boolean;
+  /** The agent state last observed on a panel, when an agent was detected. */
+  agentState?: AgentState;
+  /** The focused panel, or the worktree being shown: where the user is now. */
+  isCurrent?: boolean;
   /** A plugin search provider's result (#13792): what it opens and who it came from. */
   pluginHit?: PluginSearchHit;
 }
@@ -57,11 +70,13 @@ export interface UseQuickSwitcherReturn {
   exitScope: () => void;
 }
 
+// No `type` key: "terminal", "worktree" and "plugin" are never drawn on a row,
+// so a query fuzzily matching them listed rows with nothing visible to explain
+// why ("lin" found every panel through "terminal").
 const FUSE_OPTIONS: IFuseOptions<QuickSwitcherItem> = {
   keys: [
     { name: "title", weight: 2 },
     { name: "subtitle", weight: 1 },
-    { name: "type", weight: 0.5 },
   ],
   threshold: 0.4,
   includeScore: true,
@@ -99,6 +114,7 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     paletteIsOpen ? state.panelsById : EMPTY_PANELS_BY_ID
   );
   const mruList = usePanelStore((state) => (paletteIsOpen ? state.mruList : EMPTY_MRU));
+  const focusedPanelId = usePanelStore((state) => (paletteIsOpen ? state.focusedId : null));
   const pruneMru = usePanelStore((state) => state.pruneMru);
 
   const {
@@ -107,9 +123,10 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     isInitialized: worktreesInitialized,
     error: worktreeError,
   } = useWorktrees({ enabled: paletteIsOpen });
-  const { selectWorktree } = useWorktreeSelectionStore(
+  const { selectWorktree, activeWorktreeId } = useWorktreeSelectionStore(
     useShallow((state) => ({
       selectWorktree: state.selectWorktree,
+      activeWorktreeId: paletteIsOpen ? state.activeWorktreeId : null,
     }))
   );
 
@@ -150,6 +167,10 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
         terminalKind: t.kind,
         chrome: deriveTerminalChrome(t),
         worktreeId: t.worktreeId,
+        context: baseSubtitle,
+        isBackground,
+        agentState: isPtyPanel(t) ? t.agentState : undefined,
+        isCurrent: t.id === focusedPanelId,
       });
     }
 
@@ -160,11 +181,12 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
         type: "worktree",
         title: w.name ?? w.branch ?? "Worktree",
         subtitle: w.path,
+        isCurrent: w.id === activeWorktreeId,
       });
     }
 
     return result;
-  }, [panelIds, panelsById, worktrees, worktreeMap]);
+  }, [panelIds, panelsById, worktrees, worktreeMap, focusedPanelId, activeWorktreeId]);
 
   const { state: pluginState } = pluginSearch;
   const pluginItems = useMemo<QuickSwitcherItem[]>(() => {

@@ -35,6 +35,12 @@ export interface PanelKindOption {
    */
   origin?: PanelKindOrigin;
   installed?: boolean;
+  /**
+   * An agent's launch chord as a combo (`Cmd+Alt+C`), so the row can draw it as
+   * keycaps like every other shortcut in the family. `description` keeps the
+   * display string for search.
+   */
+  shortcut?: string;
   resumeSession?: AgentSessionRecord;
   /**
    * Resume entry whose recorded worktree no longer resolves in the live
@@ -159,6 +165,8 @@ export function usePanelPalette(): UsePanelPaletteReturn {
           iconId: agentConfig.iconId,
           color: agentConfig.color,
           description: displayCombo || agentConfig.tooltip,
+          shortcut:
+            displayCombo && actionId ? keybindingService.getEffectiveCombo(actionId) : undefined,
           category: "agent" as const,
           installed: isAvailabilityInitialized
             ? isAgentInstalled(availability[agentId])

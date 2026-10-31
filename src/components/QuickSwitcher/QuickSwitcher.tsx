@@ -89,23 +89,40 @@ export function QuickSwitcher({
     () => (keywordProvider ? { keys: ["Tab"], label: `to search ${keywordProvider.title}` } : null),
     [keywordProvider]
   );
+  // Inside a scope the way back is Backspace on an empty field, said where the
+  // Tab that got the user in was taught.
+  const scopeExitHint = useMemo(
+    () => (scopedProvider && query === "" ? { keys: ["⌫"], label: "to search everything" } : null),
+    [scopedProvider, query]
+  );
+  const secondaryHint = keywordHint ?? scopeExitHint;
   const getFooter = useCallback(
     (item: QuickSwitcherItemData | null): React.ReactNode => {
-      if (!item && !keywordHint) return undefined;
+      if (!item && !secondaryHint) return undefined;
       return (
         <div id={footerHintId} className="w-full">
           {item ? (
             <PaletteFooterHints
               primaryHint={{ keys: ["↵"], label: getQuickSwitcherActionLabel(item) }}
-              hints={keywordHint ? [keywordHint] : []}
+              hints={secondaryHint ? [secondaryHint] : []}
             />
           ) : (
-            <PaletteFooterHints primaryHint={keywordHint!} />
+            <PaletteFooterHints primaryHint={secondaryHint!} />
           )}
         </div>
       );
     },
-    [footerHintId, keywordHint]
+    [footerHintId, secondaryHint]
+  );
+
+  // Built-in rows carry their type in their glyph and stay in one MRU or ranked
+  // run; a band would split that order. Plugin rows come from somewhere else,
+  // so each provider's block is named once above it instead of on every row.
+  // Scoped, the chip in the field already names the one provider.
+  const getSectionLabel = useCallback(
+    (item: QuickSwitcherItemData) =>
+      !scopedProvider && item.type === "plugin" ? (item.pluginHit?.providerTitle ?? "") : "",
+    [scopedProvider]
   );
 
   // Keyword + Tab scopes the switcher to that provider; Backspace on an empty
@@ -202,6 +219,7 @@ export function QuickSwitcher({
       inputPrefix={chipNode}
       getItemId={(item) => item.id}
       matchesById={matchesById}
+      getSectionLabel={getSectionLabel}
       renderItem={(item, index, isSelected, onHoverIndex, matches) => (
         <QuickSwitcherItem
           key={item.id}
@@ -211,6 +229,8 @@ export function QuickSwitcher({
           onHover={() => onHoverIndex(index)}
           ariaDescribedBy={footerHintId}
           matches={matches}
+          query={query}
+          showProvider={false}
         />
       )}
       getFooter={getFooter}

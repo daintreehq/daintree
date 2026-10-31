@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
+import { HighlightedText } from "./HighlightedText";
 
 const CUT_ATTR = "data-cut";
 
@@ -81,15 +82,19 @@ export function PathTail({
   children,
   className,
   ref,
+  indices,
   ...rest
-}: { children: string; ref?: React.Ref<HTMLSpanElement> } & Omit<
-  React.HTMLAttributes<HTMLSpanElement>,
-  "children"
->) {
+}: {
+  children: string;
+  ref?: React.Ref<HTMLSpanElement>;
+  /** Match ranges on the path, for search results that show why they matched. */
+  indices?: readonly (readonly [number, number])[];
+} & Omit<React.HTMLAttributes<HTMLSpanElement>, "children">) {
   const tailRef = useRef<HTMLSpanElement | null>(null);
 
   // Observed afresh when the path or its classes change: either can carry the
-  // path across the cut in a box that keeps its width.
+  // path across the cut in a box that keeps its width. Not on `indices`: a match
+  // band or underline changes no metrics.
   useLayoutEffect(() => {
     const el = tailRef.current;
     return el ? watch(el) : undefined;
@@ -104,7 +109,9 @@ export function PathTail({
       }}
       className={cn("path-tail truncate text-left [direction:rtl]", className)}
     >
-      <bdi dir="ltr">{children}</bdi>
+      <bdi dir="ltr">
+        <HighlightedText text={children} indices={indices} />
+      </bdi>
     </span>
   );
 }

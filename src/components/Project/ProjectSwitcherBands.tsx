@@ -655,6 +655,7 @@ export function ProjectListContent({
             scratch={row}
             isSelected={isSelected}
             nowMs={nowMs}
+            highlightQuery={isSearching ? query : undefined}
             showCurrentLabel={!hasBands}
             onSelect={onSelect}
             onHoverRow={onHoverRow}
@@ -664,6 +665,7 @@ export function ProjectListContent({
             project={row}
             isSelected={isSelected}
             nowMs={nowMs}
+            highlightQuery={isSearching ? query : undefined}
             // Band membership is frozen while the palette is open, so a
             // project that became active mid-session can sit under another
             // header; only the "Current project" band makes the label redundant.
