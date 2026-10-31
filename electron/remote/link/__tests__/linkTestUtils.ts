@@ -35,15 +35,100 @@ export async function socketPair(dir: string): Promise<{ a: net.Socket; b: net.S
   return { a, b };
 }
 
+export interface LinkConditions {
+  /** Added to every byte's trip, in each direction. */
+  oneWayDelayMs: number;
+  /** Each direction's rate; unlimited when absent. */
+  bytesPerSecond?: number;
+  /**
+   * Bytes a direction holds waiting for its rate before the sender is pushed
+   * back, the way a full socket buffer pushes back.
+   */
+  queueBytes?: number;
+}
+
+const DEFAULT_QUEUE_BYTES = 256 * 1024;
+
+/**
+ * Carry one direction of a connection over an emulated link: each chunk leaves
+ * once the rate has serialized everything before it and arrives
+ * `oneWayDelayMs` later, in order. Bytes in propagation never push back; only
+ * a backlog behind the rate does, so latency alone doesn't cap throughput.
+ */
+function relayDirection(from: net.Socket, to: net.Socket, conditions: LinkConditions): void {
+  const queue: Array<{ chunk: Buffer; at: number }> = [];
+  const rate = conditions.bytesPerSecond ?? null;
+  const limit = conditions.queueBytes ?? DEFAULT_QUEUE_BYTES;
+  let wireFreeAt = 0;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let resumeTimer: ReturnType<typeof setTimeout> | null = null;
+  const deliver = () => {
+    timer = null;
+    const now = performance.now();
+    while (queue.length > 0 && queue[0]!.at <= now) to.write(queue.shift()!.chunk);
+    arm();
+  };
+  const arm = () => {
+    if (timer || queue.length === 0 || to.destroyed) return;
+    timer = setTimeout(deliver, Math.max(0, queue[0]!.at - performance.now()));
+  };
+  from.on("data", (chunk: Buffer) => {
+    const now = performance.now();
+    wireFreeAt = Math.max(now, wireFreeAt) + (rate ? (chunk.byteLength / rate) * 1000 : 0);
+    const at = wireFreeAt + conditions.oneWayDelayMs;
+    if (queue.length === 0 && at <= now) to.write(chunk);
+    else {
+      queue.push({ chunk, at });
+      arm();
+    }
+    if (!rate || resumeTimer) return;
+    const backlog = ((wireFreeAt - now) * rate) / 1000;
+    if (backlog <= limit) return;
+    from.pause();
+    resumeTimer = setTimeout(
+      () => {
+        resumeTimer = null;
+        from.resume();
+      },
+      ((backlog - limit / 2) / rate) * 1000
+    );
+  });
+  from.once("close", () => {
+    if (timer) clearTimeout(timer);
+    if (resumeTimer) clearTimeout(resumeTimer);
+    queue.length = 0;
+    to.destroy();
+  });
+}
+
+/**
+ * Two ends of one connection that runs through an emulated link with the given
+ * delay and rate in each direction (two real Unix sockets joined by a relay).
+ */
+export async function conditionedSocketPair(
+  dir: string,
+  conditions: LinkConditions
+): Promise<{ a: net.Socket; b: net.Socket }> {
+  const near = await socketPair(dir);
+  const far = await socketPair(dir);
+  relayDirection(near.b, far.a, conditions);
+  relayDirection(far.a, near.b, conditions);
+  return { a: near.a, b: far.b };
+}
+
 type Extra = Omit<LinkSessionOptions, "role">;
 
-/** A host and client session over a real socket, opened without a handshake. */
+/**
+ * A host and client session over a real socket, opened without a handshake;
+ * over an emulated link when `conditions` are given.
+ */
 export async function openSessionPair(
   dir: string,
   hostOptions: Extra = {},
-  clientOptions: Extra = {}
+  clientOptions: Extra = {},
+  conditions?: LinkConditions
 ): Promise<{ host: LinkSession; client: LinkSession }> {
-  const { a, b } = await socketPair(dir);
+  const { a, b } = conditions ? await conditionedSocketPair(dir, conditions) : await socketPair(dir);
   const host = new LinkSession(a, {
     pingIntervalMs: 0,
     idleTimeoutMs: 0,
