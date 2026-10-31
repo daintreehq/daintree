@@ -196,7 +196,7 @@ describe("AgentInstallService adversarial", () => {
       ] as const
     ).flatMap(([platform, os]) =>
       (antigravityConfig.install?.byOs?.[os] ?? []).map(
-        (block, methodIndex) => [platform, block.label ?? "", methodIndex] as const
+        (block, methodIndex) => [platform, block.label ?? "", methodIndex, block] as const
       )
     );
 
@@ -206,19 +206,23 @@ describe("AgentInstallService adversarial", () => {
       );
     });
 
-    it.each(cases)("%s %s is copy-only and never spawns", async (platform, _label, methodIndex) => {
-      setPlatform(platform);
-      getAgentConfigMock.mockReturnValue(antigravityConfig);
+    it.each(cases)(
+      "%s %s is copy-only and never spawns",
+      async (platform, _label, methodIndex, block) => {
+        expect(isBlockExecutable(block)).toBe(false);
+        setPlatform(platform);
+        getAgentConfigMock.mockReturnValue(antigravityConfig);
 
-      const result = await runAgentInstall(
-        { agentId: "antigravity", jobId: "j1", methodIndex },
-        vi.fn()
-      );
+        const result = await runAgentInstall(
+          { agentId: "antigravity", jobId: "j1", methodIndex },
+          vi.fn()
+        );
 
-      expect(result.success).toBe(false);
-      expect(result.error).toMatch(/requires manual execution/);
-      expect(spawnMock).not.toHaveBeenCalled();
-    });
+        expect(result.success).toBe(false);
+        expect(result.error).toMatch(/requires manual execution/);
+        expect(spawnMock).not.toHaveBeenCalled();
+      }
+    );
   });
 
   describe("runAgentInstall", () => {

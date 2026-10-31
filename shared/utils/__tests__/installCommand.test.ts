@@ -19,6 +19,9 @@ describe("requiresShell", () => {
     ["a line break", "npm install -g foo\nnpm install -g bar"],
     ["cmd.exe's & separator", "curl -o i.cmd https://x/i.cmd & i.cmd"],
     ["a trailing background &", "agent serve &"],
+    ["a POSIX variable", "npm install -g foo --prefix=$HOME/.local"],
+    ["a cmd.exe variable", "setup.exe /dir %LOCALAPPDATA%\\agent"],
+    ["a home-relative word", "pipx install --path ~/agent"],
   ])("needs a shell for %s", (_label, command) => {
     expect(requiresShell(command)).toBe(true);
   });

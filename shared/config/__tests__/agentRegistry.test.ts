@@ -1426,6 +1426,17 @@ describe("Antigravity install help (#15622)", () => {
     return new URL(urls[0]!);
   };
 
+  // Each script must actually run: piped into its interpreter, or, for
+  // cmd.exe, downloaded, run, then cleaned up.
+  const runsTheScript = (command: string) => {
+    const script = installerUrl(command).pathname;
+    if (script.endsWith(".sh")) return /^curl -fsSL \S+ \| bash$/.test(command);
+    if (script.endsWith(".ps1")) return /^irm \S+ \| iex$/.test(command);
+    if (!script.endsWith(".cmd")) return false;
+    const file = /^curl -fsSL \S+ -o (\S+) /.exec(command)?.[1];
+    return !!file && command.endsWith(` -o ${file} && ${file} && del ${file}`);
+  };
+
   it.each([
     ["macos", /\.sh$/],
     ["linux", /\.sh$/],
@@ -1437,11 +1448,15 @@ describe("Antigravity install help (#15622)", () => {
       const url = installerUrl(command);
       expect(url.host, command).toBe(new URL(docsUrl!).host);
       expect(url.pathname, command).toMatch(script);
+      expect(runsTheScript(command), command).toBe(true);
     }
   });
 
-  it("sends the docs link and the prerequisite's install link to the same page, not the announcement", () => {
-    expect(new URL(docsUrl!).host).not.toBe("developers.googleblog.com");
+  it("sends the docs link and the prerequisite's install link to the CLI quickstart", () => {
+    // The quickstart is the only Antigravity page with CLI install steps; the
+    // install page (/docs/install) covers sign-in, and the announcement post
+    // installs nothing.
+    expect(new URL(docsUrl!).pathname).toMatch(/^\/docs\/getting-started\/?$/);
     const installUrls = (config.prerequisites ?? []).map((p) => p.installUrl);
     expect(installUrls.length).toBeGreaterThan(0);
     expect(new Set(installUrls)).toEqual(new Set([docsUrl]));
@@ -1457,7 +1472,8 @@ describe("Antigravity install help (#15622)", () => {
   });
 
   it("stays out of the assistant until its wiring is verified against a live agy", () => {
-    expect(config.supports).toBeUndefined();
+    expect(getAssistantSupportedAgentIds()).not.toContain("antigravity");
+    expect(getAssistantWiredAgentIds()).not.toContain("antigravity");
   });
 });
 
