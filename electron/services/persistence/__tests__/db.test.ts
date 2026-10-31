@@ -52,6 +52,9 @@ import {
   attemptRecovery,
   closeSharedDb,
   withDiskRecovery,
+  isRecoveryPending,
+  markRecoveryPending,
+  clearRecoveryPending,
 } from "../db.js";
 
 // Runs first: later describes clear every mock in their beforeEach, which would
@@ -428,6 +431,76 @@ describe("probeDbFile", () => {
     expect(probeDbFile(absent)).toBe("unknown");
     expect(probeDb(absent)).toBe(true); // ...whereas the fail-open probe says fine
     expect(mockDatabaseConstructor).not.toHaveBeenCalled();
+  });
+});
+
+describe("pending-recovery marker", () => {
+  let tmpDir: string;
+  let dbPath: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-db-marker-"));
+    dbPath = path.join(tmpDir, "daintree.db");
+    vi.clearAllMocks();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mockDatabaseConstructor.mockImplementation(() => ({}));
+    mockPragma.mockReturnValue("ok");
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it("round-trips through mark and clear, and clearing twice is harmless", () => {
+    expect(isRecoveryPending(dbPath)).toBe(false);
+
+    markRecoveryPending(dbPath);
+    expect(isRecoveryPending(dbPath)).toBe(true);
+    markRecoveryPending(dbPath);
+    expect(isRecoveryPending(dbPath)).toBe(true);
+
+    clearRecoveryPending(dbPath);
+    expect(isRecoveryPending(dbPath)).toBe(false);
+    expect(() => clearRecoveryPending(dbPath)).not.toThrow();
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  const posixIt = process.platform === "win32" ? it.skip : it;
+
+  posixIt("writes the marker owner-only, with no temp file left behind", () => {
+    markRecoveryPending(dbPath);
+
+    expect(fs.readdirSync(tmpDir)).toEqual(["daintree.db.corruption-pending"]);
+    expect(fs.statSync(dbPath + ".corruption-pending").mode & 0o777).toBe(0o600);
+    expect(isRecoveryPending(dbPath)).toBe(true);
+  });
+
+  it("survives the quarantine, so a failed or interrupted recovery stays pending", () => {
+    fs.writeFileSync(dbPath, "corrupt");
+    fs.writeFileSync(dbPath + ".backup", "valid backup");
+    markRecoveryPending(dbPath);
+
+    expect(attemptRecovery(dbPath)).toMatchObject({ kind: "restored-from-backup" });
+    expect(isRecoveryPending(dbPath)).toBe(true);
+  });
+
+  it("logs rather than throws when the marker cannot be written", () => {
+    const missingDir = path.join(tmpDir, "missing", "daintree.db");
+
+    expect(() => markRecoveryPending(missingDir)).not.toThrow();
+    expect(console.error).toHaveBeenCalled();
+    expect(isRecoveryPending(missingDir)).toBe(false);
+  });
+
+  it("treats a marker it cannot inspect as pending", () => {
+    vi.spyOn(fs, "statSync").mockImplementation(() => {
+      throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+    });
+
+    expect(isRecoveryPending(dbPath)).toBe(true);
   });
 });
 
