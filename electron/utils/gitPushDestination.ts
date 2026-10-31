@@ -275,21 +275,31 @@ async function resolvePushFromFields(
       // simply fails and the force-push CTA stays suppressed, which is the safe
       // direction.
       remoteTrackingRef: `${REMOTE_TRACKING_PREFIX}${remote}/${remoteBranch}`,
-      ...(!upstreamRef && (await autoSetupRemoteApplies(git)) ? { establishesUpstream: true } : {}),
+      ...(!upstreamRef && (await autoSetupRemoteApplies(git, branchName, remote))
+        ? { establishesUpstream: true }
+        : {}),
     },
   };
 }
 
 /**
- * True when git's own default push would give an untracked branch its upstream:
- * `push.autoSetupRemote` is on, under a `push.default` that honours it (all but
- * `matching` and `nothing`). Read only for a branch that tracks nothing.
+ * True when git's own default push would give an untracked branch its upstream,
+ * by the same rules `builtin/push.c` applies: `push.autoSetupRemote` is on (the
+ * flag is only ever switched on, so a later `false` does not clear an earlier
+ * `true`), `push.default` honours it (all but `matching` and `nothing`), the
+ * remote has no push refspecs of its own (those bypass default-push setup), and
+ * the branch has no merge config (which counts as tracked even when no fetch
+ * refspec maps it to a ref, so `%(upstream)` alone would miss it).
  *
  * A failed read answers false. Unlike {@link hasDefaultSimplePushConfig}, this
  * never decides where a push goes or what it sends, only whether tracking is
  * written afterwards, so leaving it unwritten is the harmless direction.
  */
-async function autoSetupRemoteApplies(git: Pick<SimpleGit, "raw">): Promise<boolean> {
+async function autoSetupRemoteApplies(
+  git: Pick<SimpleGit, "raw">,
+  branchName: string,
+  remote: string
+): Promise<boolean> {
   let out: string;
   try {
     out = await git.raw(["config", "--list", "-z"]);
@@ -302,21 +312,33 @@ async function autoSetupRemoteApplies(git: Pick<SimpleGit, "raw">): Promise<bool
   for (const entry of out.split("\u0000")) {
     if (!entry) continue;
     const newline = entry.indexOf("\n");
-    const key = (newline === -1 ? entry : entry.slice(0, newline)).toLowerCase();
-    // A key with no `=` at all is git's spelling of true.
-    if (key === "push.autosetupremote") {
-      autoSetup = newline === -1 || isGitTrue(entry.slice(newline + 1));
-    } else if (key === "push.default") {
-      pushDefault = (newline === -1 ? "" : entry.slice(newline + 1)).trim().toLowerCase();
+    const key = newline === -1 ? entry : entry.slice(0, newline);
+    const value = newline === -1 ? null : entry.slice(newline + 1);
+    const lower = key.toLowerCase();
+    if (lower === "push.autosetupremote") {
+      // A key with no `=` at all is git's spelling of true.
+      if (value === null || isGitTrue(value)) autoSetup = true;
+    } else if (lower === "push.default") {
+      pushDefault = (value ?? "").trim().toLowerCase();
+    } else if (lower.startsWith("branch.") && lower.endsWith(".merge")) {
+      // Section and variable names are case-insensitive; the subsection isn't.
+      if (key.slice("branch.".length, -".merge".length) === branchName) return false;
+    } else if (lower.startsWith("remote.") && lower.endsWith(".push")) {
+      if (key.slice("remote.".length, -".push".length) === remote) return false;
     }
   }
   return autoSetup && pushDefault !== "matching" && pushDefault !== "nothing";
 }
 
+/**
+ * git's boolean: a word, or any integer it accepts (decimal or hex, with an
+ * optional k/m/g unit) that is not zero.
+ */
 function isGitTrue(raw: string): boolean {
   const value = raw.trim().toLowerCase();
   if (value === "true" || value === "yes" || value === "on") return true;
-  return /^[+-]?\d+$/.test(value) && Number(value) !== 0;
+  const number = /^[+-]?(?:0x([0-9a-f]+)|(\d+))[kmg]?$/.exec(value);
+  return number !== null && /[1-9a-f]/.test(number[1] ?? number[2] ?? "");
 }
 
 /** The one `push.default` value under which the recovery below is git's own intent. */

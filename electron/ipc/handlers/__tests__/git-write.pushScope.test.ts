@@ -192,8 +192,14 @@ describe("git push — writes only the branch the confirm named", () => {
   });
 
   it("leaves another ahead branch unpublished when the push also sets upstream", async () => {
+    // Untracked, with a push remote git names itself and no auto-setup, so
+    // the tracking can only come from the caller's explicit request.
     const fixture = makeFixture();
+    git(fixture.repo, ["branch", "-q", "--unset-upstream", "topic"]);
+    git(fixture.repo, ["config", "remote.pushDefault", "origin"]);
+    git(fixture.repo, ["config", "push.default", "current"]);
     git(fixture.repo, ["config", "remote.origin.push", "refs/heads/*:refs/heads/*"]);
+    expect(upstreamOf(fixture.repo, "topic")).toBe("");
 
     await push(fixture.repo, true);
 
@@ -275,6 +281,7 @@ describe("git push — destinations and recoveries keep working", () => {
     const fixture = makeFixture();
     git(fixture.repo, ["branch", "-q", "--set-upstream-to=origin/main", "topic"]);
     git(fixture.repo, ["config", "push.default", "current"]);
+    git(fixture.repo, ["config", "push.autoSetupRemote", "true"]);
 
     await push(fixture.repo);
 

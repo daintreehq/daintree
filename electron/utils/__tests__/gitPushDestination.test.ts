@@ -331,6 +331,67 @@ describe("resolveGitPushDestination — fails closed", () => {
     expect(result.status === "resolved" && result.destination.establishesUpstream).toBeUndefined();
   });
 
+  it("treats merge config as tracking under push.autoSetupRemote, even when no fetch refspec maps it", async () => {
+    // `%(upstream)` renders empty here, but git's push sees the merge config
+    // and sets nothing up; re-tracking would rewrite where the branch pulls from.
+    const repo = makeRepo();
+    git(repo, ["remote", "add", "origin", makeBare()]);
+    git(repo, [
+      "config",
+      "--replace-all",
+      "remote.origin.fetch",
+      "+refs/heads/topic:refs/remotes/origin/topic",
+    ]);
+    git(repo, ["config", "branch.topic.remote", "origin"]);
+    git(repo, ["config", "branch.topic.merge", "refs/heads/elsewhere"]);
+    git(repo, ["config", "push.default", "current"]);
+    git(repo, ["config", "push.autoSetupRemote", "true"]);
+
+    const result = await resolve(repo);
+
+    expect(result.status).toBe("resolved");
+    expect(result.status === "resolved" && result.destination.establishesUpstream).toBeUndefined();
+  });
+
+  it("leaves tracking alone under push.autoSetupRemote when the remote has its own push refspecs", async () => {
+    const repo = makeRepo();
+    git(repo, ["remote", "add", "origin", makeBare()]);
+    git(repo, ["remote", "add", "fork", makeBare()]);
+    git(repo, ["config", "branch.topic.pushRemote", "fork"]);
+    git(repo, ["config", "remote.fork.push", "refs/heads/*:refs/heads/*"]);
+    git(repo, ["config", "push.default", "current"]);
+    git(repo, ["config", "push.autoSetupRemote", "true"]);
+
+    const result = await resolve(repo);
+
+    expect(result.status).toBe("resolved");
+    expect(result.status === "resolved" && result.destination.establishesUpstream).toBeUndefined();
+  });
+
+  it.each([
+    ["push.autosetupremote\ntrue", true],
+    ["push.autosetupremote", true],
+    ["push.autosetupremote\n0x1", true],
+    ["push.autosetupremote\n1k", true],
+    ["push.autosetupremote\n0", false],
+    ["push.autosetupremote\noff", false],
+    // git's push only ever switches the flag on, so a later false can't clear it.
+    ["push.autosetupremote\ntrue\u0000push.autosetupremote\nfalse", true],
+  ])("reads push.autoSetupRemote the way git's push does: %j", async (entries, expected) => {
+    const result = await resolveGitPushDestination(
+      stubGit({
+        record: refRecord("origin", "refs/remotes/origin/topic", ""),
+        remotes: ["origin"],
+        config: `push.default\ncurrent\u0000${entries}\u0000`,
+      }),
+      "topic"
+    );
+
+    expect(result.status === "resolved" && result.destination.establishesUpstream === true).toBe(
+      expected
+    );
+  });
+
   it("never establishes tracking over an upstream the fallback branch already has", async () => {
     // git can't produce this record (an upstream implies a named remote), so
     // the guard is pinned with a double.
