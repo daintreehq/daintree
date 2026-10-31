@@ -148,20 +148,22 @@ describe("readTurnOutcomeRing", () => {
     const dbPath = path.join(tmp, "daintree.db");
     const db = createProfileDb(dbPath);
     insert(db, "mcpAuditLog", { id: "audit-1", timestamp: 1 }, "audit-1");
-    insert(db, RING, turn("t-3", 3000), "t-3");
+    // Ring order is insertion order: not timestamp order, and not the order
+    // of either ring index read forwards or backwards.
+    insert(db, RING, turn("t-m", 3000), "t-m");
     insert(db, "pluginAuditLog", { id: "plugin-1" }, "plugin-1");
-    // Ring order is insertion order, not timestamp order.
-    insert(db, RING, turn("t-1", 1000, "reasoning-loop"), "t-1");
+    insert(db, RING, turn("t-z", 1000, "reasoning-loop"), "t-z");
     insert(db, "runHistoryRecords", { id: "run-1" }, "run-1");
     // Rows written before migration 0018 carry no record_id.
-    insert(db, RING, turn("t-2", 2000), null);
+    insert(db, RING, turn("t-legacy", 4000), null);
+    insert(db, RING, turn("t-a", 2000), "t-a");
     db.close();
 
     instrumentSqlite();
     const result = readTurnOutcomeRing(dbPath);
-    expect(result.rowCount).toBe(3);
+    expect(result.rowCount).toBe(4);
     expect(result.warnings).toEqual([]);
-    expect(ids(result.rows)).toEqual(["t-3", "t-1", "t-2"]);
+    expect(ids(result.rows)).toEqual(["t-m", "t-z", "t-legacy", "t-a"]);
     expect(result.rows[1]).toMatchObject({ outcome: "reasoning-loop" });
   });
 
