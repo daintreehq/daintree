@@ -20,7 +20,9 @@ vi.mock("../../lifecycle/shutdownCoordinator.js", () => ({
 import {
   addPendingRemoteBackgroundRestores,
   buildOpenWindowRecords,
+  captureWindowRecord,
   clearPendingBackgroundRestores,
+  clearPendingWindowRecreation,
   clearPendingRemoteRestore,
   clearPendingRemoteRestoresForHost,
   enableOpenWindowsSaves,
@@ -34,6 +36,7 @@ import {
   scheduleOpenWindowsSave,
   setPendingBackgroundRestores,
   setPendingRemoteRestore,
+  setPendingWindowRecreation,
   suppressOpenWindowsSaves,
 } from "../openWindowsTracker.js";
 import {
@@ -221,6 +224,69 @@ describe("buildOpenWindowRecords", () => {
       }))
     );
     expect(buildOpenWindowRecords(registry)).toHaveLength(MAX_RESTORED_WINDOWS);
+  });
+});
+
+describe("OOM recreation records (#15564)", () => {
+  it("captures a window past the fleet cap", () => {
+    const registry = makeRegistry(
+      Array.from({ length: MAX_RESTORED_WINDOWS + 2 }, (_, i) => ({
+        windowId: i + 1,
+        projectId: `p${i}`,
+      }))
+    );
+    const last = MAX_RESTORED_WINDOWS + 2;
+    expect(captureWindowRecord(registry, last)).toEqual({ projectId: `p${last - 1}` });
+    expect(captureWindowRecord(registry, last + 1)).toBeNull();
+  });
+
+  it("captures the window's record as the manifest holds it, without orphaned live workspaces", () => {
+    const registry = makeRegistry([
+      { windowId: 1, projectId: "a", views: [["a", 3]] },
+      { windowId: 2, projectId: "b", views: [["b", 2], ["c", 1]] },
+    ]);
+    setPendingBackgroundRestores(2, ["a", "d"]);
+    initOpenWindowsTracker({
+      registry,
+      readOnly: false,
+      liveWorkspaceIds: () => new Set(["orphan"]),
+    });
+
+    expect(captureWindowRecord(registry, 2)).toEqual({
+      projectId: "b",
+      backgroundProjectIds: ["c", "d"],
+    });
+  });
+
+  it("names a replacement window's captured workspace until it shows one of its own", () => {
+    const win: FakeWindow = { windowId: 5, projectId: null };
+    const registry = makeRegistry([win]);
+    setPendingWindowRecreation(5, { projectId: "b", backgroundProjectIds: ["c"] });
+
+    expect(buildOpenWindowRecords(registry)).toEqual([
+      { projectId: "b", backgroundProjectIds: ["c"] },
+    ]);
+
+    win.projectId = "b";
+    win.views = [["b", 1]];
+    expect(buildOpenWindowRecords(registry)).toEqual([
+      { projectId: "b", backgroundProjectIds: ["c"] },
+    ]);
+
+    clearPendingWindowRecreation(5);
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: "b" }]);
+  });
+
+  it("leaves a host-scoped replacement's pending host intent unspent", () => {
+    const remote = `studio-01:${"a".repeat(64)}`;
+    const registry = makeRegistry([{ windowId: 5, projectId: null }]);
+    setPendingRemoteRestore(5, remote);
+    setPendingWindowRecreation(5, { projectId: remote });
+
+    buildOpenWindowRecords(registry);
+    clearPendingWindowRecreation(5);
+
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: remote }]);
   });
 });
 

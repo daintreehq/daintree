@@ -185,6 +185,23 @@ export function clearPendingRemoteBackgroundRestores(windowId: number): void {
   pendingRemoteBackgroundRestores.delete(windowId);
 }
 
+/**
+ * What a window rebuilt after a probable OOM was showing, keyed by the
+ * replacement's window id, until its setup settles (#15564). The replacement
+ * binds its workspace only once setup reaches `registerInitialView`, and a save
+ * landing before that (its own registration, a focus change) would otherwise
+ * persist the window as an empty picker without its background projects.
+ */
+const pendingWindowRecreations = new Map<number, OpenWindowRecord>();
+
+export function setPendingWindowRecreation(windowId: number, record: OpenWindowRecord): void {
+  pendingWindowRecreations.set(windowId, record);
+}
+
+export function clearPendingWindowRecreation(windowId: number): void {
+  pendingWindowRecreations.delete(windowId);
+}
+
 let state: TrackerState | null = null;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 /** Latched at shutdown. Permanent by design — nothing resumes after it. */
@@ -228,6 +245,35 @@ export function buildOpenWindowRecords(
   excludeWindowId?: number,
   liveWorkspaceIds?: ReadonlySet<string>
 ): OpenWindowRecord[] {
+  const { entries, claimed } = collectWindowRecords(registry, excludeWindowId, MAX_RESTORED_WINDOWS);
+  return attachOrphanedLiveWorkspaces(
+    entries.map((entry) => entry.record),
+    claimed,
+    liveWorkspaceIds
+  );
+}
+
+/**
+ * The record the manifest would hold for one window, read while it is still
+ * alive: what an OOM recreation rebuilds it onto (#15564). Built by the same
+ * pass as the manifest, so the two never disagree about a window's workspace
+ * or what it had warm, but without the fleet cap, so a window past it still
+ * has a record. Orphaned live workspaces stay with the primary window, as the
+ * manifest assigns them.
+ */
+export function captureWindowRecord(
+  registry: WindowRegistry,
+  windowId: number
+): OpenWindowRecord | null {
+  const { entries } = collectWindowRecords(registry, undefined, Number.POSITIVE_INFINITY);
+  return entries.find((entry) => entry.windowId === windowId)?.record ?? null;
+}
+
+function collectWindowRecords(
+  registry: WindowRegistry,
+  excludeWindowId: number | undefined,
+  maxWindows: number
+): { entries: Array<{ windowId: number; record: OpenWindowRecord }>; claimed: Set<string> } {
   // Two passes, because a window's background list must exclude every OTHER
   // window's foreground project, and focus order gives no way to know a later
   // window's project while building an earlier one's list. Assigning a project
@@ -264,9 +310,15 @@ export function buildOpenWindowRecords(
       else pendingRemoteRestores.delete(ctx.windowId);
     }
 
+    // Read after the host intent, which a host-scoped recreation also sets:
+    // a foreground taken from here would read as "showing something" above
+    // and spend it.
+    const recreation = pendingWindowRecreations.get(ctx.windowId);
+    if (projectId === null && recreation) projectId = recreation.projectId;
+
     if (projectId !== null) claimed.add(projectId);
     windows.push({ windowId: ctx.windowId, projectId, pvm });
-    if (windows.length >= MAX_RESTORED_WINDOWS) break;
+    if (windows.length >= maxWindows) break;
   }
 
   // Every window's views are claimed before any window's pending restores, so
@@ -285,22 +337,25 @@ export function buildOpenWindowRecords(
     return ids;
   });
 
-  const records: OpenWindowRecord[] = [];
+  const entries: Array<{ windowId: number; record: OpenWindowRecord }> = [];
   for (const [index, win] of windows.entries()) {
     const pending = [
       ...(pendingBackgroundRestores.get(win.windowId) ?? []),
       ...(pendingRemoteBackgroundRestores.get(win.windowId) ?? []),
+      ...(pendingWindowRecreations.get(win.windowId)?.backgroundProjectIds ?? []),
     ].filter((id) => !claimed.has(id));
     const backgroundProjectIds = capBackgroundProjectIds([...viewIds[index]!, ...pending]);
     for (const id of backgroundProjectIds) claimed.add(id);
-    records.push(
-      backgroundProjectIds.length > 0
-        ? { projectId: win.projectId, backgroundProjectIds }
-        : { projectId: win.projectId }
-    );
+    entries.push({
+      windowId: win.windowId,
+      record:
+        backgroundProjectIds.length > 0
+          ? { projectId: win.projectId, backgroundProjectIds }
+          : { projectId: win.projectId },
+    });
   }
 
-  return attachOrphanedLiveWorkspaces(records, claimed, liveWorkspaceIds);
+  return { entries, claimed };
 }
 
 /**
@@ -480,4 +535,5 @@ export function resetOpenWindowsTrackerForTests(): void {
   pendingBackgroundRestores.clear();
   pendingRemoteRestores.clear();
   pendingRemoteBackgroundRestores.clear();
+  pendingWindowRecreations.clear();
 }

@@ -302,17 +302,20 @@ export function setupViewHandlers(
           wc.loadURL(`app://daintree/recovery.html?${params}`);
         }
       });
-    } else if (isProbableOom && host.onRecreateWindow) {
+    } else if (isProbableOom && host.prepareWindowRecreation) {
       console.warn("[ProjectViewManager] OOM crash, destroying and recreating window");
       notifyError(new Error("A project view ran out of memory and the window was recreated."), {
         source: "renderer-crash",
       });
+      // Captured now, while the window still holds its views: destroying it
+      // disposes everything that knows what it was showing (#15564).
+      const recreateWindow = host.prepareWindowRecreation();
       setImmediate(() => {
         // Increment the guard before `destroy()` — Electron emits
         // `window-all-closed` synchronously inside the destroy call.
         beginWindowRecreating();
         if (!win.isDestroyed()) win.destroy();
-        host.onRecreateWindow!()
+        recreateWindow()
           .catch((err) => {
             console.error("[ProjectViewManager] Failed to recreate window after OOM:", err);
           })

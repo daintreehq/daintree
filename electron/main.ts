@@ -75,6 +75,7 @@ import { buildMemoryAttribution } from "./utils/memoryAttribution.js";
 import { helpSessionService } from "./services/HelpSessionService.js";
 import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
+import { createWindowRecreation } from "./window/windowRecreation.js";
 import { hasPendingOpen, isWindowBound, reserveWindowForOpen } from "./window/windowOpenState.js";
 import { distributePortsToView, getRemoteViewHooks } from "./window/portDistribution.js";
 import { findOtherProjectOwner, type ProjectOwner } from "./window/projectOwnership.js";
@@ -593,9 +594,18 @@ if (!gotTheLock) {
       ignoreMemoryPressure?: boolean;
     }
   ): Promise<CreateWindowResult> {
+    // An OOM rebuilds the window onto what it is showing then, never onto this
+    // call's arguments (#15564). One instance serves both the startup view's
+    // handler and the manager's, so the window is rebuilt once.
+    let registeredWindowId: number | undefined;
+    const recreation = createWindowRecreation({
+      windowRegistry,
+      getWindowId: () => registeredWindowId,
+      createWindow: (projectId, recreateOpts) => createWindow(undefined, projectId, recreateOpts),
+    });
     const { win, appView, loadRenderer, smokeTestTimer, smokeRendererUnresponsive } =
       setupBrowserWindow(__dirname, {
-        onRecreateWindow: () => createWindow(initialProjectPath, initialProjectId).then(() => {}),
+        prepareWindowRecreation: recreation.prepare,
         onCreateWindow: (projectPath, initiatingWindowId) =>
           openWindowForPath(projectPath, initiatingWindowId),
         projectPath: initialProjectPath,
@@ -605,6 +615,7 @@ if (!gotTheLock) {
       });
     setMainWindow(win);
     const ctx = windowRegistry.register(win, { projectPath: initialProjectPath ?? undefined });
+    registeredWindowId = ctx.windowId;
     opts?.onRegistered?.(ctx.windowId);
     if (opts?.remoteWorkspaceKey) noteRemoteWindowRestore(ctx.windowId, opts.remoteWorkspaceKey);
     // A restored window only binds its workspace once setup reaches
@@ -626,7 +637,9 @@ if (!gotTheLock) {
     scheduleOpenWindowsSave();
     win.on("closed", () => {
       forgetRemoteWindowRestore(closedWindowId);
-      saveOpenWindowsNow(closedWindowId);
+      // A window torn down for an OOM rebuild keeps its record on disk until
+      // its replacement, which carries that record, saves over it.
+      if (!recreation.isRecreating()) saveOpenWindowsNow(closedWindowId);
     });
     const initialWebContentsId = appView.webContents.id;
     windowRegistry.registerAppViewWebContents(ctx.windowId, initialWebContentsId);
@@ -637,7 +650,7 @@ if (!gotTheLock) {
 
     const pvm = new ProjectViewManager(win, {
       dirname: __dirname,
-      onRecreateWindow: () => createWindow(initialProjectPath, initialProjectId).then(() => {}),
+      prepareWindowRecreation: recreation.prepare,
       windowRegistry,
       // Resolve to the same value the IPC handler returns so the main-process
       // LRU cap and the renderer's Settings view agree on first boot. Invalid
