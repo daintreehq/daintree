@@ -8,6 +8,8 @@ import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 
 interface DevServerIndicatorProps {
   session: DevPreviewSessionState | undefined;
+  /** Lets a cramped caller hide the port and keep the glyph; the tooltip and accessible name still carry it. */
+  labelClassName?: string;
 }
 
 /**
@@ -24,7 +26,7 @@ interface DevServerIndicatorProps {
  * up, and green at rest would sit beside the agent's working spinner and
  * outshout it — the agent indicator stays the row's anchor.
  */
-export function DevServerIndicator({ session }: DevServerIndicatorProps) {
+export function DevServerIndicator({ session, labelClassName }: DevServerIndicatorProps) {
   const status = session?.status;
   const isStartup = status === "starting" || status === "installing";
   // Doherty gate: a sub-400ms start should never flash a pulse.
@@ -53,7 +55,9 @@ export function DevServerIndicator({ session }: DevServerIndicatorProps) {
   const Glyph = isError ? XCircle : Globe;
 
   return (
-    <Tooltip>
+    // Persistent: below 28rem the port is not on the card, so this is where
+    // it is read (WCAG 1.4.13).
+    <Tooltip autoDismiss={false} disableHoverableContent={false}>
       <TooltipTrigger asChild>
         <span
           role="img"
@@ -76,7 +80,13 @@ export function DevServerIndicator({ session }: DevServerIndicatorProps) {
               aria-hidden="true"
             />
           </span>
-          {label && <span className="tabular-nums">{label}</span>}
+          {label && (
+            // Only the port gives way. A failure or a startup word is the
+            // news, and the glyph alone does not say which one it is.
+            <span className={cn("tabular-nums", !isError && !isStartup && labelClassName)}>
+              {label}
+            </span>
+          )}
         </span>
       </TooltipTrigger>
       <TooltipContent side="top" className="max-w-xs">

@@ -54,7 +54,9 @@ function PluginStatusChip({
   };
 
   return (
-    <Tooltip>
+    // A plugin's explanation can run to several lines, so it stays while
+    // hovered or focused and can be hovered itself (WCAG 1.4.13).
+    <Tooltip autoDismiss={false} disableHoverableContent={false}>
       <TooltipTrigger asChild>
         {/* A button so the status is reachable by keyboard and its tooltip
             opens on focus, even when it has no command to run. */}

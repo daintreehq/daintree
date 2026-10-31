@@ -11,6 +11,11 @@ interface QuietGitDetailsProps {
   isActive: boolean;
   onOpenIssue?: () => void;
   onOpenPR?: () => void;
+  /**
+   * Only the sync line. The default profile keeps branch and PR on the card
+   * and moves just the ambient drift here (see `NonMainSecondaryRow`).
+   */
+  syncOnly?: boolean;
 }
 
 /**
@@ -25,6 +30,7 @@ export function QuietGitDetails({
   isActive,
   onOpenIssue,
   onOpenPR,
+  syncOnly = false,
 }: QuietGitDetailsProps) {
   const prDetectionPaused = usePRCircuitBreakerStore((s) => s.tripped);
   const pr =
@@ -42,9 +48,12 @@ export function QuietGitDetails({
     !isDetached && worktree.worktreeChanges != null && !worktree.worktreeChanges.tracking;
 
   return (
-    <div className="mb-2 flex flex-col gap-0.5" data-testid="worktree-quiet-git-details">
-      <BranchLabel label={branchLabel} isActive={isActive} />
-      {worktree.issueNumber && (
+    <div
+      className="mb-2 flex flex-col gap-0.5"
+      data-testid={syncOnly ? "worktree-sync-details" : "worktree-quiet-git-details"}
+    >
+      {!syncOnly && <BranchLabel label={branchLabel} isActive={isActive} />}
+      {!syncOnly && worktree.issueNumber && (
         <IssueBadge
           issueNumber={worktree.issueNumber}
           issueTitle={worktree.issueTitle ?? worktree.branchDerivedTitle}
@@ -55,7 +64,7 @@ export function QuietGitDetails({
           underlineOnHover
         />
       )}
-      {pr && (
+      {!syncOnly && pr && (
         <PRBadge
           prNumber={pr.ref.number}
           prTitle={pr.title ?? worktree.prTitle}

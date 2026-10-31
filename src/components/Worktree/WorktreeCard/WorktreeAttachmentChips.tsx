@@ -12,6 +12,8 @@ import { failureLabel, visibleAttachmentChips, type AttachmentChipState } from "
 export interface WorktreeAttachmentChipsProps {
   attachments: readonly WorktreeAttachment[] | undefined;
   onAction: (name: string, action: "detach" | "status") => void;
+  /** Lets a cramped caller hide the name and keep the glyph; the tooltip and accessible name still carry it. */
+  nameClassName?: string;
 }
 
 const OBSERVATION_VERB: Record<ProjectAttachmentObservation["action"], string> = {
@@ -72,12 +74,14 @@ function AttachmentChip({
   attachment,
   state,
   showName,
+  nameClassName,
   onAction,
 }: {
   attachment: WorktreeAttachment;
   state: AttachmentChipState;
   /** Off when several chips share the header; the tooltip and label still name it. */
   showName: boolean;
+  nameClassName?: string;
   onAction: WorktreeAttachmentChipsProps["onAction"];
 }) {
   const [open, setOpen] = useState(false);
@@ -87,7 +91,9 @@ function AttachmentChip({
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <Tooltip>
+      {/* Persistent: below 28rem the name is not on the card, so this is
+          where it is read (WCAG 1.4.13). */}
+      <Tooltip autoDismiss={false} disableHoverableContent={false}>
         <TooltipTrigger asChild>
           <PopoverTrigger asChild>
             <button
@@ -109,7 +115,9 @@ function AttachmentChip({
                   aria-hidden="true"
                 />
               )}
-              {showName && <span className="min-w-0 truncate">{attachment.name}</span>}
+              {showName && (
+                <span className={cn("min-w-0 truncate", nameClassName)}>{attachment.name}</span>
+              )}
             </button>
           </PopoverTrigger>
         </TooltipTrigger>
@@ -179,7 +187,11 @@ function AttachmentChip({
  * and one for a command that failed here, so a failed attach stays visible on
  * the worktree it was meant for rather than vanishing (#13703).
  */
-export function WorktreeAttachmentChips({ attachments, onAction }: WorktreeAttachmentChipsProps) {
+export function WorktreeAttachmentChips({
+  attachments,
+  onAction,
+  nameClassName,
+}: WorktreeAttachmentChipsProps) {
   const chips = visibleAttachmentChips(attachments);
   if (chips.length === 0) return null;
   return (
@@ -190,6 +202,7 @@ export function WorktreeAttachmentChips({ attachments, onAction }: WorktreeAttac
           attachment={attachment}
           state={state}
           showName={chips.length === 1}
+          nameClassName={nameClassName}
           onAction={onAction}
         />
       ))}

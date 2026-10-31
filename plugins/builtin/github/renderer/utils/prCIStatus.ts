@@ -12,7 +12,7 @@ export function getPRCIStatusVisual(status: GitHubPRCIStatus | undefined): PRCIS
     case "SUCCESS":
       return {
         kind: "icon",
-        icon: "check",
+        icon: "circle-check",
         colorClass: "text-status-success",
         shortLabel: "passing",
         ariaLabel: "CI passing",
@@ -21,7 +21,7 @@ export function getPRCIStatusVisual(status: GitHubPRCIStatus | undefined): PRCIS
     case "ERROR":
       return {
         kind: "icon",
-        icon: "x",
+        icon: "circle-x",
         colorClass: "text-status-error",
         shortLabel: "failing",
         ariaLabel: "CI failing",

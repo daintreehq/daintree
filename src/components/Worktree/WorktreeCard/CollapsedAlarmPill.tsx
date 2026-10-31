@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { LucideIcon } from "lucide-react";
 import { ArrowDown, CircleX, KeyRound } from "@/components/icons";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -99,6 +100,10 @@ export function CollapsedAlarmPill({
   return (
     <>
       <Tooltip
+        // The pill is a glyph, so this tooltip is the only place its words
+        // are; it stays while hovered or focused (WCAG 1.4.13).
+        autoDismiss={false}
+        disableHoverableContent={false}
         open={hoverOpen || (revealed && !revealDismissed)}
         onOpenChange={(next) => {
           setHoverOpen(next);
@@ -137,5 +142,58 @@ export function CollapsedAlarmPill({
         </span>
       )}
     </>
+  );
+}
+
+interface AttentionMarkProps {
+  tone: "error" | "warning";
+  label: string;
+  Icon: LucideIcon;
+  testId?: string;
+  /** The card's select button has keyboard focus: show the word, as the alarm pill does. */
+  revealed?: boolean;
+}
+
+/**
+ * A card-level problem that is not a pull request or a fetch — a conflict, a
+ * blocking git operation, a setup that failed or wants approval — drawn as the
+ * same pill as the CI alarm, in the same trailing column of the title row, so
+ * every "this needs you" on a card is one shape in one place whether the card
+ * is open or not. The word lives in the tooltip and the accessible name.
+ */
+export function AttentionMark({ tone, label, Icon, testId, revealed = false }: AttentionMarkProps) {
+  const [hoverOpen, setHoverOpen] = useState(false);
+  const [revealDismissed, setRevealDismissed] = useState(false);
+  const [wasRevealed, setWasRevealed] = useState(revealed);
+  if (wasRevealed !== revealed) {
+    setWasRevealed(revealed);
+    if (!revealed) setRevealDismissed(false);
+  }
+  return (
+    <Tooltip
+      autoDismiss={false}
+      disableHoverableContent={false}
+      open={hoverOpen || (revealed && !revealDismissed)}
+      onOpenChange={(next) => {
+        setHoverOpen(next);
+        if (!next && revealed) setRevealDismissed(true);
+      }}
+    >
+      <TooltipTrigger asChild>
+        <Badge
+          size="xs"
+          tone={tone}
+          role="img"
+          aria-label={label}
+          data-testid={testId}
+          className="px-1"
+        >
+          <Icon aria-hidden="true" />
+        </Badge>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="text-xs">
+        {label}
+      </TooltipContent>
+    </Tooltip>
   );
 }

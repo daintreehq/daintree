@@ -2,7 +2,13 @@ import { describe, it, expect } from "vitest";
 import { selectButtonDescribedBy, worktreeRowDescriptionId } from "../rowDescriptions";
 
 const PATH = "/Users/dev/My Projects/helios-worktrees/retry jitter";
-const none = { lifecycle: false, alarm: false, devServer: false, external: false };
+const none = {
+  lifecycle: false,
+  alarm: false,
+  attention: false,
+  devServer: false,
+  external: false,
+};
 
 describe("worktreeRowDescriptionId", () => {
   it("makes one IDREF of a path with spaces in it", () => {

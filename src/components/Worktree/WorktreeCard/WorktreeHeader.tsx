@@ -18,7 +18,12 @@ import { WorktreePluginStatusChips, useWorktreePluginStatuses } from "./Worktree
 import { DevServerIndicator } from "./DevServerIndicator";
 import { devServerSummaryText, summarizeDevServer } from "@/lib/devServerPresentation";
 import { CollapsedSessionIndicators } from "./CollapsedSessionIndicators";
-import { CollapsedAlarmPill, collapsedAlarmDescriptionId } from "./CollapsedAlarmPill";
+import {
+  AttentionMark,
+  CollapsedAlarmPill,
+  collapsedAlarmDescriptionId,
+} from "./CollapsedAlarmPill";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { worktreeRowDescriptionId } from "./rowDescriptions";
 import { isExternalWorktree, isLiveDevServerStatus } from "@/lib/worktreeFilters";
 import { getWorktreeHeadline } from "@/lib/worktreeHeadline";
@@ -27,8 +32,15 @@ import { WorktreeActionsToolbar } from "./WorktreeActionsToolbar";
 import { MainWorktreeSecondaryRow } from "./MainWorktreeSecondaryRow";
 import { NonMainSecondaryRow } from "./NonMainSecondaryRow";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { computeAlarmTier, formatAlarmDetail, isPullRequestWarning } from "@/lib/worktreeAlarmTier";
+import {
+  computeAlarmTier,
+  formatAlarmDetail,
+  isPullRequestWarning,
+  type AlarmDescriptor,
+} from "@/lib/worktreeAlarmTier";
 import { PathSegments } from "@/components/ui/PathSegments";
+
+const NO_ALARM: AlarmDescriptor = { tier: 0, kind: "none", label: "", tone: "none" };
 
 export interface WorktreeHeaderProps {
   worktree: WorktreeState;
@@ -75,6 +87,9 @@ export interface WorktreeHeaderProps {
 
   gitStateIndicator: GitStateIndicator | null;
 
+  /** A setup or lifecycle run that failed or is waiting on approval; drawn in the title row's attention column. */
+  lifecycleAlarm?: { tone: "error" | "warning"; label: string } | null;
+
   /** The presentation profile quiets git detail (#13777); see `NonMainSecondaryRow`. */
   quietGit?: boolean;
 
@@ -116,6 +131,7 @@ export function WorktreeHeader({
   onCleanupWorktree,
   badges,
   gitStateIndicator,
+  lifecycleAlarm,
   quietGit = false,
   menu,
 }: WorktreeHeaderProps) {
@@ -185,6 +201,17 @@ export function WorktreeHeader({
   // consumer needs and what this component must not assume.
   const isMainStandardLayout = !!(isMainOnStandardBranch && !hasDisplayTitle);
   const isExternal = isExternalWorktree(worktree);
+  // On the sidebar the title outranks infrastructure: a port or attachment
+  // name took 60% of the active card's title row at the default width and the
+  // whole of it at the narrowest. Below 28rem the glyphs stay and the words
+  // move to their tooltips and accessible names.
+  const compactTrailingLabel = variant === "sidebar" ? "hidden @md/card:inline" : undefined;
+  // Below 20rem healthy infrastructure gives way entirely; a failure never
+  // does. Every glyph it hides is also reachable from the card's menus.
+  const narrowHide = variant === "sidebar" ? "hidden @xs/card:inline-flex" : undefined;
+  const hasFailedAttachment = visibleAttachmentChips(worktree.attachments).some(
+    (chip) => chip.state.tone === "error"
+  );
 
   const prState = worktree.linked?.pr?.state;
   const isPrLive = prState !== undefined && prState !== "closed" && prState !== "declined";
@@ -264,7 +291,14 @@ export function WorktreeHeader({
   return (
     <div>
       <div className="flex items-center gap-2 min-h-[22px]">
-        <div className="flex items-center gap-2 min-w-0 flex-1">
+        {/* min-w-12: on the narrowest sidebar the title keeps a recognisable
+            stem before anything trailing is allowed to take its width. */}
+        <div
+          className={cn(
+            "flex items-center gap-2 flex-1",
+            variant === "sidebar" ? "min-w-12" : "min-w-0"
+          )}
+        >
           {isMainWorktree && (
             <Sprout
               className="w-3.5 h-3.5 text-text-secondary shrink-0 pointer-events-none"
@@ -354,7 +388,9 @@ export function WorktreeHeader({
           ) : (
             <BranchLabel label={branchLabel} isActive={isActive} isMuted={isMuted} />
           )}
-          {gitStateIndicator && (
+          {/* The grid keeps the word beside its title; the sidebar draws it as
+              a pill in the title row's attention column. */}
+          {gitStateIndicator && variant !== "sidebar" && (
             <span
               className={cn(
                 "text-xs font-medium shrink-0 pointer-events-none",
@@ -364,14 +400,6 @@ export function WorktreeHeader({
             >
               {gitStateIndicator.label}
             </span>
-          )}
-          {isCollapsed && (
-            <CollapsedAlarmPill
-              alarm={collapsedAlarm}
-              detail={collapsedAlarmDetail}
-              descriptionId={collapsedAlarmDescriptionId(worktree.id)}
-              revealed={isKeyboardFocused}
-            />
           )}
         </div>
 
@@ -384,10 +412,20 @@ export function WorktreeHeader({
           onCheckResourceStatus ||
           hasDevServerSignal ||
           hasAttachmentChips) && (
-          <div className="flex items-center gap-2 shrink-0">
+          <div
+            className={cn(
+              "flex items-center gap-2",
+              // The sidebar's cluster may give way to the title; the grid's
+              // keeps its full width as before.
+              variant === "sidebar" ? "min-w-0 shrink" : "shrink-0"
+            )}
+          >
             {isPinned && !isMainWorktree && (
               <Pin
-                className="w-3.5 h-3.5 text-text-muted shrink-0 pointer-events-none"
+                className={cn(
+                  "w-3.5 h-3.5 text-text-secondary shrink-0 pointer-events-none",
+                  narrowHide
+                )}
                 aria-label="Pinned"
               />
             )}
@@ -397,9 +435,9 @@ export function WorktreeHeader({
                   <span
                     role="img"
                     aria-label={`External worktree at ${worktree.path}`}
-                    className="shrink-0 leading-none"
+                    className={cn("shrink-0 leading-none", narrowHide)}
                   >
-                    <FolderOutput className="w-3.5 h-3.5 text-text-muted" aria-hidden="true" />
+                    <FolderOutput className="w-3.5 h-3.5 text-text-secondary" aria-hidden="true" />
                   </span>
                 </TooltipTrigger>
                 {/* Plain-text label: the path renders one box per folder, and
@@ -426,7 +464,10 @@ export function WorktreeHeader({
             )}
             {isProjectNotificationsMuted && (
               <BellOff
-                className="w-3.5 h-3.5 text-text-muted shrink-0 pointer-events-none"
+                className={cn(
+                  "w-3.5 h-3.5 text-text-secondary shrink-0 pointer-events-none",
+                  narrowHide
+                )}
                 aria-label="Notifications muted for this project"
               />
             )}
@@ -434,30 +475,55 @@ export function WorktreeHeader({
               resourceStatusLabel ||
               isLifecycleRunning ||
               onCheckResourceStatus) && (
-              <EnvironmentPopover
-                worktreeMode={worktree.worktreeMode}
-                environmentIcon={environmentIcon}
-                isLifecycleRunning={isLifecycleRunning}
-                lifecycle={worktree.lifecycleStatus}
-                resourceStatusLabel={resourceStatusLabel}
-                resourceStatusColor={resourceStatusColor}
-                reportedStatus={worktree.resourceStatus?.lastStatus}
-                resourceLastOutput={resourceLastOutput}
-                resourceEndpoint={resourceEndpoint}
-                resourceLastCheckedAt={resourceLastCheckedAt}
-                onCheckResourceStatus={onCheckResourceStatus}
-                onPreviewEndpoint={onPreviewEndpoint}
-                resourceSsh={worktree.resourceStatus?.ssh}
-                onOpenOnHost={onOpenOnHost}
-              />
+              <span
+                className={cn(
+                  "inline-flex shrink-0",
+                  resourceStatusColor !== "red" && !isLifecycleRunning && narrowHide
+                )}
+              >
+                <EnvironmentPopover
+                  worktreeMode={worktree.worktreeMode}
+                  environmentIcon={environmentIcon}
+                  isLifecycleRunning={isLifecycleRunning}
+                  lifecycle={worktree.lifecycleStatus}
+                  resourceStatusLabel={resourceStatusLabel}
+                  resourceStatusColor={resourceStatusColor}
+                  reportedStatus={worktree.resourceStatus?.lastStatus}
+                  resourceLastOutput={resourceLastOutput}
+                  resourceEndpoint={resourceEndpoint}
+                  resourceLastCheckedAt={resourceLastCheckedAt}
+                  onCheckResourceStatus={onCheckResourceStatus}
+                  onPreviewEndpoint={onPreviewEndpoint}
+                  resourceSsh={worktree.resourceStatus?.ssh}
+                  onOpenOnHost={onOpenOnHost}
+                />
+              </span>
             )}
             {hasAttachmentChips && onAttachmentAction && (
-              <WorktreeAttachmentChips
-                attachments={worktree.attachments}
-                onAction={onAttachmentAction}
-              />
+              <span
+                className={cn(
+                  "inline-flex min-w-0 shrink items-center gap-2",
+                  !hasFailedAttachment && narrowHide
+                )}
+              >
+                <WorktreeAttachmentChips
+                  attachments={worktree.attachments}
+                  onAction={onAttachmentAction}
+                  nameClassName={compactTrailingLabel}
+                />
+              </span>
             )}
-            <DevServerIndicator session={devServerSession} />
+            <span
+              className={cn(
+                "inline-flex shrink-0 empty:hidden",
+                devServerSession?.status !== "error" && narrowHide
+              )}
+            >
+              <DevServerIndicator
+                session={devServerSession}
+                labelClassName={compactTrailingLabel}
+              />
+            </span>
             {hasDevServerSignal && variant === "sidebar" && devServerDescription && (
               // For the card's select button to be described by; see rowDescriptions.
               <span id={worktreeRowDescriptionId(worktree.id, "devServer")} hidden>
@@ -467,10 +533,58 @@ export function WorktreeHeader({
           </div>
         )}
 
-        {isCollapsed && visibleStates.length > 0 && (
+        {/* Everything on the card that needs the user, as one pill shape in
+            one column, open or collapsed: a blocking git state, a setup that
+            failed or wants approval, failing CI or a failed sign-in. Always
+            ahead of the session glyphs, never straight after the title, so
+            the column does not move with the title's length. Drift alone is
+            ambient, not an alarm (tier 1): most branches are a few commits
+            behind their base, and a pill on each buried the one that failed. */}
+        {gitStateIndicator && variant === "sidebar" && (
+          <AttentionMark
+            tone={gitStateIndicator.tone}
+            label={gitStateIndicator.label}
+            Icon={SEVERITY_GLYPH[gitStateIndicator.tone]}
+            testId="worktree-git-state-mark"
+            revealed={isKeyboardFocused}
+          />
+        )}
+        {lifecycleAlarm && variant === "sidebar" && (
+          <AttentionMark
+            tone={lifecycleAlarm.tone}
+            label={lifecycleAlarm.label}
+            Icon={SEVERITY_GLYPH[lifecycleAlarm.tone]}
+            testId="worktree-lifecycle-mark"
+            // One reveal at a time: the leftmost mark speaks for the column.
+            revealed={isKeyboardFocused && !gitStateIndicator}
+          />
+        )}
+        {variant === "sidebar" && (
+          // For the card's select button to be described by; see rowDescriptions.
+          <span id={worktreeRowDescriptionId(worktree.id, "attention")} hidden>
+            {[gitStateIndicator?.label, lifecycleAlarm?.label].filter(Boolean).join(". ")}
+          </span>
+        )}
+        {(isCollapsed || variant === "sidebar") && (
+          <CollapsedAlarmPill
+            alarm={collapsedAlarm.tier >= 2 ? collapsedAlarm : NO_ALARM}
+            detail={collapsedAlarmDetail}
+            descriptionId={collapsedAlarmDescriptionId(worktree.id)}
+            revealed={
+              isKeyboardFocused &&
+              (variant !== "sidebar" || (!gitStateIndicator && !lifecycleAlarm))
+            }
+          />
+        )}
+
+        {/* The sidebar draws session state here in both modes, so a waiting
+            ring always lands in the same column of every card's first line:
+            the one place to look for "does anything need me". */}
+        {(isCollapsed || variant === "sidebar") && visibleStates.length > 0 && (
           <CollapsedSessionIndicators
             visibleStates={visibleStates}
             sessionAriaLabel={sessionAriaLabel}
+            secondaryClassName={variant === "sidebar" ? "hidden @xs/card:flex" : undefined}
           />
         )}
 
@@ -488,6 +602,7 @@ export function WorktreeHeader({
 
       {!isCollapsed && isMainStandardLayout && (
         <MainWorktreeSecondaryRow
+          variant={variant}
           branchLabel={branchLabel}
           isActive={isActive}
           isMuted={isMuted}
@@ -517,6 +632,7 @@ export function WorktreeHeader({
           hasSyncFacts ||
           hasPlanFile) && (
           <NonMainSecondaryRow
+            variant={variant}
             worktree={worktree}
             branchLabel={branchLabel}
             isActive={isActive}
@@ -536,7 +652,12 @@ export function WorktreeHeader({
       {/* Its own wrapping row, so any number of plugins can mark a card
           without squeezing the headline out of the row above. */}
       {!isCollapsed && pluginStatuses.length > 0 && (
-        <div className="mt-1.5 flex flex-wrap items-center gap-1 px-1">
+        <div
+          className={cn(
+            "flex flex-wrap items-center gap-1 px-1",
+            variant === "sidebar" ? "mt-1" : "mt-1.5"
+          )}
+        >
           <WorktreePluginStatusChips worktreeId={worktree.id} statuses={pluginStatuses} />
         </div>
       )}
@@ -579,8 +700,10 @@ function CustomTitleHeadline({
   if (displaced.length === 0) {
     return <TruncatedTooltip content={title}>{span}</TruncatedTooltip>;
   }
+  // A full-identity reveal, so it stays while hovered or focused rather than
+  // taking the 2.5s hint deadline (WCAG 1.4.13).
   return (
-    <Tooltip>
+    <Tooltip autoDismiss={false} disableHoverableContent={false}>
       <TooltipTrigger asChild>{span}</TooltipTrigger>
       <TooltipContent
         side="bottom"

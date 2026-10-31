@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { cn } from "@/lib/utils";
@@ -262,7 +263,14 @@ export function EnvironmentPopover({
               className="-m-[5px] inline-flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
               aria-label={triggerLabel}
             >
-              <EnvironmentIcon className={iconClass} aria-hidden="true" />
+              {/* A failed environment changes shape, not only hue (WCAG 1.4.1):
+                  the error glyph stands in for the environment's own icon,
+                  whose name stays in the label and tooltip. */}
+              {resourceStatusColor === "red" && !isLifecycleRunning ? (
+                <SEVERITY_GLYPH.error className={iconClass} aria-hidden="true" />
+              ) : (
+                <EnvironmentIcon className={iconClass} aria-hidden="true" />
+              )}
             </button>
           </PopoverTrigger>
         </TooltipTrigger>

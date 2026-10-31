@@ -70,6 +70,7 @@ import { WorktreeDialogs } from "./WorktreeCard/WorktreeDialogs";
 import { notifyAttachmentFailure } from "./WorktreeCard/notifyAttachmentFailure";
 import { WorktreeHeader } from "./WorktreeCard/WorktreeHeader";
 import { WorktreeTerminalSection } from "./WorktreeCard/WorktreeTerminalSection";
+import { deriveSetupAlarm } from "./WorktreeCard/setupAlarm";
 import { WslGitBanner } from "./WorktreeCard/WslGitBanner";
 import type { AggregateCounts } from "./WorktreeCard/aggregateCounts";
 import { useInputReceiptKey } from "./WorktreeCard/hooks/useInputReceiptKey";
@@ -1107,6 +1108,12 @@ export function WorktreeCard({
     hideDevPreview,
   };
 
+  const lifecycleAlarm = deriveSetupAlarm(worktree, lifecycleLabel, Boolean(isLifecycleRunning));
+  // Details and Sessions share one footer row while both are closed: two
+  // disclosures that each used a full row to say one line.
+  const isSessionsFooterInline =
+    variant === "sidebar" && !isExpanded && !isTerminalsExpanded && terminalCounts.total > 0;
+
   const ariaStatusParts: string[] = [spineState];
   if (gitStateIndicator) {
     ariaStatusParts.push(gitStateIndicator.label);
@@ -1149,6 +1156,9 @@ export function WorktreeCard({
             // of the card-in-card the standards for this component name as its
             // characteristic failure.
             variant === "grid" && "h-full rounded-lg",
+            // The header hides its infrastructure labels (port, attachment
+            // name) below a width, measured against the card, not the window.
+            variant === "sidebar" && "@container/card",
             isActive && variant !== "sidebar" && "bg-surface-panel-elevated",
             variant === "sidebar" && !isActive && "bg-transparent",
             isFocused && !isActive && variant === "grid" && "bg-overlay-soft",
@@ -1328,7 +1338,9 @@ export function WorktreeCard({
               // collapsed, revealing the alarm's tooltip while ringed.
               aria-describedby={selectButtonDescribedBy(worktree.id, {
                 lifecycle: chipState !== null,
-                alarm: !!effectiveIsCollapsed,
+                // The title row draws the alarm in both modes on the sidebar.
+                alarm: true,
+                attention: true,
                 devServer: !!devServerSession && isLiveDevServerStatus(devServerSession.status),
                 external: isExternal,
               })}
@@ -1578,6 +1590,7 @@ export function WorktreeCard({
                     onOpenPlan: openPlanFileForThisWorktree,
                   }}
                   gitStateIndicator={gitStateIndicator}
+                  lifecycleAlarm={lifecycleAlarm}
                   quietGit={quietGit}
                   menu={menuActions}
                 />
@@ -1598,7 +1611,10 @@ export function WorktreeCard({
                   it. At 4px the cluster was crowded against the body and the
                   whole card read as one undifferentiated mass. */}
               {!effectiveIsCollapsed && (
-                <div id={`worktree-body-${worktree.id}`} className="pb-2.5 pt-2">
+                <div
+                  id={`worktree-body-${worktree.id}`}
+                  className={variant === "sidebar" ? "pb-2 pt-0.5" : "pb-2.5 pt-2"}
+                >
                   {worktree.isWslPath && !worktree.wslGitOptIn && !worktree.wslGitDismissed && (
                     <WslGitBanner
                       worktreeId={worktree.id}
@@ -1606,81 +1622,114 @@ export function WorktreeCard({
                       wslGitEligible={worktree.wslGitEligible}
                     />
                   )}
-                  <WorktreeDetailsSection
-                    variant={variant}
-                    worktree={worktree}
-                    homeDir={homeDir}
-                    isExpanded={isExpanded}
-                    hasChanges={hasChanges}
-                    computedSubtitle={computedSubtitle}
-                    reviewState={reviewState}
-                    effectiveNote={effectiveNote}
-                    effectiveSummary={effectiveSummary}
-                    worktreeErrors={worktreeErrors}
-                    isFocused={isFocused}
-                    isStale={isStaleCard}
-                    onToggleExpand={handleToggleExpand}
-                    onPathClick={openFileBrowserForThisWorktree}
-                    onDismissError={dismissError}
-                    onRetryError={handleErrorRetry}
-                    onOpenReviewHub={openReviewHubForThisWorktree}
-                    quietGitDetail={
-                      quietGit ? (
-                        <QuietGitDetails
-                          worktree={worktree}
-                          branchLabel={branchLabel}
-                          isActive={isActive}
-                          onOpenIssue={worktree.issueNumber ? handleOpenIssueExternal : undefined}
-                          onOpenPR={worktree.linked?.pr ? handleOpenPRExternal : undefined}
-                        />
-                      ) : undefined
-                    }
-                    isLifecycleRunning={isLifecycleRunning}
-                    lifecycleLabel={lifecycleLabel}
-                    isBeingDeleted={isBeingDeleted}
-                    deleteError={deleteError}
-                    hasResourceConfig={hasResourceConfig}
-                    resourceStatus={worktree.resourceStatus?.lastStatus}
-                    onResourceResume={hasResumeCommand ? handleResourceResume : undefined}
-                    onResourcePause={hasPauseCommand ? handleResourcePause : undefined}
-                    onResourceConnect={
-                      worktree.resourceConnectCommand ? handleResourceConnect : undefined
-                    }
-                    onResourceProvision={hasProvisionCommand ? handleResourceProvision : undefined}
-                    onResourceTeardown={hasTeardownCommand ? handleResourceTeardown : undefined}
-                    onResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
-                  />
+                  {/* Stacked below 20rem, where one row cannot hold a summary,
+                      a time and the sessions trigger without losing the words. */}
+                  <div
+                    className={cn(
+                      isSessionsFooterInline &&
+                        "flex flex-col @xs/card:flex-row @xs/card:items-center @xs/card:gap-1"
+                    )}
+                  >
+                    <div className={cn(isSessionsFooterInline && "min-w-0 flex-1")}>
+                      <WorktreeDetailsSection
+                        variant={variant}
+                        worktree={worktree}
+                        homeDir={homeDir}
+                        isExpanded={isExpanded}
+                        hasChanges={hasChanges}
+                        computedSubtitle={computedSubtitle}
+                        reviewState={reviewState}
+                        effectiveNote={effectiveNote}
+                        effectiveSummary={effectiveSummary}
+                        worktreeErrors={worktreeErrors}
+                        isFocused={isFocused}
+                        isStale={isStaleCard}
+                        onToggleExpand={handleToggleExpand}
+                        onPathClick={openFileBrowserForThisWorktree}
+                        onDismissError={dismissError}
+                        onRetryError={handleErrorRetry}
+                        onOpenReviewHub={openReviewHubForThisWorktree}
+                        quietGitDetail={
+                          quietGit ? (
+                            <QuietGitDetails
+                              worktree={worktree}
+                              branchLabel={branchLabel}
+                              isActive={isActive}
+                              onOpenIssue={
+                                worktree.issueNumber ? handleOpenIssueExternal : undefined
+                              }
+                              onOpenPR={worktree.linked?.pr ? handleOpenPRExternal : undefined}
+                            />
+                          ) : undefined
+                        }
+                        isLifecycleRunning={isLifecycleRunning}
+                        lifecycleLabel={lifecycleLabel}
+                        isBeingDeleted={isBeingDeleted}
+                        deleteError={deleteError}
+                        hasResourceConfig={hasResourceConfig}
+                        resourceStatus={worktree.resourceStatus?.lastStatus}
+                        onResourceResume={hasResumeCommand ? handleResourceResume : undefined}
+                        onResourcePause={hasPauseCommand ? handleResourcePause : undefined}
+                        onResourceConnect={
+                          worktree.resourceConnectCommand ? handleResourceConnect : undefined
+                        }
+                        onResourceProvision={
+                          hasProvisionCommand ? handleResourceProvision : undefined
+                        }
+                        onResourceTeardown={hasTeardownCommand ? handleResourceTeardown : undefined}
+                        onResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
+                        syncDetail={
+                          variant === "sidebar" && !quietGit && !isMainWorktree ? (
+                            <QuietGitDetails
+                              worktree={worktree}
+                              branchLabel={branchLabel}
+                              isActive={isActive}
+                              syncOnly
+                            />
+                          ) : undefined
+                        }
+                      />
+                    </div>
 
-                  <WorktreeTerminalSection
-                    variant={variant}
-                    worktreeId={worktree.id}
-                    onStartSession={() => handleOpenPanelPalette("user")}
-                    isExpanded={isTerminalsExpanded}
-                    counts={terminalCounts}
-                    terminals={worktreeTerminals}
-                    onToggle={handleToggleTerminals}
-                    onTerminalSelect={handleTerminalSelect}
-                  />
+                    <WorktreeTerminalSection
+                      variant={variant}
+                      worktreeId={worktree.id}
+                      onStartSession={() => handleOpenPanelPalette("user")}
+                      isExpanded={isTerminalsExpanded}
+                      inline={isSessionsFooterInline}
+                      stateGlyphsElsewhere={variant === "sidebar"}
+                      counts={terminalCounts}
+                      terminals={worktreeTerminals}
+                      onToggle={handleToggleTerminals}
+                      onTerminalSelect={handleTerminalSelect}
+                    />
+                  </div>
                 </div>
               )}
             </div>
           </div>
 
-          {deleteError && (
-            <WorktreeDeleteErrorBanner
-              message={deleteError}
-              onRetry={handleRetryDelete}
-              onDismiss={handleDismissDeleteError}
-            />
-          )}
+          {(deleteError || issueError) && (
+            // Inside the card's own gutter, so a failure reads as belonging to
+            // the card above it rather than as a band between two cards.
+            <div className={cn(variant === "sidebar" && "px-3 pb-2.5")}>
+              {deleteError && (
+                <WorktreeDeleteErrorBanner
+                  message={deleteError}
+                  onRetry={handleRetryDelete}
+                  onDismiss={handleDismissDeleteError}
+                />
+              )}
 
-          {issueError && (
-            <WorktreeIssueErrorBanner
-              message={issueError.message}
-              mutationType={issueError.type}
-              onRetry={handleRetryIssue}
-              onDismiss={handleDismissIssueError}
-            />
+              {issueError && (
+                <WorktreeIssueErrorBanner
+                  message={issueError.message}
+                  mutationType={issueError.type}
+                  onRetry={handleRetryIssue}
+                  onDismiss={handleDismissIssueError}
+                />
+              )}
+            </div>
           )}
 
           <WorktreeDialogs
