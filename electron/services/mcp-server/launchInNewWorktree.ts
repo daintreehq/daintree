@@ -139,10 +139,11 @@ function parseArgs(args: unknown) {
 /**
  * A create step a view didn't answer before its dispatch deadline. Git may
  * have made the worktree after all, and nothing records it, so this is not
- * the retriable execution error it arrives as. A deadline that passed before
- * the create was sent started nothing, and stays as it came.
+ * the retriable execution error it arrives as. A deadline that passed, or ran
+ * too short, before the create was sent started nothing, and stays as it came.
  */
-const DISPATCH_TIMED_OUT = /^Action dispatch timed out\b(?!.*before it was sent)/;
+const DISPATCH_TIMED_OUT =
+  /^Action dispatch timed out\b(?!.*(?:before it was sent|left to send it))/;
 
 function createUnconfirmed(detail: string): LaunchInNewWorktreeAnswer {
   const message = `The create step didn't answer before its dispatch deadline, so it isn't known whether a worktree was made, and nothing was launched. Check the worktree listing for the branch before calling again: a retry could make a second worktree. ${detail}`;

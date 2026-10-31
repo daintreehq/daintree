@@ -404,13 +404,12 @@ describe("runLaunchInNewWorktree (#15738)", () => {
     expect(envelope.message).toMatch(/isn't known whether a worktree was made/);
   });
 
-  it("leaves a create whose deadline passed before it was sent as the error it is", async () => {
+  it.each([
+    "Action dispatch timed out: worktree.createWithRecipe — its deadline passed before it was sent",
+    "Action dispatch timed out: worktree.createWithRecipe — too little of the call's deadline was left to send it",
+  ])("leaves a create that was never sent as the error it is: %s", async (message) => {
     // Nothing was sent, so nothing can have been made.
-    const notSent = buildToolError({
-      code: "EXECUTION_ERROR",
-      message:
-        "Action dispatch timed out: worktree.createWithRecipe — its deadline passed before it was sent",
-    });
+    const notSent = buildToolError({ code: "EXECUTION_ERROR", message });
     const run = steps({ "worktree.createWithRecipe": [() => notSent] });
 
     const { result } = await runLaunchInNewWorktree(

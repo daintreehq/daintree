@@ -417,6 +417,44 @@ describe("agent.launchInNewWorktree through the session server (#15738)", () => 
     expect(prepareLaunch).not.toHaveBeenCalled();
   });
 
+  it("arms a relayed launch's notice on the launch step, pinned to the call", async () => {
+    const pending = { complete: vi.fn(), cancel: vi.fn() };
+    const prepareLaunch = vi.fn().mockResolvedValue(pending);
+    const { dispatchAction, server } = harness(
+      {
+        "worktree.createWithRecipe": created,
+        "worktree.waitUntilReady": ready,
+        "agent.launch": launched,
+      },
+      "core",
+      {
+        relay: { shellName: "shell-mbp", refuseWrite: vi.fn(() => null) },
+        resolveOwnPane: () =>
+          relayNoticePane("relay-principal", {
+            projectId: "project-1",
+            helpSessionId: "help-1",
+            deliver: vi.fn(),
+          }),
+        terminalNotify: { prepareLaunch } as unknown as TerminalNotifyHandlers,
+      }
+    );
+
+    const result = await callTool(server, {
+      name: "agent.launchInNewWorktree",
+      arguments: { source: SOURCE, agentId: "claude", prompt: "Fix it", notify: true },
+      _meta: { [RELAY_CALL_ID_META_KEY]: "call-8" },
+    } as Parameters<typeof callTool>[1]);
+
+    expect(result.isError).toBeFalsy();
+    expect(prepareLaunch).toHaveBeenCalledTimes(1);
+    expect(prepareLaunch.mock.calls[0]![0].relay).toMatchObject({ callId: "call-8" });
+    expect(dispatchAction.mock.calls.map((call) => call[0])).toEqual([
+      "worktree.createWithRecipe",
+      "worktree.waitUntilReady",
+      "agent.launch",
+    ]);
+  });
+
   it("carries a relayed call's id to every step it dispatches", async () => {
     const { dispatchAction, server } = harness(
       {
