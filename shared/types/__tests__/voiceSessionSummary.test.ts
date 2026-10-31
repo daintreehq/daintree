@@ -89,6 +89,7 @@ const summary: VoiceSessionSummary = {
   droppedQueued: 0,
   charsCommitted: 42,
   audioNoText: false,
+  reopenedSend: false,
 };
 
 describe("voice session summary schema", () => {
@@ -112,6 +113,17 @@ describe("voice session summary schema", () => {
       VoiceCorrectionPassagesSchema.safeParse({ ...summary.correctionPassages, rejected: "x" })
         .success
     ).toBe(false);
+  });
+
+  it("requires the reopened-send flag as a boolean", () => {
+    expect(VoiceSessionSummarySchema.safeParse({ ...summary, reopenedSend: true }).success).toBe(
+      true
+    );
+    const { reopenedSend: _omitted, ...without } = summary;
+    expect(VoiceSessionSummarySchema.safeParse(without).success).toBe(false);
+    expect(VoiceSessionSummarySchema.safeParse({ ...summary, reopenedSend: "yes" }).success).toBe(
+      false
+    );
   });
 
   it("rejects a field it does not declare", () => {

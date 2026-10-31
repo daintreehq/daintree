@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceStopReason } from "@shared/types/voiceSessionSummary";
+import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 
 // Drives the real voice store through the IPC callbacks to prove a spoken
 // "send it" reaches the panel's composer only when it can send a real prompt.
@@ -171,6 +172,22 @@ const complete = (text: string, itemId: string, send?: boolean) =>
     ...(send ? { send } : {}),
   });
 
+// The mocked logger outlives `vi.resetModules()`, so earlier tests' lines would
+// otherwise count in the refusals of later ones.
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+// The lines a refused send request leaves (#15704), in the order they were logged.
+async function refusals() {
+  const { logInfo } = await import("@/utils/logger");
+  const { VOICE_SEND_REFUSED_MESSAGE } = await import("../voiceSendDiagnostics");
+  return vi
+    .mocked(logInfo)
+    .mock.calls.filter(([message]) => message === VOICE_SEND_REFUSED_MESSAGE)
+    .map(([, context]) => context);
+}
+
 describe("VoiceRecordingService — spoken send (#14633)", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -322,6 +339,26 @@ describe("VoiceRecordingService — spoken send (#14633)", () => {
 
         expect(handler).not.toHaveBeenCalled();
         expect(stop).not.toHaveBeenCalled();
+        await finish();
+      }
+    );
+
+    it.each(["escape", "retarget"] as const)(
+      "logs a send landed by a %s stop as refused, with that stop's session",
+      async (reason) => {
+        const { voiceRecordingService, finish } = await stopping(reason);
+        voiceRecordingService.onSpokenSend(PANEL_ID, undefined, vi.fn());
+
+        complete("fix the login bug", "item-a", true);
+
+        expect(await refusals()).toEqual([
+          {
+            asker: "spoken_send",
+            reason: "stop_not_users",
+            panelId: PANEL_ID,
+            sessionId: SESSION_ID,
+          },
+        ]);
         await finish();
       }
     );
@@ -538,6 +575,26 @@ describe("VoiceRecordingService — spoken send to a Canopy reply off screen (#1
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(stop).not.toHaveBeenCalled();
+    expect(await refusals()).toEqual([]);
+  });
+
+  it.each([
+    ["closed", false, true],
+    ["off screen", true, false],
+  ])("logs a send to a reply that is %s as refused", async (_name, canopyOpen, hasHandler) => {
+    const { voiceRecordingService } = await setupReply(canopyOpen);
+    if (hasHandler) voiceRecordingService.onSpokenSend(REPLY.panelId, undefined, vi.fn());
+
+    complete("fix the login bug", "item-a", true);
+
+    expect(await refusals()).toEqual([
+      {
+        asker: "spoken_send",
+        reason: "composer_unavailable",
+        panelId: REPLY.panelId,
+        sessionId: SESSION_ID,
+      },
+    ]);
   });
 
   it("doesn't send from a reply still fading out as Canopy closes", async () => {
@@ -572,7 +629,7 @@ describe("VoiceRecordingService — the session panel's Send (#14920)", () => {
     await voiceRecordingService.stopAndSend();
 
     // Not a spoken "send it": a short draft goes, as it would on Enter.
-    expect(handler).toHaveBeenCalledWith({ spoken: false });
+    expect(handler).toHaveBeenCalledWith({ spoken: false, asker: "stop_and_send_key" });
     expect(stop).not.toHaveBeenCalled();
     expect(notify).not.toHaveBeenCalled();
   });
@@ -606,5 +663,219 @@ describe("VoiceRecordingService — the session panel's Send (#14920)", () => {
     voiceRecordingService.onSpokenSend(PANEL_ID, "other-project", vi.fn());
 
     expect(voiceRecordingService.canSendActiveSession()).toBe(false);
+  });
+});
+
+describe("VoiceRecordingService — a send request that goes nowhere leaves a line (#15704)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    draftState.draft = "";
+    callbacks.delta = null;
+    callbacks.complete = null;
+    callbacks.boundary = null;
+    remoteStop.release = null;
+    notify.mockClear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const spoken = (reason: string, panelId: string | null = PANEL_ID) => ({
+    asker: "spoken_send",
+    reason,
+    panelId,
+    sessionId: SESSION_ID,
+  });
+
+  describe("a spoken send", () => {
+    it("says nothing when the composer takes it", async () => {
+      const { voiceRecordingService } = await setup();
+      draftState.draft = "Fix the login bug in the settings panel";
+      voiceRecordingService.onSpokenSend(PANEL_ID, undefined, vi.fn());
+
+      complete("", "item-a", true);
+      complete("fix it", "item-b");
+
+      expect(await refusals()).toEqual([]);
+    });
+
+    it("says no composer shows the panel, though the dictation stops", async () => {
+      const { stop } = await setup();
+      draftState.draft = "Fix the login bug in the settings panel";
+
+      complete("", "item-a", true);
+
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(await refusals()).toEqual([spoken("composer_unavailable")]);
+    });
+
+    it("says the draft is empty", async () => {
+      const { voiceRecordingService } = await setup();
+      voiceRecordingService.onSpokenSend(PANEL_ID, undefined, vi.fn());
+
+      complete("", "item-a", true);
+
+      expect(await refusals()).toEqual([spoken("draft_empty")]);
+    });
+
+    it("says the draft is too short to send by voice, once", async () => {
+      const { voiceRecordingService } = await setup();
+      draftState.draft = "yes";
+      voiceRecordingService.onSpokenSend(PANEL_ID, undefined, vi.fn());
+
+      complete("", "item-a", true);
+
+      expect(await refusals()).toEqual([spoken("draft_too_short")]);
+    });
+
+    it("says the session isn't recording", async () => {
+      const { voiceRecordingService, useVoiceRecordingStore } = await setup();
+      const handler = vi.fn();
+      voiceRecordingService.onSpokenSend(PANEL_ID, undefined, handler);
+      useVoiceRecordingStore.getState().setStatus("paused");
+
+      complete("fix the login bug", "item-a", true);
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(await refusals()).toEqual([spoken("not_recording")]);
+    });
+
+    it("says the dictation had moved to another panel", async () => {
+      const { voiceRecordingService } = await setup();
+      // Only a target swapped between the completion and the send could reach it.
+      Reflect.apply(Reflect.get(voiceRecordingService, "handleSpokenSend"), voiceRecordingService, [
+        "panel-2",
+        undefined,
+        SESSION_ID,
+      ]);
+
+      expect(await refusals()).toEqual([spoken("target_changed", "panel-2")]);
+    });
+
+    it("says its session was already discarded, only when it carried a send", async () => {
+      const { voiceRecordingService } = await setup();
+      Reflect.get(voiceRecordingService, "discardedSessionIds").add(SESSION_ID);
+      Reflect.get(voiceRecordingService, "discardedSessionPanels").set(SESSION_ID, PANEL_ID);
+      voiceRecordingService.onSpokenSend(PANEL_ID, undefined, vi.fn());
+
+      complete("fix the login bug", "item-a");
+      expect(await refusals()).toEqual([]);
+
+      complete("fix the login bug", "item-b", true);
+      expect(await refusals()).toEqual([spoken("session_discarded")]);
+    });
+
+    it("says a scratch kept the send from going", async () => {
+      const { voiceRecordingService } = await setup();
+      const handler = vi.fn();
+      voiceRecordingService.onSpokenSend(PANEL_ID, undefined, handler);
+      draftState.draft = "Fix the login bug in the settings panel";
+
+      complete("scratch that", "item-a", true);
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(await refusals()).toEqual([spoken("scratch_precedence")]);
+    });
+
+    it("carries no words from the draft or the utterance", async () => {
+      const { voiceRecordingService, stop } = await setup();
+      const handler = vi.fn();
+      voiceRecordingService.onSpokenSend(PANEL_ID, undefined, handler);
+
+      // Lands two words in the draft, too short to send by voice.
+      complete("deploy staging", "item-a", true);
+      // Then with no composer to send from, three more.
+      Reflect.get(voiceRecordingService, "spokenSendHandlers").clear();
+      complete("rotate production credentials", "item-b", true);
+
+      const lines = await refusals();
+      expect(draftState.draft).toMatch(/deploy staging.*rotate production credentials/);
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(stop).toHaveBeenCalledTimes(2);
+      expect(lines).toEqual([spoken("draft_too_short"), spoken("composer_unavailable")]);
+      expect(JSON.stringify(lines)).not.toMatch(/deploy|staging|rotate|production|credentials/);
+    });
+  });
+
+  describe("stopAndSend", () => {
+    const sessionIn = (
+      store: Awaited<ReturnType<typeof setup>>["useVoiceRecordingStore"]
+    ): string | null => store.getState().panelBuffers[PANEL_ID]?.dictationSessionId ?? null;
+
+    it.each([
+      ["the stop-and-send key", undefined, "stop_and_send_key"],
+      ["the session panel's Send", { asker: "session_panel_send" } as const, "session_panel_send"],
+    ])("says who asked when %s finds no composer to send from", async (_name, options, asker) => {
+      const { voiceRecordingService, useVoiceRecordingStore } = await setup();
+      const sessionId = sessionIn(useVoiceRecordingStore);
+
+      await voiceRecordingService.stopAndSend(options);
+
+      expect(sessionId).toEqual(expect.any(String));
+      expect(await refusals()).toEqual([
+        { asker, reason: "composer_unavailable", panelId: PANEL_ID, sessionId },
+      ]);
+    });
+
+    it("says nothing when the composer is asked, whatever it does with the request", async () => {
+      const { voiceRecordingService } = await setup();
+      voiceRecordingService.onSpokenSend(PANEL_ID, undefined, vi.fn());
+
+      await voiceRecordingService.stopAndSend();
+      await voiceRecordingService.stopAndSend({ asker: "session_panel_send" });
+
+      expect(await refusals()).toEqual([]);
+    });
+
+    it("says the session is already finishing, which it never stops a second time", async () => {
+      const { voiceRecordingService, useVoiceRecordingStore } = await setup();
+      voiceRecordingService.onSpokenSend(PANEL_ID, undefined, vi.fn());
+      useVoiceRecordingStore.getState().setStatus("finishing");
+      const sessionId = sessionIn(useVoiceRecordingStore);
+
+      await voiceRecordingService.stopAndSend();
+
+      expect(await refusals()).toEqual([
+        { asker: "stop_and_send_key", reason: "session_finishing", panelId: PANEL_ID, sessionId },
+      ]);
+    });
+
+    it("says there is no dictation to send", async () => {
+      const { voiceRecordingService, useVoiceRecordingStore } = await setup();
+      useVoiceRecordingStore.setState({ status: "idle", activeTarget: null });
+
+      await voiceRecordingService.stopAndSend();
+
+      expect(await refusals()).toEqual([
+        { asker: "stop_and_send_key", reason: "no_session", panelId: null, sessionId: null },
+      ]);
+    });
+
+    it("says another view's dictation was only stopped there, with that session", async () => {
+      const { voiceRecordingService, useVoiceRecordingStore } = await setup();
+      useVoiceRecordingStore.setState({
+        status: "idle",
+        activeTarget: null,
+        sessionElsewhere: {
+          sessionId: "remote-session",
+          hostId: LOCAL_HOST_ID,
+          projectId: null,
+          projectName: null,
+          details: null,
+        },
+      });
+
+      await voiceRecordingService.stopAndSend({ asker: "session_panel_send" });
+
+      expect(await refusals()).toEqual([
+        {
+          asker: "session_panel_send",
+          reason: "session_elsewhere",
+          panelId: null,
+          sessionId: "remote-session",
+        },
+      ]);
+    });
   });
 });

@@ -550,6 +550,35 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
     expect(draft()).toBe("Keep this intro. Fresh words here.");
   });
 
+  it("names the panel and session of a spoken send an Escape cancelled, with no dictation left", async () => {
+    const { service, voiceStore, settled } = await setup("Keep this intro.");
+    service.onSpokenSend(PANEL, PROJECT, vi.fn());
+    const { logInfo } = await import("@/utils/logger");
+    const { VOICE_SEND_REFUSED_MESSAGE } = await import("../voiceSendDiagnostics");
+    vi.mocked(logInfo).mockClear();
+
+    complete("Fix the login bug.", "item-a");
+    await escapeToCancel(service);
+    await settled();
+    expect(voiceStore.getState().activeTarget).toBeNull();
+    callbacks.complete!({
+      sessionId: SESSION_ID,
+      text: "",
+      willCorrect: false,
+      itemId: "item-c",
+      send: true,
+    });
+
+    expect(
+      vi
+        .mocked(logInfo)
+        .mock.calls.filter(([message]) => message === VOICE_SEND_REFUSED_MESSAGE)
+        .map(([, context]) => context)
+    ).toEqual([
+      { asker: "spoken_send", reason: "session_discarded", panelId: PANEL, sessionId: SESSION_ID },
+    ]);
+  });
+
   it("lets a cancelled session go once main reports it ended", async () => {
     const { service, begin, draft, settled } = await setup();
 

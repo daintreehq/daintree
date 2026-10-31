@@ -210,7 +210,9 @@ describe("VoiceRecordingToolbarButton — the session panel (#14920)", () => {
     const send = byTestId("voice-session-send");
     expect(send.textContent).toContain("Stop and send");
     fireEvent.click(send);
+    // The session panel's Send is told apart from the key in the log (#15704).
     expect(service.stopAndSend).toHaveBeenCalledTimes(1);
+    expect(service.stopAndSend).toHaveBeenCalledWith({ asker: "session_panel_send" });
     expect(service.goToActiveTarget).not.toHaveBeenCalled();
     expect(service.stopActiveSession).not.toHaveBeenCalled();
     expect(panel()).toBeNull();

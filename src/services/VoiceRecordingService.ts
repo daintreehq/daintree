@@ -123,6 +123,12 @@ import {
   type VoiceDraftSend,
 } from "@/services/voiceDraftSend";
 import {
+  logVoiceSendRefused,
+  type VoiceSendAsker,
+  type VoiceSendRefusal,
+  type VoiceStopAndSendAsker,
+} from "@/services/voiceSendDiagnostics";
+import {
   collectCorrectionPassages,
   countPassageFates,
   joinPassageTexts,
@@ -222,6 +228,8 @@ type StartStepLogger = (step: string, details?: Record<string, unknown>) => void
 /** How a composer's send was asked for: a spoken "send it" holds back a too-short draft. */
 export interface VoiceSendOptions {
   spoken?: boolean;
+  /** What asked, for the line a refused send leaves. Left out, it follows `spoken`. */
+  asker?: VoiceSendAsker;
   /** A spoken "send it" its draft was too short for: nothing is sent, and the composer says so. */
   tooShort?: boolean;
 }
@@ -786,6 +794,10 @@ class VoiceRecordingService {
   // they had already sent is still on its way and has nowhere left to land.
   // Each is let go once main reports it ended, the last thing it sends for it.
   private discardedSessionIds = new Set<string>();
+  // The panel each discarded session was dictating into: Escape clears the
+  // active target at once, and a spoken send still in flight names its panel
+  // from here (#15704).
+  private discardedSessionPanels = new Map<string, string>();
   // Main has nothing left to send for this one, so cancelling it needs no
   // tombstone (and would leave one behind, with no end notice to clear it).
   private lastEndedSessionId: string | null = null;
@@ -947,6 +959,9 @@ class VoiceRecordingService {
   private cleanupModel: VoiceCorrectionModel = VOICE_CLEANUP_AI_MODEL;
   // Each session's summary until its line is logged, by session id (#14617).
   private timelines = new Map<string, VoiceSessionTimeline>();
+  // Starts that reopened a waiting send before their session, and so their
+  // summary, existed: the dictation key's press arms the target first (#15704).
+  private reopeningStarts = new WeakSet<VoiceRecordingTarget>();
   // The in-flight start's summary, until its capture is promoted.
   private attemptTimeline: VoiceSessionTimeline | null = null;
   // When the dictation shortcut was pressed, for a start in the same dispatch.
@@ -1030,7 +1045,18 @@ class VoiceRecordingService {
           heardPauses,
           commandPauses,
         }) => {
-          if (this.discardedSessionIds.has(sessionId)) return;
+          if (this.discardedSessionIds.has(sessionId)) {
+            // Main has already taken "send it" off the words.
+            if (send) {
+              logVoiceSendRefused({
+                asker: "spoken_send",
+                reason: "session_discarded",
+                panelId: this.discardedSessionPanels.get(sessionId) ?? null,
+                sessionId,
+              });
+            }
+            return;
+          }
           logDebug(`${LOG_PREFIX} Received transcription complete`, {
             itemId,
             length: text.length,
@@ -1058,6 +1084,14 @@ class VoiceRecordingService {
             // "Scratch that, send it" only scratches: the draft it leaves is one
             // the user hasn't seen, and a spoken send fires with no key press.
             if (spoken && isScratchCommand(spoken)) {
+              if (send) {
+                logVoiceSendRefused({
+                  asker: "spoken_send",
+                  reason: "scratch_precedence",
+                  panelId,
+                  sessionId,
+                });
+              }
               // Recent dictations keep what landed, so scratched words leave the
               // session's transcript with the draft (#14637), every segment a
               // cleaned chunk ran together included.
@@ -1166,7 +1200,7 @@ class VoiceRecordingService {
           useVoiceRecordingStore.getState().completeSegment(completedText, itemId);
           // After completeSegment, so the command's own preview is already retired
           // and a stop that preserves live text can't put it back.
-          if (send && panelId) this.handleSpokenSend(panelId, projectId);
+          if (send && panelId) this.handleSpokenSend(panelId, projectId, sessionId);
         }
       )
     );
@@ -1415,6 +1449,7 @@ class VoiceRecordingService {
         this.timelines.get(sessionId)?.reportEnded(reason, report);
         this.lastEndedSessionId = sessionId;
         this.discardedSessionIds.delete(sessionId);
+        this.discardedSessionPanels.delete(sessionId);
         // Replaced elsewhere before it had anything to drain, typically while
         // its start was still pending. Its start result is stale from here.
         if (reason !== "superseded" || sessionId !== this.sessionId) return;
@@ -1926,6 +1961,7 @@ class VoiceRecordingService {
     const sessionId = this.sessionId;
     if (sessionId && sessionId !== this.lastEndedSessionId) {
       this.discardedSessionIds.add(sessionId);
+      this.discardedSessionPanels.set(sessionId, target.panelId);
     }
     // Nothing of the dictation is kept, so no chunk of it lands or is recorded.
     this.resetChunking();
@@ -2105,7 +2141,22 @@ class VoiceRecordingService {
     // text. Disposed, its timeline takes every mark as a no-op.
     if (target.rewrite) timeline.dispose();
     else this.timelines.set(sessionId, timeline);
+    // Consumed: a target is reused by later starts (a microphone switch, a
+    // locked dictation), and only the one that reopened the wait says so.
+    if (this.reopeningStarts.delete(target)) timeline.noteReopenedSend();
     return timeline;
+  }
+
+  /**
+   * A dictation started in a draft whose send was waiting, and called that
+   * send off (#15703): the session's summary says so, so a prompt built from
+   * two dictations reads differently from two prompts. Given the armed target
+   * when the key's press did it, since its session isn't open yet, or the
+   * session when one began without a press.
+   */
+  noteSendReopened(by: { target: VoiceRecordingTarget } | { sessionId: string }): void {
+    if ("target" in by) this.reopeningStarts.add(by.target);
+    else this.timelines.get(by.sessionId)?.noteReopenedSend();
   }
 
   private releasePendingCapture(): void {
@@ -5999,15 +6050,23 @@ class VoiceRecordingService {
    * Stop and send, staying where the person is: the session panel's Send and
    * its key. Its composer sends as Enter would. Without one mounted to send
    * from, the dictation still stops and its words stay in the draft; another
-   * view's session stops there.
+   * view's session stops there. Whatever stops short of handing the composer
+   * the send leaves one line in the log saying why (#15704).
    */
-  async stopAndSend(): Promise<void> {
+  async stopAndSend({
+    asker = "stop_and_send_key",
+  }: { asker?: VoiceStopAndSendAsker } = {}): Promise<void> {
     this.initialize();
-    if (this.sendActiveSession()) return;
+    const unsent = this.dispatchActiveSessionSend(asker);
+    if (unsent === null) return;
+    // Read before the stop moves the store on.
+    const { activeTarget, status, sessionElsewhere } = useVoiceRecordingStore.getState();
+    const panelId = activeTarget?.panelId ?? null;
     // A start still arming had nothing to send, so its cancel says nothing.
-    const hadWords = isActiveVoiceSession(useVoiceRecordingStore.getState().status);
+    const hadWords = isActiveVoiceSession(status);
     const stopping = this.stopAnySession();
     if (stopping) {
+      logVoiceSendRefused({ asker, reason: unsent, panelId });
       await stopping;
       if (!hadWords) return;
       notify({
@@ -6019,8 +6078,17 @@ class VoiceRecordingService {
       });
       return;
     }
-    const elsewhere = useVoiceRecordingStore.getState().sessionElsewhere;
-    if (elsewhere) await this.stopSessionElsewhere(elsewhere, false);
+    if (sessionElsewhere) {
+      logVoiceSendRefused({
+        asker,
+        reason: "session_elsewhere",
+        panelId: null,
+        sessionId: sessionElsewhere.sessionId,
+      });
+      await this.stopSessionElsewhere(sessionElsewhere, false);
+      return;
+    }
+    logVoiceSendRefused({ asker, reason: unsent, panelId });
   }
 
   /**
@@ -6087,29 +6155,41 @@ class VoiceRecordingService {
 
   /** Whether the session panel's Send has a composer to send from. */
   canSendActiveSession(): boolean {
-    return this.activeSessionSend() !== null;
+    return "send" in this.activeSessionSend();
   }
 
   /**
    * The session panel's Send: the dictation stops and its composer sends the
    * draft as Enter would, without the person going there. Nothing happens
-   * when no composer for it is mounted to send from.
+   * when no composer for it is mounted to send from. True means the composer
+   * was asked, not that it sent: one that ignores the request says why in the
+   * log itself.
    */
-  sendActiveSession(): boolean {
+  sendActiveSession(asker: VoiceStopAndSendAsker = "stop_and_send_key"): boolean {
     this.initialize();
-    const send = this.activeSessionSend();
-    if (!send) return false;
-    send({ spoken: false });
-    return true;
+    return this.dispatchActiveSessionSend(asker) === null;
   }
 
-  private activeSessionSend(): ((options?: VoiceSendOptions) => void) | null {
+  /** Why nothing was asked of a composer, or null once its composer has the request. */
+  private dispatchActiveSessionSend(
+    asker: VoiceStopAndSendAsker
+  ): Extract<VoiceSendRefusal, "no_session" | "session_finishing" | "composer_unavailable"> | null {
+    const active = this.activeSessionSend();
+    if (!("send" in active)) return active.unsent;
+    active.send({ spoken: false, asker });
+    return null;
+  }
+
+  private activeSessionSend():
+    | { send: (options?: VoiceSendOptions) => void }
+    | { unsent: "no_session" | "session_finishing" | "composer_unavailable" } {
     const { activeTarget, status } = useVoiceRecordingStore.getState();
-    if (!activeTarget || status === "finishing" || !isActiveVoiceSession(status)) return null;
-    return (
-      this.spokenSendHandlers.get(spokenSendKey(activeTarget.panelId, activeTarget.projectId)) ??
-      null
+    if (!activeTarget || !isActiveVoiceSession(status)) return { unsent: "no_session" };
+    if (status === "finishing") return { unsent: "session_finishing" };
+    const send = this.spokenSendHandlers.get(
+      spokenSendKey(activeTarget.panelId, activeTarget.projectId)
     );
+    return send ? { send } : { unsent: "composer_unavailable" };
   }
 
   // A stop is the surest end of speech there is, so a send its drain lands goes
@@ -6118,13 +6198,30 @@ class VoiceRecordingService {
   // retarget, Enter or a timeout must not get a send nobody asked for, and
   // joining the stop would cancel a newer start. A stopping session is never
   // stopped a second time.
-  private handleSpokenSend(panelId: string, projectId: string | undefined): void {
+  //
+  // Main has already taken "send it" off the words, so a request that stops
+  // here leaves a line in the log: the session heard it, `sessionId`, is the
+  // one named, not a newer one in the panel (#15704).
+  private handleSpokenSend(
+    panelId: string,
+    projectId: string | undefined,
+    sessionId: string
+  ): void {
+    const refuse = (reason: VoiceSendRefusal) =>
+      logVoiceSendRefused({ asker: "spoken_send", reason, panelId, sessionId });
     const voiceState = useVoiceRecordingStore.getState();
-    if (voiceState.activeTarget?.panelId !== panelId) return;
+    if (voiceState.activeTarget?.panelId !== panelId) {
+      refuse("target_changed");
+      return;
+    }
     const stopping = voiceState.status === "finishing";
     if (stopping) {
-      if (!this.stopTakesSpokenSend) return;
+      if (!this.stopTakesSpokenSend) {
+        refuse("stop_not_users");
+        return;
+      }
     } else if (voiceState.status !== "recording") {
+      refuse("not_recording");
       return;
     }
     const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
@@ -6136,6 +6233,7 @@ class VoiceRecordingService {
       isCanopyReplyTarget(voiceState.activeTarget) &&
       (!handler || !useCanopyStore.getState().isOpen)
     ) {
+      refuse("composer_unavailable");
       return;
     }
     if (handler && isSpokenSendable(draft)) {
@@ -6146,11 +6244,13 @@ class VoiceRecordingService {
     // alone would pass for an ordinary one, so the composer says it wasn't
     // sent and how to send it, in place of the stop's own word (#14944).
     if (handler && draft.trim()) {
+      refuse("draft_too_short");
       if (stopping) this.stopAnnounces = false;
       else void this.stop("Dictation stopped.", { reason: "send", announce: false });
       handler({ tooShort: true });
       return;
     }
+    refuse(handler ? "draft_empty" : "composer_unavailable");
     if (!stopping) void this.stop("Dictation stopped.", { reason: "send" });
   }
 
@@ -6193,6 +6293,7 @@ class VoiceRecordingService {
     this.unfollowLearningBaselines();
     this.spokenSendHandlers.clear();
     this.discardedSessionIds.clear();
+    this.discardedSessionPanels.clear();
     for (const unsub of this.unsubscribers) {
       unsub();
     }

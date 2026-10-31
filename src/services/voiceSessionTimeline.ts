@@ -83,6 +83,7 @@ export class VoiceSessionTimeline {
   private droppedQueued = 0;
   private charsCommitted = 0;
   private heardSignal = false;
+  private reopenedSend = false;
   private lastSpeechAt: number | null = null;
   private provider: VoiceTranscriptionProvider | null = null;
   private backend:
@@ -157,6 +158,11 @@ export class VoiceSessionTimeline {
 
   noteSignal(): void {
     this.heardSignal = true;
+  }
+
+  /** This session's start called off a send that was still waiting in its draft. */
+  noteReopenedSend(): void {
+    if (!this.done) this.reopenedSend = true;
   }
 
   /** A chunk at speech level arrived from the capture. */
@@ -341,6 +347,7 @@ export class VoiceSessionTimeline {
       droppedQueued: this.droppedQueued,
       charsCommitted: this.charsCommitted,
       audioNoText: this.heardSignal && this.charsCommitted === 0,
+      reopenedSend: this.reopenedSend,
       provider: report?.provider ?? this.provider,
       delayTier: report?.delayTier ?? null,
       biasTermCount: report?.biasTermCount ?? null,
