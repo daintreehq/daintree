@@ -21,6 +21,7 @@ import {
 import { UserAgentConfigSchema } from "../../types/userAgentRegistry.js";
 import { buildResumeCommand, buildResumeLatestCommand } from "../../types/agentSettings.js";
 import { BUILT_IN_AGENT_IDS } from "../agentIds.js";
+import { isSensitiveEnvKey } from "../../utils/envVars.js";
 
 describe("agentRegistry", () => {
   beforeEach(() => {
@@ -1243,6 +1244,93 @@ describe("claude providerTemplates descriptions", () => {
       (s) => s.key === "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
     );
     expect(suggestion?.hint).toContain("Monitor");
+  });
+});
+
+// #15570: Claude Code speaks only the Anthropic Messages API and posts to
+// `/v1/messages` under ANTHROPIC_BASE_URL, so a template aimed at an
+// OpenAI-style `/v1` surface creates a preset that can't reach the model.
+describe("claude providerTemplates endpoints and credentials", () => {
+  const templates = getAgentConfig("claude")?.providerTemplates ?? [];
+  const routed = templates.flatMap((t) =>
+    t.env?.ANTHROPIC_BASE_URL !== undefined
+      ? [{ id: t.id, env: t.env, base: t.env.ANTHROPIC_BASE_URL }]
+      : []
+  );
+  const isLoopback = (base: string) =>
+    ["localhost", "127.0.0.1", "[::1]"].includes(new URL(base).hostname);
+  const credentials = (env: Record<string, string> = {}) =>
+    Object.entries(env).filter(([key]) => isSensitiveEnvKey(key));
+  const messagesUrl = (base: string) => `${base.replace(/\/+$/, "")}/v1/messages`;
+
+  // Each provider's published Claude Code setup: the Messages endpoint it
+  // serves, the token it documents (blank for the user's key, or a local
+  // placeholder), and whether its guide blanks an inherited ANTHROPIC_API_KEY.
+  const documented = [
+    ["zai", "https://api.z.ai/api/anthropic/v1/messages", "", undefined],
+    ["openrouter", "https://openrouter.ai/api/v1/messages", "", ""],
+    ["deepseek", "https://api.deepseek.com/anthropic/v1/messages", "", undefined],
+    ["ollama", "http://localhost:11434/v1/messages", "ollama", ""],
+  ] as const;
+
+  it.each(documented)(
+    "%s follows its provider's documented Claude Code setup",
+    (id, endpoint, authToken, apiKey) => {
+      const env = templates.find((t) => t.id === id)?.env ?? {};
+      expect(env.ANTHROPIC_BASE_URL).toBeDefined();
+      expect(messagesUrl(env.ANTHROPIC_BASE_URL ?? "")).toBe(endpoint);
+      expect(env.ANTHROPIC_AUTH_TOKEN).toBe(authToken);
+      expect(env.ANTHROPIC_API_KEY).toBe(apiKey);
+    }
+  );
+
+  // Exhaustive, so a new routed template (and any local placeholder token it
+  // carries) can't ship without its provider's setup pinned above.
+  it("pins a documented setup for every routed template", () => {
+    expect(routed.map((t) => t.id).sort()).toEqual(documented.map(([id]) => id).sort());
+  });
+
+  it("never points a routed template at a /v1 base", () => {
+    expect(routed.length).toBeGreaterThan(0);
+    for (const t of routed) {
+      const segments = new URL(t.base).pathname.split("/").filter(Boolean);
+      expect(segments, t.id).not.toContain("v1");
+    }
+  });
+
+  it("never offers an endpoint as OpenAI-compatible", () => {
+    for (const t of templates) {
+      expect(`${t.id} ${t.name} ${t.description ?? ""}`, t.id).not.toMatch(/openai/i);
+    }
+  });
+
+  it("offers the custom endpoint as Anthropic-compatible", () => {
+    const custom = templates.find((t) => t.id.startsWith("custom"));
+    expect(custom?.name).toMatch(/anthropic/i);
+    expect(custom?.description).toMatch(/anthropic/i);
+  });
+
+  it("carries the credential variable on every routed template", () => {
+    for (const t of routed) expect(t.env, t.id).toHaveProperty("ANTHROPIC_AUTH_TOKEN");
+  });
+
+  // The one non-blank credential a template may carry is a local server's
+  // placeholder token: there is no key to issue, and Claude Code needs one set.
+  it("ships no secret: every credential is blank but a local server's token", () => {
+    for (const t of templates) {
+      const base = t.env?.ANTHROPIC_BASE_URL;
+      const local = base !== undefined && isLoopback(base);
+      for (const [key, value] of credentials(t.env)) {
+        if (local && key === "ANTHROPIC_AUTH_TOKEN") continue;
+        expect(value, `${t.id} ${key}`).toBe("");
+      }
+    }
+  });
+
+  it("gives a local server a placeholder token, so it launches without a key", () => {
+    const local = routed.filter((t) => isLoopback(t.base));
+    expect(local.length).toBeGreaterThan(0);
+    for (const t of local) expect(t.env.ANTHROPIC_AUTH_TOKEN, t.id).toBeTruthy();
   });
 });
 
