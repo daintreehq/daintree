@@ -36,6 +36,7 @@ import {
 } from "./mcp-server/closedPanelExits.js";
 import { getLifecycleLedger } from "./pty/lifecycleLedger.js";
 import { readPtyTerminalProcesses } from "./mcp-server/worktreeProcessGuard.js";
+import { readWorktreeGitObservation } from "./mcp-server/worktreeRetirementGit.js";
 import {
   helpOwnershipPrincipal,
   principalOwnerKey,
@@ -500,6 +501,7 @@ export class McpServerService {
           return client ? client.getTerminalAsync(id, undefined, { strict: true }) : null;
         }),
       readTerminalProcesses: () => readPtyTerminalProcesses(getPtyClient()),
+      readWorktreeGit: (worktreePath, signal) => readWorktreeGitObservation(worktreePath, signal),
       terminalGenerationOf: (terminalId) => {
         const client = getPtyClient();
         if (!client) return undefined;

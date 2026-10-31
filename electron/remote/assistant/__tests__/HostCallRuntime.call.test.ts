@@ -8,6 +8,7 @@ import {
   type OpenRun,
 } from "../HostCallRuntime.js";
 import { MAX_RELAY_ARGS_BYTES, MAX_RELAY_RUN_MS, type McpCallAnswer } from "../linkMethods.js";
+import { DEFAULT_TERMINAL_EXIT_WAIT_MS } from "../../../../shared/types/terminalExitWait.js";
 import {
   MCP_DISPATCH_TIMEOUT_MS,
   MCP_REMOTE_CONFIRM_MARGIN_MS,
@@ -333,6 +334,21 @@ describe("relayRunMs", () => {
     // A short wait the call asks for doesn't shorten it.
     expect(relayRunMs("worktree.delete", { timeoutMs: 5_000 })).toBe(
       relayRunMs("worktree.delete", {})
+    );
+  });
+
+  it("gives a retirement its exit wait and then a whole confirmation (#15737)", () => {
+    // The wait runs before the delete's confirmation, so neither may eat the other's time.
+    expect(relayRunMs("worktree.retireOwned", { timeoutMs: 60_000 })).toBeGreaterThan(
+      60_000 + MCP_REMOTE_DISPATCH_TIMEOUT_MS
+    );
+    // Every millisecond of wait it asks for is added, and none asked means the default wait.
+    expect(
+      relayRunMs("worktree.retireOwned", { timeoutMs: 50_000 }) -
+        relayRunMs("worktree.retireOwned", { timeoutMs: 20_000 })
+    ).toBe(30_000);
+    expect(relayRunMs("worktree.retireOwned", {})).toBe(
+      relayRunMs("worktree.retireOwned", { timeoutMs: DEFAULT_TERMINAL_EXIT_WAIT_MS })
     );
   });
 

@@ -143,11 +143,14 @@ describe("createSessionServerDeps", () => {
     expect(sessionDeps.readClosedPanelProcess).toBe(readClosedPanelProcess);
   });
 
-  // #15729: an owned worktree delete refuses outright without it.
-  it("hands a local and a relayed session the terminal process reader", () => {
+  // #15729: an owned worktree delete refuses outright without it; #15737: a
+  // retirement refuses outright without the git reader.
+  it("hands a local and a relayed session the terminal process and git readers", () => {
     const deps = fakeSource();
     const readTerminalProcesses = vi.fn();
+    const readWorktreeGit = vi.fn();
     (deps as { readTerminalProcesses?: unknown }).readTerminalProcesses = readTerminalProcesses;
+    (deps as { readWorktreeGit?: unknown }).readWorktreeGit = readWorktreeGit;
 
     for (const capture of [
       {},
@@ -165,6 +168,7 @@ describe("createSessionServerDeps", () => {
         ...capture,
       });
       expect(sessionDeps.readTerminalProcesses).toBe(readTerminalProcesses);
+      expect(sessionDeps.readWorktreeGit).toBe(readWorktreeGit);
     }
   });
 

@@ -39,6 +39,15 @@ describe("lookupManifestEntry with no frontend attached (#15731)", () => {
     expect(entry?.danger).toBe(viewlessOnly!.danger);
   });
 
+  // Off the external tier, so with no window the viewless catalog is the only
+  // thing that knows retiring a worktree asks the person first (#15737).
+  it("knows an owned retirement is confirm-gated with no frontend attached", async () => {
+    const entry = await lookupManifestEntry("worktree.retireOwned", cold, noFrontend);
+
+    expect(externalIds.has("worktree.retireOwned")).toBe(false);
+    expect(entry?.danger).toBe("confirm");
+  });
+
   it("still resolves an external-tier action as before", async () => {
     const external = MCP_EXTERNAL_BASE_MANIFEST.find((e) => e.id === "terminal.list");
     expect(external).toBeDefined();

@@ -143,6 +143,19 @@ export const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
     releasesOwnership: true,
     acceptsAdoption: false,
   },
+  // The owned delete with its preconditions run first (#15737): clean and
+  // pushed, no one else's process, this session's panes closed and their
+  // processes gone. Main runs those before this delegate, which is the same
+  // `worktree.delete` the owned delete sends, so the confirmation and its
+  // preview are the same. `timeoutMs` is main's and never forwarded.
+  "worktree.retireOwned": {
+    resourceKind: "worktree",
+    executor: "renderer",
+    delegateTo: "worktree.delete",
+    idArg: "worktreeId",
+    releasesOwnership: true,
+    acceptsAdoption: false,
+  },
   // The panel is still the session's after it has been revealed, so this is the
   // one entry that keeps its record. `pilot.openRun` spells the id `runId`, and
   // the workspace it should travel to is supplied from the ledger rather than
@@ -330,7 +343,7 @@ export function filterTerminalListToOwned(
  * `terminal.close`'s documented "nothing closed" answer, and the ownership
  * release must be able to tell that apart from a real close.
  */
-function closedIdsInclude(result: unknown, id: string): boolean {
+export function closedIdsInclude(result: unknown, id: string): boolean {
   if (typeof result !== "object" || result === null || Array.isArray(result)) return false;
   const closedIds = (result as { closedIds?: unknown }).closedIds;
   return Array.isArray(closedIds) && closedIds.includes(id);

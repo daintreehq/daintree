@@ -6,6 +6,8 @@ import {
 import { PROJECT_CHECK_DEFAULT_TIMEOUT_MS } from "../../../shared/types/projectCheck.js";
 import { REPLY_WAIT_DEFAULT_SECONDS } from "../../../shared/types/replyWait.js";
 import { LAUNCH_SETUP_WAIT_DEFAULT_MS } from "../../../shared/utils/launchInNewWorktree.js";
+import { DEFAULT_TERMINAL_EXIT_WAIT_MS } from "../../../shared/types/terminalExitWait.js";
+import { WORKTREE_RETIRE_OWNED_TOOL } from "../../services/mcp-server/sessionToolIds.js";
 import {
   MCP_DISPATCH_TIMEOUT_MS,
   MCP_REMOTE_DISPATCH_TIMEOUT_MS,
@@ -665,6 +667,12 @@ export function relayRunMs(
         : LAUNCH_SETUP_WAIT_DEFAULT_MS;
     wanted = 2 * MCP_DISPATCH_TIMEOUT_MS + setupMs + replyMs;
   } else {
+    // A retirement waits for its panes' processes and then on the delete's
+    // confirmation, one after the other (#15737), so it is owed both.
+    if (tool === WORKTREE_RETIRE_OWNED_TOOL) {
+      wanted =
+        (wanted > 0 ? wanted : DEFAULT_TERMINAL_EXIT_WAIT_MS) + MCP_REMOTE_DISPATCH_TIMEOUT_MS;
+    }
     wanted = Math.max(wanted, replyMs);
   }
   return Math.min(MAX_RELAY_RUN_MS, Math.max(minMs, wanted + RELAY_RUN_MARGIN_MS));

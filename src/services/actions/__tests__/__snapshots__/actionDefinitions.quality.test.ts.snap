@@ -7731,6 +7731,18 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   },
   {
     "category": "worktree",
+    "danger": "confirm",
+    "dangerRationale": "Closes the session's own panes in the worktree and deletes the working tree from disk. Recovery requires re-creating the worktree, so the session's own ownership record is a precondition rather than the approval.",
+    "description": "Delete a worktree this session created, after the user confirms, once it is clean, every commit is on a remote, and no terminal you don't own runs there. Closes your panes there and waits for their processes to exit first. Never forces or deletes the branch.",
+    "examples": undefined,
+    "id": "worktree.retireOwned",
+    "keywords": undefined,
+    "kind": "command",
+    "requiresArgs": true,
+    "title": "Retire owned worktree",
+  },
+  {
+    "category": "worktree",
     "danger": "safe",
     "dangerRationale": undefined,
     "description": "Retry loading worktrees after a project switch failed to load them",

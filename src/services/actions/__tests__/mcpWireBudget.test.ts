@@ -937,7 +937,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // they carry the warnings (credentials in `env`, what `excludeFromPersistence`
   // hides) a caller needs at the point of use. Core only, so the external
   // ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 168_780;
+  // 168_780 → 169_340 for #15737, measured at 169_306 B: `worktree.retireOwned`
+  // joins core beside the owned delete, so retiring a finished worktree is one
+  // call instead of a status read, two listings, a close, a wait and the
+  // delete. No output schema, like the owned delete. In-app only, so the
+  // external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 169_340;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

@@ -134,6 +134,7 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "worktree.createWithRecipe",
   "worktree.delete",
   "worktree.deleteOwned",
+  "worktree.retireOwned",
   "worktree.getAvailableBranch",
   "worktree.getCurrent",
   "worktree.getDefaultPath",
